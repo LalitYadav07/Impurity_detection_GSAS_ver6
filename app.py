@@ -47,6 +47,7 @@ def is_pixi_available():
 def ensure_gsas_installed():
     import subprocess
     import shutil
+    import importlib
     
     g2_path = Path(PROJECT_ROOT) / "GSAS-II"
     if not g2_path.exists():
