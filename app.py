@@ -39,10 +39,10 @@ def ensure_gsas_installed():
     import subprocess
     g2_path = Path(PROJECT_ROOT) / "GSAS-II"
     if not g2_path.exists():
-        st.info("📦 GSAS-II not found. Cloning from source (this may take a few minutes)...")
+        st.info("📦 GSAS-II not found. Cloning from source...")
         try:
             subprocess.run(["git", "clone", "--depth", "1", "https://github.com/AdvancedPhotonSource/GSAS-II.git", str(g2_path)], check=True)
-            st.success("✅ GSAS-II cloned successfully!")
+            st.success("✅ GSAS-II cloned!")
         except Exception as e:
             st.error(f"❌ Failed to clone GSAS-II: {e}")
             return False
@@ -51,6 +51,19 @@ def ensure_gsas_installed():
     g2_p = str(g2_path.resolve())
     if g2_p not in sys.path:
         sys.path.insert(0, g2_p)
+
+    # --- NEW: Download Binaries (Crucial for Cloud Linux) ---
+    try:
+        import GSASII.GSASIIpath as G2path
+        if not G2path.GetBinaryDir():
+            st.warning("⚙️ GSAS-II binaries missing. Downloading for this platform...")
+            # This triggers the GSAS-II internal binary downloader
+            import GSASII.instG2 as instG2
+            instG2.InstallBinaries(g2_p)
+            st.success("✅ Binaries installed!")
+    except Exception as b_err:
+        st.write(f"Binary check/install skip: {b_err}")
+
     return True
 
 GSAS_DOWNLOADED = ensure_gsas_installed()
@@ -87,73 +100,69 @@ def get_gdrive_id(url):
             return match.group(1)
     return None
 
-
 def download_and_extract_db(url):
     import requests
     import zipfile
-    import io
+    import os
     import gdown
+    import shutil
     
     DB_DIR.mkdir(parents=True, exist_ok=True)
     try:
         with st.status("📥 Downloading Database Archive...", expanded=True) as status:
-            zip_path = DB_DIR / "temp_db.zip"
+            zip_path = Path(PROJECT_ROOT) / "temp_db.zip"
             
-            # --- Check for Google Drive Link ---
+            # --- 1. Download ---
             gdrive_id = get_gdrive_id(url)
             if gdrive_id:
-                st.write(f"Detected Google Drive Link (ID: {gdrive_id}). Using gdown for robust download...")
-                try:
-                    gdown.download(id=gdrive_id, output=str(zip_path), quiet=False)
-                except Exception as gd_err:
-                    st.write(f"gdown failed, trying direct fallback: {gd_err}")
-                    # Direct Link Fallback
-                    st.write(f"Fetching from: {url}")
-                    r = requests.get(url, stream=True)
-                    r.raise_for_status()
-                    with open(zip_path, "wb") as f:
-                        for chunk in r.iter_content(chunk_size=81920):
-                            if chunk: f.write(chunk)
+                st.write(f"Detected Google Drive Link (ID: {gdrive_id})")
+                gdown.download(id=gdrive_id, output=str(zip_path), quiet=False)
             else:
-                # Standard Direct Link
                 st.write(f"Fetching from: {url}")
                 r = requests.get(url, stream=True)
                 r.raise_for_status()
                 with open(zip_path, "wb") as f:
                     for chunk in r.iter_content(chunk_size=81920):
-                        if chunk:
-                            f.write(chunk)
+                        if chunk: f.write(chunk)
             
-            # 2. Extract
+            # --- 2. Extract ---
             if not zip_path.exists() or not zipfile.is_zipfile(zip_path):
-                # Debugging info
-                if zip_path.exists():
-                    with open(zip_path, 'r', errors='ignore') as f:
-                        head = f.read(500)
-                    if "<html" in head.lower() or "<!doctype" in head.lower():
-                        st.error("❌ The link resulted in an HTML page, not a ZIP. Please check your Drive permissions.")
-                    else:
-                        st.error("❌ Downloaded file is corrupted or not a valid ZIP.")
-                else:
-                    st.error("❌ Download failed: File was not created.")
-                
+                st.error("❌ Downloaded file is not a valid ZIP.")
                 zip_path.unlink(missing_ok=True)
-                status.update(label="❌ Download Failed", state="error")
                 return False
 
-            st.write("📦 Extracting files (this may take a moment)...")
+            st.write("📦 Extracting files...")
+            temp_extract_dir = Path(PROJECT_ROOT) / "temp_extract"
+            if temp_extract_dir.exists(): shutil.rmtree(temp_extract_dir)
+            temp_extract_dir.mkdir()
+
             with zipfile.ZipFile(zip_path, 'r') as z:
-                z.extractall(DB_DIR)
+                z.extractall(temp_extract_dir)
+            
+            # Smart move: find where the data actually is (handle 'database_aug/' prefix)
+            extracted_db_path = temp_extract_dir
+            if (temp_extract_dir / "database_aug").exists():
+                extracted_db_path = temp_extract_dir / "database_aug"
+            
+            # Copy contents to final destination
+            st.write("📂 Organizing folders...")
+            for item in extracted_db_path.iterdir():
+                dest = DB_DIR / item.name
+                if dest.exists():
+                    if dest.is_dir(): shutil.rmtree(dest)
+                    else: dest.unlink()
+                shutil.move(str(item), str(DB_DIR))
                 
             # Cleanup
             zip_path.unlink()
+            shutil.rmtree(temp_extract_dir)
             
             # 3. Validation
             if check_db_integrity():
                 status.update(label="✅ Database Installed Successfully!", state="complete")
                 return True
             else:
-                status.update(label="❌ Extraction failed: Missing essential files.", state="error")
+                status.update(label="❌ Missing files after extraction.", state="error")
                 return False
 
     except Exception as e:
