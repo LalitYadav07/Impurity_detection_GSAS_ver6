@@ -55,6 +55,36 @@ def ensure_gsas_installed():
 
 GSAS_DOWNLOADED = ensure_gsas_installed()
 
+# --- DATABASE STATUS CHECK ---
+DB_DIR = Path(PROJECT_ROOT) / "data" / "database_aug"
+MAIN_DB = DB_DIR / "highsymm_metadata.json"
+DB_EXISTS = MAIN_DB.exists()
+
+def download_database(url):
+    import requests
+    DB_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        with st.status("📥 Downloading Database (2.3GB total)...", expanded=True) as status:
+            # Note: In a real cloud env, we should stream this.
+            # For simplicity, we'll suggest using GitHub Releases.
+            st.write("Fetching from source...")
+            r = requests.get(url, stream=True)
+            r.raise_for_status()
+            total_size = int(r.headers.get('content-length', 0))
+            
+            with open(MAIN_DB, "wb") as f:
+                dl = 0
+                for chunk in r.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+                        dl += len(chunk)
+                        # Avoid updating progress too often
+            status.update(label="✅ Database Downloaded!", state="complete")
+        return True
+    except Exception as e:
+        st.error(f"Download failed: {e}")
+        return False
+
 # --- GSAS-II CHECK & IMPORT ---
 try:
     import GSASII.GSASIIscriptable as G2sc
@@ -423,6 +453,23 @@ st.markdown("Automated crystallography impurity phase discovery using ML-guided 
 with st.sidebar:
     st.header("🛠️ Configuration")
     
+    # Database Status
+    if not DB_EXISTS:
+        st.warning("📊 Database missing (JSON Metadata)")
+        with st.expander("🛠️ How to fix", expanded=True):
+            st.markdown("""
+                The 2.3GB database was excluded from Git. 
+                **Download it manually** or provide a direct link.
+            """)
+            db_url = st.text_input("Direct Download URL", placeholder="https://github.com/...")
+            if st.button("📥 Download Database"):
+                if download_database(db_url):
+                    st.success("Database ready! Please refresh.")
+                    st.rerun()
+            st.info("💡 Locally, ensures you haven't deleted the 'data' folder.")
+    else:
+        st.success("📊 Database: [OK] (Ready for discovery)")
+
     with st.expander("📁 Mandatory Inputs", expanded=True):
         example_mode = st.checkbox("📖 Example Mode (TbSSL Demo)", value=False)
         if example_mode:
