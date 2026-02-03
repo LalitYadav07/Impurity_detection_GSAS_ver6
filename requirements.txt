@@ -9,3 +9,4 @@ matplotlib
 Pillow
 numpy
 scipy
+gdown

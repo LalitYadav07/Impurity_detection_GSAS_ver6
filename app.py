@@ -87,37 +87,12 @@ def get_gdrive_id(url):
             return match.group(1)
     return None
 
-def download_file_from_google_drive(id, destination):
-    import requests
-    URL = "https://docs.google.com/uc?export=download"
-    session = requests.Session()
-
-    response = session.get(URL, params={'id': id}, stream=True)
-    token = get_confirm_token(response)
-
-    if token:
-        params = {'id': id, 'confirm': token}
-        response = session.get(URL, params=params, stream=True)
-
-    save_response_content(response, destination)    
-
-def get_confirm_token(response):
-    for key, value in response.cookies.items():
-        if key.startswith('download_warning'):
-            return value
-    return None
-
-def save_response_content(response, destination):
-    CHUNK_SIZE = 32768
-    with open(destination, "wb") as f:
-        for chunk in response.iter_content(CHUNK_SIZE):
-            if chunk: # filter out keep-alive new chunks
-                f.write(chunk)
 
 def download_and_extract_db(url):
     import requests
     import zipfile
     import io
+    import gdown
     
     DB_DIR.mkdir(parents=True, exist_ok=True)
     try:
@@ -127,8 +102,18 @@ def download_and_extract_db(url):
             # --- Check for Google Drive Link ---
             gdrive_id = get_gdrive_id(url)
             if gdrive_id:
-                st.write(f"Detected Google Drive Link (ID: {gdrive_id}). Handling virus scan warning...")
-                download_file_from_google_drive(gdrive_id, zip_path)
+                st.write(f"Detected Google Drive Link (ID: {gdrive_id}). Using gdown for robust download...")
+                try:
+                    gdown.download(id=gdrive_id, output=str(zip_path), quiet=False)
+                except Exception as gd_err:
+                    st.write(f"gdown failed, trying direct fallback: {gd_err}")
+                    # Direct Link Fallback
+                    st.write(f"Fetching from: {url}")
+                    r = requests.get(url, stream=True)
+                    r.raise_for_status()
+                    with open(zip_path, "wb") as f:
+                        for chunk in r.iter_content(chunk_size=81920):
+                            if chunk: f.write(chunk)
             else:
                 # Standard Direct Link
                 st.write(f"Fetching from: {url}")
@@ -140,14 +125,18 @@ def download_and_extract_db(url):
                             f.write(chunk)
             
             # 2. Extract
-            if not zipfile.is_zipfile(zip_path):
-                # Check if it's HTML (common error)
-                with open(zip_path, 'r', errors='ignore') as f:
-                    head = f.read(200)
-                if "<html" in head.lower() or "<!doctype" in head.lower():
-                    st.error("❌ The link returned a webpage, not a ZIP file. Please ensure it's a DIRECT download link.")
+            if not zip_path.exists() or not zipfile.is_zipfile(zip_path):
+                # Debugging info
+                if zip_path.exists():
+                    with open(zip_path, 'r', errors='ignore') as f:
+                        head = f.read(500)
+                    if "<html" in head.lower() or "<!doctype" in head.lower():
+                        st.error("❌ The link resulted in an HTML page, not a ZIP. Please check your Drive permissions.")
+                    else:
+                        st.error("❌ Downloaded file is corrupted or not a valid ZIP.")
                 else:
-                    st.error("❌ Downloaded file is not a valid ZIP archive.")
+                    st.error("❌ Download failed: File was not created.")
+                
                 zip_path.unlink(missing_ok=True)
                 status.update(label="❌ Download Failed", state="error")
                 return False
