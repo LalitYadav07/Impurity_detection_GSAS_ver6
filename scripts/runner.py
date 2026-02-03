@@ -9,16 +9,25 @@ from pathlib import Path
 from typing import Generator, Optional, Dict, Any
 
 class PipelineRunner:
-    def __init__(self, project_root: str):
+    def __init__(self, project_root: str, use_pixi: bool = True):
         self.project_root = Path(project_root)
         self.pixi_dir = self.project_root / "GSAS-II" / "pixi"
+        self.use_pixi = use_pixi
         
+    def _get_execution_context(self):
+        """Returns (cmd_prefix, cwd)"""
+        if self.use_pixi:
+            return ["pixi", "run", "python"], str(self.pixi_dir)
+        else:
+            # Fallback to standard python in current environment
+            return [sys.executable], str(self.project_root)
+
     def run(self, config_path: str, dataset_name: str) -> Generator[str, None, None]:
         """
         Runs the pipeline and yields log lines.
         """
-        cmd = [
-            "pixi", "run", "python", 
+        prefix, cwd = self._get_execution_context()
+        cmd = prefix + [
             str(self.project_root / "scripts" / "gsas_complete_pipeline_nomain.py"),
             "--config", str(config_path),
             "--dataset", dataset_name
@@ -31,7 +40,7 @@ class PipelineRunner:
         # Start the process in the background
         process = subprocess.Popen(
             cmd,
-            cwd=str(self.pixi_dir),
+            cwd=cwd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -55,8 +64,8 @@ class PipelineRunner:
         Starts the pipeline in the background and returns the process and a queue 
         that will be populated with stdout lines. Optionally mirrors logs to log_path.
         """
-        cmd = [
-            "pixi", "run", "python", 
+        prefix, cwd = self._get_execution_context()
+        cmd = prefix + [
             str(self.project_root / "scripts" / "gsas_complete_pipeline_nomain.py"),
             "--config", str(config_path),
             "--dataset", dataset_name
@@ -67,9 +76,10 @@ class PipelineRunner:
         env["PYTHONIOENCODING"] = "utf-8"
 
         # Start the process
+        print(f"[DEBUG] Running command: {' '.join(cmd)} in {cwd}")
         process = subprocess.Popen(
             cmd,
-            cwd=str(self.pixi_dir),
+            cwd=cwd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,

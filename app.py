@@ -35,6 +35,10 @@ from config_builder import build_pipeline_config
 from runner import PipelineRunner
 
 # --- GSAS-II AUTO-INSTALL (For Streamlit Cloud) ---
+def is_pixi_available():
+    import shutil
+    return shutil.which("pixi") is not None
+
 def ensure_gsas_installed():
     import subprocess
     g2_path = Path(PROJECT_ROOT) / "GSAS-II"
@@ -55,16 +59,28 @@ def ensure_gsas_installed():
     # --- NEW: Download Binaries (Crucial for Cloud Linux) ---
     try:
         import GSASII.GSASIIpath as G2path
+        import GSASII.instG2 as instG2
+        
+        # Force linux binary check if we are on linux
+        if sys.platform.startswith('linux'):
+            st.info("🐧 Linux detected. Verifying GSAS-II binaries...")
+        
         if not G2path.GetBinaryDir():
             st.warning("⚙️ GSAS-II binaries missing. Downloading for this platform...")
             # This triggers the GSAS-II internal binary downloader
-            import GSASII.instG2 as instG2
             instG2.InstallBinaries(g2_p)
             st.success("✅ Binaries installed!")
+        else:
+            st.success(f"⚙️ GSAS-II Binaries: [OK] ({G2path.GetBinaryDir()})")
     except Exception as b_err:
         st.write(f"Binary check/install skip: {b_err}")
 
     return True
+
+if 'use_pixi' not in st.session_state:
+    st.session_state.use_pixi = is_pixi_available()
+    if not st.session_state.use_pixi:
+        st.info("ℹ️ Pixi not detected. Falling back to standard Python environment.")
 
 GSAS_DOWNLOADED = ensure_gsas_installed()
 
@@ -630,7 +646,7 @@ with st.sidebar:
                 st.session_state.status_msg = "Initializing..."
                 
                 lpath = str(rdir / "pipeline.log")
-                process, q = PipelineRunner(PROJECT_ROOT).start_non_blocking(str(rdir/"pipeline_config.yaml"), clean_name, log_path=lpath)
+                process, q = PipelineRunner(PROJECT_ROOT, use_pixi=st.session_state.use_pixi).start_non_blocking(str(rdir/"pipeline_config.yaml"), clean_name, log_path=lpath)
                 st.session_state.pipeline_process = process
                 st.session_state.log_queue = q
                 st.session_state.run_active = True
