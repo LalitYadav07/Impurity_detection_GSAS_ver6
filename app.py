@@ -57,32 +57,66 @@ GSAS_DOWNLOADED = ensure_gsas_installed()
 
 # --- DATABASE STATUS CHECK ---
 DB_DIR = Path(PROJECT_ROOT) / "data" / "database_aug"
-MAIN_DB = DB_DIR / "highsymm_metadata.json"
-DB_EXISTS = MAIN_DB.exists()
+# Essential files to check
+REQUIRED_FILES = [
+    "highsymm_metadata.json",
+    "catalog_deduplicated.csv",
+    "mp_experimental_stable.csv"
+]
+PROFILES_DIR = DB_DIR / "profiles64"
 
-def download_database(url):
+def check_db_integrity():
+    if not DB_DIR.exists(): return False
+    for f in REQUIRED_FILES:
+        if not (DB_DIR / f).exists(): return False
+    if not PROFILES_DIR.exists() or not any(PROFILES_DIR.iterdir()): return False
+    return True
+
+DB_EXISTS = check_db_integrity()
+
+def download_and_extract_db(url):
     import requests
+    import zipfile
+    import io
+    
     DB_DIR.mkdir(parents=True, exist_ok=True)
     try:
-        with st.status("📥 Downloading Database (2.3GB total)...", expanded=True) as status:
-            # Note: In a real cloud env, we should stream this.
-            # For simplicity, we'll suggest using GitHub Releases.
-            st.write("Fetching from source...")
+        with st.status("📥 Downloading Database Archive...", expanded=True) as status:
+            st.write(f"Fetching from: {url}")
+            
+            # 1. Download ZIP
             r = requests.get(url, stream=True)
             r.raise_for_status()
             total_size = int(r.headers.get('content-length', 0))
             
-            with open(MAIN_DB, "wb") as f:
+            # Using a temporary file for safety
+            zip_path = DB_DIR / "temp_db.zip"
+            with open(zip_path, "wb") as f:
                 dl = 0
-                for chunk in r.iter_content(chunk_size=8192):
+                for chunk in r.iter_content(chunk_size=81920): # 80KB chunks
                     if chunk:
                         f.write(chunk)
                         dl += len(chunk)
-                        # Avoid updating progress too often
-            status.update(label="✅ Database Downloaded!", state="complete")
-        return True
+            
+            st.write("📦 Extracting files (this may take a moment)...")
+            
+            # 2. Extract
+            with zipfile.ZipFile(zip_path, 'r') as z:
+                z.extractall(DB_DIR)
+                
+            # Cleanup
+            zip_path.unlink()
+            
+            # 3. Validation
+            if check_db_integrity():
+                status.update(label="✅ Database Installed Successfully!", state="complete")
+                return True
+            else:
+                status.update(label="❌ Extraction failed or missing files.", state="error")
+                return False
+
     except Exception as e:
-        st.error(f"Download failed: {e}")
+        st.error(f"Download/Extraction failed: {e}")
         return False
 
 # --- GSAS-II CHECK & IMPORT ---
@@ -455,18 +489,18 @@ with st.sidebar:
     
     # Database Status
     if not DB_EXISTS:
-        st.warning("📊 Database missing (JSON Metadata)")
+        st.warning("📊 Database missing or incomplete")
         with st.expander("🛠️ How to fix", expanded=True):
             st.markdown("""
                 The 2.3GB database was excluded from Git. 
-                **Download it manually** or provide a direct link.
+                **Download the ZIP archive** manually or provide a direct link.
             """)
-            db_url = st.text_input("Direct Download URL", placeholder="https://github.com/...")
-            if st.button("📥 Download Database"):
-                if download_database(db_url):
+            db_url = st.text_input("Direct Download URL (ZIP)", placeholder="https://.../database_aug.zip")
+            if st.button("📥 Download & Install Database"):
+                if download_and_extract_db(db_url):
                     st.success("Database ready! Please refresh.")
                     st.rerun()
-            st.info("💡 Locally, ensures you haven't deleted the 'data' folder.")
+            st.info("💡 Locally, checks for JSON, CSVs, and profiles64.")
     else:
         st.success("📊 Database: [OK] (Ready for discovery)")
 
