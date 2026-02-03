@@ -36,6 +36,13 @@ class PipelineRunner:
         env = os.environ.copy()
         env["PYTHONUNBUFFERED"] = "1"
         env["PYTHONIOENCODING"] = "utf-8"
+        
+        # Add GSAS-II and scripts to PYTHONPATH so subprocess can find them
+        g2_path = str((self.project_root / "GSAS-II").resolve())
+        scripts_path = str((self.project_root / "scripts").resolve())
+        current_pp = env.get("PYTHONPATH", "")
+        new_pp = os.pathsep.join(filter(None, [g2_path, scripts_path, current_pp]))
+        env["PYTHONPATH"] = new_pp
 
         # Start the process in the background
         process = subprocess.Popen(
@@ -74,6 +81,13 @@ class PipelineRunner:
         env = os.environ.copy()
         env["PYTHONUNBUFFERED"] = "1"
         env["PYTHONIOENCODING"] = "utf-8"
+
+        # Add GSAS-II and scripts to PYTHONPATH so subprocess can find them
+        g2_path = str((self.project_root / "GSAS-II").resolve())
+        scripts_path = str((self.project_root / "scripts").resolve())
+        current_pp = env.get("PYTHONPATH", "")
+        new_pp = os.pathsep.join(filter(None, [g2_path, scripts_path, current_pp]))
+        env["PYTHONPATH"] = new_pp
 
         # Start the process
         print(f"[DEBUG] Running command: {' '.join(cmd)} in {cwd}")
