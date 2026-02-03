@@ -74,10 +74,6 @@ def check_db_integrity():
 
 DB_EXISTS = check_db_integrity()
 
-    return True
-
-DB_EXISTS = check_db_integrity()
-
 def get_gdrive_id(url):
     import re
     patterns = [
