@@ -41,6 +41,8 @@ def is_pixi_available():
 
 def ensure_gsas_installed():
     import subprocess
+    import shutil
+    
     g2_path = Path(PROJECT_ROOT) / "GSAS-II"
     if not g2_path.exists():
         st.info("📦 GSAS-II not found. Cloning from source...")
@@ -55,39 +57,70 @@ def ensure_gsas_installed():
     g2_p = str(g2_path.resolve())
     if g2_p not in sys.path:
         sys.path.insert(0, g2_p)
+        
+    # --- Dependencies Check ---
+    missing_deps = []
+    for dep in ["CifFile", "h5py", "imageio"]:
+        try:
+            __import__(dep)
+        except ImportError:
+            missing_deps.append(dep)
+    if missing_deps:
+        st.warning(f"⚠️ Optional dependencies missing from Python environment: {', '.join(missing_deps)}. CIF import may fail.")
 
-    # --- NEW: Download Binaries (Crucial for Cloud Linux) ---
+    # --- NEW: Robust Binary Download & Check ---
     try:
         import GSASII.GSASIIpath as G2path
         import GSASII.instG2 as instG2
+        import importlib
         
-        # Force linux binary check if we are on linux
+        # Diagnostics
+        bin_dir = G2path.GetBinaryDir()
+        
+        # Heuristic check for actual files (Linux specific)
+        expected_bin = None
         if sys.platform.startswith('linux'):
-            st.info("🐧 Linux detected. Verifying GSAS-II binaries...")
+             # Look for specific files usually found in bin
+             # GSASII often puts them in GSASII/bin
+             expected_bin = g2_path / "GSASII" / "bin"
         
-        if not G2path.GetBinaryDir():
-            st.warning("⚙️ GSAS-II binaries missing. Downloading for this platform...")
-            # This triggers the GSAS-II internal binary downloader
-            instG2.InstallBinaries(g2_p)
-            
-            # Re-check and refresh pathing
-            import importlib
-            importlib.reload(G2path)
-            if G2path.GetBinaryDir():
-                st.success(f"✅ Binaries installed successfully: {G2path.GetBinaryDir()}")
+        if not bin_dir and expected_bin and expected_bin.exists():
+             # If G2path doesn't see it but we do, try to force it?
+             # Actually, just report it.
+             pass
+
+        if not bin_dir:
+            if 'binary_install_attempted' not in st.session_state:
+                st.warning(f"⚙️ Binaries missing. Attempting auto-install for {sys.platform}...")
+                try:
+                    instG2.InstallBinaries(g2_p)
+                    importlib.reload(G2path)
+                    st.session_state.binary_install_attempted = True
+                    st.rerun()
+                except Exception as inst_err:
+                     st.error(f"❌ InstallBinaries failed: {inst_err}")
             else:
-                st.error("❌ Binary installation failed. GSAS-II may not function fully.")
+                 st.error("❌ Binary installation failed automatically.")
+                 if st.button("Force Retry Binary Install"):
+                     del st.session_state.binary_install_attempted
+                     st.rerun()
         else:
-            st.success(f"⚙️ GSAS-II Binaries: [OK] ({G2path.GetBinaryDir()})")
+             # Success state
+             pass
+             
+        # Add binary dir to sys.path if found, just in case
+        if G2path.GetBinaryDir() and G2path.GetBinaryDir() not in sys.path:
+            sys.path.insert(0, G2path.GetBinaryDir())
+            
     except Exception as b_err:
-        st.write(f"Binary check/install skip: {b_err}")
+        st.error(f"Binary check system error: {b_err}")
 
     return True
 
 if 'use_pixi' not in st.session_state:
     st.session_state.use_pixi = is_pixi_available()
     if not st.session_state.use_pixi:
-        st.info("ℹ️ Pixi not detected. Falling back to standard Python environment.")
+        pass # standard python
 
 GSAS_DOWNLOADED = ensure_gsas_installed()
 
