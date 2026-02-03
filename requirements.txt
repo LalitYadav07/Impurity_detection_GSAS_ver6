@@ -10,3 +10,8 @@ Pillow
 numpy
 scipy
 gdown
+pycifrw
+xmltodict
+h5py
+zarr
+imageio

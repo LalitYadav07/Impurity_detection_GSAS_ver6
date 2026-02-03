@@ -38,6 +38,7 @@ outputs/
 *.json
 
 # OS
+!examples/**
 .DS_Store
 Thumbs.db
 desktop.ini

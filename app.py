@@ -69,7 +69,14 @@ def ensure_gsas_installed():
             st.warning("⚙️ GSAS-II binaries missing. Downloading for this platform...")
             # This triggers the GSAS-II internal binary downloader
             instG2.InstallBinaries(g2_p)
-            st.success("✅ Binaries installed!")
+            
+            # Re-check and refresh pathing
+            import importlib
+            importlib.reload(G2path)
+            if G2path.GetBinaryDir():
+                st.success(f"✅ Binaries installed successfully: {G2path.GetBinaryDir()}")
+            else:
+                st.error("❌ Binary installation failed. GSAS-II may not function fully.")
         else:
             st.success(f"⚙️ GSAS-II Binaries: [OK] ({G2path.GetBinaryDir()})")
     except Exception as b_err:
@@ -608,9 +615,9 @@ with st.sidebar:
                 # File Handling
                 dpath, ipath, cpath = None, None, None
                 if example_mode:
-                    dpath = str((Path(PROJECT_ROOT) / "data" / "HB2A_TbSSL.dat").resolve())
-                    ipath = str((Path(PROJECT_ROOT) / "data" / "instrument_params" / "hb2a_si_ge113.instprm").resolve())
-                    cpath = str((Path(PROJECT_ROOT) / "data" / "cifs" / "TbSSL.cif").resolve())
+                    dpath = str((Path(PROJECT_ROOT) / "examples" / "tbssl" / "HB2A_TbSSL.dat").resolve())
+                    ipath = str((Path(PROJECT_ROOT) / "examples" / "tbssl" / "hb2a_si_ge113.instprm").resolve())
+                    cpath = str((Path(PROJECT_ROOT) / "examples" / "tbssl" / "TbSSL.cif").resolve())
                 else:
                     # Save logic inline
                     if data_file:
