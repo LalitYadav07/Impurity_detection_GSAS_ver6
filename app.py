@@ -102,7 +102,6 @@ def ensure_gsas_installed():
         if str(bin_target) not in sys.path:
             sys.path.insert(0, str(bin_target))
             try:
-                import importlib
                 importlib.invalidate_caches()
                 import pyspg
                 st.success("✅ Binaries found and loaded!")
