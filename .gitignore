@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Project Specific
+GSAS-II/
+runs/
+data/
+outputs/
+*.log
+*.jsonl
+*.xye
+*.dat
+*.instprm
+*.gpx
+*.cif
+*.bak*
+*.npz
+*.csv
+*.json
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Environment
+.pixi/
+pixi.lock
+node_modules/
+.venv/

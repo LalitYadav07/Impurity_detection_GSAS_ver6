@@ -1,0 +1,276 @@
+# ===================== ONE (or two) knobs =====================
+# Point these to wherever you move the project/scratch area.
+PROJECT_ROOT: C:\Users\lalit\OneDrive\Desktop\Impurity_detection_GSAS_ver6
+WORK_ROOT:    C:\Users\lalit\OneDrive\Desktop\Impurity_detection_GSAS_ver6\runs
+# (Optional) If you keep data under a subfolder, leave this alone:
+DATA_ROOT:    ${PROJECT_ROOT}/data
+# ===============================================================
+
+# Where per-dataset folders should live (defaults to WORK_ROOT/<dataset>)
+work_root: ${WORK_ROOT}
+ml_components_dir: ${PROJECT_ROOT}/ML_components
+
+# If a dataset sets instprm_path: auto, resolve via this map
+instrument_map:
+  hb2a: ${DATA_ROOT}/instrument_params/hb2a_si_ge113.instprm
+  pg3:  ${DATA_ROOT}/instrument_params/2023A_June_HighRes_60HzB3_CWL2p665.instprm
+
+# Database (used by screener + lattice nudger)
+db:
+  catalog_csv:   ${DATA_ROOT}/database_aug/catalog_deduplicated.csv
+  original_json: ${DATA_ROOT}/database_aug/highsymm_metadata.json
+  profiles_dir:  ${DATA_ROOT}/database_aug/profiles64
+  stable_csv:    ${DATA_ROOT}/database_aug/mp_experimental_stable.csv
+
+# Reasonable global defaults (datasets can override)
+allowed_elements: [
+  H, Li, Be, B, C, N, O, F,
+  Na, Mg, Al, Si, P, S, Cl,
+  K, Ca, Sc, Ti, V, Cr, Mn, Fe, Co, Ni, Cu, Zn,
+  Ga, Ge, As, Se, Br,
+  Rb, Sr, Y, Zr, Nb, Mo, Ru, Rh, Pd, Ag, Cd,
+  In, Sn, Sb, Te, I,
+  Cs, Ba, La, Ce, Pr, Nd, Sm, Eu, Gd, Tb, Dy,
+  Ho, Er, Tm, Yb, Lu,
+  Hf, Ta, W, Re, Os, Ir, Pt, Au, Hg,
+  Tl, Pb, Bi
+]
+element_filter:
+
+  # --- Wildcard budget (the "+N" off-list rule)
+  # How many elements not in allowed_elements are permitted in a candidate?
+  # 0 = strict subset only (no wildcard), 1 = allow one extra element, etc.
+  max_offlist_elements: 0
+
+  # --- Relation constraint for the wildcard(s)
+  # Controls which off-list element(s) are acceptable.
+  #    any           : no constraint (any off-list element is allowed)
+  #    same_group    : off-list element must be in the same periodic-table group
+  #    same_period   : off-list element must be in the same period (row)
+  #    same_family   : off-list element must be in the same family
+  #                    (alkali, alkaline_earth, transition_metal, lanthanide,
+  #                     actinide, metalloid, halogen, chalcogen, noble_gas, post_transition_metal, other)
+  wildcard_relation: "same_family"
+
+  # --- Require at least one "base" element in the composition?
+  # If true, a composition that contains *only* wildcards (i.e., none of the allowed_elements)
+  # is rejected. Recommended to keep true for impurity hunting tied to a host chemistry.
+  require_base: true
+
+  # --- Ignore elements entirely (never counted or required)
+  # Useful for H/D, isotopes, or light contaminants that shouldn't affect filtering.
+  ignore_elements: [] # [H, D]
+
+  # --- Hard ban list for off-list elements
+  # If *any* disallowed element appears as an off-list element, the candidate is rejected
+  # regardless of the wildcard budget. (Elements *on* the base list are unaffected.)
+  disallow_offlist: []   # e.g., ["F","Cl","Br","I"] to ban halogen surprises
+
+  # --- Sample environment (SE) policy
+  # Lets you explicitly allow metals from cans/holders (Al, Cu, V, Ti...) without mixing
+  # them into the compound chemistry.
+  sample_env:
+    # The set of elements that are considered "environment hardware"
+    elements: [] # [Al]
+
+    # Allow pure SE phases outright (e.g., pure Al)
+    allow_pure: true
+
+    # Allow SE combined ONLY with these elements (still treated as SE, not "chemistry");
+    # typical choice is ["O"] to allow Al2O3. Leave empty to allow *no* SE compounds.
+    allow_with: [O]
+
+    # If true, *reject* any candidate that mixes SE with base chemistry
+    # (e.g., if base is Yb/Ba/O, then YbAl or BaAl2 are rejected).
+    ban_cross_with_base: true
+
+    # If true, SE elements do not consume wildcard budget
+    # (i.e., you can allow Al without "spending" your +N).
+    ignore_in_budget: true
+
+  # --- Disallow 1-element "pure" phases for listed elements
+  # If a candidate has ONLY one element and it's in this list, reject it.
+  # Commonly used to drop O-only, C-only phases, etc.
+  disallow_pure: [O, C]
+
+max_passes: 1         # how many impurity passes to attempt
+rwp_improve_eps: 0.05  # stop if Rwp improves less than this (set >0 to enable early stop)
+
+knee_filter:
+  enable_hist: true       # activates Stage-3 histogram knee (union) before nudging
+  enable_nudge: true
+  enable_pearson: true
+  min_points_hist: 5
+  min_points_nudge: 3
+  min_points_pearson: 2
+  min_rel_span: 0.03
+  guard_frac: 0.05
+  max_keep_if_no_knee: 1 
+  min_keep_at_least: 1
+  max_keep_at_most: 10
+
+knee_filter_stage0:
+  enable_hist: true        # knee on ML histogram metrics (union of score, cosine, explained, prob)
+  enable_nudge: true       # knee on LatticeNudger best_score
+  enable_pearson: true     # knee on GSAS Pearson r (vs Yobs) across Stage-0 candidates
+  max_keep_at_most: 15
+  max_keep_if_no_knee: 1
+
+top_candidates: 10  # how many goes to the nudger
+min_impurity_percent: 0.5
+hap_init: 0.05
+max_joint_cycles: 8
+
+stage4:
+  wavelength: 1.50
+  two_theta_range: [5.0, 160.0]
+  samples: 5000
+  reps: 50
+  angle_window_deg: 0  # 5 deg angle tolerance
+  frac_window: 0.01 
+  min_pearson: 0.02
+
+hist_filter:
+  min_active_bins: 4
+  min_sum_residual: 0.0
+  topN: 57 # candidates to pass after the histogram stage
+  debug: true
+  plot: true
+  plot_out_path_png: auto
+  plot_top_k: 47
+  plot_title: "Stage-3 Histogram (ML)"
+
+datasets:
+  # ----------------------------------------------------------------------------
+  - name: cw_tbssl
+    mode: CW
+    data_path: ${DATA_ROOT}/HB2A_TbSSL.dat
+    main_cif: ${DATA_ROOT}/cifs/TbSSL.cif
+    instprm_path: auto            # uses instrument_map.hb2a
+    fmthint: xye
+    main_phase_name: TbSSL_Main
+    background:
+      type: chebyschev-1
+      terms: 9
+    allowed_elements: [Gd, Be, Ge, O]
+    element_filter:
+      require_base: true
+      disallow_offlist: []
+      sample_env:
+        elements: ["Al"]              # measured in Al can
+        allow_pure: true              # OK to match pure Al
+        ban_cross_with_base: true     # but not Yb-Al, Ba-Al, etc.
+        ignore_in_budget: true        # Al/Al2O3 doesn't consume the +1 wildcard
+      disallow_pure: [O, C]
+
+  - name: cw_tbssl_withmain
+    mode: CW
+    data_path: ${DATA_ROOT}/HB2A_TbSSL.dat
+    main_cif: ${DATA_ROOT}/cifs/TbSSL.cif
+    instprm_path: auto            # uses instrument_map.hb2a
+    fmthint: xye
+    main_phase_name: TbSSL_Main
+    background:
+      type: chebyschev-1
+      terms: 9
+    allowed_elements: [Tb, Be, Ge, O]
+    element_filter:
+      disallow_offlist: []
+      sample_env:
+        elements: ["Al"]              # measured in Al can
+        allow_pure: true              # OK to match pure Al
+        ban_cross_with_base: true
+        ignore_in_budget: true
+  
+  - name: cw_tbssl_without_main
+    mode: CW
+    data_path: ${DATA_ROOT}/HB2A_TbSSL.dat
+    main_cif: ${DATA_ROOT}/cifs/TbSSL.cif
+    instprm_path: auto            # uses instrument_map.hb2a
+    fmthint: xye
+    main_phase_name: TbSSL_Main
+    background:
+      type: chebyschev-1
+      terms: 9
+    allowed_elements: [Tb, Be, Ge, O]
+    element_filter:
+      disallow_offlist: []
+      sample_env:
+        elements: ["Al"]
+        allow_pure: true
+        ban_cross_with_base: true
+        ignore_in_budget: true
+  
+  # ----------------------------------------------------------------------------
+  - name: tof_lk99
+    mode: TOF
+    data_path: ${DATA_ROOT}/PG3_56181-3.dat
+    instprm_path: auto            # uses instrument_map.pg3
+    fmthint: xye
+    main_cif: ${DATA_ROOT}/cifs/LK99_phase_FromRefinement.cif
+    main_phase_name: LK99_Main
+    background:
+      type: log interpolate
+      terms: 6
+    allowed_elements: [Cu, S, Pb, P, O]
+
+  # ----------------------------------------------------------------------------
+  - name: SNAP
+    mode: TOF
+    data_path: ${DATA_ROOT}/SNAP063403_all_reRed.gsa
+    instprm_path: ${DATA_ROOT}/instrument_params/SNAP063403_all_reRed.instprm
+    fmthint: auto
+    main_cif: ${DATA_ROOT}/cifs/SNAP063403_all_reRed.cif
+    main_phase_name: C5H4MoNO3
+    limits: [3079.0, 24529.2735]
+    background:
+      type: chebyschev-1
+      terms: 8
+      coeffs: [583.1, 149.9895, -45.6847, 50.813, 5.7261, 12.8958, 5.8057, 3.2251]
+    allowed_elements: [C, O, H, Mo, N]
+
+  #--------------------------------
+  - name: PZT_10_bank3_nomainv5
+    mode: TOF
+    data_path: ${DATA_ROOT}/NOM_PZT10_at_100K-3.xye
+    instprm_path: ${DATA_ROOT}/instrument_params/final_NOMAD_fourbanks_instrument_file.instprm
+    fmthint: auto
+    main_phase_name: PZT10_100K
+    background:
+      type: log interpolate
+      terms: 6
+    allowed_elements: [Pb, Zr, Ti, O]
+
+  - name: PZT_10_wild
+    mode: TOF
+    data_path: ${DATA_ROOT}/NOM_PZT10_at_100K-4_clean.xye
+    instprm_path: ${DATA_ROOT}/instrument_params/final_NOMAD_fourbanks_instrument_file.instprm
+    fmthint: auto
+    main_phase_name: PZT10_100K
+    background:
+      type: log interpolate
+      terms: 6
+    allowed_elements: [H, Li, Be, B, C, N, O, F, Na, Mg, Al, Si, P, S, Cl, K, Ca, Sc, Ti, V, Cr, Mn, Fe, Co, Ni, Cu, Zn, Ga, Ge, As, Se, Br, Rb, Sr, Y, Zr, Nb, Mo, Ru, Rh, Pd, Ag, Cd, In, Sn, Sb, Te, I, Cs, Ba, La, Ce, Pr, Nd, Sm, Eu, Gd, Tb, Dy, Ho, Er, Tm, Yb, Lu, Hf, Ta, W, Re, Os, Ir, Pt, Au, Hg, Tl, Pb, Bi]
+
+  - name: PZT_10_bank3_binned3x
+    mode: TOF
+    data_path: ${DATA_ROOT}/NOM_PZT10_at_100K-3_bin3.xye
+    main_cif: ${DATA_ROOT}/cifs/PZ10_R3ch.cif
+    instprm_path: ${DATA_ROOT}/instrument_params/final_NOMAD_fourbanks_instrument_file.instprm
+    fmthint: auto
+    main_phase_name: PZT10_100K
+    background:
+      type: log interpolate
+      terms: 6
+    allowed_elements: [Pb, Zr, Ti, O]
+
+  - name: PZT_10_bank3_450K_v5
+    mode: TOF
+    data_path: ${DATA_ROOT}/NOM_PZT10_at_450K-3.xye
+    instprm_path: ${DATA_ROOT}/instrument_params/final_NOMAD_fourbanks_instrument_file.instprm
+    fmthint: auto
+    main_phase_name: PZT10_100K
+    background:
+      type: log interpolate
+      terms: 6
+    allowed_elements: [Pb, Zr, Ti, O]

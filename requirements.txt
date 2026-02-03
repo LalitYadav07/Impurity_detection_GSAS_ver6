@@ -1,0 +1,11 @@
+streamlit
+pandas
+pyyaml
+torch --index-url https://download.pytorch.org/whl/cpu
+scikit-learn
+pymatgen
+plotly
+matplotlib
+Pillow
+numpy
+scipy
