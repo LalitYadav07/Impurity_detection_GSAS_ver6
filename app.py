@@ -74,6 +74,50 @@ def check_db_integrity():
 
 DB_EXISTS = check_db_integrity()
 
+    return True
+
+DB_EXISTS = check_db_integrity()
+
+def get_gdrive_id(url):
+    import re
+    patterns = [
+        r'/file/d/([^/]+)',
+        r'id=([^&]+)',
+        r'/open\?id=([^&]+)'
+    ]
+    for p in patterns:
+        match = re.search(p, url)
+        if match:
+            return match.group(1)
+    return None
+
+def download_file_from_google_drive(id, destination):
+    import requests
+    URL = "https://docs.google.com/uc?export=download"
+    session = requests.Session()
+
+    response = session.get(URL, params={'id': id}, stream=True)
+    token = get_confirm_token(response)
+
+    if token:
+        params = {'id': id, 'confirm': token}
+        response = session.get(URL, params=params, stream=True)
+
+    save_response_content(response, destination)    
+
+def get_confirm_token(response):
+    for key, value in response.cookies.items():
+        if key.startswith('download_warning'):
+            return value
+    return None
+
+def save_response_content(response, destination):
+    CHUNK_SIZE = 32768
+    with open(destination, "wb") as f:
+        for chunk in response.iter_content(CHUNK_SIZE):
+            if chunk: # filter out keep-alive new chunks
+                f.write(chunk)
+
 def download_and_extract_db(url):
     import requests
     import zipfile
@@ -82,25 +126,37 @@ def download_and_extract_db(url):
     DB_DIR.mkdir(parents=True, exist_ok=True)
     try:
         with st.status("📥 Downloading Database Archive...", expanded=True) as status:
-            st.write(f"Fetching from: {url}")
-            
-            # 1. Download ZIP
-            r = requests.get(url, stream=True)
-            r.raise_for_status()
-            total_size = int(r.headers.get('content-length', 0))
-            
-            # Using a temporary file for safety
             zip_path = DB_DIR / "temp_db.zip"
-            with open(zip_path, "wb") as f:
-                dl = 0
-                for chunk in r.iter_content(chunk_size=81920): # 80KB chunks
-                    if chunk:
-                        f.write(chunk)
-                        dl += len(chunk)
             
-            st.write("📦 Extracting files (this may take a moment)...")
+            # --- Check for Google Drive Link ---
+            gdrive_id = get_gdrive_id(url)
+            if gdrive_id:
+                st.write(f"Detected Google Drive Link (ID: {gdrive_id}). Handling virus scan warning...")
+                download_file_from_google_drive(gdrive_id, zip_path)
+            else:
+                # Standard Direct Link
+                st.write(f"Fetching from: {url}")
+                r = requests.get(url, stream=True)
+                r.raise_for_status()
+                with open(zip_path, "wb") as f:
+                    for chunk in r.iter_content(chunk_size=81920):
+                        if chunk:
+                            f.write(chunk)
             
             # 2. Extract
+            if not zipfile.is_zipfile(zip_path):
+                # Check if it's HTML (common error)
+                with open(zip_path, 'r', errors='ignore') as f:
+                    head = f.read(200)
+                if "<html" in head.lower() or "<!doctype" in head.lower():
+                    st.error("❌ The link returned a webpage, not a ZIP file. Please ensure it's a DIRECT download link.")
+                else:
+                    st.error("❌ Downloaded file is not a valid ZIP archive.")
+                zip_path.unlink(missing_ok=True)
+                status.update(label="❌ Download Failed", state="error")
+                return False
+
+            st.write("📦 Extracting files (this may take a moment)...")
             with zipfile.ZipFile(zip_path, 'r') as z:
                 z.extractall(DB_DIR)
                 
@@ -112,7 +168,7 @@ def download_and_extract_db(url):
                 status.update(label="✅ Database Installed Successfully!", state="complete")
                 return True
             else:
-                status.update(label="❌ Extraction failed or missing files.", state="error")
+                status.update(label="❌ Extraction failed: Missing essential files.", state="error")
                 return False
 
     except Exception as e:
