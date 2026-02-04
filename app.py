@@ -204,10 +204,22 @@ st.markdown("""
         --border-color: #dee2e6;
     }
     
+    /* ============ Stability & Layout ============ */
+    /* Force vertical scrollbar to prevent horizontal jitter when content expands */
+    html {
+        overflow-y: scroll;
+    }
+    
+    /* Stop the "fading" effect during reruns by minimizing transition noise */
     .stApp {
         background-color: var(--bg-primary);
         color: var(--text-primary);
+        transition: none !important;
     }
+</style>
+""", unsafe_allow_html=True)
+
+# --- UTILITIES ---
     
     /* ============ Elegant Buttons ============ */
     .stButton>button {
@@ -646,7 +658,7 @@ with st.sidebar:
                 The 2.3GB database was excluded from Git. 
                 **Download the ZIP archive** manually or provide a direct link.
             """)
-            db_url = st.text_input("Direct Download URL (ZIP)", placeholder="https://.../database_aug.zip")
+            db_url = st.text_input("Direct Download URL (ZIP)", value="https://drive.google.com/uc?id=1BxPXjdbn7oYTXKfDeLct5-2PMkhcLVSH", placeholder="https://.../database_aug.zip")
             if st.button("📥 Download & Install Database"):
                 if download_and_extract_db(db_url):
                     st.success("Database ready! Please refresh.")
@@ -907,5 +919,6 @@ with t_exp:
 # Only trigger rerun when actively running AND not yet finished
 # This prevents flickering after the run completes
 if st.session_state.run_active and not st.session_state.run_finished:
-    time.sleep(0.8) # Slightly longer poll rate for smoother UX
+    # 2.0s delay prevents the "glowing" effect caused by rapid React re-mounts
+    time.sleep(2.0) 
     st.rerun()
