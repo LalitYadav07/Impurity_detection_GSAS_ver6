@@ -17,5 +17,10 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
+          git config --global user.email "hf-sync@example.com"
+          git config --global user.name "HF Sync"
           git remote add hf https://Lalityadav07:$HF_TOKEN@huggingface.co/spaces/Lalityadav07/phase_detection
+          # Remove binaries from this specific push to bypass HF pre-receive hooks
+          git rm -r --cached ML_components/*.pt || true
+          git commit -m "Sync to HF (models handled via Docker download)" || true
           git push --force hf master:main
