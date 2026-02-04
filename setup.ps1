@@ -31,15 +31,17 @@ if (-not (Test-Path (Join-Path $pixi_bin_dir "git.exe"))) {
     pixi global install git
 }
 
-# 3. Clone GSAS-II Repo
+# 3. Clone / Update GSAS-II Repo
 $repoDir = Join-Path $PWD "GSAS-II"
+$git_exe = Join-Path $pixi_bin_dir "git.exe"
+
 if (-not (Test-Path $repoDir)) {
     Write-Host "Cloning GSAS-II repository..."
-    $git_exe = Join-Path $pixi_bin_dir "git.exe"
     & $git_exe clone --depth 1 https://github.com/AdvancedPhotonSource/GSAS-II.git GSAS-II
 }
 else {
-    Write-Host "GSAS-II repository already exists."
+    Write-Host "GSAS-II repository found. Ensuring submodules are initialized..."
+    & $git_exe submodule update --init --recursive
 }
 
 # 4. Create Root Environment and Install GSAS-II

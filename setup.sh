@@ -21,12 +21,13 @@ if ! command -v git &> /dev/null; then
     pixi global install git
 fi
 
-# 3. Clone GSAS-II Repo
+# 3. Clone / Update GSAS-II Repo
 if [ ! -d "GSAS-II" ]; then
     echo "Cloning GSAS-II repository..."
     git clone --depth 1 https://github.com/AdvancedPhotonSource/GSAS-II.git GSAS-II
 else
-    echo "GSAS-II repository already exists."
+    echo "GSAS-II repository found. Ensuring submodules are initialized..."
+    git submodule update --init --recursive
 fi
 
 # 4. Create Root Environment and Install GSAS-II
