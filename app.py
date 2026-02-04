@@ -188,92 +188,147 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# --- PREMIUM CSS ---
+# --- PREMIUM CSS: ORNL-Inspired Calm Theme ---
 st.markdown("""
 <style>
-    /* Dark Theme Optimization */
-    .stApp {
-        background-color: #0e1117;
-        color: #e0e0e0;
+    /* ============ Global Theme: Calm Light Mode ============ */
+    :root {
+        --ornl-green: #154734;
+        --ornl-green-light: #1e6b4a;
+        --accent-green: #4caf50;
+        --bg-primary: #f8f9fa;
+        --bg-secondary: #ffffff;
+        --bg-tertiary: #e9ecef;
+        --text-primary: #212529;
+        --text-secondary: #495057;
+        --border-color: #dee2e6;
     }
     
-    /* Elegant Buttons */
+    .stApp {
+        background-color: var(--bg-primary);
+        color: var(--text-primary);
+    }
+    
+    /* ============ Elegant Buttons ============ */
     .stButton>button {
         width: 100%;
         border-radius: 8px;
         height: 3em;
-        background: linear-gradient(90deg, #2e7d32 0%, #4caf50 100%);
+        background: linear-gradient(135deg, var(--ornl-green) 0%, var(--ornl-green-light) 100%);
         color: white;
         border: none;
         font-weight: 600;
-        transition: all 0.2s ease-in-out;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        transition: all 0.3s ease;
+        box-shadow: 0 4px 6px rgba(21, 71, 52, 0.2);
     }
     .stButton>button:hover {
         transform: translateY(-2px);
-        box-shadow: 0 6px 12px rgba(46, 125, 50, 0.4);
+        box-shadow: 0 8px 15px rgba(21, 71, 52, 0.3);
+        background: linear-gradient(135deg, var(--ornl-green-light) 0%, var(--accent-green) 100%);
     }
     
-    /* Metrics Cards */
+    /* ============ Metrics Cards ============ */
     div[data-testid="stMetric"] {
-        background-color: #1e1e1e;
+        background-color: var(--bg-secondary);
         padding: 15px;
         border-radius: 10px;
-        border-left: 4px solid #4caf50;
-        box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        border-left: 4px solid var(--ornl-green);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+    }
+    div[data-testid="stMetric"] label {
+        color: var(--text-secondary);
     }
     
-    /* Tabs */
+    /* ============ Tabs ============ */
     .stTabs [data-baseweb="tab-list"] {
-        gap: 20px;
+        gap: 8px;
         background-color: transparent;
     }
     .stTabs [data-baseweb="tab"] {
-        height: 50px;
-        white-space: pre-wrap;
-        background-color: #1e1e1e;
-        border-radius: 8px;
-        color: #b0bec5;
+        height: 45px;
+        background-color: var(--bg-secondary);
+        border-radius: 8px 8px 0 0;
+        color: var(--text-secondary);
         padding: 0 20px;
-        border: 1px solid #333;
+        border: 1px solid var(--border-color);
+        border-bottom: none;
+        transition: all 0.2s ease;
+    }
+    .stTabs [data-baseweb="tab"]:hover {
+        background-color: var(--bg-tertiary);
     }
     .stTabs [data-baseweb="tab"][aria-selected="true"] {
-        background-color: #2e7d32;
+        background-color: var(--ornl-green);
         color: white;
-        border: 1px solid #2e7d32;
+        border-color: var(--ornl-green);
     }
     
-    /* Code/Logs Container */
+    /* ============ Log Viewer ============ */
     .log-viewer {
         height: 500px; 
         overflow-y: scroll; 
-        background-color: #1a1c23; 
-        color: #d1d5db; 
+        background-color: #1e293b; 
+        color: #e2e8f0; 
         padding: 15px; 
         font-family: 'JetBrains Mono', 'Fira Code', monospace; 
         border-radius: 8px; 
-        border: 1px solid #2d2f39;
+        border: 1px solid #334155;
         font-size: 0.85em;
-        line-height: 1.5;
+        line-height: 1.6;
         white-space: pre-wrap;
+        box-shadow: inset 0 2px 4px rgba(0,0,0,0.1);
     }
-    
-    .log-header { color: #bb81e0; font-weight: bold; }
-    .log-metric { color: #4fd1c5; }
+    .log-header { color: #a78bfa; font-weight: bold; }
+    .log-metric { color: #34d399; }
 
-    /* File Explorer Styling */
+    /* ============ File Explorer ============ */
     .file-tree-item {
-        padding: 4px 8px;
-        border-radius: 4px;
-        margin-bottom: 2px;
+        padding: 6px 10px;
+        border-radius: 6px;
+        margin-bottom: 3px;
         transition: background-color 0.2s;
-        border-bottom: 1px solid #2d2f39;
+        border-bottom: 1px solid var(--border-color);
+        background-color: var(--bg-secondary);
     }
     .file-tree-item:hover {
-        background-color: #2d2f39;
+        background-color: var(--bg-tertiary);
     }
-    .file-tree-folder { color: #f6e05e; font-weight: bold; }
-    .file-tree-file { color: #a0aec0; }
+    .file-tree-folder { color: var(--ornl-green); font-weight: bold; }
+    .file-tree-file { color: var(--text-secondary); }
+
+    /* ============ Sidebar ============ */
+    [data-testid="stSidebar"] {
+        background-color: var(--bg-secondary);
+        border-right: 1px solid var(--border-color);
+    }
+    [data-testid="stSidebar"] .stMarkdown h1,
+    [data-testid="stSidebar"] .stMarkdown h2,
+    [data-testid="stSidebar"] .stMarkdown h3 {
+        color: var(--ornl-green);
+    }
+
+    /* ============ Expanders ============ */
+    .streamlit-expanderHeader {
+        background-color: var(--bg-secondary);
+        border-radius: 8px;
+        border: 1px solid var(--border-color);
+    }
+    .streamlit-expanderContent {
+        background-color: var(--bg-secondary);
+        border: 1px solid var(--border-color);
+        border-top: none;
+        border-radius: 0 0 8px 8px;
+    }
+
+    /* ============ Progress Bar ============ */
+    .stProgress > div > div > div > div {
+        background: linear-gradient(90deg, var(--ornl-green) 0%, var(--accent-green) 100%);
+    }
+    
+    /* ============ Success/Warning/Error Boxes ============ */
+    .stSuccess, .stInfo, .stWarning, .stError {
+        border-radius: 8px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -849,6 +904,8 @@ with t_exp:
         st.info("No active run directory.")
 
 # --- GAME LOOP: RERUN TRIGGER ---
-if st.session_state.run_active:
-    time.sleep(0.5) # Balanced poll rate to reduce flickering
+# Only trigger rerun when actively running AND not yet finished
+# This prevents flickering after the run completes
+if st.session_state.run_active and not st.session_state.run_finished:
+    time.sleep(0.8) # Slightly longer poll rate for smoother UX
     st.rerun()
