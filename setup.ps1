@@ -42,27 +42,28 @@ else {
     Write-Host "GSAS-II repository already exists."
 }
 
-# 4. Create Environment and Install GSAS-II
-Write-Host "Creating environment and installing GSAS-II (this may take several minutes)..."
-$pixiDir = Join-Path $repoDir "pixi"
-Push-Location $pixiDir
+# 4. Create Root Environment and Install GSAS-II
+Write-Host "Creating root environment and installing GSAS-II (this may take several minutes)..."
 try {
-    # Ensure extra scientific dependencies are included
-    Write-Host "Adding Scientific dependencies (pandas, pyyaml, pytorch-cpu, scikit-learn, pymatgen)..."
-    pixi add pandas pyyaml pytorch-cpu scikit-learn pymatgen
-
+    # 4.1 Install GSAS-II binaries using its internal pixi config
+    Write-Host "Configuring GSAS-II binaries..."
+    $g2PixiDir = Join-Path $repoDir "pixi"
+    Push-Location $g2PixiDir
     pixi run install-editable-win
-}
-finally {
     Pop-Location
+
+    # 4.2 Initialize root environment dependencies
+    Write-Host "Solving root environment dependencies..."
+    pixi install
+}
+catch {
+    Write-Error "Environment setup failed: $_"
 }
 
 # 5. Validation
 Write-Host "`n--- Validating Installation ---" -ForegroundColor Cyan
 $testCmd = "import GSASII.GSASIIscriptable as G2sc; print('OK', G2sc.__file__)"
-Push-Location $pixiDir
 $result = pixi run python -c $testCmd
-Pop-Location
 
 if ($result -match "OK") {
     Write-Host "`nSUCCESS: GSAS-II is importable!" -ForegroundColor Green

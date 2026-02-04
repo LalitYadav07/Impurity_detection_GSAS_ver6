@@ -1,0 +1,50 @@
+[workspace]
+name = "impurity-detector"
+authors = ["Lalit Yadav"]
+channels = ["conda-forge"]
+platforms = ["linux-64", "win-64"]
+description = "Automated Impurity Phase Detection using GSAS-II"
+
+[dependencies]
+python = ">=3.10,<3.11"
+h5py = ">=3.12.1"
+imageio = ">=2.36.1"
+matplotlib = ">=3.10.0"
+numpy = ">=1.26.0,<2"
+pillow = ">=11.1.0"
+scipy = ">=1.15.0"
+tomli = ">=2.2.1"
+requests = ">=2.32.3"
+wxpython = ">=4.2.2"
+pip = ">=24.3.1"
+pycifrw = ">=4.4.0"
+gitpython = ">=3.1.44"
+seekpath = ">=2.1.0"
+pybaselines = ">=1.2.0"
+pandas = ">=2.2.0"
+pyyaml = ">=6.0.1"
+pytorch-cpu = ">=2.0.0"
+scikit-learn = ">=1.3.0"
+pymatgen = ">=2024.1.1"
+streamlit = ">=1.30.0"
+plotly = ">=5.18.0"
+altair = "<5"
+psutil = ">=5.9.0"
+
+[target.win-64.dependencies]
+gfortran = ">=14.2.0"
+gcc = ">=14.2.0"
+
+[tasks]
+# Installation
+setup-win = "powershell ./setup.ps1"
+setup-linux = "bash ./setup.sh"
+
+# Execution
+ui = "streamlit run app.py --browser.gatherUsageStats=false"
+cli-test = "python scripts/gsas_complete_pipeline_nomain.py --dry-run"
+cli-run = "python scripts/gsas_complete_pipeline_nomain.py"
+
+# Environment injection for GSAS-II
+[environments]
+default = { solve-group = "default" }

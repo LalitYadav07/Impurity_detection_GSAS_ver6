@@ -29,15 +29,17 @@ else
     echo "GSAS-II repository already exists."
 fi
 
-# 4. Create Environment and Install GSAS-II
-echo "Creating environment and installing GSAS-II (this may take several minutes)..."
+# 4. Create Root Environment and Install GSAS-II
+echo "Creating root environment and installing GSAS-II (this may take several minutes)..."
+# 4.1 Install GSAS-II binaries using its internal pixi config
+echo "Configuring GSAS-II binaries..."
 cd GSAS-II/pixi
-# Add extra scientific dependencies
-echo "Adding Scientific dependencies (pandas, pyyaml, pytorch-cpu, scikit-learn, pymatgen)..."
-pixi add pandas pyyaml pytorch-cpu scikit-learn pymatgen
-
-# On Linux we use install-editable
 pixi run install-editable
+cd ../..
+
+# 4.2 Initialize root environment dependencies
+echo "Solving root environment dependencies..."
+pixi install
 
 # 5. Validation
 echo -e "\n--- Validating Installation ---"
