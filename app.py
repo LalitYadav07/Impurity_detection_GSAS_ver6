@@ -12,6 +12,7 @@ import queue
 import html
 import psutil
 import gc
+import random
 import importlib.util
 from PIL import ImageFile
 ImageFile.LOAD_TRUNCATED_IMAGES = True
@@ -278,7 +279,8 @@ st.markdown("""
     /* ============ Log Viewer ============ */
     .log-viewer {
         height: 500px; 
-        overflow-y: scroll; 
+        overflow-y: scroll !important; 
+        scroll-behavior: smooth;
         background-color: #1e293b; 
         color: #e2e8f0; 
         padding: 15px; 
@@ -336,10 +338,147 @@ st.markdown("""
     .stProgress > div > div > div > div {
         background: linear-gradient(90deg, var(--ornl-green) 0%, var(--accent-green) 100%);
     }
+
+    /* ============ Decision Engine (Knee Analysis) ============ */
+    .decision-engine {
+        height: 300px; 
+        overflow-y: auto; 
+        background-color: #0f172a; 
+        color: #cbd5e1; 
+        padding: 15px; 
+        font-family: 'Inter', sans-serif; 
+        border-radius: 12px; 
+        border: 1px solid #1e293b;
+        border-left: 6px solid #f59e0b;
+        font-size: 0.85rem;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+        margin-top: 15px;
+    }
+    .decision-item {
+        margin-bottom: 12px;
+        padding: 10px;
+        background-color: #1e293b;
+        border-radius: 6px;
+        border-left: 2px solid #f59e0b;
+        animation: fadeIn 0.5s ease-out;
+    }
+    .decision-tag {
+        color: #f59e0b;
+        font-weight: 800;
+        font-size: 0.7rem;
+        letter-spacing: 0.05em;
+        margin-bottom: 4px;
+        display: block;
+    }
+    @keyframes fadeIn {
+        from { opacity: 0; transform: translateY(5px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
     
     /* ============ Success/Warning/Error Boxes ============ */
     .stSuccess, .stInfo, .stWarning, .stError {
         border-radius: 8px;
+    }
+
+    /* ============ Premium Timeline UI ============ */
+    @keyframes pulse {
+        0% { box-shadow: 0 0 0 0 rgba(21, 71, 52, 0.4); }
+        70% { box-shadow: 0 0 0 10px rgba(21, 71, 52, 0); }
+        100% { box-shadow: 0 0 0 0 rgba(21, 71, 52, 0); }
+    }
+    
+    .timeline-container {
+        padding: 10px 5px;
+        font-family: 'Inter', sans-serif;
+    }
+    .timeline-item {
+        position: relative;
+        padding-left: 30px;
+        padding-bottom: 20px;
+        border-left: 2px solid var(--border-color);
+        margin-left: 10px;
+    }
+    .timeline-item.last {
+        border-left: none;
+    }
+    .timeline-item.active {
+        border-left-color: var(--ornl-green);
+    }
+    .timeline-item.complete {
+        border-left-color: var(--accent-green);
+    }
+    
+    .timeline-dot {
+        position: absolute;
+        left: -8px;
+        top: 0;
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        background: var(--bg-tertiary);
+        border: 2px solid var(--border-color);
+        z-index: 1;
+    }
+    .timeline-item.active .timeline-dot {
+        background: var(--ornl-green);
+        border-color: var(--ornl-green);
+        animation: pulse 2s infinite;
+    }
+    .timeline-item.complete .timeline-dot {
+        background: var(--accent-green);
+        border-color: var(--accent-green);
+    }
+    
+    .timeline-content {
+        top: -4px;
+        position: relative;
+    }
+    .timeline-title {
+        font-size: 0.95rem;
+        font-weight: 600;
+        color: var(--text-primary);
+        margin-bottom: 2px;
+    }
+    .timeline-subtitle {
+        font-size: 0.8rem;
+        color: var(--text-secondary);
+    }
+    .timeline-item.active .timeline-title {
+        color: var(--ornl-green);
+    }
+    .timeline-item.complete .timeline-title {
+        color: var(--text-secondary);
+        text-decoration: line-through;
+        opacity: 0.8;
+    }
+
+    /* Sub-steps (Pass stages) */
+    .sub-steps {
+        margin-top: 10px;
+        padding-left: 5px;
+        border-left: 1px dashed var(--border-color);
+        margin-left: 5px;
+    }
+    .sub-step {
+        padding: 4px 15px;
+        font-size: 0.85rem;
+        color: var(--text-secondary);
+        position: relative;
+    }
+    .sub-step.active {
+        color: var(--ornl-green-light);
+        font-weight: 600;
+    }
+    .sub-step.active::before {
+        content: "→";
+        position: absolute;
+        left: 0;
+        animation: bounceX 1s infinite alternate;
+    }
+    
+    @keyframes bounceX {
+        from { transform: translateX(0); }
+        to { transform: translateX(3px); }
     }
 </style>
 """, unsafe_allow_html=True)
@@ -371,6 +510,8 @@ if 'progress' not in st.session_state:
     st.session_state.progress = 0
 if 'status_msg' not in st.session_state:
     st.session_state.status_msg = "Ready"
+if 'knee_logs' not in st.session_state:
+    st.session_state.knee_logs = []
 
 if 'pipeline_state' not in st.session_state:
     st.session_state.pipeline_state = {
@@ -417,7 +558,7 @@ GLOBAL_STAGES = [
 ]
 
 PASS_STAGES = [
-    ("screening", "Candidate Screening"),
+    ("screening", "ML Screening"),
     ("nudging", "Lattice Nudging"),
     ("pearson", "Pearson Refinement"),
     ("joint", "Joint Refinement"),
@@ -430,38 +571,39 @@ def parse_pipeline_log_line(line, state):
     l = line.strip()
     
     # Global Transitions
-    if "STAGE 0: BOOTSTRAP" in l:
+    l_up = l.upper()
+    if "STAGE 0: BOOTSTRAP" in l_up:
         state["global_stage_idx"] = 0
         state["stage0_status"] = "running"
-    elif "STAGE 1: MAIN PHASE REFINEMENT" in l:
+    elif "STAGE 1: MAIN PHASE REFINEMENT" in l_up:
         if state["global_stage_idx"] < 1:
             if state["stage0_status"] == "pending":
                 state["stage0_status"] = "skipped"
             state["global_stage_idx"] = 1
-    elif "STAGE 2: RESIDUAL EXTRACTION" in l:
+    elif "STAGE 2: RESIDUAL EXTRACTION" in l_up:
         state["global_stage_idx"] = 2
-    elif "SEQUENTIAL PASS" in l and "discovery" in l:
+    elif "SEQUENTIAL PHASES" in l_up or ("SEQUENTIAL PASS" in l_up and "discovery" in l):
         state["global_stage_idx"] = 3
-        m = re.search(r"PASS (\d+)", l)
+        m = re.search(r"PASS (\d+)", l, re.I)
         if m:
             state["current_pass"] = int(m.group(1))
             state["pass_stage"] = "screening"
-    elif "STAGE 6: FINAL REPORTING" in l:
+    elif "FINAL REPORTING" in l_up or "PIPELINE COMPLETED SUCCESSFULLY" in l_up:
         state["global_stage_idx"] = 4
         
-    # Pass-level anchors
+    # Pass-level anchors (within Global Stage 3)
     if state["global_stage_idx"] == 3:
-        if "Comprehensive Candidate Screening" in l:
+        if "COMPREHENSIVE CANDIDATE SCREENING" in l_up:
             state["pass_stage"] = "screening"
-        elif "[INFO]" in l and "Processing top" in l:
+        elif "PROCESSING TOP" in l_up:
             state["pass_stage"] = "nudging"
-        elif "[PEARSON]" in l:
+        elif "[PEARSON]" in l_up:
             state["pass_stage"] = "pearson"
-        elif "[clone]" in l and "joint" in l:
+        elif "[CLONE]" in l_up and any(k in l_up for k in ["JOINT", "KEPT", "COMMIT"]):
             state["pass_stage"] = "joint"
-        elif "[polish] Starting" in l:
+        elif "[POLISH] STARTING" in l_up:
             state["pass_stage"] = "polish"
-        elif "PASS" in l and "SUMMARY" in l:
+        elif "PASS" in l_up and "SUMMARY" in l_up:
             state["pass_stage"] = "summary"
             
     return state
@@ -533,7 +675,9 @@ def render_file_explorer(path: Path, key_prefix: str, filter_exts=None, depth=0)
             if item.suffix.lower() in [".png", ".jpg", ".jpeg"]:
                 if item.stat().st_size > 0:
                     # Memory optimization: Only auto-expand in Plot folders, otherwise use a toggle
-                    should_preview = "Plots" in str(item.parent) or "Diagnostics" in str(item.parent)
+                    # AND: Only auto-expand if the run is NOT active to prevent UI churn
+                    is_running = st.session_state.get("run_active", False)
+                    should_preview = ("Plots" in str(item.parent) or "Diagnostics" in str(item.parent)) and not is_running
                     
                     if should_preview:
                         try:
@@ -571,7 +715,18 @@ def update_ui_state():
         # Update Progress State
         state = st.session_state.pipeline_state
         
-        # Check Structured Events (JSONL)
+        # 1. Fallback / Complementary: Parsing raw logs (Heuristic-based)
+        if new_lines:
+            KNEE_KEYS = ["[KNEE] hist/UNION", "[KNEE] nudge/score", "[KNEE] nudge/filter", "[KNEE] pearson/r", "[KNEE] pearson/filter"]
+            for line in new_lines:
+                state = parse_pipeline_log_line(line, state)
+                # Populate Decision Logic
+                if any(k in line for k in KNEE_KEYS):
+                    st.session_state.knee_logs.append(line.strip())
+                    if len(st.session_state.knee_logs) > 100:
+                        st.session_state.knee_logs = st.session_state.knee_logs[-100:]
+
+        # 2. Primary Source: Structured Events (JSONL) - Accurate and high-confidence
         if st.session_state.run_dir:
             run_path = Path(st.session_state.run_dir)
             evt_file = run_path / "Technical" / "Logs" / "run_events.jsonl"
@@ -597,20 +752,22 @@ def update_ui_state():
                                         state["stage0_status"] = "running"
                                 elif "Stage 1" in stage:
                                     state["global_stage_idx"] = 1
+                                elif "Stage 2" in stage:
+                                    state["global_stage_idx"] = 2
                                 elif "Pass" in stage:
                                     state["global_stage_idx"] = 3
                                     state["current_pass"] = metrics.get("pass", state["current_pass"])
                                     event_type = metrics.get("event")
-                                    if event_type == "pass_start": state["pass_stage"] = "screening"
-                                    elif event_type == "joint_refine_start": state["pass_stage"] = "joint"
+                                    if event_type in ["pass_start", "screening_start"]: state["pass_stage"] = "screening"
+                                    elif event_type == "nudging_start": state["pass_stage"] = "nudging"
+                                    elif event_type == "pearson_start": state["pass_stage"] = "pearson"
+                                    elif event_type in ["joint_compare_start", "joint_refine_start"]: state["pass_stage"] = "joint"
+                                    elif event_type == "polish_start": state["pass_stage"] = "polish"
                                     elif event_type == "pass_end": state["pass_stage"] = "summary"
+                                elif "Final" in stage or "Complete" in stage:
+                                    state["global_stage_idx"] = 4
                 except:
                     pass
-
-        # Fallback to parsing logs
-        if new_lines:
-            for line in new_lines:
-                state = parse_pipeline_log_line(line, state)
         
         st.session_state.pipeline_state = state
 
@@ -623,18 +780,13 @@ def update_ui_state():
                 st.balloons()
             else:
                 st.error(f"❌ Run Failed (Exit Code {process.returncode})")
+            
+            # Important: Trigger a full rerun to synchronize the "Results" and "Explorer" tabs
+            # since they are outside this fragment.
+            st.rerun()
 
-# --- GAME LOOP: FRAGMENT-BASED UPDATE ---
-@st.fragment(run_every=2.0)
-def run_monitor_fragment():
-    """Isolated fragment that updates state and logs periodically."""
-    if st.session_state.run_active:
-        update_ui_state()
-
-# Invoke the fragment
-run_monitor_fragment()
-# Periodic Memory Cleanup
-gc.collect()
+# Note: run_monitor_fragment was consolidated into the log/sidebar fragments below 
+# to ensure data synchronization and avoid queue race conditions.
 
 # --- UI HEADER ---
 st.title("🔬Impurity Phase Detection for NPD")
@@ -774,51 +926,69 @@ with st.sidebar:
             st.rerun()
             
     st.markdown("---")
-    # Tracker
-    st.caption(f"Status: {st.session_state.get('current_stage_desc', 'Ready')}")
-    st.progress(st.session_state.progress / 100)
-    
-    # Detailed Stage Tracker
-    if st.session_state.run_active or st.session_state.run_finished:
-        st.markdown("### 🚦 Pipeline Progress")
-        state = st.session_state.pipeline_state
-        g_idx = state["global_stage_idx"]
-        
-        for i, stage_name in enumerate(GLOBAL_STAGES):
-            if i == 0: # Special handling for Stage 0 (Skipped/Running/Done)
-                status = state["stage0_status"]
-                if status == "complete":
-                    st.markdown(f"✅ <span style='color: #48bb78; text-decoration: line-through;'>{stage_name}</span>", unsafe_allow_html=True)
-                elif status == "skipped":
-                    st.markdown(f"⏩ <span style='color: #718096; text-decoration: line-through;'>{stage_name} (Skipped)</span>", unsafe_allow_html=True)
-                elif status == "running":
-                    st.markdown(f"**🔵 {stage_name}**")
-                else:
-                    st.markdown(f"⚪ <span style='color: #718096;'>{stage_name}</span>", unsafe_allow_html=True)
+    # Wrap status and progress in a fragment to update smoothly
+    @st.fragment(run_every=2.0)
+    def render_sidebar_progress():
+        if st.session_state.run_active or st.session_state.run_finished:
+            st.caption(f"Status: {st.session_state.get('current_stage_desc', 'Ready')}")
+            st.progress(min(1.0, max(0.0, st.session_state.progress / 100)))
             
-            elif i < g_idx:
-                st.markdown(f"✅ <span style='color: #48bb78; text-decoration: line-through;'>{stage_name}</span>", unsafe_allow_html=True)
-            elif i == g_idx:
-                st.markdown(f"**🔵 {stage_name}**")
-                # Nested Pass Progress
-                if i == 3: # Sequential Passes
+            st.markdown("### 🚦 Pipeline Progress")
+            state = st.session_state.pipeline_state
+            g_idx = state["global_stage_idx"]
+            
+            html_parts = ['<div class="timeline-container">']
+            
+            for i, stage_name in enumerate(GLOBAL_STAGES):
+                is_last = (i == len(GLOBAL_STAGES) - 1)
+                item_class = "timeline-item"
+                if is_last: item_class += " last"
+                
+                # Determine status
+                if i == 0:
+                    status = state["stage0_status"]
+                    if status == "complete": status_class = "complete"
+                    elif status == "running": status_class = "active"
+                    elif status == "skipped": status_class = "complete" # Or "skipped"
+                    else: status_class = ""
+                else:
+                    if i < g_idx: status_class = "complete"
+                    elif i == g_idx: status_class = "active"
+                    else: status_class = ""
+                
+                html_parts.append(f'<div class="{item_class} {status_class}">')
+                html_parts.append('<div class="timeline-dot"></div>')
+                html_parts.append('<div class="timeline-content">')
+                
+                # Icon mapping for fun
+                icons = ["🚀", "🔬", "🛰️", "🔄", "📊"]
+                icon = icons[i] if i < len(icons) else "🔹"
+                
+                title = f"{icon} {stage_name}"
+                html_parts.append(f'<div class="timeline-title">{title}</div>')
+                
+                # Sub-stages for Pass
+                if i == 3 and i == g_idx:
                     curr_pass = state["current_pass"]
                     curr_p_stage = state["pass_stage"]
-                    st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;**Pass {curr_pass}**")
+                    html_parts.append(f'<div class="timeline-subtitle">Pass {curr_pass} in progress</div>')
+                    html_parts.append('<div class="sub-steps">')
                     for s_key, s_name in PASS_STAGES:
-                        # Simple monotonic check for pass stages
-                        matched = False
-                        for sk, _ in PASS_STAGES:
-                            if sk == curr_p_stage: matched = True; break
-                        
-                        # Since we don't track historical pass stages perfectly yet, 
-                        # just show current vs pending
-                        if s_key == curr_p_stage:
-                            st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;🔹 {s_name}")
-                        else:
-                            st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;▫️ {s_name}")
-            else:
-                st.markdown(f"⚪ <span style='color: #718096;'>{stage_name}</span>", unsafe_allow_html=True)
+                        sub_class = "sub-step"
+                        if s_key == curr_p_stage: sub_class += " active"
+                        html_parts.append(f'<div class="{sub_class}">{s_name}</div>')
+                    html_parts.append('</div>')
+                
+                html_parts.append('</div></div>')
+            
+            html_parts.append('</div>')
+            st.markdown("".join(html_parts), unsafe_allow_html=True)
+        else:
+            st.caption("Status: Ready")
+            st.progress(0)
+            st.info("Start a run to see live progress.")
+
+    render_sidebar_progress()
 
 # --- TABS ---
 t_run, t_res, t_exp = st.tabs(["🚀 Run & Progress", "📊 Results", "📂 Run File Browser"])
@@ -826,65 +996,117 @@ t_run, t_res, t_exp = st.tabs(["🚀 Run & Progress", "📊 Results", "📂 Run 
 with t_run:
     c1, c2 = st.columns([2, 1])
     with c1:
-        c1_t, c1_a = st.columns([1, 1])
-        c1_t.subheader("📜 Live Logs")
-        st.session_state.log_autoscroll = c1_a.checkbox("🔄 Autoscroll", value=st.session_state.log_autoscroll)
+        @st.fragment(run_every=2.0)
+        def render_logs_and_monitor():
+            # 1. Heartbeat: Update state for the entire app from this fragment
+            if st.session_state.run_active:
+                update_ui_state()
+                # Occasional GC
+                if random.random() < 0.05: gc.collect()
+
+            c1_t, c1_a = st.columns([1, 1])
+            c1_t.subheader("📜 Live Logs")
+            st.session_state.log_autoscroll = c1_a.checkbox("🔄 Autoscroll", value=st.session_state.log_autoscroll, key="log_as_toggle")
+            
+            # Format logs with highlighting
+            formatted_logs = "<br>".join([format_log_line(line.rstrip()) for line in st.session_state.log_lines])
+            
+            # Unique IDs to prevent collision and "gray out" jank
+            run_slug = re.sub(r'[^a-zA-Z0-9]', '_', st.session_state.get('run_name', 'default'))
+            container_id = f"log-container-{run_slug}"
+
+            # Log viewer container
+            st.markdown(f'<div id="{container_id}" class="log-viewer">{formatted_logs}</div>', unsafe_allow_html=True)
+            
+            # 2. MutationObserver Autoscroll Logic (Most Robust)
+            if st.session_state.log_autoscroll:
+                cache_buster = len(st.session_state.log_lines)
+                st.markdown(f"""
+                    <script data-cache="{cache_buster}">
+                    (function() {{
+                        const container = window.parent.document.getElementById('{container_id}');
+                        if (!container) return;
+
+                        // Immediate scroll to bottom
+                        container.scrollTop = container.scrollHeight;
+
+                        // Setup Observer to watch for new lines added by React/Streamlit
+                        const observer = new MutationObserver(() => {{
+                            container.scrollTop = container.scrollHeight;
+                        }});
+
+                        observer.observe(container, {{
+                            childList: true,
+                            subtree: true,
+                            characterData: true
+                        }});
+
+                        // Fallback safety scrolls for fragments
+                        setTimeout(() => {{ container.scrollTop = container.scrollHeight; }}, 100);
+                        setTimeout(() => {{ container.scrollTop = container.scrollHeight; }}, 500);
+                    }})();
+                    </script>
+                    """, unsafe_allow_html=True)
         
-        # Format logs with highlighting
-        formatted_logs = "<br>".join([format_log_line(line.rstrip()) for line in st.session_state.log_lines])
+        render_logs_and_monitor()
+
+        # Filter Logic Panel
+        st.markdown("---")
+        st.markdown("### 🧠 Filter Logic")
+        st.markdown('<p style="font-size: 0.8rem; color: #718096; margin-top: -10px;">Automated reasoning and knee-filter analytics.</p>', unsafe_allow_html=True)
         
-        # Log viewer with anchor for robust JS-driven autoscroll
-        st.markdown(f'''
-            <div id="log-container" class="log-viewer">
-                {formatted_logs}
-                <div id="log-anchor"></div>
-            </div>
-        ''', unsafe_allow_html=True)
+        @st.fragment(run_every=2.5)
+        def render_decision_engine():
+            if not st.session_state.knee_logs:
+                st.markdown('<div class="decision-engine" style="display: flex; align-items: center; justify-content: center; color: #475569;">Waiting for intelligence events...</div>', unsafe_allow_html=True)
+                return
+
+            # Build HTML string manually to avoid markdown auto-formatting glitches
+            items_html = ""
+            for line in reversed(st.session_state.knee_logs):
+                # Parse tag and message
+                # Example: [KNEE] nudge/filter (pass 1): 10 → 4 ['pid1', 'pid2']
+                parts = line.split(":", 1)
+                tag = parts[0].replace("[KNEE]", "").strip() if len(parts) > 1 else "ANALYTICS"
+                msg = parts[1].strip() if len(parts) > 1 else line
+                
+                # Use a single-line string to prevent Streamlit from interpreting it as a code block
+                items_html += f'<div class="decision-item"><span class="decision-tag">⚡ {tag}</span><div>{html.escape(msg)}</div></div>'
+            
+            st.markdown(f'<div class="decision-engine">{items_html}</div>', unsafe_allow_html=True)
         
-        # Robust Autoscroll JS using scrollIntoView with a small delay
-        if st.session_state.log_autoscroll:
-            st.markdown("""
-                <script>
-                setTimeout(function() {
-                    var anchor = window.parent.document.getElementById('log-anchor');
-                    if (anchor) {
-                        anchor.scrollIntoView({behavior: 'smooth', block: 'end'});
-                    }
-                }, 100);
-                </script>
-                """, unsafe_allow_html=True)
+        render_decision_engine()
     
     with c2:
         st.subheader("🖼️ Artifacts")
-        if st.session_state.run_dir:
-            rdir = Path(st.session_state.run_dir)
-            
-            # Primary: New Reorganized Path
-            p_dir_new = rdir / "Results" / "Plots"
-            diag_dir = rdir / "Diagnostics"
-            
-            # Legacy/Fallback paths
-            p_dir_old = rdir / "plots"
-            sub_plots = rdir / st.session_state.get('run_name', '') / "plots"
-            
-            if p_dir_new.exists():
-                st.markdown("**Plots**")
-                render_file_explorer(p_dir_new, "art_new", [".png", ".jpg", ".pdf"])
-            
-            if diag_dir.exists():
-                st.markdown("**Diagnostics**")
-                render_file_explorer(diag_dir, "art_diag", [".png", ".jpg", ".pdf"])
+        @st.fragment(run_every=30.0)
+        def render_artifacts_fragment():
+            if st.session_state.run_dir:
+                rdir = Path(st.session_state.run_dir)
+                p_dir_new = rdir / "Results" / "Plots"
+                diag_dir = rdir / "Diagnostics"
+                p_dir_old = rdir / "plots"
+                sub_plots = rdir / st.session_state.get('run_name', '') / "plots"
+                
+                if p_dir_new.exists():
+                    st.markdown("**Plots**")
+                    render_file_explorer(p_dir_new, "art_new", [".png", ".jpg", ".pdf"])
+                
+                if diag_dir.exists():
+                    st.markdown("**Diagnostics**")
+                    render_file_explorer(diag_dir, "art_diag", [".png", ".jpg", ".pdf"])
 
-            if not p_dir_new.exists() and not diag_dir.exists():
-                # Fallback check
-                if p_dir_old.exists():
-                    render_file_explorer(p_dir_old, "art_root", [".png", ".jpg", ".pdf"])
-                elif sub_plots.exists():
-                    render_file_explorer(sub_plots, "art_sub", [".png", ".jpg", ".pdf"])
-                else:
-                    st.info("No plots directory found yet.")
-        else:
-            st.info("Start a run to see artifacts.")
+                if not p_dir_new.exists() and not diag_dir.exists():
+                    if p_dir_old.exists():
+                        render_file_explorer(p_dir_old, "art_root", [".png", ".jpg", ".pdf"])
+                    elif sub_plots.exists():
+                        render_file_explorer(sub_plots, "art_sub", [".png", ".jpg", ".pdf"])
+                    else:
+                        st.info("No plots directory found yet.")
+            else:
+                st.info("Start a run to see artifacts.")
+        
+        render_artifacts_fragment()
 
 with t_res:
     if st.session_state.run_dir:
@@ -929,10 +1151,3 @@ with t_exp:
     else:
         st.info("No active run directory.")
 
-# --- GAME LOOP: RERUN TRIGGER ---
-# Only trigger rerun when actively running AND not yet finished
-# This prevents flickering after the run completes
-if st.session_state.run_active and not st.session_state.run_finished:
-    # 2.0s delay prevents the "glowing" effect caused by rapid React re-mounts
-    time.sleep(2.0) 
-    st.rerun()

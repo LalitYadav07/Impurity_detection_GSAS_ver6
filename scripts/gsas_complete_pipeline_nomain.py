@@ -681,6 +681,11 @@ class UnifiedPipeline:
         """
         # Knee filter config (across stages)
         kcfg = (self.top_cfg.get("knee_filter") or {})
+        
+        # Derive progress context
+        seq_max_passes = int(self.top_cfg.get("max_passes", 3))
+        progress_base = 40 + ((pass_ix - 1) / seq_max_passes) * 50
+        progress_step = 50 / seq_max_passes
 
         # Stage-3: candidate screening
         analyzer = GSASPatternAnalyzer(pm_for_tools.main_histogram, pm_for_tools.main_phase)
@@ -700,6 +705,9 @@ class UnifiedPipeline:
         all_ids = list(self.db_loader.catalog['id'].astype(str))  # type: ignore[union-attr]
         all_ids = self._filter_ids(all_ids, exclude_ids)
 
+        if self.emitter:
+            self.emitter.emit(f"Pass {pass_ix}", "ML Screening", progress_base + 0.1 * progress_step, metrics={"pass": pass_ix, "event": "screening_start"})
+        
         final_candidates = screener.screen_candidates_comprehensive(
             residual_Q=residual_Q,
             Q=Q,
@@ -712,7 +720,10 @@ class UnifiedPipeline:
             hist_plot_cfg=hist_plot_cfg,
             work_dir=work_dir,
         )
-        print(f"[RESULT] [pass {pass_ix}] Screened {len(final_candidates)} candidate phases")
+        print(f"[RESULT] [pass {pass_ix}] ML screening complete: found {len(final_candidates)} phases")
+        
+        if self.emitter:
+             self.emitter.emit(f"Pass {pass_ix}", f"Screened {len(final_candidates)} candidates", progress_base + 0.15 * progress_step, metrics={"pass": pass_ix})
 
         # ----- KNEE: Histogram (union over ml_score, ml_cosine, ml_explained, ml_present_prob) -----
         if kcfg.get("enable_hist", False) and final_candidates:
@@ -825,6 +836,9 @@ class UnifiedPipeline:
         from lattice_nudger import LatticeNudger
         topN = len(phase_ids)
         print(f"[INFO] [pass {pass_ix}] Processing top {topN} candidates")
+        
+        if self.emitter:
+            self.emitter.emit(f"Pass {pass_ix}", f"Lattice Nudging for top {topN} candidates", progress_base + 0.2 * progress_step, metrics={"pass": pass_ix, "event": "nudging_start"})
 
         stage4_results = []
         try:
@@ -894,6 +908,9 @@ class UnifiedPipeline:
         resid_dir.mkdir(parents=True, exist_ok=True)
         resid_xye = resid_dir / f"{name}_residual_pass{pass_ix}.xye"
         _write_xye_from_arrays(str(resid_xye), x_native, residual_native, shift_positive=True)
+
+        if self.emitter:
+             self.emitter.emit(f"Pass {pass_ix}", "Pearson Refinement (Lattice Refinement)", progress_base + 0.3 * progress_step, metrics={"pass": pass_ix, "event": "pearson_start"})
 
         pearson_best_by_pid: Dict[str, float] = {}
         for pid in phase_ids:
@@ -1426,10 +1443,15 @@ class UnifiedPipeline:
             # INITIAL RESIDUAL (pass 1 seed)
             # --------------------------------------------------------------------
             with bench.block("Stage 2: Residual extraction (seed for pass 1)"):
+                if self.emitter:
+                    self.emitter.emit("Stage 2", "Residual extraction (seed for pass discovery)", 45)
+                self.manifest.update_stage("Stage 2", "running")
+                
                 Q, residual_Q = main_ref.get_residual_q()
                 x_native, residual_native = main_ref.get_residual_native()
                 print(f"[INFO] Extracted {len(Q)} residual points (Q-space)")
                 print(f"[INFO] Extracted {len(x_native)} residual points (native space)")
+                self.manifest.update_stage("Stage 2", "complete")
 
             # ========================= SEQUENTIAL PASSES =========================
             accepted: List[str] = []   # accepted impurities in order
@@ -1441,11 +1463,13 @@ class UnifiedPipeline:
                 print("\n" + "=" * 80)
                 print(f"SEQUENTIAL PASS {pass_ix} — candidate discovery")
                 print("=" * 80)
-                progress = 40 + (pass_ix / seq_max_passes) * 50
+                progress_base = 40 + ((pass_ix - 1) / seq_max_passes) * 50
+                progress_step = 50 / seq_max_passes
+                
                 print("\n" + "═" * 80)
                 print(f"SEQUENTIAL PASS {pass_ix} — candidate discovery")
                 print("═" * 80)
-                self.emitter.emit(f"Pass {pass_ix}", f"Discovery pass {pass_ix} starting", progress, metrics={"pass": pass_ix, "event": "pass_start"})
+                self.emitter.emit(f"Pass {pass_ix}", f"Discovery pass {pass_ix} starting", progress_base, metrics={"pass": pass_ix, "event": "pass_start"})
 
                 # For pass > 1, recompute residual from the kept GPX
                 if pass_ix > 1:
@@ -1484,6 +1508,9 @@ class UnifiedPipeline:
 
                 # Compare-run: kept GPX + top-K new candidates to decide which ONE to accept
                 with bench.block(f"Pass {pass_ix}: compare-run joint refinement (kept + top-K new)"):
+                    if self.emitter:
+                         self.emitter.emit(f"Pass {pass_ix}", "Joint refinement (compare-run) started", progress_base + 0.4 * progress_step, metrics={"pass": pass_ix, "event": "joint_compare_start"})
+                    
                     pass_dir = Path(joint_dir)
                     cmp_gpx = str(pass_dir / f"seq_pass{pass_ix}_compare.gpx")
                     fractions_cmp = joint_refine_add_phases(
@@ -1521,7 +1548,7 @@ class UnifiedPipeline:
 
                 # Commit-run: kept = main + accepted + best_new; then POLISH
                 with bench.block(f"Pass {pass_ix}: commit-run joint refinement (kept = main + accepted + best_new)"):
-                    self.emitter.emit(f"Pass {pass_ix}", "Joint refinement (commit-run) started", progress + 30/seq_max_passes, metrics={"pass": pass_ix, "event": "joint_refine_start"})
+                    self.emitter.emit(f"Pass {pass_ix}", "Joint refinement (commit-run) started", progress_base + 0.6 * progress_step, metrics={"pass": pass_ix, "event": "joint_refine_start"})
                     accepted.append(best_new)
                     commit_gpx = str(Path(joint_dir) / f"seq_pass{pass_ix}_kept.gpx")
                     pid_to_cif_commit = {pid: pid_to_cif[pid] if pid in pid_to_cif else
@@ -1541,6 +1568,9 @@ class UnifiedPipeline:
 
 
                     # POLISH
+                    if self.emitter:
+                         self.emitter.emit(f"Pass {pass_ix}", "Polishing model", progress_base + 0.8 * progress_step, metrics={"pass": pass_ix, "event": "polish_start"})
+                    
                     polished_gpx = str(Path(joint_dir) / f"seq_pass{pass_ix}_kept_polished.gpx")
                     fractions_polished, rwp_polished = joint_refine_polish(
                         base_gpx=commit_gpx,
