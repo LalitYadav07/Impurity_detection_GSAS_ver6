@@ -25,6 +25,7 @@ PERIODIC_TABLE = [
     "Hf", "Ta", "W", "Re", "Os", "Ir", "Pt", "Au", "Hg", "Tl", "Pb", "Bi", "Po", "At", "Rn"
 ]
 PROJECT_ROOT = str(Path(__file__).resolve().parent)
+IS_HF_SPACES = "SPACE_ID" in os.environ
 
 # --- SETUP PATHS ---
 scripts_dir = str(Path(__file__).resolve().parent / "scripts")
@@ -569,8 +570,13 @@ with st.sidebar:
         else: st.error("❌ GSAS-II: [FAILED]")
     with c2:
         ram = get_ram_usage()
-        if ram > 800: st.warning(f"🔋 RAM: {ram:.0f} MB")
+        # Adjusted threshold for HF Spaces (16GB)
+        threshold = 14000 if IS_HF_SPACES else 800
+        if ram > threshold: st.warning(f"🔋 RAM: {ram:.0f} MB")
         else: st.info(f"🔋 RAM: {ram:.0f} MB")
+        
+    if IS_HF_SPACES:
+        st.caption("🚀 Running on Hugging Face Spaces (16GB RAM)")
 
     if not GSAS_READY:
         if st.button("🔄 Retry GSAS-II Check"):
