@@ -33,8 +33,9 @@ fi
 # 4. Create Root Environment and Install GSAS-II
 echo "Creating root environment and installing GSAS-II (this may take several minutes)..."
 # 4.1 Install GSAS-II binaries using its internal pixi config
-echo "Configuring GSAS-II binaries..."
+echo "Configuring GSAS-II binaries and pinning dependencies..."
 cd GSAS-II/pixi
+pixi add "numpy<2.0" psutil
 pixi run install-editable
 cd ../..
 

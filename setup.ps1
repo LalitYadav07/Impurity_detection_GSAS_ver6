@@ -48,9 +48,13 @@ else {
 Write-Host "Creating root environment and installing GSAS-II (this may take several minutes)..."
 try {
     # 4.1 Install GSAS-II binaries using its internal pixi config
-    Write-Host "Configuring GSAS-II binaries..."
+    Write-Host "Configuring GSAS-II binaries and pinning dependencies..."
     $g2PixiDir = Join-Path $repoDir "pixi"
     Push-Location $g2PixiDir
+    
+    # Ensure numerical stability and missing dependencies in internal environment
+    pixi add "numpy<2.0" psutil
+    
     pixi run install-editable-win
     Pop-Location
 
