@@ -19,8 +19,18 @@ jobs:
         run: |
           git config --global user.email "hf-sync@example.com"
           git config --global user.name "HF Sync"
+          
+          # 1. Create a fresh branch with NO history
+          git checkout --orphan hf-sync
+          
+          # 2. Physically remove binaries and any large junk
+          rm -rf ML_components/*.pt
+          rm -rf database_aug.zip || true
+          
+          # 3. Add all files (the models are now gone)
+          git add .
+          
+          # 4. Commit and push a single "Clean" commit
+          git commit -m "Deployment Sync: Docker handles models"
           git remote add hf https://Lalityadav07:$HF_TOKEN@huggingface.co/spaces/Lalityadav07/phase_detection
-          # Remove binaries from this specific push to bypass HF pre-receive hooks
-          git rm -r --cached ML_components/*.pt || true
-          git commit -m "Sync to HF (models handled via Docker download)" || true
-          git push --force hf master:main
+          git push --force hf hf-sync:main
