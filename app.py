@@ -759,8 +759,16 @@ with st.sidebar:
             st.warning("Pipeline Terminated")
             st.rerun()
             
+# --- PARTIAL UPDATE FRAGMENT ---
+@st.fragment
+def run_monitor_fragment():
+    # This fragment reruns independently every 2s
+    if st.session_state.run_active and not st.session_state.run_finished:
+        time.sleep(2.0)
+        st.rerun()
+
+    # Move Tracker & Tabs INSIDE fragment
     st.markdown("---")
-    # Tracker
     st.caption(f"Status: {st.session_state.get('current_stage_desc', 'Ready')}")
     st.progress(st.session_state.progress / 100)
     
@@ -792,13 +800,9 @@ with st.sidebar:
                     curr_p_stage = state["pass_stage"]
                     st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;**Pass {curr_pass}**")
                     for s_key, s_name in PASS_STAGES:
-                        # Simple monotonic check for pass stages
                         matched = False
                         for sk, _ in PASS_STAGES:
                             if sk == curr_p_stage: matched = True; break
-                        
-                        # Since we don't track historical pass stages perfectly yet, 
-                        # just show current vs pending
                         if s_key == curr_p_stage:
                             st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;🔹 {s_name}")
                         else:
@@ -806,119 +810,101 @@ with st.sidebar:
             else:
                 st.markdown(f"⚪ <span style='color: #718096;'>{stage_name}</span>", unsafe_allow_html=True)
 
-# --- TABS ---
-t_run, t_res, t_exp = st.tabs(["🚀 Run & Progress", "📊 Results", "📂 Run File Browser"])
-
-with t_run:
-    c1, c2 = st.columns([2, 1])
-    with c1:
-        c1_t, c1_a = st.columns([1, 1])
-        c1_t.subheader("📜 Live Logs")
-        st.session_state.log_autoscroll = c1_a.checkbox("🔄 Autoscroll", value=st.session_state.log_autoscroll)
-        
-        # Format logs with highlighting
-        formatted_logs = "<br>".join([format_log_line(line.rstrip()) for line in st.session_state.log_lines])
-        
-        # Log viewer with anchor for robust JS-driven autoscroll
-        st.markdown(f'''
-            <div id="log-container" class="log-viewer">
-                {formatted_logs}
-                <div id="log-anchor"></div>
-            </div>
-        ''', unsafe_allow_html=True)
-        
-        # Robust Autoscroll JS using scrollIntoView with a small delay
-        if st.session_state.log_autoscroll:
-            st.markdown("""
-                <script>
-                setTimeout(function() {
-                    var anchor = window.parent.document.getElementById('log-anchor');
-                    if (anchor) {
-                        anchor.scrollIntoView({behavior: 'smooth', block: 'end'});
-                    }
-                }, 100);
-                </script>
-                """, unsafe_allow_html=True)
+    # --- TABS (Moved inside fragment for live updates) ---
+    t_run, t_res, t_exp = st.tabs(["🚀 Run & Progress", "📊 Results", "📂 Run File Browser"])
     
-    with c2:
-        st.subheader("🖼️ Artifacts")
+    with t_run:
+        c1, c2 = st.columns([2, 1])
+        with c1:
+            c1_t, c1_a = st.columns([1, 1])
+            c1_t.subheader("📜 Live Logs")
+            
+            # Format logs with highlighting
+            formatted_logs = "<br>".join([format_log_line(line.rstrip()) for line in st.session_state.log_lines])
+            
+            st.markdown(f'''
+                <div id="log-container" class="log-viewer">
+                    {formatted_logs}
+                    <div id="log-anchor"></div>
+                </div>
+            ''', unsafe_allow_html=True)
+            
+            # Autoscroll JS
+            if st.session_state.log_autoscroll:
+                st.markdown("""
+                    <script>
+                    setTimeout(function() {
+                        var anchor = window.parent.document.getElementById('log-anchor');
+                        if (anchor) {
+                            anchor.scrollIntoView({behavior: 'smooth', block: 'end'});
+                        }
+                    }, 100);
+                    </script>
+                    """, unsafe_allow_html=True)
+        
+        with c2:
+            st.subheader("🖼️ Artifacts")
+            if st.session_state.run_dir:
+                rdir = Path(st.session_state.run_dir)
+                p_dir_new = rdir / "Results" / "Plots"
+                diag_dir = rdir / "Diagnostics"
+                p_dir_old = rdir / "plots"
+                sub_plots = rdir / st.session_state.get('run_name', '') / "plots"
+                
+                if p_dir_new.exists():
+                    st.markdown("**Plots**")
+                    render_file_explorer(p_dir_new, "art_new", [".png", ".jpg", ".pdf"])
+                
+                if diag_dir.exists():
+                    st.markdown("**Diagnostics**")
+                    render_file_explorer(diag_dir, "art_diag", [".png", ".jpg", ".pdf"])
+
+                if not p_dir_new.exists() and not diag_dir.exists():
+                    if p_dir_old.exists():
+                        render_file_explorer(p_dir_old, "art_root", [".png", ".jpg", ".pdf"])
+                    elif sub_plots.exists():
+                        render_file_explorer(sub_plots, "art_sub", [".png", ".jpg", ".pdf"])
+                    else:
+                        st.info("No plots directory found yet.")
+            else:
+                st.info("Start a run to see artifacts.")
+    
+    with t_res:
         if st.session_state.run_dir:
             rdir = Path(st.session_state.run_dir)
-            
-            # Primary: New Reorganized Path
-            p_dir_new = rdir / "Results" / "Plots"
-            diag_dir = rdir / "Diagnostics"
-            
-            # Legacy/Fallback paths
-            p_dir_old = rdir / "plots"
-            sub_plots = rdir / st.session_state.get('run_name', '') / "plots"
-            
-            if p_dir_new.exists():
-                st.markdown("**Plots**")
-                render_file_explorer(p_dir_new, "art_new", [".png", ".jpg", ".pdf"])
-            
-            if diag_dir.exists():
-                st.markdown("**Diagnostics**")
-                render_file_explorer(diag_dir, "art_diag", [".png", ".jpg", ".pdf"])
-
-            if not p_dir_new.exists() and not diag_dir.exists():
-                # Fallback check
-                if p_dir_old.exists():
-                    render_file_explorer(p_dir_old, "art_root", [".png", ".jpg", ".pdf"])
-                elif sub_plots.exists():
-                    render_file_explorer(sub_plots, "art_sub", [".png", ".jpg", ".pdf"])
-                else:
-                    st.info("No plots directory found yet.")
+            mpath = next(rdir.rglob("run_manifest.json"), None)
+            if mpath and mpath.exists():
+                try:
+                    with open(mpath) as f: m = json.load(f)
+                    mets = m.get("metrics", {})
+                    st.markdown(f"**Status:** {m.get('status', 'Processing')} | **Final Rwp:** {mets.get('final_rwp', 0):.2f}%")
+                except: pass
+    
+            st.markdown("---")
+            st.subheader("📊 Generated Data Sheets")
+            csv_files = sorted(list(rdir.rglob("*.csv")), key=lambda x: x.stat().st_mtime, reverse=True)
+            if csv_files:
+                for fcsv in csv_files:
+                    with st.expander(f"📄 {fcsv.name}", expanded=True):
+                        try:
+                            import pandas as pd
+                            df = pd.read_csv(fcsv)
+                            st.dataframe(df, width="stretch")
+                            st.download_button(f"Download {fcsv.name}", open(fcsv, "rb"), file_name=fcsv.name, key=f"dl_res_{fcsv.name}")
+                        except Exception as e:
+                            st.error(f"Error loading {fcsv.name}: {e}")
+            else:
+                st.info("No CSV data files generated yet.")
         else:
-            st.info("Start a run to see artifacts.")
-
-with t_res:
-    if st.session_state.run_dir:
-        rdir = Path(st.session_state.run_dir)
-        
-        # Metrics Overview (Optional, maybe keep it simple)
-        mpath = next(rdir.rglob("run_manifest.json"), None)
-        if mpath and mpath.exists():
-            try:
-                with open(mpath) as f: m = json.load(f)
-                mets = m.get("metrics", {})
-                st.markdown(f"**Status:** {m.get('status', 'Processing')} | **Final Rwp:** {mets.get('final_rwp', 0):.2f}%")
-            except: pass
-
-        st.markdown("---")
-        st.subheader("📊 Generated Data Sheets")
-        
-        # Find all CSV files recursively
-        csv_files = sorted(list(rdir.rglob("*.csv")), key=lambda x: x.stat().st_mtime, reverse=True)
-        
-        if csv_files:
-            for fcsv in csv_files:
-                with st.expander(f"📄 {fcsv.name}", expanded=True):
-                    try:
-                        import pandas as pd
-                        df = pd.read_csv(fcsv)
-                        st.dataframe(df, width="stretch")
-                        st.download_button(f"Download {fcsv.name}", open(fcsv, "rb"), file_name=fcsv.name, key=f"dl_res_{fcsv.name}")
-                    except Exception as e:
-                        st.error(f"Error loading {fcsv.name}: {e}")
+            st.info("No run data available.")
+    
+    with t_exp:
+        st.subheader("📂 Run File Browser")
+        if st.session_state.run_dir:
+            rdir = Path(st.session_state.run_dir)
+            render_file_explorer(rdir, "exp_root", None)
         else:
-            st.info("No CSV data files generated yet.")
-    else:
-        st.info("No run data available.")
+            st.info("No active run directory.")
 
-with t_exp:
-    st.subheader("📂 Run File Browser")
-    if st.session_state.run_dir:
-        # Show full file tree
-        rdir = Path(st.session_state.run_dir)
-        render_file_explorer(rdir, "exp_root", None) # No filter, show all
-    else:
-        st.info("No active run directory.")
-
-# --- GAME LOOP: RERUN TRIGGER ---
-# Only trigger rerun when actively running AND not yet finished
-# This prevents flickering after the run completes
-if st.session_state.run_active and not st.session_state.run_finished:
-    # 2.0s delay prevents the "glowing" effect caused by rapid React re-mounts
-    time.sleep(2.0) 
-    st.rerun()
+# Run the isolated monitor fragment
+run_monitor_fragment()
