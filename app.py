@@ -546,6 +546,84 @@ def render_file_explorer(path: Path, key_prefix: str, filter_exts=None, depth=0)
                             from PIL import Image
                             st.image(str(item), width="stretch")
 
+def update_ui_state():
+    """Polls the runner queue and updates session state."""
+    if st.session_state.pipeline_process and st.session_state.log_queue:
+        q = st.session_state.log_queue
+        process = st.session_state.pipeline_process
+        new_lines = []
+        
+        try:
+            while True:
+                line = q.get_nowait()
+                new_lines.append(line)
+        except queue.Empty:
+            pass
+        
+        if new_lines:
+            st.session_state.log_lines.extend(new_lines)
+            update_funnel_metrics(new_lines)
+            
+            # MEMORY OPTIMIZATION: Keep only last 500 lines
+            if len(st.session_state.log_lines) > 500:
+                st.session_state.log_lines = st.session_state.log_lines[-500:]
+            
+        # Update Progress State
+        state = st.session_state.pipeline_state
+        
+        # Check Structured Events (JSONL)
+        if st.session_state.run_dir:
+            run_path = Path(st.session_state.run_dir)
+            evt_file = run_path / "Technical" / "Logs" / "run_events.jsonl"
+            
+            if evt_file.exists():
+                try:
+                    with open(evt_file, "r") as f:
+                        lines = f.readlines()
+                        if lines:
+                            for line in lines[-5:]: # Look at recent events
+                                evt = json.loads(line)
+                                if "percent" in evt:
+                                    st.session_state.progress = int(evt["percent"])
+                                
+                                stage = evt.get("stage", "")
+                                metrics = evt.get("metrics", {})
+                                
+                                if "Stage 0" in stage:
+                                    state["global_stage_idx"] = 0
+                                    if "Bootstrap complete" in evt.get("message", ""):
+                                        state["stage0_status"] = "complete"
+                                    else:
+                                        state["stage0_status"] = "running"
+                                elif "Stage 1" in stage:
+                                    state["global_stage_idx"] = 1
+                                elif "Pass" in stage:
+                                    state["global_stage_idx"] = 3
+                                    state["current_pass"] = metrics.get("pass", state["current_pass"])
+                                    event_type = metrics.get("event")
+                                    if event_type == "pass_start": state["pass_stage"] = "screening"
+                                    elif event_type == "joint_refine_start": state["pass_stage"] = "joint"
+                                    elif event_type == "pass_end": state["pass_stage"] = "summary"
+                except:
+                    pass
+
+        # Fallback to parsing logs
+        if new_lines:
+            for line in new_lines:
+                state = parse_pipeline_log_line(line, state)
+        
+        st.session_state.pipeline_state = state
+
+        # Check Process Status
+        if process.poll() is not None and q.empty():
+            st.session_state.run_active = False
+            st.session_state.run_finished = True
+            if process.returncode == 0:
+                st.success("✅ Run Completed Successfully!")
+                st.balloons()
+            else:
+                st.error(f"❌ Run Failed (Exit Code {process.returncode})")
+
 # --- GAME LOOP: FRAGMENT-BASED UPDATE ---
 @st.fragment(run_every=2.0)
 def run_monitor_fragment():
