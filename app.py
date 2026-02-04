@@ -57,8 +57,10 @@ def check_gsas_installation():
         st.error(f"⚠️ GSAS-II initialization error: {e}")
         return False
 
-# Trigger Check
-GSAS_READY = check_gsas_installation()
+# Trigger Check (Runs once per session/reset)
+if 'gsas_ready' not in st.session_state:
+    st.session_state.gsas_ready = check_gsas_installation()
+GSAS_READY = st.session_state.gsas_ready
 
 # Fallback for Pixi detection (unused if running via pip)
 def is_pixi_available():
@@ -442,15 +444,22 @@ def render_file_explorer(path: Path, key_prefix: str, filter_exts=None, depth=0)
                 """, unsafe_allow_html=True)
             with c2:
                 with open(item, "rb") as f:
-                    st.download_button("💾", f, file_name=item.name, key=f"dl_{key_prefix}_{item.name}", use_container_width=True)
+                    st.download_button("💾", f, file_name=item.name, key=f"dl_{key_prefix}_{item.name}", width="stretch")
             
-            # Preview for Artifacts
+            # Preview for Artifacts (Lazy Load)
             if item.suffix.lower() in [".png", ".jpg", ".jpeg"]:
                 if item.stat().st_size > 0:
-                    try:
-                        st.image(str(item), use_container_width=True)
-                    except Exception:
-                        st.caption(f"⚠️ Image {item.name} is still being written or is corrupted.")
+                    # Memory optimization: Only auto-expand in Plot folders, otherwise use a toggle
+                    should_preview = "Plots" in str(item.parent) or "Diagnostics" in str(item.parent)
+                    
+                    if should_preview:
+                        try:
+                            st.image(str(item), width="stretch" if hasattr(st, "image") else None)
+                        except Exception:
+                            st.caption(f"⚠️ Image {item.name} is still being written.")
+                    else:
+                        if st.checkbox(f"👁️ Preview {item.name}", key=f"pv_{key_prefix}_{item.name}"):
+                            st.image(str(item), width="stretch")
 
 # --- GAME LOOP: UPDATE STATE ---
 # This runs BEFORE any UI rendering to ensure all tabs see fresh data
@@ -471,6 +480,10 @@ if st.session_state.run_active:
         if new_lines:
             st.session_state.log_lines.extend(new_lines)
             update_funnel_metrics(new_lines)
+            
+            # MEMORY OPTIMIZATION: Keep only last 500 lines
+            if len(st.session_state.log_lines) > 500:
+                st.session_state.log_lines = st.session_state.log_lines[-500:]
             
         # 2. Update Progress State
         state = st.session_state.pipeline_state
@@ -537,6 +550,15 @@ st.markdown("Automated crystallography impurity phase discovery using ML-guided 
 with st.sidebar:
     st.header("🛠️ Configuration")
     
+    # GSAS-II Health in Sidebar to reduce main UI churn
+    if GSAS_READY:
+        st.success("✅ GSAS-II: [OK]")
+    else:
+        st.error("❌ GSAS-II: [FAILED]")
+        if st.button("🔄 Retry GSAS-II Check"):
+            del st.session_state.gsas_ready
+            st.rerun()
+
     # Database Status
     if not DB_EXISTS:
         st.warning("📊 Database missing or incomplete")
