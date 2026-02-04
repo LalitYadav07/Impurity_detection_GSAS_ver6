@@ -5,15 +5,16 @@ import yaml
 import json
 import time
 import datetime
-import pandas as pd
-import plotly.express as px
 from pathlib import Path
-from PIL import Image, ImageFile
-ImageFile.LOAD_TRUNCATED_IMAGES = True
 import re
 import shutil
 import queue
 import html
+import psutil
+import gc
+import importlib.util
+from PIL import ImageFile
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 # --- CONSTANTS ---
 PERIODIC_TABLE = [
@@ -275,6 +276,12 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# --- UTILITIES ---
+def get_ram_usage():
+    process = psutil.Process(os.getpid())
+    mem = process.memory_info().rss / (1024 * 1024) # MB
+    return mem
+
 # --- STATE INITIALIZATION ---
 if 'run_active' not in st.session_state:
     st.session_state.run_active = False
@@ -454,11 +461,13 @@ def render_file_explorer(path: Path, key_prefix: str, filter_exts=None, depth=0)
                     
                     if should_preview:
                         try:
+                            from PIL import Image
                             st.image(str(item), width="stretch" if hasattr(st, "image") else None)
                         except Exception:
                             st.caption(f"⚠️ Image {item.name} is still being written.")
                     else:
                         if st.checkbox(f"👁️ Preview {item.name}", key=f"pv_{key_prefix}_{item.name}"):
+                            from PIL import Image
                             st.image(str(item), width="stretch")
 
 # --- GAME LOOP: UPDATE STATE ---
@@ -541,6 +550,9 @@ if st.session_state.run_active:
                 st.balloons()
             else:
                 st.error(f"❌ Run Failed (Exit Code {process.returncode})")
+        
+        # Periodic Memory Cleanup
+        gc.collect()
 
 # --- UI HEADER ---
 st.title("🔬Impurity Phase Detection for NPD")
@@ -551,10 +563,16 @@ with st.sidebar:
     st.header("🛠️ Configuration")
     
     # GSAS-II Health in Sidebar to reduce main UI churn
-    if GSAS_READY:
-        st.success("✅ GSAS-II: [OK]")
-    else:
-        st.error("❌ GSAS-II: [FAILED]")
+    c1, c2 = st.columns(2)
+    with c1:
+        if GSAS_READY: st.success("✅ GSAS-II: [OK]")
+        else: st.error("❌ GSAS-II: [FAILED]")
+    with c2:
+        ram = get_ram_usage()
+        if ram > 800: st.warning(f"🔋 RAM: {ram:.0f} MB")
+        else: st.info(f"🔋 RAM: {ram:.0f} MB")
+
+    if not GSAS_READY:
         if st.button("🔄 Retry GSAS-II Check"):
             del st.session_state.gsas_ready
             st.rerun()
@@ -804,8 +822,9 @@ with t_res:
             for fcsv in csv_files:
                 with st.expander(f"📄 {fcsv.name}", expanded=True):
                     try:
+                        import pandas as pd
                         df = pd.read_csv(fcsv)
-                        st.dataframe(df, use_container_width=True)
+                        st.dataframe(df, width="stretch")
                         st.download_button(f"Download {fcsv.name}", open(fcsv, "rb"), file_name=fcsv.name, key=f"dl_res_{fcsv.name}")
                     except Exception as e:
                         st.error(f"Error loading {fcsv.name}: {e}")
