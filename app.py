@@ -218,9 +218,9 @@ st.markdown("""
     }
 </style>
 """, unsafe_allow_html=True)
-
-# --- UTILITIES ---
-    
+# --- PREMIUM CSS: Part 2 ---
+st.markdown("""
+<style>
     /* ============ Elegant Buttons ============ */
     .stButton>button {
         width: 100%;
