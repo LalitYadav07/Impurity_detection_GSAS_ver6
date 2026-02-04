@@ -504,10 +504,10 @@ def render_file_explorer(path: Path, key_prefix: str, filter_exts=None, depth=0)
         
         # Recursive Folder
         if item.is_dir():
-            # STABLE KEY: Use path hash to keep expander state stable during updates
             unique_key = f"{key_prefix}_{item.name}"
             # Use a stable key for expanders to prevent closure during reruns
-            with st.expander(f"📁 {item.name}", expanded=(depth < 1), key=f"exp_{unique_key}"):
+            # Removing 'key' because local Streamlit 1.53.1 signature lacks it
+            with st.expander(f"📁 {item.name}", expanded=(depth < 1)):
                 render_file_explorer(item, unique_key, filter_exts, depth + 1)
                 
         # File Display
