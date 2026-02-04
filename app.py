@@ -555,9 +555,8 @@ def run_monitor_fragment():
 
 # Invoke the fragment
 run_monitor_fragment()
-        
-        # Periodic Memory Cleanup
-        gc.collect()
+# Periodic Memory Cleanup
+gc.collect()
 
 # --- UI HEADER ---
 st.title("🔬Impurity Phase Detection for NPD")
