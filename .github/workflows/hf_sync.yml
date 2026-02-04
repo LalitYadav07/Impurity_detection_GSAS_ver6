@@ -16,4 +16,6 @@ jobs:
       - name: Push to hub
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: git push --force https://Lalityadav07:$HF_TOKEN@huggingface.co/spaces/Lalityadav07/phase_detection master:main
+        run: |
+          git remote add hf https://Lalityadav07:$HF_TOKEN@huggingface.co/spaces/Lalityadav07/phase_detection
+          git push --force hf master:main
