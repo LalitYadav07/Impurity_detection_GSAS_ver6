@@ -1,3 +1,4 @@
+GSAS-II @ git+https://github.com/AdvancedPhotonSource/GSAS-II.git
 streamlit
 pandas
 pyyaml
@@ -7,11 +8,8 @@ pymatgen
 plotly
 matplotlib
 Pillow
-numpy
-scipy
 gdown
+h5py
+imageio
 pycifrw
 xmltodict
-h5py
-zarr
-imageio

@@ -34,127 +34,39 @@ from config_builder import build_pipeline_config
 # Lazy import runner later or import here if safe
 from runner import PipelineRunner
 
-# --- GSAS-II AUTO-INSTALL (For Streamlit Cloud) ---
-def is_pixi_available():
-    import shutil
-    return shutil.which("pixi") is not None
-
-# --- GSAS-II AUTO-INSTALL (For Streamlit Cloud) ---
-def is_pixi_available():
-    import shutil
-    return shutil.which("pixi") is not None
-
-def ensure_gsas_installed():
-    import subprocess
-    import shutil
-    import importlib
-    
-    g2_path = Path(PROJECT_ROOT) / "GSAS-II"
-    if not g2_path.exists():
-        st.info("📦 GSAS-II not found. Cloning from source...")
-        try:
-            subprocess.run(["git", "clone", "--depth", "1", "https://github.com/AdvancedPhotonSource/GSAS-II.git", str(g2_path)], check=True)
-            st.success("✅ GSAS-II cloned!")
-        except Exception as e:
-            st.error(f"❌ Failed to clone GSAS-II: {e}")
-            return False
-    
-    # Add to sys.path
-    g2_p = str(g2_path.resolve())
-    if g2_p not in sys.path:
-        sys.path.insert(0, g2_p)
-        
-    # --- Dependencies Check ---
-    missing_deps = []
-    # gdown is required for app, others for GSAS-II
-    for dep in ["CifFile", "h5py", "imageio", "gdown"]:
-        try:
-            importlib.import_module(dep)
-        except ImportError:
-            # Try mapping some names
-            if dep == "CifFile":
-                try:
-                    importlib.import_module("CifFile")
-                except ImportError:
-                    missing_deps.append(dep)
-            else:
-               missing_deps.append(dep)
-
-    if missing_deps:
-        st.warning(f"⚠️ Optional dependencies missing: {', '.join(missing_deps)}. functionality may be limited.")
-
-    # --- Robust Binary Install (Custom) ---
+# --- GSAS-II HEALTH CHECK ---
+def check_gsas_installation():
     try:
+        import GSASII
         import GSASII.GSASIIpath as G2path
         
-        # 1. Check if we can already import the critical binary module
+        # Check for the core binary module
         try:
             import pyspg
-            # st.success("✅ GSAS-II Binaries confirmed loaded (pyspg).")
+            st.success("✅ GSAS-II and binaries confirmed loaded.")
             return True
-        except ImportError:
-            pass # Continue to install
+        except ImportError as e:
+            st.error(f"❌ GSAS-II binaries (pyspg) failed to load: {e}")
+            st.info("The system may be rebuilding binaries. Please refresh in a minute.")
+            return False
             
-        # 2. If not loaded, try to find/install them
-        bin_target = g2_path / "GSASII" / "bin"
-        
-        # Add target to sys.path immediately just in case they are there but not seen
-        if str(bin_target) not in sys.path:
-            sys.path.insert(0, str(bin_target))
-            try:
-                importlib.invalidate_caches()
-                import pyspg
-                st.success("✅ Binaries found and loaded!")
-                return True
-            except ImportError:
-                pass
-
-        if 'binary_install_attempted' not in st.session_state:
-            st.warning(f"⚙️ binaries missing. downloading to {bin_target}...")
-            
-            # Use GSASIIpath internal logic to get the correct URL for this platform
-            url = G2path.getGitBinaryLoc() 
-            if not url:
-                st.error("❌ Could not determine binary URL for this platform via GSASIIpath.")
-                return True # Fail gracefully?
-            
-            # Download and extract using GSASIIpath
-            if not bin_target.exists():
-                bin_target.mkdir(parents=True, exist_ok=True)
-                
-            st.write(f"📥 Downloading: {url}")
-            try:
-                G2path.InstallGitBinary(url, str(bin_target))
-                st.session_state.binary_install_attempted = True
-                st.rerun() # Rerun to pick up the new path
-            except Exception as e:
-                st.error(f"❌ Binary download failed: {e}")
-        
-        else:
-             # We already tried. If import still fails, offer retry.
-             st.error("❌ Binaries failed to load after install attempt.")
-             if st.button("Force Retry Binary Download"):
-                 del st.session_state.binary_install_attempted
-                 if bin_target.exists():
-                     import shutil
-                     shutil.rmtree(bin_target)
-                 st.rerun()
-                 
+    except ImportError:
+        st.error("❌ GSAS-II package not found. Please ensure it is in requirements.txt.")
+        return False
     except Exception as e:
-        st.error(f"Binary system error: {e}")
-        # Print traceback for deeper debugging if needed
-        import traceback
-        st.code(traceback.format_exc())
+        st.error(f"⚠️ GSAS-II initialization error: {e}")
+        return False
 
-    return True
+# Trigger Check
+GSAS_READY = check_gsas_installation()
+
+# Fallback for Pixi detection (unused if running via pip)
+def is_pixi_available():
+    import shutil
+    return shutil.which("pixi") is not None
 
 if 'use_pixi' not in st.session_state:
     st.session_state.use_pixi = is_pixi_available()
-    # Check if we are falling back
-    if not st.session_state.use_pixi:
-         pass
-
-GSAS_DOWNLOADED = ensure_gsas_installed()
 
 # --- DATABASE STATUS CHECK ---
 DB_DIR = Path(PROJECT_ROOT) / "data" / "database_aug"
