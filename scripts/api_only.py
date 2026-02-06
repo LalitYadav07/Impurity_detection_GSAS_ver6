@@ -101,9 +101,9 @@ async def health():
 @app.post("/run", response_model=RunResponse, dependencies=[Depends(verify_api_key)])
 async def run_pipeline(
     data_file: UploadFile = File(...),
+    instrument_file: UploadFile = File(...),
     cif_file: Optional[UploadFile] = File(None),
     allowed_elements: str = Form(""),
-    instrument_type: str = Form("auto"),
     min_phase_fraction: float = Form(0.01)
 ):
     run_id = datetime_run_id()
@@ -115,6 +115,11 @@ async def run_pipeline(
     data_path = run_dir / data_file.filename
     with open(data_path, "wb") as buffer:
         shutil.copyfileobj(data_file.file, buffer)
+
+    # Save Instrument file
+    inst_path = run_dir / instrument_file.filename
+    with open(inst_path, "wb") as buffer:
+        shutil.copyfileobj(instrument_file.file, buffer)
 
     # Save CIF if provided
     main_cif_path = None
@@ -133,7 +138,7 @@ async def run_pipeline(
     config_yaml = build_pipeline_config(
         run_name=run_id,
         data_file=str(data_path),
-        instprm_file=instrument_type,
+        instprm_file=str(inst_path), 
         allowed_elements=allowed_elements.split(",") if allowed_elements else [],
         main_cif=main_cif_path,
         min_impurity_percent=min_phase_fraction * 100,
