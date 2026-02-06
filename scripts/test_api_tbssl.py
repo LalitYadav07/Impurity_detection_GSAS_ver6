@@ -5,10 +5,11 @@ import sys
 import os
 
 # Configuration
+# Configuration
 BASE_URL = "https://lalityadav07-phase-detection.hf.space"
 DATA_FILE = r"data\HB2A_TbSSL.dat"
 CIF_FILE = r"data\cifs\TbSSL.cif"
-INST_FILE = r"GSAS-II\tests\testinp\INST_XRY.PRM"
+INST_FILE = r"data\instrument_params\hb2a_si_ge113.instprm"
 
 def test_pipeline():
     print(f"=== Testing API with TbSSL ===")
