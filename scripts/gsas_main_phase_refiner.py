@@ -75,6 +75,19 @@ def _parse_cif_number(s: str) -> float:
 
 # === Robust Pearson ===
 
+def _init_gsas_process():
+    """Ensure GSAS-II is initialized correctly in a sub-process (headless, Agg)."""
+    try:
+        import matplotlib
+        matplotlib.use('Agg')
+        import wx
+        if not wx.GetApp():
+            app = wx.App(False)
+        import GSASII.GSASIIctrlGUI as G2gui
+        G2gui.haveGUI = False
+    except Exception:
+        pass
+
 def _safe_pearson(a, b) -> float:
     """
     Numerically robust Pearson; returns 0.0 if either vector has <2 valid points or ~zero variance.
@@ -760,6 +773,7 @@ def compute_gsas_pearson_for_cif(
     y_override: Optional[np.ndarray] = None,
     fmthint_override: Optional[str] = None,
     shift_positive: bool = True,
+    template_gpx: Optional[str] = None,
 ) -> float:
     """
     Build a tiny GSAS-II project, run staged refinement (Pass-1: Scale; Pass-2: Scale+Cell),
@@ -771,6 +785,7 @@ def compute_gsas_pearson_for_cif(
       <stem>_refined.cif (or 'out_refined_cif' if provided).
     - After writing, the first 'data_' header is sanitized to a short, GSAS-II-friendly label.
     """
+    _init_gsas_process()
     import re
     from pathlib import Path as _Path
     from gsas_core_infrastructure import GSASProjectManager
@@ -801,24 +816,36 @@ def compute_gsas_pearson_for_cif(
             pass
 
     pm = GSASProjectManager(work_dir, f"{_Path(cif_path).stem}_{tmp_tag}")
-    if not pm.create_project():
+    if not pm.create_project(template_gpx=template_gpx):
         raise RuntimeError("Failed to create GSAS project for Pearson")
 
-    # Select observed dataset
-    local_data_path = data_path
-    local_fmthint = fmthint
-    using_override = (x_override is not None) and (y_override is not None)
-    if using_override:
-        _Path(work_dir).mkdir(parents=True, exist_ok=True)
-        base = _Path(data_path).stem if data_path else "obs"
-        tmp_xye_path = str(_Path(work_dir) / f"{base}_{tmp_tag}_RESID.xye")
-        write_xye_from_arrays(tmp_xye_path, x_override, y_override, sigma=None, shift_positive=shift_positive)
-        local_data_path = tmp_xye_path
-        local_fmthint  = fmthint_override or "xye"
+    histogram_loaded_from_template = False
+    if template_gpx and _Path(template_gpx).exists():
+        # Resolve existing histogram from template
+        if pm.project.histograms():
+            hist = pm.project.histograms()[0]
+            pm.main_histogram = hist
+            histogram_loaded_from_template = True
+        else:
+             print(f"[WARN] Template GPX loaded from {template_gpx} but has no histograms. Falling back to fresh load.")
+             # No raise; fall through to normal loading
 
-    if not pm.add_histogram(local_data_path, instprm_path, fmthint=local_fmthint):
-        raise RuntimeError("Failed to add histogram for Pearson")
-    hist = pm.main_histogram
+    if not histogram_loaded_from_template:
+        # Select observed dataset
+        local_data_path = data_path
+        local_fmthint = fmthint
+        using_override = (x_override is not None) and (y_override is not None)
+        if using_override:
+            _Path(work_dir).mkdir(parents=True, exist_ok=True)
+            base = _Path(data_path).stem if data_path else "obs"
+            tmp_xye_path = str(_Path(work_dir) / f"{base}_{tmp_tag}_RESID.xye")
+            write_xye_from_arrays(tmp_xye_path, x_override, y_override, sigma=None, shift_positive=shift_positive)
+            local_data_path = tmp_xye_path
+            local_fmthint  = fmthint_override or "xye"
+
+        if not pm.add_histogram(local_data_path, instprm_path, fmthint=local_fmthint):
+            raise RuntimeError("Failed to add histogram for Pearson")
+        hist = pm.main_histogram
 
     # Limits & excludes
     try:
@@ -907,11 +934,19 @@ def compute_gsas_pearson_for_cif(
 
     # Pass-1: Scale only
     _set_flags(hist_scale=True, cell=False)
-    _run_and_r(1, "pass1-scale")
+    r1 = _run_and_r(1, "pass1-scale")
 
-    # Pass-2: Scale + Cell
-    _set_flags(hist_scale=True, cell=True)
-    r2 = _run_and_r(1, "pass2-scale+cell")
+    # Early exit for clearly poor candidates:
+    # If r < 0.1 after scale refinement, it's unlikely to become a top candidate with cell refinement.
+    if r1 < 0.1:
+        print(f"[PEARSON] {ph_name} early-exit: r={r1:.4f} too low")
+        # Final result is r1
+        # Still need to write the refined CIF if requested, but use r1 for return
+        r2 = r1
+    else:
+        # Pass-2: Scale + Cell
+        _set_flags(hist_scale=True, cell=True)
+        r2 = _run_and_r(1, "pass2-scale+cell")
 
     # ---- Export refined CIF via GSAS-II (always to a separate file) ----
     stem = _Path(cif_path).stem

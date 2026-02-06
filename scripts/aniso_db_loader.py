@@ -176,14 +176,13 @@ class CatalogPaths:
 
 
 class DBLoader:
+    def _log(self, msg: str) -> None:
+        if self.debug:
+            print(msg)
+
     def __init__(self, paths: CatalogPaths):
         self.paths = paths
         self.debug = bool(int(os.environ.get("ANISO_DB_DEBUG", "1")))
-
-        def _log(msg: str) -> None:
-            if self.debug:
-                print(msg)
-        self._log = _log  # instance logger
 
         if not os.path.exists(paths.catalog_csv):
             raise FileNotFoundError(f"catalog_csv not found: {paths.catalog_csv}")

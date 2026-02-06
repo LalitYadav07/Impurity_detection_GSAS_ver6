@@ -34,8 +34,9 @@ outputs/
 *.cif
 *.bak*
 *.npz
-*.csv
-*.json
+# Avoid blocking specific metadata/configs
+# *.csv
+# *.json
 *.gsa
 *.fxye
 
@@ -47,8 +48,10 @@ desktop.ini
 
 # Environment
 .pixi/
-pixi.lock
+# pixi.lock  <-- Removed exclusion to allow tracking for reproducibility
 node_modules/
 .venv/
 *.zip
 temp_models/
+!ML_components/*.pt
+!ML_ranker/*.pt

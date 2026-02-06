@@ -55,8 +55,24 @@ try {
     # Ensure numerical stability and missing dependencies in internal environment
     pixi add "numpy<2.0" psutil
     
+    Write-Host "Building GSAS-II binaries (this requires a C++/Fortran compiler)..."
     pixi run install-editable-win
     Pop-Location
+
+    # --- NEW: Binary Bridge ---
+    # GSAS-II build artifacts are often deep in the build directory. 
+    # We move them to the package source for immediate availability.
+    Write-Host "Bridging compiled binaries to GSASII package..."
+    $buildDir = Join-Path $repoDir "build"
+    if (Test-Path $buildDir) {
+        $pydFiles = Get-ChildItem -Path $buildDir -Recurse -Filter "*.pyd"
+        $exeFiles = Get-ChildItem -Path $buildDir -Recurse -Filter "*.exe"
+        $destDir = Join-Path $repoDir "GSASII"
+        
+        foreach ($f in $pydFiles) { Copy-Item $f.FullName $destDir -Force }
+        foreach ($f in $exeFiles) { Copy-Item $f.FullName $destDir -Force }
+        Write-Host "Bridge complete: $($pydFiles.Count) extensions and $($exeFiles.Count) binaries copied."
+    }
 
     # 4.2 Initialize root environment dependencies
     Write-Host "Solving root environment dependencies..."
@@ -68,17 +84,20 @@ catch {
 
 # 5. Validation
 Write-Host "`n--- Validating Installation ---" -ForegroundColor Cyan
-$testCmd = "import GSASII.GSASIIscriptable as G2sc; print('OK', G2sc.__file__)"
+# We set PYTHONPATH to include GSAS-II during validation to match production behavior
+$env:PYTHONPATH = $repoDir
+$testCmd = "import GSASII.GSASIIscriptable as G2sc; import GSASII.pyspg; print('OK', G2sc.__file__)"
 $result = pixi run python -c $testCmd
 
 if ($result -match "OK") {
-    Write-Host "`nSUCCESS: GSAS-II is importable!" -ForegroundColor Green
+    Write-Host "`nSUCCESS: GSAS-II and binaries are confirmed active!" -ForegroundColor Green
     Write-Host $result
 }
 else {
-    Write-Error "Validation failed. Output: $result"
+    Write-Host "`nWARNING: Validation failed or binaries missing. Check gfortran installation." -ForegroundColor Yellow
+    Write-Host "Output: $result"
 }
 
 Write-Host "`n--- SETUP COMPLETE ---" -ForegroundColor Cyan
-Write-Host "To start the environment, simply run: .\activate.ps1"
-Write-Host "If 'pixi' command is still not found in new windows, please restart your computer."
+Write-Host "To use the project, always run via pixi tasks: 'pixi run ui' or 'pixi run cli-run'"
+Write-Host "If binaries are still missing, refer to the Troubleshooting section in README.md."

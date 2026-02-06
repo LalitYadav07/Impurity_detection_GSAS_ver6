@@ -43,6 +43,7 @@ from typing import Any, Dict, Optional, Tuple, List, Iterable, Set
 from time import perf_counter
 from contextlib import contextmanager
 from collections import defaultdict
+import concurrent.futures
 
 # ---------------------------
 # Optional third-party imports
@@ -81,8 +82,12 @@ except ImportError:
 # Local path setup
 # ---------------------------
 ROOT = Path(__file__).resolve().parent
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+PROJECT_ROOT = ROOT.parent
+GSAS_PATH = PROJECT_ROOT / "GSAS-II"
+
+for p in [str(ROOT), str(PROJECT_ROOT), str(GSAS_PATH)]:
+    if p not in sys.path:
+        sys.path.insert(0, p)
 
 # ---------------------------
 # GSAS-II availability check
@@ -147,6 +152,7 @@ try:
             print(f"[INFO] ML model path added: {ml_path}")
 except Exception as e:
     print(f"[WARN] Could not preload ML path from YAML: {e}")
+
 
 # ---- lightweight timing utility ----
 class BenchTimer:
@@ -672,9 +678,9 @@ class UnifiedPipeline:
         models_ref_dir = ds_cfg.get("models_ref_path") or str(Path(models_dir) / "Reference_CIFs")
         models_refined_dir = ds_cfg.get("models_refined_path") or str(Path(models_dir) / "Refined_CIFs")
         
-        Path(diag_resid_dir).mkdir(parents=True, exist_ok=True)
-        Path(models_ref_dir).mkdir(parents=True, exist_ok=True)
-        Path(models_refined_dir).mkdir(parents=True, exist_ok=True)
+        # Path(diag_resid_dir).mkdir(parents=True, exist_ok=True)   # Removed: Created on-demand in Pearson scanning
+        # Path(models_ref_dir).mkdir(parents=True, exist_ok=True)   # Removed: Created when saving CIFs
+        # Path(models_refined_dir).mkdir(parents=True, exist_ok=True) # Removed: Created when saving CIFs
         """
         Returns:
           final_candidates, pid_to_cif, pearson_best_by_pid, result_by_pid
@@ -724,6 +730,64 @@ class UnifiedPipeline:
         
         if self.emitter:
              self.emitter.emit(f"Pass {pass_ix}", f"Screened {len(final_candidates)} candidates", progress_base + 0.15 * progress_step, metrics={"pass": pass_ix})
+
+        # ----- ML Surrogate Ranker (Async) -----
+        try:
+            ranker_input = []
+            for c in final_candidates:
+                def _get_val(obj, name):
+                    v = getattr(obj, name, None)
+                    if v is None: return None
+                    try:
+                        f = float(v)
+                        return None if math.isnan(f) else f
+                    except:
+                        return None
+
+                ranker_input.append({
+                    "mp_id": c.phase_id,
+                    "score": _get_val(c, "ml_score"),
+                    "cos": _get_val(c, "ml_cosine"),
+                    "beta": _get_val(c, "ml_beta"),
+                    "alpha": _get_val(c, "ml_alpha"),
+                    "p": _get_val(c, "ml_present_prob"),
+                    "explained": _get_val(c, "ml_explained"),
+                })
+            
+            # Dump to JSON
+            ml_json_path = str(Path(ds_cfg.get("diagnostics_path") or Path(work_dir) / "Diagnostics") / f"ml_rank_input_pass{pass_ix}.json")
+            with open(ml_json_path, "w") as f:
+                json.dump({"candidates": ranker_input, "run_name": f"{name}_pass{pass_ix}"}, f, indent=2)
+
+            # Locate Ranker
+            import sys
+            scripts_dir = os.path.dirname(os.path.abspath(__file__))
+            project_root = os.path.dirname(scripts_dir)
+            ranker_dir = os.path.join(project_root, "ML_ranker", "mlp_ranker_for_phase_detection-main")
+            ranker_script = os.path.join(ranker_dir, "infer.py")
+            ranker_model = os.path.join(ranker_dir, "mlp_ranker.pt")
+            
+            if os.path.exists(ranker_script) and os.path.exists(ranker_model):
+                output_jsonl = str(Path(ds_cfg.get("diagnostics_path") or Path(work_dir) / "Diagnostics") / f"ml_rank_result_pass{pass_ix}.jsonl")
+                
+                cmd = [
+                    sys.executable,
+                    ranker_script,
+                    "--model", ranker_model,
+                    "--input", ml_json_path,
+                    "--output", output_jsonl,
+                    "--format", "json",
+                    "--topk", "5"
+                ]
+                
+                print(f"[INFO] Spawning ML Ranker: {ranker_script}")
+                import subprocess
+                subprocess.Popen(cmd) # Non-blocking
+            else:
+                print(f"[WARN] ML Ranker not found at {ranker_dir}")
+
+        except Exception as e:
+            print(f"[WARN] Failed to spawn ML Ranker: {e}")
 
         # ----- KNEE: Histogram (union over ml_score, ml_cosine, ml_explained, ml_present_prob) -----
         if kcfg.get("enable_hist", False) and final_candidates:
@@ -912,38 +976,91 @@ class UnifiedPipeline:
         if self.emitter:
              self.emitter.emit(f"Pass {pass_ix}", "Pearson Refinement (Lattice Refinement)", progress_base + 0.3 * progress_step, metrics={"pass": pass_ix, "event": "pearson_start"})
 
+        # --- Parallel Pearson Refinement ---
         pearson_best_by_pid: Dict[str, float] = {}
+
+        # Create template project for this pass to avoid redundant histogram parsing
+        template_gpx = str(resid_dir / f"template_pass{pass_ix}.gpx")
+        try:
+            from gsas_core_infrastructure import GSASProjectManager
+            tpm = GSASProjectManager(str(resid_dir), f"template_pass{pass_ix}")
+            if tpm.create_project():
+                if tpm.add_histogram(str(resid_xye), instprm_path, fmthint="xye"):
+                    tpm.save_project()
+                else:
+                    template_gpx = None
+            else:
+                template_gpx = None
+        except Exception as te:
+            print(f"[WARN] Failed to create template project: {te}")
+            template_gpx = None
+
+        # Decide worker count
+        cpu_count = os.cpu_count() or 1
+        max_workers_cfg = int(s4_cfg.get("max_workers", 0))
+        if max_workers_cfg > 0:
+            workers = max_workers_cfg
+        else:
+            workers = max(1, cpu_count // 2) # Conservative default
+            
+        print(f"[INFO] Starting parallel Pearson refinement for {len(phase_ids)} candidates with {workers} workers.")
+        
+        # Ensure template file is physically on disk and flushed
+        if template_gpx and 'tpm' in locals():
+            try:
+                tpm.save_project()
+                # Force cleanup of the project object to ensure file locks are released
+                del tpm
+                import time
+                time.sleep(0.5) 
+            except Exception as e:
+                print(f"[WARN] Error flushing template project: {e}")
+
+        import sys
+        sys.stdout.flush()
+        
+        # We need to collect results. Note: we only refine the NUDGED structures if they exist, 
+        # otherwise we fallback to original as per the original logic.
+        tasks = []
         for pid in phase_ids:
             nudged_cif = result_by_pid.get(pid).nudged_cif_path if pid in result_by_pid else None
-            label = "nudged-only"
             if nudged_cif:
-                r_n, _, out_n = _compute_pearson_with_refinement(
-                    pid, nudged_cif, f"{name}_p{pass_ix}", work_dir, x_native, residual_native, instprm_path
-                )
-                best_p = r_n
-                best_path = out_n or nudged_cif
+                cand_cif = nudged_cif
             else:
-                # fallback to original only if we truly have no nudged structure
                 try:
-                    orig_cif = self.db_loader.ensure_cif_on_disk(pid, out_dir=cif_cache_dir)  # type: ignore[union-attr]
+                    cand_cif = self.db_loader.ensure_cif_on_disk(pid, out_dir=cif_cache_dir)
                 except Exception:
-                    orig_cif = None
-                if orig_cif:
-                    r_o, _, out_o = _compute_pearson_with_refinement(
-                        pid, orig_cif, f"{name}_p{pass_ix}", work_dir, x_native, residual_native, instprm_path
-                    )
-                    best_p = r_o
-                    best_path = out_o or orig_cif
-                    label = "orig (fallback)"
-                else:
-                    best_p = float("-inf")
-                    best_path = ""
-                    label = "no-cif"
+                    cand_cif = None
+            
+            if cand_cif:
+                tasks.append((pid, cand_cif))
+            else:
+                pearson_best_by_pid[pid] = float("-inf")
+                print(f"[RESULT] [pass {pass_ix}] {pid}: no-cif (r=-inf)")
 
-            if best_path and Path(best_path).exists():
-                pid_to_cif[pid] = str(Path(best_path).resolve())
-            pearson_best_by_pid[pid] = best_p
-            print(f"[RESULT] [pass {pass_ix}] {pid}: {label} (r={best_p:.4f})")
+        with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as executor:
+            # Preparing arguments for _compute_pearson_with_refinement
+            # def _compute_pearson_with_refinement(pid, cand_cif, name, work_dir, x_native, residual_native, instprm_path)
+            future_to_pid = {
+                executor.submit(
+                    _compute_pearson_with_refinement,
+                    pid, cif, f"{name}_p{pass_ix}", work_dir, x_native, residual_native, instprm_path,
+                    template_gpx=template_gpx,
+                    engine=s4_cfg.get("pearson_engine", "surrogate")
+                ): pid for pid, cif in tasks
+            }
+            
+            for future in concurrent.futures.as_completed(future_to_pid):
+                pid = future_to_pid[future]
+                try:
+                    best_p, label, best_path = future.result()
+                    pearson_best_by_pid[pid] = best_p
+                    if best_path and Path(best_path).exists():
+                        pid_to_cif[pid] = str(Path(best_path).resolve())
+                    print(f"[RESULT] [pass {pass_ix}] {pid}: {label} (r={best_p:.4f})")
+                except Exception as exc:
+                    print(f"[ERROR] {pid} generated an exception: {exc}")
+                    pearson_best_by_pid[pid] = 0.0
 
 
         # ----- KNEE: Pearson r over current candidate set -----
@@ -955,7 +1072,7 @@ class UnifiedPipeline:
                 id_fn=lambda x: x["pid"],
                 val_fn=lambda x: x["r"],
                 label=f"pearson/r (pass {pass_ix})",
-                min_points=int(kcfg.get("min_points_pearson", 3)),
+                min_points=int(kcfg.get("min_points_pearson", kcfg.get("min_points_hist", 3))),
                 min_rel_span=float(kcfg.get("min_rel_span", 0.03)),
                 guard_frac=float(kcfg.get("guard_frac", 0.05)),
                 max_keep_if_no_knee=int(kcfg.get("max_keep_if_no_knee", 0)),
@@ -1140,6 +1257,7 @@ class UnifiedPipeline:
             "reps": int(ds.get("stage4", {}).get("reps", self.top_cfg.get("stage4", {}).get("reps", 20))),
             "min_score": float(ds.get("stage4", {}).get("min_score", self.top_cfg.get("stage4", {}).get("min_score", 0.02))),
             "min_pearson": ds.get("stage4", {}).get("min_pearson", self.top_cfg.get("stage4", {}).get("min_pearson", "nan")),
+            "pearson_engine": ds.get("stage4", {}).get("pearson_engine", self.top_cfg.get("stage4", {}).get("pearson_engine", self.top_cfg.get("hist_filter", {}).get("pearson_engine", "surrogate"))),
         }
 
         # Database configuration
@@ -1633,7 +1751,7 @@ class UnifiedPipeline:
                     print(f"  - {s}")
                 print("-" * 80 + "\n")
 
-                self.emitter.emit(f"Pass {pass_ix}", f"Discovery pass {pass_ix} complete", progress + 50/seq_max_passes, metrics={"pass": pass_ix, "event": "pass_end"})
+                self.emitter.emit(f"Pass {pass_ix}", f"Discovery pass {pass_ix} complete", progress_base + progress_step, metrics={"pass": pass_ix, "event": "pass_end"})
                 self.manifest.update_stage(f"Pass {pass_ix}", "complete", {
                     "rwp_before": kept_rwp,
                     "rwp_trial_blend": rwp_compare,
@@ -1760,7 +1878,9 @@ def _compute_pearson_with_refinement(
     work_dir: str,
     x_native,
     residual_native,
-    instprm_path: str
+    instprm_path: str,
+    template_gpx: Optional[str] = None,
+    engine: str = "surrogate"
 ) -> Tuple[float, str, str]:
     import numpy as _np
     try:
@@ -1774,24 +1894,22 @@ def _compute_pearson_with_refinement(
         lims = (float(_np.nanmin(x_native)), float(_np.nanmax(x_native)))
         is_nudged = str(cand_cif).endswith("_nudged.cif")
         label = "nudged" if is_nudged else "orig"
-
         r_val = compute_gsas_pearson_for_cif(
-            data_path=str(resid_xye),
+            data_path="",
             instprm_path=instprm_path,
-            fmthint="xye",
+            fmthint=None,
             cif_path=cand_cif,
-            work_dir=str(resid_dir),
-            limits=lims,
+            work_dir=work_dir,
+            limits=None,
             exclude_regions=None,
-            tmp_tag=f"{name}_s4_{pid}_{label}",
-            refine_cycles=2,
-            refine_hist_scale=True,
-            refine_cell=True,
-            out_refined_cif=None,
-            source_cif_for_export=cand_cif
+            tmp_tag=f"sel_{pid}",
+            x_override=x_native,
+            y_override=residual_native,
+            template_gpx=template_gpx,
         )
 
-        print(f"[INFO] Stage-4 Pearson ({label}): {pid} → r={float(r_val):.4f}")
+        print(f"[INFO] Stage-4 Pearson (GSAS - {label}): {pid} → r={float(r_val):.4f}")
+        
         return float(r_val), label, cand_cif
 
     except Exception as e:

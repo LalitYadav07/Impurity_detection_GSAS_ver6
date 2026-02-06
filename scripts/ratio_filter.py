@@ -27,13 +27,18 @@ import pandas as pd
 # =============================================================================
 # DB pack loader
 # =============================================================================
+_PROFILE_CACHE: Dict[str, Any] = {}
+
 def _load_profiles64_metadata(profiles_dir: str) -> Dict[str, Any]:
     """
     Load 64-bin profiles and metadata from profiles64.npz (+ index.csv).
-
-    Returns a dict with keys:
-      profiles (N,64), pid_to_row, q_min, q_max, n_bins, sigma_bins, edges, centers
+    Caches results in-memory to avoid redundant I/O.
     """
+    global _PROFILE_CACHE
+    cache_key = str(Path(profiles_dir).resolve())
+    if cache_key in _PROFILE_CACHE:
+        return _PROFILE_CACHE[cache_key]
+
     prof_npz = os.path.join(profiles_dir, "profiles64.npz")
     idx_csv = os.path.join(profiles_dir, "index.csv")
     if not os.path.exists(prof_npz):
@@ -70,7 +75,7 @@ def _load_profiles64_metadata(profiles_dir: str) -> Dict[str, Any]:
     if profiles.shape[1] != n_bins:
         raise ValueError(f"Profile bins mismatch: {profiles.shape[1]} vs {n_bins}")
 
-    return {
+    res = {
         "profiles": profiles,
         "pid_to_row": pid_to_row,
         "q_min": q_min,
@@ -80,6 +85,8 @@ def _load_profiles64_metadata(profiles_dir: str) -> Dict[str, Any]:
         "edges": edges,
         "centers": centers,
     }
+    _PROFILE_CACHE[cache_key] = res
+    return res
 
 
 

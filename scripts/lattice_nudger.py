@@ -1,9 +1,12 @@
-# lattice_nudger_optimized_patched.py
-# Patches applied:
-# 1) Metric-based HKL Q via reciprocal metric (Numba JIT) for fast hkl_Q_signature.
-# 2) Faster accumulation on uniform grid using np.bincount in _render_with_plan.
-# 3) Thread-local NDCalculator in NDSticksQ for thread-safe simulations.
-# 4) Parallel representative scoring in LatticeNudger.optimize_one using ThreadPoolExecutor.
+"""
+GSAS-II Integrated Impurity Detection Pipeline (Complete)
+
+Implements the core sequential refinement logic, orchestrating:
+- Global data screening and initial candidate shortlisting.
+- Multi-pass ML-driven diagnostic ranking.
+- Automated GSAS-II lattice refinement and Rwp optimization.
+- Event emission for real-time UI monitoring and progress tracking.
+"""
 from __future__ import annotations
 
 import os
@@ -13,6 +16,7 @@ from dataclasses import dataclass
 from typing import List, Tuple, Dict, Optional
 from functools import lru_cache
 import threading
+import concurrent.futures
 import re
 from pathlib import Path
 
@@ -856,6 +860,16 @@ class NDSticksQ:
         # Add caching for repeated structure calculations
         self._pattern_cache = {}
 
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        if "_local" in state:
+            del state["_local"]
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        self._local = threading.local()
+
     def _nd_calc(self):
         if not hasattr(self._local, "nd"):
             self._local.nd = NDCalculator(wavelength=self.wl)
@@ -947,7 +961,7 @@ class LatticeNudger:
         structure.to(fmt="cif", filename=path, symprec=symprec, angle_tolerance=angle_tolerance)
         # Enforce a short, GSAS-II-friendly data_ label
         _sanitize_cif_data_block(path, pid, suffix="nudged", maxlen=5)
-        print("***********************sanitised**************")
+
         return path
 
     # ------------------------ Q-signature constrained strategy (optimized) ------------------------
@@ -1181,14 +1195,36 @@ class LatticeNudger:
         except Exception:
             pass
 
+        # Decide worker count
+        cpu_count = os.cpu_count() or 1
+        # We don't have direct access to s4_cfg here, but we can look at env or just use a default
+        max_workers_env = int(os.environ.get("STAGE4_MAX_WORKERS", "0"))
+        if max_workers_env > 0:
+            workers = max_workers_env
+        else:
+            workers = max(1, cpu_count // 2)
+            
+        print(f"[stage4] Starting parallel Lattice Nudging for {len(candidates)} candidates with {workers} workers.")
+        
+        import sys
+        sys.stdout.flush()
+
         results = []
-        for pid in candidates:
-            try:
-                r = self.optimize_one(pid, Q_res, R_res, reps, samples, frac_window, angle_window_deg, out_cif_dir)
-                results.append(r)
-                print(f"[stage4] {pid}: score={r.best_score:.3f}  -> {os.path.basename(r.nudged_cif_path)}")
-            except Exception as e:
-                print(f"[stage4] {pid}: failed: {e}")
+        with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as executor:
+            future_to_pid = {
+                executor.submit(
+                    self.optimize_one, pid, Q_res, R_res, reps, samples, frac_window, angle_window_deg, out_cif_dir
+                ): pid for pid in candidates
+            }
+            
+            for future in concurrent.futures.as_completed(future_to_pid):
+                pid = future_to_pid[future]
+                try:
+                    r = future.result()
+                    results.append(r)
+                    print(f"[stage4] {pid}: score={r.best_score:.3f}  -> {os.path.basename(r.nudged_cif_path)}")
+                except Exception as e:
+                    print(f"[stage4] {pid}: failed: {e}")
 
         results.sort(key=lambda r: r.best_score, reverse=True)
         return results

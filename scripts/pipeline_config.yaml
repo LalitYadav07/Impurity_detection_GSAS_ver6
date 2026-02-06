@@ -1,7 +1,7 @@
 # ===================== ONE (or two) knobs =====================
 # Point these to wherever you move the project/scratch area.
-PROJECT_ROOT: C:\Users\lalit\OneDrive\Desktop\Impurity_detection_GSAS_ver6
-WORK_ROOT:    C:\Users\lalit\OneDrive\Desktop\Impurity_detection_GSAS_ver6\runs
+PROJECT_ROOT: C:\Users\lalit\OneDrive\Desktop\Impurity_detection_GSAS_version7
+WORK_ROOT:    C:\Users\lalit\OneDrive\Desktop\Impurity_detection_GSAS_version7\runs
 # (Optional) If you keep data under a subfolder, leave this alone:
 DATA_ROOT:    ${PROJECT_ROOT}/data
 # ===============================================================
@@ -133,11 +133,11 @@ stage4:
 hist_filter:
   min_active_bins: 4
   min_sum_residual: 0.0
-  topN: 57 # candidates to pass after the histogram stage
+  topN: 10 # candidates to pass after the histogram stage
   debug: true
   plot: true
   plot_out_path_png: auto
-  plot_top_k: 47
+  plot_top_k: 10
   plot_title: "Stage-3 Histogram (ML)"
 
 datasets:

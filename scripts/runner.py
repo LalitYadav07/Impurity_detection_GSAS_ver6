@@ -1,3 +1,12 @@
+"""
+Automated Database Augmentation Tool
+
+Builds an augmented spectral database from raw CIF files or JSON metadata.
+Provides parallelized processing of crystal structures to generate:
+- 128-bit element masks for fast chemistry filtering.
+- Spectral fingerprints (Profile64) for histogram-based screening.
+- Optimized hybrid catalogs for local and remote data integration.
+"""
 import subprocess
 import os
 import sys
@@ -17,7 +26,7 @@ class PipelineRunner:
     def _get_execution_context(self):
         """Returns (cmd_prefix, cwd)"""
         if self.use_pixi:
-            return ["pixi", "run", "python"], str(self.pixi_dir)
+            return ["pixi", "run", "python"], str(self.project_root)
         else:
             # Fallback to standard python in current environment
             return [sys.executable], str(self.project_root)

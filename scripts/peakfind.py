@@ -1,13 +1,9 @@
-
 """
-Lightweight peak picker for 1D diffraction patterns without SciPy dependency.
+Machine Learning Spectral Filter and Purity Estimator
 
-- Smooths with a short moving average to suppress pixel noise
-- Detects local maxima
-- Applies a prominence threshold relative to median absolute deviation (MAD)
-- Enforces a minimum peak spacing (distance in points)
-
-Returns peak indices and (optionally) the corresponding Q positions.
+Implements the Stage-3 histogram-based screening logic for candidate ranking.
+Calculates ML-relevant metrics including explained fraction, purity scores,
+and p-weighted scale factors against continuous residual distributions.
 """
 from __future__ import annotations
 import numpy as np

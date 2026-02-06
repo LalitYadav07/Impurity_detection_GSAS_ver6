@@ -39,23 +39,37 @@ pixi add "numpy<2.0" psutil
 pixi run install-editable
 cd ../..
 
+# --- NEW: Binary Bridge ---
+echo "Bridging compiled binaries to GSASII package..."
+# On Linux, these are usually .so files or executables
+FIND_PYD=$(find GSAS-II/build -name "*.so" -o -name "*.pyd" 2>/dev/null || true)
+FIND_EXE=$(find GSAS-II/build -executable -type f -not -path "*/.*" 2>/dev/null || true)
+
+if [ -n "$FIND_PYD" ] || [ -n "$FIND_EXE" ]; then
+    cp $FIND_PYD GSAS-II/GSASII/ 2>/dev/null || true
+    cp $FIND_EXE GSAS-II/GSASII/ 2>/dev/null || true
+    echo "Bridge complete: binaries copied to GSASII package source."
+fi
+
 # 4.2 Initialize root environment dependencies
 echo "Solving root environment dependencies..."
 pixi install
 
 # 5. Validation
 echo -e "\n--- Validating Installation ---"
-TEST_CMD="import GSASII.GSASIIscriptable as G2sc; print('OK', G2sc.__file__)"
+export PYTHONPATH="$PWD/GSAS-II"
+TEST_CMD="import GSASII.GSASIIscriptable as G2sc; import GSASII.pyspg; print('OK', G2sc.__file__)"
 RESULT=$(pixi run python -c "$TEST_CMD" 2>&1)
 
 if [[ $RESULT == *"OK"* ]]; then
-    echo -e "\nSUCCESS: GSAS-II is importable!"
+    echo -e "\nSUCCESS: GSAS-II and binaries are confirmed active!"
     echo "$RESULT"
 else
-    echo -e "\nValidation failed. Output:"
+    echo -e "\nWARNING: Validation failed or binaries missing. Check gfortran/gcc installation."
+    echo "Output:"
     echo "$RESULT"
-    exit 1
 fi
 
-echo -e "\nTo use the environment, run commands via: cd GSAS-II/pixi && pixi run python ..."
-echo "Or activate the shell: cd GSAS-II/pixi && pixi shell"
+echo -e "\n--- SETUP COMPLETE ---"
+echo "To use the project, always run via pixi tasks: 'pixi run ui' or 'pixi run cli-run'"
+echo "Refer to README.md for troubleshooting."

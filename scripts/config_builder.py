@@ -55,11 +55,7 @@ def build_pipeline_config(
         "rwp_improve_eps": 0.05,
         "knee_filter": {
             "enable_hist": True,
-            "enable_nudge": True,
-            "enable_pearson": True,
             "min_points_hist": 5,
-            "min_points_nudge": 4,
-            "min_points_pearson": 3,
             "min_rel_span": 0.03,
             "guard_frac": 0.05,
         },
@@ -68,16 +64,19 @@ def build_pipeline_config(
             "two_theta_range": [5.0, 160.0],
             "samples": 5000,
             "reps": 50,
-            "angle_window_deg": 0,
-            "frac_window": 0.01,
-            "min_pearson": 0.02,
+            "len_tol_pct": 1.0,  # User-requested default
+            "ang_tol_deg": 3.0,  # User-requested default
         },
         "hist_filter": {
             "min_active_bins": 4,
             "min_sum_residual": 0.0,
-            "topN": 57,
-            "plot": True,
-            "plot_top_k": 47,
+            "topN": 50,
+        },
+        "corr_threshold": 0.95,
+        "exclude_sg": [1, 2],
+        "background": {
+            "type": "chebyschev-1",
+            "terms": 12,
         },
         "element_filter": {
             "max_offlist_elements": 0,

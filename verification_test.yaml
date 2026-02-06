@@ -1,0 +1,48 @@
+PROJECT_ROOT: C:\Users\lalit\OneDrive\Desktop\Impurity_detection_GSAS_version7
+WORK_ROOT:    C:\Users\lalit\OneDrive\Desktop\Impurity_detection_GSAS_version7\runs
+DATA_ROOT:    ${PROJECT_ROOT}/data
+
+work_root: ${WORK_ROOT}
+ml_components_dir: ${PROJECT_ROOT}/ML_components
+
+instrument_map:
+  hb2a: ${DATA_ROOT}/instrument_params/hb2a_si_ge113.instprm
+  pg3:  ${DATA_ROOT}/instrument_params/2023A_June_HighRes_60HzB3_CWL2p665.instprm
+
+db:
+  catalog_csv:   ${DATA_ROOT}/database_aug/catalog_deduplicated.csv
+  original_json: ${DATA_ROOT}/database_aug/highsymm_metadata.json
+  profiles_dir:  ${DATA_ROOT}/database_aug/profiles64
+  stable_csv:    ${DATA_ROOT}/database_aug/mp_experimental_stable.csv
+
+allowed_elements: [Tb, Sc, Si, O, Pb, P, Cu, S, Be, Ge, Al]
+max_passes: 1
+
+datasets:
+  - name: tbssl_verification
+    mode: CW
+    data_path: ${DATA_ROOT}/HB2A_TbSSL.dat
+    main_cif: ${DATA_ROOT}/cifs/TbSSL.cif
+    instprm_path: auto
+    fmthint: xye
+    main_phase_name: TbSSL_Main
+    background:
+      type: chebyschev-1
+      terms: 9
+    allowed_elements: [Tb, Be, Ge, O]
+    element_filter:
+      sample_env:
+        elements: ["Al"]
+        allow_pure: true
+
+  - name: lk99_verification
+    mode: TOF
+    data_path: ${DATA_ROOT}/PG3_56181-3.dat
+    main_cif: ${DATA_ROOT}/cifs/LK99_phase_FromRefinement.cif
+    instprm_path: auto
+    fmthint: xye
+    main_phase_name: LK99_Main
+    background:
+      type: log interpolate
+      terms: 6
+    allowed_elements: [Cu, S, Pb, P, O]

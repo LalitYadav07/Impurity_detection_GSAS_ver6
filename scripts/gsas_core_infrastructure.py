@@ -40,17 +40,32 @@ class GSASProjectManager:
         self.main_phase: Optional[Any] = None
         self.instrument_type: Optional[str] = None
         
-    def create_project(self, overwrite: bool = True) -> bool:
-        """Create a new GSAS-II project."""
+    def create_project(self, overwrite: bool = True, template_gpx: Optional[str] = None) -> bool:
+        """Create a new GSAS-II project, optionally from a template."""
         if not GSAS_AVAILABLE:
             raise RuntimeError("GSAS-II not available for project creation")
             
         try:
             if overwrite and self.project_path.exists():
-                self.project_path.unlink()
+                import time
+                for i in range(5):
+                    try:
+                        self.project_path.unlink()
+                        break
+                    except PermissionError:
+                        if i == 4: raise
+                        time.sleep(0.2)
+            
+            if template_gpx and os.path.exists(template_gpx):
+                import shutil
+                shutil.copy2(template_gpx, str(self.project_path))
+                self.project = G2sc.G2Project(gpxfile=str(self.project_path))
+                # GSAS-II sometimes needs to know it's a new path
+                self.project.save(str(self.project_path))
+            else:
+                self.project = G2sc.G2Project(newgpx=str(self.project_path))
                 
-            self.project = G2sc.G2Project(newgpx=str(self.project_path))
-            print(f"Created GSAS-II project: {self.project_path}")
+            print(f"Created GSAS-II project: {self.project_path} (template={template_gpx})")
             return True
             
         except Exception as e:

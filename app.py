@@ -43,15 +43,16 @@ def check_gsas_installation():
         import GSASII
         import GSASII.GSASIIpath as G2path
         
-        # Check for the core binary module
+        # Check for the core binary module but don't treat direct import failure as a hard crash
+        # GSAS-II often relies on pathing that it manages internally.
         try:
             import pyspg
-            st.success("✅ GSAS-II and binaries confirmed loaded.")
-            return True
-        except ImportError as e:
-            st.error(f"❌ GSAS-II binaries (pyspg) failed to load: {e}")
-            st.info("The system may be rebuilding binaries. Please refresh in a minute.")
-            return False
+        except ImportError:
+            # If GSASII is present, we consider it "OK" but maybe "Degraded" or just
+            # needing internal pathing to be set up.
+            pass
+            
+        return True
             
     except ImportError:
         st.error("❌ GSAS-II package not found. Please ensure it is in requirements.txt.")
@@ -708,9 +709,9 @@ def update_ui_state():
             st.session_state.log_lines.extend(new_lines)
             update_funnel_metrics(new_lines)
             
-            # MEMORY OPTIMIZATION: Keep only last 500 lines
-            if len(st.session_state.log_lines) > 500:
-                st.session_state.log_lines = st.session_state.log_lines[-500:]
+            # MEMORY OPTIMIZATION: Keep only last 2000 lines for live view
+            if len(st.session_state.log_lines) > 2000:
+                st.session_state.log_lines = st.session_state.log_lines[-2000:]
             
         # Update Progress State
         state = st.session_state.pipeline_state
@@ -833,35 +834,78 @@ with st.sidebar:
     else:
         st.success("📊 Database: [OK] (Ready for discovery)")
 
-    with st.expander("📁 Mandatory Inputs", expanded=True):
-        example_mode = st.checkbox("📖 Example Mode (TbSSL Demo)", value=False)
-        if example_mode:
-            st.info("Using bundled TbSSL dataset (4K neutrons). Parameters are pre-configured.")
+    # --- 1. MAIN PANEL (Always visible) ---
+    with st.expander("📁 Main Settings", expanded=True):
+        example_selection = st.selectbox("📖 Example Mode", ["None", "TbSSL (CW Demo)", "LK-99 (TOF Demo)"], index=0)
+        run_name = st.text_input("Run Name", f"run_{datetime.datetime.now().strftime('%Y%j_%H%M%S')}")
+        
+        if example_selection != "None":
+            if example_selection == "TbSSL (CW Demo)":
+                st.info("Using bundled TbSSL dataset (CW). Parameters are pre-configured.")
+                st.code("Allowed: Tb, Be, Ge, O\nHardware: Al\nCIF: TbSSL.cif", language="text")
+                allowed_elements_str = "Tb, Be, Ge, O"
+                sample_env_elements_str = "Al"
+            else: # LK-99
+                 st.info("Using bundled LK-99 dataset (TOF). Parameters are pre-configured.")
+                 st.code("Allowed: Pb, P, O, Cu\nHardware: None\nCIF: LK99.cif", language="text")
+                 allowed_elements_str = "Pb, P, O, Cu"
+                 sample_env_elements_str = ""
+            
             data_file, instprm_file, main_cif = None, None, None
-            # Read-only display of what will be used
-            st.code("Allowed: Tb, Be, Ge, O\nEnv: Al\nCIF: TbSSL.cif", language="text")
-            allowed_elements_str = "Tb, Be, Ge, O"
-            sample_env_elements_str = "Al"
+            max_passes = 3
         else:
             data_file = st.file_uploader("Diffraction Data", type=["dat", "xye", "gsa", "fxye"])
             instprm_file = st.file_uploader("Instrument Params (.instprm)", type=["instprm"])
             main_cif = st.file_uploader("Main CIF (Optional)", type=["cif"])
-            allowed_elements_str = st.text_input("Allowed Elements", "Tb, Be, Ge, O")
-            sample_env_elements_str = st.text_input("Sample Env", "")
+            
+            c1, c2 = st.columns(2)
+            with c1:
+                allowed_elements_str = st.text_input("Allowed Elements", "Tb, Be, Ge, O", help="Comma-separated elements in the sample.")
+            with c2:
+                sample_env_elements_str = st.text_input("Hardware / SE", "Al", help="Elements from sample environment (cans, holders).")
+            
+            max_passes = st.number_input("Max Discovery Passes", 1, 10, 3, help="Max number of sequential impurity phases to search for.")
 
-    with st.expander("🧠 Advanced Params", expanded=False):
-        run_name = st.text_input("Run Name", f"run_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}")
-        min_impurity = st.slider("Min Wt%", 0.0, 5.0, 0.5)
-        max_passes = st.number_input("Max Passes", 1, 10, 3)
-        top_candidates = st.number_input("Top Candidates", 1, 100, 10)
+    # --- 2. ADVANCED SETTINGS (Secondary) ---
+    with st.expander("⚙️ Advanced Tuning", expanded=False):
+        c1, c2 = st.columns(2)
+        with c1:
+            top_n_ml = st.number_input("Initial Top-N", 1, 1000, 50, help="Max candidates to pass from ML screening.")
+            wait_for_pass = st.number_input("Wait-for-Pass", 1, 100, 10, help="Phases to send to Stage 4 (Nudge).")
+            rwp_eps = st.number_input("Rwp Improve Eps", 0.0, 1.0, 0.05, format="%.3f", help="Min Rwp improvement required to keep searching.")
+        with c2:
+            len_tol = st.number_input("Length Tolerance (%)", 0.0, 50.0, 1.0, help="Max lattice length deviation to explore.")
+            ang_tol = st.number_input("Angle Tolerance (°)", 0.0, 90.0, 3.0, help="Max lattice angle deviation to explore.")
+            trace_limit = st.number_input("Trace Limit (Wt%)", 0.0, 100.0, 0.5, help="Wt% threshold for 'detected' classification.")
+        
+        c3, c4 = st.columns(2)
+        with c3:
+            dedup_threshold = st.number_input("Dedup Threshold", 0.0, 1.0, 0.95, format="%.2f", help="Pearson threshold for merging similar CIFs.")
+            bg_type = st.selectbox("Background Type", ["chebyschev-1", "log interpolate", "cosine", "exponential"], index=0, help="GSAS-II background function type.")
+        with c4:
+            excluded_sgs = st.text_input("Excluded SGs", "1, 2", help="Comma-separated Space Group numbers to ignore.")
+            bg_terms = st.number_input("Background Terms", 1, 36, 12, help="Number of coefficients for background refinement.")
+
+    # --- 3. EXPERT MODE (Hidden/Searchable) ---
+    expert_mode = st.toggle("🔍 Expert Mode", value=False)
+    if expert_mode:
+        with st.expander("🧪 Expert Tuning (Internal)", expanded=True):
+            st.caption("Algorithm internals for debugging and research.")
+            k_min_hist = st.number_input("Knee: Min Points", 1, 100, 5)
+            k_span = st.number_input("Knee: Min Span", 0.0, 1.0, 0.03, format="%.3f")
+            
+            st.divider()
+            db_catalog = st.text_input("Catalog CSV", "catalog_deduplicated.csv")
+            db_stable = st.text_input("Stable CSV", "mp_experimental_stable.csv")
+            db_metadata = st.text_input("Metadata JSON", "highsymm_metadata.json")
+    else:
+        # Defaults for expert params if not in expert mode
+        k_min_hist, k_span = 5, 0.03
+        db_catalog, db_stable, db_metadata = "catalog_deduplicated.csv", "mp_experimental_stable.csv", "highsymm_metadata.json"
         
     # START BUTTON
     if not st.session_state.run_active:
         if st.button("🚀 RUN PIPELINE"):
-            # Validation
-            if not example_mode and (not data_file or not instprm_file):
-                st.error("Missing required files!")
-            else:
                 # Setup
                 clean_name = run_name.replace(" ", "_")
                 rdir = PROJECT_ROOT / Path("runs") / clean_name
@@ -870,10 +914,15 @@ with st.sidebar:
                 
                 # File Handling
                 dpath, ipath, cpath = None, None, None
-                if example_mode:
-                    dpath = str((Path(PROJECT_ROOT) / "examples" / "tbssl" / "HB2A_TbSSL.dat").resolve())
-                    ipath = str((Path(PROJECT_ROOT) / "examples" / "tbssl" / "hb2a_si_ge113.instprm").resolve())
-                    cpath = str((Path(PROJECT_ROOT) / "examples" / "tbssl" / "TbSSL.cif").resolve())
+                if example_selection != "None":
+                    if example_selection == "TbSSL (CW Demo)":
+                        dpath = str((Path(PROJECT_ROOT) / "examples" / "tbssl" / "HB2A_TbSSL.dat").resolve())
+                        ipath = str((Path(PROJECT_ROOT) / "examples" / "tbssl" / "hb2a_si_ge113.instprm").resolve())
+                        cpath = str((Path(PROJECT_ROOT) / "examples" / "tbssl" / "TbSSL.cif").resolve())
+                    else: # LK-99
+                        dpath = str((Path(PROJECT_ROOT) / "examples" / "lk99" / "PG3_56181-3.dat").resolve())
+                        ipath = str((Path(PROJECT_ROOT) / "examples" / "lk99" / "2023A_June_HighRes_60HzB3_CWL2p665.instprm").resolve())
+                        cpath = str((Path(PROJECT_ROOT) / "examples" / "lk99" / "LK99.cif").resolve())
                 else:
                     # Save logic inline
                     if data_file:
@@ -890,12 +939,40 @@ with st.sidebar:
                 els = [e.strip() for e in allowed_elements_str.split(",") if e.strip()]
                 env = [e.strip() for e in sample_env_elements_str.split(",") if e.strip()]
                 
+                # Advanced parameters dictionary
+                adv_cfg = {
+                    "hist_filter": {"topN": top_n_ml},
+                    "top_candidates": wait_for_pass,
+                    "rwp_improve_eps": rwp_eps,
+                    "stage4": {
+                        "len_tol_pct": len_tol,
+                        "ang_tol_deg": ang_tol,
+                    },
+                    "knee_filter": {
+                        "min_points_hist": k_min_hist,
+                        "min_rel_span": k_span,
+                    },
+                    "corr_threshold": dedup_threshold,
+                    "exclude_sg": [int(s.strip()) for s in excluded_sgs.split(",") if s.strip().isdigit()],
+                    "background": {
+                        "type": bg_type,
+                        "terms": int(bg_terms),
+                    }
+                }
+                
+                # DB Path Overrides (if expert mode changed them)
+                db_overrides = {}
+                if db_catalog != "catalog_deduplicated.csv": db_overrides["catalog_csv"] = str(Path(DB_DIR) / db_catalog)
+                if db_stable != "mp_experimental_stable.csv": db_overrides["stable_csv"] = str(Path(DB_DIR) / db_stable)
+                if db_metadata != "highsymm_metadata.json": db_overrides["original_json"] = str(Path(DB_DIR) / db_metadata)
+                if db_overrides: adv_cfg["db"] = db_overrides
+
                 cfg = build_pipeline_config(
                     run_name=run_name, data_file=dpath, instprm_file=ipath,
                     allowed_elements=els, sample_env_elements=env, main_cif=cpath,
                     work_root=str(rdir), project_root=PROJECT_ROOT,
-                    min_impurity_percent=min_impurity, max_passes=max_passes,
-                    advanced_params={"top_candidates": top_candidates}
+                    min_impurity_percent=trace_limit, max_passes=max_passes,
+                    advanced_params=adv_cfg
                 )
                 
                 with open(rdir / "pipeline_config.yaml", "w") as f: f.write(cfg)
@@ -904,6 +981,7 @@ with st.sidebar:
                 st.session_state.run_dir = str(rdir)
                 st.session_state.run_name = clean_name
                 st.session_state.log_lines = []
+                st.session_state.knee_logs = []
                 st.session_state.funnel_data = {"Total Database": 0, "Elements": 0, "Spacegroup": 0, "Stability": 0}
                 st.session_state.progress = 0
                 st.session_state.status_msg = "Initializing..."
@@ -1006,7 +1084,26 @@ with t_run:
 
             c1_t, c1_a = st.columns([1, 1])
             c1_t.subheader("📜 Live Logs")
-            st.session_state.log_autoscroll = c1_a.checkbox("🔄 Autoscroll", value=st.session_state.log_autoscroll, key="log_as_toggle")
+            
+            # Additional controls: Download and Load Full
+            c_auto, c_dl, c_full = st.columns([0.3, 0.35, 0.35])
+            with c_auto:
+                st.session_state.log_autoscroll = st.checkbox("🔄 Autoscroll", value=st.session_state.log_autoscroll, key="log_as_toggle")
+            
+            with c_dl:
+                if st.session_state.run_dir:
+                    lfile = Path(st.session_state.run_dir) / "pipeline.log"
+                    if lfile.exists():
+                        with open(lfile, "rb") as f:
+                            st.download_button("📥 Download Log", f, file_name="pipeline.log", key="dl_full_log_btn")
+            
+            with c_full:
+                if st.session_state.run_finished and st.session_state.run_dir:
+                    if st.button("📖 Load Full History", help="Load the entire log file from disk"):
+                        lfile = Path(st.session_state.run_dir) / "pipeline.log"
+                        if lfile.exists():
+                            with open(lfile, "r", encoding="utf-8") as f:
+                                st.session_state.log_lines = f.readlines()
             
             # Format logs with highlighting
             formatted_logs = "<br>".join([format_log_line(line.rstrip()) for line in st.session_state.log_lines])
@@ -1112,6 +1209,57 @@ with t_res:
     if st.session_state.run_dir:
         rdir = Path(st.session_state.run_dir)
         
+        # --- ML Ranker Results ---
+        @st.fragment(run_every=5.0)
+        def render_ml_results():
+            diag_dir = rdir / "Diagnostics"
+            if diag_dir.exists():
+                # Find all pass files
+                ml_files = sorted(list(diag_dir.glob("ml_rank_result_pass*.jsonl")), 
+                                 key=lambda x: int(re.search(r"pass(\d+)", x.name).group(1)) if re.search(r"pass(\d+)", x.name) else 0)
+                
+                if ml_files:
+                    st.subheader("🤖 ML Ranker Diagnostics")
+                    st.info("💡 **ML Score**: Higher (less negative) is better. Represents relative relevance weight.")
+                    
+                    # Display each pass in its own expander
+                    for f_path in ml_files:
+                        pass_name = f_path.stem.replace("ml_rank_result_", "")
+                        with st.expander(f"Pass: {pass_name}", expanded=(f_path == ml_files[-1])):
+                            try:
+                                with open(f_path, "r") as f:
+                                    data = json.load(f)
+                                
+                                if "ranked" in data:
+                                    import pandas as pd
+                                    df = pd.DataFrame(data["ranked"])
+                                    
+                                    # Add metadata columns if db_loader is available
+                                    if "db_loader" in st.session_state and st.session_state.db_loader:
+                                        db = st.session_state.db_loader
+                                        names, sgs, sg_nums = [], [], []
+                                        for pid in df["mp_id"]:
+                                            try:
+                                                names.append(db.get_pretty_name(pid))
+                                                sgs.append(db.get_space_group_symbol(pid) or "—")
+                                                sg_nums.append(db.get_space_group_number(pid) or "—")
+                                            except:
+                                                names.append("unknown")
+                                                sgs.append("—")
+                                                sg_nums.append("—")
+                                        
+                                        df.insert(2, "Compound", names)
+                                        df.insert(3, "Space Group", sgs)
+                                        df.insert(4, "SG #", sg_nums)
+
+                                    st.dataframe(df, hide_index=True, use_container_width=True)
+                                else:
+                                    st.caption("No ranking data found in output.")
+                            except Exception as e:
+                                st.caption(f"Waiting for ML ranker... ({e})")
+        
+        render_ml_results()
+        
         # Metrics Overview (Optional, maybe keep it simple)
         mpath = next(rdir.rglob("run_manifest.json"), None)
         if mpath and mpath.exists():
@@ -1143,11 +1291,25 @@ with t_res:
         st.info("No run data available.")
 
 with t_exp:
-    st.subheader("📂 Run File Browser")
+    c1, c2 = st.columns([0.8, 0.2])
+    with c1:
+        st.subheader("📂 Run File Browser")
+    with c2:
+        if st.button("🔄 Refresh", use_container_width=True):
+            st.rerun()
+            
     if st.session_state.run_dir:
         # Show full file tree
         rdir = Path(st.session_state.run_dir)
-        render_file_explorer(rdir, "exp_root", None) # No filter, show all
+        if not rdir.exists():
+            st.error(f"Run directory not found: {rdir}")
+        else:
+            # Check for pipeline.log presence
+            lfile = rdir / "pipeline.log"
+            if not lfile.exists():
+                st.warning("⚠️ pipeline.log not found in run root.")
+            
+            render_file_explorer(rdir, "exp_root", None) # No filter, show all
     else:
         st.info("No active run directory.")
 

@@ -558,7 +558,7 @@ class LegacyPipelineBridge:
 
         if work_dir:
              traces_dir = Path(work_dir) / "Diagnostics" / "Screening_Traces"
-             traces_dir.mkdir(parents=True, exist_ok=True)
+             # traces_dir.mkdir(parents=True, exist_ok=True)  <-- Removed: Lazy creation inside shortlist_by_hist_ML
              default_plot_path = str(traces_dir / "diag_hist_grid.png")
         else:
              default_plot_path = os.path.join(os.getcwd(), "diag_hist_grid.png")
@@ -601,6 +601,8 @@ class LegacyPipelineBridge:
                 p     = _metric(d, "present_prob", float("nan"))
                 p_str = f", p={p:.3f}" if np.isfinite(p) else ""
                 print(f"  - {pid}: {name}, SG={sg}, score={sc:.3f} (cos={cos:.3f}, α={alpha:.3f}{p_str}, explained={R_cov:.3f})")
+            import sys
+            sys.stdout.flush()
 
         return scored, details, meta
 
@@ -694,6 +696,7 @@ class IntegratedCandidateScreener:
             try:
                 c.ml_score        = float(det.get("score", hist_sc))
                 c.ml_alpha        = float(det.get("alpha", np.nan))
+                c.ml_beta         = float(det.get("beta", np.nan))
                 c.ml_explained    = float(det.get("explained_fraction", np.nan))
                 c.ml_cosine       = float(det.get("cosine", np.nan))
                 c.ml_present_prob = float(det.get("present_prob", np.nan))
@@ -912,10 +915,10 @@ def stage0_bootstrap_no_cif(
     )
     s4_res = nudger.optimize_many(
         phase_ids, Q, residual_Q,
-        reps=s4_cfg["reps"],
-        samples=s4_cfg["samples"],
-        frac_window=s4_cfg["frac_window"],
-        angle_window_deg=s4_cfg["angle_window_deg"],
+        reps=s4_cfg.get("reps", 50),
+        samples=s4_cfg.get("samples", 5000),
+        frac_window=s4_cfg.get("len_tol_pct", s4_cfg.get("frac_window", 1.0)),
+        angle_window_deg=s4_cfg.get("ang_tol_deg", s4_cfg.get("angle_window_deg", 3.0)),
         out_cif_dir=models_refined_dir,
     )
 

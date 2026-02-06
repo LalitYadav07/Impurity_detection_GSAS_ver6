@@ -1,8 +1,10 @@
 """
-Position-only alignment utilities and ratio-hist shortlist.
-- ratio_histogram(dvals): compute scale-invariant histogram
-- shortlist_by_ratio(residual_Q, candidates_ratio_hist, topN)
-- align_score_candidate(residual_Q, cand_Q, cand_I, q_tol, coverage_thresh)
+Diffraction Pattern Alignment and Scoring Utilities
+
+Provides core logic for:
+- Scale-invariant ratio histogram computation for candidate pre-filtering.
+- Peak-based alignment scoring for ranking candidates against residuals.
+- Chi-square improvement metrics for evaluating candidate fit.
 """
 from __future__ import annotations
 import numpy as np
