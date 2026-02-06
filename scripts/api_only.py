@@ -75,8 +75,9 @@ async def execute_pipeline_task(run_id: str, config_path: str):
         
         logger.info(f"Task {run_id}: Starting pipeline...")
         for line in runner.run(config_path, run_id):
-            # The runner writes logs/events to the run_dir (in /tmp), so we just consume
-            pass
+            # Log output to server console for debugging
+            if line.strip():
+                print(f"[Pipeline {run_id}] {line.strip()}", flush=True)
         logger.info(f"Task {run_id}: Pipeline finished.")
         
     except Exception as e:
