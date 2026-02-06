@@ -45,7 +45,7 @@ class StatusResponse(BaseModel):
 async def health():
     return {"status": "ok"}
 
-@app.post("/api/run", response_model=RunResponse, dependencies=[Depends(verify_api_key)])
+@app.post("/run", response_model=RunResponse, dependencies=[Depends(verify_api_key)])
 async def run_pipeline(
     data_file: UploadFile = File(...),
     cif_file: Optional[UploadFile] = File(None),
@@ -97,7 +97,7 @@ async def run_pipeline(
 
     return RunResponse(run_id=run_id, message="Pipeline started successfully")
 
-@app.get("/api/status/{run_id}", response_model=StatusResponse)
+@app.get("/status/{run_id}", response_model=StatusResponse)
 async def get_status(run_id: str):
     run_dir = RUNS_DIR / run_id
     event_file = run_dir / "run_events.jsonl"
@@ -126,7 +126,7 @@ async def get_status(run_id: str):
     
     return StatusResponse(run_id=run_id, status=status, progress=progress, last_event=last_event)
 
-@app.get("/api/results/{run_id}", dependencies=[Depends(verify_api_key)])
+@app.get("/results/{run_id}", dependencies=[Depends(verify_api_key)])
 async def get_results(run_id: str):
     run_dir = RUNS_DIR / run_id
     summary_file = run_dir / "pipeline_summary.json"
@@ -145,7 +145,7 @@ async def get_results(run_id: str):
 
     return data
 
-@app.get("/api/download/{run_id}/{path:path}")
+@app.get("/download/{run_id}/{path:path}")
 async def download_file(run_id: str, path: str):
     file_path = RUNS_DIR / run_id / path
     if not file_path.exists():
