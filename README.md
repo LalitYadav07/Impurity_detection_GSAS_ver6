@@ -1,4 +1,6 @@
 ---
+# NOTE: This YAML block is required for Hugging Face Spaces configuration.
+# It defines the SDK (Docker), Space title, and UI theme.
 title: GSAS-II Impurity Detector
 emoji: 🔬
 colorFrom: green
@@ -7,7 +9,7 @@ sdk: docker
 pinned: false
 ---
 
-# 🔬 GSAS-II Impurity Detector (v7.0)
+# GSAS-II Impurity Detector (v7.0)
 
 This platform leverages **GSAS-II** to automate the discovery and refinement of impurity phases in powder diffraction data. It combines machine learning candidate screening with rigorous Rietveld refinement to provide high-confidence phase identification.
 
