@@ -1,6 +1,4 @@
 ---
-# NOTE: This YAML block is required for Hugging Face Spaces configuration.
-# It defines the SDK (Docker), Space title, and UI theme.
 title: GSAS-II Impurity Detector
 emoji: 🔬
 colorFrom: green
@@ -8,6 +6,11 @@ colorTo: blue
 sdk: docker
 pinned: false
 ---
+
+<!-- 
+NOTE: The YAML block above is required for Hugging Face Spaces configuration.
+It defines the SDK (Docker), Space title, and UI theme for the hosted app.
+-->
 
 # GSAS-II Impurity Detector (v7.0)
 
