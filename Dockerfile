@@ -41,5 +41,5 @@ COPY --chown=user . .
 # Expose Streamlit port
 EXPOSE 7860
 
-# Run the app
-CMD ["streamlit", "run", "app.py", "--server.port", "7860", "--server.address", "0.0.0.0"]
+# Run the app via the Gateway (FastAPI + Streamlit)
+CMD ["python", "scripts/gateway.py"]

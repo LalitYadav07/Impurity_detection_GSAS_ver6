@@ -15,3 +15,8 @@ imageio
 pycifrw
 xmltodict
 psutil
+# Core API & Gateway
+fastapi
+uvicorn[standard]
+python-multipart
+httpx
