@@ -100,8 +100,39 @@ def test_pipeline():
                      print(f"- {c['sample']}: {BASE_URL}{link}")
                  else:
                      print(f"- {c['sample']}: {BASE_URL}/{link}")
-        else:
-            print(f"Failed to get results: {r_res.text}")
+        if r_res.status_code == 200:
+            results = r_res.json()
+            print("\n[SUCCESS] ANALYSIS COMPLETE")
+            print(f"Sample: {results.get('sample_name')}")
+            print(f"Candidates Found: {len(results.get('candidates', []))}")
+            if results.get('candidates'):
+                best = results['candidates'][0]
+                print(f"Top Candidate: {best.get('phase_name', 'Unknown')} (Score: {best.get('score', 0):.2f})")
+            
+            # Auto-verification of Zip Download
+            zip_link = results.get("zip_link")
+            if zip_link:
+                # Handle relative URL
+                if zip_link.startswith("/"):
+                    zip_url = f"{BASE_URL}{zip_link}"
+                else:
+                    zip_url = f"{BASE_URL}/{zip_link}"
+                
+                print(f"\n[VERIFYING] Downloading results zip: {zip_url} ...")
+                r_zip = requests.get(zip_url, stream=True)
+                if r_zip.status_code == 200:
+                    local_zip = f"results_{run_id}.zip"
+                    with open(local_zip, "wb") as f:
+                        for chunk in r_zip.iter_content(chunk_size=8192):
+                            f.write(chunk)
+                    size_mb = os.path.getsize(local_zip) / (1024 * 1024)
+                    print(f"[PASS] Downloaded {local_zip} ({size_mb:.2f} MB)")
+                else:
+                    print(f"[FAIL] Failed to download zip: {r_zip.status_code}")
+            else:
+                print("[FAIL] No zip_link found in results.")
+
+            print("\nDownload Links:")
     else:
         print(f"Run ended with status: {status}")
 

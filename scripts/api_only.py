@@ -78,7 +78,10 @@ async def execute_pipeline_task(run_id: str, config_path: str):
             # Log output to server console for debugging
             if line.strip():
                 print(f"[Pipeline {run_id}] {line.strip()}", flush=True)
-        logger.info(f"Task {run_id}: Pipeline finished.")
+        
+        # Create Zip Archive of results
+        shutil.make_archive(str(RUNS_DIR / run_id / "results"), 'zip', str(RUNS_DIR / run_id))
+        logger.info(f"Task {run_id}: Pipeline finished. Results zipped.")
         
     except Exception as e:
         logger.error(f"Task {run_id} failed: {e}")
@@ -199,6 +202,8 @@ async def get_results(run_id: str):
 
     # Add download links
     base_url = f"/download/{run_id}/"
+    data["zip_link"] = base_url + "results.zip"
+
     for cand in data.get("candidates", []):
         cand["cif_link"] = base_url + "Refined_CIFs/" + cand["sample"] + ".cif"
         cand["plot_link"] = base_url + "Screening_Traces/" + cand["sample"] + "_trace.png"
