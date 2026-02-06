@@ -69,7 +69,9 @@ async def execute_pipeline_task(run_id: str, config_path: str):
         
         # Initialize runner with original project root implies referencing 
         # static data (structure db) from the image, which is fine (read-only).
-        runner = PipelineRunner(str(PROJECT_ROOT), use_pixi=os.path.exists(PROJECT_ROOT / "pixi.toml"))
+        # FORCE use_pixi=False because in Docker we are already in the env
+        # and 'pixi' binary is not in PATH.
+        runner = PipelineRunner(str(PROJECT_ROOT), use_pixi=False)
         
         logger.info(f"Task {run_id}: Starting pipeline...")
         for line in runner.run(config_path, run_id):
