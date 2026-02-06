@@ -75,22 +75,22 @@ async def run_pipeline(
         main_cif_path = str(cif_path)
 
     # Build internal config
-    # We'll use the existing config_builder logic indirectly
     from config_builder import build_pipeline_config
     
-    config = build_pipeline_config(
-        data_file_path=str(data_path),
-        instrument_params=instrument_type,
-        main_phase_cif=main_cif_path,
+    # Map API params to config_builder signature
+    config_yaml = build_pipeline_config(
+        run_name=run_id,
+        data_file=str(data_path),
+        instprm_file=instrument_type,
         allowed_elements=allowed_elements.split(",") if allowed_elements else [],
-        min_fraction=min_phase_fraction,
-        output_dir=str(run_dir)
+        main_cif=main_cif_path,
+        min_impurity_percent=min_phase_fraction * 100, # UI fraction -> Percent
+        work_root=str(run_dir)
     )
 
     config_path = run_dir / "pipeline_config.yaml"
     with open(config_path, "w") as f:
-        import yaml
-        yaml.dump(config, f)
+        f.write(config_yaml)
 
     # Start runner in background
     asyncio.create_task(execute_pipeline_task(run_id, str(config_path)))
