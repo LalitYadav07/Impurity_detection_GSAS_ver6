@@ -26,12 +26,23 @@ PERIODIC_TABLE = [
     "Hf", "Ta", "W", "Re", "Os", "Ir", "Pt", "Au", "Hg", "Tl", "Pb", "Bi", "Po", "At", "Rn"
 ]
 PROJECT_ROOT = str(Path(__file__).resolve().parent)
+# Mitigation for stale NFS/shell paths: force current dir if it looks like the locked one
+if "_locked" in PROJECT_ROOT:
+    PROJECT_ROOT = os.getcwd()
+
 IS_HF_SPACES = "SPACE_ID" in os.environ
 
+# Diagnostic prints for the user logs
+print(f"[DEBUG] PROJECT_ROOT: {PROJECT_ROOT}")
+print(f"[DEBUG] CWD: {os.getcwd()}")
+
 # --- SETUP PATHS ---
-scripts_dir = str(Path(__file__).resolve().parent / "scripts")
-if scripts_dir not in sys.path:
-    sys.path.insert(0, scripts_dir)
+scripts_dir = str(Path(PROJECT_ROOT) / "scripts")
+gsas_dir = str(Path(PROJECT_ROOT) / "GSAS-II")
+
+for p in [scripts_dir, gsas_dir]:
+    if p not in sys.path:
+        sys.path.insert(0, p)
 
 from config_builder import build_pipeline_config
 # Lazy import runner later or import here if safe

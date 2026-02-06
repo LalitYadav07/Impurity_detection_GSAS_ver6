@@ -35,7 +35,7 @@ echo "Creating root environment and installing GSAS-II (this may take several mi
 echo "Configuring GSAS-II binaries and pinning dependencies..."
 cd GSAS-II/pixi
 pixi add psutil
-pixi run install-editable
+pixi run -e py312 install-editable
 cd ../..
 
 # --- NEW: Binary Bridge ---
@@ -56,7 +56,7 @@ pixi install
 
 # 5. Download ML Models (LFS Recovery)
 echo "Ensuring ML models are downloaded..."
-pixi run python scripts/download_models.py
+pixi run install-models
 
 # 6. Validation
 echo -e "\n--- Validating Installation ---"
