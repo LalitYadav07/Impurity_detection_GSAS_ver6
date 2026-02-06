@@ -1,0 +1,10 @@
+data/
+.pixi/
+runs/
+GSAS-II/
+__pycache__/
+*.pyc
+*.pt
+.gemini/
+test_wx.py
+test_wx_patch.py

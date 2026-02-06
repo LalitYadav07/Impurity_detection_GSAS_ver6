@@ -1,0 +1,17 @@
+GSAS-II @ git+https://github.com/AdvancedPhotonSource/GSAS-II.git
+streamlit
+pandas
+pyyaml
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch
+scikit-learn
+pymatgen
+plotly
+matplotlib
+Pillow
+gdown
+h5py
+imageio
+pycifrw
+xmltodict
+psutil
