@@ -41,5 +41,6 @@ COPY --chown=user . .
 # Expose Streamlit port
 EXPOSE 7860
 
-# Run the app via the Gateway (FastAPI + Streamlit)
-CMD ["python", "scripts/gateway.py"]
+# Run the API-Only App (v7.2)
+# Direct Uvicorn run, no gateway logic
+CMD ["uvicorn", "scripts.api_only:app", "--host", "0.0.0.0", "--port", "7860"]
