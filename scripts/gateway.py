@@ -1,7 +1,6 @@
 """
-GSAS-II API Gateway v7.1.3
-Unified Gateway for FastAPI (API) and Streamlit (UI).
-Optimized for Hugging Face Spaces.
+GSAS-II API Gateway v7.1.4
+Robust Proxy for FastAPI (API) and Streamlit (UI) on Hugging Face Spaces.
 """
 import uvicorn
 import subprocess
@@ -11,74 +10,91 @@ import httpx
 import websockets
 import asyncio
 import logging
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import StreamingResponse
+import time
+from fastapi import FastAPI, Request, WebSocket
+from fastapi.responses import StreamingResponse, HTMLResponse
 from pathlib import Path
 from contextlib import asynccontextmanager
 
-# Logging
+# --- LOGGING ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("gateway")
 
-# Configuration
+# --- CONFIGURATION ---
 UI_PORT = 8501
-GATEWAY_PORT = int(os.getenv("PORT", 7860))
+GATEWAY_PORT = 7860  # Force 7860 for Hugging Face
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-# Import the API app
+# --- STREAMLIT STARTUP (EAGER) ---
+logger.info("Eagerly starting Streamlit...")
+streamlit_proc = subprocess.Popen([
+    "streamlit", "run", "app.py",
+    "--server.port", str(UI_PORT),
+    "--server.address", "0.0.0.0",
+    "--server.headless", "true",
+    "--server.enableCORS", "false",
+    "--server.enableXsrfProtection", "false",
+    "--server.enableWebsocketCompression", "false",
+    "--browser.gatherUsageStats", "false"
+], cwd=str(PROJECT_ROOT))
+
+# --- API APP DELAYED IMPORT ---
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Ensure Streamlit has a head start
+    logger.info("FastAPI Lifespan started. Gateway is ready.")
+    yield
+    logger.info("Shutting down Gateway...")
+    streamlit_proc.terminate()
+
+app = FastAPI(lifespan=lifespan)
+
+# Import API app inside to avoid top-level side effects
 sys.path.append(str(PROJECT_ROOT / "scripts"))
-from api_app import app as api_app
+try:
+    from api_app import app as api_app
+    app.mount("/api", api_app)
+except Exception as e:
+    logger.error(f"Failed to mount API app: {e}")
 
 # HTTP Proxy Client
 client = httpx.AsyncClient(base_url=f"http://localhost:{UI_PORT}", timeout=None)
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Lifecycle management for the Gateway and Streamlit"""
-    logger.info(f"Starting Streamlit on internal port {UI_PORT}...")
-    
-    # We use a very permissive configuration for Streamlit to work behind double proxies
-    cmd = [
-        "streamlit", "run", "app.py",
-        "--server.port", str(UI_PORT),
-        "--server.address", "0.0.0.0",
-        "--server.headless", "true",
-        "--server.enableCORS", "false",
-        "--server.enableXsrfProtection", "false",
-        "--server.fileWatcherType", "none",
-        "--browser.gatherUsageStats", "false"
-    ]
-    
-    proc = subprocess.Popen(cmd, cwd=str(PROJECT_ROOT))
-    
-    yield
-    
-    logger.info("Shutting down Streamlit...")
-    proc.terminate()
-    proc.wait()
+# --- ROUTES ---
 
-app = FastAPI(lifespan=lifespan)
+@app.get("/health")
+async def gateway_health():
+    return {"status": "gateway_running", "streamlit_pid": streamlit_proc.pid}
 
-# Mount API Endpoints
-app.mount("/api", api_app)
+@app.get("/", response_class=HTMLResponse)
+async def root_proxy(request: Request):
+    """
+    Directly handle root to satisfy health checks and avoid loops.
+    We proxy it manually to ensure it works.
+    """
+    try:
+        res = await client.get("/")
+        return HTMLResponse(content=res.text, status_code=res.status_code)
+    except:
+        return HTMLResponse(content="<h1>GSAS-II Pipeline is starting...</h1><script>setTimeout(()=>location.reload(), 2000)</script>", status_code=503)
 
 @app.middleware("http")
 async def proxy_http_to_ui(request: Request, call_next):
-    """Middleware to proxy all non-API HTTP traffic to Streamlit"""
     path = request.url.path
     
-    # Do not proxy API or Docs
-    if any(path.startswith(prefix) for prefix in ["/api", "/docs", "/redoc", "/openapi.json"]):
+    # Do not proxy API, Health, or Docs
+    if any(path.startswith(prefix) for prefix in ["/api", "/docs", "/redoc", "/openapi.json", "/health"]):
         return await call_next(request)
     
-    # Prepare proxied request
+    if path == "/":
+        return await call_next(request)
+
+    # Proxy everything else
     query = str(request.query_params)
     url_path = f"{path}?{query}" if query else path
     
-    # Clean headers
     headers = dict(request.headers)
     headers.pop("host", None)
-    headers.pop("content-length", None)
     headers.pop("connection", None)
     
     try:
@@ -90,7 +106,6 @@ async def proxy_http_to_ui(request: Request, call_next):
         )
         res = await client.send(req, stream=True)
         
-        # Clean response headers
         res_headers = dict(res.headers)
         res_headers.pop("content-length", None)
         res_headers.pop("transfer-encoding", None)
@@ -102,19 +117,15 @@ async def proxy_http_to_ui(request: Request, call_next):
             headers=res_headers
         )
     except Exception as e:
-        logger.error(f"HTTP Proxy Error: {e}")
         return StreamingResponse(
-            iter([b"Streamlit is starting... please wait."]),
+            iter([b"Linking to Streamlit..."]),
             status_code=503
         )
 
 @app.websocket("/_stcore/stream")
 async def proxy_websocket_to_ui(websocket: WebSocket):
-    """Bi-directional WebSocket proxy for Streamlit's real-time engine"""
     await websocket.accept()
-    logger.info("WebSocket connection established with client")
     
-    # Attempt to pass through the Origin header
     headers = []
     origin = websocket.headers.get("origin")
     if origin:
@@ -123,14 +134,13 @@ async def proxy_websocket_to_ui(websocket: WebSocket):
     try:
         async with websockets.connect(
             f"ws://localhost:{UI_PORT}/_stcore/stream",
-            extra_headers=headers
+            extra_headers=headers,
+            open_timeout=10
         ) as target_ws:
-            logger.info("WebSocket connection established with internal Streamlit")
             
             async def forward_to_ui():
                 try:
                     while True:
-                        # FastAPI receives messages as dicts
                         data = await websocket.receive()
                         if "text" in data:
                             await target_ws.send(data["text"])
@@ -138,8 +148,8 @@ async def proxy_websocket_to_ui(websocket: WebSocket):
                             await target_ws.send(data["bytes"])
                         elif data.get("type") == "websocket.disconnect":
                             break
-                except Exception as e:
-                    logger.debug(f"WS Forward to UI closed: {e}")
+                except:
+                    pass
 
             async def forward_to_client():
                 try:
@@ -148,16 +158,14 @@ async def proxy_websocket_to_ui(websocket: WebSocket):
                             await websocket.send_text(message)
                         else:
                             await websocket.send_bytes(message)
-                except Exception as e:
-                    logger.debug(f"WS Forward to Client closed: {e}")
+                except:
+                    pass
 
-            # Run both forwarding tasks concurrently
             await asyncio.gather(forward_to_ui(), forward_to_client())
             
     except Exception as e:
-        logger.error(f"WebSocket Proxy Error: {e}")
+        logger.error(f"WS Proxy Error: {e}")
     finally:
-        logger.info("WebSocket connection closed")
         try:
             await websocket.close()
         except:
