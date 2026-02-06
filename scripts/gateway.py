@@ -63,12 +63,10 @@ async def proxy_to_ui(request: Request, call_next):
     # Note: Streamlit uses WebSockets for the main app logic, 
     # so we MUST handle the websocket separately.
     
-    url = httpx.URL(path=path)
-    
     try:
         req = client.build_request(
             request.method,
-            url,
+            path,
             headers=request.headers.raw,
             content=request.stream(),
         )
