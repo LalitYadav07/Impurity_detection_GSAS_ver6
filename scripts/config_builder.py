@@ -103,11 +103,19 @@ def build_pipeline_config(
             else:
                 config[k] = v
 
+    # Instrument Parameter Mapping
+    inst_map = {
+        "hb2a": str(Path(project_root) / "GSAS-II" / "instrument_map.hb2a")
+    }
+    
+    # Resolve instrument path if it's a known key
+    final_inst_path = inst_map.get(instprm_file, instprm_file)
+
     # Dataset entry
     dataset = {
         "name": run_name,
         "data_path": data_file,
-        "instprm_path": instprm_file,
+        "instprm_path": final_inst_path,
         "background": {
             "type": "chebyschev-1",
             "terms": 9
