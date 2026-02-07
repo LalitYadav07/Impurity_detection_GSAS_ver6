@@ -92,7 +92,7 @@ async def execute_pipeline_task(run_id: str, config_path: str):
 async def root():
     return {
         "service": "GSAS-II Impurity Detection API",
-        "version": "v7.2-api-only",
+        "version": "v7.4-api-only",
         "status": "online",
         "docs_url": "/docs"
     }
