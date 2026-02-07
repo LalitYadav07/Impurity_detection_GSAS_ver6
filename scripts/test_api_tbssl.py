@@ -26,7 +26,8 @@ def test_pipeline():
             }
             data = {
                 "min_phase_fraction": 0.01,
-                "allowed_elements": "" # No restriction
+                "allowed_elements": "", # No restriction
+                "fast_mode": "True"
             }
             
             resp = requests.post(f"{BASE_URL}/run", files=files, data=data, timeout=30)

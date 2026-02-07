@@ -31,7 +31,7 @@ class PipelineRunner:
             # Fallback to standard python in current environment
             return [sys.executable], str(self.project_root)
 
-    def run(self, config_path: str, dataset_name: str) -> Generator[str, None, None]:
+    def run(self, config_path: str, dataset_name: str, ml_only: bool = False) -> Generator[str, None, None]:
         """
         Runs the pipeline and yields log lines.
         """
@@ -41,6 +41,8 @@ class PipelineRunner:
             "--config", str(config_path),
             "--dataset", dataset_name
         ]
+        if ml_only:
+            cmd.append("--ml-only")
         
         env = os.environ.copy()
         env["PYTHONUNBUFFERED"] = "1"

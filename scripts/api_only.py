@@ -60,7 +60,7 @@ class StatusResponse(BaseModel):
 def datetime_run_id():
     return f"run_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
-async def execute_pipeline_task(run_id: str, config_path: str):
+async def execute_pipeline_task(run_id: str, config_path: str, ml_only: bool = False):
     """Bridge to existing PipelineRunner"""
     try:
         # We need to add scripts/ to path to find runner
@@ -73,8 +73,8 @@ async def execute_pipeline_task(run_id: str, config_path: str):
         # and 'pixi' binary is not in PATH.
         runner = PipelineRunner(str(PROJECT_ROOT), use_pixi=False)
         
-        logger.info(f"Task {run_id}: Starting pipeline...")
-        for line in runner.run(config_path, run_id):
+        logger.info(f"Task {run_id}: Starting pipeline (ml_only={ml_only})...")
+        for line in runner.run(config_path, run_id, ml_only=ml_only):
             # Log output to server console for debugging
             if line.strip():
                 print(f"[Pipeline {run_id}] {line.strip()}", flush=True)
@@ -92,7 +92,7 @@ async def execute_pipeline_task(run_id: str, config_path: str):
 async def root():
     return {
         "service": "GSAS-II Impurity Detection API",
-        "version": "v7.4-api-only",
+        "version": "v7.5-fast-mode",
         "status": "online",
         "docs_url": "/docs"
     }
@@ -107,7 +107,8 @@ async def run_pipeline(
     instrument_file: UploadFile = File(...),
     cif_file: Optional[UploadFile] = File(None),
     allowed_elements: str = Form(""),
-    min_phase_fraction: float = Form(0.01)
+    min_phase_fraction: float = Form(0.01),
+    fast_mode: bool = Form(True)
 ):
     run_id = datetime_run_id()
     run_dir = RUNS_DIR / run_id
@@ -156,7 +157,7 @@ async def run_pipeline(
         f.write(config_yaml)
 
     # Launch Background Task
-    asyncio.create_task(execute_pipeline_task(run_id, str(config_path)))
+    asyncio.create_task(execute_pipeline_task(run_id, str(config_path), ml_only=fast_mode))
 
     return RunResponse(run_id=run_id, message="Pipeline started successfully")
 
@@ -205,8 +206,17 @@ async def get_results(run_id: str):
     data["zip_link"] = base_url + "results.zip"
 
     for cand in data.get("candidates", []):
-        cand["cif_link"] = base_url + "Refined_CIFs/" + cand["sample"] + ".cif"
-        cand["plot_link"] = base_url + "Screening_Traces/" + cand["sample"] + "_trace.png"
+        sample = cand.get("sample")
+        if sample:
+            # Check if CIF exists before adding link
+            cif_path = run_dir / "Refined_CIFs" / f"{sample}.cif"
+            if cif_path.exists():
+                cand["cif_link"] = base_url + "Refined_CIFs/" + sample + ".cif"
+            
+            # Check if plot exists before adding link
+            plot_path = run_dir / "Screening_Traces" / f"{sample}_trace.png"
+            if plot_path.exists():
+                cand["plot_link"] = base_url + "Screening_Traces/" + sample + "_trace.png"
 
     return data
 
