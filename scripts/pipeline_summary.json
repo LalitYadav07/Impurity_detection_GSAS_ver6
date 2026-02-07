@@ -1,0 +1,15 @@
+{
+  "success": true,
+  "datasets_processed": [
+    "cw_tbssl",
+    "cw_tbssl_withmain",
+    "cw_tbssl_without_main",
+    "tof_lk99",
+    "SNAP",
+    "PZT_10_bank3_nomainv5",
+    "PZT_10_wild",
+    "PZT_10_bank3_binned3x",
+    "PZT_10_bank3_450K_v5"
+  ],
+  "note": "Sequential pipeline complete. See per-pass artifacts in 'Results' and 'Diagnostics' folders."
+}

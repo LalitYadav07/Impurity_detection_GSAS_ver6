@@ -1,0 +1,8 @@
+{
+  "success": true,
+  "datasets_processed": [
+    "tbssl_verification",
+    "lk99_verification"
+  ],
+  "note": "Sequential pipeline complete. See per-pass artifacts in 'Results' and 'Diagnostics' folders."
+}

@@ -36,11 +36,6 @@ ninja = "*"
 cython = "*"
 pkg-config = "*"
 xmltodict = ">=0.14.2"
-fastapi = ">=0.100.0"
-uvicorn = ">=0.22.0"
-python-multipart = ">=0.0.6"
-httpx = ">=0.24.0"
-websockets = ">=11.0.0"
 
 [target.win-64.dependencies]
 gfortran = ">=14.2.0"
@@ -53,7 +48,6 @@ setup-linux = "bash ./setup.sh"
 
 # Execution
 ui = { cmd = "streamlit run app.py --browser.gatherUsageStats=false", env = { PYTHONPATH = "./GSAS-II" } }
-api = { cmd = "python scripts/gateway.py", env = { PYTHONPATH = "./GSAS-II" } }
 cli-test = { cmd = "python scripts/gsas_complete_pipeline_nomain.py --dry-run --config scripts/pipeline_config.yaml", env = { PYTHONPATH = "./GSAS-II" } }
 cli-run = { cmd = "python scripts/gsas_complete_pipeline_nomain.py --config scripts/pipeline_config.yaml", env = { PYTHONPATH = "./GSAS-II" } }
 

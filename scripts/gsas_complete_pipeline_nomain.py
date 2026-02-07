@@ -491,7 +491,6 @@ class UnifiedPipeline:
         self.stable_ids: Optional[set] = None
         self.emitter: Optional[EventEmitter] = None
         self.manifest: Optional[ManifestManager] = None
-        self.ml_only: bool = False
 
     # ---------------------------
     # DB initialization (unchanged)
@@ -781,45 +780,9 @@ class UnifiedPipeline:
                     "--topk", "5"
                 ]
                 
-                if self.ml_only:
-                    print(f"[INFO] Running ML Ranker (FAST MODE): {ranker_script}", flush=True)
-                    subprocess.run(cmd, check=True)
-                    
-                    # Parse results
-                    candidates_out = []
-                    if os.path.exists(output_jsonl):
-                        with open(output_jsonl, "r") as f:
-                            res_data = json.loads(f.readline())
-                            for r in res_data.get("ranked", []):
-                                pid = r["mp_id"]
-                                disp, sg = self._safe_db_display_and_sg(pid)
-                                candidates_out.append({
-                                    "sample": pid,
-                                    "phase_name": disp,
-                                    "space_group": sg,
-                                    "score": r["score"],
-                                    "is_main": False
-                                })
-                    
-                    # Write summary
-                    summary_path = Path(work_dir) / "pipeline_summary.json"
-                    print(f"[INFO] Fast Mode: Writing summary to {summary_path}", flush=True)
-                    with open(summary_path, "w") as f:
-                        json.dump({
-                            "success": True,
-                            "sample_name": name,
-                            "candidates": candidates_out,
-                            "note": "Fast ML-Only mode completed successfully."
-                        }, f, indent=2)
-                    
-                    # Emit finish
-                    if self.emitter:
-                        self.emitter.emit("Final", "Fast ML Pipeline complete", 100)
-                    
-                    sys.exit(0)
-                else:
-                    print(f"[INFO] Spawning ML Ranker (ASYNCHRONOUS): {ranker_script}")
-                    subprocess.Popen(cmd) # Non-blocking
+                print(f"[INFO] Spawning ML Ranker: {ranker_script}")
+                import subprocess
+                subprocess.Popen(cmd) # Non-blocking
             else:
                 print(f"[WARN] ML Ranker not found at {ranker_dir}")
 
@@ -2003,7 +1966,6 @@ Examples:
     parser.add_argument("--config", required=True, help="YAML/JSON configuration file")
     parser.add_argument("--dataset", help="Process only specified dataset (by name)")
     parser.add_argument("--dry-run", action="store_true", help="Validate configuration and exit")
-    parser.add_argument("--ml-only", action="store_true", help="Stop after ML screening and return ranked candidates")
     args = parser.parse_args()
 
     if not GSAS_AVAILABLE or not COMPONENTS_OK:
@@ -2023,7 +1985,6 @@ Examples:
         return False
 
     pipe = UnifiedPipeline(cfg)
-    pipe.ml_only = args.ml_only
 
     if args.dry_run:
         print("\n" + "=" * 80)
