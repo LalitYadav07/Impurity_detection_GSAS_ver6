@@ -38,9 +38,11 @@ RUN mkdir -p ML_components && \
 # Copy the rest of the application
 COPY --chown=user . .
 
+# Download and install the spectral database (2.3GB ZIP -> 1.3GB disk)
+RUN python scripts/download_db.py
+
 # Expose Streamlit port
 EXPOSE 7860
 
 # Run the API-Only App (v7.2)
-# Direct Uvicorn run, no gateway logic
 CMD ["uvicorn", "scripts.api_only:app", "--host", "0.0.0.0", "--port", "7860"]
