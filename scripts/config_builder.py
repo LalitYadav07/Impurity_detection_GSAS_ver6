@@ -1,3 +1,13 @@
+#!/usr/bin/env python3
+"""
+Pipeline Configuration Builder
+
+This script dynamically generates the default `pipeline_config.yaml` configuration file.
+It defines:
+- Default paths for data, databases, and output directories.
+- Tunable parameters for all pipeline stages (Stage-0 to Stage-4).
+- Instrument parameter defaults.
+"""
 import yaml
 import os
 from pathlib import Path
@@ -108,10 +118,6 @@ def build_pipeline_config(
         "name": run_name,
         "data_path": data_file,
         "instprm_path": instprm_file,
-        "background": {
-            "type": "chebyschev-1",
-            "terms": 9
-        }
     }
     if main_cif:
         dataset["main_cif"] = main_cif

@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """
-64-bin histogram screening for impurity detection (continuous residual version).
+ML-Based Histogram Screening (Ratio Filter)
 
-- Loads DB profiles (64-bin) from profiles64.npz + index.csv
-- Builds residual histogram directly from continuous residual R(Q) by summing
-  positive residual values per DB bin (ΔQ-weighted area per bin)
-- Matches active Q-range with DB, min-max/peak scales within active bins
-- Fits per-candidate scale α with p-weighted quantile cap
-- Ranks by explained_fraction and purity; returns details & metadata
+This module implements the 64-bin histogram screening logic used to rank candidate phases.
+Functions include:
+- `get_hist_from_resid`: Converts continuous residual signals into binned histograms.
+- Candidate scoring and probability estimation using pre-trained ML models.
+- "Knee" detection for dynamic thresholding of candidate lists.
 """
 
 # ---------------------------

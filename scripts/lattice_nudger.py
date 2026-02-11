@@ -1,11 +1,12 @@
 """
-GSAS-II Integrated Impurity Detection Pipeline (Complete)
+GSAS-II Lattice Refinement Module (Stage-4)
 
-Implements the core sequential refinement logic, orchestrating:
-- Global data screening and initial candidate shortlisting.
-- Multi-pass ML-driven diagnostic ranking.
-- Automated GSAS-II lattice refinement and Rwp optimization.
-- Event emission for real-time UI monitoring and progress tracking.
+This module implements the "Lattice Nudging" and advanced refinement logic (Stage-4).
+It is responsible for:
+- Adaptive lattice parameter optimization using a hit-and-run polytope sampling approach.
+- Exploring the neighborhood of likely lattice parameters to escape local minima.
+- Tikhonov-regularized backsolving for lattice constraints.
+- Optimized Q-space metrics and gradients.
 """
 from __future__ import annotations
 

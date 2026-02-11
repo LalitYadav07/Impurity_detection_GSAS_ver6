@@ -1,19 +1,13 @@
 #!/usr/bin/env python3
 """
-Legacy Bridge (clean) — ML-histogram only
+GSAS-II Legacy Bridge & Screening Bootstrap
 
-Integrates GSAS-II pipeline with impurity detection components:
-- Element mask filtering (bit-mask, vectorized)
-- Space-group pruning (drop low-symmetry SGs after element filter)
-- ML histogram screening (64-bin, unified plotting)
-- (Optional) stability filtering against a "stable" catalog
-
-Removed legacy/stale pieces:
-- shortlist_by_hist_underfill_abs64  (we use ML-only)
-- align_score_candidate / screen_by_alignment
-- peak_positions / residual-peak finder (alignment removed)
-- BoxCapResult data class
-- plot_main_refinement_figure and related GSAS plotting helpers
+This module serves as the bridge between modern ML-based screening and the 
+GSAS-II infrastructure. It handles:
+- Stage-0 bootstrapping for initial phase identification.
+- Integration of element masking and space-group filtering.
+- 64-bin histogram screening and visualization.
+- Candidate data structure definitions.
 """
 
 from __future__ import annotations
@@ -750,7 +744,7 @@ _atom_site_U_iso_or_equiv
 Na1 Na 0.00000 0.00000 0.00000 1.0 Uiso 0.005
 Cl1 Cl 0.50000 0.50000 0.50000 1.0 Uiso 0.005
 """
-    outp = Path(out_dir) / "Technical" / "bootstrap" / "NaCl_dummy.cif"
+    outp = Path(out_dir) / "NaCl_dummy.cif"
     outp.parent.mkdir(parents=True, exist_ok=True)
     outp.write_text(cif_content)
     print(f"[stage0] wrote dummy CIF → {outp}")
@@ -793,6 +787,7 @@ def stage0_bootstrap_no_cif(
     db_loader: DBLoader,
     stable_ids: Optional[set] = None,
     *,
+    ds_cfg: Optional[Dict[str, Any]] = None,
     hist_plot_cfg: Optional[dict] = None,
     knee_cfg: Optional[dict] = None,
 ) -> Tuple[str, str, Optional[List[Any]]]:
@@ -843,11 +838,11 @@ def stage0_bootstrap_no_cif(
     residual_Q       = yobs.copy()
     residual_native  = yobs.copy()
     # Re-derive paths for Stage-0
-    diagnostics_dir = (s4_cfg or {}).get("diagnostics_path") or str(Path(work_dir) / "Diagnostics")
-    diag_hist_dir = str(Path(diagnostics_dir) / "Screening_Histograms")
-    models_dir = str(Path(work_dir) / "Models")
-    models_ref_dir = str(Path(models_dir) / "Reference_CIFs")
-    models_refined_dir = str(Path(models_dir) / "Refined_CIFs")
+    diagnostics_dir = (ds_cfg or {}).get("diagnostics_path") or (s4_cfg or {}).get("diagnostics_path") or str(Path(work_dir) / "Diagnostics")
+    diag_hist_dir = (ds_cfg or {}).get("diag_hist_path") or str(Path(diagnostics_dir) / "Screening_Histograms")
+    models_dir = (ds_cfg or {}).get("models_path") or str(Path(work_dir) / "Models")
+    models_ref_dir = (ds_cfg or {}).get("models_ref_path") or str(Path(models_dir) / "Reference_CIFs")
+    models_refined_dir = (ds_cfg or {}).get("models_refined_path") or str(Path(models_dir) / "Refined_CIFs")
 
     q_main = np.array([])  # no main reflections at Stage-0
 

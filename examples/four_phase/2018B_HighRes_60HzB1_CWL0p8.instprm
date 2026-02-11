@@ -1,0 +1,21 @@
+#GSAS-II instrument parameter file; do not add/delete items POWGEN 2018B!
+Type:PNT
+beta-0:0.104300889187
+fltPath:63.183
+alpha:0.121635145707
+sig-q:381.916840447
+2-theta:90.0
+sig-1:-691.173345607
+sig-0:-53.0495741643
+sig-2:573.794482403
+Zero:-2.64285157402
+difA:5.57026357116
+difB:0.645820689442
+Azimuth:0.0
+Y:12.7052727509
+X:10.2299024436
+beta-q:0.0
+Z:-9.01
+difC:22576.2243203
+beta-1:0.00204603052758
+Bank:1.0
