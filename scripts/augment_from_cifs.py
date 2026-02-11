@@ -55,7 +55,7 @@ def _pick_workers(n_jobs: int) -> int:
     slurm = os.environ.get("SLURM_CPUS_PER_TASK") or os.environ.get("SLURM_CPUS_ON_NODE")
     avail = int(slurm) if slurm else (os.cpu_count() or 1)
     cap   = 64  # adjust if your FS is very fast; 16–64 is typical
-    return max(8, min(cap, avail, max(1, n_jobs)))
+    return max(1, min(cap, avail, max(1, n_jobs)))
 
 def _worker_init():
     

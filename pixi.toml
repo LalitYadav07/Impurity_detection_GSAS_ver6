@@ -36,6 +36,7 @@ ninja = "*"
 cython = "*"
 pkg-config = "*"
 xmltodict = ">=0.14.2"
+setuptools = "*"
 
 [target.win-64.dependencies]
 gfortran = ">=14.2.0"

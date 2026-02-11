@@ -5,6 +5,15 @@ $ErrorActionPreference = "Stop"
 
 Write-Host "--- Starting GSAS-II Setup ---" -ForegroundColor Cyan
 
+# 0. Pre-installation Checks
+$currentPath = $PWD.Path
+if ($currentPath -match "\s") {
+    Write-Host "`n[ERROR] The installation path contains spaces: '$currentPath'" -ForegroundColor Red
+    Write-Host "Low-level GSAS-II build tools (gfortran/Meson) often fail with paths containing spaces." -ForegroundColor Yellow
+    Write-Host "Please move the project to a directory without spaces (e.g., C:\Coding\Impurity_Detection) and try again." -ForegroundColor Yellow
+    exit 1
+}
+
 # 1. Install Pixi (if not already present)
 $pixi_bin_dir = "$env:USERPROFILE\.pixi\bin"
 $pixi_exe = Join-Path $pixi_bin_dir "pixi.exe"

@@ -36,6 +36,7 @@ if scripts_dir not in sys.path:
 from config_builder import build_pipeline_config
 # Lazy import runner later or import here if safe
 from runner import PipelineRunner
+from aniso_db_loader import DBLoader, CatalogPaths
 
 # --- GSAS-II HEALTH CHECK ---
 def check_gsas_installation():
@@ -513,6 +514,8 @@ if 'status_msg' not in st.session_state:
     st.session_state.status_msg = "Ready"
 if 'knee_logs' not in st.session_state:
     st.session_state.knee_logs = []
+if 'custom_run_name' not in st.session_state:
+    st.session_state.custom_run_name = f"run_{datetime.datetime.now().strftime('%Y%j_%H%M%S')}"
 
 if 'pipeline_state' not in st.session_state:
     st.session_state.pipeline_state = {
@@ -523,6 +526,21 @@ if 'pipeline_state' not in st.session_state:
         "stage0_status": "pending", # pending, running, complete, skipped
         "stages_complete": set()
     }
+
+# --- DB LOADER INITIALIZATION ---
+if DB_EXISTS and 'db_loader' not in st.session_state:
+    try:
+        paths = CatalogPaths(
+            catalog_csv=str(DB_DIR / "catalog_deduplicated.csv"),
+            original_json=str(DB_DIR / "highsymm_metadata.json")
+        )
+        loader = DBLoader(paths)
+        stable_csv = DB_DIR / "mp_experimental_stable.csv"
+        if stable_csv.exists():
+            loader.attach_stable_catalog(str(stable_csv))
+        st.session_state.db_loader = loader
+    except Exception as e:
+        st.error(f"Failed to initialize DB Loader: {e}")
 
 # --- LOG STATE CLEANUP (Recovery from previous formatting mistakes) ---
 if 'log_lines' in st.session_state:
@@ -837,7 +855,7 @@ with st.sidebar:
     # --- 1. MAIN PANEL (Always visible) ---
     with st.expander("📁 Main Settings", expanded=True):
         example_selection = st.selectbox("📖 Example Mode", ["None", "TbSSL (CW Demo)", "LK-99 (TOF Demo)"], index=0)
-        run_name = st.text_input("Run Name", f"run_{datetime.datetime.now().strftime('%Y%j_%H%M%S')}")
+        run_name = st.text_input("Run Name", key="custom_run_name")
         
         if example_selection != "None":
             if example_selection == "TbSSL (CW Demo)":
@@ -1228,7 +1246,12 @@ with t_res:
                         with st.expander(f"Pass: {pass_name}", expanded=(f_path == ml_files[-1])):
                             try:
                                 with open(f_path, "r") as f:
-                                    data = json.load(f)
+                                    # json.load(f) might fail if file is jsonl with multiple lines
+                                    # but gsas_complete_pipeline_nomain writes one JSON object per pass
+                                    raw_text = f.read().strip()
+                                    if not raw_text:
+                                        continue
+                                    data = json.loads(raw_text)
                                 
                                 if "ranked" in data:
                                     import pandas as pd

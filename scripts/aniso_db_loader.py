@@ -1,15 +1,11 @@
 """
-Utilities to load the processed anisotropic DB *metadata* and resolve CIFs/structures
-for simulation. Does **not** use the C-matrix for synthesis.
+Anisotropic Database Loader & Search
 
-Key responsibilities:
-- Load catalog.csv (ids, element masks, etc.)
-- Build/compare 128-bit element masks
-- Resolve CIF paths from a provided map {phase_id: path_to_cif}
-- Construct pymatgen Structure from CIF (only when explicitly requested)
-- Provide NPZ accessors for Q0/I0/ratio_hist
-- Element filtering (strict + variant-list wildcard; CIF-free)
-- Optional: lattice jitter and Q-grid helper
+This module handles the loading and querying of the specialized crystallographic database.
+Key features:
+- Loading large JSON/Pickle databases of crystal structures.
+- Fast lookups by element composition and space group.
+- Utilities for retrieving CIF content and metadata.
 """
 
 from __future__ import annotations

@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """
-Core Infrastructure for GSAS-II Integrated Impurity Detection Pipeline
+GSAS-II Core Infrastructure and Coordinate Management
 
-This module provides the foundational classes for managing GSAS-II projects
-and handling coordinate system conversions between native instrument coordinates
-(2θ/TOF) and Q-space.
+This module provides the foundational classes for interacting with GSAS-II projects
+and checking coordinate systems. It includes:
+- GSASProjectManager: A context manager for creating and saving .gpx projects.
+- CoordinateHandler: Utilities for converting between 2-Theta, Time-of-Flight, and Q-space.
+- IntensityNormalizer: Helper for normalizing diffraction patterns.
 """
 
 import os

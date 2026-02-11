@@ -1,21 +1,20 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 """
-Unified GSAS-II Impurity Detection Pipeline — Sequential Passes (clean)
+GSAS-II Impurity Detection Pipeline (Unified Driver)
 
-Changes vs. previous:
-- ML histogram only (no underfill path)
-- No alignment or residual peak stages
-- No BoxCap structures
-- No plot_main_refinement_figure (uses plot_gpx_fit_with_ticks only)
-- Unified histogram plotting for all stages including Stage-0
-- Pretty-name printing in histogram summaries; β removed
-- Overshoot not used for ranking
-- Proper, reusable knee filter utility; used for Stage-k and Stage-0
+This is the main entry point for the sequential impurity detection pipeline.
+It orchestrates the entire process, including:
+- Data loading and instrument parameter setup.
+- Sequential candidate screening and ranking (ML-driven).
+- Lattice nudging and refinement (Stage-4).
+- Parallel Pearson correlation analysis.
+- Final report generation and artifact management.
 
-Usage examples:
-  python gsas_complete_pipeline_nomain.py --config pipeline_config.yaml --dataset cw_tbssl
-  python gsas_complete_pipeline_nomain.py --config pipeline_config.yaml --dry-run
+Process Flow:
+1. Stage-0: Bootstrap and initial screening.
+2. Stage-1..N: Sequential discovery of impurity phases.
+3. Verification and final output generation.
 """
 
 # ---------------------------
@@ -197,7 +196,7 @@ class EventEmitter:
         if self.event_file:
             Path(self.event_file).parent.mkdir(parents=True, exist_ok=True)
 
-    def emit(self, stage: str, message: str, percent: float, level: str = "INFO", artifacts: List[str] = None, metrics: Dict[str, Any] = None):
+    def emit(self, stage: str, message: str, percent: float, level: str = "INFO", artifacts: Optional[List[str]] = None, metrics: Optional[Dict[str, Any]] = None):
         event = {
             "time": datetime.datetime.now().isoformat(),
             "level": level,
@@ -219,7 +218,8 @@ class EventEmitter:
 class ManifestManager:
     def __init__(self, manifest_file: Optional[str]):
         self.manifest_file = manifest_file
-        self.data = {
+        # Explicitly type as Dict[str, Any] to avoid strict union inference issues
+        self.data: Dict[str, Any] = {
             "status": "starting",
             "stages": {},
             "artifacts": [],
@@ -228,6 +228,8 @@ class ManifestManager:
         }
 
     def update_stage(self, stage: str, status: str, result: Any = None):
+        if "stages" not in self.data:
+            self.data["stages"] = {}
         self.data["stages"][stage] = {
             "status": status,
             "updated": datetime.datetime.now().isoformat(),
@@ -236,11 +238,15 @@ class ManifestManager:
         self.save()
 
     def add_artifact(self, path: str):
+        if "artifacts" not in self.data:
+            self.data["artifacts"] = []
         if path and path not in self.data["artifacts"]:
             self.data["artifacts"].append(str(path))
             self.save()
 
     def update_metrics(self, metrics: Dict[str, Any]):
+        if "metrics" not in self.data:
+            self.data["metrics"] = {}
         self.data["metrics"].update(metrics)
         self.save()
 
@@ -634,10 +640,8 @@ class UnifiedPipeline:
         min_active_bins = int(hp_plot_ds.get("min_active_bins", hp_filt_ds.get("min_active_bins", hp_plot_g.get("min_active_bins", hp_filt_g.get("min_active_bins", 2)))))
         min_sum_residual = float(hp_plot_ds.get("min_sum_residual", hp_filt_ds.get("min_sum_residual", hp_plot_g.get("min_sum_residual", hp_filt_g.get("min_sum_residual", 0.0)))))
 
-        if "Diagnostics" in work_dir:
-             out_png = str(Path(work_dir) / stage_tag / "hist_grid.png")
-        else:
-             out_png = str(Path(work_dir) / "Diagnostics" / "Screening_Histograms" / stage_tag / "hist_grid.png")
+        diag_hist_dir = (ds_cfg or {}).get("diag_hist_path") or str(Path(work_dir) / "Diagnostics" / "Screening_Histograms")
+        out_png = str(Path(diag_hist_dir) / stage_tag / "hist_grid.png")
         
         Path(out_png).parent.mkdir(parents=True, exist_ok=True)
 
@@ -677,6 +681,7 @@ class UnifiedPipeline:
         models_dir = ds_cfg.get("models_path") or str(Path(work_dir) / "Models")
         models_ref_dir = ds_cfg.get("models_ref_path") or str(Path(models_dir) / "Reference_CIFs")
         models_refined_dir = ds_cfg.get("models_refined_path") or str(Path(models_dir) / "Refined_CIFs")
+        candidate_work_dir = ds_cfg.get("tech_cand_path") or work_dir
         
         # Path(diag_resid_dir).mkdir(parents=True, exist_ok=True)   # Removed: Created on-demand in Pearson scanning
         # Path(models_ref_dir).mkdir(parents=True, exist_ok=True)   # Removed: Created when saving CIFs
@@ -782,7 +787,29 @@ class UnifiedPipeline:
                 
                 print(f"[INFO] Spawning ML Ranker: {ranker_script}")
                 import subprocess
-                subprocess.Popen(cmd) # Non-blocking
+                p = subprocess.Popen(cmd)
+                p.wait() # Wait for ranker to finish
+
+                # Read results and log
+                if os.path.exists(output_jsonl):
+                    try:
+                        with open(output_jsonl, "r") as f:
+                            res_data = json.loads(f.read().strip())
+                        
+                        ranked = res_data.get("ranked", [])
+                        if ranked:
+                            print(f"\n[RESULT] [pass {pass_ix}] Top candidates by ML Ranker (Final):")
+                            for r in ranked[:5]:
+                                pid = r.get("mp_id")
+                                score = r.get("score")
+                                name_disp, sg_disp = "Unknown", "—"
+                                if self.db_loader:
+                                    name_disp, sg_disp = self.db_loader.get_display_name_and_sg(pid)
+                                print(f"  - {pid}: {name_disp}, SG={sg_disp}, rank_score={score:.3f}")
+                            print("")
+                    except Exception as re:
+                        print(f"[WARN] Failed to read ML Ranker output: {re}")
+
             else:
                 print(f"[WARN] ML Ranker not found at {ranker_dir}")
 
@@ -980,10 +1007,10 @@ class UnifiedPipeline:
         pearson_best_by_pid: Dict[str, float] = {}
 
         # Create template project for this pass to avoid redundant histogram parsing
-        template_gpx = str(resid_dir / f"template_pass{pass_ix}.gpx")
+        template_gpx = str(Path(diag_resid_dir) / f"template_pass{pass_ix}.gpx")
         try:
             from gsas_core_infrastructure import GSASProjectManager
-            tpm = GSASProjectManager(str(resid_dir), f"template_pass{pass_ix}")
+            tpm = GSASProjectManager(diag_resid_dir, f"template_pass{pass_ix}")
             if tpm.create_project():
                 if tpm.add_histogram(str(resid_xye), instprm_path, fmthint="xye"):
                     tpm.save_project()
@@ -1041,10 +1068,11 @@ class UnifiedPipeline:
         with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as executor:
             # Preparing arguments for _compute_pearson_with_refinement
             # def _compute_pearson_with_refinement(pid, cand_cif, name, work_dir, x_native, residual_native, instprm_path)
+            candidate_work_dir = ds_cfg.get("tech_cand_path") or work_dir
             future_to_pid = {
                 executor.submit(
                     _compute_pearson_with_refinement,
-                    pid, cif, f"{name}_p{pass_ix}", work_dir, x_native, residual_native, instprm_path,
+                    pid, cif, f"{name}_p{pass_ix}", candidate_work_dir, x_native, residual_native, instprm_path,
                     template_gpx=template_gpx,
                     engine=s4_cfg.get("pearson_engine", "surrogate")
                 ): pid for pid, cif in tasks
@@ -1208,6 +1236,7 @@ class UnifiedPipeline:
         technical_dir = str(Path(work_dir) / "Technical")
         tech_projects_dir = str(Path(technical_dir) / "GSAS_Projects")
         tech_logs_dir = str(Path(technical_dir) / "Logs")
+        tech_cand_dir = str(Path(technical_dir) / "Candidate_Refinements")
         
         # Create all directories
         print(f"[DEBUG] results_dir: {results_dir}")
@@ -1218,7 +1247,7 @@ class UnifiedPipeline:
         for d in (work_dir, results_dir, results_plots_dir, 
                   models_dir, models_ref_dir, models_refined_dir,
                   diagnostics_dir, diag_hist_dir, diag_resid_dir, diag_traces_dir,
-                  technical_dir, tech_projects_dir, tech_logs_dir):
+                  technical_dir, tech_projects_dir, tech_logs_dir, tech_cand_dir):
             Path(d).mkdir(parents=True, exist_ok=True)
             
         print(f"[INFO] Working directory: {work_dir}")
@@ -1258,6 +1287,8 @@ class UnifiedPipeline:
             "min_score": float(ds.get("stage4", {}).get("min_score", self.top_cfg.get("stage4", {}).get("min_score", 0.02))),
             "min_pearson": ds.get("stage4", {}).get("min_pearson", self.top_cfg.get("stage4", {}).get("min_pearson", "nan")),
             "pearson_engine": ds.get("stage4", {}).get("pearson_engine", self.top_cfg.get("stage4", {}).get("pearson_engine", self.top_cfg.get("hist_filter", {}).get("pearson_engine", "surrogate"))),
+            "diagnostics_path": diagnostics_dir,
+            "tech_cand_path": tech_cand_dir,
         }
 
         # Database configuration
@@ -1295,6 +1326,23 @@ class UnifiedPipeline:
         # Data range limits and exclusions
         limits = ds.get("limits")
         exclude_regions = ds.get("exclude_regions", [])
+
+        # Build comprehensive ds_cfg with all redirected paths
+        ds_cfg = {
+            **ds,
+            "diagnostics_path": diagnostics_dir,
+            "diag_hist_path": diag_hist_dir,
+            "diag_resid_path": diag_resid_dir,
+            "diag_traces_path": diag_traces_dir,
+            "models_path": models_dir,
+            "models_ref_path": models_ref_dir,
+            "models_refined_path": models_refined_dir,
+            "technical_path": technical_dir,
+            "tech_projects_path": tech_projects_dir,
+            "tech_logs_path": tech_logs_dir,
+            "tech_cand_path": tech_cand_dir,
+            "work_dir": work_dir
+        }
 
         # =========================
         bench = BenchTimer(run_name=name)
@@ -1352,7 +1400,7 @@ class UnifiedPipeline:
                                 allowed_elements=allowed_elements,
                                 top_candidates=top_candidates,
                                 s4_cfg=s4_cfg,
-                                ds_cfg={"diagnostics_path": diagnostics_dir}, # Pass diagnostics root
+                                ds_cfg=ds_cfg,
                                 profiles_dir=profiles_dir,
                                 db_loader=self.db_loader,
                                 stable_ids=self.stable_ids,
@@ -1482,7 +1530,7 @@ class UnifiedPipeline:
                         else:
                             os.environ["ML_IS_STAGE0"] = _prev_ml_is_stage0
                     
-                    self.emitter.emit("Stage 0", "Bootstrap complete", 20, metrics={"main_phase_id": main_phase_id})
+                    self.emitter.emit("Stage 0", "Bootstrap complete", 20, metrics={"main_phase_id": main_phase_name})
                     self.manifest.update_stage("Stage 0", "complete", {"main_cif": main_cif, "main_phase_name": main_phase_name})
 
             # --------------------------------------------------------------------
@@ -1615,7 +1663,7 @@ class UnifiedPipeline:
                                 exclude_ids=exclude_ids,
                                 joint_top_k=joint_top_k,
                                 s4_cfg=s4_cfg,
-                                ds_cfg=ds,  # <-- NEW
+                                ds_cfg=ds_cfg,
                             )
 
 

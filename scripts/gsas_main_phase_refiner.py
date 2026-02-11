@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 """
-GSAS-II Main Phase Refinement Engine and Pattern Analysis
+GSAS-II Main Phase Refinement Engine
 
-This module provides the main phase refinement capabilities using GSAS-II's
-native functions and extracts residuals in both native and Q-space coordinates.
+This module encapsulates the GSAS-II refinement logic for the impurity detection pipeline.
+It provides:
+- Automated refinement of lattice parameters, phase fractions, and instrument profile terms.
+- Extraction of residuals in both native (2θ/TOF) and Q-space.
+- Calculation of Pearson correlations for candidate ranking.
+- Generation of difference plots and refinement metrics.
 """
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,6 +24,13 @@ try:
 except ImportError:
     GSAS_AVAILABLE = False
     G2Exception = Exception
+
+# Safe Limits Import
+try:
+    from gsas_safe_limits import apply_safe_limits
+except ImportError:
+    # Fallback if not found (during dev)
+    def apply_safe_limits(proj): return False
 
 
 # === XYE writer (used for residual-as-Yobs jobs) ===
@@ -376,6 +387,9 @@ class GSASMainPhaseRefiner:
             self.histogram.set_refinements({
                 'Limits': {'low': float(np.min(x_data)), 'high': float(np.max(x_data))}
             })
+            
+        # Enforce safe limits (prevent negative variance at low d/TOF)
+        apply_safe_limits(self.project)
 
     def _clear_all_instrument_refinements(self):
         """Disable all instrument parameter refinements."""
@@ -1019,6 +1033,7 @@ def joint_refine_one_cycle(
 
     clone_gpx(base_gpx, out_gpx)
     proj = G2sc.G2Project(gpxfile=out_gpx)
+    apply_safe_limits(proj)
     hist, main_phase = get_hist_and_main_phase(proj, main_phase_name)
 
     # Init HAP scales to a normalized split
@@ -1118,6 +1133,104 @@ def extract_residual_from_gpx(gpx_path: str):
         rwp = float('nan')
 
     return x_native, residual_native, Q, residual_Q, rwp, hist.name, proj
+
+def _validate_candidates_individually(
+    base_gpx: str,
+    out_gpx: str, 
+    main_phase_name: str,
+    pid_to_cif: Dict[str, str],
+    hap_init: float
+) -> Dict[str, str]:
+    """
+    Helper to check each candidate phase in isolation.
+    Returns: Dict[pid, cif] of only the SAFE candidates.
+    """
+    from GSASII import GSASIIscriptable as G2sc
+    import os
+    import sys
+    from io import StringIO
+    import shutil
+
+    validated_cifs: Dict[str, str] = {}
+    if not pid_to_cif:
+        return {}
+
+    print(f"[joint+] Validating {len(pid_to_cif)} candidates individually...")
+    val_gpx = str(Path(out_gpx).with_suffix(".validation.gpx"))
+    
+    for pid, cif in pid_to_cif.items():
+        proj_val = None
+        try:
+            if os.path.exists(val_gpx):
+                try: os.remove(val_gpx)
+                except: pass
+            
+            shutil.copy(base_gpx, val_gpx)
+            proj_val = G2sc.G2Project(gpxfile=val_gpx)
+            apply_safe_limits(proj_val) # Enforce physical data limits
+            hist_val, _ = get_hist_and_main_phase(proj_val, main_phase_name)
+            
+            # 1. Add phase
+            p_val = proj_val.add_phase(cif, phasename=str(pid), histograms=[hist_val])
+            
+            # 2. Setup Refinement: ONLY Scale and Background
+            # Candidate Scale -> refine=True
+            p_val.set_HAP_refinements({'Scale': True}, histograms=[hist_val])
+            p_val.HAPvalue('Scale', float(hap_init), targethistlist=[hist_val])
+            
+            # Background -> refine=True
+            hist_val.set_refinements({'Background': {'refine': True}})
+            
+            # EVERYTHING ELSE -> fixed
+            set_phase_cell_refine(p_val, refine=False)
+            for other_p in proj_val.phases():
+                if other_p.name != p_val.name:
+                    set_phase_cell_refine(other_p, refine=False)
+                    other_p.set_HAP_refinements({'Scale': False}, histograms=[hist_val])
+            
+            # Sample params, Zero, profile -> ensure fixed
+            try: hist_val.clear_refinements({'Sample Parameters': ['Scale']})
+            except: pass
+            
+            proj_val.data['Controls']['data']['max cyc'] = 1
+            
+            # 3. Test Drive with stdout capture
+            capture = StringIO()
+            old_stdout = sys.stdout
+            try:
+                sys.stdout = capture
+                proj_val.do_refinements([{'refine': True}])
+            finally:
+                sys.stdout = old_stdout
+            
+            output = capture.getvalue()
+            
+            # Always print full output so user can diagnose
+            print(f"[joint+] Candidate {pid} stdout:\n{output}")
+            
+            # Only reject on HARD failures, not recoverable warnings like ouch #7
+            hard_fail = ("Refinement error" in output 
+                         or "ouch #0" in output 
+                         or "ouch #3" in output 
+                         or "recip-matrix error" in output
+                         or "ERROR - Refinement failed" in output)
+            if hard_fail:
+                print(f"[joint+] Candidate {pid} REJECTED (hard failure detected)")
+                continue
+            else:
+                print(f"[joint+] Candidate {pid} PASSED individual validation")
+                
+            validated_cifs[pid] = cif
+            
+        except Exception as e:
+            print(f"[joint+] WARNING: Candidate {pid} rejected (exception): {e}")
+        finally:
+            if proj_val: del proj_val
+            if os.path.exists(val_gpx):
+                try: os.remove(val_gpx)
+                except: pass
+    
+    return validated_cifs
 # === END ADD =================================================================
 # === BEGIN ADD: joint_refine_add_phases ======================================
 def joint_refine_add_phases(
@@ -1131,77 +1244,123 @@ def joint_refine_add_phases(
 ) -> Dict[str, Dict[str, float]]:
     """
     Clone base GPX, add *new* candidate phases, and refine HAP Scales for all phases.
-    - Existing phases remain, refine=True; current HAP Scale values are preserved.
-    - New phases are added with small HAP Scale=hap_init and refine=True.
-    - Background refine ON; sample Scale held; zero/profile held; phase Cell held.
-    Returns per-phase fractions as in joint_refine_one_cycle.
+    Optimistic approach: try batch first, if crash, validate individually and retry.
     """
     from GSASII import GSASIIscriptable as G2sc
+    import sys
+    from io import StringIO
+    import os
 
+    # 1. Prepare project with ALL candidates
     clone_gpx(base_gpx, out_gpx)
     proj = G2sc.G2Project(gpxfile=out_gpx)
+    apply_safe_limits(proj) # Enforce physical data limits
     hist, main_phase = get_hist_and_main_phase(proj, main_phase_name)
 
     existing = {p.name: p for p in proj.phases()}
 
-    # Existing phases → refine Scale; keep their current values unless caller opts otherwise
+    # Existing phases -> setup
     for p in existing.values():
         set_phase_cell_refine(p, refine=False)
         p.set_HAP_refinements({'Scale': True}, histograms=[hist])
-        if not preserve_existing_scales:
-            # Place holder: intentionally do nothing to avoid risky guesswork
-            pass
 
-    # Add new phases only if missing
+    # Add ALL new phases
     for pid, cif in pid_to_cif_new.items():
         if pid in existing:
-            print(f"[joint+] Phase '{pid}' already present; skipping add.")
-            continue
+             continue
         p = proj.add_phase(cif, phasename=str(pid), histograms=[hist])
         set_phase_cell_refine(p, refine=False)
         p.set_HAP_refinements({'Scale': True}, histograms=[hist])
         p.HAPvalue('Scale', float(hap_init), targethistlist=[hist])
 
-    # Background refine ON; sample Scale held; zero/profile held (same policy as one_cycle)
+    # Background ON; Sample Scale held; zero/profile held
     hist.set_refinements({'Background': {'refine': True}})
-    try:
-        hist.clear_refinements({'Sample Parameters': ['Scale']})
-    except Exception:
-        pass
-    try:
-        proj.add_HoldConstr(proj.make_var_obj(hist=hist, varname='Zero'))
-    except Exception:
-        pass
+    try: hist.clear_refinements({'Sample Parameters': ['Scale']})
+    except: pass
+    
+    # Hold instrument params (U,V,W,X,Y,Z, Zero)
+    try: proj.add_HoldConstr(proj.make_var_obj(hist=hist, varname='Zero'))
+    except: pass
     for var in ['U', 'V', 'W', 'X', 'Y', 'Z', 'Sh/L']:
-        try:
-            proj.add_HoldConstr(proj.make_var_obj(hist=hist, varname=var))
-        except Exception:
-            pass
-
-    # Ensure no HAP constraints couple scales
-    cons = proj.data.setdefault('Constraints', {})
-    if 'HAP' in cons and cons['HAP']:
-        cons['HAP'] = []
-        print("[joint+] Cleared existing HAP constraints.")
+        try: proj.add_HoldConstr(proj.make_var_obj(hist=hist, varname=var))
+        except: pass
 
     proj.data['Controls']['data']['max cyc'] = int(max_joint_cycles)
-    proj.do_refinements([
-        {'set': {'Background': {'refine': True}}},
-        {'refine': True},
-    ])
+    
+    # 2. Try Batch Refinement
+    refine_success = False
+    batch_error = ""
+    try:
+        capture = StringIO()
+        old_stdout = sys.stdout
+        try:
+            sys.stdout = capture
+            proj.do_refinements([{'refine': True}])
+        finally:
+            sys.stdout = old_stdout
+            
+        output = capture.getvalue()
+        
+        # Print full batch output for diagnostics
+        print(f"[joint+] Batch refinement stdout:\n{output}")
+        
+        # Only fail on HARD errors, not recoverable warnings like ouch #7
+        hard_fail = ("Refinement error" in output 
+                     or "ouch #0" in output 
+                     or "ouch #3" in output 
+                     or "recip-matrix error" in output
+                     or "ERROR - Refinement failed" in output)
+        if hard_fail:
+             batch_error = f"GSAS-II Refinement failed (stdout): {output[:200]}..."
+             raise RuntimeError(batch_error)
+             
+        refine_success = True
+        
+    except (Exception, RuntimeError) as e:
+        batch_error = str(e)
+        print(f"[joint+] Batch refinement failed ({batch_error}). Falling back to individual validation...")
+        
+        # 3. Fallback: Validate and Retry
+        del proj # Release handle
+        
+        valid_subset = _validate_candidates_individually(
+            base_gpx, out_gpx, main_phase_name, pid_to_cif_new, hap_init
+        )
+        
+        if len(valid_subset) < len(pid_to_cif_new):
+             print(f"[joint+] Retrying batch with {len(valid_subset)} valid candidates...")
+             # Recursive call for clean state
+             if not valid_subset:
+                  print("[joint+] No valid candidates found. Returning empty results.")
+                  return {}
+             
+             return joint_refine_add_phases(
+                 base_gpx, out_gpx, main_phase_name, valid_subset,
+                 hap_init, max_joint_cycles, preserve_existing_scales
+             )
+        else:
+             print("[joint+] Validation passed all candidates, but batch failed. Hard failure.")
+             raise e
 
-    # Parse fractions
-    lst_path = Path(out_gpx).with_suffix(".lst")
-    parsed = parse_gsas_lst(lst_path, hist.name) if lst_path.exists() else {}
-    results: Dict[str, Dict[str, float]] = {}
-    for p in proj.phases():
-        nm = p.name
-        vals = parsed.get(nm)
-        results[nm] = {
-            "phase_fraction_pct": float(vals["phase_fraction_pct"]) if vals else 0.0,
-            "weight_fraction_pct": float(vals["weight_fraction_pct"]) if vals else 0.0,
-        }
-    return results
+    # 4. Success -> Extract Results
+    if refine_success:
+        # Re-open or use saved results
+        lst_path = Path(out_gpx).with_suffix(".lst")
+        parsed = parse_gsas_lst(lst_path, hist.name) if lst_path.exists() else {}
+        results: Dict[str, Dict[str, float]] = {}
+        
+        # We need results for ALL phases in the project
+        proj = G2sc.G2Project(gpxfile=out_gpx) # reload to be sure
+        for p in proj.phases():
+            nm = p.name
+            vals = parsed.get(nm)
+            results[nm] = {
+                "phase_fraction_pct": float(vals["phase_fraction_pct"]) if vals else 0.0,
+                "weight_fraction_pct": float(vals["weight_fraction_pct"]) if vals else 0.0,
+            }
+        return results
+    
+    return {}
 # === END ADD =================================================================
 # === BEGIN ADD: joint_refine_polish (multi-cycle, optional Cell refine) ======
 # === BEGIN: joint_refine_polish (bullet-proof, transactional) ===
@@ -1256,7 +1415,9 @@ def joint_refine_polish(
         shutil.copy2(src, dst)
 
     def _open(path: str):
-        return G2sc.G2Project(gpxfile=path)
+        proj = G2sc.G2Project(gpxfile=path)
+        apply_safe_limits(proj)
+        return proj
 
     def _save(proj, path: str) -> None:
         proj.save(path)

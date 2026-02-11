@@ -74,7 +74,7 @@ pixi run cli-run -- --config my_pipeline_config.yaml
 ### Directory Structure
 
 - `app.py`: Main Streamlit application.
-- `scripts/`: Implementation of the discovery pipeline and ML screening.
+- `scripts/`: Core pipeline logic, including the unified driver (`gsas_complete_pipeline_nomain.py`) and adaptive lattice refinement (`lattice_nudger.py`).
 - `GSAS-II/`: The core GSAS-II scientific engine (git-ignored submodule).
 - `ML_components/`: Pre-trained models for Stage-3 screening.
 - `data/database_aug/`: Crystallographic database (required for screening).
@@ -86,6 +86,7 @@ pixi run cli-run -- --config my_pipeline_config.yaml
 - **Lattice Nudging**: Adaptive lattice parameter optimization before Rietveld.
 - **Sequential Passes**: Each pass identifies the next most likely impurity, refining the global model until convergence. Multi-pass results are now viewable in organized expanders.
 - **Decision Engine**: Visualizes the internal "Knee Filter" logic used to prune candidates.
+- **Safety & Stability**: Automated "Safe Limits" calculation to prevent crashes from invalid d-spacing or negative variance regions.
 
 ---
 
@@ -103,10 +104,19 @@ If you see `*** ERROR: Unable to find GSAS-II binaries`, it usually means the Fo
 
 - **Solution**: Run `.\setup.ps1` (Windows) or `./setup.sh` (Linux) again. The scripts are designed to "bridge" the compiled binaries into the Python path.
 
-### 2. Python Version
+### 2. Critical: File Path Restrictions (Windows)
 
-This project requires **Python 3.12**.
+> [!IMPORTANT]
+> **NO SPACES IN PATH**: Low-level GSAS-II build tools (gfortran, Meson) will fail if the project is located in a folder with spaces (e.g., `OneDrive - Oak Ridge National Laboratory`). 
+> **Solution**: Install in a simple path like `C:\Coding\GSAS-Detector`.
 
-### 3. Database Download
+### 3. Python Version & Dependencies
+
+This project requires **Python 3.12**. 
+
+- If the build fails with `ModuleNotFoundError: No module named 'urllib'`, ensure you are using a clean environment without version conflicts.
+- The `setup.ps1` script automatically handles the inclusion of build-backend dependencies like `setuptools`.
+
+### 4. Database Download
 
 The database is ~2.3GB. If the download fails in the UI, you can manually download it from the link provided in the logs and extract it to `data/database_aug/`.
