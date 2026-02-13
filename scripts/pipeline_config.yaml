@@ -120,6 +120,7 @@ top_candidates: 10  # how many goes to the nudger
 min_impurity_percent: 0.5
 hap_init: 0.05
 max_joint_cycles: 8
+joint_top_k: 3
 
 stage4:
   wavelength: 1.50
@@ -212,7 +213,7 @@ datasets:
     background:
       type: log interpolate
       terms: 6
-    allowed_elements: [Cu, S, Pb, P, O]
+    allowed_elements: [Pb, P, Cu, O, S]
 
   # ----------------------------------------------------------------------------
   - name: SNAP

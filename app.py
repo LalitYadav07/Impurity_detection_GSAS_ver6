@@ -809,6 +809,8 @@ def update_ui_state():
 
 # --- UI HEADER ---
 st.title("🔬Impurity Phase Detection for NPD")
+if IS_HF_SPACES:
+    st.info("🚀 **Hugging Face Spaces Detected**: Resource limits (max 2 workers) are active to prevent OOM crashes.")
 st.markdown("Automated crystallography impurity phase discovery using ML-guided refinement.")
 
 # --- SIDEBAR ---
@@ -865,8 +867,8 @@ with st.sidebar:
                 sample_env_elements_str = "Al"
             else: # LK-99
                  st.info("Using bundled LK-99 dataset (TOF). Parameters are pre-configured.")
-                 st.code("Allowed: Pb, P, O, Cu\nHardware: None\nCIF: LK99.cif", language="text")
-                 allowed_elements_str = "Pb, P, O, Cu"
+                 st.code("Allowed: Pb, P, Cu, O, S\nHardware: None\nCIF: LK99.cif for LK-99 tod demo", language="text")
+                 allowed_elements_str = "Pb, P, Cu, O, S"
                  sample_env_elements_str = ""
             
             data_file, instprm_file, main_cif = None, None, None
@@ -911,6 +913,7 @@ with st.sidebar:
             st.caption("Algorithm internals for debugging and research.")
             k_min_hist = st.number_input("Knee: Min Points", 1, 100, 5)
             k_span = st.number_input("Knee: Min Span", 0.0, 1.0, 0.03, format="%.3f")
+            joint_k = st.number_input("Joint: Top-K Candidates", 1, 20, 3, help="Number of candidates for joint refinement.")
             
             st.divider()
             db_catalog = st.text_input("Catalog CSV", "catalog_deduplicated.csv")
@@ -919,6 +922,7 @@ with st.sidebar:
     else:
         # Defaults for expert params if not in expert mode
         k_min_hist, k_span = 5, 0.03
+        joint_k = 3
         db_catalog, db_stable, db_metadata = "catalog_deduplicated.csv", "mp_experimental_stable.csv", "highsymm_metadata.json"
         
     # START BUTTON
@@ -961,6 +965,7 @@ with st.sidebar:
                 adv_cfg = {
                     "hist_filter": {"topN": top_n_ml},
                     "top_candidates": wait_for_pass,
+                    "joint_top_k": joint_k,
                     "rwp_improve_eps": rwp_eps,
                     "stage4": {
                         "len_tol_pct": len_tol,
