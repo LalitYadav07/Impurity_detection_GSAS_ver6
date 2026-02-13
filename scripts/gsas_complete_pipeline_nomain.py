@@ -1023,10 +1023,15 @@ class UnifiedPipeline:
             template_gpx = None
 
         # Decide worker count
+        is_hf = "SPACE_ID" in os.environ
         cpu_count = os.cpu_count() or 1
         max_workers_cfg = int(s4_cfg.get("max_workers", 0))
+        
         if max_workers_cfg > 0:
             workers = max_workers_cfg
+        elif is_hf:
+            workers = min(2, cpu_count) # Cap at 2 for HF Spaces OOM safety
+            print(f"[INFO] Hugging Face Space detected. Capping workers to {workers} for RAM safety.")
         else:
             workers = max(1, cpu_count // 2) # Conservative default
             
@@ -1437,11 +1442,11 @@ class UnifiedPipeline:
                             pear_tmp_dir = str(Path(technical_dir) / "Pearson_Temp")
                             Path(pear_tmp_dir).mkdir(parents=True, exist_ok=True)
 
-                            def _pearson_raw(cif_path: Optional[str], tag: str) -> float:
+                            def _pearson_raw(cif_path: Optional[str], tag: str) -> Tuple[float, Optional[str]]:
                                 if not cif_path or not Path(cif_path).exists():
-                                    return float("nan")
+                                    return float("nan"), None
                                 try:
-                                    return float(
+                                    r = float(
                                         compute_gsas_pearson_for_cif(
                                             data_path=data_path,
                                             instprm_path=instprm_path,
@@ -1453,8 +1458,14 @@ class UnifiedPipeline:
                                             tmp_tag=tag,
                                         )
                                     )
+                                    # Construct the refined path similar to Stage 4 fix
+                                    stem = Path(cif_path).stem
+                                    refined_cif_path = str(Path(cif_path).with_name(f"{stem}_refined.cif"))
+                                    final_path = refined_cif_path if Path(refined_cif_path).exists() else cif_path
+                                    return r, final_path
+                                    
                                 except Exception:
-                                    return float("nan")
+                                    return float("nan"), None
 
                             pearson_best_by_pid: Dict[str, float] = {}
                             path_choice_by_pid: Dict[str, Optional[str]] = {}
@@ -1466,17 +1477,21 @@ class UnifiedPipeline:
 
                                 nudged_cif = getattr(r, "nudged_cif_path", None)
                                 if nudged_cif:
-                                    p = _pearson_raw(nudged_cif, f"{name}_stage0_sel_{pid}_nudged")
+                                    p, final_cif = _pearson_raw(nudged_cif, f"{name}_stage0_sel_{pid}_nudged")
                                     pearson_best_by_pid[pid] = p
-                                    path_choice_by_pid[pid]  = nudged_cif
+                                    path_choice_by_pid[pid]  = final_cif
                                 else:
                                     try:
                                         orig_cif = self.db_loader.ensure_cif_on_disk(pid, out_dir=cif_cache_dir)  # type: ignore[union-attr]
                                     except Exception:
                                         orig_cif = None
-                                    p = _pearson_raw(orig_cif, f"{name}_stage0_sel_{pid}_orig") if orig_cif else float("nan")
+                                    if orig_cif:
+                                        p, final_cif = _pearson_raw(orig_cif, f"{name}_stage0_sel_{pid}_orig")
+                                    else:
+                                        p, final_cif = float("nan"), None
+                                    
                                     pearson_best_by_pid[pid] = p
-                                    path_choice_by_pid[pid]  = orig_cif
+                                    path_choice_by_pid[pid]  = final_cif
 
 
                             kcfg = (self.top_cfg.get("knee_filter") or {})
@@ -1717,16 +1732,17 @@ class UnifiedPipeline:
                     self.emitter.emit(f"Pass {pass_ix}", "Joint refinement (commit-run) started", progress_base + 0.6 * progress_step, metrics={"pass": pass_ix, "event": "joint_refine_start"})
                     accepted.append(best_new)
                     commit_gpx = str(Path(joint_dir) / f"seq_pass{pass_ix}_kept.gpx")
-                    pid_to_cif_commit = {pid: pid_to_cif[pid] if pid in pid_to_cif else
-                                         self.db_loader.ensure_cif_on_disk(pid, out_dir=models_ref_dir)  # type: ignore[union-attr]
-                                         for pid in accepted}
-                    fractions_kept_quick = joint_refine_one_cycle(
-                        base_gpx=str(Path(tech_projects_dir) / f"{name}_project.gpx"),
+                    pid_to_cif_new = {best_new: pid_to_cif[best_new] if best_new in pid_to_cif else
+                                      self.db_loader.ensure_cif_on_disk(best_new, out_dir=models_ref_dir)}
+
+                    fractions_kept_quick = joint_refine_add_phases(
+                        base_gpx=kept_gpx,   # Build upon the previously polished/kept project
                         out_gpx=commit_gpx,
                         main_phase_name=main_phase_name,
-                        pid_to_cif=pid_to_cif_commit,
+                        pid_to_cif_new=pid_to_cif_new,  # Add ONLY the new phase (others are already in kept_gpx)
                         hap_init=hap_init,
                         max_joint_cycles=max_joint_cycles,
+                        preserve_existing_scales=True,  # Critical: don't reset previous phases
                     )
                     # Rwp for quick accept
                     _, _, _, _, rwp_kept, _, _ = extract_residual_from_gpx(commit_gpx)
@@ -1956,9 +1972,17 @@ def _compute_pearson_with_refinement(
             template_gpx=template_gpx,
         )
 
-        print(f"[INFO] Stage-4 Pearson (GSAS - {label}): {pid} → r={float(r_val):.4f}")
+        # Fix: construct the path to the REFINED CIF that compute_gsas_pearson_for_cif writes
+        # It always writes to <stem>_refined.cif unless overridden, and we don't override output name.
+        stem = Path(cand_cif).stem
+        refined_cif_path = str(Path(cand_cif).with_name(f"{stem}_refined.cif"))
         
-        return float(r_val), label, cand_cif
+        # Verify it exists; if not, fall back to input
+        final_cif = refined_cif_path if Path(refined_cif_path).exists() else cand_cif
+
+        print(f"[INFO] Stage-4 Pearson (GSAS - {label}): {pid} → r={float(r_val):.4f} (using {Path(final_cif).name})")
+        
+        return float(r_val), label, final_cif
 
     except Exception as e:
         print(f"[ERROR] Pearson computation failed for {pid}: {e}")

@@ -1145,8 +1145,13 @@ class LatticeNudger:
             Qs, Is = self.sim.simulate_QI(struct_i, q_window=(q_lo, q_hi))
             return _coslog_score_on_fixed_grid(Qs, Is, plan, Rvec, alpha, eps)
 
+        is_hf = "SPACE_ID" in os.environ
         cpu = os.cpu_count() or 1
-        workers = int(os.environ.get("STAGE4_WORKERS", max(1, cpu // 2)))
+        default_workers = 1 if is_hf else max(1, cpu // 2)
+        workers = int(os.environ.get("STAGE4_WORKERS", default_workers))
+        
+        if is_hf and workers > 2:
+            workers = 2
 
         if workers > 1 and len(reps_lattices) > 1:
             from concurrent.futures import ThreadPoolExecutor
@@ -1197,11 +1202,15 @@ class LatticeNudger:
             pass
 
         # Decide worker count
+        is_hf = "SPACE_ID" in os.environ
         cpu_count = os.cpu_count() or 1
         # We don't have direct access to s4_cfg here, but we can look at env or just use a default
         max_workers_env = int(os.environ.get("STAGE4_MAX_WORKERS", "0"))
         if max_workers_env > 0:
             workers = max_workers_env
+        elif is_hf:
+            workers = min(2, cpu_count)
+            print(f"[stage4] Hugging Face Space detected. Capping workers to {workers} for RAM safety.")
         else:
             workers = max(1, cpu_count // 2)
             
