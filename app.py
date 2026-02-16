@@ -882,6 +882,27 @@ with st.sidebar:
     else:
         st.success("📊 Database: [OK] (Ready for discovery)")
 
+    # --- USER GUIDE ---
+    with st.expander("📖 User Guide", expanded=False):
+        st.markdown("""
+        ### Analysis Setup
+        * **Initial Selection**: Set **Example Selection** to `None` to enable manual uploads.
+        * **Data Entry**: Provide your **Main CIF**, **Instrument Parameters**, and **Diffraction Data**.
+        * **Chemistry**: Enter the **Allowed Elements**. Leave **Sample Environment** blank unless you expect specific peaks from a sample holder or canister.
+        * **Discovery Strategy**: Set **Max Discovery Passes** to the number of impurity phases you expect to find.
+        * **Instrument Mode**: Manually select `TOF` or `CW` as appropriate for your data.
+        * **Background**: Default is a **12-term Chebyshev** polynomial. Adjust this in **Advanced Tuning** if necessary; other settings should remain at defaults.
+
+        ### Runtime Monitoring (~5–10 mins)
+        * **Initial Verification (< 1 min)**: Check the **Main Phase Fit** in the Artifacts panel to ensure the baseline fitting is accurate.
+        * **Sequential Updates**: Look for `seq_pass#N_accepted_model.png` after each pass to see if the added phase explains previously unknown peaks.
+        * **Candidate Tracking**: Browse `Diagnostics / Screening_Histograms` or the **Results ML Ranker** tab to see top candidates by formula and space group.
+
+        ### Reviewing Results
+        * **Quantification**: Use **Weighted Fraction Pct** from the final Data Sheet. 
+        * **Note**: Disregard `phase_fraction_pct`, as it is a legacy metric.
+        """)
+
     # --- 1. MAIN PANEL (Always visible) ---
     with st.expander("📁 Main Settings", expanded=True):
         example_selection = st.selectbox("📖 Example Mode", ["None", "TbSSL (CW Demo)", "LK-99 (TOF Demo)"], index=0)
