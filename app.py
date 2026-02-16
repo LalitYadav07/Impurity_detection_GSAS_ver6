@@ -969,17 +969,27 @@ with st.sidebar:
                 
                 # File Handling
                 dpath, ipath, cpath = None, None, None
+                import shutil
                 if example_selection != "None":
                     if example_selection == "TbSSL (CW Demo)":
-                        dpath = str((Path(PROJECT_ROOT) / "examples" / "tbssl" / "HB2A_TbSSL.dat").resolve())
-                        ipath = str((Path(PROJECT_ROOT) / "examples" / "tbssl" / "hb2a_si_ge113.instprm").resolve())
-                        cpath = str((Path(PROJECT_ROOT) / "examples" / "tbssl" / "TbSSL.cif").resolve())
+                        orig_d = (Path(PROJECT_ROOT) / "examples" / "tbssl" / "HB2A_TbSSL.dat")
+                        orig_i = (Path(PROJECT_ROOT) / "examples" / "tbssl" / "hb2a_si_ge113.instprm")
+                        orig_c = (Path(PROJECT_ROOT) / "examples" / "tbssl" / "TbSSL.cif")
                     else: # LK-99
-                        dpath = str((Path(PROJECT_ROOT) / "examples" / "lk99" / "PG3_56181-3.dat").resolve())
-                        ipath = str((Path(PROJECT_ROOT) / "examples" / "lk99" / "2023A_June_HighRes_60HzB3_CWL2p665.instprm").resolve())
-                        cpath = str((Path(PROJECT_ROOT) / "examples" / "lk99" / "LK99.cif").resolve())
+                        orig_d = (Path(PROJECT_ROOT) / "examples" / "lk99" / "PG3_56181-3.dat")
+                        orig_i = (Path(PROJECT_ROOT) / "examples" / "lk99" / "2023A_June_HighRes_60HzB3_CWL2p665.instprm")
+                        orig_c = (Path(PROJECT_ROOT) / "examples" / "lk99" / "LK99.cif")
+                    
+                    # Copy to inputs folder for provenance & sync
+                    shutil.copy(orig_d, input_dir / orig_d.name)
+                    shutil.copy(orig_i, input_dir / orig_i.name)
+                    shutil.copy(orig_c, input_dir / orig_c.name)
+                    
+                    dpath = str((input_dir / orig_d.name).resolve())
+                    ipath = str((input_dir / orig_i.name).resolve())
+                    cpath = str((input_dir / orig_c.name).resolve())
                 else:
-                    # Save logic inline
+                    # Save logic inline for manual uploads
                     if data_file:
                         with open(input_dir / data_file.name, "wb") as f: f.write(data_file.getbuffer())
                         dpath = str((input_dir / data_file.name).resolve())
