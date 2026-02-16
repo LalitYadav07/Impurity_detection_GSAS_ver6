@@ -491,6 +491,31 @@ def get_ram_usage():
     mem = process.memory_info().rss / (1024 * 1024) # MB
     return mem
 
+def sync_run_to_hf(run_dir: str, run_name: str):
+    """Syncs a completed run directory to a Hugging Face Dataset."""
+    token = os.environ.get("HF_TOKEN_WRITE")
+    # Default dataset name, can be overridden by env var
+    repo_id = os.environ.get("HF_DATASET_ID", "Lalityadav07/phase_detection_records")
+    
+    if not token:
+        st.warning("⚠️ HF_TOKEN_WRITE not found. Persistence disabled.")
+        return
+        
+    try:
+        from huggingface_hub import HfApi
+        api = HfApi(token=token)
+        
+        st.info(f"📤 Syncing results to {repo_id}...")
+        api.upload_folder(
+            folder_path=run_dir,
+            path_in_repo=f"runs/{run_name}",
+            repo_id=repo_id,
+            repo_type="dataset",
+        )
+        st.success("✅ Results synced to Hugging Face.")
+    except Exception as e:
+        st.error(f"❌ Failed to sync to Hugging Face: {e}")
+
 # --- STATE INITIALIZATION ---
 if 'run_active' not in st.session_state:
     st.session_state.run_active = False
@@ -796,6 +821,9 @@ def update_ui_state():
             st.session_state.run_finished = True
             if process.returncode == 0:
                 st.success("✅ Run Completed Successfully!")
+                # Trigger sync to HF
+                if IS_HF_SPACES:
+                    sync_run_to_hf(st.session_state.run_dir, st.session_state.get('run_name', 'default'))
                 st.balloons()
             else:
                 st.error(f"❌ Run Failed (Exit Code {process.returncode})")
