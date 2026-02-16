@@ -25,6 +25,7 @@ def build_pipeline_config(
     min_impurity_percent: float = 0.5,
     max_passes: int = 3,
     sample_env_elements: List[str] = None,
+    instrument_mode: str = "auto",
     advanced_params: Dict[str, Any] = None
 ) -> str:
     """
@@ -55,6 +56,7 @@ def build_pipeline_config(
         "allowed_elements": allowed_elements,
         "min_impurity_percent": min_impurity_percent,
         "max_passes": max_passes,
+        "instrument_mode": instrument_mode,
     }
 
     # Add advanced defaults
@@ -118,6 +120,7 @@ def build_pipeline_config(
         "name": run_name,
         "data_path": data_file,
         "instprm_path": instprm_file,
+        "mode": instrument_mode,
     }
     if main_cif:
         dataset["main_cif"] = main_cif

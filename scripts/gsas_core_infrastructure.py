@@ -76,7 +76,7 @@ class GSASProjectManager:
             return False
     
     def add_histogram(self, data_file: str, instprm_file: str, 
-                     fmthint: Optional[str] = None) -> bool:
+                     fmthint: Optional[str] = None, instrument_type: Optional[str] = None) -> bool:
         """Add powder histogram to the project."""
         if not self.project:
             raise RuntimeError("Project not initialized. Call create_project() first.")
@@ -99,7 +99,10 @@ class GSASProjectManager:
                 )
                 
             # Determine instrument type
-            self.instrument_type = self._get_instrument_type()
+            if instrument_type and instrument_type.upper() in ["TOF", "CW"]:
+                self.instrument_type = instrument_type.upper()
+            else:
+                self.instrument_type = self._get_instrument_type()
             print(f"Added histogram: {data_file} (type: {self.instrument_type})")
             return True
             

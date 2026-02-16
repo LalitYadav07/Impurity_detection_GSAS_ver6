@@ -1371,7 +1371,7 @@ class UnifiedPipeline:
                             pm0 = GSASProjectManager(tech_projects_dir, f"{name}_stage0")
                             if not pm0.create_project():
                                 raise RuntimeError(f"[{name}] Failed to create Stage-0 project")
-                            if not pm0.add_histogram(data_path, instprm_path, fmthint=fmthint):
+                            if not pm0.add_histogram(data_path, instprm_path, fmthint=fmthint, instrument_type=mode):
                                 raise RuntimeError(f"[{name}] Failed to add histogram")
 
                             # Apply limits/exclusions
@@ -1564,7 +1564,7 @@ class UnifiedPipeline:
                 pm = GSASProjectManager(tech_projects_dir, f"{name}_project")
                 if not pm.create_project():
                     raise RuntimeError(f"[{name}] Failed to create GSAS project")
-                if not pm.add_histogram(data_path, instprm_path, fmthint=fmthint):
+                if not pm.add_histogram(data_path, instprm_path, fmthint=fmthint, instrument_type=mode):
                     raise RuntimeError(f"[{name}] Failed to add histogram")
 
                 hist = pm.main_histogram

@@ -878,13 +878,18 @@ with st.sidebar:
             instprm_file = st.file_uploader("Instrument Params (.instprm)", type=["instprm"])
             main_cif = st.file_uploader("Main CIF (Optional)", type=["cif"])
             
+            st.divider()
             c1, c2 = st.columns(2)
             with c1:
                 allowed_elements_str = st.text_input("Allowed Elements", "Tb, Be, Ge, O", help="Comma-separated elements in the sample.")
             with c2:
                 sample_env_elements_str = st.text_input("Hardware / SE", "Al", help="Elements from sample environment (cans, holders).")
             
-            max_passes = st.number_input("Max Discovery Passes", 1, 10, 3, help="Max number of sequential impurity phases to search for.")
+            c3, c4 = st.columns(2)
+            with c3:
+                max_passes = st.number_input("Max Discovery Passes", 1, 10, 3, help="Max number of sequential impurity phases to search for.")
+            with c4:
+                inst_mode = st.radio("Instrument Mode", ["Auto", "CW", "TOF"], horizontal=True, help="Manually specify instrument type if auto-detection fails.")
 
     # --- 2. ADVANCED SETTINGS (Secondary) ---
     with st.expander("⚙️ Advanced Tuning", expanded=False):
@@ -990,11 +995,18 @@ with st.sidebar:
                 if db_metadata != "highsymm_metadata.json": db_overrides["original_json"] = str(Path(DB_DIR) / db_metadata)
                 if db_overrides: adv_cfg["db"] = db_overrides
 
+                # Mode Handling
+                if example_selection != "None":
+                    selected_mode = "auto" # Examples use auto
+                else:
+                    selected_mode = inst_mode.lower()
+
                 cfg = build_pipeline_config(
                     run_name=run_name, data_file=dpath, instprm_file=ipath,
                     allowed_elements=els, sample_env_elements=env, main_cif=cpath,
                     work_root=str(rdir), project_root=PROJECT_ROOT,
                     min_impurity_percent=trace_limit, max_passes=max_passes,
+                    instrument_mode=selected_mode,
                     advanced_params=adv_cfg
                 )
                 
