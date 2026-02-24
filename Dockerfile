@@ -36,6 +36,17 @@ RUN mkdir -p ML_components && \
     curl -L https://github.com/LalitYadav07/Impurity_detection_GSAS_ver6/raw/main/ML_components/residual_training.pt -o ML_components/residual_training.pt && \
     curl -L https://github.com/LalitYadav07/Impurity_detection_GSAS_ver6/raw/main/ML_components/two_phase_training.pt -o ML_components/two_phase_training.pt
 
+# Download X-ray database from Google Drive at build time so it is baked into the image.
+# This avoids the runtime failure caused by Google Drive bot-protection during Streamlit startup.
+RUN pip install --quiet gdown && \
+    mkdir -p data/database_xray && \
+    gdown --id 12H19jI3mGcYBpJrQRtY-5_WaMjFyIMah -O /tmp/database_xray.zip && \
+    unzip -q /tmp/database_xray.zip -d /tmp/db_extract && \
+    (mv /tmp/db_extract/database_xray/* data/database_xray/ 2>/dev/null || \
+    mv /tmp/db_extract/database_aug/* data/database_xray/ 2>/dev/null || \
+    mv /tmp/db_extract/* data/database_xray/ 2>/dev/null || true) && \
+    rm -rf /tmp/database_xray.zip /tmp/db_extract
+
 # Copy the rest of the application
 COPY --chown=user . .
 
