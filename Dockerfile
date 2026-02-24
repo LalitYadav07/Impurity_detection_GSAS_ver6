@@ -36,26 +36,14 @@ RUN mkdir -p ML_components && \
     curl -L https://github.com/LalitYadav07/Impurity_detection_GSAS_ver6/raw/main/ML_components/residual_training.pt -o ML_components/residual_training.pt && \
     curl -L https://github.com/LalitYadav07/Impurity_detection_GSAS_ver6/raw/main/ML_components/two_phase_training.pt -o ML_components/two_phase_training.pt
 
+# Copy just the extraction helper early (allows caching of the download layer)
+COPY --chown=user scripts/extract_xray_db.py scripts/extract_xray_db.py
+
 # Download X-ray database from Google Drive at build time so it is baked into the image.
-# Uses Python zipfile (not unzip) to handle Windows-style backslash paths in the archive.
+# Uses a dedicated Python script to handle Windows-style backslash paths in the archive.
 RUN pip install --quiet gdown && \
-    mkdir -p data/database_xray && \
     gdown 12H19jI3mGcYBpJrQRtY-5_WaMjFyIMah -O /tmp/database_xray.zip && \
-    python3 -c "\
-    import zipfile, os, shutil; \
-    dest = 'data/database_xray'; \
-    with zipfile.ZipFile('/tmp/database_xray.zip') as z: \
-    for m in z.infolist(): \
-    m.filename = m.filename.replace('\\\\', '/'); \
-    parts = m.filename.split('/'); \
-    start = 1 if parts[0] in ('database_xray', 'database_aug') else 0; \
-    rel = '/'.join(parts[start:]); \
-    if not rel: continue; \
-    out = os.path.join(dest, rel); \
-    os.makedirs(os.path.dirname(out), exist_ok=True); \
-    if not m.is_dir(): \
-    with z.open(m) as src, open(out, 'wb') as dst: shutil.copyfileobj(src, dst) \
-    " && \
+    python3 scripts/extract_xray_db.py /tmp/database_xray.zip data/database_xray && \
     rm -f /tmp/database_xray.zip
 
 # Copy the rest of the application
