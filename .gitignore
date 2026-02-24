@@ -39,6 +39,7 @@ pip-wheel-metadata/
 /docs/
 
 # GSAS-II build / vendored compiled artifacts
+/GSAS-II/
 /GSAS-II/build/
 /GSAS-II/pixi/
 GSAS-II/*.egg-info
