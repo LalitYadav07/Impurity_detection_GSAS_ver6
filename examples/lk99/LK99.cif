@@ -1,0 +1,65 @@
+ 
+######################################################################
+data_pb10(po4)6o
+_gsas_GSASII_version  5658
+
+# phase info for pb10(po4)6o follows
+_pd_phase_name  pb10(po4)6o
+_cell_measurement_temperature  ?
+_cell_length_a  9.807921
+_cell_length_b  9.807921
+_cell_length_c  7.399046
+_cell_angle_alpha  90
+_cell_angle_beta   90
+_cell_angle_gamma  120
+_cell_volume  616.397
+_exptl_crystal_density_diffrn  6.7967
+_symmetry_cell_setting  hexagonal
+_symmetry_space_group_name_H-M  "P 63/m"
+loop_
+    _space_group_symop_id
+    _space_group_symop_operation_xyz
+     1  x,y,z
+     2  x-y,x,1/2+z
+     3  -y,x-y,z
+     4  -x,-y,1/2+z
+     5  y-x,-x,z
+     6  y,y-x,1/2+z
+     7  -x,-y,-z
+     8  y-x,-x,1/2-z
+     9  y,y-x,-z
+    10  x,y,1/2-z
+    11  x-y,x,-z
+    12  -y,x-y,1/2-z
+
+# ATOMIC COORDINATES AND DISPLACEMENT PARAMETERS
+loop_ 
+   _atom_site_label
+   _atom_site_type_symbol
+   _atom_site_fract_x
+   _atom_site_fract_y
+   _atom_site_fract_z
+   _atom_site_occupancy
+   _atom_site_adp_type
+   _atom_site_U_iso_or_equiv
+   _atom_site_site_symmetry_multiplicity
+Pb1    Pb   -0.00381    0.75572     0.25000     0.9000     Uiso 0.0227     6   
+Pb2    Pb   0.66670     0.33330     -0.00523    0.9400     Uiso 0.0405     4   
+P1     P    0.63577     0.59148     0.25000     0.8822     Uiso 0.0031     6   
+O1     O    0.51867     0.66538     0.25000     1.1311     Uiso 0.1914     6   
+O2     O    0.73902     0.65754     0.07882     0.9746     Uiso 0.0253     12  
+O3     O    0.52938     0.41388     0.25000     1.0000     Uiso 0.0043     6   
+O4     O    0.00000     0.00000     0.19249     0.2500     Uiso 0.0119     4   
+Cu1    Cu   -0.00381    0.75572     0.25000     0.1000     Uiso 0.0227     6   
+Cu2    Cu   0.66670     0.33330     -0.00523    0.0600     Uiso 0.0405     4   
+
+loop_  _atom_type_symbol _atom_type_number_in_cell
+  Cu      0.84
+  O       25.482
+  P       5.293
+  Pb      9.16
+
+# Note that Z affects _cell_formula_sum and _weight
+_cell_formula_units_Z  6
+_chemical_formula_sum  "Cu0.14 O4.247 P0.882 Pb1.527"
+_chemical_formula_weight  420.49

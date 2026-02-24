@@ -1,0 +1,36 @@
+name: Sync to Hugging Face hub
+on:
+  push:
+    branches: [main]
+  # to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+jobs:
+  sync-to-hub:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          lfs: true
+      - name: Push to hub
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          git config --global user.email "hf-sync@example.com"
+          git config --global user.name "HF Sync"
+          
+          # 1. Create a fresh branch with NO history
+          git checkout --orphan hf-sync
+          
+          # 2. Physically remove binaries and any large junk
+          rm -rf ML_components/*.pt
+          rm -rf database_aug.zip || true
+          
+          # 3. Add all files (the models are now gone)
+          git add .
+          
+          # 4. Commit and push a single "Clean" commit
+          git commit -m "Deployment Sync: Docker handles models"
+          git remote add hf https://Lalityadav07:$HF_TOKEN@huggingface.co/spaces/Lalityadav07/phase_detection
+          git push --force hf hf-sync:main

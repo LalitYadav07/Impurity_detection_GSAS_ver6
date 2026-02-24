@@ -1,0 +1,102 @@
+ 
+######################################################################
+data_C5_H4_Mo_N_O3
+_gsas_GSASII_version  5813
+
+# phase info for C5 H4 Mo N O3 follows
+_pd_phase_name  "C5 H4 Mo N O3"
+_cell_length_a  5.2469(8)
+_cell_length_b  5.2469
+_cell_length_c  22.676(4)
+_cell_angle_alpha  90
+_cell_angle_beta   90
+_cell_angle_gamma  90
+_cell_volume  624.27(20)
+_exptl_crystal_density_diffrn  2.3624
+_symmetry_cell_setting  tetragonal
+_space_group_name_H-M_alt  "I 4/m m m"
+_space_group_name_Hall  "-I 4 2"
+loop_
+    _space_group_symop_id
+    _space_group_symop_operation_xyz
+     1  x,y,z
+     2  -y,x,z
+     3  -x,-y,z
+     4  y,-x,z
+     5  -x,y,z
+     6  -y,-x,z
+     7  x,-y,z
+     8  y,x,z
+     9  -x,-y,-z
+    10  y,-x,-z
+    11  x,y,-z
+    12  -y,x,-z
+    13  x,-y,-z
+    14  y,x,-z
+    15  -x,y,-z
+    16  -y,-x,-z
+    17  1/2+x,1/2+y,1/2+z
+    18  1/2-y,1/2+x,1/2+z
+    19  1/2-x,1/2-y,1/2+z
+    20  1/2+y,1/2-x,1/2+z
+    21  1/2-x,1/2+y,1/2+z
+    22  1/2-y,1/2-x,1/2+z
+    23  1/2+x,1/2-y,1/2+z
+    24  1/2+y,1/2+x,1/2+z
+    25  1/2-x,1/2-y,1/2-z
+    26  1/2+y,1/2-x,1/2-z
+    27  1/2+x,1/2+y,1/2-z
+    28  1/2-y,1/2+x,1/2-z
+    29  1/2+x,1/2-y,1/2-z
+    30  1/2+y,1/2+x,1/2-z
+    31  1/2-x,1/2+y,1/2-z
+    32  1/2-y,1/2-x,1/2-z
+
+# ATOMIC COORDINATES AND DISPLACEMENT PARAMETERS
+loop_ 
+   _atom_site_label
+   _atom_site_type_symbol
+   _atom_site_fract_x
+   _atom_site_fract_y
+   _atom_site_fract_z
+   _atom_site_occupancy
+   _atom_site_adp_type
+   _atom_site_U_iso_or_equiv
+   _atom_site_site_symmetry_multiplicity
+Mo1    Mo   0.50000     0.50000     0.23593     1.0000     Uani 0.0176     4   
+O1     O    0.50000     0.50000     0.16180     1.0000     Uani 0.0203     4   
+N1     N    0.50000     0.50000     0.34350     1.0000     Uani 0.0207     4   
+O2     O    0.70000     0.80000     0.25000     0.5000     Uani 0.0183     16  
+C1     C    0.50000     0.50000     0.46720     1.0000     Uani 0.0243     4   
+C3     C    0.50000     0.71900     0.37390     0.5000     Uani 0.0240     16  
+H3     H    0.50000     0.87144     0.35317     0.5000     Uiso 0.0290     16  
+C2     C    0.50000     0.72700     0.43510     0.5000     Uani 0.0280     16  
+H2     H    0.50000     0.88282     0.45455     0.5000     Uiso 0.0340     16  
+
+loop_
+   _atom_site_aniso_label
+   _atom_site_aniso_U_11
+   _atom_site_aniso_U_22
+   _atom_site_aniso_U_33
+   _atom_site_aniso_U_12
+   _atom_site_aniso_U_13
+   _atom_site_aniso_U_23
+Mo1    0.0212      0.0212      0.0104      0.0000      0.0000      0.0000      
+O1     0.0230      0.0230      0.0150      0.0000      0.0000      0.0000      
+N1     0.0250      0.0250      0.0120      0.0000      0.0000      0.0000      
+O2     0.0180      0.0180      0.0190      -0.0020     0.0000      0.0000      
+C1     0.0300      0.0300      0.0130      0.0000      0.0000      0.0000      
+C3     0.0340      0.0210      0.0170      0.0000      0.0000      0.0020      
+C2     0.0490      0.0180      0.0170      0.0000      0.0000      -0.0020     
+
+loop_  _atom_type_symbol _atom_type_number_in_cell
+  C       20
+  H       16
+  Mo      4
+  N       4
+  O       12
+
+# Note that Z affects _cell_formula_sum and _weight
+_cell_formula_units_Z  4
+_chemical_formula_sum  "C5 H4 Mo N O3"
+_chemical_formula_weight  222.03

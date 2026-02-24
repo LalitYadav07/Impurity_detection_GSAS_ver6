@@ -1,0 +1,89 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Virtual / environment directories
+/.pixi/envs/
+.venv/
+venv/
+env/
+ENV/
+pip-wheel-metadata/
+
+# Data / databases / run outputs
+/runs/
+/Results/
+/Diagnostics/
+/Technical/
+/data/
+/data_old/
+/database_xray.zip
+/data/database_xray/
+/data/database_neutron/
+ 
+# Allow tracking selected model weights (keep these in repo if desired)
+!ML_components/*.pt
+!ML_ranker/*.pt
+
+# Exclude documentation folder from commits (per request)
+/docs/
+
+# GSAS-II build / vendored compiled artifacts
+/GSAS-II/build/
+/GSAS-II/pixi/
+GSAS-II/*.egg-info
+
+# Machine-learning artifacts (large model weights)
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.npz
+*.npz.*
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs and temporary files
+*.log
+*.tmp
+*.cache
+
+# Archives and large generated files
+*.zip
+*.tar.gz
+*.tar
+*.gz
+
+# Python test / cache
+.pytest_cache/
+
+# Misc
+*.bak
+*.old
+
+# Keep repo metadata files and configuration tracked
+!.github/
+!.streamlit/
+README.md
+LICENSE
+pyproject.toml
+requirements.txt
+pixi.toml
+pixi.lock

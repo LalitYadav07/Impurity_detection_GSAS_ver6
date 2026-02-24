@@ -1,0 +1,23 @@
+#GSAS-II instrument parameter file; do not add/delete items!
+Type:PNT
+beta-0:0.08116304111450451
+fltPath:15.5806
+alpha:0.9927261988673471
+sig-1:-45.91259079985221
+2-theta:85.447
+sig-q:0.0
+sig-0:177.39972111359646
+sig-2:96.02328877472763
+Zero:0.0
+difA:1.8758513658826228
+difB:0.0
+Azimuth:0.0
+Y:0.0
+X:0.0
+beta-1:0.03
+Z:0.0
+difC:5225.81224728827
+beta-q:0.0
+Bank:1.0
+Diff-type:Debye-Scherrer
+Gonio. radius:200.0
