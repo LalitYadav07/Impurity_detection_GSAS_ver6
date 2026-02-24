@@ -82,7 +82,7 @@ Thumbs.db
 # Keep repo metadata files and configuration tracked
 !.github/
 !.streamlit/
-README.md
+!README.md
 LICENSE
 pyproject.toml
 requirements.txt
