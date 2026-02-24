@@ -301,7 +301,7 @@ def load_model(checkpoint_path: str, device: str) -> Tuple[RankingMLP, torch.dev
         dev_str = "cpu"
 
     dev = torch.device(dev_str)
-    ckpt = torch.load(checkpoint_path, map_location=dev)
+    ckpt = torch.load(checkpoint_path, map_location=dev, weights_only=False)
 
     cfg = ckpt.get("config", {}) or {}
     hidden_dim = int(cfg.get("hidden_dim", 64))

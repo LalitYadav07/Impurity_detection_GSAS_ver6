@@ -170,7 +170,7 @@ def load_ml_model(variant: str = DEFAULT_VARIANT, ckpt_path: str = DEFAULT_CKPT,
     dev = "cuda" if (device == "cuda" and torch.cuda.is_available()) else "cpu"
     if not os.path.exists(ckpt_path):
         raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
-    ckpt = torch.load(ckpt_path, map_location=dev)
+    ckpt = torch.load(ckpt_path, map_location=dev, weights_only=False)
     state = ckpt.get("model", ckpt)
 
     # Detect classification head in checkpoint keys
