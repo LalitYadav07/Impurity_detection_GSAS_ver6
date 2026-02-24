@@ -1,2 +1,1 @@
-*.pt filter=lfs diff=lfs merge=lfs -text
-ML_components/*.pt filter=lfs diff=lfs merge=lfs -text
+# .pt model checkpoints stored as regular git objects (not LFS) so Dockerfile can curl them via raw URL

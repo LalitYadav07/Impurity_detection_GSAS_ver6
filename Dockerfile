@@ -30,11 +30,11 @@ WORKDIR /home/user/app
 COPY --chown=user requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Create ML_components and download models from GitHub LFS
-# NOTE: must use /media/ not /raw/ — raw returns the LFS pointer text, not the binary
+# Create ML_components and download models from GitHub
+# .pt files are stored as regular git objects (not LFS) so raw URL works
 RUN mkdir -p ML_components && \
-    curl -L https://media.githubusercontent.com/media/LalitYadav07/Impurity_detection_GSAS_ver6/main/ML_components/residual_training.pt -o ML_components/residual_training.pt && \
-    curl -L https://media.githubusercontent.com/media/LalitYadav07/Impurity_detection_GSAS_ver6/main/ML_components/two_phase_training.pt -o ML_components/two_phase_training.pt
+    curl -L https://github.com/LalitYadav07/Impurity_detection_GSAS_ver6/raw/main/ML_components/residual_training.pt -o ML_components/residual_training.pt && \
+    curl -L https://github.com/LalitYadav07/Impurity_detection_GSAS_ver6/raw/main/ML_components/two_phase_training.pt -o ML_components/two_phase_training.pt
 
 # Copy the rest of the application
 COPY --chown=user . .
