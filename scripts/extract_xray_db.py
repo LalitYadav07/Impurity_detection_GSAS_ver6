@@ -1,9 +1,9 @@
 """
-Extract the X-ray database ZIP (which may use Windows backslash path separators)
-into data/database_xray/, stripping any top-level wrapper folder.
+Extract a database ZIP (which may use Windows backslash path separators)
+into the given destination directory, stripping any top-level wrapper folder.
 
 Usage:
-    python3 scripts/extract_xray_db.py /tmp/database_xray.zip data/database_xray
+    python3 scripts/extract_xray_db.py <zip_path> <dest_dir>
 """
 import sys
 import zipfile
@@ -14,7 +14,7 @@ zip_path = sys.argv[1]
 dest = sys.argv[2]
 os.makedirs(dest, exist_ok=True)
 
-STRIP_PREFIXES = ("database_xray", "database_aug")
+STRIP_PREFIXES = ("database_xray", "database_aug", "database_neutron")
 
 with zipfile.ZipFile(zip_path) as z:
     for m in z.infolist():

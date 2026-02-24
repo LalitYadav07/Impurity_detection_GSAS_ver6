@@ -39,9 +39,12 @@ RUN mkdir -p ML_components && \
 # Copy just the extraction helper early (allows caching of the download layer)
 COPY --chown=user scripts/extract_xray_db.py scripts/extract_xray_db.py
 
-# Download X-ray database from Google Drive at build time so it is baked into the image.
+# Download both databases from Google Drive at build time so they are baked into the image.
 # Uses a dedicated Python script to handle Windows-style backslash paths in the archive.
 RUN pip install --quiet gdown && \
+    gdown 1BxPXjdbn7oYTXKfDeLct5-2PMkhcLVSH -O /tmp/database_neutron.zip && \
+    python3 scripts/extract_xray_db.py /tmp/database_neutron.zip data/database_neutron && \
+    rm -f /tmp/database_neutron.zip && \
     gdown 12H19jI3mGcYBpJrQRtY-5_WaMjFyIMah -O /tmp/database_xray.zip && \
     python3 scripts/extract_xray_db.py /tmp/database_xray.zip data/database_xray && \
     rm -f /tmp/database_xray.zip
