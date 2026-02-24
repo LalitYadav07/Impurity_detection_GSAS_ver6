@@ -27,6 +27,12 @@ jobs:
           rm -rf ML_components/*.pt
           rm -rf database_aug.zip || true
           
+          # Clean up scientific binaries/junk from examples that HF rejects
+          find examples -name "*.gpx" -delete
+          find examples -name "*.gsa" -delete
+          find examples -name "*.fxye" -delete
+          find examples -name "*.junk" -delete
+          
           # 3. Add all files (the models are now gone)
           git add .
           
