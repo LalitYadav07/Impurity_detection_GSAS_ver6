@@ -994,12 +994,13 @@ with st.sidebar:
     with st.expander("📖 User Guide", expanded=False):
         st.markdown("""
         ### Analysis Setup
-        * **Initial Selection**: Set **Example Selection** to `None` to enable manual uploads.
+        * **Radiation Source**: Select **Neutron** or **X-ray** in the sidebar to switch databases automatically.
+        * **Initial Selection**: Set **Example Mode** to `None` to enable manual uploads, or pick a built-in demo dataset.
         * **Data Entry**: Provide your **Main CIF**, **Instrument Parameters**, and **Diffraction Data**.
-        * **Chemistry**: Enter the **Allowed Elements**. Leave **Sample Environment** blank unless you expect specific peaks from a sample holder or canister.
+        * **Chemistry**: Enter the **Allowed Elements**. Use **Hardware / SE** for sample environment peaks (e.g., Al cans).
         * **Discovery Strategy**: Set **Max Discovery Passes** to the number of impurity phases you expect to find.
-        * **Instrument Mode**: Manually select `TOF` or `CW` as appropriate for your data.
-        * **Background**: Default is a **12-term Chebyshev** polynomial. Adjust this in **Advanced Tuning** if necessary; other settings should remain at defaults.
+        * **Instrument Mode**: Select `Auto`, `TOF`, or `CW` as appropriate for your data.
+        * **Background**: Default is a **12-term Chebyshev** polynomial. Adjust in **Advanced Tuning** if necessary.
 
         ### Runtime Monitoring (~5–10 mins)
         * **Initial Verification (< 1 min)**: Check the **Main Phase Fit** in the Artifacts panel to ensure the baseline fitting is accurate.
@@ -1007,9 +1008,10 @@ with st.sidebar:
         * **Candidate Tracking**: Browse `Diagnostics / Screening_Histograms` or the **Results ML Ranker** tab to see top candidates by formula and space group.
 
         ### Reviewing Results
-        * **Quantification**: Use **Weighted Fraction Pct** from the final Data Sheet. 
-        * **Note**: Disregard `phase_fraction_pct`, as it is a legacy metric.
+        * **Quantification**: Use **Weighted Fraction Pct** from the final Data Sheet.
+        * **Interactive Plots**: Open the **Interactive Plots** tab for zoomable, exportable Rietveld fit visualizations.
         """)
+
 
     # --- 1. MAIN PANEL (Always visible) ---
     with st.expander("📁 Main Settings", expanded=True):
