@@ -37,15 +37,26 @@ RUN mkdir -p ML_components && \
     curl -L https://github.com/LalitYadav07/Impurity_detection_GSAS_ver6/raw/main/ML_components/two_phase_training.pt -o ML_components/two_phase_training.pt
 
 # Download X-ray database from Google Drive at build time so it is baked into the image.
-# This avoids the runtime failure caused by Google Drive bot-protection during Streamlit startup.
+# Uses Python zipfile (not unzip) to handle Windows-style backslash paths in the archive.
 RUN pip install --quiet gdown && \
     mkdir -p data/database_xray && \
-    gdown --id 12H19jI3mGcYBpJrQRtY-5_WaMjFyIMah -O /tmp/database_xray.zip && \
-    unzip -q /tmp/database_xray.zip -d /tmp/db_extract && \
-    (mv /tmp/db_extract/database_xray/* data/database_xray/ 2>/dev/null || \
-    mv /tmp/db_extract/database_aug/* data/database_xray/ 2>/dev/null || \
-    mv /tmp/db_extract/* data/database_xray/ 2>/dev/null || true) && \
-    rm -rf /tmp/database_xray.zip /tmp/db_extract
+    gdown 12H19jI3mGcYBpJrQRtY-5_WaMjFyIMah -O /tmp/database_xray.zip && \
+    python3 -c "\
+    import zipfile, os, shutil; \
+    dest = 'data/database_xray'; \
+    with zipfile.ZipFile('/tmp/database_xray.zip') as z: \
+    for m in z.infolist(): \
+    m.filename = m.filename.replace('\\\\', '/'); \
+    parts = m.filename.split('/'); \
+    start = 1 if parts[0] in ('database_xray', 'database_aug') else 0; \
+    rel = '/'.join(parts[start:]); \
+    if not rel: continue; \
+    out = os.path.join(dest, rel); \
+    os.makedirs(os.path.dirname(out), exist_ok=True); \
+    if not m.is_dir(): \
+    with z.open(m) as src, open(out, 'wb') as dst: shutil.copyfileobj(src, dst) \
+    " && \
+    rm -f /tmp/database_xray.zip
 
 # Copy the rest of the application
 COPY --chown=user . .
