@@ -35,6 +35,13 @@ def build_pipeline_config(
     original_json_override: If set, use this path for db.original_json instead of
     the default (db_root/highsymm_metadata.json).
     """
+    if not run_name or not str(run_name).strip():
+        raise ValueError("run_name is required")
+    if not data_file:
+        raise ValueError("data_file is required")
+    if not instprm_file:
+        raise ValueError("instprm_file is required")
+
     if project_root is None:
         project_root = str(Path(__file__).resolve().parent.parent)
     
@@ -52,7 +59,9 @@ def build_pipeline_config(
         "work_root": work_root,
         "ml_components_dir": str(Path(project_root) / "ML_components"),
         "instrument_map": {
+            "cw": str(Path(project_root) / "examples" / "tbssl" / "hb2a_si_ge113.instprm"),
             "hb2a": str(Path(project_root) / "examples" / "tbssl" / "hb2a_si_ge113.instprm"),
+            "tof": str(Path(project_root) / "examples" / "lk99" / "2023A_June_HighRes_60HzB3_CWL2p665.instprm"),
             "pg3": str(Path(project_root) / "examples" / "lk99" / "2023A_June_HighRes_60HzB3_CWL2p665.instprm"),
         },
         "db": {
@@ -97,6 +106,13 @@ def build_pipeline_config(
         "background": {
             "type": "chebyschev-1",
             "terms": 12,
+        },
+        "light_calibration": {
+            "enabled": False,
+            "zero_cycles": 1,
+            "profile_cycles": 2,
+            "accept_rwp_worsen": 0.15,
+            "terms": ["Zero", "U", "V", "W"],
         },
         "element_filter": {
             "max_offlist_elements": 0,

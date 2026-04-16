@@ -31,10 +31,6 @@ pip-wheel-metadata/
 /data/database_xray/
 /data/database_neutron/
  
-# Allow tracking selected model weights (keep these in repo if desired)
-!ML_components/*.pt
-!ML_ranker/*.pt
-
 # Exclude documentation folder from commits (per request)
 /docs/
 
@@ -51,6 +47,9 @@ GSAS-II/*.egg-info
 *.safetensors
 *.npz
 *.npz.*
+!ML_components/*.pt
+!ML_ranker/*.pt
+!ML_ranker/**/mlp_ranker.pt
 
 # IDE / Editor
 .vscode/

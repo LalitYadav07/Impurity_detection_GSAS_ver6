@@ -17,6 +17,8 @@ from contextlib import suppress
 from pathlib import Path
 from typing import Any, Dict, Generator, Optional, Tuple
 
+import psutil
+
 try:
     from logging_config import configure_logging
 except Exception:
@@ -32,6 +34,43 @@ if configure_logging:
         logging.basicConfig(level=logging.INFO)
 
 logger = logging.getLogger(__name__)
+
+
+def stop_process_tree(process: subprocess.Popen, timeout: float = 5.0) -> None:
+    """Terminate a pipeline process and any child workers it spawned."""
+    if process is None:
+        return
+    if process.poll() is not None:
+        return
+
+    try:
+        parent = psutil.Process(process.pid)
+        children = parent.children(recursive=True)
+    except Exception:
+        children = []
+
+    for child in children:
+        with suppress(Exception):
+            child.terminate()
+
+    with suppress(Exception):
+        process.terminate()
+
+    gone = []
+    alive = []
+    if children:
+        with suppress(Exception):
+            gone, alive = psutil.wait_procs(children, timeout=timeout)
+
+    for child in alive:
+        with suppress(Exception):
+            child.kill()
+
+    try:
+        process.wait(timeout=timeout)
+    except Exception:
+        with suppress(Exception):
+            process.kill()
 
 
 class PipelineRunner:

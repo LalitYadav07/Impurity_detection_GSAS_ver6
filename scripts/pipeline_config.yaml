@@ -1,7 +1,7 @@
 # ===================== ONE (or two) knobs =====================
-# Point these to wherever you move the project/scratch area.
-PROJECT_ROOT: C:\Users\ly6\Documents\Impurity_detection_GSAS_MultiSource
-WORK_ROOT:    C:\Users\ly6\Documents\Impurity_detection_GSAS_MultiSource\runs
+# Defaults are relative to this config file's location.
+PROJECT_ROOT: ${CONFIG_DIR}/..
+WORK_ROOT:    ${PROJECT_ROOT}/runs
 # (Optional) If you keep data under a subfolder, leave this alone:
 DATA_ROOT:    ${PROJECT_ROOT}/data
 # ===============================================================
@@ -152,6 +152,7 @@ datasets:
   # ----------------------------------------------------------------------------
   - name: cw_tbssl
     mode: CW
+    db_source: neutron
     data_path: ${DATA_ROOT}/HB2A_TbSSL.dat
     main_cif: ${DATA_ROOT}/cifs/TbSSL.cif
     instprm_path: auto            # uses instrument_map.hb2a
@@ -173,6 +174,7 @@ datasets:
 
   - name: cw_tbssl_withmain
     mode: CW
+    db_source: neutron
     data_path: ${DATA_ROOT}/HB2A_TbSSL.dat
     main_cif: ${DATA_ROOT}/cifs/TbSSL.cif
     instprm_path: auto            # uses instrument_map.hb2a
@@ -192,6 +194,7 @@ datasets:
   
   - name: cw_tbssl_without_main
     mode: CW
+    db_source: neutron
     data_path: ${DATA_ROOT}/HB2A_TbSSL.dat
     main_cif: ${DATA_ROOT}/cifs/TbSSL.cif
     instprm_path: auto            # uses instrument_map.hb2a

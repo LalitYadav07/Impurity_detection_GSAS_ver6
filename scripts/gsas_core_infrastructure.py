@@ -10,6 +10,7 @@ and checking coordinate systems. It includes:
 """
 
 import os
+import copy
 import tempfile
 import traceback
 import numpy as np
@@ -19,12 +20,23 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+_POWDER_HINT_ALIASES = {
+    "xye": ("xye", "topas"),
+    "qye": ("qye", "topas"),
+    "csv": ("comma/tab/semicolon separated", "worksheet", "csv"),
+    "gsas": ("gsas powder data", "gsas"),
+    "fxye": ("gsas powder data", "gsas", "fxye"),
+    "fullprof": ("fullprof .dat", "fullprof"),
+    "rigaku": ("rigaku",),
+}
+
 try:
     from GSASII import GSASIIscriptable as G2sc
     from GSASII.GSASIIobj import G2Exception
     GSAS_AVAILABLE = True
 except ImportError:
     logger.warning("GSAS-II not available. Some functionality will be limited.")
+    G2sc = None
     GSAS_AVAILABLE = False
     G2Exception = Exception
 
@@ -82,74 +94,315 @@ class GSASProjectManager:
                      fmthint: Optional[str] = None, instrument_type: Optional[str] = None) -> bool:
         """Add powder histogram to the project.
 
-        Tries the provided fmthint first, then falls back through a sequence of
-        common format hints before giving up.  This makes loading robust against
-        unusual two-column .dat files, qye / xye variants, etc.
+        Uses a stricter, GUI-like reader selection path instead of trusting
+        the first scriptable GSAS-II reader that does not throw. This avoids
+        accepting malformed imports that only fail later when no reflections
+        fall inside the histogram limits.
         """
         if not self.project:
             raise RuntimeError("Project not initialized. Call create_project() first.")
 
-        # Candidate format-hint sequences to try.  None means "let GSAS-II guess".
-        # We start with the caller's preference, then try common alternatives.
-        _fallback_hints: List[Optional[str]] = []
-        if fmthint and fmthint.lower() != "auto":
-            _fallback_hints.append(fmthint)
-        _fallback_hints += [None, "xye", "qye", "gsas", "fxye", "csv"]
-        # De-duplicate while preserving order
-        _seen: set = set()
-        _ordered: List[Optional[str]] = []
-        for h in _fallback_hints:
-            key = h if h is not None else "__none__"
-            if key not in _seen:
-                _seen.add(key)
-                _ordered.append(h)
-
-        last_exc: Optional[Exception] = None
-        for hint in _ordered:
-            try:
-                if hint is not None:
-                    try:
-                        self.main_histogram = self.project.add_powder_histogram(
-                            data_file, instprm_file, fmthint=hint
-                        )
-                    except TypeError:
-                        # Older GSAS-II API does not accept fmthint kwarg
-                        self.main_histogram = self.project.add_powder_histogram(
-                            data_file, instprm_file
-                        )
-                else:
-                    self.main_histogram = self.project.add_powder_histogram(
-                        data_file, instprm_file
-                    )
-
-                # Success
-                hint_label = repr(hint) if hint is not None else "auto-detect"
-                logger.info(f"Added histogram: {data_file} (fmthint={hint_label})")
-                break
-
-            except Exception as exc:
-                hint_label = repr(hint) if hint is not None else "auto-detect"
-                logger.warning(f"add_histogram: fmthint={hint_label} failed: {exc}")
-                last_exc = exc
-        else:
-            # All hints exhausted
-            logger.warning(f"Failed to add histogram after trying all format hints: {last_exc}")
-            if last_exc:
-                traceback.print_exc()
+        try:
+            self.main_histogram = self._add_histogram_strict(
+                data_file=data_file,
+                instprm_file=instprm_file,
+                fmthint=fmthint,
+                instrument_type=instrument_type,
+            )
+        except Exception as exc:
+            logger.warning(f"Failed to add histogram for {data_file}: {exc}")
+            traceback.print_exc()
             return False
 
         # Determine instrument type
         try:
-            if instrument_type and instrument_type.upper() in ["TOF", "CW"]:
-                self.instrument_type = instrument_type.upper()
-            else:
-                self.instrument_type = self._get_instrument_type()
+            actual_type = self._get_instrument_type()
+            expected_type = (instrument_type or "").upper()
+            if expected_type in ["TOF", "CW"] and actual_type not in ("Unknown", expected_type):
+                logger.warning(
+                    "Histogram import type mismatch: expected %s but loaded %s",
+                    expected_type,
+                    actual_type,
+                )
+            self.instrument_type = actual_type if actual_type != "Unknown" else (expected_type or "CW")
             logger.info(f"  → instrument type: {self.instrument_type}")
         except Exception as e:
             logger.warning(f"Could not determine instrument type: {e}")
             self.instrument_type = "CW"  # safe default
 
         return True
+
+    def _add_histogram_strict(self, data_file: str, instprm_file: str,
+                              fmthint: Optional[str], instrument_type: Optional[str]):
+        G2sc.LoadG2fil()
+        sniff = self._sniff_powder_file(data_file)
+        hint_order = self._build_powder_hint_order(data_file, fmthint, sniff)
+        existing_names = [h.name for h in self.project.histograms()]
+        errors: List[str] = []
+
+        logger.info("Importing %s with powder hint order %s", data_file, hint_order)
+
+        for hint in hint_order:
+            for template_reader, ext_flag in self._iter_candidate_readers(data_file, hint):
+                reader = copy.deepcopy(template_reader)
+                fmt = getattr(reader, "formatName", reader.__class__.__name__)
+                hint_label = "auto-detect" if hint is None else hint
+
+                reader_ok, reader_err = self._read_with_reader(reader, data_file)
+                if not reader_ok:
+                    errors.append(f"{fmt} [{hint_label}] read failed: {reader_err}")
+                    logger.info("Rejected reader %s for %s: %s", fmt, data_file, reader_err)
+                    continue
+
+                try:
+                    histname, new_names, pwdrdata = G2sc.load_pwd_from_reader(
+                        reader, instprm_file, existingnames=existing_names
+                    )
+                except Exception as exc:
+                    errors.append(f"{fmt} [{hint_label}] load failed: {exc}")
+                    logger.info("Reader %s could not build histogram for %s: %s", fmt, data_file, exc)
+                    continue
+
+                valid, validation_msg = self._validate_loaded_histogram(
+                    pwdrdata,
+                    expected_instrument_type=instrument_type,
+                    sniff=sniff,
+                )
+                if not valid:
+                    errors.append(f"{fmt} [{hint_label}] invalid histogram: {validation_msg}")
+                    logger.info("Rejected histogram from reader %s for %s: %s", fmt, data_file, validation_msg)
+                    continue
+
+                histogram = self._attach_loaded_histogram(histname, new_names, pwdrdata)
+                logger.info(
+                    "Added histogram: %s via reader %s (hint=%s, extmatch=%s)",
+                    data_file,
+                    fmt,
+                    hint_label,
+                    ext_flag,
+                )
+                return histogram
+
+        detail = "\n".join(errors[-10:]) if errors else "No compatible GSAS-II powder readers were available."
+        raise RuntimeError(f"Unable to import powder data {data_file}.\n{detail}")
+
+    def _attach_loaded_histogram(self, histname: str, new_names: List[str], pwdrdata: Dict[str, Any]):
+        if histname in self.project.data:
+            logger.warning("Warning - redefining histogram %s", histname)
+        elif self.project.names[-1][0] == 'Phases':
+            self.project.names.insert(-1, new_names)
+        else:
+            self.project.names.append(new_names)
+        self.project.data[histname] = pwdrdata
+        self.project.update_ids()
+        return self.project.histogram(histname)
+
+    def _read_with_reader(self, reader, data_file: str) -> Tuple[bool, str]:
+        fmt = getattr(reader, "formatName", reader.__class__.__name__)
+        try:
+            reader.selections = []
+            reader.dnames = []
+            reader.ReInitialize()
+            reader.errors = ""
+            contents_ok = reader.ContentsValidator(data_file)
+        except Exception as exc:
+            return False, f"validator exception: {exc}"
+        if not contents_ok:
+            msg = reader.errors or "ContentsValidator rejected file"
+            return False, msg
+
+        reader.objname = os.path.basename(data_file)
+        try:
+            flag = reader.Reader(data_file, buffer={}, blocknum=1)
+        except Exception as exc:
+            return False, f"reader exception: {exc}"
+        if not flag:
+            return False, reader.errors or f"{fmt} reader returned False"
+        return True, ""
+
+    def _iter_candidate_readers(self, data_file: str, hint: Optional[str]):
+        primary = []
+        secondary = []
+        for reader in G2sc.Readers.get('Pwdr', []):
+            if hint is not None and not self._reader_matches_hint(reader, hint):
+                continue
+            try:
+                ext_flag = reader.ExtensionValidator(data_file)
+            except Exception:
+                continue
+            if ext_flag is True:
+                primary.append((reader, ext_flag))
+            elif ext_flag is None:
+                secondary.append((reader, ext_flag))
+        return primary + secondary
+
+    def _reader_matches_hint(self, reader, hint: str) -> bool:
+        fmt = getattr(reader, "formatName", "").lower()
+        aliases = _POWDER_HINT_ALIASES.get((hint or "").lower(), ((hint or "").lower(),))
+        return any(alias in fmt for alias in aliases)
+
+    def _build_powder_hint_order(self, data_file: str, fmthint: Optional[str], sniff: Dict[str, Any]) -> List[Optional[str]]:
+        ext = Path(data_file).suffix.lower()
+        order: List[Optional[str]] = []
+
+        if fmthint and fmthint.lower() != "auto":
+            order.append(fmthint.lower())
+
+        kind = sniff.get("kind")
+        if kind == "gsas" or ext in {".gsa", ".gss", ".gsas", ".fxye", ".raw", ".gda", ".xra"}:
+            order += ["gsas", None]
+        elif kind == "fullprof":
+            order += ["fullprof", None, "xye", "csv"]
+        elif kind == "csv":
+            order += ["csv", "xye", None]
+        elif kind == "qye":
+            order += ["qye", "xye", "csv", None]
+        elif kind == "xye":
+            order += ["xye", "csv", None]
+        else:
+            order += [None, "xye", "qye", "gsas", "csv", "fullprof"]
+
+        if ext in {".xye", ".chi"}:
+            order = ["xye"] + order
+        elif ext in {".qye", ".qchi"}:
+            order = ["qye"] + order
+        elif ext in {".csv", ".xy"}:
+            order = ["csv"] + order
+        elif ext == ".dat" and kind == "xye":
+            order = ["xye", "csv"] + order
+
+        deduped: List[Optional[str]] = []
+        seen = set()
+        for item in order:
+            key = "__auto__" if item is None else item
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(item)
+        return deduped
+
+    def _sniff_powder_file(self, data_file: str) -> Dict[str, Any]:
+        info: Dict[str, Any] = {"kind": None, "axis": None}
+        ext = Path(data_file).suffix.lower()
+        if ext in {".gsa", ".gss", ".gsas", ".fxye", ".raw", ".gda", ".xra"}:
+            info["kind"] = "gsas"
+            return info
+        if ext in {".qye", ".qchi"}:
+            info["kind"] = "qye"
+            info["axis"] = "q"
+            return info
+        if ext in {".xye", ".chi"}:
+            info["kind"] = "xye"
+            return info
+
+        try:
+            with open(data_file, "r", encoding="utf-8", errors="replace") as fp:
+                raw_lines = [line.rstrip("\n") for _, line in zip(range(80), fp)]
+        except OSError:
+            return info
+
+        lower_lines = [line.strip().lower() for line in raw_lines if line.strip()]
+        if any(line.startswith("bank ") and "fxye" in line for line in lower_lines):
+            info["kind"] = "gsas"
+            return info
+        if any("time-of-flight" in line or line.startswith("'tof") for line in lower_lines):
+            info["axis"] = "tof"
+        elif any("2-theta" in line or "2theta" in line for line in lower_lines):
+            info["axis"] = "2theta"
+        elif any(" q " in f" {line} " for line in lower_lines[:5]):
+            info["axis"] = "q"
+
+        if any("xydata" in line for line in lower_lines[:5]):
+            info["kind"] = "xye"
+            return info
+
+        numeric_counts: List[int] = []
+        for line in raw_lines:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if stripped.startswith(("'", "#", "!", "/*", "TITLE")):
+                continue
+            tokens = stripped.replace(",", " ").replace(";", " ").split()
+            try:
+                floats = [float(tok) for tok in tokens]
+            except ValueError:
+                continue
+            numeric_counts.append(len(floats))
+            if len(numeric_counts) >= 12:
+                break
+
+        if numeric_counts:
+            if all(count in (2, 3) for count in numeric_counts[:6]):
+                info["kind"] = "qye" if info.get("axis") == "q" else "xye"
+            elif numeric_counts[0] >= 3 and any(count not in (2, 3) for count in numeric_counts[1:6]):
+                info["kind"] = "fullprof"
+
+        if info["kind"] is None and any(("," in line or ";" in line) for line in raw_lines[:10]):
+            info["kind"] = "csv"
+
+        return info
+
+    def _validate_loaded_histogram(self, pwdrdata: Dict[str, Any],
+                                   expected_instrument_type: Optional[str],
+                                   sniff: Dict[str, Any]) -> Tuple[bool, str]:
+        try:
+            powder_block = pwdrdata["data"][1]
+            x = np.asarray(powder_block[0], dtype=float).ravel()
+            y = np.asarray(powder_block[1], dtype=float).ravel()
+            w = np.asarray(powder_block[2], dtype=float).ravel()
+            inst = pwdrdata["Instrument Parameters"][0]
+        except Exception as exc:
+            return False, f"missing histogram arrays: {exc}"
+
+        npts = min(len(x), len(y), len(w))
+        if npts < 10:
+            return False, f"too few data points ({npts})"
+        x = x[:npts]
+        y = y[:npts]
+        w = w[:npts]
+
+        if not np.all(np.isfinite(x)):
+            return False, "x-axis contains non-finite values"
+        if float(np.max(x) - np.min(x)) <= 0.0:
+            return False, "x-axis span is zero"
+        dx = np.diff(x)
+        if dx.size and np.any(~np.isfinite(dx)):
+            return False, "x-axis step array contains non-finite values"
+        if dx.size and np.any(dx <= 0.0):
+            return False, "x-axis is not strictly increasing"
+
+        finite_y = np.isfinite(y)
+        if int(np.count_nonzero(finite_y)) < max(10, npts // 2):
+            return False, "too few finite intensities"
+        positive_y = np.isfinite(y) & (y > 0.0)
+        if int(np.count_nonzero(positive_y)) < min(10, npts):
+            return False, "all intensities are zero or negative"
+
+        finite_w = np.isfinite(w) & (w >= 0.0)
+        if int(np.count_nonzero(finite_w)) < min(10, npts):
+            return False, "weights are missing or invalid"
+
+        inst_type_token = str(inst.get("Type", [""])[0])
+        loaded_type = "TOF" if "T" in inst_type_token else "CW"
+        expected = (expected_instrument_type or "").upper()
+        if expected in {"TOF", "CW"} and loaded_type != expected:
+            return False, f"instrument type mismatch ({loaded_type} vs expected {expected})"
+
+        sniff_axis = (sniff or {}).get("axis")
+        if sniff_axis == "tof" and loaded_type != "TOF":
+            return False, "file header looks TOF but instrument parameters are not TOF"
+
+        try:
+            qmin, qmax = CoordinateHandler(loaded_type, inst).get_coverage_limits(x)
+        except Exception as exc:
+            return False, f"failed to derive coordinate coverage: {exc}"
+        if not np.isfinite(qmin) or not np.isfinite(qmax) or qmax <= qmin:
+            return False, "invalid Q coverage"
+        if qmax > 100.0:
+            return False, f"unphysical Q coverage ({qmin:.3f}, {qmax:.3f})"
+
+        return True, ""
     
     def add_phase_from_cif(self, cif_file: str, phasename: str = "MainPhase",
                           link_to_histogram: bool = True) -> bool:
