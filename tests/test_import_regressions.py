@@ -97,6 +97,17 @@ class _FakeReader:
         return True
 
 
+class _HeaderSensitiveReader(_FakeReader):
+    def ContentsValidator(self, filename):
+        self.contents_calls += 1
+        text = Path(filename).read_text(encoding="utf-8")
+        if "INTER " in text or text.lstrip().lower().startswith("xydata"):
+            self.errors = "Unexpected wrapped header"
+            return False
+        self.errors = ""
+        return True
+
+
 class _FakeG2sc:
     def __init__(self, readers):
         self.Readers = {"Pwdr": readers}
@@ -221,6 +232,35 @@ class HistogramImportTests(unittest.TestCase):
         self.assertTrue(ok)
         self.assertGreaterEqual(bad.read_calls, 1)
         self.assertEqual(good.read_calls, 1)
+
+    def test_normalizes_wrapped_xydata_dat_before_reader_validation(self):
+        xye = _HeaderSensitiveReader(
+            "Topas xye/qye or 2th Fit2D chi/qchi",
+            ext_flag=True,
+            contents_ok=True,
+            powderdata=(np.linspace(3.0, 4.0, 32), np.linspace(100.0, 132.0, 32), np.ones(32)),
+        )
+        fake_g2 = _FakeG2sc([xye])
+        manager = self._make_manager()
+
+        with tempfile.NamedTemporaryFile("w", suffix=".dat", delete=False) as tmp:
+            tmp.write("XYDATA\n")
+            tmp.write("! Fullprof format INSTRM=10 (x, y, sigma)\n")
+            tmp.write("INTER 1.0 1.0  2 0.05000\n")
+            for i in range(20):
+                tmp.write(f"{3.0 + i * 0.05:.5f} {200 + i:.5f} {10 + 0.1 * i:.5f}\n")
+            path = tmp.name
+
+        with patch.object(gci, "G2sc", fake_g2), patch.object(gci, "GSAS_AVAILABLE", True):
+            ok = manager.add_histogram(path, "cw.instprm", instrument_type="CW")
+
+        self.assertTrue(ok)
+        self.assertEqual(xye.read_calls, 1)
+        self.assertIn(f"PWDR {Path(path).name}", manager.project.data)
+        normalized_dir = Path(manager.work_dir) / ".normalized_inputs"
+        self.assertTrue(normalized_dir.exists())
+        proxy_files = list(normalized_dir.glob("*_normalized.xye"))
+        self.assertTrue(proxy_files)
 
 
 if __name__ == "__main__":

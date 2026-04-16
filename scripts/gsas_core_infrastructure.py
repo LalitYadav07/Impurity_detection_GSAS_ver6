@@ -136,19 +136,33 @@ class GSASProjectManager:
                               fmthint: Optional[str], instrument_type: Optional[str]):
         G2sc.LoadG2fil()
         sniff = self._sniff_powder_file(data_file)
+        proxy_data_file = self._maybe_prepare_numeric_proxy(data_file, sniff)
+        read_data_file = proxy_data_file or data_file
         hint_order = self._build_powder_hint_order(data_file, fmthint, sniff)
         existing_names = [h.name for h in self.project.histograms()]
         errors: List[str] = []
 
-        logger.info("Importing %s with powder hint order %s", data_file, hint_order)
+        if proxy_data_file:
+            logger.info(
+                "Importing %s with powder hint order %s via normalized proxy %s",
+                data_file,
+                hint_order,
+                proxy_data_file,
+            )
+        else:
+            logger.info("Importing %s with powder hint order %s", data_file, hint_order)
 
         for hint in hint_order:
-            for template_reader, ext_flag in self._iter_candidate_readers(data_file, hint):
+            for template_reader, ext_flag in self._iter_candidate_readers(read_data_file, hint):
                 reader = copy.deepcopy(template_reader)
                 fmt = getattr(reader, "formatName", reader.__class__.__name__)
                 hint_label = "auto-detect" if hint is None else hint
 
-                reader_ok, reader_err = self._read_with_reader(reader, data_file)
+                reader_ok, reader_err = self._read_with_reader(
+                    reader,
+                    read_data_file,
+                    original_data_file=data_file,
+                )
                 if not reader_ok:
                     errors.append(f"{fmt} [{hint_label}] read failed: {reader_err}")
                     logger.info("Rejected reader %s for %s: %s", fmt, data_file, reader_err)
@@ -197,8 +211,10 @@ class GSASProjectManager:
         self.project.update_ids()
         return self.project.histogram(histname)
 
-    def _read_with_reader(self, reader, data_file: str) -> Tuple[bool, str]:
+    def _read_with_reader(self, reader, data_file: str,
+                          original_data_file: Optional[str] = None) -> Tuple[bool, str]:
         fmt = getattr(reader, "formatName", reader.__class__.__name__)
+        display_file = original_data_file or data_file
         try:
             reader.selections = []
             reader.dnames = []
@@ -211,13 +227,22 @@ class GSASProjectManager:
             msg = reader.errors or "ContentsValidator rejected file"
             return False, msg
 
-        reader.objname = os.path.basename(data_file)
+        reader.objname = os.path.basename(display_file)
         try:
             flag = reader.Reader(data_file, buffer={}, blocknum=1)
         except Exception as exc:
             return False, f"reader exception: {exc}"
         if not flag:
             return False, reader.errors or f"{fmt} reader returned False"
+        try:
+            reader.idstring = os.path.basename(display_file)
+        except Exception:
+            pass
+        try:
+            if getattr(reader, "powderentry", None):
+                reader.powderentry[0] = display_file
+        except Exception:
+            pass
         return True, ""
 
     def _iter_candidate_readers(self, data_file: str, hint: Optional[str]):
@@ -282,7 +307,7 @@ class GSASProjectManager:
         return deduped
 
     def _sniff_powder_file(self, data_file: str) -> Dict[str, Any]:
-        info: Dict[str, Any] = {"kind": None, "axis": None}
+        info: Dict[str, Any] = {"kind": None, "axis": None, "wrapped_xydata": False}
         ext = Path(data_file).suffix.lower()
         if ext in {".gsa", ".gss", ".gsas", ".fxye", ".raw", ".gda", ".xra"}:
             info["kind"] = "gsas"
@@ -314,6 +339,11 @@ class GSASProjectManager:
 
         if any("xydata" in line for line in lower_lines[:5]):
             info["kind"] = "xye"
+            info["wrapped_xydata"] = True
+            return info
+
+        if any(line.startswith("inter ") for line in lower_lines[:10]):
+            info["wrapped_xydata"] = True
             return info
 
         numeric_counts: List[int] = []
@@ -342,6 +372,74 @@ class GSASProjectManager:
             info["kind"] = "csv"
 
         return info
+
+    def _maybe_prepare_numeric_proxy(self, data_file: str, sniff: Dict[str, Any]) -> Optional[str]:
+        """
+        Normalize wrapped lab PXRD text exports into a simple numeric xye proxy.
+
+        Some `.dat` exports contain harmless wrapper records such as `XYDATA`
+        and `INTER ...` before an otherwise standard two/three-column table.
+        GSAS-II's strict xye validator rejects those headers, so we generate a
+        clean numeric proxy file and preserve the original filename for the
+        loaded histogram.
+        """
+        path = Path(data_file)
+        if path.suffix.lower() != ".dat":
+            return None
+        if sniff.get("kind") not in {"xye", "fullprof"} and not sniff.get("wrapped_xydata"):
+            return None
+
+        try:
+            raw_lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            return None
+
+        lower_nonempty = [line.strip().lower() for line in raw_lines if line.strip()]
+        has_xydata = any(line.startswith("xydata") for line in lower_nonempty[:5])
+        has_inter = any(line.startswith("inter ") for line in lower_nonempty[:10])
+        if not (has_xydata or has_inter or sniff.get("wrapped_xydata")):
+            return None
+
+        numeric_rows: List[List[float]] = []
+        for line in raw_lines:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            lowered = stripped.lower()
+            if stripped.startswith(("'", "#", "!", "/*")):
+                continue
+            if stripped.startswith("TITLE"):
+                continue
+            if lowered.startswith("xydata") or lowered.startswith("inter "):
+                continue
+
+            tokens = stripped.replace(",", " ").replace(";", " ").split()
+            try:
+                floats = [float(tok) for tok in tokens]
+            except ValueError:
+                continue
+            if len(floats) not in (2, 3):
+                continue
+            numeric_rows.append(floats)
+
+        if len(numeric_rows) < 10:
+            return None
+
+        x = np.asarray([row[0] for row in numeric_rows], dtype=float)
+        if not np.all(np.isfinite(x)) or np.any(np.diff(x) <= 0):
+            return None
+
+        proxy_dir = self.work_dir / ".normalized_inputs"
+        proxy_dir.mkdir(parents=True, exist_ok=True)
+        proxy_path = proxy_dir / f"{path.stem}_normalized.xye"
+        lines = ["# Normalized by RADAR-PD from wrapped powder text export\n"]
+        for row in numeric_rows:
+            if len(row) == 2:
+                lines.append(f"{row[0]:.10g} {row[1]:.10g}\n")
+            else:
+                lines.append(f"{row[0]:.10g} {row[1]:.10g} {row[2]:.10g}\n")
+        proxy_path.write_text("".join(lines), encoding="utf-8")
+        return str(proxy_path)
 
     def _validate_loaded_histogram(self, pwdrdata: Dict[str, Any],
                                    expected_instrument_type: Optional[str],
