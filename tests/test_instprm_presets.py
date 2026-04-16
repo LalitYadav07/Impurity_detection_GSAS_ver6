@@ -41,6 +41,29 @@ class BuiltinInstrumentPresetTests(unittest.TestCase):
             self.assertIn("Type:PXC;Bank:1", text)
             self.assertIn("Lam1:1.5405;Lam2:1.5443", text)
 
+    def test_supported_upload_extensions_include_legacy_gsas_formats(self):
+        self.assertEqual(
+            ip.SUPPORTED_INSTRUMENT_UPLOAD_EXTENSIONS,
+            ["instprm", "prm", "inst", "ins"],
+        )
+
+    def test_legacy_prm_normalizes_to_instprm(self):
+        legacy_prm = REPO_ROOT / "GSAS-II" / "tests" / "testinp" / "inst_d1a.prm"
+        self.assertTrue(legacy_prm.exists(), "Expected bundled GSAS-II legacy .prm sample")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "normalized_from_legacy.instprm"
+            written_path = ip.normalize_instrument_profile_to_instprm(
+                legacy_prm,
+                output_path,
+            )
+
+            self.assertEqual(written_path, output_path)
+            text = output_path.read_text(encoding="utf-8")
+            self.assertIn("#GSAS-II instrument parameter file", text)
+            self.assertIn("Type:PNC", text)
+            self.assertIn("Lam:1.909", text)
+
     def test_generated_lab_preset_imports_synthetic_xray_histogram(self):
         if not gci.GSAS_AVAILABLE:
             self.skipTest("GSAS-II is not available in this environment")

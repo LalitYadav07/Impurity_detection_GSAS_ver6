@@ -48,6 +48,8 @@ from aniso_db_loader import DBLoader, CatalogPaths
 from instprm_presets import (
     DEFAULT_LAB_XRAY_PRESET_KEY,
     get_builtin_instprm_preset,
+    normalize_instrument_profile_to_instprm,
+    SUPPORTED_INSTRUMENT_UPLOAD_EXTENSIONS,
     write_builtin_instprm_file,
 )
 from ml_ranker_support import load_first_json_record
@@ -1150,15 +1152,21 @@ with st.sidebar:
                     st.caption("A real `.instprm` file will be generated automatically inside the run inputs folder so the pipeline remains fully file-based.")
                 else:
                     instprm_file = st.file_uploader(
-                        "Instrument Params (.instprm or .ins)",
-                        type=["instprm", "ins"],
-                        help="GSAS-II .instprm file, or SHELX .ins file (auto-converted to .instprm)"
+                        "Instrument Params (.instprm, .prm, .inst, or .ins)",
+                        type=SUPPORTED_INSTRUMENT_UPLOAD_EXTENSIONS,
+                        help=(
+                            "GSAS-II `.instprm` or legacy GSAS/EXPGUI `.prm` / `.inst` / `.ins` "
+                            "instrument files. Legacy formats are normalized to `.instprm` for the run."
+                        ),
                     )
             else:
                 instprm_file = st.file_uploader(
-                    "Instrument Params (.instprm or .ins)",
-                    type=["instprm", "ins"],
-                    help="GSAS-II .instprm file, or SHELX .ins file (auto-converted to .instprm)"
+                    "Instrument Params (.instprm, .prm, .inst, or .ins)",
+                    type=SUPPORTED_INSTRUMENT_UPLOAD_EXTENSIONS,
+                    help=(
+                        "GSAS-II `.instprm` or legacy GSAS/EXPGUI `.prm` / `.inst` / `.ins` "
+                        "instrument files. Legacy formats are normalized to `.instprm` for the run."
+                    ),
                 )
             main_cif = st.file_uploader("Main CIF (Optional)", type=["cif"])
             
@@ -1297,9 +1305,14 @@ with st.sidebar:
                                 write_builtin_instprm_file(builtin_instprm_key, generated_instprm)
                                 ipath = str(generated_instprm.resolve())
                             else:
-                                with open(input_dir / instprm_file.name, "wb") as f:
+                                uploaded_instprm_path = input_dir / instprm_file.name
+                                with open(uploaded_instprm_path, "wb") as f:
                                     f.write(instprm_file.getbuffer())
-                                ipath = str((input_dir / instprm_file.name).resolve())
+                                normalized_instprm_path = normalize_instrument_profile_to_instprm(
+                                    uploaded_instprm_path,
+                                    uploaded_instprm_path.with_suffix(".instprm"),
+                                )
+                                ipath = str(normalized_instprm_path.resolve())
 
                             if main_cif:
                                 with open(input_dir / main_cif.name, "wb") as f:
