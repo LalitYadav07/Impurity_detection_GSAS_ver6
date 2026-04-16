@@ -404,6 +404,7 @@ class LegacyPipelineBridge:
         hist_scored: List[Tuple[str, float]],
         *,
         corr_threshold: float = 0.95,
+        anchor_ids: List[str] | None = None,
     ) -> List[Tuple[str, float]]:
         """
         De-duplicate Stage-3 candidates using the consolidated profiles64 pack.
@@ -412,6 +413,8 @@ class LegacyPipelineBridge:
         - Group by (space_group, elements_mask_hi, elements_mask_lo).
         - Within each group, compare FULL 64-bin profiles via Pearson r.
         - If r >= corr_threshold, keep only the highest histogram score in that cluster.
+        - Anchor ids seed the representative set so candidates that match an already
+          accepted phase can be dropped across passes as well.
         """
         if not hist_scored:
             return hist_scored
@@ -473,18 +476,41 @@ class LegacyPipelineBridge:
             key = (sg, int(r["elements_mask_hi"]), int(r["elements_mask_lo"]))
             groups.setdefault(key, []).append(str(r["id"]))
 
+        anchor_profiles: dict[str, np.ndarray] = {}
+        anchor_key_map: dict[str, tuple[int, int, int]] = {}
+        if anchor_ids:
+            for apid in anchor_ids:
+                apid = str(apid)
+                try:
+                    ah = _hist64(apid)
+                except Exception:
+                    logger.info(f"  [dedup-anchor] skip '{apid}': not in profiles64")
+                    continue
+                arow = cat[cat["id"].astype(str) == apid]
+                if arow.empty:
+                    logger.info(f"  [dedup-anchor] skip '{apid}': not in catalog")
+                    continue
+                r0 = arow.iloc[0]
+                asg = int(r0["space_group"]) if pd.notna(r0["space_group"]) else -1
+                anchor_key_map[apid] = (asg, int(r0["elements_mask_hi"]), int(r0["elements_mask_lo"]))
+                anchor_profiles[apid] = ah
+            if anchor_profiles:
+                logger.info(f"  [dedup-anchor] loaded {len(anchor_profiles)} anchor(s): {sorted(anchor_profiles)}")
+
         kept: list[str] = []
         dropped_log: list[tuple[str, str, float]] = []  # (pid_dropped, pid_kept, r)
 
         for key, pids in groups.items():
-            if len(pids) == 1:
+            group_anchors = {pid: anchor_profiles[pid] for pid, k in anchor_key_map.items() if k == key}
+
+            if len(pids) == 1 and not group_anchors:
                 kept.append(pids[0])
                 continue
 
             p_sorted = sorted(pids, key=lambda p: score_map.get(p, float("-inf")), reverse=True)
 
-            representatives: list[str] = []
-            rep_profile: dict[str, np.ndarray] = {}
+            representatives: list[str] = list(group_anchors.keys())
+            rep_profile: dict[str, np.ndarray] = dict(group_anchors)
 
             for pid in p_sorted:
                 h = _hist64(pid)
@@ -501,7 +527,7 @@ class LegacyPipelineBridge:
                     base, r = duplicate_of
                     dropped_log.append((pid, base, r))
 
-            kept.extend(representatives)
+            kept.extend(pid for pid in representatives if pid not in group_anchors)
 
         before, after = len(hist_scored), len(kept)
         logger.info(f"Duplicate pruning (SG+elements, r>={corr_threshold:.2f}): {before} → {after} (dropped {before - after})")
@@ -628,7 +654,8 @@ class IntegratedCandidateScreener:
                                         stable_ids: Optional[set] = None,
                                         *,
                                         hist_plot_cfg: Optional[dict] = None,
-                                        work_dir: Optional[str] = None) -> List[CandidatePhase]:
+                                        work_dir: Optional[str] = None,
+                                        anchor_ids: Optional[List[str]] = None) -> List[CandidatePhase]:
         """
         Comprehensive pipeline (clean):
           1) element filter
@@ -671,7 +698,11 @@ class IntegratedCandidateScreener:
             hist_details_map = {str(k): v for k, v in (hist_details or {}).items()}
 
         # 5) drop near-duplicates (SG+elements, r>=0.95 default)
-        hist_scored = self.bridge.dedup_by_hist_and_elements(hist_scored, corr_threshold=0.95)
+        hist_scored = self.bridge.dedup_by_hist_and_elements(
+            hist_scored,
+            corr_threshold=0.95,
+            anchor_ids=anchor_ids or [],
+        )
 
         if not hist_scored:
             raise RuntimeError("No candidates pass histogram screening")

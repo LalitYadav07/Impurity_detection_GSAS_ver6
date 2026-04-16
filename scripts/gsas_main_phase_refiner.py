@@ -17,6 +17,7 @@ import numpy as np
 import traceback
 import re
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +82,7 @@ _CELL_KEYS = [
 HISTOGRAM_HOLD_VARS = ('Zero', 'U', 'V', 'W', 'X', 'Y', 'Z', 'SH/L')
 
 _num_re = re.compile(r"""^[ \t]*([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)(?:\([\d]+\))?""")
+LIGHT_CALIBRATION_DEFAULT_TERMS = ("Zero", "U", "V", "W")
 
 def _parse_cif_number(s: str) -> float:
     """Parse a CIF numeric token that may include uncertainty '(...)'."""
@@ -100,6 +102,29 @@ def _add_histogram_hold_constraint(proj, hist, varname: str) -> None:
     proj.add_HoldConstr(hold_vars)
 
 
+def pick_refinable_instrument_terms(inst_params: Dict[str, Any], requested_terms) -> Tuple[str, ...]:
+    """Return requested instrument terms that are actually refinable in this histogram."""
+    usable: List[str] = []
+    for term in requested_terms or ():
+        value = inst_params.get(term)
+        if isinstance(value, (list, tuple)) and len(value) > 2 and isinstance(value[2], (bool, np.bool_)):
+            usable.append(term)
+    return tuple(usable)
+
+
+def histogram_supports_light_instrument_calibration(histogram) -> bool:
+    """Only allow the light calibration path for lab PXRD histograms."""
+    try:
+        inst_params = histogram.getHistEntryValue(['Instrument Parameters'])[0]
+        sample_params = histogram.getHistEntryValue(['Sample Parameters'])
+    except Exception:
+        return False
+
+    inst_type = str(inst_params.get('Type', [''])[0]).upper()
+    sample_type = str(sample_params.get('Type', ''))
+    return inst_type.startswith("PXC") and sample_type == "Bragg-Brentano"
+
+
 
 # === Robust Pearson ===
 
@@ -110,11 +135,16 @@ def _init_gsas_process():
         matplotlib.use('Agg')
         import wx
         if not wx.GetApp():
-            app = wx.App(False)
+            if os.environ.get("DISPLAY"):
+                app = wx.App(False)
+            else:
+                print("[WARN] DISPLAY not set; skipping wx.App init in worker")
         import GSASII.GSASIIctrlGUI as G2gui
         G2gui.haveGUI = False
-    except Exception:
-        pass
+    except BaseException as e:
+        if isinstance(e, KeyboardInterrupt):
+            raise
+        print(f"[WARN] Worker GSAS init skipped GUI setup: {e}")
 
 def _safe_pearson(a, b) -> float:
     """
@@ -145,6 +175,18 @@ class RefinementResults:
     background_params: Dict[str, Any]
     cell_params: Dict[str, float]
     convergence_cycles: int
+    error_message: Optional[str] = None
+
+
+@dataclass
+class LightCalibrationResults:
+    """Outcome for a light PXRD instrument calibration pass."""
+    success: bool
+    skipped: bool
+    exported_instprm: Optional[str]
+    rwp_before: Optional[float]
+    rwp_after: Optional[float]
+    refined_terms: Tuple[str, ...]
     error_message: Optional[str] = None
 
 
@@ -316,35 +358,201 @@ class GSASMainPhaseRefiner:
                 error_message=str(e)
             )
 
-    def refine_stage_cell(self) -> RefinementResults:
-        """Stage 3: Refine scale + background + cell (optional/guarded)."""
-        logger.info("=== Stage 3: Scale + Background + Cell ===")
+    @staticmethod
+    def _get_free_cell_mask(sgdata: dict):
+        """Return free-cell flags and a symmetry-enforcing projector."""
+        laue = sgdata.get('SGLaue', '-1')
+        axis = sgdata.get('SGUniq', 'b')
+
+        if laue == '-1':
+            free = [True] * 6
+            def _enforce(c): return c
+        elif laue == '2/m':
+            if axis == 'a':
+                free = [True, True, True, True, False, False]
+                def _enforce(c): c[4] = 90.0; c[5] = 90.0; return c
+            elif axis == 'b':
+                free = [True, True, True, False, True, False]
+                def _enforce(c): c[3] = 90.0; c[5] = 90.0; return c
+            else:
+                free = [True, True, True, False, False, True]
+                def _enforce(c): c[3] = 90.0; c[4] = 90.0; return c
+        elif laue == 'mmm':
+            free = [True, True, True, False, False, False]
+            def _enforce(c): c[3] = 90.0; c[4] = 90.0; c[5] = 90.0; return c
+        elif laue in ('4/m', '4/mmm'):
+            free = [True, False, True, False, False, False]
+            def _enforce(c): c[1] = c[0]; c[3] = 90.0; c[4] = 90.0; c[5] = 90.0; return c
+        elif laue in ('6/m', '6/mmm', '3m1', '31m', '3'):
+            free = [True, False, True, False, False, False]
+            def _enforce(c): c[1] = c[0]; c[3] = 90.0; c[4] = 90.0; c[5] = 120.0; return c
+        elif laue in ('3R', '3mR'):
+            free = [True, False, False, True, False, False]
+            def _enforce(c): c[1] = c[0]; c[2] = c[0]; c[4] = c[3]; c[5] = c[3]; return c
+        elif laue in ('m3', 'm3m'):
+            free = [True, False, False, False, False, False]
+            def _enforce(c): c[1] = c[0]; c[2] = c[0]; c[3] = 90.0; c[4] = 90.0; c[5] = 90.0; return c
+        else:
+            free = [True] * 6
+            def _enforce(c): return c
+
+        return free, _enforce
+
+    def _read_cell_from_data(self):
+        """Return (a, b, c, alpha, beta, gamma) from phase data."""
         try:
-            self._enable_scale_refinement()
-            self._enable_background_refinement()
-            self._enable_cell_refinement()
-
-            self.project.refine()
-
-            results = self._extract_refinement_results("Full")
-            logger.info(f"Cell refinement: Rwp = {results.rwp:.3f}%")
-            return results
-
+            cell_list = self.phase.data['General']['Cell']
+            return tuple(float(cell_list[i]) for i in range(1, 7))
         except Exception as e:
-            logger.warning(f"Cell refinement failed, reverting: {e}")
-            self._disable_cell_refinement()
+            logger.warning(f"_read_cell_from_data failed: {e}")
+            return None
+
+    def _write_cell_to_data(self, cell_abcabg, perturb_pct: float = 0.0, seed: int = 0):
+        """Write a cell tuple back into GSAS phase data, optionally perturbed."""
+        try:
+            from GSASII import GSASIIlattice as G2lat
+            cell6 = list(cell_abcabg)
+            if perturb_pct > 0.0:
+                sgdata = self.phase.data['General']['SGData']
+                free_mask, enforce_fn = self._get_free_cell_mask(sgdata)
+                rng = np.random.default_rng(seed + 1)
+                for i, is_free in enumerate(free_mask):
+                    if is_free:
+                        cell6[i] *= 1.0 + rng.uniform(-perturb_pct, perturb_pct) / 100.0
+                cell6 = enforce_fn(cell6)
+            a, b, c, alpha, beta, gamma = cell6
+            A = G2lat.cell2A(cell6)
+            vol = float(G2lat.calc_V(A))
+            cell_list = self.phase.data['General']['Cell']
+            cell_list[1] = a
+            cell_list[2] = b
+            cell_list[3] = c
+            cell_list[4] = alpha
+            cell_list[5] = beta
+            cell_list[6] = gamma
+            cell_list[7] = vol
+            logger.info(
+                f"Cell reset -> a={a:.5f} b={b:.5f} c={c:.5f} "
+                f"alpha={alpha:.3f} beta={beta:.3f} gamma={gamma:.3f} V={vol:.3f} A^3"
+            )
+        except Exception as e:
+            logger.warning(f"_write_cell_to_data failed: {e}")
+
+    def _set_max_cyc(self, n: int):
+        """Set GSAS-II max refinement cycles for the current project."""
+        try:
+            self.project.data['Controls']['data']['max cyc'] = int(n)
+        except Exception as e:
+            logger.debug(f"_set_max_cyc({n}) failed: {e}")
+
+    def refine_stage_cell(self) -> RefinementResults:
+        """Stage 3: Refine scale + background + cell with metric-error retry."""
+        logger.info("=== Stage 3: Scale + Background + Cell ===")
+        import contextlib
+        import io
+
+        metric_keys = ('invalid', 'metric', 'ouch', 'g2exception', 'cell metric', 'unable to evaluate')
+        degenerate_rwp = 99.9
+        schedule = [
+            (None, 0.00, "standard"),
+            (1, 0.00, "1-cycle / no-perturb"),
+            (1, 0.05, "1-cycle / +/-0.05% free-params only"),
+            (2, 0.10, "2-cycle / +/-0.10% free-params only"),
+        ]
+
+        def _is_metric_error(exc: Exception) -> bool:
+            return any(k in str(exc).lower() for k in metric_keys)
+
+        def _is_metric_stdout(captured: str) -> bool:
+            lo = captured.lower()
+            return any(k in lo for k in metric_keys)
+
+        try:
+            orig_max_cyc = int(self.project.data['Controls']['data']['max cyc'])
+        except Exception:
+            orig_max_cyc = None
+
+        cell_before = self._read_cell_from_data()
+        last_exc: Optional[Exception] = None
+
+        for attempt, (max_cyc, perturb_pct, label) in enumerate(schedule):
+            if attempt > 0:
+                logger.warning(f"Cell refinement attempt {attempt + 1}/{len(schedule)}: {label}")
+                if cell_before is not None:
+                    self._write_cell_to_data(cell_before, perturb_pct=perturb_pct, seed=attempt)
+                if max_cyc is not None:
+                    self._set_max_cyc(max_cyc)
+
             try:
+                self._enable_scale_refinement()
+                self._enable_background_refinement()
+                self._enable_cell_refinement()
+
+                stdout_buf = io.StringIO()
+                with contextlib.redirect_stdout(stdout_buf):
+                    self.project.refine()
+                captured = stdout_buf.getvalue()
+                if captured:
+                    import sys as _sys
+                    print(captured, end="", file=_sys.__stdout__)
+
+                results = self._extract_refinement_results("Full")
+                silent_metric = _is_metric_stdout(captured) or results.rwp >= degenerate_rwp
+                if silent_metric:
+                    if attempt < len(schedule) - 1:
+                        logger.warning(
+                            f"Cell refinement attempt {attempt + 1}/{len(schedule)} detected silent metric failure "
+                            f"(Rwp={results.rwp:.3f}%, metric_in_stdout={_is_metric_stdout(captured)}); retrying."
+                        )
+                        self._disable_cell_refinement()
+                        continue
+                    last_exc = RuntimeError(
+                        f"Cell metric failure persisted through all {len(schedule)} attempts "
+                        f"(Rwp={results.rwp:.3f}%)"
+                    )
+                    self._disable_cell_refinement()
+                    break
+
+                logger.info(
+                    f"Cell refinement succeeded (attempt {attempt + 1}/{len(schedule)}): "
+                    f"Rwp = {results.rwp:.3f}%"
+                )
+                if max_cyc is not None and orig_max_cyc is not None:
+                    self._set_max_cyc(orig_max_cyc)
+                return results
+
+            except Exception as e:
+                is_metric = _is_metric_error(e)
+                last_exc = e
+                logger.warning(
+                    f"Cell refinement attempt {attempt + 1} failed "
+                    f"({'metric error' if is_metric else 'other error'}): {e}"
+                )
+                self._disable_cell_refinement()
+                if is_metric and attempt < len(schedule) - 1:
+                    continue
+                break
+
+        if orig_max_cyc is not None:
+            self._set_max_cyc(orig_max_cyc)
+
+        logger.warning(
+            f"Cell refinement failed after {len(schedule)} attempts, "
+            f"falling back to Scale+Background only. Last error: {last_exc}"
+        )
+        self._disable_cell_refinement()
+        try:
                 self.project.refine()
                 results = self._extract_refinement_results("Scale+Background")
-                results.error_message = f"Cell refinement failed: {e}"
+                results.error_message = f"Cell refinement failed: {last_exc}"
                 return results
-            except Exception as e2:
-                traceback.print_exc()
-                return RefinementResults(
-                    success=False, rwp=999.0, chi2=999.0, scale=1.0,
-                    background_params={}, cell_params={}, convergence_cycles=0,
-                    error_message=f"Cell refinement failed and recovery failed: {e2}"
-                )
+        except Exception as e2:
+            traceback.print_exc()
+            return RefinementResults(
+                success=False, rwp=999.0, chi2=999.0, scale=1.0,
+                background_params={}, cell_params={}, convergence_cycles=0,
+                error_message=f"Cell refinement failed and recovery failed: {e2}"
+            )
 
     def run_staged_refinement(
         self,
@@ -542,6 +750,171 @@ class GSASMainPhaseRefiner:
         except Exception as e:
             logger.warning(f"Warning: Could not disable cell refinement: {e}")
 
+    def _enable_instrument_refinement_terms(self, terms) -> Tuple[str, ...]:
+        """Enable a selected subset of instrument parameters for refinement."""
+        inst_params = self.histogram.getHistEntryValue(['Instrument Parameters'])[0]
+        usable_terms = pick_refinable_instrument_terms(inst_params, terms)
+        self._clear_all_instrument_refinements()
+        if usable_terms:
+            self.histogram.set_refinements({'Instrument Parameters': list(usable_terms)})
+        return usable_terms
+
+    def load_instrument_profile(self, profile_path: str) -> None:
+        """Reload histogram instrument parameters from a `.instprm` file."""
+        if not profile_path:
+            raise ValueError("profile_path is required to reload instrument parameters")
+        self.histogram.LoadProfile(str(profile_path))
+        self._clear_all_instrument_refinements()
+        logger.info("Reloaded instrument profile from %s", profile_path)
+
+    def run_light_instrument_calibration(
+        self,
+        *,
+        bg_type: Optional[str] = None,
+        bg_terms: Optional[int] = None,
+        bg_coeffs: Optional[List[float]] = None,
+        zero_cycles: int = 1,
+        profile_cycles: int = 2,
+        profile_terms = None,
+        export_path: Optional[str] = None,
+    ) -> LightCalibrationResults:
+        """Run a conservative lab-PXRD instrument-profile calibration and export `.instprm`."""
+        logger.info("=== Light PXRD Instrument Calibration ===")
+
+        if not histogram_supports_light_instrument_calibration(self.histogram):
+            return LightCalibrationResults(
+                success=False,
+                skipped=True,
+                exported_instprm=None,
+                rwp_before=None,
+                rwp_after=None,
+                refined_terms=(),
+                error_message="Histogram is not a Bragg-Brentano PXC powder pattern",
+            )
+
+        requested_terms = tuple(profile_terms or LIGHT_CALIBRATION_DEFAULT_TERMS)
+        baseline_rwp: Optional[float] = None
+        chosen_terms: Tuple[str, ...] = ()
+
+        try:
+            orig_max_cyc = int(self.project.data['Controls']['data']['max cyc'])
+        except Exception:
+            orig_max_cyc = None
+
+        try:
+            if not self.setup_initial_state():
+                return LightCalibrationResults(
+                    success=False,
+                    skipped=False,
+                    exported_instprm=None,
+                    rwp_before=None,
+                    rwp_after=None,
+                    refined_terms=(),
+                    error_message="Failed to setup initial state",
+                )
+
+            results_scale = self.refine_stage_scale()
+            if not results_scale.success:
+                return LightCalibrationResults(
+                    success=False,
+                    skipped=False,
+                    exported_instprm=None,
+                    rwp_before=None,
+                    rwp_after=None,
+                    refined_terms=(),
+                    error_message=results_scale.error_message or "Scale refinement failed",
+                )
+
+            results_bg = self.refine_stage_background(
+                bg_type=bg_type,
+                bg_terms=bg_terms,
+                bg_coeffs=bg_coeffs,
+            )
+            if not results_bg.success:
+                return LightCalibrationResults(
+                    success=False,
+                    skipped=False,
+                    exported_instprm=None,
+                    rwp_before=None,
+                    rwp_after=None,
+                    refined_terms=(),
+                    error_message=results_bg.error_message or "Background refinement failed",
+                )
+            baseline_rwp = float(results_bg.rwp)
+
+            self._disable_cell_refinement()
+            self._enable_scale_refinement()
+            self._enable_background_refinement()
+
+            zero_terms = self._enable_instrument_refinement_terms(("Zero",))
+            if zero_terms:
+                if orig_max_cyc is not None:
+                    self._set_max_cyc(max(1, int(zero_cycles)))
+                self.project.refine()
+
+            chosen_terms = self._enable_instrument_refinement_terms(requested_terms)
+            if not chosen_terms:
+                return LightCalibrationResults(
+                    success=False,
+                    skipped=True,
+                    exported_instprm=None,
+                    rwp_before=baseline_rwp,
+                    rwp_after=baseline_rwp,
+                    refined_terms=(),
+                    error_message="No requested instrument profile terms are refinable",
+                )
+
+            if orig_max_cyc is not None:
+                self._set_max_cyc(max(1, int(profile_cycles)))
+            self.project.refine()
+
+            results_final = self._extract_refinement_results("LightCalibration")
+            self._clear_all_instrument_refinements()
+
+            exported_instprm = None
+            if export_path:
+                export_target = Path(export_path)
+                export_target.parent.mkdir(parents=True, exist_ok=True)
+                self.histogram.SaveProfile(str(export_target))
+                exported_instprm = str(export_target)
+
+            logger.info(
+                "Light PXRD calibration complete: Rwp %.3f%% -> %.3f%%, terms=%s, export=%s",
+                baseline_rwp,
+                results_final.rwp,
+                ",".join(chosen_terms),
+                exported_instprm or "none",
+            )
+            return LightCalibrationResults(
+                success=True,
+                skipped=False,
+                exported_instprm=exported_instprm,
+                rwp_before=baseline_rwp,
+                rwp_after=float(results_final.rwp),
+                refined_terms=chosen_terms,
+            )
+
+        except Exception as e:
+            logger.warning(f"Light PXRD calibration failed: {e}")
+            traceback.print_exc()
+            try:
+                self._clear_all_instrument_refinements()
+                self._disable_cell_refinement()
+            except Exception:
+                pass
+            return LightCalibrationResults(
+                success=False,
+                skipped=False,
+                exported_instprm=None,
+                rwp_before=baseline_rwp,
+                rwp_after=None,
+                refined_terms=chosen_terms,
+                error_message=str(e),
+            )
+        finally:
+            if orig_max_cyc is not None:
+                self._set_max_cyc(orig_max_cyc)
+
     def _extract_refinement_results(self, stage: str) -> RefinementResults:
         """Extract refinement results from current state."""
         try:
@@ -714,11 +1087,13 @@ def parse_gsas_lst(lst_path: Path, target_hist: str):
     """Return {phase: {'phase_fraction_pct':..., 'weight_fraction_pct':...}}."""
     num = r'[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?'
     phase_hdr_re = re.compile(r'^\s*Phase:\s*(?P<phase>.+?)\s+in\s+histogram:\s*(?P<hist>.+?)\s*$')
+    phase_only_re = re.compile(rf'Phase fraction\s*:\s*(?P<pf>{num})\s*(?:Refine\?\s*(?P<ref>True|False))?')
     frac_line_re = re.compile(
         rf'Phase fraction\s*:\s*(?P<pf>{num})\s*,\s*sig\s*(?P<pf_sig>{num})\s*'
         rf'Weight fraction\s*:\s*(?P<wf>{num})\s*,\s*sig\s*(?P<wf_sig>{num})'
     )
     out: Dict[str, Dict[str, float]] = {}
+    fallback_only: Dict[str, Dict[str, float]] = {}
     lines = Path(lst_path).read_text(errors="ignore").splitlines()
     i, n = 0, len(lines)
     while i < n:
@@ -727,6 +1102,7 @@ def parse_gsas_lst(lst_path: Path, target_hist: str):
             phase = m.group('phase').strip()
             histname = m.group('hist').strip()
             if histname == target_hist:
+                fallback_pf = None
                 for j in range(i + 1, min(i + 30, n)):
                     m2 = frac_line_re.search(lines[j])
                     if m2:
@@ -736,7 +1112,18 @@ def parse_gsas_lst(lst_path: Path, target_hist: str):
                             "weight_fraction_pct": g["wf"] * 100.0,
                         }
                         break
+                    if fallback_pf is None:
+                        m3 = phase_only_re.search(lines[j])
+                        if m3:
+                            fallback_pf = float(m3.group('pf'))
+                if phase not in out and fallback_pf is not None:
+                    fallback_only[phase] = {
+                        "phase_fraction_pct": fallback_pf * 100.0,
+                        "weight_fraction_pct": fallback_pf * 100.0,
+                    }
         i += 1
+    if not out and len(fallback_only) == 1:
+        return fallback_only
     return out
 
 
@@ -1597,9 +1984,34 @@ def joint_refine_polish(
             logger.warning(f"[polish] Failed to regenerate .lst: {e}")
             return False
 
+    def _scale_fraction_fallback(proj, hist_name: str) -> Dict[str, Dict[str, float]]:
+        vals: Dict[str, float] = {}
+        for p in proj.phases():
+            try:
+                hcfg = p.data.get('Histograms', {}).get(hist_name, {})
+                if hcfg.get('Use', True) is False:
+                    continue
+                sc = hcfg.get('Scale', [0.0, False])
+                sval = float(sc[0]) if isinstance(sc, (list, tuple)) and len(sc) else float(sc)
+                if math.isfinite(sval) and sval > 0:
+                    vals[p.name] = sval
+            except Exception:
+                continue
+        tot = sum(vals.values())
+        out: Dict[str, Dict[str, float]] = {}
+        if tot > 0:
+            for k, v in vals.items():
+                pct = 100.0 * v / tot
+                out[k] = {
+                    "phase_fraction_pct": float(pct),
+                    "weight_fraction_pct": float(pct),
+                }
+        return out
+
     def _final_readout(proj, lst_path: Path, hist_name: str) -> Tuple[Dict[str, Dict[str, float]], float]:
         results: Dict[str, Dict[str, float]] = {}
         parsed = {}
+        fallback = _scale_fraction_fallback(proj, hist_name)
         parse_func = _parse_ext or parse_gsas_lst
         try:
             if lst_path.exists():
@@ -1609,6 +2021,8 @@ def joint_refine_polish(
         for p in proj.phases():
             nm = p.name
             vals = parsed.get(nm)
+            if vals is None:
+                vals = fallback.get(nm)
             results[nm] = {
                 "phase_fraction_pct": float(vals["phase_fraction_pct"]) if vals else 0.0,
                 "weight_fraction_pct": float(vals["weight_fraction_pct"]) if vals else 0.0,
@@ -1625,6 +2039,9 @@ def joint_refine_polish(
     _clone(base_gpx, out_gpx)
     checkpoint = Path(out_gpx).with_suffix(".checkpoint.gpx")
     _clone(out_gpx, str(checkpoint))
+    proj0 = _open(out_gpx)
+    hist0 = proj0.histograms()[0]
+    last_good_results, _ = _final_readout(proj0, _lst_path(out_gpx), hist0.name)
 
     # === STABILIZATION PHASE ===
     print("[polish] Starting stabilization phase...")
@@ -1658,6 +2075,8 @@ def joint_refine_polish(
     # Commit stabilization to checkpoint
     print(f"[polish] Stabilization OK (GOF={gof:.3f}). Updating checkpoint.")
     _clone(out_gpx, str(checkpoint))
+    proj_ckpt = _open(str(checkpoint))
+    last_good_results, _ = _final_readout(proj_ckpt, _lst_path(str(checkpoint)), hist.name)
 
     # === CUMULATIVE PHASE-BY-PHASE CELL REFINEMENT ===
     remaining = max(0, max_polish_cycles - STAB_CYCLES)
@@ -1728,6 +2147,8 @@ def joint_refine_polish(
             print(f"[polish] Phase {nm}: success (GOF={gof:.3f}) with {len(candidate_enabled)} phase(s) enabled.")
             _clone(temp_gpx, out_gpx)
             _clone(temp_gpx, str(checkpoint))
+            proj_ckpt = _open(str(checkpoint))
+            last_good_results, _ = _final_readout(proj_ckpt, _lst_path(str(checkpoint)), hist.name)
             enabled.append(nm)  # Add to enabled list
             remaining -= per_phase
 
@@ -1781,6 +2202,8 @@ def joint_refine_polish(
                     print(f"[polish] Final polish successful (GOF={gof:.3f}).")
                     _clone(temp_gpx, out_gpx)
                     _clone(temp_gpx, str(checkpoint))
+                    proj_ckpt = _open(str(checkpoint))
+                    last_good_results, _ = _final_readout(proj_ckpt, _lst_path(str(checkpoint)), hist.name)
                 else:
                     print(f"[polish] Final polish cells invalid. Keeping last good state.")
 
@@ -1797,7 +2220,7 @@ def joint_refine_polish(
     # CRITICAL: Final restoration and .lst regeneration (ensure .lst matches final GPX)
     logger.info("[polish] Finalizing output...")
     _clone(str(checkpoint), out_gpx)
-    _regenerate_lst(out_gpx, refine_background)
+    regen_ok = _regenerate_lst(out_gpx, refine_background)
 
     proj = _open(out_gpx)
 
@@ -1806,7 +2229,11 @@ def joint_refine_polish(
     else:
         logger.info("[polish] No phases accepted for cell refinement during polish.")
 
-    return _final_readout(proj, _lst_path(out_gpx), hist.name)
+    final_results, final_rwp = _final_readout(proj, _lst_path(out_gpx), hist.name)
+    if (not regen_ok) or (sum(v.get("weight_fraction_pct", 0.0) for v in final_results.values()) <= 0.0):
+        logger.warning("[polish] Using last-good fractions fallback after failed/empty final readout.")
+        return last_good_results, final_rwp
+    return final_results, final_rwp
 
 
 # === BEGIN REPLACE: plot_gpx_fit_with_ticks (publication-grade, 2 panels) ===

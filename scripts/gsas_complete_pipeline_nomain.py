@@ -66,9 +66,14 @@ try:
     import gsas_main_phase_refiner
     import lattice_nudger
     if not wx.GetApp():
-        app = wx.App(False)
-except ImportError:
-    pass
+        if os.environ.get("DISPLAY"):
+            app = wx.App(False)
+        else:
+            print("[WARN] DISPLAY not set; skipping wx.App init for headless mode")
+except BaseException as e:
+    if isinstance(e, KeyboardInterrupt):
+        raise
+    print(f"[WARN] wx initialization skipped: {e}")
 
 try:
     import GSASII.GSASIIctrlGUI as G2gui
@@ -148,6 +153,7 @@ try:
         stage0_bootstrap_no_cif,
 
     )
+    from ml_ranker_support import discover_ml_ranker_assets, load_first_json_record, write_ranker_status
     COMPONENTS_OK = True
 except ImportError as e:
     print(f"[ERROR] Failed to import integration components: {e}")
@@ -332,6 +338,30 @@ def _default_fmthint(mode: Optional[str]) -> Optional[str]:
     An explicit fmthint can always be set in the dataset config.
     """
     return None
+
+
+def _instrument_map_keys(mode: Optional[str], tag: Optional[str]) -> List[str]:
+    """Return instrument_map lookup keys from most specific to most generic.
+
+    We keep legacy aliases such as `hb2a` and `pg3` for backward
+    compatibility, but prefer generic `cw` / `tof` labels in logs and new
+    configs so non-HB2A CW runs do not look mislabeled.
+    """
+    keys: List[str] = []
+
+    def _add(value: Optional[str]):
+        if value and value not in keys:
+            keys.append(value)
+
+    _add(tag)
+    mode_lower = (mode or "").lower()
+    if mode_lower == "cw":
+        _add("cw")
+        _add("hb2a")
+    elif mode_lower == "tof":
+        _add("tof")
+        _add("pg3")
+    return keys
 
 def _write_xye_from_arrays(out_path: str, x, y, sigma=None, shift_positive: bool = True) -> str:
     import numpy as _np
@@ -715,6 +745,7 @@ class UnifiedPipeline:
         joint_top_k: int,
         s4_cfg: Dict[str, Any],
         ds_cfg: Dict[str, Any],
+        anchor_ids: Optional[List[str]] = None,
     ) -> Tuple[List[Any], Dict[str, str], Dict[str, float], Dict[str, Any]]:
 
         # Re-derive paths for internal use (or accept from ds_cfg)
@@ -769,6 +800,7 @@ class UnifiedPipeline:
             stable_ids=self.stable_ids,
             hist_plot_cfg=hist_plot_cfg,
             work_dir=work_dir,
+            anchor_ids=anchor_ids or [],
         )
         print(f"[RESULT] [pass {pass_ix}] ML screening complete: found {len(final_candidates)} phases")
         
@@ -776,6 +808,10 @@ class UnifiedPipeline:
              self.emitter.emit(f"Pass {pass_ix}", f"Screened {len(final_candidates)} candidates", progress_base + 0.15 * progress_step, metrics={"pass": pass_ix})
 
         # ----- ML Surrogate Ranker (Async) -----
+        diagnostics_path = Path(ds_cfg.get("diagnostics_path") or Path(work_dir) / "Diagnostics")
+        status_path = diagnostics_path / f"ml_rank_status_pass{pass_ix}.json"
+        ml_json_path = str(diagnostics_path / f"ml_rank_input_pass{pass_ix}.json")
+        output_jsonl = str(diagnostics_path / f"ml_rank_result_pass{pass_ix}.jsonl")
         try:
             ranker_input = []
             for c in final_candidates:
@@ -799,44 +835,82 @@ class UnifiedPipeline:
                 })
             
             # Dump to JSON
-            ml_json_path = str(Path(ds_cfg.get("diagnostics_path") or Path(work_dir) / "Diagnostics") / f"ml_rank_input_pass{pass_ix}.json")
             with open(ml_json_path, "w") as f:
                 json.dump({"candidates": ranker_input, "run_name": f"{name}_pass{pass_ix}"}, f, indent=2)
 
-            # Locate Ranker
-            import sys
-            scripts_dir = os.path.dirname(os.path.abspath(__file__))
-            project_root = os.path.dirname(scripts_dir)
-            ranker_dir = os.path.join(project_root, "ML_ranker", "mlp_ranker_for_phase_detection-main")
-            ranker_script = os.path.join(ranker_dir, "infer.py")
-            ranker_model = os.path.join(ranker_dir, "mlp_ranker.pt")
-            
-            if os.path.exists(ranker_script) and os.path.exists(ranker_model):
-                output_jsonl = str(Path(ds_cfg.get("diagnostics_path") or Path(work_dir) / "Diagnostics") / f"ml_rank_result_pass{pass_ix}.jsonl")
-                
+            assets = discover_ml_ranker_assets(PROJECT_ROOT)
+
+            write_ranker_status(
+                status_path,
+                status="input_ready",
+                pass_ix=pass_ix,
+                input_json=ml_json_path,
+                n_candidates=len(ranker_input),
+                asset_source=assets.source,
+                script_path=str(assets.script_path) if assets.script_path else None,
+                model_path=str(assets.model_path) if assets.model_path else None,
+            )
+
+            if assets.is_ready:
                 cmd = [
                     sys.executable,
-                    ranker_script,
-                    "--model", ranker_model,
+                    str(assets.script_path),
+                    "--model", str(assets.model_path),
                     "--input", ml_json_path,
                     "--output", output_jsonl,
                     "--format", "json",
                     "--topk", "5"
                 ]
                 
-                print(f"[INFO] Spawning ML Ranker: {ranker_script}")
+                print(f"[INFO] Spawning ML Ranker: {assets.script_path}")
                 import subprocess
-                p = subprocess.Popen(cmd)
-                p.wait() # Wait for ranker to finish
+                completed = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+
+                if completed.stdout.strip():
+                    print(completed.stdout.strip())
+                if completed.stderr.strip():
+                    print(f"[WARN] ML Ranker stderr:\n{completed.stderr.strip()}")
+
+                if completed.returncode != 0:
+                    write_ranker_status(
+                        status_path,
+                        status="failed",
+                        pass_ix=pass_ix,
+                        input_json=ml_json_path,
+                        output_jsonl=output_jsonl,
+                        asset_source=assets.source,
+                        script_path=str(assets.script_path),
+                        model_path=str(assets.model_path),
+                        returncode=completed.returncode,
+                        stdout=completed.stdout[-4000:],
+                        stderr=completed.stderr[-4000:],
+                    )
+                    print(f"[WARN] ML Ranker failed with exit code {completed.returncode}")
 
                 # Read results and log
                 if os.path.exists(output_jsonl):
                     try:
-                        with open(output_jsonl, "r") as f:
-                            res_data = json.loads(f.read().strip())
+                        res_data = load_first_json_record(output_jsonl)
                         
                         ranked = res_data.get("ranked", [])
                         if ranked:
+                            write_ranker_status(
+                                status_path,
+                                status="complete",
+                                pass_ix=pass_ix,
+                                input_json=ml_json_path,
+                                output_jsonl=output_jsonl,
+                                asset_source=assets.source,
+                                script_path=str(assets.script_path),
+                                model_path=str(assets.model_path),
+                                n_ranked=len(ranked),
+                                top_ids=res_data.get("top_ids", []),
+                            )
                             print(f"\n[RESULT] [pass {pass_ix}] Top candidates by ML Ranker (Final):")
                             for r in ranked[:5]:
                                 pid = r.get("mp_id")
@@ -846,13 +920,64 @@ class UnifiedPipeline:
                                     name_disp, sg_disp = self.db_loader.get_display_name_and_sg(pid)
                                 print(f"  - {pid}: {name_disp}, SG={sg_disp}, rank_score={score:.3f}")
                             print("")
+                        else:
+                            write_ranker_status(
+                                status_path,
+                                status="complete_empty",
+                                pass_ix=pass_ix,
+                                input_json=ml_json_path,
+                                output_jsonl=output_jsonl,
+                                asset_source=assets.source,
+                                script_path=str(assets.script_path),
+                                model_path=str(assets.model_path),
+                                note="Ranker completed but returned no ranked candidates.",
+                            )
                     except Exception as re:
+                        write_ranker_status(
+                            status_path,
+                            status="failed_readback",
+                            pass_ix=pass_ix,
+                            input_json=ml_json_path,
+                            output_jsonl=output_jsonl,
+                            asset_source=assets.source,
+                            script_path=str(assets.script_path),
+                            model_path=str(assets.model_path),
+                            error=str(re),
+                        )
                         print(f"[WARN] Failed to read ML Ranker output: {re}")
+                elif assets.is_ready:
+                    write_ranker_status(
+                        status_path,
+                        status="failed_no_output",
+                        pass_ix=pass_ix,
+                        input_json=ml_json_path,
+                        output_jsonl=output_jsonl,
+                        asset_source=assets.source,
+                        script_path=str(assets.script_path),
+                        model_path=str(assets.model_path),
+                        note="Ranker process finished without creating an output file.",
+                    )
 
             else:
-                print(f"[WARN] ML Ranker not found at {ranker_dir}")
+                write_ranker_status(
+                    status_path,
+                    status="missing_assets",
+                    pass_ix=pass_ix,
+                    input_json=ml_json_path,
+                    asset_source=assets.source,
+                    error=assets.error,
+                )
+                print(f"[WARN] ML Ranker assets missing: {assets.error}")
 
         except Exception as e:
+            write_ranker_status(
+                status_path,
+                status="failed_exception",
+                pass_ix=pass_ix,
+                input_json=ml_json_path,
+                output_jsonl=output_jsonl,
+                error=str(e),
+            )
             print(f"[WARN] Failed to spawn ML Ranker: {e}")
 
         # ----- KNEE: Histogram (union over ml_score, ml_cosine, ml_explained, ml_present_prob) -----
@@ -1088,7 +1213,6 @@ class UnifiedPipeline:
             except Exception as e:
                 print(f"[WARN] Error flushing template project: {e}")
 
-        import sys
         sys.stdout.flush()
         
         # We need to collect results. Note: we only refine the NUDGED structures if they exist, 
@@ -1208,14 +1332,19 @@ class UnifiedPipeline:
 
         mode = ds.get("mode", "auto")
         tag = None
-        if str(mode).lower() == "auto":
+        mode_from_auto = str(mode).lower() == "auto"
+        if mode_from_auto:
             mode, tag = _guess_mode_and_tag(data_path)
             if not mode:
                 raise RuntimeError(f"[{name}] Could not infer instrument mode. Specify CW or TOF.")
         else:
             mode = str(mode).lower()
-            tag = "hb2a" if mode == "cw" else ("pg3" if mode == "tof" else None)
-        print(f"[INFO] Instrument mode: {mode.upper()}, tag: {tag}")
+        tag_keys = _instrument_map_keys(mode, tag)
+        tag_display = tag if tag else (tag_keys[0] if tag_keys else None)
+        if mode_from_auto:
+            print(f"[INFO] Instrument mode: {mode.upper()}, tag: {tag_display}")
+        else:
+            print(f"[INFO] Instrument mode: {mode.upper()}")
 
         fmthint = ds.get("fmthint", "auto")
         if fmthint == "auto":
@@ -1226,12 +1355,17 @@ class UnifiedPipeline:
             imap = self.top_cfg.get("instrument_map", {})
             if "instrument_map" in ds and isinstance(ds["instrument_map"], dict):
                 imap = ds["instrument_map"]
-            guess_key = tag or ("hb2a" if mode == "cw" else "pg3")
-            instprm_path = _expand(imap.get(guess_key))
+            guess_key = None
+            for key in tag_keys:
+                candidate = _expand(imap.get(key))
+                if candidate and Path(candidate).exists():
+                    instprm_path = candidate
+                    guess_key = key
+                    break
             if not instprm_path or not Path(instprm_path).exists():
                 raise RuntimeError(
                     f"[{name}] Could not resolve instrument parameter file. "
-                    f"Provide instrument_map.{guess_key} or explicit path."
+                    f"Provide one of instrument_map.{', instrument_map.'.join(tag_keys)} or explicit path."
                 )
         else:
             instprm_path = _expand(instprm_path)
@@ -1338,10 +1472,20 @@ class UnifiedPipeline:
         }
 
         # Database configuration
-        db_cfg = self.top_cfg.get("db", {}).copy()
+        db_cfg = dict(self.top_cfg.get("db", {}) or {})
+        ds_db = ds.get("db", {})
+        if isinstance(ds_db, dict):
+            db_cfg.update(ds_db)
         for k in ("catalog_csv", "original_json", "profiles_dir", "stable_csv", "cif_map_json"):
             if k in ds:
                 db_cfg[k] = ds[k]
+
+        if not db_cfg:
+            db_source = str(ds.get("db_source", self.top_cfg.get("db_source", "xray"))).strip().lower()
+            if db_source == "neutron":
+                db_cfg = dict(self.top_cfg.get("db_neutron", {}) or {})
+            else:
+                db_cfg = dict(self.top_cfg.get("db_xray", {}) or {})
 
         if not self.db_loader:
             if not self.initialize_database(db_cfg):
@@ -1639,6 +1783,93 @@ class UnifiedPipeline:
 
                 main_ref = GSASMainPhaseRefiner(pm)
                 _bg = ds.get("background", self.top_cfg.get("background", {})) or {}
+                calibrated_instprm_path = None
+                calibration_status = "not_requested"
+                calibration_note = None
+                calibration_rwp_before = None
+                calibration_rwp_after = None
+                baseline_instprm_path = instprm_path
+
+                calib_cfg = dict(self.top_cfg.get("light_calibration", {}) or {})
+                if isinstance(ds.get("light_calibration"), dict):
+                    calib_cfg.update(ds.get("light_calibration") or {})
+
+                should_light_calibrate = bool(
+                    calib_cfg.get("enabled")
+                    and main_cif
+                    and str(mode).upper() == "CW"
+                )
+                if should_light_calibrate:
+                    calibration_export = str(Path(technical_dir) / f"{name}_light_calibrated.instprm")
+                    self.emitter.emit("Stage 1", "PXRD light calibration", 28)
+                    with bench.block("S1: light pxrd calibration"):
+                        calib_result = main_ref.run_light_instrument_calibration(
+                            bg_type=_bg.get("type"),
+                            bg_terms=int(_bg["terms"]) if _bg.get("terms") is not None else None,
+                            bg_coeffs=_bg.get("coeffs"),
+                            zero_cycles=int(calib_cfg.get("zero_cycles", 1)),
+                            profile_cycles=int(calib_cfg.get("profile_cycles", 2)),
+                            profile_terms=calib_cfg.get("terms"),
+                            export_path=calibration_export,
+                        )
+                    calibration_rwp_before = calib_result.rwp_before
+                    calibration_rwp_after = calib_result.rwp_after
+
+                    if calib_result.skipped:
+                        calibration_status = "skipped"
+                        calibration_note = calib_result.error_message
+                        print(f"[INFO] Light PXRD calibration skipped: {calib_result.error_message}")
+                    elif not calib_result.success:
+                        calibration_status = "failed"
+                        calibration_note = calib_result.error_message
+                        try:
+                            main_ref.load_instrument_profile(baseline_instprm_path)
+                        except Exception as restore_err:
+                            raise RuntimeError(
+                                f"[{name}] Light PXRD calibration failed and the original "
+                                f"instrument profile could not be restored: {restore_err}"
+                            ) from restore_err
+                        print(f"[WARN] Light PXRD calibration failed: {calib_result.error_message}")
+                    else:
+                        accept_rwp_worsen = float(calib_cfg.get("accept_rwp_worsen", 0.15))
+                        before_rwp = calib_result.rwp_before
+                        after_rwp = calib_result.rwp_after
+                        if (
+                            before_rwp is not None and after_rwp is not None
+                            and math.isfinite(before_rwp) and math.isfinite(after_rwp)
+                            and after_rwp <= before_rwp + accept_rwp_worsen
+                            and calib_result.exported_instprm
+                        ):
+                            calibration_status = "adopted"
+                            calibration_note = (
+                                f"Rwp {before_rwp:.3f}% -> {after_rwp:.3f}% "
+                                f"using {','.join(calib_result.refined_terms)}"
+                            )
+                            calibrated_instprm_path = calib_result.exported_instprm
+                            instprm_path = calibrated_instprm_path
+                            print(
+                                f"[INFO] Adopted calibrated PXRD profile: {instprm_path} "
+                                f"(Rwp {before_rwp:.3f}% -> {after_rwp:.3f}%)"
+                            )
+                            self.manifest.add_artifact(instprm_path)
+                        else:
+                            calibration_status = "rejected"
+                            calibration_note = (
+                                f"Calibration not adopted (Rwp {before_rwp:.3f}% -> {after_rwp:.3f}%)"
+                                if before_rwp is not None and after_rwp is not None
+                                else "Calibration not adopted"
+                            )
+                            try:
+                                main_ref.load_instrument_profile(baseline_instprm_path)
+                            except Exception as restore_err:
+                                raise RuntimeError(
+                                    f"[{name}] Light PXRD calibration was not adopted and the original "
+                                    f"instrument profile could not be restored: {restore_err}"
+                                ) from restore_err
+                            print(
+                                "[WARN] Light PXRD calibration was not adopted; "
+                                f"Rwp changed from {before_rwp} to {after_rwp}"
+                            )
 
                 with bench.block("S1: staged refinement"):
                     main_results = main_ref.run_staged_refinement(
@@ -1662,7 +1893,18 @@ class UnifiedPipeline:
                         print(f"[WARN] Could not generate main phase plot: {plot_err}")
 
                 self.emitter.emit("Stage 1", "Main phase refinement complete", 40)
-                self.manifest.update_stage("Stage 1", "complete", {"rwp": main_results.rwp})
+                self.manifest.update_stage(
+                    "Stage 1",
+                    "complete",
+                    {
+                        "rwp": main_results.rwp,
+                        "calibrated_instprm": calibrated_instprm_path,
+                        "calibration_status": calibration_status,
+                        "calibration_note": calibration_note,
+                        "calibration_rwp_before": calibration_rwp_before,
+                        "calibration_rwp_after": calibration_rwp_after,
+                    },
+                )
 
             # --------------------------------------------------------------------
             # INITIAL RESIDUAL (pass 1 seed)
@@ -1705,27 +1947,41 @@ class UnifiedPipeline:
                         print(f"[INFO] [pass {pass_ix}] Kept GPX: {kept_gpx}, Rwp={kept_rwp:.3f}%")
 
                 exclude_ids = {main_phase_name, *accepted}
+                anchor_ids_for_pass = list(accepted)
 
                 with bench.block(f"Pass {pass_ix}: screen + nudge + pearson"):
-                    final_candidates, pid_to_cif, pearson_best_by_pid, result_by_pid = self._screen_and_rank_candidates(
-                                name=name,
-                                pass_ix=pass_ix,
-                                pm_for_tools=pm,
-                                Q=Q, residual_Q=residual_Q, x_native=x_native, residual_native=residual_native,
-                                allowed_elements=allowed_elements,
-                                profiles_dir=profiles_dir,
-                                instprm_path=instprm_path,
-                                data_path=data_path,
-                                fmthint=fmthint,
-                                limits=limits,
-                                exclude_regions=exclude_regions,
-                                work_dir=work_dir,
-                                top_candidates=top_candidates,
-                                exclude_ids=exclude_ids,
-                                joint_top_k=joint_top_k,
-                                s4_cfg=s4_cfg,
-                                ds_cfg=ds_cfg,
-                            )
+                    try:
+                        final_candidates, pid_to_cif, pearson_best_by_pid, result_by_pid = self._screen_and_rank_candidates(
+                                    name=name,
+                                    pass_ix=pass_ix,
+                                    pm_for_tools=pm,
+                                    Q=Q, residual_Q=residual_Q, x_native=x_native, residual_native=residual_native,
+                                    allowed_elements=allowed_elements,
+                                    profiles_dir=profiles_dir,
+                                    instprm_path=instprm_path,
+                                    data_path=data_path,
+                                    fmthint=fmthint,
+                                    limits=limits,
+                                    exclude_regions=exclude_regions,
+                                    work_dir=work_dir,
+                                    top_candidates=top_candidates,
+                                    exclude_ids=exclude_ids,
+                                    joint_top_k=joint_top_k,
+                                    s4_cfg=s4_cfg,
+                                    ds_cfg=ds_cfg,
+                                    anchor_ids=anchor_ids_for_pass,
+                                )
+                    except RuntimeError as e:
+                        msg = str(e)
+                        if "No candidates pass histogram screening" in msg:
+                            print(f"[INFO] [pass {pass_ix}] Histogram screening returned zero candidates; stopping discovery.")
+                            self.manifest.update_stage(f"Pass {pass_ix}", "complete", {"status": "stopped", "reason": "no_candidates_histogram"})
+                            final_candidates = []
+                            pid_to_cif = {}
+                            pearson_best_by_pid = {}
+                            result_by_pid = {}
+                            break
+                        raise
 
 
                 if not pid_to_cif:
@@ -1934,6 +2190,16 @@ class UnifiedPipeline:
                     })
 
                 rows_sorted = sorted(rows, key=lambda r: (not r["is_main"], -r["wf"]))  # main first, then by wf
+                if len(rows_sorted) == 1:
+                    main_row = rows_sorted[0]
+                    try:
+                        wf_val = float(main_row.get("wf", 0.0))
+                    except Exception:
+                        wf_val = 0.0
+                    if wf_val == 0.0:
+                        main_row["wf"] = 100.0
+                        rows_sorted[0] = main_row
+
                 total_imp = sum(r["wf"] for r in rows_sorted if not r["is_main"] and r["wf"] >= min_impurity_percent)
 
                 hdr = f"Sequential Phase Quantification for {name}"
@@ -2137,10 +2403,18 @@ Examples:
             success &= ok
         except KeyboardInterrupt:
             print("\n[INFO] Interrupted by user")
+            if pipe.manifest:
+                pipe.manifest.set_status("interrupted")
+            if pipe.emitter:
+                pipe.emitter.emit("Interrupted", "Pipeline interrupted by user", 100, level="WARN")
             return False
         except Exception as e:
             print(f"[FATAL] Dataset '{args.dataset}' failed: {e}")
             traceback.print_exc()
+            if pipe.manifest:
+                pipe.manifest.set_status("failed")
+            if pipe.emitter:
+                pipe.emitter.emit("Error", str(e), 100, level="ERROR")
             return False
     else:
         for ds in datasets:
@@ -2150,6 +2424,10 @@ Examples:
                 success &= ok
             except KeyboardInterrupt:
                 print("\n[INFO] Interrupted by user")
+                if pipe.manifest:
+                    pipe.manifest.set_status("interrupted")
+                if pipe.emitter:
+                    pipe.emitter.emit("Interrupted", "Pipeline interrupted by user", 100, level="WARN")
                 return False
             except Exception as e:
                 print(f"[ERROR] Dataset '{name}' failed: {e}")
@@ -2159,7 +2437,12 @@ Examples:
                     pipe.emitter.emit("Error", str(e), 100, level="ERROR")
                 success = False
 
-    out_dir = _expand(cfg.get("work_dir")) or str(Path(args.config).resolve().parent)
+    out_dir = (
+        _expand(cfg.get("work_dir"))
+        or _expand(cfg.get("work_root"))
+        or _expand(cfg.get("WORK_ROOT"))
+        or str(Path(args.config).resolve().parent)
+    )
     Path(out_dir).mkdir(parents=True, exist_ok=True)
     summary_path = str(Path(out_dir) / "pipeline_summary.json")
 

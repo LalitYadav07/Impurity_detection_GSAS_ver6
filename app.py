@@ -43,8 +43,14 @@ if scripts_dir not in sys.path:
     sys.path.insert(0, scripts_dir)
 
 from config_builder import build_pipeline_config
-from runner import PipelineRunner
+from runner import PipelineRunner, stop_process_tree
 from aniso_db_loader import DBLoader, CatalogPaths
+from instprm_presets import (
+    DEFAULT_LAB_XRAY_PRESET_KEY,
+    get_builtin_instprm_preset,
+    write_builtin_instprm_file,
+)
+from ml_ranker_support import load_first_json_record
 
 try:
     from plotly_interactive import (
@@ -55,6 +61,8 @@ try:
     INTERACTIVE_PLOTS_AVAILABLE = True
 except Exception:
     INTERACTIVE_PLOTS_AVAILABLE = False
+
+LAB_XRAY_PRESET = get_builtin_instprm_preset(DEFAULT_LAB_XRAY_PRESET_KEY)
 
 # --- GSAS-II HEALTH CHECK ---
 def check_gsas_installation():
@@ -111,6 +119,57 @@ REQUIRED_FILES_COMMON = [
 DB_NEUTRON_GDRIVE_URL = "https://drive.google.com/uc?id=1BxPXjdbn7oYTXKfDeLct5-2PMkhcLVSH"
 DB_XRAY_GDRIVE_URL = "https://drive.google.com/file/d/12H19jI3mGcYBpJrQRtY-5_WaMjFyIMah/view?usp=sharing"  # X-ray DB GDrive URL
 
+_DB_WRAPPER_DIRS = {"database_aug", "database_xray", "database_neutron"}
+
+
+def repair_database_layout(target_db_dir: Path) -> bool:
+    """Normalize malformed archive layouts in-place.
+
+    Some ZIP archives were created on Windows with backslashes embedded in member
+    names (for example `database_xray\\catalog_deduplicated.csv`). On Linux those
+    become literal filenames rather than nested paths. This helper repairs that
+    layout and also flattens one extra wrapper directory when present.
+    """
+    target_db_dir = Path(target_db_dir)
+    if not target_db_dir.exists():
+        return False
+
+    changed = False
+    files_to_move = [p for p in target_db_dir.rglob("*") if p.is_file()]
+
+    for src in files_to_move:
+        rel = src.relative_to(target_db_dir).as_posix().replace("\\", "/")
+        parts = [part for part in rel.split("/") if part not in ("", ".")]
+        if parts and parts[0] in _DB_WRAPPER_DIRS:
+            parts = parts[1:]
+        if not parts:
+            continue
+
+        dest = target_db_dir.joinpath(*parts)
+        if dest == src:
+            continue
+
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if dest.exists():
+            if dest.is_dir():
+                shutil.rmtree(dest)
+            else:
+                dest.unlink()
+        shutil.move(str(src), str(dest))
+        changed = True
+
+    for root, dirs, _files in os.walk(target_db_dir, topdown=False):
+        for dirname in dirs:
+            path = Path(root) / dirname
+            try:
+                if path.exists() and not any(path.iterdir()):
+                    path.rmdir()
+                    changed = True
+            except OSError:
+                pass
+
+    return changed
+
 def check_db_integrity(target_db_dir, is_xray=False):
     """Check if a database directory has the required files.
     
@@ -119,7 +178,12 @@ def check_db_integrity(target_db_dir, is_xray=False):
             and its own highsymm_metadata.json.
         Neutron: requires profiles64/ directory and its own highsymm_metadata.json.
     """
+    target_db_dir = Path(target_db_dir)
     if not target_db_dir.exists(): return False
+    try:
+        repair_database_layout(target_db_dir)
+    except Exception:
+        pass
     for f in REQUIRED_FILES_COMMON:
         if not (target_db_dir / f).exists(): return False
     if is_xray:
@@ -190,6 +254,10 @@ def download_and_extract_db(url, target_db_dir: Path, is_xray: bool = False):
 
             with zipfile.ZipFile(zip_path, 'r') as z:
                 z.extractall(temp_extract_dir)
+
+            repaired_temp = repair_database_layout(temp_extract_dir)
+            if repaired_temp:
+                st.write("🧩 Normalized archive paths from Windows-style separators.")
             
             # Resolve extracted database root (supports optional wrapper folders).
             extracted_db_path = temp_extract_dir
@@ -208,6 +276,10 @@ def download_and_extract_db(url, target_db_dir: Path, is_xray: bool = False):
                     if dest.is_dir(): shutil.rmtree(dest)
                     else: dest.unlink()
                 shutil.move(str(item), str(target_db_dir))
+
+            repaired_target = repair_database_layout(target_db_dir)
+            if repaired_target:
+                st.write("🧩 Repaired extracted database layout.")
 
             # Migration guard: for older X-ray archives that may miss metadata,
             # copy from local neutron DB only if available.
@@ -615,6 +687,10 @@ if 'pipeline_state' not in st.session_state:
         "stage0_status": "pending", # pending, running, complete, skipped
         "stages_complete": set()
     }
+if 'event_file_cursor' not in st.session_state:
+    st.session_state.event_file_cursor = 0
+if 'event_file_run_dir' not in st.session_state:
+    st.session_state.event_file_run_dir = None
 
 # --- DB LOADER INITIALIZATION ---
 # Determine active DB based on session state
@@ -749,7 +825,13 @@ def update_funnel_metrics(new_lines):
         
     st.session_state.funnel_data = data
 
-def render_file_explorer(path: Path, key_prefix: str, filter_exts=None, depth=0):
+
+def _hide_curated_artifact(path: Path) -> bool:
+    """Hide noisy intermediate artifacts from curated UI views."""
+    return "_trial_blend" in path.name.lower()
+
+
+def render_file_explorer(path: Path, key_prefix: str, filter_exts=None, depth=0, hide_predicate=None):
     """Recursive file explorer UI component with improved layout."""
     if not path.is_dir():
         return False
@@ -772,6 +854,8 @@ def render_file_explorer(path: Path, key_prefix: str, filter_exts=None, depth=0)
             def _has_matching_files(d: Path):
                 for child in d.rglob("*"):
                     if child.is_file() and not child.name.startswith("."):
+                        if hide_predicate and hide_predicate(child):
+                            continue
                         if not filter_exts or child.suffix.lower() in filter_exts:
                             return True
                 return False
@@ -779,11 +863,13 @@ def render_file_explorer(path: Path, key_prefix: str, filter_exts=None, depth=0)
             if _has_matching_files(item):
                 has_content = True
                 with st.expander(f"📁 {item.name}", expanded=(depth < 1)):
-                    render_file_explorer(item, unique_key, filter_exts, depth + 1)
+                    render_file_explorer(item, unique_key, filter_exts, depth + 1, hide_predicate=hide_predicate)
                 
         # File Display
         else:
             if filter_exts and item.suffix.lower() not in filter_exts:
+                continue
+            if hide_predicate and hide_predicate(item):
                 continue
                 
             has_content = True
@@ -859,39 +945,52 @@ def update_ui_state():
             
             if evt_file.exists():
                 try:
-                    with open(evt_file, "r") as f:
+                    run_dir_str = str(run_path)
+                    if st.session_state.event_file_run_dir != run_dir_str:
+                        st.session_state.event_file_run_dir = run_dir_str
+                        st.session_state.event_file_cursor = 0
+
+                    with open(evt_file, "r", encoding="utf-8") as f:
+                        try:
+                            f.seek(st.session_state.event_file_cursor)
+                        except Exception:
+                            st.session_state.event_file_cursor = 0
+                            f.seek(0)
+
                         lines = f.readlines()
-                        if lines:
-                            for line in lines[-5:]: # Look at recent events
-                                evt = json.loads(line)
-                                if "percent" in evt:
-                                    st.session_state.progress = int(evt["percent"])
-                                
-                                stage = evt.get("stage", "")
-                                metrics = evt.get("metrics", {})
-                                
-                                if "Stage 0" in stage:
-                                    state["global_stage_idx"] = 0
-                                    if "Bootstrap complete" in evt.get("message", ""):
-                                        state["stage0_status"] = "complete"
-                                    else:
-                                        state["stage0_status"] = "running"
-                                elif "Stage 1" in stage:
-                                    state["global_stage_idx"] = 1
-                                elif "Stage 2" in stage:
-                                    state["global_stage_idx"] = 2
-                                elif "Pass" in stage:
-                                    state["global_stage_idx"] = 3
-                                    state["current_pass"] = metrics.get("pass", state["current_pass"])
-                                    event_type = metrics.get("event")
-                                    if event_type in ["pass_start", "screening_start"]: state["pass_stage"] = "screening"
-                                    elif event_type == "nudging_start": state["pass_stage"] = "nudging"
-                                    elif event_type == "pearson_start": state["pass_stage"] = "pearson"
-                                    elif event_type in ["joint_compare_start", "joint_refine_start"]: state["pass_stage"] = "joint"
-                                    elif event_type == "polish_start": state["pass_stage"] = "polish"
-                                    elif event_type == "pass_end": state["pass_stage"] = "summary"
-                                elif "Final" in stage or "Complete" in stage:
-                                    state["global_stage_idx"] = 4
+                        st.session_state.event_file_cursor = f.tell()
+
+                    if lines:
+                        for line in lines[-20:]:
+                            evt = json.loads(line)
+                            if "percent" in evt:
+                                st.session_state.progress = int(evt["percent"])
+                            
+                            stage = evt.get("stage", "")
+                            metrics = evt.get("metrics", {})
+                            
+                            if "Stage 0" in stage:
+                                state["global_stage_idx"] = 0
+                                if "Bootstrap complete" in evt.get("message", ""):
+                                    state["stage0_status"] = "complete"
+                                else:
+                                    state["stage0_status"] = "running"
+                            elif "Stage 1" in stage:
+                                state["global_stage_idx"] = 1
+                            elif "Stage 2" in stage:
+                                state["global_stage_idx"] = 2
+                            elif "Pass" in stage:
+                                state["global_stage_idx"] = 3
+                                state["current_pass"] = metrics.get("pass", state["current_pass"])
+                                event_type = metrics.get("event")
+                                if event_type in ["pass_start", "screening_start"]: state["pass_stage"] = "screening"
+                                elif event_type == "nudging_start": state["pass_stage"] = "nudging"
+                                elif event_type == "pearson_start": state["pass_stage"] = "pearson"
+                                elif event_type in ["joint_compare_start", "joint_refine_start"]: state["pass_stage"] = "joint"
+                                elif event_type == "polish_start": state["pass_stage"] = "polish"
+                                elif event_type == "pass_end": state["pass_stage"] = "summary"
+                            elif "Final" in stage or "Complete" in stage:
+                                state["global_stage_idx"] = 4
                 except Exception as e:
                     print(f"[ui] Warning: failed to parse recent events from {evt_file}: {e}")
         
@@ -952,6 +1051,7 @@ with st.sidebar:
     rad_source = st.radio("Source Type", ["Neutron", "X-ray"], index=0 if st.session_state.radiation_source == "Neutron" else 1, key="radiation_selector")
     if rad_source != st.session_state.radiation_source:
         st.session_state.radiation_source = rad_source
+        st.session_state.pop("xray_auto_attempted", None)
         st.rerun()
 
     # Database Status
@@ -969,7 +1069,7 @@ with st.sidebar:
                         success = download_and_extract_db(default_url, target_db_dir=ACTIVE_DB_DIR, is_xray=True)
                         if success:
                             st.success("✅ X-ray database downloaded and installed. Refreshing UI...")
-                            st.experimental_rerun()
+                            st.rerun()
                         else:
                             st.warning("⚠️ Automatic download failed — please provide a direct link or upload the ZIP manually.")
                     except Exception as _e:
@@ -996,10 +1096,10 @@ with st.sidebar:
         ### Analysis Setup
         * **Radiation Source**: Select **Neutron** or **X-ray** in the sidebar to switch databases automatically.
         * **Initial Selection**: Set **Example Mode** to `None` to enable manual uploads, or pick a built-in demo dataset.
-        * **Data Entry**: Provide your **Main CIF**, **Instrument Parameters**, and **Diffraction Data**.
+        * **Data Entry**: Provide your **Diffraction Data**, optional **Main CIF**, and either uploaded **Instrument Parameters** or the built-in **CuKa lab PXRD** profile for X-ray CW screening.
         * **Chemistry**: Enter the **Allowed Elements**. Use **Hardware / SE** for sample environment peaks (e.g., Al cans).
         * **Discovery Strategy**: Set **Max Discovery Passes** to the number of impurity phases you expect to find.
-        * **Instrument Mode**: Select `Auto`, `TOF`, or `CW` as appropriate for your data.
+        * **Instrument Mode**: Select `Auto`, `TOF`, or `CW` as appropriate for your data. The built-in CuKa lab preset forces `CW`.
         * **Background**: Default is a **12-term Chebyshev** polynomial. Adjust in **Advanced Tuning** if necessary.
 
         ### Runtime Monitoring (~5–10 mins)
@@ -1017,6 +1117,7 @@ with st.sidebar:
     with st.expander("📁 Main Settings", expanded=True):
         example_selection = st.selectbox("📖 Example Mode", ["None", "TbSSL (CW Demo)", "LK-99 (TOF Demo)"], index=0)
         run_name = st.text_input("Run Name", key="custom_run_name")
+        light_calibration_enabled = False
         
         if example_selection != "None":
             if example_selection == "TbSSL (CW Demo)":
@@ -1031,14 +1132,34 @@ with st.sidebar:
                  sample_env_elements_str = ""
             
             data_file, instprm_file, main_cif = None, None, None
+            builtin_instprm_key = None
             max_passes = 3
         else:
+            data_file, instprm_file, main_cif = None, None, None
+            builtin_instprm_key = None
             data_file = st.file_uploader("Diffraction Data", type=["dat", "xye", "gsa", "fxye"])
-            instprm_file = st.file_uploader(
-                "Instrument Params (.instprm or .ins)",
-                type=["instprm", "ins"],
-                help="GSAS-II .instprm file, or SHELX .ins file (auto-converted to .instprm)"
-            )
+            if IS_XRAY:
+                profile_choice = st.radio(
+                    "Instrument Profile",
+                    ["Upload Instrument Params", LAB_XRAY_PRESET["ui_label"]],
+                    help="Use a calibrated instrument file when available. The built-in preset is an approximate Cu Kalpha lab PXRD profile for CW screening.",
+                )
+                if profile_choice == LAB_XRAY_PRESET["ui_label"]:
+                    builtin_instprm_key = DEFAULT_LAB_XRAY_PRESET_KEY
+                    st.info("Using GSAS-II's built-in CuKa lab PXRD profile. This mode is approximate and is best for quick CW lab-XRD screening.")
+                    st.caption("A real `.instprm` file will be generated automatically inside the run inputs folder so the pipeline remains fully file-based.")
+                else:
+                    instprm_file = st.file_uploader(
+                        "Instrument Params (.instprm or .ins)",
+                        type=["instprm", "ins"],
+                        help="GSAS-II .instprm file, or SHELX .ins file (auto-converted to .instprm)"
+                    )
+            else:
+                instprm_file = st.file_uploader(
+                    "Instrument Params (.instprm or .ins)",
+                    type=["instprm", "ins"],
+                    help="GSAS-II .instprm file, or SHELX .ins file (auto-converted to .instprm)"
+                )
             main_cif = st.file_uploader("Main CIF (Optional)", type=["cif"])
             
             st.divider()
@@ -1052,7 +1173,30 @@ with st.sidebar:
             with c3:
                 max_passes = st.number_input("Max Discovery Passes", 1, 10, 3, help="Max number of sequential impurity phases to search for.")
             with c4:
-                inst_mode = st.radio("Instrument Mode", ["Auto", "CW", "TOF"], horizontal=True, help="Manually specify instrument type if auto-detection fails.")
+                if builtin_instprm_key:
+                    inst_mode = "CW"
+                    st.markdown("**Instrument Mode**")
+                    st.info("CW (fixed by built-in CuKa lab PXRD preset)")
+                else:
+                    inst_mode = st.radio("Instrument Mode", ["Auto", "CW", "TOF"], horizontal=True, help="Manually specify instrument type if auto-detection fails.")
+
+            if IS_XRAY and main_cif is not None:
+                light_calibration_enabled = st.checkbox(
+                    "Use Light PXRD Calibration",
+                    value=True,
+                    key="light_pxrd_calibration_enabled",
+                    help=(
+                        "Before discovery, run a conservative main-phase-only refinement to "
+                        "optimize `Zero + U/V/W` and reuse the generated `.instprm` for the rest of the run."
+                    ),
+                )
+                if light_calibration_enabled:
+                    st.info(
+                        "Main phase provided: RADAR-PD will run a light PXRD calibration "
+                        "before discovery to refine `Zero + U/V/W` and reuse the generated `.instprm`."
+                    )
+                else:
+                    st.caption("Light PXRD calibration is disabled for this run; the original instrument file will be used throughout.")
 
     # --- 2. ADVANCED SETTINGS (Secondary) ---
     with st.expander("⚙️ Advanced Tuning", expanded=False):
@@ -1096,126 +1240,172 @@ with st.sidebar:
     # START BUTTON
     if not st.session_state.run_active:
         if st.button("🚀 RUN PIPELINE"):
-                # Setup
-                clean_name = run_name.replace(" ", "_")
-                rdir = PROJECT_ROOT / Path("runs") / clean_name
-                input_dir = rdir / "inputs"
-                input_dir.mkdir(parents=True, exist_ok=True)
-                
-                # File Handling
-                dpath, ipath, cpath = None, None, None
-                import shutil
-                if example_selection != "None":
-                    if example_selection == "TbSSL (CW Demo)":
-                        orig_d = (Path(PROJECT_ROOT) / "examples" / "tbssl" / "HB2A_TbSSL.dat")
-                        orig_i = (Path(PROJECT_ROOT) / "examples" / "tbssl" / "hb2a_si_ge113.instprm")
-                        orig_c = (Path(PROJECT_ROOT) / "examples" / "tbssl" / "TbSSL.cif")
-                    else: # LK-99
-                        orig_d = (Path(PROJECT_ROOT) / "examples" / "lk99" / "PG3_56181-3.dat")
-                        orig_i = (Path(PROJECT_ROOT) / "examples" / "lk99" / "2023A_June_HighRes_60HzB3_CWL2p665.instprm")
-                        orig_c = (Path(PROJECT_ROOT) / "examples" / "lk99" / "LK99.cif")
-                    
-                    # Copy to inputs folder for provenance & sync
-                    shutil.copy(orig_d, input_dir / orig_d.name)
-                    shutil.copy(orig_i, input_dir / orig_i.name)
-                    shutil.copy(orig_c, input_dir / orig_c.name)
-                    
-                    dpath = str((input_dir / orig_d.name).resolve())
-                    ipath = str((input_dir / orig_i.name).resolve())
-                    cpath = str((input_dir / orig_c.name).resolve())
+                clean_name = (run_name or "").strip().replace(" ", "_")
+                setup_errors = []
+
+                if not clean_name:
+                    setup_errors.append("Please enter a run name before starting the pipeline.")
+
+                if example_selection == "None":
+                    if not data_file:
+                        setup_errors.append("Please upload a diffraction data file.")
+                    if builtin_instprm_key:
+                        if not IS_XRAY:
+                            setup_errors.append("The built-in CuKa lab PXRD preset is only available for X-ray runs.")
+                    elif not instprm_file:
+                        if IS_XRAY:
+                            setup_errors.append("Please upload an instrument parameter file, or select the built-in CuKa lab PXRD preset.")
+                        else:
+                            setup_errors.append("Please upload an instrument parameter file.")
+
+                if setup_errors:
+                    for message in setup_errors:
+                        st.error(message)
                 else:
-                    # Save logic inline for manual uploads
-                    if data_file:
-                        with open(input_dir / data_file.name, "wb") as f: f.write(data_file.getbuffer())
-                        dpath = str((input_dir / data_file.name).resolve())
-                    if instprm_file:
-                        with open(input_dir / instprm_file.name, "wb") as f: f.write(instprm_file.getbuffer())
-                        ipath = str((input_dir / instprm_file.name).resolve())
-                    if main_cif:
-                        with open(input_dir / main_cif.name, "wb") as f: f.write(main_cif.getbuffer())
-                        cpath = str((input_dir / main_cif.name).resolve())
+                    rdir = PROJECT_ROOT / Path("runs") / clean_name
+                    input_dir = rdir / "inputs"
+                    input_dir.mkdir(parents=True, exist_ok=True)
 
-                # Config
-                els = [e.strip() for e in allowed_elements_str.split(",") if e.strip()]
-                env = [e.strip() for e in sample_env_elements_str.split(",") if e.strip()]
-                
-                # Advanced parameters dictionary
-                adv_cfg = {
-                    "hist_filter": {"topN": top_n_ml},
-                    "top_candidates": wait_for_pass,
-                    "joint_top_k": joint_k,
-                    "rwp_improve_eps": rwp_eps,
-                    "stage4": {
-                        "len_tol_pct": len_tol,
-                        "ang_tol_deg": ang_tol,
-                    },
-                    "knee_filter": {
-                        "min_points_hist": k_min_hist,
-                        "min_rel_span": k_span,
-                    },
-                    "corr_threshold": dedup_threshold,
-                    "exclude_sg": [int(s.strip()) for s in excluded_sgs.split(",") if s.strip().isdigit()],
-                    "background": {
-                        "type": bg_type,
-                        "terms": int(bg_terms),
-                    }
-                }
-                
-                # DB Path Overrides (if expert mode changed them)
-                db_overrides = {}
-                if db_catalog != "catalog_deduplicated.csv": db_overrides["catalog_csv"] = str(Path(ACTIVE_DB_DIR) / db_catalog)
-                if db_stable != "mp_experimental_stable.csv": db_overrides["stable_csv"] = str(Path(ACTIVE_DB_DIR) / db_stable)
-                if db_metadata != "highsymm_metadata.json": db_overrides["original_json"] = str(Path(ACTIVE_DB_DIR) / db_metadata)
-                if db_overrides: adv_cfg["db"] = db_overrides
+                    dpath, ipath, cpath = None, None, None
 
-                # Wire radiation into stage4 config
-                rad_lower = "xray" if IS_XRAY else "neutron"
-                if "stage4" not in adv_cfg:
-                    adv_cfg["stage4"] = {}
-                adv_cfg["stage4"]["radiation"] = rad_lower
+                    try:
+                        if example_selection != "None":
+                            if example_selection == "TbSSL (CW Demo)":
+                                orig_d = (Path(PROJECT_ROOT) / "examples" / "tbssl" / "HB2A_TbSSL.dat")
+                                orig_i = (Path(PROJECT_ROOT) / "examples" / "tbssl" / "hb2a_si_ge113.instprm")
+                                orig_c = (Path(PROJECT_ROOT) / "examples" / "tbssl" / "TbSSL.cif")
+                            else: # LK-99
+                                orig_d = (Path(PROJECT_ROOT) / "examples" / "lk99" / "PG3_56181-3.dat")
+                                orig_i = (Path(PROJECT_ROOT) / "examples" / "lk99" / "2023A_June_HighRes_60HzB3_CWL2p665.instprm")
+                                orig_c = (Path(PROJECT_ROOT) / "examples" / "lk99" / "LK99.cif")
 
-                # Mode Handling
-                if example_selection != "None":
-                    selected_mode = "auto" # Examples use auto
-                else:
-                    selected_mode = inst_mode.lower()
+                            shutil.copy(orig_d, input_dir / orig_d.name)
+                            shutil.copy(orig_i, input_dir / orig_i.name)
+                            shutil.copy(orig_c, input_dir / orig_c.name)
 
-                cfg = build_pipeline_config(
-                    run_name=run_name, data_file=dpath, instprm_file=ipath,
-                    allowed_elements=els, sample_env_elements=env, main_cif=cpath,
-                    work_root=str(rdir), project_root=PROJECT_ROOT,
-                    db_root=str(ACTIVE_DB_DIR),
-                    # Always use metadata JSON from the active DB directory
-                    original_json_override=str(Path(ACTIVE_DB_DIR) / "highsymm_metadata.json"),
-                    min_impurity_percent=trace_limit, max_passes=max_passes,
-                    instrument_mode=selected_mode,
-                    advanced_params=adv_cfg
-                )
-                
-                with open(rdir / "pipeline_config.yaml", "w") as f: f.write(cfg)
-                
-                # Start
-                st.session_state.run_dir = str(rdir)
-                st.session_state.run_name = clean_name
-                st.session_state.log_lines = []
-                st.session_state.funnel_data = {"Total Database": 0, "Elements": 0, "Spacegroup": 0, "Stability": 0}
-                st.session_state.progress = 0
-                st.session_state.status_msg = "Initializing..."
-                
-                lpath = str(rdir / "pipeline.log")
-                process, q = PipelineRunner(PROJECT_ROOT, use_pixi=st.session_state.use_pixi).start_non_blocking(str(rdir/"pipeline_config.yaml"), clean_name, log_path=lpath)
-                st.session_state.pipeline_process = process
-                st.session_state.log_queue = q
-                st.session_state.run_active = True
-                st.rerun()
+                            dpath = str((input_dir / orig_d.name).resolve())
+                            ipath = str((input_dir / orig_i.name).resolve())
+                            cpath = str((input_dir / orig_c.name).resolve())
+                        else:
+                            with open(input_dir / data_file.name, "wb") as f:
+                                f.write(data_file.getbuffer())
+                            dpath = str((input_dir / data_file.name).resolve())
+
+                            if builtin_instprm_key:
+                                preset = get_builtin_instprm_preset(builtin_instprm_key)
+                                generated_instprm = input_dir / preset["filename"]
+                                write_builtin_instprm_file(builtin_instprm_key, generated_instprm)
+                                ipath = str(generated_instprm.resolve())
+                            else:
+                                with open(input_dir / instprm_file.name, "wb") as f:
+                                    f.write(instprm_file.getbuffer())
+                                ipath = str((input_dir / instprm_file.name).resolve())
+
+                            if main_cif:
+                                with open(input_dir / main_cif.name, "wb") as f:
+                                    f.write(main_cif.getbuffer())
+                                cpath = str((input_dir / main_cif.name).resolve())
+                    except Exception as exc:
+                        setup_errors.append(f"Failed to prepare input files: {exc}")
+
+                    if setup_errors:
+                        for message in setup_errors:
+                            st.error(message)
+                    else:
+                        els = [e.strip() for e in allowed_elements_str.split(",") if e.strip()]
+                        env = [e.strip() for e in sample_env_elements_str.split(",") if e.strip()]
+
+                        adv_cfg = {
+                            "hist_filter": {"topN": top_n_ml},
+                            "top_candidates": wait_for_pass,
+                            "joint_top_k": joint_k,
+                            "rwp_improve_eps": rwp_eps,
+                            "stage4": {
+                                "len_tol_pct": len_tol,
+                                "ang_tol_deg": ang_tol,
+                            },
+                            "knee_filter": {
+                                "min_points_hist": k_min_hist,
+                                "min_rel_span": k_span,
+                            },
+                            "corr_threshold": dedup_threshold,
+                            "exclude_sg": [int(s.strip()) for s in excluded_sgs.split(",") if s.strip().isdigit()],
+                            "background": {
+                                "type": bg_type,
+                                "terms": int(bg_terms),
+                            }
+                        }
+
+                        db_overrides = {}
+                        if db_catalog != "catalog_deduplicated.csv": db_overrides["catalog_csv"] = str(Path(ACTIVE_DB_DIR) / db_catalog)
+                        if db_stable != "mp_experimental_stable.csv": db_overrides["stable_csv"] = str(Path(ACTIVE_DB_DIR) / db_stable)
+                        if db_metadata != "highsymm_metadata.json": db_overrides["original_json"] = str(Path(ACTIVE_DB_DIR) / db_metadata)
+                        if db_overrides: adv_cfg["db"] = db_overrides
+
+                        rad_lower = "xray" if IS_XRAY else "neutron"
+                        if "stage4" not in adv_cfg:
+                            adv_cfg["stage4"] = {}
+                        adv_cfg["stage4"]["radiation"] = rad_lower
+
+                        if example_selection != "None":
+                            selected_mode = "auto"
+                        elif builtin_instprm_key:
+                            selected_mode = LAB_XRAY_PRESET["instrument_mode"]
+                        else:
+                            selected_mode = inst_mode.lower()
+
+                        if IS_XRAY and cpath and light_calibration_enabled:
+                            adv_cfg["light_calibration"] = {
+                                "enabled": True,
+                                "zero_cycles": 1,
+                                "profile_cycles": 2,
+                                "accept_rwp_worsen": 0.15,
+                                "terms": ["Zero", "U", "V", "W"],
+                            }
+
+                        try:
+                            cfg = build_pipeline_config(
+                                run_name=run_name, data_file=dpath, instprm_file=ipath,
+                                allowed_elements=els, sample_env_elements=env, main_cif=cpath,
+                                work_root=str(rdir), project_root=PROJECT_ROOT,
+                                db_root=str(ACTIVE_DB_DIR),
+                                # Always use metadata JSON from the active DB directory
+                                original_json_override=str(Path(ACTIVE_DB_DIR) / "highsymm_metadata.json"),
+                                min_impurity_percent=trace_limit, max_passes=max_passes,
+                                instrument_mode=selected_mode,
+                                advanced_params=adv_cfg
+                            )
+
+                            with open(rdir / "pipeline_config.yaml", "w") as f:
+                                f.write(cfg)
+
+                            st.session_state.run_dir = str(rdir)
+                            st.session_state.run_name = clean_name
+                            st.session_state.log_lines = []
+                            st.session_state.event_file_run_dir = str(rdir)
+                            st.session_state.event_file_cursor = 0
+                            st.session_state.funnel_data = {"Total Database": 0, "Elements": 0, "Spacegroup": 0, "Stability": 0}
+                            st.session_state.progress = 0
+                            st.session_state.status_msg = "Initializing..."
+
+                            lpath = str(rdir / "pipeline.log")
+                            process, q = PipelineRunner(PROJECT_ROOT, use_pixi=st.session_state.use_pixi).start_non_blocking(str(rdir/"pipeline_config.yaml"), clean_name, log_path=lpath)
+                            st.session_state.pipeline_process = process
+                            st.session_state.log_queue = q
+                            st.session_state.run_active = True
+                            st.rerun()
+                        except Exception as exc:
+                            st.error(f"Failed to start the pipeline: {exc}")
 
     # STOP BUTTON
     if st.session_state.run_active:
         if st.button("🛑 STOP PIPELINE"):
             if st.session_state.pipeline_process:
-                st.session_state.pipeline_process.terminate()
+                stop_process_tree(st.session_state.pipeline_process)
             st.session_state.run_active = False
             st.session_state.run_finished = True
+            st.session_state.pipeline_process = None
+            st.session_state.log_queue = None
             st.warning("Pipeline Terminated")
             st.rerun()
             
@@ -1383,21 +1573,41 @@ with t_run:
                 
                 if p_dir_new.exists():
                     st.markdown("**Plots**")
-                    has_plots = render_file_explorer(p_dir_new, "art_new", [".png", ".jpg", ".pdf"])
+                    has_plots = render_file_explorer(
+                        p_dir_new,
+                        "art_new",
+                        [".png", ".jpg", ".pdf"],
+                        hide_predicate=_hide_curated_artifact,
+                    )
                     if not has_plots:
                         st.caption("No plots generated yet.")
                 
                 if diag_dir.exists():
                     st.markdown("**Diagnostics**")
-                    has_diag = render_file_explorer(diag_dir, "art_diag", [".png", ".jpg", ".pdf"])
+                    has_diag = render_file_explorer(
+                        diag_dir,
+                        "art_diag",
+                        [".png", ".jpg", ".pdf"],
+                        hide_predicate=_hide_curated_artifact,
+                    )
                     if not has_diag:
                         st.caption("No diagnostics generated yet.")
 
                 if not p_dir_new.exists() and not diag_dir.exists():
                     if p_dir_old.exists():
-                        render_file_explorer(p_dir_old, "art_root", [".png", ".jpg", ".pdf"])
+                        render_file_explorer(
+                            p_dir_old,
+                            "art_root",
+                            [".png", ".jpg", ".pdf"],
+                            hide_predicate=_hide_curated_artifact,
+                        )
                     elif sub_plots.exists():
-                        render_file_explorer(sub_plots, "art_sub", [".png", ".jpg", ".pdf"])
+                        render_file_explorer(
+                            sub_plots,
+                            "art_sub",
+                            [".png", ".jpg", ".pdf"],
+                            hide_predicate=_hide_curated_artifact,
+                        )
                     else:
                         st.info("No plots directory found yet.")
             else:
@@ -1414,56 +1624,82 @@ with t_res:
         def render_ml_results():
             diag_dir = rdir / "Diagnostics"
             if diag_dir.exists():
-                # Find all pass files
-                ml_files = sorted(list(diag_dir.glob("ml_rank_result_pass*.jsonl")), 
-                                 key=lambda x: int(re.search(r"pass(\d+)", x.name).group(1)) if re.search(r"pass(\d+)", x.name) else 0)
-                
-                if ml_files:
+                result_files = list(diag_dir.glob("ml_rank_result_pass*.jsonl"))
+                status_files = list(diag_dir.glob("ml_rank_status_pass*.json"))
+                input_files = list(diag_dir.glob("ml_rank_input_pass*.json"))
+
+                def _pass_ix(path: Path) -> int:
+                    match = re.search(r"pass(\d+)", path.name)
+                    return int(match.group(1)) if match else 0
+
+                result_by_pass = {_pass_ix(path): path for path in result_files}
+                status_by_pass = {_pass_ix(path): path for path in status_files}
+                input_by_pass = {_pass_ix(path): path for path in input_files}
+                all_passes = sorted(set(result_by_pass) | set(status_by_pass) | set(input_by_pass))
+
+                if all_passes:
                     st.subheader("🤖 ML Ranker Diagnostics")
                     st.info("💡 **ML Score**: Higher (less negative) is better. Represents relative relevance weight.")
                     
-                    # Display each pass in its own expander
-                    for f_path in ml_files:
-                        pass_name = f_path.stem.replace("ml_rank_result_", "")
-                        with st.expander(f"Pass: {pass_name}", expanded=(f_path == ml_files[-1])):
-                            try:
-                                with open(f_path, "r") as f:
-                                    # json.load(f) might fail if file is jsonl with multiple lines
-                                    # but gsas_complete_pipeline_nomain writes one JSON object per pass
-                                    raw_text = f.read().strip()
-                                    if not raw_text:
-                                        continue
-                                    data = json.loads(raw_text)
-                                
-                                if "ranked" in data:
-                                    import pandas as pd
-                                    df = pd.DataFrame(data["ranked"])
-                                    
-                                    # Add metadata columns if db_loader is available
-                                    if "db_loader" in st.session_state and st.session_state.db_loader:
-                                        db = st.session_state.db_loader
-                                        names, sgs, sg_nums = [], [], []
-                                        for pid in df["mp_id"]:
-                                            try:
-                                                names.append(db.get_pretty_name(pid))
-                                                sgs.append(db.get_space_group_symbol(pid) or "—")
-                                                sg_nums.append(db.get_space_group_number(pid) or "—")
-                                            except Exception as e:
-                                                names.append("unknown")
-                                                sgs.append("—")
-                                                sg_nums.append("—")
-                                                print(f"[ui] Warning: metadata lookup failed for {pid}: {e}")
-                                        
-                                        df.insert(2, "Compound", names)
-                                        df.insert(3, "Space Group", sgs)
-                                        df.insert(4, "SG #", sg_nums)
+                    for pass_ix in all_passes:
+                        f_path = result_by_pass.get(pass_ix)
+                        status_path = status_by_pass.get(pass_ix)
+                        input_path = input_by_pass.get(pass_ix)
+                        with st.expander(f"Pass: pass{pass_ix}", expanded=(pass_ix == all_passes[-1])):
+                            if f_path:
+                                try:
+                                    data = load_first_json_record(f_path)
+                                    if "ranked" in data:
+                                        import pandas as pd
+                                        df = pd.DataFrame(data["ranked"])
+                                        # Add metadata columns if db_loader is available
+                                        if "db_loader" in st.session_state and st.session_state.db_loader:
+                                            db = st.session_state.db_loader
+                                            names, sgs, sg_nums = [], [], []
+                                            for pid in df["mp_id"]:
+                                                try:
+                                                    names.append(db.get_pretty_name(pid))
+                                                    sgs.append(db.get_space_group_symbol(pid) or "—")
+                                                    sg_nums.append(db.get_space_group_number(pid) or "—")
+                                                except Exception as e:
+                                                    names.append("unknown")
+                                                    sgs.append("—")
+                                                    sg_nums.append("—")
+                                                    print(f"[ui] Warning: metadata lookup failed for {pid}: {e}")
 
-                                    st.dataframe(df, hide_index=True, width='stretch')
-                                else:
-                                    st.caption("No ranking data found in output.")
-                            except Exception as e:
-                                st.caption(f"Waiting for ML ranker... ({e})")
-        
+                                            df.insert(2, "Compound", names)
+                                            df.insert(3, "Space Group", sgs)
+                                            df.insert(4, "SG #", sg_nums)
+
+                                        st.dataframe(df, hide_index=True, width='stretch')
+                                    else:
+                                        st.caption("No ranking data found in output.")
+                                except Exception as e:
+                                    st.caption(f"Could not read ML ranker result: {e}")
+
+                            if status_path:
+                                try:
+                                    status_data = json.loads(status_path.read_text(encoding="utf-8"))
+                                except Exception as e:
+                                    st.caption(f"Could not read ranker status: {e}")
+                                    continue
+
+                                status_value = status_data.get("status", "unknown")
+                                if status_value == "missing_assets":
+                                    st.warning(f"ML ranker unavailable: {status_data.get('error', 'missing checkpoint or script')}")
+                                elif status_value in {"failed", "failed_no_output", "failed_readback", "failed_exception"}:
+                                    st.error(f"ML ranker failed: {status_data.get('error') or status_data.get('note') or status_data.get('stderr') or 'unknown error'}")
+                                elif status_value == "complete":
+                                    st.caption(f"Ranker completed with {status_data.get('n_ranked', 0)} ranked candidates.")
+                                elif status_value == "complete_empty":
+                                    st.info(status_data.get("note", "ML ranker completed but returned no ranked candidates."))
+                                elif status_value == "input_ready":
+                                    st.caption("Ranker input prepared; waiting for result.")
+                            elif input_path:
+                                st.warning("Ranker input was generated, but no status/result artifact was found for this run.")
+                else:
+                    st.caption("No ML ranker diagnostics generated yet.")
+
         render_ml_results()
         
         # Metrics Overview (Optional, maybe keep it simple)
@@ -1472,7 +1708,33 @@ with t_res:
             try:
                 with open(mpath) as f: m = json.load(f)
                 mets = m.get("metrics", {})
-                st.markdown(f"**Status:** {m.get('status', 'Processing')} | **Final Rwp:** {mets.get('final_rwp', 0):.2f}%")
+                stage1_result = ((m.get("stages") or {}).get("Stage 1") or {}).get("result", {}) or {}
+
+                def _fmt_percent(value):
+                    try:
+                        return f"{float(value):.2f}%"
+                    except Exception:
+                        return "—"
+
+                c_status, c_final, c_stage1, c_phases = st.columns(4)
+                c_status.metric("Run Status", str(m.get("status", "processing")).title())
+                c_final.metric("Final Rwp", _fmt_percent(mets.get("final_rwp")))
+                c_stage1.metric("Stage 1 Rwp", _fmt_percent(stage1_result.get("rwp")))
+                c_phases.metric("Phases Found", str(mets.get("phases_found", "—")))
+
+                calib_status = stage1_result.get("calibration_status")
+                calib_note = stage1_result.get("calibration_note")
+                calibrated_instprm = stage1_result.get("calibrated_instprm")
+                if calib_status == "adopted":
+                    st.success(f"PXRD light calibration applied. {calib_note or ''}".strip())
+                elif calib_status == "rejected":
+                    st.warning(f"PXRD light calibration was not adopted. {calib_note or ''}".strip())
+                elif calib_status == "failed":
+                    st.error(f"PXRD light calibration failed. {calib_note or ''}".strip())
+                elif calib_status == "skipped":
+                    st.info(f"PXRD light calibration skipped. {calib_note or ''}".strip())
+                if calibrated_instprm:
+                    st.caption(f"Calibrated instrument profile: {calibrated_instprm}")
             except Exception as e:
                 st.caption(f"⚠️ Could not read run manifest yet: {e}")
 
@@ -1483,15 +1745,35 @@ with t_res:
         csv_files = sorted(list(rdir.rglob("*.csv")), key=lambda x: x.stat().st_mtime, reverse=True)
         
         if csv_files:
-            for fcsv in csv_files:
-                with st.expander(f"📄 {fcsv.name}", expanded=True):
-                    try:
-                        import pandas as pd
-                        df = pd.read_csv(fcsv)
-                        st.dataframe(df, width="stretch")
-                        st.download_button(f"Download {fcsv.name}", open(fcsv, "rb"), file_name=fcsv.name, key=f"dl_res_{fcsv.name}")
-                    except Exception as e:
-                        st.error(f"❌ Could not load {fcsv.name}: {e}")
+            primary_csvs = [p for p in csv_files if p.name == "Summary_Fractions.csv"]
+            other_csvs = [p for p in csv_files if p.name != "Summary_Fractions.csv"]
+
+            def _render_csv_group(files, *, primary=False):
+                for idx, fcsv in enumerate(files):
+                    label = f"📄 {fcsv.name}"
+                    if primary:
+                        label = f"⭐ {fcsv.name}"
+                    with st.expander(label, expanded=(primary and idx == 0)):
+                        try:
+                            import pandas as pd
+                            df = pd.read_csv(fcsv)
+                            st.dataframe(df, width="stretch")
+                            st.download_button(
+                                f"Download {fcsv.name}",
+                                fcsv.read_bytes(),
+                                file_name=fcsv.name,
+                                key=f"dl_res_{fcsv.as_posix()}",
+                            )
+                        except Exception as e:
+                            st.error(f"❌ Could not load {fcsv.name}: {e}")
+
+            if primary_csvs:
+                st.markdown("**Primary Output**")
+                _render_csv_group(primary_csvs, primary=True)
+
+            if other_csvs:
+                st.markdown("**Other CSV Artifacts**")
+                _render_csv_group(other_csvs, primary=False)
         else:
             st.info("No CSV data files generated yet.")
     else:
@@ -1509,7 +1791,10 @@ with t_int:
         @st.fragment(run_every=5.0)
         def render_interactive_plots():
             rdir = Path(st.session_state.run_dir)
-            payload_files = discover_plot_payload_files(rdir)
+            payload_files = [
+                p for p in discover_plot_payload_files(rdir)
+                if not _hide_curated_artifact(p)
+            ]
 
             if not payload_files:
                 st.info("No interactive plot payloads found yet. Run the pipeline to generate new plot sidecars.")
@@ -1530,10 +1815,11 @@ with t_int:
                                 st.warning("This payload type is not supported yet.")
                                 continue
 
+                            plot_key = "int_plot_" + str(payload_path).replace("\\", "_").replace("/", "_")
                             st.plotly_chart(
                                 fig,
                                 width='stretch',
-                                key=f"int_plot_{str(payload_path).replace('\\', '_').replace('/', '_')}",
+                                key=plot_key,
                             )
 
                             src_plot = payload.get("source_plot_path")
@@ -1566,4 +1852,3 @@ with t_exp:
             render_file_explorer(rdir, "exp_root", None) # No filter, show all
     else:
         st.info("No active run directory.")
-
