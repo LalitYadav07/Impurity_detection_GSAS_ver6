@@ -146,7 +146,7 @@ def simulate_topM_peaks(structure: Structure, two_theta_min: float, two_theta_ma
                         radiation: str = "neutron", wavelength: float = 1.54184
                         ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     if radiation.lower() == "neutron":
-        calc = NDCalculator() # Pymatgen default (approx 1.0 or 1.54? usually 1.54 for pattern generation unless specified)
+        calc = NDCalculator(wavelength=wavelength)
         pat = calc.get_pattern(structure, two_theta_range=(two_theta_min, two_theta_max))
     else:
         # X-ray
