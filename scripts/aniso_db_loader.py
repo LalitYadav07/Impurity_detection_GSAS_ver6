@@ -171,21 +171,47 @@ class CatalogPaths:
     original_json: Optional[str] = None  # optional JSON: {id: {"cif_content": "..."}}
 
 
+def _catalog_base_dir(catalog_csv: str) -> str:
+    return os.path.dirname(os.path.abspath(catalog_csv))
+
+
+def _resolve_catalog_relative_path(catalog_csv: str, maybe_path: Optional[str]) -> Optional[str]:
+    if not maybe_path:
+        return maybe_path
+    if os.path.isabs(maybe_path):
+        return maybe_path
+    return os.path.normpath(os.path.join(_catalog_base_dir(catalog_csv), maybe_path))
+
+
+def _resolve_cif_map_entry(cif_map_json: str, mapped_path: str) -> str:
+    if os.path.isabs(mapped_path):
+        return mapped_path
+    base = os.path.dirname(os.path.abspath(cif_map_json))
+    return os.path.normpath(os.path.join(base, mapped_path))
+
+
 class DBLoader:
     def _log(self, msg: str) -> None:
         if self.debug:
             print(msg)
 
     def __init__(self, paths: CatalogPaths):
-        self.paths = paths
+        resolved_catalog = os.path.abspath(paths.catalog_csv)
+        resolved_cif_map = _resolve_catalog_relative_path(resolved_catalog, paths.cif_map_json)
+        resolved_original = _resolve_catalog_relative_path(resolved_catalog, paths.original_json)
+        self.paths = CatalogPaths(
+            catalog_csv=resolved_catalog,
+            cif_map_json=resolved_cif_map,
+            original_json=resolved_original,
+        )
         self.debug = bool(int(os.environ.get("ANISO_DB_DEBUG", "1")))
 
-        if not os.path.exists(paths.catalog_csv):
-            raise FileNotFoundError(f"catalog_csv not found: {paths.catalog_csv}")
+        if not os.path.exists(self.paths.catalog_csv):
+            raise FileNotFoundError(f"catalog_csv not found: {self.paths.catalog_csv}")
 
         # Load catalog
-        self.catalog = pd.read_csv(paths.catalog_csv, keep_default_na=False)
-        self._log(f"[DB] catalog loaded: {paths.catalog_csv}")
+        self.catalog = pd.read_csv(self.paths.catalog_csv, keep_default_na=False)
+        self._log(f"[DB] catalog loaded: {self.paths.catalog_csv}")
         self._log(f"[DB] catalog size: {len(self.catalog)} rows")
 
         # --- Normalize columns (works for different catalog flavors) ---
@@ -236,20 +262,25 @@ class DBLoader:
 
         # Optional CIF map
         self._cif_map: Optional[Dict[str, str]] = None
-        if paths.cif_map_json:
-            if not os.path.exists(paths.cif_map_json):
-                raise FileNotFoundError(f"cif_map_json not found: {paths.cif_map_json}")
-            with open(paths.cif_map_json) as f:
-                self._cif_map = json.load(f)
-                if not isinstance(self._cif_map, dict):
+        if self.paths.cif_map_json:
+            if not os.path.exists(self.paths.cif_map_json):
+                raise FileNotFoundError(f"cif_map_json not found: {self.paths.cif_map_json}")
+            with open(self.paths.cif_map_json) as f:
+                raw_cif_map = json.load(f)
+                if not isinstance(raw_cif_map, dict):
                     raise ValueError("cif_map_json must map id -> path")
-            self._log(f"[DB] attached CIF map: {paths.cif_map_json}")
+                self._cif_map = {}
+                for pid, mapped in raw_cif_map.items():
+                    if not isinstance(mapped, str):
+                        raise ValueError("cif_map_json must map id -> path")
+                    self._cif_map[str(pid)] = _resolve_cif_map_entry(self.paths.cif_map_json, mapped)
+            self._log(f"[DB] attached CIF map: {self.paths.cif_map_json}")
 
         # Optional original JSON
-        if paths.original_json and not os.path.exists(paths.original_json):
-            raise FileNotFoundError(f"original_json not found: {paths.original_json}")
-        if paths.original_json:
-            self._log(f"[DB] original_json available: {paths.original_json}")
+        if self.paths.original_json and not os.path.exists(self.paths.original_json):
+            raise FileNotFoundError(f"original_json not found: {self.paths.original_json}")
+        if self.paths.original_json:
+            self._log(f"[DB] original_json available: {self.paths.original_json}")
 
     # ---------- NPZ path & data ----------
     def phase_npz_path(self, phase_id: str) -> str:

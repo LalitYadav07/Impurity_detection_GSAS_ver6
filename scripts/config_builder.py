@@ -13,6 +13,11 @@ import os
 from pathlib import Path
 from typing import Dict, Any, List
 
+try:
+    from .db_pack import build_db_config, validate_db_config
+except ImportError:
+    from db_pack import build_db_config, validate_db_config
+
 def build_pipeline_config(
     run_name: str,
     data_file: str,
@@ -23,6 +28,8 @@ def build_pipeline_config(
     project_root: str = None,
     db_root: str = None,
     original_json_override: str = None,
+    cif_map_json_override: str = None,
+    db_config_override: Dict[str, Any] = None,
     min_impurity_percent: float = 0.5,
     max_passes: int = 3,
     sample_env_elements: List[str] = None,
@@ -34,6 +41,9 @@ def build_pipeline_config(
     
     original_json_override: If set, use this path for db.original_json instead of
     the default (db_root/highsymm_metadata.json).
+    cif_map_json_override: Optional CIF path overlay map for custom/augmented DB packs.
+    db_config_override: Optional explicit DB config entries to merge over the generated
+    pack layout. Intended for custom pack selection.
     """
     if not run_name or not str(run_name).strip():
         raise ValueError("run_name is required")
@@ -51,6 +61,19 @@ def build_pipeline_config(
     if db_root is None:
         db_root = str(Path(project_root) / "data" / "database_aug")
 
+    db_config = build_db_config(
+        db_root,
+        original_json=original_json_override,
+        cif_map_json=cif_map_json_override,
+    )
+    if db_config_override:
+        for key, value in db_config_override.items():
+            if value is None:
+                db_config.pop(key, None)
+            else:
+                db_config[key] = value
+    validate_db_config(db_config)
+
     # Global section
     config = {
         "PROJECT_ROOT": project_root,
@@ -64,12 +87,7 @@ def build_pipeline_config(
             "tof": str(Path(project_root) / "examples" / "lk99" / "2023A_June_HighRes_60HzB3_CWL2p665.instprm"),
             "pg3": str(Path(project_root) / "examples" / "lk99" / "2023A_June_HighRes_60HzB3_CWL2p665.instprm"),
         },
-        "db": {
-            "catalog_csv": str(Path(db_root) / "catalog_deduplicated.csv"),
-            "original_json": original_json_override or str(Path(db_root) / "highsymm_metadata.json"),
-            "profiles_dir": str(Path(db_root) / "profiles64"),
-            "stable_csv": str(Path(db_root) / "mp_experimental_stable.csv"),
-        },
+        "db": db_config,
         "allowed_elements": allowed_elements,
         "min_impurity_percent": min_impurity_percent,
         "max_passes": max_passes,

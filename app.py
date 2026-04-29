@@ -3,9 +3,11 @@ import os
 import sys
 import yaml
 import json
+import csv
 import time
 import datetime
 import logging
+import tempfile
 from pathlib import Path
 import re
 import shutil
@@ -45,6 +47,8 @@ if scripts_dir not in sys.path:
 from config_builder import build_pipeline_config
 from runner import PipelineRunner, stop_process_tree
 from aniso_db_loader import DBLoader, CatalogPaths
+from db_pack import build_db_config, get_db_pack_layout
+from db_pack_builder import build_augmented_db_pack, build_mini_db_pack
 from instprm_presets import (
     DEFAULT_LAB_XRAY_PRESET_KEY,
     get_builtin_instprm_preset,
@@ -122,6 +126,7 @@ DB_NEUTRON_GDRIVE_URL = "https://drive.google.com/uc?id=1BxPXjdbn7oYTXKfDeLct5-2
 DB_XRAY_GDRIVE_URL = "https://drive.google.com/file/d/12H19jI3mGcYBpJrQRtY-5_WaMjFyIMah/view?usp=sharing"  # X-ray DB GDrive URL
 
 _DB_WRAPPER_DIRS = {"database_aug", "database_xray", "database_neutron"}
+USER_DB_PACKS_DIR = Path(PROJECT_ROOT) / "data" / "user_db_packs"
 
 
 def repair_database_layout(target_db_dir: Path) -> bool:
@@ -203,6 +208,201 @@ def check_db_integrity(target_db_dir, is_xray=False):
 
 # Initial check (placeholder, real check happens in UI)
 DB_EXISTS = check_db_integrity(DB_NEUTRON_DIR, is_xray=False)
+
+
+def _source_key_from_label(source_label: str) -> str:
+    return "xray" if source_label == "X-ray" else "neutron"
+
+
+def _sanitize_token(text: str) -> str:
+    token = re.sub(r"[^A-Za-z0-9]+", "_", str(text)).strip("_").lower()
+    return token or ""
+
+
+def _selected_pack_state_key(source_label: str) -> str:
+    return f"selected_custom_pack_{_source_key_from_label(source_label)}"
+
+
+def _db_mode_matches_kind(selection_mode: str, kind: str) -> bool:
+    if selection_mode == "Original":
+        return False
+    if selection_mode == "Augmented Pack":
+        return kind == "augmented"
+    if selection_mode == "Mini Pack":
+        return kind == "mini"
+    return False
+
+
+def _db_config_is_usable(db_cfg: dict) -> bool:
+    required = ("catalog_csv", "stable_csv", "profiles_dir")
+    for key in required:
+        path = db_cfg.get(key)
+        if not path or not Path(path).exists():
+            return False
+    cif_sources = [db_cfg.get("original_json"), db_cfg.get("cif_map_json")]
+    return any(path and Path(path).exists() for path in cif_sources)
+
+
+def _format_bytes(num_bytes: int) -> str:
+    size = float(max(0, num_bytes))
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024.0 or unit == "GB":
+            if unit == "B":
+                return f"{int(size)} {unit}"
+            return f"{size:.1f} {unit}"
+        size /= 1024.0
+    return f"{size:.1f} GB"
+
+
+def _pack_phase_count(pack: dict) -> int | None:
+    manifest = pack.get("manifest") or {}
+    if manifest.get("kind") == "augmented":
+        added = manifest.get("n_added_phases")
+        base = manifest.get("n_base_phases")
+        if added is not None and base is not None:
+            return int(base) + int(added)
+    n_phases = manifest.get("n_phases")
+    if n_phases is not None:
+        return int(n_phases)
+    return None
+
+
+def _active_db_phase_count() -> int | None:
+    loader = st.session_state.get("db_loader")
+    if loader is None:
+        return None
+    try:
+        return int(len(loader.catalog))
+    except Exception:
+        return None
+
+
+def _derive_allowed_elements_from_active_db() -> list[str]:
+    loader = st.session_state.get("db_loader")
+    elements: set[str] = set()
+
+    if loader is not None:
+        try:
+            catalog = getattr(loader, "catalog", None)
+            if catalog is not None and "elements_list" in catalog.columns:
+                for raw in catalog["elements_list"].astype(str).tolist():
+                    for token in raw.split(","):
+                        token = token.strip()
+                        if token:
+                            elements.add(token)
+        except Exception:
+            pass
+
+    if elements:
+        return sorted(elements)
+
+    catalog_csv = ACTIVE_DB_CONFIG.get("catalog_csv")
+    if catalog_csv and Path(catalog_csv).exists():
+        try:
+            with open(catalog_csv, newline="", encoding="utf-8") as fh:
+                reader = csv.DictReader(fh)
+                for row in reader:
+                    raw = str(row.get("elements_list", "") or "")
+                    for token in raw.split(","):
+                        token = token.strip()
+                        if token:
+                            elements.add(token)
+        except Exception:
+            return []
+
+    return sorted(elements)
+
+
+def discover_user_db_packs(source_label: str) -> list[dict]:
+    source_key = _source_key_from_label(source_label)
+    packs: list[dict] = []
+    if not USER_DB_PACKS_DIR.exists():
+        return packs
+
+    for pack_group in sorted(USER_DB_PACKS_DIR.iterdir()):
+        if not pack_group.is_dir():
+            continue
+        pack_root = pack_group / source_key
+        if not pack_root.is_dir():
+            continue
+
+        layout = get_db_pack_layout(pack_root)
+        manifest = {}
+        if layout.manifest_json.exists():
+            try:
+                manifest = json.loads(layout.manifest_json.read_text(encoding="utf-8"))
+            except Exception:
+                manifest = {}
+
+        kind = str(manifest.get("kind", "custom"))
+        original_json = None
+        if kind == "augmented":
+            original_json = manifest.get("base_original_json")
+        elif layout.original_json.exists():
+            original_json = layout.original_json
+
+        cif_map = layout.cif_map_json if layout.cif_map_json.exists() else None
+        try:
+            db_cfg = build_db_config(
+                layout.root,
+                original_json=original_json,
+                cif_map_json=cif_map,
+            )
+        except Exception:
+            continue
+        if not _db_config_is_usable(db_cfg):
+            continue
+        n_phases = _pack_phase_count({"manifest": manifest})
+
+        packs.append({
+            "name": pack_group.name,
+            "root": layout.root,
+            "root_str": str(layout.root),
+            "kind": kind,
+            "manifest": manifest,
+            "db_config": db_cfg,
+            "label": (
+                f"{pack_group.name} [{kind}, {n_phases} phases]"
+                if n_phases is not None
+                else f"{pack_group.name} [{kind}]"
+            ),
+            "n_phases": n_phases,
+        })
+    return packs
+
+
+def resolve_active_db_selection(source_label: str) -> dict:
+    source_key = _source_key_from_label(source_label)
+    builtin_root = DB_XRAY_DIR if source_key == "xray" else DB_NEUTRON_DIR
+    builtin_cfg = build_db_config(
+        builtin_root,
+        original_json=builtin_root / "highsymm_metadata.json",
+    )
+    builtin = {
+        "root": builtin_root,
+        "db_config": builtin_cfg,
+        "label": f"Built-in {source_label}",
+        "kind": "original",
+        "selection_key": f"{source_label}:original:{builtin_root}",
+    }
+
+    selection_mode = st.session_state.get("db_selection_mode", "Original")
+    if selection_mode == "Original":
+        return builtin
+
+    packs = discover_user_db_packs(source_label)
+    selected_root = st.session_state.get(_selected_pack_state_key(source_label))
+    selected = next((p for p in packs if p["root_str"] == selected_root and _db_mode_matches_kind(selection_mode, p["kind"])), None)
+    if selected is None:
+        return builtin
+
+    return {
+        "root": selected["root"],
+        "db_config": selected["db_config"],
+        "label": selected["label"],
+        "kind": selected["kind"],
+        "selection_key": f"{source_label}:{selected['kind']}:{selected['root_str']}",
+    }
 
 
 def get_gdrive_id(url):
@@ -679,6 +879,12 @@ if 'status_msg' not in st.session_state:
     st.session_state.status_msg = "Ready"
 if 'custom_run_name' not in st.session_state:
     st.session_state.custom_run_name = f"run_{datetime.datetime.now().strftime('%Y%j_%H%M%S')}"
+if 'db_selection_mode' not in st.session_state:
+    st.session_state.db_selection_mode = "Original"
+if 'selected_custom_pack_xray' not in st.session_state:
+    st.session_state.selected_custom_pack_xray = None
+if 'selected_custom_pack_neutron' not in st.session_state:
+    st.session_state.selected_custom_pack_neutron = None
 
 if 'pipeline_state' not in st.session_state:
     st.session_state.pipeline_state = {
@@ -694,31 +900,50 @@ if 'event_file_cursor' not in st.session_state:
 if 'event_file_run_dir' not in st.session_state:
     st.session_state.event_file_run_dir = None
 
+# Apply deferred custom-pack activation before any widgets using these keys are created.
+pending_db_activation = st.session_state.pop("pending_db_activation", None)
+if pending_db_activation:
+    try:
+        pending_mode = str(pending_db_activation.get("mode", "")).strip()
+        pending_source = str(pending_db_activation.get("source", "")).strip().lower()
+        pending_pack_root = pending_db_activation.get("pack_root")
+        if pending_mode in {"Original", "Augmented Pack", "Mini Pack"}:
+            st.session_state.db_selection_mode = pending_mode
+        if pending_source in {"xray", "neutron"} and pending_pack_root:
+            st.session_state[f"selected_custom_pack_{pending_source}"] = str(pending_pack_root)
+    except Exception:
+        pass
+
 # --- DB LOADER INITIALIZATION ---
 # Determine active DB based on session state
 current_source = st.session_state.get("radiation_source", "Neutron")
 IS_XRAY = (current_source == "X-ray")
-ACTIVE_DB_DIR = DB_NEUTRON_DIR if not IS_XRAY else DB_XRAY_DIR
-ACTIVE_DB_EXISTS = check_db_integrity(ACTIVE_DB_DIR, is_xray=IS_XRAY)
+BUILTIN_DB_DIR = DB_NEUTRON_DIR if not IS_XRAY else DB_XRAY_DIR
+BUILTIN_DB_EXISTS = check_db_integrity(BUILTIN_DB_DIR, is_xray=IS_XRAY)
+ACTIVE_DB_SELECTION = resolve_active_db_selection(current_source)
+ACTIVE_DB_ROOT = Path(ACTIVE_DB_SELECTION["root"])
+ACTIVE_DB_CONFIG = ACTIVE_DB_SELECTION["db_config"]
+ACTIVE_DB_LABEL = ACTIVE_DB_SELECTION["label"]
+ACTIVE_DB_KIND = ACTIVE_DB_SELECTION["kind"]
+ACTIVE_DB_EXISTS = _db_config_is_usable(ACTIVE_DB_CONFIG)
+ACTIVE_METADATA_JSON = ACTIVE_DB_CONFIG.get("original_json")
 
-# Active metadata is always local to the selected database.
-ACTIVE_METADATA_JSON = str(ACTIVE_DB_DIR / "highsymm_metadata.json")
-
-# Reload logic: if source changed or loader missing
-if ACTIVE_DB_EXISTS and ('db_loader' not in st.session_state or st.session_state.get('db_loader_source') != current_source):
+# Reload logic: if selection changed or loader missing
+if ACTIVE_DB_EXISTS and ('db_loader' not in st.session_state or st.session_state.get('db_loader_source') != ACTIVE_DB_SELECTION["selection_key"]):
     try:
         paths = CatalogPaths(
-            catalog_csv=str(ACTIVE_DB_DIR / "catalog_deduplicated.csv"),
-            original_json=ACTIVE_METADATA_JSON if os.path.exists(ACTIVE_METADATA_JSON) else None
+            catalog_csv=str(ACTIVE_DB_CONFIG["catalog_csv"]),
+            cif_map_json=ACTIVE_DB_CONFIG.get("cif_map_json"),
+            original_json=ACTIVE_METADATA_JSON if ACTIVE_METADATA_JSON and os.path.exists(ACTIVE_METADATA_JSON) else None
         )
         loader = DBLoader(paths)
-        stable_csv = ACTIVE_DB_DIR / "mp_experimental_stable.csv"
-        if stable_csv.exists():
+        stable_csv = ACTIVE_DB_CONFIG.get("stable_csv")
+        if stable_csv and Path(stable_csv).exists():
             loader.attach_stable_catalog(str(stable_csv))
         st.session_state.db_loader = loader
-        st.session_state.db_loader_source = current_source
+        st.session_state.db_loader_source = ACTIVE_DB_SELECTION["selection_key"]
     except Exception as e:
-        st.error(f"❌ Failed to initialize {current_source} database catalog: {e}")
+        st.error(f"❌ Failed to initialize {ACTIVE_DB_LABEL} database catalog: {e}")
 
 # --- LOG STATE CLEANUP (Recovery from previous formatting mistakes) ---
 if 'log_lines' in st.session_state:
@@ -1057,40 +1282,291 @@ with st.sidebar:
         st.rerun()
 
     # Database Status
-    if not ACTIVE_DB_EXISTS:
-        st.warning(f"📊 {rad_source} Database missing")
-        with st.expander("🛠️ How to fix", expanded=True):
-            default_url = DB_XRAY_GDRIVE_URL if IS_XRAY else DB_NEUTRON_GDRIVE_URL
-            # If X-ray is selected and we have a default GDrive URL, attempt a single automatic download
-            if IS_XRAY and default_url:
-                # Use a session flag to avoid repeated automatic attempts on reruns
-                if not st.session_state.get("xray_auto_attempted", False):
-                    st.session_state["xray_auto_attempted"] = True
-                    st.info("🔁 X-ray database missing — attempting automatic download from configured Google Drive link...")
-                    try:
-                        success = download_and_extract_db(default_url, target_db_dir=ACTIVE_DB_DIR, is_xray=True)
-                        if success:
-                            st.success("✅ X-ray database downloaded and installed. Refreshing UI...")
-                            st.rerun()
-                        else:
-                            st.warning("⚠️ Automatic download failed — please provide a direct link or upload the ZIP manually.")
-                    except Exception as _e:
-                        st.warning("⚠️ Automatic download encountered an error — please provide a direct link or upload the ZIP manually.")
-            elif IS_XRAY and not default_url:
-                st.info("ℹ️ X-ray DB: Enter the Google Drive URL for the X-ray database, or leave blank to provide a direct link.")
-            else:
-                st.markdown("""
-                    The database was excluded from Git. 
-                    **Download the ZIP archive** using the pre-filled URL or provide a direct link.
-                """)
-            db_url = st.text_input("Direct Download URL (ZIP)", value=default_url, placeholder="https://drive.google.com/.../database.zip")
-            if st.button("📥 Download & Install Database"):
-                if download_and_extract_db(db_url, target_db_dir=ACTIVE_DB_DIR, is_xray=IS_XRAY):
-                    st.success("Database ready! Please refresh.")
-                    st.rerun()
-            st.info("💡 Locally, checks for catalog CSV, stable CSV, and profiles.")
+    if ACTIVE_DB_EXISTS:
+        st.success(f"📊 Search DB: [OK] ({ACTIVE_DB_LABEL})")
     else:
-        st.success("📊 Database: [OK] (Ready for discovery)")
+        st.error(f"📊 Active search DB is not usable: {ACTIVE_DB_LABEL}")
+
+    if not BUILTIN_DB_EXISTS:
+        if ACTIVE_DB_KIND != "original" and ACTIVE_DB_EXISTS:
+            st.warning(
+                f"Built-in {rad_source} database is missing. "
+                f"The current {ACTIVE_DB_KIND} pack is usable for search, but built-in discovery "
+                f"and augmented-pack creation will stay unavailable until the base DB is installed."
+            )
+        else:
+            st.warning(f"📦 Built-in {rad_source} database missing")
+            with st.expander("🛠️ How to fix", expanded=True):
+                default_url = DB_XRAY_GDRIVE_URL if IS_XRAY else DB_NEUTRON_GDRIVE_URL
+                # If X-ray is selected and we have a default GDrive URL, attempt a single automatic download
+                if IS_XRAY and default_url:
+                    # Use a session flag to avoid repeated automatic attempts on reruns
+                    if not st.session_state.get("xray_auto_attempted", False):
+                        st.session_state["xray_auto_attempted"] = True
+                        st.info("🔁 X-ray database missing — attempting automatic download from configured Google Drive link...")
+                        try:
+                            success = download_and_extract_db(default_url, target_db_dir=BUILTIN_DB_DIR, is_xray=True)
+                            if success:
+                                st.success("✅ X-ray database downloaded and installed. Refreshing UI...")
+                                st.rerun()
+                            else:
+                                st.warning("⚠️ Automatic download failed — please provide a direct link or upload the ZIP manually.")
+                        except Exception as _e:
+                            st.warning("⚠️ Automatic download encountered an error — please provide a direct link or upload the ZIP manually.")
+                elif IS_XRAY and not default_url:
+                    st.info("ℹ️ X-ray DB: Enter the Google Drive URL for the X-ray database, or leave blank to provide a direct link.")
+                else:
+                    st.markdown("""
+                        The database was excluded from Git. 
+                        **Download the ZIP archive** using the pre-filled URL or provide a direct link.
+                    """)
+                db_url = st.text_input("Direct Download URL (ZIP)", value=default_url, placeholder="https://drive.google.com/.../database.zip")
+                if st.button("📥 Download & Install Database"):
+                    if download_and_extract_db(db_url, target_db_dir=BUILTIN_DB_DIR, is_xray=IS_XRAY):
+                        st.success("Database ready! Please refresh.")
+                        st.rerun()
+                st.info("💡 Locally, checks for catalog CSV, stable CSV, and profiles.")
+    st.caption(f"Search DB: {ACTIVE_DB_LABEL}")
+
+    db_notice_peek = st.session_state.get("db_pack_build_notice")
+    with st.expander("🗂️ Search Database", expanded=bool(db_notice_peek)):
+        db_notice = st.session_state.pop("db_pack_build_notice", None)
+        if db_notice:
+            level = db_notice.get("level", "info")
+            message = db_notice.get("message", "")
+            detail = db_notice.get("detail")
+            if level == "success":
+                st.success(message)
+            elif level == "warning":
+                st.warning(message)
+            else:
+                st.info(message)
+            if detail:
+                st.caption(detail)
+
+        st.markdown("#### Use Existing Search DB")
+        st.caption("This controls which database the next run will use. Building a new pack below does not change the active search DB until it is selected.")
+
+        st.radio(
+            "Database Mode",
+            ["Original", "Augmented Pack", "Mini Pack"],
+            key="db_selection_mode",
+            help="Choose the built-in database, or a custom augmented/mini pack for the selected radiation source.",
+        )
+
+        available_packs = discover_user_db_packs(current_source)
+        eligible_packs = [
+            pack for pack in available_packs
+            if _db_mode_matches_kind(st.session_state.db_selection_mode, pack["kind"])
+        ]
+        selected_pack_key = _selected_pack_state_key(current_source)
+        selected_pack = None
+
+        if st.session_state.db_selection_mode != "Original":
+            if eligible_packs:
+                option_roots = [pack["root_str"] for pack in eligible_packs]
+                labels = {pack["root_str"]: pack["label"] for pack in eligible_packs}
+                current_choice = st.session_state.get(selected_pack_key)
+                if current_choice not in option_roots:
+                    st.session_state[selected_pack_key] = option_roots[0]
+                st.selectbox(
+                    "Custom Pack",
+                    option_roots,
+                    key=selected_pack_key,
+                    format_func=lambda root: labels[root],
+                )
+                selected_pack = next(
+                    (pack for pack in eligible_packs if pack["root_str"] == st.session_state.get(selected_pack_key)),
+                    None,
+                )
+            else:
+                st.warning(f"No {st.session_state.db_selection_mode.lower()} available for {rad_source}.")
+                st.caption(f"Current runs will use fallback DB: {ACTIVE_DB_LABEL}")
+
+        active_phase_count = _active_db_phase_count()
+        c1, c2 = st.columns(2)
+        with c1:
+            st.metric("Active DB", ACTIVE_DB_KIND.title())
+        with c2:
+            st.metric("Active Phases", active_phase_count if active_phase_count is not None else "—")
+
+        st.info(f"Current run target: {ACTIVE_DB_LABEL}")
+        if st.session_state.db_selection_mode == "Original":
+            st.caption("Current runs will use the built-in database for the selected radiation source.")
+        elif ACTIVE_DB_KIND == "original":
+            st.warning("A custom-pack mode is selected, but no usable pack is currently selected. Runs will fall back to the built-in database.")
+        else:
+            detail_bits = [f"Source: {rad_source}", f"Pack type: {ACTIVE_DB_KIND}"]
+            if selected_pack and selected_pack.get("n_phases") is not None:
+                detail_bits.append(f"Pack phases: {selected_pack['n_phases']}")
+            st.caption(" | ".join(detail_bits))
+            st.success("This custom pack is already selected. You do not need to move back up and reselect it.")
+
+        st.divider()
+        st.markdown("#### Build New Custom Pack")
+        st.caption("This creates a persistent pack under `data/user_db_packs`. A successful build is auto-selected for subsequent runs.")
+
+        build_mode = st.radio(
+            "Build Custom Pack",
+            ["Augmented Pack", "Mini Pack"],
+            horizontal=True,
+            key=f"db_build_mode_{_source_key_from_label(current_source)}",
+        )
+        pack_name = st.text_input(
+            "Pack Name",
+            key=f"db_pack_name_{_source_key_from_label(current_source)}",
+            help="Custom packs are stored under data/user_db_packs/<pack_name>/<source>.",
+        )
+        uploaded_cifs = st.file_uploader(
+            "Candidate CIF Files",
+            type=["cif"],
+            accept_multiple_files=True,
+            key=f"db_pack_cifs_{_source_key_from_label(current_source)}",
+            help="No hard file-count limit is enforced here. Practical limits are browser memory, local disk, and pack-build runtime.",
+        )
+
+        total_upload_bytes = sum(int(getattr(uploaded, "size", 0)) for uploaded in (uploaded_cifs or []))
+        if uploaded_cifs:
+            st.info(
+                f"Selection summary: {len(uploaded_cifs)} CIF files chosen "
+                f"({ _format_bytes(total_upload_bytes) }). This is file selection only, not pack-build progress."
+            )
+            preview_names = [uploaded.name for uploaded in uploaded_cifs[:5]]
+            st.caption("Selected CIFs: " + ", ".join(preview_names) + (" ..." if len(uploaded_cifs) > 5 else ""))
+        else:
+            st.caption("No CIF files selected yet.")
+
+        overwrite_pack = st.checkbox(
+            "Overwrite Existing Pack",
+            value=False,
+            key=f"db_pack_overwrite_{_source_key_from_label(current_source)}",
+        )
+
+        clean_pack_name = _sanitize_token(pack_name)
+        source_key = _source_key_from_label(current_source)
+        output_root = USER_DB_PACKS_DIR / clean_pack_name / source_key if clean_pack_name else None
+        existing_pack_note = None
+        if output_root and output_root.exists():
+            try:
+                existing_layout = get_db_pack_layout(output_root)
+                if existing_layout.manifest_json.exists():
+                    existing_manifest = json.loads(existing_layout.manifest_json.read_text(encoding="utf-8"))
+                    existing_kind = existing_manifest.get("kind", "custom")
+                    existing_count = (
+                        existing_manifest.get("n_phases")
+                        if existing_manifest.get("n_phases") is not None
+                        else existing_manifest.get("n_added_phases")
+                    )
+                    if existing_count is not None:
+                        existing_pack_note = (
+                            f"Existing pack detected at this path: {existing_kind}, {existing_count} phase(s). "
+                            f"{'It will be replaced because overwrite is enabled.' if overwrite_pack else 'Enable overwrite to replace it.'}"
+                        )
+                    else:
+                        existing_pack_note = (
+                            "Existing pack detected at this path. "
+                            f"{'It will be replaced because overwrite is enabled.' if overwrite_pack else 'Enable overwrite to replace it.'}"
+                        )
+            except Exception:
+                existing_pack_note = "Existing output folder detected."
+        target_lines = [
+            f"Build target: `{build_mode}` for `{rad_source}`",
+            f"Output folder: `{output_root}`" if output_root else "Output folder: pending pack name",
+            "Base DB merge: built-in database" if build_mode == "Augmented Pack" else "Base DB merge: none (new standalone mini pack)",
+        ]
+        st.info("\n\n".join(target_lines))
+        if existing_pack_note:
+            st.warning(existing_pack_note)
+
+        if st.button("🧱 Build Database Pack"):
+            build_errors = []
+            if not clean_pack_name:
+                build_errors.append("Pack name is required.")
+            if not uploaded_cifs:
+                build_errors.append("Please upload at least one CIF file.")
+            if build_mode == "Augmented Pack" and not BUILTIN_DB_EXISTS:
+                build_errors.append(f"The built-in {rad_source} database is required to build an augmented pack.")
+
+            if build_errors:
+                for msg in build_errors:
+                    st.error(msg)
+            else:
+                tmp_parent = Path(PROJECT_ROOT) / ".tmp"
+                tmp_parent.mkdir(parents=True, exist_ok=True)
+                with tempfile.TemporaryDirectory(prefix="db_pack_build_", dir=str(tmp_parent)) as tmpdir:
+                    tmpdir_path = Path(tmpdir)
+                    cif_paths = []
+                    for uploaded in uploaded_cifs:
+                        out = tmpdir_path / uploaded.name
+                        out.write_bytes(uploaded.getbuffer())
+                        cif_paths.append(out)
+
+                    with st.status("🧱 Building custom database pack...", expanded=True) as status:
+                        status.write(f"Target source: `{rad_source}`")
+                        status.write(f"Pack mode: `{build_mode}`")
+                        status.write(f"Pack output: `{output_root}`")
+                        status.write(f"CIF inputs: `{len(cif_paths)}` file(s), `{_format_bytes(total_upload_bytes)}` total")
+                        progress_bar = st.progress(0, text="Preparing custom database pack")
+                        progress_detail = st.empty()
+
+                        def _on_build_progress(event: dict) -> None:
+                            fraction = float(event.get("fraction", 0.0))
+                            message = str(event.get("message", "Building custom database pack"))
+                            progress_bar.progress(max(0, min(100, int(round(fraction * 100)))), text=message)
+                            current = event.get("current")
+                            total = event.get("total")
+                            source_name = event.get("source_name")
+                            detail = message
+                            if current is not None and total is not None:
+                                detail = f"{message} ({current}/{total})"
+                            if source_name:
+                                detail = f"{detail} • `{source_name}`"
+                            progress_detail.caption(detail)
+
+                        try:
+                            if build_mode == "Augmented Pack":
+                                result = build_augmented_db_pack(
+                                    cif_paths,
+                                    output_root,
+                                    source_type=source_key,
+                                    base_db_root=BUILTIN_DB_DIR,
+                                    overwrite=overwrite_pack,
+                                    progress_callback=_on_build_progress,
+                                )
+                            else:
+                                result = build_mini_db_pack(
+                                    cif_paths,
+                                    output_root,
+                                    source_type=source_key,
+                                    reference_db_root=BUILTIN_DB_DIR if BUILTIN_DB_EXISTS else None,
+                                    overwrite=overwrite_pack,
+                                    progress_callback=_on_build_progress,
+                                )
+                            progress_bar.progress(100, text="Custom database pack built")
+                            progress_detail.caption(f"Completed pack build at `{result.pack_root}`")
+                            status.update(label="✅ Custom database pack built", state="complete")
+                            skipped_count = len(result.failures)
+                            if skipped_count:
+                                st.warning(f"Built with {skipped_count} skipped/failed CIFs. See manifest for details.")
+                            st.session_state["pending_db_activation"] = {
+                                "mode": build_mode,
+                                "source": source_key,
+                                "pack_root": str(result.pack_root),
+                            }
+                            st.session_state["db_pack_build_notice"] = {
+                                "level": "warning" if skipped_count else "success",
+                                "message": (
+                                    f"{build_mode} '{clean_pack_name}' built successfully and is now selected for {rad_source.lower()} runs."
+                                ),
+                                "detail": (
+                                    f"No further selection is needed. Active pack path: {result.pack_root} | "
+                                    f"Usable phases: {len(result.phase_ids)} | Skipped/failed CIFs: {skipped_count}"
+                                ),
+                            }
+                            st.rerun()
+                        except Exception as exc:
+                            status.update(label="❌ Pack build failed", state="error")
+                            st.error(f"Failed to build custom pack: {exc}")
 
     # --- USER GUIDE ---
     with st.expander("📖 User Guide", expanded=False):
@@ -1173,7 +1649,23 @@ with st.sidebar:
             st.divider()
             c1, c2 = st.columns(2)
             with c1:
-                allowed_elements_str = st.text_input("Allowed Elements", "Tb, Be, Ge, O", help="Comma-separated elements in the sample.")
+                allowed_elements_str = st.text_input(
+                    "Allowed Elements",
+                    "Tb, Be, Ge, O",
+                    help=(
+                        "Comma-separated elements in the sample. "
+                        "If a custom mini/augmented DB is selected, you may leave this blank to use all elements present in that DB."
+                    ),
+                )
+                if ACTIVE_DB_KIND != "original" and ACTIVE_DB_EXISTS:
+                    derived_custom_elements = _derive_allowed_elements_from_active_db()
+                    if derived_custom_elements:
+                        st.caption(
+                            f"Blank allowed-elements field will use all {len(derived_custom_elements)} "
+                            f"elements from the selected custom DB."
+                        )
+                    else:
+                        st.caption("Blank allowed-elements fallback is unavailable because the selected custom DB could not be inspected.")
             with c2:
                 sample_env_elements_str = st.text_input("Hardware / SE", "Al", help="Elements from sample environment (cans, holders).")
             
@@ -1328,6 +1820,28 @@ with st.sidebar:
                         els = [e.strip() for e in allowed_elements_str.split(",") if e.strip()]
                         env = [e.strip() for e in sample_env_elements_str.split(",") if e.strip()]
 
+                        if not els:
+                            if ACTIVE_DB_KIND != "original" and ACTIVE_DB_EXISTS:
+                                els = _derive_allowed_elements_from_active_db()
+                                if els:
+                                    st.info(
+                                        f"No allowed elements were entered. Using all {len(els)} elements "
+                                        f"from the selected custom DB: {ACTIVE_DB_LABEL}."
+                                    )
+                                else:
+                                    setup_errors.append(
+                                        "Allowed Elements is blank, and the selected custom DB could not provide element metadata."
+                                    )
+                            else:
+                                setup_errors.append(
+                                    "Allowed Elements is required when using the built-in database."
+                                )
+
+                    if setup_errors:
+                        for message in setup_errors:
+                            st.error(message)
+                    else:
+
                         adv_cfg = {
                             "hist_filter": {"topN": top_n_ml},
                             "top_candidates": wait_for_pass,
@@ -1350,9 +1864,9 @@ with st.sidebar:
                         }
 
                         db_overrides = {}
-                        if db_catalog != "catalog_deduplicated.csv": db_overrides["catalog_csv"] = str(Path(ACTIVE_DB_DIR) / db_catalog)
-                        if db_stable != "mp_experimental_stable.csv": db_overrides["stable_csv"] = str(Path(ACTIVE_DB_DIR) / db_stable)
-                        if db_metadata != "highsymm_metadata.json": db_overrides["original_json"] = str(Path(ACTIVE_DB_DIR) / db_metadata)
+                        if db_catalog != "catalog_deduplicated.csv": db_overrides["catalog_csv"] = str(Path(ACTIVE_DB_ROOT) / db_catalog)
+                        if db_stable != "mp_experimental_stable.csv": db_overrides["stable_csv"] = str(Path(ACTIVE_DB_ROOT) / db_stable)
+                        if db_metadata != "highsymm_metadata.json": db_overrides["original_json"] = str(Path(ACTIVE_DB_ROOT) / db_metadata)
                         if db_overrides: adv_cfg["db"] = db_overrides
 
                         rad_lower = "xray" if IS_XRAY else "neutron"
@@ -1381,9 +1895,10 @@ with st.sidebar:
                                 run_name=run_name, data_file=dpath, instprm_file=ipath,
                                 allowed_elements=els, sample_env_elements=env, main_cif=cpath,
                                 work_root=str(rdir), project_root=PROJECT_ROOT,
-                                db_root=str(ACTIVE_DB_DIR),
-                                # Always use metadata JSON from the active DB directory
-                                original_json_override=str(Path(ACTIVE_DB_DIR) / "highsymm_metadata.json"),
+                                db_root=str(ACTIVE_DB_ROOT),
+                                db_config_override=dict(ACTIVE_DB_CONFIG),
+                                original_json_override=ACTIVE_DB_CONFIG.get("original_json"),
+                                cif_map_json_override=ACTIVE_DB_CONFIG.get("cif_map_json"),
                                 min_impurity_percent=trace_limit, max_passes=max_passes,
                                 instrument_mode=selected_mode,
                                 advanced_params=adv_cfg

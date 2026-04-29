@@ -53,6 +53,22 @@ try:
 except ImportError:
     HAVE_YAML = False
 
+try:
+    import pandas as pd
+except Exception:
+    pd = None  # type: ignore[assignment]
+
+try:
+    from pymatgen.core import Structure
+    from pymatgen.analysis.structure_matcher import StructureMatcher
+    from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
+    HAVE_PYMATGEN_MATCHER = True
+except Exception:
+    Structure = None  # type: ignore[assignment]
+    StructureMatcher = None  # type: ignore[assignment]
+    SpacegroupAnalyzer = None  # type: ignore[assignment]
+    HAVE_PYMATGEN_MATCHER = False
+
 # ---------------------------
 # Headless / No-GUI Patches
 # ---------------------------
@@ -170,7 +186,7 @@ else:
 # Database loader
 # ---------------------------
 try:
-    from aniso_db_loader import DBLoader, CatalogPaths
+    from aniso_db_loader import DBLoader, CatalogPaths, build_mask
     LEGACY_DB_AVAILABLE = True
 except ImportError as e:
     print(f"[ERROR] aniso_db_loader not available: {e}")
@@ -569,6 +585,7 @@ class UnifiedPipeline:
         self.stable_ids: Optional[set] = None
         self.emitter: Optional[EventEmitter] = None
         self.manifest: Optional[ManifestManager] = None
+        self._main_phase_match_cache: Dict[str, Set[str]] = {}
 
     # ---------------------------
     # DB initialization
@@ -666,6 +683,71 @@ class UnifiedPipeline:
             sg_final = "—"
             
         return str(name_final), str(sg_final)
+
+    def _matching_db_ids_for_main_phase(self, main_cif: Optional[str]) -> Set[str]:
+        """
+        Find DB entries that are structurally identical to the provided main-phase CIF.
+
+        This is used to prevent the search DB from rediscovering the known main phase
+        under a different database id, which is especially important for custom packs.
+        """
+        if not main_cif or not self.db_loader or not HAVE_PYMATGEN_MATCHER:
+            return set()
+
+        try:
+            cache_key = str(Path(main_cif).resolve())
+        except Exception:
+            cache_key = str(main_cif)
+        if cache_key in self._main_phase_match_cache:
+            return set(self._main_phase_match_cache[cache_key])
+
+        matches: Set[str] = set()
+        try:
+            ref_structure = Structure.from_file(main_cif)  # type: ignore[union-attr]
+            ref_elements = sorted({str(el) for el in ref_structure.composition.as_dict().keys()})
+            ref_hi, ref_lo = build_mask(ref_elements)
+
+            ref_sg: Optional[int] = None
+            try:
+                ref_sg = int(SpacegroupAnalyzer(ref_structure, symprec=1e-2, angle_tolerance=5.0).get_space_group_number())  # type: ignore[misc]
+            except Exception:
+                ref_sg = None
+
+            cat = self.db_loader.catalog.copy()
+            cat["id"] = cat["id"].astype(str)
+            if "elements_mask_hi" in cat.columns and "elements_mask_lo" in cat.columns:
+                cat = cat[
+                    (cat["elements_mask_hi"].astype(object).map(int) == int(ref_hi)) &
+                    (cat["elements_mask_lo"].astype(object).map(int) == int(ref_lo))
+                ]
+            if ref_sg is not None and "space_group" in cat.columns and pd is not None:
+                cat = cat[pd.to_numeric(cat["space_group"], errors="coerce") == ref_sg]
+
+            candidate_ids = cat["id"].astype(str).tolist()
+            if not candidate_ids:
+                self._main_phase_match_cache[cache_key] = set()
+                return set()
+
+            matcher = StructureMatcher(primitive_cell=True, scale=True, attempt_supercell=False)  # type: ignore[operator]
+            for pid in candidate_ids:
+                try:
+                    cand_structure = self.db_loader.load_structure(pid)
+                except Exception:
+                    continue
+                try:
+                    if matcher.fit(ref_structure, cand_structure):
+                        matches.add(pid)
+                except Exception:
+                    continue
+
+            if matches:
+                print(f"[INFO] Excluding {len(matches)} DB phase(s) structurally matching the main CIF: {sorted(matches)}")
+        except Exception as exc:
+            print(f"[WARN] Could not resolve DB matches for main CIF exclusion: {exc}")
+            matches = set()
+
+        self._main_phase_match_cache[cache_key] = set(matches)
+        return set(matches)
 
     # ---------------------------
     # Helpers for sequential passes
@@ -1946,7 +2028,8 @@ class UnifiedPipeline:
                         x_native, residual_native, Q, residual_Q, kept_rwp, hist_name, _ = extract_residual_from_gpx(kept_gpx)
                         print(f"[INFO] [pass {pass_ix}] Kept GPX: {kept_gpx}, Rwp={kept_rwp:.3f}%")
 
-                exclude_ids = {main_phase_name, *accepted}
+                main_phase_db_matches = self._matching_db_ids_for_main_phase(main_cif)
+                exclude_ids = {main_phase_name, *accepted, *main_phase_db_matches}
                 anchor_ids_for_pass = list(accepted)
 
                 with bench.block(f"Pass {pass_ix}: screen + nudge + pearson"):
@@ -1973,9 +2056,18 @@ class UnifiedPipeline:
                                 )
                     except RuntimeError as e:
                         msg = str(e)
-                        if "No candidates pass histogram screening" in msg:
-                            print(f"[INFO] [pass {pass_ix}] Histogram screening returned zero candidates; stopping discovery.")
-                            self.manifest.update_stage(f"Pass {pass_ix}", "complete", {"status": "stopped", "reason": "no_candidates_histogram"})
+                        if msg.startswith("No candidates"):
+                            print(f"[INFO] [pass {pass_ix}] {msg}; stopping discovery.")
+                            reason = "no_candidates"
+                            if "element filtering" in msg:
+                                reason = "no_candidates_element_filter"
+                            elif "space-group" in msg:
+                                reason = "no_candidates_space_group"
+                            elif "stability" in msg:
+                                reason = "no_candidates_stability"
+                            elif "histogram screening" in msg:
+                                reason = "no_candidates_histogram"
+                            self.manifest.update_stage(f"Pass {pass_ix}", "complete", {"status": "stopped", "reason": reason})
                             final_candidates = []
                             pid_to_cif = {}
                             pearson_best_by_pid = {}
