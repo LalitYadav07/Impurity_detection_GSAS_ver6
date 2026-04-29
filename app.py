@@ -918,6 +918,19 @@ if pending_db_activation:
 # Determine active DB based on session state
 current_source = st.session_state.get("radiation_source", "Neutron")
 IS_XRAY = (current_source == "X-ray")
+selection_mode = st.session_state.get("db_selection_mode", "Original")
+selected_pack_key = _selected_pack_state_key(current_source)
+if selection_mode != "Original":
+    available_packs_for_source = discover_user_db_packs(current_source)
+    eligible_pack_roots = [
+        pack["root_str"]
+        for pack in available_packs_for_source
+        if _db_mode_matches_kind(selection_mode, pack["kind"])
+    ]
+    current_selected_root = st.session_state.get(selected_pack_key)
+    if eligible_pack_roots and current_selected_root not in eligible_pack_roots:
+        st.session_state[selected_pack_key] = eligible_pack_roots[0]
+
 BUILTIN_DB_DIR = DB_NEUTRON_DIR if not IS_XRAY else DB_XRAY_DIR
 BUILTIN_DB_EXISTS = check_db_integrity(BUILTIN_DB_DIR, is_xray=IS_XRAY)
 ACTIVE_DB_SELECTION = resolve_active_db_selection(current_source)
