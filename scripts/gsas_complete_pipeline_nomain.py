@@ -154,6 +154,9 @@ try:
         GSASMainPhaseRefiner,
         GSASPatternAnalyzer,
         read_abs_limits_or_bounds,
+        normalize_limits,
+        normalize_excluded_regions,
+        ensure_usable_range,
         set_limits,
         set_excluded,
         compute_gsas_ycalc_pearson,
@@ -1644,18 +1647,22 @@ class UnifiedPipeline:
                             # Apply limits/exclusions
                             hist0 = pm0.main_histogram
                             abs_lo, abs_hi = read_abs_limits_or_bounds(hist0)
-                            if limits and len(limits) == 2:
-                                req_lo, req_hi = float(limits[0]), float(limits[1])
-                                lo, hi = (
-                                    max(req_lo, abs_lo),
-                                    min(req_hi, abs_hi),
-                                ) if (abs_lo is not None and abs_hi is not None) else (req_lo, req_hi)
+                            active_limits = normalize_limits(limits, abs_lo, abs_hi)
+                            if active_limits:
+                                lo, hi = active_limits
+                            elif abs_lo is not None and abs_hi is not None:
+                                lo, hi = float(abs_lo), float(abs_hi)
+                            else:
+                                lo = hi = None
+                            normalized_exclusions = normalize_excluded_regions(exclude_regions, lo, hi)
+                            if lo is not None and hi is not None:
+                                ensure_usable_range(lo, hi, normalized_exclusions)
+                            if active_limits:
                                 set_limits(hist0, lo, hi)
                                 print(f"[INFO] Data limits applied: [{lo:.2f}, {hi:.2f}]")
-
-                            if exclude_regions:
-                                set_excluded(hist0, exclude_regions)
-                                print(f"[INFO] Excluded regions: {exclude_regions}")
+                            if normalized_exclusions:
+                                set_excluded(hist0, normalized_exclusions)
+                                print(f"[INFO] Excluded regions: {normalized_exclusions}")
 
                         with bench.block("S0: ML bootstrap → main phase"):
                             # Stage-0 knee overrides (fall back to global if absent)
@@ -1708,6 +1715,7 @@ class UnifiedPipeline:
 
                             pear_tmp_dir = str(Path(technical_dir) / "Pearson_Temp")
                             Path(pear_tmp_dir).mkdir(parents=True, exist_ok=True)
+                            pearson_bg_cfg = ds.get("background", self.top_cfg.get("background", {})) or {}
 
                             def _pearson_raw(cif_path: Optional[str], tag: str) -> Tuple[float, Optional[str]]:
                                 if not cif_path or not Path(cif_path).exists():
@@ -1723,6 +1731,7 @@ class UnifiedPipeline:
                                             limits=limits,
                                             exclude_regions=exclude_regions,
                                             tmp_tag=tag,
+                                            background_config=pearson_bg_cfg,
                                         )
                                     )
                                     # Construct the refined path similar to Stage 4 fix
@@ -1837,19 +1846,22 @@ class UnifiedPipeline:
 
                 hist = pm.main_histogram
                 abs_lo, abs_hi = read_abs_limits_or_bounds(hist)
-                if limits and len(limits) == 2:
-                    req_lo, req_hi = float(limits[0]), float(limits[1])
-                    lo, hi = (
-                        max(req_lo, abs_lo),
-                        min(req_hi, abs_hi),
-                    ) if (abs_lo is not None and abs_hi is not None) else (req_lo, req_hi)
-                    if lo >= hi:
-                        raise ValueError(f"Invalid limits after clipping to available range [{abs_lo}, {abs_hi}]")
+                active_limits = normalize_limits(limits, abs_lo, abs_hi)
+                if active_limits:
+                    lo, hi = active_limits
+                elif abs_lo is not None and abs_hi is not None:
+                    lo, hi = float(abs_lo), float(abs_hi)
+                else:
+                    lo = hi = None
+                normalized_exclusions = normalize_excluded_regions(exclude_regions, lo, hi)
+                if lo is not None and hi is not None:
+                    ensure_usable_range(lo, hi, normalized_exclusions)
+                if active_limits:
                     set_limits(hist, lo, hi)
                     print(f"[INFO] Data limits: [{lo:.2f}, {hi:.2f}]")
-                if exclude_regions:
-                    set_excluded(hist, exclude_regions)
-                    print(f"[INFO] Excluded regions: {exclude_regions}")
+                if normalized_exclusions:
+                    set_excluded(hist, normalized_exclusions)
+                    print(f"[INFO] Excluded regions: {normalized_exclusions}")
 
                 if not main_cif:
                     raise RuntimeError(f"[{name}] Main CIF is required for Stage-1")
@@ -1886,6 +1898,7 @@ class UnifiedPipeline:
                     self.emitter.emit("Stage 1", "PXRD light calibration", 28)
                     with bench.block("S1: light pxrd calibration"):
                         calib_result = main_ref.run_light_instrument_calibration(
+                            background_config=_bg,
                             bg_type=_bg.get("type"),
                             bg_terms=int(_bg["terms"]) if _bg.get("terms") is not None else None,
                             bg_coeffs=_bg.get("coeffs"),
@@ -1956,6 +1969,7 @@ class UnifiedPipeline:
                 with bench.block("S1: staged refinement"):
                     main_results = main_ref.run_staged_refinement(
                         enable_cell=True,
+                        background_config=_bg,
                         bg_type=_bg.get("type"),
                         bg_terms=int(_bg["terms"]) if _bg.get("terms") is not None else None,
                         bg_coeffs=_bg.get("coeffs"),

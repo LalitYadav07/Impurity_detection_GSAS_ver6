@@ -18,8 +18,20 @@ import traceback
 import re
 import logging
 import os
+import sys
 
 logger = logging.getLogger(__name__)
+
+
+def _bootstrap_gsasii_import() -> None:
+    """Make the bundled GSAS-II checkout importable outside the CLI driver."""
+    repo_root = Path(__file__).resolve().parents[1]
+    gsas_dir = str(repo_root / "GSAS-II")
+    if gsas_dir not in sys.path:
+        sys.path.insert(0, gsas_dir)
+
+
+_bootstrap_gsasii_import()
 
 try:
     from GSASII import GSASIIscriptable as G2sc
@@ -35,6 +47,11 @@ try:
 except ImportError:
     # Fallback if not found (during dev)
     def apply_safe_limits(proj): return False
+
+try:
+    from auto_background_points import coerce_auto_background_params, estimate_background
+except ImportError:
+    from .auto_background_points import coerce_auto_background_params, estimate_background
 
 
 # === XYE writer (used for residual-as-Yobs jobs) ===
@@ -125,6 +142,27 @@ def histogram_supports_light_instrument_calibration(histogram) -> bool:
     return inst_type.startswith("PXC") and sample_type == "Bragg-Brentano"
 
 
+def normalize_background_config(
+    background_config: Optional[Dict[str, Any]] = None,
+    *,
+    bg_type: Optional[str] = None,
+    bg_terms: Optional[int] = None,
+    bg_coeffs: Optional[List[float]] = None,
+) -> Dict[str, Any]:
+    """Return a single normalized background config dict."""
+    cfg = dict(background_config or {})
+    if "mode" not in cfg:
+        cfg["mode"] = "function"
+    if bg_type is not None:
+        cfg["type"] = bg_type
+    if bg_terms is not None:
+        cfg["terms"] = int(bg_terms)
+    if bg_coeffs is not None:
+        cfg["coeffs"] = list(bg_coeffs)
+    cfg.setdefault("auto_params", {})
+    return cfg
+
+
 
 # === Robust Pearson ===
 
@@ -204,24 +242,44 @@ class GSASDataExtractor:
 
         data: Dict[str, np.ndarray] = {}
         try:
-            # Native coordinate (2θ or TOF)
-            x_native = histogram.getdata('x')
-            data['x_native'] = x_native.compressed() if hasattr(x_native, 'compressed') else np.asarray(x_native)
+            raw_arrays = {
+                'x_native': histogram.getdata('x'),
+                'Q': histogram.getdata('Q'),
+                'd': histogram.getdata('d'),
+                'yobs': histogram.getdata('yobs'),
+                'ycalc': histogram.getdata('ycalc'),
+            }
 
-            # Q-space using GSAS built-in conversion
-            Q = histogram.getdata('Q')
-            data['Q'] = Q.compressed() if hasattr(Q, 'compressed') else np.asarray(Q)
+            # GSAS exclusions often mask x/Q/ycalc but not yobs. Use a shared mask so
+            # all extracted arrays stay aligned after internal regions are excluded.
+            shared_mask = None
+            shared_size = None
+            for arr in raw_arrays.values():
+                arr_np = np.ma.asarray(arr)
+                if arr_np.ndim != 1:
+                    continue
+                if shared_size is None:
+                    shared_size = int(arr_np.size)
+                elif arr_np.size != shared_size:
+                    shared_size = None
+                    break
+                arr_mask = np.ma.getmaskarray(arr_np)
+                if shared_mask is None:
+                    shared_mask = np.array(arr_mask, dtype=bool, copy=True)
+                else:
+                    shared_mask |= arr_mask
 
-            # d-spacing using GSAS built-in conversion
-            d = histogram.getdata('d')
-            data['d'] = d.compressed() if hasattr(d, 'compressed') else np.asarray(d)
+            def _aligned_array(arr) -> np.ndarray:
+                arr_np = np.ma.asarray(arr)
+                values = np.asarray(np.ma.getdata(arr_np))
+                if shared_mask is not None and values.ndim == 1 and values.size == shared_mask.size:
+                    return values[~shared_mask]
+                if hasattr(arr_np, 'compressed'):
+                    return arr_np.compressed()
+                return values
 
-            # Intensities
-            yobs = histogram.getdata('yobs')
-            data['yobs'] = yobs.compressed() if hasattr(yobs, 'compressed') else np.asarray(yobs)
-
-            ycalc = histogram.getdata('ycalc')
-            data['ycalc'] = ycalc.compressed() if hasattr(ycalc, 'compressed') else np.asarray(ycalc)
+            for key, arr in raw_arrays.items():
+                data[key] = _aligned_array(arr)
 
             # Background (may not exist via getdata)
             try:
@@ -229,7 +287,7 @@ class GSASDataExtractor:
             except Exception:
                 ybkg = None
             if ybkg is not None:
-                data['ybkg'] = ybkg.compressed() if hasattr(ybkg, 'compressed') else np.asarray(ybkg)
+                data['ybkg'] = _aligned_array(ybkg)
 
             # Weights (may be 'ywt' in some builds)
             try:
@@ -240,7 +298,7 @@ class GSASDataExtractor:
                 except Exception:
                     ywt = None
             if ywt is not None:
-                data['ywt'] = ywt.compressed() if hasattr(ywt, 'compressed') else np.asarray(ywt)
+                data['ywt'] = _aligned_array(ywt)
 
             # Compute residuals if possible
             if data.get('yobs') is not None and data.get('ycalc') is not None:
@@ -331,6 +389,7 @@ class GSASMainPhaseRefiner:
 
     def refine_stage_background(
         self,
+        background_config: Optional[Dict[str, Any]] = None,
         bg_type: Optional[str] = None,
         bg_terms: Optional[int] = None,
         bg_coeffs: Optional[List[float]] = None
@@ -339,7 +398,12 @@ class GSASMainPhaseRefiner:
         logger.info("=== Stage 2: Scale + Background ===")
         try:
             self._enable_scale_refinement()
-            self._configure_background(bg_type, bg_terms, bg_coeffs)
+            self._configure_background(
+                background_config=background_config,
+                bg_type=bg_type,
+                bg_terms=bg_terms,
+                bg_coeffs=bg_coeffs,
+            )
             self._enable_background_refinement()
             self._disable_cell_refinement()
 
@@ -557,6 +621,7 @@ class GSASMainPhaseRefiner:
     def run_staged_refinement(
         self,
         enable_cell: bool = True,
+        background_config: Optional[Dict[str, Any]] = None,
         bg_type: Optional[str] = None,
         bg_terms: Optional[int] = None,
         bg_coeffs: Optional[List[float]] = None
@@ -576,7 +641,10 @@ class GSASMainPhaseRefiner:
             return results_scale
 
         results_bg = self.refine_stage_background(
-            bg_type=bg_type, bg_terms=bg_terms, bg_coeffs=bg_coeffs
+            background_config=background_config,
+            bg_type=bg_type,
+            bg_terms=bg_terms,
+            bg_coeffs=bg_coeffs,
         )
         if not results_bg.success:
             return results_bg
@@ -606,15 +674,38 @@ class GSASMainPhaseRefiner:
 
     # Helper methods for refinement control
     def _set_limits_to_data(self):
-        """Set refinement limits to full data range."""
-        x_data = np.asarray(self.histogram.getdata('x'))
-        if x_data.size > 0:
+        """Preserve current refinement limits and exclusions, then apply safe limits."""
+        excluded = []
+        try:
+            excluded = self.histogram.Excluded() or []
+        except Exception:
+            excluded = []
+
+        lo = hi = None
+        try:
+            lo = float(self.histogram.Limits('lower'))
+            hi = float(self.histogram.Limits('upper'))
+        except Exception:
+            x_data = np.asarray(self.histogram.getdata('x'))
+            if x_data.size > 0:
+                lo = float(np.min(x_data))
+                hi = float(np.max(x_data))
+
+        if lo is not None and hi is not None and hi > lo:
             self.histogram.set_refinements({
-                'Limits': {'low': float(np.min(x_data)), 'high': float(np.max(x_data))}
+                'Limits': {'low': float(lo), 'high': float(hi)}
             })
-            
+
         # Enforce safe limits (prevent negative variance at low d/TOF)
         apply_safe_limits(self.project)
+
+        if excluded:
+            try:
+                cur_lo = float(self.histogram.Limits('lower'))
+                cur_hi = float(self.histogram.Limits('upper'))
+                set_excluded(self.histogram, normalize_excluded_regions(excluded, cur_lo, cur_hi))
+            except Exception:
+                set_excluded(self.histogram, excluded)
 
     def _clear_all_instrument_refinements(self):
         """Disable all instrument parameter refinements."""
@@ -647,78 +738,119 @@ class GSASMainPhaseRefiner:
         except Exception as e:
             logger.warning(f"Warning: Could not disable phase scale: {e}")
 
+    def _default_bg_by_instrument(self) -> Tuple[str, int]:
+        if self.instrument_type == "TOF":
+            try:
+                x_data = np.asarray(self.histogram.getdata('x'))
+                terms = max(2, min(8, len(x_data) // 100)) if x_data.size > 0 else 3
+            except Exception:
+                terms = 3
+            return "log interpolate", terms
+        return "chebyschev-1", 12
+
+    def _background_observed_arrays(self) -> Tuple[np.ndarray, np.ndarray]:
+        x_data = self.histogram.getdata('x')
+        yobs_data = self.histogram.getdata('yobs')
+
+        x_mask = np.ma.getmaskarray(x_data) if np.ma.isMaskedArray(x_data) else None
+        y_mask = np.ma.getmaskarray(yobs_data) if np.ma.isMaskedArray(yobs_data) else None
+
+        shared_mask = None
+        if x_mask is not None:
+            shared_mask = np.array(x_mask, dtype=bool)
+        if y_mask is not None:
+            shared_mask = np.array(y_mask, dtype=bool) if shared_mask is None else (shared_mask | np.array(y_mask, dtype=bool))
+
+        x_vals = np.asarray(np.ma.getdata(x_data), dtype=float)
+        y_vals = np.asarray(np.ma.getdata(yobs_data), dtype=float)
+
+        if shared_mask is None:
+            finite = np.isfinite(x_vals) & np.isfinite(y_vals)
+            return x_vals[finite], y_vals[finite]
+
+        keep = (~shared_mask) & np.isfinite(x_vals) & np.isfinite(y_vals)
+        return x_vals[keep], y_vals[keep]
+
+    def _clear_fixed_background_points(self) -> None:
+        try:
+            self.histogram.clear_refinements({'Background': {'FixedPoints': []}})
+        except Exception:
+            pass
+        try:
+            cur = self.histogram.getHistEntryValue(['Background'])
+            if isinstance(cur, list) and len(cur) >= 2 and isinstance(cur[1], dict):
+                cur[1].pop('FixedPoints', None)
+                self.histogram.setHistEntryValue(['Background'], cur)
+        except Exception:
+            pass
+
     def _configure_background(
         self,
-        bg_type: Optional[str],
-        bg_terms: Optional[int],
-        bg_coeffs: Optional[List[float]] = None
+        background_config: Optional[Dict[str, Any]] = None,
+        bg_type: Optional[str] = None,
+        bg_terms: Optional[int] = None,
+        bg_coeffs: Optional[List[float]] = None,
     ):
-        """Configure background model.
+        """Configure either a direct GSAS-II background function or auto fixed points."""
+        cfg = normalize_background_config(
+            background_config,
+            bg_type=bg_type,
+            bg_terms=bg_terms,
+            bg_coeffs=bg_coeffs,
+        )
 
-        Rules:
-        - If nothing provided (type/terms/coeffs all None) → auto by instrument.
-        - If type/terms provided (even without coeffs) → override with those.
-        - If coeffs provided → seed them (padded/truncated to 'terms').
-        """
+        default_type, default_terms = self._default_bg_by_instrument()
+        mode = str(cfg.get("mode", "function") or "function").strip().lower()
+        resolved_type = str(cfg.get("type") or default_type)
+        resolved_terms = int(cfg.get("terms") if cfg.get("terms") is not None else default_terms)
+        resolved_coeffs = cfg.get("coeffs")
 
-        # Instrument-based defaults
-        def _default_bg_by_instrument() -> Tuple[str, int]:
-            if self.instrument_type == "TOF":
-                try:
-                    x_data = np.asarray(self.histogram.getdata('x'))
-                    terms = max(2, min(8, len(x_data) // 100)) if x_data.size > 0 else 3
-                except Exception:
-                    terms = 3
-                return "log interpolate", terms
-            else:  # CW
-                return "chebyschev-1", 12
-
-        if bg_type is None and bg_terms is None and bg_coeffs is None:
-            bg_type, bg_terms = _default_bg_by_instrument()
-        else:
-            if bg_type is None or bg_terms is None:
-                d_type, d_terms = _default_bg_by_instrument()
-                if bg_type is None:
-                    bg_type = d_type
-                if bg_terms is None:
-                    bg_terms = d_terms
-
-        # Apply selection
         try:
             self.histogram.set_refinements({'Background': {
-                'type': bg_type,
-                'no. coeffs': int(bg_terms),
-                'refine': False  # enable refine separately
+                'type': resolved_type,
+                'no. coeffs': int(resolved_terms),
+                'refine': False,
             }})
-            logger.info(f"Background configured: {bg_type} with {bg_terms} terms")
+            logger.info(
+                "Background configured: mode=%s type=%s terms=%s",
+                mode, resolved_type, resolved_terms,
+            )
 
-            # Seed explicit coefficients, if given
-            if bg_coeffs is not None:
-                coeffs = list(map(float, bg_coeffs))
-                coeffs = (coeffs + [0.0] * int(bg_terms))[:int(bg_terms)]  # pad/trim
-
+            if resolved_coeffs is not None:
+                coeffs = list(map(float, resolved_coeffs))
+                coeffs = (coeffs + [0.0] * int(resolved_terms))[:int(resolved_terms)]
                 cur = self.histogram.getHistEntryValue(['Background'])
-                # Expect: cur == [Back(list), DebyePeaks(dict)]
                 if (isinstance(cur, list) and len(cur) >= 2
                         and isinstance(cur[0], list) and isinstance(cur[1], dict)):
-                    back = list(cur[0])  # [funcName, refineFlag, nCoeffs, coeffs...]
-                    if len(back) < 1:
-                        back.append(bg_type)
-                    else:
-                        back[0] = bg_type
-                    if len(back) < 2:
-                        back.append(False)
-                    else:
-                        back[1] = bool(back[1])
-                    if len(back) < 3:
-                        back.append(int(bg_terms))
-                    else:
-                        back[2] = int(bg_terms)
+                    back = list(cur[0])
+                    back[0] = resolved_type
+                    back[1] = bool(back[1]) if len(back) > 1 else False
+                    back[2] = int(resolved_terms) if len(back) > 2 else int(resolved_terms)
                     back = back[:3] + coeffs
                     self.histogram.setHistEntryValue(['Background'], [back, cur[1]])
-                    logger.info(f"Background coefficients seeded (n={len(coeffs)})")
-                else:
-                    logger.warning("Note: unexpected Background layout; skipped coeff seeding to avoid corrupting GSAS state.")
+                    logger.info("Background coefficients seeded (n=%d)", len(coeffs))
+
+            if mode == "auto_fixed_points":
+                x_vals, y_vals = self._background_observed_arrays()
+                auto_params = coerce_auto_background_params(cfg.get("auto_params") or {})
+                _background_curve, fixed_points, resolved_params = estimate_background(
+                    x_vals,
+                    y_vals,
+                    params=auto_params,
+                )
+                self._clear_fixed_background_points()
+                self.histogram.set_refinements({'Background': {
+                    'FixedPoints': fixed_points.tolist(),
+                    'fit fixed points': True,
+                }})
+                logger.info(
+                    "Auto fixed-point background prepared (points=%d, snip_iterations=%s)",
+                    len(fixed_points),
+                    resolved_params.snip_iterations,
+                )
+            else:
+                self._clear_fixed_background_points()
+
         except Exception as e:
             logger.warning(f"Warning: Could not configure background: {e}")
 
@@ -770,6 +902,7 @@ class GSASMainPhaseRefiner:
     def run_light_instrument_calibration(
         self,
         *,
+        background_config: Optional[Dict[str, Any]] = None,
         bg_type: Optional[str] = None,
         bg_terms: Optional[int] = None,
         bg_coeffs: Optional[List[float]] = None,
@@ -826,6 +959,7 @@ class GSASMainPhaseRefiner:
                 )
 
             results_bg = self.refine_stage_background(
+                background_config=background_config,
                 bg_type=bg_type,
                 bg_terms=bg_terms,
                 bg_coeffs=bg_coeffs,
@@ -932,8 +1066,16 @@ class GSASMainPhaseRefiner:
                 bg_data = self.histogram.getHistEntryValue(['Background'])
                 if isinstance(bg_data, list) and len(bg_data) > 0:
                     bg_type = bg_data[0][0] if isinstance(bg_data[0], (list, tuple)) else "unknown"
-                    bg_coeffs = bg_data[1] if len(bg_data) > 1 else []
-                    bg_params = {'type': bg_type, 'coefficients': list(bg_coeffs)}
+                    coeffs = list(bg_data[0][3:]) if isinstance(bg_data[0], (list, tuple)) and len(bg_data[0]) > 3 else []
+                    fixed_points = []
+                    if len(bg_data) > 1 and isinstance(bg_data[1], dict):
+                        fixed_points = list(bg_data[1].get('FixedPoints', []) or [])
+                    bg_params = {
+                        'type': bg_type,
+                        'coefficients': coeffs,
+                        'mode': 'auto_fixed_points' if fixed_points else 'function',
+                        'fixed_point_count': len(fixed_points),
+                    }
             except Exception:
                 pass
 
@@ -1055,6 +1197,76 @@ def read_abs_limits_or_bounds(hist):
         return None, None
 
 
+def normalize_limits(
+    limits: Optional[Tuple[float, float] | List[float]],
+    abs_lo: Optional[float] = None,
+    abs_hi: Optional[float] = None,
+) -> Optional[Tuple[float, float]]:
+    """Normalize and clip a user-specified fit window."""
+    if not limits or len(limits) != 2:
+        return None
+    lo, hi = float(limits[0]), float(limits[1])
+    if not np.isfinite(lo) or not np.isfinite(hi):
+        raise ValueError("Limits must be finite numbers")
+    lo, hi = min(lo, hi), max(lo, hi)
+    if abs_lo is not None:
+        lo = max(lo, float(abs_lo))
+    if abs_hi is not None:
+        hi = min(hi, float(abs_hi))
+    if not np.isfinite(lo) or not np.isfinite(hi) or lo >= hi:
+        raise ValueError(
+            f"Invalid limits after clipping to available range [{abs_lo}, {abs_hi}]"
+        )
+    return float(lo), float(hi)
+
+
+def normalize_excluded_regions(
+    excluded_pairs: Optional[List[Tuple[float, float]]],
+    lo: Optional[float] = None,
+    hi: Optional[float] = None,
+) -> List[List[float]]:
+    """Sort, clip, and merge excluded regions in native histogram coordinates."""
+    if not excluded_pairs:
+        return []
+
+    cleaned: List[List[float]] = []
+    for pair in excluded_pairs:
+        if pair is None or len(pair) != 2:
+            continue
+        a, b = float(pair[0]), float(pair[1])
+        if not np.isfinite(a) or not np.isfinite(b):
+            continue
+        a, b = min(a, b), max(a, b)
+        if lo is not None:
+            a = max(a, float(lo))
+        if hi is not None:
+            b = min(b, float(hi))
+        if b <= a:
+            continue
+        cleaned.append([float(a), float(b)])
+
+    cleaned.sort(key=lambda pair: (pair[0], pair[1]))
+    merged: List[List[float]] = []
+    for a, b in cleaned:
+        if not merged or a > merged[-1][1]:
+            merged.append([a, b])
+        else:
+            merged[-1][1] = max(merged[-1][1], b)
+    return merged
+
+
+def ensure_usable_range(lo: float, hi: float, excluded_pairs: Optional[List[Tuple[float, float]]]) -> None:
+    """Raise if exclusions leave no usable points in the active fit window."""
+    merged = normalize_excluded_regions(excluded_pairs, lo, hi)
+    cursor = float(lo)
+    for a, b in merged:
+        if a > cursor:
+            return
+        cursor = max(cursor, b)
+    if cursor >= hi:
+        raise ValueError("Excluded regions consume the entire active data range")
+
+
 def set_limits(hist, lo, hi):
     """Set current refinement limits to [lo, hi], respecting old GSAS layouts if needed."""
     try:
@@ -1070,7 +1282,7 @@ def set_limits(hist, lo, hi):
 
 
 def set_excluded(hist, excluded_pairs):
-    cleaned = [[float(min(a, b)), float(max(a, b))] for (a, b) in excluded_pairs]
+    cleaned = normalize_excluded_regions(excluded_pairs)
     try:
         hist.Excluded(cleaned)
     except Exception:
@@ -1195,6 +1407,7 @@ def compute_gsas_pearson_for_cif(
     fmthint_override: Optional[str] = None,
     shift_positive: bool = True,
     template_gpx: Optional[str] = None,
+    background_config: Optional[Dict[str, Any]] = None,
 ) -> float:
     """
     Build a tiny GSAS-II project, run staged refinement (Pass-1: Scale; Pass-2: Scale+Cell),
@@ -1209,7 +1422,10 @@ def compute_gsas_pearson_for_cif(
     _init_gsas_process()
     import re
     from pathlib import Path as _Path
-    from gsas_core_infrastructure import GSASProjectManager
+    try:
+        from gsas_core_infrastructure import GSASProjectManager
+    except ImportError:
+        from .gsas_core_infrastructure import GSASProjectManager
 
     def _sanitize_cif_data_block(cif_file: str, label_base: str, suffix: str = "refined", maxlen: int = 40) -> None:
         """
@@ -1241,6 +1457,7 @@ def compute_gsas_pearson_for_cif(
         raise RuntimeError("Failed to create GSAS project for Pearson")
 
     histogram_loaded_from_template = False
+    using_override = (x_override is not None) and (y_override is not None)
     if template_gpx and _Path(template_gpx).exists():
         # Resolve existing histogram from template
         if pm.project.histograms():
@@ -1255,7 +1472,6 @@ def compute_gsas_pearson_for_cif(
         # Select observed dataset
         local_data_path = data_path
         local_fmthint = fmthint
-        using_override = (x_override is not None) and (y_override is not None)
         if using_override:
             _Path(work_dir).mkdir(parents=True, exist_ok=True)
             base = _Path(data_path).stem if data_path else "obs"
@@ -1304,9 +1520,15 @@ def compute_gsas_pearson_for_cif(
     if phase is None:
         raise RuntimeError(f"Could not locate phase '{ph_name}' after add_phase_from_cif")
 
-    # Background OFF; use histogram Scale (HAP Scale held)
+    # Background model: keep residual-as-Yobs jobs background-free, but allow the
+    # configured background path for raw observed-data Pearson re-ranking.
     try:
-        hist.set_refinements({'Background': {'type': 'chebyschev-1','no. coeffs': 1, 'coeffs': [0.0],'refine': False}})
+        if using_override:
+            hist.set_refinements({'Background': {'type': 'chebyschev-1', 'no. coeffs': 1, 'coeffs': [0.0], 'refine': False}})
+        elif background_config:
+            GSASMainPhaseRefiner(pm)._configure_background(background_config=background_config)
+        else:
+            hist.set_refinements({'Background': {'type': 'chebyschev-1', 'no. coeffs': 1, 'coeffs': [0.0], 'refine': False}})
     except Exception:
         pass
     try:
@@ -2297,14 +2519,10 @@ def plot_gpx_fit_with_ticks(
     # ---------------------------
     # Data arrays
     # ---------------------------
-    def _arr(kind: str):
-        try:
-            arr = hist.getdata(kind)
-            return arr.compressed() if hasattr(arr, 'compressed') else np.asarray(arr, float)
-        except Exception:
-            return np.array([], float)
-
-    x = _arr('x'); yobs = _arr('yobs'); ycalc = _arr('ycalc')
+    data = GSASDataExtractor.get_all_arrays(hist)
+    x = np.asarray(data.get('x_native', np.array([], float)), float)
+    yobs = np.asarray(data.get('yobs', np.array([], float)), float)
+    ycalc = np.asarray(data.get('ycalc', np.array([], float)), float)
     if x.size == 0 or yobs.size == 0 or ycalc.size == 0:
         logger.info("[plot] Missing x/yobs/ycalc; skipped.")
         return

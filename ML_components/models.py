@@ -195,6 +195,7 @@ def shortlist_ml_rank(
     profiles: np.ndarray,
     pid_to_row: Dict[str, int],
     candidate_ids: List[str],
+    mask_bool: Optional[np.ndarray] = None,
     q_active_min: float,
     q_active_max: float,
     topN: Optional[int] = None,
@@ -221,7 +222,12 @@ def shortlist_ml_rank(
 ) -> Tuple[List[Tuple[str, float]], List[dict], dict]:
 
     assert H_res.shape[-1] == 64 and centers.shape[-1] == 64
-    M = (centers >= float(q_active_min)) & (centers <= float(q_active_max))
+    if mask_bool is None:
+        M = (centers >= float(q_active_min)) & (centers <= float(q_active_max))
+    else:
+        M = np.asarray(mask_bool, dtype=bool).reshape(-1)
+        if M.shape[0] != 64:
+            raise ValueError(f"mask_bool must have length 64, got {M.shape[0]}")
     n_active = int(np.sum(M))
     y = np.maximum(H_res[M], 0.0).astype(np.float32)
     if n_active == 0 or y.max() <= 0:
@@ -337,6 +343,7 @@ def shortlist_ml_rank(
         mode="hist_ML",
         active_bins=int(n_active),
         q_active_min=float(q_active_min), q_active_max=float(q_active_max),
+        fragmented_mask=bool(np.any(np.diff(np.flatnonzero(mask_bool if mask_bool is not None else M.astype(bool))) > 1)) if n_active > 1 else False,
         n_candidates=len(candidate_ids), n_kept=len(details),
         fusion=dict(alpha=FUSION_DEFAULT["alpha"], beta=(FUSION_DEFAULT["beta"] if use_beta else 0.0),
                     cos=FUSION_DEFAULT["cos"], explained=FUSION_DEFAULT["explained"]),

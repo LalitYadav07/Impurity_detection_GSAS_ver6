@@ -7,7 +7,6 @@ import csv
 import time
 import datetime
 import logging
-import tempfile
 from pathlib import Path
 import re
 import shutil
@@ -17,6 +16,12 @@ import psutil
 import gc
 import random
 import importlib.util
+import hashlib
+import numpy as np
+try:
+    import pandas as pd
+except Exception:
+    pd = None
 from PIL import ImageFile
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
@@ -31,6 +36,19 @@ PERIODIC_TABLE = [
 PROJECT_ROOT = str(Path(__file__).resolve().parent)
 IS_HF_SPACES = "SPACE_ID" in os.environ
 
+
+def _bootstrap_local_import_paths() -> None:
+    """Make repo-local modules and bundled GSAS-II importable in the UI process."""
+    project_root = Path(PROJECT_ROOT)
+    scripts_path = str(project_root / "scripts")
+    gsas_path = str(project_root / "GSAS-II")
+    for candidate in (scripts_path, str(project_root), gsas_path):
+        if candidate not in sys.path:
+            sys.path.insert(0, candidate)
+
+
+_bootstrap_local_import_paths()
+
 # Ensure consistent logging for both CLI and Streamlit sessions
 try:
     from scripts.logging_config import configure_logging
@@ -38,11 +56,6 @@ try:
 except Exception:
     # Best-effort: don't crash the UI if logging helper is unavailable
     logging.basicConfig(level=logging.INFO)
-
-# --- SETUP PATHS ---
-scripts_dir = str(Path(__file__).resolve().parent / "scripts")
-if scripts_dir not in sys.path:
-    sys.path.insert(0, scripts_dir)
 
 from config_builder import build_pipeline_config
 from runner import PipelineRunner, stop_process_tree
@@ -252,6 +265,131 @@ def _format_bytes(num_bytes: int) -> str:
             return f"{size:.1f} {unit}"
         size /= 1024.0
     return f"{size:.1f} GB"
+
+
+def _limits_axis_label(
+    *,
+    source_label: str,
+    example_selection: str,
+    builtin_instprm_key: str | None,
+    instrument_mode: str,
+) -> str:
+    if example_selection == "LK-99 (TOF Demo)":
+        return "TOF (\u00b5s)"
+    if example_selection == "TbSSL (CW Demo)" or builtin_instprm_key:
+        return "2\u03b8 (deg)"
+    mode = (instrument_mode or "").strip().upper()
+    if mode == "TOF":
+        return "TOF (\u00b5s)"
+    if mode == "CW":
+        return "2\u03b8 (deg)"
+    if source_label == "X-ray":
+        return "2\u03b8 (deg)"
+    return "native x-axis (2\u03b8 deg or TOF \u00b5s)"
+
+
+def _parse_excluded_region_rows(editor_value) -> tuple[list[list[float]], list[str]]:
+    if editor_value is None:
+        return [], []
+
+    if hasattr(editor_value, "to_dict"):
+        records = editor_value.to_dict("records")
+    elif isinstance(editor_value, list):
+        records = editor_value
+    else:
+        records = []
+
+    parsed: list[list[float]] = []
+    errors: list[str] = []
+    for idx, row in enumerate(records, start=1):
+        start = row.get("Start", row.get("start"))
+        end = row.get("End", row.get("end"))
+        if start in (None, "") and end in (None, ""):
+            continue
+        if start in (None, "") or end in (None, ""):
+            errors.append(f"Ignored region row {idx} must include both Start and End values.")
+            continue
+        try:
+            parsed.append([float(start), float(end)])
+        except Exception:
+            errors.append(f"Ignored region row {idx} must contain numeric Start/End values.")
+    return parsed, errors
+
+
+def _parse_fit_window_inputs(lower_text: str, upper_text: str) -> tuple[tuple[float, float] | None, list[str]]:
+    lower_text = str(lower_text or "").strip()
+    upper_text = str(upper_text or "").strip()
+    if not lower_text and not upper_text:
+        return None, []
+    if not lower_text or not upper_text:
+        return None, ["Fit window override requires both Lower and Upper values."]
+    try:
+        lo = float(lower_text)
+        hi = float(upper_text)
+    except Exception:
+        return None, ["Fit window override values must be numeric."]
+    if lo == hi:
+        return None, ["Fit window override must span a non-zero range."]
+    return (min(lo, hi), max(lo, hi)), []
+
+
+def _coerce_excluded_region_rows(value) -> list[dict]:
+    if value is None:
+        return []
+    if hasattr(value, "to_dict"):
+        try:
+            return value.to_dict("records")
+        except Exception:
+            return []
+    if isinstance(value, list):
+        rows = []
+        for row in value:
+            if isinstance(row, dict):
+                rows.append({
+                    "Start": row.get("Start", row.get("start")),
+                    "End": row.get("End", row.get("end")),
+                })
+        return rows
+    return []
+
+
+def _merge_excluded_region_editor_state(base_rows, editor_state) -> list[dict]:
+    rows = _coerce_excluded_region_rows(base_rows)
+    if not isinstance(editor_state, dict):
+        return rows
+
+    edited_rows = editor_state.get("edited_rows") or {}
+    for raw_idx, patch in edited_rows.items():
+        try:
+            idx = int(raw_idx)
+        except Exception:
+            continue
+        while idx >= len(rows):
+            rows.append({"Start": None, "End": None})
+        if isinstance(patch, dict):
+            if "Start" in patch or "start" in patch:
+                rows[idx]["Start"] = patch.get("Start", patch.get("start"))
+            if "End" in patch or "end" in patch:
+                rows[idx]["End"] = patch.get("End", patch.get("end"))
+
+    added_rows = editor_state.get("added_rows") or []
+    for row in added_rows:
+        if isinstance(row, dict):
+            rows.append({
+                "Start": row.get("Start", row.get("start")),
+                "End": row.get("End", row.get("end")),
+            })
+
+    deleted_rows = editor_state.get("deleted_rows") or []
+    for raw_idx in sorted((int(i) for i in deleted_rows if str(i).strip().isdigit()), reverse=True):
+        if 0 <= raw_idx < len(rows):
+            rows.pop(raw_idx)
+
+    return rows
+
+
+def _format_region(lo: float, hi: float, axis_label: str) -> str:
+    return f"[{lo:.6f}, {hi:.6f}] {axis_label}"
 
 
 def _pack_phase_count(pack: dict) -> int | None:
@@ -885,6 +1023,22 @@ if 'selected_custom_pack_xray' not in st.session_state:
     st.session_state.selected_custom_pack_xray = None
 if 'selected_custom_pack_neutron' not in st.session_state:
     st.session_state.selected_custom_pack_neutron = None
+if 'fit_window_override_enabled' not in st.session_state:
+    st.session_state.fit_window_override_enabled = False
+if 'fit_window_lower' not in st.session_state:
+    st.session_state.fit_window_lower = ""
+if 'fit_window_upper' not in st.session_state:
+    st.session_state.fit_window_upper = ""
+if 'excluded_regions_rows' not in st.session_state:
+    st.session_state.excluded_regions_rows = []
+if 'excluded_regions_editor_buffer' not in st.session_state:
+    st.session_state.excluded_regions_editor_buffer = []
+if 'excluded_region_edit_index' not in st.session_state:
+    st.session_state.excluded_region_edit_index = None
+if 'excluded_region_form_start' not in st.session_state:
+    st.session_state.excluded_region_form_start = ""
+if 'excluded_region_form_end' not in st.session_state:
+    st.session_state.excluded_region_form_end = ""
 
 if 'pipeline_state' not in st.session_state:
     st.session_state.pipeline_state = {
@@ -913,6 +1067,35 @@ if pending_db_activation:
             st.session_state[f"selected_custom_pack_{pending_source}"] = str(pending_pack_root)
     except Exception:
         pass
+
+pending_excluded_region_remove = st.session_state.pop("pending_excluded_region_remove", None)
+if pending_excluded_region_remove is not None:
+    try:
+        idx = int(pending_excluded_region_remove)
+        rows = _coerce_excluded_region_rows(st.session_state.get("excluded_regions_editor_buffer"))
+        if 0 <= idx < len(rows):
+            rows.pop(idx)
+            st.session_state.excluded_regions_rows = rows
+            st.session_state.excluded_regions_editor_buffer = rows
+            edit_idx = st.session_state.get("excluded_region_edit_index")
+            if edit_idx == idx:
+                st.session_state.excluded_region_edit_index = None
+                st.session_state.excluded_region_form_start = ""
+                st.session_state.excluded_region_form_end = ""
+            elif isinstance(edit_idx, int) and edit_idx > idx:
+                st.session_state.excluded_region_edit_index = edit_idx - 1
+            st.session_state.pop("excluded_regions_editor", None)
+    except Exception:
+        pass
+
+editor_state = st.session_state.get("excluded_regions_editor")
+if isinstance(editor_state, dict):
+    merged_rows = _merge_excluded_region_editor_state(
+        st.session_state.get("excluded_regions_editor_buffer"),
+        editor_state,
+    )
+    st.session_state.excluded_regions_editor_buffer = merged_rows
+    st.session_state.excluded_regions_rows = merged_rows
 
 # --- DB LOADER INITIALIZATION ---
 # Determine active DB based on session state
@@ -1616,11 +1799,13 @@ with st.sidebar:
                 st.code("Allowed: Tb, Be, Ge, O\nHardware: Al\nCIF: TbSSL.cif", language="text")
                 allowed_elements_str = "Tb, Be, Ge, O"
                 sample_env_elements_str = "Al"
+                inst_mode = "CW"
             else: # LK-99
                  st.info("Using bundled LK-99 dataset (TOF). Parameters are pre-configured.")
                  st.code("Allowed: Pb, P, Cu, O, S\nHardware: None\nCIF: LK99.cif for LK-99 tod demo", language="text")
                  allowed_elements_str = "Pb, P, Cu, O, S"
                  sample_env_elements_str = ""
+                 inst_mode = "TOF"
             
             data_file, instprm_file, main_cif = None, None, None
             builtin_instprm_key = None
@@ -1726,10 +1911,193 @@ with st.sidebar:
         c3, c4 = st.columns(2)
         with c3:
             dedup_threshold = st.number_input("Dedup Threshold", 0.0, 1.0, 0.95, format="%.2f", help="Pearson threshold for merging similar CIFs.")
-            bg_type = st.selectbox("Background Type", ["chebyschev-1", "log interpolate", "cosine", "exponential"], index=0, help="GSAS-II background function type.")
+            bg_mode_label = st.selectbox(
+                "Background Mode",
+                ["Function", "Auto Fixed Points"],
+                index=1,
+                help=(
+                    "Function uses the standard GSAS-II background function directly. "
+                    "Auto Fixed Points first picks low-envelope background points and then fits "
+                    "the GSAS-II background function to those points."
+                ),
+            )
+            bg_mode = "auto_fixed_points" if bg_mode_label == "Auto Fixed Points" else "function"
+            bg_type = st.selectbox(
+                "Background Type",
+                ["chebyschev-1", "log interpolate", "cosine", "exponential"],
+                index=0,
+                help="GSAS-II background function type used during refinement.",
+            )
         with c4:
             excluded_sgs = st.text_input("Excluded SGs", "1, 2", help="Comma-separated Space Group numbers to ignore.")
             bg_terms = st.number_input("Background Terms", 1, 36, 12, help="Number of coefficients for background refinement.")
+            if bg_mode == "auto_fixed_points":
+                st.caption("Auto Fixed Points uses a scale-aware low-envelope picker to seed GSAS-II fixed background points.")
+
+        c5, c6 = st.columns(2)
+        with c5:
+            nudge_samples = st.number_input(
+                "Nudge Q-Target Samples",
+                1,
+                50000,
+                5000,
+                help=(
+                    "Per candidate, Stage 4 samples this many Q-target lattices before "
+                    "deduplication and representative selection. Larger values search more broadly "
+                    "but cost more time."
+                ),
+            )
+        with c6:
+            nudge_reps = st.number_input(
+                "Nudge Representative Count",
+                1,
+                500,
+                50,
+                help=(
+                    "After deduplication, Stage 4 keeps up to this many representative lattices "
+                    "for scoring against the residual. Larger values cost more time."
+                ),
+            )
+
+        st.divider()
+        axis_label = _limits_axis_label(
+            source_label=current_source,
+            example_selection=example_selection,
+            builtin_instprm_key=builtin_instprm_key,
+            instrument_mode=inst_mode,
+        )
+        st.markdown("**Ignored Regions**")
+        st.caption(
+            "Optional fit exclusions in the histogram's native x-axis. "
+            "These regions are ignored during refinement and downstream residual passes."
+        )
+        st.caption(f"Units: {axis_label}")
+        fit_window_enabled = st.checkbox(
+            "Use fit window override",
+            key="fit_window_override_enabled",
+            help=f"Restrict refinement to a single outer range in {axis_label}. "
+                 "Ignored regions are applied inside this range.",
+        )
+        fit_window = None
+        fit_window_input_errors: list[str] = []
+        if fit_window_enabled:
+            fit_c1, fit_c2 = st.columns(2)
+            with fit_c1:
+                st.text_input("Fit Window Lower", key="fit_window_lower", help=f"Lower bound in {axis_label}.")
+            with fit_c2:
+                st.text_input("Fit Window Upper", key="fit_window_upper", help=f"Upper bound in {axis_label}.")
+            fit_window, fit_window_input_errors = _parse_fit_window_inputs(
+                st.session_state.get("fit_window_lower", ""),
+                st.session_state.get("fit_window_upper", ""),
+            )
+            if fit_window:
+                fcol1, fcol2 = st.columns([0.72, 0.28])
+                with fcol1:
+                    st.info(f"Fit window override: {_format_region(fit_window[0], fit_window[1], axis_label)}")
+                with fcol2:
+                    if st.button("Clear fit window", key="clear_fit_window", width="stretch"):
+                        st.session_state.fit_window_lower = ""
+                        st.session_state.fit_window_upper = ""
+                        st.rerun()
+
+        existing_excluded_rows = _coerce_excluded_region_rows(
+            st.session_state.get("excluded_regions_editor_buffer")
+        )
+        excluded_region_pairs, excluded_region_input_errors = _parse_excluded_region_rows(existing_excluded_rows)
+        if excluded_region_pairs:
+            st.markdown("Current ignored regions:")
+            for idx, pair in enumerate(excluded_region_pairs):
+                lo, hi = float(min(pair)), float(max(pair))
+                rcol1, rcol2, rcol3 = st.columns([0.62, 0.18, 0.20])
+                with rcol1:
+                    st.caption(f"{idx + 1}. {_format_region(lo, hi, axis_label)}")
+                with rcol2:
+                    if st.button("Edit", key=f"edit_excluded_region_{idx}", width="stretch"):
+                        st.session_state.excluded_region_edit_index = idx
+                        st.session_state.excluded_region_form_start = f"{lo:.6f}"
+                        st.session_state.excluded_region_form_end = f"{hi:.6f}"
+                        st.rerun()
+                with rcol3:
+                    if st.button("Remove", key=f"remove_excluded_region_{idx}", width="stretch"):
+                        st.session_state["pending_excluded_region_remove"] = idx
+                        st.rerun()
+            rclear1, rclear2 = st.columns([0.65, 0.35])
+            with rclear2:
+                if st.button("Clear all", key="clear_all_excluded_regions", width="stretch"):
+                    st.session_state.excluded_regions_rows = []
+                    st.session_state.excluded_regions_editor_buffer = []
+                    st.session_state.excluded_region_edit_index = None
+                    st.session_state.excluded_region_form_start = ""
+                    st.session_state.excluded_region_form_end = ""
+                    st.rerun()
+            st.info(
+                f"{len(excluded_region_pairs)} ignored region(s) configured for this run in {axis_label}."
+            )
+        else:
+            st.caption("No ignored regions configured.")
+        edit_idx = st.session_state.get("excluded_region_edit_index")
+        editing_region = isinstance(edit_idx, int) and 0 <= edit_idx < len(existing_excluded_rows)
+        editor_title = "Edit ignored region" if editing_region else "Add ignored region"
+        with st.expander(editor_title, expanded=editing_region):
+            with st.form("excluded_region_form", clear_on_submit=False):
+                ec1, ec2 = st.columns(2)
+                with ec1:
+                    st.text_input(
+                        "Start",
+                        key="excluded_region_form_start",
+                        help=f"Lower bound of the ignored region in {axis_label}.",
+                    )
+                with ec2:
+                    st.text_input(
+                        "End",
+                        key="excluded_region_form_end",
+                        help=f"Upper bound of the ignored region in {axis_label}.",
+                    )
+                ac1, ac2 = st.columns(2)
+                with ac1:
+                    submit_region = st.form_submit_button(
+                        "Update region" if editing_region else "Add region",
+                        width="stretch",
+                    )
+                with ac2:
+                    cancel_region = st.form_submit_button(
+                        "Cancel edit" if editing_region else "Clear entry",
+                        width="stretch",
+                    )
+
+            if cancel_region:
+                st.session_state.excluded_region_edit_index = None
+                st.session_state.excluded_region_form_start = ""
+                st.session_state.excluded_region_form_end = ""
+                st.rerun()
+
+            if submit_region:
+                start_text = str(st.session_state.get("excluded_region_form_start", "")).strip()
+                end_text = str(st.session_state.get("excluded_region_form_end", "")).strip()
+                if not start_text or not end_text:
+                    st.error("Ignored region entry requires both Start and End values.")
+                else:
+                    try:
+                        start_val = float(start_text)
+                        end_val = float(end_text)
+                        next_rows = _coerce_excluded_region_rows(existing_excluded_rows)
+                        region_row = {"Start": start_val, "End": end_val}
+                        if editing_region:
+                            next_rows[edit_idx] = region_row
+                        else:
+                            next_rows.append(region_row)
+                        st.session_state.excluded_regions_rows = next_rows
+                        st.session_state.excluded_regions_editor_buffer = next_rows
+                        st.session_state.excluded_region_edit_index = None
+                        st.session_state.excluded_region_form_start = ""
+                        st.session_state.excluded_region_form_end = ""
+                        st.rerun()
+                    except Exception:
+                        st.error("Ignored region Start and End must be numeric.")
+
+        excluded_region_pairs, excluded_region_input_errors = _parse_excluded_region_rows(
+            st.session_state.get("excluded_regions_rows")
+        )
 
     # --- 3. EXPERT MODE (Hidden/Searchable) ---
     expert_mode = st.toggle("🔍 Expert Mode", value=False)
@@ -1833,6 +2201,11 @@ with st.sidebar:
                         els = [e.strip() for e in allowed_elements_str.split(",") if e.strip()]
                         env = [e.strip() for e in sample_env_elements_str.split(",") if e.strip()]
 
+                        if fit_window_input_errors:
+                            setup_errors.extend(fit_window_input_errors)
+                        if excluded_region_input_errors:
+                            setup_errors.extend(excluded_region_input_errors)
+
                         if not els:
                             if ACTIVE_DB_KIND != "original" and ACTIVE_DB_EXISTS:
                                 els = _derive_allowed_elements_from_active_db()
@@ -1861,6 +2234,8 @@ with st.sidebar:
                             "joint_top_k": joint_k,
                             "rwp_improve_eps": rwp_eps,
                             "stage4": {
+                                "samples": int(nudge_samples),
+                                "reps": int(nudge_reps),
                                 "len_tol_pct": len_tol,
                                 "ang_tol_deg": ang_tol,
                             },
@@ -1871,6 +2246,7 @@ with st.sidebar:
                             "corr_threshold": dedup_threshold,
                             "exclude_sg": [int(s.strip()) for s in excluded_sgs.split(",") if s.strip().isdigit()],
                             "background": {
+                                "mode": bg_mode,
                                 "type": bg_type,
                                 "terms": int(bg_terms),
                             }
@@ -1914,7 +2290,9 @@ with st.sidebar:
                                 cif_map_json_override=ACTIVE_DB_CONFIG.get("cif_map_json"),
                                 min_impurity_percent=trace_limit, max_passes=max_passes,
                                 instrument_mode=selected_mode,
-                                advanced_params=adv_cfg
+                                advanced_params=adv_cfg,
+                                limits=list(fit_window) if fit_window else None,
+                                exclude_regions=excluded_region_pairs,
                             )
 
                             with open(rdir / "pipeline_config.yaml", "w") as f:
@@ -2361,6 +2739,10 @@ with t_int:
                                 fig,
                                 width='stretch',
                                 key=plot_key,
+                                config={
+                                    "scrollZoom": True,
+                                    "displaylogo": False,
+                                },
                             )
 
                             src_plot = payload.get("source_plot_path")
