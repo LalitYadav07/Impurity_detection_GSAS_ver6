@@ -977,6 +977,51 @@ class LatticeNudger:
 
         return path
 
+    @staticmethod
+    def _resolve_inner_workers(num_reps: int, allow_parallel: bool = True) -> int:
+        """
+        Decide how many threads to use inside a single candidate optimization.
+
+        When Stage 4 is already distributing candidates across a process pool,
+        inner fan-out should stay disabled to avoid multiplying concurrency.
+        """
+        if num_reps <= 1:
+            return 1
+
+        env_workers = int(os.environ.get("STAGE4_REP_WORKERS", "0"))
+        if env_workers > 0:
+            return max(1, min(env_workers, num_reps))
+
+        is_hf = "SPACE_ID" in os.environ
+        if not allow_parallel or is_hf:
+            return 1
+
+        cpu = os.cpu_count() or 1
+        return max(1, min(num_reps, cpu // 2))
+
+    @staticmethod
+    def _resolve_outer_workers(num_candidates: int) -> int:
+        """
+        Decide how many candidate processes to launch for Stage 4.
+
+        The worker count should never exceed the number of candidates, since
+        extra idle workers add large process/memory overhead without speeding up
+        the search.
+        """
+        if num_candidates <= 1:
+            return 1
+
+        is_hf = "SPACE_ID" in os.environ
+        cpu_count = os.cpu_count() or 1
+        max_workers_env = int(os.environ.get("STAGE4_MAX_WORKERS", "0"))
+        if max_workers_env > 0:
+            workers = max_workers_env
+        elif is_hf:
+            workers = min(2, cpu_count)
+        else:
+            workers = max(1, cpu_count // 2)
+        return max(1, min(num_candidates, workers))
+
     # ------------------------ Q-signature constrained strategy (optimized) ------------------------
 
     def _make_candidates_qsignature(self,
@@ -1010,6 +1055,11 @@ class LatticeNudger:
             ang_tol_deg = float(os.environ.get("STAGE4_ANG_TOL_DEG", "6.0"))
         if _DEBUG:
             logger.info(f"Lattice tolerance: lengths ≤ {len_tol_pct:.2f}%  |  angles ≤ {ang_tol_deg:.2f}°")
+
+        if float(len_tol_pct) <= 0.0 and float(ang_tol_deg) <= 0.0:
+            if _DEBUG:
+                logger.debug("Zero lattice tolerances requested; skipping target generation and using base lattice only.")
+            return [base_lat]
 
         q_targets = _generate_q_targets(q0_full, J, mask_rows,
                                         max_pct=_QWIN_PCT,
@@ -1079,7 +1129,8 @@ class LatticeNudger:
                     Q_res: np.ndarray, R_res: np.ndarray,
                     reps: int = 10, samples: int = 200,
                     frac_window: float = 0.025, angle_window_deg: float = 1.5,
-                    out_cif_dir: Optional[str] = None) -> Stage4Result:
+                    out_cif_dir: Optional[str] = None,
+                    allow_inner_parallel: bool = True) -> Stage4Result:
         """
         Nudge one candidate structure against residual R(Q).
         """
@@ -1157,13 +1208,10 @@ class LatticeNudger:
             Qs, Is = self.sim.simulate_QI(struct_i, q_window=(q_lo, q_hi))
             return _coslog_score_on_fixed_grid(Qs, Is, plan, Rvec, alpha, eps)
 
-        is_hf = "SPACE_ID" in os.environ
-        cpu = os.cpu_count() or 1
-        default_workers = 1 if is_hf else max(1, cpu // 2)
-        workers = int(os.environ.get("STAGE4_WORKERS", default_workers))
-        
-        if is_hf and workers > 2:
-            workers = 2
+        workers = self._resolve_inner_workers(
+            len(reps_lattices),
+            allow_parallel=allow_inner_parallel,
+        )
 
         if workers > 1 and len(reps_lattices) > 1:
             from concurrent.futures import ThreadPoolExecutor
@@ -1213,19 +1261,11 @@ class LatticeNudger:
         except Exception:
             pass
 
-        # Decide worker count
+        workers = self._resolve_outer_workers(len(candidates))
         is_hf = "SPACE_ID" in os.environ
-        cpu_count = os.cpu_count() or 1
-        # We don't have direct access to s4_cfg here, but we can look at env or just use a default
-        max_workers_env = int(os.environ.get("STAGE4_MAX_WORKERS", "0"))
-        if max_workers_env > 0:
-            workers = max_workers_env
-        elif is_hf:
-            workers = min(2, cpu_count)
+        if is_hf:
             logger.info(f"Hugging Face Space detected. Capping workers to {workers} for RAM safety.")
-        else:
-            workers = max(1, cpu_count // 2)
-            
+
         logger.info(f"Starting parallel Lattice Nudging for {len(candidates)} candidates with {workers} workers.")
         
         import sys
@@ -1235,7 +1275,16 @@ class LatticeNudger:
         with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as executor:
             future_to_pid = {
                 executor.submit(
-                    self.optimize_one, pid, Q_res, R_res, reps, samples, frac_window, angle_window_deg, out_cif_dir
+                    self.optimize_one,
+                    pid,
+                    Q_res,
+                    R_res,
+                    reps,
+                    samples,
+                    frac_window,
+                    angle_window_deg,
+                    out_cif_dir,
+                    False,
                 ): pid for pid in candidates
             }
             
@@ -1250,4 +1299,3 @@ class LatticeNudger:
 
         results.sort(key=lambda r: r.best_score, reverse=True)
         return results
-

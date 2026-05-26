@@ -10,6 +10,7 @@ and checking coordinate systems. It includes:
 """
 
 import os
+import sys
 import copy
 import tempfile
 import traceback
@@ -19,6 +20,17 @@ from pathlib import Path
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def _bootstrap_gsasii_import() -> None:
+    """Make the bundled GSAS-II checkout importable outside the CLI driver."""
+    repo_root = Path(__file__).resolve().parents[1]
+    gsas_dir = str(repo_root / "GSAS-II")
+    if gsas_dir not in sys.path:
+        sys.path.insert(0, gsas_dir)
+
+
+_bootstrap_gsasii_import()
 
 _POWDER_HINT_ALIASES = {
     "xye": ("xye", "topas"),

@@ -75,6 +75,23 @@ class DBPackLayoutTests(unittest.TestCase):
             self.assertEqual(cfg["db"]["cif_map_json"], str(pack_root / "cif_map.json"))
             self.assertNotIn("original_json", cfg["db"])
 
+    def test_build_pipeline_config_persists_dataset_excluded_regions(self):
+        cfg_text = build_pipeline_config(
+            run_name="exclude_test",
+            data_file="/tmp/example.dat",
+            instprm_file="/tmp/example.instprm",
+            allowed_elements=["Al"],
+            limits=[5.0, 120.0],
+            exclude_regions=[[12.5, 13.1], [44.0, 45.5]],
+        )
+        cfg = yaml.safe_load(cfg_text)
+
+        self.assertEqual(cfg["datasets"][0]["limits"], [5.0, 120.0])
+        self.assertEqual(
+            cfg["datasets"][0]["exclude_regions"],
+            [[12.5, 13.1], [44.0, 45.5]],
+        )
+
 
 class DBLoaderPathResolutionTests(unittest.TestCase):
     def test_loader_resolves_relative_cif_map_and_relative_cif_entries(self):

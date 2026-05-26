@@ -11,7 +11,7 @@ It defines:
 import yaml
 import os
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 try:
     from .db_pack import build_db_config, validate_db_config
@@ -34,7 +34,9 @@ def build_pipeline_config(
     max_passes: int = 3,
     sample_env_elements: List[str] = None,
     instrument_mode: str = "auto",
-    advanced_params: Dict[str, Any] = None
+    advanced_params: Dict[str, Any] = None,
+    limits: Optional[List[float]] = None,
+    exclude_regions: Optional[List[List[float]]] = None,
 ) -> str:
     """
     Builds a pipeline_config.yaml content and returns it as a string.
@@ -122,6 +124,7 @@ def build_pipeline_config(
         "corr_threshold": 0.95,
         "exclude_sg": [1, 2],
         "background": {
+            "mode": "auto_fixed_points",
             "type": "chebyschev-1",
             "terms": 12,
         },
@@ -166,6 +169,14 @@ def build_pipeline_config(
     }
     if main_cif:
         dataset["main_cif"] = main_cif
+    if limits:
+        dataset["limits"] = [float(limits[0]), float(limits[1])]
+    if exclude_regions:
+        dataset["exclude_regions"] = [
+            [float(pair[0]), float(pair[1])]
+            for pair in exclude_regions
+            if pair is not None and len(pair) == 2
+        ]
 
     config["datasets"] = [dataset]
 

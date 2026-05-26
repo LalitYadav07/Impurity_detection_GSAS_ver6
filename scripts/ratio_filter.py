@@ -99,7 +99,41 @@ def _load_profiles64_metadata(profiles_dir: str) -> Dict[str, Any]:
 # =============================================================================
 # Residual → 64-bin histogram (continuous, ΔQ-weighted)
 # =============================================================================
-def _residual_hist_from_continuous(
+def _segment_ids_from_q_sequence(Q: np.ndarray, gap_factor: float = 5.0) -> np.ndarray:
+    """
+    Split a 1D Q sequence into contiguous observed segments.
+
+    Excluded regions remove samples entirely, so the surviving Q values can have
+    large jumps. Those jumps should terminate one observed segment and start the
+    next; otherwise downstream ΔQ weighting incorrectly bridges across missing
+    regions.
+    """
+    Q = np.asarray(Q, dtype=float)
+    if Q.ndim != 1:
+        raise ValueError("Q must be 1D.")
+    n = int(Q.size)
+    if n == 0:
+        return np.zeros((0,), dtype=np.int32)
+    if n == 1:
+        return np.zeros((1,), dtype=np.int32)
+
+    gaps = np.abs(np.diff(Q))
+    pos_gaps = gaps[gaps > 0.0]
+    if pos_gaps.size == 0:
+        return np.zeros((n,), dtype=np.int32)
+
+    median_gap = float(np.median(pos_gaps))
+    if not np.isfinite(median_gap) or median_gap <= 0.0:
+        return np.zeros((n,), dtype=np.int32)
+
+    break_mask = gaps > (float(gap_factor) * median_gap)
+    seg_ids = np.zeros((n,), dtype=np.int32)
+    if np.any(break_mask):
+        seg_ids[1:] = np.cumsum(break_mask.astype(np.int32))
+    return seg_ids
+
+
+def _residual_hist_from_continuous_parts(
     Q: np.ndarray,
     R: np.ndarray,
     Q_main_peaks: Optional[np.ndarray],
@@ -107,16 +141,20 @@ def _residual_hist_from_continuous(
     sigma_bins: float,
     peak_mask_width: float = 0.015,  # Q half-width to mask around each main-phase peak
     debug_plot: bool = False,        # set True or env RESID_BIN_DEBUG=1 to save a PNG
-) -> np.ndarray:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Build a 64-bin residual histogram H from continuous R(Q) with:
       - sample-level masking near main-phase peaks,
       - signed *area* accumulation per bin (ΔQ-weighted, order-robust),
+      - segment-aware ΔQ weighting so internal excluded gaps are not bridged,
       - optional Gaussian smoothing in *bin units* (sigma_bins from DB),
       - late rectification (clip negatives to 0),
+      - a 64-bin observability mask describing which bins truly contain observed data,
       - NO min–max scaling here (active-window normalization happens later).
 
-    IMPORTANT: ΔQ uses absolute neighbor gaps, so ascending/descending Q both work.
+    IMPORTANT:
+      - ΔQ uses absolute neighbor gaps, so ascending/descending Q both work.
+      - excluded regions are treated as *unobserved*, not as zeros.
     """
     Q = np.asarray(Q, dtype=float)
     R = np.asarray(R, dtype=float)
@@ -133,7 +171,8 @@ def _residual_hist_from_continuous(
 
     n_bins = int(len(edges) - 1)
     if Q.size < 2 or n_bins <= 0:
-        return np.zeros(max(n_bins, 0), dtype=np.float64)
+        zeros = np.zeros(max(n_bins, 0), dtype=np.float64)
+        return zeros, np.zeros_like(zeros, dtype=bool), np.zeros_like(zeros, dtype=np.int64)
     if np.any(np.diff(edges) <= 0):
         raise ValueError("edges must be strictly increasing.")
 
@@ -149,36 +188,60 @@ def _residual_hist_from_continuous(
         m = in_range
 
     if not np.any(m):
-        return np.zeros(n_bins, dtype=np.float64)
+        zeros = np.zeros(n_bins, dtype=np.float64)
+        return zeros, np.zeros(n_bins, dtype=bool), np.zeros(n_bins, dtype=np.int64)
 
     Qm = Q[m]
     Rm = R[m]
 
-    # 2) ΔQ weights (absolute gaps)
-    dq = np.empty_like(Qm)
-    if Qm.size == 1:
-        dq[:] = 0.0
-    else:
-        dq[1:-1] = 0.5 * (np.abs(Qm[2:] - Qm[1:-1]) + np.abs(Qm[1:-1] - Qm[:-2]))
-        dq[0] = np.abs(Qm[1] - Qm[0])
-        dq[-1] = np.abs(Qm[-1] - Qm[-2])
-    dq = np.maximum(dq, 0.0)
-
-    # 3) Bin assignment: [e_i, e_{i+1}) with last bin inclusive
-    idx = np.searchsorted(edges, Qm, side="right") - 1
-    idx = np.clip(idx, 0, n_bins - 1)
-
-    # 4) Signed AREA accumulation per bin (no per-bin divide)
+    # 2) Segment-aware ΔQ weights and observability support.
     H = np.zeros(n_bins, dtype=np.float64)
-    np.add.at(H, idx, Rm * dq)
+    bin_observed_mask = np.zeros(n_bins, dtype=bool)
+    C = np.zeros(n_bins, dtype=np.int64)
 
-    # Diagnostic counts per bin (used only for debug plot)
-    C = None
-    if debug_plot or os.environ.get("RESID_BIN_DEBUG", "") == "1":
-        C = np.zeros(n_bins, dtype=np.int64)
+    seg_ids = _segment_ids_from_q_sequence(Qm)
+    for seg_id in np.unique(seg_ids):
+        seg_sel = (seg_ids == seg_id)
+        Qs = np.asarray(Qm[seg_sel], dtype=np.float64)
+        Rs = np.asarray(Rm[seg_sel], dtype=np.float64)
+        if Qs.size == 0:
+            continue
+
+        order = np.argsort(Qs)
+        Qs = Qs[order]
+        Rs = Rs[order]
+
+        if Qs.size == 1:
+            dq = np.zeros((1,), dtype=np.float64)
+            support_lo = Qs.copy()
+            support_hi = Qs.copy()
+        else:
+            gaps = np.abs(np.diff(Qs))
+            left_half = np.empty_like(Qs)
+            right_half = np.empty_like(Qs)
+            left_half[0] = 0.5 * gaps[0]
+            right_half[-1] = 0.5 * gaps[-1]
+            left_half[1:] = 0.5 * gaps
+            right_half[:-1] = 0.5 * gaps
+            dq = np.maximum(left_half + right_half, 0.0)
+            support_lo = Qs - left_half
+            support_hi = Qs + right_half
+
+        idx = np.searchsorted(edges, Qs, side="right") - 1
+        idx = np.clip(idx, 0, n_bins - 1)
+        np.add.at(H, idx, Rs * dq)
         np.add.at(C, idx, 1)
 
-    # 5) Optional Gaussian smoothing in BIN units
+        for lo, hi in zip(support_lo, support_hi):
+            if not np.isfinite(lo) or not np.isfinite(hi):
+                continue
+            span_lo, span_hi = (float(min(lo, hi)), float(max(lo, hi)))
+            if span_hi <= edges[0] or span_lo >= edges[-1]:
+                continue
+            overlap = (edges[:-1] < span_hi) & (edges[1:] > span_lo)
+            bin_observed_mask |= overlap
+
+    # 3) Optional Gaussian smoothing in BIN units, but never across unobserved gaps.
     if sigma_bins is not None and float(sigma_bins) > 0.0:
         sb = float(sigma_bins)
         W = int(np.ceil(3.0 * sb))  # ±3σ support
@@ -186,12 +249,30 @@ def _residual_hist_from_continuous(
             x = np.arange(-W, W + 1, dtype=np.float64)
             ker = np.exp(-0.5 * (x / sb) ** 2)
             ker /= ker.sum()
-            H = np.convolve(H, ker, mode="same")
+            if np.any(bin_observed_mask):
+                smoothed = np.zeros_like(H)
+                starts = np.flatnonzero(bin_observed_mask & np.r_[True, ~bin_observed_mask[:-1]])
+                stops = np.flatnonzero(bin_observed_mask & np.r_[~bin_observed_mask[1:], True])
+                for start, stop in zip(starts, stops):
+                    segment = H[start : stop + 1]
+                    if segment.size == 1:
+                        smoothed[start : stop + 1] = segment
+                        continue
 
-    # 6) Late rectification (non-negative residual mass)
+                    # np.convolve(..., mode="same") returns the larger of the two lengths,
+                    # which breaks for short observed segments when the kernel is wider
+                    # than the segment. Pad inside the observed segment and trim back to
+                    # the original segment length so smoothing never crosses excluded gaps.
+                    pad = min(W, max(segment.size - 1, 0))
+                    padded = np.pad(segment, (pad, pad), mode="edge")
+                    conv = np.convolve(padded, ker, mode="same")
+                    smoothed[start : stop + 1] = conv[pad : pad + segment.size]
+                H = smoothed
+
+    # 4) Late rectification (non-negative residual mass)
     H = np.maximum(H, 0.0)
 
-    # 7) Debug plot (optional)
+    # 5) Debug plot (optional)
     if debug_plot or os.environ.get("RESID_BIN_DEBUG", "") == "1":
         try:
             import matplotlib.pyplot as plt
@@ -261,6 +342,7 @@ def _residual_hist_from_continuous(
                         "centers": centers,
                         "H": H,
                         "C": C,
+                        "observed_mask": bin_observed_mask.astype(np.int8),
                         "Q_main_peaks": Q_main_peaks,
                     },
                 )
@@ -270,6 +352,28 @@ def _residual_hist_from_continuous(
         except Exception as e:
             logger.debug(f"plot failed: {e}")
 
+    return H, bin_observed_mask, C
+
+
+def _residual_hist_from_continuous(
+    Q: np.ndarray,
+    R: np.ndarray,
+    Q_main_peaks: Optional[np.ndarray],
+    edges: np.ndarray,
+    sigma_bins: float,
+    peak_mask_width: float = 0.015,
+    debug_plot: bool = False,
+) -> np.ndarray:
+    """Backward-compatible wrapper returning only the final 64-bin residual histogram."""
+    H, _, _ = _residual_hist_from_continuous_parts(
+        Q,
+        R,
+        Q_main_peaks,
+        edges,
+        sigma_bins,
+        peak_mask_width=peak_mask_width,
+        debug_plot=debug_plot,
+    )
     return H
 
 
@@ -326,15 +430,22 @@ def shortlist_by_hist_ML(
     Q = np.asarray(Q, dtype=np.float64); R = np.asarray(R, dtype=np.float64)
     if Q.ndim != 1 or R.ndim != 1 or Q.shape != R.shape:
         raise ValueError("Q and R must be 1D arrays of the same shape.")
-    H_res = _residual_hist_from_continuous(Q, R, Q_main_peaks, edges, sigma, debug_plot=False)
+    H_res, observed_mask, bin_counts = _residual_hist_from_continuous_parts(
+        Q,
+        R,
+        Q_main_peaks,
+        edges,
+        sigma,
+        debug_plot=False,
+    )
 
-    # 3) Active overlap with DB (allow small windows; just forbid empty)
+    # 3) Active overlap with DB. Internal excluded gaps remain masked out.
     q_min_res = float(np.min(Q)) if Q.size else 0.0
     q_max_res = float(np.max(Q)) if Q.size else 0.0
     q_active_min = max(q_min_res, q_min_db)
     q_active_max = min(q_max_res, q_max_db)
 
-    M_range = (centers >= q_active_min) & (centers <= q_active_max)
+    M_range = observed_mask.astype(bool)
     n_active = int(np.sum(M_range))
     if n_active < int(min_active_bins):
         meta = {
@@ -343,6 +454,7 @@ def shortlist_by_hist_ML(
             "q_min_res": q_min_res, "q_max_res": q_max_res,
             "active_range": (q_active_min, q_active_max),
             "active_bins": n_active,
+            "fragmented_mask": bool(np.any(np.diff(np.flatnonzero(M_range)) > 1)) if n_active > 1 else False,
             "profiles_dir": profiles_dir,
         }
         return [], [], meta
@@ -396,6 +508,7 @@ def shortlist_by_hist_ML(
         profiles=profiles,
         pid_to_row=pid_to_row,
         candidate_ids=cand_ids,
+        mask_bool=M_range,
         q_active_min=q_active_min,
         q_active_max=q_active_max,
         topN=(int(topN) if topN is not None else None),
@@ -420,9 +533,11 @@ def shortlist_by_hist_ML(
         "q_min_res": q_min_res, "q_max_res": q_max_res,
         "active_range": (q_active_min, q_active_max),
         "active_bins": n_active,
+        "fragmented_mask": bool(np.any(np.diff(np.flatnonzero(M_range)) > 1)) if n_active > 1 else False,
         "profiles_dir": profiles_dir,
         "sigma_bins": sigma,
         "sum_residual": float(np.maximum(H_res[M_range], 0.0).sum()),
+        "observed_bin_count_sum": int(np.sum(bin_counts[M_range])),
         "is_stage0": (bool(stage0_flag) if stage0_flag is not None else None),
         "ckpt_source": ckpt_source,
     })
