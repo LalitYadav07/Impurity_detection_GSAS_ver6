@@ -37,6 +37,7 @@ def build_pipeline_config(
     advanced_params: Dict[str, Any] = None,
     limits: Optional[List[float]] = None,
     exclude_regions: Optional[List[List[float]]] = None,
+    reference_phase_exclusions: Optional[Dict[str, Any]] = None,
 ) -> str:
     """
     Builds a pipeline_config.yaml content and returns it as a string.
@@ -135,6 +136,22 @@ def build_pipeline_config(
             "accept_rwp_worsen": 0.15,
             "terms": ["Zero", "U", "V", "W"],
         },
+        "reference_phase_exclusions": {
+            "enabled": False,
+            "presets": [],
+            "window_mode": "auto",
+            "fwhm_factor": 6.0,
+            "fractional_d_tolerance": 0.003,
+            "zero_tolerance_deg": 0.05,
+            "zero_tolerance_tof": 25.0,
+            "min_half_width_deg": 0.35,
+            "max_half_width_deg": 2.00,
+            "fallback_half_width_deg": 0.75,
+            "min_half_width_tof": 75.0,
+            "max_half_width_tof": 750.0,
+            "fallback_half_width_tof": 200.0,
+            "include_cu_kbeta": False,
+        },
         "element_filter": {
             "max_offlist_elements": 0,
             "wildcard_relation": "same_family",
@@ -151,6 +168,9 @@ def build_pipeline_config(
             "disallow_pure": ["O", "C"]
         }
     })
+
+    if reference_phase_exclusions is not None:
+        config["reference_phase_exclusions"].update(reference_phase_exclusions)
 
     # Override with advanced_params if provided
     if advanced_params:

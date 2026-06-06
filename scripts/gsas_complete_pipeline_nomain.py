@@ -31,6 +31,7 @@ import math
 import re
 import io
 import datetime
+import logging
 from pathlib import Path
 
 # Force UTF-8 for stdout/stderr to avoid 'charmap' errors on Windows
@@ -173,6 +174,7 @@ try:
 
     )
     from ml_ranker_support import discover_ml_ranker_assets, load_first_json_record, write_ranker_status
+    from reference_phase_masks import build_reference_phase_exclusions, merge_reference_phase_exclusion_config
     COMPONENTS_OK = True
 except ImportError as e:
     print(f"[ERROR] Failed to import integration components: {e}")
@@ -339,6 +341,84 @@ def _expand(p: Optional[str]) -> Optional[str]:
         base = os.environ.get("CONFIG_DIR") or os.getcwd()
         q = Path(base) / q
     return str(q.resolve())
+
+
+def _resolve_dataset_work_dir(top_cfg: Dict[str, Any], ds: Dict[str, Any]) -> Path:
+    """Resolve the dataset work directory using the same rules as run_dataset()."""
+    name = ds.get("name", "dataset")
+    work_root_cfg = top_cfg.get("work_root") or os.environ.get("WORK_ROOT")
+    work_root = _expand(work_root_cfg) if work_root_cfg else None
+
+    ds_work_dir = ds.get("work_dir")
+    if ds_work_dir:
+        return Path(_expand(ds_work_dir))
+    if work_root:
+        wr_path = Path(work_root)
+        return wr_path if wr_path.name == name else (wr_path / name)
+    return Path(_expand(top_cfg.get("work_dir")) or str(Path.cwd() / name))
+
+
+class _TeeStream:
+    def __init__(self, original: Any, mirror: Any):
+        self._original = original
+        self._mirror = mirror
+
+    def write(self, data: str) -> int:
+        self._original.write(data)
+        self._mirror.write(data)
+        return len(data)
+
+    def flush(self) -> None:
+        self._original.flush()
+        self._mirror.flush()
+
+    def isatty(self) -> bool:
+        try:
+            return bool(self._original.isatty())
+        except Exception:
+            return False
+
+    @property
+    def encoding(self) -> str:
+        return getattr(self._original, "encoding", "utf-8")
+
+
+@contextmanager
+def _dataset_log_capture(top_cfg: Dict[str, Any], ds: Dict[str, Any]) -> Iterable[Path]:
+    """Mirror CLI stdout/stderr/logging into the dataset run folder like the GUI."""
+    work_dir = _resolve_dataset_work_dir(top_cfg, ds)
+    work_dir.mkdir(parents=True, exist_ok=True)
+    log_path = work_dir / "pipeline.log"
+
+    root = logging.getLogger()
+    formatter = None
+    for handler in root.handlers:
+        formatter = getattr(handler, "formatter", None)
+        if formatter is not None:
+            break
+    if formatter is None:
+        formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+
+    file_handler = logging.FileHandler(log_path, mode="a", encoding="utf-8")
+    file_handler.setLevel(root.level or logging.INFO)
+    file_handler.setFormatter(formatter)
+    root.addHandler(file_handler)
+
+    old_stdout, old_stderr = sys.stdout, sys.stderr
+    log_handle = open(log_path, "a", encoding="utf-8")
+    sys.stdout = _TeeStream(old_stdout, log_handle)
+    sys.stderr = _TeeStream(old_stderr, log_handle)
+    try:
+        print(f"[INFO] CLI log file: {log_path}")
+        yield log_path
+    finally:
+        sys.stdout.flush()
+        sys.stderr.flush()
+        sys.stdout = old_stdout
+        sys.stderr = old_stderr
+        root.removeHandler(file_handler)
+        file_handler.close()
+        log_handle.close()
 
 def _guess_mode_and_tag(data_path: str) -> Tuple[Optional[str], Optional[str]]:
     name = Path(data_path).name.lower()
@@ -1600,11 +1680,55 @@ class UnifiedPipeline:
 
         # Data range limits and exclusions
         limits = ds.get("limits")
-        exclude_regions = ds.get("exclude_regions", [])
+        manual_exclude_regions = list(ds.get("exclude_regions", []) or [])
+        ref_exclusion_cfg = merge_reference_phase_exclusion_config(
+            self.top_cfg.get("reference_phase_exclusions", {}),
+            ds.get("reference_phase_exclusions", {}),
+        )
+
+        def _reference_exclusion_state(current_instprm_path: str) -> Tuple[Dict[str, Any], List[Any]]:
+            try:
+                report = build_reference_phase_exclusions(
+                    ref_exclusion_cfg,
+                    instprm_path=current_instprm_path,
+                    mode=mode,
+                    limits=limits,
+                )
+            except Exception as exc:
+                raise RuntimeError(f"[{name}] Reference/can phase exclusion setup failed: {exc}") from exc
+
+            generated = report.get("ranges", []) or []
+            combined = manual_exclude_regions + generated
+            if report.get("enabled"):
+                audit_payload = {
+                    **report,
+                    "manual_ranges": manual_exclude_regions,
+                    "combined_ranges": combined,
+                }
+                audit_path = Path(tech_logs_dir) / "reference_phase_exclusions.json"
+                audit_path.write_text(json.dumps(audit_payload, indent=2), encoding="utf-8")
+                if self.manifest:
+                    self.manifest.add_artifact(str(audit_path))
+
+            if generated:
+                print(
+                    "[INFO] Reference/can phase exclusions: "
+                    f"{len(generated)} generated window(s) from {report.get('presets', [])} "
+                    f"on {report.get('native_axis', 'native axis')}"
+                )
+                if bool(ref_exclusion_cfg.get("include_cu_kbeta", ref_exclusion_cfg.get("include_kbeta", False))):
+                    print("[INFO] Reference/can phase exclusions include Cu K-beta companion windows.")
+            elif report.get("enabled"):
+                print("[INFO] Reference/can phase exclusions enabled; no Bragg windows fell inside the active range.")
+            return report, combined
+
+        reference_phase_exclusion_report, exclude_regions = _reference_exclusion_state(instprm_path)
 
         # Build comprehensive ds_cfg with all redirected paths
         ds_cfg = {
             **ds,
+            "exclude_regions": exclude_regions,
+            "reference_phase_exclusion_report": reference_phase_exclusion_report,
             "diagnostics_path": diagnostics_dir,
             "diag_hist_path": diag_hist_dir,
             "diag_resid_path": diag_resid_dir,
@@ -1965,6 +2089,16 @@ class UnifiedPipeline:
                                 "[WARN] Light PXRD calibration was not adopted; "
                                 f"Rwp changed from {before_rwp} to {after_rwp}"
                             )
+
+                if calibrated_instprm_path and reference_phase_exclusion_report.get("enabled"):
+                    reference_phase_exclusion_report, exclude_regions = _reference_exclusion_state(instprm_path)
+                    ds_cfg["exclude_regions"] = exclude_regions
+                    ds_cfg["reference_phase_exclusion_report"] = reference_phase_exclusion_report
+                    normalized_exclusions = normalize_excluded_regions(exclude_regions, lo, hi)
+                    if lo is not None and hi is not None:
+                        ensure_usable_range(lo, hi, normalized_exclusions)
+                    set_excluded(hist, normalized_exclusions)
+                    print("[INFO] Recomputed reference/can phase exclusions after light PXRD calibration.")
 
                 with bench.block("S1: staged refinement"):
                     main_results = main_ref.run_staged_refinement(
@@ -2505,7 +2639,8 @@ Examples:
             print(f"[ERROR] Dataset '{args.dataset}' not found in configuration")
             return False
         try:
-            ok = pipe.run_dataset(ds)
+            with _dataset_log_capture(cfg, ds):
+                ok = pipe.run_dataset(ds)
             success &= ok
         except KeyboardInterrupt:
             print("\n[INFO] Interrupted by user")
@@ -2526,7 +2661,8 @@ Examples:
         for ds in datasets:
             name = ds.get("name", "<unnamed>")
             try:
-                ok = pipe.run_dataset(ds)
+                with _dataset_log_capture(cfg, ds):
+                    ok = pipe.run_dataset(ds)
                 success &= ok
             except KeyboardInterrupt:
                 print("\n[INFO] Interrupted by user")

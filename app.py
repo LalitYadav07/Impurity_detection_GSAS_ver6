@@ -1896,6 +1896,8 @@ with st.sidebar:
                 else:
                     st.caption("Light PXRD calibration is disabled for this run; the original instrument file will be used throughout.")
 
+    reference_phase_exclusion_config = {"enabled": False, "presets": []}
+
     # --- 2. ADVANCED SETTINGS (Secondary) ---
     with st.expander("⚙️ Advanced Tuning", expanded=False):
         c1, c2 = st.columns(2)
@@ -1972,6 +1974,177 @@ with st.sidebar:
             "These regions are ignored during refinement and downstream residual passes."
         )
         st.caption(f"Units: {axis_label}")
+
+        se_tokens = [e.strip().lower() for e in str(sample_env_elements_str or "").split(",") if e.strip()]
+        default_ref_presets = []
+        if "al" in se_tokens:
+            default_ref_presets.append("Al_fcc")
+        if "cu" in se_tokens:
+            default_ref_presets.append("Cu_fcc")
+        if "v" in se_tokens:
+            default_ref_presets.append("V_bcc")
+
+        auto_reference_mask_enabled = st.checkbox(
+            "Auto-mask reference/can Bragg peaks",
+            value=False,
+            key="auto_reference_phase_mask_enabled",
+            help=(
+                "Generate ignored regions around known Al, Cu, or V container/reference peaks. "
+                "This is independent of the Hardware / SE chemistry filter."
+            ),
+        )
+        ref_c1, ref_c2 = st.columns(2)
+        with ref_c1:
+            reference_mask_presets = st.multiselect(
+                "Reference/can presets",
+                ["Al_fcc", "Cu_fcc", "V_bcc"],
+                default=default_ref_presets,
+                disabled=not auto_reference_mask_enabled,
+                help="Preset crystal structures used to calculate Bragg peak positions for masking.",
+            )
+        with ref_c2:
+            reference_mask_window_mode_label = st.selectbox(
+                "Reference mask width",
+                ["Auto from instrument profile", "Fixed half-width"],
+                index=0,
+                disabled=not auto_reference_mask_enabled,
+                help="Auto estimates the window from the instrument profile terms; fixed uses one user-supplied half-width.",
+            )
+        reference_mask_window_mode = "fixed" if reference_mask_window_mode_label == "Fixed half-width" else "auto"
+        is_tof_axis = "TOF" in axis_label
+        default_min_ref_width = 75.0 if is_tof_axis else 0.35
+        default_max_ref_width = 750.0 if is_tof_axis else 2.00
+        default_fixed_ref_width = 200.0 if is_tof_axis else 0.75
+        default_zero_tolerance = 25.0 if is_tof_axis else 0.05
+        width_step = 5.0 if is_tof_axis else 0.05
+        width_format = "%.1f" if is_tof_axis else "%.2f"
+
+        width_c1, width_c2, width_c3 = st.columns(3)
+        if reference_mask_window_mode == "fixed":
+            with width_c1:
+                reference_mask_fixed_half_width = st.number_input(
+                    "Fixed half-width",
+                    0.01,
+                    10000.0,
+                    default_fixed_ref_width,
+                    step=width_step,
+                    format=width_format,
+                    disabled=not auto_reference_mask_enabled,
+                    help=f"Fixed half-width of each generated ignored region in {axis_label}.",
+                )
+            reference_mask_fwhm_factor = 6.0
+            reference_mask_fractional_d_tolerance = 0.003
+            reference_mask_zero_tolerance = default_zero_tolerance
+            reference_mask_min_half_width = default_min_ref_width
+            reference_mask_max_half_width = default_max_ref_width
+        else:
+            with width_c1:
+                reference_mask_fwhm_factor = st.number_input(
+                    "Profile FWHM factor",
+                    0.5,
+                    20.0,
+                    6.0,
+                    step=0.5,
+                    format="%.1f",
+                    disabled=not auto_reference_mask_enabled,
+                    help=(
+                        "Generated half-width includes 0.5 * factor * profile FWHM plus "
+                        "the position tolerance below, then is clamped by min/max."
+                    ),
+                )
+            with width_c2:
+                reference_mask_fractional_d_tolerance_pct = st.number_input(
+                    "d tolerance (%)",
+                    0.0,
+                    5.0,
+                    0.3,
+                    step=0.1,
+                    format="%.1f",
+                    disabled=not auto_reference_mask_enabled,
+                    help="Allows shifted peaks from alloying, temperature, or reference-cell mismatch.",
+                )
+                reference_mask_fractional_d_tolerance = float(reference_mask_fractional_d_tolerance_pct) / 100.0
+            with width_c3:
+                reference_mask_zero_tolerance = st.number_input(
+                    "Zero tolerance",
+                    0.0,
+                    10000.0,
+                    default_zero_tolerance,
+                    step=width_step,
+                    format=width_format,
+                    disabled=not auto_reference_mask_enabled,
+                    help=f"Extra center-position tolerance in {axis_label} for residual zero/calibration mismatch.",
+                )
+            minmax_c1, minmax_c2 = st.columns(2)
+            with minmax_c1:
+                reference_mask_min_half_width = st.number_input(
+                    "Min half-width",
+                    0.01,
+                    10000.0,
+                    default_min_ref_width,
+                    step=width_step,
+                    format=width_format,
+                    disabled=not auto_reference_mask_enabled,
+                    help=f"Minimum generated half-width in {axis_label}.",
+                )
+            with minmax_c2:
+                reference_mask_max_half_width = st.number_input(
+                    "Max half-width",
+                    0.01,
+                    10000.0,
+                    default_max_ref_width,
+                    step=width_step,
+                    format=width_format,
+                    disabled=not auto_reference_mask_enabled,
+                    help=f"Maximum generated half-width in {axis_label}.",
+                )
+            reference_mask_fixed_half_width = default_fixed_ref_width
+
+        kbeta_c1, kbeta_c2 = st.columns(2)
+        with kbeta_c1:
+            reference_mask_include_kbeta = st.checkbox(
+                "Also mask Cu K-beta positions",
+                value=bool(IS_XRAY),
+                key="reference_phase_mask_include_kbeta",
+                disabled=not auto_reference_mask_enabled,
+                help="For Cu-anode lab PXRD, also mask K-beta companion peaks from the selected phases.",
+            )
+        with kbeta_c2:
+            st.caption("Cu K-beta uses the same width policy as the selected reference peaks.")
+        if auto_reference_mask_enabled:
+            reference_phase_exclusion_config = {
+                "enabled": True,
+                "presets": list(reference_mask_presets),
+                "window_mode": reference_mask_window_mode,
+                "include_cu_kbeta": bool(reference_mask_include_kbeta),
+            }
+            if reference_mask_window_mode == "fixed":
+                if is_tof_axis:
+                    reference_phase_exclusion_config["half_width_tof"] = float(reference_mask_fixed_half_width)
+                else:
+                    reference_phase_exclusion_config["half_width_deg"] = float(reference_mask_fixed_half_width)
+            else:
+                reference_phase_exclusion_config["fwhm_factor"] = float(reference_mask_fwhm_factor)
+                reference_phase_exclusion_config["fractional_d_tolerance"] = float(reference_mask_fractional_d_tolerance)
+                if is_tof_axis:
+                    reference_phase_exclusion_config.update({
+                        "min_half_width_tof": float(reference_mask_min_half_width),
+                        "max_half_width_tof": float(reference_mask_max_half_width),
+                        "zero_tolerance_tof": float(reference_mask_zero_tolerance),
+                        "zero_tolerance_deg": 0.05,
+                        "min_half_width_deg": 0.35,
+                        "max_half_width_deg": 2.00,
+                    })
+                else:
+                    reference_phase_exclusion_config.update({
+                        "min_half_width_deg": float(reference_mask_min_half_width),
+                        "max_half_width_deg": float(reference_mask_max_half_width),
+                        "zero_tolerance_deg": float(reference_mask_zero_tolerance),
+                        "zero_tolerance_tof": 25.0,
+                        "min_half_width_tof": 75.0,
+                        "max_half_width_tof": 750.0,
+                    })
+
         fit_window_enabled = st.checkbox(
             "Use fit window override",
             key="fit_window_override_enabled",
@@ -2205,6 +2378,25 @@ with st.sidebar:
                             setup_errors.extend(fit_window_input_errors)
                         if excluded_region_input_errors:
                             setup_errors.extend(excluded_region_input_errors)
+                        if reference_phase_exclusion_config.get("enabled") and not reference_phase_exclusion_config.get("presets"):
+                            setup_errors.append(
+                                "Auto-mask reference/can Bragg peaks requires at least one Al, Cu, or V preset."
+                            )
+                        if reference_phase_exclusion_config.get("enabled") and reference_phase_exclusion_config.get("window_mode") == "auto":
+                            for min_key, max_key in (
+                                ("min_half_width_deg", "max_half_width_deg"),
+                                ("min_half_width_tof", "max_half_width_tof"),
+                            ):
+                                if (
+                                    min_key in reference_phase_exclusion_config
+                                    and max_key in reference_phase_exclusion_config
+                                    and float(reference_phase_exclusion_config[max_key])
+                                    < float(reference_phase_exclusion_config[min_key])
+                                ):
+                                    setup_errors.append(
+                                        "Auto-mask reference/can Bragg peaks requires Max half-width >= Min half-width."
+                                    )
+                                    break
 
                         if not els:
                             if ACTIVE_DB_KIND != "original" and ACTIVE_DB_EXISTS:
@@ -2293,6 +2485,7 @@ with st.sidebar:
                                 advanced_params=adv_cfg,
                                 limits=list(fit_window) if fit_window else None,
                                 exclude_regions=excluded_region_pairs,
+                                reference_phase_exclusions=reference_phase_exclusion_config,
                             )
 
                             with open(rdir / "pipeline_config.yaml", "w") as f:

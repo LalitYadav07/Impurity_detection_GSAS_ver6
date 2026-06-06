@@ -100,6 +100,22 @@ element_filter:
   # Commonly used to drop O-only, C-only phases, etc.
   disallow_pure: [O, C]
 
+reference_phase_exclusions:
+  enabled: false
+  presets: []              # e.g. [Al_fcc, Cu_fcc, V_bcc]
+  window_mode: auto        # auto from instrument profile, or fixed
+  fwhm_factor: 6.0
+  fractional_d_tolerance: 0.003
+  zero_tolerance_deg: 0.05
+  zero_tolerance_tof: 25.0
+  min_half_width_deg: 0.35
+  max_half_width_deg: 2.00
+  fallback_half_width_deg: 0.75
+  min_half_width_tof: 75.0
+  max_half_width_tof: 750.0
+  fallback_half_width_tof: 200.0
+  include_cu_kbeta: false  # for Cu-anode lab PXRD companion peaks
+
 max_passes: 1         # how many impurity passes to attempt
 rwp_improve_eps: 0.05  # stop if Rwp improves less than this (set >0 to enable early stop)
 
