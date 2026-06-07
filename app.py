@@ -18,6 +18,7 @@ import random
 import importlib.util
 import hashlib
 import numpy as np
+from urllib.parse import urlencode
 try:
     import pandas as pd
 except Exception:
@@ -35,6 +36,11 @@ PERIODIC_TABLE = [
 ]
 PROJECT_ROOT = str(Path(__file__).resolve().parent)
 IS_HF_SPACES = "SPACE_ID" in os.environ
+FEEDBACK_ISSUE_URL = os.environ.get(
+    "FEEDBACK_ISSUE_URL",
+    "https://github.com/LalitYadav07/Impurity_detection_GSAS_ver6/issues/new",
+).strip()
+FEEDBACK_WEBHOOK_URL = os.environ.get("FEEDBACK_WEBHOOK_URL", "").strip()
 
 
 def _bootstrap_local_import_paths() -> None:
@@ -48,6 +54,47 @@ def _bootstrap_local_import_paths() -> None:
 
 
 _bootstrap_local_import_paths()
+
+
+def _append_feedback_record(payload: dict) -> Path:
+    feedback_path = Path(PROJECT_ROOT) / "runs" / "feedback" / "feedback.jsonl"
+    feedback_path.parent.mkdir(parents=True, exist_ok=True)
+    with feedback_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
+    return feedback_path
+
+
+def _feedback_issue_url(payload: dict) -> str:
+    message = str(payload.get("message", "")).strip()
+    first_line = next((line.strip() for line in message.splitlines() if line.strip()), "")
+    title_text = first_line[:80] if first_line else str(payload.get("category", "GUI feedback"))
+    title = f"{payload.get('category', 'GUI feedback')}: {title_text}"
+    context = payload.get("context") or {}
+    context_lines = [f"- {key}: `{value}`" for key, value in context.items() if value not in (None, "")]
+    body_parts = [
+        "## Feedback",
+        message[:3500] if message else "(No message provided.)",
+        "",
+        "## Context",
+        "\n".join(context_lines) if context_lines else "(No context included.)",
+        "",
+        f"Feedback ID: `{payload.get('id', 'unknown')}`",
+    ]
+    separator = "&" if "?" in FEEDBACK_ISSUE_URL else "?"
+    return FEEDBACK_ISSUE_URL + separator + urlencode({"title": title, "body": "\n".join(body_parts)})
+
+
+def _send_feedback_webhook(payload: dict) -> tuple[bool, str]:
+    if not FEEDBACK_WEBHOOK_URL:
+        return False, "No FEEDBACK_WEBHOOK_URL configured."
+    try:
+        import requests
+        response = requests.post(FEEDBACK_WEBHOOK_URL, json=payload, timeout=8)
+        if response.status_code >= 400:
+            return False, f"Webhook returned HTTP {response.status_code}."
+        return True, "Feedback sent through configured webhook."
+    except Exception as exc:
+        return False, f"Webhook send failed: {exc}"
 
 # Ensure consistent logging for both CLI and Streamlit sessions
 try:
@@ -1765,26 +1812,168 @@ with st.sidebar:
                             st.error(f"Failed to build custom pack: {exc}")
 
     # --- USER GUIDE ---
-    with st.expander("📖 User Guide", expanded=False):
+    with st.expander("📖 In-App User Guide", expanded=False):
         st.markdown("""
-        ### Analysis Setup
-        * **Radiation Source**: Select **Neutron** or **X-ray** in the sidebar to switch databases automatically.
-        * **Initial Selection**: Set **Example Mode** to `None` to enable manual uploads, or pick a built-in demo dataset.
-        * **Data Entry**: Provide your **Diffraction Data**, optional **Main CIF**, and either uploaded **Instrument Parameters** or the built-in **CuKa lab PXRD** profile for X-ray CW screening.
-        * **Chemistry**: Enter the **Allowed Elements**. Use **Hardware / SE** for sample environment peaks (e.g., Al cans).
-        * **Discovery Strategy**: Set **Max Discovery Passes** to the number of impurity phases you expect to find.
-        * **Instrument Mode**: Select `Auto`, `TOF`, or `CW` as appropriate for your data. The built-in CuKa lab preset forces `CW`.
-        * **Background**: Default is a **12-term Chebyshev** polynomial. Adjust in **Advanced Tuning** if necessary.
+        Use this panel as the run checklist. The most common failures come from using
+        the wrong database, omitting the instrument file, or letting can peaks drive
+        the residual search.
 
-        ### Runtime Monitoring (~5–10 mins)
-        * **Initial Verification (< 1 min)**: Check the **Main Phase Fit** in the Artifacts panel to ensure the baseline fitting is accurate.
-        * **Sequential Updates**: Look for `seq_pass#N_accepted_model.png` after each pass to see if the added phase explains previously unknown peaks.
-        * **Candidate Tracking**: Browse `Diagnostics / Screening_Histograms` or the **Results ML Ranker** tab to see top candidates by formula and space group.
+        ### Recommended Setup Order
 
-        ### Reviewing Results
-        * **Quantification**: Use **Weighted Fraction Pct** from the final Data Sheet.
-        * **Interactive Plots**: Open the **Interactive Plots** tab for zoomable, exportable Rietveld fit visualizations.
+        | Step | GUI control | What to check |
+        | --- | --- | --- |
+        | 1 | **Radiation Source** | Pick `Neutron` or `X-ray` before choosing a database. |
+        | 2 | **Search Database** | Use `Original`, or select/build an `Augmented Pack` or `Mini Pack`. |
+        | 3 | **Example Mode** | Pick a demo, or choose `None` for your own files. |
+        | 4 | **Diffraction Data** | Upload `.dat`, `.xye`, `.gsa`, or `.fxye`. |
+        | 5 | **Instrument Profile** | Prefer a real `.instprm`; X-ray can use the built-in CuKa preset for quick CW screening. |
+        | 6 | **Main CIF** | Optional. Provide it for known-host impurity discovery; omit it for no-main discovery. |
+        | 7 | **Allowed Elements** | Enter host/sample chemistry, not can hardware. |
+        | 8 | **Hardware / SE** | Enter can/holder elements such as `Al`, `Cu`, `V`. This affects chemistry filtering only. |
+        | 9 | **Advanced Tuning** | Set fit windows, ignored regions, masks, background, and pass counts. |
+
+        ### Which Run Mode Should I Use?
+
+        | Situation | Recommended setup |
+        | --- | --- |
+        | Known main phase, looking for impurities | Upload **Main CIF**, set allowed host elements, run 1-3 passes. |
+        | Unknown pattern or no reliable main phase | Leave **Main CIF** empty and use Stage 0 no-main discovery. |
+        | Search only a curated set of CIFs | Build/select a **Mini Pack**. Allowed elements may be left blank if the pack is usable. |
+        | Add custom CIFs to the standard DB | Build/select an **Augmented Pack**. |
+        | Can or holder peaks are visible | Use **Hardware / SE** for filtering and **Auto-mask reference/can Bragg peaks** for data masking. |
+
+        ### Sample Environment vs Peak Masking
+
+        **Hardware / SE** is a composition filter. It lets phases such as pure Al,
+        Cu, V, or allowed oxides pass without treating them as sample chemistry.
+        It does not remove their peaks from the data.
+
+        **Auto-mask reference/can Bragg peaks** is a data mask. It calculates
+        `Al_fcc`, `Cu_fcc`, or `V_bcc` peak positions from the actual instrument
+        file and excludes those native-axis windows before refinement and ML
+        residual screening.
+
+        Practical defaults:
+
+        | Problem | Setting to adjust |
+        | --- | --- |
+        | Peak center is slightly shifted | Increase **d tolerance (%)** or **Zero tolerance**. |
+        | Peak shoulders still remain | Increase **Max half-width** or use **Fixed half-width**. |
+        | Cu K-beta contamination in lab XRD | Enable **Also mask Cu K-beta positions**. |
+        | Need to ignore unrelated bad regions | Add them manually under **Ignored Regions**. |
+
+        ### What To Watch During A Run
+
+        | Panel/file | Meaning |
+        | --- | --- |
+        | **Live log** | Immediate errors, current pass, current candidate, and Rwp changes. |
+        | `pipeline.log` | Complete run log saved inside `runs/<run_name>/`. |
+        | `Results/Plots/main_phase_fit.png` | Baseline fit when a main CIF is supplied. |
+        | `Results/Plots/seq_pass*_accepted_model.png` | Accepted model after each impurity pass. |
+        | `Diagnostics/Screening_Histograms/pass*/hist_grid.png` | What the ML histogram screen considered. |
+        | `Results/Summary_Fractions.csv` | Final phase fractions and detection summary. |
+        | `Technical/Logs/reference_phase_exclusions.json` | Exact generated Al/Cu/V mask centers and windows. |
+
+        ### Quick Troubleshooting
+
+        | Symptom | Likely fix |
+        | --- | --- |
+        | No candidates survive | Check allowed elements, database mode, and `Excluded SGs`. |
+        | Obvious can peaks dominate residual | Enable reference/can masking and widen the mask. |
+        | Peaks do not align for many candidates | Check instrument mode, wavelength/TOF instrument file, and zero calibration. |
+        | GUI and CLI outputs differ | Reuse the GUI-generated `runs/<run_name>/pipeline_config.yaml` from CLI. |
+        | Run starts but log is elsewhere | Check `runs/<run_name>/pipeline.log`; GUI writes there explicitly. |
+
+        ### Send Feedback
+
+        Use the **Feedback** panel below this guide for bug reports, result-quality
+        comments, or feature requests. The app saves a local feedback copy under
+        `runs/feedback/feedback.jsonl` and provides a prefilled GitHub issue link.
+        If `FEEDBACK_WEBHOOK_URL` is configured, the same payload is also sent there.
+
+        ### Reuse The GUI Config From CLI
+
+        ```bash
+        pixi run python scripts/gsas_complete_pipeline_nomain.py \\
+          --config runs/<run_name>/pipeline_config.yaml \\
+          --dataset <run_name>
+        ```
         """)
+
+    with st.expander("💬 Feedback", expanded=False):
+        st.caption(
+            "Send a bug report, result-quality note, or feature request. "
+            "A local copy is saved first; a prefilled GitHub issue link is generated for sending."
+        )
+        with st.form("gui_feedback_form", clear_on_submit=False):
+            feedback_category = st.selectbox(
+                "Feedback type",
+                ["Result quality", "Bug", "Usability", "Feature request", "Other"],
+            )
+            feedback_message = st.text_area(
+                "Comment",
+                height=130,
+                placeholder="Describe what happened, what you expected, and any run name or candidate you are looking at.",
+            )
+            feedback_contact = st.text_input(
+                "Contact or name (optional)",
+                placeholder="Email, GitHub handle, or lab/name",
+            )
+            feedback_include_context = st.checkbox(
+                "Include current GUI context",
+                value=True,
+                help="Includes run name, radiation source, database mode, and mask settings.",
+            )
+            feedback_submitted = st.form_submit_button("Prepare feedback")
+
+        if feedback_submitted:
+            message_text = str(feedback_message or "").strip()
+            if not message_text:
+                st.error("Please enter a comment before submitting feedback.")
+            else:
+                created_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                feedback_id = hashlib.sha1(
+                    f"{created_at}|{feedback_category}|{message_text}".encode("utf-8")
+                ).hexdigest()[:12]
+                feedback_context = {}
+                if feedback_include_context:
+                    feedback_context = {
+                        "run_name": st.session_state.get("custom_run_name", ""),
+                        "radiation_source": rad_source,
+                        "database_mode": st.session_state.get("db_selection_mode", "Original"),
+                        "active_database": ACTIVE_DB_LABEL,
+                        "reference_mask_enabled": st.session_state.get("auto_reference_phase_mask_enabled", False),
+                        "cu_kbeta_mask_enabled": st.session_state.get("reference_phase_mask_include_kbeta", False),
+                        "runtime": "Hugging Face Spaces" if IS_HF_SPACES else "local",
+                    }
+                feedback_payload = {
+                    "id": feedback_id,
+                    "created_at": created_at,
+                    "category": feedback_category,
+                    "message": message_text,
+                    "contact": str(feedback_contact or "").strip(),
+                    "context": feedback_context,
+                }
+
+                try:
+                    saved_feedback_path = _append_feedback_record(feedback_payload)
+                    st.success(f"Feedback saved locally: `{saved_feedback_path}`")
+                except Exception as exc:
+                    st.error(f"Could not save local feedback copy: {exc}")
+
+                sent_by_webhook, webhook_message = _send_feedback_webhook(feedback_payload)
+                if sent_by_webhook:
+                    st.success(webhook_message)
+                elif FEEDBACK_WEBHOOK_URL:
+                    st.warning(webhook_message)
+                else:
+                    st.info("No direct feedback webhook is configured. Use the GitHub issue link below to send it.")
+
+                feedback_issue_link = _feedback_issue_url(feedback_payload)
+                if hasattr(st, "link_button"):
+                    st.link_button("Open prefilled GitHub issue", feedback_issue_link)
+                else:
+                    st.markdown(f"[Open prefilled GitHub issue]({feedback_issue_link})")
 
 
     # --- 1. MAIN PANEL (Always visible) ---
