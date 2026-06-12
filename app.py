@@ -41,10 +41,12 @@ def _bootstrap_local_import_paths() -> None:
     """Make repo-local modules and bundled GSAS-II importable in the UI process."""
     project_root = Path(PROJECT_ROOT)
     scripts_path = str(project_root / "scripts")
-    gsas_path = str(project_root / "GSAS-II")
-    for candidate in (scripts_path, str(project_root), gsas_path):
-        if candidate not in sys.path:
-            sys.path.insert(0, candidate)
+    gsas_path = os.environ.get("RADAR_PD_GSASII_ROOT") or str(project_root / "GSAS-II")
+    candidates = (gsas_path, scripts_path, str(project_root))
+    for candidate in reversed(candidates):
+        if candidate in sys.path:
+            sys.path.remove(candidate)
+        sys.path.insert(0, candidate)
 
 
 _bootstrap_local_import_paths()

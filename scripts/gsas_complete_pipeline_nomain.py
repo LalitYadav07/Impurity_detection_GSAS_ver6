@@ -103,11 +103,12 @@ except ImportError:
 # ---------------------------
 ROOT = Path(__file__).resolve().parent
 PROJECT_ROOT = ROOT.parent
-GSAS_PATH = PROJECT_ROOT / "GSAS-II"
+GSAS_PATH = Path(os.environ.get("RADAR_PD_GSASII_ROOT") or PROJECT_ROOT / "GSAS-II")
 
-for p in [str(ROOT), str(PROJECT_ROOT), str(GSAS_PATH)]:
-    if p not in sys.path:
-        sys.path.insert(0, p)
+for p in reversed([str(GSAS_PATH), str(ROOT), str(PROJECT_ROOT)]):
+    if p in sys.path:
+        sys.path.remove(p)
+    sys.path.insert(0, p)
 
 # Centralized logging: configure early for CLI runs
 try:

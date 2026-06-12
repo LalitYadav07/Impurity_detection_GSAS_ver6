@@ -45,7 +45,7 @@ def _import_gsas_inst_modules():
         from GSASII import GSASIIscriptable as G2sc
         return G2fil, G2sc
     except Exception:
-        repo_gsas_dir = Path(__file__).resolve().parents[1] / "GSAS-II"
+        repo_gsas_dir = Path(os.environ.get("RADAR_PD_GSASII_ROOT") or Path(__file__).resolve().parents[1] / "GSAS-II")
         if str(repo_gsas_dir) not in sys.path:
             sys.path.insert(0, str(repo_gsas_dir))
         try:
@@ -64,7 +64,7 @@ def write_builtin_instprm_file(key: str, output_path) -> Path:
     try:
         from GSASII import defaultIparms as dI
     except Exception:
-        repo_gsas_dir = Path(__file__).resolve().parents[1] / "GSAS-II"
+        repo_gsas_dir = Path(os.environ.get("RADAR_PD_GSASII_ROOT") or Path(__file__).resolve().parents[1] / "GSAS-II")
         if str(repo_gsas_dir) not in sys.path:
             sys.path.insert(0, str(repo_gsas_dir))
         try:

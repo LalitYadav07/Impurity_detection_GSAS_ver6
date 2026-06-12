@@ -26,9 +26,10 @@ logger = logging.getLogger(__name__)
 def _bootstrap_gsasii_import() -> None:
     """Make the bundled GSAS-II checkout importable outside the CLI driver."""
     repo_root = Path(__file__).resolve().parents[1]
-    gsas_dir = str(repo_root / "GSAS-II")
-    if gsas_dir not in sys.path:
-        sys.path.insert(0, gsas_dir)
+    gsas_dir = os.environ.get("RADAR_PD_GSASII_ROOT") or str(repo_root / "GSAS-II")
+    if gsas_dir in sys.path:
+        sys.path.remove(gsas_dir)
+    sys.path.insert(0, gsas_dir)
 
 
 _bootstrap_gsasii_import()
