@@ -39,15 +39,28 @@ RUN mkdir -p ML_components && \
 # Copy just the extraction helper early (allows caching of the download layer)
 COPY --chown=user scripts/extract_xray_db.py scripts/extract_xray_db.py
 
-# Download both databases from Google Drive at build time so they are baked into the image.
-# Uses a dedicated Python script to handle Windows-style backslash paths in the archive.
+# Best-effort catalog bake. Google Drive can intermittently block headless
+# builders with quota/public-link checks, so catalog download must not prevent
+# the Space image from building. If this step cannot fetch a catalog, the app
+# still starts and shows the database install/upload controls in the UI.
 RUN pip install --quiet gdown && \
-    gdown 1BxPXjdbn7oYTXKfDeLct5-2PMkhcLVSH -O /tmp/database_neutron.zip && \
-    python3 scripts/extract_xray_db.py /tmp/database_neutron.zip data/database_neutron && \
-    rm -f /tmp/database_neutron.zip && \
-    gdown 12H19jI3mGcYBpJrQRtY-5_WaMjFyIMah -O /tmp/database_xray.zip && \
-    python3 scripts/extract_xray_db.py /tmp/database_xray.zip data/database_xray && \
-    rm -f /tmp/database_xray.zip
+    mkdir -p data/database_neutron data/database_xray && \
+    ( \
+      gdown 1BxPXjdbn7oYTXKfDeLct5-2PMkhcLVSH -O /tmp/database_neutron.zip && \
+      python3 scripts/extract_xray_db.py /tmp/database_neutron.zip data/database_neutron && \
+      rm -f /tmp/database_neutron.zip \
+    ) || ( \
+      echo "WARNING: neutron database download failed during Docker build; install it from the app UI." && \
+      rm -f /tmp/database_neutron.zip \
+    ) && \
+    ( \
+      gdown 12H19jI3mGcYBpJrQRtY-5_WaMjFyIMah -O /tmp/database_xray.zip && \
+      python3 scripts/extract_xray_db.py /tmp/database_xray.zip data/database_xray && \
+      rm -f /tmp/database_xray.zip \
+    ) || ( \
+      echo "WARNING: X-ray database download failed during Docker build; install it from the app UI." && \
+      rm -f /tmp/database_xray.zip \
+    )
 
 # Copy the rest of the application
 COPY --chown=user . .
