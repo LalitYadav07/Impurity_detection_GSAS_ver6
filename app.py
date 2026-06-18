@@ -10,6 +10,7 @@ import logging
 from pathlib import Path
 import re
 import shutil
+import tempfile
 import queue
 import html
 import psutil
