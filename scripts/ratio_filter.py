@@ -49,7 +49,9 @@ def _load_profiles64_metadata(profiles_dir: str) -> Dict[str, Any]:
         raise FileNotFoundError(f"index.csv not found: {idx_csv}")
 
     with np.load(prof_npz) as z:
-        profiles = z["profiles"].astype(np.float64)  # (N, 64)
+        # Profiles are 64-bin ML screening features. Keep them in float32 to
+        # avoid a large float64 copy when X-ray/custom packs are loaded.
+        profiles = z["profiles"].astype(np.float32, copy=False)  # (N, 64)
         q_min = float(z["q_min"])
         q_max = float(z["q_max"])
         n_bins = int(z["n_bins"])  # should be 64
@@ -420,7 +422,7 @@ def shortlist_by_hist_ML(
     # 1) DB pack / metadata
     if ctx is None:
         ctx = _load_profiles64_metadata(profiles_dir)
-    profiles = ctx["profiles"].astype(np.float32)
+    profiles = ctx["profiles"].astype(np.float32, copy=False)
     pid_to_row = ctx["pid_to_row"]
     q_min_db = float(ctx["q_min"]); q_max_db = float(ctx["q_max"])
     edges = ctx["edges"].astype(np.float64); centers = ctx["centers"].astype(np.float64)

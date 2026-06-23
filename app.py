@@ -250,11 +250,15 @@ def _db_mode_matches_kind(selection_mode: str, kind: str) -> bool:
 
 
 def _db_config_is_usable(db_cfg: dict) -> bool:
-    required = ("catalog_csv", "stable_csv", "profiles_dir")
-    for key in required:
+    for key in ("catalog_csv", "stable_csv", "profiles_dir"):
         path = db_cfg.get(key)
         if not path or not Path(path).exists():
             return False
+    profiles_dir = Path(db_cfg["profiles_dir"])
+    if not (profiles_dir / "profiles64.npz").exists():
+        return False
+    if not (profiles_dir / "index.csv").exists():
+        return False
     cif_sources = [db_cfg.get("original_json"), db_cfg.get("cif_map_json")]
     return any(path and Path(path).exists() for path in cif_sources)
 
@@ -395,6 +399,89 @@ def _format_region(lo: float, hi: float, axis_label: str) -> str:
     return f"[{lo:.6f}, {hi:.6f}] {axis_label}"
 
 
+def _path_mtime(path_like) -> float | None:
+    if not path_like:
+        return None
+    try:
+        return Path(path_like).stat().st_mtime
+    except OSError:
+        return None
+
+
+@st.cache_data(show_spinner=False, ttl=60)
+def _catalog_phase_count(catalog_csv: str, mtime: float | None) -> int | None:
+    try:
+        with open(catalog_csv, "rb") as fh:
+            return max(0, sum(1 for _ in fh) - 1)
+    except Exception:
+        return None
+
+
+@st.cache_data(show_spinner=False, ttl=60)
+def _catalog_elements(catalog_csv: str, mtime: float | None) -> list[str]:
+    elements: set[str] = set()
+    try:
+        with open(catalog_csv, newline="", encoding="utf-8") as fh:
+            reader = csv.DictReader(fh)
+            for row in reader:
+                raw = str(row.get("elements_list", "") or "")
+                for token in raw.split(","):
+                    token = token.strip()
+                    if token:
+                        elements.add(token)
+    except Exception:
+        return []
+    return sorted(elements)
+
+
+@st.cache_resource(show_spinner=False)
+def _load_ui_db_loader(
+    selection_key: str,
+    catalog_csv: str,
+    cif_map_json: str | None,
+    original_json: str | None,
+    stable_csv: str | None,
+    catalog_mtime: float | None,
+    cif_map_mtime: float | None,
+    original_mtime: float | None,
+    stable_mtime: float | None,
+) -> DBLoader:
+    paths = CatalogPaths(
+        catalog_csv=str(catalog_csv),
+        cif_map_json=cif_map_json,
+        original_json=original_json if original_json and os.path.exists(original_json) else None,
+    )
+    loader = DBLoader(paths)
+    if stable_csv and Path(stable_csv).exists():
+        loader.attach_stable_catalog(str(stable_csv))
+    return loader
+
+
+def get_active_db_loader() -> DBLoader | None:
+    """Lazy UI metadata loader. Avoid eager large-catalog memory use during run start."""
+    if not ACTIVE_DB_EXISTS:
+        return None
+    catalog_csv = str(ACTIVE_DB_CONFIG["catalog_csv"])
+    cif_map_json = ACTIVE_DB_CONFIG.get("cif_map_json")
+    original_json = ACTIVE_METADATA_JSON
+    stable_csv = ACTIVE_DB_CONFIG.get("stable_csv")
+    try:
+        return _load_ui_db_loader(
+            ACTIVE_DB_SELECTION["selection_key"],
+            catalog_csv,
+            cif_map_json,
+            original_json,
+            stable_csv,
+            _path_mtime(catalog_csv),
+            _path_mtime(cif_map_json),
+            _path_mtime(original_json),
+            _path_mtime(stable_csv),
+        )
+    except Exception as e:
+        st.warning(f"Could not load optional UI metadata from {ACTIVE_DB_LABEL}: {e}")
+        return None
+
+
 def _pack_phase_count(pack: dict) -> int | None:
     manifest = pack.get("manifest") or {}
     if manifest.get("kind") == "augmented":
@@ -409,49 +496,17 @@ def _pack_phase_count(pack: dict) -> int | None:
 
 
 def _active_db_phase_count() -> int | None:
-    loader = st.session_state.get("db_loader")
-    if loader is None:
-        return None
-    try:
-        return int(len(loader.catalog))
-    except Exception:
-        return None
+    catalog_csv = ACTIVE_DB_CONFIG.get("catalog_csv")
+    if catalog_csv and Path(catalog_csv).exists():
+        return _catalog_phase_count(str(catalog_csv), _path_mtime(catalog_csv))
+    return None
 
 
 def _derive_allowed_elements_from_active_db() -> list[str]:
-    loader = st.session_state.get("db_loader")
-    elements: set[str] = set()
-
-    if loader is not None:
-        try:
-            catalog = getattr(loader, "catalog", None)
-            if catalog is not None and "elements_list" in catalog.columns:
-                for raw in catalog["elements_list"].astype(str).tolist():
-                    for token in raw.split(","):
-                        token = token.strip()
-                        if token:
-                            elements.add(token)
-        except Exception:
-            pass
-
-    if elements:
-        return sorted(elements)
-
     catalog_csv = ACTIVE_DB_CONFIG.get("catalog_csv")
     if catalog_csv and Path(catalog_csv).exists():
-        try:
-            with open(catalog_csv, newline="", encoding="utf-8") as fh:
-                reader = csv.DictReader(fh)
-                for row in reader:
-                    raw = str(row.get("elements_list", "") or "")
-                    for token in raw.split(","):
-                        token = token.strip()
-                        if token:
-                            elements.add(token)
-        except Exception:
-            return []
-
-    return sorted(elements)
+        return _catalog_elements(str(catalog_csv), _path_mtime(catalog_csv))
+    return []
 
 
 def discover_user_db_packs(source_label: str) -> list[dict]:
@@ -1130,8 +1185,8 @@ ACTIVE_DB_KIND = ACTIVE_DB_SELECTION["kind"]
 ACTIVE_DB_EXISTS = _db_config_is_usable(ACTIVE_DB_CONFIG)
 ACTIVE_METADATA_JSON = ACTIVE_DB_CONFIG.get("original_json")
 
-# Reload logic: if selection changed or loader missing
-if ACTIVE_DB_EXISTS and ('db_loader' not in st.session_state or st.session_state.get('db_loader_source') != ACTIVE_DB_SELECTION["selection_key"]):
+# Optional metadata is loaded lazily by get_active_db_loader().
+if False and ACTIVE_DB_EXISTS and ('db_loader' not in st.session_state or st.session_state.get('db_loader_source') != ACTIVE_DB_SELECTION["selection_key"]):
     try:
         paths = CatalogPaths(
             catalog_csv=str(ACTIVE_DB_CONFIG["catalog_csv"]),
@@ -2170,6 +2225,18 @@ with st.sidebar:
                 if not clean_name:
                     setup_errors.append("Please enter a run name before starting the pipeline.")
 
+                if not ACTIVE_DB_EXISTS:
+                    if st.session_state.db_selection_mode != "Original":
+                        setup_errors.append(
+                            f"No usable {current_source} custom pack is selected. "
+                            f"Custom packs are radiation-specific, so a neutron pack cannot be reused for an X-ray run. "
+                            f"Build or select a {current_source} pack, or switch Database Mode to Original with a usable built-in DB."
+                        )
+                    else:
+                        setup_errors.append(
+                            f"The active {current_source} search database is not usable: {ACTIVE_DB_LABEL}."
+                        )
+
                 if example_selection == "None":
                     if not data_file:
                         setup_errors.append("Please upload a diffraction data file.")
@@ -2614,9 +2681,9 @@ with t_res:
                                     if "ranked" in data:
                                         import pandas as pd
                                         df = pd.DataFrame(data["ranked"])
-                                        # Add metadata columns if db_loader is available
-                                        if "db_loader" in st.session_state and st.session_state.db_loader:
-                                            db = st.session_state.db_loader
+                                        # Add metadata columns only when this results view needs them.
+                                        db = get_active_db_loader()
+                                        if db is not None:
                                             names, sgs, sg_nums = [], [], []
                                             for pid in df["mp_id"]:
                                                 try:

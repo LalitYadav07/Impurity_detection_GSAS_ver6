@@ -1,4 +1,5 @@
 import sys
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -16,7 +17,7 @@ for p in (str(REPO_ROOT), str(SCRIPTS_DIR), str(ML_COMPONENTS_DIR)):
         sys.path.insert(0, p)
 
 from scripts.gsas_legacy_bridge import LegacyPipelineBridge
-from scripts.ratio_filter import _residual_hist_from_continuous_parts
+from scripts.ratio_filter import _PROFILE_CACHE, _load_profiles64_metadata, _residual_hist_from_continuous_parts
 from models import shortlist_ml_rank
 
 
@@ -99,6 +100,28 @@ class ResidualHistogramGapTests(unittest.TestCase):
         self.assertEqual(counts.shape, (8,))
         self.assertGreater(np.count_nonzero(observed_mask), 0)
         self.assertTrue(np.all(np.isfinite(H)))
+
+
+class ProfileMetadataLoadTests(unittest.TestCase):
+    def test_profiles64_cache_uses_float32_not_float64(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "profiles64"
+            root.mkdir()
+            np.savez(
+                root / "profiles64.npz",
+                profiles=np.ones((3, 64), dtype=np.float16),
+                q_min=np.array(0.5),
+                q_max=np.array(6.0),
+                n_bins=np.array(64),
+                sigma_bins=np.array(0.7),
+            )
+            (root / "index.csv").write_text("id,row\np0,0\np1,1\np2,2\n", encoding="utf-8")
+
+            _PROFILE_CACHE.clear()
+            ctx = _load_profiles64_metadata(str(root))
+
+            self.assertEqual(ctx["profiles"].dtype, np.float32)
+            self.assertEqual(ctx["profiles"].shape, (3, 64))
 
 
 class ExplicitMaskMLRankTests(unittest.TestCase):
