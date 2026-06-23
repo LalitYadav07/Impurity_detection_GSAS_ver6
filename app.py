@@ -1042,6 +1042,9 @@ if 'excluded_region_form_start' not in st.session_state:
     st.session_state.excluded_region_form_start = ""
 if 'excluded_region_form_end' not in st.session_state:
     st.session_state.excluded_region_form_end = ""
+if st.session_state.pop("pending_excluded_region_form_reset", False):
+    st.session_state.excluded_region_form_start = ""
+    st.session_state.excluded_region_form_end = ""
 
 if 'pipeline_state' not in st.session_state:
     st.session_state.pipeline_state = {
@@ -2006,6 +2009,26 @@ with st.sidebar:
         existing_excluded_rows = _coerce_excluded_region_rows(
             st.session_state.get("excluded_regions_editor_buffer")
         )
+        deduped_excluded_rows = []
+        seen_excluded_regions = set()
+        for row in existing_excluded_rows:
+            try:
+                start = float(row.get("Start"))
+                end = float(row.get("End"))
+            except Exception:
+                deduped_excluded_rows.append(row)
+                continue
+            lo, hi = sorted((start, end))
+            key = (round(lo, 8), round(hi, 8))
+            if key in seen_excluded_regions:
+                continue
+            seen_excluded_regions.add(key)
+            deduped_excluded_rows.append({"Start": lo, "End": hi})
+        if deduped_excluded_rows != existing_excluded_rows:
+            existing_excluded_rows = deduped_excluded_rows
+            st.session_state.excluded_regions_rows = existing_excluded_rows
+            st.session_state.excluded_regions_editor_buffer = existing_excluded_rows
+
         excluded_region_pairs, excluded_region_input_errors = _parse_excluded_region_rows(existing_excluded_rows)
         if excluded_region_pairs:
             st.markdown("Current ignored regions:")
@@ -2045,15 +2068,17 @@ with st.sidebar:
             with st.form("excluded_region_form", clear_on_submit=False):
                 ec1, ec2 = st.columns(2)
                 with ec1:
-                    st.text_input(
+                    start_text = st.text_input(
                         "Start",
                         key="excluded_region_form_start",
+                        placeholder=f"Start ({axis_label})",
                         help=f"Lower bound of the ignored region in {axis_label}.",
                     )
                 with ec2:
-                    st.text_input(
+                    end_text = st.text_input(
                         "End",
                         key="excluded_region_form_end",
+                        placeholder=f"End ({axis_label})",
                         help=f"Upper bound of the ignored region in {axis_label}.",
                     )
                 ac1, ac2 = st.columns(2)
@@ -2070,33 +2095,48 @@ with st.sidebar:
 
             if cancel_region:
                 st.session_state.excluded_region_edit_index = None
-                st.session_state.excluded_region_form_start = ""
-                st.session_state.excluded_region_form_end = ""
+                st.session_state.pending_excluded_region_form_reset = True
                 st.rerun()
 
             if submit_region:
-                start_text = str(st.session_state.get("excluded_region_form_start", "")).strip()
-                end_text = str(st.session_state.get("excluded_region_form_end", "")).strip()
+                start_text = str(start_text or "").strip()
+                end_text = str(end_text or "").strip()
                 if not start_text or not end_text:
                     st.error("Ignored region entry requires both Start and End values.")
                 else:
                     try:
                         start_val = float(start_text)
                         end_val = float(end_text)
+                    except Exception:
+                        st.error("Ignored region Start and End must be numeric.")
+                    else:
+                        lo, hi = sorted((start_val, end_val))
                         next_rows = _coerce_excluded_region_rows(existing_excluded_rows)
-                        region_row = {"Start": start_val, "End": end_val}
+                        region_row = {"Start": lo, "End": hi}
+                        duplicate = False
                         if editing_region:
                             next_rows[edit_idx] = region_row
                         else:
-                            next_rows.append(region_row)
+                            for existing_row in next_rows:
+                                try:
+                                    existing_lo, existing_hi = sorted((
+                                        float(existing_row.get("Start")),
+                                        float(existing_row.get("End")),
+                                    ))
+                                except Exception:
+                                    continue
+                                if abs(existing_lo - lo) < 1e-8 and abs(existing_hi - hi) < 1e-8:
+                                    duplicate = True
+                                    break
+                            if not duplicate:
+                                next_rows.append(region_row)
                         st.session_state.excluded_regions_rows = next_rows
                         st.session_state.excluded_regions_editor_buffer = next_rows
                         st.session_state.excluded_region_edit_index = None
-                        st.session_state.excluded_region_form_start = ""
-                        st.session_state.excluded_region_form_end = ""
+                        st.session_state.pending_excluded_region_form_reset = True
+                        if duplicate and hasattr(st, "toast"):
+                            st.toast("That ignored region is already configured.")
                         st.rerun()
-                    except Exception:
-                        st.error("Ignored region Start and End must be numeric.")
 
         excluded_region_pairs, excluded_region_input_errors = _parse_excluded_region_rows(
             st.session_state.get("excluded_regions_rows")

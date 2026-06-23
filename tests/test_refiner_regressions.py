@@ -11,6 +11,7 @@ from scripts.gsas_main_phase_refiner import (
     GSASDataExtractor,
     GSASMainPhaseRefiner,
     RefinementResults,
+    ensure_usable_range,
     normalize_excluded_regions,
     normalize_background_config,
     parse_gsas_lst,
@@ -117,6 +118,13 @@ class ExcludedRegionNormalizationTests(unittest.TestCase):
         )
 
         self.assertEqual(result, [[0.0, 2.0], [10.0, 14.0], [30.0, 35.0]])
+
+    def test_high_angle_ignored_tail_still_leaves_usable_range(self):
+        ensure_usable_range(5.0, 120.0, [[69.9, 120.0]])
+
+    def test_rejects_exclusions_that_consume_active_range(self):
+        with self.assertRaisesRegex(ValueError, "consume the entire active data range"):
+            ensure_usable_range(5.0, 120.0, [[5.0, 69.9], [69.9, 120.0]])
 
 
 class BackgroundConfigTests(unittest.TestCase):
@@ -268,6 +276,27 @@ class DataExtractorAlignmentTests(unittest.TestCase):
         self.assertTrue(np.array_equal(arrays["yobs"], np.array([100, 300, 500])))
         self.assertTrue(np.array_equal(arrays["ycalc"], np.array([90, 290, 490])))
         self.assertTrue(np.array_equal(arrays["residual"], np.array([10, 10, 10])))
+
+    def test_residual_extraction_reports_all_masked_points(self):
+        class _FakeHistogram:
+            def __init__(self):
+                self._mask = np.array([True, True, True])
+
+            def getdata(self, kind):
+                values = {
+                    "x": [1.0, 2.0, 3.0],
+                    "Q": [10.0, 20.0, 30.0],
+                    "d": [0.1, 0.2, 0.3],
+                    "yobs": [100.0, 200.0, 300.0],
+                    "ycalc": [90.0, 190.0, 290.0],
+                    "background": [5.0, 5.0, 5.0],
+                }
+                if kind not in values:
+                    raise KeyError(kind)
+                return np.ma.array(values[kind], mask=self._mask)
+
+        with self.assertRaisesRegex(RuntimeError, "no usable residual points remain"):
+            GSASDataExtractor.get_residual_both_spaces(_FakeHistogram())
 
 
 class AutoBackgroundPointTests(unittest.TestCase):

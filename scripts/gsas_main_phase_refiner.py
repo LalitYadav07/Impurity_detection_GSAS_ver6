@@ -322,6 +322,13 @@ class GSASDataExtractor:
         x_native = data.get('x_native', np.array([]))
         Q = data.get('Q', np.array([]))
         residual = data.get('residual', np.array([]))
+        validate_residual_arrays(
+            x_native,
+            residual,
+            Q,
+            residual,
+            context="GSAS histogram residual extraction",
+        )
         # residual_Q is the same residual sampled at the Q-mapped points
         return x_native, residual, Q, residual
 
@@ -665,8 +672,9 @@ class GSASMainPhaseRefiner:
     def get_residual_q(self) -> Tuple[np.ndarray, np.ndarray]:
         """Get residual in Q-space coordinates."""
         _, _, Q, residual = GSASDataExtractor.get_residual_both_spaces(self.histogram)
-        logger.debug("Residual max min: %s %s", np.max(residual), np.min(residual))
-        logger.debug("Q max min: %s %s", np.max(Q), np.min(Q))
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug("Residual max min: %s %s", np.max(residual), np.min(residual))
+            logger.debug("Q max min: %s %s", np.max(Q), np.min(Q))
         return Q, residual
 
     def get_all_data(self) -> Dict[str, np.ndarray]:
@@ -1268,6 +1276,38 @@ def ensure_usable_range(lo: float, hi: float, excluded_pairs: Optional[List[Tupl
         raise ValueError("Excluded regions consume the entire active data range")
 
 
+def validate_residual_arrays(
+    x_native: np.ndarray,
+    residual_native: np.ndarray,
+    q_values: np.ndarray,
+    residual_q: np.ndarray,
+    *,
+    context: str = "GSAS residual extraction",
+) -> None:
+    """Raise a clear error when GSAS exclusions/limits leave no residual points."""
+    x_arr = np.asarray(x_native, float).ravel()
+    r_native = np.asarray(residual_native, float).ravel()
+    q_arr = np.asarray(q_values, float).ravel()
+    r_q = np.asarray(residual_q, float).ravel()
+
+    if x_arr.size == 0 or r_native.size == 0 or q_arr.size == 0 or r_q.size == 0:
+        raise RuntimeError(
+            f"{context}: no usable residual points remain after applying fit limits "
+            "and ignored regions. Reduce or correct the ignored region/fit window so "
+            "at least part of the measured pattern remains."
+        )
+
+    n_native = min(x_arr.size, r_native.size)
+    n_q = min(q_arr.size, r_q.size)
+    finite_native = np.isfinite(x_arr[:n_native]) & np.isfinite(r_native[:n_native])
+    finite_q = np.isfinite(q_arr[:n_q]) & np.isfinite(r_q[:n_q])
+    if not finite_native.any() or not finite_q.any():
+        raise RuntimeError(
+            f"{context}: residual arrays contain no finite usable points after "
+            "applying fit limits and ignored regions."
+        )
+
+
 def set_limits(hist, lo, hi):
     """Set current refinement limits to [lo, hi], respecting old GSAS layouts if needed."""
     try:
@@ -1752,6 +1792,13 @@ def extract_residual_from_gpx(gpx_path: str):
     # we expose it twice to match the pipeline API)
     residual_native = residual
     residual_Q = residual
+    validate_residual_arrays(
+        x_native,
+        residual_native,
+        Q,
+        residual_Q,
+        context=f"Residual extraction from {Path(gpx_path).name}",
+    )
 
     try:
         rwp = float(hist.get_wR())
