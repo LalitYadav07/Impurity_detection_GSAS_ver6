@@ -38,6 +38,10 @@ pip-wheel-metadata/
 !/docs/VALIDATION_CHECKLIST.md
 !/docs/user_manual/
 !/docs/user_manual/**
+/docs/user_manual/dist/*
+!/docs/user_manual/dist/.gitkeep
+/docs/user_manual/examples/*
+!/docs/user_manual/examples/.gitkeep
 
 # GSAS-II build / vendored compiled artifacts
 /GSAS-II/
