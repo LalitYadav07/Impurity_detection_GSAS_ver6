@@ -8,6 +8,7 @@ file-based.
 """
 
 from pathlib import Path
+import os
 import shutil
 import sys
 from typing import Dict
@@ -26,6 +27,13 @@ BUILTIN_INSTPRM_PRESETS: Dict[str, Dict[str, str]] = {
         "description": (
             "Uses GSAS-II's built-in Cu Kalpha lab profile for approximate "
             "Bragg-Brentano PXRD screening when no calibrated instrument file is available."
+        ),
+        "fallback_instprm": (
+            "#GSAS-II instrument parameter file for lab CuKa data\n"
+            "Type:PXC;Bank:1\n"
+            "Lam1:1.5405;Lam2:1.5443;I(L2)/I(L1):0.5000\n"
+            "Zero:0.0;Polariz.:0.99\n"
+            "U:2.0;V:-2.0;W:1.0;X:0.0;Y:0.0;SH/L:0.002\n"
         ),
     }
 }
@@ -70,7 +78,15 @@ def write_builtin_instprm_file(key: str, output_path) -> Path:
         try:
             from GSASII import defaultIparms as dI
         except Exception as nested_exc:
-            raise RuntimeError("GSAS-II default instrument presets are unavailable") from nested_exc
+            fallback = preset.get("fallback_instprm")
+            if not fallback:
+                raise RuntimeError("GSAS-II default instrument presets are unavailable") from nested_exc
+            output_path = Path(output_path)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(str(fallback), encoding="utf-8")
+            if not output_path.exists() or output_path.stat().st_size <= 0:
+                raise RuntimeError(f"Failed to create instrument file at {output_path}")
+            return output_path
 
     try:
         preset_index = dI.defaultIparm_lbl.index(gsas_label)

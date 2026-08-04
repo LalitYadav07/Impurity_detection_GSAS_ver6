@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import tempfile
+import time
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -89,6 +90,13 @@ class BuildResult:
     failures: List[Dict[str, str]]
 
 
+@dataclass
+class BaseDuplicateIndex:
+    candidate_ids_by_key: Dict[Tuple[int, int, int], List[str]]
+    matcher: Any
+    structure_cache: Dict[str, Any]
+
+
 ProgressCallback = Optional[Callable[[Dict[str, Any]], None]]
 
 
@@ -105,6 +113,9 @@ def _emit_progress(
     current: Optional[int] = None,
     total: Optional[int] = None,
     source_name: Optional[str] = None,
+    started_at: Optional[float] = None,
+    stage_started_at: Optional[float] = None,
+    **metrics: Any,
 ) -> None:
     if progress_callback is None:
         return
@@ -119,6 +130,14 @@ def _emit_progress(
         payload["total"] = int(total)
     if source_name:
         payload["source_name"] = str(source_name)
+    now = time.perf_counter()
+    if started_at is not None:
+        payload["elapsed_s"] = max(0.0, now - float(started_at))
+    if stage_started_at is not None:
+        payload["stage_elapsed_s"] = max(0.0, now - float(stage_started_at))
+    for key, value in metrics.items():
+        if value is not None:
+            payload[key] = value
     progress_callback(payload)
 
 
@@ -441,10 +460,37 @@ def _build_base_frames(base_db_root: Path) -> Tuple[pd.DataFrame, pd.DataFrame, 
     return catalog_df, stable_df, profiles.astype(np.float16, copy=False), index_df
 
 
+def _build_base_duplicate_index(base_loader: DBLoader) -> Optional[BaseDuplicateIndex]:
+    if not HAVE_PYMATGEN_MATCHER:
+        return None
+    catalog = base_loader.catalog
+    required = {"id", "elements_mask_hi", "elements_mask_lo", "space_group"}
+    if not required.issubset(set(catalog.columns)):
+        return None
+
+    ids = [str(pid) for pid in getattr(base_loader, "_ids", catalog["id"].astype(str).to_numpy())]
+    hi_values = getattr(base_loader, "_m_hi", catalog["elements_mask_hi"].astype(object).map(int).to_numpy())
+    lo_values = getattr(base_loader, "_m_lo", catalog["elements_mask_lo"].astype(object).map(int).to_numpy())
+    sg_values = getattr(base_loader, "_sg_values", pd.to_numeric(catalog["space_group"], errors="coerce").to_numpy())
+
+    candidate_ids_by_key: Dict[Tuple[int, int, int], List[str]] = {}
+    for pid, hi, lo, sg in zip(ids, hi_values, lo_values, sg_values):
+        if pd.isna(sg):
+            continue
+        key = (int(hi), int(lo), int(sg))
+        candidate_ids_by_key.setdefault(key, []).append(str(pid))
+
+    return BaseDuplicateIndex(
+        candidate_ids_by_key=candidate_ids_by_key,
+        matcher=StructureMatcher(primitive_cell=True, scale=True, attempt_supercell=False),  # type: ignore[operator]
+        structure_cache={},
+    )
+
 def _find_matching_base_phase_ids(
     phase: PhaseInput,
     *,
     base_loader: DBLoader,
+    duplicate_index: Optional[BaseDuplicateIndex] = None,
 ) -> List[str]:
     """
     Detect whether an uploaded CIF already exists in the base DB under a different id.
@@ -464,28 +510,50 @@ def _find_matching_base_phase_ids(
     except Exception:
         return []
 
-    cat = base_loader.catalog.copy()
-    cat["id"] = cat["id"].astype(str)
-    cat = cat[
-        (cat["elements_mask_hi"].astype(object).map(int) == int(ref_hi)) &
-        (cat["elements_mask_lo"].astype(object).map(int) == int(ref_lo))
-    ]
-    if "space_group" in cat.columns:
-        cat = cat[pd.to_numeric(cat["space_group"], errors="coerce") == ref_sg]
+    if duplicate_index is None:
+        duplicate_index = _build_base_duplicate_index(base_loader)
+    if duplicate_index is None:
+        cat = base_loader.catalog.copy()
+        cat["id"] = cat["id"].astype(str)
+        cat = cat[
+            (cat["elements_mask_hi"].astype(object).map(int) == int(ref_hi)) &
+            (cat["elements_mask_lo"].astype(object).map(int) == int(ref_lo))
+        ]
+        if "space_group" in cat.columns:
+            cat = cat[pd.to_numeric(cat["space_group"], errors="coerce") == ref_sg]
 
-    candidate_ids = cat["id"].astype(str).tolist()
+        candidate_ids = cat["id"].astype(str).tolist()
+        if not candidate_ids:
+            return []
+
+        matcher = StructureMatcher(primitive_cell=True, scale=True, attempt_supercell=False)  # type: ignore[operator]
+        matches: List[str] = []
+        for pid in candidate_ids:
+            try:
+                cand_structure = base_loader.load_structure(pid)
+            except Exception:
+                continue
+            try:
+                if matcher.fit(ref_structure, cand_structure):
+                    matches.append(pid)
+            except Exception:
+                continue
+        return matches
+
+    candidate_ids = duplicate_index.candidate_ids_by_key.get((int(ref_hi), int(ref_lo), int(ref_sg)), [])
     if not candidate_ids:
         return []
 
-    matcher = StructureMatcher(primitive_cell=True, scale=True, attempt_supercell=False)  # type: ignore[operator]
     matches: List[str] = []
     for pid in candidate_ids:
         try:
-            cand_structure = base_loader.load_structure(pid)
+            if pid not in duplicate_index.structure_cache:
+                duplicate_index.structure_cache[pid] = base_loader.load_structure(pid)
+            cand_structure = duplicate_index.structure_cache[pid]
         except Exception:
             continue
         try:
-            if matcher.fit(ref_structure, cand_structure):
+            if duplicate_index.matcher.fit(ref_structure, cand_structure):
                 matches.append(pid)
         except Exception:
             continue
@@ -500,6 +568,7 @@ def _build_phase_batch(
     progress_callback: ProgressCallback,
     progress_start: float,
     progress_span: float,
+    build_started_at: Optional[float] = None,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[np.ndarray], Dict[str, Dict[str, Any]], List[Dict[str, str]], List[str]]:
     rows: List[Dict[str, Any]] = []
     stable_rows: List[Dict[str, Any]] = []
@@ -513,13 +582,19 @@ def _build_phase_batch(
         return rows, stable_rows, profiles, meta_rows, failures, phase_ids
 
     workers = _pick_workers(total_phases)
+    stage_started_at = time.perf_counter()
     _emit_progress(
         progress_callback,
         step="materialize",
-        message=f"Starting phase simulation with {workers} worker(s)",
+        message=f"Building {total_phases} phase profile(s) with {workers} worker(s)",
         fraction=progress_start,
         current=0,
         total=total_phases,
+        started_at=build_started_at,
+        stage_started_at=stage_started_at,
+        workers=workers,
+        built_count=0,
+        failed_count=0,
     )
 
     args_iter = [(phase, settings, str(layout.root)) for phase in phase_inputs]
@@ -552,11 +627,19 @@ def _build_phase_batch(
             _emit_progress(
                 progress_callback,
                 step="materialize",
-                message=f"Processed CIF {completed}/{total_phases}: {source_name}",
+                message=(
+                    f"Built profiles {completed}/{total_phases}; "
+                    f"usable {len(rows)}, failed {len(failures)}"
+                ),
                 fraction=progress_start + progress_span * (completed / max(1, total_phases)),
                 current=completed,
                 total=total_phases,
                 source_name=source_name,
+                started_at=build_started_at,
+                stage_started_at=stage_started_at,
+                workers=workers,
+                built_count=len(rows),
+                failed_count=len(failures),
             )
     finally:
         if workers != 1:
@@ -575,17 +658,27 @@ def build_mini_db_pack(
     overwrite: bool = False,
     progress_callback: ProgressCallback = None,
 ) -> BuildResult:
+    build_started_at = time.perf_counter()
+    raw_input_count = len(cif_paths)
     phase_inputs = collect_phase_inputs(cif_paths)
     if not phase_inputs:
         raise ValueError("No CIF files provided")
     total_phases = len(phase_inputs)
+    duplicate_upload_count = max(0, raw_input_count - total_phases)
     _emit_progress(
         progress_callback,
         step="collect",
-        message=f"Collected {total_phases} unique CIF file(s)",
+        message=(
+            f"Collected {total_phases} unique CIF file(s)"
+            + (f"; ignored {duplicate_upload_count} duplicate upload(s)" if duplicate_upload_count else "")
+        ),
         fraction=0.05,
         current=0,
         total=total_phases,
+        started_at=build_started_at,
+        input_files=raw_input_count,
+        unique_cifs=total_phases,
+        duplicate_upload_count=duplicate_upload_count,
     )
 
     settings = resolve_simulation_settings(
@@ -602,6 +695,8 @@ def build_mini_db_pack(
         fraction=0.12,
         current=0,
         total=total_phases,
+        started_at=build_started_at,
+        unique_cifs=total_phases,
     )
 
     rows, stable_rows, profiles, meta_rows, failures, phase_ids = _build_phase_batch(
@@ -611,6 +706,7 @@ def build_mini_db_pack(
         progress_callback=progress_callback,
         progress_start=0.12,
         progress_span=0.70,
+        build_started_at=build_started_at,
     )
 
     if not rows:
@@ -630,10 +726,13 @@ def build_mini_db_pack(
     _emit_progress(
         progress_callback,
         step="write",
-        message="Writing catalog, stable rows, and profile bundle",
+        message=f"Writing mini catalog with {len(phase_ids)} phase profile(s)",
         fraction=0.88,
         current=len(phase_ids),
         total=total_phases,
+        started_at=build_started_at,
+        built_count=len(phase_ids),
+        failed_count=len(failures),
     )
     catalog_df.to_csv(layout.catalog_csv, index=False)
     stable_df.to_csv(layout.stable_csv, index=False)
@@ -654,10 +753,14 @@ def build_mini_db_pack(
     _emit_progress(
         progress_callback,
         step="finalize",
-        message=f"Built mini pack with {len(phase_ids)} phase(s)",
+        message=f"Built mini pack with {len(phase_ids)} usable phase(s); skipped/failed {len(failures)}",
         fraction=1.0,
         current=len(phase_ids),
         total=total_phases,
+        started_at=build_started_at,
+        built_count=len(phase_ids),
+        failed_count=len(failures),
+        skipped_count=len(failures),
     )
 
     db_config = build_db_config(
@@ -685,17 +788,27 @@ def build_augmented_db_pack(
     overwrite: bool = False,
     progress_callback: ProgressCallback = None,
 ) -> BuildResult:
+    build_started_at = time.perf_counter()
+    raw_input_count = len(cif_paths)
     phase_inputs = collect_phase_inputs(cif_paths)
     if not phase_inputs:
         raise ValueError("No CIF files provided")
     total_phases = len(phase_inputs)
+    duplicate_upload_count = max(0, raw_input_count - total_phases)
     _emit_progress(
         progress_callback,
         step="collect",
-        message=f"Collected {total_phases} unique CIF file(s)",
+        message=(
+            f"Collected {total_phases} unique CIF file(s)"
+            + (f"; ignored {duplicate_upload_count} duplicate upload(s)" if duplicate_upload_count else "")
+        ),
         fraction=0.05,
         current=0,
         total=total_phases,
+        started_at=build_started_at,
+        input_files=raw_input_count,
+        unique_cifs=total_phases,
+        duplicate_upload_count=duplicate_upload_count,
     )
 
     settings = resolve_simulation_settings(
@@ -712,8 +825,11 @@ def build_augmented_db_pack(
         fraction=0.12,
         current=0,
         total=total_phases,
+        started_at=build_started_at,
+        unique_cifs=total_phases,
     )
 
+    base_load_started_at = time.perf_counter()
     base_catalog_df, base_stable_df, base_profiles, base_index_df = _build_base_frames(Path(base_db_root))
     base_layout = get_db_pack_layout(base_db_root)
     base_loader = DBLoader(CatalogPaths(
@@ -721,19 +837,28 @@ def build_augmented_db_pack(
         cif_map_json=str(base_layout.cif_map_json) if base_layout.cif_map_json.exists() else None,
         original_json=str(base_layout.original_json) if base_layout.original_json.exists() else None,
     ))
+    duplicate_index = _build_base_duplicate_index(base_loader)
     _emit_progress(
         progress_callback,
         step="base-load",
-        message=f"Loaded base database with {len(base_catalog_df)} phase(s)",
+        message=f"Loaded base database with {len(base_catalog_df)} phase(s); checking uploaded CIFs",
         fraction=0.20,
         current=0,
         total=total_phases,
+        started_at=build_started_at,
+        stage_started_at=base_load_started_at,
+        base_phase_count=len(base_catalog_df),
+        unique_cifs=total_phases,
+        duplicate_index_keys=len(duplicate_index.candidate_ids_by_key) if duplicate_index is not None else 0,
     )
 
     failures: List[Dict[str, str]] = []
     buildable_phases: List[PhaseInput] = []
+    skipped_existing_id_count = 0
+    skipped_matching_structure_count = 0
 
     existing_ids = set(base_catalog_df["id"].astype(str))
+    precheck_started_at = time.perf_counter()
     for idx, phase in enumerate(phase_inputs, start=1):
         _emit_progress(
             progress_callback,
@@ -743,6 +868,13 @@ def build_augmented_db_pack(
             current=idx - 1,
             total=total_phases,
             source_name=phase.source_name,
+            started_at=build_started_at,
+            stage_started_at=precheck_started_at,
+            checked_count=idx - 1,
+            queued_count=len(buildable_phases),
+            skipped_count=len(failures),
+            skipped_existing_id_count=skipped_existing_id_count,
+            skipped_matching_structure_count=skipped_matching_structure_count,
         )
         if phase.phase_id in existing_ids:
             failures.append({
@@ -750,25 +882,98 @@ def build_augmented_db_pack(
                 "source_name": phase.source_name,
                 "error": "phase id already exists in base catalog",
             })
+            skipped_existing_id_count += 1
+            _emit_progress(
+                progress_callback,
+                step="precheck",
+                message=(
+                    f"Checked {idx}/{total_phases} CIFs; "
+                    f"queued {len(buildable_phases)} new, skipped {len(failures)}"
+                ),
+                fraction=0.20 + 0.60 * (idx / max(1, total_phases)),
+                current=idx,
+                total=total_phases,
+                source_name=phase.source_name,
+                started_at=build_started_at,
+                stage_started_at=precheck_started_at,
+                checked_count=idx,
+                queued_count=len(buildable_phases),
+                skipped_count=len(failures),
+                skipped_existing_id_count=skipped_existing_id_count,
+                skipped_matching_structure_count=skipped_matching_structure_count,
+            )
             continue
-        matched_base_ids = _find_matching_base_phase_ids(phase, base_loader=base_loader)
+        matched_base_ids = _find_matching_base_phase_ids(
+            phase,
+            base_loader=base_loader,
+            duplicate_index=duplicate_index,
+        )
         if matched_base_ids:
             failures.append({
                 "id": phase.phase_id,
                 "source_name": phase.source_name,
                 "error": f"phase already exists in base database as {', '.join(matched_base_ids[:5])}",
             })
+            skipped_matching_structure_count += 1
+            _emit_progress(
+                progress_callback,
+                step="precheck",
+                message=(
+                    f"Checked {idx}/{total_phases} CIFs; "
+                    f"queued {len(buildable_phases)} new, skipped {len(failures)}"
+                ),
+                fraction=0.20 + 0.60 * (idx / max(1, total_phases)),
+                current=idx,
+                total=total_phases,
+                source_name=phase.source_name,
+                started_at=build_started_at,
+                stage_started_at=precheck_started_at,
+                checked_count=idx,
+                queued_count=len(buildable_phases),
+                skipped_count=len(failures),
+                skipped_existing_id_count=skipped_existing_id_count,
+                skipped_matching_structure_count=skipped_matching_structure_count,
+            )
             continue
         buildable_phases.append(phase)
         _emit_progress(
             progress_callback,
             step="precheck",
-            message=f"Queued CIF {idx}/{total_phases}: {phase.source_name}",
+            message=(
+                f"Checked {idx}/{total_phases} CIFs; "
+                f"queued {len(buildable_phases)} new, skipped {len(failures)}"
+            ),
             fraction=0.20 + 0.60 * (idx / max(1, total_phases)),
             current=idx,
             total=total_phases,
             source_name=phase.source_name,
+            started_at=build_started_at,
+            stage_started_at=precheck_started_at,
+            checked_count=idx,
+            queued_count=len(buildable_phases),
+            skipped_count=len(failures),
+            skipped_existing_id_count=skipped_existing_id_count,
+            skipped_matching_structure_count=skipped_matching_structure_count,
         )
+
+    _emit_progress(
+        progress_callback,
+        step="precheck",
+        message=(
+            f"Precheck complete: {len(buildable_phases)} new CIF(s), "
+            f"{len(failures)} duplicate/skipped CIF(s)"
+        ),
+        fraction=0.80,
+        current=total_phases,
+        total=total_phases,
+        started_at=build_started_at,
+        stage_started_at=precheck_started_at,
+        checked_count=total_phases,
+        queued_count=len(buildable_phases),
+        skipped_count=len(failures),
+        skipped_existing_id_count=skipped_existing_id_count,
+        skipped_matching_structure_count=skipped_matching_structure_count,
+    )
 
     rows, stable_rows, profiles, _meta_rows, new_failures, phase_ids = _build_phase_batch(
         buildable_phases,
@@ -777,6 +982,7 @@ def build_augmented_db_pack(
         progress_callback=progress_callback,
         progress_start=0.80,
         progress_span=0.08,
+        build_started_at=build_started_at,
     )
     failures.extend(new_failures)
 
@@ -805,10 +1011,18 @@ def build_augmented_db_pack(
     _emit_progress(
         progress_callback,
         step="write",
-        message="Writing merged catalog, stable rows, and profile bundle",
+        message=(
+            f"Writing merged catalog with {base_rows} base phase(s) "
+            f"and {len(phase_ids)} new phase profile(s)"
+        ),
         fraction=0.88,
         current=len(phase_ids),
         total=total_phases,
+        started_at=build_started_at,
+        base_phase_count=base_rows,
+        built_count=len(phase_ids),
+        skipped_count=len(failures),
+        failed_count=len(new_failures),
     )
     merged_catalog_df.to_csv(layout.catalog_csv, index=False)
     merged_stable_df.to_csv(layout.stable_csv, index=False)
@@ -831,10 +1045,17 @@ def build_augmented_db_pack(
     _emit_progress(
         progress_callback,
         step="finalize",
-        message=f"Built augmented pack with {len(phase_ids)} new phase(s)",
+        message=f"Built augmented pack with {len(phase_ids)} new phase(s); skipped/failed {len(failures)}",
         fraction=1.0,
         current=len(phase_ids),
         total=total_phases,
+        started_at=build_started_at,
+        base_phase_count=int(base_profiles.shape[0]),
+        built_count=len(phase_ids),
+        skipped_count=len(failures),
+        failed_count=len(new_failures),
+        skipped_existing_id_count=skipped_existing_id_count,
+        skipped_matching_structure_count=skipped_matching_structure_count,
     )
 
     db_config = build_db_config(

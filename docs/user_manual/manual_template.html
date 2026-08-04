@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ title }}</title>
+    <style>{{ css | safe }}</style>
+  </head>
+  <body>
+    <header class="manual-header">
+      <div>
+        <p class="eyebrow">Hosted RADAR-PD Documentation</p>
+        <h1>{{ title }}</h1>
+        <p class="subtitle">Web app and API guide for powder diffraction phase analysis.</p>
+      </div>
+      <div class="generated">Generated {{ generated_at }}</div>
+    </header>
+
+    <nav class="manual-toc" aria-label="Table of contents">
+      <h2>Contents</h2>
+      <ol>
+        {% for item in toc %}
+        <li><a href="{{ item.href }}">{{ item.title }}</a></li>
+        {% endfor %}
+      </ol>
+    </nav>
+
+    <main class="manual-content">
+      {{ body_html | safe }}
+    </main>
+
+    <footer class="manual-footer">
+      <p>RADAR-PD hosted user manual. Screenshots are maintained in a clean documentation workspace.</p>
+    </footer>
+  </body>
+</html>
+

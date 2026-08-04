@@ -37,6 +37,7 @@ def build_pipeline_config(
     advanced_params: Dict[str, Any] = None,
     limits: Optional[List[float]] = None,
     exclude_regions: Optional[List[List[float]]] = None,
+    reference_phase_exclusions: Optional[Dict[str, Any]] = None,
 ) -> str:
     """
     Builds a pipeline_config.yaml content and returns it as a string.
@@ -76,10 +77,13 @@ def build_pipeline_config(
                 db_config[key] = value
     validate_db_config(db_config)
 
+    resolved_work_root = Path(work_root)
+    run_parent_root = resolved_work_root.parent if resolved_work_root.name == run_name else resolved_work_root
+
     # Global section
     config = {
         "PROJECT_ROOT": project_root,
-        "WORK_ROOT": str(Path(project_root) / "runs"),
+        "WORK_ROOT": str(run_parent_root),
         "DATA_ROOT": str(Path(project_root) / "data"),
         "work_root": work_root,
         "ml_components_dir": str(Path(project_root) / "ML_components"),
@@ -101,6 +105,17 @@ def build_pipeline_config(
         "top_candidates": 10,
         "hap_init": 0.05,
         "max_joint_cycles": 8,
+        "polish_strategy": "adaptive",
+        "polish_refine_cell": True,
+        "polish_refine_background": True,
+        "polish_refine_main_cell": True,
+        "polish_defer_main_cell": True,
+        "polish_refine_existing_cells": False,
+        "polish_escalate_on_failure": True,
+        "polish_stabilization_cycles": 0,
+        "polish_cell_trial_cycles": 1,
+        "polish_final_cycles": 0,
+        "polish_skip_fresh_lst_regen": True,
         "rwp_improve_eps": 0.05,
         "knee_filter": {
             "enable_hist": True,
@@ -109,12 +124,19 @@ def build_pipeline_config(
             "guard_frac": 0.05,
         },
         "stage4": {
+            "radiation": "neutron",
             "wavelength": 1.54,
             "two_theta_range": [5.0, 160.0],
             "samples": 5000,
             "reps": 50,
             "len_tol_pct": 1.0,  # User-requested default
             "ang_tol_deg": 3.0,  # User-requested default
+            "seed": 0,
+            "score_q_max": 8.0,
+            "pearson_q_max": 8.0,
+            "pearson_min_points": 25,
+            "lattice_tiebreak_score_tol": 5e-4,
+            "pearson_cell_refine_min_r": 0.50,
         },
         "hist_filter": {
             "min_active_bins": 4,
@@ -126,7 +148,7 @@ def build_pipeline_config(
         "background": {
             "mode": "auto_fixed_points",
             "type": "chebyschev-1",
-            "terms": 12,
+            "terms": 6,
         },
         "light_calibration": {
             "enabled": False,
@@ -134,6 +156,92 @@ def build_pipeline_config(
             "profile_cycles": 2,
             "accept_rwp_worsen": 0.15,
             "terms": ["Zero", "U", "V", "W"],
+        },
+        "main_phase_prenudge": {
+            "enabled": True,
+            "apply_only_user_main": True,
+            "trigger_rwp": 18.0,
+            "hard_rwp": 35.0,
+            "min_peak_support": 0.50,
+            "min_rwp_for_peak_support_trigger": 8.0,
+            "strongest_barely_supported_fraction": 0.75,
+            "peak_match_tolerance_q": 0.035,
+            "frac_window": 0.01,
+            "angle_window_deg": 1.0,
+            "fail_unresolved_main": False,
+        },
+        "main_phase_guard": {
+            "enabled": True,
+            "apply_only_user_main": True,
+            "min_weight_pct": 20.0,
+        },
+        "main_phase_shadow": {
+            "enabled": True,
+            "top_main_peaks": 8,
+            "top_candidate_peaks": 10,
+            "peak_match_tolerance_q": 0.040,
+            "min_target_prominence_fraction": 0.03,
+            "nudge_filter_enabled": True,
+            "filter_top_main_peaks": 5,
+            "filter_top_candidate_peaks": 5,
+            "filter_min_overlap_count": 3,
+            "filter_min_overlap_fraction": 0.60,
+            "filter_min_shadow_intensity_fraction": 0.60,
+            "filter_max_unique_supported_count": 1,
+            "filter_max_unique_supported_fraction": 0.25,
+            "refill_attempts": 2,
+            "require_reliable_main_rwp_max": 25.0,
+            "require_reliable_main_peak_support": 0.55,
+        },
+        "main_phase_cleanup": {
+            "enabled": False,
+            "apply_only_user_main": True,
+            "refine_u_iso": False,
+            "refine_positions": False,
+            "cycles": 1,
+            "accept_rwp_worsen": 0.15,
+            "min_rwp_improvement": 0.05,
+            "max_position_shift": 0.15,
+            "min_u_iso": 0.0,
+            "max_u_iso": 0.20,
+        },
+        "magnetic_precheck": {
+            "enabled": False,
+            "q_max": 6.0,
+            "max_hkl": 8,
+            "denominators": [2, 3],
+            "width_grid": [0.025, 0.04, 0.065],
+            "pseudo_voigt_eta": 0.35,
+            "max_k_vectors": 80,
+            "max_positions_per_k": 260,
+            "top_residual_peaks": 8,
+            "null_trials": 48,
+            "random_seed": 13,
+            "include_gamma": False,
+        },
+        "xray_doublet": {
+            "enabled": "auto",
+            "default_intensity_ratio": 0.5,
+            "apply_to_64_ml_input": True,
+            "apply_to_64_similarity": True,
+            "apply_to_512": True,
+            "apply_to_lattice_nudge": True,
+        },
+        "reference_phase_exclusions": {
+            "enabled": False,
+            "presets": [],
+            "window_mode": "auto",
+            "fwhm_factor": 6.0,
+            "fractional_d_tolerance": 0.003,
+            "zero_tolerance_deg": 0.05,
+            "zero_tolerance_tof": 25.0,
+            "min_half_width_deg": 0.35,
+            "max_half_width_deg": 2.00,
+            "fallback_half_width_deg": 0.75,
+            "min_half_width_tof": 75.0,
+            "max_half_width_tof": 750.0,
+            "fallback_half_width_tof": 200.0,
+            "include_cu_kbeta": False,
         },
         "element_filter": {
             "max_offlist_elements": 0,
@@ -144,13 +252,16 @@ def build_pipeline_config(
             "sample_env": {
                 "elements": sample_env_elements if sample_env_elements else [],
                 "allow_pure": True,
-                "allow_with": ["O"],
+                "allow_with": [],
                 "ban_cross_with_base": True,
                 "ignore_in_budget": True
             },
             "disallow_pure": ["O", "C"]
         }
     })
+
+    if reference_phase_exclusions is not None:
+        config["reference_phase_exclusions"].update(reference_phase_exclusions)
 
     # Override with advanced_params if provided
     if advanced_params:

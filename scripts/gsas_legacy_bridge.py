@@ -29,6 +29,12 @@ from aniso_db_loader import DBLoader, CatalogPaths, build_mask  # fast mask filt
 # IMPORTANT: file is named "ratio_filter.py"
 from ratio_filter import shortlist_by_hist_ML, _load_profiles64_metadata
 
+try:
+    from xray_doublet import apply_doublet_to_profiles, is_active_for
+except Exception:
+    apply_doublet_to_profiles = None
+    is_active_for = None
+
 
 # --------------------------------------------------------------------------------------
 # Data containers
@@ -52,6 +58,7 @@ class CandidatePhase:
 # --------------------------------------------------------------------------------------
 
 def _fmt_list(ids, values=None, limit=20):
+    ids = list(ids or [])
     if not ids:
         return "[]"
     if values is None:
@@ -405,6 +412,7 @@ class LegacyPipelineBridge:
         *,
         corr_threshold: float = 0.95,
         anchor_ids: List[str] | None = None,
+        xray_doublet_config: Optional[Dict[str, Any]] = None,
     ) -> List[Tuple[str, float]]:
         """
         De-duplicate Stage-3 candidates using the consolidated profiles64 pack.
@@ -446,6 +454,16 @@ class LegacyPipelineBridge:
         # Load profiles64 (dict return)
         meta = _load_profiles64_metadata(self.profiles_dir)
         profiles: np.ndarray = meta["profiles"]         # shape (N, 64)
+        if xray_doublet_config and apply_doublet_to_profiles is not None:
+            try:
+                profiles = apply_doublet_to_profiles(
+                    profiles,
+                    meta,
+                    xray_doublet_config,
+                    apply_key="apply_to_64_similarity",
+                )
+            except Exception as exc:
+                logger.warning(f"[dedup] PXRD doublet correction skipped: {exc}")
         pid_to_row: dict[str, int] = meta["pid_to_row"] # id -> row index
 
         npz_path = os.path.join(self.profiles_dir, "profiles64.npz")
@@ -590,6 +608,7 @@ class LegacyPipelineBridge:
             Q, R, Q_main_peaks, candidate_ids,
             profiles_dir=self.profiles_dir,
             topN=selection_topN,
+            xray_doublet_config=hp.get("xray_doublet"),
             plot=bool(hp.get("plot", False)),
             plot_out_path_png=plot_path or default_plot_path,
             plot_top_k=plot_top_k,
@@ -702,6 +721,7 @@ class IntegratedCandidateScreener:
             hist_scored,
             corr_threshold=0.95,
             anchor_ids=anchor_ids or [],
+            xray_doublet_config=(hist_plot_cfg or {}).get("xray_doublet"),
         )
 
         if not hist_scored:

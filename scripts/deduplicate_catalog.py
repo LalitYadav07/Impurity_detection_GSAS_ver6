@@ -215,7 +215,7 @@ for r in usable:
 
 dup_clusters = [g for g in clusters.values() if len(g) > 1]
 dup_clusters.sort(key=lambda g: (-len(g), sorted(x["id"] for x in g)[0]))
-    logger.info(f"  found {len(dup_clusters)} duplicate clusters (size>1)")
+logger.info(f"  found {len(dup_clusters)} duplicate clusters (size>1)")
 
 def cluster_is_identical_by_cif(group):
     for i in range(len(group)):
@@ -270,8 +270,8 @@ with open(OUT_LOG, "w", newline="", encoding="utf-8") as logf:
         cat_sg_set = sorted({r["cat_sg"] for r in group if r["cat_sg"] is not None})
         cat_sg_unique = int(len(cat_sg_set) == 1)
 
-          logger.info(f"  [{status.upper():8}] CIF SG #{cif_sg:>3}  n={len(group)}  rep={rep_id}  removed={removed}  "
-                  f"catalog_SG_unique={bool(cat_sg_unique)} cat_SGs={cat_sg_set or ['None']}")
+        logger.info(f"  [{status.upper():8}] CIF SG #{cif_sg:>3}  n={len(group)}  rep={rep_id}  removed={removed}  "
+                    f"catalog_SG_unique={bool(cat_sg_unique)} cat_SGs={cat_sg_set or ['None']}")
 
         sum_lines.append(
             f"[{status.upper()}] CIF SG #{cif_sg} | formula='{formula}' | size={len(group)} | rep={rep_id} | removed={removed} | "

@@ -19,13 +19,50 @@ from functools import lru_cache
 import threading
 import concurrent.futures
 import re
+import hashlib
 from pathlib import Path
+from time import perf_counter
 
 import numpy as np
 from pymatgen.core import Structure, Lattice
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def _load_cif_structure_relaxed(cif_path: str | Path) -> Structure:
+    """Load user/CIF-exported structures with the same tolerance used elsewhere.
+
+    GSAS-II can read a number of CIFs that pymatgen's default
+    ``Structure.from_file`` rejects, especially refined/exported CIFs with
+    slightly over-occupied sites. Main-phase lattice nudging should not fail
+    only because this helper used a stricter parser than the rest of RADAR-PD.
+    """
+    cif_path = Path(cif_path)
+    parser_error: Exception | None = None
+    try:
+        from pymatgen.io.cif import CifParser
+
+        structures = CifParser(str(cif_path), occupancy_tolerance=2.0).parse_structures(primitive=False)
+        if structures:
+            return structures[0]
+        parser_error = RuntimeError("CifParser returned no structures")
+    except Exception as exc:
+        parser_error = exc
+
+    try:
+        return Structure.from_file(str(cif_path))
+    except Exception as exc:
+        raise RuntimeError(
+            f"Could not parse CIF for lattice nudging: {cif_path}. "
+            f"Relaxed parser error: {parser_error}; default parser error: {exc}"
+        ) from exc
+try:
+    from xray_doublet import apply_doublet_to_peaks, describe_doublet, is_active_for
+except Exception:
+    apply_doublet_to_peaks = None
+    describe_doublet = None
+    is_active_for = None
 
 try:
     import matplotlib.pyplot as plt  # optional; plots are skipped if unavailable
@@ -64,6 +101,11 @@ import numpy as _np
 # ======================================================================================
 DEFAULT_WAVELENGTH = 1.50                    # Å; covers Q ~0.5–8.2 Å^-1 with 2θ≈5–160°
 DEFAULT_TWOTHETA_RANGE: Tuple[float, float] = (5.0, 160.0)
+DEFAULT_SCORE_Q_MAX = float(os.environ.get("STAGE4_SCORE_Q_MAX", "8.0"))
+DEFAULT_LATTICE_TIEBREAK_SCORE_TOL = float(
+    os.environ.get("STAGE4_LATTICE_TIEBREAK_SCORE_TOL", "5e-4")
+)
+DEFAULT_STAGE4_SEED = int(os.environ.get("STAGE4_SEED", "0"))
 DEFAULT_FWHM_Q = float(os.environ.get("STAGE4_FWHM_Q", 0.03))  # Å^-1 peak width in Q
 
 # Debug / Strategy
@@ -159,6 +201,9 @@ class LatticeConstraints:
     free_alpha: bool; free_beta: bool; free_gamma: bool
     tie_ab: bool; tie_ac: bool; tie_bc: bool
     alpha0: Optional[float]; beta0: Optional[float]; gamma0: Optional[float]
+    tie_alpha_beta: bool = False
+    tie_alpha_gamma: bool = False
+    tie_beta_gamma: bool = False
 
 def infer_constraints(structure: Structure, sgnum: Optional[int]) -> LatticeConstraints:
     L = structure.lattice
@@ -178,13 +223,12 @@ def infer_constraints(structure: Structure, sgnum: Optional[int]) -> LatticeCons
         return LatticeConstraints(True, False, True, False, False, False,
                                   True, False, False, 90.0, 90.0, 120.0)
     if cs == "trigonal":
-        return _maybe_specialize_trigonal_hex_by_angles(L, cons)
+        return _trigonal_constraints_for_lattice(L)
     if cs == "orthorhombic":
         return LatticeConstraints(True, True, True, False, False, False,
                                   False, False, False, 90.0, 90.0, 90.0)
     if cs == "monoclinic":
-        return LatticeConstraints(True, True, True, False, True, False,
-                                  False, False, False, 90.0, None, 90.0)
+        return _monoclinic_constraints_for_lattice(L)
     return cons
 
 def _maybe_specialize_trigonal_hex_by_angles(L: Lattice, cons: LatticeConstraints) -> LatticeConstraints:
@@ -195,8 +239,55 @@ def _maybe_specialize_trigonal_hex_by_angles(L: Lattice, cons: LatticeConstraint
                                   True, False, False, 90.0, 90.0, 120.0)
     if abs(alpha-beta) < 1 and abs(beta-gamma) < 1 and abs(a-b)/max(a,b) < 0.01 and abs(b-c)/max(b,c) < 0.01:
         return LatticeConstraints(True, False, False, True, False, False,
-                                  True, True, True, None, None, None)
+                                  True, True, True, None, None, None,
+                                  True, True, False)
     return cons
+
+def _trigonal_constraints_for_lattice(L: Lattice) -> LatticeConstraints:
+    """Trigonal cells must stay in either hexagonal or rhombohedral setting."""
+    a, b, c = L.a, L.b, L.c
+    alpha, beta, gamma = L.alpha, L.beta, L.gamma
+
+    hex_score = (
+        abs(a - b) / max(a, b, 1e-12) * 100.0
+        + abs(alpha - 90.0)
+        + abs(beta - 90.0)
+        + abs(gamma - 120.0)
+    )
+    rhom_score = (
+        abs(a - b) / max(a, b, 1e-12) * 100.0
+        + abs(a - c) / max(a, c, 1e-12) * 100.0
+        + abs(alpha - beta)
+        + abs(alpha - gamma)
+    )
+
+    if hex_score <= rhom_score:
+        return LatticeConstraints(True, False, True, False, False, False,
+                                  True, False, False, 90.0, 90.0, 120.0)
+
+    return LatticeConstraints(True, False, False, True, False, False,
+                              True, True, True, None, None, None,
+                              True, True, False)
+
+def _monoclinic_constraints_for_lattice(L: Lattice) -> LatticeConstraints:
+    """Keep the observed monoclinic unique-axis setting instead of assuming beta."""
+    deviations = {
+        "alpha": abs(L.alpha - 90.0),
+        "beta": abs(L.beta - 90.0),
+        "gamma": abs(L.gamma - 90.0),
+    }
+    unique = max(deviations, key=deviations.get)
+    if deviations[unique] < 0.5:
+        unique = "beta"
+
+    if unique == "alpha":
+        return LatticeConstraints(True, True, True, True, False, False,
+                                  False, False, False, None, 90.0, 90.0)
+    if unique == "gamma":
+        return LatticeConstraints(True, True, True, False, False, True,
+                                  False, False, False, 90.0, 90.0, None)
+    return LatticeConstraints(True, True, True, False, True, False,
+                              False, False, False, 90.0, None, 90.0)
 
 def _rebuild_with_lattice(base_struct: Structure, new_latt: Lattice) -> Structure:
     # Works for ordered & disordered sites
@@ -209,6 +300,78 @@ def _rebuild_with_lattice(base_struct: Structure, new_latt: Lattice) -> Structur
         charge=getattr(base_struct, "charge", None),
         coords_are_cartesian=False,
     )
+
+def _lattice_deviation_metric(
+    base_lat: Lattice,
+    cand_lat: Lattice,
+    len_tol_pct: float,
+    ang_tol_deg: float,
+) -> float:
+    """Normalized distance from the starting lattice for near-tie selection."""
+    len_scale = max(float(len_tol_pct) / 100.0, 1e-12)
+    ang_scale = max(float(ang_tol_deg), 1e-12)
+    terms = [
+        (cand_lat.a - base_lat.a) / max(abs(base_lat.a) * len_scale, 1e-12),
+        (cand_lat.b - base_lat.b) / max(abs(base_lat.b) * len_scale, 1e-12),
+        (cand_lat.c - base_lat.c) / max(abs(base_lat.c) * len_scale, 1e-12),
+        (cand_lat.alpha - base_lat.alpha) / ang_scale,
+        (cand_lat.beta - base_lat.beta) / ang_scale,
+        (cand_lat.gamma - base_lat.gamma) / ang_scale,
+    ]
+    return float(math.sqrt(sum(t * t for t in terms) / len(terms)))
+
+def _choose_best_lattice_index(
+    scores: np.ndarray,
+    deviations: np.ndarray,
+    score_tol: float,
+) -> Tuple[int, int]:
+    """Choose highest score, breaking near-ties by closest lattice."""
+    scores = np.asarray(scores, dtype=float)
+    deviations = np.asarray(deviations, dtype=float)
+    if scores.size == 0:
+        return 0, 0
+    best_sc = float(np.max(scores))
+    tie_tol = max(0.0, float(score_tol))
+    if tie_tol > 0:
+        near_best = np.where(scores >= best_sc - tie_tol)[0]
+    else:
+        near_best = np.where(scores == best_sc)[0]
+    if near_best.size:
+        return int(near_best[np.argmin(deviations[near_best])]), int(near_best.size)
+    return int(np.argmax(scores)), 1
+
+def _lattice_constraint_violations(
+    cons: LatticeConstraints,
+    lat: Lattice,
+    *,
+    length_rtol: float = 1e-7,
+    angle_atol: float = 1e-5,
+) -> List[str]:
+    """Return constraint labels violated by a lattice."""
+    violations: List[str] = []
+
+    def _rel_bad(x: float, y: float) -> bool:
+        return abs(x - y) > length_rtol * max(abs(x), abs(y), 1.0)
+
+    if cons.tie_ab and _rel_bad(lat.a, lat.b):
+        violations.append("a=b")
+    if cons.tie_ac and _rel_bad(lat.a, lat.c):
+        violations.append("a=c")
+    if cons.tie_bc and _rel_bad(lat.b, lat.c):
+        violations.append("b=c")
+    if cons.tie_alpha_beta and abs(lat.alpha - lat.beta) > angle_atol:
+        violations.append("alpha=beta")
+    if cons.tie_alpha_gamma and abs(lat.alpha - lat.gamma) > angle_atol:
+        violations.append("alpha=gamma")
+    if cons.tie_beta_gamma and abs(lat.beta - lat.gamma) > angle_atol:
+        violations.append("beta=gamma")
+    if not cons.free_alpha and cons.alpha0 is not None and abs(lat.alpha - cons.alpha0) > angle_atol:
+        violations.append(f"alpha={cons.alpha0:g}")
+    if not cons.free_beta and cons.beta0 is not None and abs(lat.beta - cons.beta0) > angle_atol:
+        violations.append(f"beta={cons.beta0:g}")
+    if not cons.free_gamma and cons.gamma0 is not None and abs(lat.gamma - cons.gamma0) > angle_atol:
+        violations.append(f"gamma={cons.gamma0:g}")
+    return violations
 
 # ======================================================================================
 # HKL signature in Q (cached for performance) + FAST PATH
@@ -461,6 +624,25 @@ def _build_fixed_grid_and_residual(Q_res, R_res, ngrid=2048):
     Ruse = Ra if use_abs else Rp
     return q_grid, _minmax(Ruse), ("|R|" if use_abs else "R+")
 
+
+def _clip_q_residual_window(
+    Q_res,
+    R_res,
+    q_min: Optional[float] = None,
+    q_max: Optional[float] = DEFAULT_SCORE_Q_MAX,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Restrict residual arrays to the Stage-4 scoring Q window."""
+    Q = np.asarray(Q_res, float).ravel()
+    R = np.asarray(R_res, float).ravel()
+    m = np.isfinite(Q) & np.isfinite(R)
+    if q_min is not None and math.isfinite(float(q_min)):
+        m &= Q >= float(q_min)
+    if q_max is not None and math.isfinite(float(q_max)) and float(q_max) > 0.0:
+        m &= Q <= float(q_max)
+    if not np.any(m):
+        return Q, R
+    return Q[m], R[m]
+
 # ======================================================================================
 # Optimized Scoring
 # ======================================================================================
@@ -525,8 +707,8 @@ def _free_param_names(cons: LatticeConstraints) -> List[str]:
     if cons.free_b and not cons.tie_ab: names.append("b")
     if cons.free_c and not (cons.tie_ac or cons.tie_bc): names.append("c")
     if cons.free_alpha: names.append("alpha")
-    if cons.free_beta: names.append("beta")
-    if cons.free_gamma: names.append("gamma")
+    if cons.free_beta and not cons.tie_alpha_beta: names.append("beta")
+    if cons.free_gamma and not (cons.tie_alpha_gamma or cons.tie_beta_gamma): names.append("gamma")
     return names
 
 def _apply_params_from_vector(base: Lattice, cons: LatticeConstraints,
@@ -544,6 +726,10 @@ def _apply_params_from_vector(base: Lattice, cons: LatticeConstraints,
     if cons.tie_ab: b = a
     if cons.tie_ac: c = a
     if cons.tie_bc: c = b
+
+    if cons.tie_alpha_beta: be = al
+    if cons.tie_alpha_gamma: ga = al
+    if cons.tie_beta_gamma: ga = be
 
     if not cons.free_alpha and cons.alpha0 is not None: al = float(cons.alpha0)
     if not cons.free_beta  and cons.beta0  is not None: be = float(cons.beta0)
@@ -875,33 +1061,57 @@ class NDSticksQ:
         self.__dict__.update(state)
         self._local = threading.local()
 
-    def _calc(self):
+    def _calc(self, wavelength: Optional[float] = None):
         """Return a thread-local diffraction calculator appropriate for the radiation type."""
-        if not hasattr(self._local, "calc"):
+        wl = float(wavelength if wavelength is not None else self.wl)
+        key = round(wl, 8)
+        if not hasattr(self._local, "calcs"):
+            self._local.calcs = {}
+        if key not in self._local.calcs:
             if self.radiation == "xray":
                 from pymatgen.analysis.diffraction.xrd import XRDCalculator
-                self._local.calc = XRDCalculator(wavelength=self.wl)
+                self._local.calcs[key] = XRDCalculator(wavelength=wl)
             else:
                 # Local import to avoid hard dependency at module import time
                 from pymatgen.analysis.diffraction.neutron import NDCalculator
-                self._local.calc = NDCalculator(wavelength=self.wl)
-        return self._local.calc
+                self._local.calcs[key] = NDCalculator(wavelength=wl)
+        return self._local.calcs[key]
 
     @staticmethod
     def tt_to_Q(two_theta_deg: np.ndarray, wl: float) -> np.ndarray:
         theta = np.deg2rad(two_theta_deg)*0.5
         return 4.0*math.pi*np.sin(theta)/float(wl)
 
+    def _effective_wavelength_for_q_window(self, q_window: Optional[Tuple[float, float]]) -> float:
+        """Return the configured simulator wavelength.
+
+        Stage-4 ranking intentionally focuses on a low-Q scoring window. High-Q
+        coverage is controlled by the caller's score_q_max rather than silently
+        shortening the wavelength and expanding the simulated pattern.
+        """
+        return self.wl
+
     def _get_structure_hash(self, structure: Structure) -> str:
         """Create a hash for structure caching"""
         lat = structure.lattice
-        # Round to avoid cache misses from tiny numerical differences
-        return f"{lat.a:.6f}_{lat.b:.6f}_{lat.c:.6f}_{lat.alpha:.3f}_{lat.beta:.3f}_{lat.gamma:.3f}"
+        # Include chemistry and fractional coordinates. Lattice-only keys can
+        # incorrectly reuse patterns for distinct phases with similar cells.
+        parts = [
+            f"{lat.a:.6f}_{lat.b:.6f}_{lat.c:.6f}_{lat.alpha:.3f}_{lat.beta:.3f}_{lat.gamma:.3f}",
+            str(len(structure)),
+        ]
+        for site in structure:
+            fc = site.frac_coords
+            parts.append(
+                f"{site.species_string}@{fc[0]:.5f},{fc[1]:.5f},{fc[2]:.5f}"
+            )
+        return hashlib.blake2b("|".join(parts).encode("utf-8"), digest_size=16).hexdigest()
 
     def simulate_QI(self, structure: Structure, q_window: Optional[Tuple[float, float]] = None) -> Tuple[np.ndarray, np.ndarray]:
         # Create cache key
+        wl_eff = self._effective_wavelength_for_q_window(q_window)
         struct_hash = self._get_structure_hash(structure)
-        cache_key = (struct_hash, q_window)
+        cache_key = (struct_hash, q_window, round(wl_eff, 8))
 
         # Check cache first
         if cache_key in self._pattern_cache:
@@ -912,17 +1122,17 @@ class NDSticksQ:
             ttr = self.tt
         else:
             qlo, qhi = float(q_window[0]), float(q_window[1])
-            tmin = _q_to_tth(max(qlo, 0.0), self.wl)
-            qhi_clip = min(qhi, 4.0 * math.pi / self.wl)
-            tmax = _q_to_tth(qhi_clip, self.wl)
+            tmin = _q_to_tth(max(qlo, 0.0), wl_eff)
+            qhi_clip = min(qhi, 4.0 * math.pi * math.sin(math.radians(89.0)) / wl_eff)
+            tmax = _q_to_tth(qhi_clip, wl_eff)
             if not (tmax > tmin):
                 tmin, tmax = self.tt
             ttr = (tmin, tmax)
 
-        patt = self._calc().get_pattern(structure, two_theta_range=ttr)
+        patt = self._calc(wl_eff).get_pattern(structure, two_theta_range=ttr)
         tt = np.asarray(patt.x, float)
         I  = np.asarray(patt.y, float)
-        Q  = self.tt_to_Q(tt, self.wl)
+        Q  = self.tt_to_Q(tt, wl_eff)
         ok = (Q > 0) & np.isfinite(I) & (I > 0)
         if not np.any(ok):
             result = (np.array([], dtype=float), np.array([], dtype=float))
@@ -937,6 +1147,96 @@ class NDSticksQ:
 
         return result
 
+    def simulate_hkl_intensity_table(
+        self,
+        structure: Structure,
+        q_window: Optional[Tuple[float, float]] = None,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Build an HKL/intensity table once for fast lattice-only rescoring."""
+        wl_eff = self._effective_wavelength_for_q_window(q_window)
+        struct_hash = self._get_structure_hash(structure)
+        cache_key = ("hkl_table", struct_hash, q_window, round(wl_eff, 8))
+        if cache_key in self._pattern_cache:
+            return self._pattern_cache[cache_key]
+
+        if q_window is None:
+            ttr = self.tt
+        else:
+            qlo, qhi = float(q_window[0]), float(q_window[1])
+            tmin = _q_to_tth(max(qlo, 0.0), wl_eff)
+            qhi_clip = min(qhi, 4.0 * math.pi * math.sin(math.radians(89.0)) / wl_eff)
+            tmax = _q_to_tth(qhi_clip, wl_eff)
+            ttr = (tmin, tmax) if tmax > tmin else self.tt
+
+        patt = self._calc(wl_eff).get_pattern(structure, two_theta_range=ttr)
+        hkls: List[Tuple[int, int, int]] = []
+        intensities: List[float] = []
+        for peak_i, grouped_hkls in enumerate(getattr(patt, "hkls", []) or []):
+            try:
+                peak_intensity = float(patt.y[peak_i])
+            except Exception:
+                continue
+            if not math.isfinite(peak_intensity) or peak_intensity <= 0.0:
+                continue
+            entries = list(grouped_hkls or [])
+            mult_total = sum(max(1, int(entry.get("multiplicity", 1))) for entry in entries) or 1
+            for entry in entries:
+                hkl = entry.get("hkl")
+                if hkl is None or len(hkl) != 3:
+                    continue
+                mult = max(1, int(entry.get("multiplicity", 1)))
+                hkls.append((int(hkl[0]), int(hkl[1]), int(hkl[2])))
+                intensities.append(peak_intensity * mult / mult_total)
+
+        result = (np.asarray(hkls, dtype=np.int64), np.asarray(intensities, dtype=float))
+        if len(self._pattern_cache) < 1000:
+            self._pattern_cache[cache_key] = result
+        return result
+
+    @staticmethod
+    def reposition_hkl_intensities(
+        hkl_table: np.ndarray,
+        intensities: np.ndarray,
+        lattice: Lattice,
+        q_window: Optional[Tuple[float, float]] = None,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Recompute Q positions for an existing HKL/intensity table."""
+        hkls = np.asarray(hkl_table, dtype=np.float64)
+        Is = np.asarray(intensities, dtype=float)
+        if hkls.size == 0 or Is.size == 0:
+            return np.array([], dtype=float), np.array([], dtype=float)
+
+        Gs = _reciprocal_metric_fast(
+            lattice.a,
+            lattice.b,
+            lattice.c,
+            lattice.alpha,
+            lattice.beta,
+            lattice.gamma,
+        )
+        h = hkls[:, 0]
+        k = hkls[:, 1]
+        l = hkls[:, 2]
+        dinv2 = (
+            h * h * Gs[0, 0]
+            + 2.0 * h * k * Gs[0, 1]
+            + 2.0 * h * l * Gs[0, 2]
+            + k * k * Gs[1, 1]
+            + 2.0 * k * l * Gs[1, 2]
+            + l * l * Gs[2, 2]
+        )
+        ok = np.isfinite(dinv2) & (dinv2 > 0.0) & np.isfinite(Is) & (Is > 0.0)
+        Q = 2.0 * math.pi * np.sqrt(np.maximum(dinv2, 0.0))
+        if q_window is not None:
+            qlo, qhi = float(q_window[0]), float(q_window[1])
+            ok &= (Q >= qlo) & (Q <= qhi)
+        if not np.any(ok):
+            return np.array([], dtype=float), np.array([], dtype=float)
+        Q = Q[ok]
+        I = Is[ok]
+        order = np.argsort(Q)
+        return Q[order], I[order]
+
 
 # ======================================================================================
 # Public API - Optimized LatticeNudger
@@ -948,16 +1248,45 @@ class Stage4Result:
     best_params: Dict[str, float]
     best_score: float
     nudged_cif_path: str
+    elapsed_s: float = 0.0
+    candidate_count: int = 0
+    scored_count: int = 0
+    target_s: float = 0.0
+    prep_s: float = 0.0
+    score_s: float = 0.0
+    scoring_mode: str = ""
+    lattice_deviation: float = 0.0
+    score_tie_count: int = 1
 
 class LatticeNudger:
     def __init__(self,
                  db_loader,
                  wavelength_ang: float = DEFAULT_WAVELENGTH,
                  two_theta_range: Tuple[float,float] = DEFAULT_TWOTHETA_RANGE,
-                 radiation: str = "neutron"):
+                 radiation: str = "neutron",
+                 score_q_max: Optional[float] = DEFAULT_SCORE_Q_MAX,
+                 fast_peak_reposition: Optional[bool] = None,
+                 lattice_tiebreak_score_tol: Optional[float] = DEFAULT_LATTICE_TIEBREAK_SCORE_TOL,
+                 xray_doublet_config: Optional[Dict] = None,
+                 random_seed: Optional[int] = DEFAULT_STAGE4_SEED):
         self.db = db_loader
+        self.radiation = str(radiation).lower()
         self.sim = NDSticksQ(wavelength_ang, two_theta_range, radiation=radiation)
         self._fwhm_Q = DEFAULT_FWHM_Q
+        self.score_q_max = score_q_max
+        self.xray_doublet_config = xray_doublet_config or {"enabled": False}
+        if (
+            self.radiation in {"xray", "x-ray", "pxrd"}
+            and is_active_for is not None
+            and is_active_for(self.xray_doublet_config, "apply_to_lattice_nudge")
+        ):
+            desc = describe_doublet(self.xray_doublet_config) if describe_doublet else "active"
+            logger.info(f"PXRD doublet correction active for lattice nudging: {desc}")
+        if fast_peak_reposition is None:
+            fast_peak_reposition = self.radiation != "xray"
+        self.fast_peak_reposition = bool(fast_peak_reposition)
+        self.lattice_tiebreak_score_tol = max(0.0, float(lattice_tiebreak_score_tol or 0.0))
+        self.random_seed = random_seed
         # Add structure caching to avoid repeated database loads
         self._structure_cache = {}
 
@@ -965,6 +1294,49 @@ class LatticeNudger:
         if pid not in self._structure_cache:
             self._structure_cache[pid] = self.db.load_structure(pid)
         return self._structure_cache[pid]
+
+    def optimize_cif(self,
+                     cif_path: str,
+                     phase_id: str,
+                     Q_res: np.ndarray, R_res: np.ndarray,
+                     reps: int = 10, samples: int = 200,
+                     frac_window: float = 0.025, angle_window_deg: float = 1.5,
+                     out_cif_dir: Optional[str] = None,
+                     allow_inner_parallel: bool = True,
+                     score_q_max: Optional[float] = None) -> Stage4Result:
+        """
+        Nudge an arbitrary CIF against a target signal.
+
+        This is used for user-supplied main phases, which are not guaranteed to
+        exist in the phase database. The structure is registered in the same
+        in-memory cache used by optimize_one, so the normal symmetry-aware
+        lattice constraints, Q-signature sampling, scoring, and tie-breaking are
+        reused without a separate code path.
+        """
+        if out_cif_dir is None:
+            raise ValueError("out_cif_dir must be specified")
+        cif = Path(cif_path)
+        if not cif.exists():
+            raise FileNotFoundError(f"CIF not found: {cif}")
+
+        safe_pid = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(phase_id or cif.stem)).strip("._-")
+        if not safe_pid:
+            safe_pid = cif.stem or "main_phase"
+        safe_pid = safe_pid[:80]
+
+        self._structure_cache[safe_pid] = _load_cif_structure_relaxed(cif)
+        return self.optimize_one(
+            safe_pid,
+            Q_res,
+            R_res,
+            reps=reps,
+            samples=samples,
+            frac_window=frac_window,
+            angle_window_deg=angle_window_deg,
+            out_cif_dir=out_cif_dir,
+            allow_inner_parallel=allow_inner_parallel,
+            score_q_max=score_q_max,
+        )
 
     def _write_nudged_cif(self, pid: str, structure: Structure, out_dir: str,
                         symprec: float = 1e-3, angle_tolerance: float = 5.0) -> str:
@@ -1047,7 +1419,7 @@ class LatticeNudger:
                 logger.debug("No DOF or no valid HKL rows; only base lattice will be used.")
             return [base_lat]
 
-        seed_val = int(os.environ.get("STAGE4_SEED", "0")) or None
+        seed_val = getattr(self, "random_seed", DEFAULT_STAGE4_SEED)
         # resolve tolerances (percent for lengths, degrees for angles)
         if len_tol_pct is None:
             len_tol_pct = float(os.environ.get("STAGE4_LEN_TOL_PCT", "3.0"))
@@ -1130,13 +1502,15 @@ class LatticeNudger:
                     reps: int = 10, samples: int = 200,
                     frac_window: float = 0.025, angle_window_deg: float = 1.5,
                     out_cif_dir: Optional[str] = None,
-                    allow_inner_parallel: bool = True) -> Stage4Result:
+                    allow_inner_parallel: bool = True,
+                    score_q_max: Optional[float] = None) -> Stage4Result:
         """
         Nudge one candidate structure against residual R(Q).
         """
         if out_cif_dir is None:
             raise ValueError("out_cif_dir must be specified")
         global _QWIN_PCT  # <-- declare first
+        t_total = perf_counter()
 
         pid = str(phase_id)
         base_struct = self._structure_for_pid(pid)
@@ -1147,6 +1521,18 @@ class LatticeNudger:
             sgnum = self.db.get_space_group_number(pid)
         except Exception:
             pass
+        if sgnum is None:
+            try:
+                from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
+                sgnum = int(
+                    SpacegroupAnalyzer(
+                        base_struct,
+                        symprec=1e-2,
+                        angle_tolerance=5.0,
+                    ).get_space_group_number()
+                )
+            except Exception:
+                sgnum = None
         cons = infer_constraints(base_struct, sgnum)
 
         if _DEBUG:
@@ -1182,7 +1568,9 @@ class LatticeNudger:
             _QWIN_PCT = _prev_qwin * _scale
             if _DEBUG:
                 logger.debug(f"Crystal system={cs}; constraint window: ±{_prev_qwin:.1f}% → ±{_QWIN_PCT:.1f}%")
+            t_targets = perf_counter()
             reps_lattices = self._make_candidates_qsignature(base_struct, cons, reps=reps,samples=samples,len_tol_pct=len_tol_pct, ang_tol_deg=ang_tol_deg)
+            target_s = perf_counter() - t_targets
         finally:
             _QWIN_PCT = _prev_qwin  # restore
 
@@ -1191,7 +1579,14 @@ class LatticeNudger:
         ngrid_fixed = int(os.environ.get("STAGE4_FIXED_GRID_N", "2048"))
         alpha = float(os.environ.get("STAGE4_COSLOG_ALPHA", "50.0"))
         eps   = float(os.environ.get("STAGE4_COSLOG_EPS", "1e-12"))
-        q_grid, Rvec, rlabel = _build_fixed_grid_and_residual(Q_res, R_res, ngrid=ngrid_fixed)
+        q_limit = self.score_q_max if score_q_max is None else score_q_max
+        Q_score, R_score = _clip_q_residual_window(Q_res, R_res, q_max=q_limit)
+        if Q_score.size != np.asarray(Q_res).size:
+            logger.info(
+                f"Stage-4 scoring Q-window: kept {Q_score.size}/{np.asarray(Q_res).size} "
+                f"points up to Q={float(q_limit):.3f} A^-1"
+            )
+        q_grid, Rvec, rlabel = _build_fixed_grid_and_residual(Q_score, R_score, ngrid=ngrid_fixed)
         plan = _make_fft_plan(q_grid, self._fwhm_Q)
         # Q margin to ensure tails of peaks contribute
         sigma = float(self._fwhm_Q) / 2.354820045
@@ -1202,10 +1597,47 @@ class LatticeNudger:
             logger.debug(f"fixed grid n={len(q_grid)} in [{q_grid[0]:.5f},{q_grid[-1]:.5f}], residual={rlabel}")
             logger.debug(f"sim Q-window with margin: [{q_lo:.5f},{q_hi:.5f}]")
 
+        hkl_table = np.empty((0, 3), dtype=np.int64)
+        hkl_intensities = np.empty(0, dtype=float)
+        prep_s = 0.0
+        use_fast_reposition = bool(self.fast_peak_reposition)
+        if use_fast_reposition:
+            try:
+                t_prep = perf_counter()
+                hkl_table, hkl_intensities = self.sim.simulate_hkl_intensity_table(
+                    base_struct,
+                    q_window=(q_lo, q_hi),
+                )
+                prep_s = perf_counter() - t_prep
+                use_fast_reposition = hkl_table.size > 0 and hkl_intensities.size > 0
+            except Exception as exc:
+                logger.debug(f"Fast HKL reposition unavailable for {pid}: {exc}")
+                use_fast_reposition = False
+
         # --- Patch 4: parallel representative scoring (adaptive, notebook-safe) ---
         def _score_for_L(L):
-            struct_i = _rebuild_with_lattice(base_struct, L)
-            Qs, Is = self.sim.simulate_QI(struct_i, q_window=(q_lo, q_hi))
+            if use_fast_reposition:
+                Qs, Is = self.sim.reposition_hkl_intensities(
+                    hkl_table,
+                    hkl_intensities,
+                    L,
+                    q_window=(q_lo, q_hi),
+                )
+            else:
+                struct_i = _rebuild_with_lattice(base_struct, L)
+                Qs, Is = self.sim.simulate_QI(struct_i, q_window=(q_lo, q_hi))
+            if (
+                self.radiation in {"xray", "x-ray", "pxrd"}
+                and apply_doublet_to_peaks is not None
+                and is_active_for is not None
+                and is_active_for(self.xray_doublet_config, "apply_to_lattice_nudge")
+            ):
+                Qs, Is = apply_doublet_to_peaks(
+                    Qs,
+                    Is,
+                    self.xray_doublet_config,
+                    apply_key="apply_to_lattice_nudge",
+                )
             return _coslog_score_on_fixed_grid(Qs, Is, plan, Rvec, alpha, eps)
 
         workers = self._resolve_inner_workers(
@@ -1213,21 +1645,50 @@ class LatticeNudger:
             allow_parallel=allow_inner_parallel,
         )
 
+        t_score = perf_counter()
         if workers > 1 and len(reps_lattices) > 1:
             from concurrent.futures import ThreadPoolExecutor
             with ThreadPoolExecutor(max_workers=workers) as ex:
                 scores = np.array(list(ex.map(_score_for_L, reps_lattices)), dtype=float)
         else:
             scores = np.array([_score_for_L(L) for L in reps_lattices], dtype=float)
+        score_s = perf_counter() - t_score
 
-        best_i = int(np.argmax(scores))
-        best_sc = float(scores[best_i]) if scores.size else -1.0
+        deviations = np.array(
+            [
+                _lattice_deviation_metric(base_lat, L, len_tol_pct, ang_tol_deg)
+                for L in reps_lattices
+            ],
+            dtype=float,
+        )
+        best_sc = float(np.max(scores)) if scores.size else -1.0
+        best_i, score_tie_count = _choose_best_lattice_index(
+            scores,
+            deviations,
+            self.lattice_tiebreak_score_tol,
+        )
+        best_dev = float(deviations[best_i]) if deviations.size else 0.0
 
         if best_sc <= 0:
             L_best = base_lat
             best_sc = 0.0
+            best_dev = 0.0
         else:
             L_best = reps_lattices[best_i]
+
+        violations = _lattice_constraint_violations(cons, L_best)
+        if violations:
+            logger.warning(
+                f"{pid}: nudged lattice violated constraints {violations}; "
+                "reprojecting through the inferred constraint model."
+            )
+            names = _free_param_names(cons)
+            L_best = _apply_params_from_vector(
+                base_lat,
+                cons,
+                names,
+                _pack_vector_from_lattice(L_best, cons, names),
+            )
 
         struct_best = _rebuild_with_lattice(base_struct, L_best)
         out_path = self._write_nudged_cif(pid, struct_best, out_cif_dir)
@@ -1243,14 +1704,24 @@ class LatticeNudger:
 
         return Stage4Result(phase_id=pid, best_params=params,
                             best_score=float(max(best_sc, 0.0)),
-                            nudged_cif_path=out_path)
+                            nudged_cif_path=out_path,
+                            elapsed_s=perf_counter() - t_total,
+                            candidate_count=len(reps_lattices),
+                            scored_count=int(scores.size),
+                            target_s=target_s,
+                            prep_s=prep_s,
+                            score_s=score_s,
+                            scoring_mode="hkl-reposition" if use_fast_reposition else "exact",
+                            lattice_deviation=best_dev,
+                            score_tie_count=int(score_tie_count))
 
     def optimize_many(self,
                       candidates: List[str],
                       Q_res: np.ndarray, R_res: np.ndarray,
                       reps: int = 10, samples: int = 200,
                       frac_window: float = 0.025, angle_window_deg: float = 1.5,
-                      out_cif_dir: Optional[str] = None) -> List[Stage4Result]:
+                      out_cif_dir: Optional[str] = None,
+                      score_q_max: Optional[float] = None) -> List[Stage4Result]:
         """
         Parallel optimization of many candidates.
         """
@@ -1285,6 +1756,7 @@ class LatticeNudger:
                     angle_window_deg,
                     out_cif_dir,
                     False,
+                    score_q_max,
                 ): pid for pid in candidates
             }
             
@@ -1293,9 +1765,27 @@ class LatticeNudger:
                 try:
                     r = future.result()
                     results.append(r)
-                    logger.info(f"{pid}: score={r.best_score:.3f}  -> {os.path.basename(r.nudged_cif_path)}")
+                    logger.info(
+                        f"{pid}: score={r.best_score:.3f}, elapsed={r.elapsed_s:.3f}s "
+                        f"(targets={r.target_s:.3f}s, prep={r.prep_s:.3f}s, score={r.score_s:.3f}s, "
+                        f"reps={r.scored_count}/{r.candidate_count}, mode={r.scoring_mode}, "
+                        f"tie={r.score_tie_count}, dev={r.lattice_deviation:.3f}) "
+                        f"-> {os.path.basename(r.nudged_cif_path)}"
+                    )
                 except Exception as e:
                     logger.warning(f"{pid}: failed: {e}")
 
-        results.sort(key=lambda r: r.best_score, reverse=True)
+        results.sort(
+            key=lambda r: (
+                -float(r.best_score),
+                float(r.lattice_deviation),
+                str(r.phase_id),
+            )
+        )
+        for r in sorted(results, key=lambda item: item.elapsed_s, reverse=True)[:3]:
+            logger.info(
+                f"[time] slow nudge {r.phase_id}: total={r.elapsed_s:.3f}s, "
+                f"targets={r.target_s:.3f}s, prep={r.prep_s:.3f}s, score={r.score_s:.3f}s, "
+                f"reps={r.scored_count}/{r.candidate_count}, mode={r.scoring_mode}"
+            )
         return results

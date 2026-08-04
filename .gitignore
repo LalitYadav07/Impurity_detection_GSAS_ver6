@@ -1,4 +1,4 @@
-# Byte-compiled / optimized / DLL files
+﻿# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
@@ -31,8 +31,13 @@ pip-wheel-metadata/
 /data/database_xray/
 /data/database_neutron/
  
-# Exclude documentation folder from commits (per request)
-/docs/
+# Keep most ad-hoc documentation artifacts out of commits, but allow the
+# maintained hosted user manual package.
+/docs/*
+!/docs/radar_api.md
+!/docs/VALIDATION_CHECKLIST.md
+!/docs/user_manual/
+!/docs/user_manual/**
 
 # GSAS-II build / vendored compiled artifacts
 /GSAS-II/

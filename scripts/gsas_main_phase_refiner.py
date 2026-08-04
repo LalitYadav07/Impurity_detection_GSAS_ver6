@@ -12,6 +12,7 @@ It provides:
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Any
+from time import perf_counter
 
 import numpy as np
 import traceback
@@ -19,8 +20,107 @@ import re
 import logging
 import os
 import sys
+import math
+import json
 
 logger = logging.getLogger(__name__)
+
+
+def _reflection_hkl_label(row: np.ndarray, *, is_super: bool = False) -> str:
+    """Return a compact HKL label for a GSAS-II RefList row."""
+    try:
+        hkl_cols = 4 if is_super and len(row) >= 4 else 3
+        vals = [int(round(float(v))) for v in row[:hkl_cols]]
+        return " ".join(str(v) for v in vals)
+    except Exception:
+        return ""
+
+
+def _reflection_strengths(ref_list: np.ndarray, d_col: int) -> np.ndarray:
+    """Estimate relative Bragg strength from a GSAS-II powder RefList.
+
+    GSAS-II RefList layouts vary slightly by instrument/reflection type. The
+    strongest calculated quantity is normally stored after position/profile
+    columns, so use a conservative priority list and fall back to equal weights
+    if no usable positive column is present.
+    """
+    arr = np.asarray(ref_list)
+    n_rows = int(arr.shape[0]) if arr.ndim == 2 else 0
+    if n_rows == 0:
+        return np.asarray([], dtype=float)
+
+    candidate_cols = [9, 8, 11, 10, 12, 13, 14, 15]
+    candidate_cols.extend(i for i in range(d_col + 2, arr.shape[1]) if i not in candidate_cols)
+    for col in candidate_cols:
+        if col >= arr.shape[1] or col == d_col:
+            continue
+        try:
+            vals = np.asarray(arr[:, col], dtype=float)
+        except Exception:
+            continue
+        vals = np.abs(vals)
+        finite = np.isfinite(vals)
+        if not finite.any():
+            continue
+        positive = finite & (vals > 0)
+        if int(np.sum(positive)) == 0:
+            continue
+        max_val = float(np.nanmax(vals[positive]))
+        if not math.isfinite(max_val) or max_val <= 0.0:
+            continue
+        return vals
+
+    return np.ones(n_rows, dtype=float)
+
+
+def _select_major_bragg_ticks(
+    x_ticks: np.ndarray,
+    strengths: np.ndarray,
+    hkl_labels: List[str],
+    *,
+    count: int = 3,
+) -> List[Dict[str, Any]]:
+    """Pick the strongest unique peak positions for highlighted Bragg ticks."""
+    x_arr = np.asarray(x_ticks, dtype=float)
+    s_arr = np.asarray(strengths, dtype=float)
+    if x_arr.size == 0 or s_arr.size == 0:
+        return []
+    n = min(x_arr.size, s_arr.size)
+    x_arr = x_arr[:n]
+    s_arr = s_arr[:n]
+    finite = np.isfinite(x_arr) & np.isfinite(s_arr)
+    if not finite.any():
+        return []
+    x_arr = x_arr[finite]
+    s_arr = np.abs(s_arr[finite])
+    labels = [hkl_labels[i] if i < len(hkl_labels) else "" for i, keep in enumerate(finite[:len(hkl_labels)]) if keep]
+    if len(labels) < x_arr.size:
+        labels.extend([""] * (x_arr.size - len(labels)))
+
+    x_span = float(np.nanmax(x_arr) - np.nanmin(x_arr)) if x_arr.size else 0.0
+    duplicate_tol = max(abs(x_span) * 1e-4, 1e-7)
+    order = np.argsort(-s_arr)
+    selected: List[Dict[str, Any]] = []
+    max_strength = float(np.nanmax(s_arr)) if s_arr.size else 0.0
+    for idx in order:
+        x_val = float(x_arr[idx])
+        if not math.isfinite(x_val):
+            continue
+        if any(abs(x_val - float(item["x"])) <= duplicate_tol for item in selected):
+            continue
+        strength = float(s_arr[idx])
+        selected.append(
+            {
+                "x": x_val,
+                "relative_strength": float(strength / max(max_strength, 1e-12)),
+                "raw_strength": strength,
+                "hkl": labels[int(idx)] if int(idx) < len(labels) else "",
+                "rank": len(selected) + 1,
+            }
+        )
+        if len(selected) >= max(1, int(count)):
+            break
+    return selected
 
 
 def _bootstrap_gsasii_import() -> None:
@@ -1409,11 +1509,15 @@ def compute_gsas_pearson_for_cif(
     shift_positive: bool = True,
     template_gpx: Optional[str] = None,
     background_config: Optional[Dict[str, Any]] = None,
-) -> float:
+    cell_refine_min_r: float = 0.5,
+    export_refined_cif: bool = True,
+    return_diagnostics: bool = False,
+) -> Any:
     """
-    Build a tiny GSAS-II project, run staged refinement (Pass-1: Scale; Pass-2: Scale+Cell),
-    return Pearson(Yobs, Ycalc), and write a refined CIF for the candidate phase using
-    GSAS-II's exporter (export_CIF(..., quickmode=True)).
+    Build a tiny GSAS-II project, run staged refinement (Pass-1: Scale; optional
+    Pass-2: Scale+Cell), return Pearson(Yobs, Ycalc), and optionally write a
+    refined CIF for the candidate phase using GSAS-II's exporter
+    (export_CIF(..., quickmode=True)).
 
     Notes:
     - This patched version never overwrites the input CIF. The refined file is written to
@@ -1427,6 +1531,9 @@ def compute_gsas_pearson_for_cif(
         from gsas_core_infrastructure import GSASProjectManager
     except ImportError:
         from .gsas_core_infrastructure import GSASProjectManager
+
+    timings: Dict[str, float] = {}
+    t_total = perf_counter()
 
     def _sanitize_cif_data_block(cif_file: str, label_base: str, suffix: str = "refined", maxlen: int = 40) -> None:
         """
@@ -1453,6 +1560,7 @@ def compute_gsas_pearson_for_cif(
         except Exception:
             pass
 
+    t_setup = perf_counter()
     pm = GSASProjectManager(work_dir, f"{_Path(cif_path).stem}_{tmp_tag}")
     if not pm.create_project(template_gpx=template_gpx):
         raise RuntimeError("Failed to create GSAS project for Pearson")
@@ -1520,6 +1628,7 @@ def compute_gsas_pearson_for_cif(
         phase = getattr(pm, 'main_phase', None)
     if phase is None:
         raise RuntimeError(f"Could not locate phase '{ph_name}' after add_phase_from_cif")
+    timings["setup_s"] = perf_counter() - t_setup
 
     # Background model: keep residual-as-Yobs jobs background-free, but allow the
     # configured background path for raw observed-data Pearson re-ranking.
@@ -1556,14 +1665,16 @@ def compute_gsas_pearson_for_cif(
         except Exception:
             pass
 
-    def _run_and_r(cycles: int, label: str) -> float:
+    def _run_and_r(cycles: int, label: str) -> Tuple[float, float]:
         try:
             pm.project.data['Controls']['data']['max cyc'] = int(max(0, cycles))
         except Exception:
             pass
         logger.info(f"[PEARSON] {ph_name} {label}: cycles={int(max(0, cycles))}")
+        t_refine = perf_counter()
         try:
-            pm.project.do_refinements([{'set': {'Background': {'refine': False}}}, {'refine': True}])
+            hist.set_refinements({'Background': {'refine': False}})
+            pm.project.do_refinements([{'refine': True}])
         except Exception:
             pass
         try:
@@ -1573,45 +1684,81 @@ def compute_gsas_pearson_for_cif(
             _, Yo, _, Yc = hist.getdata()
             Yo = np.asarray(Yo, float); Yc = np.asarray(Yc, float)
         r = _safe_pearson(Yo, Yc)
-        logger.info(f"[PEARSON] {ph_name} {label}: r={r:.6f}")
-        return r
+        dt = perf_counter() - t_refine
+        logger.info(f"[PEARSON] {ph_name} {label}: r={r:.6f} dt={dt:.3f}s")
+        return r, dt
 
     # Pass-1: Scale only
     _set_flags(hist_scale=True, cell=False)
-    r1 = _run_and_r(1, "pass1-scale")
+    r1, pass1_s = _run_and_r(1, "pass1-scale")
+    timings["pass1_scale_s"] = pass1_s
 
     # Early exit for clearly poor candidates:
-    # If r < 0.1 after scale refinement, it's unlikely to become a top candidate with cell refinement.
-    if r1 < 0.1:
-        logger.debug(f"[PEARSON] {ph_name} early-exit: r={r1:.4f} too low")
+    # If r is below the configured cutoff after scale refinement, it is unlikely
+    # to become a top candidate with cell refinement. NaN keeps legacy behavior
+    # and proceeds to the cell pass so failures remain visible.
+    try:
+        min_r_for_cell = float(cell_refine_min_r)
+    except Exception:
+        min_r_for_cell = 0.1
+    run_cell_refine = not (math.isfinite(float(r1)) and float(r1) < min_r_for_cell)
+    used_cell_refinement = False
+    cell_skip_reason = ""
+    if not run_cell_refine:
+        logger.debug(f"[PEARSON] {ph_name} early-exit: r={r1:.4f} below cell cutoff {min_r_for_cell:.4f}")
         # Final result is r1
         # Still need to write the refined CIF if requested, but use r1 for return
         r2 = r1
+        timings["pass2_cell_s"] = 0.0
+        cell_skip_reason = f"r1_below_{min_r_for_cell:.4f}"
     else:
         # Pass-2: Scale + Cell
         _set_flags(hist_scale=True, cell=True)
-        r2 = _run_and_r(1, "pass2-scale+cell")
+        r2, pass2_s = _run_and_r(1, "pass2-scale+cell")
+        timings["pass2_cell_s"] = pass2_s
+        used_cell_refinement = True
 
     # ---- Export refined CIF via GSAS-II (always to a separate file) ----
     stem = _Path(cif_path).stem
     target_write = out_refined_cif or str(_Path(cif_path).with_name(stem + "_refined.cif"))
+    timings["export_cif_s"] = 0.0
 
-    try:
-        # Export from the refined phase object
-        phase.export_CIF(target_write, quickmode=True)
+    if export_refined_cif:
+        t_export = perf_counter()
+        try:
+            # Export from the refined phase object
+            phase.export_CIF(target_write, quickmode=True)
 
-        # Basic sanity
-        txt = open(target_write, "r", encoding="utf-8", errors="ignore").read()
-        if ("_cell_length_a" not in txt) or ("_atom_site_" not in txt):
-            raise RuntimeError("export_CIF wrote an incomplete file (missing cell and/or atom loop)")
+            # Basic sanity
+            txt = open(target_write, "r", encoding="utf-8", errors="ignore").read()
+            if ("_cell_length_a" not in txt) or ("_atom_site_" not in txt):
+                raise RuntimeError("export_CIF wrote an incomplete file (missing cell and/or atom loop)")
 
-        # Sanitize the first data_ header to something short & stable
-        _sanitize_cif_data_block(target_write, label_base=ph_name, suffix="refined", maxlen=40)
-        logger.info(f"[PEARSON] wrote refined CIF → {target_write}")
+            # Sanitize the first data_ header to something short & stable
+            _sanitize_cif_data_block(target_write, label_base=ph_name, suffix="refined", maxlen=40)
+            logger.info(f"[PEARSON] wrote refined CIF -> {target_write}")
 
-    except Exception as ex:
-        # Be strict: if export fails, surface the error (keeps behavior obvious)
-        raise RuntimeError(f"Failed to export refined CIF to {target_write}: {ex}") from ex
+        except Exception as ex:
+            # Be strict: if export fails, surface the error (keeps behavior obvious)
+            raise RuntimeError(f"Failed to export refined CIF to {target_write}: {ex}") from ex
+        finally:
+            timings["export_cif_s"] = perf_counter() - t_export
+    else:
+        target_write = None
+        logger.debug(f"[PEARSON] deferred refined CIF export for {ph_name}")
+    timings["total_s"] = perf_counter() - t_total
+    if return_diagnostics:
+        return {
+            "pearson": float(r2),
+            "r_scale": float(r1),
+            "r_cell": float(r2) if used_cell_refinement else None,
+            "cell_refined": bool(used_cell_refinement),
+            "cell_skip_reason": cell_skip_reason,
+            "cell_refine_min_r": float(min_r_for_cell),
+            "refined_cif_path": target_write,
+            "export_refined_cif": bool(export_refined_cif),
+            "timings": timings,
+        }
 
     return r2
 
@@ -1703,10 +1850,7 @@ def joint_refine_one_cycle(
         logger.info("[joint] Cleared existing HAP constraints.")
 
     proj.data['Controls']['data']['max cyc'] = int(max_joint_cycles)
-    proj.do_refinements([
-        {'set': {'Background': {'refine': True}}},
-        {'refine': True},
-    ])
+    proj.do_refinements([{'refine': True}])
 
     # Parse fractions
     lst_path = Path(out_gpx).with_suffix(".lst")
@@ -2007,6 +2151,43 @@ from pathlib import Path
 from typing import Tuple, Dict, List, Optional
 
 
+def resolve_polish_cell_targets(
+    phase_names: Iterable[str],
+    main_phase_name: str,
+    target_phase_names: Optional[Iterable[str]] = None,
+    *,
+    refine_main_cell: bool = True,
+    refine_existing_cells: bool = False,
+) -> List[str]:
+    """Return the adaptive cell-refinement order for polish.
+
+    The newly accepted phase(s) are tried first. Previously accepted phases and
+    the main phase are only included when explicitly requested.
+    """
+    phase_list = [str(name) for name in phase_names]
+    phase_set = set(phase_list)
+    main_name = str(main_phase_name)
+    ordered: List[str] = []
+
+    for name in target_phase_names or []:
+        name = str(name)
+        if name in phase_set and name not in ordered:
+            ordered.append(name)
+
+    if not ordered:
+        ordered = [name for name in phase_list if name != main_name]
+
+    if refine_main_cell and main_name in phase_set and main_name not in ordered:
+        ordered.append(main_name)
+
+    if refine_existing_cells:
+        for name in phase_list:
+            if name not in ordered:
+                ordered.append(name)
+
+    return ordered
+
+
 
 
 def joint_refine_polish(
@@ -2016,26 +2197,97 @@ def joint_refine_polish(
     max_polish_cycles: int = 10,
     refine_cell_for_all: bool = True,
     refine_background: bool = True,
+    target_phase_names: Optional[List[str]] = None,
+    polish_strategy: str = "adaptive",
+    refine_main_cell: bool = True,
+    refine_existing_cells: bool = False,
+    escalate_on_failure: bool = True,
+    stabilization_cycles: Optional[int] = None,
+    cell_trial_cycles: int = 1,
+    final_polish_cycles: int = 0,
+    skip_fresh_lst_regen: bool = True,
+    trace_path: Optional[str] = None,
 ) -> Tuple[Dict[str, Dict[str, float]], float]:
     """
     Transactional polish refinement with strict checkpoint integrity.
     Phases are tested cumulatively: each success adds to the enabled set.
 
-    Success/failure is determined SOLELY by the presence of a GOF in the
-    .lst (derived from the .gpx name) and GOF <= threshold (default 50).
+    A trial is accepted only if GOF, cell geometry, Rwp drift, and phase
+    fractions all pass conservative collapse checks.
     """
     import os
     import math, shutil
     from pathlib import Path
 
-    # GOF threshold (configurable via env; default 50.0)
-    try:
-        GOF_MAX = float(os.environ.get("GSAS_MAX_GOF", "50.0"))
-    except Exception:
-        GOF_MAX = 50.0
+    def _env_float(name: str, default: float) -> float:
+        try:
+            return float(os.environ.get(name, str(default)))
+        except Exception:
+            return float(default)
 
-    STAB_CYCLES = max(1, min(3, max_polish_cycles))
+    # Conservative collapse guards. These reject a trial polish state only when
+    # it has clear numerical/physical symptoms of a failed refinement.
+    GOF_MAX = _env_float("GSAS_MAX_GOF", 50.0)
+    MAX_RWP_INCREASE = _env_float("GSAS_POLISH_MAX_RWP_INCREASE", 0.5)
+    FRAC_SUM_MIN = _env_float("GSAS_POLISH_FRAC_SUM_MIN", 50.0)
+    FRAC_SUM_MAX = _env_float("GSAS_POLISH_FRAC_SUM_MAX", 150.0)
+    MAIN_MIN_WT = _env_float("GSAS_POLISH_MAIN_MIN_WT", 0.1)
+    TRACK_MIN_WT = _env_float("GSAS_POLISH_TRACK_MIN_WT", 0.5)
+    COLLAPSE_MIN_WT = _env_float("GSAS_POLISH_COLLAPSE_MIN_WT", 0.05)
+    COLLAPSE_REL_FLOOR = _env_float("GSAS_POLISH_COLLAPSE_REL_FLOOR", 0.05)
+
+    strategy = str(polish_strategy or "adaptive").strip().lower()
+    if strategy not in {"adaptive", "legacy"}:
+        logger.warning(f"[polish] Unknown strategy {polish_strategy!r}; using adaptive.")
+        strategy = "adaptive"
+
+    if stabilization_cycles is None:
+        STAB_CYCLES = 0 if strategy == "adaptive" else max(1, min(3, max_polish_cycles))
+    else:
+        STAB_CYCLES = int(max(0, min(max_polish_cycles, stabilization_cycles)))
+    CELL_TRIAL_CYCLES = int(max(1, cell_trial_cycles))
+    FINAL_POLISH_CYCLES = int(max(0, final_polish_cycles))
     PER_PHASE_MAX = 3
+    trace_file = Path(trace_path) if trace_path else Path(out_gpx).with_suffix(".polish_trace.json")
+    trace_events: List[Dict[str, Any]] = []
+    trace_t0 = perf_counter()
+
+    def _trace(event: str, **fields: Any) -> None:
+        payload = {
+            "event": event,
+            "elapsed_s": round(perf_counter() - trace_t0, 6),
+        }
+        payload.update(fields)
+        trace_events.append(payload)
+
+    def _write_trace(status: str, **fields: Any) -> None:
+        try:
+            trace_file.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "status": status,
+                "strategy": strategy,
+                "base_gpx": str(base_gpx),
+                "out_gpx": str(out_gpx),
+                "main_phase_name": str(main_phase_name),
+                "target_phase_names": [str(n) for n in (target_phase_names or [])],
+                "max_polish_cycles": int(max_polish_cycles),
+                "stabilization_cycles": int(STAB_CYCLES),
+                "cell_trial_cycles": int(CELL_TRIAL_CYCLES),
+                "final_polish_cycles": int(FINAL_POLISH_CYCLES),
+                "refine_cell_for_all": bool(refine_cell_for_all),
+                "refine_main_cell": bool(refine_main_cell),
+                "refine_existing_cells": bool(refine_existing_cells),
+                "escalate_on_failure": bool(escalate_on_failure),
+                "skip_fresh_lst_regen": bool(skip_fresh_lst_regen),
+                "elapsed_s": round(perf_counter() - trace_t0, 6),
+                "events": trace_events,
+            }
+            payload.update(fields)
+            trace_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        except Exception as exc:
+            logger.warning(f"[polish] Could not write trace {trace_file}: {exc}")
+
+    _trace("start")
 
     from GSASII import GSASIIscriptable as G2sc
     try:
@@ -2047,6 +2299,10 @@ def joint_refine_polish(
     def _clone(src: str, dst: str) -> None:
         Path(dst).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dst)
+        src_lst = Path(src).with_suffix(".lst")
+        dst_lst = Path(dst).with_suffix(".lst")
+        if src_lst.exists():
+            shutil.copy2(src_lst, dst_lst)
 
     def _open(path: str):
         proj = G2sc.G2Project(gpxfile=path)
@@ -2077,10 +2333,28 @@ def joint_refine_polish(
         except Exception:
             pass
 
+    def _hold_sample_scale(hist) -> None:
+        """Fix histogram/sample scale so phase HAP scales carry mixture weights."""
+        try:
+            sample_params = hist.getHistEntryValue(['Sample Parameters'])
+            current_scale = 1.0
+            if isinstance(sample_params, dict):
+                raw_scale = sample_params.get('Scale', [1.0, False])
+                if isinstance(raw_scale, (list, tuple)) and raw_scale:
+                    current_scale = float(raw_scale[0])
+                elif isinstance(raw_scale, (int, float)):
+                    current_scale = float(raw_scale)
+                sample_params['Scale'] = [current_scale, False]
+                hist.setHistEntryValue(['Sample Parameters'], sample_params)
+            hist.clear_refinements({'Sample Parameters': ['Scale']})
+        except Exception:
+            pass
+
     def _set_all_scales_on(proj, hist) -> None:
+        _hold_sample_scale(hist)
         for p in proj.phases():
             try:
-                p.set_HAP_refinements({'Scale': True}, histograms=[hist])
+                p.set_HAP_refinements({'Use': True, 'Scale': True}, histograms=[hist])
             except Exception:
                 pass
 
@@ -2107,10 +2381,8 @@ def joint_refine_polish(
 
     def _refine(proj, bg_on: bool) -> None:
         """Run refinement. Note: GSAS-II doesn't reliably return failure status."""
-        proj.do_refinements([
-            {'set': {'Background': {'refine': bool(bg_on)}}},
-            {'refine': True},
-        ])
+        _set_bg(proj.histograms()[0], bg_on)
+        proj.do_refinements([{'refine': True}])
 
     def _phase_order(proj, hist, main_name: str, lst: Path) -> List[str]:
         weights: Dict[str, float] = {}
@@ -2199,7 +2471,7 @@ def joint_refine_polish(
 
             ok, gof = _lst_gof_ok(_lst_path(gpx_path))
             if not ok:
-                logger.warning(f"[polish] Regenerated .lst failed GOF check (GOF={gof!r}, req ≤ {GOF_MAX}).")
+                logger.warning(f"[polish] Regenerated .lst failed GOF check (GOF={gof!r}, req <= {GOF_MAX}).")
                 return False
             logger.info(f"[polish] Regenerated .lst OK (GOF={gof:.3f}) for {Path(gpx_path).name}")
             return True
@@ -2256,6 +2528,245 @@ def joint_refine_polish(
             rwp = float('nan')
         return results, rwp
 
+    def _weight_map(results: Dict[str, Dict[str, float]]) -> Dict[str, float]:
+        out: Dict[str, float] = {}
+        for name, vals in (results or {}).items():
+            try:
+                out[str(name)] = float(vals.get("weight_fraction_pct", 0.0))
+            except Exception:
+                out[str(name)] = float("nan")
+        return out
+
+    def _check_polish_quality(
+        stage: str,
+        proj,
+        gpx_path: str,
+        hist_name: str,
+        *,
+        reference_results: Optional[Dict[str, Dict[str, float]]] = None,
+        reference_rwp: Optional[float] = None,
+        required_names: Optional[List[str]] = None,
+    ) -> Tuple[bool, Dict[str, Dict[str, float]], float]:
+        results, rwp = _final_readout(proj, _lst_path(gpx_path), hist_name)
+        weights = _weight_map(results)
+        reasons: List[str] = []
+
+        if not math.isfinite(rwp):
+            reasons.append("Rwp is not finite")
+        elif reference_rwp is not None and math.isfinite(reference_rwp):
+            if rwp > reference_rwp + MAX_RWP_INCREASE:
+                reasons.append(
+                    f"Rwp regression {reference_rwp:.3f}% -> {rwp:.3f}% "
+                    f"(limit +{MAX_RWP_INCREASE:.3f}%)"
+                )
+
+        if not weights:
+            reasons.append("no phase fractions were readable")
+        else:
+            bad = [nm for nm, wf in weights.items() if not math.isfinite(wf) or wf < -1e-6 or wf > 1000.0]
+            if bad:
+                reasons.append(f"non-physical weight fraction(s): {bad[:5]}")
+            wt_sum = sum(wf for wf in weights.values() if math.isfinite(wf))
+            if wt_sum < FRAC_SUM_MIN or wt_sum > FRAC_SUM_MAX:
+                reasons.append(f"weight-fraction sum {wt_sum:.3f}% outside [{FRAC_SUM_MIN:.1f}, {FRAC_SUM_MAX:.1f}]")
+
+            main_wt = weights.get(main_phase_name, 0.0)
+            if main_wt < MAIN_MIN_WT:
+                reasons.append(f"main phase {main_phase_name} collapsed to {main_wt:.4f}%")
+
+        for nm in [str(n) for n in (required_names or [])]:
+            wf = weights.get(nm, 0.0)
+            if not math.isfinite(wf) or wf < -1e-6:
+                reasons.append(f"required phase {nm} has invalid fraction {wf!r}")
+
+        if reference_results:
+            ref_weights = _weight_map(reference_results)
+            for nm, prev_wt in ref_weights.items():
+                if not math.isfinite(prev_wt) or prev_wt < TRACK_MIN_WT:
+                    continue
+                curr_wt = weights.get(nm, 0.0)
+                floor = max(COLLAPSE_MIN_WT, prev_wt * COLLAPSE_REL_FLOOR)
+                if curr_wt < floor:
+                    reasons.append(
+                        f"phase {nm} collapsed {prev_wt:.3f}% -> {curr_wt:.4f}% "
+                        f"(floor {floor:.4f}%)"
+                    )
+
+        if reasons:
+            print(f"[polish] {stage}: rejected by collapse guard: {'; '.join(reasons)}")
+            return False, results, rwp
+
+        wt_sum = sum(wf for wf in weights.values() if math.isfinite(wf))
+        print(f"[polish] {stage}: quality OK (Rwp={rwp:.3f}%, WtSum={wt_sum:.2f}%).")
+        return True, results, rwp
+
+    def _can_reuse_lst(gpx_path: str, hist_name: str) -> Tuple[bool, Optional[float]]:
+        ok, gof = _lst_gof_ok(_lst_path(gpx_path))
+        if not ok:
+            return False, gof
+        try:
+            parse_func = _parse_ext or parse_gsas_lst
+            results = parse_func(_lst_path(gpx_path), hist_name) or {}
+            wt_sum = sum(
+                float(v.get("weight_fraction_pct", 0.0))
+                for v in results.values()
+                if isinstance(v, dict)
+            )
+            return wt_sum > 0.0, gof
+        except Exception:
+            return False, gof
+
+    def _run_cell_trial(
+        label: str,
+        enabled_names: List[str],
+        cycles: int,
+        reference_results: Dict[str, Dict[str, float]],
+        reference_rwp: float,
+    ) -> Tuple[bool, Dict[str, Dict[str, float]], float]:
+        temp_gpx = str(Path(out_gpx).with_suffix(".temp.gpx"))
+        _clone(str(checkpoint), temp_gpx)
+        t_trial = perf_counter()
+        _trace("cell_trial_start", label=label, enabled_names=list(enabled_names), cycles=int(cycles))
+
+        try:
+            proj_temp = _open(temp_gpx)
+            hist_temp, _ = _hist_and_main(proj_temp, main_phase_name)
+            _set_cell_for_list(proj_temp, enabled_names)
+            _set_bg(hist_temp, refine_background)
+            _set_all_scales_on(proj_temp, hist_temp)
+            _set_max_cycles(proj_temp, cycles)
+
+            _save(proj_temp, temp_gpx)
+            _refine(proj_temp, refine_background)
+            _save(proj_temp, temp_gpx)
+
+            ok, gof = _lst_gof_ok(_lst_path(temp_gpx))
+            if not ok:
+                _trace(
+                    "cell_trial_rejected",
+                    label=label,
+                    reason="gof",
+                    gof=gof,
+                    duration_s=round(perf_counter() - t_trial, 6),
+                )
+                print(f"[polish] {label}: GOF check failed (GOF={gof!r}, req <= {GOF_MAX}).")
+                return False, reference_results, reference_rwp
+
+            proj_temp = _open(temp_gpx)
+            for phase_name in enabled_names:
+                c6 = _phase_cell6(proj_temp, phase_name)
+                if (c6 is None) or (not _posdef_G6(c6)):
+                    _trace(
+                        "cell_trial_rejected",
+                        label=label,
+                        reason="invalid_cell",
+                        phase=phase_name,
+                        duration_s=round(perf_counter() - t_trial, 6),
+                    )
+                    print(f"[polish] {label}: phase {phase_name} has invalid cell.")
+                    return False, reference_results, reference_rwp
+
+            quality_ok, quality_results, quality_rwp = _check_polish_quality(
+                label,
+                proj_temp,
+                temp_gpx,
+                hist_temp.name,
+                reference_results=reference_results,
+                reference_rwp=reference_rwp,
+                required_names=enabled_names,
+            )
+            if not quality_ok:
+                _trace(
+                    "cell_trial_rejected",
+                    label=label,
+                    reason="quality",
+                    rwp=quality_rwp,
+                    duration_s=round(perf_counter() - t_trial, 6),
+                )
+                return False, quality_results, quality_rwp
+
+            _clone(temp_gpx, out_gpx)
+            _clone(temp_gpx, str(checkpoint))
+            _trace(
+                "cell_trial_accepted",
+                label=label,
+                gof=gof,
+                rwp=quality_rwp,
+                duration_s=round(perf_counter() - t_trial, 6),
+            )
+            print(f"[polish] {label}: success (GOF={gof:.3f}).")
+            return True, quality_results, quality_rwp
+
+        except Exception as exc:
+            _trace(
+                "cell_trial_exception",
+                label=label,
+                error=str(exc),
+                duration_s=round(perf_counter() - t_trial, 6),
+            )
+            print(f"[polish] {label}: refinement exception: {exc}.")
+            return False, reference_results, reference_rwp
+        finally:
+            for suffix in (".gpx", ".lst"):
+                tp = Path(temp_gpx).with_suffix(suffix)
+                if tp.exists():
+                    try:
+                        tp.unlink()
+                    except Exception:
+                        pass
+
+    def _finalize_from_checkpoint(
+        required_names: List[str],
+        last_results: Dict[str, Dict[str, float]],
+        last_rwp: float,
+        enabled_names: List[str],
+    ) -> Tuple[Dict[str, Dict[str, float]], float]:
+        logger.info("[polish] Finalizing output...")
+        _clone(str(checkpoint), out_gpx)
+        proj = _open(out_gpx)
+        hist, _ = _hist_and_main(proj, main_phase_name)
+
+        reuse_ok, reuse_gof = (False, None)
+        if skip_fresh_lst_regen:
+            reuse_ok, reuse_gof = _can_reuse_lst(out_gpx, hist.name)
+
+        if reuse_ok:
+            _trace("final_lst_reused", gof=reuse_gof)
+            logger.info(f"[polish] Reusing matching .lst for {Path(out_gpx).name} (GOF={reuse_gof:.3f}).")
+            _write_trace("complete", final_rwp=last_rwp, enabled_names=enabled_names, reused_lst=True)
+            return last_results, last_rwp
+        else:
+            _trace("final_lst_regen_start", previous_gof=reuse_gof)
+            regen_ok = _regenerate_lst(out_gpx, refine_background)
+            _trace("final_lst_regen_done", ok=bool(regen_ok))
+            proj = _open(out_gpx)
+
+        if enabled_names:
+            logger.info(f"[polish] Cell refinement enabled for: {', '.join(enabled_names)}")
+        else:
+            logger.info("[polish] No phases accepted for cell refinement during polish.")
+
+        final_ok, final_results, final_rwp = _check_polish_quality(
+            "Final output",
+            proj,
+            out_gpx,
+            hist.name,
+            reference_results=last_results,
+            reference_rwp=last_rwp,
+            required_names=required_names or [main_phase_name],
+        )
+        wt_sum = sum(v.get("weight_fraction_pct", 0.0) for v in final_results.values())
+        if (not regen_ok) or (not final_ok) or (wt_sum <= 0.0):
+            logger.warning("[polish] Using last-good fractions fallback after failed/empty final readout.")
+            _clone(str(checkpoint), out_gpx)
+            proj = _open(out_gpx)
+            _, final_rwp = _final_readout(proj, _lst_path(out_gpx), hist.name)
+            _write_trace("fallback", final_rwp=final_rwp, enabled_names=enabled_names)
+            return last_results, final_rwp
+
+        _write_trace("complete", final_rwp=final_rwp, enabled_names=enabled_names)
+        return final_results, final_rwp
+
     # === MAIN FLOW ===
 
     # Initialize with clean base
@@ -2264,199 +2775,229 @@ def joint_refine_polish(
     _clone(out_gpx, str(checkpoint))
     proj0 = _open(out_gpx)
     hist0 = proj0.histograms()[0]
-    last_good_results, _ = _final_readout(proj0, _lst_path(out_gpx), hist0.name)
+    last_good_results, last_good_rwp = _final_readout(proj0, _lst_path(out_gpx), hist0.name)
 
-    # === STABILIZATION PHASE ===
-    print("[polish] Starting stabilization phase...")
-    proj = _open(out_gpx)
-    hist, _main = _hist_and_main(proj, main_phase_name)
-    _set_all_cell(proj, False)
-    _set_bg(hist, refine_background)
-    _set_all_scales_on(proj, hist)
-    _set_max_cycles(proj, STAB_CYCLES)
-
-    try:
-        _save(proj, out_gpx)
-        _refine(proj, refine_background)
-        _save(proj, out_gpx)
-    except Exception as e:
-        print(f"[polish] Stabilization exception: {e}. Reverting to base.")
-        _clone(str(checkpoint), out_gpx)
-        _regenerate_lst(out_gpx, refine_background)
+    if STAB_CYCLES > 0:
+        # === STABILIZATION PHASE ===
+        print("[polish] Starting stabilization phase...")
         proj = _open(out_gpx)
-        return _final_readout(proj, _lst_path(out_gpx), hist.name)
+        hist, _main = _hist_and_main(proj, main_phase_name)
+        _set_all_cell(proj, False)
+        _set_bg(hist, refine_background)
+        _set_all_scales_on(proj, hist)
+        _set_max_cycles(proj, STAB_CYCLES)
 
-    # Validate stabilization via GOF
-    ok, gof = _lst_gof_ok(_lst_path(out_gpx))
-    if not ok:
-        print(f"[polish] Stabilization failed GOF check (GOF={gof!r}, req ≤ {GOF_MAX}). Reverting to base.")
-        _clone(str(checkpoint), out_gpx)
-        _regenerate_lst(out_gpx, refine_background)
+        try:
+            _save(proj, out_gpx)
+            _refine(proj, refine_background)
+            _save(proj, out_gpx)
+        except Exception as e:
+            print(f"[polish] Stabilization exception: {e}. Reverting to base.")
+            _clone(str(checkpoint), out_gpx)
+            _regenerate_lst(out_gpx, refine_background)
+            proj = _open(out_gpx)
+            _write_trace("stabilization_exception", error=str(e))
+            return _final_readout(proj, _lst_path(out_gpx), hist.name)
+
+        ok, gof = _lst_gof_ok(_lst_path(out_gpx))
+        if not ok:
+            print(f"[polish] Stabilization failed GOF check (GOF={gof!r}, req <= {GOF_MAX}). Reverting to base.")
+            _clone(str(checkpoint), out_gpx)
+            _regenerate_lst(out_gpx, refine_background)
+            proj = _open(out_gpx)
+            _write_trace("stabilization_gof_failed", gof=gof)
+            return _final_readout(proj, _lst_path(out_gpx), hist.name)
+
+        quality_ok, quality_results, quality_rwp = _check_polish_quality(
+            "Stabilization",
+            proj,
+            out_gpx,
+            hist.name,
+            reference_results=last_good_results,
+            reference_rwp=last_good_rwp,
+            required_names=[main_phase_name],
+        )
+        if not quality_ok:
+            print("[polish] Stabilization failed collapse guard. Reverting to base.")
+            _clone(str(checkpoint), out_gpx)
+            _regenerate_lst(out_gpx, refine_background)
+            proj = _open(out_gpx)
+            _write_trace("stabilization_quality_failed", rwp=quality_rwp)
+            return _final_readout(proj, _lst_path(out_gpx), hist.name)
+
+        print(f"[polish] Stabilization OK (GOF={gof:.3f}). Updating checkpoint.")
+        _clone(out_gpx, str(checkpoint))
+        last_good_results, last_good_rwp = quality_results, quality_rwp
+        _trace("stabilization_accepted", gof=gof, rwp=quality_rwp)
+    else:
+        print("[polish] Stabilization skipped; validating commit checkpoint.")
+        ok, gof = _lst_gof_ok(_lst_path(out_gpx))
+        if not ok:
+            print(f"[polish] Commit checkpoint missing valid GOF (GOF={gof!r}); regenerating .lst.")
+            _regenerate_lst(out_gpx, refine_background)
         proj = _open(out_gpx)
-        return _final_readout(proj, _lst_path(out_gpx), hist.name)
+        hist, _main = _hist_and_main(proj, main_phase_name)
+        quality_ok, quality_results, quality_rwp = _check_polish_quality(
+            "Commit checkpoint",
+            proj,
+            out_gpx,
+            hist.name,
+            reference_results=last_good_results,
+            reference_rwp=last_good_rwp,
+            required_names=[main_phase_name],
+        )
+        if quality_ok:
+            _clone(out_gpx, str(checkpoint))
+            last_good_results, last_good_rwp = quality_results, quality_rwp
+            _trace("stabilization_skipped", gof=gof, rwp=quality_rwp)
+        else:
+            print("[polish] Commit checkpoint failed collapse guard; keeping original checkpoint.")
+            _trace("stabilization_skip_quality_failed", rwp=quality_rwp)
 
-    # Commit stabilization to checkpoint
-    print(f"[polish] Stabilization OK (GOF={gof:.3f}). Updating checkpoint.")
-    _clone(out_gpx, str(checkpoint))
-    proj_ckpt = _open(str(checkpoint))
-    last_good_results, _ = _final_readout(proj_ckpt, _lst_path(str(checkpoint)), hist.name)
-
-    # === CUMULATIVE PHASE-BY-PHASE CELL REFINEMENT ===
     remaining = max(0, max_polish_cycles - STAB_CYCLES)
+    enabled: List[str] = []
     if remaining == 0:
         print("[polish] No cycles remaining for phase refinement.")
-        proj = _open(out_gpx)
-        return _final_readout(proj, _lst_path(out_gpx), hist.name)
+        return _finalize_from_checkpoint([main_phase_name], last_good_results, last_good_rwp, enabled)
 
     proj = _open(out_gpx)
     hist, _main = _hist_and_main(proj, main_phase_name)
+    phase_names = [p.name for p in proj.phases()]
+    required_names = [main_phase_name]
+    for name in target_phase_names or []:
+        if name in phase_names and name not in required_names:
+            required_names.append(str(name))
+
+    if strategy == "adaptive":
+        if not refine_cell_for_all:
+            target_order: List[str] = []
+        else:
+            target_order = resolve_polish_cell_targets(
+                phase_names,
+                main_phase_name,
+                target_phase_names,
+                refine_main_cell=refine_main_cell,
+                refine_existing_cells=refine_existing_cells,
+            )
+
+        print(f"[polish] Adaptive phase refinement order: {target_order}")
+        print(f"[polish] Adaptive cycles per target: {CELL_TRIAL_CYCLES}")
+        _trace("adaptive_plan", phase_names=phase_names, target_order=target_order)
+
+        accepted_any = False
+        for nm in target_order:
+            if remaining <= 0:
+                break
+            cycles = min(CELL_TRIAL_CYCLES, remaining)
+            ok, trial_results, trial_rwp = _run_cell_trial(
+                f"Adaptive phase {nm}",
+                [nm],
+                cycles,
+                last_good_results,
+                last_good_rwp,
+            )
+            if ok:
+                enabled.append(nm)
+                if nm not in required_names:
+                    required_names.append(nm)
+                last_good_results, last_good_rwp = trial_results, trial_rwp
+                remaining -= cycles
+                accepted_any = True
+            elif not escalate_on_failure:
+                break
+
+        if (not accepted_any) and escalate_on_failure and refine_cell_for_all:
+            fallback_order = _phase_order(proj, hist, main_phase_name, _lst_path(out_gpx))
+            allowed_fallback = set(resolve_polish_cell_targets(
+                phase_names,
+                main_phase_name,
+                target_phase_names,
+                refine_main_cell=refine_main_cell,
+                refine_existing_cells=refine_existing_cells,
+            ))
+            fallback_order = [name for name in fallback_order if name in allowed_fallback]
+            per_phase = max(1, min(PER_PHASE_MAX, remaining // max(1, len(fallback_order)))) if remaining > 0 else 0
+            print(f"[polish] Adaptive target pass failed; escalating to legacy order: {fallback_order}")
+            _trace("adaptive_escalation", fallback_order=fallback_order, cycles_per_phase=per_phase)
+            for nm in fallback_order:
+                if remaining <= 0 or per_phase <= 0:
+                    break
+                candidate_enabled = enabled + [nm]
+                ok, trial_results, trial_rwp = _run_cell_trial(
+                    f"Escalated phase {nm}",
+                    candidate_enabled,
+                    per_phase,
+                    last_good_results,
+                    last_good_rwp,
+                )
+                if ok:
+                    for phase_name in candidate_enabled:
+                        if phase_name not in enabled:
+                            enabled.append(phase_name)
+                        if phase_name not in required_names:
+                            required_names.append(phase_name)
+                    last_good_results, last_good_rwp = trial_results, trial_rwp
+                    remaining -= per_phase
+
+        if enabled and remaining > 0 and FINAL_POLISH_CYCLES > 0:
+            cycles = min(FINAL_POLISH_CYCLES, remaining)
+            print(f"[polish] Adaptive final polish with {cycles} cycles on {enabled}.")
+            ok, trial_results, trial_rwp = _run_cell_trial(
+                "Adaptive final polish",
+                enabled,
+                cycles,
+                last_good_results,
+                last_good_rwp,
+            )
+            if ok:
+                last_good_results, last_good_rwp = trial_results, trial_rwp
+
+        return _finalize_from_checkpoint(required_names, last_good_results, last_good_rwp, enabled)
+
+    # === LEGACY CUMULATIVE PHASE-BY-PHASE CELL REFINEMENT ===
     order = _phase_order(proj, hist, main_phase_name, _lst_path(out_gpx))
     per_phase = max(1, min(PER_PHASE_MAX, remaining // max(1, len(order))))
 
     print(f"[polish] Phase refinement order: {order}")
     print(f"[polish] Cycles per phase: {per_phase}")
-
-    enabled: List[str] = []  # Track successfully enabled phases
+    _trace("legacy_plan", phase_order=order, cycles_per_phase=per_phase)
 
     for nm in order:
         if remaining <= 0:
-            print(f"[polish] No cycles remaining. Stopping.")
+            print("[polish] No cycles remaining. Stopping.")
             break
 
         print(f"[polish] Attempting to add phase: {nm} (enabled: {enabled})")
-
-        # Create candidate list: all previously enabled + current phase
         candidate_enabled = enabled + [nm]
-
-        # Create a temporary working copy from checkpoint
-        temp_gpx = str(Path(out_gpx).with_suffix(".temp.gpx"))
-        _clone(str(checkpoint), temp_gpx)
-
-        try:
-            # Work on the temp copy with cumulative enabling
-            proj_temp = _open(temp_gpx)
-            hist_temp, _ = _hist_and_main(proj_temp, main_phase_name)
-
-            # Enable cell for all phases in candidate list
-            _set_cell_for_list(proj_temp, candidate_enabled)
-            _set_bg(hist_temp, refine_background)
-            _set_all_scales_on(proj_temp, hist_temp)
-            _set_max_cycles(proj_temp, per_phase)
-
-            _save(proj_temp, temp_gpx)
-            _refine(proj_temp, refine_background)
-            _save(proj_temp, temp_gpx)
-
-            # GOF check FIRST
-            ok, gof = _lst_gof_ok(_lst_path(temp_gpx))
-            if not ok:
-                print(f"[polish] Phase {nm}: GOF check failed (GOF={gof!r}, req ≤ {GOF_MAX}). Skipping.")
-                continue
-
-            # Reopen to get fresh cell values - check ALL enabled phases
-            proj_temp = _open(temp_gpx)
-            all_valid = True
+        ok, trial_results, trial_rwp = _run_cell_trial(
+            f"Phase {nm}",
+            candidate_enabled,
+            per_phase,
+            last_good_results,
+            last_good_rwp,
+        )
+        if ok:
             for phase_name in candidate_enabled:
-                c6 = _phase_cell6(proj_temp, phase_name)
-                if (c6 is None) or (not _posdef_G6(c6)):
-                    print(f"[polish] Phase {phase_name} has invalid cell. Skipping {nm}.")
-                    all_valid = False
-                    break
-
-            if not all_valid:
-                continue
-
-            # Success! Commit temp to both out_gpx and checkpoint
-            print(f"[polish] Phase {nm}: success (GOF={gof:.3f}) with {len(candidate_enabled)} phase(s) enabled.")
-            _clone(temp_gpx, out_gpx)
-            _clone(temp_gpx, str(checkpoint))
-            proj_ckpt = _open(str(checkpoint))
-            last_good_results, _ = _final_readout(proj_ckpt, _lst_path(str(checkpoint)), hist.name)
-            enabled.append(nm)  # Add to enabled list
+                if phase_name not in enabled:
+                    enabled.append(phase_name)
+                if phase_name not in required_names:
+                    required_names.append(phase_name)
+            last_good_results, last_good_rwp = trial_results, trial_rwp
             remaining -= per_phase
 
-        except Exception as e:
-            print(f"[polish] Phase {nm}: Refinement exception: {e}. Skipping.")
-            continue
-        finally:
-            # Clean up temp files
-            tp = Path(temp_gpx)
-            if tp.exists():
-                tp.unlink()
-            tl = _lst_path(temp_gpx)
-            if tl.exists():
-                tl.unlink()
-
-    # === OPTIONAL FINAL POLISH (with remaining cycles) ===
     if enabled and remaining > 0:
         print(f"[polish] Running final polish with {remaining} cycles on {len(enabled)} enabled phase(s)...")
+        ok, trial_results, trial_rwp = _run_cell_trial(
+            "Final polish",
+            enabled,
+            remaining,
+            last_good_results,
+            last_good_rwp,
+        )
+        if ok:
+            last_good_results, last_good_rwp = trial_results, trial_rwp
 
-        temp_gpx = str(Path(out_gpx).with_suffix(".temp.gpx"))
-        _clone(str(checkpoint), temp_gpx)
-
-        try:
-            proj_temp = _open(temp_gpx)
-            hist_temp, _ = _hist_and_main(proj_temp, main_phase_name)
-
-            _set_cell_for_list(proj_temp, enabled)
-            _set_bg(hist_temp, refine_background)
-            _set_all_scales_on(proj_temp, hist_temp)
-            _set_max_cycles(proj_temp, remaining)
-
-            _save(proj_temp, temp_gpx)
-            _refine(proj_temp, refine_background)
-            _save(proj_temp, temp_gpx)
-
-            ok, gof = _lst_gof_ok(_lst_path(temp_gpx))
-            if not ok:
-                print(f"[polish] Final polish failed GOF check (GOF={gof!r}, req ≤ {GOF_MAX}). Keeping last good state.")
-            else:
-                # Then check cells
-                proj_temp = _open(temp_gpx)
-                all_valid = True
-                for nm in enabled:
-                    c6 = _phase_cell6(proj_temp, nm)
-                    if (c6 is None) or (not _posdef_G6(c6)):
-                        print(f"[polish] Phase {nm} became invalid in final polish.")
-                        all_valid = False
-                        break
-
-                if all_valid:
-                    print(f"[polish] Final polish successful (GOF={gof:.3f}).")
-                    _clone(temp_gpx, out_gpx)
-                    _clone(temp_gpx, str(checkpoint))
-                    proj_ckpt = _open(str(checkpoint))
-                    last_good_results, _ = _final_readout(proj_ckpt, _lst_path(str(checkpoint)), hist.name)
-                else:
-                    print(f"[polish] Final polish cells invalid. Keeping last good state.")
-
-        except Exception as e:
-            print(f"[polish] Final polish exception: {e}. Keeping last good state.")
-        finally:
-            tp = Path(temp_gpx)
-            if tp.exists():
-                tp.unlink()
-            tl = _lst_path(temp_gpx)
-            if tl.exists():
-                tl.unlink()
-
-    # CRITICAL: Final restoration and .lst regeneration (ensure .lst matches final GPX)
-    logger.info("[polish] Finalizing output...")
-    _clone(str(checkpoint), out_gpx)
-    regen_ok = _regenerate_lst(out_gpx, refine_background)
-
-    proj = _open(out_gpx)
-
-    if enabled:
-        logger.info(f"[polish] Cell refinement enabled for: {', '.join(enabled)}")
-    else:
-        logger.info("[polish] No phases accepted for cell refinement during polish.")
-
-    final_results, final_rwp = _final_readout(proj, _lst_path(out_gpx), hist.name)
-    if (not regen_ok) or (sum(v.get("weight_fraction_pct", 0.0) for v in final_results.values()) <= 0.0):
-        logger.warning("[polish] Using last-good fractions fallback after failed/empty final readout.")
-        return last_good_results, final_rwp
-    return final_results, final_rwp
+    return _finalize_from_checkpoint(required_names, last_good_results, last_good_rwp, enabled)
 
 
 # === BEGIN REPLACE: plot_gpx_fit_with_ticks (publication-grade, 2 panels) ===
@@ -2574,6 +3115,8 @@ def plot_gpx_fit_with_ticks(
 
     # ---------------------------
     ticks_by_phase = {}
+    major_ticks_by_phase = {}
+    major_tick_details_by_phase = {}
     try:
         refls = hist.reflections() or {}
         for p_obj, info in refls.items():
@@ -2586,8 +3129,13 @@ def plot_gpx_fit_with_ticks(
             if ref_list.shape[1] <= d_col:
                 continue
 
-            d_vals = ref_list[:, d_col].astype(float)
-            d_vals = d_vals[np.isfinite(d_vals) & (d_vals > 0.0)]
+            d_vals_all = ref_list[:, d_col].astype(float)
+            strengths_all = _reflection_strengths(ref_list, d_col)
+            hkl_labels_all = [_reflection_hkl_label(row, is_super=is_super) for row in ref_list]
+            finite_d = np.isfinite(d_vals_all) & (d_vals_all > 0.0)
+            d_vals = d_vals_all[finite_d]
+            strengths = strengths_all[finite_d] if strengths_all.size == finite_d.size else np.ones(d_vals.size, dtype=float)
+            hkl_labels = [label for label, keep in zip(hkl_labels_all, finite_d) if keep]
             if d_vals.size == 0:
                 continue
 
@@ -2596,7 +3144,10 @@ def plot_gpx_fit_with_ticks(
             else:
                 x_ticks = np.array([], float)
 
-            x_ticks = x_ticks[np.isfinite(x_ticks)]
+            finite_x = np.isfinite(x_ticks)
+            x_ticks = x_ticks[finite_x]
+            strengths = strengths[finite_x] if strengths.size == finite_x.size else np.ones(x_ticks.size, dtype=float)
+            hkl_labels = [label for label, keep in zip(hkl_labels, finite_x) if keep]
             if x_ticks.size == 0:
                 continue
 
@@ -2611,15 +3162,26 @@ def plot_gpx_fit_with_ticks(
             tolerance = (x_max_bound - x_min_bound) * 0.001  # 0.1% tolerance
             m = (x_ticks >= (x_min_bound - tolerance)) & (x_ticks <= (x_max_bound + tolerance))
             x_ticks = x_ticks[m]
+            strengths = strengths[m] if strengths.size == m.size else np.ones(x_ticks.size, dtype=float)
+            hkl_labels = [label for label, keep in zip(hkl_labels, m) if keep]
             
             if x_ticks.size == 0:
                 continue
+
+            major_details = _select_major_bragg_ticks(x_ticks, strengths, hkl_labels, count=5)
+            if major_details:
+                major_tick_details_by_phase[pname] = major_details
+                major_ticks_by_phase[pname] = np.asarray([item["x"] for item in major_details], dtype=float)
             
             # Sort based on whether x data is ascending or descending
+            sort_idx = np.argsort(x_ticks)
+            if x_lo >= x_hi:
+                sort_idx = sort_idx[::-1]
+            x_ticks = x_ticks[sort_idx]
             if x_lo < x_hi:
-                x_ticks = np.sort(x_ticks)  # Ascending (typical for 2theta)
+                x_ticks = x_ticks  # Ascending (typical for 2theta)
             else:
-                x_ticks = np.sort(x_ticks)[::-1]  # Descending (some TOF data)
+                x_ticks = x_ticks  # Descending (some TOF data)
 
             if max_ticks_per_phase and x_ticks.size > max_ticks_per_phase:
                 step = int(np.ceil(x_ticks.size / max_ticks_per_phase))
@@ -2840,7 +3402,7 @@ def plot_gpx_fit_with_ticks(
                     t.set_weight('bold')
             
             # Draw ticks with enhanced styling
-            tick_height = 0.35  # Taller ticks
+            tick_height = 0.28
             for row, nm in enumerate(phase_order):
                 xt = ticks_by_phase.get(nm)
                 if xt is None or xt.size == 0:
@@ -2858,6 +3420,19 @@ def plot_gpx_fit_with_ticks(
                 # Main ticks
                 ax_ticks.vlines(xt, row - tick_height, row + tick_height, 
                               lw=1.2, colors=[color], alpha=alpha, zorder=2)
+
+                # Emphasize the strongest calculated Bragg peaks for this phase.
+                major_xt = np.asarray(major_ticks_by_phase.get(nm, []), dtype=float)
+                if major_xt.size:
+                    ax_ticks.vlines(
+                        major_xt,
+                        row - tick_height * 1.05,
+                        row + tick_height * 1.05,
+                        lw=2.8,
+                        colors=[color],
+                        alpha=1.0,
+                        zorder=4,
+                    )
                 
                 # Add subtle background for each phase row
                 ax_ticks.axhspan(row - 0.45, row + 0.45, 
@@ -2936,6 +3511,10 @@ def plot_gpx_fit_with_ticks(
                 str(pname): np.asarray(xt, dtype=float).tolist()
                 for pname, xt in (ticks_by_phase or {}).items()
             }
+            phase_major_ticks_json = {
+                str(pname): np.asarray(xt, dtype=float).tolist()
+                for pname, xt in (major_ticks_by_phase or {}).items()
+            }
 
             save_plot_payload(
                 out_png,
@@ -2949,6 +3528,8 @@ def plot_gpx_fit_with_ticks(
                     "phase_labels": {str(k): str(v) for k, v in (phase_labels or {}).items()},
                     "phase_weights": {str(k): float(v) for k, v in wt.items()},
                     "phase_ticks": phase_ticks_json,
+                    "phase_major_ticks": phase_major_ticks_json,
+                    "phase_major_tick_details": major_tick_details_by_phase,
                 },
                 arrays={
                     "x": x,

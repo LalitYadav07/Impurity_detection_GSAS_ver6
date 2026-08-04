@@ -1,0 +1,79 @@
+﻿workspace:
+  username: docs_demo
+  pin: "2468"
+  hosted_app_url: "http://128.219.184.26:8502/"
+  api_base_url: "http://128.219.184.26:8501"
+policy:
+  private_workspaces_not_allowed:
+    - u1
+  note: "Screenshots used in chapters must be captured from docs_demo or an equivalent sanitized workspace."
+screenshots:
+  - file: app_landing_setup.png
+    required: true
+    status: captured
+    chapter: index.md
+    caption: "Hosted app landing page and primary workspace tabs."
+    ui_state: "Fresh load of the hosted RADAR-PD web app."
+  - file: workspace_access.png
+    required: true
+    status: captured
+    chapter: 02_workspaces_and_sessions.md
+    caption: "Workspace access panel for opening or creating a saved workspace."
+    ui_state: "Workspace Access panel open with docs_demo credentials visible only as example values."
+  - file: measurement_type.png
+    required: true
+    status: captured
+    chapter: 04_setup_options.md
+    caption: "Measurement type controls select neutron or X-ray behavior before other options."
+    ui_state: "Setup sidebar near Measurement Type."
+  - file: candidate_library.png
+    required: true
+    status: captured
+    chapter: 04_setup_options.md
+    caption: "Candidate library selector and custom CIF library entry point."
+    ui_state: "Candidate Library panel with built-in library selected."
+  - file: data_collection_reuse.png
+    required: true
+    status: captured
+    chapter: 03_input_files.md
+    caption: "Diffraction data, instrument profile, and optional main phase upload widgets."
+    ui_state: "Data Collection panel cropped to required upload widgets."
+  - file: analysis_mode_options.png
+    required: true
+    status: captured
+    chapter: 06_rapid_hypothesis_mode.md
+    caption: "Analysis mode selection switches between Full RADAR-PD and Rapid Hypothesis Mode."
+    ui_state: "Analysis mode panel visible."
+  - file: run_monitor_empty.png
+    required: true
+    status: captured
+    chapter: 05_full_radar_pd.md
+    caption: "Run monitor before starting a run."
+    ui_state: "Run Monitor tab with no active run."
+  - file: full_results_example.png
+    required: false
+    status: planned
+    chapter: 08_results_plots_and_interpretation.md
+    caption: "Full RADAR-PD results page from a controlled TBSSL tutorial run."
+  - file: rapid_results_example.png
+    required: false
+    status: planned
+    chapter: 06_rapid_hypothesis_mode.md
+    caption: "Rapid results page from a controlled LK-99 tutorial run."
+  - file: solution_inspector_example.png
+    required: false
+    status: planned
+    chapter: 06_rapid_hypothesis_mode.md
+    caption: "Solution inspector with alternate representative phase choices."
+  - file: interactive_plot_example.png
+    required: false
+    status: planned
+    chapter: 08_results_plots_and_interpretation.md
+    caption: "Interactive fit plot with observed, calculated, difference, and Bragg tick tracks."
+  - file: rapid_lk99_refinement_curve.png
+    required: true
+    status: captured
+    chapter: 08_results_plots_and_interpretation.md
+    caption: "Example rapid-mode GSAS-II refinement curve from the verified LK-99 API tutorial run."
+    ui_state: "Downloaded from hosted API artifact endpoint for docs_demo tutorial evidence."
+

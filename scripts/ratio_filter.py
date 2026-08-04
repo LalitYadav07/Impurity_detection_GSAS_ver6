@@ -25,6 +25,13 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+try:
+    from xray_doublet import apply_doublet_to_profiles, describe_doublet, is_active_for
+except Exception:
+    apply_doublet_to_profiles = None
+    describe_doublet = None
+    is_active_for = None
+
 
 # =============================================================================
 # DB pack loader
@@ -401,6 +408,7 @@ def shortlist_by_hist_ML(
     fusion_alpha: float = 1.0,
     fusion_beta:  float = 0.2,
     fusion_cos:   float = 0.6,
+    xray_doublet_config: Optional[Dict[str, Any]] = None,
     # plotting for parity
     plot: bool = True,
     plot_out_path_png: Optional[str] = None,
@@ -421,6 +429,19 @@ def shortlist_by_hist_ML(
     if ctx is None:
         ctx = _load_profiles64_metadata(profiles_dir)
     profiles = ctx["profiles"].astype(np.float32)
+    if xray_doublet_config and apply_doublet_to_profiles is not None:
+        try:
+            profiles = apply_doublet_to_profiles(
+                profiles,
+                ctx,
+                xray_doublet_config,
+                apply_key="apply_to_64_ml_input",
+            ).astype(np.float32, copy=False)
+            if is_active_for is not None and is_active_for(xray_doublet_config, "apply_to_64_ml_input"):
+                desc = describe_doublet(xray_doublet_config) if describe_doublet else "active"
+                logger.info(f"[ML-HIST] PXRD doublet correction active: {desc}")
+        except Exception as exc:
+            logger.warning(f"[ML-HIST] PXRD doublet correction skipped: {exc}")
     pid_to_row = ctx["pid_to_row"]
     q_min_db = float(ctx["q_min"]); q_max_db = float(ctx["q_max"])
     edges = ctx["edges"].astype(np.float64); centers = ctx["centers"].astype(np.float64)
@@ -540,6 +561,7 @@ def shortlist_by_hist_ML(
         "observed_bin_count_sum": int(np.sum(bin_counts[M_range])),
         "is_stage0": (bool(stage0_flag) if stage0_flag is not None else None),
         "ckpt_source": ckpt_source,
+        "xray_doublet": xray_doublet_config or {"enabled": False},
     })
     return scored, details, meta
 

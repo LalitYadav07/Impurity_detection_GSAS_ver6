@@ -14,6 +14,7 @@ from scripts.gsas_main_phase_refiner import (
     normalize_excluded_regions,
     normalize_background_config,
     parse_gsas_lst,
+    resolve_polish_cell_targets,
 )
 
 
@@ -106,6 +107,63 @@ class ParseLstFallbackTests(unittest.TestCase):
 
             self.assertEqual(result["TbSSL_Main"]["phase_fraction_pct"], 100.0)
             self.assertEqual(result["TbSSL_Main"]["weight_fraction_pct"], 100.0)
+
+
+class AdaptivePolishPlanTests(unittest.TestCase):
+    def test_targets_new_phase_before_existing_phases(self):
+        result = resolve_polish_cell_targets(
+            ["main", "old_impurity", "new_impurity"],
+            "main",
+            ["new_impurity"],
+            refine_main_cell=False,
+            refine_existing_cells=False,
+        )
+
+        self.assertEqual(result, ["new_impurity"])
+
+    def test_includes_main_phase_when_requested(self):
+        result = resolve_polish_cell_targets(
+            ["main", "old_impurity", "new_impurity"],
+            "main",
+            ["new_impurity"],
+            refine_main_cell=True,
+            refine_existing_cells=False,
+        )
+
+        self.assertEqual(result, ["new_impurity", "main"])
+
+    def test_can_target_main_phase_only_for_final_polish(self):
+        result = resolve_polish_cell_targets(
+            ["main", "old_impurity", "new_impurity"],
+            "main",
+            ["main"],
+            refine_main_cell=True,
+            refine_existing_cells=False,
+        )
+
+        self.assertEqual(result, ["main"])
+
+    def test_can_escalate_to_all_existing_phases_when_requested(self):
+        result = resolve_polish_cell_targets(
+            ["main", "old_impurity", "new_impurity"],
+            "main",
+            ["new_impurity"],
+            refine_main_cell=True,
+            refine_existing_cells=True,
+        )
+
+        self.assertEqual(result, ["new_impurity", "main", "old_impurity"])
+
+    def test_falls_back_to_non_main_phase_when_target_missing(self):
+        result = resolve_polish_cell_targets(
+            ["main", "candidate_a", "candidate_b"],
+            "main",
+            ["missing"],
+            refine_main_cell=False,
+            refine_existing_cells=False,
+        )
+
+        self.assertEqual(result, ["candidate_a", "candidate_b"])
 
 
 class ExcludedRegionNormalizationTests(unittest.TestCase):

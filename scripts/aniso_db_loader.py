@@ -259,6 +259,11 @@ class DBLoader:
 
         # Fast row index
         self._row_index: Dict[str, int] = {pid: i for i, pid in enumerate(self._ids)}
+        self._sg_values = (
+            pd.to_numeric(self.catalog["space_group"], errors="coerce").to_numpy(dtype=float)
+            if "space_group" in self.catalog.columns
+            else None
+        )
 
         # Optional CIF map
         self._cif_map: Optional[Dict[str, str]] = None
@@ -392,10 +397,10 @@ class DBLoader:
         pid = str(pid)
         if hasattr(self, "_pretty_by_id") and pid in self._pretty_by_id:
             return self._pretty_by_id[pid]
-        row = self.catalog.loc[self.catalog["id"] == pid]
-        if row.empty:
+        row_ix = self._row_index.get(pid)
+        if row_ix is None:
             raise KeyError(f"phase id not in catalog: {pid}")
-        s = row.iloc[0]
+        s = self.catalog.iloc[row_ix]
         for k in ("pretty_formula", "formula_pretty", "formula", "pretty_name", "elements_list"):
             val = s.get(k)
             if isinstance(val, str) and val.strip():
@@ -407,20 +412,24 @@ class DBLoader:
         if hasattr(self, "_sgnum_by_id") and pid in getattr(self, "_sgnum_by_id"):
             v = self._sgnum_by_id[pid]
             return int(v) if v is not None and v == v else None
-        row = self.catalog.loc[self.catalog["id"] == pid]
-        if row.empty:
+        row_ix = self._row_index.get(pid)
+        if row_ix is None:
             raise KeyError(f"phase id not in catalog: {pid}")
-        sg = pd.to_numeric(row.iloc[0].get("space_group"), errors="coerce")
+        if self._sg_values is not None:
+            sg = self._sg_values[row_ix]
+        else:
+            sg = pd.to_numeric(self.catalog.iloc[row_ix].get("space_group"), errors="coerce")
         return int(sg) if pd.notna(sg) else None
 
     def get_space_group_symbol(self, pid: str) -> Optional[str]:
         pid = str(pid)
-        row = self.catalog.loc[self.catalog["id"] == pid]
-        if row.empty:
+        row_ix = self._row_index.get(pid)
+        if row_ix is None:
             return None
+        row = self.catalog.iloc[row_ix]
         # Check SG_symbol first, then SG_symbol if normalized differently
         for k in ("SG_symbol", "spacegroup_symbol", "symbol"):
-            s = row.iloc[0].get(k)
+            s = row.get(k)
             if isinstance(s, str) and s.strip():
                 return s.strip()
         return None
@@ -683,12 +692,15 @@ class DBLoader:
     def exclude_space_groups(self, candidate_ids: Iterable[str], exclude_sg: Iterable[int] = (1, 2)) -> List[str]:
         """Return candidate IDs with space_group NOT in exclude_sg."""
         ids = [str(x) for x in candidate_ids]
-        view = self.catalog[self.catalog["id"].isin(ids)]
-        if "space_group" not in view.columns:
+        if self._sg_values is None:
             raise KeyError("catalog missing 'space_group' column")
-        sg = pd.to_numeric(view["space_group"], errors="coerce").astype("Int64")
-        keep = ~sg.isin(list(exclude_sg))
-        return view.loc[keep.fillna(False), "id"].astype(str).tolist()
+        idx = sorted(self._row_index[pid] for pid in ids if pid in self._row_index)
+        if not idx:
+            return []
+        idx_arr = np.asarray(idx, dtype=np.int64)
+        sg = self._sg_values[idx_arr]
+        keep = np.isfinite(sg) & ~np.isin(sg, [float(x) for x in exclude_sg])
+        return self._ids[idx_arr[keep]].astype(str).tolist()
 
     def drop_low_symmetry_sg(self, candidate_ids: Iterable[str], exclude_sg: Iterable[int] = (1, 2)) -> List[str]:
         """Alias for exclude_space_groups; keeps pipeline stage name self-documenting."""

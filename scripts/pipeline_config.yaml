@@ -100,6 +100,22 @@ element_filter:
   # Commonly used to drop O-only, C-only phases, etc.
   disallow_pure: [O, C]
 
+reference_phase_exclusions:
+  enabled: false
+  presets: []              # e.g. [Al_fcc, Cu_fcc, V_bcc]
+  window_mode: auto        # auto from instrument profile, or fixed
+  fwhm_factor: 6.0
+  fractional_d_tolerance: 0.003
+  zero_tolerance_deg: 0.05
+  zero_tolerance_tof: 25.0
+  min_half_width_deg: 0.35
+  max_half_width_deg: 2.00
+  fallback_half_width_deg: 0.75
+  min_half_width_tof: 75.0
+  max_half_width_tof: 750.0
+  fallback_half_width_tof: 200.0
+  include_cu_kbeta: false  # for Cu-anode lab PXRD companion peaks
+
 max_passes: 1         # how many impurity passes to attempt
 rwp_improve_eps: 0.05  # stop if Rwp improves less than this (set >0 to enable early stop)
 
@@ -128,15 +144,82 @@ min_impurity_percent: 0.5
 hap_init: 0.05
 max_joint_cycles: 8
 joint_top_k: 3
+adaptive_compare_enabled: true
+adaptive_compare_keep: 2
+adaptive_compare_cycles: 1
+polish_strategy: adaptive
+polish_refine_cell: true
+polish_refine_background: true
+polish_refine_main_cell: true
+polish_defer_main_cell: true
+polish_refine_existing_cells: false
+polish_escalate_on_failure: true
+polish_stabilization_cycles: 0
+polish_cell_trial_cycles: 1
+polish_final_cycles: 0
+polish_skip_fresh_lst_regen: true
+
+main_phase_prenudge:
+  enabled: true
+  apply_only_user_main: true
+  trigger_rwp: 18.0
+  hard_rwp: 35.0
+  min_peak_support: 0.50
+  min_rwp_for_peak_support_trigger: 8.0
+  strongest_barely_supported_fraction: 0.75
+  peak_match_tolerance_q: 0.035
+  frac_window: 0.01
+  angle_window_deg: 1.0
+  fail_unresolved_main: false
+
+main_phase_guard:
+  enabled: true
+  apply_only_user_main: true
+  min_weight_pct: 20.0
+
+main_phase_shadow:
+  enabled: true
+  top_main_peaks: 8
+  top_candidate_peaks: 10
+  peak_match_tolerance_q: 0.040
+  min_target_prominence_fraction: 0.03
+  nudge_filter_enabled: true
+  filter_top_main_peaks: 5
+  filter_top_candidate_peaks: 5
+  filter_min_overlap_count: 3
+  filter_min_overlap_fraction: 0.60
+  filter_max_unique_supported_count: 1
+  filter_max_unique_supported_fraction: 0.25
+  require_reliable_main_rwp_max: 25.0
+  require_reliable_main_peak_support: 0.55
+
+main_phase_cleanup:
+  enabled: false
+  apply_only_user_main: true
+  refine_u_iso: false
+  refine_positions: false
+  cycles: 1
+  accept_rwp_worsen: 0.15
+  min_rwp_improvement: 0.05
+  max_position_shift: 0.15
+  min_u_iso: 0.0
+  max_u_iso: 0.20
 
 stage4:
   wavelength: 1.50
   two_theta_range: [5.0, 160.0]
   samples: 5000
   reps: 50
+  seed: 0
+  score_q_max: 8.0
+  pearson_q_max: 8.0
+  pearson_defer_export: true
+  pearson_min_points: 25
+  lattice_tiebreak_score_tol: 0.0005
   angle_window_deg: 0  # 5 deg angle tolerance
   frac_window: 0.01 
   min_pearson: 0.02
+  pearson_cell_refine_min_r: 0.50
 
 hist_filter:
   min_active_bins: 4

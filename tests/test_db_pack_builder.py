@@ -23,7 +23,10 @@ from scripts.db_pack_builder import (
     XRAY_DEFAULT_TWO_THETA_MAX,
     _optimized_xray_two_theta_max,
     _normalize_catalog_df,
+    _build_base_duplicate_index,
+    _find_matching_base_phase_ids,
     build_augmented_db_pack,
+    collect_phase_inputs,
     build_mini_db_pack,
     resolve_simulation_settings,
 )
@@ -232,6 +235,37 @@ class DBPackBuilderTests(unittest.TestCase):
                 original_json=str(aug_result.db_config["original_json"]),
             ))
             self.assertEqual(len(loader.catalog), 2)
+
+    def test_base_duplicate_index_reuses_candidate_structures(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir = Path(tmpdir)
+            base_cif = tmpdir / "base_phase.cif"
+            base_dup_cif = tmpdir / "base_phase_uploaded_again.cif"
+            _write_cif(base_cif, ["Na", "Cl"], [[0, 0, 0], [0.5, 0.5, 0.5]], a=5.63)
+            base_dup_cif.write_text(base_cif.read_text(encoding="utf-8"), encoding="utf-8")
+
+            base_result = build_mini_db_pack(
+                [base_cif],
+                tmpdir / "base_pack",
+                source_type="neutron",
+                overwrite=True,
+            )
+            loader = DBLoader(CatalogPaths(
+                catalog_csv=str(base_result.db_config["catalog_csv"]),
+                cif_map_json=str(base_result.db_config["cif_map_json"]),
+                original_json=str(base_result.db_config["original_json"]),
+            ))
+            duplicate_index = _build_base_duplicate_index(loader)
+            self.assertIsNotNone(duplicate_index)
+
+            phase = collect_phase_inputs([base_dup_cif])[0]
+            matches = _find_matching_base_phase_ids(phase, base_loader=loader, duplicate_index=duplicate_index)
+            self.assertEqual(matches, base_result.phase_ids)
+            cache_size = len(duplicate_index.structure_cache)
+
+            matches_again = _find_matching_base_phase_ids(phase, base_loader=loader, duplicate_index=duplicate_index)
+            self.assertEqual(matches_again, base_result.phase_ids)
+            self.assertEqual(len(duplicate_index.structure_cache), cache_size)
 
 
 if __name__ == "__main__":

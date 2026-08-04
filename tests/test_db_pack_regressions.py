@@ -1,6 +1,7 @@
 import json
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -16,8 +17,8 @@ for p in (str(REPO_ROOT), str(SCRIPTS_DIR)):
 from scripts.aniso_db_loader import CatalogPaths, DBLoader, build_mask
 from scripts.config_builder import build_pipeline_config
 from scripts.db_pack import build_db_config, get_db_pack_layout
-from scripts.db_pack_builder import build_mini_db_pack
-from scripts.gsas_complete_pipeline_nomain import UnifiedPipeline
+from scripts.db_pack_builder import _emit_progress, build_mini_db_pack
+from scripts.gsas_complete_pipeline_nomain import BenchTimer, UnifiedPipeline, _crop_native_arrays_by_q
 
 
 def _write_catalog(path: Path, phase_id: str) -> None:
@@ -74,6 +75,9 @@ class DBPackLayoutTests(unittest.TestCase):
             self.assertEqual(cfg["db"]["profiles_dir"], str(pack_root / "profiles64"))
             self.assertEqual(cfg["db"]["cif_map_json"], str(pack_root / "cif_map.json"))
             self.assertNotIn("original_json", cfg["db"])
+            self.assertEqual(cfg["stage4"]["seed"], 0)
+            self.assertEqual(cfg["stage4"]["pearson_q_max"], 8.0)
+            self.assertTrue(cfg["polish_defer_main_cell"])
 
     def test_build_pipeline_config_persists_dataset_excluded_regions(self):
         cfg_text = build_pipeline_config(
@@ -91,6 +95,119 @@ class DBPackLayoutTests(unittest.TestCase):
             cfg["datasets"][0]["exclude_regions"],
             [[12.5, 13.1], [44.0, 45.5]],
         )
+
+    def test_sample_environment_does_not_allow_oxides_by_default(self):
+        cfg_text = build_pipeline_config(
+            run_name="env_policy_test",
+            data_file="/tmp/example.dat",
+            instprm_file="/tmp/example.instprm",
+            allowed_elements=["Tb", "Be", "Ge", "O"],
+            sample_env_elements=["Al"],
+        )
+        cfg = yaml.safe_load(cfg_text)
+        sample_env = cfg["element_filter"]["sample_env"]
+
+        self.assertEqual(sample_env["elements"], ["Al"])
+        self.assertTrue(sample_env["allow_pure"])
+        self.assertEqual(sample_env["allow_with"], [])
+        self.assertTrue(sample_env["ban_cross_with_base"])
+
+    def test_db_pack_progress_events_include_elapsed_time_and_counters(self):
+        events = []
+        now = time.perf_counter()
+
+        _emit_progress(
+            events.append,
+            step="precheck",
+            message="Checking custom CIFs",
+            fraction=0.5,
+            current=2,
+            total=4,
+            source_name="phase.cif",
+            started_at=now - 2.0,
+            stage_started_at=now - 0.5,
+            checked_count=2,
+            queued_count=1,
+            skipped_count=1,
+        )
+
+        self.assertEqual(len(events), 1)
+        event = events[0]
+        self.assertEqual(event["step"], "precheck")
+        self.assertEqual(event["fraction"], 0.5)
+        self.assertEqual(event["current"], 2)
+        self.assertEqual(event["total"], 4)
+        self.assertEqual(event["source_name"], "phase.cif")
+        self.assertGreaterEqual(event["elapsed_s"], 1.0)
+        self.assertGreaterEqual(event["stage_elapsed_s"], 0.1)
+        self.assertEqual(event["checked_count"], 2)
+        self.assertEqual(event["queued_count"], 1)
+        self.assertEqual(event["skipped_count"], 1)
+
+
+class PipelineDeterminismTests(unittest.TestCase):
+    def test_low_q_pearson_crop_uses_q_mask_but_returns_native_x(self):
+        x_native = [100.0, 200.0, 300.0, 400.0]
+        residual = [1.0, 2.0, 3.0, 4.0]
+        q_values = [10.0, 7.5, 4.0, 12.0]
+
+        x_crop, y_crop, meta = _crop_native_arrays_by_q(
+            x_native,
+            residual,
+            q_values,
+            q_max=8.0,
+            min_points=2,
+        )
+
+        self.assertTrue(meta["enabled"])
+        self.assertEqual(list(x_crop), [200.0, 300.0])
+        self.assertEqual(list(y_crop), [2.0, 3.0])
+        self.assertEqual(meta["output_points"], 2)
+
+    def test_benchmark_report_writes_json_and_csv(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            timer = BenchTimer("bench_test")
+            with timer.block("stage"):
+                pass
+
+            json_path, csv_path = timer.write_report(
+                str(Path(tmpdir) / "benchmark_report.json"),
+                {"passes": [{"pass": 1, "compare_candidate_count": 2}]},
+            )
+
+            payload = json.loads(Path(json_path).read_text(encoding="utf-8"))
+            self.assertEqual(payload["run_name"], "bench_test")
+            self.assertEqual(payload["passes"][0]["compare_candidate_count"], 2)
+            self.assertTrue(Path(csv_path).exists())
+
+    def test_choose_top_new_uses_pearson_then_phase_id_only_for_ties(self):
+        fractions = {
+            "phase_b": {"weight_fraction_pct": 2.0},
+            "phase_a": {"weight_fraction_pct": 2.0},
+            "phase_c": {"weight_fraction_pct": 1.9},
+        }
+        pearson = {"phase_a": 0.80, "phase_b": 0.80, "phase_c": 0.99}
+
+        best = UnifiedPipeline._choose_top_new_by_wf(
+            fractions,
+            ["phase_b", "phase_a", "phase_c"],
+            pearson,
+        )
+
+        self.assertEqual(best, "phase_a")
+
+    def test_copy_gpx_with_lst_preserves_matching_lst(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            src = root / "source.gpx"
+            dst = root / "nested" / "dest.gpx"
+            src.write_text("gpx", encoding="utf-8")
+            src.with_suffix(".lst").write_text("lst", encoding="utf-8")
+
+            UnifiedPipeline._copy_gpx_with_lst(str(src), str(dst))
+
+            self.assertEqual(dst.read_text(encoding="utf-8"), "gpx")
+            self.assertEqual(dst.with_suffix(".lst").read_text(encoding="utf-8"), "lst")
 
 
 class DBLoaderPathResolutionTests(unittest.TestCase):

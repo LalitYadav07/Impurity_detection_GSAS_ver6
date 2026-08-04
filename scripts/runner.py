@@ -83,10 +83,10 @@ class PipelineRunner:
             return ["pixi", "run", "python"], str(self.project_root)
         return [sys.executable], str(self.project_root)
 
-    def run(self, config_path: str, dataset_name: str) -> Generator[str, None, None]:
+    def run(self, config_path: str, dataset_name: str, script_name: str = "gsas_complete_pipeline_nomain.py") -> Generator[str, None, None]:
         prefix, cwd = self._get_execution_context()
         cmd = prefix + [
-            str(self.project_root / "scripts" / "gsas_complete_pipeline_nomain.py"),
+            str(self.project_root / "scripts" / script_name),
             "--config",
             str(config_path),
             "--dataset",
@@ -133,10 +133,16 @@ class PipelineRunner:
             logger.info("pipeline_exit_success")
             yield "\n[INFO] Pipeline finished successfully\n"
 
-    def start_non_blocking(self, config_path: str, dataset_name: str, log_path: Optional[str] = None):
+    def start_non_blocking(
+        self,
+        config_path: str,
+        dataset_name: str,
+        log_path: Optional[str] = None,
+        script_name: str = "gsas_complete_pipeline_nomain.py",
+    ):
         prefix, cwd = self._get_execution_context()
         cmd = prefix + [
-            str(self.project_root / "scripts" / "gsas_complete_pipeline_nomain.py"),
+            str(self.project_root / "scripts" / script_name),
             "--config",
             str(config_path),
             "--dataset",

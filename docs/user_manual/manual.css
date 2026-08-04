@@ -1,0 +1,263 @@
+:root {
+  color-scheme: light;
+  --bg: #f5f8f6;
+  --paper: #ffffff;
+  --ink: #14211d;
+  --muted: #66736e;
+  --line: #d8e5df;
+  --accent: #0f5d46;
+  --accent-soft: #e8f4ef;
+  --blue-soft: #e9f2ff;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  line-height: 1.58;
+}
+
+.manual-header,
+.manual-toc,
+.manual-content,
+.manual-footer {
+  width: min(1120px, calc(100% - 48px));
+  margin: 0 auto;
+}
+
+.manual-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 56px 0 24px;
+  border-bottom: 1px solid var(--line);
+}
+
+.manual-header h1 {
+  margin: 0;
+  font-size: clamp(34px, 4vw, 56px);
+  line-height: 1.05;
+  letter-spacing: 0;
+}
+
+.eyebrow {
+  margin: 0 0 10px;
+  color: var(--accent);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  font-size: 13px;
+}
+
+.subtitle {
+  margin: 16px 0 0;
+  font-size: 18px;
+  color: #3d4c47;
+}
+
+.generated {
+  color: var(--muted);
+  font-size: 13px;
+  min-width: 180px;
+  text-align: right;
+}
+
+.manual-toc {
+  margin-top: 24px;
+  padding: 18px 22px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(16, 45, 35, .06);
+}
+
+.manual-toc h2 {
+  margin: 0 0 10px;
+  font-size: 18px;
+}
+
+.manual-toc ol {
+  columns: 2;
+  margin: 0;
+  padding-left: 20px;
+}
+
+.manual-toc a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.manual-content {
+  margin-top: 28px;
+  margin-bottom: 64px;
+  padding: 42px 54px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 18px 50px rgba(16, 45, 35, .07);
+}
+
+.manual-content h1 {
+  margin: 44px 0 14px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  color: #102b23;
+  font-size: 32px;
+  line-height: 1.15;
+}
+
+.manual-content h1:first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.manual-content h2 {
+  margin: 30px 0 10px;
+  color: #12372e;
+  font-size: 24px;
+}
+
+.manual-content h3 {
+  margin: 24px 0 8px;
+  font-size: 18px;
+  color: #1b4d41;
+}
+
+.manual-content p {
+  margin: 0 0 14px;
+}
+
+.manual-content a {
+  color: var(--accent);
+}
+
+.manual-content code {
+  padding: 2px 5px;
+  background: #eef5f1;
+  border-radius: 5px;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: .92em;
+}
+
+pre {
+  overflow: auto;
+  padding: 16px;
+  background: #102033;
+  color: #eff8f2;
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+pre code {
+  padding: 0;
+  background: transparent;
+  color: inherit;
+}
+
+blockquote {
+  margin: 18px 0;
+  padding: 14px 18px;
+  border-left: 4px solid var(--accent);
+  background: var(--accent-soft);
+  color: #214139;
+  border-radius: 0 8px 8px 0;
+}
+
+.manual-figure {
+  margin: 26px 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  background: #fbfdfc;
+  border-radius: 10px;
+}
+
+.manual-figure img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+  border-radius: 6px;
+  border: 1px solid #e4ece8;
+}
+
+.manual-figure figcaption {
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+.table-wrap {
+  overflow-x: auto;
+  margin: 18px 0;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+th,
+td {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  vertical-align: top;
+}
+
+th {
+  background: var(--accent-soft);
+  color: #143d33;
+  text-align: left;
+}
+
+.manual-footer {
+  color: var(--muted);
+  font-size: 13px;
+  padding: 0 0 40px;
+}
+
+@media (max-width: 760px) {
+  .manual-header {
+    display: block;
+  }
+
+  .generated {
+    margin-top: 12px;
+    text-align: left;
+  }
+
+  .manual-toc ol {
+    columns: 1;
+  }
+
+  .manual-content {
+    padding: 28px 22px;
+  }
+}
+
+@media print {
+  body {
+    background: white;
+  }
+
+  .manual-header,
+  .manual-toc,
+  .manual-content,
+  .manual-footer {
+    width: 100%;
+  }
+
+  .manual-content {
+    box-shadow: none;
+    border: 0;
+    padding: 0;
+  }
+}
+
