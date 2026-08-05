@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "radar-pd-input/v1",
+  "title": "RADAR-PD NDIP input bundle",
+  "type": "object",
+  "required": ["$schema", "run_name", "analysis_mode", "source", "inputs"],
+  "properties": {
+    "$schema": {"const": "radar-pd-input/v1"},
+    "run_name": {"type": "string", "minLength": 1},
+    "analysis_mode": {"enum": ["rapid", "full"]},
+    "source": {"enum": ["history", "ipts", "collection", "previous_run", "api"]},
+    "inputs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["role", "name", "size_bytes", "sha256"],
+        "properties": {
+          "role": {"type": "string"},
+          "name": {"type": "string"},
+          "path": {"type": "string"},
+          "size_bytes": {"type": "integer", "minimum": 0},
+          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        }
+      }
+    },
+    "metadata": {"type": "object"}
+  }
+}

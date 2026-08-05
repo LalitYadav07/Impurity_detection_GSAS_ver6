@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "radar-pd-state/v1",
+  "title": "RADAR-PD NDIP workflow state",
+  "type": "object",
+  "required": ["$schema", "run_name", "analysis_mode", "status", "stages", "artifacts", "errors"],
+  "properties": {
+    "$schema": {"const": "radar-pd-state/v1"},
+    "run_name": {"type": "string"},
+    "analysis_mode": {"enum": ["rapid", "full"]},
+    "status": {"enum": ["pending", "running", "complete", "partial", "failed", "skipped"]},
+    "stages": {"type": "object"},
+    "artifacts": {"type": "object"},
+    "warnings": {"type": "array"},
+    "errors": {"type": "array"}
+  }
+}

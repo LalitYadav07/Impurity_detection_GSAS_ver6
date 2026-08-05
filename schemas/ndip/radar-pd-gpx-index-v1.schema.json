@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "radar-pd-gpx-index/v1",
+  "title": "RADAR-PD GSAS-II project index",
+  "type": "object",
+  "required": ["$schema", "project_count", "projects"],
+  "properties": {
+    "$schema": {"const": "radar-pd-gpx-index/v1"},
+    "project_count": {"type": "integer", "minimum": 0},
+    "projects": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["index", "label", "stage", "status", "name", "path", "sha256"],
+        "properties": {
+          "index": {"type": "integer", "minimum": 1},
+          "label": {"type": "string"},
+          "stage": {"type": "string"},
+          "status": {"enum": ["checkpoint", "accepted", "rollback", "failed"]},
+          "name": {"type": "string"},
+          "path": {"type": "string"},
+          "collection_path": {"type": "string"},
+          "source_path": {"type": "string"},
+          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        }
+      }
+    }
+  }
+}

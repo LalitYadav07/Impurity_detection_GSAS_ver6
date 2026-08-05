@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "radar-pd-library/v1",
+  "title": "RADAR-PD custom phase-library manifest",
+  "type": "object",
+  "required": ["$schema", "library_mode", "radiation", "phase_count", "archive_root"],
+  "properties": {
+    "$schema": {"const": "radar-pd-library/v1"},
+    "library_mode": {"enum": ["mini", "augmented"]},
+    "radiation": {"enum": ["neutron", "xray"]},
+    "phase_count": {"type": "integer", "minimum": 1},
+    "archive_root": {"type": "string"},
+    "database_config": {"type": "object"},
+    "phase_ids": {"type": "array", "items": {"type": "string"}},
+    "failures": {"type": "array"}
+  }
+}

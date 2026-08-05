@@ -36,6 +36,8 @@ pip-wheel-metadata/
 /docs/*
 !/docs/radar_api.md
 !/docs/VALIDATION_CHECKLIST.md
+!/docs/ndip_container.md
+!/docs/ndip_integration.md
 !/docs/user_manual/
 !/docs/user_manual/**
 /docs/user_manual/dist/*

@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "radar-pd-result/v1",
+  "title": "RADAR-PD normalized result",
+  "type": "object",
+  "required": ["$schema", "run_name", "analysis_mode", "status", "provenance", "artifacts"],
+  "properties": {
+    "$schema": {"const": "radar-pd-result/v1"},
+    "run_name": {"type": "string"},
+    "analysis_mode": {"enum": ["rapid", "full"]},
+    "status": {"enum": ["complete", "partial", "failed"]},
+    "summary": {"type": "object"},
+    "phases": {"type": "array"},
+    "hypotheses": {"type": "array"},
+    "gpx_projects": {"type": "array"},
+    "provenance": {"type": "object"},
+    "artifacts": {"type": "object"},
+    "warnings": {"type": "array"},
+    "errors": {"type": "array"}
+  }
+}

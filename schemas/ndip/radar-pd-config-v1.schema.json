@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "radar-pd-config/v1",
+  "title": "RADAR-PD portable NDIP configuration",
+  "type": "object",
+  "required": ["$schema", "analysis", "chemistry", "pattern", "background", "main_phase", "full", "rapid"],
+  "properties": {
+    "$schema": {"const": "radar-pd-config/v1"},
+    "created_utc": {"type": "string"},
+    "analysis": {
+      "type": "object",
+      "required": ["mode", "radiation", "instrument_mode"],
+      "properties": {
+        "mode": {"enum": ["rapid", "full"]},
+        "radiation": {"enum": ["neutron", "xray"]},
+        "instrument_mode": {"enum": ["auto", "cw", "tof"]}
+      }
+    },
+    "chemistry": {
+      "type": "object",
+      "required": ["sample_elements", "environment_elements"],
+      "properties": {
+        "sample_elements": {"type": "array", "minItems": 1, "items": {"type": "string", "pattern": "^[A-Z][a-z]?$"}},
+        "environment_elements": {"type": "array", "items": {"type": "string", "pattern": "^[A-Z][a-z]?$"}}
+      }
+    },
+    "pattern": {
+      "type": "object",
+      "properties": {
+        "limits": {
+          "oneOf": [
+            {"type": "null"},
+            {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "number"}}
+          ]
+        },
+        "exclude_regions": {
+          "type": "array",
+          "items": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "number"}}
+        }
+      }
+    },
+    "background": {"type": "object"},
+    "main_phase": {"type": "object"},
+    "magnetic_precheck": {"type": "object"},
+    "full": {"type": "object"},
+    "rapid": {"type": "object"}
+  }
+}

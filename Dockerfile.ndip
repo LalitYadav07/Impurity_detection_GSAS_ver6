@@ -1,0 +1,45 @@
+FROM python:3.12-slim
+
+ARG RADAR_PD_UID=1000
+ARG RADAR_PD_GID=1000
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONIOENCODING=utf-8 \
+    MPLBACKEND=Agg \
+    RADAR_PD_ROOT=/opt/radar-pd \
+    RADAR_PD_DB_ROOT=/opt/radar-pd/data
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        curl \
+        gfortran \
+        git \
+        libgl1 \
+        libglib2.0-0 \
+        libgomp1 \
+        unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN groupadd --gid "${RADAR_PD_GID}" radar \
+    && useradd --uid "${RADAR_PD_UID}" --gid radar --create-home radar
+
+WORKDIR /opt/radar-pd
+COPY requirements.txt /tmp/radar-requirements.txt
+RUN python -m pip install --no-cache-dir --upgrade pip \
+    && python -m pip install --no-cache-dir -r /tmp/radar-requirements.txt
+
+COPY --chown=radar:radar . /opt/radar-pd
+RUN python -m py_compile \
+        scripts/ndip_contracts.py \
+        scripts/ndip_gpx_handoff.py \
+        scripts/ndip_outputs.py \
+        scripts/ndip_runner.py
+
+USER radar
+ENV PATH=/home/radar/.local/bin:${PATH} \
+    PYTHONPATH=/opt/radar-pd/scripts:/opt/radar-pd/GSAS-II
+
+VOLUME ["/work", "/opt/radar-pd/data"]
+CMD ["python", "/opt/radar-pd/scripts/ndip_runner.py", "--help"]
