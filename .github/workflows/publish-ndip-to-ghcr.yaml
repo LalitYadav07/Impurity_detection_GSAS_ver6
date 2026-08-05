@@ -48,6 +48,9 @@ jobs:
         with:
           context: .
           file: Dockerfile.ndip
+          platforms: linux/amd64
+          provenance: false
+          sbom: false
           push: true
           tags: |
             ${{ env.IMAGE_NAME }}:ndip
