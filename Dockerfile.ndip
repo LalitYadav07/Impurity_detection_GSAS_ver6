@@ -37,7 +37,6 @@ RUN python -m py_compile \
         scripts/ndip_outputs.py \
         scripts/ndip_runner.py
 
-USER radar
 ENV PATH=/home/radar/.local/bin:${PATH} \
     PYTHONPATH=/opt/radar-pd/scripts:/opt/radar-pd/GSAS-II
 
