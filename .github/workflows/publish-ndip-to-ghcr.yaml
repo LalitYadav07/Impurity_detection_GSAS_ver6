@@ -43,7 +43,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push NDIP image
+      - name: Build and load NDIP image
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -51,9 +51,15 @@ jobs:
           platforms: linux/amd64
           provenance: false
           sbom: false
-          push: true
+          load: true
           tags: |
             ${{ env.IMAGE_NAME }}:ndip
             ${{ env.IMAGE_NAME }}:ndip-${{ github.sha }}
           cache-from: type=registry,ref=${{ env.IMAGE_NAME }}:ndip-buildcache
           cache-to: type=registry,ref=${{ env.IMAGE_NAME }}:ndip-buildcache,mode=max
+
+      - name: Push Docker schema v2 manifests
+        shell: bash
+        run: |
+          docker push "${IMAGE_NAME}:ndip"
+          docker push "${IMAGE_NAME}:ndip-${GITHUB_SHA}"
