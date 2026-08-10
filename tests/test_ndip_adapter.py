@@ -209,6 +209,44 @@ def test_normalized_outputs_include_all_gpx_projects(tmp_path: Path) -> None:
     assert (portal / "results.zip").is_file()
 
 
+def test_normalized_outputs_fall_back_to_pattern_rank_when_gsas_is_skipped(tmp_path: Path) -> None:
+    run = tmp_path / "run"
+    rapid = run / "rapid_results"
+    nudge = rapid / "nudge" / "live_run"
+    nudge.mkdir(parents=True)
+    (rapid / "summary.json").write_text(json.dumps({"live_run": {}}), encoding="utf-8")
+    with (rapid / "all_gsas_validation_summary.csv").open("w", encoding="utf-8", newline="") as handle:
+        csv.DictWriter(handle, fieldnames=["rank", "hypothesis", "rwp"]).writeheader()
+    with (nudge / "reranked_512_after_radar_nudge.csv").open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=["rank512", "formulas", "space_groups", "score512", "phase_coefs512"],
+        )
+        writer.writeheader()
+        writer.writerow(
+            {
+                "rank512": 1,
+                "formulas": "Cu|Cu2S",
+                "space_groups": "225|14",
+                "score512": 0.81,
+                "phase_coefs512": "1.2|0.3",
+            }
+        )
+    (nudge / "target_512.npz").write_bytes(b"array")
+
+    portal = tmp_path / "portal"
+    result = collect_outputs(run, portal, mode="rapid", run_name="pattern-only")
+    report = (portal / "report.html").read_text(encoding="utf-8")
+
+    assert result["hypothesis_stage"] == "pattern_scoring"
+    assert result["hypotheses"][0]["rank512"] == "1"
+    assert "Cu (SG 225) + Cu2S (SG 14)" in report
+    assert "Pattern score" in report
+    assert "comparative pattern weights" in report
+    assert not list((portal / "plots").glob("*.npz"))
+    assert list((portal / "diagnostics").glob("*.npz"))
+
+
 def test_ipts_resolver_copies_one_unambiguous_reduced_run(tmp_path: Path) -> None:
     shared = tmp_path / "SNS" / "HB2A" / "IPTS-123" / "shared" / "reduced"
     shared.mkdir(parents=True)

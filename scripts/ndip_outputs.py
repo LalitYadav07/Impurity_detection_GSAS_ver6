@@ -33,11 +33,11 @@ except ImportError:
 
 
 COLLECTION_RULES = {
-    "plots": {".png", ".jpg", ".jpeg", ".svg", ".html", ".npz"},
+    "plots": {".png", ".jpg", ".jpeg", ".svg", ".html"},
     "tables": {".csv", ".tsv"},
     "phases": {".cif"},
     "gpx": {".gpx"},
-    "diagnostics": {".json", ".yaml", ".yml", ".log", ".lst", ".txt"},
+    "diagnostics": {".json", ".yaml", ".yml", ".log", ".lst", ".txt", ".npz"},
 }
 
 SKIP_DIRS = {"inputs", "portal", "ndip_outputs", "__pycache__"}
@@ -170,20 +170,32 @@ def _find_suffix(root: Path, suffix: str) -> Path | None:
     return None
 
 
-def _summary_sources(run_dir: Path, mode: str) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
+def _summary_sources(
+    run_dir: Path,
+    mode: str,
+) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]], str]:
     if mode == "rapid":
         summary_path = _find_suffix(run_dir, "rapid_results/summary.json")
         summary = read_json(summary_path, {}) if summary_path else {}
         hypothesis_path = _find_suffix(run_dir, "rapid_results/all_gsas_validation_summary.csv")
         hypotheses = _read_csv(hypothesis_path) if hypothesis_path else []
+        hypothesis_stage = "final_refinement"
+        if not hypotheses:
+            hypothesis_path = _find_suffix(
+                run_dir,
+                "rapid_results/nudge/live_run/reranked_512_after_radar_nudge.csv",
+            )
+            hypotheses = _read_csv(hypothesis_path) if hypothesis_path else []
+            hypothesis_stage = "pattern_scoring" if hypotheses else "none"
         phases: list[dict[str, Any]] = []
     else:
         summary_path = _find_suffix(run_dir, "pipeline_summary.json")
         summary = read_json(summary_path, {}) if summary_path else {}
         hypotheses = []
+        hypothesis_stage = "none"
         phase_path = next(iter(run_dir.rglob("Summary_Fractions.csv")), None)
         phases = _read_csv(phase_path) if phase_path else []
-    return summary, hypotheses, phases
+    return summary, hypotheses, phases, hypothesis_stage
 
 
 def _artifact_href(item: dict[str, Any]) -> str:
@@ -278,16 +290,45 @@ def _timing_values(summary: dict[str, Any]) -> list[tuple[str, float]]:
     return values
 
 
-def _hypothesis_table(items: list[dict[str, Any]], *, limit: int = 20) -> str:
+def _hypothesis_label(item: dict[str, Any]) -> str:
+    raw = item.get("hypothesis") or item.get("formulas") or item.get("formula_keys") or "-"
+    formulas = [part.strip() for part in str(raw).replace(" + ", "|").split("|") if part.strip()]
+    groups = [part.strip() for part in str(item.get("space_groups") or "").split("|") if part.strip()]
+    if formulas and len(formulas) == len(groups):
+        return " + ".join(f"{formula} (SG {group})" for formula, group in zip(formulas, groups))
+    return " + ".join(formulas) if formulas else "-"
+
+
+def _hypothesis_table(
+    items: list[dict[str, Any]],
+    *,
+    stage: str = "final_refinement",
+    limit: int = 20,
+) -> str:
     if not items:
-        return "<p class='empty'>No final hypothesis table was produced for this run.</p>"
+        return "<p class='empty'>No ranked hypothesis table was produced for this run.</p>"
+    pattern_stage = stage == "pattern_scoring"
+    metric_heading = "Pattern score" if pattern_stage else "Rwp / fit metric"
+    fraction_heading = "Relative scale coefficients" if pattern_stage else "Refined phase fractions"
     rows: list[str] = []
     for index, item in enumerate(items[:limit], start=1):
-        rank = item.get("gsas_rwp_rank") or item.get("rank") or index
-        hypothesis = item.get("hypothesis") or item.get("formulas") or item.get("formula_keys") or "-"
-        quality = item.get("rwp") or item.get("Rwp") or item.get("refinement_quality")
-        fractions = item.get("weights_json") or item.get("phase_fractions") or item.get("weights") or "-"
-        status = item.get("status") or "complete"
+        rank = item.get("gsas_rwp_rank") or item.get("rank512") or item.get("rank") or index
+        hypothesis = _hypothesis_label(item)
+        quality = (
+            item.get("rwp")
+            or item.get("Rwp")
+            or item.get("refinement_quality")
+            or item.get("score512")
+            or item.get("r2_512")
+        )
+        fractions = (
+            item.get("weights_json")
+            or item.get("phase_fractions")
+            or item.get("weights")
+            or item.get("phase_coefs512")
+            or "-"
+        )
+        status = item.get("status") or ("pattern ranked" if pattern_stage else "complete")
         rows.append(
             "<tr>"
             f"<td>{html.escape(str(rank))}</td>"
@@ -299,7 +340,7 @@ def _hypothesis_table(items: list[dict[str, Any]], *, limit: int = 20) -> str:
         )
     return (
         "<div class='table-scroll'><table><thead><tr><th>Rank</th><th>Phase hypothesis</th>"
-        "<th>Rwp / fit metric</th><th>Refined phase fractions</th><th>Status</th></tr></thead>"
+        f"<th>{metric_heading}</th><th>{fraction_heading}</th><th>Status</th></tr></thead>"
         f"<tbody>{''.join(rows)}</tbody></table></div>"
     )
 
@@ -347,6 +388,7 @@ def _render_report(result: dict[str, Any]) -> str:
     phases = list(collections.get("phases") or [])
     diagnostics = list(collections.get("diagnostics") or [])
     hypotheses = list(result.get("hypotheses") or [])
+    hypothesis_stage = str(result.get("hypothesis_stage") or "final_refinement")
     phases_summary = list(result.get("phases") or [])
     timings = _timing_values(summary)
     best_rwp = min(
@@ -356,7 +398,10 @@ def _render_report(result: dict[str, Any]) -> str:
     cards = [
         ("Analysis", "Rapid hypothesis" if str(result.get("analysis_mode")) == "rapid" else "Full RADAR-PD"),
         ("Status", str(result.get("status") or "unknown").title()),
-        ("Final hypotheses", str(len(hypotheses)) if hypotheses else "-"),
+        (
+            "Pattern hypotheses" if hypothesis_stage == "pattern_scoring" else "Final hypotheses",
+            str(len(hypotheses)) if hypotheses else "-",
+        ),
         ("Reported phases", str(len(phases_summary)) if phases_summary else "-"),
         ("Best Rwp", _fmt_number(best_rwp, 3)),
     ]
@@ -396,8 +441,8 @@ details{{border:1px solid var(--line);padding:.7rem .9rem;margin:.8rem 0}} summa
 {f'<h2>Stage timing</h2><div class="metrics">{timing_cards}</div>' if timing_cards else ''}
 {f'<div class="notice"><strong>Run messages</strong><ul>{messages}</ul></div>' if messages else ''}
 <h2>Scientific result</h2>
-<p class="muted">For Rapid mode, pattern ranking narrows hypotheses and final GSAS-II refinement supplies the fit metric and phase fractions. Treat a low-ranked or zero-weight phase as unsupported by that refinement, not as proof of absence.</p>
-{_hypothesis_table(hypotheses)}
+<p class="muted">{html.escape('Final GSAS-II refinement was not requested or did not produce a ranking, so this table shows the best lattice-aware pattern-scoring hypotheses. Scale coefficients are comparative pattern weights, not quantitative phase fractions.' if hypothesis_stage == 'pattern_scoring' else 'For Rapid mode, pattern ranking narrows hypotheses and final GSAS-II refinement supplies the fit metric and phase fractions. Treat a low-ranked or zero-weight phase as unsupported by that refinement, not as proof of absence.')}</p>
+{_hypothesis_table(hypotheses, stage=hypothesis_stage)}
 {f'<h3>Final phase summary</h3>{_phase_table(phases_summary)}' if phases_summary else ''}
 <h2>Fit and diagnostic plots</h2><p class="muted">Final and accepted fit plots are shown first. Open any plot at full size to inspect residuals and Bragg positions.</p>{_plot_gallery(plots)}
 <h2>Continue in GSAS-II</h2><p>Each refinement checkpoint is preserved with provenance. Select a GPX project with the RADAR-PD GPX handoff tool, then open it in the hosted GSAS-II interface for manual inspection or continued refinement.</p>
@@ -439,7 +484,7 @@ def collect_outputs(
             project["collection_path"] = output_record.get("path")
             project["collection_name"] = output_record.get("name")
     atomic_write_json(portal / "gpx_index.json", gpx_index)
-    summary, hypotheses, phases = _summary_sources(run_root, mode)
+    summary, hypotheses, phases, hypothesis_stage = _summary_sources(run_root, mode)
     manifest_path = _find_suffix(run_root, "run_manifest.json")
     manifest = read_json(manifest_path) if manifest_path else {}
     effective_status = "failed" if status == "failed" else ("complete" if manifest.get("status", status) == "complete" else status)
@@ -453,6 +498,7 @@ def collect_outputs(
         "summary": summary,
         "phases": phases,
         "hypotheses": hypotheses,
+        "hypothesis_stage": hypothesis_stage,
         "gpx_projects": gpx_index["projects"],
         "provenance": {
             "radar_pd_git_commit": _git_commit(root),
