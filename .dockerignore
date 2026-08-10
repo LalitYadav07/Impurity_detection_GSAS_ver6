@@ -19,6 +19,8 @@ Diagnostics
 Technical
 data
 data_old
+.ndip_catalog/*
+!.ndip_catalog/radar-pd-catalog.tar.gz
 GSAS-II
 docs/user_manual/dist
 docs/user_manual/screenshots

@@ -1,0 +1,33 @@
+ARG RADAR_PD_APP_IMAGE=savannah.ornl.gov/radar-pd/radar-pd:ndip-34037c3
+ARG RADAR_PD_CATALOG_VERSION=orc-builtins-20260617
+FROM ${RADAR_PD_APP_IMAGE}
+
+ARG RADAR_PD_CATALOG_VERSION
+LABEL gov.ornl.radar-pd.catalog.version=${RADAR_PD_CATALOG_VERSION}
+
+USER root
+
+# Generated from the controlled ORNL catalog by scripts/ndip_catalog_bundle.py.
+# User libraries and run data are deliberately absent from this archive.
+ADD --chown=radar:radar .ndip_catalog/radar-pd-catalog.tar.gz /opt/radar-pd/data/
+
+# Neutron and X-ray use the same metadata payload. Store it once and expose
+# the second path expected by the existing pipeline.
+RUN ln -s ../database_neutron/highsymm_metadata.json \
+        /opt/radar-pd/data/database_xray/highsymm_metadata.json \
+    && test -s /opt/radar-pd/data/catalog_manifest.json \
+    && test -s /opt/radar-pd/data/database_neutron/catalog_deduplicated.csv \
+    && test -s /opt/radar-pd/data/database_neutron/mp_experimental_stable.csv \
+    && test -s /opt/radar-pd/data/database_neutron/profiles64/profiles64.npz \
+    && test -s /opt/radar-pd/data/database_neutron/profiles64/index.csv \
+    && test -s /opt/radar-pd/data/database_neutron/highsymm_metadata.json \
+    && test -s /opt/radar-pd/data/database_xray/catalog_deduplicated.csv \
+    && test -s /opt/radar-pd/data/database_xray/mp_experimental_stable.csv \
+    && test -s /opt/radar-pd/data/database_xray/profiles64.npz \
+    && test -s /opt/radar-pd/data/database_xray/profiles64/index.csv \
+    && test -s /opt/radar-pd/data/database_xray/highsymm_metadata.json \
+    && chown -h radar:radar /opt/radar-pd/data/database_xray/highsymm_metadata.json
+
+USER radar
+ENV RADAR_PD_DB_ROOT=/opt/radar-pd/data \
+    RADAR_PD_DATABASE_VERSION=${RADAR_PD_CATALOG_VERSION}

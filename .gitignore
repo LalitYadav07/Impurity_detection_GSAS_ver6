@@ -28,6 +28,7 @@ pip-wheel-metadata/
 /data/
 /data_old/
 /database_xray.zip
+/.ndip_catalog/
 /data/database_xray/
 /data/database_neutron/
  
