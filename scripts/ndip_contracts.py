@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -42,6 +43,14 @@ def sha256_file(path: str | Path) -> str:
     return digest.hexdigest()
 
 
+def ensure_shared_readable(path: str | Path) -> Path:
+    """Make a completed NDIP output readable by Galaxy post-processing."""
+    destination = Path(path)
+    current_mode = stat.S_IMODE(destination.stat().st_mode)
+    destination.chmod(current_mode | stat.S_IRGRP | stat.S_IROTH)
+    return destination
+
+
 def atomic_write_json(path: str | Path, payload: Mapping[str, Any]) -> Path:
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -51,6 +60,7 @@ def atomic_write_json(path: str | Path, payload: Mapping[str, Any]) -> Path:
             json.dump(payload, handle, indent=2, default=str)
             handle.write("\n")
         os.replace(temporary, destination)
+        ensure_shared_readable(destination)
     except Exception:
         try:
             os.unlink(temporary)
@@ -174,6 +184,7 @@ __all__ = [
     "RESULT_SCHEMA",
     "STATE_SCHEMA",
     "atomic_write_json",
+    "ensure_shared_readable",
     "file_record",
     "initial_state",
     "input_manifest",

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import csv
 import json
+import os
+import stat
 import sys
 import zipfile
 from pathlib import Path
@@ -14,10 +16,19 @@ SCRIPTS = ROOT / "scripts"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
-from ndip_contracts import CONFIG_SCHEMA, GPX_INDEX_SCHEMA, RESULT_SCHEMA  # noqa: E402
+from ndip_contracts import CONFIG_SCHEMA, GPX_INDEX_SCHEMA, RESULT_SCHEMA, atomic_write_json  # noqa: E402
 from ndip_gpx_handoff import main as gpx_handoff_main  # noqa: E402
 from ndip_outputs import collect_outputs  # noqa: E402
 from ndip_runner import _extract_db_pack, main  # noqa: E402
+
+
+def test_atomic_json_is_readable_by_galaxy_postprocessing(tmp_path: Path) -> None:
+    output = atomic_write_json(tmp_path / "output.json", {"status": "ok"})
+    assert json.loads(output.read_text(encoding="utf-8")) == {"status": "ok"}
+    if os.name == "posix":
+        mode = stat.S_IMODE(output.stat().st_mode)
+        assert mode & stat.S_IRGRP
+        assert mode & stat.S_IROTH
 
 
 def test_configure_and_direct_xray_dry_run(tmp_path: Path) -> None:
