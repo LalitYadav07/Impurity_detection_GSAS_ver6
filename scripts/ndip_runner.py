@@ -46,6 +46,111 @@ PLACEHOLDER_DATA = "RADAR_PD_NDIP_WILL_REWRITE_DATA"
 PLACEHOLDER_INSTRUMENT = "RADAR_PD_NDIP_WILL_REWRITE_INSTRUMENT"
 
 
+FULL_RUNTIME_PROFILES: dict[str, dict[str, Any]] = {
+    "quick": {
+        "max_passes": 1,
+        "min_phase_percent": 1.0,
+        "top_n_ml": 12,
+        "nudge_candidates": 3,
+        "cell_length_tolerance_pct": 0.6,
+        "cell_angle_tolerance_deg": 1.5,
+        "nudge_samples": 800,
+        "nudge_representatives": 10,
+        "compare_candidates": 1,
+        "compare_cycles": 4,
+        "rwp_improvement_threshold": 0.12,
+        "knee_keep_if_no_knee": 1,
+        "knee_keep_at_most": 3,
+    },
+    "balanced": {
+        "max_passes": 2,
+        "min_phase_percent": 0.5,
+        "top_n_ml": 35,
+        "nudge_candidates": 7,
+        "cell_length_tolerance_pct": 1.0,
+        "cell_angle_tolerance_deg": 3.0,
+        "nudge_samples": 5000,
+        "nudge_representatives": 50,
+        "compare_candidates": 2,
+        "compare_cycles": 6,
+        "rwp_improvement_threshold": 0.06,
+        "knee_keep_if_no_knee": 2,
+        "knee_keep_at_most": 5,
+    },
+    "thorough": {
+        "max_passes": 3,
+        "min_phase_percent": 0.25,
+        "top_n_ml": 75,
+        "nudge_candidates": 12,
+        "cell_length_tolerance_pct": 2.0,
+        "cell_angle_tolerance_deg": 5.0,
+        "nudge_samples": 20000,
+        "nudge_representatives": 150,
+        "compare_candidates": 3,
+        "compare_cycles": 8,
+        "rwp_improvement_threshold": 0.03,
+        "knee_keep_if_no_knee": 3,
+        "knee_keep_at_most": 8,
+    },
+}
+
+
+def _parse_positive_integers(value: str | Iterable[int] | None, *, minimum: int = 1) -> list[int]:
+    if value is None:
+        return []
+    values = value if not isinstance(value, str) else re.split(r"[\s,;]+", value.strip())
+    result: list[int] = []
+    for item in values:
+        if item in (None, ""):
+            continue
+        number = int(item)
+        if number < minimum:
+            raise ValueError(f"Expected an integer >= {minimum}, received {item!r}")
+        if number not in result:
+            result.append(number)
+    return result
+
+
+def _full_runtime_settings(args: argparse.Namespace) -> dict[str, Any]:
+    profile = str(args.runtime_profile or "balanced").lower()
+    if profile in FULL_RUNTIME_PROFILES:
+        return {"profile": profile, **FULL_RUNTIME_PROFILES[profile]}
+    if profile != "custom":
+        raise ValueError(f"Unknown Full RADAR-PD runtime profile: {profile}")
+    settings = {
+        "profile": "custom",
+        "max_passes": int(args.max_passes),
+        "min_phase_percent": float(args.min_phase_percent),
+        "top_n_ml": int(args.full_top_n_ml),
+        "nudge_candidates": int(args.full_nudge_candidates),
+        "cell_length_tolerance_pct": float(args.full_cell_length_tolerance),
+        "cell_angle_tolerance_deg": float(args.full_cell_angle_tolerance),
+        "nudge_samples": int(args.full_nudge_samples),
+        "nudge_representatives": int(args.full_nudge_representatives),
+        "compare_candidates": int(args.full_compare_candidates),
+        "compare_cycles": int(args.full_compare_cycles),
+        "rwp_improvement_threshold": float(args.full_rwp_improvement_threshold),
+        "knee_keep_if_no_knee": min(2, int(args.full_nudge_candidates)),
+        "knee_keep_at_most": max(2, min(8, int(args.full_nudge_candidates))),
+    }
+    positive_keys = (
+        "max_passes",
+        "top_n_ml",
+        "nudge_candidates",
+        "nudge_samples",
+        "nudge_representatives",
+        "compare_candidates",
+        "compare_cycles",
+    )
+    if any(int(settings[key]) < 1 for key in positive_keys):
+        raise ValueError("Custom Full RADAR-PD search counts must be positive")
+    if float(settings["min_phase_percent"]) < 0:
+        raise ValueError("Minimum phase fraction cannot be negative")
+    if float(settings["cell_length_tolerance_pct"]) <= 0 or float(settings["cell_angle_tolerance_deg"]) <= 0:
+        raise ValueError("Custom lattice-search tolerances must be positive")
+    return settings
+
+
 def _load_yaml(path: str | Path) -> dict[str, Any]:
     payload = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
     if not isinstance(payload, dict):
@@ -95,9 +200,22 @@ def _parse_regions(values: list[str] | None) -> list[list[float]]:
 
 def _contract_config(args: argparse.Namespace) -> dict[str, Any]:
     mode = "rapid" if args.mode == "rapid" else "full"
+    full_settings = _full_runtime_settings(args)
     allowed = _split_elements(args.allowed_elements)
     if not allowed:
         raise ValueError("At least one sample element is required")
+    bounded_values = (
+        ("background terms", int(args.background_terms), 1, 36),
+        ("rapid phases per hypothesis", int(args.phases_per_hypothesis), 1, 5),
+        ("rapid stage output limit", int(args.rapid_stage_output_limit), 3, 50),
+        ("rapid refinement limit", int(args.gsas_validation_limit), 0, 100),
+        ("rapid workers", int(args.rapid_workers), 1, 16),
+    )
+    for label, value, lower, upper in bounded_values:
+        if not lower <= value <= upper:
+            raise ValueError(f"{label} must be between {lower} and {upper}")
+    if float(args.magnetic_q_max) <= 0:
+        raise ValueError("Magnetic precheck Q maximum must be positive")
     limits = None
     if args.limit_start is not None or args.limit_end is not None:
         if args.limit_start is None or args.limit_end is None or args.limit_end <= args.limit_start:
@@ -118,6 +236,12 @@ def _contract_config(args: argparse.Namespace) -> dict[str, Any]:
         "pattern": {
             "limits": limits,
             "exclude_regions": _parse_regions(args.exclude_region),
+            "reference_phase_exclusions": {
+                "enabled": bool(args.reference_mask_preset),
+                "presets": list(dict.fromkeys(args.reference_mask_preset)),
+                "window_mode": "auto",
+                "include_cu_kbeta": bool(args.reference_mask_include_kbeta),
+            },
         },
         "background": {
             "mode": args.background_mode,
@@ -133,14 +257,19 @@ def _contract_config(args: argparse.Namespace) -> dict[str, Any]:
                 "refine_positions": bool(args.refine_positions),
             },
         },
-        "magnetic_precheck": {"enabled": bool(args.magnetic_precheck)},
-        "full": {
-            "max_passes": int(args.max_passes),
-            "min_phase_percent": float(args.min_phase_percent),
+        "magnetic_precheck": {
+            "enabled": bool(args.magnetic_precheck),
+            "q_max": float(args.magnetic_q_max),
+            "denominators": _parse_positive_integers(args.magnetic_denominators, minimum=2) or [2, 3],
         },
+        "full": full_settings,
         "rapid": {
             "phases_per_hypothesis": int(args.phases_per_hypothesis),
+            "stage_output_limit": int(args.rapid_stage_output_limit),
             "gsas_validation_limit": int(args.gsas_validation_limit),
+            "parallel_workers": int(args.rapid_workers),
+            "show_family_variants": bool(args.rapid_family_variants),
+            "final_polish_enabled": bool(args.rapid_final_polish),
         },
     }
     return payload
@@ -197,29 +326,85 @@ def _materialize_contract_config(
     full = dict(contract.get("full") or {})
     mode = "rapid" if analysis.get("mode") == "rapid" else "full"
     radiation = str(analysis.get("radiation") or "neutron").lower()
+    nudge_candidates = int(full.get("nudge_candidates", 7))
+    compare_candidates = int(full.get("compare_candidates", 2))
     advanced = {
         "analysis_mode": "rapid_hypothesis" if mode == "rapid" else "full_radar_pd",
         "rapid_hypothesis": {
             "enabled": mode == "rapid",
-            "phases_per_hypothesis": int(rapid.get("phases_per_hypothesis", 3)),
+            "beam_depth": int(rapid.get("phases_per_hypothesis", 3)),
+            "beam_width": 40,
+            "branch_top": 160,
+            "nudge_unique_phases": 0,
+            "parallel_nudge": True,
+            "stage_output_limit": int(rapid.get("stage_output_limit", 10)),
             "gsas_validation_limit": int(rapid.get("gsas_validation_limit", 10)),
+            "gsas_parallel_workers": int(rapid.get("parallel_workers", 4)),
+            "show_family_variants": bool(rapid.get("show_family_variants", True)),
+            "final_polish_enabled": bool(rapid.get("final_polish_enabled", False)),
+            "final_polish_strategy": "adaptive" if bool(rapid.get("final_polish_enabled", False)) else "quick",
+            "low_weight_prune_pct": 0.2,
+            "low_weight_skip_min_phases": 2,
+            "workflow": "64_bin_to_radar_nudge_to_512_bin_to_final_refinement_ranking",
+        },
+        "hist_filter": {"topN": int(full.get("top_n_ml", 35))},
+        "top_candidates": nudge_candidates,
+        "joint_top_k": compare_candidates,
+        "max_joint_cycles": int(full.get("compare_cycles", 6)),
+        "adaptive_compare_enabled": True,
+        "adaptive_compare_keep": max(1, min(2, compare_candidates)),
+        "adaptive_compare_cycles": 1,
+        "rwp_improve_eps": float(full.get("rwp_improvement_threshold", 0.06)),
+        "corr_threshold": 0.95,
+        "knee_filter": {
+            "enable_hist": True,
+            "enable_nudge": True,
+            "enable_pearson": True,
+            "min_points_hist": 5,
+            "min_points_nudge": 3,
+            "min_points_pearson": 2,
+            "min_rel_span": 0.03,
+            "guard_frac": 0.05,
+            "max_keep_if_no_knee": int(full.get("knee_keep_if_no_knee", 2)),
+            "min_keep_at_least": 1,
+            "max_keep_at_most": int(full.get("knee_keep_at_most", 5)),
         },
         "background": {
             "mode": background.get("mode", "auto_fixed_points"),
             "type": background.get("type", "chebyschev-1"),
             "terms": int(background.get("terms", 6)),
         },
-        "main_phase_prenudge": {"enabled": bool(main_phase.get("prenudge", True))},
-        "main_phase_shadow": {"enabled": bool(main_phase.get("shadow_filter", True))},
+        "main_phase_prenudge": {
+            "enabled": bool(main_phase.get("prenudge", True)),
+            "apply_only_user_main": True,
+        },
+        "main_phase_shadow": {
+            "enabled": bool(main_phase.get("shadow_filter", True)),
+            "nudge_filter_enabled": bool(main_phase.get("shadow_filter", True)),
+            "refill_attempts": 2,
+        },
         "main_phase_cleanup": {
             "enabled": bool(cleanup.get("enabled", False)),
+            "apply_only_user_main": True,
             "refine_u_iso": bool(cleanup.get("refine_u_iso", False)),
             "refine_positions": bool(cleanup.get("refine_positions", False)),
         },
         "magnetic_precheck": dict(contract.get("magnetic_precheck") or {"enabled": False}),
-        "stage4": {"radiation": radiation},
+        "stage4": {
+            "radiation": radiation,
+            "samples": int(full.get("nudge_samples", 5000)),
+            "reps": int(full.get("nudge_representatives", 50)),
+            "len_tol_pct": float(full.get("cell_length_tolerance_pct", 1.0)),
+            "ang_tol_deg": float(full.get("cell_angle_tolerance_deg", 3.0)),
+            "score_q_max": 8.0,
+            "pearson_q_max": 8.0,
+            "pearson_defer_export": True,
+            "lattice_tiebreak_score_tol": 0.0005,
+            "pearson_cell_refine_min_r": 0.50,
+        },
         "db_source": radiation,
     }
+    reference_exclusions = dict(pattern.get("reference_phase_exclusions") or {})
     text = build_pipeline_config(
         run_name=run_name,
         data_file=str(data),
@@ -230,12 +415,13 @@ def _materialize_contract_config(
         project_root=str(PROJECT_ROOT),
         db_root=str(db_root),
         min_impurity_percent=float(full.get("min_phase_percent", 0.5)),
-        max_passes=int(full.get("max_passes", 3)),
+        max_passes=int(full.get("max_passes", 2)),
         sample_env_elements=_split_elements(chemistry.get("environment_elements")),
         instrument_mode=str(analysis.get("instrument_mode") or "auto"),
         advanced_params=advanced,
         limits=pattern.get("limits"),
         exclude_regions=pattern.get("exclude_regions") or [],
+        reference_phase_exclusions=reference_exclusions,
     )
     return yaml.safe_load(text)
 
@@ -705,14 +891,37 @@ def _add_config_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--limit-start", type=float)
     parser.add_argument("--limit-end", type=float)
     parser.add_argument("--exclude-region", action="append", default=[])
+    parser.add_argument(
+        "--reference-mask-preset",
+        action="append",
+        choices=("Al_fcc", "Cu_fcc", "V_bcc"),
+        default=[],
+    )
+    parser.add_argument("--reference-mask-include-kbeta", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--background-mode", default="auto_fixed_points")
     parser.add_argument("--background-type", default="chebyschev-1")
     parser.add_argument("--background-terms", type=int, default=6)
     parser.add_argument("--max-passes", type=int, default=3)
     parser.add_argument("--min-phase-percent", type=float, default=0.5)
+    parser.add_argument("--runtime-profile", choices=("quick", "balanced", "thorough", "custom"), default="balanced")
+    parser.add_argument("--full-top-n-ml", type=int, default=35)
+    parser.add_argument("--full-nudge-candidates", type=int, default=7)
+    parser.add_argument("--full-cell-length-tolerance", type=float, default=1.0)
+    parser.add_argument("--full-cell-angle-tolerance", type=float, default=3.0)
+    parser.add_argument("--full-nudge-samples", type=int, default=5000)
+    parser.add_argument("--full-nudge-representatives", type=int, default=50)
+    parser.add_argument("--full-compare-candidates", type=int, default=2)
+    parser.add_argument("--full-compare-cycles", type=int, default=6)
+    parser.add_argument("--full-rwp-improvement-threshold", type=float, default=0.06)
     parser.add_argument("--phases-per-hypothesis", type=int, default=3)
+    parser.add_argument("--rapid-stage-output-limit", type=int, default=10)
     parser.add_argument("--gsas-validation-limit", type=int, default=10)
+    parser.add_argument("--rapid-workers", type=int, default=4)
+    parser.add_argument("--rapid-family-variants", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--rapid-final-polish", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--magnetic-precheck", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--magnetic-q-max", type=float, default=6.0)
+    parser.add_argument("--magnetic-denominators", default="2,3")
     parser.add_argument("--main-prenudge", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--main-shadow-filter", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--main-cleanup", action=argparse.BooleanOptionalAction, default=False)

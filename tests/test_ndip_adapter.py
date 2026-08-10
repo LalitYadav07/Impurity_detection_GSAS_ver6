@@ -48,6 +48,24 @@ def test_configure_and_direct_xray_dry_run(tmp_path: Path) -> None:
             "Al",
             "--exclude-region",
             "20:21.5",
+            "--reference-mask-preset",
+            "Al_fcc",
+            "--reference-mask-include-kbeta",
+            "--phases-per-hypothesis",
+            "4",
+            "--rapid-stage-output-limit",
+            "12",
+            "--gsas-validation-limit",
+            "6",
+            "--rapid-workers",
+            "3",
+            "--no-rapid-family-variants",
+            "--rapid-final-polish",
+            "--magnetic-precheck",
+            "--magnetic-q-max",
+            "5.5",
+            "--magnetic-denominators",
+            "2,4",
             "--output",
             str(config),
         ]
@@ -56,6 +74,17 @@ def test_configure_and_direct_xray_dry_run(tmp_path: Path) -> None:
     assert portable["$schema"] == CONFIG_SCHEMA
     assert portable["chemistry"]["sample_elements"] == ["Fe", "O"]
     assert portable["pattern"]["exclude_regions"] == [[20.0, 21.5]]
+    assert portable["pattern"]["reference_phase_exclusions"]["presets"] == ["Al_fcc"]
+    assert portable["rapid"] == {
+        "phases_per_hypothesis": 4,
+        "stage_output_limit": 12,
+        "gsas_validation_limit": 6,
+        "parallel_workers": 3,
+        "show_family_variants": False,
+        "final_polish_enabled": True,
+    }
+    assert portable["magnetic_precheck"]["q_max"] == 5.5
+    assert portable["magnetic_precheck"]["denominators"] == [2, 4]
 
     data = tmp_path / "scan.xye"
     data.write_text("10 100 10\n11 120 11\n", encoding="utf-8")
@@ -83,7 +112,65 @@ def test_configure_and_direct_xray_dry_run(tmp_path: Path) -> None:
     resolved = yaml.safe_load((portal / "resolved_config.yaml").read_text(encoding="utf-8"))
     assert state["status"] == "complete"
     assert resolved["datasets"][0]["instprm_path"].endswith("generated_CuKa_lab.instprm")
+    assert resolved["rapid_hypothesis"]["beam_depth"] == 4
+    assert resolved["rapid_hypothesis"]["stage_output_limit"] == 12
+    assert resolved["rapid_hypothesis"]["gsas_parallel_workers"] == 3
+    assert resolved["rapid_hypothesis"]["show_family_variants"] is False
+    assert resolved["rapid_hypothesis"]["final_polish_enabled"] is True
+    assert resolved["reference_phase_exclusions"]["presets"] == ["Al_fcc"]
     assert (work / "inputs" / "generated_CuKa_lab.instprm").is_file()
+
+
+def test_full_runtime_profile_materializes_hosted_gui_budget(tmp_path: Path) -> None:
+    config = tmp_path / "full_config.yaml"
+    assert main(
+        [
+            "configure",
+            "--mode",
+            "full",
+            "--radiation",
+            "neutron",
+            "--allowed-elements",
+            "Tb, Ge, O",
+            "--runtime-profile",
+            "thorough",
+            "--output",
+            str(config),
+        ]
+    ) == 0
+    data = tmp_path / "scan.dat"
+    instrument = tmp_path / "scan.instprm"
+    data.write_text("1 1 1\n2 2 1\n", encoding="utf-8")
+    instrument.write_text("#GSAS-II\n", encoding="utf-8")
+    portal = tmp_path / "portal"
+    work = tmp_path / "work"
+    assert main(
+        [
+            "analyze",
+            "--config",
+            str(config),
+            "--data",
+            str(data),
+            "--instrument",
+            str(instrument),
+            "--db-root",
+            str(tmp_path / "database_neutron"),
+            "--work-dir",
+            str(work),
+            "--output-dir",
+            str(portal),
+            "--dry-run",
+        ]
+    ) == 0
+    resolved = yaml.safe_load((portal / "resolved_config.yaml").read_text(encoding="utf-8"))
+    assert resolved["max_passes"] == 3
+    assert resolved["min_impurity_percent"] == 0.25
+    assert resolved["hist_filter"]["topN"] == 75
+    assert resolved["top_candidates"] == 12
+    assert resolved["stage4"]["samples"] == 20000
+    assert resolved["stage4"]["reps"] == 150
+    assert resolved["stage4"]["len_tol_pct"] == 2.0
+    assert resolved["stage4"]["ang_tol_deg"] == 5.0
 
 
 def test_normalized_outputs_include_all_gpx_projects(tmp_path: Path) -> None:
@@ -116,7 +203,9 @@ def test_normalized_outputs_include_all_gpx_projects(tmp_path: Path) -> None:
     report = (portal / "report.html").read_text(encoding="utf-8")
     assert "Fit and diagnostic plots" in report
     assert "plots/plots__fit.png" in report
-    assert "GPX-capable hosted GSAS-II" in report
+    assert "Continue in GSAS-II" in report
+    assert "Cu + Cu2S" in report
+    assert "Stage timing" in report
     assert (portal / "results.zip").is_file()
 
 

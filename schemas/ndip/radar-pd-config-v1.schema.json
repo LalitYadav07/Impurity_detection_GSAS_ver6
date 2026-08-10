@@ -36,13 +36,58 @@
         "exclude_regions": {
           "type": "array",
           "items": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "number"}}
+        },
+        "reference_phase_exclusions": {
+          "type": "object",
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "presets": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {"enum": ["Al_fcc", "Cu_fcc", "V_bcc"]}
+            },
+            "window_mode": {"enum": ["auto", "fixed"]},
+            "include_cu_kbeta": {"type": "boolean"}
+          }
         }
       }
     },
     "background": {"type": "object"},
     "main_phase": {"type": "object"},
-    "magnetic_precheck": {"type": "object"},
-    "full": {"type": "object"},
-    "rapid": {"type": "object"}
+    "magnetic_precheck": {
+      "type": "object",
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "q_max": {"type": "number", "exclusiveMinimum": 0},
+        "denominators": {"type": "array", "items": {"type": "integer", "minimum": 2}}
+      }
+    },
+    "full": {
+      "type": "object",
+      "properties": {
+        "profile": {"enum": ["quick", "balanced", "thorough", "custom"]},
+        "max_passes": {"type": "integer", "minimum": 1},
+        "min_phase_percent": {"type": "number", "minimum": 0},
+        "top_n_ml": {"type": "integer", "minimum": 1},
+        "nudge_candidates": {"type": "integer", "minimum": 1},
+        "cell_length_tolerance_pct": {"type": "number", "exclusiveMinimum": 0},
+        "cell_angle_tolerance_deg": {"type": "number", "exclusiveMinimum": 0},
+        "nudge_samples": {"type": "integer", "minimum": 1},
+        "nudge_representatives": {"type": "integer", "minimum": 1},
+        "compare_candidates": {"type": "integer", "minimum": 1},
+        "compare_cycles": {"type": "integer", "minimum": 1}
+      }
+    },
+    "rapid": {
+      "type": "object",
+      "properties": {
+        "phases_per_hypothesis": {"type": "integer", "minimum": 1, "maximum": 5},
+        "stage_output_limit": {"type": "integer", "minimum": 3, "maximum": 50},
+        "gsas_validation_limit": {"type": "integer", "minimum": 0},
+        "parallel_workers": {"type": "integer", "minimum": 1},
+        "show_family_variants": {"type": "boolean"},
+        "final_polish_enabled": {"type": "boolean"}
+      }
+    }
   }
 }

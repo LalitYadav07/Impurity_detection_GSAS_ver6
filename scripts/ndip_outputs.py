@@ -194,6 +194,12 @@ def _artifact_label(item: dict[str, Any]) -> str:
     return html.escape(str(item.get("source_path") or item.get("name") or "artifact"))
 
 
+def _artifact_title(item: dict[str, Any]) -> str:
+    raw = str(item.get("source_path") or item.get("name") or "artifact")
+    name = Path(raw).stem.replace("__", " / ").replace("_", " ")
+    return html.escape(" ".join(name.split()))
+
+
 def _artifact_links(items: list[dict[str, Any]], *, limit: int = 80) -> str:
     if not items:
         return "<p class='empty'>No files were produced for this collection.</p>"
@@ -211,20 +217,109 @@ def _plot_gallery(items: list[dict[str, Any]], *, limit: int = 24) -> str:
         return "<p class='empty'>No plot artifacts were produced.</p>"
     figures: list[str] = []
     links: list[dict[str, Any]] = []
-    for item in items:
+    def priority(item: dict[str, Any]) -> tuple[int, str]:
+        label = str(item.get("source_path") or item.get("name") or "").lower()
+        if any(token in label for token in ("final", "accepted_model", "best_fit", "curve")):
+            return (0, label)
+        if any(token in label for token in ("fit", "refine", "hypothesis")):
+            return (1, label)
+        return (2, label)
+
+    for item in sorted(items, key=priority):
         suffix = Path(str(item.get("name") or item.get("path") or "")).suffix.lower()
         if suffix in {".png", ".jpg", ".jpeg", ".svg"} and len(figures) < limit:
             href = _artifact_href(item)
             figures.append(
                 f"<figure><a href='{href}' target='_blank' rel='noopener'>"
                 f"<img src='{href}' loading='lazy' alt='{_artifact_label(item)}'></a>"
-                f"<figcaption>{_artifact_label(item)}</figcaption></figure>"
+                f"<figcaption><strong>{_artifact_title(item)}</strong>"
+                f"<span>{_artifact_label(item)}</span></figcaption></figure>"
             )
         else:
             links.append(item)
     gallery = f"<div class='gallery'>{''.join(figures)}</div>" if figures else ""
     extra = _artifact_links(links) if links else ""
     return gallery + extra
+
+
+def _as_float(value: Any) -> float | None:
+    try:
+        number = float(value)
+        return number if number == number else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _fmt_number(value: Any, digits: int = 2) -> str:
+    number = _as_float(value)
+    return "-" if number is None else f"{number:.{digits}f}"
+
+
+def _timing_values(summary: dict[str, Any]) -> list[tuple[str, float]]:
+    timings = ((summary.get("live_run") or {}).get("timings") or {}) if isinstance(summary, dict) else {}
+    labels = {
+        "signal_seconds": "Input preparation",
+        "search64_seconds": "Coarse search",
+        "nudge_seconds": "Lattice nudge",
+        "rerank512_seconds": "Pattern scoring",
+        "gsas_wall_seconds": "Final refinement wall time",
+        "gsas_total_seconds": "Summed refinement time",
+        "total_seconds": "Total",
+    }
+    values: list[tuple[str, float]] = []
+    for key, label in labels.items():
+        value = _as_float(timings.get(key))
+        if value is not None:
+            values.append((label, value))
+    if not any(label == "Total" for label, _ in values):
+        stage_values = [value for label, value in values if "Summed" not in label]
+        if stage_values:
+            values.append(("Reported stages", sum(stage_values)))
+    return values
+
+
+def _hypothesis_table(items: list[dict[str, Any]], *, limit: int = 20) -> str:
+    if not items:
+        return "<p class='empty'>No final hypothesis table was produced for this run.</p>"
+    rows: list[str] = []
+    for index, item in enumerate(items[:limit], start=1):
+        rank = item.get("gsas_rwp_rank") or item.get("rank") or index
+        hypothesis = item.get("hypothesis") or item.get("formulas") or item.get("formula_keys") or "-"
+        quality = item.get("rwp") or item.get("Rwp") or item.get("refinement_quality")
+        fractions = item.get("weights_json") or item.get("phase_fractions") or item.get("weights") or "-"
+        status = item.get("status") or "complete"
+        rows.append(
+            "<tr>"
+            f"<td>{html.escape(str(rank))}</td>"
+            f"<td class='scientific'>{html.escape(str(hypothesis))}</td>"
+            f"<td>{_fmt_number(quality, 3)}</td>"
+            f"<td class='scientific'>{html.escape(str(fractions))}</td>"
+            f"<td>{html.escape(str(status).replace('_', ' ').title())}</td>"
+            "</tr>"
+        )
+    return (
+        "<div class='table-scroll'><table><thead><tr><th>Rank</th><th>Phase hypothesis</th>"
+        "<th>Rwp / fit metric</th><th>Refined phase fractions</th><th>Status</th></tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody></table></div>"
+    )
+
+
+def _phase_table(items: list[dict[str, Any]], *, limit: int = 30) -> str:
+    if not items:
+        return ""
+    columns = list(items[0].keys())[:8]
+    head = "".join(f"<th>{html.escape(str(column).replace('_', ' ').title())}</th>" for column in columns)
+    body = "".join(
+        "<tr>" + "".join(f"<td>{html.escape(str(item.get(column, '')))}</td>" for column in columns) + "</tr>"
+        for item in items[:limit]
+    )
+    return f"<div class='table-scroll'><table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table></div>"
+
+
+def _message_text(item: Any) -> str:
+    if isinstance(item, dict):
+        return str(item.get("message") or item.get("error") or json.dumps(item, default=str))
+    return str(item)
 
 def _render_report(result: dict[str, Any]) -> str:
     summary = result.get("summary") or {}
@@ -246,39 +341,73 @@ def _render_report(result: dict[str, Any]) -> str:
         for name, items in collections.items()
         if isinstance(items, list)
     )
-    messages = "".join(f"<li>{html.escape(str(item))}</li>" for item in [*warnings, *errors])
+    messages = "".join(f"<li>{html.escape(_message_text(item))}</li>" for item in [*warnings, *errors])
     plots = list(collections.get("plots") or [])
     tables = list(collections.get("tables") or [])
     phases = list(collections.get("phases") or [])
     diagnostics = list(collections.get("diagnostics") or [])
+    hypotheses = list(result.get("hypotheses") or [])
+    phases_summary = list(result.get("phases") or [])
+    timings = _timing_values(summary)
+    best_rwp = min(
+        (value for value in (_as_float(item.get("rwp") or item.get("Rwp")) for item in hypotheses) if value is not None),
+        default=None,
+    )
+    cards = [
+        ("Analysis", "Rapid hypothesis" if str(result.get("analysis_mode")) == "rapid" else "Full RADAR-PD"),
+        ("Status", str(result.get("status") or "unknown").title()),
+        ("Final hypotheses", str(len(hypotheses)) if hypotheses else "-"),
+        ("Reported phases", str(len(phases_summary)) if phases_summary else "-"),
+        ("Best Rwp", _fmt_number(best_rwp, 3)),
+    ]
+    timing_cards = "".join(
+        f"<div class='metric'><span>{html.escape(label)}</span><strong>{value:.1f} s</strong></div>"
+        for label, value in timings
+    )
+    overview_cards = "".join(
+        f"<div class='metric'><span>{html.escape(label)}</span><strong>{html.escape(value)}</strong></div>"
+        for label, value in cards
+    )
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>RADAR-PD result: {html.escape(str(result.get('run_name', 'run')))}</title>
 <style>
-body{{font-family:Arial,sans-serif;max-width:1180px;margin:2rem auto;padding:0 1.25rem;color:#17231e;background:#fff}}
-h1,h2{{color:#0f5138}} table{{border-collapse:collapse;width:100%;margin:1rem 0}}
-th,td{{border:1px solid #ccd8d1;padding:.55rem;text-align:left}} th{{background:#e9f3ee}}
-a{{color:#126b4e}} pre{{background:#f5f7f6;padding:1rem;overflow:auto;max-height:34rem}}
-.status{{font-weight:700}} .empty,.muted{{color:#68766f}} .file-list{{columns:2;column-gap:2rem}}
-.gallery{{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:1rem}}
-figure{{margin:0;border:1px solid #d7e1dc;padding:.65rem;background:#fbfcfb}}
-figure img{{display:block;width:100%;height:230px;object-fit:contain;background:#fff}}
-figcaption{{font-size:.86rem;color:#52615a;margin-top:.5rem;overflow-wrap:anywhere}}
-@media(max-width:700px){{.file-list{{columns:1}} figure img{{height:auto}}}}
+:root{{--ink:#14231d;--muted:#66756e;--green:#125b42;--green2:#e8f3ed;--line:#d4e0d9;--panel:#f7faf8;--warn:#fff4d6}}
+*{{box-sizing:border-box}} body{{font-family:Inter,Segoe UI,Arial,sans-serif;max-width:1240px;margin:0 auto;padding:2.25rem 1.4rem 5rem;color:var(--ink);background:#fff;line-height:1.5}}
+h1{{font-size:2rem;letter-spacing:0;margin:.25rem 0}} h2{{color:#103f31;margin:2.35rem 0 .45rem;font-size:1.3rem}} h3{{margin:1.25rem 0 .35rem}}
+.eyebrow{{color:var(--green);font-size:.78rem;font-weight:800;text-transform:uppercase}} .lede{{color:var(--muted);max-width:780px;margin:.4rem 0 1.3rem}}
+.metrics{{display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:.7rem;margin:1rem 0}}
+.metric{{border:1px solid var(--line);border-left:4px solid var(--green);padding:.75rem .85rem;background:#fff;min-height:74px}}
+.metric span{{display:block;color:var(--muted);font-size:.75rem;font-weight:700}} .metric strong{{display:block;font-size:1.05rem;margin-top:.2rem;overflow-wrap:anywhere}}
+.notice{{border:1px solid #ecd58e;background:var(--warn);padding:.8rem 1rem;margin:1rem 0}}
+table{{border-collapse:collapse;width:100%;margin:.8rem 0}} th,td{{border:1px solid var(--line);padding:.58rem;text-align:left;vertical-align:top}} th{{background:var(--green2);font-size:.8rem}}
+.table-scroll{{overflow-x:auto}} .scientific{{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:.86rem}}
+a{{color:#126b4e}} pre{{background:#f5f7f6;border:1px solid var(--line);padding:1rem;overflow:auto;max-height:34rem;font-size:.8rem}}
+.empty,.muted{{color:var(--muted)}} .file-list{{columns:2;column-gap:2rem;padding-left:1.2rem}} .file-list li{{break-inside:avoid;margin:.22rem 0}}
+.gallery{{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:1rem}}
+figure{{margin:0;border:1px solid var(--line);padding:.7rem;background:var(--panel)}} figure img{{display:block;width:100%;height:280px;object-fit:contain;background:#fff}}
+figcaption{{font-size:.82rem;color:var(--muted);margin-top:.55rem;overflow-wrap:anywhere}} figcaption strong,figcaption span{{display:block}} figcaption strong{{color:var(--ink);font-size:.9rem}}
+details{{border:1px solid var(--line);padding:.7rem .9rem;margin:.8rem 0}} summary{{cursor:pointer;font-weight:700}}
+@media(max-width:700px){{body{{padding:1rem}}.file-list{{columns:1}}figure img{{height:auto}}.gallery{{grid-template-columns:1fr}}}}
 </style></head><body>
-<h1>RADAR-PD analysis report</h1>
-<p><strong>Run:</strong> {html.escape(str(result.get('run_name')))}<br>
-<strong>Mode:</strong> {html.escape(str(result.get('analysis_mode')))}<br>
-<strong>Status:</strong> <span class="status">{html.escape(str(result.get('status')))}</span></p>
-<h2>Output collections</h2><table><tr><th>Collection</th><th>Files</th></tr>{collection_rows}</table>
-<h2>Fit and diagnostic plots</h2>{_plot_gallery(plots)}
-<h2>Result tables</h2>{_artifact_links(tables)}
-<h2>Phase structures</h2>{_artifact_links(phases)}
-<h2>GSAS-II projects</h2><p>Each checkpoint is preserved with provenance. Use the GPX handoff tool and, once registered by NDIP, a GPX-capable hosted GSAS-II session to continue an existing refinement.</p>
+<div class="eyebrow">RADAR-PD scientific analysis</div><h1>{html.escape(str(result.get('run_name')))}</h1>
+<p class="lede">Candidate phases, lattice-aware pattern matching, and GSAS-II refinement outputs collected into one inspectable NDIP result.</p>
+<div class="metrics">{overview_cards}</div>
+{f'<h2>Stage timing</h2><div class="metrics">{timing_cards}</div>' if timing_cards else ''}
+{f'<div class="notice"><strong>Run messages</strong><ul>{messages}</ul></div>' if messages else ''}
+<h2>Scientific result</h2>
+<p class="muted">For Rapid mode, pattern ranking narrows hypotheses and final GSAS-II refinement supplies the fit metric and phase fractions. Treat a low-ranked or zero-weight phase as unsupported by that refinement, not as proof of absence.</p>
+{_hypothesis_table(hypotheses)}
+{f'<h3>Final phase summary</h3>{_phase_table(phases_summary)}' if phases_summary else ''}
+<h2>Fit and diagnostic plots</h2><p class="muted">Final and accepted fit plots are shown first. Open any plot at full size to inspect residuals and Bragg positions.</p>{_plot_gallery(plots)}
+<h2>Continue in GSAS-II</h2><p>Each refinement checkpoint is preserved with provenance. Select a GPX project with the RADAR-PD GPX handoff tool, then open it in the hosted GSAS-II interface for manual inspection or continued refinement.</p>
 <table><tr><th>#</th><th>Project</th><th>Stage</th><th>Status</th></tr>{rows}</table>
+<h2>Downloads and reproducibility</h2>
+<details open><summary>Result tables ({len(tables)})</summary>{_artifact_links(tables)}</details>
+<details><summary>Phase CIF files ({len(phases)})</summary>{_artifact_links(phases)}</details>
 <details><summary>Diagnostics and logs ({len(diagnostics)})</summary>{_artifact_links(diagnostics)}</details>
-<h2>Pipeline summary</h2><pre>{html.escape(json.dumps(summary, indent=2, default=str))}</pre>
-{f'<h2>Warnings and errors</h2><ul>{messages}</ul>' if messages else ''}
+<details><summary>Output inventory</summary><table><tr><th>Collection</th><th>Files</th></tr>{collection_rows}</table></details>
+<details><summary>Machine-readable pipeline summary</summary><pre>{html.escape(json.dumps(summary, indent=2, default=str))}</pre></details>
 </body></html>"""
 
 
