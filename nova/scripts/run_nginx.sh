@@ -12,9 +12,11 @@ fi
 # Keep the fallback root location unique during local/root-path launches.
 # NOVA supplies a non-empty entry-point path in production.
 export EP_PATH="${ep_path:-/__radar_pd_root__}"
+runtime_dir="/tmp/radar-pd-nginx"
+mkdir -p "${runtime_dir}/client-body" "${runtime_dir}/proxy"
 
 envsubst '${EP_PATH}' \
   < /etc/nginx/templates/radar-pd.conf.template \
-  > /etc/nginx/conf.d/radar-pd.conf
+  > /tmp/radar-pd-nginx.conf
 
-exec nginx -g 'daemon off;'
+exec nginx -c /tmp/radar-pd-nginx.conf -g 'daemon off;'

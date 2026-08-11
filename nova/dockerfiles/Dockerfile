@@ -24,4 +24,4 @@ ENV PYTHONUNBUFFERED=1 \
 
 EXPOSE 8081
 ENTRYPOINT []
-CMD ["/usr/bin/supervisord", "-n", "-c", "/etc/supervisor/supervisord.conf"]
+CMD ["/usr/bin/supervisord", "-n", "-c", "/etc/supervisor/conf.d/radar-pd.conf"]

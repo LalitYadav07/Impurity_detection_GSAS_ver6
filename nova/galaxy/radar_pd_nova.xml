@@ -21,7 +21,7 @@
     <command detect_errors="exit_code"><![CDATA[
         set -euo pipefail
         : > '$session_log'
-        /usr/bin/supervisord -n -c /etc/supervisor/supervisord.conf \
+        /usr/bin/supervisord -n -c /etc/supervisor/conf.d/radar-pd.conf \
           > >(tee -a '$session_log') \
           2> >(tee -a '$session_log' >&2)
     ]]></command>
