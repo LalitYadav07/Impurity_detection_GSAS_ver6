@@ -77,6 +77,8 @@ def test_interactive_startup_keeps_a_console_output_for_ndip_lifecycle() -> None
     assert len(declared_outputs) == 1
     assert declared_outputs[0].get("name") == "console_output"
     assert declared_outputs[0].get("format") == "txt"
-    assert 'tee -a "$console_output"' in root.findtext("command", default="")
+    command = root.findtext("command", default="")
+    assert "Galaxy command starting" in command
+    assert 'exec /usr/local/bin/run_container.sh >> "$console_output" 2>&1' in command
     assert "touch " not in root.findtext("command", default="")
     assert "launcher starting" in launcher

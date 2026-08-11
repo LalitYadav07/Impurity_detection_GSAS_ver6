@@ -1,4 +1,4 @@
-<tool id="neutrons_radar_pd_interactive_prototype" tool_type="interactive" name="RADAR-PD Interactive" version="0.1.7" profile="22.05">
+<tool id="neutrons_radar_pd_interactive_prototype" tool_type="interactive" name="RADAR-PD Interactive" version="0.1.8" profile="22.05">
     <description>configure, run, monitor, recover, and inspect Full or Rapid RADAR-PD analyses</description>
     <creator>
         <person name="Lalit Yadav"/>
@@ -21,7 +21,8 @@
     <command detect_errors="exit_code"><![CDATA[
         set -euo pipefail
         : > "$console_output"
-        /usr/local/bin/run_container.sh > >(tee -a "$console_output") 2> >(tee -a "$console_output" >&2)
+        printf '[radar-pd-nova] Galaxy command starting\n' >> "$console_output"
+        exec /usr/local/bin/run_container.sh >> "$console_output" 2>&1
     ]]></command>
     <inputs/>
     <outputs>
