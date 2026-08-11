@@ -85,6 +85,8 @@ Thumbs.db
 
 # Python test / cache
 .pytest_cache/
+.pytest_tmp*/
+test_tmp_manual/
 
 # Misc
 *.bak

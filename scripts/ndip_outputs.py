@@ -5,6 +5,7 @@ import csv
 import html
 import json
 import os
+import re
 import shutil
 import zipfile
 from pathlib import Path
@@ -73,6 +74,74 @@ def _flatten_name(path: Path, root: Path) -> str:
     return safe_name(stem, path.name)
 
 
+def _is_intermediate_file(path: Path) -> bool:
+    name = path.name.lower()
+    return any(token in name for token in (".bak", ".temp.", ".checkpoint"))
+
+
+def _publish_gpx(path: Path, run_dir: Path) -> bool:
+    """Keep only scientifically useful handoff projects in the Galaxy collection."""
+    if _is_intermediate_file(path):
+        return False
+    relative = path.relative_to(run_dir).as_posix().lower()
+    name = path.name.lower()
+    if "candidate_refinements" in relative or "residual_scanning" in relative:
+        return False
+    if "rapid_results" in relative:
+        return any(token in name for token in ("stable_", "accepted", "final"))
+    if "gsas_projects" in relative:
+        return (
+            "pattern_project" in name
+            or "seq_final_main_polished" in name
+            or ("seq_pass" in name and "kept_polished" in name)
+        )
+    return any(token in name for token in ("accepted", "final", "kept", "polished"))
+
+
+def _publish_artifact(path: Path, run_dir: Path, collection: str) -> bool:
+    relative = path.relative_to(run_dir).as_posix().lower()
+    if collection == "gpx":
+        return _publish_gpx(path, run_dir)
+    if collection == "plots":
+        return not any(token in relative for token in ("screening_histograms", "trial_blend", "technical__"))
+    if collection == "tables":
+        return not any(token in relative for token in ("technical", "diagnostics", "timing", "benchmark"))
+    return True
+
+
+def _published_name(path: Path, run_dir: Path, collection: str) -> str:
+    """Give Galaxy collection elements short, user-facing names."""
+    relative = path.relative_to(run_dir).as_posix().lower()
+    suffix = path.suffix.lower()
+    stem: str | None = None
+    if collection == "plots":
+        if "main_phase_fit" in relative:
+            stem = "01_Main_phase_fit"
+        else:
+            pass_match = re.search(r"seq_pass(\d+)_accepted_model", relative)
+            if pass_match:
+                stem = f"Accepted_fit_after_pass_{pass_match.group(1)}"
+    elif collection == "tables":
+        if "summary_fractions" in relative:
+            stem = "Final_phase_fractions"
+        elif "all_gsas_validation_summary" in relative:
+            stem = "Final_refinement_ranking"
+        elif "reranked_512" in relative:
+            stem = "Lattice_aware_pattern_ranking"
+    elif collection == "gpx":
+        if "pattern_project" in relative:
+            stem = "01_Imported_pattern_and_main_phase"
+        elif "seq_final_main_polished" in relative:
+            stem = "02_Main_phase_anchor"
+        else:
+            pass_match = re.search(r"seq_pass(\d+)_kept_polished", relative)
+            if pass_match:
+                stem = f"Accepted_model_after_pass_{pass_match.group(1)}"
+    if stem is None:
+        return _flatten_name(path, run_dir)
+    return safe_name(f"{stem}{suffix}", path.name)
+
+
 def _iter_artifacts(run_dir: Path) -> Iterable[Path]:
     for path in sorted(run_dir.rglob("*")):
         if not path.is_file():
@@ -98,11 +167,17 @@ def _gpx_stage(relative: str) -> str:
     return "refinement_checkpoint"
 
 
-def build_gpx_index(run_dir: str | Path) -> dict[str, Any]:
+def build_gpx_index(
+    run_dir: str | Path,
+    *,
+    source_paths: set[str] | None = None,
+) -> dict[str, Any]:
     root = Path(run_dir).resolve()
     projects: list[dict[str, Any]] = []
     for index, path in enumerate(sorted(root.rglob("*.gpx")), start=1):
         relative = path.resolve().relative_to(root).as_posix()
+        if source_paths is not None and relative not in source_paths:
+            continue
         lowered = relative.lower()
         if "rollback" in lowered:
             status = "rollback"
@@ -139,9 +214,11 @@ def _copy_collections(run_dir: Path, portal: Path) -> dict[str, list[dict[str, A
         collection = next((name for name, suffixes in COLLECTION_RULES.items() if suffix in suffixes), None)
         if collection is None:
             continue
+        if not _publish_artifact(source, run_dir, collection):
+            continue
         destination_dir = portal / collection
         destination_dir.mkdir(parents=True, exist_ok=True)
-        destination = destination_dir / _flatten_name(source, run_dir)
+        destination = destination_dir / _published_name(source, run_dir, collection)
         if destination.exists() and destination.resolve() != source.resolve():
             destination = destination.with_name(f"{destination.stem}_{len(records[collection]) + 1}{destination.suffix}")
         if destination.resolve() != source.resolve():
@@ -152,11 +229,15 @@ def _copy_collections(run_dir: Path, portal: Path) -> dict[str, list[dict[str, A
     return records
 
 
-def _zip_run(run_dir: Path, archive: Path) -> None:
+def _zip_run(run_dir: Path, archive: Path, portal: Path) -> None:
     archive.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as handle:
         for path in _iter_artifacts(run_dir):
             handle.write(path, arcname=path.relative_to(run_dir).as_posix())
+        for path in sorted(portal.rglob("*")):
+            if not path.is_file() or path.resolve() == archive.resolve():
+                continue
+            handle.write(path, arcname=f"ndip/{path.relative_to(portal).as_posix()}")
 
 
 def _find_suffix(root: Path, suffix: str) -> Path | None:
@@ -267,6 +348,28 @@ def _fmt_number(value: Any, digits: int = 2) -> str:
     return "-" if number is None else f"{number:.{digits}f}"
 
 
+def _best_refinement_metric(result: dict[str, Any]) -> float | None:
+    hypotheses = list(result.get("hypotheses") or [])
+    candidates = [
+        _as_float(item.get("rwp") or item.get("Rwp") or item.get("refinement_quality"))
+        for item in hypotheses
+    ]
+    summary = result.get("summary") or {}
+    if isinstance(summary, dict):
+        candidates.extend(
+            [
+                _as_float(summary.get("best_rwp")),
+                _as_float((summary.get("live_run") or {}).get("best_rwp")),
+                _as_float((summary.get("final") or {}).get("final_rwp")),
+            ]
+        )
+    manifest = ((result.get("provenance") or {}).get("source_manifest") or {})
+    if isinstance(manifest, dict):
+        candidates.append(_as_float((manifest.get("metrics") or {}).get("final_rwp")))
+    valid = [value for value in candidates if value is not None]
+    return min(valid) if valid else None
+
+
 def _timing_values(summary: dict[str, Any]) -> list[tuple[str, float]]:
     timings = ((summary.get("live_run") or {}).get("timings") or {}) if isinstance(summary, dict) else {}
     labels = {
@@ -362,6 +465,68 @@ def _message_text(item: Any) -> str:
         return str(item.get("message") or item.get("error") or json.dumps(item, default=str))
     return str(item)
 
+
+def _phase_summary_text(items: list[dict[str, Any]]) -> str:
+    values: list[str] = []
+    for item in items[:12]:
+        label = next(
+            (
+                str(item[key]).strip()
+                for key in (
+                    "compound_name",
+                    "Phase",
+                    "phase",
+                    "Formula",
+                    "formula",
+                    "Name",
+                    "name",
+                    "phase_id",
+                )
+                if item.get(key) not in (None, "")
+            ),
+            "phase",
+        )
+        space_group = item.get("space_group") or item.get("Space group") or item.get("SG")
+        if space_group not in (None, "", "unknown"):
+            label = f"{label} (SG {space_group})"
+        fraction_key = next(
+            (
+                key
+                for key in item
+                if any(token in key.lower() for token in ("weight", "fraction", "wt%", "percent"))
+            ),
+            None,
+        )
+        fraction = _as_float(item.get(fraction_key)) if fraction_key else None
+        values.append(f"{label}: {fraction:.2f}%" if fraction is not None else label)
+    return "; ".join(values) if values else "-"
+
+
+def _write_overview(path: Path, result: dict[str, Any]) -> None:
+    hypotheses = list(result.get("hypotheses") or [])
+    phases = list(result.get("phases") or [])
+    first_hypothesis = _hypothesis_label(hypotheses[0]) if hypotheses else "-"
+    best_metric = _best_refinement_metric(result)
+    artifacts = result.get("artifacts") or {}
+    rows = [
+        ("Run", result.get("run_name") or "-"),
+        ("Analysis", "Rapid Hypothesis Mode" if result.get("analysis_mode") == "rapid" else "Full RADAR-PD"),
+        ("Status", str(result.get("status") or "unknown").title()),
+        ("Result stage", str(result.get("hypothesis_stage") or "phase refinement").replace("_", " ").title()),
+        ("Best hypothesis", first_hypothesis),
+        ("Best Rwp / refinement metric", _fmt_number(best_metric, 3)),
+        ("Final phase summary", _phase_summary_text(phases)),
+        ("Fit and diagnostic plots", len(artifacts.get("plots") or [])),
+        ("Scientific tables", len(artifacts.get("tables") or [])),
+        ("Phase CIF files", len(artifacts.get("phases") or [])),
+        ("GSAS-II handoff projects", len(result.get("gpx_projects") or [])),
+    ]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle, delimiter="\t", lineterminator="\n")
+        writer.writerow(("Result", "Value"))
+        writer.writerows(rows)
+
 def _render_report(result: dict[str, Any]) -> str:
     summary = result.get("summary") or {}
     projects = result.get("gpx_projects") or []
@@ -391,10 +556,7 @@ def _render_report(result: dict[str, Any]) -> str:
     hypothesis_stage = str(result.get("hypothesis_stage") or "final_refinement")
     phases_summary = list(result.get("phases") or [])
     timings = _timing_values(summary)
-    best_rwp = min(
-        (value for value in (_as_float(item.get("rwp") or item.get("Rwp")) for item in hypotheses) if value is not None),
-        default=None,
-    )
+    best_rwp = _best_refinement_metric(result)
     cards = [
         ("Analysis", "Rapid hypothesis" if str(result.get("analysis_mode")) == "rapid" else "Full RADAR-PD"),
         ("Status", str(result.get("status") or "unknown").title()),
@@ -474,7 +636,12 @@ def collect_outputs(
         raise FileNotFoundError(f"RADAR-PD run directory does not exist: {run_root}")
 
     collection_records = _copy_collections(run_root, portal)
-    gpx_index = build_gpx_index(run_root)
+    published_gpx_paths = {
+        str(item.get("source_path"))
+        for item in collection_records.get("gpx", [])
+        if item.get("source_path")
+    }
+    gpx_index = build_gpx_index(run_root, source_paths=published_gpx_paths)
     gpx_outputs = {item.get("source_path"): item for item in collection_records.get("gpx", [])}
     for project in gpx_index["projects"]:
         source_path = project.get("path")
@@ -511,9 +678,10 @@ def collect_outputs(
         "errors": list(errors or []),
     }
     atomic_write_json(portal / "summary.json", result)
+    _write_overview(portal / "overview.tsv", result)
     (portal / "report.html").write_text(_render_report(result), encoding="utf-8")
     if include_archive:
-        _zip_run(run_root, portal / "results.zip")
+        _zip_run(run_root, portal / "results.zip", portal)
     return result
 
 

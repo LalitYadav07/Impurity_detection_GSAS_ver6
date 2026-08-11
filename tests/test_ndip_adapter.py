@@ -229,7 +229,7 @@ def test_explicit_instrument_mode_rejects_mismatched_profile(tmp_path: Path) -> 
     )
 
 
-def test_normalized_outputs_include_all_gpx_projects(tmp_path: Path) -> None:
+def test_normalized_outputs_publish_handoff_projects_and_archive_all_checkpoints(tmp_path: Path) -> None:
     run = tmp_path / "run"
     rapid = run / "nested" / "rapid_results"
     rapid.mkdir(parents=True)
@@ -245,14 +245,15 @@ def test_normalized_outputs_include_all_gpx_projects(tmp_path: Path) -> None:
     (run / "checkpoints" / "pass1").mkdir(parents=True)
     (run / "checkpoints" / "pass1" / "accepted.gpx").write_bytes(b"GPX-1")
     (run / "checkpoints" / "rollback.gpx").write_bytes(b"GPX-2")
+    (run / "checkpoints" / "accepted.temp.bak0.gpx").write_bytes(b"GPX-3")
 
     portal = tmp_path / "portal"
     result = collect_outputs(run, portal, mode="rapid", run_name="demo")
     index = json.loads((portal / "gpx_index.json").read_text(encoding="utf-8"))
     assert result["$schema"] == RESULT_SCHEMA
     assert index["$schema"] == GPX_INDEX_SCHEMA
-    assert index["project_count"] == 2
-    assert len(list((portal / "gpx").glob("*.gpx"))) == 2
+    assert index["project_count"] == 1
+    assert len(list((portal / "gpx").glob("*.gpx"))) == 1
     assert all(project.get("collection_path", "").startswith("gpx/") for project in index["projects"])
     assert result["hypotheses"][0]["hypothesis"] == "Cu + Cu2S"
     assert (portal / "report.html").is_file()
@@ -262,7 +263,17 @@ def test_normalized_outputs_include_all_gpx_projects(tmp_path: Path) -> None:
     assert "Continue in GSAS-II" in report
     assert "Cu + Cu2S" in report
     assert "Stage timing" in report
+    overview = (portal / "overview.tsv").read_text(encoding="utf-8")
+    assert "Rapid Hypothesis Mode" in overview
+    assert "Cu + Cu2S" in overview
+    assert "9.400" in overview
     assert (portal / "results.zip").is_file()
+    with zipfile.ZipFile(portal / "results.zip") as archive:
+        names = set(archive.namelist())
+    assert "checkpoints/rollback.gpx" in names
+    assert "ndip/report.html" in names
+    assert "ndip/overview.tsv" in names
+    assert any(name.startswith("ndip/plots/") for name in names)
 
 
 def test_normalized_outputs_fall_back_to_pattern_rank_when_gsas_is_skipped(tmp_path: Path) -> None:
