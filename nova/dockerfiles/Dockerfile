@@ -16,6 +16,8 @@ COPY dockerfiles/nginx.conf.template /etc/nginx/templates/radar-pd.conf.template
 COPY dockerfiles/supervisord.conf /etc/supervisor/conf.d/radar-pd.conf
 COPY scripts/run_nginx.sh scripts/run_trame.sh /usr/local/bin/
 RUN chmod 0755 /usr/local/bin/run_nginx.sh /usr/local/bin/run_trame.sh \
+    && touch /var/log/nginx/error.log \
+    && chmod 0666 /var/log/nginx/error.log \
     && rm -f /etc/nginx/sites-enabled/default
 
 ENV PYTHONUNBUFFERED=1 \
@@ -24,4 +26,5 @@ ENV PYTHONUNBUFFERED=1 \
 
 EXPOSE 8081
 ENTRYPOINT []
+USER 1000:1000
 CMD ["/usr/bin/supervisord", "-n", "-c", "/etc/supervisor/conf.d/radar-pd.conf"]
