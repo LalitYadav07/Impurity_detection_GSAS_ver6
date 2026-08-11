@@ -5,7 +5,7 @@
         <organization url="https://www.ornl.gov/" name="ORNL"/>
     </creator>
     <requirements>
-        <container type="docker" shell="/bin/bash">savannah.ornl.gov/radar-pd/radar-pd-nova:nova-10aab83</container>
+        <container type="docker" shell="/bin/bash">savannah.ornl.gov/radar-pd/radar-pd-nova:nova-03f1ff2</container>
     </requirements>
     <entry_points>
         <entry_point name="RADAR-PD Interactive" label="radar_pd_nova" requires_domain="False" requires_path_in_url="True">
