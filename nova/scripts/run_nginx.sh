@@ -24,4 +24,4 @@ envsubst '${EP_PATH}' \
   < /etc/nginx/templates/radar-pd.conf.template \
   > /tmp/radar-pd-nginx.conf
 
-exec nginx -e /dev/stderr -c /tmp/radar-pd-nginx.conf -g 'daemon off;'
+exec nginx -c /tmp/radar-pd-nginx.conf -g 'daemon off;'
