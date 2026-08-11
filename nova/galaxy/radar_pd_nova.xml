@@ -1,4 +1,4 @@
-<tool id="neutrons_radar_pd_interactive_prototype" tool_type="interactive" name="RADAR-PD Interactive" version="0.1.1" profile="22.05">
+<tool id="neutrons_radar_pd_interactive_prototype" tool_type="interactive" name="RADAR-PD Interactive" version="0.1.2" profile="22.05">
     <description>configure, run, monitor, recover, and inspect Full or Rapid RADAR-PD analyses</description>
     <creator>
         <person name="Lalit Yadav"/>
@@ -20,9 +20,15 @@
     </environment_variables>
     <command detect_errors="exit_code"><![CDATA[
         set -euo pipefail
-        exec /usr/bin/supervisord -n -c /etc/supervisor/conf.d/radar-pd.conf
+        echo "Starting RADAR-PD NOVA workspace at ${EP_PATH:-/}" > "$session_log"
+        exec /usr/bin/supervisord -n -c /etc/supervisor/conf.d/radar-pd.conf \
+            > >(tee -a "$session_log") \
+            2> >(tee -a "$session_log" >&2)
     ]]></command>
     <inputs/>
+    <outputs>
+        <data name="session_log" format="txt" label="RADAR-PD interactive session log"/>
+    </outputs>
     <help><![CDATA[
 RADAR-PD Interactive provides one shared setup experience for Full RADAR-PD and Rapid Hypothesis Mode. It can upload local files, reuse datasets in the current Galaxy history, resolve SNS IPTS inputs, submit the existing batch Analyze tool, show progress, recover earlier runs, render interactive results, and expose reproducible artifacts.
 
