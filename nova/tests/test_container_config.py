@@ -37,7 +37,7 @@ def test_container_exits_when_either_service_exits() -> None:
     assert "supervisor" not in dockerfile.lower()
     assert "supervisor" not in galaxy_xml.lower()
     assert 'CMD ["/usr/local/bin/run_container.sh"]' in dockerfile
-    assert "exec /usr/local/bin/run_container.sh" in galaxy_xml
+    assert "/usr/local/bin/run_container.sh" in galaxy_xml
 
 
 def test_nova_prefix_redirects_to_the_canonical_trailing_slash() -> None:
@@ -64,13 +64,17 @@ def test_package_and_galaxy_tool_versions_match() -> None:
     assert package_version == tool_version
 
 
-def test_interactive_startup_declares_and_creates_no_galaxy_outputs() -> None:
+def test_interactive_startup_keeps_a_console_output_for_ndip_lifecycle() -> None:
     galaxy_xml = _read("galaxy/radar_pd_nova.xml")
     launcher = _read("scripts/run_container.sh")
     root = ET.fromstring(galaxy_xml)
     outputs = root.find("outputs")
 
     assert outputs is not None
-    assert list(outputs) == []
+    declared_outputs = list(outputs)
+    assert len(declared_outputs) == 1
+    assert declared_outputs[0].get("name") == "console_output"
+    assert declared_outputs[0].get("format") == "txt"
+    assert 'tee -a "$console_output"' in root.findtext("command", default="")
     assert "touch " not in root.findtext("command", default="")
     assert not re.search(r"(^|\s)(echo|printf)\s", launcher)
