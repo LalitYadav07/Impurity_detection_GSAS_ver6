@@ -13,10 +13,15 @@ fi
 # NOVA supplies a non-empty entry-point path in production.
 export EP_PATH="${ep_path:-/__radar_pd_root__}"
 runtime_dir="/tmp/radar-pd-nginx"
-mkdir -p "${runtime_dir}/client-body" "${runtime_dir}/proxy"
+mkdir -p \
+  "${runtime_dir}/client-body" \
+  "${runtime_dir}/proxy" \
+  "${runtime_dir}/fastcgi" \
+  "${runtime_dir}/uwsgi" \
+  "${runtime_dir}/scgi"
 
 envsubst '${EP_PATH}' \
   < /etc/nginx/templates/radar-pd.conf.template \
   > /tmp/radar-pd-nginx.conf
 
-exec nginx -c /tmp/radar-pd-nginx.conf -g 'daemon off;'
+exec nginx -e /dev/stderr -c /tmp/radar-pd-nginx.conf -g 'daemon off;'

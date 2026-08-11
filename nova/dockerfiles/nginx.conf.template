@@ -11,6 +11,9 @@ http {
     access_log /dev/stdout;
     client_body_temp_path /tmp/radar-pd-nginx/client-body;
     proxy_temp_path /tmp/radar-pd-nginx/proxy;
+    fastcgi_temp_path /tmp/radar-pd-nginx/fastcgi;
+    uwsgi_temp_path /tmp/radar-pd-nginx/uwsgi;
+    scgi_temp_path /tmp/radar-pd-nginx/scgi;
 
     server {
         listen 8081;
