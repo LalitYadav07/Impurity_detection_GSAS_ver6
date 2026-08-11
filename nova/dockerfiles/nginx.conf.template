@@ -18,9 +18,14 @@ http {
     server {
         listen 8081;
         server_name _;
+        absolute_redirect off;
         client_max_body_size 2g;
 
-        location ${EP_PATH}/ {
+        location = ${EP_PATH} {
+            return 308 ${EP_PATH}/$is_args$args;
+        }
+
+        location ^~ ${EP_PATH}/ {
             rewrite ^${EP_PATH}/?(.*)$ /$1 break;
             proxy_pass http://127.0.0.1:8080;
             proxy_http_version 1.1;

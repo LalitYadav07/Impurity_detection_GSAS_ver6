@@ -6,6 +6,7 @@ from radar_pd_nova.results import (
     discover_tables,
     figure_for_payload,
     phase_fraction_rows,
+    total_elapsed_seconds,
 )
 
 
@@ -30,6 +31,104 @@ def test_discovers_and_renders_component_results(tmp_path: Path) -> None:
 
 def test_phase_fraction_normalization() -> None:
     rows = phase_fraction_rows(
-        {"phase_fractions": [{"formula": "Fe", "space_group": 225, "weight_percent": 91.2}]}
+        {
+            "phase_fractions": [
+                {"formula": "Fe", "space_group": 225, "weight_percent": 91.2},
+                {"formula": "Cr", "space_group": 229, "weight_percent": 0.0},
+            ]
+        }
     )
-    assert rows == [{"phase": "Fe", "space_group": 225, "weight_percent": 91.2}]
+    assert rows == [
+        {"phase": "Fe", "space_group": 225, "weight_percent": 91.2},
+        {"phase": "Cr", "space_group": 229, "weight_percent": 0.0},
+    ]
+
+
+def test_renders_real_rapid_phase_components_and_zero_contribution() -> None:
+    payload = {
+        "plot_kind": "rapid_refined_pattern_match",
+        "q": [1.0, 2.0, 3.0],
+        "target": [0.0, 1.0, 0.0],
+        "total_fit": [0.0, 0.9, 0.0],
+        "residual": [0.0, 0.1, 0.0],
+        "background": [0.0, 0.0, 0.0],
+        "phases": [
+            {"label": "Cu (SG 225)", "component": [0.0, 0.9, 0.0], "relative_scale": 1.0},
+            {"label": "Cu2S (SG 14)", "component": [0.0, 0.0, 0.0], "contribution": 0.0},
+        ],
+    }
+
+    figure = figure_for_payload(payload)
+
+    assert [trace.name for trace in figure.data] == [
+        "Measured",
+        "Background",
+        "Cu (SG 225) (100.0%)",
+        "Cu2S (SG 14) (0.0%)",
+        "Total hypothesis fit",
+        "Difference",
+    ]
+    assert list(figure.data[2].y) == [0.0, 0.9, 0.0]
+
+
+def test_rapid_final_hypothesis_fractions_are_normalized() -> None:
+    rows = phase_fraction_rows(
+        {
+            "analysis_mode": "rapid",
+            "phases": [],
+            "hypothesis_stage": "final_refinement",
+            "hypotheses": [
+                {
+                    "gsas_rwp_rank": "1",
+                    "status": "ok",
+                    "weights_json": '{"Cu (SG 225)": 88.5, "Cu2S (SG 14)": 11.5, "CuO (SG 15)": 0.0}',
+                }
+            ],
+        }
+    )
+
+    assert rows == [
+        {"phase": "Cu", "space_group": "225", "weight_percent": 88.5},
+        {"phase": "Cu2S", "space_group": "14", "weight_percent": 11.5},
+        {"phase": "CuO", "space_group": "15", "weight_percent": 0.0},
+    ]
+
+
+def test_total_elapsed_seconds_reads_nested_rapid_timing_and_zero() -> None:
+    assert total_elapsed_seconds({"summary": {"live_run": {"timings": {"total_seconds": 245.5}}}}) == 245.5
+    assert total_elapsed_seconds({"total_seconds": 0.0}) == 0.0
+
+
+def test_gsas_plot_renders_ranked_strongest_bragg_ticks() -> None:
+    payload = {
+        "plot_kind": "gsas_fit_with_ticks_v1",
+        "arrays": {
+            "x": [10.0, 20.0, 30.0],
+            "yobs": [1.0, 2.0, 1.0],
+            "ycalc": [1.0, 1.8, 1.0],
+            "resid": [0.0, 0.2, 0.0],
+        },
+        "phase_order": ["phase_1"],
+        "phase_labels": {"phase_1": "Fe (SG 225)"},
+        "phase_ticks": {"phase_1": [12.0, 20.0, 28.0]},
+        "phase_major_ticks": {"phase_1": [20.0]},
+        "phase_major_tick_details": {
+            "phase_1": [{"x": 20.0, "rank": 1, "hkl": "1 1 0", "relative_strength": 0.0}]
+        },
+        "rwp": 0.0,
+    }
+
+    figure = figure_for_payload(payload)
+
+    assert [trace.name for trace in figure.data] == [
+        "Observed",
+        "Calculated",
+        "Difference",
+        "Fe (SG 225)",
+        "Key peaks: Fe (SG 225)",
+    ]
+    strongest = figure.data[-1]
+    assert list(strongest.x) == [20.0]
+    assert strongest.marker.line.width == 3
+    assert "Relative strength=0.000" in strongest.text[0]
+    assert figure.layout.title.text.endswith("Rwp 0.00%")

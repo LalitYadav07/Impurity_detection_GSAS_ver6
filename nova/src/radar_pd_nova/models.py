@@ -224,8 +224,11 @@ class RunRecord(BaseModel):
     updated_utc: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     input_dataset_ids: dict[str, str] = Field(default_factory=dict)
     output_dataset_ids: dict[str, str] = Field(default_factory=dict)
+    config: AnalysisConfig | None = None
+    inputs: InputSelection | None = None
     output_dir: str | None = None
     message: str = ""
+    console_tail: str = ""
 
     def as_row(self) -> dict[str, Any]:
         return {
