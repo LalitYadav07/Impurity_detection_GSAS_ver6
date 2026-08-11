@@ -185,6 +185,65 @@ def _split_elements(value: str | Iterable[str] | None) -> list[str]:
     return result
 
 
+def _instrument_mode_from_instprm(path: str | Path) -> str | None:
+    """Infer CW/TOF from a GSAS-II instrument parameter file.
+
+    GSAS-II powder instrument types use ``T`` for time-of-flight (for
+    example PNT). Constant-wavelength profiles use types such as PXC or PNC.
+    Parameter-name fallbacks cover older profiles that omit the Type line.
+    """
+    instrument_path = Path(path)
+    text = instrument_path.read_text(encoding="utf-8", errors="replace")
+    type_tokens = re.findall(r"^\s*Type\s*:\s*([^\s#;]+)", text, flags=re.MULTILINE | re.IGNORECASE)
+    type_modes = {"tof" if "T" in token.upper() else "cw" for token in type_tokens if token.strip()}
+    if len(type_modes) > 1:
+        raise ValueError(f"Conflicting GSAS-II instrument Type entries in {instrument_path.name}")
+    if type_modes:
+        return next(iter(type_modes))
+
+    has_tof_terms = bool(re.search(r"^\s*(?:dif[ABC]|fltPath|2-theta)\s*:", text, flags=re.MULTILINE | re.IGNORECASE))
+    has_cw_terms = bool(re.search(r"^\s*Lam\s*:", text, flags=re.MULTILINE | re.IGNORECASE))
+    if has_tof_terms and has_cw_terms:
+        raise ValueError(f"Ambiguous CW/TOF parameters in {instrument_path.name}")
+    if has_tof_terms:
+        return "tof"
+    if has_cw_terms:
+        return "cw"
+    return None
+
+
+def _resolve_instrument_mode(requested: Any, instrument_path: str | Path) -> tuple[str, str]:
+    normalized = str(requested or "auto").strip().lower()
+    if normalized not in {"auto", "cw", "tof"}:
+        raise ValueError(f"Unsupported instrument mode: {requested!r}")
+    detected = _instrument_mode_from_instprm(instrument_path)
+    if normalized == "auto":
+        if detected is None:
+            raise ValueError(
+                "Could not infer CW or TOF from the GSAS-II instrument parameter file. "
+                "Select Pattern geometry explicitly or provide a profile containing a Type entry."
+            )
+        return detected, "instrument profile"
+    if detected is not None and detected != normalized:
+        raise ValueError(
+            f"Selected instrument mode {normalized.upper()} conflicts with "
+            f"{Path(instrument_path).name}, which is {detected.upper()}."
+        )
+    return normalized, "user selection"
+
+
+def _requested_instrument_mode(config: dict[str, Any]) -> str:
+    analysis = config.get("analysis")
+    if isinstance(analysis, dict) and analysis.get("instrument_mode"):
+        return str(analysis["instrument_mode"])
+    if config.get("instrument_mode"):
+        return str(config["instrument_mode"])
+    datasets = config.get("datasets")
+    if isinstance(datasets, list) and datasets and isinstance(datasets[0], dict):
+        return str(datasets[0].get("mode") or "auto")
+    return "auto"
+
+
 def _parse_regions(values: list[str] | None) -> list[list[float]]:
     regions: list[list[float]] = []
     for value in values or []:
@@ -545,6 +604,15 @@ def command_analyze(args: argparse.Namespace) -> int:
         shutil.copy2(main_cif, copied_main)
 
     raw_config = _load_yaml(args.config)
+    instrument_mode, mode_source = _resolve_instrument_mode(
+        _requested_instrument_mode(raw_config),
+        copied_instrument,
+    )
+    if raw_config.get("$schema") == CONFIG_SCHEMA:
+        contract_analysis = dict(raw_config.get("analysis") or {})
+        contract_analysis["instrument_mode"] = instrument_mode
+        raw_config["analysis"] = contract_analysis
+    print(f"[INFO] Instrument mode: {instrument_mode.upper()} ({mode_source}: {copied_instrument.name})")
     contract_mode = str((raw_config.get("analysis") or {}).get("mode") or "full")
     mode = args.mode if args.mode != "auto" else ("rapid" if contract_mode == "rapid" else "full")
     input_doc = input_manifest(
@@ -585,6 +653,10 @@ def command_analyze(args: argparse.Namespace) -> int:
             work_root=run_dir,
             mode=mode,
         )
+    resolved["instrument_mode"] = instrument_mode
+    for dataset in resolved.get("datasets") or []:
+        if isinstance(dataset, dict):
+            dataset["mode"] = instrument_mode
     resolved["ndip_job"] = {
         "schema": "radar-pd-state/v1",
         "created_utc": utc_now(),

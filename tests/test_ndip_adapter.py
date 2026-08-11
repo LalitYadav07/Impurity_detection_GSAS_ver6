@@ -19,7 +19,7 @@ if str(SCRIPTS) not in sys.path:
 from ndip_contracts import CONFIG_SCHEMA, GPX_INDEX_SCHEMA, RESULT_SCHEMA, atomic_write_json  # noqa: E402
 from ndip_gpx_handoff import main as gpx_handoff_main  # noqa: E402
 from ndip_outputs import collect_outputs  # noqa: E402
-from ndip_runner import _extract_db_pack, main  # noqa: E402
+from ndip_runner import _extract_db_pack, _instrument_mode_from_instprm, main  # noqa: E402
 
 
 def test_atomic_json_is_readable_by_galaxy_postprocessing(tmp_path: Path) -> None:
@@ -141,7 +141,7 @@ def test_full_runtime_profile_materializes_hosted_gui_budget(tmp_path: Path) -> 
     data = tmp_path / "scan.dat"
     instrument = tmp_path / "scan.instprm"
     data.write_text("1 1 1\n2 2 1\n", encoding="utf-8")
-    instrument.write_text("#GSAS-II\n", encoding="utf-8")
+    instrument.write_text("#GSAS-II instrument parameter file\nType:PNT\ndifC:22597.136\n", encoding="utf-8")
     portal = tmp_path / "portal"
     work = tmp_path / "work"
     assert main(
@@ -171,6 +171,62 @@ def test_full_runtime_profile_materializes_hosted_gui_budget(tmp_path: Path) -> 
     assert resolved["stage4"]["reps"] == 150
     assert resolved["stage4"]["len_tol_pct"] == 2.0
     assert resolved["stage4"]["ang_tol_deg"] == 5.0
+    assert resolved["instrument_mode"] == "tof"
+    assert resolved["datasets"][0]["mode"] == "tof"
+
+
+def test_instrument_mode_is_inferred_from_real_gsasii_profiles() -> None:
+    assert _instrument_mode_from_instprm(ROOT / "examples" / "tbssl" / "hb2a_si_ge113.instprm") == "cw"
+    assert (
+        _instrument_mode_from_instprm(
+            ROOT / "examples" / "lk99" / "2023A_June_HighRes_60HzB3_CWL2p665.instprm"
+        )
+        == "tof"
+    )
+
+
+def test_explicit_instrument_mode_rejects_mismatched_profile(tmp_path: Path) -> None:
+    config = tmp_path / "config.yaml"
+    assert main(
+        [
+            "configure",
+            "--mode",
+            "full",
+            "--radiation",
+            "neutron",
+            "--instrument-mode",
+            "cw",
+            "--allowed-elements",
+            "Fe, O",
+            "--output",
+            str(config),
+        ]
+    ) == 0
+    data = tmp_path / "pattern.dat"
+    instrument = tmp_path / "tof.instprm"
+    data.write_text("1 1 1\n2 2 1\n", encoding="utf-8")
+    instrument.write_text("Type:PNT\ndifC:10000\n", encoding="utf-8")
+    assert (
+        main(
+            [
+                "analyze",
+                "--config",
+                str(config),
+                "--data",
+                str(data),
+                "--instrument",
+                str(instrument),
+                "--db-root",
+                str(tmp_path / "database_neutron"),
+                "--work-dir",
+                str(tmp_path / "work"),
+                "--output-dir",
+                str(tmp_path / "portal"),
+                "--dry-run",
+            ]
+        )
+        != 0
+    )
 
 
 def test_normalized_outputs_include_all_gpx_projects(tmp_path: Path) -> None:

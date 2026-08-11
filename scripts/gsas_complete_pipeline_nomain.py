@@ -471,13 +471,35 @@ def _expand(p: Optional[str]) -> Optional[str]:
         q = Path(base) / q
     return str(q.resolve())
 
-def _guess_mode_and_tag(data_path: str) -> Tuple[Optional[str], Optional[str]]:
+def _mode_from_instprm(instprm_path: Optional[str]) -> Optional[str]:
+    if not instprm_path:
+        return None
+    path = Path(_expand(instprm_path))
+    if not path.is_file():
+        return None
+    text = path.read_text(encoding="utf-8", errors="replace")
+    match = re.search(r"^\s*Type\s*:\s*([^\s#;]+)", text, flags=re.MULTILINE | re.IGNORECASE)
+    if match:
+        return "tof" if "T" in match.group(1).upper() else "cw"
+    if re.search(r"^\s*(?:dif[ABC]|fltPath|2-theta)\s*:", text, flags=re.MULTILINE | re.IGNORECASE):
+        return "tof"
+    if re.search(r"^\s*Lam\s*:", text, flags=re.MULTILINE | re.IGNORECASE):
+        return "cw"
+    return None
+
+
+def _guess_mode_and_tag(data_path: str, instprm_path: Optional[str] = None) -> Tuple[Optional[str], Optional[str]]:
     name = Path(data_path).name.lower()
+    instrument_mode = _mode_from_instprm(instprm_path)
     if "hb2a" in name:
+        if instrument_mode and instrument_mode != "cw":
+            raise RuntimeError("Diffraction filename suggests CW/HB2A but the instrument profile is TOF")
         return "cw", "hb2a"
     if "pg3" in name:
+        if instrument_mode and instrument_mode != "tof":
+            raise RuntimeError("Diffraction filename suggests TOF/PG3 but the instrument profile is CW")
         return "tof", "pg3"
-    return None, None
+    return instrument_mode, None
 
 def _default_fmthint(mode: Optional[str]) -> Optional[str]:
     """Return a GSAS-II format hint for the given instrument mode.
@@ -2958,7 +2980,7 @@ class UnifiedPipeline:
         tag = None
         mode_from_auto = str(mode).lower() == "auto"
         if mode_from_auto:
-            mode, tag = _guess_mode_and_tag(data_path)
+            mode, tag = _guess_mode_and_tag(data_path, ds.get("instprm_path"))
             if not mode:
                 raise RuntimeError(f"[{name}] Could not infer instrument mode. Specify CW or TOF.")
         else:
