@@ -24,18 +24,20 @@ def test_runtime_files_are_writable_by_ndip_job_user() -> None:
     assert "USER 1000:1000" in dockerfile
 
 
-def test_container_exits_when_either_service_exits() -> None:
+def test_container_supervises_both_web_services() -> None:
     launcher = _read("scripts/run_container.sh")
     dockerfile = _read("dockerfiles/Dockerfile")
+    service_manager = _read("scripts/supervise_services.py")
     galaxy_xml = _read("galaxy/radar_pd_nova.xml")
 
-    assert "wait -n" in launcher
-    assert 'kill -TERM "${trame_pid}"' in launcher
-    assert 'kill -TERM "${nginx_pid}"' in launcher
-    assert 'exit "${child_status}"' in launcher
-    assert "autorestart" not in launcher
-    assert "supervisor" not in dockerfile.lower()
-    assert "supervisor" not in galaxy_xml.lower()
+    assert "wait -n" not in launcher
+    assert "exec python /usr/local/bin/supervise_services.py" in launcher
+    assert "scripts/supervise_services.py" in dockerfile
+    assert 'Service("trame", ("/usr/local/bin/run_trame.sh",))' in service_manager
+    assert 'Service("nginx", ("/usr/local/bin/run_nginx.sh",))' in service_manager
+    assert "service.restarts += 1" in service_manager
+    assert "start_new_session=True" in service_manager
+    assert "os.killpg" in service_manager
     assert 'CMD ["/usr/local/bin/run_container.sh"]' in dockerfile
     assert "/usr/local/bin/run_container.sh" in galaxy_xml
 
@@ -77,4 +79,4 @@ def test_interactive_startup_keeps_a_console_output_for_ndip_lifecycle() -> None
     assert declared_outputs[0].get("format") == "txt"
     assert 'tee -a "$console_output"' in root.findtext("command", default="")
     assert "touch " not in root.findtext("command", default="")
-    assert not re.search(r"(^|\s)(echo|printf)\s", launcher)
+    assert "launcher starting" in launcher

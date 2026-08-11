@@ -13,11 +13,12 @@ RUN python -m pip install --no-cache-dir --upgrade pip \
     && python -m pip install --no-cache-dir /src
 
 COPY dockerfiles/nginx.conf.template /etc/nginx/templates/radar-pd.conf.template
-COPY scripts/run_container.sh scripts/run_nginx.sh scripts/run_trame.sh /usr/local/bin/
+COPY scripts/run_container.sh scripts/run_nginx.sh scripts/run_trame.sh scripts/supervise_services.py /usr/local/bin/
 RUN chmod 0755 \
         /usr/local/bin/run_container.sh \
         /usr/local/bin/run_nginx.sh \
         /usr/local/bin/run_trame.sh \
+        /usr/local/bin/supervise_services.py \
     && touch /var/log/nginx/error.log \
     && chmod 0666 /var/log/nginx/error.log \
     && rm -f /etc/nginx/sites-enabled/default
