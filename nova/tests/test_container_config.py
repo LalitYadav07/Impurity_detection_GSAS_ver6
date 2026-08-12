@@ -77,7 +77,7 @@ def test_package_and_galaxy_tool_versions_match() -> None:
     assert package_version == tool_version
 
 
-def test_interactive_startup_declares_but_does_not_write_galaxy_output() -> None:
+def test_interactive_startup_writes_to_galaxy_managed_output() -> None:
     galaxy_xml = _read("galaxy/radar_pd_nova.xml")
     launcher = _read("scripts/run_container.sh")
     root = ET.fromstring(galaxy_xml)
@@ -91,9 +91,11 @@ def test_interactive_startup_declares_but_does_not_write_galaxy_output() -> None
     assert declared_outputs[0].get("hidden") == "true"
     command = root.findtext("command", default="")
     assert "Galaxy command starting" in command
-    assert "/usr/local/bin/run_trame.sh &" in command
+    assert "/usr/local/bin/run_trame.sh" in command
+    assert re.search(r"run_trame\.sh.*&", command) is not None
     assert "exec /usr/local/bin/run_nginx.sh" in command
     assert "$session_log" not in command
-    assert "$console_output" not in command
+    assert "> $console_output" in command
+    assert "tee -a $console_output" in command
     assert "touch " not in command
     assert "launcher starting" in launcher
