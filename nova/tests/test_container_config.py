@@ -86,7 +86,7 @@ def test_interactive_startup_writes_to_galaxy_managed_output() -> None:
     assert outputs is not None
     declared_outputs = list(outputs)
     assert len(declared_outputs) == 1
-    assert declared_outputs[0].get("name") == "console_output"
+    assert declared_outputs[0].get("name") == "output"
     assert declared_outputs[0].get("format") == "txt"
     assert declared_outputs[0].get("hidden") == "true"
     command = root.findtext("command", default="")
@@ -95,7 +95,8 @@ def test_interactive_startup_writes_to_galaxy_managed_output() -> None:
     assert re.search(r"run_trame\.sh.*&", command) is not None
     assert "exec /usr/local/bin/run_nginx.sh" in command
     assert "$session_log" not in command
-    assert "> $console_output" in command
-    assert "tee -a $console_output" in command
+    assert "> $output" in command
+    assert "tee -a $output" in command
+    assert "$console_output" not in command
     assert "touch " not in command
     assert "launcher starting" in launcher

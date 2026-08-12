@@ -1,4 +1,4 @@
-<tool id="neutrons_radar_pd_interactive_prototype" tool_type="interactive" name="RADAR-PD Interactive" version="0.1.15" profile="22.05">
+<tool id="neutrons_radar_pd_interactive_prototype" tool_type="interactive" name="RADAR-PD Interactive" version="0.1.16" profile="22.05">
     <description>configure, run, monitor, recover, and inspect Full or Rapid RADAR-PD analyses</description>
     <creator>
         <person name="Lalit Yadav"/>
@@ -20,14 +20,14 @@
     </environment_variables>
     <command detect_errors="exit_code"><![CDATA[
         set -euo pipefail
-        printf '[radar-pd-nova] Galaxy command starting\n' > $console_output
-        /usr/local/bin/run_trame.sh > >(tee -a $console_output) 2> >(tee -a $console_output >&2) &
-        printf '[radar-pd-nova] Trame backend launched; keeping Nginx in the foreground\n' >> $console_output
-        exec /usr/local/bin/run_nginx.sh > >(tee -a $console_output) 2> >(tee -a $console_output >&2)
+        printf '[radar-pd-nova] Galaxy command starting\n' > $output
+        /usr/local/bin/run_trame.sh > >(tee -a $output) 2> >(tee -a $output >&2) &
+        printf '[radar-pd-nova] Trame backend launched; keeping Nginx in the foreground\n' >> $output
+        exec /usr/local/bin/run_nginx.sh > >(tee -a $output) 2> >(tee -a $output >&2)
     ]]></command>
     <inputs/>
     <outputs>
-        <data format="txt" name="console_output" label="RADAR-PD Interactive console output" hidden="true"/>
+        <data format="txt" name="output" label="RADAR-PD Interactive console output" hidden="true"/>
     </outputs>
     <help><![CDATA[
 RADAR-PD Interactive provides one shared setup experience for Full RADAR-PD and Rapid Hypothesis Mode. It can upload local files, reuse datasets in the current Galaxy history, resolve SNS IPTS inputs, submit the existing batch Analyze tool, show progress, recover earlier runs, render interactive results, and expose reproducible artifacts.
