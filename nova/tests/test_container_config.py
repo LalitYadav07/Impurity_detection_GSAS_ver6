@@ -55,6 +55,16 @@ def test_nova_prefix_redirects_to_the_canonical_trailing_slash() -> None:
     assert "location ^~ ${EP_PATH}/ {" in nginx_config
 
 
+def test_nginx_answers_readiness_while_trame_is_starting() -> None:
+    nginx_config = _read("dockerfiles/nginx.conf.template")
+
+    assert nginx_config.count("proxy_intercept_errors on;") == 2
+    assert nginx_config.count("error_page 502 503 504 =200 @radar_pd_starting;") == 2
+    assert "location @radar_pd_starting {" in nginx_config
+    assert "RADAR-PD is starting" in nginx_config
+    assert 'add_header Retry-After "2" always;' in nginx_config
+
+
 def test_package_and_galaxy_tool_versions_match() -> None:
     pyproject = _read("pyproject.toml")
     version_match = re.search(r'^version\s*=\s*"([^"]+)"', pyproject, re.MULTILINE)
