@@ -77,7 +77,7 @@ def test_package_and_galaxy_tool_versions_match() -> None:
     assert package_version == tool_version
 
 
-def test_interactive_startup_keeps_a_console_output_for_ndip_lifecycle() -> None:
+def test_interactive_startup_avoids_galaxy_output_staging() -> None:
     galaxy_xml = _read("galaxy/radar_pd_nova.xml")
     launcher = _read("scripts/run_container.sh")
     root = ET.fromstring(galaxy_xml)
@@ -85,12 +85,12 @@ def test_interactive_startup_keeps_a_console_output_for_ndip_lifecycle() -> None
 
     assert outputs is not None
     declared_outputs = list(outputs)
-    assert len(declared_outputs) == 1
-    assert declared_outputs[0].get("name") == "console_output"
-    assert declared_outputs[0].get("format") == "txt"
+    assert declared_outputs == []
     command = root.findtext("command", default="")
     assert "Galaxy command starting" in command
-    assert '/usr/local/bin/run_trame.sh > >(tee -a "$console_output")' in command
-    assert 'exec /usr/local/bin/run_nginx.sh > >(tee -a "$console_output")' in command
-    assert "touch " not in root.findtext("command", default="")
+    assert "/usr/local/bin/run_trame.sh &" in command
+    assert "exec /usr/local/bin/run_nginx.sh" in command
+    assert "$session_log" not in command
+    assert "$console_output" not in command
+    assert "touch " not in command
     assert "launcher starting" in launcher
