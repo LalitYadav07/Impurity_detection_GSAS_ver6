@@ -39,8 +39,9 @@ def test_container_supervises_both_web_services() -> None:
     assert "start_new_session=True" in service_manager
     assert "os.killpg" in service_manager
     assert 'CMD ["/usr/local/bin/run_container.sh"]' in dockerfile
-    assert "/usr/local/bin/run_trame.sh" in galaxy_xml
-    assert "/usr/local/bin/run_nginx.sh" in galaxy_xml
+    assert "/usr/local/bin/run_container.sh" in galaxy_xml
+    assert "/usr/local/bin/run_trame.sh" not in galaxy_xml
+    assert "/usr/local/bin/run_nginx.sh" not in galaxy_xml
 
 
 def test_nova_prefix_redirects_to_the_canonical_trailing_slash() -> None:
@@ -91,9 +92,10 @@ def test_interactive_startup_writes_to_galaxy_managed_output() -> None:
     assert declared_outputs[0].get("hidden") == "true"
     command = root.findtext("command", default="")
     assert "Galaxy command starting" in command
-    assert "/usr/local/bin/run_trame.sh" in command
-    assert re.search(r"run_trame\.sh.*&", command) is not None
-    assert "exec /usr/local/bin/run_nginx.sh" in command
+    assert "/usr/local/bin/run_container.sh" in command
+    assert "exec /usr/local/bin/run_container.sh" not in command
+    assert "/usr/local/bin/run_trame.sh" not in command
+    assert "/usr/local/bin/run_nginx.sh" not in command
     assert "$session_log" not in command
     assert "> $output" in command
     assert "tee -a $output" in command
