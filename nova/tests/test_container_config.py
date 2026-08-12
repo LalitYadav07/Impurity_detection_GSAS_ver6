@@ -39,7 +39,8 @@ def test_container_supervises_both_web_services() -> None:
     assert "start_new_session=True" in service_manager
     assert "os.killpg" in service_manager
     assert 'CMD ["/usr/local/bin/run_container.sh"]' in dockerfile
-    assert "/usr/local/bin/run_container.sh" in galaxy_xml
+    assert "/usr/local/bin/run_trame.sh" in galaxy_xml
+    assert "/usr/local/bin/run_nginx.sh" in galaxy_xml
 
 
 def test_nova_prefix_redirects_to_the_canonical_trailing_slash() -> None:
@@ -79,6 +80,7 @@ def test_interactive_startup_keeps_a_console_output_for_ndip_lifecycle() -> None
     assert declared_outputs[0].get("format") == "txt"
     command = root.findtext("command", default="")
     assert "Galaxy command starting" in command
-    assert 'exec /usr/local/bin/run_container.sh >> "$console_output" 2>&1' in command
+    assert '/usr/local/bin/run_trame.sh > >(tee -a "$console_output")' in command
+    assert 'exec /usr/local/bin/run_nginx.sh > >(tee -a "$console_output")' in command
     assert "touch " not in root.findtext("command", default="")
     assert "launcher starting" in launcher

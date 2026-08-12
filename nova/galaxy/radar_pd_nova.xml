@@ -1,4 +1,4 @@
-<tool id="neutrons_radar_pd_interactive_prototype" tool_type="interactive" name="RADAR-PD Interactive" version="0.1.8" profile="22.05">
+<tool id="neutrons_radar_pd_interactive_prototype" tool_type="interactive" name="RADAR-PD Interactive" version="0.1.9" profile="22.05">
     <description>configure, run, monitor, recover, and inspect Full or Rapid RADAR-PD analyses</description>
     <creator>
         <person name="Lalit Yadav"/>
@@ -22,7 +22,9 @@
         set -euo pipefail
         : > "$console_output"
         printf '[radar-pd-nova] Galaxy command starting\n' >> "$console_output"
-        exec /usr/local/bin/run_container.sh >> "$console_output" 2>&1
+        /usr/local/bin/run_trame.sh > >(tee -a "$console_output") 2> >(tee -a "$console_output" >&2) &
+        printf '[radar-pd-nova] Trame backend launched; keeping Nginx in the foreground\n' >> "$console_output"
+        exec /usr/local/bin/run_nginx.sh > >(tee -a "$console_output") 2> >(tee -a "$console_output" >&2)
     ]]></command>
     <inputs/>
     <outputs>
