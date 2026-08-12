@@ -77,7 +77,7 @@ def test_package_and_galaxy_tool_versions_match() -> None:
     assert package_version == tool_version
 
 
-def test_interactive_startup_avoids_galaxy_output_staging() -> None:
+def test_interactive_startup_declares_but_does_not_write_galaxy_output() -> None:
     galaxy_xml = _read("galaxy/radar_pd_nova.xml")
     launcher = _read("scripts/run_container.sh")
     root = ET.fromstring(galaxy_xml)
@@ -85,7 +85,10 @@ def test_interactive_startup_avoids_galaxy_output_staging() -> None:
 
     assert outputs is not None
     declared_outputs = list(outputs)
-    assert declared_outputs == []
+    assert len(declared_outputs) == 1
+    assert declared_outputs[0].get("name") == "console_output"
+    assert declared_outputs[0].get("format") == "txt"
+    assert declared_outputs[0].get("hidden") == "true"
     command = root.findtext("command", default="")
     assert "Galaxy command starting" in command
     assert "/usr/local/bin/run_trame.sh &" in command
