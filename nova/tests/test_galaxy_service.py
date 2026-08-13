@@ -1,4 +1,6 @@
 import sys
+import threading
+import time
 import zipfile
 from contextlib import contextmanager
 from pathlib import Path
@@ -230,6 +232,66 @@ def test_submit_persists_configuration_and_resolved_input_selection(tmp_path: Pa
     restored = RunRecord.model_validate_json(record.model_dump_json())
     assert restored.config is not None and restored.config.run_name == "snapshot-run"
     assert restored.inputs is not None and restored.inputs.data_dataset_id == "uploaded-diffraction data"
+
+
+def test_submit_waits_for_async_galaxy_job_identifier(tmp_path: Path, monkeypatch: Any) -> None:
+    class FakeParameters:
+        def add_input(self, **kwargs: Any) -> None:
+            pass
+
+    class FakeStatus:
+        state = "queued"
+        details: dict[str, str] = {}
+
+    class FakeTool:
+        def __init__(self, id: str) -> None:
+            self.id = id
+            self.uid = ""
+
+        def run(self, store: Any, params: Any, *, wait: bool) -> None:
+            assert wait is False
+
+            def acknowledge() -> None:
+                time.sleep(0.02)
+                self.uid = "delayed-job"
+
+            threading.Thread(target=acknowledge, daemon=True).start()
+
+        def get_uid(self) -> str:
+            return self.uid
+
+        def get_full_status(self) -> FakeStatus:
+            return FakeStatus()
+
+    nova_module = ModuleType("nova")
+    galaxy_module = ModuleType("nova.galaxy")
+    galaxy_module.Parameters = FakeParameters  # type: ignore[attr-defined]
+    galaxy_module.Tool = FakeTool  # type: ignore[attr-defined]
+    nova_module.galaxy = galaxy_module  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "nova", nova_module)
+    monkeypatch.setitem(sys.modules, "nova.galaxy", galaxy_module)
+
+    class FakeDataset:
+        def __init__(self, identifier: str) -> None:
+            self.id = identifier
+
+    @contextmanager
+    def fake_store() -> Iterator[object]:
+        yield object()
+
+    service = GalaxyService("https://example.invalid", "key", "history", output_root=tmp_path)
+    service._store = fake_store  # type: ignore[method-assign]
+    service._upload_dataset = lambda path, store, label: FakeDataset(f"uploaded-{label}")  # type: ignore[method-assign]
+    service._dataset_for_input = (  # type: ignore[method-assign]
+        lambda *, path, dataset_id, store, label: FakeDataset(dataset_id or f"uploaded-{label}")
+    )
+
+    record = service.submit(
+        AnalysisConfig(run_name="async-run", mode=AnalysisMode.RAPID, sample_elements=["Cu", "S"]),
+        InputSelection(source=InputSource.UPLOAD, data_path="pattern.dat", instrument_path="profile.instprm"),
+    )
+
+    assert record.uid == "delayed-job"
 
 
 def test_upload_dataset_targets_store_history_id(tmp_path: Path, monkeypatch: Any) -> None:

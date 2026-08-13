@@ -8,6 +8,7 @@ import re
 import shutil
 import tempfile
 import threading
+import time
 import zipfile
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -22,6 +23,7 @@ from .models import AnalysisConfig, AnalysisMode, InputSelection, InputSource, R
 
 ANALYZE_TOOL_ID = os.getenv("RADAR_PD_ANALYZE_TOOL_ID", "neutrons_radar_pd_analyze_prototype")
 RUN_NAME_PREFIX = "RADAR-PD NOVA"
+SUBMISSION_ACK_TIMEOUT_SECONDS = float(os.getenv("RADAR_PD_SUBMISSION_ACK_TIMEOUT", "60"))
 
 
 def _extract_results_archive(archive: Path, destination: Path) -> None:
@@ -707,7 +709,7 @@ class GalaxyService:
 
             tool = Tool(id=ANALYZE_TOOL_ID)
             tool.run(store, params, wait=False)
-            uid = tool.get_uid()
+            uid = self._wait_for_submission(tool)
             if not uid:
                 raise RuntimeError("Galaxy accepted the request but did not return a job identifier")
             with self._lock:
@@ -724,6 +726,34 @@ class GalaxyService:
                 config=submitted_config,
                 inputs=submitted_inputs,
             )
+
+    @staticmethod
+    def _wait_for_submission(tool: Any) -> str:
+        """Wait only for Galaxy to acknowledge an async NOVA submission.
+
+        NOVA starts ``Tool.run(wait=False)`` in a background thread. The tool
+        UID is assigned after Galaxy accepts ``run_tool``, so reading it on the
+        next line races that thread. This wait ends as soon as the UID exists;
+        it does not wait for the scientific job to finish.
+        """
+
+        deadline = time.monotonic() + SUBMISSION_ACK_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
+            uid = tool.get_uid()
+            if uid:
+                return str(uid)
+            try:
+                status = tool.get_full_status()
+            except Exception:
+                status = None
+            state = getattr(status, "state", None)
+            state_value = str(getattr(state, "value", state) or "").lower()
+            if state_value in {"error", "canceled", "cancelled"}:
+                details = getattr(status, "details", None) or {}
+                message = details.get("message") if isinstance(details, dict) else None
+                raise RuntimeError(message or f"Galaxy submission failed with status {state_value}")
+            time.sleep(0.1)
+        return ""
 
     def _recover_tool(self, uid: str) -> Any:
         from nova.galaxy import Tool
