@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shutil
+import tempfile
 import threading
 import zipfile
 from contextlib import contextmanager
@@ -188,12 +189,15 @@ class GalaxyService:
         galaxy_key: str | None = None,
         history_id: str | None = None,
         *,
-        output_root: str | Path = "/tmp/radar-pd-nova",
+        output_root: str | Path | None = None,
     ) -> None:
         self.galaxy_url = (galaxy_url or os.getenv("GALAXY_URL", "")).rstrip("/")
         self.galaxy_key = galaxy_key or os.getenv("GALAXY_API_KEY", "")
         self.history_id = history_id or os.getenv("HISTORY_ID", "")
-        self.output_root = Path(output_root)
+        runtime_uid = getattr(os, "getuid", lambda: "user")()
+        self.output_root = Path(output_root) if output_root is not None else (
+            Path(tempfile.gettempdir()) / f"radar-pd-nova-{runtime_uid}-{os.getpid()}"
+        )
         self.output_root.mkdir(parents=True, exist_ok=True)
         self._tools: dict[str, Any] = {}
         self._lock = threading.RLock()
