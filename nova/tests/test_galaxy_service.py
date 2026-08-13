@@ -173,9 +173,11 @@ def test_result_archive_rejects_paths_outside_staging(tmp_path: Path) -> None:
 
 
 def test_submit_persists_configuration_and_resolved_input_selection(tmp_path: Path, monkeypatch: Any) -> None:
+    submitted_parameters: list[tuple[str, Any]] = []
+
     class FakeParameters:
         def add_input(self, **kwargs: Any) -> None:
-            pass
+            submitted_parameters.append((kwargs["name"], kwargs["value"]))
 
     class FakeTool:
         def __init__(self, id: str) -> None:
@@ -229,6 +231,26 @@ def test_submit_persists_configuration_and_resolved_input_selection(tmp_path: Pa
     assert record.inputs.instrument_dataset_id == "uploaded-instrument profile"
     assert record.inputs.main_cif_dataset_id == "uploaded-main phase CIF"
     assert record.input_dataset_ids["configuration"] == "uploaded-configuration"
+    submitted_names = {name for name, _ in submitted_parameters}
+    assert {
+        "measurement|radiation",
+        "measurement|instrument_mode",
+        "chemistry|sample_elements",
+        "chemistry|environment_elements",
+        "analysis|strategy|analysis_mode",
+        "reproducibility|configuration_override|config_kind",
+        "reproducibility|configuration_override|config_file",
+        "data_inputs|input_source|source_kind",
+        "data_inputs|input_source|diffraction_pattern",
+        "data_inputs|input_source|instrument_source|kind",
+        "data_inputs|input_source|instrument_source|instrument_file",
+        "data_inputs|main_cif",
+        "library|database|database_kind",
+        "reproducibility|run_name",
+    }.issubset(submitted_names)
+    assert not any(name.startswith("input_source|") for name in submitted_names)
+    assert ("chemistry|sample_elements", "Cu, S") in submitted_parameters
+    assert ("data_inputs|input_source|source_kind", "history") in submitted_parameters
     restored = RunRecord.model_validate_json(record.model_dump_json())
     assert restored.config is not None and restored.config.run_name == "snapshot-run"
     assert restored.inputs is not None and restored.inputs.data_dataset_id == "uploaded-diffraction data"

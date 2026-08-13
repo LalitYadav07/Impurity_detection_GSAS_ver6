@@ -626,11 +626,24 @@ class GalaxyService:
             uploaded: dict[str, str] = {}
             config_ds = self._upload_dataset(str(config_path), store, "configuration")
             uploaded["configuration"] = config_ds.id
-            params.add_input(name="configuration|config_kind", value="existing")
-            params.add_input(name="configuration|config_file", value=config_ds)
+            # Parameter names must match the complete nested path in the
+            # deployed Galaxy Analyze XML. Galaxy silently applies conditional
+            # defaults when an obsolete or partially-qualified path is used,
+            # which can turn a valid NOVA form into source_kind=choose and an
+            # empty chemistry policy.
+            params.add_input(name="measurement|radiation", value=config.radiation.value)
+            params.add_input(name="measurement|instrument_mode", value=config.instrument_mode)
+            params.add_input(name="chemistry|sample_elements", value=", ".join(config.sample_elements))
+            params.add_input(
+                name="chemistry|environment_elements",
+                value=", ".join(config.environment_elements),
+            )
+            params.add_input(name="analysis|strategy|analysis_mode", value=config.mode.value)
+            params.add_input(name="reproducibility|configuration_override|config_kind", value="existing")
+            params.add_input(name="reproducibility|configuration_override|config_file", value=config_ds)
 
             if inputs.source in {InputSource.UPLOAD, InputSource.GALAXY}:
-                params.add_input(name="input_source|source_kind", value="history")
+                params.add_input(name="data_inputs|input_source|source_kind", value="history")
                 data = self._dataset_for_input(
                     path=inputs.data_path,
                     dataset_id=inputs.data_dataset_id,
@@ -641,9 +654,12 @@ class GalaxyService:
                     raise ValueError("A diffraction pattern is required")
                 uploaded["data"] = data.id
                 submitted_inputs.data_dataset_id = data.id
-                params.add_input(name="input_source|data", value=data)
+                params.add_input(name="data_inputs|input_source|diffraction_pattern", value=data)
                 if inputs.use_builtin_cuka:
-                    params.add_input(name="input_source|instrument_source|instrument_kind", value="builtin_cuka")
+                    params.add_input(
+                        name="data_inputs|input_source|instrument_source|kind",
+                        value="builtin_cuka",
+                    )
                 else:
                     instrument = self._dataset_for_input(
                         path=inputs.instrument_path,
@@ -655,12 +671,17 @@ class GalaxyService:
                         raise ValueError("An instrument profile is required")
                     uploaded["instrument"] = instrument.id
                     submitted_inputs.instrument_dataset_id = instrument.id
-                    params.add_input(name="input_source|instrument_source|instrument_kind", value="upload")
-                    params.add_input(name="input_source|instrument_source|instrument", value=instrument)
+                    params.add_input(
+                        name="data_inputs|input_source|instrument_source|kind",
+                        value="uploaded",
+                    )
+                    params.add_input(
+                        name="data_inputs|input_source|instrument_source|instrument_file",
+                        value=instrument,
+                    )
             else:
-                params.add_input(name="input_source|source_kind", value="ipts")
+                params.add_input(name="data_inputs|input_source|source_kind", value=inputs.source.value)
                 if inputs.source == InputSource.IPTS_EVENT:
-                    params.add_input(name="input_source|ipts_lookup|lookup_kind", value="event")
                     event = self._dataset_for_input(
                         path=inputs.event_file_path,
                         dataset_id=inputs.event_dataset_id,
@@ -671,15 +692,13 @@ class GalaxyService:
                         raise ValueError("A NeXus event file is required")
                     uploaded["event_file"] = event.id
                     submitted_inputs.event_dataset_id = event.id
-                    params.add_input(name="input_source|ipts_lookup|event_file", value=event)
-                    params.add_input(name="input_source|ipts_lookup|bank", value=inputs.bank)
+                    params.add_input(name="data_inputs|input_source|event_file", value=event)
+                    params.add_input(name="data_inputs|input_source|bank", value=inputs.bank)
                 else:
-                    params.add_input(name="input_source|ipts_lookup|lookup_kind", value="manual")
-                    params.add_input(name="input_source|ipts_lookup|instrument", value=inputs.instrument)
-                    params.add_input(name="input_source|ipts_lookup|ipts", value=inputs.ipts)
-                    params.add_input(name="input_source|ipts_lookup|run_number", value=inputs.run_number)
-                    params.add_input(name="input_source|ipts_lookup|bank", value=inputs.bank)
-                params.add_input(name="input_source|facility_root", value=inputs.facility_root)
+                    params.add_input(name="data_inputs|input_source|instrument", value=inputs.instrument)
+                    params.add_input(name="data_inputs|input_source|ipts", value=inputs.ipts)
+                    params.add_input(name="data_inputs|input_source|run_number", value=inputs.run_number)
+                    params.add_input(name="data_inputs|input_source|bank", value=inputs.bank)
 
             main_cif = self._dataset_for_input(
                 path=inputs.main_cif_path,
@@ -690,7 +709,7 @@ class GalaxyService:
             if main_cif is not None:
                 uploaded["main_cif"] = main_cif.id
                 submitted_inputs.main_cif_dataset_id = main_cif.id
-                params.add_input(name="main_cif", value=main_cif)
+                params.add_input(name="data_inputs|main_cif", value=main_cif)
 
             database = self._dataset_for_input(
                 path=inputs.database_archive_path,
@@ -699,13 +718,13 @@ class GalaxyService:
                 label="candidate library",
             )
             if database is None:
-                params.add_input(name="database|database_kind", value="builtin")
+                params.add_input(name="library|database|database_kind", value="builtin")
             else:
                 uploaded["database_archive"] = database.id
                 submitted_inputs.database_dataset_id = database.id
-                params.add_input(name="database|database_kind", value="custom")
-                params.add_input(name="database|database_archive", value=database)
-            params.add_input(name="run_name", value=config.run_name)
+                params.add_input(name="library|database|database_kind", value="custom")
+                params.add_input(name="library|database|database_archive", value=database)
+            params.add_input(name="reproducibility|run_name", value=config.run_name)
 
             tool = Tool(id=ANALYZE_TOOL_ID)
             tool.run(store, params, wait=False)
