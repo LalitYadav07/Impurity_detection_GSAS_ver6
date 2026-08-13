@@ -243,3 +243,17 @@ class RunRecord(BaseModel):
     @property
     def local_output_dir(self) -> Path | None:
         return Path(self.output_dir) if self.output_dir else None
+
+
+def selected_run_uid(value: Any) -> str:
+    """Normalize Vuetify selection payloads across client versions."""
+
+    selected = value
+    if isinstance(selected, dict):
+        selected = selected.get("value", selected.get("modelValue", selected.get("item", selected)))
+    if isinstance(selected, (list, tuple)):
+        selected = selected[0] if selected else ""
+    if isinstance(selected, dict):
+        raw = selected.get("raw", selected)
+        selected = raw.get("uid", raw.get("value", "")) if isinstance(raw, dict) else raw
+    return str(selected or "")

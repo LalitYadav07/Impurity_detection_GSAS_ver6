@@ -15,7 +15,7 @@ from trame.widgets import html, plotly, vuetify3 as vuetify
 
 from .configuration import config_from_contract, load_configuration
 from .galaxy_service import GalaxyService
-from .models import AnalysisConfig, AnalysisMode, InputSelection, InputSource, RunRecord, RunStatus
+from .models import AnalysisConfig, AnalysisMode, InputSelection, InputSource, RunRecord, RunStatus, selected_run_uid
 from .results import discover_plot_payloads, discover_tables, figure_for_payload, phase_fraction_rows, read_json, read_table, total_elapsed_seconds
 
 
@@ -120,6 +120,7 @@ class RadarPdNovaApp(ThemedApp):
         state.history_main_cif_id = ""
         state.history_database_id = ""
         state.run_rows = []
+        state.run_selection = []
         state.selected_run_uid = ""
         state.selected_run_name = "No run selected"
         state.selected_run_status = "-"
@@ -465,9 +466,12 @@ class RadarPdNovaApp(ThemedApp):
                     headers=("[{title:'Run',key:'name'},{title:'Mode',key:'mode'},{title:'Status',key:'status'},{title:'Current stage',key:'stage'},{title:'Progress',key:'progress'}]",),
                     items=("run_rows",),
                     item_value="uid",
+                    model_value=("run_selection", []),
+                    update_modelValue=self._run_selection_changed,
+                    show_select=True,
+                    select_strategy="single",
                     hover=True,
                     density="comfortable",
-                    click_row=self._row_selected,
                     no_data_text="No RADAR-PD runs are present in this history yet.",
                 )
             with vuetify.VCard(classes="radar-card mt-4", variant="flat", v_if="selected_run_uid"):
@@ -790,15 +794,17 @@ class RadarPdNovaApp(ThemedApp):
             state.error_message = f"Could not load Galaxy datasets: {exc}"
         state.flush()
 
-    def _row_selected(self, _event: Any, item: Any, **__: Any) -> None:
-        row = item.get("item", item) if isinstance(item, dict) else {}
-        uid = str(row.get("uid") or "")
+    def _run_selection_changed(self, value: Any, **__: Any) -> None:
+        uid = selected_run_uid(value)
         if uid and uid in self.records:
             self._select_record(self.records[uid])
+            self.server.state.run_selection = [uid]
+            self.server.state.flush()
 
     def _select_record(self, record: RunRecord) -> None:
         state = self.server.state
         state.selected_run_uid = record.uid
+        state.run_selection = [record.uid]
         state.selected_run_name = record.name
         state.selected_run_status = record.status.value.title()
         state.selected_run_stage = record.stage
