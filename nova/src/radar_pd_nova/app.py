@@ -44,6 +44,7 @@ class RadarPdNovaApp(ThemedApp):
         self._monitored_uids: set[str] = set()
         self._plot_widget: Any | None = None
         self._initialize_state()
+        self.server.state.change("run_selection")(self._run_selection_changed)
         self.create_ui()
         self.server.controller.on_server_ready.add(self._recover_runs)
 
@@ -466,8 +467,7 @@ class RadarPdNovaApp(ThemedApp):
                     headers=("[{title:'Run',key:'name'},{title:'Mode',key:'mode'},{title:'Status',key:'status'},{title:'Current stage',key:'stage'},{title:'Progress',key:'progress'}]",),
                     items=("run_rows",),
                     item_value="uid",
-                    model_value=("run_selection", []),
-                    update_modelValue=self._run_selection_changed,
+                    v_model=("run_selection", []),
                     show_select=True,
                     select_strategy="single",
                     hover=True,
@@ -794,8 +794,8 @@ class RadarPdNovaApp(ThemedApp):
             state.error_message = f"Could not load Galaxy datasets: {exc}"
         state.flush()
 
-    def _run_selection_changed(self, value: Any, **__: Any) -> None:
-        uid = selected_run_uid(value)
+    def _run_selection_changed(self, run_selection: Any = None, **__: Any) -> None:
+        uid = selected_run_uid(run_selection)
         if uid and uid in self.records:
             self._select_record(self.records[uid])
             self.server.state.run_selection = [uid]
