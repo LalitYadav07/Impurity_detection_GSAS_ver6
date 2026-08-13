@@ -42,6 +42,7 @@ class RadarPdNovaApp(ThemedApp):
         self.service = GalaxyService()
         self.records: dict[str, RunRecord] = {}
         self._monitored_uids: set[str] = set()
+        self._opening_run_uid: str | None = None
         self._plot_widget: Any | None = None
         self._initialize_state()
         self.server.state.change("run_selection")(self._run_selection_changed)
@@ -129,6 +130,7 @@ class RadarPdNovaApp(ThemedApp):
         state.selected_run_progress = 0
         state.selected_run_message = ""
         state.selected_run_console = ""
+        state.selected_run_loading = False
         state.summary_cards = []
         state.viewed_run_mode = ""
         state.viewed_run_name = ""
@@ -481,10 +483,23 @@ class RadarPdNovaApp(ThemedApp):
                 with vuetify.VCardText():
                     html.Div("{{ selected_run_stage }}", classes="stage-label")
                     vuetify.VProgressLinear(model_value=("selected_run_progress",), color="#0b5d46", height=10, rounded=True, classes="mb-3")
+                    vuetify.VAlert(
+                        v_if="selected_run_loading",
+                        text="Loading the completed run and reconstructing its results...",
+                        type="info",
+                        variant="tonal",
+                        classes="mb-3",
+                    )
                     vuetify.VAlert(v_if="selected_run_message", text=("selected_run_message",), type="warning", variant="tonal")
                     with vuetify.VBtnGroup(variant="outlined", divided=True):
                         vuetify.VBtn("Refresh", click=self.refresh_selected_run, prepend_icon="mdi-refresh")
-                        vuetify.VBtn("Inspect results", click=self.open_selected_results, prepend_icon="mdi-chart-box-outline", disabled=("selected_run_status !== 'Ok'",))
+                        vuetify.VBtn(
+                            "Inspect results",
+                            click=self.open_selected_results,
+                            prepend_icon="mdi-chart-box-outline",
+                            disabled=("selected_run_status !== 'Ok'",),
+                            loading=("selected_run_loading",),
+                        )
                         vuetify.VBtn("Use configuration", click=self.use_selected_configuration, prepend_icon="mdi-file-restore-outline", disabled=("!selected_run_uid",))
                         vuetify.VBtn("Stop", click=self.cancel_selected_run, prepend_icon="mdi-stop-circle-outline", color="#a33131", disabled=("selected_run_status !== 'Running' && selected_run_status !== 'Queued'",))
                     with vuetify.VExpansionPanels(v_if="viewed_configuration", variant="accordion", classes="mt-4"):
@@ -812,10 +827,14 @@ class RadarPdNovaApp(ThemedApp):
 
     def _run_selection_changed(self, run_selection: Any = None, **__: Any) -> None:
         uid = selected_run_uid(run_selection)
-        if uid and uid in self.records:
-            self._select_record(self.records[uid])
-            self.server.state.run_selection = [uid]
-            self.server.state.flush()
+        if not uid or uid not in self.records:
+            return
+        record = self.records[uid]
+        self._select_record(record)
+        if record.status == RunStatus.OK:
+            self._open_record_results(record)
+            return
+        self.server.state.flush()
 
     def _select_record(self, record: RunRecord) -> None:
         state = self.server.state
@@ -957,16 +976,40 @@ class RadarPdNovaApp(ThemedApp):
 
     def open_selected_results(self, **_: Any) -> None:
         uid = self.server.state.selected_run_uid
-        if uid and uid in self.records:
-            record = self.records[uid]
+        if not uid or uid not in self.records:
+            return
+        self._open_record_results(self.records[uid])
+
+    def _open_record_results(self, record: RunRecord) -> None:
+        """Collect and display one completed run without allowing duplicate loads."""
+
+        if record.status != RunStatus.OK or self._opening_run_uid == record.uid:
+            return
+        state = self.server.state
+        self._opening_run_uid = record.uid
+        state.selected_run_loading = True
+        state.selected_run_message = ""
+        state.error_message = ""
+        state.notice = f"Loading results for {record.name}..."
+        state.flush()
+        try:
             if not record.output_dir:
                 record = self.service.collect_results(record)
-                self.records[uid] = record
+                self.records[record.uid] = record
                 self._select_record(record)
                 self._sync_runs()
             self._load_results(record)
-            self.server.state.active_page = "results"
-            self.server.state.flush()
+            state.active_page = "results"
+            state.notice = f"Showing results for {record.name}."
+        except Exception as exc:
+            message = f"Could not load results for {record.name}: {exc}"
+            state.active_page = "runs"
+            state.error_message = message
+            state.selected_run_message = message
+        finally:
+            state.selected_run_loading = False
+            self._opening_run_uid = None
+            state.flush()
 
     def _load_results(self, record: RunRecord) -> None:
         state = self.server.state
