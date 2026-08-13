@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import threading
+import zipfile
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,6 +21,18 @@ from .models import AnalysisConfig, AnalysisMode, InputSelection, InputSource, R
 
 ANALYZE_TOOL_ID = os.getenv("RADAR_PD_ANALYZE_TOOL_ID", "neutrons_radar_pd_analyze_prototype")
 RUN_NAME_PREFIX = "RADAR-PD NOVA"
+
+
+def _extract_results_archive(archive: Path, destination: Path) -> None:
+    """Extract a RADAR-PD archive without allowing paths outside destination."""
+
+    destination_root = destination.resolve()
+    with zipfile.ZipFile(archive) as handle:
+        for member in handle.infolist():
+            target = (destination / member.filename).resolve()
+            if target != destination_root and destination_root not in target.parents:
+                raise ValueError(f"Unsafe path in RADAR-PD results archive: {member.filename}")
+        handle.extractall(destination)
 
 
 def _decode_parameter(value: Any) -> Any:
@@ -791,7 +804,7 @@ class GalaxyService:
         return records
 
     def collect_results(self, record: RunRecord) -> RunRecord:
-        """Download stable scalar outputs and collections when the job completes."""
+        """Download completed results, tolerating unavailable duplicate collections."""
 
         destination = self.output_root / "runs" / record.uid
         staging = destination.parent / f".{record.uid}-{threading.get_ident()}.partial"
@@ -805,6 +818,9 @@ class GalaxyService:
             staging.mkdir(parents=True)
             output_ids: dict[str, str] = {}
             downloaded = 0
+            usable_downloads = 0
+            failures: list[str] = []
+            archive_path: Path | None = None
             for name in (
                 "report",
                 "summary",
@@ -832,9 +848,24 @@ class GalaxyService:
                     "console_output": ".txt",
                 }[name]
                 target = staging / f"{name}{suffix}"
-                dataset.download(str(target))
+                try:
+                    dataset.download(str(target))
+                except Exception as exc:
+                    target.unlink(missing_ok=True)
+                    failures.append(f"{name}: {exc}")
+                    continue
                 downloaded += 1
                 output_ids[name] = str(getattr(dataset, "id", ""))
+                if name == "results_archive":
+                    archive_path = target
+                else:
+                    usable_downloads += 1
+            if archive_path is not None:
+                try:
+                    _extract_results_archive(archive_path, staging)
+                    usable_downloads += 1
+                except Exception as exc:
+                    failures.append(f"results_archive extraction: {exc}")
             for name in ("plots", "tables", "phases", "gpx_projects", "diagnostics"):
                 try:
                     collection = outputs.get_collection(name)
@@ -842,11 +873,19 @@ class GalaxyService:
                     continue
                 target = staging / name
                 target.mkdir(exist_ok=True)
-                collection.download(str(target))
+                try:
+                    collection.download(str(target))
+                except Exception as exc:
+                    shutil.rmtree(target, ignore_errors=True)
+                    failures.append(f"{name}: {exc}")
+                    continue
                 downloaded += 1
+                usable_downloads += 1
                 output_ids[name] = str(getattr(collection, "id", ""))
-            if not downloaded:
-                raise RuntimeError("Galaxy returned no downloadable RADAR-PD result artifacts")
+            if not downloaded or not usable_downloads:
+                details = "; ".join(failures)
+                message = "Galaxy returned no downloadable RADAR-PD result artifacts"
+                raise RuntimeError(f"{message}: {details}" if details else message)
             if destination.exists():
                 shutil.rmtree(destination)
             staging.replace(destination)
@@ -855,7 +894,11 @@ class GalaxyService:
             record.status = RunStatus.OK
             record.stage = "Results ready"
             record.progress = 100
-            record.message = ""
+            record.message = (
+                f"Results loaded; {len(failures)} duplicate or optional Galaxy output(s) were unavailable."
+                if failures
+                else ""
+            )
         except Exception as exc:
             if staging.exists():
                 shutil.rmtree(staging, ignore_errors=True)
@@ -872,7 +915,8 @@ class GalaxyService:
             return {}
         payload: dict[str, Any] = {"artifacts": []}
         for key in ("summary", "state", "gpx_index", "input_manifest"):
-            path = root / f"{key}.json"
+            candidates = (root / f"{key}.json", root / "ndip" / f"{key}.json")
+            path = next((candidate for candidate in candidates if candidate.is_file()), candidates[0])
             if path.is_file():
                 try:
                     payload[key] = json.loads(path.read_text(encoding="utf-8"))

@@ -1,4 +1,5 @@
 import sys
+import zipfile
 from contextlib import contextmanager
 from pathlib import Path
 from types import ModuleType
@@ -66,6 +67,83 @@ def test_result_collector_uses_nova_collection_api(tmp_path: Path) -> None:
     assert outputs.collection_names == ["plots", "tables", "phases", "gpx_projects", "diagnostics"]
     assert result.status is RunStatus.OK
     assert (Path(result.output_dir) / "plots" / "member.txt").read_text(encoding="utf-8") == "ok"
+
+
+def test_result_collector_recovers_archive_when_collections_are_unavailable(tmp_path: Path) -> None:
+    class ArchiveDataset:
+        id = "archive-id"
+
+        def download(self, target: str) -> None:
+            with zipfile.ZipFile(target, "w") as handle:
+                handle.writestr("ndip/summary.json", '{"analysis_mode":"full","phases":[]}')
+                handle.writestr("ndip/tables/Final_phase_fractions.csv", "phase,weight_percent\nFe,100\n")
+                handle.writestr(
+                    "ndip/plots/final_fit.plotdata.json",
+                    '{"plot_kind":"rapid_component_fit_v1","q":[1],"target":[1],"total_fit":[1]}',
+                )
+
+    class FakeOutputs:
+        def get_dataset(self, name: str) -> ArchiveDataset:
+            if name == "results_archive":
+                return ArchiveDataset()
+            raise RuntimeError("not published")
+
+        def get_collection(self, name: str) -> Any:
+            class BrokenCollection:
+                id = f"{name}-id"
+
+                def download(self, target: str) -> None:
+                    raise OSError("collection object store unavailable")
+
+            return BrokenCollection()
+
+    class FakeTool:
+        def get_results(self) -> FakeOutputs:
+            return FakeOutputs()
+
+    service = GalaxyService("https://example.invalid", "key", "history", output_root=tmp_path)
+    service._recover_tool = lambda uid: FakeTool()  # type: ignore[method-assign]
+    record = RunRecord(uid="archive-job", name="run", mode=AnalysisMode.FULL, history_id="history")
+
+    result = service.collect_results(record)
+    payload = service.result_payload(result)
+
+    assert result.status is RunStatus.OK
+    assert "5 duplicate or optional" in result.message
+    assert payload["summary"]["analysis_mode"] == "full"
+    assert (Path(result.output_dir) / "ndip" / "tables" / "Final_phase_fractions.csv").is_file()
+
+
+def test_result_archive_rejects_paths_outside_staging(tmp_path: Path) -> None:
+    class UnsafeArchive:
+        id = "unsafe-archive"
+
+        def download(self, target: str) -> None:
+            with zipfile.ZipFile(target, "w") as handle:
+                handle.writestr("../outside.txt", "unsafe")
+
+    class FakeOutputs:
+        def get_dataset(self, name: str) -> UnsafeArchive:
+            if name == "results_archive":
+                return UnsafeArchive()
+            raise RuntimeError("not published")
+
+        def get_collection(self, name: str) -> Any:
+            raise RuntimeError("not published")
+
+    class FakeTool:
+        def get_results(self) -> FakeOutputs:
+            return FakeOutputs()
+
+    service = GalaxyService("https://example.invalid", "key", "history", output_root=tmp_path)
+    service._recover_tool = lambda uid: FakeTool()  # type: ignore[method-assign]
+    record = RunRecord(uid="unsafe-job", name="run", mode=AnalysisMode.FULL, history_id="history")
+
+    result = service.collect_results(record)
+
+    assert result.status is RunStatus.ERROR
+    assert "Unsafe path" in result.message
+    assert not (tmp_path / "outside.txt").exists()
 
 
 def test_submit_persists_configuration_and_resolved_input_selection(tmp_path: Path, monkeypatch: Any) -> None:
