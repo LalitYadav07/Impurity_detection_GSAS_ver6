@@ -247,8 +247,21 @@ class GalaxyService:
         source = Path(path)
         if not source.is_file():
             raise FileNotFoundError(f"{label} does not exist: {source}")
-        dataset = Dataset(path=str(source), name=f"RADAR-PD {label} | {source.name}")
-        dataset.upload(store)
+        dataset_name = f"RADAR-PD {label} | {source.name}"
+        galaxy_instance = store.nova_connection.galaxy_instance
+        upload_result = galaxy_instance.tools.upload_file(
+            path=str(source),
+            history_id=store.history_id,
+            file_name=dataset_name,
+        )
+        outputs = upload_result.get("outputs", []) if isinstance(upload_result, dict) else []
+        if not outputs or not outputs[0].get("id"):
+            raise RuntimeError(f"Galaxy did not return a dataset identifier after uploading {label}")
+
+        dataset = Dataset(name=dataset_name, force_upload=False)
+        dataset.id = str(outputs[0]["id"])
+        dataset.store = store
+        galaxy_instance.datasets.wait_for_dataset(dataset.id)
         return dataset
 
     def list_history_datasets(self, *, limit: int = 500) -> list[dict[str, str]]:

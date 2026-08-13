@@ -232,6 +232,58 @@ def test_submit_persists_configuration_and_resolved_input_selection(tmp_path: Pa
     assert restored.inputs is not None and restored.inputs.data_dataset_id == "uploaded-diffraction data"
 
 
+def test_upload_dataset_targets_store_history_id(tmp_path: Path, monkeypatch: Any) -> None:
+    source = tmp_path / "pattern.dat"
+    source.write_text("1 2\n", encoding="utf-8")
+    upload_calls: list[dict[str, Any]] = []
+    waited: list[str] = []
+
+    class FakeDataset:
+        def __init__(self, *, name: str, force_upload: bool) -> None:
+            self.name = name
+            self.force_upload = force_upload
+            self.id = ""
+            self.store: Any = None
+
+    class FakeTools:
+        def upload_file(self, **kwargs: Any) -> dict[str, Any]:
+            upload_calls.append(kwargs)
+            return {"outputs": [{"id": "uploaded-id"}]}
+
+    class FakeDatasets:
+        def wait_for_dataset(self, dataset_id: str) -> None:
+            waited.append(dataset_id)
+
+    galaxy_module = ModuleType("nova.galaxy")
+    galaxy_module.Dataset = FakeDataset  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "nova.galaxy", galaxy_module)
+
+    galaxy_instance = type("GalaxyInstance", (), {"tools": FakeTools(), "datasets": FakeDatasets()})()
+    connection = type("Connection", (), {"galaxy_instance": galaxy_instance})()
+    store = type(
+        "Store",
+        (),
+        {
+            "name": "RADAR-PD NOVA",
+            "history_id": "actual-history-id",
+            "nova_connection": connection,
+        },
+    )()
+
+    dataset = GalaxyService._upload_dataset(str(source), store, "diffraction data")
+
+    assert upload_calls == [
+        {
+            "path": str(source),
+            "history_id": "actual-history-id",
+            "file_name": "RADAR-PD diffraction data | pattern.dat",
+        }
+    ]
+    assert waited == ["uploaded-id"]
+    assert dataset.id == "uploaded-id"
+    assert dataset.store is store
+
+
 def test_recent_runs_recovers_config_and_inputs_without_command_guessing(
     tmp_path: Path, monkeypatch: Any
 ) -> None:

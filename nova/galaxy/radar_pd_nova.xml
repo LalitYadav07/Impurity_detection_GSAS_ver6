@@ -1,11 +1,11 @@
-<tool id="neutrons_radar_pd_interactive_prototype" tool_type="interactive" name="RADAR-PD Interactive" version="0.1.27" profile="22.01">
+<tool id="neutrons_radar_pd_interactive_prototype" tool_type="interactive" name="RADAR-PD Interactive" version="0.1.28" profile="22.01">
     <description>configure, run, monitor, recover, and inspect Full or Rapid RADAR-PD analyses</description>
     <creator>
         <person name="Lalit Yadav"/>
         <organization url="https://www.ornl.gov/" name="ORNL"/>
     </creator>
     <requirements>
-        <container type="docker" shell="/bin/bash">savannah.ornl.gov/radar-pd/radar-pd-nova:nova-0.1.27</container>
+        <container type="docker" shell="/bin/bash">savannah.ornl.gov/radar-pd/radar-pd-nova:nova-0.1.28</container>
     </requirements>
     <entry_points>
         <entry_point name="RADAR-PD Interactive" label="app_entry" requires_domain="False" requires_path_in_url="True">
