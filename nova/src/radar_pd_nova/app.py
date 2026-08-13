@@ -45,8 +45,6 @@ class RadarPdNovaApp(ThemedApp):
         self._plot_widget: Any | None = None
         self._initialize_state()
         self.server.state.change("run_selection")(self._run_selection_changed)
-        self.server.state.change("selected_table")(self._table_changed)
-        self.server.state.change("selected_plot")(self._plot_changed)
         self.create_ui()
         self.server.controller.on_server_ready.add(self._recover_runs)
 
@@ -522,10 +520,26 @@ class RadarPdNovaApp(ThemedApp):
                         no_data_text="Phase fractions are not available in the normalized summary.",
                     )
                 with html.Div(v_show="result_tab === 'tables'", classes="result-panel"):
-                    vuetify.VSelect(label="Result table", v_model=("selected_table",), items=("table_options",), item_title="name", item_value="path", variant="outlined")
+                    vuetify.VSelect(
+                        label="Result table",
+                        v_model=("selected_table",),
+                        items=("table_options",),
+                        item_title="name",
+                        item_value="path",
+                        variant="outlined",
+                        update_modelValue=(self._table_changed, "[$event]"),
+                    )
                     vuetify.VDataTable(headers=("table_headers",), items=("table_rows",), density="compact", fixed_header=True, height=520, no_data_text="Select a result table.")
                 with html.Div(v_show="result_tab === 'plots'", classes="result-panel"):
-                    vuetify.VSelect(label="Interactive plot", v_model=("selected_plot",), items=("plot_options",), item_title="name", item_value="path", variant="outlined")
+                    vuetify.VSelect(
+                        label="Interactive plot",
+                        v_model=("selected_plot",),
+                        items=("plot_options",),
+                        item_title="name",
+                        item_value="path",
+                        variant="outlined",
+                        update_modelValue=(self._plot_changed, "[$event]"),
+                    )
                     self._plot_widget = plotly.Figure(display_mode_bar=True)
                 with html.Div(v_show="result_tab === 'inspector'", classes="result-panel"):
                     html.H3("Rapid hypothesis inspector")
@@ -1019,18 +1033,21 @@ class RadarPdNovaApp(ThemedApp):
         if self._plot_widget is not None:
             self._plot_widget.update(figure_for_payload({}))
 
-    def _table_changed(self, **_: Any) -> None:
-        path = self.server.state.selected_table
+    def _table_changed(self, path: str | None = None, **_: Any) -> None:
+        path = path or self.server.state.selected_table
+        if path:
+            self.server.state.selected_table = path
         rows = read_table(path) if path else []
         self.server.state.table_rows = rows
         keys = list(rows[0].keys()) if rows else []
         self.server.state.table_headers = [{"title": key.replace("_", " ").title(), "key": key} for key in keys]
         self.server.state.flush()
 
-    def _plot_changed(self, **_: Any) -> None:
-        path = self.server.state.selected_plot
+    def _plot_changed(self, path: str | None = None, **_: Any) -> None:
+        path = path or self.server.state.selected_plot
         if not path or self._plot_widget is None:
             return
+        self.server.state.selected_plot = path
         figure = figure_for_payload(read_json(path))
         self._plot_widget.update(figure)
 
