@@ -45,6 +45,8 @@ class RadarPdNovaApp(ThemedApp):
         self._plot_widget: Any | None = None
         self._initialize_state()
         self.server.state.change("run_selection")(self._run_selection_changed)
+        self.server.state.change("selected_table")(self._table_changed)
+        self.server.state.change("selected_plot")(self._plot_changed)
         self.create_ui()
         self.server.controller.on_server_ready.add(self._recover_runs)
 
@@ -520,10 +522,10 @@ class RadarPdNovaApp(ThemedApp):
                         no_data_text="Phase fractions are not available in the normalized summary.",
                     )
                 with html.Div(v_show="result_tab === 'tables'", classes="result-panel"):
-                    vuetify.VSelect(label="Result table", v_model=("selected_table",), items=("table_options",), item_title="name", item_value="path", variant="outlined", change=self._table_changed)
+                    vuetify.VSelect(label="Result table", v_model=("selected_table",), items=("table_options",), item_title="name", item_value="path", variant="outlined")
                     vuetify.VDataTable(headers=("table_headers",), items=("table_rows",), density="compact", fixed_header=True, height=520, no_data_text="Select a result table.")
                 with html.Div(v_show="result_tab === 'plots'", classes="result-panel"):
-                    vuetify.VSelect(label="Interactive plot", v_model=("selected_plot",), items=("plot_options",), item_title="name", item_value="path", variant="outlined", change=self._plot_changed)
+                    vuetify.VSelect(label="Interactive plot", v_model=("selected_plot",), items=("plot_options",), item_title="name", item_value="path", variant="outlined")
                     self._plot_widget = plotly.Figure(display_mode_bar=True)
                 with html.Div(v_show="result_tab === 'inspector'", classes="result-panel"):
                     html.H3("Rapid hypothesis inspector")
