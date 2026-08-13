@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 from typing import Any, Iterable
 
+import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
@@ -18,6 +19,32 @@ def read_json(path: str | Path) -> dict[str, Any]:
         return payload if isinstance(payload, dict) else {}
     except Exception:
         return {}
+
+
+def read_plot_payload(path: str | Path) -> dict[str, Any]:
+    """Load a plot sidecar and its optional compressed scientific arrays."""
+
+    payload_path = Path(path)
+    payload = read_json(payload_path)
+    arrays_name = payload.get("arrays_npz")
+    if not isinstance(arrays_name, str) or not arrays_name.strip():
+        return payload
+
+    parent = payload_path.resolve().parent
+    arrays_path = (parent / arrays_name).resolve()
+    try:
+        arrays_path.relative_to(parent)
+    except ValueError:
+        return payload
+    if not arrays_path.is_file():
+        return payload
+
+    try:
+        with np.load(arrays_path, allow_pickle=False) as archive:
+            payload["arrays"] = {name: archive[name].tolist() for name in archive.files}
+    except Exception:
+        pass
+    return payload
 
 
 def read_table(path: str | Path, *, limit: int = 500) -> list[dict[str, Any]]:

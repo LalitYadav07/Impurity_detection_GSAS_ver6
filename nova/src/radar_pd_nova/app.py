@@ -16,7 +16,7 @@ from trame.widgets import html, plotly, vuetify3 as vuetify
 from .configuration import config_from_contract, load_configuration
 from .galaxy_service import GalaxyService
 from .models import AnalysisConfig, AnalysisMode, InputSelection, InputSource, RunRecord, RunStatus, selected_run_uid
-from .results import discover_plot_payloads, discover_tables, figure_for_payload, phase_fraction_rows, read_json, read_table, total_elapsed_seconds
+from .results import discover_plot_payloads, discover_tables, figure_for_payload, phase_fraction_rows, read_json, read_plot_payload, read_table, total_elapsed_seconds
 
 
 def _list_value(value: Any) -> list[str]:
@@ -1048,7 +1048,7 @@ class RadarPdNovaApp(ThemedApp):
         if not path or self._plot_widget is None:
             return
         self.server.state.selected_plot = path
-        figure = figure_for_payload(read_json(path))
+        figure = figure_for_payload(read_plot_payload(path))
         self._plot_widget.update(figure)
 
     def download_artifact(self, **_: Any) -> None:

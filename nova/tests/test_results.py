@@ -1,11 +1,14 @@
 import json
 from pathlib import Path
 
+import numpy as np
+
 from radar_pd_nova.results import (
     discover_plot_payloads,
     discover_tables,
     figure_for_payload,
     phase_fraction_rows,
+    read_plot_payload,
     total_elapsed_seconds,
 )
 
@@ -27,6 +30,36 @@ def test_discovers_and_renders_component_results(tmp_path: Path) -> None:
     assert discover_plot_payloads(tmp_path)[0]["kind"] == "rapid_component_fit_v1"
     figure = figure_for_payload(payload)
     assert [trace.name for trace in figure.data] == ["Measured", "Background", "Cu (SG 225)", "Total hypothesis fit", "Difference"]
+
+
+def test_loads_companion_npz_arrays_for_gsas_plot(tmp_path: Path) -> None:
+    plot_path = tmp_path / "accepted.png.plotdata.json"
+    arrays_path = tmp_path / "accepted.png.plotdata.npz"
+    plot_path.write_text(
+        json.dumps(
+            {
+                "plot_kind": "gsas_fit_with_ticks_v1",
+                "arrays_npz": arrays_path.name,
+                "phase_order": ["main"],
+                "phase_ticks": {"main": [20.0]},
+            }
+        ),
+        encoding="utf-8",
+    )
+    np.savez_compressed(
+        arrays_path,
+        x=np.asarray([10.0, 20.0, 30.0]),
+        yobs=np.asarray([1.0, 2.0, 1.0]),
+        ycalc=np.asarray([1.0, 1.8, 1.0]),
+        resid=np.asarray([0.0, 0.2, 0.0]),
+    )
+
+    payload = read_plot_payload(plot_path)
+    figure = figure_for_payload(payload)
+
+    assert payload["arrays"]["yobs"] == [1.0, 2.0, 1.0]
+    assert [trace.name for trace in figure.data[:3]] == ["Observed", "Calculated", "Difference"]
+    assert list(figure.data[0].y) == [1.0, 2.0, 1.0]
 
 
 def test_phase_fraction_normalization() -> None:
