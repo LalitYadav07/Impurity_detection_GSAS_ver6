@@ -59,13 +59,14 @@ def test_result_collector_uses_nova_collection_api(tmp_path: Path) -> None:
             return outputs
 
     service = GalaxyService("https://example.invalid", "key", "history", output_root=tmp_path)
+    service._job_details = lambda uid: {}  # type: ignore[method-assign]
     service._recover_tool = lambda uid: FakeTool()  # type: ignore[method-assign]
     record = RunRecord(uid="job-1", name="run-1", mode=AnalysisMode.RAPID, history_id="history")
 
     result = service.collect_results(record)
 
     assert outputs.collection_names == ["plots", "tables", "phases", "gpx_projects", "diagnostics"]
-    assert result.status is RunStatus.OK
+    assert result.status is RunStatus.OK, result.message
     assert (Path(result.output_dir) / "plots" / "member.txt").read_text(encoding="utf-8") == "ok"
 
 
@@ -102,6 +103,7 @@ def test_result_collector_recovers_archive_when_collections_are_unavailable(tmp_
             return FakeOutputs()
 
     service = GalaxyService("https://example.invalid", "key", "history", output_root=tmp_path)
+    service._job_details = lambda uid: {}  # type: ignore[method-assign]
     service._recover_tool = lambda uid: FakeTool()  # type: ignore[method-assign]
     record = RunRecord(uid="archive-job", name="run", mode=AnalysisMode.FULL, history_id="history")
 
@@ -112,6 +114,27 @@ def test_result_collector_recovers_archive_when_collections_are_unavailable(tmp_
     assert "5 duplicate or optional" in result.message
     assert payload["summary"]["analysis_mode"] == "full"
     assert (Path(result.output_dir) / "ndip" / "tables" / "Final_phase_fractions.csv").is_file()
+
+
+def test_result_collector_uses_durable_dataset_ids_for_recovered_jobs(tmp_path: Path) -> None:
+    service = GalaxyService("https://example.invalid", "key", "history", output_root=tmp_path)
+    service._job_details = lambda uid: {"outputs": {"results_archive": {"id": "archive-id"}}}  # type: ignore[method-assign]
+    service._recover_tool = lambda uid: (_ for _ in ()).throw(RuntimeError("no live tool"))  # type: ignore[method-assign]
+
+    def download(dataset_id: str, target: Path) -> None:
+        assert dataset_id == "archive-id"
+        with zipfile.ZipFile(target, "w") as handle:
+            handle.writestr("ndip/summary.json", '{"analysis_mode":"rapid","phases":[]}')
+            handle.writestr("ndip/tables/ranking.csv", "rank,phase\n1,Cu\n")
+
+    service._download_dataset = download  # type: ignore[method-assign]
+    record = RunRecord(uid="recovered-job", name="run", mode=AnalysisMode.RAPID, history_id="history")
+
+    result = service.collect_results(record)
+
+    assert result.status is RunStatus.OK, result.message
+    assert result.output_dataset_ids["results_archive"] == "archive-id"
+    assert (Path(result.output_dir) / "ndip" / "summary.json").is_file()
 
 
 def test_result_archive_rejects_paths_outside_staging(tmp_path: Path) -> None:
@@ -136,6 +159,7 @@ def test_result_archive_rejects_paths_outside_staging(tmp_path: Path) -> None:
             return FakeOutputs()
 
     service = GalaxyService("https://example.invalid", "key", "history", output_root=tmp_path)
+    service._job_details = lambda uid: {}  # type: ignore[method-assign]
     service._recover_tool = lambda uid: FakeTool()  # type: ignore[method-assign]
     record = RunRecord(uid="unsafe-job", name="run", mode=AnalysisMode.FULL, history_id="history")
 
@@ -341,6 +365,7 @@ def test_result_download_failure_is_an_error_and_preserves_existing_results(tmp_
             return FakeOutputs()
 
     service = GalaxyService("https://example.invalid", "key", "history", output_root=tmp_path)
+    service._job_details = lambda uid: {}  # type: ignore[method-assign]
     service._recover_tool = lambda uid: FakeTool()  # type: ignore[method-assign]
     destination = tmp_path / "runs" / "job-failed-download"
     destination.mkdir(parents=True)
@@ -367,6 +392,7 @@ def test_missing_galaxy_results_are_an_error(tmp_path: Path) -> None:
             return None
 
     service = GalaxyService("https://example.invalid", "key", "history", output_root=tmp_path)
+    service._job_details = lambda uid: {}  # type: ignore[method-assign]
     service._recover_tool = lambda uid: FakeTool()  # type: ignore[method-assign]
     record = RunRecord(uid="missing", name="run", mode=AnalysisMode.FULL, history_id="history")
 

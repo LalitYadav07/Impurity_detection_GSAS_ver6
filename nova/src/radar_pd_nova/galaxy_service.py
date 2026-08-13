@@ -330,6 +330,23 @@ class GalaxyService:
         payload = yaml.safe_load(response.text)
         return payload if isinstance(payload, dict) else None
 
+    def _download_dataset(self, dataset_id: str, destination: Path) -> None:
+        """Download a durable Galaxy dataset without relying on a live Tool object."""
+
+        response = requests.get(
+            f"{self.galaxy_url}/api/datasets/{dataset_id}/display",
+            headers=self._headers,
+            params={"raw": "true"},
+            timeout=120,
+            stream=True,
+        )
+        response.raise_for_status()
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with destination.open("wb") as handle:
+            for chunk in response.iter_content(chunk_size=1024 * 1024):
+                if chunk:
+                    handle.write(chunk)
+
     @staticmethod
     def _job_metric(job: dict[str, Any], name: str) -> str | None:
         metrics = job.get("job_metrics") or {}
@@ -809,10 +826,20 @@ class GalaxyService:
         destination = self.output_root / "runs" / record.uid
         staging = destination.parent / f".{record.uid}-{threading.get_ident()}.partial"
         try:
-            tool = self._recover_tool(record.uid)
-            outputs = tool.get_results()
-            if outputs is None:
-                raise RuntimeError("Galaxy did not return the declared result outputs")
+            try:
+                job = self._job_details(record.uid)
+                record.output_dataset_ids.update(self._job_output_ids(job))
+            except Exception:
+                pass
+
+            outputs = None
+            try:
+                tool = self._recover_tool(record.uid)
+                outputs = tool.get_results()
+            except Exception:
+                # Recovered sessions should use durable dataset IDs. The Tool
+                # object is retained only as a fallback for older Galaxy jobs.
+                outputs = None
             if staging.exists():
                 shutil.rmtree(staging)
             staging.mkdir(parents=True)
@@ -832,10 +859,6 @@ class GalaxyService:
                 "input_resolution_metadata",
                 "console_output",
             ):
-                try:
-                    dataset = outputs.get_dataset(name)
-                except Exception:
-                    continue
                 suffix = {
                     "report": ".html",
                     "summary": ".json",
@@ -848,14 +871,27 @@ class GalaxyService:
                     "console_output": ".txt",
                 }[name]
                 target = staging / f"{name}{suffix}"
+                dataset_id = record.output_dataset_ids.get(name)
+                dataset = None
+                if not dataset_id and outputs is not None:
+                    try:
+                        dataset = outputs.get_dataset(name)
+                    except Exception:
+                        continue
                 try:
-                    dataset.download(str(target))
+                    if dataset_id:
+                        self._download_dataset(dataset_id, target)
+                        output_ids[name] = dataset_id
+                    elif dataset is not None:
+                        dataset.download(str(target))
+                        output_ids[name] = str(getattr(dataset, "id", ""))
+                    else:
+                        continue
                 except Exception as exc:
                     target.unlink(missing_ok=True)
                     failures.append(f"{name}: {exc}")
                     continue
                 downloaded += 1
-                output_ids[name] = str(getattr(dataset, "id", ""))
                 if name == "results_archive":
                     archive_path = target
                 else:
@@ -867,6 +903,8 @@ class GalaxyService:
                 except Exception as exc:
                     failures.append(f"results_archive extraction: {exc}")
             for name in ("plots", "tables", "phases", "gpx_projects", "diagnostics"):
+                if outputs is None:
+                    continue
                 try:
                     collection = outputs.get_collection(name)
                 except Exception:
@@ -884,7 +922,11 @@ class GalaxyService:
                 output_ids[name] = str(getattr(collection, "id", ""))
             if not downloaded or not usable_downloads:
                 details = "; ".join(failures)
-                message = "Galaxy returned no downloadable RADAR-PD result artifacts"
+                message = (
+                    "Galaxy did not return the declared result outputs"
+                    if outputs is None and not record.output_dataset_ids
+                    else "Galaxy returned no downloadable RADAR-PD result artifacts"
+                )
                 raise RuntimeError(f"{message}: {details}" if details else message)
             if destination.exists():
                 shutil.rmtree(destination)

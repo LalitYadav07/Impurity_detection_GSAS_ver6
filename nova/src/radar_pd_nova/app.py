@@ -945,6 +945,9 @@ class RadarPdNovaApp(ThemedApp):
             record = self.records[uid]
             if not record.output_dir:
                 record = self.service.collect_results(record)
+                self.records[uid] = record
+                self._select_record(record)
+                self._sync_runs()
             self._load_results(record)
             self.server.state.active_page = "results"
             self.server.state.flush()
