@@ -5,4 +5,9 @@ test -n "${GALAXY_URL:-}"
 test -n "${GALAXY_API_KEY:-}"
 test -n "${HISTORY_ID:-}"
 
-exec python -m radar_pd_nova --host 0.0.0.0 --port 8080 --timeout 0
+exec python -m radar_pd_nova \
+  --server \
+  --galaxy-history-id "${HISTORY_ID}" \
+  --host 0.0.0.0 \
+  --port 8080 \
+  --timeout 0

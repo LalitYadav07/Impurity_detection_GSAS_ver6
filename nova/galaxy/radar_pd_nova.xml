@@ -1,14 +1,14 @@
-<tool id="neutrons_radar_pd_interactive_prototype" tool_type="interactive" name="RADAR-PD Interactive" version="0.1.17" profile="22.05">
+<tool id="neutrons_radar_pd_interactive_prototype" tool_type="interactive" name="RADAR-PD Interactive" version="0.1.18" profile="22.01">
     <description>configure, run, monitor, recover, and inspect Full or Rapid RADAR-PD analyses</description>
     <creator>
         <person name="Lalit Yadav"/>
         <organization url="https://www.ornl.gov/" name="ORNL"/>
     </creator>
     <requirements>
-        <container type="docker" shell="/bin/bash">savannah.ornl.gov/radar-pd/radar-pd-nova:nova-dfecb0b</container>
+        <container type="docker" shell="/bin/bash">savannah.ornl.gov/radar-pd/radar-pd-nova:nova-0.1.18</container>
     </requirements>
     <entry_points>
-        <entry_point name="RADAR-PD Interactive" label="radar_pd_nova" requires_domain="False" requires_path_in_url="True">
+        <entry_point name="RADAR-PD Interactive" label="app_entry" requires_domain="False" requires_path_in_url="True">
             <port>8081</port>
         </entry_point>
     </entry_points>
@@ -16,16 +16,14 @@
         <environment_variable name="GALAXY_URL">$__galaxy_url__</environment_variable>
         <environment_variable name="GALAXY_API_KEY" inject="api_key"/>
         <environment_variable name="HISTORY_ID">$__history_id__</environment_variable>
-        <environment_variable name="EP_PATH" inject="entry_point_path_for_label">radar_pd_nova</environment_variable>
+        <environment_variable name="EP_PATH" inject="entry_point_path_for_label">app_entry</environment_variable>
     </environment_variables>
-    <command detect_errors="exit_code"><![CDATA[
-        set -euo pipefail
-        printf '[radar-pd-nova] Galaxy command starting\n' > $output
-        /usr/local/bin/run_container.sh > >(tee -a $output) 2> >(tee -a $output >&2)
+    <command><![CDATA[
+        supervisord -c /etc/supervisord.conf > >(tee -a $output) 2> >(tee -a $output >&2)
     ]]></command>
     <inputs/>
     <outputs>
-        <data format="txt" name="output" label="RADAR-PD Interactive console output" hidden="true"/>
+        <data format="txt" name="output" label="RADAR-PD Interactive console output"/>
     </outputs>
     <help><![CDATA[
 RADAR-PD Interactive provides one shared setup experience for Full RADAR-PD and Rapid Hypothesis Mode. It can upload local files, reuse datasets in the current Galaxy history, resolve SNS IPTS inputs, submit the existing batch Analyze tool, show progress, recover earlier runs, render interactive results, and expose reproducible artifacts.

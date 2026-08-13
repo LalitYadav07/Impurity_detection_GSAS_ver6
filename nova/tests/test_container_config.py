@@ -10,95 +10,72 @@ def _read(relative_path: str) -> str:
     return (NOVA_ROOT / relative_path).read_text(encoding="utf-8")
 
 
-def test_runtime_files_are_writable_by_ndip_job_user() -> None:
-    nginx_script = _read("scripts/run_nginx.sh")
-    nginx_config = _read("dockerfiles/nginx.conf.template")
+def test_container_uses_supported_nova_supervisor_contract() -> None:
     dockerfile = _read("dockerfiles/Dockerfile")
+    supervisor = _read("dockerfiles/supervisord.conf")
 
-    assert "/tmp/radar-pd-nginx.conf" in nginx_script
-    assert "client_body_temp_path /tmp/radar-pd-nginx/" in nginx_config
-    assert "proxy_temp_path /tmp/radar-pd-nginx/" in nginx_config
-    assert "fastcgi_temp_path /tmp/radar-pd-nginx/" in nginx_config
-    assert "uwsgi_temp_path /tmp/radar-pd-nginx/" in nginx_config
-    assert "scgi_temp_path /tmp/radar-pd-nginx/" in nginx_config
-    assert "USER 1000:1000" in dockerfile
-
-
-def test_container_supervises_both_web_services() -> None:
-    launcher = _read("scripts/run_container.sh")
-    dockerfile = _read("dockerfiles/Dockerfile")
-    service_manager = _read("scripts/supervise_services.py")
-    galaxy_xml = _read("galaxy/radar_pd_nova.xml")
-
-    assert "wait -n" not in launcher
-    assert "exec python /usr/local/bin/supervise_services.py" in launcher
-    assert "scripts/supervise_services.py" in dockerfile
-    assert 'Service("trame", ("/usr/local/bin/run_trame.sh",))' in service_manager
-    assert 'Service("nginx", ("/usr/local/bin/run_nginx.sh",))' in service_manager
-    assert "service.restarts += 1" in service_manager
-    assert "start_new_session=True" in service_manager
-    assert "os.killpg" in service_manager
-    assert 'CMD ["/usr/local/bin/run_container.sh"]' in dockerfile
-    assert "/usr/local/bin/run_container.sh" in galaxy_xml
-    assert "/usr/local/bin/run_trame.sh" not in galaxy_xml
-    assert "/usr/local/bin/run_nginx.sh" not in galaxy_xml
+    assert "python -m pip install --no-cache-dir supervisor /src" in dockerfile
+    assert "COPY dockerfiles/supervisord.conf /etc/supervisord.conf" in dockerfile
+    assert "python -m trame.tools.www --client-type vue3 --output /app/www-content" in dockerfile
+    assert 'CMD ["supervisord", "-c", "/etc/supervisord.conf"]' in dockerfile
+    assert "USER 1000:1000" not in dockerfile
+    assert "nodaemon=true" in supervisor
+    assert "command=/bin/bash /run_trame.sh" in supervisor
+    assert "command=/bin/bash /run_nginx.sh" in supervisor
+    assert "events=PROCESS_STATE_EXITED,PROCESS_STATE_FATAL" in supervisor
+    assert "supervisorctl shutdown" in supervisor
 
 
-def test_nova_prefix_redirects_to_the_canonical_trailing_slash() -> None:
+def test_nginx_advertises_readiness_only_after_trame_is_ready() -> None:
+    trame_script = _read("scripts/run_trame.sh")
     nginx_script = _read("scripts/run_nginx.sh")
     nginx_config = _read("dockerfiles/nginx.conf.template")
 
-    assert "ep_path=\"${ep_path%/}\"" in nginx_script
-    assert "^(/[A-Za-z0-9._~-]+)+$" in nginx_script
-    assert "absolute_redirect off;" in nginx_config
-    assert "location = ${EP_PATH} {" in nginx_config
-    assert "return 308 ${EP_PATH}/$is_args$args;" in nginx_config
-    assert "location ^~ ${EP_PATH}/ {" in nginx_config
+    assert "exec python -m radar_pd_nova" in trame_script
+    assert "--server" in trame_script
+    assert "until wget -q -O /dev/null http://127.0.0.1:8080/" in nginx_script
+    assert "envsubst '${EP_PATH}'" in nginx_script
+    assert "exec nginx" in nginx_script
+    assert "error_page 502 503 504 =200" not in nginx_config
+    assert "RADAR-PD is starting" not in nginx_config
+    assert "location ${EP_PATH}/ws" in nginx_config
+    assert "alias /app/www-content/" in nginx_config
+    assert "try_files $uri $uri/ @proxy" in nginx_config
+    assert "location @proxy" in nginx_config
+    assert "proxy_pass http://127.0.0.1:8080" in nginx_config
 
 
-def test_nginx_answers_readiness_while_trame_is_starting() -> None:
-    nginx_config = _read("dockerfiles/nginx.conf.template")
+def test_galaxy_tool_matches_the_official_interactive_contract() -> None:
+    root = ET.parse(NOVA_ROOT / "galaxy" / "radar_pd_nova.xml").getroot()
+    xml = _read("galaxy/radar_pd_nova.xml")
 
-    assert nginx_config.count("proxy_intercept_errors on;") == 2
-    assert nginx_config.count("error_page 502 503 504 =200 @radar_pd_starting;") == 2
-    assert "location @radar_pd_starting {" in nginx_config
-    assert "RADAR-PD is starting" in nginx_config
-    assert 'add_header Retry-After "2" always;' in nginx_config
+    assert root.get("tool_type") == "interactive"
+    assert root.get("profile") == "22.01"
+    entry_point = root.find("./entry_points/entry_point")
+    assert entry_point is not None
+    assert entry_point.get("label") == "app_entry"
+    assert entry_point.get("requires_path_in_url") == "True"
+    assert entry_point.findtext("port") == "8081"
+    ep_path = root.find("./environment_variables/environment_variable[@name='EP_PATH']")
+    assert ep_path is not None
+    assert ep_path.get("inject") == "entry_point_path_for_label"
+    assert ep_path.text == "app_entry"
+    command = root.findtext("command", default="")
+    assert "supervisord -c /etc/supervisord.conf" in command
+    assert "/usr/local/bin/run_container.sh" not in command
+    output = root.find("./outputs/data")
+    assert output is not None
+    assert output.get("name") == "output"
+    assert output.get("hidden") is None
+    assert "detect_errors=" not in xml
 
 
 def test_package_and_galaxy_tool_versions_match() -> None:
     pyproject = _read("pyproject.toml")
     version_match = re.search(r'^version\s*=\s*"([^"]+)"', pyproject, re.MULTILINE)
     assert version_match is not None
-    package_version = version_match.group(1)
     tool_version = ET.parse(NOVA_ROOT / "galaxy" / "radar_pd_nova.xml").getroot().get(
         "version"
     )
 
-    assert package_version == tool_version
-
-
-def test_interactive_startup_writes_to_galaxy_managed_output() -> None:
-    galaxy_xml = _read("galaxy/radar_pd_nova.xml")
-    launcher = _read("scripts/run_container.sh")
-    root = ET.fromstring(galaxy_xml)
-    outputs = root.find("outputs")
-
-    assert outputs is not None
-    declared_outputs = list(outputs)
-    assert len(declared_outputs) == 1
-    assert declared_outputs[0].get("name") == "output"
-    assert declared_outputs[0].get("format") == "txt"
-    assert declared_outputs[0].get("hidden") == "true"
-    command = root.findtext("command", default="")
-    assert "Galaxy command starting" in command
-    assert "/usr/local/bin/run_container.sh" in command
-    assert "exec /usr/local/bin/run_container.sh" not in command
-    assert "/usr/local/bin/run_trame.sh" not in command
-    assert "/usr/local/bin/run_nginx.sh" not in command
-    assert "$session_log" not in command
-    assert "> $output" in command
-    assert "tee -a $output" in command
-    assert "$console_output" not in command
-    assert "touch " not in command
-    assert "launcher starting" in launcher
+    assert version_match.group(1) == tool_version
