@@ -63,16 +63,46 @@ def discover_tables(root: str | Path) -> list[dict[str, str]]:
     ]
 
 
+def _plot_payload_has_arrays(payload: dict[str, Any]) -> bool:
+    """Check that a plot payload actually loaded its declared numeric arrays.
+
+    Galaxy's per-output collection downloads can duplicate a plot's JSON
+    under an unrelated filename and without its paired .npz archive (the
+    results-archive extraction is the only source that keeps them together),
+    producing a payload with no numeric arrays. Checking the same loaded
+    result that rendering uses -- rather than re-deriving file-existence
+    logic here -- catches that regardless of what the duplicate is named or
+    why the array failed to load.
+    """
+
+    arrays_name = payload.get("arrays_npz")
+    if not isinstance(arrays_name, str) or not arrays_name.strip():
+        return True
+    arrays = payload.get("arrays")
+    if not isinstance(arrays, dict):
+        return False
+    return any(isinstance(value, list) and value for value in arrays.values())
+
+
 def discover_plot_payloads(root: str | Path) -> list[dict[str, str]]:
     base = Path(root)
-    return [
-        {
-            "name": path.name.replace(".plotdata.json", "").replace("_", " ").title(),
-            "path": str(path),
-            "kind": str(read_json(path).get("plot_kind") or "interactive plot"),
-        }
-        for path in sorted(base.rglob("*.plotdata.json"))
-    ]
+    seen_names: set[str] = set()
+    options: list[dict[str, str]] = []
+    for path in sorted(base.rglob("*.plotdata.json")):
+        payload = read_plot_payload(path)
+        if not _plot_payload_has_arrays(payload):
+            continue
+        if path.name in seen_names:
+            continue
+        seen_names.add(path.name)
+        options.append(
+            {
+                "name": path.name.replace(".plotdata.json", "").replace("_", " ").title(),
+                "path": str(path),
+                "kind": str(payload.get("plot_kind") or "interactive plot"),
+            }
+        )
+    return options
 
 
 def _array(payload: dict[str, Any], *names: str) -> list[float]:

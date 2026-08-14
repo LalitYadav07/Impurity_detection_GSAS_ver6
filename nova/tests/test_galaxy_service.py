@@ -9,7 +9,7 @@ from typing import Any, Iterator
 
 import yaml
 
-from radar_pd_nova.galaxy_service import GalaxyService, normalize_status, stage_from_console
+from radar_pd_nova.galaxy_service import GalaxyService, _upload_filename, normalize_status, stage_from_console
 from radar_pd_nova.models import AnalysisConfig, AnalysisMode, InputSelection, InputSource, RunRecord, RunStatus
 
 
@@ -316,6 +316,79 @@ def test_submit_waits_for_async_galaxy_job_identifier(tmp_path: Path, monkeypatc
     assert record.uid == "delayed-job"
 
 
+def test_submit_retries_after_transient_galaxy_submission_failure(tmp_path: Path, monkeypatch: Any) -> None:
+    """A failed tool-run attempt never creates a Galaxy job, so retrying is safe.
+
+    NDIP interactive-tool pods have occasionally seen the Analyze tool-run POST
+    come back as a generic Galaxy legacy-webapp 400 page instead of a normal
+    API response, with an identical retry succeeding immediately after.
+    """
+
+    monkeypatch.setattr("radar_pd_nova.galaxy_service.time.sleep", lambda _seconds: None)
+
+    class FakeParameters:
+        def add_input(self, **kwargs: Any) -> None:
+            pass
+
+    class FailingStatus:
+        state = "error"
+        details = {
+            "message": (
+                "Unexpected HTTP status code: 400: "
+                '<div class="message mt-2 alert alert-info">'
+                "Required parameter(s) kwd not provided in request.</div>"
+            )
+        }
+
+    tool_instances: list["FakeTool"] = []
+
+    class FakeTool:
+        def __init__(self, id: str) -> None:
+            self.id = id
+            self.attempt_index = len(tool_instances)
+            tool_instances.append(self)
+
+        def run(self, store: Any, params: Any, *, wait: bool) -> None:
+            assert wait is False
+
+        def get_uid(self) -> str:
+            return "" if self.attempt_index == 0 else "recovered-after-retry"
+
+        def get_full_status(self) -> Any:
+            return FailingStatus() if self.attempt_index == 0 else None
+
+    nova_module = ModuleType("nova")
+    galaxy_module = ModuleType("nova.galaxy")
+    galaxy_module.Parameters = FakeParameters  # type: ignore[attr-defined]
+    galaxy_module.Tool = FakeTool  # type: ignore[attr-defined]
+    nova_module.galaxy = galaxy_module  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "nova", nova_module)
+    monkeypatch.setitem(sys.modules, "nova.galaxy", galaxy_module)
+
+    class FakeDataset:
+        def __init__(self, identifier: str) -> None:
+            self.id = identifier
+
+    @contextmanager
+    def fake_store() -> Iterator[object]:
+        yield object()
+
+    service = GalaxyService("https://example.invalid", "key", "history", output_root=tmp_path)
+    service._store = fake_store  # type: ignore[method-assign]
+    service._upload_dataset = lambda path, store, label: FakeDataset(f"uploaded-{label}")  # type: ignore[method-assign]
+    service._dataset_for_input = (  # type: ignore[method-assign]
+        lambda *, path, dataset_id, store, label: FakeDataset(dataset_id or f"uploaded-{label}")
+    )
+
+    record = service.submit(
+        AnalysisConfig(run_name="retry-run", mode=AnalysisMode.RAPID, sample_elements=["Cu", "S"]),
+        InputSelection(source=InputSource.UPLOAD, data_path="pattern.dat", instrument_path="profile.instprm"),
+    )
+
+    assert record.uid == "recovered-after-retry"
+    assert len(tool_instances) == 2, "expected exactly one retry after the transient failure"
+
+
 def test_upload_dataset_targets_store_history_id(tmp_path: Path, monkeypatch: Any) -> None:
     source = tmp_path / "pattern.dat"
     source.write_text("1 2\n", encoding="utf-8")
@@ -366,6 +439,63 @@ def test_upload_dataset_targets_store_history_id(tmp_path: Path, monkeypatch: An
     assert waited == ["uploaded-id"]
     assert dataset.id == "uploaded-id"
     assert dataset.store is store
+
+
+def test_laptop_temporary_uploads_receive_scientific_filename_suffixes(tmp_path: Path) -> None:
+    """Browser uploads expose extensionless temp paths, but Galaxy HDAs must not."""
+
+    temporary = tmp_path / "tmpkc3r80cb"
+    expected = {
+        "diffraction data": "RADAR-PD diffraction data | tmpkc3r80cb.dat",
+        "instrument profile": "RADAR-PD instrument profile | tmpkc3r80cb.instprm",
+        "main phase CIF": "RADAR-PD main phase CIF | tmpkc3r80cb.cif",
+        "candidate library": "RADAR-PD candidate library | tmpkc3r80cb.zip",
+        "NeXus event file": "RADAR-PD NeXus event file | tmpkc3r80cb.nxs",
+    }
+
+    for label, filename in expected.items():
+        assert _upload_filename(temporary, label) == filename
+
+
+def test_server_selected_upload_keeps_supported_original_filename(tmp_path: Path) -> None:
+    source = tmp_path / "TbSSL.CIF"
+
+    assert _upload_filename(source, "main phase CIF") == "RADAR-PD main phase CIF | TbSSL.CIF"
+
+
+def test_history_dataset_listing_paginates_before_filtering(monkeypatch: Any) -> None:
+    calls: list[dict[str, Any]] = []
+    pages = {
+        0: [
+            {"id": "new-output", "name": "result", "extension": "json", "state": "ok"},
+            {"id": "data", "name": "pattern.dat", "extension": "dat", "state": "ok"},
+        ],
+        2: [
+            {"id": "cif", "name": "TbSSL.cif", "extension": "cif", "state": "ok"},
+        ],
+    }
+
+    class FakeResponse:
+        def __init__(self, payload: list[dict[str, Any]]) -> None:
+            self.payload = payload
+
+        def raise_for_status(self) -> None:
+            pass
+
+        def json(self) -> list[dict[str, Any]]:
+            return self.payload
+
+    def fake_get(url: str, **kwargs: Any) -> FakeResponse:
+        calls.append({"url": url, **kwargs})
+        return FakeResponse(pages[int(kwargs["params"]["offset"])])
+
+    monkeypatch.setattr("radar_pd_nova.galaxy_service.requests.get", fake_get)
+    service = GalaxyService("https://galaxy.example", "key", "history")
+
+    datasets = service.list_history_datasets(limit=4, page_size=2)
+
+    assert [item["id"] for item in datasets] == ["new-output", "data", "cif"]
+    assert [call["params"]["offset"] for call in calls] == [0, 2]
 
 
 def test_recent_runs_recovers_config_and_inputs_without_command_guessing(

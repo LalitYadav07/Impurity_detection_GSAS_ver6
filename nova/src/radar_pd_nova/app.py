@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any
 
 from nova.trame import ThemedApp
-from nova.trame.view.components import FileUpload
 from trame.app import get_server
 from trame.widgets import html, plotly, vuetify3 as vuetify
 
@@ -17,6 +16,7 @@ from .configuration import config_from_contract, load_configuration
 from .galaxy_service import GalaxyService
 from .models import AnalysisConfig, AnalysisMode, InputSelection, InputSource, RunRecord, RunStatus, selected_run_uid
 from .results import discover_plot_payloads, discover_tables, figure_for_payload, phase_fraction_rows, read_json, read_plot_payload, read_table, total_elapsed_seconds
+from .uploads import NamedFileUpload
 
 
 def _list_value(value: Any) -> list[str]:
@@ -278,22 +278,42 @@ class RadarPdNovaApp(ThemedApp):
                         item_value="value",
                         variant="outlined",
                     )
-                    with html.Div(v_if="input_source === 'upload'", classes="upload-grid"):
-                        FileUpload(
+                    with html.Div(v_if="input_source === 'upload'", classes="upload-grid", key="radar-upload-inputs"):
+                        NamedFileUpload(
                             "data_path",
                             label="Choose diffraction data",
                             extensions=[".dat", ".xye", ".xy", ".csv", ".txt", ".fxye", ".xrdml", ".xml"],
                             return_contents=False,
                             show_server_files=True,
                             color="#0b5d46",
+                            key="radar-diffraction-upload",
                         )
-                        FileUpload(
+                        vuetify.VChip(
+                            "Diffraction data ready",
+                            v_if="!!data_path",
+                            prepend_icon="mdi-check-circle-outline",
+                            color="#0b5d46",
+                            variant="tonal",
+                            size="small",
+                            key="radar-diffraction-ready",
+                        )
+                        NamedFileUpload(
                             "instrument_path",
                             label="Choose GSAS-II instrument profile",
                             extensions=[".instprm", ".prm", ".inst", ".ins"],
                             return_contents=False,
                             show_server_files=True,
                             color="#0b5d46",
+                            key="radar-instrument-upload",
+                        )
+                        vuetify.VChip(
+                            "Instrument profile ready",
+                            v_if="!!instrument_path",
+                            prepend_icon="mdi-check-circle-outline",
+                            color="#0b5d46",
+                            variant="tonal",
+                            size="small",
+                            key="radar-instrument-ready",
                         )
                         vuetify.VSwitch(
                             v_if="radiation === 'xray' && instrument_mode !== 'tof'",
@@ -302,13 +322,13 @@ class RadarPdNovaApp(ThemedApp):
                             color="#0b5d46",
                             inset=True,
                         )
-                    with html.Div(v_if="input_source === 'galaxy'"):
+                    with html.Div(v_if="input_source === 'galaxy'", key="radar-history-inputs"):
                         html.P("Select durable inputs from the current Galaxy history.", classes="field-help")
-                        vuetify.VSelect(label="Diffraction data", v_model=("history_data_id",), items=("history_data_datasets",), item_title="name", item_value="id", variant="outlined", no_data_text="No compatible diffraction datasets are in this history")
-                        vuetify.VSelect(label="Instrument profile", v_model=("history_instrument_id",), items=("history_instrument_datasets",), item_title="name", item_value="id", variant="outlined", no_data_text="No GSAS-II instrument profiles are in this history")
+                        vuetify.VSelect(label="Diffraction data", v_model=("history_data_id",), items=("history_data_datasets",), item_title="name", item_value="id", variant="outlined", no_data_text="No compatible diffraction datasets are in this history", key="radar-history-diffraction")
+                        vuetify.VSelect(label="Instrument profile", v_model=("history_instrument_id",), items=("history_instrument_datasets",), item_title="name", item_value="id", variant="outlined", no_data_text="No GSAS-II instrument profiles are in this history", key="radar-history-instrument")
                         vuetify.VSwitch(v_if="radiation === 'xray'", v_model=("use_builtin_cuka",), label="Use built-in Cu K-alpha laboratory profile", color="#0b5d46")
                     with html.Div(v_if="input_source === 'ipts_event'"):
-                        FileUpload("event_file_path", label="Choose NeXus event file", extensions=[".nxs", ".h5", ".hdf5"], return_contents=False, show_server_files=True, color="#0b5d46")
+                        NamedFileUpload("event_file_path", label="Choose NeXus event file", extensions=[".nxs", ".h5", ".hdf5"], return_contents=False, show_server_files=True, color="#0b5d46", key="radar-event-upload")
                         vuetify.VTextField(label="Detector bank", v_model=("bank",), variant="outlined", placeholder="for example bank1")
                     with html.Div(v_if="input_source === 'ipts_manual'"):
                         with vuetify.VRow():
@@ -324,12 +344,13 @@ class RadarPdNovaApp(ThemedApp):
                     html.H3("Known main phase and candidate library", classes="subsection-title")
                     html.P("The main-phase and library sources are independent of the diffraction-data source, so uploaded and saved inputs can be mixed.", classes="field-help")
                     vuetify.VSelect(label="Known/main phase", v_model=("main_cif_source",), items=("main_cif_source_options",), item_title="title", item_value="value", variant="outlined")
-                    with html.Div(v_if="main_cif_source === 'upload'", classes="upload-grid"):
-                        FileUpload("main_cif_path", label="Choose known/main phase CIF (optional)", extensions=[".cif"], return_contents=False, show_server_files=True, color="#0b5d46")
-                    vuetify.VSelect(v_if="main_cif_source === 'galaxy'", label="Known/main phase CIF", v_model=("history_main_cif_id",), items=("history_cif_datasets",), item_title="name", item_value="id", clearable=True, variant="outlined", no_data_text="No CIF datasets are in this history")
+                    with html.Div(v_if="main_cif_source === 'upload'", classes="upload-grid", key="radar-main-cif-upload-panel"):
+                        NamedFileUpload("main_cif_path", label="Choose known/main phase CIF (optional)", extensions=[".cif"], return_contents=False, show_server_files=True, color="#0b5d46", key="radar-main-cif-upload")
+                        vuetify.VChip("Main-phase CIF ready", v_if="!!main_cif_path", prepend_icon="mdi-check-circle-outline", color="#0b5d46", variant="tonal", size="small", key="radar-main-cif-ready")
+                    vuetify.VSelect(v_if="main_cif_source === 'galaxy'", label="Known/main phase CIF", v_model=("history_main_cif_id",), items=("history_cif_datasets",), item_title="name", item_value="id", clearable=True, variant="outlined", no_data_text="No CIF datasets are in this history", key="radar-history-main-cif")
                     vuetify.VSelect(label="Candidate library", v_model=("database_source",), items=("database_source_options",), item_title="title", item_value="value", variant="outlined")
                     with html.Div(v_if="database_source === 'upload'", classes="upload-grid"):
-                        FileUpload("database_archive_path", label="Choose candidate-library ZIP (optional)", extensions=[".zip"], return_contents=False, show_server_files=True, color="#0b5d46")
+                        NamedFileUpload("database_archive_path", label="Choose candidate-library ZIP (optional)", extensions=[".zip"], return_contents=False, show_server_files=True, color="#0b5d46", key="radar-database-upload")
                     vuetify.VSelect(v_if="database_source === 'galaxy'", label="Candidate-library archive", v_model=("history_database_id",), items=("history_archive_datasets",), item_title="name", item_value="id", clearable=True, variant="outlined", no_data_text="No library archives are in this history")
                     html.A("Build a reusable CIF library in Galaxy", href="/?tool_id=neutrons_radar_pd_library_builder_prototype&version=latest", target="_blank", classes="handoff-link")
                 self._close_section(card)
@@ -443,7 +464,7 @@ class RadarPdNovaApp(ThemedApp):
                         with vuetify.VExpansionPanels(variant="accordion", classes="mb-3"):
                             with vuetify.VExpansionPanel(title="Import a saved RADAR-PD configuration"):
                                 with vuetify.VExpansionPanelText():
-                                    FileUpload("config_import_path", label="Choose configuration YAML", extensions=[".yaml", ".yml"], return_contents=False, show_server_files=True, color="#0b5d46")
+                                    NamedFileUpload("config_import_path", label="Choose configuration YAML", extensions=[".yaml", ".yml"], return_contents=False, show_server_files=True, color="#0b5d46", key="radar-config-upload")
                                     vuetify.VBtn("Apply configuration", click=self.apply_uploaded_configuration, variant="outlined", prepend_icon="mdi-file-import-outline", disabled=("!config_import_path",), classes="mt-2")
                         vuetify.VBtn(
                             "Submit analysis to NDIP",

@@ -25,6 +25,37 @@ ANALYZE_TOOL_ID = os.getenv("RADAR_PD_ANALYZE_TOOL_ID", "neutrons_radar_pd_analy
 RUN_NAME_PREFIX = "RADAR-PD NOVA"
 SUBMISSION_ACK_TIMEOUT_SECONDS = float(os.getenv("RADAR_PD_SUBMISSION_ACK_TIMEOUT", "60"))
 
+_UPLOAD_SUFFIX_POLICIES: dict[str, tuple[frozenset[str], str]] = {
+    "diffraction data": (
+        frozenset({".dat", ".xye", ".xy", ".csv", ".txt", ".fxye", ".xrdml", ".xml"}),
+        ".dat",
+    ),
+    "instrument profile": (frozenset({".instprm", ".prm", ".inst", ".ins"}), ".instprm"),
+    "main phase CIF": (frozenset({".cif"}), ".cif"),
+    "candidate library": (frozenset({".zip"}), ".zip"),
+    "NeXus event file": (frozenset({".nxs", ".h5", ".hdf5"}), ".nxs"),
+}
+
+
+def _upload_filename(source: Path, label: str) -> str:
+    """Return a Galaxy filename that retains a meaningful scientific suffix.
+
+    nova-trame's browser upload currently writes laptop files to an
+    extensionless ``NamedTemporaryFile`` and exposes only that server path.
+    Galaxy uses the supplied display filename while creating the HDA, so add
+    a conservative type-specific suffix whenever the temporary basename no
+    longer carries one of the extensions accepted by the corresponding form
+    control. Server-selected files keep their original names unchanged.
+    """
+
+    name = source.name
+    policy = _UPLOAD_SUFFIX_POLICIES.get(label)
+    if policy is not None:
+        accepted_suffixes, fallback_suffix = policy
+        if source.suffix.lower() not in accepted_suffixes:
+            name = f"{name}{fallback_suffix}"
+    return f"RADAR-PD {label} | {name}"
+
 
 def _extract_results_archive(archive: Path, destination: Path) -> None:
     """Extract a RADAR-PD archive without allowing paths outside destination."""
@@ -249,7 +280,7 @@ class GalaxyService:
         source = Path(path)
         if not source.is_file():
             raise FileNotFoundError(f"{label} does not exist: {source}")
-        dataset_name = f"RADAR-PD {label} | {source.name}"
+        dataset_name = _upload_filename(source, label)
         galaxy_instance = store.nova_connection.galaxy_instance
         upload_result = galaxy_instance.tools.upload_file(
             path=str(source),
@@ -266,17 +297,34 @@ class GalaxyService:
         galaxy_instance.datasets.wait_for_dataset(dataset.id)
         return dataset
 
-    def list_history_datasets(self, *, limit: int = 500) -> list[dict[str, str]]:
+    def list_history_datasets(self, *, limit: int = 5000, page_size: int = 500) -> list[dict[str, str]]:
         """Return selectable, non-deleted datasets from the active history."""
 
-        response = requests.get(
-            f"{self.galaxy_url}/api/histories/{self.history_id}/contents",
-            headers=self._headers,
-            params={"v": "dev", "limit": limit, "order": "update_time-dsc"},
-            timeout=30,
-        )
-        response.raise_for_status()
-        rows = response.json()
+        if limit < 1 or page_size < 1:
+            return []
+        rows: list[dict[str, Any]] = []
+        offset = 0
+        while offset < limit:
+            requested = min(page_size, limit - offset)
+            response = requests.get(
+                f"{self.galaxy_url}/api/histories/{self.history_id}/contents",
+                headers=self._headers,
+                params={
+                    "v": "dev",
+                    "limit": requested,
+                    "offset": offset,
+                    "order": "update_time-dsc",
+                },
+                timeout=30,
+            )
+            response.raise_for_status()
+            page = response.json()
+            if not isinstance(page, list):
+                raise RuntimeError("Galaxy returned an invalid history-dataset response")
+            rows.extend(row for row in page if isinstance(row, dict))
+            if len(page) < requested:
+                break
+            offset += len(page)
         return [
             {
                 "id": str(row.get("id")),
@@ -726,11 +774,7 @@ class GalaxyService:
                 params.add_input(name="library|database|database_archive", value=database)
             params.add_input(name="reproducibility|run_name", value=config.run_name)
 
-            tool = Tool(id=ANALYZE_TOOL_ID)
-            tool.run(store, params, wait=False)
-            uid = self._wait_for_submission(tool)
-            if not uid:
-                raise RuntimeError("Galaxy accepted the request but did not return a job identifier")
+            uid, tool = self._submit_with_retry(store, params)
             with self._lock:
                 self._tools[uid] = tool
             return RunRecord(
@@ -745,6 +789,37 @@ class GalaxyService:
                 config=submitted_config,
                 inputs=submitted_inputs,
             )
+
+    def _submit_with_retry(self, store: Any, params: Any, *, attempts: int = 3) -> tuple[str, Any]:
+        """Start the Analyze tool run, retrying on transient Galaxy submission failures.
+
+        Galaxy submissions can fail before creating a job because of a
+        transient transport or service error. A failed attempt never creates
+        a Galaxy job, so retrying is safe and does not risk duplicate
+        submissions. Deterministic input failures still surface after the
+        bounded retry count.
+        """
+
+        from nova.galaxy import Tool
+
+        last_error: Exception | None = None
+        for attempt in range(1, attempts + 1):
+            tool = Tool(id=ANALYZE_TOOL_ID)
+            tool.run(store, params, wait=False)
+            try:
+                uid = self._wait_for_submission(tool)
+            except RuntimeError as exc:
+                last_error = exc
+                if attempt < attempts:
+                    time.sleep(2.0 * attempt)
+                    continue
+                raise
+            if uid:
+                return uid, tool
+            last_error = RuntimeError("Galaxy accepted the request but did not return a job identifier")
+            if attempt < attempts:
+                time.sleep(2.0 * attempt)
+        raise last_error or RuntimeError("Galaxy submission failed for an unknown reason")
 
     @staticmethod
     def _wait_for_submission(tool: Any) -> str:

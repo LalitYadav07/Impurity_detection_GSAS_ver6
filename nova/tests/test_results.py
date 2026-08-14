@@ -62,6 +62,45 @@ def test_loads_companion_npz_arrays_for_gsas_plot(tmp_path: Path) -> None:
     assert list(figure.data[0].y) == [1.0, 2.0, 1.0]
 
 
+def test_discover_plot_payloads_excludes_duplicate_missing_its_arrays(tmp_path: Path) -> None:
+    """Galaxy's per-output collection downloads can duplicate a plot's JSON
+
+    under an unrelated filename, without the paired .npz archive that only
+    the results-archive extraction keeps alongside it. Such a duplicate must
+    never be offered, even when it sorts before the complete copy.
+    """
+
+    good_dir = tmp_path / "rapid_results" / "live_run" / "gsas" / "live_rank512_01_rank64_39"
+    bad_dir = tmp_path / "diagnostics"
+    good_dir.mkdir(parents=True)
+    bad_dir.mkdir(parents=True)
+
+    good_json = good_dir / "curve.png.plotdata.json"
+    good_json.write_text(
+        json.dumps({"plot_kind": "gsas_fit_with_ticks_v1", "arrays_npz": "curve.png.plotdata.npz"}),
+        encoding="utf-8",
+    )
+    np.savez_compressed(
+        good_dir / "curve.png.plotdata.npz",
+        x=np.asarray([10.0, 20.0]),
+        yobs=np.asarray([1.0, 2.0]),
+        ycalc=np.asarray([1.0, 1.8]),
+        resid=np.asarray([0.0, 0.2]),
+    )
+
+    # "diagnostics" sorts before "rapid_results", so without the fix this
+    # incomplete duplicate would be picked as the default plot.
+    (bad_dir / "rapid_results__live_run__gsas__live_rank512_01_rank64_39__curve.png.plotdata.json").write_text(
+        json.dumps({"plot_kind": "gsas_fit_with_ticks_v1", "arrays_npz": "curve.png.plotdata.npz"}),
+        encoding="utf-8",
+    )
+
+    options = discover_plot_payloads(tmp_path)
+
+    assert len(options) == 1
+    assert Path(options[0]["path"]) == good_json
+
+
 def test_phase_fraction_normalization() -> None:
     rows = phase_fraction_rows(
         {
