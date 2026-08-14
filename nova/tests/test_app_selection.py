@@ -1,3 +1,4 @@
+import asyncio
 from types import SimpleNamespace
 
 from radar_pd_nova.app import RadarPdNovaApp
@@ -78,3 +79,52 @@ def test_selecting_active_run_keeps_run_monitor_visible() -> None:
     assert state.selected_run_stage == "Lattice nudging"
     assert state.selected_run_progress == 42
     assert opened == []
+
+
+def test_async_monitor_publishes_updates_on_the_event_loop(tmp_path) -> None:
+    record = RunRecord(
+        uid="monitor-1",
+        name="monitored run",
+        mode=AnalysisMode.RAPID,
+        history_id="history-1",
+        status=RunStatus.QUEUED,
+        stage="Waiting for compute",
+        progress=3,
+    )
+
+    class _Service:
+        refresh_count = 0
+
+        def refresh(self, current: RunRecord) -> RunRecord:
+            self.refresh_count += 1
+            if self.refresh_count == 1:
+                current.status = RunStatus.RUNNING
+                current.stage = "Pattern scoring"
+                current.progress = 72
+            else:
+                current.status = RunStatus.OK
+                current.stage = "Results ready"
+                current.progress = 100
+            return current
+
+        def collect_results(self, current: RunRecord) -> RunRecord:
+            current.output_dir = str(tmp_path / "run")
+            current.message = "Results loaded"
+            return current
+
+    app = RadarPdNovaApp.__new__(RadarPdNovaApp)
+    app.service = _Service()
+    app._monitored_uids = {record.uid}
+    updates: list[tuple[RunStatus, str, int, str]] = []
+    app._monitor_update = lambda current: updates.append(  # type: ignore[method-assign]
+        (current.status, current.stage, current.progress, current.message)
+    )
+
+    asyncio.run(app._monitor_record(record, poll_seconds=0))
+
+    assert updates == [
+        (RunStatus.RUNNING, "Pattern scoring", 72, ""),
+        (RunStatus.OK, "Results ready", 100, ""),
+        (RunStatus.OK, "Results ready", 100, "Results loaded"),
+    ]
+    assert record.uid not in app._monitored_uids

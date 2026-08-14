@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
-import threading
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +42,7 @@ class RadarPdNovaApp(ThemedApp):
         self.service = GalaxyService()
         self.records: dict[str, RunRecord] = {}
         self._monitored_uids: set[str] = set()
+        self._monitor_tasks: set[asyncio.Task[None]] = set()
         self._opening_run_uid: str | None = None
         self._plot_widget: Any | None = None
         self._initialize_state()
@@ -767,14 +768,35 @@ class RadarPdNovaApp(ThemedApp):
         if record.uid in self._monitored_uids or record.status not in {RunStatus.NEW, RunStatus.UPLOADING, RunStatus.QUEUED, RunStatus.RUNNING}:
             return
         self._monitored_uids.add(record.uid)
+        task = asyncio.create_task(self._monitor_record(record), name=f"radar-monitor-{record.uid[:8]}")
+        self._monitor_tasks.add(task)
+        task.add_done_callback(self._monitor_tasks.discard)
 
-        def monitor() -> None:
-            try:
-                self.service.monitor(record, self._monitor_update)
-            finally:
-                self._monitored_uids.discard(record.uid)
+    async def _monitor_record(self, record: RunRecord, *, poll_seconds: float = 5.0) -> None:
+        """Poll Galaxy off-thread and publish UI state on Trame's event loop."""
 
-        threading.Thread(target=monitor, daemon=True, name=f"radar-monitor-{record.uid[:8]}").start()
+        terminal = {RunStatus.OK, RunStatus.ERROR, RunStatus.CANCELLED}
+        try:
+            while record.status not in terminal:
+                try:
+                    record = await asyncio.to_thread(self.service.refresh, record)
+                except Exception as exc:
+                    record.message = str(exc)
+                self._monitor_update(record)
+                if record.status in terminal:
+                    break
+                await asyncio.sleep(poll_seconds)
+            if record.status == RunStatus.OK:
+                try:
+                    record = await asyncio.to_thread(self.service.collect_results, record)
+                except Exception as exc:
+                    record.status = RunStatus.ERROR
+                    record.stage = "Result download failed"
+                    record.progress = 100
+                    record.message = f"Analysis finished, but result download failed: {exc}"
+                self._monitor_update(record)
+        finally:
+            self._monitored_uids.discard(record.uid)
 
     def _sync_runs(self) -> None:
         self.server.state.run_rows = [record.as_row() for record in sorted(self.records.values(), key=lambda item: item.created_utc, reverse=True)]
