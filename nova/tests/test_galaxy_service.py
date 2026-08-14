@@ -610,6 +610,44 @@ def test_recovered_active_run_refreshes_through_galaxy_rest(tmp_path: Path, monk
     assert refreshed.inputs is not None
 
 
+def test_newly_submitted_run_uses_authoritative_galaxy_rest_state(tmp_path: Path) -> None:
+    class StaleTool:
+        def get_status(self) -> str:
+            raise AssertionError("cached nova-galaxy state was used")
+
+        def get_stdout(self) -> str:
+            raise AssertionError("cached nova-galaxy stdout was used")
+
+        def get_stderr(self) -> str:
+            raise AssertionError("cached nova-galaxy stderr was used")
+
+    service = GalaxyService("https://galaxy.example", "key", "history", output_root=tmp_path)
+    service._tools["submitted-job"] = StaleTool()  # type: ignore[assignment]
+    service._job_details = lambda uid: {  # type: ignore[method-assign]
+        "id": uid,
+        "state": "ok",
+        "job_stdout": "Rapid Hypothesis Mode finished successfully",
+        "outputs": {"results_archive": {"id": "archive-id"}},
+    }
+    record = RunRecord(
+        uid="submitted-job",
+        name="submitted-run",
+        mode=AnalysisMode.RAPID,
+        history_id="history",
+        status=RunStatus.QUEUED,
+        stage="Waiting for compute",
+        progress=3,
+    )
+
+    refreshed = service.refresh(record)
+
+    assert refreshed.status is RunStatus.OK
+    assert refreshed.stage == "Results ready"
+    assert refreshed.progress == 100
+    assert refreshed.console_tail == "Rapid Hypothesis Mode finished successfully"
+    assert refreshed.output_dataset_ids["results_archive"] == "archive-id"
+
+
 def test_result_download_failure_is_an_error_and_preserves_existing_results(tmp_path: Path) -> None:
     class BrokenDataset:
         id = "broken-id"

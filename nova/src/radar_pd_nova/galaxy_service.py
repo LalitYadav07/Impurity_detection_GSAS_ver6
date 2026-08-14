@@ -865,15 +865,22 @@ class GalaxyService:
     def refresh(self, record: RunRecord) -> RunRecord:
         with self._lock:
             tool = self._tools.get(record.uid)
-        if tool is not None:
+        try:
+            job = self._job_details(record.uid)
+        except Exception:
+            if tool is None:
+                raise
             status = normalize_status(tool.get_status())
             stdout = tool.get_stdout() or ""
             stderr = tool.get_stderr() or ""
         else:
-            job = self._job_details(record.uid)
+            # Galaxy's REST job record is authoritative for both recovered and
+            # newly submitted runs. Some nova-galaxy releases leave their
+            # cached Job at QUEUED after Galaxy reports the terminal ``ok``
+            # state, which otherwise strands the live UI at 3% forever.
             status = normalize_status(job.get("state"))
-            stdout = str(job.get("stdout") or job.get("tool_stdout") or "")
-            stderr = str(job.get("stderr") or job.get("tool_stderr") or "")
+            stdout = str(job.get("stdout") or job.get("tool_stdout") or job.get("job_stdout") or "")
+            stderr = str(job.get("stderr") or job.get("tool_stderr") or job.get("job_stderr") or "")
             parameters = self._job_parameters(job)
             output_ids = self._job_output_ids(job)
             record.output_dataset_ids.update(output_ids)
