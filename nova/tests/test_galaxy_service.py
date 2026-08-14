@@ -648,6 +648,50 @@ def test_newly_submitted_run_uses_authoritative_galaxy_rest_state(tmp_path: Path
     assert refreshed.output_dataset_ids["results_archive"] == "archive-id"
 
 
+def test_refresh_never_regresses_to_stale_cached_state_on_rest_failure(tmp_path: Path) -> None:
+    stale_calls: list[str] = []
+
+    class StaleTool:
+        def get_status(self) -> str:
+            stale_calls.append("status")
+            return "queued"
+
+        def get_stdout(self) -> str:
+            stale_calls.append("stdout")
+            return ""
+
+        def get_stderr(self) -> str:
+            stale_calls.append("stderr")
+            return ""
+
+    service = GalaxyService("https://galaxy.example", "key", "history", output_root=tmp_path)
+    service._tools["completed-job"] = StaleTool()  # type: ignore[assignment]
+    service._job_details = (  # type: ignore[method-assign]
+        lambda uid: (_ for _ in ()).throw(RuntimeError("temporary Galaxy status failure"))
+    )
+    record = RunRecord(
+        uid="completed-job",
+        name="completed-run",
+        mode=AnalysisMode.RAPID,
+        history_id="history",
+        status=RunStatus.OK,
+        stage="Results ready",
+        progress=100,
+    )
+
+    try:
+        service.refresh(record)
+    except RuntimeError as exc:
+        assert str(exc) == "temporary Galaxy status failure"
+    else:
+        raise AssertionError("Galaxy REST failure was unexpectedly ignored")
+
+    assert stale_calls == []
+    assert record.status is RunStatus.OK
+    assert record.stage == "Results ready"
+    assert record.progress == 100
+
+
 def test_result_download_failure_is_an_error_and_preserves_existing_results(tmp_path: Path) -> None:
     class BrokenDataset:
         id = "broken-id"

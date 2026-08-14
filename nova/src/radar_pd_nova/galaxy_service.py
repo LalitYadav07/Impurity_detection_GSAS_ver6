@@ -863,37 +863,28 @@ class GalaxyService:
             return tool
 
     def refresh(self, record: RunRecord) -> RunRecord:
-        with self._lock:
-            tool = self._tools.get(record.uid)
-        try:
-            job = self._job_details(record.uid)
-        except Exception:
-            if tool is None:
-                raise
-            status = normalize_status(tool.get_status())
-            stdout = tool.get_stdout() or ""
-            stderr = tool.get_stderr() or ""
-        else:
-            # Galaxy's REST job record is authoritative for both recovered and
-            # newly submitted runs. Some nova-galaxy releases leave their
-            # cached Job at QUEUED after Galaxy reports the terminal ``ok``
-            # state, which otherwise strands the live UI at 3% forever.
-            status = normalize_status(job.get("state"))
-            stdout = str(job.get("stdout") or job.get("tool_stdout") or job.get("job_stdout") or "")
-            stderr = str(job.get("stderr") or job.get("tool_stderr") or job.get("job_stderr") or "")
-            parameters = self._job_parameters(job)
-            output_ids = self._job_output_ids(job)
-            record.output_dataset_ids.update(output_ids)
-            record.input_dataset_ids.update(self._input_dataset_ids(parameters))
-            recovered_config = self._config_from_job(job, parameters, output_ids)
-            if recovered_config is not None:
-                record.config = recovered_config
-                record.mode = recovered_config.mode
-                if recovered_config.run_name:
-                    record.name = recovered_config.run_name
-            recovered_inputs = self._inputs_from_parameters(parameters)
-            if recovered_inputs is not None:
-                record.inputs = recovered_inputs
+        # Galaxy's REST job record is authoritative for both recovered and
+        # newly submitted runs. Some nova-galaxy releases leave their cached
+        # Job at QUEUED after Galaxy reports the terminal ``ok`` state. Never
+        # fall back to that stale object: a temporary REST error must leave the
+        # last known state intact instead of regressing an OK run to QUEUED.
+        job = self._job_details(record.uid)
+        status = normalize_status(job.get("state"))
+        stdout = str(job.get("stdout") or job.get("tool_stdout") or job.get("job_stdout") or "")
+        stderr = str(job.get("stderr") or job.get("tool_stderr") or job.get("job_stderr") or "")
+        parameters = self._job_parameters(job)
+        output_ids = self._job_output_ids(job)
+        record.output_dataset_ids.update(output_ids)
+        record.input_dataset_ids.update(self._input_dataset_ids(parameters))
+        recovered_config = self._config_from_job(job, parameters, output_ids)
+        if recovered_config is not None:
+            record.config = recovered_config
+            record.mode = recovered_config.mode
+            if recovered_config.run_name:
+                record.name = recovered_config.run_name
+        recovered_inputs = self._inputs_from_parameters(parameters)
+        if recovered_inputs is not None:
+            record.inputs = recovered_inputs
         stage, progress = stage_from_console(stdout, status)
         record.status = status
         record.stage = stage
