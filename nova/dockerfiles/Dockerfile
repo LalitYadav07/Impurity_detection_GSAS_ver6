@@ -1,6 +1,9 @@
-FROM savannah.ornl.gov/radar-pd/radar-pd-nova:nova-0.1.39
+FROM savannah.ornl.gov/radar-pd/radar-pd-nova:nova-0.1.40
 
 USER root
+
+# Hide NOVA developer-resource links in the deployed scientific workspace.
+ENV PIXI_ENVIRONMENT_NAME=production
 
 WORKDIR /src
 COPY pyproject.toml README.md /src/

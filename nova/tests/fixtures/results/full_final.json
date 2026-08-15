@@ -1,0 +1,17 @@
+{
+  "$schema": "radar-pd-result/v1",
+  "analysis_mode": "full",
+  "status": "complete",
+  "hypothesis_stage": "phase_refinement",
+  "summary": {"final": {"final_rwp": 8.5}, "elapsed_seconds": 120.0},
+  "phases": [
+    {"formula": "Fe", "space_group": 225, "weight_percent": 94.0},
+    {"formula": "Fe3O4", "space_group": 227, "weight_percent": 6.0}
+  ],
+  "hypotheses": [
+    {"formulas": "Fe|Fe3O4", "space_groups": "225|227", "stage": "final polish", "status": "accepted", "rwp": 8.5},
+    {"formulas": "Fe|FeO", "space_groups": "225|225", "stage": "candidate pass", "status": "rejected", "rwp": 11.2, "warning": "Residual peaks remained"}
+  ],
+  "warnings": [],
+  "errors": []
+}

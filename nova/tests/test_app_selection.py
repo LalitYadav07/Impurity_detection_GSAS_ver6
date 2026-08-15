@@ -78,7 +78,29 @@ def test_selecting_active_run_keeps_run_monitor_visible() -> None:
     assert state.active_page == "runs"
     assert state.selected_run_stage == "Lattice nudging"
     assert state.selected_run_progress == 42
+    assert state.workspace_view == "monitor"
+    assert state.setup_collapsed is True
+    assert [item["value"] for item in state.workspace_options] == ["monitor", "results", "plots", "files"]
     assert opened == []
+
+
+def test_monitor_timeline_uses_mode_specific_stages() -> None:
+    rapid = RunRecord(
+        uid="rapid-stage",
+        name="rapid",
+        mode=AnalysisMode.RAPID,
+        history_id="history-1",
+        status=RunStatus.RUNNING,
+        stage="Pattern scoring",
+        progress=70,
+    )
+    full = rapid.model_copy(update={"uid": "full-stage", "mode": AnalysisMode.FULL, "stage": "Refinement pass 2"})
+
+    rapid_rows = RadarPdNovaApp._monitor_stage_rows(rapid)
+    full_rows = RadarPdNovaApp._monitor_stage_rows(full)
+
+    assert rapid_rows[3] == {"name": "Pattern scoring", "state": "active"}
+    assert full_rows[3] == {"name": "Refinement passes", "state": "active"}
 
 
 def test_async_monitor_publishes_updates_on_the_event_loop(tmp_path) -> None:

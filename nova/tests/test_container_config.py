@@ -15,8 +15,9 @@ def test_container_reuses_supported_nova_supervisor_contract() -> None:
     supervisor = _read("dockerfiles/supervisord.conf")
 
     assert dockerfile.startswith(
-        "FROM savannah.ornl.gov/radar-pd/radar-pd-nova:nova-0.1.39\n"
+        "FROM savannah.ornl.gov/radar-pd/radar-pd-nova:nova-0.1.40\n"
     )
+    assert "ENV PIXI_ENVIRONMENT_NAME=production" in dockerfile
     assert (
         "python -m pip install --no-cache-dir --no-deps --force-reinstall /src"
         in dockerfile

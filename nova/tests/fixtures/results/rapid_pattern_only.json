@@ -1,0 +1,12 @@
+{
+  "$schema": "radar-pd-result/v1",
+  "analysis_mode": "rapid",
+  "status": "partial",
+  "hypothesis_stage": "pattern_scoring",
+  "phases": [],
+  "hypotheses": [
+    {"rank512": 1, "formulas": "Cu|Cu2S", "phase_coefs512": "1.0|0.2"}
+  ],
+  "warnings": ["Final refinement did not complete"],
+  "errors": []
+}

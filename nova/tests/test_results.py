@@ -4,6 +4,8 @@ from pathlib import Path
 import numpy as np
 
 from radar_pd_nova.results import (
+    build_result_view,
+    curate_rapid_rows,
     discover_plot_payloads,
     discover_tables,
     figure_for_payload,
@@ -99,6 +101,21 @@ def test_discover_plot_payloads_excludes_duplicate_missing_its_arrays(tmp_path: 
 
     assert len(options) == 1
     assert Path(options[0]["path"]) == good_json
+
+
+def test_discover_plot_payloads_keeps_distinct_valid_hypothesis_fits_with_the_same_basename(tmp_path: Path) -> None:
+    first = tmp_path / "gsas" / "live_rank512_01_rank64_08" / "curve.png.plotdata.json"
+    second = tmp_path / "gsas" / "live_rank512_02_rank64_12" / "curve.png.plotdata.json"
+    _write_gsas_payload(first, rwp=8.0)
+    _write_gsas_payload(second, rwp=9.0)
+
+    options = discover_plot_payloads(tmp_path)
+
+    assert len(options) == 2
+    assert {Path(option["path"]).parent.name for option in options} == {
+        "live_rank512_01_rank64_08",
+        "live_rank512_02_rank64_12",
+    }
 
 
 def test_phase_fraction_normalization() -> None:
@@ -204,3 +221,173 @@ def test_gsas_plot_renders_ranked_strongest_bragg_ticks() -> None:
     assert strongest.marker.line.width == 3
     assert "Relative strength=0.000" in strongest.text[0]
     assert figure.layout.title.text.endswith("Rwp 0.00%")
+
+
+def _write_gsas_payload(path: Path, *, rwp: float, phase: str = "TbSSL") -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "plot_kind": "gsas_fit_with_ticks_v1",
+                "rwp": rwp,
+                "arrays": {
+                    "x": [1.0, 2.0, 3.0],
+                    "yobs": [2.0, 3.0, 2.0],
+                    "ycalc": [2.0, 2.8, 2.0],
+                    "resid": [0.0, 0.2, 0.0],
+                },
+                "phase_order": [phase],
+                "phase_ticks": {phase: [2.0]},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_builds_curated_rapid_result_and_selects_ranked_refinement(tmp_path: Path) -> None:
+    best = tmp_path / "rapid_results" / "live_run" / "gsas" / "live_rank512_01_rank64_39" / "curve.png.plotdata.json"
+    other = tmp_path / "rapid_results" / "live_run" / "gsas" / "live_rank512_02_rank64_12" / "curve.png.plotdata.json"
+    _write_gsas_payload(best, rwp=15.283)
+    _write_gsas_payload(other, rwp=22.0)
+    (tmp_path / "results.zip").write_bytes(b"zip")
+    checkpoint = tmp_path / "gpx" / "rapid_final.gpx"
+    checkpoint.parent.mkdir()
+    checkpoint.write_bytes(b"gpx")
+    nudge = tmp_path / "nudge_results.csv"
+    nudge.write_text("formula,space_group,best_score,distance_from_start,a,b,c,alpha,beta,gamma,seconds\nTbSSL,14,0.9,0.01,4,5,6,90,90,90,2\n", encoding="utf-8")
+    pattern = tmp_path / "reranked_512_after_radar_nudge.csv"
+    pattern.write_text("rank512,rank64,formulas,space_groups,score512,r2_512,sse512,peak_support_summary\n1,39,TbSSL,14,0.95,0.94,0.06,3+1/5\n", encoding="utf-8")
+    result = {
+        "$schema": "radar-pd-result/v1",
+        "analysis_mode": "rapid",
+        "status": "complete",
+        "hypothesis_stage": "final_refinement",
+        "summary": {"live_run": {"timings": {"total_seconds": 61.2}}},
+        "phases": [],
+        "hypotheses": [
+            {
+                "gsas_rwp_rank": "1",
+                "rank512": "1",
+                "rank64": "39",
+                "formulas": "TbSSL|Al",
+                "space_groups": "14|225",
+                "status": "ok",
+                "rwp": "15.283",
+                "weights_json": '{"TbSSL (SG 14)": 91.0, "Al (SG 225)": 9.0}',
+                "curve_png": "/run/rapid_results/live_run/gsas/live_rank512_01_rank64_39/curve.png",
+            },
+            {
+                "gsas_rwp_rank": "2",
+                "rank512": "2",
+                "formulas": "TbSSL|Be",
+                "status": "ok",
+                "rwp": "22.0",
+                "curve_png": "/run/rapid_results/live_run/gsas/live_rank512_02_rank64_12/curve.png",
+            },
+        ],
+        "gpx_projects": [
+            {"label": "rapid_final", "path": "gpx/rapid_final.gpx", "stage": "hypothesis_refinement", "status": "accepted"}
+        ],
+        "warnings": [],
+        "errors": [],
+    }
+
+    view = build_result_view(result, tmp_path)
+
+    assert Path(view.primary_plot_path) == best
+    assert view.metrics[2] == {"label": "Best Rwp", "value": "15.283%"}
+    assert view.phase_total == "100.00% total"
+    assert view.phases[0]["weight_display"] == "91.00%"
+    assert view.top_refinements[0]["hypothesis"] == "TbSSL (SG 14) + Al (SG 225)"
+    assert view.rapid_stages["pattern_scoring"][0]["key_peak_support"] == "3 supported, 1 weak, 1 missing/review"
+    assert view.checkpoints[0].handoff_available is True
+    assert len(view.plots) == 2
+    assert all("/tmp/" not in plot.name for plot in view.plots)
+
+
+def test_builds_full_result_and_prioritizes_latest_accepted_fit(tmp_path: Path) -> None:
+    accepted = tmp_path / "gsas_projects" / "seq_pass2_accepted_model.png.plotdata.json"
+    main = tmp_path / "main_phase_fit.png.plotdata.json"
+    _write_gsas_payload(accepted, rwp=8.5, phase="Fe")
+    _write_gsas_payload(main, rwp=12.0, phase="Fe")
+    result = {
+        "$schema": "radar-pd-result/v1",
+        "analysis_mode": "full",
+        "status": "complete",
+        "hypothesis_stage": "phase_refinement",
+        "summary": {"final": {"final_rwp": 8.5}, "elapsed_seconds": 120.0},
+        "phases": [{"formula": "Fe", "space_group": 225, "weight_percent": 100.0}],
+        "hypotheses": [],
+        "gpx_projects": [
+            {"label": "accepted model", "path": "accepted.gpx", "stage": "full_pipeline_pass", "status": "accepted"}
+        ],
+    }
+
+    view = build_result_view(result, tmp_path)
+
+    assert Path(view.primary_plot_path) == accepted
+    assert view.mode == "full"
+    assert view.metrics[0]["value"] == "Full RADAR-PD"
+    assert view.phases[0]["phase"] == "Fe"
+    assert view.full_progression == [{"stage": "Full pipeline pass", "status": "Accepted"}]
+    assert view.full_models == [
+        {
+            "model": "Accepted model",
+            "stage": "Full pipeline pass",
+            "rwp": "-",
+            "decision": "Accepted",
+            "note": "-",
+        }
+    ]
+
+
+def test_pattern_only_result_warns_that_coefficients_are_not_phase_fractions(tmp_path: Path) -> None:
+    result = {
+        "analysis_mode": "rapid",
+        "status": "complete",
+        "hypothesis_stage": "pattern_scoring",
+        "phases": [],
+        "hypotheses": [{"rank512": 1, "formulas": "Cu|Cu2S", "phase_coefs512": "1.0|0.2"}],
+    }
+
+    view = build_result_view(result, tmp_path)
+
+    assert "not quantitative phase fractions" in view.warnings[0]
+
+
+def test_curated_rapid_rows_hide_internal_paths_and_json_fields() -> None:
+    rows = curate_rapid_rows(
+        "final_refinement",
+        [
+            {
+                "gsas_rwp_rank": 1,
+                "formulas": "Cu|Cu2S",
+                "space_groups": "225|14",
+                "rwp": 9.25,
+                "weights_json": '{"Cu": 80, "Cu2S": 20}',
+                "cif_paths": "/internal/a.cif|/internal/b.cif",
+                "stdout_tail": "technical",
+                "status": "ok",
+            }
+        ],
+    )
+
+    assert list(rows[0]) == ["rank", "hypothesis", "rwp", "phase_fractions", "pattern_rank", "status", "time"]
+    assert "/internal" not in str(rows[0])
+
+
+def test_fixed_result_contract_fixtures_cover_rapid_full_partial_and_failure(tmp_path: Path) -> None:
+    fixture_root = Path(__file__).parent / "fixtures" / "results"
+    rapid = build_result_view(json.loads((fixture_root / "rapid_final.json").read_text(encoding="utf-8")), tmp_path)
+    full = build_result_view(json.loads((fixture_root / "full_final.json").read_text(encoding="utf-8")), tmp_path)
+    partial = build_result_view(
+        json.loads((fixture_root / "rapid_pattern_only.json").read_text(encoding="utf-8")), tmp_path
+    )
+    failed = build_result_view(json.loads((fixture_root / "failed.json").read_text(encoding="utf-8")), tmp_path)
+
+    assert rapid.phase_total == "100.00% total"
+    assert full.phase_total == "100.00% total"
+    assert [row["decision"] for row in full.full_models] == ["Accepted", "Rejected"]
+    assert "not quantitative phase fractions" in partial.warnings[0]
+    assert failed.status == "Failed"
+    assert failed.warnings == ["No candidate model converged"]

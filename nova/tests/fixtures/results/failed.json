@@ -1,0 +1,10 @@
+{
+  "$schema": "radar-pd-result/v1",
+  "analysis_mode": "full",
+  "status": "failed",
+  "hypothesis_stage": "candidate_search",
+  "phases": [],
+  "hypotheses": [],
+  "warnings": [],
+  "errors": [{"message": "No candidate model converged"}]
+}

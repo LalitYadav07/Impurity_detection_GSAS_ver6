@@ -1,0 +1,21 @@
+{
+  "$schema": "radar-pd-result/v1",
+  "analysis_mode": "rapid",
+  "status": "complete",
+  "hypothesis_stage": "final_refinement",
+  "summary": {"live_run": {"timings": {"total_seconds": 61.2}}},
+  "phases": [],
+  "hypotheses": [
+    {
+      "gsas_rwp_rank": 1,
+      "rank512": 1,
+      "formulas": "TbSSL|Al",
+      "space_groups": "14|225",
+      "status": "ok",
+      "rwp": 15.283,
+      "weights_json": "{\"TbSSL (SG 14)\": 91.0, \"Al (SG 225)\": 9.0}"
+    }
+  ],
+  "warnings": [],
+  "errors": []
+}

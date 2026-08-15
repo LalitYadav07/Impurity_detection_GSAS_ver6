@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import json
 import re
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -55,12 +56,126 @@ def read_table(path: str | Path, *, limit: int = 500) -> list[dict[str, Any]]:
         return [dict(row) for _, row in zip(range(limit), csv.DictReader(handle))]
 
 
-def discover_tables(root: str | Path) -> list[dict[str, str]]:
+@dataclass(frozen=True)
+class PlotDescriptor:
+    """Presentation metadata for one interactive scientific plot."""
+
+    id: str
+    name: str
+    path: str
+    kind: str
+    category: str
+    stage: str
+    rank: int | None = None
+    rwp: float | None = None
+    valid: bool = True
+    primary: bool = False
+
+
+@dataclass(frozen=True)
+class TableDescriptor:
+    """Presentation metadata for one published scientific table."""
+
+    id: str
+    name: str
+    path: str
+    category: str
+    stage: str
+    primary: bool = False
+
+
+@dataclass(frozen=True)
+class CheckpointDescriptor:
+    """A downloadable GSAS-II checkpoint with user-facing provenance."""
+
+    id: str
+    name: str
+    path: str
+    stage: str
+    status: str
+    handoff_available: bool
+
+
+@dataclass
+class ResultView:
+    """UI-ready view of the stable ``radar-pd-result/v1`` document."""
+
+    mode: str
+    status: str
+    result_stage: str
+    metrics: list[dict[str, str]] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    phases: list[dict[str, Any]] = field(default_factory=list)
+    phase_total: str = "-"
+    plots: list[PlotDescriptor] = field(default_factory=list)
+    tables: list[TableDescriptor] = field(default_factory=list)
+    primary_plot_path: str = ""
+    rapid_stages: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    top_refinements: list[dict[str, Any]] = field(default_factory=list)
+    full_progression: list[dict[str, str]] = field(default_factory=list)
+    full_models: list[dict[str, str]] = field(default_factory=list)
+    checkpoints: list[CheckpointDescriptor] = field(default_factory=list)
+    file_groups: list[dict[str, Any]] = field(default_factory=list)
+
+    def to_state(self) -> dict[str, Any]:
+        """Convert dataclasses into Trame-serializable dictionaries."""
+
+        return asdict(self)
+
+
+def _humanize(value: str) -> str:
+    text = re.sub(r"__+", " / ", str(value or ""))
+    text = re.sub(r"[_-]+", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:1].upper() + text[1:] if text else "Result"
+
+
+def _table_stage(path: Path) -> tuple[str, str, str, bool]:
+    lowered = path.as_posix().lower()
+    if "all_gsas_validation_summary" in lowered or "final_refinement_ranking" in lowered:
+        return "Final refinement ranking", "Rapid results", "final_refinement", True
+    if "reranked_512" in lowered or "lattice_aware_pattern_ranking" in lowered:
+        return "Pattern scoring", "Rapid results", "pattern_scoring", False
+    if "nudge_results" in lowered:
+        return "Lattice nudge", "Rapid results", "lattice_nudge", False
+    if "beam64" in lowered or "coarse" in lowered:
+        return "Coarse search", "Rapid results", "coarse_search", False
+    if "summary_fractions" in lowered or "final_phase_fractions" in lowered:
+        return "Final phase fractions", "Scientific result", "phase_fractions", True
+    if any(token in lowered for token in ("accepted", "best_combination", "ranking", "candidate")):
+        return _humanize(path.stem), "Scientific result", "accepted_models", False
+    return _humanize(path.stem), "Technical tables", "technical", False
+
+
+def discover_tables(root: str | Path) -> list[dict[str, Any]]:
+    """Discover tables while assigning stable, human-facing roles."""
+
     base = Path(root)
-    return [
-        {"name": path.stem.replace("_", " ").title(), "path": str(path)}
-        for path in sorted(base.rglob("*.csv"))
-    ]
+    options: list[dict[str, Any]] = []
+    seen: set[tuple[str, int]] = set()
+    for index, path in enumerate(sorted(base.rglob("*.csv"))):
+        try:
+            signature = (path.name.lower(), path.stat().st_size)
+        except OSError:
+            continue
+        if signature in seen:
+            continue
+        seen.add(signature)
+        name, category, stage, primary = _table_stage(path)
+        options.append(
+            asdict(
+                TableDescriptor(
+                    id=f"table-{index}",
+                    name=name,
+                    path=str(path),
+                    category=category,
+                    stage=stage,
+                    primary=primary,
+                )
+            )
+        )
+    category_order = {"Scientific result": 0, "Rapid results": 1, "Technical tables": 2}
+    return sorted(options, key=lambda item: (category_order.get(item["category"], 9), not item["primary"], item["name"]))
 
 
 def _plot_payload_has_arrays(payload: dict[str, Any]) -> bool:
@@ -84,23 +199,61 @@ def _plot_payload_has_arrays(payload: dict[str, Any]) -> bool:
     return any(isinstance(value, list) and value for value in arrays.values())
 
 
-def discover_plot_payloads(root: str | Path) -> list[dict[str, str]]:
+def _plot_stage(path: Path, payload: dict[str, Any]) -> tuple[str, str, int | None]:
+    lowered = f"{path.as_posix()} {payload.get('plot_kind', '')}".lower()
+    rank_match = re.search(r"rank(?:512)?[_ -]?0*(\d+)", lowered)
+    rank = int(rank_match.group(1)) if rank_match else None
+    if "magnetic" in lowered:
+        return "Diagnostics", "magnetic_precheck", rank
+    if "rapid_refined_pattern" in lowered or "component" in lowered:
+        return "Hypothesis fits", "pattern_scoring", rank
+    if "main_phase" in lowered:
+        return "Refinement fits", "main_phase_anchor", rank
+    if "gsas" in lowered or "phase_ticks" in payload or payload.get("rwp") is not None:
+        return "Refinement fits", "final_refinement", rank
+    return "Diagnostics", "diagnostic", rank
+
+
+def _plot_display_name(path: Path, payload: dict[str, Any], stage: str, rank: int | None) -> str:
+    if stage == "magnetic_precheck":
+        return "Magnetic residual precheck"
+    if stage == "main_phase_anchor":
+        return "Main-phase refinement fit"
+    formulas = payload.get("formulas")
+    if stage == "pattern_scoring" and formulas:
+        label = " + ".join(part.strip() for part in str(formulas).split("|") if part.strip())
+        return f"Pattern fit / {label}" if label else "Pattern fit"
+    rwp = _as_float(payload.get("rwp"))
+    if stage == "final_refinement":
+        prefix = f"Refinement rank {rank}" if rank is not None else "Refinement fit"
+        return f"{prefix} / Rwp {rwp:.2f}%" if rwp is not None else prefix
+    title = str(payload.get("title") or "").strip()
+    if title and not any(token in title.lower() for token in ("/mnt/", "\\", ".plotdata")):
+        return _humanize(title)
+    return _humanize(path.name.replace(".plotdata.json", ""))
+
+
+def discover_plot_payloads(root: str | Path) -> list[dict[str, Any]]:
     base = Path(root)
-    seen_names: set[str] = set()
-    options: list[dict[str, str]] = []
-    for path in sorted(base.rglob("*.plotdata.json")):
+    options: list[dict[str, Any]] = []
+    for index, path in enumerate(sorted(base.rglob("*.plotdata.json"))):
         payload = read_plot_payload(path)
         if not _plot_payload_has_arrays(payload):
             continue
-        if path.name in seen_names:
-            continue
-        seen_names.add(path.name)
+        category, stage, rank = _plot_stage(path, payload)
         options.append(
-            {
-                "name": path.name.replace(".plotdata.json", "").replace("_", " ").title(),
-                "path": str(path),
-                "kind": str(payload.get("plot_kind") or "interactive plot"),
-            }
+            asdict(
+                PlotDescriptor(
+                    id=f"plot-{index}",
+                    name=_plot_display_name(path, payload, stage, rank),
+                    path=str(path),
+                    kind=str(payload.get("plot_kind") or "interactive plot"),
+                    category=category,
+                    stage=stage,
+                    rank=rank,
+                    rwp=_as_float(payload.get("rwp")),
+                )
+            )
         )
     return options
 
@@ -409,3 +562,424 @@ def total_elapsed_seconds(summary: dict[str, Any]) -> float | None:
     live_run = nested.get("live_run") if isinstance(nested, dict) else None
     timings = live_run.get("timings") if isinstance(live_run, dict) else None
     return _as_float(_first_value(timings, "total_seconds")) if isinstance(timings, dict) else None
+
+
+def _number_text(value: Any, digits: int = 3) -> str:
+    number = _as_float(value)
+    return "-" if number is None else f"{number:.{digits}f}"
+
+
+def _rank_value(value: Any, fallback: int = 999999) -> int:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _hypothesis_label(row: dict[str, Any]) -> str:
+    raw = _first_value(row, "hypothesis", "formulas", "formula_keys", "phases")
+    formulas = [part.strip() for part in str(raw or "").replace(" + ", "|").split("|") if part.strip()]
+    groups = [part.strip() for part in str(row.get("space_groups") or "").split("|") if part.strip()]
+    if formulas and len(formulas) == len(groups):
+        return " + ".join(f"{formula} (SG {group})" for formula, group in zip(formulas, groups))
+    return " + ".join(formulas) if formulas else "-"
+
+
+def _weights_label(value: Any) -> str:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return value or "-"
+    if isinstance(value, dict):
+        rendered: list[str] = []
+        for label, raw in value.items():
+            number = _as_float(raw)
+            rendered.append(f"{label}: {number:.1f}%" if number is not None else f"{label}: {raw}")
+        return "; ".join(rendered) if rendered else "-"
+    return str(value) if value not in (None, "") else "-"
+
+
+def _peak_support_plain(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text or text.lower() == "nan":
+        return "-"
+
+    def expand(match: re.Match[str]) -> str:
+        label = (match.group("label") or "").strip()
+        supported = int(match.group("supported"))
+        weak = int(match.group("weak"))
+        total = int(match.group("total"))
+        missing = max(0, total - supported - weak)
+        summary = f"{supported} supported, {weak} weak, {missing} missing/review"
+        return f"{label}: {summary}" if label else summary
+
+    return re.sub(
+        r"(?:(?P<label>[^:;]+):\s*)?(?P<supported>\d+)\+(?P<weak>\d+)/(?P<total>\d+)",
+        expand,
+        text,
+    )
+
+
+def _cell_summary(row: dict[str, Any]) -> str:
+    lengths = [_number_text(row.get(key), 3) for key in ("a", "b", "c")]
+    angles = [_number_text(row.get(key), 2) for key in ("alpha", "beta", "gamma")]
+    if all(value == "-" for value in [*lengths, *angles]):
+        return "-"
+    return f"a, b, c: {', '.join(lengths)}; angles: {', '.join(angles)}"
+
+
+def curate_rapid_rows(stage: str, rows: Iterable[dict[str, Any]], *, limit: int = 100) -> list[dict[str, Any]]:
+    """Project internal Rapid CSV columns into the ORC user-facing vocabulary."""
+
+    source = [dict(row) for row in rows]
+    rank_key = {
+        "coarse_search": "rank64",
+        "pattern_scoring": "rank512",
+        "final_refinement": "gsas_rwp_rank",
+    }.get(stage)
+    if rank_key:
+        source.sort(key=lambda row: _rank_value(row.get(rank_key, row.get("rank"))))
+    projected: list[dict[str, Any]] = []
+    for row in source[:limit]:
+        if stage == "coarse_search":
+            projected.append(
+                {
+                    "rank": _rank_value(row.get("rank64", row.get("rank")), len(projected) + 1),
+                    "hypothesis": _hypothesis_label(row),
+                    "coarse_match": _number_text(row.get("gain64")),
+                    "unexplained_signal": _number_text(row.get("sse64")),
+                }
+            )
+        elif stage == "lattice_nudge":
+            formula = _first_value(row, "formula", "formula_key", "phase_id") or "-"
+            projected.append(
+                {
+                    "phase": str(formula),
+                    "space_group": str(row.get("space_group") or "-"),
+                    "nudge_match": _number_text(row.get("best_score")),
+                    "cell_adjustment": _number_text(row.get("distance_from_start"), 4),
+                    "best_cell": _cell_summary(row),
+                    "time": f"{_number_text(row.get('seconds'), 1)} s" if _as_float(row.get("seconds")) is not None else "-",
+                    "status": "Needs review" if str(row.get("error") or "").strip() else "Ready",
+                }
+            )
+        elif stage == "pattern_scoring":
+            projected.append(
+                {
+                    "rank": _rank_value(row.get("rank512", row.get("rank")), len(projected) + 1),
+                    "hypothesis": _hypothesis_label(row),
+                    "key_peak_support": _peak_support_plain(row.get("peak_support_summary")),
+                    "coarse_rank": _rank_value(row.get("rank64")),
+                    "pattern_match": _number_text(row.get("score512")),
+                    "explained_signal": _number_text(row.get("r2_512")),
+                    "unexplained_signal": _number_text(row.get("sse512")),
+                }
+            )
+        elif stage == "final_refinement":
+            status = str(row.get("status") or "").strip().lower()
+            status_label = {"ok": "Converged", "refine_warning": "Needs review", "error": "Failed"}.get(
+                status, status.replace("_", " ").title() or "-"
+            )
+            projected.append(
+                {
+                    "rank": _rank_value(row.get("gsas_rwp_rank", row.get("rank")), len(projected) + 1),
+                    "hypothesis": _hypothesis_label(row),
+                    "rwp": _number_text(_first_value(row, "rwp", "Rwp", "refinement_quality")),
+                    "phase_fractions": _weights_label(
+                        _first_value(row, "weights_json", "phase_fractions", "weights")
+                    ),
+                    "pattern_rank": _rank_value(row.get("rank512")),
+                    "status": status_label,
+                    "time": f"{_number_text(row.get('seconds'), 1)} s" if _as_float(row.get("seconds")) is not None else "-",
+                }
+            )
+    return projected
+
+
+def _best_rwp(result: dict[str, Any]) -> float | None:
+    candidates: list[float] = []
+    for row in result.get("hypotheses") or []:
+        if not isinstance(row, dict):
+            continue
+        value = _as_float(_first_value(row, "rwp", "Rwp", "refinement_quality"))
+        if value is not None:
+            candidates.append(value)
+    summary = result.get("summary") or {}
+    if isinstance(summary, dict):
+        for value in (
+            summary.get("best_rwp"),
+            (summary.get("live_run") or {}).get("best_rwp") if isinstance(summary.get("live_run"), dict) else None,
+            (summary.get("final") or {}).get("final_rwp") if isinstance(summary.get("final"), dict) else None,
+        ):
+            number = _as_float(value)
+            if number is not None:
+                candidates.append(number)
+    manifest = ((result.get("provenance") or {}).get("source_manifest") or {})
+    if isinstance(manifest, dict):
+        number = _as_float((manifest.get("metrics") or {}).get("final_rwp"))
+        if number is not None:
+            candidates.append(number)
+    return min(candidates) if candidates else None
+
+
+def _message_text(value: Any) -> str:
+    if isinstance(value, dict):
+        return str(value.get("message") or value.get("error") or json.dumps(value, default=str))
+    return str(value)
+
+
+def _primary_plot_index(plots: list[dict[str, Any]], result: dict[str, Any], mode: str) -> int | None:
+    if not plots:
+        return None
+    hypotheses = [row for row in (result.get("hypotheses") or []) if isinstance(row, dict)]
+    successful = [row for row in hypotheses if str(row.get("status") or "ok").lower() in {"ok", "complete", "converged", "success"}]
+    ranked = successful or hypotheses
+    ranked.sort(
+        key=lambda row: (
+            _rank_value(row.get("gsas_rwp_rank", row.get("rank512"))),
+            _as_float(row.get("rwp")) if _as_float(row.get("rwp")) is not None else float("inf"),
+        )
+    )
+    best = ranked[0] if ranked else {}
+    curve_path = str(best.get("curve_png") or best.get("curve_csv") or "").replace("\\", "/").lower()
+    curve_parts = [part for part in curve_path.split("/") if part][-3:]
+    best_pattern_rank = _rank_value(best.get("rank512"))
+
+    def priority(item: dict[str, Any]) -> tuple[Any, ...]:
+        lowered = str(item.get("path") or "").replace("\\", "/").lower()
+        stage = str(item.get("stage") or "")
+        rwp = _as_float(item.get("rwp"))
+        rank = item.get("rank")
+        if mode == "rapid":
+            curve_match = bool(curve_parts and all(part in lowered for part in curve_parts[:-1]))
+            rank_match = rank is not None and int(rank) == best_pattern_rank
+            stage_score = 0 if curve_match else 1 if stage == "final_refinement" and rank_match else 2 if stage == "final_refinement" else 4 if stage == "pattern_scoring" else 8
+            return (stage_score, rwp if rwp is not None else float("inf"), _rank_value(rank))
+        final_score = 0 if any(token in lowered for token in ("seq_final", "accepted_model", "final", "polish")) else 2 if stage == "final_refinement" else 4 if stage == "main_phase_anchor" else 8
+        pass_match = re.search(r"pass[_ -]?(\d+)", lowered)
+        latest_pass = -int(pass_match.group(1)) if pass_match else 0
+        return (final_score, latest_pass, rwp if rwp is not None else float("inf"))
+
+    return min(range(len(plots)), key=lambda index: priority(plots[index]))
+
+
+def _phase_rows_for_view(result: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
+    rows = phase_fraction_rows(result)
+    total = 0.0
+    has_weight = False
+    for row in rows:
+        number = _as_float(row.get("weight_percent"))
+        row["weight_value"] = number if number is not None else 0.0
+        row["weight_display"] = f"{number:.2f}%" if number is not None else "-"
+        row["bar_width"] = min(100.0, max(0.0, number or 0.0))
+        if number is not None:
+            total += number
+            has_weight = True
+    return rows, (f"{total:.2f}% total" if has_weight else "-")
+
+
+def _local_file_groups(root: Path) -> list[dict[str, Any]]:
+    group_order = [
+        "Report and archive",
+        "Scientific tables",
+        "Fit plots",
+        "Phase CIFs",
+        "GSAS-II projects",
+        "Reproducibility",
+        "Diagnostics and logs",
+    ]
+    groups: dict[str, list[dict[str, Any]]] = {name: [] for name in group_order}
+    seen: set[tuple[str, int]] = set()
+    for path in sorted(root.rglob("*")):
+        if not path.is_file():
+            continue
+        try:
+            size = path.stat().st_size
+        except OSError:
+            continue
+        signature = (path.name.lower(), size)
+        if signature in seen:
+            continue
+        seen.add(signature)
+        name = path.name.lower()
+        suffix = path.suffix.lower()
+        if name in {"report.html", "results.zip", "overview.tsv"}:
+            group = "Report and archive"
+        elif suffix in {".csv", ".tsv"}:
+            group = "Scientific tables"
+        elif suffix in {".png", ".jpg", ".jpeg", ".svg", ".html"} and name != "report.html":
+            group = "Fit plots"
+        elif suffix == ".cif":
+            group = "Phase CIFs"
+        elif suffix == ".gpx":
+            group = "GSAS-II projects"
+        elif name in {"resolved_config.yaml", "input_manifest.json", "summary.json", "state.json"} or "config" in name:
+            group = "Reproducibility"
+        else:
+            group = "Diagnostics and logs"
+        display = {
+            "report.html": "Integrated result report",
+            "results.zip": "Complete results archive",
+            "overview.tsv": "Result overview",
+            "resolved_config.yaml": "Resolved RADAR-PD configuration",
+            "input_manifest.json": "Input provenance manifest",
+        }.get(name, _humanize(path.name.replace(".plotdata.json", " interactive data")))
+        groups[group].append(
+            {
+                "id": f"file-{len(seen)}",
+                "name": display,
+                "filename": path.name,
+                "path": str(path),
+                "size": f"{size / 1024:.1f} KB" if size < 1024 * 1024 else f"{size / (1024 * 1024):.1f} MB",
+            }
+        )
+    return [{"name": name, "files": groups[name]} for name in group_order if groups[name]]
+
+
+def _checkpoint_descriptors(result: dict[str, Any], root: Path) -> list[CheckpointDescriptor]:
+    local = list(root.rglob("*.gpx"))
+    descriptors: list[CheckpointDescriptor] = []
+    for index, item in enumerate(result.get("gpx_projects") or []):
+        if not isinstance(item, dict):
+            continue
+        candidates = [
+            str(item.get("collection_name") or ""),
+            Path(str(item.get("collection_path") or "")).name,
+            Path(str(item.get("path") or "")).name,
+            Path(str(item.get("source_path") or "")).name,
+        ]
+        path = next((candidate for candidate in local if candidate.name in candidates), None)
+        label = str(item.get("label") or (path.stem if path else "GSAS-II checkpoint"))
+        descriptors.append(
+            CheckpointDescriptor(
+                id=f"checkpoint-{index}",
+                name=_humanize(label),
+                path=str(path) if path else "",
+                stage=_humanize(str(item.get("stage") or "Refinement checkpoint")),
+                status=_humanize(str(item.get("status") or "Available")),
+                handoff_available=path is not None,
+            )
+        )
+    return descriptors
+
+
+def _full_model_rows(result: dict[str, Any]) -> list[dict[str, str]]:
+    """Project Full-mode decisions without exposing pipeline paths or IDs."""
+
+    rows: list[dict[str, str]] = []
+    for item in result.get("hypotheses") or []:
+        if not isinstance(item, dict):
+            continue
+        status = _humanize(str(_first_value(item, "decision", "status") or "Reported"))
+        stage = _humanize(str(_first_value(item, "stage", "hypothesis_stage", "pipeline_pass") or "Refinement"))
+        warning = str(_first_value(item, "warning", "message") or "").strip()
+        rows.append(
+            {
+                "model": _hypothesis_label(item),
+                "stage": stage,
+                "rwp": _number_text(_first_value(item, "rwp", "Rwp", "refinement_quality")),
+                "decision": status,
+                "note": warning or "-",
+            }
+        )
+    if rows:
+        return rows
+
+    for item in result.get("gpx_projects") or []:
+        if not isinstance(item, dict):
+            continue
+        rows.append(
+            {
+                "model": _humanize(str(item.get("label") or "Published model")),
+                "stage": _humanize(str(item.get("stage") or "Refinement")),
+                "rwp": _number_text(_first_value(item, "rwp", "Rwp")),
+                "decision": _humanize(str(item.get("status") or "Published")),
+                "note": str(item.get("warning") or "-") or "-",
+            }
+        )
+    return rows
+
+
+def build_result_view(result: dict[str, Any], root: str | Path) -> ResultView:
+    """Build a deterministic Rapid or Full scientific presentation model."""
+
+    base = Path(root)
+    mode = str(result.get("analysis_mode") or "full").lower()
+    status = str(result.get("status") or "complete").replace("_", " ").title()
+    result_stage = str(result.get("hypothesis_stage") or "phase_refinement")
+    phase_rows, phase_total = _phase_rows_for_view(result)
+    elapsed = total_elapsed_seconds(result)
+    best_rwp = _best_rwp(result)
+
+    plot_dicts = discover_plot_payloads(base)
+    primary_index = _primary_plot_index(plot_dicts, result, mode)
+    if primary_index is not None:
+        plot_dicts[primary_index]["primary"] = True
+        plot_dicts[primary_index]["category"] = "Best refinement"
+        plot_dicts[primary_index]["name"] = "Best refinement fit" + (
+            f" / Rwp {plot_dicts[primary_index]['rwp']:.2f}%" if plot_dicts[primary_index].get("rwp") is not None else ""
+        )
+    plots = [PlotDescriptor(**item) for item in plot_dicts]
+    tables = [TableDescriptor(**item) for item in discover_tables(base)]
+
+    table_rows: dict[str, list[dict[str, Any]]] = {}
+    for descriptor in tables:
+        if descriptor.stage not in table_rows:
+            table_rows[descriptor.stage] = read_table(descriptor.path)
+    final_source = [row for row in (result.get("hypotheses") or []) if isinstance(row, dict)]
+    if not final_source:
+        final_source = table_rows.get("final_refinement", [])
+    rapid_stages = {
+        "coarse_search": curate_rapid_rows("coarse_search", table_rows.get("coarse_search", [])),
+        "lattice_nudge": curate_rapid_rows("lattice_nudge", table_rows.get("lattice_nudge", [])),
+        "pattern_scoring": curate_rapid_rows("pattern_scoring", table_rows.get("pattern_scoring", [])),
+        "final_refinement": curate_rapid_rows("final_refinement", final_source),
+    }
+
+    warnings = [_message_text(item) for item in [*(result.get("warnings") or []), *(result.get("errors") or [])] if _message_text(item)]
+    if mode == "rapid" and result_stage == "pattern_scoring":
+        warnings.insert(
+            0,
+            "Final refinement is not available. Pattern scale coefficients are comparative and are not quantitative phase fractions.",
+        )
+
+    progression: list[dict[str, str]] = []
+    seen_progression: set[tuple[str, str]] = set()
+    for item in result.get("gpx_projects") or []:
+        if not isinstance(item, dict):
+            continue
+        stage = _humanize(str(item.get("stage") or "Refinement"))
+        state = _humanize(str(item.get("status") or "Checkpoint"))
+        key = (stage, state)
+        if key not in seen_progression:
+            seen_progression.add(key)
+            progression.append({"stage": stage, "status": state})
+
+    metrics = [
+        {"label": "Analysis", "value": "Rapid Hypothesis" if mode == "rapid" else "Full RADAR-PD"},
+        {"label": "Status", "value": status},
+        {"label": "Best Rwp", "value": f"{best_rwp:.3f}%" if best_rwp is not None else "-"},
+        {"label": "Reported phases", "value": str(len(phase_rows)) if phase_rows else "-"},
+        {"label": "Total time", "value": f"{elapsed:.1f} s" if elapsed is not None else "-"},
+        {"label": "Result stage", "value": _humanize(result_stage)},
+    ]
+    primary_path = plots[primary_index].path if primary_index is not None else ""
+    return ResultView(
+        mode=mode,
+        status=status,
+        result_stage=result_stage,
+        metrics=metrics,
+        warnings=warnings,
+        phases=phase_rows,
+        phase_total=phase_total,
+        plots=plots,
+        tables=tables,
+        primary_plot_path=primary_path,
+        rapid_stages=rapid_stages,
+        top_refinements=rapid_stages["final_refinement"][:5],
+        full_progression=progression,
+        full_models=_full_model_rows(result) if mode == "full" else [],
+        checkpoints=_checkpoint_descriptors(result, base),
+        file_groups=_local_file_groups(base),
+    )

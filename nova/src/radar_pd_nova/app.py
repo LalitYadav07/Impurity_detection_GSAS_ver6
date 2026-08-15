@@ -5,17 +5,19 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from nova.trame import ThemedApp
 from trame.app import get_server
-from trame.widgets import html, plotly, vuetify3 as vuetify
+from trame.widgets import client, html, plotly, vuetify3 as vuetify
 
 from .configuration import config_from_contract, load_configuration
 from .galaxy_service import GalaxyService
 from .models import AnalysisConfig, AnalysisMode, InputSelection, InputSource, RunRecord, RunStatus, selected_run_uid
-from .results import discover_plot_payloads, discover_tables, figure_for_payload, phase_fraction_rows, read_json, read_plot_payload, read_table, total_elapsed_seconds
+from .results import build_result_view, figure_for_payload, read_plot_payload, read_table
 from .uploads import NamedFileUpload
 
 
@@ -45,6 +47,8 @@ class RadarPdNovaApp(ThemedApp):
         self._monitor_tasks: set[asyncio.Task[None]] = set()
         self._opening_run_uid: str | None = None
         self._plot_widget: Any | None = None
+        self._primary_plot_widget: Any | None = None
+        self._auto_opened_uids: set[str] = set()
         self._initialize_state()
         self.server.state.change("run_selection")(self._run_selection_changed)
         self.create_ui()
@@ -54,6 +58,16 @@ class RadarPdNovaApp(ThemedApp):
         state = self.server.state
         state.trame__title = "RADAR-PD Interactive"
         state.active_page = "setup"
+        state.setup_collapsed = False
+        state.setup_panels = ["measurement", "data"]
+        state.workspace_view = "monitor"
+        state.workspace_options = [
+            {"title": "Run Monitor", "value": "monitor", "icon": "mdi-progress-clock"},
+            {"title": "Rapid Results", "value": "results", "icon": "mdi-chart-line"},
+            {"title": "Run File Browser", "value": "files", "icon": "mdi-folder-outline"},
+        ]
+        state.run_search = ""
+        state.cancel_dialog = False
         state.connection_status = "Checking NDIP connection"
         state.connection_ok = False
         state.busy = False
@@ -132,7 +146,12 @@ class RadarPdNovaApp(ThemedApp):
         state.selected_run_message = ""
         state.selected_run_console = ""
         state.selected_run_loading = False
+        state.selected_run_elapsed = "-"
+        state.monitor_stages = []
         state.summary_cards = []
+        state.result_metrics = []
+        state.result_warnings = []
+        state.phase_total = "-"
         state.viewed_run_mode = ""
         state.viewed_run_name = ""
         state.viewed_configuration = ""
@@ -143,11 +162,27 @@ class RadarPdNovaApp(ThemedApp):
         state.table_headers = []
         state.plot_options = []
         state.selected_plot = ""
+        state.gallery_selected_plot = ""
+        state.primary_plot_path = ""
+        state.plot_groups = []
         state.artifact_options = []
         state.selected_artifact = ""
+        state.file_groups = []
         state.gpx_rows = []
+        state.checkpoint_rows = []
+        state.selected_checkpoint = ""
+        state.selected_hypothesis = None
+        state.comparison_hypothesis = None
         state.solution_rows = []
         state.solution_headers = []
+        state.rapid_stage = "final_refinement"
+        state.rapid_coarse_rows = []
+        state.rapid_nudge_rows = []
+        state.rapid_pattern_rows = []
+        state.rapid_final_rows = []
+        state.top_refinements = []
+        state.full_progression = []
+        state.full_model_rows = []
         state.last_log = ""
         state.result_tab = "overview"
         state.mode_options = [
@@ -155,10 +190,10 @@ class RadarPdNovaApp(ThemedApp):
             {"title": "Full RADAR-PD", "value": "full"},
         ]
         state.source_options = [
-            {"title": "Upload from this computer or select a server file", "value": "upload"},
-            {"title": "Reuse datasets already in this Galaxy history", "value": "galaxy"},
-            {"title": "SNS IPTS: resolve from a NeXus event file", "value": "ipts_event"},
-            {"title": "SNS IPTS: instrument, IPTS, run, and bank", "value": "ipts_manual"},
+            {"title": "Computer", "value": "upload"},
+            {"title": "Galaxy History", "value": "galaxy"},
+            {"title": "SNS IPTS / NeXus event file", "value": "ipts_event"},
+            {"title": "SNS IPTS / run lookup", "value": "ipts_manual"},
         ]
         state.radiation_options = [
             {"title": "Neutron powder diffraction", "value": "neutron"},
@@ -166,443 +201,748 @@ class RadarPdNovaApp(ThemedApp):
         ]
         state.main_cif_source_options = [
             {"title": "No supplied main phase", "value": "none"},
-            {"title": "Upload/select a CIF file", "value": "upload"},
-            {"title": "Reuse a CIF from Galaxy history", "value": "galaxy"},
+            {"title": "Choose CIF from computer", "value": "upload"},
+            {"title": "Choose CIF from Galaxy History", "value": "galaxy"},
         ]
         state.database_source_options = [
             {"title": "Built-in MP/COD catalog", "value": "builtin"},
-            {"title": "Upload/select a candidate-library ZIP", "value": "upload"},
-            {"title": "Reuse a library archive from Galaxy history", "value": "galaxy"},
+            {"title": "Candidate-library ZIP from computer", "value": "upload"},
+            {"title": "Library archive from Galaxy History", "value": "galaxy"},
         ]
 
     def create_ui(self) -> None:
         self.set_theme("CompactTheme")
         with super().create_ui() as layout:
             layout.toolbar_title.set_text("RADAR-PD Interactive")
-            with layout.pre_content:
-                self._navigation()
+            # Vue deliberately ignores <style> elements embedded in a component
+            # template. Client.Style registers the sheet in the document head,
+            # which keeps the two-pane layout intact after reactive updates.
+            client.Style(self._css())
             with layout.content:
-                html.Style(self._css())
-                with html.Div(classes="radar-shell"):
+                with html.Div(classes="radar-app-shell"):
                     self._header()
-                    with html.Div(v_show="active_page === 'setup'"):
-                        self._setup_page()
-                    with html.Div(v_show="active_page === 'runs'"):
-                        self._runs_page()
-                    with html.Div(v_show="active_page === 'results'"):
-                        self._results_page()
-                    with html.Div(v_show="active_page === 'artifacts'"):
-                        self._artifacts_page()
+                    with html.Div(
+                        classes=("setup_collapsed ? 'radar-layout is-collapsed' : 'radar-layout'",),
+                    ):
+                        with html.Aside(classes="radar-setup-rail", v_show="!setup_collapsed"):
+                            self._setup_page()
+                        with html.Main(classes="radar-workspace"):
+                            self._workspace_page()
             return layout
 
-    def _navigation(self) -> None:
-        with vuetify.VTabs(v_model=("active_page", "setup"), color="#0b5d46", density="compact"):
-            vuetify.VTab("New analysis", value="setup", prepend_icon="mdi-flask-outline")
-            vuetify.VTab("Runs", value="runs", prepend_icon="mdi-progress-clock")
-            vuetify.VTab("Results", value="results", prepend_icon="mdi-chart-line")
-            vuetify.VTab("Artifacts", value="artifacts", prepend_icon="mdi-folder-outline")
-
     def _header(self) -> None:
-        with html.Section(classes="radar-hero"):
-            html.Div("RADAR-PD SCIENTIFIC AI WORKSPACE", classes="radar-kicker")
-            html.H1("Phase detection for powder diffraction")
-            html.P(
-                "Configure Full or Rapid analysis, submit it to NDIP compute, leave this page safely, and return to inspect the same Galaxy-backed run.",
-                classes="radar-subtitle",
+        with html.Header(classes="radar-context-header"):
+            vuetify.VBtn(
+                icon=("setup_collapsed ? 'mdi-menu-open' : 'mdi-menu'",),
+                title=("setup_collapsed ? 'Show setup' : 'Hide setup'",),
+                variant="text",
+                size="small",
+                click="setup_collapsed = !setup_collapsed",
             )
-            with html.Div(classes="radar-status-row"):
-                vuetify.VChip(
-                    text=("connection_status",),
-                    color=("connection_ok ? '#d8f3e6' : '#fff0d4'",),
-                    prepend_icon=("connection_ok ? 'mdi-cloud-check-outline' : 'mdi-cloud-alert-outline'",),
-                    variant="flat",
+            with html.Div(classes="radar-context-title"):
+                html.Div("RADAR-PD Interactive", classes="radar-product-name")
+                html.Div("Phase detection for powder diffraction", classes="radar-product-subtitle")
+            vuetify.VSpacer()
+            vuetify.VChip(
+                text=("connection_status",),
+                color=("connection_ok ? '#dff2e8' : '#fff0d4'",),
+                prepend_icon=("connection_ok ? 'mdi-cloud-check-outline' : 'mdi-cloud-alert-outline'",),
+                variant="flat",
+                size="small",
+            )
+            vuetify.VChip(
+                v_if="!!selected_run_uid",
+                text=("selected_run_name",),
+                prepend_icon="mdi-flask-outline",
+                variant="outlined",
+                size="small",
+                classes="radar-run-chip",
+            )
+            vuetify.VChip(
+                v_if="!!selected_run_uid",
+                text=("selected_run_status",),
+                color=("selected_run_status === 'Ok' ? '#dff2e8' : selected_run_status === 'Error' ? '#fde7e7' : '#fff0d4'",),
+                variant="flat",
+                size="small",
+            )
+
+    @contextmanager
+    def _setup_section(self, number: int, title: str, value: str, status_expression: str) -> Any:
+        with vuetify.VExpansionPanel(value=value, key=f"'setup-{value}'", classes="radar-setup-panel"):
+            with vuetify.VExpansionPanelTitle(classes="radar-setup-title"):
+                html.Span(str(number), classes="radar-step-number")
+                html.Span(title, classes="radar-step-label")
+                vuetify.VSpacer()
+                vuetify.VIcon(
+                    icon=(f"{status_expression} ? 'mdi-check-circle' : 'mdi-circle-outline'",),
+                    color=(f"{status_expression} ? '#1f6b4b' : '#91a099'",),
                     size="small",
                 )
-                vuetify.VChip("Neutron and X-ray", size="small", variant="outlined")
-                vuetify.VChip("Full and Rapid", size="small", variant="outlined")
-                vuetify.VChip("Galaxy-backed recovery", size="small", variant="outlined")
-
-    def _section(self, title: str, subtitle: str, number: int) -> Any:
-        card = vuetify.VCard(classes="radar-card", variant="flat")
-        card.__enter__()
-        with vuetify.VCardTitle(classes="radar-card-title"):
-            html.Span(str(number), classes="step-number")
-            html.Span(title)
-        vuetify.VCardSubtitle(subtitle, classes="radar-card-subtitle")
-        return card
-
-    def _close_section(self, card: Any) -> None:
-        card.__exit__(None, None, None)
+            # Stateful controls must survive panel collapse. Vuetify otherwise
+            # lazily unmounts expansion content, which recreates file inputs
+            # and was the root of the sibling-reset/duplicate-upload defect.
+            with vuetify.VExpansionPanelText(eager=True):
+                yield
 
     def _setup_page(self) -> None:
-        with vuetify.VRow(classes="mt-4", align="start"):
-            with vuetify.VCol(cols=12, lg=7):
-                card = self._section("Analysis path", "Both modes use the same inputs and scientific safeguards.", 1)
-                with vuetify.VCardText():
-                    vuetify.VSelect(
-                        label="Analysis mode",
-                        v_model=("analysis_mode",),
-                        items=("mode_options",),
-                        item_title="title",
-                        item_value="value",
-                        variant="outlined",
-                        density="comfortable",
-                    )
-                    with vuetify.VRow():
-                        with vuetify.VCol(cols=12, md=6):
-                            vuetify.VSelect(
-                                label="Measurement type",
-                                v_model=("radiation",),
-                                items=("radiation_options",),
-                                item_title="title",
-                                item_value="value",
-                                variant="outlined",
-                            )
-                        with vuetify.VCol(cols=12, md=6):
-                            vuetify.VSelect(
-                                label="Pattern geometry",
-                                v_model=("instrument_mode",),
-                                items=("[{title:'Auto detect',value:'auto'},{title:'Constant wavelength',value:'cw'},{title:'Time of flight',value:'tof'}]",),
-                                item_title="title",
-                                item_value="value",
-                                variant="outlined",
-                            )
-                self._close_section(card)
+        html.Div("SETUP", classes="radar-rail-kicker")
+        html.H2("Configure analysis", classes="radar-rail-heading")
+        html.P("Work from top to bottom. Earlier choices control the options that follow.", classes="radar-rail-help")
 
-                card = self._section("Diffraction data", "Upload from the laptop, reuse Galaxy data, or resolve an SNS IPTS run.", 2)
-                with vuetify.VCardText():
-                    vuetify.VSelect(
-                        label="Where is the diffraction pattern?",
-                        v_model=("input_source",),
-                        items=("source_options",),
-                        item_title="title",
-                        item_value="value",
-                        variant="outlined",
-                    )
-                    with html.Div(v_if="input_source === 'upload'", classes="upload-grid", key="radar-upload-inputs"):
-                        NamedFileUpload(
-                            "data_path",
-                            label="Choose diffraction data",
-                            extensions=[".dat", ".xye", ".xy", ".csv", ".txt", ".fxye", ".xrdml", ".xml"],
-                            return_contents=False,
-                            show_server_files=True,
-                            color="#0b5d46",
-                            key="radar-diffraction-upload",
-                        )
-                        vuetify.VChip(
-                            "Diffraction data ready",
-                            v_if="!!data_path",
-                            prepend_icon="mdi-check-circle-outline",
-                            color="#0b5d46",
-                            variant="tonal",
-                            size="small",
-                            key="radar-diffraction-ready",
-                        )
-                        NamedFileUpload(
-                            "instrument_path",
-                            label="Choose GSAS-II instrument profile",
-                            extensions=[".instprm", ".prm", ".inst", ".ins"],
-                            return_contents=False,
-                            show_server_files=True,
-                            color="#0b5d46",
-                            key="radar-instrument-upload",
-                        )
-                        vuetify.VChip(
-                            "Instrument profile ready",
-                            v_if="!!instrument_path",
-                            prepend_icon="mdi-check-circle-outline",
-                            color="#0b5d46",
-                            variant="tonal",
-                            size="small",
-                            key="radar-instrument-ready",
-                        )
-                        vuetify.VSwitch(
-                            v_if="radiation === 'xray' && instrument_mode !== 'tof'",
-                            v_model=("use_builtin_cuka",),
-                            label="Use built-in Cu K-alpha laboratory profile",
-                            color="#0b5d46",
-                            inset=True,
-                        )
-                    with html.Div(v_if="input_source === 'galaxy'", key="radar-history-inputs"):
-                        html.P("Select durable inputs from the current Galaxy history.", classes="field-help")
-                        vuetify.VSelect(label="Diffraction data", v_model=("history_data_id",), items=("history_data_datasets",), item_title="name", item_value="id", variant="outlined", no_data_text="No compatible diffraction datasets are in this history", key="radar-history-diffraction")
-                        vuetify.VSelect(label="Instrument profile", v_model=("history_instrument_id",), items=("history_instrument_datasets",), item_title="name", item_value="id", variant="outlined", no_data_text="No GSAS-II instrument profiles are in this history", key="radar-history-instrument")
-                        vuetify.VSwitch(v_if="radiation === 'xray'", v_model=("use_builtin_cuka",), label="Use built-in Cu K-alpha laboratory profile", color="#0b5d46")
-                    with html.Div(v_if="input_source === 'ipts_event'"):
-                        NamedFileUpload("event_file_path", label="Choose NeXus event file", extensions=[".nxs", ".h5", ".hdf5"], return_contents=False, show_server_files=True, color="#0b5d46", key="radar-event-upload")
-                        vuetify.VTextField(label="Detector bank", v_model=("bank",), variant="outlined", placeholder="for example bank1")
-                    with html.Div(v_if="input_source === 'ipts_manual'"):
-                        with vuetify.VRow():
-                            with vuetify.VCol(cols=12, sm=6):
-                                vuetify.VTextField(label="SNS instrument", v_model=("ipts_instrument",), variant="outlined", placeholder="HB2A")
-                            with vuetify.VCol(cols=12, sm=6):
-                                vuetify.VTextField(label="IPTS", v_model=("ipts",), variant="outlined", placeholder="IPTS-12345")
-                            with vuetify.VCol(cols=12, sm=6):
-                                vuetify.VTextField(label="Run number", v_model=("run_number",), type="number", variant="outlined")
-                            with vuetify.VCol(cols=12, sm=6):
-                                vuetify.VTextField(label="Detector bank", v_model=("bank",), variant="outlined")
-                    vuetify.VDivider(classes="my-4")
-                    html.H3("Known main phase and candidate library", classes="subsection-title")
-                    html.P("The main-phase and library sources are independent of the diffraction-data source, so uploaded and saved inputs can be mixed.", classes="field-help")
-                    vuetify.VSelect(label="Known/main phase", v_model=("main_cif_source",), items=("main_cif_source_options",), item_title="title", item_value="value", variant="outlined")
-                    with html.Div(v_if="main_cif_source === 'upload'", classes="upload-grid", key="radar-main-cif-upload-panel"):
-                        NamedFileUpload("main_cif_path", label="Choose known/main phase CIF (optional)", extensions=[".cif"], return_contents=False, show_server_files=True, color="#0b5d46", key="radar-main-cif-upload")
-                        vuetify.VChip("Main-phase CIF ready", v_if="!!main_cif_path", prepend_icon="mdi-check-circle-outline", color="#0b5d46", variant="tonal", size="small", key="radar-main-cif-ready")
-                    vuetify.VSelect(v_if="main_cif_source === 'galaxy'", label="Known/main phase CIF", v_model=("history_main_cif_id",), items=("history_cif_datasets",), item_title="name", item_value="id", clearable=True, variant="outlined", no_data_text="No CIF datasets are in this history", key="radar-history-main-cif")
-                    vuetify.VSelect(label="Candidate library", v_model=("database_source",), items=("database_source_options",), item_title="title", item_value="value", variant="outlined")
-                    with html.Div(v_if="database_source === 'upload'", classes="upload-grid"):
-                        NamedFileUpload("database_archive_path", label="Choose candidate-library ZIP (optional)", extensions=[".zip"], return_contents=False, show_server_files=True, color="#0b5d46", key="radar-database-upload")
-                    vuetify.VSelect(v_if="database_source === 'galaxy'", label="Candidate-library archive", v_model=("history_database_id",), items=("history_archive_datasets",), item_title="name", item_value="id", clearable=True, variant="outlined", no_data_text="No library archives are in this history")
-                    html.A("Build a reusable CIF library in Galaxy", href="/?tool_id=neutrons_radar_pd_library_builder_prototype&version=latest", target="_blank", classes="handoff-link")
-                self._close_section(card)
-
-                card = self._section("Chemistry and pattern policy", "Define sample chemistry separately from container or environment chemistry.", 3)
-                with vuetify.VCardText():
-                    with vuetify.VRow():
-                        with vuetify.VCol(cols=12, md=6):
-                            vuetify.VTextField(label="Sample elements", v_model=("sample_elements",), placeholder="Cu, P, Pb, O, S", variant="outlined", hint="Comma- or space-separated element symbols", persistent_hint=True)
-                        with vuetify.VCol(cols=12, md=6):
-                            vuetify.VTextField(label="Sample can / environment elements", v_model=("environment_elements",), placeholder="Al, V", variant="outlined", hint="Allowed as pure environment phases, not mixed freely into sample chemistry", persistent_hint=True)
-                    with vuetify.VRow():
-                        with vuetify.VCol(cols=12, sm=6):
-                            vuetify.VTextField(label="Fit range start (optional)", v_model=("fit_start",), type="number", variant="outlined")
-                        with vuetify.VCol(cols=12, sm=6):
-                            vuetify.VTextField(label="Fit range end (optional)", v_model=("fit_end",), type="number", variant="outlined")
-                    vuetify.VTextarea(label="Ignored regions", v_model=("ignore_regions",), placeholder="One start,end pair per line\n2.0, 3.2", variant="outlined", rows=2, auto_grow=True)
-                    vuetify.VSwitch(v_model=("reference_masks_enabled",), label="Mask selected can/reference peak positions", color="#0b5d46", inset=True)
-                    vuetify.VSelect(v_if="reference_masks_enabled", label="Reference structures", v_model=("reference_mask_presets",), items=("['Al_fcc','Cu_fcc','V_bcc']",), multiple=True, chips=True, variant="outlined")
-                    vuetify.VSelect(v_if="reference_masks_enabled", label="Reference-mask window", v_model=("reference_window_mode",), items=("[{title:'Automatic from instrument resolution',value:'auto'},{title:'Fixed window',value:'fixed'}]",), item_title="title", item_value="value", variant="outlined")
-                    vuetify.VSwitch(v_if="radiation === 'xray' && reference_masks_enabled", v_model=("include_cu_kbeta",), label="Also mask Cu K-beta companion positions", color="#0b5d46", inset=True)
-                self._close_section(card)
-
-                card = self._section("Refinement safeguards", "These options are shared by Full and Rapid analysis.", 4)
-                with vuetify.VCardText():
-                    with vuetify.VRow():
-                        with vuetify.VCol(cols=12, md=4):
-                            vuetify.VSelect(label="Background correction", v_model=("background_mode",), items=("[{title:'Automatic fixed points',value:'auto_fixed_points'},{title:'Manual / pipeline default',value:'manual'}]",), item_title="title", item_value="value", variant="outlined")
-                        with vuetify.VCol(cols=12, md=4):
-                            vuetify.VSelect(label="Background function", v_model=("background_type",), items=("['chebyschev-1','chebyschev','cosine','Q^2 power series']",), variant="outlined")
-                        with vuetify.VCol(cols=12, md=4):
-                            vuetify.VTextField(label="Background terms", v_model=("background_terms",), type="number", min=1, max=36, variant="outlined")
-                    vuetify.VAlert(v_if="main_cif_source === 'none'", text="Main-phase anchoring, main-shadow filtering, internal-coordinate cleanup, and magnetic indexing require a supplied main-phase CIF.", type="info", variant="tonal", classes="mb-3")
-                    vuetify.VSwitch(v_if="main_cif_source !== 'none'", v_model=("main_prenudge",), label="Automatically anchor a supplied main-phase cell", color="#0b5d46", inset=True)
-                    vuetify.VSwitch(v_if="main_cif_source !== 'none'", v_model=("main_shadow_filter",), label="Filter candidates supported only by strong main-phase peaks", color="#0b5d46", inset=True)
-                    vuetify.VSwitch(v_if="main_cif_source !== 'none' && radiation === 'neutron'", v_model=("magnetic_precheck",), label="Check whether residual peaks can be indexed by a commensurate magnetic propagation vector", color="#0b5d46", inset=True)
-                    with html.Div(v_if="main_cif_source !== 'none' && radiation === 'neutron' && magnetic_precheck"):
-                        vuetify.VTextField(label="Magnetic precheck Q maximum", v_model=("magnetic_q_max",), type="number", variant="outlined")
-                    vuetify.VSwitch(v_if="main_cif_source !== 'none'", v_model=("cleanup_enabled",), label="Refine supplied main-CIF internal parameters after lattice anchoring", color="#0b5d46", inset=True)
-                    with vuetify.VRow(v_if="main_cif_source !== 'none' && cleanup_enabled"):
-                        with vuetify.VCol(cols=12, sm=6):
-                            vuetify.VCheckbox(v_model=("refine_u_iso",), label="Refine isotropic displacement parameters")
-                        with vuetify.VCol(cols=12, sm=6):
-                            vuetify.VCheckbox(v_model=("refine_positions",), label="Refine atomic positions")
-                self._close_section(card)
-
-                card = self._section("Mode-specific search controls", "Only controls relevant to the selected analysis path are shown.", 5)
-                with vuetify.VCardText():
-                    with html.Div(v_if="analysis_mode === 'rapid'"):
-                        with vuetify.VRow():
-                            with vuetify.VCol(cols=12, md=6):
-                                vuetify.VTextField(label="Phases per hypothesis", v_model=("rapid_phases_per_hypothesis",), type="number", min=1, max=5, variant="outlined")
-                            with vuetify.VCol(cols=12, md=6):
-                                vuetify.VTextField(label="Hypotheses retained per stage", v_model=("rapid_stage_output_limit",), type="number", min=3, max=50, variant="outlined")
-                            with vuetify.VCol(cols=12, md=6):
-                                vuetify.VTextField(label="Final refinements", v_model=("rapid_gsas_validation_limit",), type="number", min=0, variant="outlined")
-                            with vuetify.VCol(cols=12, md=6):
-                                vuetify.VTextField(label="Parallel workers", v_model=("rapid_parallel_workers",), type="number", min=1, max=16, variant="outlined")
-                        vuetify.VSwitch(v_model=("rapid_show_family_variants",), label="Keep same-family variants available in Solution Inspector", color="#0b5d46", inset=True)
-                        vuetify.VSwitch(v_model=("rapid_final_polish_enabled",), label="Run final polish after ranking", color="#0b5d46", inset=True)
-                    with html.Div(v_if="analysis_mode === 'full'"):
-                        vuetify.VSelect(label="Search profile", v_model=("full_profile",), items=("['quick','balanced','thorough','custom']",), variant="outlined")
-                        vuetify.VAlert(
-                            v_if="full_profile !== 'custom'",
-                            text="Quick, Balanced, and Thorough apply complete, reproducible search-breadth presets. Choose Custom to edit every numeric control.",
-                            type="info",
-                            variant="tonal",
-                            classes="mb-3",
-                        )
-                        with vuetify.VRow(v_if="full_profile === 'custom'"):
-                            with vuetify.VCol(cols=12, md=6):
-                                vuetify.VTextField(label="Impurity discovery rounds", v_model=("full_max_passes",), type="number", min=1, variant="outlined")
-                            with vuetify.VCol(cols=12, md=6):
-                                vuetify.VTextField(label="Stop below phase fraction (wt%)", v_model=("full_min_phase_percent",), type="number", min=0, variant="outlined")
-                        with vuetify.VExpansionPanels(v_if="full_profile === 'custom'", variant="accordion", classes="mt-2"):
-                            with vuetify.VExpansionPanel(title="Custom search breadth and lattice nudge"):
-                                with vuetify.VExpansionPanelText():
-                                    for label, model in (
-                                        ("ML candidates", "full_top_n_ml"),
-                                        ("Lattice-nudge candidates", "full_nudge_candidates"),
-                                        ("Nudge samples", "full_nudge_samples"),
-                                        ("Nudge representatives", "full_nudge_representatives"),
-                                        ("Joint comparison candidates", "full_compare_candidates"),
-                                        ("Joint comparison cycles", "full_compare_cycles"),
-                                    ):
-                                        vuetify.VTextField(label=label, v_model=(model,), type="number", min=1, variant="outlined", density="compact")
-                                    with vuetify.VRow():
-                                        with vuetify.VCol(cols=12, md=6):
-                                            vuetify.VTextField(label="Cell-length tolerance (%)", v_model=("full_cell_length_tolerance_pct",), type="number", min=0.01, variant="outlined", density="compact")
-                                        with vuetify.VCol(cols=12, md=6):
-                                            vuetify.VTextField(label="Cell-angle tolerance (degrees)", v_model=("full_cell_angle_tolerance_deg",), type="number", min=0.01, variant="outlined", density="compact")
-                self._close_section(card)
-
-            with vuetify.VCol(cols=12, lg=5):
-                with vuetify.VCard(classes="review-card sticky-review", variant="flat"):
-                    vuetify.VCardTitle("Review and submit")
-                    with vuetify.VCardText():
-                        html.P("A portable configuration is generated from these controls and saved with the Galaxy run.", classes="field-help")
-                        vuetify.VTextField(label="Run name (optional)", v_model=("run_name",), variant="outlined", placeholder="Generated automatically when left blank")
-                        with html.Div(classes="review-summary"):
-                            html.Div("Mode", classes="review-label")
-                            html.Div("{{ analysis_mode === 'rapid' ? 'Rapid Hypothesis Mode' : 'Full RADAR-PD' }}", classes="review-value")
-                            html.Div("Measurement", classes="review-label")
-                            html.Div("{{ radiation === 'neutron' ? 'Neutron' : 'X-ray' }} / {{ instrument_mode.toUpperCase() }}", classes="review-value")
-                            html.Div("Source", classes="review-label")
-                            html.Div("{{ source_options.find(x => x.value === input_source)?.title }}", classes="review-value")
-                            html.Div("Sample", classes="review-label")
-                            html.Div("{{ sample_elements || 'Enter sample elements' }}", classes="review-value")
-                        vuetify.VAlert(v_if="error_message", text=("error_message",), type="error", variant="tonal", classes="mb-3")
-                        vuetify.VAlert(v_if="notice", text=("notice",), type="success", variant="tonal", classes="mb-3")
-                        with vuetify.VExpansionPanels(variant="accordion", classes="mb-3"):
-                            with vuetify.VExpansionPanel(title="Import a saved RADAR-PD configuration"):
-                                with vuetify.VExpansionPanelText():
-                                    NamedFileUpload("config_import_path", label="Choose configuration YAML", extensions=[".yaml", ".yml"], return_contents=False, show_server_files=True, color="#0b5d46", key="radar-config-upload")
-                                    vuetify.VBtn("Apply configuration", click=self.apply_uploaded_configuration, variant="outlined", prepend_icon="mdi-file-import-outline", disabled=("!config_import_path",), classes="mt-2")
-                        vuetify.VBtn(
-                            "Submit analysis to NDIP",
-                            click=self.submit_run,
-                            loading=("busy",),
-                            disabled=("!connection_ok || busy",),
-                            color="#0b5d46",
-                            size="large",
-                            block=True,
-                            prepend_icon="mdi-rocket-launch-outline",
-                        )
-                        vuetify.VBtn("Refresh Galaxy inputs", click=self.refresh_history, variant="outlined", block=True, classes="mt-2", prepend_icon="mdi-refresh")
-
-    def _runs_page(self) -> None:
-        with html.Div(classes="page-section"):
-            with html.Div(classes="section-heading-row"):
-                with html.Div():
-                    html.H2("Galaxy-backed runs")
-                    html.P("Close this NOVA session and return later; the analysis and its outputs remain in Galaxy.")
-                vuetify.VBtn("Recover from history", click=self._recover_runs, prepend_icon="mdi-history", color="#0b5d46", variant="outlined")
-            with vuetify.VCard(classes="radar-card", variant="flat"):
-                vuetify.VDataTable(
-                    headers=("[{title:'Run',key:'name'},{title:'Mode',key:'mode'},{title:'Status',key:'status'},{title:'Current stage',key:'stage'},{title:'Progress',key:'progress'}]",),
-                    items=("run_rows",),
-                    item_value="uid",
-                    v_model=("run_selection", []),
-                    show_select=True,
-                    select_strategy="single",
-                    hover=True,
-                    density="comfortable",
-                    no_data_text="No RADAR-PD runs are present in this history yet.",
-                )
-            with vuetify.VCard(classes="radar-card mt-4", variant="flat", v_if="selected_run_uid"):
-                with vuetify.VCardTitle(classes="d-flex align-center justify-space-between"):
-                    html.Span("{{ selected_run_name }}")
-                    vuetify.VChip(text=("selected_run_status",), color="#d8f3e6", variant="flat")
-                with vuetify.VCardText():
-                    html.Div("{{ selected_run_stage }}", classes="stage-label")
-                    vuetify.VProgressLinear(model_value=("selected_run_progress",), color="#0b5d46", height=10, rounded=True, classes="mb-3")
-                    vuetify.VAlert(
-                        v_if="selected_run_loading",
-                        text="Loading the completed run and reconstructing its results...",
-                        type="info",
-                        variant="tonal",
-                        classes="mb-3",
-                    )
-                    vuetify.VAlert(v_if="selected_run_message", text=("selected_run_message",), type="warning", variant="tonal")
-                    with vuetify.VBtnGroup(variant="outlined", divided=True):
-                        vuetify.VBtn("Refresh", click=self.refresh_selected_run, prepend_icon="mdi-refresh")
-                        vuetify.VBtn(
-                            "Inspect results",
-                            click=self.open_selected_results,
-                            prepend_icon="mdi-chart-box-outline",
-                            disabled=("selected_run_status !== 'Ok'",),
-                            loading=("selected_run_loading",),
-                        )
-                        vuetify.VBtn("Use configuration", click=self.use_selected_configuration, prepend_icon="mdi-file-restore-outline", disabled=("!selected_run_uid",))
-                        vuetify.VBtn("Stop", click=self.cancel_selected_run, prepend_icon="mdi-stop-circle-outline", color="#a33131", disabled=("selected_run_status !== 'Running' && selected_run_status !== 'Queued'",))
-                    with vuetify.VExpansionPanels(v_if="viewed_configuration", variant="accordion", classes="mt-4"):
-                        with vuetify.VExpansionPanel(title="Saved run configuration"):
-                            with vuetify.VExpansionPanelText():
-                                html.Pre("{{ viewed_configuration }}", classes="config-preview")
-                    with vuetify.VExpansionPanels(v_if="selected_run_console", variant="accordion", classes="mt-3"):
-                        with vuetify.VExpansionPanel(title="Live analysis log"):
-                            with vuetify.VExpansionPanelText():
-                                html.Pre("{{ selected_run_console }}", classes="config-preview live-console")
-
-    def _results_page(self) -> None:
-        with html.Div(classes="page-section"):
-            html.H2("Scientific results")
-            html.P("Tables and interactive plots are reconstructed from RADAR-PD's normalized Galaxy outputs.")
-            vuetify.VAlert(v_if="!selected_run_uid", text="Select a completed run from the Runs page.", type="info", variant="tonal")
-            with html.Div(v_if="selected_run_uid"):
-                with html.Div(classes="metric-grid"):
-                    with vuetify.VCard(v_for="card in summary_cards", key="card.label", classes="metric-card", variant="flat"):
-                        html.Div("{{ card.label }}", classes="metric-label")
-                        html.Div("{{ card.value }}", classes="metric-value")
-                with vuetify.VTabs(v_model=("result_tab", "overview"), color="#0b5d46", classes="mt-4"):
-                    vuetify.VTab("Overview", value="overview")
-                    vuetify.VTab("Rankings and tables", value="tables")
-                    vuetify.VTab("Interactive plots", value="plots")
-                    vuetify.VTab(v_if="viewed_run_mode === 'rapid'", text="Solution Inspector", value="inspector")
-                with html.Div(v_show="result_tab === 'overview'", classes="result-panel"):
-                    html.H3("Phase fractions")
-                    vuetify.VDataTable(
-                        headers=("[{title:'Phase',key:'phase'},{title:'Space group',key:'space_group'},{title:'Weight (%)',key:'weight_percent'}]",),
-                        items=("phase_rows",),
+        with vuetify.VExpansionPanels(multiple=True, variant="accordion", classes="radar-history-panel mb-3"):
+            with vuetify.VExpansionPanel(value="history"):
+                with vuetify.VExpansionPanelTitle():
+                    vuetify.VIcon("mdi-history", size="small", classes="mr-2")
+                    html.Span("Open Previous Run")
+                with vuetify.VExpansionPanelText():
+                    vuetify.VTextField(
+                        v_model=("run_search",),
+                        label="Search runs",
+                        prepend_inner_icon="mdi-magnify",
                         density="compact",
-                        no_data_text="Phase fractions are not available in the normalized summary.",
-                    )
-                with html.Div(v_show="result_tab === 'tables'", classes="result-panel"):
-                    vuetify.VSelect(
-                        label="Result table",
-                        v_model=("selected_table",),
-                        items=("table_options",),
-                        item_title="name",
-                        item_value="path",
                         variant="outlined",
-                        update_modelValue=(self._table_changed, "[$event]"),
+                        hide_details=True,
+                        clearable=True,
                     )
-                    vuetify.VDataTable(headers=("table_headers",), items=("table_rows",), density="compact", fixed_header=True, height=520, no_data_text="Select a result table.")
-                with html.Div(v_show="result_tab === 'plots'", classes="result-panel"):
+                    with html.Div(classes="radar-run-list"):
+                        with vuetify.VListItem(
+                            v_for="run in run_rows.filter(item => !run_search || item.name.toLowerCase().includes(run_search.toLowerCase()))",
+                            key="run.uid",
+                            click=(self._run_selection_changed, "[run.uid]"),
+                            classes="radar-run-list-item",
+                        ):
+                            html.Div("{{ run.name }}", classes="radar-run-list-name")
+                            html.Div("{{ run.mode }} / {{ run.status }}", classes="radar-run-list-meta")
+                            html.Div("{{ run.stage }}", classes="radar-run-list-stage")
+                        html.Div("No RADAR-PD runs are in this Galaxy history.", v_if="!run_rows.length", classes="radar-empty-compact")
+                    vuetify.VBtn(
+                        "Refresh from Galaxy",
+                        click=self._recover_runs,
+                        prepend_icon="mdi-refresh",
+                        variant="text",
+                        size="small",
+                        block=True,
+                        classes="mt-2",
+                    )
+
+        with vuetify.VExpansionPanels(
+            v_model=("setup_panels",),
+            multiple=True,
+            variant="accordion",
+            classes="radar-setup-panels",
+        ):
+            with self._setup_section(1, "Measurement Type", "measurement", "!!radiation && !!instrument_mode"):
+                vuetify.VSelect(
+                    label="Radiation source",
+                    v_model=("radiation",),
+                    items=("radiation_options",),
+                    item_title="title",
+                    item_value="value",
+                    density="compact",
+                    variant="outlined",
+                )
+                vuetify.VSelect(
+                    label="Pattern geometry",
+                    v_model=("instrument_mode",),
+                    items=("[{title:'Auto detect',value:'auto'},{title:'Constant wavelength',value:'cw'},{title:'Time of flight',value:'tof'}]",),
+                    item_title="title",
+                    item_value="value",
+                    density="compact",
+                    variant="outlined",
+                    hint="Auto detect is recommended unless the instrument requires an override.",
+                    persistent_hint=True,
+                )
+            with self._setup_section(
+                2,
+                "Candidate Library",
+                "library",
+                "database_source === 'builtin' || (database_source === 'upload' && !!database_archive_path) || (database_source === 'galaxy' && !!history_database_id)",
+            ):
+                vuetify.VSelect(
+                    label="Candidate library",
+                    v_model=("database_source",),
+                    items=("database_source_options",),
+                    item_title="title",
+                    item_value="value",
+                    density="compact",
+                    variant="outlined",
+                )
+                with html.Div(v_show="database_source === 'upload'", key="'radar-library-upload-panel'"):
+                    NamedFileUpload(
+                        "database_archive_path",
+                        label="Candidate-library ZIP",
+                        help_text="A reusable RADAR-PD CIF library archive (.zip)",
+                        extensions=[".zip"],
+                        optional=True,
+                        key="radar-database-upload",
+                    )
+                vuetify.VSelect(
+                    v_show="database_source === 'galaxy'",
+                    label="Galaxy library archive",
+                    v_model=("history_database_id",),
+                    items=("history_archive_datasets",),
+                    item_title="name",
+                    item_value="id",
+                    density="compact",
+                    variant="outlined",
+                    no_data_text="No library archives are in this history",
+                )
+                html.A(
+                    "Build a reusable CIF library",
+                    href="/?tool_id=neutrons_radar_pd_library_builder_prototype&version=latest",
+                    target="_blank",
+                    classes="radar-secondary-link",
+                )
+            data_ready = "(input_source === 'upload' && !!data_path && (!!instrument_path || (radiation === 'xray' && use_builtin_cuka))) || (input_source === 'galaxy' && !!history_data_id && (!!history_instrument_id || (radiation === 'xray' && use_builtin_cuka))) || (input_source === 'ipts_event' && !!event_file_path && !!bank) || (input_source === 'ipts_manual' && !!ipts_instrument && !!ipts && !!run_number && !!bank)"
+            with self._setup_section(3, "Data Collection", "data", data_ready):
+                vuetify.VSelect(
+                    label="Data source",
+                    v_model=("input_source",),
+                    items=("source_options",),
+                    item_title="title",
+                    item_value="value",
+                    density="compact",
+                    variant="outlined",
+                )
+                with html.Div(v_show="input_source === 'upload'", key="'radar-computer-inputs'"):
+                    NamedFileUpload(
+                        "data_path",
+                        label="Diffraction data",
+                        help_text="Required measurement pattern",
+                        extensions=[".dat", ".xye", ".xy", ".csv", ".txt", ".fxye", ".xrdml", ".xml"],
+                        key="radar-diffraction-upload",
+                    )
+                    NamedFileUpload(
+                        "instrument_path",
+                        label="GSAS-II instrument profile",
+                        help_text="Required unless the built-in X-ray profile is used",
+                        extensions=[".instprm", ".prm", ".inst", ".ins"],
+                        key="radar-instrument-upload",
+                    )
+                with html.Div(v_show="input_source === 'galaxy'", key="'radar-history-inputs'"):
                     vuetify.VSelect(
-                        label="Interactive plot",
+                        label="Diffraction data from History",
+                        v_model=("history_data_id",),
+                        items=("history_data_datasets",),
+                        item_title="name",
+                        item_value="id",
+                        density="compact",
+                        variant="outlined",
+                        no_data_text="No compatible diffraction datasets",
+                        key="radar-history-diffraction",
+                    )
+                    vuetify.VSelect(
+                        label="Instrument profile from History",
+                        v_model=("history_instrument_id",),
+                        items=("history_instrument_datasets",),
+                        item_title="name",
+                        item_value="id",
+                        density="compact",
+                        variant="outlined",
+                        no_data_text="No GSAS-II instrument profiles",
+                        key="radar-history-instrument",
+                    )
+                vuetify.VSwitch(
+                    v_show="radiation === 'xray' && instrument_mode !== 'tof' && (input_source === 'upload' || input_source === 'galaxy')",
+                    v_model=("use_builtin_cuka",),
+                    label="Use built-in Cu K-alpha profile",
+                    color="#15543c",
+                    density="compact",
+                    inset=True,
+                )
+                with html.Div(v_show="input_source === 'ipts_event'", key="'radar-event-inputs'"):
+                    NamedFileUpload(
+                        "event_file_path",
+                        label="NeXus event file",
+                        extensions=[".nxs", ".h5", ".hdf5"],
+                        key="radar-event-upload",
+                    )
+                    vuetify.VTextField(label="Detector bank", v_model=("bank",), density="compact", variant="outlined", placeholder="bank1")
+                with html.Div(v_show="input_source === 'ipts_manual'", key="'radar-ipts-inputs'"):
+                    vuetify.VTextField(label="SNS instrument", v_model=("ipts_instrument",), density="compact", variant="outlined", placeholder="HB2A")
+                    vuetify.VTextField(label="IPTS", v_model=("ipts",), density="compact", variant="outlined", placeholder="IPTS-12345")
+                    with html.Div(classes="radar-field-pair"):
+                        vuetify.VTextField(label="Run number", v_model=("run_number",), type="number", density="compact", variant="outlined")
+                        vuetify.VTextField(label="Detector bank", v_model=("bank",), density="compact", variant="outlined")
+                vuetify.VDivider(classes="my-3")
+                vuetify.VSelect(
+                    label="Known/main phase",
+                    v_model=("main_cif_source",),
+                    items=("main_cif_source_options",),
+                    item_title="title",
+                    item_value="value",
+                    density="compact",
+                    variant="outlined",
+                    hint="Optional and independent of the diffraction-data source.",
+                    persistent_hint=True,
+                )
+                with html.Div(v_show="main_cif_source === 'upload'", key="'radar-main-cif-upload-panel'"):
+                    NamedFileUpload(
+                        "main_cif_path",
+                        label="Known/main-phase CIF",
+                        help_text="Optional crystallographic model (.cif)",
+                        extensions=[".cif"],
+                        optional=True,
+                        key="radar-main-cif-upload",
+                    )
+                vuetify.VSelect(
+                    v_show="main_cif_source === 'galaxy'",
+                    label="Main-phase CIF from History",
+                    v_model=("history_main_cif_id",),
+                    items=("history_cif_datasets",),
+                    item_title="name",
+                    item_value="id",
+                    clearable=True,
+                    density="compact",
+                    variant="outlined",
+                    no_data_text="No CIF datasets are in this history",
+                    key="'radar-history-main-cif'",
+                )
+            with self._setup_section(4, "Chemistry Policy", "chemistry", "!!sample_elements"):
+                vuetify.VTextField(
+                    label="Sample elements",
+                    v_model=("sample_elements",),
+                    placeholder="Tb, Be, Ge, O",
+                    density="compact",
+                    variant="outlined",
+                    hint="Comma- or space-separated symbols",
+                    persistent_hint=True,
+                )
+                vuetify.VTextField(
+                    label="Sample can / environment",
+                    v_model=("environment_elements",),
+                    placeholder="Al, V",
+                    density="compact",
+                    variant="outlined",
+                    hint="Allowed as environment phases, not mixed freely into sample chemistry",
+                    persistent_hint=True,
+                )
+            with self._setup_section(5, "Pattern Regions", "pattern", "(!fit_start && !fit_end) || (!!fit_start && !!fit_end)"):
+                with html.Div(classes="radar-field-pair"):
+                    vuetify.VTextField(label="Fit start", v_model=("fit_start",), type="number", density="compact", variant="outlined", clearable=True)
+                    vuetify.VTextField(label="Fit end", v_model=("fit_end",), type="number", density="compact", variant="outlined", clearable=True)
+                vuetify.VTextarea(
+                    label="Ignored regions",
+                    v_model=("ignore_regions",),
+                    placeholder="One start,end pair per line\n2.0, 3.2",
+                    density="compact",
+                    variant="outlined",
+                    rows=2,
+                    auto_grow=True,
+                )
+            with self._setup_section(6, "Background Correction", "background", "!!background_mode && !!background_type && background_terms > 0"):
+                vuetify.VSelect(
+                    label="Background correction",
+                    v_model=("background_mode",),
+                    items=("[{title:'Automatic fixed points',value:'auto_fixed_points'},{title:'Manual / pipeline default',value:'manual'}]",),
+                    item_title="title",
+                    item_value="value",
+                    density="compact",
+                    variant="outlined",
+                )
+                with html.Div(classes="radar-field-pair"):
+                    vuetify.VSelect(label="Function", v_model=("background_type",), items=("['chebyschev-1','chebyschev','cosine','Q^2 power series']",), density="compact", variant="outlined")
+                    vuetify.VTextField(label="Terms", v_model=("background_terms",), type="number", min=1, max=36, density="compact", variant="outlined")
+            with self._setup_section(7, "Magnetic Ordering Precheck", "magnetic", "true"):
+                vuetify.VAlert(
+                    v_show="main_cif_source === 'none' || radiation !== 'neutron'",
+                    text="Available when a neutron run includes a known main-phase CIF.",
+                    type="info",
+                    variant="tonal",
+                    density="compact",
+                )
+                vuetify.VSwitch(
+                    v_show="main_cif_source !== 'none' && radiation === 'neutron'",
+                    v_model=("magnetic_precheck",),
+                    label="Check residual peaks for commensurate magnetic indexing",
+                    color="#15543c",
+                    density="compact",
+                    inset=True,
+                )
+                vuetify.VTextField(
+                    v_show="main_cif_source !== 'none' && radiation === 'neutron' && magnetic_precheck",
+                    label="Q maximum",
+                    v_model=("magnetic_q_max",),
+                    type="number",
+                    density="compact",
+                    variant="outlined",
+                )
+            with self._setup_section(8, "Analysis Mode", "mode", "!!analysis_mode"):
+                vuetify.VSelect(
+                    label="Analysis path",
+                    v_model=("analysis_mode",),
+                    items=("mode_options",),
+                    item_title="title",
+                    item_value="value",
+                    density="compact",
+                    variant="outlined",
+                )
+                vuetify.VAlert(
+                    text=("analysis_mode === 'rapid' ? 'Fast staged hypothesis search followed by focused refinements.' : 'Rigorous residual-aware multi-pass phase discovery and refinement.'",),
+                    type="info",
+                    variant="tonal",
+                    density="compact",
+                )
+            with self._setup_section(9, "Runtime Budget", "budget", "true"):
+                with html.Div(v_show="analysis_mode === 'rapid'"):
+                    with html.Div(classes="radar-field-pair"):
+                        vuetify.VTextField(label="Phases / hypothesis", v_model=("rapid_phases_per_hypothesis",), type="number", min=1, max=5, density="compact", variant="outlined")
+                        vuetify.VTextField(label="Retained / stage", v_model=("rapid_stage_output_limit",), type="number", min=3, max=50, density="compact", variant="outlined")
+                        vuetify.VTextField(label="Final refinements", v_model=("rapid_gsas_validation_limit",), type="number", min=0, density="compact", variant="outlined")
+                        vuetify.VTextField(label="Parallel workers", v_model=("rapid_parallel_workers",), type="number", min=1, max=16, density="compact", variant="outlined")
+                with html.Div(v_show="analysis_mode === 'full'"):
+                    vuetify.VSelect(
+                        label="Search profile",
+                        v_model=("full_profile",),
+                        items=("[{title:'Quick',value:'quick'},{title:'Balanced',value:'balanced'},{title:'Thorough',value:'thorough'},{title:'Custom',value:'custom'}]",),
+                        item_title="title",
+                        item_value="value",
+                        density="compact",
+                        variant="outlined",
+                    )
+                    vuetify.VAlert(v_show="full_profile !== 'custom'", text="The profile applies a complete reproducible search budget.", type="info", variant="tonal", density="compact")
+            with self._setup_section(10, "Expert Tuning", "expert", "true"):
+                vuetify.VSwitch(v_model=("reference_masks_enabled",), label="Mask reference/can peaks", color="#15543c", density="compact", inset=True)
+                vuetify.VSelect(v_show="reference_masks_enabled", label="Reference structures", v_model=("reference_mask_presets",), items=("['Al_fcc','Cu_fcc','V_bcc']",), multiple=True, chips=True, density="compact", variant="outlined")
+                vuetify.VSelect(v_show="reference_masks_enabled", label="Reference-mask window", v_model=("reference_window_mode",), items=("[{title:'Automatic from resolution',value:'auto'},{title:'Fixed window',value:'fixed'}]",), item_title="title", item_value="value", density="compact", variant="outlined")
+                vuetify.VSwitch(v_show="radiation === 'xray' && reference_masks_enabled", v_model=("include_cu_kbeta",), label="Mask Cu K-beta companions", color="#15543c", density="compact", inset=True)
+                vuetify.VDivider(classes="my-3")
+                vuetify.VAlert(v_show="main_cif_source === 'none'", text="Main-phase safeguards become available when a CIF is supplied.", type="info", variant="tonal", density="compact")
+                vuetify.VSwitch(v_show="main_cif_source !== 'none'", v_model=("main_prenudge",), label="Anchor supplied main-phase cell", color="#15543c", density="compact", inset=True)
+                vuetify.VSwitch(v_show="main_cif_source !== 'none'", v_model=("main_shadow_filter",), label="Filter main-shadow-only candidates", color="#15543c", density="compact", inset=True)
+                vuetify.VSwitch(v_show="main_cif_source !== 'none'", v_model=("cleanup_enabled",), label="Clean up main-CIF internal parameters", color="#15543c", density="compact", inset=True)
+                vuetify.VCheckbox(v_show="main_cif_source !== 'none' && cleanup_enabled", v_model=("refine_u_iso",), label="Refine isotropic displacement parameters", density="compact")
+                vuetify.VCheckbox(v_show="main_cif_source !== 'none' && cleanup_enabled", v_model=("refine_positions",), label="Refine atomic positions", density="compact")
+                with html.Div(v_show="analysis_mode === 'rapid'"):
+                    vuetify.VDivider(classes="my-3")
+                    vuetify.VSwitch(v_model=("rapid_show_family_variants",), label="Keep family variants in Solution Inspector", color="#15543c", density="compact", inset=True)
+                    vuetify.VSwitch(v_model=("rapid_final_polish_enabled",), label="Run final polish after ranking", color="#15543c", density="compact", inset=True)
+                with html.Div(v_show="analysis_mode === 'full' && full_profile === 'custom'"):
+                    vuetify.VDivider(classes="my-3")
+                    with html.Div(classes="radar-field-pair"):
+                        for label, model in (
+                            ("Discovery rounds", "full_max_passes"),
+                            ("Minimum phase wt%", "full_min_phase_percent"),
+                            ("ML candidates", "full_top_n_ml"),
+                            ("Nudge candidates", "full_nudge_candidates"),
+                            ("Nudge samples", "full_nudge_samples"),
+                            ("Nudge representatives", "full_nudge_representatives"),
+                            ("Comparison candidates", "full_compare_candidates"),
+                            ("Comparison cycles", "full_compare_cycles"),
+                            ("Cell length tolerance %", "full_cell_length_tolerance_pct"),
+                            ("Cell angle tolerance °", "full_cell_angle_tolerance_deg"),
+                        ):
+                            vuetify.VTextField(label=label, v_model=(model,), type="number", min=0, density="compact", variant="outlined")
+            ready_expression = f"connection_ok && !!sample_elements && ({data_ready}) && (database_source === 'builtin' || (database_source === 'upload' && !!database_archive_path) || (database_source === 'galaxy' && !!history_database_id))"
+            with self._setup_section(11, "Review Run Plan", "review", ready_expression):
+                vuetify.VTextField(label="Run name", v_model=("run_name",), density="compact", variant="outlined", placeholder="Generated automatically if blank")
+                with html.Div(classes="radar-checklist"):
+                    for label, expression in (
+                        ("Connected to NDIP", "connection_ok"),
+                        ("Measurement selected", "!!radiation && !!instrument_mode"),
+                        ("Data and instrument ready", data_ready),
+                        ("Sample chemistry entered", "!!sample_elements"),
+                        ("Candidate library ready", "database_source === 'builtin' || !!database_archive_path || !!history_database_id"),
+                    ):
+                        with html.Div(classes="radar-check-row"):
+                            vuetify.VIcon(icon=(f"{expression} ? 'mdi-check-circle' : 'mdi-alert-circle-outline'",), color=(f"{expression} ? '#1f6b4b' : '#a66a00'",), size="small")
+                            html.Span(label)
+                with html.Div(classes="radar-review-summary"):
+                    html.Div("{{ analysis_mode === 'rapid' ? 'Rapid Hypothesis Mode' : 'Full RADAR-PD' }}", classes="radar-review-primary")
+                    html.Div("{{ radiation === 'neutron' ? 'Neutron' : 'X-ray' }} / {{ instrument_mode.toUpperCase() }}", classes="radar-review-secondary")
+                    html.Div("Sample: {{ sample_elements || 'not entered' }}", classes="radar-review-secondary")
+                    html.Div("Main phase: {{ main_cif_source === 'none' ? 'not supplied' : 'supplied' }}", classes="radar-review-secondary")
+                vuetify.VAlert(v_show="!!error_message", text=("error_message",), type="error", variant="tonal", density="compact", classes="mb-2")
+                vuetify.VAlert(v_show="!!notice", text=("notice",), type="success", variant="tonal", density="compact", classes="mb-2")
+                with vuetify.VExpansionPanels(variant="accordion", classes="radar-config-import mb-2"):
+                    with vuetify.VExpansionPanel(title="Import saved configuration"):
+                        with vuetify.VExpansionPanelText():
+                            NamedFileUpload(
+                                "config_import_path",
+                                label="RADAR-PD configuration",
+                                extensions=[".yaml", ".yml"],
+                                optional=True,
+                                key="radar-config-upload",
+                            )
+                            vuetify.VBtn("Apply configuration", click=self.apply_uploaded_configuration, variant="outlined", size="small", block=True, disabled=("!config_import_path",), classes="mt-2")
+                vuetify.VBtn(
+                    "Run analysis on NDIP",
+                    click=self.submit_run,
+                    loading=("busy",),
+                    disabled=(f"busy || !({ready_expression})",),
+                    color="#15543c",
+                    size="large",
+                    block=True,
+                    prepend_icon="mdi-rocket-launch-outline",
+                    classes="radar-primary-action",
+                )
+                vuetify.VBtn("Refresh Galaxy inputs", click=self.refresh_history, variant="text", block=True, size="small", prepend_icon="mdi-refresh", classes="mt-1")
+
+    def _workspace_page(self) -> None:
+        with html.Div(classes="radar-workspace-inner"):
+            with html.Div(v_if="!selected_run_uid", classes="radar-workspace-empty"):
+                html.Div("RADAR-PD SCIENTIFIC AI WORKSPACE", classes="radar-kicker")
+                html.H1("Phase detection for powder diffraction")
+                html.P(
+                    "Configure inputs in the setup rail, then monitor the Galaxy-backed run and inspect its scientific result here.",
+                    classes="radar-empty-lede",
+                )
+                with html.Div(classes="radar-empty-features"):
+                    html.Div("Neutron and X-ray", classes="radar-feature-chip")
+                    html.Div("Full and Rapid", classes="radar-feature-chip")
+                    html.Div("Recoverable from Galaxy", classes="radar-feature-chip")
+                with html.Div(classes="radar-empty-grid"):
+                    with html.Div(classes="radar-empty-card"):
+                        vuetify.VIcon("mdi-progress-clock", color="#15543c")
+                        html.H3("Run Monitor")
+                        html.P("Live stage, progress, messages, and bounded console output.")
+                    with html.Div(classes="radar-empty-card"):
+                        vuetify.VIcon("mdi-chart-line", color="#15543c")
+                        html.H3("Scientific Results")
+                        html.P("Best refinement, phase fractions, rankings, and diagnostics.")
+                    with html.Div(classes="radar-empty-card"):
+                        vuetify.VIcon("mdi-folder-outline", color="#15543c")
+                        html.H3("Reproducibility")
+                        html.P("Reports, tables, CIFs, GPX checkpoints, and configurations.")
+
+            with html.Div(v_if="!!selected_run_uid"):
+                with html.Div(classes="radar-run-context"):
+                    with html.Div():
+                        html.Div("CURRENT GALAXY RUN", classes="radar-context-kicker")
+                        html.H1("{{ selected_run_name }}", classes="radar-run-title")
+                        html.P("{{ viewed_run_mode === 'rapid' ? 'Rapid Hypothesis Mode' : 'Full RADAR-PD' }} / {{ selected_run_stage }}", classes="radar-run-subtitle")
+                    vuetify.VChip(text=("selected_run_status",), color=("selected_run_status === 'Ok' ? '#dff2e8' : selected_run_status === 'Error' ? '#fde7e7' : '#fff0d4'",), variant="flat")
+                with vuetify.VBtnToggle(
+                    v_model=("workspace_view",),
+                    mandatory=True,
+                    divided=True,
+                    color="#15543c",
+                    classes="radar-workspace-nav",
+                ):
+                    with vuetify.VBtn(v_for="item in workspace_options", key="item.value", value=("item.value",), size="small"):
+                        vuetify.VIcon(icon=("item.icon",), size="small", classes="mr-2")
+                        html.Span("{{ item.title }}")
+
+                with html.Div(v_show="workspace_view === 'monitor'", classes="radar-workspace-view"):
+                    self._run_monitor_view()
+                with html.Div(v_show="workspace_view === 'results'", classes="radar-workspace-view"):
+                    self._results_dashboard()
+                with html.Div(v_show="workspace_view === 'plots'", classes="radar-workspace-view"):
+                    self._interactive_plots_view()
+                with html.Div(v_show="workspace_view === 'files'", classes="radar-workspace-view"):
+                    self._file_browser_view()
+
+    def _run_monitor_view(self) -> None:
+        with html.Div(classes="radar-section-heading"):
+            with html.Div():
+                html.H2("Run Monitor")
+                html.P("The analysis remains in Galaxy even if this interactive session is closed.")
+            with html.Div(classes="radar-button-row"):
+                vuetify.VBtn("Refresh", click=self.refresh_selected_run, prepend_icon="mdi-refresh", variant="outlined", size="small")
+                vuetify.VBtn("Use configuration", click=self.use_selected_configuration, prepend_icon="mdi-file-restore-outline", variant="outlined", size="small")
+                vuetify.VBtn(
+                    "Stop",
+                    click="cancel_dialog = true",
+                    prepend_icon="mdi-stop-circle-outline",
+                    color="#9b2c2c",
+                    variant="outlined",
+                    size="small",
+                    disabled=("selected_run_status !== 'Running' && selected_run_status !== 'Queued'",),
+                )
+        with html.Div(classes="radar-monitor-summary"):
+            with html.Div(classes="radar-monitor-stage"):
+                html.Div("CURRENT STAGE", classes="radar-micro-label")
+                html.H3("{{ selected_run_stage }}")
+                html.P("{{ selected_run_message || 'Waiting for the next Galaxy update.' }}")
+                html.Span("{{ selected_run_elapsed }}", classes="radar-elapsed")
+            with html.Div(classes="radar-progress-number"):
+                html.Strong("{{ selected_run_progress }}%")
+                html.Span("complete")
+        vuetify.VProgressLinear(model_value=("selected_run_progress",), color="#1f6b4b", height=10, rounded=True, classes="mb-4")
+        vuetify.VAlert(v_show="selected_run_loading", text="Loading the completed run and reconstructing its scientific results...", type="info", variant="tonal", classes="mb-3")
+        vuetify.VAlert(v_show="selected_run_status === 'Error' && !!selected_run_message", text=("selected_run_message",), type="error", variant="tonal", classes="mb-3")
+        with html.Div(classes="radar-stage-timeline"):
+            with html.Div(
+                v_for="stage in monitor_stages",
+                key="stage.name",
+                classes=("'radar-stage-item is-' + stage.state",),
+            ):
+                vuetify.VIcon(icon=("stage.state === 'complete' ? 'mdi-check-circle' : stage.state === 'active' ? 'mdi-progress-clock' : 'mdi-circle-outline'",), size="small")
+                with html.Div():
+                    html.Strong("{{ stage.name }}")
+                    html.Span("{{ stage.state === 'active' ? 'In progress' : stage.state === 'complete' ? 'Complete' : 'Pending' }}")
+        with vuetify.VExpansionPanels(variant="accordion", classes="radar-detail-panels mt-4"):
+            with vuetify.VExpansionPanel(v_show="!!selected_run_console", title="Live analysis log"):
+                with vuetify.VExpansionPanelText():
+                    html.Pre("{{ selected_run_console }}", classes="radar-console")
+            with vuetify.VExpansionPanel(v_show="!!viewed_configuration", title="Saved run configuration"):
+                with vuetify.VExpansionPanelText():
+                    html.Pre("{{ viewed_configuration }}", classes="radar-config-preview")
+        with vuetify.VDialog(v_model=("cancel_dialog",), max_width=440):
+            with vuetify.VCard():
+                vuetify.VCardTitle("Stop this Galaxy run?")
+                vuetify.VCardText("The current RADAR-PD job will be cancelled. Completed Galaxy outputs will remain in History.")
+                with vuetify.VCardActions():
+                    vuetify.VSpacer()
+                    vuetify.VBtn("Keep running", click="cancel_dialog = false", variant="text")
+                    vuetify.VBtn("Stop run", click=self.confirm_cancel_selected_run, color="#9b2c2c", variant="flat")
+
+    def _phase_fraction_panel(self) -> None:
+        with html.Section(classes="radar-result-card radar-phase-card"):
+            with html.Div(classes="radar-card-heading"):
+                with html.Div():
+                    html.Div("QUANTITATIVE SUMMARY", classes="radar-micro-label")
+                    html.H3("Phase fractions")
+                vuetify.VChip(text=("phase_total",), size="small", variant="tonal", color="#15543c")
+            with html.Div(v_if="phase_rows.length", classes="radar-phase-list"):
+                with html.Div(v_for="phase in phase_rows", key="phase.phase + phase.space_group", classes="radar-phase-row"):
+                    with html.Div(classes="radar-phase-copy"):
+                        html.Strong("{{ phase.phase }}")
+                        html.Span("Space group {{ phase.space_group }}")
+                    with html.Div(classes="radar-phase-weight"):
+                        html.Strong("{{ phase.weight_display }}")
+                        vuetify.VProgressLinear(model_value=("phase.weight_value",), max=100, height=7, rounded=True, color="#1f6b4b")
+            html.Div("Phase fractions are not available in this result.", v_if="!phase_rows.length", classes="radar-empty-compact")
+
+    def _results_dashboard(self) -> None:
+        with html.Div(classes="radar-section-heading"):
+            with html.Div():
+                html.H2("{{ viewed_run_mode === 'rapid' ? 'Rapid Results' : 'Scientific Results' }}")
+                html.P("Curated from the normalized Galaxy result; technical fields remain available below.")
+            vuetify.VBtn("Back to monitor", click="workspace_view = 'monitor'", prepend_icon="mdi-arrow-left", variant="text", size="small")
+        with html.Div(v_if="selected_run_status !== 'Ok'", classes="radar-result-not-ready"):
+            vuetify.VAlert(text="Results will appear here after the selected Galaxy run completes.", type="info", variant="tonal")
+        with html.Div(v_show="selected_run_status === 'Ok'"):
+            with html.Div(classes="radar-metric-grid"):
+                with html.Div(v_for="metric in result_metrics", key="metric.label", classes="radar-metric-card"):
+                    html.Div("{{ metric.label }}", classes="radar-metric-label")
+                    html.Div("{{ metric.value }}", classes="radar-metric-value")
+            with vuetify.VAlert(v_for="warning in result_warnings", key="warning", text=("warning",), type="warning", variant="tonal", density="compact", classes="mb-2"):
+                pass
+            with html.Div(classes="radar-result-overview-grid"):
+                self._phase_fraction_panel()
+                with html.Section(classes="radar-result-card radar-primary-plot-card"):
+                    with html.Div(classes="radar-card-heading"):
+                        with html.Div():
+                            html.Div("PRIMARY SCIENTIFIC VIEW", classes="radar-micro-label")
+                            html.H3("Best refinement fit")
+                    vuetify.VSelect(
+                        v_show="plot_options.length > 1",
+                        label="Inspect another published plot",
                         v_model=("selected_plot",),
                         items=("plot_options",),
                         item_title="name",
                         item_value="path",
+                        density="compact",
                         variant="outlined",
-                        update_modelValue=(self._plot_changed, "[$event]"),
+                        hide_details=True,
+                        update_modelValue=(self._primary_plot_changed, "[$event]"),
+                        classes="mb-2",
                     )
-                    self._plot_widget = plotly.Figure(display_mode_bar=True)
-                with html.Div(v_show="result_tab === 'inspector'", classes="result-panel"):
-                    html.H3("Rapid hypothesis inspector")
-                    html.P("Compare pattern-ranked hypotheses and same-family variants before choosing a refinement checkpoint. Follow-up refinement is submitted as a separate Galaxy job so the original result remains unchanged.", classes="field-help")
-                    vuetify.VDataTable(headers=("solution_headers",), items=("solution_rows",), density="compact", no_data_text="No rapid hypothesis table was published for this run.")
-                    with html.Div(classes="handoff-actions mt-3"):
-                        html.A("Open targeted RADAR-PD analysis", href="/?tool_id=neutrons_radar_pd_analyze_prototype&version=latest", target="_blank", classes="handoff-link")
-                        html.A("Open GSAS-II project handoff", href="/?tool_id=neutrons_radar_pd_gpx_handoff_prototype&version=latest", target="_blank", classes="handoff-link")
-                    vuetify.VAlert(text="Follow-up jobs are separate Galaxy actions, so this result remains reproducible. Select the source hypothesis or checkpoint in Galaxy when the tool opens.", type="info", variant="tonal", classes="mt-3")
+                    self._primary_plot_widget = plotly.Figure(display_mode_bar=True)
+                    html.Div("No interactive refinement payload was published for this run.", v_if="!plot_options.length", classes="radar-empty-compact")
 
-    def _artifacts_page(self) -> None:
-        with html.Div(classes="page-section"):
-            html.H2("Artifacts and downstream handoffs")
-            html.P("Download the complete archive or report, and pass an indexed GPX checkpoint to the hosted GSAS-II workflow.")
-            with vuetify.VCard(classes="radar-card", variant="flat"):
-                with vuetify.VCardText():
-                    vuetify.VSelect(label="Artifact", v_model=("selected_artifact",), items=("artifact_options",), item_title="title", item_value="path", variant="outlined")
-                    vuetify.VBtn("Download selected artifact", click=self.download_artifact, color="#0b5d46", prepend_icon="mdi-download", disabled=("!selected_artifact",))
-                    html.A("Open GSAS-II project handoff", href="/?tool_id=neutrons_radar_pd_gpx_handoff_prototype&version=latest", target="_blank", classes="handoff-link ml-3")
-            html.H3("GSAS-II refinement checkpoints", classes="mt-6")
-            vuetify.VDataTable(
-                headers=("[{title:'Checkpoint',key:'name'},{title:'Stage',key:'stage'},{title:'Status',key:'status'},{title:'File',key:'path'}]",),
-                items=("gpx_rows",),
-                density="comfortable",
-                no_data_text="No GPX checkpoint index is available for this run.",
-            )
+            with html.Section(v_show="viewed_run_mode === 'rapid'", classes="radar-stage-results"):
+                html.H3("Rapid hypothesis path")
+                html.P("Coarse search / lattice nudge / pattern scoring / final refinement ranking / solution inspector", classes="radar-section-help")
+                with vuetify.VTabs(v_model=("rapid_stage",), color="#15543c", density="compact", classes="radar-stage-tabs"):
+                    vuetify.VTab("Coarse Search", value="coarse_search")
+                    vuetify.VTab("Lattice Nudge", value="lattice_nudge")
+                    vuetify.VTab("Pattern Scoring", value="pattern_scoring")
+                    vuetify.VTab("Final Refinement", value="final_refinement")
+                    vuetify.VTab("Solution Inspector", value="inspector")
+                with html.Div(v_show="rapid_stage === 'coarse_search'", classes="radar-result-card"):
+                    vuetify.VDataTable(headers=("[{title:'Rank',key:'rank'},{title:'Hypothesis',key:'hypothesis'},{title:'Coarse match',key:'coarse_match'},{title:'Unexplained signal',key:'unexplained_signal'}]",), items=("rapid_coarse_rows",), density="compact", no_data_text="No coarse-search table was published.")
+                with html.Div(v_show="rapid_stage === 'lattice_nudge'", classes="radar-result-card"):
+                    vuetify.VDataTable(headers=("[{title:'Phase',key:'phase'},{title:'Space group',key:'space_group'},{title:'Nudge match',key:'nudge_match'},{title:'Cell adjustment',key:'cell_adjustment'},{title:'Best cell',key:'best_cell'},{title:'Time',key:'time'},{title:'Status',key:'status'}]",), items=("rapid_nudge_rows",), density="compact", no_data_text="No lattice-nudge table was published.")
+                with html.Div(v_show="rapid_stage === 'pattern_scoring'", classes="radar-result-card"):
+                    vuetify.VDataTable(headers=("[{title:'Rank',key:'rank'},{title:'Hypothesis',key:'hypothesis'},{title:'Key peak support',key:'key_peak_support'},{title:'Coarse rank',key:'coarse_rank'},{title:'Pattern match',key:'pattern_match'},{title:'Explained signal',key:'explained_signal'},{title:'Unexplained signal',key:'unexplained_signal'}]",), items=("rapid_pattern_rows",), density="compact", no_data_text="No pattern-scoring table was published.")
+                with html.Div(v_show="rapid_stage === 'final_refinement'", classes="radar-stage-content"):
+                    with html.Div(classes="radar-refinement-card-grid"):
+                        with html.Div(v_for="row in top_refinements", key="row.rank", classes="radar-refinement-card"):
+                            html.Div("Final rank {{ row.rank }}", classes="radar-micro-label")
+                            html.H4("{{ row.hypothesis }}")
+                            html.Div("Rwp {{ row.rwp }}%", classes="radar-refinement-rwp")
+                            html.P("{{ row.phase_fractions }}")
+                            html.Span("{{ row.status }} / {{ row.time }}")
+                    with html.Div(classes="radar-result-card"):
+                        vuetify.VDataTable(headers=("[{title:'Rank',key:'rank'},{title:'Hypothesis',key:'hypothesis'},{title:'Rwp',key:'rwp'},{title:'Phase fractions',key:'phase_fractions'},{title:'Pattern rank',key:'pattern_rank'},{title:'Status',key:'status'},{title:'Time',key:'time'}]",), items=("rapid_final_rows",), density="compact", no_data_text="No final-refinement ranking was published.")
+                with html.Div(v_show="rapid_stage === 'inspector'", classes="radar-result-card"):
+                    html.H3("Solution Inspector")
+                    html.P("Compare published refined hypotheses and carry an existing GSAS-II checkpoint into the downstream handoff workflow.", classes="radar-section-help")
+                    with html.Div(classes="radar-field-pair"):
+                        vuetify.VSelect(label="Primary hypothesis", v_model=("selected_hypothesis",), items=("rapid_final_rows",), item_title="hypothesis", item_value="rank", density="compact", variant="outlined", no_data_text="No refined hypotheses are available")
+                        vuetify.VSelect(label="Compare with", v_model=("comparison_hypothesis",), items=("rapid_final_rows",), item_title="hypothesis", item_value="rank", density="compact", variant="outlined", clearable=True, no_data_text="No alternate hypothesis is available")
+                    with html.Div(classes="radar-refinement-card-grid"):
+                        with html.Div(v_for="row in rapid_final_rows.filter(item => String(item.rank) === String(selected_hypothesis) || String(item.rank) === String(comparison_hypothesis))", key="'compare-' + row.rank", classes="radar-refinement-card"):
+                            html.Div("Published rank {{ row.rank }}", classes="radar-micro-label")
+                            html.H4("{{ row.hypothesis }}")
+                            html.Div("Rwp {{ row.rwp }}%", classes="radar-refinement-rwp")
+                            html.P("{{ row.phase_fractions }}")
+                            html.Span("{{ row.status }} / {{ row.time }}")
+                    vuetify.VSelect(label="GSAS-II checkpoint", v_model=("selected_checkpoint",), items=("checkpoint_rows",), item_title="name", item_value="path", density="compact", variant="outlined", no_data_text="No published GPX checkpoint is available")
+                    with html.Div(classes="radar-button-row"):
+                        vuetify.VBtn("Download selected checkpoint", click=self.download_checkpoint, disabled=("!selected_checkpoint",), prepend_icon="mdi-download", color="#15543c", variant="outlined")
+                        html.A("Open GSAS-II project handoff", href="/?tool_id=neutrons_radar_pd_gpx_handoff_prototype&version=latest", target="_blank", classes="radar-secondary-link as-button")
+                    vuetify.VAlert(text="This release reviews and hands off existing checkpoints. Editing a phase combination and launching a targeted refinement requires a future Galaxy backend action.", type="info", variant="tonal", density="compact", classes="mt-3")
+
+            with html.Section(v_show="viewed_run_mode === 'full'", classes="radar-full-results"):
+                html.H3("Full refinement progression")
+                with html.Div(v_if="full_progression.length", classes="radar-full-progression"):
+                    with html.Div(v_for="item in full_progression", key="item.stage + item.status", classes="radar-progression-item"):
+                        vuetify.VIcon(icon=("item.status.toLowerCase().includes('accept') ? 'mdi-check-circle' : 'mdi-checkbox-blank-circle-outline'",), color="#15543c", size="small")
+                        with html.Div():
+                            html.Strong("{{ item.stage }}")
+                            html.Span("{{ item.status }}")
+                html.Div("No GPX progression was published for this run.", v_if="!full_progression.length", classes="radar-empty-compact")
+                with html.Div(classes="radar-result-card mt-3"):
+                    html.H3("Accepted and reviewed models")
+                    html.P("Published model decisions from the Full pipeline, without internal filenames or paths.", classes="radar-section-help")
+                    vuetify.VDataTable(
+                        headers=("[{title:'Model',key:'model'},{title:'Stage',key:'stage'},{title:'Rwp',key:'rwp'},{title:'Decision',key:'decision'},{title:'Note',key:'note'}]",),
+                        items=("full_model_rows",),
+                        density="compact",
+                        no_data_text="No model-decision table was published.",
+                    )
+
+            with vuetify.VExpansionPanels(variant="accordion", classes="radar-technical-panel mt-4"):
+                with vuetify.VExpansionPanel(title="Technical tables and raw fields"):
+                    with vuetify.VExpansionPanelText():
+                        vuetify.VSelect(label="Published result table", v_model=("selected_table",), items=("table_options",), item_title="name", item_value="path", density="compact", variant="outlined", update_modelValue=(self._table_changed, "[$event]"))
+                        vuetify.VDataTable(headers=("table_headers",), items=("table_rows",), density="compact", fixed_header=True, height=460, no_data_text="Select a result table.")
+
+    def _interactive_plots_view(self) -> None:
+        with html.Div(classes="radar-section-heading"):
+            with html.Div():
+                html.H2("Interactive Plots")
+                html.P("Accepted Full-mode fits and diagnostic plots, grouped by scientific role.")
+        with html.Section(classes="radar-result-card"):
+            with html.Div(classes="radar-plot-category-row"):
+                with vuetify.VChip(v_for="group in plot_groups", key="group.name", size="small", variant="outlined", color="#15543c"):
+                    html.Span("{{ group.name }} / {{ group.count }}")
+            vuetify.VSelect(label="Published interactive plot", v_model=("gallery_selected_plot",), items=("plot_options",), item_title="name", item_value="path", density="compact", variant="outlined", update_modelValue=(self._gallery_plot_changed, "[$event]"))
+            self._plot_widget = plotly.Figure(display_mode_bar=True)
+            html.Div("No interactive plots were published.", v_if="!plot_options.length", classes="radar-empty-compact")
+
+    def _file_browser_view(self) -> None:
+        with html.Div(classes="radar-section-heading"):
+            with html.Div():
+                html.H2("Run File Browser")
+                html.P("Published results grouped by scientific purpose; local container paths remain hidden.")
+            html.A("Open GSAS-II project handoff", href="/?tool_id=neutrons_radar_pd_gpx_handoff_prototype&version=latest", target="_blank", classes="radar-secondary-link as-button")
+        with vuetify.VExpansionPanels(multiple=True, variant="accordion", classes="radar-file-groups"):
+            with vuetify.VExpansionPanel(v_for="group in file_groups", key="group.name", value=("group.name",)):
+                with vuetify.VExpansionPanelTitle():
+                    html.Strong("{{ group.name }}")
+                    vuetify.VSpacer()
+                    vuetify.VChip(text=("String(group.files.length)",), size="x-small", variant="tonal", color="#15543c")
+                with vuetify.VExpansionPanelText():
+                    with html.Div(v_for="file in group.files", key="file.id", classes="radar-file-row"):
+                        with html.Div(classes="radar-file-copy"):
+                            html.Strong("{{ file.name }}")
+                            html.Span("{{ file.filename }} / {{ file.size }}")
+                        vuetify.VBtn(icon="mdi-download", title="Download", size="small", variant="text", color="#15543c", click=(self.download_artifact, "[file.path]"))
+        html.Div("No downloadable files are available for this run.", v_if="!file_groups.length", classes="radar-empty-compact")
 
     def _parse_regions(self) -> list[tuple[float, float]]:
         regions: list[tuple[float, float]] = []
@@ -746,6 +1086,8 @@ class RadarPdNovaApp(ThemedApp):
             state.selected_run_uid = record.uid
             state.notice = f"{config.run_name} was submitted to NDIP. You may close this NOVA session safely."
             state.active_page = "runs"
+            state.workspace_view = "monitor"
+            state.setup_collapsed = True
             self._sync_runs()
             self._select_record(record)
             self._start_monitor(record)
@@ -760,8 +1102,13 @@ class RadarPdNovaApp(ThemedApp):
         self._sync_runs()
         if self.server.state.selected_run_uid == record.uid:
             self._select_record(record)
-            if record.status == RunStatus.OK:
+            if record.status == RunStatus.OK and record.output_dir:
                 self._load_results(record)
+                if record.uid not in self._auto_opened_uids:
+                    self._auto_opened_uids.add(record.uid)
+                    self.server.state.workspace_view = "results"
+            elif record.status == RunStatus.ERROR:
+                self.server.state.workspace_view = "monitor"
         self.server.state.flush()
 
     def _start_monitor(self, record: RunRecord) -> None:
@@ -877,7 +1224,81 @@ class RadarPdNovaApp(ThemedApp):
         if record.status == RunStatus.OK:
             self._open_record_results(record)
             return
+        self.server.state.workspace_view = "monitor"
+        self.server.state.setup_collapsed = True
         self.server.state.flush()
+
+    def _sync_workspace_options(self, mode: AnalysisMode | str) -> None:
+        state = self.server.state
+        value = mode.value if isinstance(mode, AnalysisMode) else str(mode)
+        if value == AnalysisMode.RAPID.value:
+            options = [
+                {"title": "Run Monitor", "value": "monitor", "icon": "mdi-progress-clock"},
+                {"title": "Rapid Results", "value": "results", "icon": "mdi-chart-line"},
+                {"title": "Run File Browser", "value": "files", "icon": "mdi-folder-outline"},
+            ]
+        else:
+            options = [
+                {"title": "Run Monitor", "value": "monitor", "icon": "mdi-progress-clock"},
+                {"title": "Results", "value": "results", "icon": "mdi-chart-line"},
+                {"title": "Interactive Plots", "value": "plots", "icon": "mdi-chart-scatter-plot"},
+                {"title": "Run File Browser", "value": "files", "icon": "mdi-folder-outline"},
+            ]
+        state.workspace_options = options
+        if getattr(state, "workspace_view", "monitor") not in {item["value"] for item in options}:
+            state.workspace_view = "monitor"
+
+    @staticmethod
+    def _monitor_stage_rows(record: RunRecord) -> list[dict[str, str]]:
+        if record.mode == AnalysisMode.RAPID:
+            names = [
+                "Signal preparation",
+                "Coarse search",
+                "Lattice nudge",
+                "Pattern scoring",
+                "Final refinement",
+                "Result collection",
+            ]
+            tokens = [
+                ("prepar", "upload", "queue", "wait"),
+                ("coarse", "search64", "hypothesis search"),
+                ("nudge", "lattice"),
+                ("pattern", "512", "scoring"),
+                ("gsas", "refin", "validation"),
+                ("result", "download", "collect", "ready"),
+            ]
+        else:
+            names = [
+                "Input preparation",
+                "Main-phase model",
+                "Candidate search",
+                "Refinement passes",
+                "Finalization",
+                "Result collection",
+            ]
+            tokens = [
+                ("prepar", "upload", "queue", "wait"),
+                ("main", "anchor"),
+                ("candidate", "search", "screen"),
+                ("pass", "refin", "compare"),
+                ("final", "polish"),
+                ("result", "download", "collect", "ready"),
+            ]
+        if record.status == RunStatus.OK:
+            active_index = len(names)
+        else:
+            lowered = str(record.stage or "").lower()
+            active_index = next(
+                (index for index, stage_tokens in enumerate(tokens) if any(token in lowered for token in stage_tokens)),
+                min(len(names) - 1, max(0, int(record.progress) * len(names) // 101)),
+            )
+        return [
+            {
+                "name": name,
+                "state": "complete" if index < active_index or record.status == RunStatus.OK else "active" if index == active_index else "pending",
+            }
+            for index, name in enumerate(names)
+        ]
 
     def _select_record(self, record: RunRecord) -> None:
         state = self.server.state
@@ -889,6 +1310,17 @@ class RadarPdNovaApp(ThemedApp):
         state.selected_run_progress = record.progress
         state.selected_run_message = record.message
         state.selected_run_console = record.console_tail
+        state.viewed_run_mode = record.mode.value
+        state.monitor_stages = self._monitor_stage_rows(record)
+        try:
+            created = datetime.fromisoformat(record.created_utc.replace("Z", "+00:00"))
+            if created.tzinfo is None:
+                created = created.replace(tzinfo=timezone.utc)
+            elapsed = max(0.0, (datetime.now(timezone.utc) - created).total_seconds())
+            state.selected_run_elapsed = f"{elapsed:.0f} s elapsed"
+        except (TypeError, ValueError):
+            state.selected_run_elapsed = "-"
+        self._sync_workspace_options(record.mode)
         saved_config = getattr(record, "config", None)
         configuration = saved_config.portable_contract() if isinstance(saved_config, AnalysisConfig) else (getattr(record, "configuration", {}) or {})
         state.viewed_configuration = json.dumps(configuration, indent=2, sort_keys=False) if configuration else ""
@@ -935,6 +1367,8 @@ class RadarPdNovaApp(ThemedApp):
             state.run_name = ""
             state.notice = f"Loaded the scientific configuration from {record.name}. Choose or replace any inputs, then submit a new run."
             state.active_page = "setup"
+            state.setup_collapsed = False
+            state.setup_panels = ["data", "review"]
         except Exception as exc:
             self.server.state.error_message = str(exc)
         self.server.state.flush()
@@ -948,6 +1382,8 @@ class RadarPdNovaApp(ThemedApp):
             self._apply_configuration(config)
             self.server.state.notice = "Loaded the saved scientific configuration. Choose inputs, review the setup, and submit a new run."
             self.server.state.active_page = "setup"
+            self.server.state.setup_collapsed = False
+            self.server.state.setup_panels = ["data", "review"]
         except Exception as exc:
             self.server.state.error_message = str(exc)
         self.server.state.flush()
@@ -998,6 +1434,9 @@ class RadarPdNovaApp(ThemedApp):
                 record = self.service.collect_results(record)
             self.records[uid] = record
             self._select_record(record)
+            if record.status == RunStatus.OK and record.output_dir:
+                self._load_results(record)
+                self.server.state.workspace_view = "results"
             self._sync_runs()
         except Exception as exc:
             self.server.state.selected_run_message = str(exc)
@@ -1016,6 +1455,10 @@ class RadarPdNovaApp(ThemedApp):
         except Exception as exc:
             self.server.state.selected_run_message = str(exc)
         self.server.state.flush()
+
+    def confirm_cancel_selected_run(self, **_: Any) -> None:
+        self.server.state.cancel_dialog = False
+        self.cancel_selected_run()
 
     def open_selected_results(self, **_: Any) -> None:
         uid = self.server.state.selected_run_uid
@@ -1043,10 +1486,13 @@ class RadarPdNovaApp(ThemedApp):
                 self._sync_runs()
             self._load_results(record)
             state.active_page = "results"
+            state.workspace_view = "results"
+            state.setup_collapsed = True
             state.notice = f"Showing results for {record.name}."
         except Exception as exc:
             message = f"Could not load results for {record.name}: {exc}"
             state.active_page = "runs"
+            state.workspace_view = "monitor"
             state.error_message = message
             state.selected_run_message = message
         finally:
@@ -1058,66 +1504,109 @@ class RadarPdNovaApp(ThemedApp):
         state = self.server.state
         self._reset_result_state()
         payload = self.service.result_payload(record)
-        summary = payload.get("summary") or {}
+        result_document = payload.get("summary") or {}
         state.viewed_run_mode = record.mode.value
         state.viewed_run_name = record.name
-        state.phase_rows = phase_fraction_rows(summary)
-        total_seconds = total_elapsed_seconds(summary)
-        state.summary_cards = [
-            {"label": "Run", "value": record.name},
-            {"label": "Analysis", "value": "Rapid Hypothesis" if record.mode == AnalysisMode.RAPID else "Full RADAR-PD"},
-            {"label": "Status", "value": record.status.value.title()},
-            {"label": "Total time", "value": f"{float(total_seconds):.1f} s" if total_seconds is not None else "See stage timing"},
-        ]
         root = record.local_output_dir
         if root is None:
             return
-        state.table_options = discover_tables(root)
-        state.plot_options = discover_plot_payloads(root)
+        view = build_result_view(result_document, root).to_state()
+        state.result_metrics = view["metrics"]
+        state.summary_cards = view["metrics"]
+        state.result_warnings = view["warnings"]
+        state.phase_rows = view["phases"]
+        state.phase_total = view["phase_total"]
+        state.table_options = view["tables"]
+        state.plot_options = view["plots"]
+        state.primary_plot_path = view["primary_plot_path"]
+        state.file_groups = view["file_groups"]
+        state.checkpoint_rows = view["checkpoints"]
+        state.gpx_rows = view["checkpoints"]
+        state.rapid_coarse_rows = view["rapid_stages"]["coarse_search"]
+        state.rapid_nudge_rows = view["rapid_stages"]["lattice_nudge"]
+        state.rapid_pattern_rows = view["rapid_stages"]["pattern_scoring"]
+        state.rapid_final_rows = view["rapid_stages"]["final_refinement"]
+        state.top_refinements = view["top_refinements"]
+        state.solution_rows = view["rapid_stages"]["final_refinement"]
+        state.solution_headers = [
+            {"title": "Rank", "key": "rank"},
+            {"title": "Hypothesis", "key": "hypothesis"},
+            {"title": "Rwp", "key": "rwp"},
+            {"title": "Phase fractions", "key": "phase_fractions"},
+        ]
+        state.full_progression = view["full_progression"]
+        state.full_model_rows = view["full_models"]
         state.artifact_options = [
-            {"title": f"{item['kind'].title()} / {item['name']} ({item['size'] / 1024:.1f} KB)", "path": item["path"]}
-            for item in payload.get("artifacts", [])
+            {"title": f"{group['name']} / {item['name']} ({item['size']})", "path": item["path"]}
+            for group in view["file_groups"]
+            for item in group["files"]
         ]
-        state.gpx_rows = [
-            {
-                "name": item.get("label") or item.get("name") or Path(str(item.get("path") or "project.gpx")).name,
-                "stage": item.get("stage") or "Refinement",
-                "status": item.get("status") or "Available",
-                "path": item.get("collection_path") or item.get("path") or item.get("source_path") or "-",
-            }
-            for item in (payload.get("gpx_index") or {}).get("projects", [])
-        ]
+        counts: dict[str, int] = {}
+        for item in state.plot_options:
+            counts[item["category"]] = counts.get(item["category"], 0) + 1
+        state.plot_groups = [{"name": name, "count": count} for name, count in counts.items()]
         if state.table_options:
-            state.selected_table = state.table_options[0]["path"]
+            primary_table = next((item for item in state.table_options if item.get("primary")), state.table_options[0])
+            state.selected_table = primary_table["path"]
             self._table_changed()
         if state.plot_options:
-            state.selected_plot = state.plot_options[0]["path"]
-            self._plot_changed()
-        rapid_tables = [item for item in state.table_options if any(token in item["path"].lower() for token in ("validation_summary", "reranked_512", "hypothesis"))]
-        if rapid_tables:
-            state.solution_rows = read_table(rapid_tables[0]["path"], limit=100)
-            keys = list(state.solution_rows[0].keys()) if state.solution_rows else []
-            state.solution_headers = [{"title": key.replace("_", " ").title(), "key": key} for key in keys]
+            state.selected_plot = state.primary_plot_path or state.plot_options[0]["path"]
+            state.gallery_selected_plot = state.selected_plot
+            self._primary_plot_changed()
+            self._gallery_plot_changed()
+        if state.artifact_options:
+            state.selected_artifact = state.artifact_options[0]["path"]
+        if state.checkpoint_rows:
+            state.selected_checkpoint = next(
+                (item["path"] for item in state.checkpoint_rows if item.get("handoff_available")),
+                "",
+            )
+        if state.rapid_final_rows:
+            state.selected_hypothesis = state.rapid_final_rows[0]["rank"]
+            state.comparison_hypothesis = (
+                state.rapid_final_rows[1]["rank"] if len(state.rapid_final_rows) > 1 else None
+            )
+        self._sync_workspace_options(record.mode)
         state.flush()
 
     def _reset_result_state(self) -> None:
         state = self.server.state
         state.summary_cards = []
+        state.result_metrics = []
+        state.result_warnings = []
         state.phase_rows = []
+        state.phase_total = "-"
         state.table_options = []
         state.selected_table = ""
         state.table_rows = []
         state.table_headers = []
         state.plot_options = []
         state.selected_plot = ""
+        state.gallery_selected_plot = ""
+        state.primary_plot_path = ""
+        state.plot_groups = []
         state.artifact_options = []
         state.selected_artifact = ""
+        state.file_groups = []
         state.gpx_rows = []
+        state.checkpoint_rows = []
+        state.selected_checkpoint = ""
         state.solution_rows = []
         state.solution_headers = []
+        state.rapid_coarse_rows = []
+        state.rapid_nudge_rows = []
+        state.rapid_pattern_rows = []
+        state.rapid_final_rows = []
+        state.top_refinements = []
+        state.full_progression = []
+        state.full_model_rows = []
+        state.selected_hypothesis = None
+        state.comparison_hypothesis = None
         state.result_tab = "overview"
         if self._plot_widget is not None:
             self._plot_widget.update(figure_for_payload({}))
+        if self._primary_plot_widget is not None:
+            self._primary_plot_widget.update(figure_for_payload({}))
 
     def _table_changed(self, path: str | None = None, **_: Any) -> None:
         path = path or self.server.state.selected_table
@@ -1129,16 +1618,29 @@ class RadarPdNovaApp(ThemedApp):
         self.server.state.table_headers = [{"title": key.replace("_", " ").title(), "key": key} for key in keys]
         self.server.state.flush()
 
-    def _plot_changed(self, path: str | None = None, **_: Any) -> None:
+    def _primary_plot_changed(self, path: str | None = None, **_: Any) -> None:
         path = path or self.server.state.selected_plot
-        if not path or self._plot_widget is None:
+        if not path or self._primary_plot_widget is None:
             return
         self.server.state.selected_plot = path
         figure = figure_for_payload(read_plot_payload(path))
+        self._primary_plot_widget.update(figure)
+
+    def _gallery_plot_changed(self, path: str | None = None, **_: Any) -> None:
+        path = path or self.server.state.gallery_selected_plot
+        if not path or self._plot_widget is None:
+            return
+        self.server.state.gallery_selected_plot = path
+        figure = figure_for_payload(read_plot_payload(path))
         self._plot_widget.update(figure)
 
-    def download_artifact(self, **_: Any) -> None:
-        path = Path(str(self.server.state.selected_artifact or ""))
+    def _plot_changed(self, path: str | None = None, **_: Any) -> None:
+        """Backward-compatible alias for existing callbacks and tests."""
+
+        self._primary_plot_changed(path)
+
+    def download_artifact(self, path: str | None = None, **_: Any) -> None:
+        path = Path(str(path or self.server.state.selected_artifact or ""))
         if not path.is_file():
             self.server.state.error_message = "The selected artifact is no longer available in this NOVA session."
             return
@@ -1151,44 +1653,200 @@ class RadarPdNovaApp(ThemedApp):
             ".yml": "application/yaml",
             ".zip": "application/zip",
             ".gpx": "application/octet-stream",
+            ".cif": "chemical/x-cif",
+            ".png": "image/png",
+            ".svg": "image/svg+xml",
         }.get(path.suffix.lower(), "application/octet-stream")
         self.download_file(path.name, mime, path.read_bytes())
+
+    def download_checkpoint(self, **_: Any) -> None:
+        selected = str(self.server.state.selected_checkpoint or "")
+        self.download_artifact(selected)
 
     @staticmethod
     def _css() -> str:
         return """
-        :root { color-scheme: light; }
-        body { background: #f5f8f7; }
-        .radar-shell { max-width: 1480px; margin: 0 auto; padding: 8px 24px 48px; color: #17251f; }
-        .radar-hero { padding: 34px 4px 22px; border-bottom: 1px solid #d7e3de; }
-        .radar-kicker { display: inline-block; color: #0b5d46; border: 1px solid #b8d4c9; border-radius: 999px; padding: 5px 10px; font-size: 12px; font-weight: 700; }
-        .radar-hero h1 { font-size: clamp(32px, 4vw, 52px); line-height: 1.05; margin: 18px 0 12px; letter-spacing: 0; }
-        .radar-subtitle { max-width: 900px; color: #52645c; font-size: 18px; }
-        .radar-status-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
-        .radar-card, .review-card { background: #fff; border: 1px solid #d7e3de; border-left: 4px solid #0b5d46; border-radius: 7px; box-shadow: 0 4px 14px rgba(21,54,43,.06); margin-bottom: 16px; }
-        .radar-card-title { display: flex; align-items: center; gap: 10px; font-size: 18px; font-weight: 700; padding-bottom: 4px; }
-        .radar-card-subtitle { white-space: normal; color: #65766f; padding-left: 58px; }
-        .step-number { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: #d8f3e6; color: #0b5d46; font-weight: 800; }
-        .subsection-title { font-size: 16px; margin: 0 0 14px; }
-        .field-help { color: #687972; line-height: 1.55; }
-        .upload-grid { display: grid; grid-template-columns: 1fr; gap: 12px; margin-bottom: 12px; }
-        .sticky-review { position: sticky; top: 12px; }
-        .review-summary { display: grid; grid-template-columns: 130px 1fr; gap: 8px 14px; background: #f1f7f4; border-radius: 6px; padding: 16px; margin: 12px 0 20px; }
-        .review-label { color: #6a7973; font-size: 13px; }
-        .review-value { color: #183c30; font-weight: 650; overflow-wrap: anywhere; }
-        .page-section { padding-top: 32px; }
-        .page-section h2 { font-size: 30px; margin-bottom: 4px; }
-        .section-heading-row { display: flex; justify-content: space-between; align-items: end; gap: 16px; margin-bottom: 18px; }
-        .stage-label { font-weight: 700; color: #0b5d46; margin-bottom: 8px; }
-        .metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-top: 18px; }
-        .metric-card { padding: 15px 17px; border: 1px solid #d7e3de; border-left: 4px solid #0b5d46; border-radius: 6px; background: #fff; }
-        .metric-label { color: #66776f; font-size: 12px; font-weight: 700; text-transform: uppercase; }
-        .metric-value { color: #17251f; font-size: 19px; font-weight: 750; margin-top: 5px; overflow-wrap: anywhere; }
-        .config-preview { max-height: 360px; overflow: auto; padding: 14px; background: #f5f8f7; border: 1px solid #d7e3de; border-radius: 5px; font-size: 12px; white-space: pre-wrap; }
-        .live-console { max-height: 440px; background: #17251f; color: #e7f2ed; border-color: #29483c; font-family: Consolas, "Courier New", monospace; }
-        .handoff-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
-        .handoff-link { display: inline-flex; align-items: center; min-height: 38px; padding: 8px 14px; color: #0b5d46; border: 1px solid #0b5d46; border-radius: 5px; font-weight: 700; text-decoration: none; }
-        .handoff-link:hover { background: #e8f5ef; }
-        .result-panel { background: #fff; border: 1px solid #d7e3de; border-radius: 7px; padding: 18px; margin-top: 10px; }
-        @media (max-width: 800px) { .radar-shell { padding: 4px 12px 32px; } .review-summary { grid-template-columns: 1fr; } .sticky-review { position: static; } }
+        :root {
+          color-scheme: light;
+          --radar-brand-900: #0d3428;
+          --radar-brand-800: #124331;
+          --radar-brand-700: #15543c;
+          --radar-brand-600: #1f6b4b;
+          --radar-ink: #18231f;
+          --radar-muted: #64746e;
+          --radar-surface: #ffffff;
+          --radar-surface-muted: #f6faf8;
+          --radar-line: #d9e5df;
+          --radar-line-strong: #b8cec2;
+          --radar-warn: #a66a00;
+          --radar-danger: #9b2c2c;
+        }
+        * { box-sizing: border-box; }
+        body { margin: 0; background: #f2f7f4; color: var(--radar-ink); font-family: Inter, "Segoe UI", Arial, sans-serif; }
+        .radar-app-shell { min-height: calc(100vh - 64px); background: #f2f7f4; }
+        .radar-context-header {
+          min-height: 58px; display: flex; align-items: center; gap: 10px; padding: 8px 18px;
+          background: var(--radar-surface); border-bottom: 1px solid var(--radar-line); position: sticky; top: 0; z-index: 8;
+        }
+        .radar-context-title { min-width: 220px; }
+        .radar-product-name { color: var(--radar-brand-900); font-size: 16px; font-weight: 800; line-height: 1.2; }
+        .radar-product-subtitle { color: var(--radar-muted); font-size: 12px; margin-top: 2px; }
+        .radar-run-chip { max-width: 310px; }
+        .radar-run-chip .v-chip__content { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .radar-layout { display: grid; grid-template-columns: 360px minmax(0, 1fr); min-height: calc(100vh - 122px); }
+        .radar-layout.is-collapsed { grid-template-columns: minmax(0, 1fr); }
+        .radar-setup-rail {
+          width: 360px; max-height: calc(100vh - 122px); overflow-y: auto; padding: 18px 14px 36px;
+          background: #eef5f1; border-right: 1px solid var(--radar-line-strong); scrollbar-gutter: stable;
+        }
+        .radar-rail-kicker, .radar-kicker, .radar-context-kicker, .radar-micro-label {
+          color: var(--radar-brand-700); font-size: 11px; line-height: 1.2; font-weight: 800; letter-spacing: .075em; text-transform: uppercase;
+        }
+        .radar-rail-heading { margin: 5px 0 4px; color: var(--radar-brand-900); font-size: 23px; line-height: 1.2; }
+        .radar-rail-help { margin: 0 0 15px; color: var(--radar-muted); font-size: 13px; line-height: 1.45; }
+        .radar-history-panel, .radar-setup-panels { border: 1px solid var(--radar-line-strong); border-radius: 8px; overflow: hidden; box-shadow: none; }
+        .radar-setup-panel { border-left: 3px solid var(--radar-brand-700); }
+        .radar-setup-panel + .radar-setup-panel { border-top: 1px solid var(--radar-line); }
+        .radar-setup-title { min-height: 48px !important; padding: 8px 11px !important; font-size: 13px; }
+        .radar-step-number {
+          display: inline-grid; place-items: center; flex: 0 0 25px; width: 25px; height: 25px; margin-right: 9px;
+          border-radius: 50%; background: #dceee5; color: var(--radar-brand-700); font-size: 12px; font-weight: 850;
+        }
+        .radar-step-label { color: var(--radar-brand-900); font-weight: 750; }
+        .radar-setup-panels .v-expansion-panel-text__wrapper, .radar-history-panel .v-expansion-panel-text__wrapper { padding: 8px 11px 13px; }
+        .radar-field-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+        .radar-secondary-link {
+          display: inline-flex; align-items: center; color: var(--radar-brand-700); font-size: 13px; font-weight: 750;
+          text-decoration: none; border-bottom: 1px solid currentColor; margin-top: 5px;
+        }
+        .radar-secondary-link.as-button { min-height: 34px; padding: 6px 11px; border: 1px solid var(--radar-brand-700); border-radius: 7px; margin: 0; }
+        .radar-secondary-link:hover { color: var(--radar-brand-900); background: #e7f3ed; }
+        .radar-hidden-file-input { position: absolute !important; width: 1px !important; height: 1px !important; overflow: hidden !important; opacity: 0 !important; pointer-events: none !important; }
+        .radar-upload-card {
+          position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center;
+          margin: 8px 0; padding: 10px; background: #fff; border: 1px solid var(--radar-line); border-radius: 8px;
+        }
+        .radar-upload-copy { min-width: 0; }
+        .radar-upload-label { color: var(--radar-ink); font-size: 13px; font-weight: 760; }
+        .radar-upload-help { color: var(--radar-muted); font-size: 11px; line-height: 1.35; margin-top: 2px; }
+        .radar-upload-filename { color: #7a8982; font-size: 12px; line-height: 1.35; overflow-wrap: anywhere; margin-top: 4px; }
+        .radar-upload-filename.is-ready { color: var(--radar-brand-600); font-weight: 720; }
+        .radar-upload-actions { display: flex; align-items: center; gap: 2px; }
+        .radar-checklist { display: grid; gap: 6px; margin: 7px 0 12px; }
+        .radar-check-row { display: flex; align-items: center; gap: 7px; color: #344740; font-size: 12px; }
+        .radar-review-summary { padding: 10px; margin-bottom: 11px; background: var(--radar-surface-muted); border: 1px solid var(--radar-line); border-radius: 7px; }
+        .radar-review-primary { color: var(--radar-brand-900); font-size: 13px; font-weight: 780; }
+        .radar-review-secondary { color: var(--radar-muted); font-size: 12px; margin-top: 3px; overflow-wrap: anywhere; }
+        .radar-primary-action { font-weight: 800; letter-spacing: 0; }
+        .radar-run-list { max-height: 245px; overflow-y: auto; margin-top: 8px; border: 1px solid var(--radar-line); border-radius: 7px; background: #fff; }
+        .radar-run-list-item { min-height: 65px !important; border-bottom: 1px solid var(--radar-line); cursor: pointer; }
+        .radar-run-list-name { color: var(--radar-brand-900); font-size: 12px; font-weight: 760; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .radar-run-list-meta, .radar-run-list-stage { color: var(--radar-muted); font-size: 11px; margin-top: 2px; }
+        .radar-workspace { min-width: 0; background: #f7faf8; }
+        .radar-workspace-inner { max-width: 1520px; margin: 0 auto; padding: 22px clamp(16px, 2.2vw, 34px) 56px; }
+        .radar-workspace-empty { min-height: 620px; display: flex; flex-direction: column; justify-content: center; align-items: flex-start; max-width: 1040px; margin: 0 auto; }
+        .radar-workspace-empty h1 { max-width: 760px; margin: 16px 0 12px; color: var(--radar-brand-900); font-size: clamp(36px, 5vw, 62px); line-height: 1.02; letter-spacing: -.025em; }
+        .radar-empty-lede { max-width: 760px; color: #52645c; font-size: 18px; line-height: 1.55; }
+        .radar-empty-features { display: flex; flex-wrap: wrap; gap: 8px; margin: 9px 0 26px; }
+        .radar-feature-chip { padding: 5px 10px; color: var(--radar-brand-700); border: 1px solid var(--radar-line-strong); border-radius: 999px; background: #fff; font-size: 12px; font-weight: 700; }
+        .radar-empty-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; width: 100%; }
+        .radar-empty-card { min-height: 145px; padding: 18px; background: #fff; border: 1px solid var(--radar-line); border-left: 4px solid var(--radar-brand-700); border-radius: 8px; }
+        .radar-empty-card h3 { margin: 10px 0 4px; font-size: 16px; }
+        .radar-empty-card p { margin: 0; color: var(--radar-muted); font-size: 13px; line-height: 1.45; }
+        .radar-run-context { display: flex; justify-content: space-between; align-items: center; gap: 18px; margin-bottom: 13px; }
+        .radar-run-title { margin: 3px 0 2px; color: var(--radar-brand-900); font-size: clamp(25px, 3vw, 38px); line-height: 1.12; overflow-wrap: anywhere; }
+        .radar-run-subtitle { margin: 0; color: var(--radar-muted); font-size: 13px; }
+        .radar-workspace-nav { display: flex !important; width: 100%; min-height: 40px; margin-bottom: 20px; border: 1px solid var(--radar-line-strong); border-radius: 8px; background: #fff; overflow: hidden; }
+        .radar-workspace-nav .v-btn { flex: 1 1 160px; text-transform: none; font-weight: 730; }
+        .radar-workspace-view { min-width: 0; }
+        .radar-section-heading { display: flex; justify-content: space-between; align-items: flex-end; gap: 18px; margin: 0 0 15px; }
+        .radar-section-heading h2 { margin: 0; color: var(--radar-brand-900); font-size: 27px; }
+        .radar-section-heading p, .radar-section-help { margin: 4px 0 0; color: var(--radar-muted); font-size: 13px; line-height: 1.5; }
+        .radar-button-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+        .radar-monitor-summary { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; padding: 19px; background: #fff; border: 1px solid var(--radar-line); border-left: 4px solid var(--radar-brand-700); border-radius: 8px; }
+        .radar-monitor-stage h3 { margin: 5px 0 3px; color: var(--radar-brand-900); font-size: 21px; }
+        .radar-monitor-stage p { margin: 0; color: var(--radar-muted); }
+        .radar-elapsed { display: block; color: var(--radar-muted); font-size: 12px; margin-top: 6px; }
+        .radar-progress-number { display: flex; flex-direction: column; align-items: flex-end; justify-content: center; }
+        .radar-progress-number strong { color: var(--radar-brand-700); font-size: 30px; }
+        .radar-progress-number span { color: var(--radar-muted); font-size: 11px; text-transform: uppercase; }
+        .radar-stage-timeline { display: grid; grid-template-columns: repeat(6, minmax(105px, 1fr)); gap: 8px; overflow-x: auto; }
+        .radar-stage-item { display: flex; gap: 7px; min-width: 110px; padding: 10px; border: 1px solid var(--radar-line); border-radius: 7px; background: #fff; color: #91a099; }
+        .radar-stage-item strong, .radar-stage-item span { display: block; }
+        .radar-stage-item strong { font-size: 12px; color: inherit; }
+        .radar-stage-item span { margin-top: 2px; font-size: 10px; }
+        .radar-stage-item.is-active { color: var(--radar-warn); border-color: #e2c87e; background: #fffaf0; }
+        .radar-stage-item.is-complete { color: var(--radar-brand-600); background: #f0f8f4; }
+        .radar-console, .radar-config-preview { max-height: 440px; overflow: auto; margin: 0; padding: 14px; border-radius: 7px; font: 12px/1.45 Consolas, "Courier New", monospace; white-space: pre-wrap; }
+        .radar-console { background: #17251f; color: #e7f2ed; }
+        .radar-config-preview { background: #f5f8f7; color: #263a32; border: 1px solid var(--radar-line); }
+        .radar-metric-grid { display: grid; grid-template-columns: repeat(6, minmax(118px, 1fr)); gap: 9px; margin-bottom: 14px; }
+        .radar-metric-card { min-width: 0; min-height: 78px; padding: 12px 13px; background: #fff; border: 1px solid var(--radar-line); border-top: 3px solid var(--radar-brand-700); border-radius: 8px; }
+        .radar-metric-label { color: var(--radar-muted); font-size: 10px; font-weight: 800; letter-spacing: .055em; text-transform: uppercase; }
+        .radar-metric-value { margin-top: 6px; color: var(--radar-ink); font-size: 16px; font-weight: 780; overflow-wrap: anywhere; }
+        .radar-result-overview-grid { display: grid; grid-template-columns: minmax(290px, .78fr) minmax(520px, 1.7fr); gap: 13px; align-items: start; }
+        .radar-result-card { min-width: 0; padding: 16px; background: #fff; border: 1px solid var(--radar-line); border-radius: 8px; box-shadow: 0 3px 10px rgba(13,52,40,.04); }
+        .radar-card-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; margin-bottom: 12px; }
+        .radar-card-heading h3 { margin: 3px 0 0; color: var(--radar-brand-900); font-size: 19px; }
+        .radar-phase-list { display: grid; gap: 8px; }
+        .radar-phase-row { padding: 9px 0; border-bottom: 1px solid var(--radar-line); }
+        .radar-phase-row:last-child { border-bottom: 0; }
+        .radar-phase-copy, .radar-phase-weight { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; }
+        .radar-phase-copy strong { color: var(--radar-ink); font-size: 13px; overflow-wrap: anywhere; }
+        .radar-phase-copy span { color: var(--radar-muted); font-size: 11px; }
+        .radar-phase-weight { grid-template-columns: 58px minmax(0, 1fr); margin-top: 7px; }
+        .radar-phase-weight strong { color: var(--radar-brand-700); font-size: 12px; }
+        .radar-primary-plot-card { overflow: hidden; }
+        .radar-stage-results, .radar-full-results { margin-top: 18px; }
+        .radar-stage-results > h3, .radar-full-results > h3 { margin: 0; color: var(--radar-brand-900); font-size: 20px; }
+        .radar-stage-tabs { margin: 12px 0 10px; border-bottom: 1px solid var(--radar-line); }
+        .radar-stage-content { min-width: 0; }
+        .radar-refinement-card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(215px, 1fr)); gap: 9px; margin-bottom: 10px; }
+        .radar-refinement-card { min-width: 0; padding: 13px; background: #fff; border: 1px solid var(--radar-line); border-left: 4px solid var(--radar-brand-700); border-radius: 8px; }
+        .radar-refinement-card h4 { margin: 5px 0 8px; color: var(--radar-ink); font-size: 13px; overflow-wrap: anywhere; }
+        .radar-refinement-card p { margin: 6px 0; color: #344740; font-size: 11px; line-height: 1.45; }
+        .radar-refinement-card span { color: var(--radar-muted); font-size: 11px; }
+        .radar-refinement-rwp { color: var(--radar-brand-700); font-size: 18px; font-weight: 800; }
+        .radar-full-progression { display: grid; grid-template-columns: repeat(auto-fit, minmax(175px, 1fr)); gap: 8px; margin: 11px 0; }
+        .radar-progression-item { display: flex; gap: 8px; padding: 11px; background: #fff; border: 1px solid var(--radar-line); border-radius: 7px; }
+        .radar-progression-item strong, .radar-progression-item span { display: block; }
+        .radar-progression-item strong { font-size: 12px; color: var(--radar-ink); }
+        .radar-progression-item span { margin-top: 3px; font-size: 11px; color: var(--radar-muted); }
+        .radar-plot-category-row { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 10px; }
+        .radar-file-groups { border: 1px solid var(--radar-line); border-radius: 8px; overflow: hidden; }
+        .radar-file-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 9px 2px; border-bottom: 1px solid var(--radar-line); }
+        .radar-file-row:last-child { border-bottom: 0; }
+        .radar-file-copy { min-width: 0; }
+        .radar-file-copy strong, .radar-file-copy span { display: block; overflow-wrap: anywhere; }
+        .radar-file-copy strong { color: var(--radar-ink); font-size: 13px; }
+        .radar-file-copy span { margin-top: 2px; color: var(--radar-muted); font-size: 11px; }
+        .radar-empty-compact { padding: 12px; color: var(--radar-muted); font-size: 12px; line-height: 1.45; text-align: center; }
+        .radar-technical-panel { border: 1px solid var(--radar-line); border-radius: 8px; overflow: hidden; }
+        .radar-result-card .v-data-table, .radar-technical-panel .v-data-table { max-width: 100%; overflow-x: auto; }
+        @media (max-width: 1280px) {
+          .radar-metric-grid { grid-template-columns: repeat(3, minmax(120px, 1fr)); }
+          .radar-result-overview-grid { grid-template-columns: 1fr; }
+        }
+        @media (max-width: 1050px) {
+          .radar-context-header { position: static; flex-wrap: wrap; }
+          .radar-layout, .radar-layout.is-collapsed { display: block; }
+          .radar-setup-rail { width: 100%; max-height: none; border-right: 0; border-bottom: 1px solid var(--radar-line-strong); }
+          .radar-workspace-empty { min-height: 430px; }
+          .radar-empty-grid { grid-template-columns: 1fr; }
+        }
+        @media (max-width: 700px) {
+          .radar-context-header { padding: 8px 10px; }
+          .radar-product-subtitle, .radar-run-chip { display: none; }
+          .radar-workspace-inner { padding: 15px 10px 38px; }
+          .radar-run-context, .radar-section-heading { align-items: flex-start; flex-direction: column; }
+          .radar-workspace-nav { overflow-x: auto; }
+          .radar-workspace-nav .v-btn { flex: 0 0 auto; }
+          .radar-metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+          .radar-field-pair { grid-template-columns: 1fr; }
+          .radar-stage-timeline { grid-template-columns: repeat(6, 130px); }
+          .radar-monitor-summary { grid-template-columns: 1fr; }
+          .radar-progress-number { align-items: flex-start; }
+          .radar-upload-card { grid-template-columns: 1fr; }
+          .radar-upload-actions { justify-content: flex-start; }
+        }
         """
