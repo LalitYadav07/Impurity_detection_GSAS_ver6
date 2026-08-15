@@ -1,4 +1,4 @@
-FROM savannah.ornl.gov/radar-pd/radar-pd-nova:nova-0.2.1
+FROM savannah.ornl.gov/radar-pd/radar-pd-nova:nova-0.2.2
 
 USER root
 

@@ -36,3 +36,10 @@ def test_setup_panels_and_uploads_have_single_stable_instances() -> None:
     assert "From Server" not in template
     assert 'activator="parent"' not in template
 
+
+def test_plotly_canvases_have_nonzero_layout_frames() -> None:
+    app = RadarPdNovaApp()
+    template = app.layout.html
+
+    assert template.count('class="radar-plot-frame"') == 2
+    assert ".radar-plot-frame { position: relative; width: 100%; height: 720px;" in app._css()

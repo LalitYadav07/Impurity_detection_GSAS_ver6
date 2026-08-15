@@ -839,7 +839,8 @@ class RadarPdNovaApp(ThemedApp):
                         update_modelValue=(self._primary_plot_changed, "[$event]"),
                         classes="mb-2",
                     )
-                    self._primary_plot_widget = plotly.Figure(display_mode_bar=True)
+                    with html.Div(classes="radar-plot-frame"):
+                        self._primary_plot_widget = plotly.Figure(display_mode_bar=True)
                     html.Div("No interactive refinement payload was published for this run.", v_if="!plot_options.length", classes="radar-empty-compact")
 
             with html.Section(v_show="viewed_run_mode === 'rapid'", classes="radar-stage-results"):
@@ -921,7 +922,8 @@ class RadarPdNovaApp(ThemedApp):
                 with vuetify.VChip(v_for="group in plot_groups", key="group.name", size="small", variant="outlined", color="#15543c"):
                     html.Span("{{ group.name }} / {{ group.count }}")
             vuetify.VSelect(label="Published interactive plot", v_model=("gallery_selected_plot",), items=("plot_options",), item_title="name", item_value="path", density="compact", variant="outlined", update_modelValue=(self._gallery_plot_changed, "[$event]"))
-            self._plot_widget = plotly.Figure(display_mode_bar=True)
+            with html.Div(classes="radar-plot-frame"):
+                self._plot_widget = plotly.Figure(display_mode_bar=True)
             html.Div("No interactive plots were published.", v_if="!plot_options.length", classes="radar-empty-compact")
 
     def _file_browser_view(self) -> None:
@@ -1797,6 +1799,8 @@ class RadarPdNovaApp(ThemedApp):
         .radar-phase-weight { grid-template-columns: 58px minmax(0, 1fr); margin-top: 7px; }
         .radar-phase-weight strong { color: var(--radar-brand-700); font-size: 12px; }
         .radar-primary-plot-card { overflow: hidden; }
+        .radar-plot-frame { position: relative; width: 100%; height: 720px; min-height: 560px; overflow: hidden; }
+        .radar-plot-frame > div { width: 100% !important; height: 100% !important; }
         .radar-stage-results, .radar-full-results { margin-top: 18px; }
         .radar-stage-results > h3, .radar-full-results > h3 { margin: 0; color: var(--radar-brand-900); font-size: 20px; }
         .radar-stage-tabs { margin: 12px 0 10px; border-bottom: 1px solid var(--radar-line); }
