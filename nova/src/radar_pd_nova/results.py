@@ -6,6 +6,7 @@ import csv
 import json
 import re
 from dataclasses import asdict, dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -496,9 +497,17 @@ def phase_fraction_rows(summary: dict[str, Any]) -> list[dict[str, Any]]:
     for item in candidates if isinstance(candidates, list) else []:
         if not isinstance(item, dict):
             continue
-        phase, label_space_group = _split_phase_label(
-            str(_first_value(item, "phase", "formula", "label") or "Unknown")
+        phase_label = str(
+            _first_value(item, "phase", "formula", "compound_name", "label", "phase_id")
+            or "Unknown"
         )
+        if phase_label.strip().lower() == "main" and str(item.get("is_main", "")).strip().lower() in {
+            "1",
+            "true",
+            "yes",
+        }:
+            phase_label = "Known main phase"
+        phase, label_space_group = _split_phase_label(phase_label)
         space_group = _first_value(item, "space_group", "sg")
         weight = _first_value(
             item,
@@ -561,7 +570,33 @@ def total_elapsed_seconds(summary: dict[str, Any]) -> float | None:
         nested = summary
     live_run = nested.get("live_run") if isinstance(nested, dict) else None
     timings = live_run.get("timings") if isinstance(live_run, dict) else None
-    return _as_float(_first_value(timings, "total_seconds")) if isinstance(timings, dict) else None
+    value = _as_float(_first_value(timings, "total_seconds")) if isinstance(timings, dict) else None
+    if value is not None:
+        return value
+
+    provenance = summary.get("provenance")
+    source_manifest = provenance.get("source_manifest") if isinstance(provenance, dict) else None
+    started = source_manifest.get("start_time") if isinstance(source_manifest, dict) else None
+    finished = _first_value(summary, "created_utc", "completed_utc", "updated_utc")
+    if started and finished:
+        try:
+            def parse_timestamp(value: Any) -> datetime:
+                text = str(value).removesuffix("Z")
+                for format_string in ("%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S"):
+                    try:
+                        return datetime.strptime(text, format_string)
+                    except ValueError:
+                        continue
+                return datetime.fromisoformat(text)
+
+            start_time = parse_timestamp(started)
+            finish_time = parse_timestamp(finished)
+            start_time = start_time.replace(tzinfo=None)
+            finish_time = finish_time.replace(tzinfo=None)
+            return max(0.0, (finish_time - start_time).total_seconds())
+        except (TypeError, ValueError):
+            pass
+    return None
 
 
 def _number_text(value: Any, digits: int = 3) -> str:
@@ -908,6 +943,8 @@ def build_result_view(result: dict[str, Any], root: str | Path) -> ResultView:
     mode = str(result.get("analysis_mode") or "full").lower()
     status = str(result.get("status") or "complete").replace("_", " ").title()
     result_stage = str(result.get("hypothesis_stage") or "phase_refinement")
+    if result_stage.strip().lower() in {"", "none", "null", "unknown"}:
+        result_stage = "final_refinement" if mode == "full" and status == "Complete" else "phase_refinement"
     phase_rows, phase_total = _phase_rows_for_view(result)
     elapsed = total_elapsed_seconds(result)
     best_rwp = _best_rwp(result)

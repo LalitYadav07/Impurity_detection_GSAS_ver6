@@ -188,6 +188,40 @@ def test_total_elapsed_seconds_reads_nested_rapid_timing_and_zero() -> None:
     assert total_elapsed_seconds({"total_seconds": 0.0}) == 0.0
 
 
+def test_full_result_falls_back_to_manifest_timing_and_presents_known_main_phase(tmp_path: Path) -> None:
+    result = {
+        "$schema": "radar-pd-result/v1",
+        "created_utc": "2026-08-15T03:42:00Z",
+        "analysis_mode": "full",
+        "status": "complete",
+        "hypothesis_stage": "none",
+        "phases": [
+            {
+                "phase_id": "main",
+                "compound_name": "main",
+                "space_group": "P -4 21 m (113)",
+                "weight_fraction_pct": "90.37",
+                "is_main": "1",
+            },
+            {
+                "phase_id": "cod-9017775",
+                "compound_name": "Al",
+                "space_group": "Im-3m (229)",
+                "weight_fraction_pct": "9.63",
+                "is_main": "0",
+            },
+        ],
+        "provenance": {"source_manifest": {"start_time": "2026-08-15T03:41:37.8"}},
+    }
+
+    view = build_result_view(result, tmp_path)
+
+    assert view.phases[0]["phase"] == "Known main phase"
+    assert view.phases[1]["phase"] == "Al"
+    assert view.metrics[4] == {"label": "Total time", "value": "22.2 s"}
+    assert view.metrics[5] == {"label": "Result stage", "value": "Final refinement"}
+
+
 def test_gsas_plot_renders_ranked_strongest_bragg_ticks() -> None:
     payload = {
         "plot_kind": "gsas_fit_with_ticks_v1",
