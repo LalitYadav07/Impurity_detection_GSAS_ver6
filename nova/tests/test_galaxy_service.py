@@ -516,13 +516,22 @@ def test_recent_runs_recovers_config_and_inputs_without_command_guessing(
             "reproducibility|run_name": "recovered-rapid-run",
             "analysis|strategy|analysis_mode": "full",
             "data_inputs|input_source|source_kind": "history",
-            "data_inputs|input_source|diffraction_pattern": {"src": "hda", "id": "data-id"},
+            "data_inputs|input_source|diffraction_pattern": {"src": "hda", "id": 292227},
             "data_inputs|input_source|instrument_source|kind": "uploaded",
             "data_inputs|input_source|instrument_source|instrument_file": {
                 "src": "hda",
-                "id": "instrument-id",
+                "id": 292229,
             },
+            "data_inputs|main_cif": {"src": "hda", "id": 292232},
             "chemistry|sample_elements": "Cu, S",
+        },
+        "inputs": {
+            "data_inputs|input_source|diffraction_pattern": {"src": "hda", "id": "encoded-data-id"},
+            "data_inputs|input_source|instrument_source|instrument_file": {
+                "src": "hda",
+                "id": "encoded-instrument-id",
+            },
+            "data_inputs|main_cif": {"src": "hda", "id": "encoded-cif-id"},
         },
         "outputs": {"resolved_config": {"id": "resolved-config-id"}},
     }
@@ -559,8 +568,12 @@ def test_recent_runs_recovers_config_and_inputs_without_command_guessing(
     assert record.config is not None and record.config.sample_elements == ["Cu", "S"]
     assert record.inputs is not None
     assert record.inputs.source is InputSource.GALAXY
-    assert record.inputs.data_dataset_id == "data-id"
-    assert record.inputs.instrument_dataset_id == "instrument-id"
+    assert record.inputs.data_dataset_id == "encoded-data-id"
+    assert record.inputs.instrument_dataset_id == "encoded-instrument-id"
+    assert record.inputs.main_cif_dataset_id == "encoded-cif-id"
+    assert record.input_dataset_ids["data"] == "encoded-data-id"
+    assert record.input_dataset_ids["instrument"] == "encoded-instrument-id"
+    assert record.input_dataset_ids["main_cif"] == "encoded-cif-id"
     assert record.output_dataset_ids["resolved_config"] == "resolved-config-id"
 
 

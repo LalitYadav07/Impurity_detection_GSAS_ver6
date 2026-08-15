@@ -630,7 +630,7 @@ class RadarPdNovaApp(ThemedApp):
                             ("Comparison candidates", "full_compare_candidates"),
                             ("Comparison cycles", "full_compare_cycles"),
                             ("Cell length tolerance %", "full_cell_length_tolerance_pct"),
-                            ("Cell angle tolerance °", "full_cell_angle_tolerance_deg"),
+                            ("Cell angle tolerance (deg)", "full_cell_angle_tolerance_deg"),
                         ):
                             vuetify.VTextField(label=label, v_model=(model,), type="number", min=0, density="compact", variant="outlined")
             ready_expression = f"connection_ok && !!sample_elements && ({data_ready}) && (database_source === 'builtin' || (database_source === 'upload' && !!database_archive_path) || (database_source === 'galaxy' && !!history_database_id))"

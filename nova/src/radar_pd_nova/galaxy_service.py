@@ -386,6 +386,39 @@ class GalaxyService:
             output_ids.update(self._named_output_ids(job.get(key)))
         return output_ids
 
+    @staticmethod
+    def _public_input_dataset_ids(job: dict[str, Any]) -> dict[str, str]:
+        """Read encoded HDA IDs from Galaxy's full job ``inputs`` map.
+
+        Tool parameter JSON stores Galaxy's internal integer dataset IDs,
+        while the public REST API requires encoded IDs. Full job details
+        expose the encoded equivalents in ``inputs``; recovered runs must use
+        those values when a saved configuration is reused.
+        """
+
+        inputs = _decode_parameter(job.get("inputs"))
+        if not isinstance(inputs, dict):
+            return {}
+        aliases = (
+            ("configuration", ("config_file",)),
+            ("database_archive", ("database_archive",)),
+            ("instrument", ("instrument_file",)),
+            ("event_file", ("event_file",)),
+            ("main_cif", ("main_cif",)),
+            ("data", ("diffraction_pattern",)),
+        )
+        result: dict[str, str] = {}
+        for parameter_name, item in inputs.items():
+            normalized = str(parameter_name).replace("|", ".").lower()
+            identifier = _dataset_id(item)
+            if not identifier:
+                continue
+            for name, suffixes in aliases:
+                if any(normalized.endswith(suffix) for suffix in suffixes):
+                    result[name] = identifier
+                    break
+        return result
+
     def _dataset_document(self, dataset_id: str) -> dict[str, Any] | None:
         response = requests.get(
             f"{self.galaxy_url}/api/datasets/{dataset_id}/display",
@@ -580,8 +613,13 @@ class GalaxyService:
                 result[name] = identifier
         return result
 
-    def _inputs_from_parameters(self, parameters: Any) -> InputSelection | None:
+    def _inputs_from_parameters(
+        self,
+        parameters: Any,
+        public_dataset_ids: dict[str, str] | None = None,
+    ) -> InputSelection | None:
         dataset_ids = self._input_dataset_ids(parameters)
+        dataset_ids.update(public_dataset_ids or {})
         source_kind = (
             _text(
                 _parameter_value(
@@ -874,15 +912,17 @@ class GalaxyService:
         stderr = str(job.get("stderr") or job.get("tool_stderr") or job.get("job_stderr") or "")
         parameters = self._job_parameters(job)
         output_ids = self._job_output_ids(job)
+        public_input_ids = self._public_input_dataset_ids(job)
         record.output_dataset_ids.update(output_ids)
         record.input_dataset_ids.update(self._input_dataset_ids(parameters))
+        record.input_dataset_ids.update(public_input_ids)
         recovered_config = self._config_from_job(job, parameters, output_ids)
         if recovered_config is not None:
             record.config = recovered_config
             record.mode = recovered_config.mode
             if recovered_config.run_name:
                 record.name = recovered_config.run_name
-        recovered_inputs = self._inputs_from_parameters(parameters)
+        recovered_inputs = self._inputs_from_parameters(parameters, public_input_ids)
         if recovered_inputs is not None:
             record.inputs = recovered_inputs
         stage, progress = stage_from_console(stdout, status)
@@ -920,8 +960,9 @@ class GalaxyService:
             state = normalize_status(job.get("state"))
             parameters = self._job_parameters(job)
             output_ids = self._job_output_ids(job)
+            public_input_ids = self._public_input_dataset_ids(job)
             config = self._config_from_job(job, parameters, output_ids)
-            inputs = self._inputs_from_parameters(parameters)
+            inputs = self._inputs_from_parameters(parameters, public_input_ids)
             parameter_name = _text(_parameter_value(parameters, "reproducibility.run_name", "run_name"))
             run_name = config.run_name if config is not None and config.run_name else parameter_name
             run_name = run_name or self._job_metric(job, "run_name")
@@ -951,7 +992,7 @@ class GalaxyService:
                     progress=stage_from_console("", state)[1],
                     created_utc=created,
                     updated_utc=updated,
-                    input_dataset_ids=self._input_dataset_ids(parameters),
+                    input_dataset_ids={**self._input_dataset_ids(parameters), **public_input_ids},
                     output_dataset_ids=output_ids,
                     config=config,
                     inputs=inputs,
