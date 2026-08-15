@@ -10,14 +10,17 @@ def _read(relative_path: str) -> str:
     return (NOVA_ROOT / relative_path).read_text(encoding="utf-8")
 
 
-def test_container_uses_supported_nova_supervisor_contract() -> None:
+def test_container_reuses_supported_nova_supervisor_contract() -> None:
     dockerfile = _read("dockerfiles/Dockerfile")
     supervisor = _read("dockerfiles/supervisord.conf")
 
-    assert "python -m pip install --no-cache-dir supervisor /src" in dockerfile
-    assert "COPY dockerfiles/supervisord.conf /etc/supervisord.conf" in dockerfile
-    assert "python -m trame.tools.www --client-type vue3 --output /app/www-content" in dockerfile
-    assert 'CMD ["supervisord", "-c", "/etc/supervisord.conf"]' in dockerfile
+    assert dockerfile.startswith(
+        "FROM savannah.ornl.gov/radar-pd/radar-pd-nova:nova-0.1.39\n"
+    )
+    assert (
+        "python -m pip install --no-cache-dir --no-deps --force-reinstall /src"
+        in dockerfile
+    )
     assert "USER 1000:1000" not in dockerfile
     assert "nodaemon=true" in supervisor
     assert "command=/bin/bash /run_trame.sh" in supervisor
