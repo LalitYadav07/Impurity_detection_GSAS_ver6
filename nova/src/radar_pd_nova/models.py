@@ -7,7 +7,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class AnalysisMode(str, Enum):
@@ -35,6 +35,30 @@ class RunStatus(str, Enum):
     OK = "ok"
     ERROR = "error"
     CANCELLED = "cancelled"
+
+
+class ResultStatus(str, Enum):
+    """State of result collection, independent of the Galaxy analysis job."""
+
+    NOT_REQUESTED = "not_requested"
+    COLLECTING = "collecting"
+    READY = "ready"
+    STALE = "stale"
+    ERROR = "error"
+
+
+class SubmissionPhase(str, Enum):
+    """User-visible phases before Galaxy assigns an Analyze job identifier."""
+
+    VALIDATING = "validating"
+    UPLOADING_CONFIGURATION = "uploading_configuration"
+    UPLOADING_DATA = "uploading_data"
+    UPLOADING_INSTRUMENT = "uploading_instrument"
+    UPLOADING_OPTIONAL = "uploading_optional"
+    WAITING_FOR_GALAXY = "waiting_for_galaxy"
+    ACKNOWLEDGED = "acknowledged"
+    CANCELLED = "cancelled"
+    ERROR = "error"
 
 
 class InputSelection(BaseModel):
@@ -101,6 +125,7 @@ class AnalysisConfig(BaseModel):
     refine_positions: bool = False
     magnetic_precheck: bool = False
     magnetic_q_max: float = Field(default=4.0, gt=0)
+    magnetic_denominators: list[int] = Field(default_factory=lambda: [2, 3, 4])
     full_profile: Literal["quick", "balanced", "thorough", "custom"] = "balanced"
     full_max_passes: int = Field(default=2, ge=1, le=20)
     full_min_phase_percent: float = Field(default=0.5, ge=0)
@@ -112,6 +137,7 @@ class AnalysisConfig(BaseModel):
     full_compare_cycles: int = Field(default=6, ge=1)
     full_cell_length_tolerance_pct: float = Field(default=1.0, gt=0)
     full_cell_angle_tolerance_deg: float = Field(default=3.0, gt=0)
+    full_rwp_improvement_threshold: float = Field(default=0.06, ge=0)
     rapid_phases_per_hypothesis: int = Field(default=3, ge=1, le=5)
     rapid_stage_output_limit: int = Field(default=10, ge=3, le=50)
     rapid_gsas_validation_limit: int = Field(default=5, ge=0)
@@ -140,6 +166,10 @@ class AnalysisConfig(BaseModel):
         for start, end in self.exclude_regions:
             if start >= end:
                 raise ValueError("Ignored-region start must be less than end")
+        denominators = list(dict.fromkeys(int(value) for value in self.magnetic_denominators))
+        if not denominators or any(value < 2 for value in denominators):
+            raise ValueError("Magnetic denominators must contain integers greater than or equal to 2")
+        self.magnetic_denominators = denominators
         return self
 
     def portable_contract(self) -> dict[str, Any]:
@@ -184,7 +214,7 @@ class AnalysisConfig(BaseModel):
             "magnetic_precheck": {
                 "enabled": self.magnetic_precheck,
                 "q_max": self.magnetic_q_max,
-                "denominators": [2, 3, 4],
+                "denominators": self.magnetic_denominators,
             },
             "full": {
                 "profile": self.full_profile,
@@ -198,6 +228,7 @@ class AnalysisConfig(BaseModel):
                 "nudge_representatives": self.full_nudge_representatives,
                 "compare_candidates": self.full_compare_candidates,
                 "compare_cycles": self.full_compare_cycles,
+                "rwp_improvement_threshold": self.full_rwp_improvement_threshold,
             },
             "rapid": {
                 "phases_per_hypothesis": self.rapid_phases_per_hypothesis,
@@ -210,14 +241,84 @@ class AnalysisConfig(BaseModel):
         }
 
 
+class SubmissionSnapshot(BaseModel):
+    """Immutable, button-time input used for one idempotent submission."""
+
+    model_config = ConfigDict(frozen=True)
+
+    config: AnalysisConfig
+    inputs: InputSelection
+    client_revision: int = Field(default=0, ge=0)
+    display_summary: dict[str, str] = Field(default_factory=dict)
+    idempotency_token: str = Field(min_length=8)
+    created_utc: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+    @model_validator(mode="after")
+    def detach_mutable_models(self) -> "SubmissionSnapshot":
+        # Frozen prevents attribute replacement. Deep copies ensure subsequent
+        # Trame state changes cannot mutate nested values captured by a click.
+        object.__setattr__(self, "config", self.config.model_copy(deep=True))
+        object.__setattr__(self, "inputs", self.inputs.model_copy(deep=True))
+        object.__setattr__(self, "display_summary", dict(self.display_summary))
+        return self
+
+
+class SubmissionProgress(BaseModel):
+    phase: SubmissionPhase = SubmissionPhase.VALIDATING
+    label: str = "Validating run plan"
+    completed_items: int = Field(default=0, ge=0)
+    total_items: int = Field(default=0, ge=0)
+    started_utc: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    elapsed_seconds: float = Field(default=0.0, ge=0)
+    galaxy_job_id: str | None = None
+
+
+class CacheManifest(BaseModel):
+    job_id: str
+    archive_dataset_id: str
+    archive_size: int | None = Field(default=None, ge=0)
+    archive_update_time: str | None = None
+    adapter_version: str = "0.3.0"
+    collected_utc: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+
+class GalaxyArtifactRef(BaseModel):
+    artifact_id: str
+    source_type: Literal["dataset", "collection_element", "archive"] = "dataset"
+    scientific_role: str
+    display_name: str
+    archive_path: str | None = None
+    dataset_id: str | None = None
+    collection_id: str | None = None
+    provenance: dict[str, Any] = Field(default_factory=dict)
+
+
+class UtilityActionRecord(BaseModel):
+    uid: str
+    tool_id: str
+    name: str
+    associated_run_uid: str | None = None
+    inputs: dict[str, Any] = Field(default_factory=dict)
+    galaxy_job_id: str | None = None
+    entrypoint_id: str | None = None
+    status: RunStatus = RunStatus.NEW
+    outputs: dict[str, str] = Field(default_factory=dict)
+    message: str = ""
+    created_utc: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    updated_utc: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+
 class RunRecord(BaseModel):
     """Recoverable reference to one Galaxy-backed RADAR-PD run."""
 
     uid: str
+    galaxy_job_id: str | None = None
     name: str
     mode: AnalysisMode
     history_id: str
     status: RunStatus = RunStatus.NEW
+    analysis_status: RunStatus | None = None
+    result_status: ResultStatus = ResultStatus.NOT_REQUESTED
     stage: str = "Preparing submission"
     progress: int = Field(default=0, ge=0, le=100)
     created_utc: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
@@ -229,8 +330,24 @@ class RunRecord(BaseModel):
     output_dir: str | None = None
     message: str = ""
     console_tail: str = ""
+    submission: SubmissionProgress | None = None
+    idempotency_token: str | None = None
+    prepared_dataset_ids: dict[str, str] = Field(default_factory=dict)
+    cancel_requested: bool = False
+    cache_manifest: CacheManifest | None = None
+    recovery_diagnostics: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def adapt_legacy_record(self) -> "RunRecord":
+        if self.galaxy_job_id is None and not self.uid.startswith("pending-"):
+            self.galaxy_job_id = self.uid
+        if self.analysis_status is None:
+            self.analysis_status = self.status
+        return self
 
     def as_row(self) -> dict[str, Any]:
+        timestamp = self.created_utc.replace("T", " ")[:16]
+        short_job = (self.galaxy_job_id or "pending")[:8]
         return {
             "name": self.name,
             "mode": self.mode.value.title(),
@@ -238,6 +355,9 @@ class RunRecord(BaseModel):
             "stage": self.stage,
             "progress": f"{self.progress}%",
             "uid": self.uid,
+            "job_id": self.galaxy_job_id or "Pending",
+            "created": self.created_utc,
+            "display_name": f"{self.name} / {self.mode.value.title()} / {timestamp} / {self.status.value.title()} / {short_job}",
         }
 
     @property

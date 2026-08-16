@@ -9,6 +9,7 @@ from radar_pd_nova.results import (
     discover_plot_payloads,
     discover_tables,
     figure_for_payload,
+    load_plot_with_fallback,
     phase_fraction_rows,
     read_plot_payload,
     total_elapsed_seconds,
@@ -116,6 +117,93 @@ def test_discover_plot_payloads_keeps_distinct_valid_hypothesis_fits_with_the_sa
         "live_rank512_01_rank64_08",
         "live_rank512_02_rank64_12",
     }
+
+
+def test_plot_index_does_not_load_npz_arrays_until_selection(tmp_path: Path, monkeypatch: object) -> None:
+    plot_path = tmp_path / "rank01" / "curve.plotdata.json"
+    plot_path.parent.mkdir()
+    plot_path.write_text(
+        json.dumps({"plot_kind": "gsas_fit_with_ticks_v1", "arrays_npz": "curve.npz", "rwp": 4.2}),
+        encoding="utf-8",
+    )
+    (plot_path.parent / "curve.npz").write_bytes(b"present-but-not-read-during-index")
+
+    def fail_if_loaded(*args: object, **kwargs: object) -> object:
+        raise AssertionError("np.load must not run while indexing plot metadata")
+
+    monkeypatch.setattr("radar_pd_nova.results.np.load", fail_if_loaded)  # type: ignore[attr-defined]
+
+    options = discover_plot_payloads(tmp_path)
+
+    assert len(options) == 1
+    assert options[0]["rwp"] == 4.2
+
+
+def test_selected_plot_falls_back_when_ranked_npz_is_corrupt(tmp_path: Path) -> None:
+    broken = tmp_path / "rank01" / "curve.plotdata.json"
+    broken.parent.mkdir()
+    broken.write_text(
+        json.dumps({"plot_kind": "gsas_fit_with_ticks_v1", "arrays_npz": "curve.npz", "rwp": 3.0}),
+        encoding="utf-8",
+    )
+    (broken.parent / "curve.npz").write_bytes(b"not-an-npz")
+    valid = tmp_path / "rank02" / "curve.plotdata.json"
+    _write_gsas_payload(valid, rwp=4.0)
+    options = discover_plot_payloads(tmp_path)
+
+    selected = load_plot_with_fallback(options, str(broken))
+
+    assert selected is not None
+    path, payload, figure = selected
+    assert path == str(valid)
+    assert payload["rwp"] == 4.0
+    assert [trace.name for trace in figure.data[:3]] == ["Observed", "Calculated", "Difference"]
+
+
+def test_result_mode_document_is_authoritative_and_warns_on_mismatch(tmp_path: Path) -> None:
+    view = build_result_view(
+        {"$schema": "radar-pd-result/v1", "analysis_mode": "rapid", "status": "complete"},
+        tmp_path,
+        submitted_mode="full",
+    )
+
+    assert view.mode == "rapid"
+    assert view.warnings[0].startswith("Mode mismatch: NOVA submitted Full")
+
+
+def test_run112_compact_archive_recognizes_five_refinements_and_real_traces(tmp_path: Path) -> None:
+    fixture_path = Path(__file__).parent / "fixtures" / "run112_archive_compact.json"
+    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+    for item in fixture["plots"]:
+        path = tmp_path / item["relative_path"]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "plot_kind": "gsas_fit_with_ticks_v1",
+            "rwp": item["rwp"],
+            "phase_order": item["phase_order"],
+            "phase_labels": item["phase_labels"],
+            "phase_ticks": item["phase_ticks"],
+            "arrays": item["arrays"],
+        }
+        path.write_text(json.dumps(payload), encoding="utf-8")
+    duplicate = tmp_path / "ndip" / "diagnostics" / "run112_rank01_duplicate.plotdata.json"
+    duplicate.parent.mkdir(parents=True)
+    duplicate.write_text(
+        json.dumps({"plot_kind": "gsas_fit_with_ticks_v1", "arrays_npz": "missing.npz", "rwp": 15.28}),
+        encoding="utf-8",
+    )
+
+    view = build_result_view(fixture["summary"], tmp_path)
+
+    refinements = [plot for plot in view.plots if plot.stage == "final_refinement"]
+    assert len(refinements) == 5
+    assert "live_rank512_01_rank64_36" in view.primary_plot_path
+    for descriptor in refinements:
+        payload = read_plot_payload(descriptor.path)
+        figure = figure_for_payload(payload)
+        assert [trace.name for trace in figure.data[:3]] == ["Observed", "Calculated", "Difference"]
+        assert all(len(trace.x) == 5 for trace in figure.data[:3])
+    assert fixture["source"]["source_points_per_curve"] == 2439
 
 
 def test_phase_fraction_normalization() -> None:
@@ -425,3 +513,55 @@ def test_fixed_result_contract_fixtures_cover_rapid_full_partial_and_failure(tmp
     assert "not quantitative phase fractions" in partial.warnings[0]
     assert failed.status == "Failed"
     assert failed.warnings == ["No candidate model converged"]
+
+
+def test_run112_archive_fixture_recovers_five_refinements_and_scientific_traces(tmp_path: Path) -> None:
+    fixture = json.loads(
+        (Path(__file__).parent / "fixtures" / "run112_archive_compact.json").read_text(encoding="utf-8")
+    )
+    for plot in fixture["plots"]:
+        plot_path = tmp_path / plot["relative_path"]
+        plot_path.parent.mkdir(parents=True, exist_ok=True)
+        plot_path.write_text(
+            json.dumps(
+                {
+                    "plot_kind": "gsas_fit_with_ticks_v1",
+                    "rwp": plot["rwp"],
+                    "phase_order": plot["phase_order"],
+                    "phase_labels": plot["phase_labels"],
+                    "phase_ticks": plot["phase_ticks"],
+                    "arrays": plot["arrays"],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    # Reproduce the incomplete duplicate that caused the pre-0.1.36 live failure.
+    duplicate = tmp_path / "named_collection_copy" / "run112_best.plotdata.json"
+    duplicate.parent.mkdir()
+    duplicate.write_text(
+        json.dumps(
+            {
+                "plot_kind": "gsas_fit_with_ticks_v1",
+                "arrays_npz": "missing.plotdata.npz",
+                "rwp": fixture["plots"][0]["rwp"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    plots = discover_plot_payloads(tmp_path)
+    view = build_result_view(fixture["summary"], tmp_path)
+
+    assert fixture["source"]["source_points_per_curve"] == 2439
+    assert len(plots) == 5
+    assert "rank512_01_rank64_36" in view.primary_plot_path
+    assert view.metrics[2]["value"] == "15.283%"
+    for plot in plots:
+        loaded = load_plot_with_fallback([plot])
+        assert loaded is not None
+        names = {trace.name: trace for trace in loaded[2].data}
+        assert len(names["Observed"].x) == 5
+        assert len(names["Calculated"].x) == 5
+        assert len(names["Difference"].x) == 5
+        assert any(name not in {"Observed", "Calculated", "Difference"} for name in names)

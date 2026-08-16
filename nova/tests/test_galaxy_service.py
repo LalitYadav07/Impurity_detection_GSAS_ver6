@@ -10,7 +10,16 @@ from typing import Any, Iterator
 import yaml
 
 from radar_pd_nova.galaxy_service import GalaxyService, _upload_filename, normalize_status, stage_from_console
-from radar_pd_nova.models import AnalysisConfig, AnalysisMode, InputSelection, InputSource, RunRecord, RunStatus
+from radar_pd_nova.models import (
+    AnalysisConfig,
+    AnalysisMode,
+    InputSelection,
+    InputSource,
+    ResultStatus,
+    RunRecord,
+    RunStatus,
+    SubmissionPhase,
+)
 
 
 def test_progress_stage_inference() -> None:
@@ -69,6 +78,8 @@ def test_result_collector_uses_nova_collection_api(tmp_path: Path) -> None:
 
     assert outputs.collection_names == ["plots", "tables", "phases", "gpx_projects", "diagnostics"]
     assert result.status is RunStatus.OK, result.message
+    assert result.analysis_status is RunStatus.OK
+    assert result.result_status is ResultStatus.READY
     assert (Path(result.output_dir) / "plots" / "member.txt").read_text(encoding="utf-8") == "ok"
 
 
@@ -113,7 +124,8 @@ def test_result_collector_recovers_archive_when_collections_are_unavailable(tmp_
     payload = service.result_payload(result)
 
     assert result.status is RunStatus.OK
-    assert "5 duplicate or optional" in result.message
+    assert result.result_status is ResultStatus.READY
+    assert result.message == ""
     assert payload["summary"]["analysis_mode"] == "full"
     assert (Path(result.output_dir) / "ndip" / "tables" / "Final_phase_fractions.csv").is_file()
 
@@ -167,7 +179,9 @@ def test_result_archive_rejects_paths_outside_staging(tmp_path: Path) -> None:
 
     result = service.collect_results(record)
 
-    assert result.status is RunStatus.ERROR
+    assert result.status is RunStatus.OK
+    assert result.analysis_status is RunStatus.OK
+    assert result.result_status is ResultStatus.ERROR
     assert "Unsafe path" in result.message
     assert not (tmp_path / "outside.txt").exists()
 
@@ -313,7 +327,8 @@ def test_submit_waits_for_async_galaxy_job_identifier(tmp_path: Path, monkeypatc
         InputSelection(source=InputSource.UPLOAD, data_path="pattern.dat", instrument_path="profile.instprm"),
     )
 
-    assert record.uid == "delayed-job"
+    assert record.uid.startswith("pending-")
+    assert record.galaxy_job_id == "delayed-job"
 
 
 def test_submit_retries_after_transient_galaxy_submission_failure(tmp_path: Path, monkeypatch: Any) -> None:
@@ -385,7 +400,7 @@ def test_submit_retries_after_transient_galaxy_submission_failure(tmp_path: Path
         InputSelection(source=InputSource.UPLOAD, data_path="pattern.dat", instrument_path="profile.instprm"),
     )
 
-    assert record.uid == "recovered-after-retry"
+    assert record.galaxy_job_id == "recovered-after-retry"
     assert len(tool_instances) == 2, "expected exactly one retry after the transient failure"
 
 
@@ -741,8 +756,10 @@ def test_result_download_failure_is_an_error_and_preserves_existing_results(tmp_
 
     result = service.collect_results(record)
 
-    assert result.status is RunStatus.ERROR
-    assert result.stage == "Result download failed"
+    assert result.status is RunStatus.OK
+    assert result.analysis_status is RunStatus.OK
+    assert result.result_status is ResultStatus.ERROR
+    assert result.stage == "Analysis complete; results unavailable"
     assert "object store unavailable" in result.message
     assert (destination / "previous.json").read_text(encoding="utf-8") == "valid"
 
@@ -759,5 +776,6 @@ def test_missing_galaxy_results_are_an_error(tmp_path: Path) -> None:
 
     result = service.collect_results(record)
 
-    assert result.status is RunStatus.ERROR
+    assert result.status is RunStatus.OK
+    assert result.result_status is ResultStatus.ERROR
     assert "did not return" in result.message

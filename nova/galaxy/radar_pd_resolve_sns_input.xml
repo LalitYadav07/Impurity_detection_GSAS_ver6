@@ -1,0 +1,54 @@
+<tool id="neutrons_radar_pd_resolve_sns_input_prototype" name="RADAR-PD Utility: Resolve SNS Input" profile="22.05" version="0.1.0">
+    <description>resolve and verify an SNS powder pattern and instrument profile before analysis</description>
+    <creator>
+        <person name="Lalit Yadav"/>
+        <organization url="https://www.ornl.gov/" name="ORNL"/>
+    </creator>
+    <requirements>
+        <container type="docker" shell="/bin/bash">savannah.ornl.gov/radar-pd/radar-pd:ndip-3e33a6b-catalog-20260617</container>
+    </requirements>
+    <command detect_errors="exit_code"><![CDATA[
+        touch '$pattern' '$instrument_profile' '$resolution_metadata' '$console_output' &&
+        trap "chmod a+r '$pattern' '$instrument_profile' '$resolution_metadata' '$console_output' >/dev/null 2>&1 || true" EXIT &&
+        set -euo pipefail &&
+        resolve_args=(python /opt/radar-pd/scripts/ndip_runner.py resolve-ipts
+            --bank '$source.bank'
+            --pattern-output '$pattern'
+            --instrument-output '$instrument_profile'
+            --metadata-output '$resolution_metadata') &&
+        #if str($source.source_kind) == 'event_file'
+        resolve_args+=(--event-file '$source.event_file') &&
+        #else
+        resolve_args+=(--instrument '$source.instrument' --ipts '$source.ipts' --run '$source.run_number' --facility-root '$source.facility_root') &&
+        #end if
+        "\${resolve_args[@]}" > >(tee -a '$console_output') 2> >(tee -a '$console_output' >&2)
+    ]]></command>
+    <inputs>
+        <conditional name="source">
+            <param name="source_kind" type="select" display="radio" label="SNS input reference">
+                <option value="ipts_manual" selected="true">Instrument / IPTS / run</option>
+                <option value="event_file">NeXus event metadata</option>
+            </param>
+            <when value="ipts_manual">
+                <param name="instrument" type="text" label="SNS instrument" help="For example HB2A"/>
+                <param name="ipts" type="text" label="IPTS" help="For example IPTS-12345"/>
+                <param name="run_number" type="integer" min="1" label="Run number"/>
+                <param name="bank" type="text" value="" optional="true" label="Detector bank"/>
+                <param name="facility_root" type="text" value="/SNS" label="Mounted SNS facility root"/>
+            </when>
+            <when value="event_file">
+                <param name="event_file" type="data" format="nxs,h5,hdf5" label="NeXus event file"/>
+                <param name="bank" type="text" value="" optional="true" label="Detector bank"/>
+            </when>
+        </conditional>
+    </inputs>
+    <outputs>
+        <data name="pattern" format="dat" label="RADAR-PD resolved SNS powder pattern"/>
+        <data name="instrument_profile" format="instprm" label="RADAR-PD resolved GSAS-II instrument profile"/>
+        <data name="resolution_metadata" format="json" label="RADAR-PD SNS input provenance"/>
+        <data name="console_output" format="txt" label="RADAR-PD SNS resolution log"/>
+    </outputs>
+    <help><![CDATA[
+Resolve the exact reduced powder pattern and GSAS-II instrument profile available through the mounted SNS IPTS archive. Review the returned bank and provenance before submitting RADAR-PD Analyze. This utility performs no scientific analysis.
+    ]]></help>
+</tool>

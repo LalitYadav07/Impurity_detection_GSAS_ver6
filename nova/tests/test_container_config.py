@@ -83,3 +83,18 @@ def test_package_and_galaxy_tool_versions_match() -> None:
     )
 
     assert version_match.group(1) == tool_version
+
+
+def test_sns_resolver_uses_existing_lightweight_ndip_command() -> None:
+    root = ET.parse(NOVA_ROOT / "galaxy" / "radar_pd_resolve_sns_input.xml").getroot()
+    command = root.findtext("command", default="")
+
+    assert root.get("id") == "neutrons_radar_pd_resolve_sns_input_prototype"
+    assert root.get("version") == "0.1.0"
+    assert "ndip_runner.py resolve-ipts" in command
+    assert "--pattern-output '$pattern'" in command
+    assert "--instrument-output '$instrument_profile'" in command
+    assert "--metadata-output '$resolution_metadata'" in command
+    assert root.find("./outputs/data[@name='pattern']") is not None
+    assert root.find("./outputs/data[@name='instrument_profile']") is not None
+    assert root.find("./outputs/data[@name='resolution_metadata']") is not None

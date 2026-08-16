@@ -43,3 +43,23 @@ def test_plotly_canvases_have_nonzero_layout_frames() -> None:
 
     assert template.count('class="radar-plot-frame"') == 2
     assert ".radar-plot-frame { position: relative; width: 100%; height: 720px;" in app._css()
+    assert "Plotly.Plots.resize" in template
+
+
+def test_workbench_exposes_atomic_pending_and_companion_actions() -> None:
+    app = RadarPdNovaApp()
+    template = app.layout.html
+
+    assert "Run analysis on NDIP" in template
+    assert "Server request:" in template
+    assert "selected_run_stage" in template
+    assert "Reload results from Galaxy" in template
+    assert "Resolve and verify SNS input" in template
+    assert "Build and select library" in template
+    assert "Save reusable configuration to History" in template
+    assert "Open Result Explorer" in template
+    assert "Send checkpoint to GSAS-II handoff" in template
+    assert "Compare selected series" in template
+    assert "Companion-tool activity" in template
+    assert "Technical files" in template
+    assert template.count("radar-mode-card") >= 2

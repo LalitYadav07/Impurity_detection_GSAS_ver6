@@ -1,0 +1,114 @@
+{
+  "source": {
+    "run": "Run112",
+    "galaxy_job_id": "f0b0ba27cf3b1fc0",
+    "archive_dataset_id": "f77f78d8c7380060",
+    "archive_sha256": "1BC2A6487D0642064DDEA26994B7287FF184C2671866419458BDCEF4EF663CB2",
+    "source_points_per_curve": 2439,
+    "note": "Five GSAS refinement payloads sampled from the published Run112 results archive."
+  },
+  "summary": {
+    "$schema": "radar-pd-result/v1",
+    "run_name": "Run112",
+    "analysis_mode": "rapid",
+    "status": "complete",
+    "hypothesis_stage": "final_refinement",
+    "phases": [],
+    "hypotheses": [
+      {
+        "rank512": "1",
+        "rank64": "36",
+        "gsas_rwp_rank": "1",
+        "formulas": "GeO2|Ge7O16|Al",
+        "status": "ok",
+        "rwp": "15.283391766282067",
+        "weights_json": "{\"Al (SG 229)\": 8.878, \"Ge7O16 (SG 215)\": 0.238, \"GeO2 (SG 205)\": 3.006, \"Tb2Be2GeO7 (SG 113)\": 87.878}",
+        "curve_png": "rapid_results/live_run/gsas/live_rank512_01_rank64_36/curve.png"
+      },
+      {
+        "rank512": "4",
+        "rank64": "5",
+        "gsas_rwp_rank": "2",
+        "formulas": "TbGeO3|GeO2|Be3Ge",
+        "status": "ok",
+        "rwp": "20.489267086240627",
+        "weights_json": "{\"Be3Ge (SG 139)\": 1.219, \"GeO2 (SG 205)\": 3.895, \"Tb2Be2GeO7 (SG 113)\": 94.85, \"TbGeO3 (SG 221)\": 0.036}",
+        "curve_png": "rapid_results/live_run/gsas/live_rank512_04_rank64_05/curve.png"
+      },
+      {
+        "rank512": "3",
+        "rank64": "13",
+        "gsas_rwp_rank": "3",
+        "formulas": "TbGeO3|GeO2|BeGe3",
+        "status": "ok",
+        "rwp": "20.56947990045147",
+        "weights_json": "{\"BeGe3 (SG 221)\": 2.05, \"GeO2 (SG 205)\": 3.367, \"Tb2Be2GeO7 (SG 113)\": 94.473, \"TbGeO3 (SG 221)\": 0.11}",
+        "curve_png": "rapid_results/live_run/gsas/live_rank512_03_rank64_13/curve.png"
+      },
+      {
+        "rank512": "2",
+        "rank64": "6",
+        "gsas_rwp_rank": "4",
+        "formulas": "Ge|TbGeO3|GeO2",
+        "status": "ok",
+        "rwp": "20.708485196102153",
+        "weights_json": "{\"Ge (SG 64)\": 3.743, \"GeO2 (SG 205)\": 3.603, \"Tb2Be2GeO7 (SG 113)\": 92.607, \"TbGeO3 (SG 221)\": 0.047}",
+        "curve_png": "rapid_results/live_run/gsas/live_rank512_02_rank64_06/curve.png"
+      },
+      {
+        "rank512": "5",
+        "rank64": "9",
+        "gsas_rwp_rank": "5",
+        "formulas": "TbGeO3|GeO2|TbGe2",
+        "status": "error",
+        "rwp": "100.0",
+        "weights_json": "{}",
+        "curve_png": "rapid_results/live_run/gsas/live_rank512_05_rank64_09/curve.png"
+      }
+    ],
+    "warnings": [],
+    "errors": []
+  },
+  "plots": [
+    {
+      "relative_path": "rapid_results/live_run/gsas/live_rank512_01_rank64_36/curve.png.plotdata.json",
+      "rwp": 15.283391766282067,
+      "phase_order": ["Main phase", "Al", "GeO2", "Ge7O16"],
+      "phase_labels": {"Main phase": "Tb2Be2GeO7 (SG 113)", "Al": "Al (SG 229)", "GeO2": "GeO2 (SG 205)", "Ge7O16": "Ge7O16 (SG 215)"},
+      "phase_ticks": {"Main phase": [26.44746989, 29.02330716], "Al": [73.27334367], "GeO2": [52.25966703], "Ge7O16": [17.67336297]},
+      "arrays": {"x": [5.025, 33.675, 62.375, 91.025, 126.925], "yobs": [231.52330477, 198.50185991, 236.74888138, 649.12442582, 420.97921382], "ycalc": [196.54735448, 210.38490473, 181.23667285, 640.84770896, 167.03490917], "resid": [34.97595029, -11.88304482, 55.51220853, 8.27671686, 253.94430465]}
+    },
+    {
+      "relative_path": "rapid_results/live_run/gsas/live_rank512_02_rank64_06/curve.png.plotdata.json",
+      "rwp": 20.708485196102153,
+      "phase_order": ["Main phase", "Ge", "GeO2", "TbGeO3"],
+      "phase_labels": {"Main phase": "Tb2Be2GeO7 (SG 113)", "Ge": "Ge (SG 64)", "GeO2": "GeO2 (SG 205)", "TbGeO3": "TbGeO3 (SG 221)"},
+      "phase_ticks": {"Main phase": [26.44746989], "Ge": [35.568299], "GeO2": [52.25966703], "TbGeO3": [36.1348935]},
+      "arrays": {"x": [5.025, 33.675, 62.375, 91.025, 126.925], "yobs": [231.52330477, 198.50185991, 236.74888138, 649.12442582, 420.97921382], "ycalc": [188.02305995, 175.32015106, 189.52343331, 653.14229751, 111.72269704], "resid": [43.50024482, 23.18170885, 47.22544807, -4.01787169, 309.25651678]}
+    },
+    {
+      "relative_path": "rapid_results/live_run/gsas/live_rank512_03_rank64_13/curve.png.plotdata.json",
+      "rwp": 20.56947990045147,
+      "phase_order": ["Main phase", "GeO2", "BeGe3", "TbGeO3"],
+      "phase_labels": {"Main phase": "Tb2Be2GeO7 (SG 113)", "GeO2": "GeO2 (SG 205)", "BeGe3": "BeGe3 (SG 221)", "TbGeO3": "TbGeO3 (SG 221)"},
+      "phase_ticks": {"Main phase": [26.44746989], "GeO2": [52.25966703], "BeGe3": [34.6163018], "TbGeO3": [36.1348935]},
+      "arrays": {"x": [5.025, 33.675, 62.375, 91.025, 126.925], "yobs": [231.52330477, 198.50185991, 236.74888138, 649.12442582, 420.97921382], "ycalc": [188.02305995, 175.32306305, 221.6214582, 654.62984531, 111.74701039], "resid": [43.50024482, 23.17879686, 15.12742318, -5.50541949, 309.23220343]}
+    },
+    {
+      "relative_path": "rapid_results/live_run/gsas/live_rank512_04_rank64_05/curve.png.plotdata.json",
+      "rwp": 20.489267086240627,
+      "phase_order": ["Main phase", "GeO2", "Be3Ge", "TbGeO3"],
+      "phase_labels": {"Main phase": "Tb2Be2GeO7 (SG 113)", "GeO2": "GeO2 (SG 205)", "Be3Ge": "Be3Ge (SG 139)", "TbGeO3": "TbGeO3 (SG 221)"},
+      "phase_ticks": {"Main phase": [26.44746989], "GeO2": [52.25966703], "Be3Ge": [40.21074131], "TbGeO3": [36.1348935]},
+      "arrays": {"x": [5.025, 33.675, 62.375, 91.025, 126.925], "yobs": [231.52330477, 198.50185991, 236.74888138, 649.12442582, 420.97921382], "ycalc": [188.02305995, 175.31380035, 182.26501135, 649.3592874, 111.70710206], "resid": [43.50024482, 23.18805956, 54.48387003, -0.23486158, 309.27211176]}
+    },
+    {
+      "relative_path": "rapid_results/live_run/gsas/live_rank512_05_rank64_09/curve.png.plotdata.json",
+      "rwp": 100.0,
+      "phase_order": ["Main phase", "GeO2", "TbGe2", "TbGeO3"],
+      "phase_labels": {"Main phase": "Tb2Be2GeO7 (SG 113)", "GeO2": "GeO2 (SG 205)", "TbGe2": "TbGe2 (SG 141)", "TbGeO3": "TbGeO3 (SG 221)"},
+      "phase_ticks": {"Main phase": [26.44746989], "GeO2": [52.25966703], "TbGe2": [33.49847902], "TbGeO3": [36.1348935]},
+      "arrays": {"x": [5.025, 33.675, 62.375, 91.025, 126.925], "yobs": [231.52330477, 198.50185991, 236.74888138, 649.12442582, 420.97921382], "ycalc": [188.02305995, 59563.0202867, 254376.09337894, 125574.44334011, 709914.81088761], "resid": [43.50024482, -59364.51842679, -254139.34449756, -124925.31891429, -709493.83167379]}
+    }
+  ]
+}

@@ -9,7 +9,9 @@ import shutil
 import tempfile
 import threading
 import time
+import uuid
 import zipfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,9 +21,27 @@ import requests
 import yaml
 
 from .configuration import config_from_contract, dump_configuration
-from .models import AnalysisConfig, AnalysisMode, InputSelection, InputSource, RunRecord, RunStatus
+from .models import (
+    AnalysisConfig,
+    AnalysisMode,
+    CacheManifest,
+    InputSelection,
+    InputSource,
+    ResultStatus,
+    RunRecord,
+    RunStatus,
+    SubmissionPhase,
+    SubmissionProgress,
+    SubmissionSnapshot,
+    UtilityActionRecord,
+)
 
 ANALYZE_TOOL_ID = os.getenv("RADAR_PD_ANALYZE_TOOL_ID", "neutrons_radar_pd_analyze_prototype")
+SNS_RESOLVER_TOOL_ID = "neutrons_radar_pd_resolve_sns_input_prototype"
+LIBRARY_BUILDER_TOOL_ID = "neutrons_radar_pd_library_builder_prototype"
+GPX_HANDOFF_TOOL_ID = "neutrons_radar_pd_gpx_handoff_prototype"
+COMPARE_SERIES_TOOL_ID = "neutrons_radar_pd_compare_series_prototype"
+RESULT_EXPLORER_TOOL_ID = "neutrons_radar_pd_result_explorer_prototype"
 RUN_NAME_PREFIX = "RADAR-PD NOVA"
 SUBMISSION_ACK_TIMEOUT_SECONDS = float(os.getenv("RADAR_PD_SUBMISSION_ACK_TIMEOUT", "60"))
 
@@ -233,6 +253,9 @@ class GalaxyService:
         )
         self.output_root.mkdir(parents=True, exist_ok=True)
         self._tools: dict[str, Any] = {}
+        self._submissions: dict[str, RunRecord] = {}
+        self._submission_cancel_events: dict[str, threading.Event] = {}
+        self._active_submission_tokens: set[str] = set()
         self._lock = threading.RLock()
 
     def validate_connection(self) -> None:
@@ -266,9 +289,14 @@ class GalaxyService:
 
     @staticmethod
     def _existing_dataset(dataset_id: str, store: Any, name: str) -> Any:
-        from nova.galaxy import Dataset
+        try:
+            from nova.galaxy import Dataset
 
-        dataset = Dataset(name=name, force_upload=False)
+            dataset = Dataset(name=name, force_upload=False)
+        except ImportError:  # Lightweight test doubles may omit Dataset.
+            from types import SimpleNamespace
+
+            dataset = SimpleNamespace(name=name)
         dataset.id = dataset_id
         dataset.store = store
         return dataset
@@ -297,46 +325,106 @@ class GalaxyService:
         galaxy_instance.datasets.wait_for_dataset(dataset.id)
         return dataset
 
-    def list_history_datasets(self, *, limit: int = 5000, page_size: int = 500) -> list[dict[str, str]]:
-        """Return selectable, non-deleted datasets from the active history."""
+    @staticmethod
+    def _dataset_scientific_role(row: dict[str, Any]) -> tuple[str, bool]:
+        name = str(row.get("name") or "").lower()
+        extension = str(row.get("extension") or row.get("file_ext") or "").lower().lstrip(".")
+        generated_tokens = (
+            "results archive",
+            "radar-pd summary",
+            "resolved config",
+            "input manifest",
+            "console output",
+            "plot payload",
+            "phase fractions",
+            "gpx index",
+        )
+        generated = any(token in name for token in generated_tokens)
+        if extension in {"instprm", "prm", "inst", "ins"}:
+            return "instrument", generated
+        if extension == "cif":
+            return "cif", generated
+        if extension == "zip" and not generated:
+            return "candidate_library", False
+        if extension in {"nxs", "h5", "hdf5"}:
+            return "event", generated
+        if extension in {"dat", "xye", "xy", "csv", "txt", "fxye", "xrdml", "xml"}:
+            return "diffraction", generated
+        if extension in {"yaml", "yml"} and ("config" in name or "radar" in name):
+            return "configuration", generated
+        return "other", True
 
-        if limit < 1 or page_size < 1:
+    def search_history_datasets(
+        self,
+        *,
+        query: str = "",
+        limit: int = 100,
+        offset: int = 0,
+        include_generated: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Page and search the active Galaxy history on the server."""
+
+        if limit < 1 or offset < 0:
             return []
+        params: dict[str, Any] = {
+            "v": "dev",
+            "limit": min(limit, 500),
+            "offset": offset,
+            "order": "update_time-dsc",
+        }
+        if query.strip():
+            params.update({"q": "name-contains", "qv": query.strip()})
+        response = requests.get(
+            f"{self.galaxy_url}/api/histories/{self.history_id}/contents",
+            headers=self._headers,
+            params=params,
+            timeout=30,
+        )
+        response.raise_for_status()
+        page = response.json()
+        if not isinstance(page, list):
+            raise RuntimeError("Galaxy returned an invalid history-dataset response")
+        result: list[dict[str, Any]] = []
+        for row in page:
+            if not isinstance(row, dict):
+                continue
+            if row.get("history_content_type", "dataset") != "dataset" or row.get("deleted"):
+                continue
+            if str(row.get("state") or "ok") not in {"ok", "deferred"}:
+                continue
+            role, generated = self._dataset_scientific_role(row)
+            if generated and not include_generated:
+                continue
+            result.append(
+                {
+                    "id": str(row.get("id")),
+                    "name": str(row.get("name") or row.get("hid") or "dataset"),
+                    "extension": str(row.get("extension") or row.get("file_ext") or "data"),
+                    "state": str(row.get("state") or ""),
+                    "update_time": str(row.get("update_time") or ""),
+                    "role": role,
+                    "generated": generated,
+                }
+            )
+        return result
+
+    def list_history_datasets(self, *, limit: int = 5000, page_size: int = 500) -> list[dict[str, Any]]:
+        """Compatibility pagination API; new views should call search_history_datasets."""
+
         rows: list[dict[str, Any]] = []
         offset = 0
         while offset < limit:
             requested = min(page_size, limit - offset)
-            response = requests.get(
-                f"{self.galaxy_url}/api/histories/{self.history_id}/contents",
-                headers=self._headers,
-                params={
-                    "v": "dev",
-                    "limit": requested,
-                    "offset": offset,
-                    "order": "update_time-dsc",
-                },
-                timeout=30,
+            page = self.search_history_datasets(
+                limit=requested,
+                offset=offset,
+                include_generated=True,
             )
-            response.raise_for_status()
-            page = response.json()
-            if not isinstance(page, list):
-                raise RuntimeError("Galaxy returned an invalid history-dataset response")
-            rows.extend(row for row in page if isinstance(row, dict))
+            rows.extend(page)
             if len(page) < requested:
                 break
-            offset += len(page)
-        return [
-            {
-                "id": str(row.get("id")),
-                "name": str(row.get("name") or row.get("hid") or "dataset"),
-                "extension": str(row.get("extension") or row.get("file_ext") or "data"),
-                "state": str(row.get("state") or ""),
-            }
-            for row in rows
-            if row.get("history_content_type", "dataset") == "dataset"
-            and not row.get("deleted")
-            and str(row.get("state") or "ok") in {"ok", "deferred"}
-        ]
+            offset += requested
+        return rows
 
     def _job_details(self, uid: str, fallback: dict[str, Any] | None = None) -> dict[str, Any]:
         """Fetch the durable Galaxy job record used to recover a NOVA session."""
@@ -446,6 +534,16 @@ class GalaxyService:
             for chunk in response.iter_content(chunk_size=1024 * 1024):
                 if chunk:
                     handle.write(chunk)
+
+    def _dataset_metadata(self, dataset_id: str) -> dict[str, Any]:
+        response = requests.get(
+            f"{self.galaxy_url}/api/datasets/{dataset_id}",
+            headers=self._headers,
+            timeout=30,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        return payload if isinstance(payload, dict) else {}
 
     @staticmethod
     def _job_metric(job: dict[str, Any], name: str) -> str | None:
@@ -694,141 +792,523 @@ class GalaxyService:
             return self._upload_dataset(path, store, label)
         return None
 
+    def create_submission_snapshot(
+        self,
+        config: AnalysisConfig,
+        inputs: InputSelection,
+        *,
+        client_revision: int = 0,
+        idempotency_token: str | None = None,
+    ) -> SubmissionSnapshot:
+        """Capture the exact validated form values accepted for one click."""
+
+        return SubmissionSnapshot(
+            config=config.model_copy(deep=True),
+            inputs=inputs.model_copy(deep=True),
+            client_revision=client_revision,
+            idempotency_token=idempotency_token or uuid.uuid4().hex,
+            display_summary={
+                "run_name": config.run_name,
+                "mode": config.mode.value,
+                "runtime_profile": config.full_profile if config.mode == AnalysisMode.FULL else "rapid",
+                "final_refinements": str(config.rapid_gsas_validation_limit),
+            },
+        )
+
+    def pending_record(self, snapshot: SubmissionSnapshot) -> RunRecord:
+        """Return one stable pending record for an idempotency token."""
+
+        with self._lock:
+            existing = self._submissions.get(snapshot.idempotency_token)
+            if existing is not None:
+                return existing
+            record = RunRecord(
+                uid=f"pending-{snapshot.idempotency_token}",
+                name=snapshot.config.run_name,
+                mode=snapshot.config.mode,
+                history_id=self.history_id,
+                status=RunStatus.UPLOADING,
+                analysis_status=RunStatus.UPLOADING,
+                result_status=ResultStatus.NOT_REQUESTED,
+                stage="Validating",
+                progress=1,
+                config=snapshot.config.model_copy(deep=True),
+                inputs=snapshot.inputs.model_copy(deep=True),
+                idempotency_token=snapshot.idempotency_token,
+                submission=SubmissionProgress(),
+            )
+            self._submissions[snapshot.idempotency_token] = record
+            self._submission_cancel_events[snapshot.idempotency_token] = threading.Event()
+            return record
+
+    @staticmethod
+    def _submission_label(key: str) -> tuple[SubmissionPhase, str]:
+        return {
+            "configuration": (SubmissionPhase.UPLOADING_CONFIGURATION, "Uploading configuration"),
+            "data": (SubmissionPhase.UPLOADING_DATA, "Uploading diffraction data"),
+            "instrument": (SubmissionPhase.UPLOADING_INSTRUMENT, "Uploading instrument profile"),
+            "event_file": (SubmissionPhase.UPLOADING_DATA, "Uploading NeXus event data"),
+            "main_cif": (SubmissionPhase.UPLOADING_OPTIONAL, "Uploading main-phase CIF"),
+            "database_archive": (SubmissionPhase.UPLOADING_OPTIONAL, "Uploading candidate library"),
+        }[key]
+
+    def _emit_submission_progress(
+        self,
+        record: RunRecord,
+        phase: SubmissionPhase,
+        label: str,
+        completed: int,
+        total: int,
+        callback: Callable[[RunRecord], None] | None,
+    ) -> None:
+        started = record.submission.started_utc if record.submission else datetime.now(timezone.utc).isoformat()
+        try:
+            elapsed = max(0.0, (datetime.now(timezone.utc) - datetime.fromisoformat(started)).total_seconds())
+        except ValueError:
+            elapsed = 0.0
+        record.submission = SubmissionProgress(
+            phase=phase,
+            label=label,
+            completed_items=completed,
+            total_items=total,
+            started_utc=started,
+            elapsed_seconds=elapsed,
+            galaxy_job_id=record.galaxy_job_id,
+        )
+        record.stage = label
+        record.progress = min(5 + int(85 * completed / max(total, 1)), 90)
+        record.updated_utc = datetime.now(timezone.utc).isoformat()
+        if callback is not None:
+            callback(record)
+
+    def _upload_one(self, key: str, path: str, label: str) -> tuple[str, str]:
+        # nova-galaxy connections are not thread safe. Each upload owns a
+        # short-lived connection, allowing independent files to proceed in
+        # parallel without sharing a Bioblend client or Datastore.
+        with self._store() as store:
+            dataset = self._upload_dataset(path, store, label)
+            return key, str(dataset.id)
+
+    def _prepare_datasets(
+        self,
+        snapshot: SubmissionSnapshot,
+        record: RunRecord,
+        config_path: Path,
+        callback: Callable[[RunRecord], None] | None,
+    ) -> dict[str, str]:
+        inputs = snapshot.inputs
+        prepared = dict(record.prepared_dataset_ids)
+        existing = {
+            "data": inputs.data_dataset_id,
+            "instrument": inputs.instrument_dataset_id,
+            "main_cif": inputs.main_cif_dataset_id,
+            "database_archive": inputs.database_dataset_id,
+            "event_file": inputs.event_dataset_id,
+        }
+        prepared.update({key: str(value) for key, value in existing.items() if value})
+        uploads: dict[str, tuple[str, str]] = {"configuration": (str(config_path), "configuration")}
+        for key, path, label in (
+            ("data", inputs.data_path, "diffraction data"),
+            ("instrument", inputs.instrument_path, "instrument profile"),
+            ("main_cif", inputs.main_cif_path, "main phase CIF"),
+            ("database_archive", inputs.database_archive_path, "candidate library"),
+            ("event_file", inputs.event_file_path, "NeXus event file"),
+        ):
+            if path and key not in prepared:
+                uploads[key] = (path, label)
+        if "configuration" in prepared:
+            uploads.pop("configuration", None)
+
+        total = len(uploads) + len(prepared)
+        completed = len(prepared)
+        progress_lock = threading.Lock()
+        if not uploads:
+            return prepared
+        first_key = next(
+            (key for key in ("configuration", "data", "event_file", "instrument", "main_cif", "database_archive") if key in uploads),
+            next(iter(uploads)),
+        )
+        phase, label = self._submission_label(first_key)
+        self._emit_submission_progress(record, phase, label, completed, total, callback)
+        with ThreadPoolExecutor(max_workers=min(4, len(uploads)), thread_name_prefix="radar-upload") as pool:
+            futures = {
+                pool.submit(self._upload_one, key, path, label): key
+                for key, (path, label) in uploads.items()
+            }
+            failures: list[Exception] = []
+            for future in as_completed(futures):
+                try:
+                    key, dataset_id = future.result()
+                except Exception as exc:
+                    failures.append(exc)
+                    continue
+                with progress_lock:
+                    prepared[key] = dataset_id
+                    record.prepared_dataset_ids[key] = dataset_id
+                    completed += 1
+                    phase, label = self._submission_label(key)
+                    self._emit_submission_progress(record, phase, label, completed, total, callback)
+            if failures:
+                raise failures[0]
+        return prepared
+
+    def _prepared_parameters(
+        self,
+        store: Any,
+        snapshot: SubmissionSnapshot,
+        prepared: dict[str, str],
+    ) -> tuple[Any, InputSelection]:
+        from nova.galaxy import Parameters
+
+        config = snapshot.config
+        inputs = snapshot.inputs.model_copy(deep=True)
+        params = Parameters()
+        params.add_input(name="measurement|radiation", value=config.radiation.value)
+        params.add_input(name="measurement|instrument_mode", value=config.instrument_mode)
+        params.add_input(name="chemistry|sample_elements", value=", ".join(config.sample_elements))
+        params.add_input(name="chemistry|environment_elements", value=", ".join(config.environment_elements))
+        params.add_input(name="analysis|strategy|analysis_mode", value=config.mode.value)
+        params.add_input(name="reproducibility|configuration_override|config_kind", value="existing")
+        config_ds = self._existing_dataset(prepared["configuration"], store, "configuration")
+        params.add_input(name="reproducibility|configuration_override|config_file", value=config_ds)
+
+        if inputs.source in {InputSource.UPLOAD, InputSource.GALAXY}:
+            params.add_input(name="data_inputs|input_source|source_kind", value="history")
+            if "data" not in prepared:
+                raise ValueError("A diffraction pattern is required")
+            data = self._existing_dataset(prepared["data"], store, "diffraction data")
+            inputs.data_dataset_id = prepared["data"]
+            params.add_input(name="data_inputs|input_source|diffraction_pattern", value=data)
+            if inputs.use_builtin_cuka:
+                params.add_input(name="data_inputs|input_source|instrument_source|kind", value="builtin_cuka")
+            else:
+                if "instrument" not in prepared:
+                    raise ValueError("An instrument profile is required")
+                instrument = self._existing_dataset(prepared["instrument"], store, "instrument profile")
+                inputs.instrument_dataset_id = prepared["instrument"]
+                params.add_input(name="data_inputs|input_source|instrument_source|kind", value="uploaded")
+                params.add_input(name="data_inputs|input_source|instrument_source|instrument_file", value=instrument)
+        else:
+            params.add_input(name="data_inputs|input_source|source_kind", value=inputs.source.value)
+            if inputs.source == InputSource.IPTS_EVENT:
+                if "event_file" not in prepared:
+                    raise ValueError("A NeXus event file is required")
+                event = self._existing_dataset(prepared["event_file"], store, "NeXus event file")
+                inputs.event_dataset_id = prepared["event_file"]
+                params.add_input(name="data_inputs|input_source|event_file", value=event)
+                params.add_input(name="data_inputs|input_source|bank", value=inputs.bank)
+            else:
+                params.add_input(name="data_inputs|input_source|instrument", value=inputs.instrument)
+                params.add_input(name="data_inputs|input_source|ipts", value=inputs.ipts)
+                params.add_input(name="data_inputs|input_source|run_number", value=inputs.run_number)
+                params.add_input(name="data_inputs|input_source|bank", value=inputs.bank)
+
+        if "main_cif" in prepared:
+            main_cif = self._existing_dataset(prepared["main_cif"], store, "main phase CIF")
+            inputs.main_cif_dataset_id = prepared["main_cif"]
+            params.add_input(name="data_inputs|main_cif", value=main_cif)
+        if "database_archive" in prepared:
+            database = self._existing_dataset(prepared["database_archive"], store, "candidate library")
+            inputs.database_dataset_id = prepared["database_archive"]
+            params.add_input(name="library|database|database_kind", value="custom")
+            params.add_input(name="library|database|database_archive", value=database)
+        else:
+            params.add_input(name="library|database|database_kind", value="builtin")
+        params.add_input(name="reproducibility|run_name", value=config.run_name)
+        return params, inputs
+
     def submit(self, config: AnalysisConfig, inputs: InputSelection) -> RunRecord:
-        """Upload inputs and asynchronously start the existing Analyze tool."""
+        """Compatibility wrapper for a fully tracked immutable submission."""
+
+        return self.submit_snapshot(self.create_submission_snapshot(config, inputs))
+
+    def submit_snapshot(
+        self,
+        snapshot: SubmissionSnapshot,
+        *,
+        callback: Callable[[RunRecord], None] | None = None,
+    ) -> RunRecord:
+        """Prepare inputs concurrently and launch Analyze exactly once."""
+
+        record = self.pending_record(snapshot)
+        with self._lock:
+            if record.galaxy_job_id or record.analysis_status in {RunStatus.QUEUED, RunStatus.RUNNING, RunStatus.OK}:
+                return record
+            if snapshot.idempotency_token in self._active_submission_tokens:
+                return record
+            self._active_submission_tokens.add(snapshot.idempotency_token)
+        cancel_event = self._submission_cancel_events[snapshot.idempotency_token]
+        config = snapshot.config
+        inputs = snapshot.inputs
+        record.status = RunStatus.UPLOADING
+        record.analysis_status = RunStatus.UPLOADING
+        record.message = ""
+        self._emit_submission_progress(record, SubmissionPhase.VALIDATING, "Validating", 0, 1, callback)
+        try:
+            if inputs.use_builtin_cuka and (config.radiation.value != "xray" or config.instrument_mode == "tof"):
+                raise ValueError("The built-in Cu K-alpha profile is only valid for X-ray CW data")
+            work_dir = self.output_root / "submissions" / snapshot.idempotency_token
+            work_dir.mkdir(parents=True, exist_ok=True)
+            config_path = dump_configuration(config, work_dir / "radar_pd_config.yaml")
+            prepared = self._prepare_datasets(snapshot, record, config_path, callback)
+            if cancel_event.is_set() or record.cancel_requested:
+                record.status = RunStatus.CANCELLED
+                record.analysis_status = RunStatus.CANCELLED
+                self._emit_submission_progress(
+                    record, SubmissionPhase.CANCELLED, "Submission cancelled before Analyze", len(prepared), len(prepared), callback
+                )
+                return record
+            self._emit_submission_progress(
+                record, SubmissionPhase.WAITING_FOR_GALAXY, "Waiting for Galaxy", len(prepared), len(prepared), callback
+            )
+            with self._store() as store:
+                params, submitted_inputs = self._prepared_parameters(store, snapshot, prepared)
+                uid, tool = self._submit_with_retry(
+                    store,
+                    params,
+                    run_name=config.run_name,
+                    config_dataset_id=prepared.get("configuration"),
+                )
+            with self._lock:
+                self._tools[uid] = tool
+            record.galaxy_job_id = uid
+            record.status = RunStatus.QUEUED
+            record.analysis_status = RunStatus.QUEUED
+            record.stage = "Waiting for compute"
+            record.progress = 3
+            record.input_dataset_ids = dict(prepared)
+            record.prepared_dataset_ids = dict(prepared)
+            record.config = config.model_copy(deep=True)
+            record.inputs = submitted_inputs
+            record.submission = SubmissionProgress(
+                phase=SubmissionPhase.ACKNOWLEDGED,
+                label="Galaxy job created",
+                completed_items=len(prepared),
+                total_items=len(prepared),
+                started_utc=record.submission.started_utc if record.submission else datetime.now(timezone.utc).isoformat(),
+                galaxy_job_id=uid,
+            )
+            if callback is not None:
+                callback(record)
+            return record
+        except Exception as exc:
+            record.status = RunStatus.ERROR
+            record.analysis_status = RunStatus.ERROR
+            record.message = str(exc)
+            self._emit_submission_progress(record, SubmissionPhase.ERROR, "Submission failed", 0, 1, callback)
+            raise
+        finally:
+            with self._lock:
+                self._active_submission_tokens.discard(snapshot.idempotency_token)
+
+    def cancel_pending_submission(self, token: str) -> RunRecord | None:
+        """Prevent a prepared pending submission from creating an Analyze job."""
+
+        with self._lock:
+            event = self._submission_cancel_events.get(token)
+            record = self._submissions.get(token)
+            if event is not None:
+                event.set()
+            if record is not None and not record.galaxy_job_id:
+                record.cancel_requested = True
+                record.stage = "Cancelling after current uploads"
+            return record
+
+    def create_dataset_collection(self, name: str, dataset_ids: list[str]) -> str:
+        """Create a reusable Galaxy list collection from existing HDAs."""
+
+        if not dataset_ids:
+            raise ValueError("Select at least one Galaxy dataset")
+        response = requests.post(
+            f"{self.galaxy_url}/api/dataset_collections",
+            headers={**self._headers, "content-type": "application/json"},
+            json={
+                "history_id": self.history_id,
+                "collection_type": "list",
+                "name": name,
+                "element_identifiers": [
+                    {"id": dataset_id, "src": "hda", "name": f"item_{index:03d}"}
+                    for index, dataset_id in enumerate(dataset_ids, start=1)
+                ],
+            },
+            timeout=60,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        identifier = payload.get("id") if isinstance(payload, dict) else None
+        if not identifier:
+            raise RuntimeError("Galaxy did not return a dataset collection identifier")
+        return str(identifier)
+
+    @staticmethod
+    def _existing_collection(collection_id: str, store: Any, name: str) -> Any:
+        from nova.galaxy import DatasetCollection
+
+        collection = DatasetCollection(path=".", name=name)
+        collection.id = collection_id
+        collection.store = store
+        return collection
+
+    def submit_utility(
+        self,
+        *,
+        tool_id: str,
+        name: str,
+        inputs: dict[str, Any],
+        associated_run_uid: str | None = None,
+    ) -> UtilityActionRecord:
+        """Submit one deployed RADAR-PD companion tool with typed references."""
 
         from nova.galaxy import Parameters, Tool
 
-        submitted_config = config.model_copy(deep=True)
-        submitted_inputs = inputs.model_copy(deep=True)
-        if inputs.use_builtin_cuka and (config.radiation.value != "xray" or config.instrument_mode == "tof"):
-            raise ValueError("The built-in Cu K-alpha profile is only valid for X-ray CW data")
-        work_dir = self.output_root / "submissions" / config.run_name
-        work_dir.mkdir(parents=True, exist_ok=True)
-        config_path = dump_configuration(config, work_dir / "radar_pd_config.yaml")
-
         with self._store() as store:
             params = Parameters()
-            uploaded: dict[str, str] = {}
-            config_ds = self._upload_dataset(str(config_path), store, "configuration")
-            uploaded["configuration"] = config_ds.id
-            # Parameter names must match the complete nested path in the
-            # deployed Galaxy Analyze XML. Galaxy silently applies conditional
-            # defaults when an obsolete or partially-qualified path is used,
-            # which can turn a valid NOVA form into source_kind=choose and an
-            # empty chemistry policy.
-            params.add_input(name="measurement|radiation", value=config.radiation.value)
-            params.add_input(name="measurement|instrument_mode", value=config.instrument_mode)
-            params.add_input(name="chemistry|sample_elements", value=", ".join(config.sample_elements))
-            params.add_input(
-                name="chemistry|environment_elements",
-                value=", ".join(config.environment_elements),
-            )
-            params.add_input(name="analysis|strategy|analysis_mode", value=config.mode.value)
-            params.add_input(name="reproducibility|configuration_override|config_kind", value="existing")
-            params.add_input(name="reproducibility|configuration_override|config_file", value=config_ds)
-
-            if inputs.source in {InputSource.UPLOAD, InputSource.GALAXY}:
-                params.add_input(name="data_inputs|input_source|source_kind", value="history")
-                data = self._dataset_for_input(
-                    path=inputs.data_path,
-                    dataset_id=inputs.data_dataset_id,
-                    store=store,
-                    label="diffraction data",
-                )
-                if data is None:
-                    raise ValueError("A diffraction pattern is required")
-                uploaded["data"] = data.id
-                submitted_inputs.data_dataset_id = data.id
-                params.add_input(name="data_inputs|input_source|diffraction_pattern", value=data)
-                if inputs.use_builtin_cuka:
-                    params.add_input(
-                        name="data_inputs|input_source|instrument_source|kind",
-                        value="builtin_cuka",
-                    )
+            serialized_inputs: dict[str, Any] = {}
+            for parameter_name, value in inputs.items():
+                resolved = value
+                if isinstance(value, dict) and value.get("dataset_id"):
+                    resolved = self._existing_dataset(str(value["dataset_id"]), store, parameter_name)
+                    serialized_inputs[parameter_name] = {"dataset_id": str(value["dataset_id"])}
+                elif isinstance(value, dict) and value.get("collection_id"):
+                    resolved = self._existing_collection(str(value["collection_id"]), store, parameter_name)
+                    serialized_inputs[parameter_name] = {"collection_id": str(value["collection_id"])}
                 else:
-                    instrument = self._dataset_for_input(
-                        path=inputs.instrument_path,
-                        dataset_id=inputs.instrument_dataset_id,
-                        store=store,
-                        label="instrument profile",
-                    )
-                    if instrument is None:
-                        raise ValueError("An instrument profile is required")
-                    uploaded["instrument"] = instrument.id
-                    submitted_inputs.instrument_dataset_id = instrument.id
-                    params.add_input(
-                        name="data_inputs|input_source|instrument_source|kind",
-                        value="uploaded",
-                    )
-                    params.add_input(
-                        name="data_inputs|input_source|instrument_source|instrument_file",
-                        value=instrument,
-                    )
-            else:
-                params.add_input(name="data_inputs|input_source|source_kind", value=inputs.source.value)
-                if inputs.source == InputSource.IPTS_EVENT:
-                    event = self._dataset_for_input(
-                        path=inputs.event_file_path,
-                        dataset_id=inputs.event_dataset_id,
-                        store=store,
-                        label="NeXus event file",
-                    )
-                    if event is None:
-                        raise ValueError("A NeXus event file is required")
-                    uploaded["event_file"] = event.id
-                    submitted_inputs.event_dataset_id = event.id
-                    params.add_input(name="data_inputs|input_source|event_file", value=event)
-                    params.add_input(name="data_inputs|input_source|bank", value=inputs.bank)
-                else:
-                    params.add_input(name="data_inputs|input_source|instrument", value=inputs.instrument)
-                    params.add_input(name="data_inputs|input_source|ipts", value=inputs.ipts)
-                    params.add_input(name="data_inputs|input_source|run_number", value=inputs.run_number)
-                    params.add_input(name="data_inputs|input_source|bank", value=inputs.bank)
-
-            main_cif = self._dataset_for_input(
-                path=inputs.main_cif_path,
-                dataset_id=inputs.main_cif_dataset_id,
-                store=store,
-                label="main phase CIF",
-            )
-            if main_cif is not None:
-                uploaded["main_cif"] = main_cif.id
-                submitted_inputs.main_cif_dataset_id = main_cif.id
-                params.add_input(name="data_inputs|main_cif", value=main_cif)
-
-            database = self._dataset_for_input(
-                path=inputs.database_archive_path,
-                dataset_id=inputs.database_dataset_id,
-                store=store,
-                label="candidate library",
-            )
-            if database is None:
-                params.add_input(name="library|database|database_kind", value="builtin")
-            else:
-                uploaded["database_archive"] = database.id
-                submitted_inputs.database_dataset_id = database.id
-                params.add_input(name="library|database|database_kind", value="custom")
-                params.add_input(name="library|database|database_archive", value=database)
-            params.add_input(name="reproducibility|run_name", value=config.run_name)
-
-            uid, tool = self._submit_with_retry(store, params)
+                    serialized_inputs[parameter_name] = value
+                params.add_input(name=parameter_name, value=resolved)
+            tool = Tool(id=tool_id)
+            tool.run(store, params, wait=False)
+            uid = self._wait_for_submission(tool)
+            if not uid:
+                raise RuntimeError(f"Galaxy did not acknowledge {name}")
             with self._lock:
                 self._tools[uid] = tool
-            return RunRecord(
-                uid=uid,
-                name=config.run_name,
-                mode=config.mode,
-                history_id=self.history_id,
-                status=RunStatus.QUEUED,
-                stage="Waiting for compute",
-                progress=3,
-                input_dataset_ids=uploaded,
-                config=submitted_config,
-                inputs=submitted_inputs,
-            )
+        return UtilityActionRecord(
+            uid=f"utility-{uuid.uuid4().hex}",
+            tool_id=tool_id,
+            name=name,
+            associated_run_uid=associated_run_uid,
+            inputs=serialized_inputs,
+            galaxy_job_id=uid,
+            status=RunStatus.QUEUED,
+        )
 
-    def _submit_with_retry(self, store: Any, params: Any, *, attempts: int = 3) -> tuple[str, Any]:
+    def refresh_utility(self, action: UtilityActionRecord) -> UtilityActionRecord:
+        if not action.galaxy_job_id:
+            return action
+        job = self._job_details(action.galaxy_job_id)
+        action.status = normalize_status(job.get("state"))
+        action.outputs.update(self._job_output_ids(job))
+        stderr = str(job.get("stderr") or job.get("tool_stderr") or "")
+        if action.status == RunStatus.ERROR:
+            action.message = stderr[-2000:] or "Galaxy reported a utility-tool error"
+        if action.tool_id == RESULT_EXPLORER_TOOL_ID and action.status in {RunStatus.RUNNING, RunStatus.OK}:
+            try:
+                response = requests.get(
+                    f"{self.galaxy_url}/api/entry_points",
+                    headers=self._headers,
+                    params={"job_id": action.galaxy_job_id},
+                    timeout=30,
+                )
+                response.raise_for_status()
+                entries = response.json()
+                if isinstance(entries, list) and entries:
+                    entry = entries[0]
+                    action.entrypoint_id = str(entry.get("id") or entry.get("entry_point_id") or "") or None
+                    target = entry.get("target") or entry.get("url") or entry.get("access_url")
+                    if target:
+                        action.outputs["launch_url"] = str(target)
+            except Exception:
+                pass
+        action.updated_utc = datetime.now(timezone.utc).isoformat()
+        return action
+
+    def save_configuration(self, config: AnalysisConfig, *, associated_run_uid: str | None = None) -> UtilityActionRecord:
+        """Persist the exact validated radar-pd-config/v1 document in History."""
+
+        work_dir = self.output_root / "utilities" / uuid.uuid4().hex
+        config_path = dump_configuration(config, work_dir / f"{config.run_name}_radar_pd_config.yaml")
+        with self._store() as store:
+            dataset = self._upload_dataset(str(config_path), store, "configuration")
+        return UtilityActionRecord(
+            uid=f"utility-{uuid.uuid4().hex}",
+            tool_id="neutrons_radar_pd_configure_prototype",
+            name="Save reusable configuration",
+            associated_run_uid=associated_run_uid,
+            inputs={"schema": "radar-pd-config/v1"},
+            status=RunStatus.OK,
+            outputs={"config_output": str(dataset.id)},
+            message="Validated configuration saved to Galaxy History",
+        )
+
+    def collection_elements(self, collection_id: str) -> list[dict[str, str]]:
+        response = requests.get(
+            f"{self.galaxy_url}/api/dataset_collections/{collection_id}",
+            headers=self._headers,
+            timeout=30,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        elements = payload.get("elements") if isinstance(payload, dict) else []
+        result: list[dict[str, str]] = []
+        for element in elements or []:
+            obj = element.get("object") or {}
+            identifier = obj.get("id") or element.get("id")
+            if identifier:
+                result.append(
+                    {
+                        "id": str(identifier),
+                        "name": str(element.get("element_identifier") or obj.get("name") or "artifact"),
+                    }
+                )
+        return result
+
+    def _find_acknowledged_job(self, run_name: str, config_dataset_id: str | None) -> str | None:
+        """Find a just-created job after the client lost its acknowledgement."""
+
+        response = requests.get(
+            f"{self.galaxy_url}/api/jobs",
+            headers=self._headers,
+            params={
+                "history_id": self.history_id,
+                "tool_id": ANALYZE_TOOL_ID,
+                "order": "update_time-dsc",
+                "limit": 30,
+            },
+            timeout=30,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        for summary in payload if isinstance(payload, list) else []:
+            uid = str(summary.get("id") or "")
+            if not uid:
+                continue
+            try:
+                job = self._job_details(uid, summary)
+            except Exception:
+                continue
+            parameters = self._job_parameters(job)
+            candidate_name = _text(_parameter_value(parameters, "reproducibility.run_name", "run_name"))
+            candidate_config = self._public_input_dataset_ids(job).get("configuration") or _dataset_id(
+                _parameter_value(
+                    parameters,
+                    "reproducibility.configuration_override.config_file",
+                    "configuration_override.config_file",
+                    "config_file",
+                )
+            )
+            if candidate_name == run_name and (not config_dataset_id or candidate_config == config_dataset_id):
+                return uid
+        return None
+
+    def _submit_with_retry(
+        self,
+        store: Any,
+        params: Any,
+        *,
+        attempts: int = 3,
+        run_name: str | None = None,
+        config_dataset_id: str | None = None,
+    ) -> tuple[str, Any]:
         """Start the Analyze tool run, retrying on transient Galaxy submission failures.
 
         Galaxy submissions can fail before creating a job because of a
@@ -843,20 +1323,26 @@ class GalaxyService:
         last_error: Exception | None = None
         for attempt in range(1, attempts + 1):
             tool = Tool(id=ANALYZE_TOOL_ID)
-            tool.run(store, params, wait=False)
             try:
+                tool.run(store, params, wait=False)
                 uid = self._wait_for_submission(tool)
-            except RuntimeError as exc:
+                if not uid:
+                    raise RuntimeError("Galaxy accepted the request but did not return a job identifier")
+            except Exception as exc:
                 last_error = exc
+                try:
+                    recovered_uid = self._find_acknowledged_job(run_name, config_dataset_id) if run_name else None
+                except Exception:
+                    recovered_uid = None
+                if recovered_uid:
+                    recovered = Tool(id=ANALYZE_TOOL_ID)
+                    recovered.assign_id(recovered_uid, store)
+                    return recovered_uid, recovered
                 if attempt < attempts:
                     time.sleep(2.0 * attempt)
                     continue
                 raise
-            if uid:
-                return uid, tool
-            last_error = RuntimeError("Galaxy accepted the request but did not return a job identifier")
-            if attempt < attempts:
-                time.sleep(2.0 * attempt)
+            return uid, tool
         raise last_error or RuntimeError("Galaxy submission failed for an unknown reason")
 
     @staticmethod
@@ -906,7 +1392,9 @@ class GalaxyService:
         # Job at QUEUED after Galaxy reports the terminal ``ok`` state. Never
         # fall back to that stale object: a temporary REST error must leave the
         # last known state intact instead of regressing an OK run to QUEUED.
-        job = self._job_details(record.uid)
+        if not record.galaxy_job_id:
+            return record
+        job = self._job_details(record.galaxy_job_id)
         status = normalize_status(job.get("state"))
         stdout = str(job.get("stdout") or job.get("tool_stdout") or job.get("job_stdout") or "")
         stderr = str(job.get("stderr") or job.get("tool_stderr") or job.get("job_stderr") or "")
@@ -927,6 +1415,7 @@ class GalaxyService:
             record.inputs = recovered_inputs
         stage, progress = stage_from_console(stdout, status)
         record.status = status
+        record.analysis_status = status
         record.stage = stage
         record.progress = progress
         record.console_tail = stdout[-12000:]
@@ -984,10 +1473,12 @@ class GalaxyService:
             records.append(
                 RunRecord(
                     uid=uid,
+                    galaxy_job_id=uid,
                     name=run_name,
                     mode=mode,
                     history_id=self.history_id,
                     status=state,
+                    analysis_status=state,
                     stage=stage_from_console("", state)[0],
                     progress=stage_from_console("", state)[1],
                     created_utc=created,
@@ -1000,21 +1491,83 @@ class GalaxyService:
             )
         return records
 
-    def collect_results(self, record: RunRecord) -> RunRecord:
-        """Download completed results, tolerating unavailable duplicate collections."""
+    @staticmethod
+    def _read_cache_manifest(destination: Path) -> CacheManifest | None:
+        path = destination / ".radar-pd-cache.json"
+        if not path.is_file():
+            return None
+        try:
+            return CacheManifest.model_validate_json(path.read_text(encoding="utf-8"))
+        except Exception:
+            return None
 
-        destination = self.output_root / "runs" / record.uid
-        staging = destination.parent / f".{record.uid}-{threading.get_ident()}.partial"
+    def _current_cache_manifest(self, record: RunRecord) -> CacheManifest | None:
+        job_id = record.galaxy_job_id
+        archive_id = record.output_dataset_ids.get("results_archive")
+        if not job_id or not archive_id:
+            return None
+        try:
+            metadata = self._dataset_metadata(archive_id)
+        except Exception:
+            metadata = {}
+        raw_size = metadata.get("file_size", metadata.get("size"))
+        try:
+            size = int(raw_size) if raw_size is not None else None
+        except (TypeError, ValueError):
+            size = None
+        return CacheManifest(
+            job_id=job_id,
+            archive_dataset_id=archive_id,
+            archive_size=size,
+            archive_update_time=str(metadata.get("update_time") or metadata.get("updated_utc") or "") or None,
+        )
+
+    @staticmethod
+    def _cache_is_current(cached: CacheManifest | None, current: CacheManifest | None, destination: Path) -> bool:
+        if cached is None or current is None or not destination.is_dir():
+            return False
+        return (
+            cached.adapter_version == current.adapter_version
+            and cached.job_id == current.job_id
+            and cached.archive_dataset_id == current.archive_dataset_id
+            and (current.archive_size is None or cached.archive_size == current.archive_size)
+            and (not current.archive_update_time or cached.archive_update_time == current.archive_update_time)
+            and any(destination.rglob("*.plotdata.json"))
+        )
+
+    def collect_results(self, record: RunRecord, *, force: bool = False) -> RunRecord:
+        """Collect the canonical archive without changing scientific job state on failure."""
+
+        job_id = record.galaxy_job_id or record.uid
+        destination = self.output_root / "runs" / job_id
+        staging = destination.parent / f".{job_id}-{threading.get_ident()}.partial"
+        # Result collection only begins after Galaxy has completed Analyze.
+        # Old recovered records may not carry the new analysis_status field.
+        record.analysis_status = RunStatus.OK
+        record.status = RunStatus.OK
+        record.result_status = ResultStatus.COLLECTING
         try:
             try:
-                job = self._job_details(record.uid)
+                job = self._job_details(job_id)
                 record.output_dataset_ids.update(self._job_output_ids(job))
             except Exception:
                 pass
 
+            current_manifest = self._current_cache_manifest(record)
+            cached_manifest = self._read_cache_manifest(destination)
+            if not force and self._cache_is_current(cached_manifest, current_manifest, destination):
+                record.cache_manifest = cached_manifest
+                record.output_dir = str(destination)
+                record.result_status = ResultStatus.READY
+                record.status = record.analysis_status or RunStatus.OK
+                record.stage = "Results ready"
+                record.progress = 100
+                record.message = ""
+                return record
+
             outputs = None
             try:
-                tool = self._recover_tool(record.uid)
+                tool = self._recover_tool(job_id)
                 outputs = tool.get_results()
             except Exception:
                 # Recovered sessions should use durable dataset IDs. The Tool
@@ -1028,6 +1581,7 @@ class GalaxyService:
             usable_downloads = 0
             failures: list[str] = []
             archive_path: Path | None = None
+            archive_extracted = False
             for name in (
                 "report",
                 "summary",
@@ -1080,9 +1634,13 @@ class GalaxyService:
                 try:
                     _extract_results_archive(archive_path, staging)
                     usable_downloads += 1
+                    archive_extracted = True
                 except Exception as exc:
                     failures.append(f"results_archive extraction: {exc}")
-            for name in ("plots", "tables", "phases", "gpx_projects", "diagnostics"):
+            # The archive is canonical and preserves plot JSON/NPZ pairs. Only
+            # fall back to named collection downloads for legacy jobs that did
+            # not publish an extractable archive.
+            for name in (() if archive_extracted else ("plots", "tables", "phases", "gpx_projects", "diagnostics")):
                 if outputs is None:
                     continue
                 try:
@@ -1110,10 +1668,18 @@ class GalaxyService:
                 raise RuntimeError(f"{message}: {details}" if details else message)
             if destination.exists():
                 shutil.rmtree(destination)
+            manifest = current_manifest or CacheManifest(
+                job_id=job_id,
+                archive_dataset_id=record.output_dataset_ids.get("results_archive", "legacy-no-archive"),
+            )
+            (staging / ".radar-pd-cache.json").write_text(manifest.model_dump_json(indent=2), encoding="utf-8")
             staging.replace(destination)
             record.output_dataset_ids.update(output_ids)
             record.output_dir = str(destination)
-            record.status = RunStatus.OK
+            record.status = record.analysis_status or RunStatus.OK
+            record.analysis_status = record.status
+            record.result_status = ResultStatus.READY
+            record.cache_manifest = manifest
             record.stage = "Results ready"
             record.progress = 100
             record.message = (
@@ -1124,8 +1690,9 @@ class GalaxyService:
         except Exception as exc:
             if staging.exists():
                 shutil.rmtree(staging, ignore_errors=True)
-            record.status = RunStatus.ERROR
-            record.stage = "Result download failed"
+            record.status = record.analysis_status or RunStatus.OK
+            record.result_status = ResultStatus.ERROR
+            record.stage = "Analysis complete; results unavailable"
             record.progress = 100
             record.message = f"Analysis finished, but result download failed: {exc}"
         record.updated_utc = datetime.now(timezone.utc).isoformat()

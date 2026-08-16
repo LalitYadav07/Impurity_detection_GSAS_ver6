@@ -180,16 +180,7 @@ def discover_tables(root: str | Path) -> list[dict[str, Any]]:
 
 
 def _plot_payload_has_arrays(payload: dict[str, Any]) -> bool:
-    """Check that a plot payload actually loaded its declared numeric arrays.
-
-    Galaxy's per-output collection downloads can duplicate a plot's JSON
-    under an unrelated filename and without its paired .npz archive (the
-    results-archive extraction is the only source that keeps them together),
-    producing a payload with no numeric arrays. Checking the same loaded
-    result that rendering uses -- rather than re-deriving file-existence
-    logic here -- catches that regardless of what the duplicate is named or
-    why the array failed to load.
-    """
+    """Check a selected, fully loaded payload for declared numeric arrays."""
 
     arrays_name = payload.get("arrays_npz")
     if not isinstance(arrays_name, str) or not arrays_name.strip():
@@ -198,6 +189,21 @@ def _plot_payload_has_arrays(payload: dict[str, Any]) -> bool:
     if not isinstance(arrays, dict):
         return False
     return any(isinstance(value, list) and value for value in arrays.values())
+
+
+def _plot_arrays_available(path: Path, payload: dict[str, Any]) -> bool:
+    """Validate an NPZ reference without eagerly loading its numerical arrays."""
+
+    arrays_name = payload.get("arrays_npz")
+    if not isinstance(arrays_name, str) or not arrays_name.strip():
+        return True
+    parent = path.resolve().parent
+    candidate = (parent / arrays_name).resolve()
+    try:
+        candidate.relative_to(parent)
+        return candidate.is_file() and candidate.stat().st_size > 0
+    except (ValueError, OSError):
+        return False
 
 
 def _plot_stage(path: Path, payload: dict[str, Any]) -> tuple[str, str, int | None]:
@@ -235,11 +241,13 @@ def _plot_display_name(path: Path, payload: dict[str, Any], stage: str, rank: in
 
 
 def discover_plot_payloads(root: str | Path) -> list[dict[str, Any]]:
+    """Index plot metadata; numerical arrays stay unloaded until selection."""
+
     base = Path(root)
     options: list[dict[str, Any]] = []
     for index, path in enumerate(sorted(base.rglob("*.plotdata.json"))):
-        payload = read_plot_payload(path)
-        if not _plot_payload_has_arrays(payload):
+        payload = read_json(path)
+        if not payload or not _plot_arrays_available(path, payload):
             continue
         category, stage, rank = _plot_stage(path, payload)
         options.append(
@@ -257,6 +265,44 @@ def discover_plot_payloads(root: str | Path) -> list[dict[str, Any]]:
             )
         )
     return options
+
+
+def load_plot_with_fallback(
+    plots: Iterable[dict[str, Any] | PlotDescriptor],
+    preferred_path: str | None = None,
+) -> tuple[str, dict[str, Any], go.Figure] | None:
+    """Load one renderable plot, falling through ranked descriptors on failure."""
+
+    normalized = [asdict(item) if isinstance(item, PlotDescriptor) else dict(item) for item in plots]
+    ordered = sorted(
+        normalized,
+        key=lambda item: (
+            0 if preferred_path and str(item.get("path")) == preferred_path else 1,
+            0 if item.get("primary") else 1,
+            _rank_value(item.get("rank")),
+        ),
+    )
+    for item in ordered:
+        path = str(item.get("path") or "")
+        if not path:
+            continue
+        payload = read_plot_payload(path)
+        if not payload or not _plot_payload_has_arrays(payload):
+            continue
+        try:
+            figure = figure_for_payload(payload)
+        except Exception:
+            continue
+        def populated(value: Any) -> bool:
+            try:
+                return value is not None and len(value) > 0
+            except TypeError:
+                return False
+
+        has_points = any(populated(getattr(trace, "x", None)) or populated(getattr(trace, "y", None)) for trace in figure.data)
+        if has_points:
+            return path, payload, figure
+    return None
 
 
 def _array(payload: dict[str, Any], *names: str) -> list[float]:
@@ -829,6 +875,8 @@ def _local_file_groups(root: Path) -> list[dict[str, Any]]:
     for path in sorted(root.rglob("*")):
         if not path.is_file():
             continue
+        if path.name == ".radar-pd-cache.json":
+            continue
         try:
             size = path.stat().st_size
         except OSError:
@@ -867,6 +915,9 @@ def _local_file_groups(root: Path) -> list[dict[str, Any]]:
                 "filename": path.name,
                 "path": str(path),
                 "size": f"{size / 1024:.1f} KB" if size < 1024 * 1024 else f"{size / (1024 * 1024):.1f} MB",
+                "technical": group == "Diagnostics and logs"
+                or path.name.endswith(".plotdata.json")
+                or suffix == ".npz",
             }
         )
     return [{"name": name, "files": groups[name]} for name in group_order if groups[name]]
@@ -936,7 +987,12 @@ def _full_model_rows(result: dict[str, Any]) -> list[dict[str, str]]:
     return rows
 
 
-def build_result_view(result: dict[str, Any], root: str | Path) -> ResultView:
+def build_result_view(
+    result: dict[str, Any],
+    root: str | Path,
+    *,
+    submitted_mode: str | None = None,
+) -> ResultView:
     """Build a deterministic Rapid or Full scientific presentation model."""
 
     base = Path(root)
@@ -975,6 +1031,11 @@ def build_result_view(result: dict[str, Any], root: str | Path) -> ResultView:
     }
 
     warnings = [_message_text(item) for item in [*(result.get("warnings") or []), *(result.get("errors") or [])] if _message_text(item)]
+    if submitted_mode and submitted_mode.lower() != mode:
+        warnings.insert(
+            0,
+            f"Mode mismatch: NOVA submitted {submitted_mode.title()}, but radar-pd-result/v1 reports {mode.title()}. The result mode is authoritative.",
+        )
     if mode == "rapid" and result_stage == "pattern_scoring":
         warnings.insert(
             0,
