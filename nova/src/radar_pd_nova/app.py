@@ -470,7 +470,7 @@ class RadarPdNovaApp(ThemedApp):
                     label="Galaxy library archive",
                     v_model=("history_database_id",),
                     items=("history_archive_datasets",),
-                    item_title="name",
+                    item_title="display_name",
                     item_value="id",
                     density="compact",
                     variant="outlined",
@@ -489,7 +489,7 @@ class RadarPdNovaApp(ThemedApp):
                                 label="Candidate CIFs",
                                 v_model=("library_builder_cif_ids",),
                                 items=("history_cif_datasets",),
-                                item_title="name",
+                                item_title="display_name",
                                 item_value="id",
                                 multiple=True,
                                 chips=True,
@@ -564,7 +564,7 @@ class RadarPdNovaApp(ThemedApp):
                         label="Diffraction data from History",
                         v_model=("history_data_id",),
                         items=("history_data_datasets",),
-                        item_title="name",
+                        item_title="display_name",
                         item_value="id",
                         density="compact",
                         variant="outlined",
@@ -575,7 +575,7 @@ class RadarPdNovaApp(ThemedApp):
                         label="Instrument profile from History",
                         v_model=("history_instrument_id",),
                         items=("history_instrument_datasets",),
-                        item_title="name",
+                        item_title="display_name",
                         item_value="id",
                         density="compact",
                         variant="outlined",
@@ -657,7 +657,7 @@ class RadarPdNovaApp(ThemedApp):
                     label="Main-phase CIF from History",
                     v_model=("history_main_cif_id",),
                     items=("history_cif_datasets",),
-                    item_title="name",
+                    item_title="display_name",
                     item_value="id",
                     clearable=True,
                     density="compact",
@@ -861,7 +861,7 @@ class RadarPdNovaApp(ThemedApp):
                                 label="Reusable configuration from Galaxy History",
                                 v_model=("history_configuration_id",),
                                 items=("history_configuration_datasets",),
-                                item_title="name",
+                                item_title="display_name",
                                 item_value="id",
                                 density="compact",
                                 variant="outlined",
@@ -1635,7 +1635,25 @@ class RadarPdNovaApp(ThemedApp):
             if item.get("role") in {"diffraction", "instrument", "cif", "candidate_library", "event", "configuration"}
             and (state.history_show_all or not item.get("generated"))
         ]
-        combined = list(state.history_datasets) if append else []
+        previous = list(state.history_datasets)
+        if append:
+            combined = previous
+        else:
+            selected_ids = {
+                str(identifier)
+                for identifier in (
+                    state.history_data_id,
+                    state.history_instrument_id,
+                    state.history_main_cif_id,
+                    state.history_database_id,
+                    state.history_configuration_id,
+                    *(state.library_builder_cif_ids or []),
+                )
+                if identifier
+            }
+            # Retain selected records while the user searches for a sibling
+            # input. Otherwise Vuetify can only render the opaque Galaxy ID.
+            combined = [item for item in previous if str(item.get("id")) in selected_ids]
         known = {str(item.get("id")) for item in combined}
         combined.extend(item for item in visible if str(item.get("id")) not in known)
         state.history_datasets = combined
@@ -1969,7 +1987,7 @@ class RadarPdNovaApp(ThemedApp):
             return
         payload = {
             "schema": "radar-pd-nova-diagnostics/v1",
-            "nova_version": "0.3.0",
+            "nova_version": "0.3.1",
             "run": {
                 "name": record.name,
                 "mode_submitted": record.mode.value,

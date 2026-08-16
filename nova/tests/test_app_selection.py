@@ -150,3 +150,37 @@ def test_async_monitor_publishes_updates_on_the_event_loop(tmp_path) -> None:
         (RunStatus.OK, "Results ready", 100, "Results loaded"),
     ]
     assert record.uid not in app._monitored_uids
+
+
+def test_history_search_preserves_selected_sibling_labels() -> None:
+    app = RadarPdNovaApp.__new__(RadarPdNovaApp)
+    selected_data = {
+        "id": "data-id",
+        "name": "RADAR-PD diffraction data | pattern.dat",
+        "display_name": "pattern.dat · data-id",
+        "role": "diffraction",
+        "generated": False,
+    }
+    state = _State(
+        history_datasets=[selected_data],
+        history_show_all=False,
+        history_data_id="data-id",
+        history_instrument_id="",
+        history_main_cif_id="",
+        history_database_id="",
+        history_configuration_id="",
+        library_builder_cif_ids=[],
+    )
+    app.server = SimpleNamespace(state=state)
+    instrument = {
+        "id": "instrument-id",
+        "name": "RADAR-PD instrument profile | profile.instprm",
+        "display_name": "profile.instprm · instrument-id",
+        "role": "instrument",
+        "generated": False,
+    }
+
+    app._apply_history_page([instrument], append=False)
+
+    assert [item["id"] for item in state.history_data_datasets] == ["data-id"]
+    assert [item["id"] for item in state.history_instrument_datasets] == ["instrument-id"]

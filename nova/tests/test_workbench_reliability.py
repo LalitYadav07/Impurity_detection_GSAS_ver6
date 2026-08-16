@@ -218,6 +218,32 @@ def test_remote_history_search_uses_dev_pagination_and_query(tmp_path: Path, mon
     assert rows[0]["role"] == "diffraction"
 
 
+def test_history_role_uses_preserved_filename_when_galaxy_sniffs_text(tmp_path: Path, monkeypatch: Any) -> None:
+    class Response:
+        def raise_for_status(self) -> None:
+            pass
+
+        def json(self) -> list[dict[str, Any]]:
+            return [
+                {
+                    "id": "instrument-dataset",
+                    "name": "RADAR-PD instrument profile | hb2a_si_ge113.instprm",
+                    "extension": "txt",
+                    "state": "ok",
+                    "update_time": "2026-08-15T20:51:00",
+                    "history_content_type": "dataset",
+                }
+            ]
+
+    monkeypatch.setattr("radar_pd_nova.galaxy_service.requests.get", lambda *args, **kwargs: Response())
+    service = GalaxyService("https://example.invalid", "key", "history", output_root=tmp_path)
+
+    rows = service.search_history_datasets(query="instprm")
+
+    assert rows[0]["role"] == "instrument"
+    assert rows[0]["display_name"] == "hb2a_si_ge113.instprm · 2026-08-15 20:51 · instrume"
+
+
 def test_every_companion_action_serializes_dataset_and_collection_references(
     tmp_path: Path, monkeypatch: Any
 ) -> None:

@@ -329,6 +329,12 @@ class GalaxyService:
     def _dataset_scientific_role(row: dict[str, Any]) -> tuple[str, bool]:
         name = str(row.get("name") or "").lower()
         extension = str(row.get("extension") or row.get("file_ext") or "").lower().lstrip(".")
+        # Galaxy may sniff an uploaded ``.instprm`` or ``.dat`` as the
+        # generic ``txt`` datatype.  The preserved scientific filename and
+        # NOVA upload label are therefore more authoritative than datatype
+        # alone for these input roles.
+        preserved_name = name.rsplit("|", 1)[-1].strip()
+        preserved_suffix = Path(preserved_name).suffix.lower().lstrip(".")
         generated_tokens = (
             "results archive",
             "radar-pd summary",
@@ -340,17 +346,21 @@ class GalaxyService:
             "gpx index",
         )
         generated = any(token in name for token in generated_tokens)
-        if extension in {"instprm", "prm", "inst", "ins"}:
+        if preserved_suffix in {"instprm", "prm", "inst", "ins"} or "instrument profile" in name:
             return "instrument", generated
-        if extension == "cif":
+        if preserved_suffix == "cif" or extension == "cif":
             return "cif", generated
-        if extension == "zip" and not generated:
+        if (preserved_suffix == "zip" or extension == "zip") and not generated:
             return "candidate_library", False
-        if extension in {"nxs", "h5", "hdf5"}:
+        if preserved_suffix in {"nxs", "h5", "hdf5"} or extension in {"nxs", "h5", "hdf5"}:
             return "event", generated
-        if extension in {"dat", "xye", "xy", "csv", "txt", "fxye", "xrdml", "xml"}:
+        if preserved_suffix in {"dat", "xye", "xy", "csv", "txt", "fxye", "xrdml", "xml"} or extension in {
+            "dat", "xye", "xy", "csv", "txt", "fxye", "xrdml", "xml"
+        }:
             return "diffraction", generated
-        if extension in {"yaml", "yml"} and ("config" in name or "radar" in name):
+        if (preserved_suffix in {"yaml", "yml"} or extension in {"yaml", "yml"}) and (
+            "config" in name or "radar" in name
+        ):
             return "configuration", generated
         return "other", True
 
@@ -395,10 +405,16 @@ class GalaxyService:
             role, generated = self._dataset_scientific_role(row)
             if generated and not include_generated:
                 continue
+            dataset_id = str(row.get("id"))
+            dataset_name = str(row.get("name") or row.get("hid") or "dataset")
+            original_name = dataset_name.rsplit("|", 1)[-1].strip()
+            update_time = str(row.get("update_time") or "")[:16].replace("T", " ")
+            display_suffix = " · ".join(value for value in (update_time, dataset_id[:8]) if value)
             result.append(
                 {
-                    "id": str(row.get("id")),
-                    "name": str(row.get("name") or row.get("hid") or "dataset"),
+                    "id": dataset_id,
+                    "name": dataset_name,
+                    "display_name": f"{original_name} · {display_suffix}" if display_suffix else original_name,
                     "extension": str(row.get("extension") or row.get("file_ext") or "data"),
                     "state": str(row.get("state") or ""),
                     "update_time": str(row.get("update_time") or ""),
