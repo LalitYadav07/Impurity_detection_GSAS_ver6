@@ -1197,6 +1197,17 @@ class RadarPdNovaApp(ThemedApp):
                 html.P("Published results grouped by scientific purpose; local container paths remain hidden.")
             vuetify.VBtn("Send selected GPX to handoff", click=self.handoff_selected_checkpoint, disabled=("!selected_checkpoint",), prepend_icon="mdi-send-outline", variant="outlined", size="small")
         with html.Div(classes="radar-file-toolbar"):
+            vuetify.VSelect(
+                label="GSAS-II checkpoint",
+                v_model=("selected_checkpoint",),
+                items=("checkpoint_rows",),
+                item_title="name",
+                item_value="path",
+                density="compact",
+                variant="outlined",
+                hide_details=True,
+                v_show="checkpoint_rows.length > 0",
+            )
             vuetify.VTextField(
                 label="Search published files",
                 v_model=("file_search",),
@@ -1987,7 +1998,7 @@ class RadarPdNovaApp(ThemedApp):
             return
         payload = {
             "schema": "radar-pd-nova-diagnostics/v1",
-            "nova_version": "0.3.1",
+            "nova_version": "0.3.2",
             "run": {
                 "name": record.name,
                 "mode_submitted": record.mode.value,
@@ -2366,7 +2377,7 @@ class RadarPdNovaApp(ThemedApp):
             except Exception as exc:
                 action.message = str(exc)
             self._register_utility(action)
-            if action.tool_id == RESULT_EXPLORER_TOOL_ID and action.entrypoint_id:
+            if action.tool_id == RESULT_EXPLORER_TOOL_ID and action.outputs.get("launch_url"):
                 await self._utility_completed(action)
                 return
         if action.status == RunStatus.OK:
@@ -2532,11 +2543,22 @@ class RadarPdNovaApp(ThemedApp):
                 self.server.state.error_message = "Galaxy did not publish a GPX collection for this run."
                 return
             elements = await asyncio.to_thread(self.service.collection_elements, collection_id)
+            checkpoint = next(
+                (
+                    item
+                    for item in self.server.state.checkpoint_rows or []
+                    if Path(str(item.get("path") or "")) == selected
+                ),
+                {},
+            )
+            published_name = str(checkpoint.get("galaxy_element_name") or "")
+            target_stems = {selected.stem.casefold(), Path(published_name).stem.casefold()}
+            target_stems.discard("")
             match = next(
                 (
                     item
                     for item in elements
-                    if Path(item["name"]).name == selected.name or Path(item["name"]).stem == selected.stem
+                    if Path(item["name"]).stem.casefold() in target_stems
                 ),
                 None,
             )

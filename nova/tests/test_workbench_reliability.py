@@ -325,9 +325,9 @@ def test_every_companion_action_serializes_dataset_and_collection_references(
 
     assert [tool_id for tool_id, _ in submissions] == [case[0] for case in cases]
     assert submissions[0][1]["source|event_file"].id == "event"
-    assert submissions[1][1]["cif_files"].id == "cifs"
+    assert submissions[1][1]["cif_files"] == {"src": "hdca", "id": "cifs"}
     assert submissions[2][1]["gpx_index"].id == "index"
-    assert submissions[3][1]["summaries"].id == "summaries"
+    assert submissions[3][1]["summaries"] == {"src": "hdca", "id": "summaries"}
     assert submissions[4][1]["result_source|results_archive"].id == "archive"
 
 
@@ -338,8 +338,8 @@ def test_utility_refresh_exposes_outputs_and_result_explorer_entrypoint(
         def raise_for_status(self) -> None:
             pass
 
-        def json(self) -> list[dict[str, str]]:
-            return [{"id": "entry", "target": "/interactivetool/ep/entry/token/"}]
+        def json(self) -> list[dict[str, Any]]:
+            return [{"id": "entry", "active": True, "target": "/interactivetool/ep/entry/token/"}]
 
     monkeypatch.setattr("radar_pd_nova.galaxy_service.requests.get", lambda *args, **kwargs: Response())
     service = GalaxyService("https://example.invalid", "key", "history", output_root=tmp_path)
@@ -356,10 +356,37 @@ def test_utility_refresh_exposes_outputs_and_result_explorer_entrypoint(
 
     refreshed = service.refresh_utility(action)
 
-    assert refreshed.status is RunStatus.RUNNING
+    assert refreshed.status is RunStatus.OK
     assert refreshed.outputs["result_report"] == "report-id"
     assert refreshed.outputs["launch_url"] == "/interactivetool/ep/entry/token/"
     assert refreshed.entrypoint_id == "entry"
+
+
+def test_result_explorer_inactive_entrypoint_is_reported_as_error(tmp_path: Path, monkeypatch: Any) -> None:
+    class Response:
+        def raise_for_status(self) -> None:
+            pass
+
+        def json(self) -> list[dict[str, Any]]:
+            return [{"id": "entry", "active": False}]
+
+    monkeypatch.setattr("radar_pd_nova.galaxy_service.requests.get", lambda *args, **kwargs: Response())
+    service = GalaxyService("https://example.invalid", "key", "history", output_root=tmp_path)
+    service._job_details = lambda job_id: {  # type: ignore[method-assign]
+        "state": "ok",
+        "job_stderr": "container stopped",
+    }
+    action = UtilityActionRecord(
+        uid="utility",
+        tool_id=RESULT_EXPLORER_TOOL_ID,
+        name="Explorer",
+        galaxy_job_id="job",
+    )
+
+    refreshed = service.refresh_utility(action)
+
+    assert refreshed.status is RunStatus.ERROR
+    assert refreshed.message == "container stopped"
 
 
 def test_collection_creation_and_element_mapping_use_public_galaxy_ids(

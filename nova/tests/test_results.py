@@ -463,6 +463,39 @@ def test_builds_full_result_and_prioritizes_latest_accepted_fit(tmp_path: Path) 
     ]
 
 
+def test_checkpoint_prefers_galaxy_collection_alias_over_technical_copy(tmp_path: Path) -> None:
+    technical = tmp_path / "Technical" / "GSAS_Projects" / "seq_final_main_polished.gpx"
+    published = tmp_path / "gpx" / "02_Main_phase_anchor.gpx"
+    technical.parent.mkdir(parents=True)
+    published.parent.mkdir(parents=True)
+    technical.write_bytes(b"technical")
+    published.write_bytes(b"published")
+    result = {
+        "$schema": "radar-pd-result/v1",
+        "analysis_mode": "full",
+        "status": "complete",
+        "phases": [],
+        "hypotheses": [],
+        "gpx_projects": [
+            {
+                "label": "seq_final_main_polished",
+                "path": "Technical/GSAS_Projects/seq_final_main_polished.gpx",
+                "source_path": "Technical/GSAS_Projects/seq_final_main_polished.gpx",
+                "collection_path": "gpx/02_Main_phase_anchor.gpx",
+                "collection_name": "02_Main_phase_anchor.gpx",
+                "stage": "hypothesis_refinement",
+                "status": "accepted",
+            }
+        ],
+    }
+
+    view = build_result_view(result, tmp_path)
+
+    assert Path(view.checkpoints[0].path) == published
+    assert view.checkpoints[0].galaxy_element_name == "02_Main_phase_anchor"
+    assert view.checkpoints[0].handoff_available is True
+
+
 def test_pattern_only_result_warns_that_coefficients_are_not_phase_fractions(tmp_path: Path) -> None:
     result = {
         "analysis_mode": "rapid",

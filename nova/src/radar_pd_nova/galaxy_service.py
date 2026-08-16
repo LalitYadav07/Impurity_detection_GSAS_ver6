@@ -1156,15 +1156,6 @@ class GalaxyService:
             raise RuntimeError("Galaxy did not return a dataset collection identifier")
         return str(identifier)
 
-    @staticmethod
-    def _existing_collection(collection_id: str, store: Any, name: str) -> Any:
-        from nova.galaxy import DatasetCollection
-
-        collection = DatasetCollection(path=".", name=name)
-        collection.id = collection_id
-        collection.store = store
-        return collection
-
     def submit_utility(
         self,
         *,
@@ -1186,8 +1177,13 @@ class GalaxyService:
                     resolved = self._existing_dataset(str(value["dataset_id"]), store, parameter_name)
                     serialized_inputs[parameter_name] = {"dataset_id": str(value["dataset_id"])}
                 elif isinstance(value, dict) and value.get("collection_id"):
-                    resolved = self._existing_collection(str(value["collection_id"]), store, parameter_name)
-                    serialized_inputs[parameter_name] = {"collection_id": str(value["collection_id"])}
+                    collection_id = str(value["collection_id"])
+                    # nova-galaxy only special-cases Dataset inputs. Passing its
+                    # DatasetCollection object through Parameters leaves that object
+                    # in the run_tool JSON payload and fails at serialization time.
+                    # Galaxy's public tool API accepts the native HDCA reference.
+                    resolved = {"src": "hdca", "id": collection_id}
+                    serialized_inputs[parameter_name] = {"collection_id": collection_id}
                 else:
                     serialized_inputs[parameter_name] = value
                 params.add_input(name=parameter_name, value=resolved)
@@ -1214,7 +1210,7 @@ class GalaxyService:
         job = self._job_details(action.galaxy_job_id)
         action.status = normalize_status(job.get("state"))
         action.outputs.update(self._job_output_ids(job))
-        stderr = str(job.get("stderr") or job.get("tool_stderr") or "")
+        stderr = str(job.get("stderr") or job.get("tool_stderr") or job.get("job_stderr") or "")
         if action.status == RunStatus.ERROR:
             action.message = stderr[-2000:] or "Galaxy reported a utility-tool error"
         if action.tool_id == RESULT_EXPLORER_TOOL_ID and action.status in {RunStatus.RUNNING, RunStatus.OK}:
@@ -1231,8 +1227,14 @@ class GalaxyService:
                     entry = entries[0]
                     action.entrypoint_id = str(entry.get("id") or entry.get("entry_point_id") or "") or None
                     target = entry.get("target") or entry.get("url") or entry.get("access_url")
-                    if target:
+                    active = bool(entry.get("active"))
+                    if active and target:
                         action.outputs["launch_url"] = str(target)
+                        action.status = RunStatus.OK
+                        action.message = "Result Explorer is ready"
+                    elif action.status == RunStatus.OK and not active:
+                        action.status = RunStatus.ERROR
+                        action.message = stderr[-2000:] or "Result Explorer stopped before its NDIP entry point became active"
             except Exception:
                 pass
         action.updated_utc = datetime.now(timezone.utc).isoformat()

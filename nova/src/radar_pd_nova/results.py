@@ -95,6 +95,7 @@ class CheckpointDescriptor:
     stage: str
     status: str
     handoff_available: bool
+    galaxy_element_name: str = ""
 
 
 @dataclass
@@ -929,13 +930,17 @@ def _checkpoint_descriptors(result: dict[str, Any], root: Path) -> list[Checkpoi
     for index, item in enumerate(result.get("gpx_projects") or []):
         if not isinstance(item, dict):
             continue
+        collection_name = Path(str(item.get("collection_name") or item.get("collection_path") or "")).name
         candidates = [
-            str(item.get("collection_name") or ""),
-            Path(str(item.get("collection_path") or "")).name,
             Path(str(item.get("path") or "")).name,
             Path(str(item.get("source_path") or "")).name,
         ]
-        path = next((candidate for candidate in local if candidate.name in candidates), None)
+        # Prefer the exact file published as the Galaxy collection element. The
+        # archive can also contain a technical source copy with a different name;
+        # selecting that copy makes a later GPX handoff impossible to map.
+        path = next((candidate for candidate in local if collection_name and candidate.name == collection_name), None)
+        if path is None:
+            path = next((candidate for candidate in local if candidate.name in candidates), None)
         label = str(item.get("label") or (path.stem if path else "GSAS-II checkpoint"))
         descriptors.append(
             CheckpointDescriptor(
@@ -945,6 +950,7 @@ def _checkpoint_descriptors(result: dict[str, Any], root: Path) -> list[Checkpoi
                 stage=_humanize(str(item.get("stage") or "Refinement checkpoint")),
                 status=_humanize(str(item.get("status") or "Available")),
                 handoff_available=path is not None,
+                galaxy_element_name=Path(collection_name).stem if collection_name else (path.stem if path else ""),
             )
         )
     return descriptors
