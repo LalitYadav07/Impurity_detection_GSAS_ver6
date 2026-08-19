@@ -63,3 +63,62 @@ def test_workbench_exposes_atomic_pending_and_companion_actions() -> None:
     assert "Companion-tool activity" in template
     assert "Technical files" in template
     assert template.count("radar-mode-card") >= 2
+
+
+def test_facility_workspace_exposes_one_folder_and_independent_inputs() -> None:
+    app = RadarPdNovaApp()
+    template = app.layout.html
+
+    assert any(
+        option["value"] == "ipts_browser" and "SNS/HFIR" in option["title"]
+        for option in app.server.state.source_options
+    )
+    for text in (
+        "Use an SNS/HFIR experiment working folder",
+        "Experiment working folder",
+        "Facility",
+        "Instrument",
+        "Experiment (IPTS)",
+        "Current working folder",
+        "Open subfolder",
+        "Copy completed results into this working folder",
+        "Results subfolder",
+        "Instrument profile source",
+        "Diffraction data in working folder",
+        "Instrument profile in working folder",
+        "Known/main-phase CIF in working folder",
+    ):
+        assert text in template
+
+    assert template.count("radar-instrument-upload-native") == 1
+    assert "facility_working_directory" in template
+    assert "facility_working_subdirectory" in template
+    assert "Main-phase CIF from current IPTS auxiliary folder" not in template
+    assert app.server.state.facility_options == [
+        {"title": "Spallation Neutron Source (SNS)", "value": "SNS"},
+        {"title": "High Flux Isotope Reactor (HFIR)", "value": "HFIR"},
+    ]
+
+
+def test_galaxy_remote_browser_is_an_explicit_history_import_path() -> None:
+    app = RadarPdNovaApp()
+    template = app.layout.html
+
+    remote_option = next(
+        option
+        for option in app.server.state.source_options
+        if option["value"] == "galaxy_remote"
+    )
+    assert remote_option["title"] == "Browse SNS files through Galaxy"
+    for text in (
+        "Discover SNS sources",
+        "Authorized file source",
+        "Current remote folder",
+    ):
+        assert text in template
+    handler_messages = " ".join(
+        str(constant) for constant in app.discover_remote_sources.__func__.__code__.co_consts
+    )
+    assert "Selected files are imported into this History before RADAR-PD starts." in handler_messages
+    for model in ("remote_data_uri", "remote_instrument_uri", "remote_main_cif_uri"):
+        assert model in template

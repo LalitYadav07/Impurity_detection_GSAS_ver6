@@ -2,17 +2,25 @@
 
 ## Scope
 
-This integration runs RADAR-PD as an NDIP/Galaxy job. It does not call the Birthright VM and it does not start the Streamlit application. Galaxy owns input selection, job execution, history, collections, provenance, reruns, workflow mapping, and output retention. The existing RADAR-PD Full and Rapid scientific pipelines remain the calculation engines.
+This integration runs RADAR-PD as an NDIP/Galaxy job. It does not call the Birthright VM and it does not start the Streamlit application. For one-off and mapped analyses, Galaxy owns input selection, job execution, history, collections, provenance, reruns, workflow mapping, and output retention. The optional managed watch worker uses the same immutable batch image but writes a self-contained, checksummed result bundle directly to the selected IPTS `shared/` folder; it is an NDIP-operated acquisition service rather than a browser session. The existing RADAR-PD Full and Rapid scientific pipelines remain the calculation engines.
 
-The implementation is local only at this stage. No container image or Galaxy tool has been pushed.
+The Galaxy batch tools and NOVA interactive client are deployed through the
+NDIP prototype environment. The IPTS browser, atomic result publisher, and
+restart-safe watch worker described here are implemented in the application
+repository; mounting `/SNS` and operating the persistent watcher remain NDIP
+deployment responsibilities.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
     A["Galaxy history upload"] --> D["RADAR-PD Analyze"]
-    B["SNS IPTS metadata or event file"] --> C["Read-only IPTS resolver"]
+    B["SNS IPTS metadata or event file"] --> C["IPTS resolver"]
+    B1["Galaxy-authorized SNS browser"] --> C1["Import selected gxfiles URI to History"]
+    B2["NOVA shared-folder browser"] --> C2["Confined /SNS/.../shared selection"]
     C --> D
+    C1 --> D
+    C2 --> D
     E["Portable RADAR-PD config"] --> D
     F["Built-in catalog mount"] --> D
     G["Custom library archive"] --> D
@@ -27,6 +35,10 @@ flowchart LR
     J --> O["Interactive result explorer"]
     L --> P["Typed GPX handoff"]
     P --> Q["Future NDIP interactive GSAS-II GPX opener"]
+    J --> R["Optional atomic curated IPTS copy"]
+    S["Saved watch recipe"] --> T["Managed restart-safe worker"]
+    T --> D
+    T --> R
 ```
 
 ## Components
@@ -50,7 +62,26 @@ The config covers:
 
 ### Input routes
 
-Direct Galaxy history input is the default. It accepts a diffraction dataset, instrument profile, and optional main-phase CIF. The built-in laboratory Cu K-alpha instrument preset can replace an uploaded profile for appropriate X-ray data.
+Direct Galaxy History or laptop upload remains available. It accepts a
+diffraction dataset, instrument profile, and optional main-phase CIF. The
+built-in laboratory Cu K-alpha instrument preset can replace an uploaded
+profile for appropriate X-ray data.
+
+For one-off SNS browsing, NOVA uses Galaxy's authenticated remote-file API. The
+browser lists only file sources authorized for the current NDIP user, retains
+opaque `gxfiles://` URIs, and filters files by scientific role. Diffraction
+data, instrument profile, and main-phase CIF are independent selections. Galaxy
+imports every selected remote object into the active History before Analyze
+runs, so the job consumes immutable History datasets and retains complete
+provenance. If a deployment does not expose file sources through the NOVA API
+key, the supported fallback is Galaxy **Upload -> Choose remote files**, followed
+by selection from **Galaxy History** in the RADAR-PD setup rail.
+
+The NOVA client also contains a direct mounted-storage browser for deployments
+that explicitly provide `/SNS` to the interactive pod. It selects an
+instrument, an `IPTS-*` experiment, a directory under `shared/`, and then a
+role-filtered file. This path is optional and is not inferred merely because
+Galaxy batch workers can access `/SNS`.
 
 SNS IPTS resolution is optional. It accepts either:
 
@@ -58,6 +89,12 @@ SNS IPTS resolution is optional. It accepts either:
 2. explicit instrument, IPTS, run, and bank values.
 
 The resolver searches the mounted read-only facility tree for exactly one reduced pattern and one matching instrument profile. Zero matches fail with a useful message. Multiple matches also fail instead of silently choosing the wrong bank or reduction.
+
+Both browser routes are distinct from inference-based resolution: the user sees
+and chooses the actual reduced file. Galaxy remote-source authorization governs
+the primary browser. Direct mounted browsing and publishing are additionally
+confined to `/SNS/<instrument>/IPTS-*/shared`; traversal, symlink escape, and
+writes to raw NeXus trees are rejected.
 
 ### Scientific execution
 
@@ -123,7 +160,25 @@ Galaxy collection mapping is the NDIP-native mechanism for repeated scans:
 3. preserve one independent result bundle per scan,
 4. pass the mapped `summary` collection to RADAR-PD Compare Series.
 
-This supports temperature, field, pressure, time, and repeated live-reduction series without introducing a separate RADAR queue or watcher service. An upstream reduction workflow can append or create the pattern collection before RADAR-PD runs.
+This supports finite temperature, field, pressure, time, and repeated-reduction
+series and is the preferred path when the scan set is already represented as a
+Galaxy collection.
+
+For an acquisition folder that receives new reduced files over time, NOVA can
+save a portable analysis configuration and a `radar-pd-watch/v1` recipe into the
+IPTS `shared/` tree. `scripts/ndip_ipts_watch.py` is a separate managed worker
+that:
+
+- discovers only configured filename patterns,
+- waits for size and modification time to remain stable,
+- fingerprints each input and keeps restart-safe atomic state,
+- retries failures with configured delay and attempt limits,
+- stages outputs in a hidden processing directory,
+- atomically renames successful results into a unique per-file directory, and
+- preserves numbered failure evidence without overwriting previous runs.
+
+The watcher deliberately does not run inside the NOVA browser pod. It therefore
+survives logout, browser closure, and interactive-session expiry.
 
 ## Intended NDIP Workflows
 
@@ -134,6 +189,24 @@ History diffraction + instrument + optional main CIF -> configuration -> Analyze
 ### IPTS run analysis
 
 Event file or explicit IPTS metadata -> resolver inside Analyze -> Full/Rapid pipeline -> normalized outputs.
+
+### Galaxy-browsed SNS file analysis
+
+NOVA authorized source -> `gxfiles://` folder -> selected reduced pattern +
+independently selected instrument/CIF -> import into Galaxy History -> Analyze
+-> report and collections in Galaxy History.
+
+### Direct-mounted IPTS file analysis
+
+NOVA instrument -> IPTS -> shared folder -> selected reduced pattern +
+independently selected instrument/CIF -> Galaxy Analyze -> Galaxy history ->
+optional atomic curated copy to a selected IPTS output folder.
+
+### Watched acquisition folder
+
+Saved configuration + CIF/instrument files in IPTS -> managed watcher -> stable
+new pattern -> Full/Rapid analysis -> unique atomic result folder with manifest,
+logs, report, tables, plots, CIFs, and GPX checkpoints.
 
 ### Sequential scan series
 
@@ -159,10 +232,15 @@ docker run --rm radar-pd-ndip:local
 Galaxy wrappers currently refer to `radar-pd-ndip:local`. Before deployment this must be replaced with an immutable ORNL registry reference, preferably by digest. The deployed job needs:
 
 - a read-only versioned catalog mount
-- an optional read-only `/SNS` mount for IPTS mode
+- an optional read-only `/SNS` mount for IPTS browsing/resolution
 - writable ephemeral Galaxy job storage
 - no Birthright VM credentials
 - no API token for batch execution
+
+Direct result publishing requires a narrowly scoped writer identity for selected
+IPTS `shared/` folders. Continuous watching additionally requires an NDIP-managed
+service or scheduled container using the same immutable application image and
+recipe contract.
 
 The image uses a normal Docker `CMD`, not an `ENTRYPOINT`, so Galaxy can execute its generated Bash command.
 
@@ -173,6 +251,12 @@ The image uses a normal Docker `CMD`, not an `ENTRYPOINT`, so Galaxy can execute
 - User-supplied database archives reject path traversal before extraction.
 - IPTS components accept only safe alphanumeric, underscore, and hyphen tokens.
 - Ambiguous facility-file matches fail closed.
+- Facility browsing and output paths are confined to an IPTS `shared/` tree;
+  traversal and symlink escapes fail closed.
+- IPTS publication stages data before atomic rename and never overwrites a
+  completed result directory.
+- Watch state and fingerprints are atomic and restart-safe; unstable files are
+  not processed.
 - Input files are checksummed in the manifest.
 - Result provenance records the RADAR-PD Git commit, container digest, and database version when supplied by the deployment.
 - Scientific failures return partial diagnostics and a failed normalized state rather than reporting success.
@@ -181,7 +265,7 @@ The image uses a normal Docker `CMD`, not an `ENTRYPOINT`, so Galaxy can execute
 
 ```bash
 python -m pytest tests/test_ndip_adapter.py -q
-python -m py_compile scripts/ndip_contracts.py scripts/ndip_outputs.py scripts/ndip_runner.py
+python -m py_compile scripts/ndip_contracts.py scripts/ndip_outputs.py scripts/ndip_runner.py scripts/ndip_ipts_watch.py
 python scripts/ndip_runner.py configure --allowed-elements Cu,P,Pb,O,S --output config.yaml
 python scripts/ndip_runner.py analyze --config config.yaml --data pattern.dat --instrument profile.instprm --work-dir work --output-dir portal --dry-run
 ```
@@ -197,9 +281,13 @@ planemo lint tools/neutrons/powder_diffraction/radar_pd_*.xml
 
 1. ORNL registry project, image name, and immutable tag/digest policy.
 2. Versioned neutron and X-ray catalog mount paths.
-3. Whether production NDIP jobs may mount `/SNS` directly and which reduced-data layout is supported.
+3. Production `/SNS` mount policy: read-only browsing for NOVA/batch jobs and a
+   narrowly scoped writer identity for curated publication/watch outputs.
 4. CPU, memory, walltime, and concurrency destinations for Full and Rapid jobs.
 5. Galaxy datatype registration for `.gpx`.
 6. Ownership or source image for an interactive GSAS-II GPX opener.
 7. Retention policy for large GPX collections and complete result ZIP files.
 8. Prototype-branch permissions, review process, and who is authorized to publish the image.
+9. Owner and deployment model for the persistent watch worker (managed service
+   versus scheduler-driven `--once` sweeps), including monitoring and restart
+   policy.

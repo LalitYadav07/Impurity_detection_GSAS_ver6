@@ -23,6 +23,8 @@ class Radiation(str, Enum):
 class InputSource(str, Enum):
     UPLOAD = "upload"
     GALAXY = "galaxy"
+    GALAXY_REMOTE = "galaxy_remote"
+    IPTS_BROWSER = "ipts_browser"
     IPTS_EVENT = "ipts_event"
     IPTS_MANUAL = "ipts_manual"
 
@@ -65,12 +67,16 @@ class InputSelection(BaseModel):
     """File or IPTS inputs selected by the user."""
 
     source: InputSource = InputSource.UPLOAD
+    instrument_source: Literal["upload", "galaxy", "galaxy_remote", "ipts", "builtin"] = "upload"
     data_path: str | None = None
     data_dataset_id: str | None = None
+    data_remote_uri: str | None = None
     instrument_path: str | None = None
     instrument_dataset_id: str | None = None
+    instrument_remote_uri: str | None = None
     main_cif_path: str | None = None
     main_cif_dataset_id: str | None = None
+    main_cif_remote_uri: str | None = None
     database_archive_path: str | None = None
     database_dataset_id: str | None = None
     use_builtin_cuka: bool = False
@@ -81,14 +87,32 @@ class InputSelection(BaseModel):
     ipts: str | None = None
     run_number: int | None = None
     bank: str | None = None
+    data_relative_path: str | None = None
+    instrument_relative_path: str | None = None
+    main_cif_relative_path: str | None = None
+    publish_results_to_ipts: bool = False
+    publish_directory: str | None = None
+    publish_subfolder: str | None = None
 
     @model_validator(mode="after")
     def validate_source(self) -> "InputSelection":
-        if self.source in {InputSource.UPLOAD, InputSource.GALAXY}:
-            if not (self.data_path or self.data_dataset_id):
+        if self.source in {
+            InputSource.UPLOAD,
+            InputSource.GALAXY,
+            InputSource.GALAXY_REMOTE,
+            InputSource.IPTS_BROWSER,
+        }:
+            if not (self.data_path or self.data_dataset_id or self.data_remote_uri):
                 raise ValueError("Select a diffraction pattern")
-            if not self.use_builtin_cuka and not (self.instrument_path or self.instrument_dataset_id):
+            if not self.use_builtin_cuka and not (
+                self.instrument_path or self.instrument_dataset_id or self.instrument_remote_uri
+            ):
                 raise ValueError("Select an instrument profile or use the built-in Cu K-alpha profile")
+            if self.source == InputSource.GALAXY_REMOTE and not self.data_remote_uri:
+                raise ValueError("Select a diffraction pattern from a Galaxy remote file source")
+            if self.source == InputSource.IPTS_BROWSER:
+                if not all((self.instrument, self.ipts, self.data_relative_path)):
+                    raise ValueError("Select a facility instrument, IPTS, and diffraction file")
         elif self.source == InputSource.IPTS_EVENT:
             if not (self.event_file_path or self.event_dataset_id):
                 raise ValueError("Select a NeXus event file")
@@ -97,6 +121,10 @@ class InputSelection(BaseModel):
         elif self.source == InputSource.IPTS_MANUAL:
             if not all((self.instrument, self.ipts, self.run_number, self.bank)):
                 raise ValueError("Instrument, IPTS, run number, and bank are required")
+        if self.publish_results_to_ipts and not all(
+            (self.instrument, self.ipts, self.publish_directory, self.publish_subfolder)
+        ):
+            raise ValueError("Select an IPTS result destination before enabling result publishing")
         return self
 
 
@@ -278,7 +306,7 @@ class CacheManifest(BaseModel):
     archive_dataset_id: str
     archive_size: int | None = Field(default=None, ge=0)
     archive_update_time: str | None = None
-    adapter_version: str = "0.3.2"
+    adapter_version: str = "0.3.10"
     collected_utc: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
@@ -336,6 +364,8 @@ class RunRecord(BaseModel):
     cancel_requested: bool = False
     cache_manifest: CacheManifest | None = None
     recovery_diagnostics: list[str] = Field(default_factory=list)
+    published_output_dir: str | None = None
+    publish_message: str = ""
 
     @model_validator(mode="after")
     def adapt_legacy_record(self) -> "RunRecord":

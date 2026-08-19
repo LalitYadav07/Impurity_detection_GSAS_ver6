@@ -8,6 +8,39 @@ recovers jobs from the user's Galaxy history, and renders completed artifacts.
 The Full and Rapid paths share one setup form and one Galaxy submission
 contract. Scientific work remains inside the versioned RADAR-PD batch image.
 
+## Facility experiment integration
+
+The Data Collection panel provides a single working-folder browser for mounted
+SNS and HFIR experiment data. The user chooses the facility, instrument, and
+IPTS, then navigates one directory level at a time. Directory listings are lazy:
+RADAR-PD never scans an entire IPTS tree or recursively enumerates raw files.
+After a working folder is selected, each input control shows only compatible
+files from that folder.
+
+Diffraction data, instrument profile, and optional main-phase CIF retain
+independent sources. Each may come from the selected working folder, a laptop
+upload, or Galaxy History. This supports common mixed cases such as using a
+reduced pattern from `/SNS`, an instrument profile generated in the UI, and a
+CIF uploaded from a laptop. For suitable X-ray data, the built-in Cu K-alpha
+profile remains available.
+
+Galaxy History remains the authoritative result store. When the selected
+working folder is writable, the user may also request an atomic copy of the
+completed result package in a named subfolder below that folder. Publication is
+confined to the selected IPTS and cannot overwrite the working folder itself. A
+publication failure is reported separately and does not turn a successful
+scientific job into a failed job.
+
+Galaxy's authenticated remote-file sources remain a fallback when `/SNS` or
+`/HFIR` is not mounted in the interactive pod. Import the desired files through
+**Upload -> Choose remote files**, then select the resulting datasets from
+**Galaxy History** in RADAR-PD.
+
+The setup rail can save a portable configuration plus a `radar-pd-watch/v1`
+recipe for a continuously arriving reduced-data folder. The recipe is consumed
+by `scripts/ndip_ipts_watch.py`, which must run as an NDIP-managed worker; it is
+not tied to the lifetime of the NOVA browser session.
+
 ## Local checks
 
 ```bash
@@ -19,6 +52,10 @@ python -m pytest nova/tests -q
 ```bash
 docker build -f nova/dockerfiles/Dockerfile -t radar-pd-nova:local nova
 docker run --rm -p 8081:8081 \
+  -v /SNS:/SNS:ro \
+  -v /HFIR:/HFIR:ro \
+  -e RADAR_PD_SNS_ROOT=/SNS \
+  -e RADAR_PD_HFIR_ROOT=/HFIR \
   -e GALAXY_URL=https://ndip-test.ornl.gov \
   -e GALAXY_API_KEY=... \
   -e HISTORY_ID=... \
@@ -44,3 +81,10 @@ scientific catalog or run GSAS-II itself. It submits
 `neutrons_radar_pd_analyze_prototype`, whose versioned batch image remains the
 scientific execution environment and Galaxy remains the source of record for
 inputs, jobs, outputs, and provenance.
+
+Galaxy-authorized browsing does not require facility mounts inside the NOVA pod;
+NDIP's Galaxy file-source configuration owns that access. Direct working-folder
+browsing requires read-only `/SNS` and `/HFIR` mounts. Direct result publication
+and directory watching are separate operational features and require a narrowly
+scoped writer identity with access only to approved experiment folders. Raw data
+trees must remain read-only.

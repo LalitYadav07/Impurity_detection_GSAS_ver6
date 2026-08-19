@@ -48,3 +48,39 @@ collect         normalize an existing run directory
 ```
 
 The image writes Galaxy-ready collections under the selected output directory: `plots/`, `tables/`, `phases/`, `gpx/`, and `diagnostics/`. It also writes `summary.json`, `state.json`, `gpx_index.json`, `report.html`, and `results.zip`.
+
+## SNS IPTS folder watcher
+
+The same image contains a restart-safe worker for continuously arriving reduced
+patterns. The NOVA application writes a `radar-pd-watch/v1` recipe and its
+portable RADAR-PD configuration into an explicitly selected IPTS `shared/`
+folder. A managed NDIP worker consumes that recipe:
+
+```bash
+python /opt/radar-pd/scripts/ndip_ipts_watch.py \
+  --recipe /SNS/HB2A/IPTS-12345/shared/radar/watch/radar-pd-watch.json \
+  --facility-root /SNS
+```
+
+Use `--once` for a scheduler-driven sweep; omit it for a persistent worker. The
+worker waits for a file's size and modification time to remain stable, records
+fingerprints in an atomic state file, uses a recoverable heartbeat lease,
+retries bounded failures, and publishes
+each completed result directory by atomic rename. Failed attempts retain their
+logs in numbered evidence directories and never overwrite a previous result.
+
+The worker must be deployed by NDIP operations as a managed service or scheduled
+job. Saving a recipe in NOVA does not start a background process inside the
+interactive browser session.
+
+## Facility mount contract
+
+Ordinary one-off browsing should use Galaxy-authenticated remote-file sources;
+the selected object is imported into History before Analyze runs, and the NOVA
+pod does not need a native `/SNS` path. Mount the SNS tree read-only only when
+direct mounted browsing or run resolution is explicitly enabled. Publishing
+results and directory watching require a separate, narrowly scoped read-write
+mount that permits the worker identity to write only to the selected
+experiment's `shared/` tree. RADAR-PD rejects paths outside
+`/SNS/<instrument>/IPTS-*/shared`, path traversal, and symlink escapes. Raw
+NeXus directories are never writable through this integration.

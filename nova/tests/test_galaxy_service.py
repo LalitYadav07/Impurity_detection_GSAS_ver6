@@ -478,6 +478,93 @@ def test_server_selected_upload_keeps_supported_original_filename(tmp_path: Path
     assert _upload_filename(source, "main phase CIF") == "RADAR-PD main phase CIF | TbSSL.CIF"
 
 
+def test_remote_sources_and_directory_entries_are_normalized(monkeypatch: Any) -> None:
+    responses = [
+        [
+            {
+                "id": "sns",
+                "label": "SNS experiment files",
+                "uri_root": "gxfiles://sns/",
+                "browsable": True,
+                "writable": False,
+            }
+        ],
+        [
+            {"class": "Directory", "name": "HB2A", "uri": "gxfiles://sns/HB2A"},
+            {"class": "File", "name": "scan.dat", "uri": "gxfiles://sns/scan.dat"},
+            {"class": "File", "name": "notes.pdf", "uri": "gxfiles://sns/notes.pdf"},
+        ],
+    ]
+
+    class FakeResponse:
+        def __init__(self, payload: Any) -> None:
+            self.payload = payload
+
+        def raise_for_status(self) -> None:
+            pass
+
+        def json(self) -> Any:
+            return self.payload
+
+    monkeypatch.setattr(
+        "radar_pd_nova.galaxy_service.requests.get",
+        lambda *args, **kwargs: FakeResponse(responses.pop(0)),
+    )
+    service = GalaxyService("https://galaxy.example", "key", "history")
+
+    sources = service.list_remote_file_sources()
+    entries = service.list_remote_files("gxfiles://sns/", role="data")
+
+    assert sources == [
+        {
+            "id": "sns",
+            "title": "SNS experiment files",
+            "value": "gxfiles://sns/",
+            "description": "",
+            "writable": False,
+        }
+    ]
+    assert [entry["title"] for entry in entries] == ["HB2A", "scan.dat"]
+    assert service.remote_parent_uri("gxfiles://sns/HB2A/IPTS-123/shared/", "gxfiles://sns/") == (
+        "gxfiles://sns/HB2A/IPTS-123/"
+    )
+    assert service.remote_parent_uri("gxfiles://other/private/", "gxfiles://sns/") == "gxfiles://sns/"
+
+
+def test_remote_file_import_uses_galaxy_fetch_and_waits_for_dataset(monkeypatch: Any) -> None:
+    posted: list[dict[str, Any]] = []
+
+    class FakeResponse:
+        def __init__(self, payload: Any) -> None:
+            self.payload = payload
+
+        def raise_for_status(self) -> None:
+            pass
+
+        def json(self) -> Any:
+            return self.payload
+
+    def fake_post(url: str, **kwargs: Any) -> FakeResponse:
+        posted.append({"url": url, **kwargs})
+        return FakeResponse({"outputs": [{"id": "imported-data"}]})
+
+    monkeypatch.setattr("radar_pd_nova.galaxy_service.requests.post", fake_post)
+    monkeypatch.setattr(
+        "radar_pd_nova.galaxy_service.requests.get",
+        lambda *args, **kwargs: FakeResponse({"state": "ok"}),
+    )
+    service = GalaxyService("https://galaxy.example", "key", "history")
+
+    dataset_id = service._import_remote_dataset("gxfiles://sns/HB2A/IPTS-123/shared/scan.dat", "diffraction data")
+
+    assert dataset_id == "imported-data"
+    assert posted[0]["url"].endswith("/api/tools/fetch")
+    assert posted[0]["json"]["history_id"] == "history"
+    item = posted[0]["json"]["targets"][0]["items"][0]
+    assert item["url"] == "gxfiles://sns/HB2A/IPTS-123/shared/scan.dat"
+    assert item["name"].endswith("scan.dat")
+
+
 def test_history_dataset_listing_paginates_before_filtering(monkeypatch: Any) -> None:
     calls: list[dict[str, Any]] = []
     pages = {

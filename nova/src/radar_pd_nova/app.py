@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import json
 import os
@@ -18,6 +19,7 @@ from trame.app import get_server
 from trame.widgets import client, html, plotly, vuetify3 as vuetify
 
 from .configuration import config_from_contract, load_configuration
+from .facility import FacilityBrowser, FacilityPathError, WatchRecipe
 from .galaxy_service import (
     COMPARE_SERIES_TOOL_ID,
     GPX_HANDOFF_TOOL_ID,
@@ -43,7 +45,7 @@ from .uploads import NamedFileUpload
 
 
 _SUBMISSION_FIELDS = (
-    "analysis_mode", "radiation", "instrument_mode", "input_source", "data_path", "instrument_path",
+    "analysis_mode", "radiation", "instrument_mode", "input_source", "instrument_source", "data_path", "instrument_path",
     "main_cif_path", "database_archive_path", "main_cif_source", "database_source", "event_file_path",
     "use_builtin_cuka", "ipts_instrument", "ipts", "run_number", "bank", "sample_elements",
     "environment_elements", "run_name", "fit_start", "fit_end", "ignore_regions", "reference_masks_enabled",
@@ -55,7 +57,13 @@ _SUBMISSION_FIELDS = (
     "full_cell_length_tolerance_pct", "full_cell_angle_tolerance_deg", "full_rwp_improvement_threshold",
     "rapid_phases_per_hypothesis", "rapid_stage_output_limit", "rapid_gsas_validation_limit",
     "rapid_parallel_workers", "rapid_show_family_variants", "rapid_final_polish_enabled", "history_data_id",
-    "history_instrument_id", "history_main_cif_id", "history_database_id", "submission_token", "form_revision",
+    "history_instrument_id", "history_main_cif_id", "history_database_id",
+    "remote_source", "remote_data_uri", "remote_instrument_uri", "remote_main_cif_uri",
+    "use_facility_workspace", "facility_site", "facility_instrument", "facility_ipts",
+    "facility_working_directory", "facility_data_path", "facility_data_relative_path",
+    "facility_instrument_path", "facility_instrument_relative_path", "facility_main_cif_path",
+    "facility_main_cif_relative_path", "publish_results_to_ipts", "facility_output_subfolder",
+    "submission_token", "form_revision",
 )
 
 
@@ -80,6 +88,7 @@ class RadarPdNovaApp(ThemedApp):
         self.server = get_server(None, client_type="vue3")
         super().__init__(server=self.server)
         self.service = GalaxyService()
+        self.facility = FacilityBrowser(facility="SNS")
         self.records: dict[str, RunRecord] = {}
         self.utility_actions: dict[str, UtilityActionRecord] = {}
         self._monitored_uids: set[str] = set()
@@ -95,6 +104,10 @@ class RadarPdNovaApp(ThemedApp):
         self._initialize_state()
         self.server.state.change("run_selection")(self._run_selection_changed)
         self.server.state.change(*_SUBMISSION_FIELDS[:-2])(self._submission_form_changed)
+        self.server.state.change("facility_site")(self._facility_site_changed)
+        self.server.state.change("facility_instrument")(self._facility_instrument_changed)
+        self.server.state.change("facility_ipts")(self._facility_ipts_changed)
+        self.server.state.change("remote_source")(self._remote_source_changed)
         self.create_ui()
         self.server.controller.on_server_ready.add(self._recover_runs)
 
@@ -123,6 +136,7 @@ class RadarPdNovaApp(ThemedApp):
         state.radiation = "neutron"
         state.instrument_mode = "auto"
         state.input_source = "upload"
+        state.instrument_source = "upload"
         state.data_path = ""
         state.instrument_path = ""
         state.main_cif_path = ""
@@ -249,6 +263,74 @@ class RadarPdNovaApp(ThemedApp):
         state.library_builder_cif_ids = []
         state.library_builder_mode = "mini"
         state.sns_resolution = {}
+        state.use_facility_workspace = False
+        state.facility_site = "SNS"
+        state.facility_options = [
+            {"title": "Spallation Neutron Source (SNS)", "value": "SNS"},
+            {"title": "High Flux Isotope Reactor (HFIR)", "value": "HFIR"},
+        ]
+        state.facility_root = str(self.facility.root)
+        state.facility_available = self.facility.available
+        state.facility_instruments = self.facility.list_instruments()
+        state.facility_ipts_options = []
+        state.facility_instrument = ""
+        state.facility_ipts = ""
+        state.facility_working_directory = "."
+        state.facility_working_subdirectory = ""
+        state.facility_working_directories = []
+        state.facility_working_readable = False
+        state.facility_working_writable = False
+        state.facility_data_directory = "."
+        state.facility_data_subdirectory = ""
+        state.facility_data_directories = []
+        state.facility_data_files = []
+        state.facility_data_path = ""
+        state.facility_data_relative_path = ""
+        state.facility_instrument_directory = "."
+        state.facility_instrument_subdirectory = ""
+        state.facility_instrument_directories = []
+        state.facility_instrument_files = []
+        state.facility_cif_directory = "."
+        state.facility_cif_subdirectory = ""
+        state.facility_cif_directories = []
+        state.facility_cif_files = []
+        state.facility_instrument_path = ""
+        state.facility_instrument_relative_path = ""
+        state.facility_main_cif_path = ""
+        state.facility_main_cif_relative_path = ""
+        state.publish_results_to_ipts = False
+        state.facility_output_directory = "."
+        state.facility_output_subdirectory = ""
+        state.facility_output_directories = []
+        state.facility_new_output_folder = "radar-pd-results"
+        state.facility_output_subfolder = "radar-pd-results"
+        state.facility_browser_message = ""
+        state.remote_sources = []
+        state.remote_source = ""
+        state.remote_available = False
+        state.remote_message = "Select Discover SNS sources to load file locations authorized for your NDIP account."
+        state.remote_data_directory = ""
+        state.remote_data_subdirectory = ""
+        state.remote_data_directories = []
+        state.remote_data_files = []
+        state.remote_data_uri = ""
+        state.remote_instrument_directory = ""
+        state.remote_instrument_subdirectory = ""
+        state.remote_instrument_directories = []
+        state.remote_instrument_files = []
+        state.remote_instrument_uri = ""
+        state.remote_cif_directory = ""
+        state.remote_cif_subdirectory = ""
+        state.remote_cif_directories = []
+        state.remote_cif_files = []
+        state.remote_main_cif_uri = ""
+        state.watch_enabled = False
+        state.watch_patterns = "*.dat, *.xye, *.fxye, *.gsa, *.xrdml"
+        state.watch_settle_seconds = 60
+        state.watch_process_existing = False
+        state.watch_max_attempts = 3
+        state.watch_retry_delay_seconds = 120
+        state.watch_recipe_message = ""
         state.result_tab = "overview"
         state.mode_options = [
             {"title": "Rapid Hypothesis Mode", "value": "rapid"},
@@ -257,8 +339,16 @@ class RadarPdNovaApp(ThemedApp):
         state.source_options = [
             {"title": "Computer", "value": "upload"},
             {"title": "Galaxy History", "value": "galaxy"},
+            {"title": "Browse SNS files through Galaxy", "value": "galaxy_remote"},
+            {"title": "Experiment working folder (SNS/HFIR)", "value": "ipts_browser"},
             {"title": "SNS IPTS / NeXus event file", "value": "ipts_event"},
             {"title": "SNS IPTS / run lookup", "value": "ipts_manual"},
+        ]
+        state.instrument_source_options = [
+            {"title": "Choose profile from computer", "value": "upload"},
+            {"title": "Choose profile from Galaxy History", "value": "galaxy"},
+            {"title": "Browse SNS profile through Galaxy", "value": "galaxy_remote"},
+            {"title": "Choose profile from experiment working folder", "value": "ipts"},
         ]
         state.radiation_options = [
             {"title": "Neutron powder diffraction", "value": "neutron"},
@@ -268,6 +358,8 @@ class RadarPdNovaApp(ThemedApp):
             {"title": "No supplied main phase", "value": "none"},
             {"title": "Choose CIF from computer", "value": "upload"},
             {"title": "Choose CIF from Galaxy History", "value": "galaxy"},
+            {"title": "Browse SNS CIF through Galaxy", "value": "galaxy_remote"},
+            {"title": "Choose CIF from experiment working folder", "value": "ipts"},
         ]
         state.database_source_options = [
             {"title": "Built-in MP/COD catalog", "value": "builtin"},
@@ -330,6 +422,306 @@ class RadarPdNovaApp(ThemedApp):
                 variant="flat",
                 size="small",
             )
+
+    def _facility_picker(
+        self,
+        *,
+        title: str,
+        directory_model: str,
+        subdirectory_model: str,
+        directory_items: str,
+        file_model: str,
+        file_items: str,
+        open_action: Any,
+        up_action: Any,
+        select_action: Any,
+        file_label: str,
+    ) -> None:
+        """Render one role-filtered, progressive IPTS shared-folder picker."""
+
+        with html.Div(classes="radar-facility-picker"):
+            html.Strong(title, classes="radar-facility-picker-title")
+            with html.Div(classes="radar-facility-path-row"):
+                vuetify.VTextField(
+                    v_model=(directory_model,),
+                    label="Current folder",
+                    readonly=True,
+                    density="compact",
+                    variant="outlined",
+                    hide_details=True,
+                )
+                vuetify.VBtn(
+                    icon="mdi-arrow-up",
+                    title="Go to parent folder",
+                    click=up_action,
+                    variant="outlined",
+                    size="small",
+                )
+            with html.Div(classes="radar-facility-path-row mt-2"):
+                vuetify.VSelect(
+                    v_model=(subdirectory_model,),
+                    items=(directory_items,),
+                    item_title="title",
+                    item_value="value",
+                    label="Subfolder",
+                    density="compact",
+                    variant="outlined",
+                    hide_details=True,
+                    clearable=True,
+                    no_data_text="No readable subfolders",
+                )
+                vuetify.VBtn(
+                    icon="mdi-folder-open-outline",
+                    title="Open selected folder",
+                    click=open_action,
+                    disabled=(f"!{subdirectory_model}",),
+                    variant="outlined",
+                    size="small",
+                )
+            vuetify.VSelect(
+                v_model=(file_model,),
+                items=(file_items,),
+                item_title="title",
+                item_value="value",
+                label=file_label,
+                density="compact",
+                variant="outlined",
+                clearable=True,
+                no_data_text="No compatible files in this folder",
+                update_modelValue=(select_action, "[$event]"),
+                classes="mt-2",
+            )
+
+    def _facility_workspace_controls(self) -> None:
+        """Render one lazy, IPTS-confined experiment working-folder browser."""
+
+        vuetify.VSwitch(
+            v_model=("use_facility_workspace",),
+            label="Use an SNS/HFIR experiment working folder",
+            hint="Enable this to select inputs from an IPTS folder or copy completed results back to it.",
+            persistent_hint=True,
+            color="#15543c",
+            density="compact",
+            inset=True,
+        )
+        with html.Div(
+            v_show="use_facility_workspace || input_source === 'ipts_browser' || instrument_source === 'ipts' || main_cif_source === 'ipts' || publish_results_to_ipts",
+            classes="radar-facility-picker",
+        ):
+            html.Strong("Experiment working folder", classes="radar-facility-picker-title")
+            html.P(
+                "Choose the facility, instrument, IPTS, and one folder. Only the immediate subfolders and compatible files are listed.",
+                classes="radar-help-copy",
+            )
+            with html.Div(classes="radar-field-pair"):
+                vuetify.VSelect(
+                    label="Facility",
+                    v_model=("facility_site",),
+                    items=("facility_options",),
+                    item_title="title",
+                    item_value="value",
+                    density="compact",
+                    variant="outlined",
+                )
+                vuetify.VSelect(
+                    label="Instrument",
+                    v_model=("facility_instrument",),
+                    items=("facility_instruments",),
+                    item_title="title",
+                    item_value="value",
+                    density="compact",
+                    variant="outlined",
+                    no_data_text="No readable instruments",
+                )
+            vuetify.VCombobox(
+                label="Experiment (IPTS)",
+                v_model=("facility_ipts",),
+                items=("facility_ipts_options",),
+                item_title="title",
+                item_value="value",
+                density="compact",
+                variant="outlined",
+                hint="Select a recent IPTS or enter any IPTS number, for example IPTS-34537.",
+                persistent_hint=True,
+                no_data_text="Choose an instrument or enter an IPTS",
+            )
+            vuetify.VAlert(
+                v_show="!facility_available",
+                text=("'The ' + facility_site + ' filesystem is not mounted in this interactive session.'",),
+                type="warning",
+                variant="tonal",
+                density="compact",
+            )
+            with html.Div(classes="radar-facility-path-row"):
+                vuetify.VTextField(
+                    v_model=("facility_working_directory",),
+                    label="Current working folder",
+                    readonly=True,
+                    density="compact",
+                    variant="outlined",
+                    hide_details=True,
+                )
+                vuetify.VBtn(
+                    icon="mdi-arrow-up",
+                    title="Go to parent folder",
+                    click=self.up_facility_working_directory,
+                    disabled=("facility_working_directory === '.'",),
+                    variant="outlined",
+                    size="small",
+                )
+            with html.Div(classes="radar-facility-path-row mt-2"):
+                vuetify.VSelect(
+                    v_model=("facility_working_subdirectory",),
+                    items=("facility_working_directories",),
+                    item_title="title",
+                    item_value="value",
+                    label="Open subfolder",
+                    density="compact",
+                    variant="outlined",
+                    hide_details=True,
+                    clearable=True,
+                    no_data_text="No readable subfolders",
+                )
+                vuetify.VBtn(
+                    icon="mdi-folder-open-outline",
+                    title="Open selected subfolder",
+                    click=self.open_facility_working_directory,
+                    disabled=("!facility_working_subdirectory",),
+                    variant="outlined",
+                    size="small",
+                )
+            vuetify.VBtn(
+                "Refresh folder",
+                click=self.refresh_facility_browser,
+                prepend_icon="mdi-refresh",
+                variant="text",
+                size="small",
+                block=True,
+            )
+            vuetify.VAlert(
+                v_show="!!facility_browser_message",
+                text=("facility_browser_message",),
+                type=("facility_working_readable ? 'info' : 'warning'",),
+                variant="tonal",
+                density="compact",
+            )
+            vuetify.VSwitch(
+                v_model=("publish_results_to_ipts",),
+                label="Copy completed results into this working folder",
+                hint="Galaxy History remains the authoritative result store. This creates a separate named subfolder here.",
+                persistent_hint=True,
+                color="#15543c",
+                density="compact",
+                inset=True,
+                disabled=("!facility_working_writable",),
+            )
+            vuetify.VTextField(
+                v_show="publish_results_to_ipts",
+                v_model=("facility_output_subfolder",),
+                label="Results subfolder",
+                placeholder="radar-pd-results",
+                density="compact",
+                variant="outlined",
+                hint="A run-specific folder will be created inside this subfolder.",
+                persistent_hint=True,
+            )
+
+    def _remote_picker(
+        self,
+        *,
+        title: str,
+        directory_model: str,
+        subdirectory_model: str,
+        directory_items: str,
+        file_model: str,
+        file_items: str,
+        open_action: Any,
+        up_action: Any,
+        select_action: Any,
+        file_label: str,
+    ) -> None:
+        """Render a Galaxy-authorized remote-file picker."""
+
+        with html.Div(classes="radar-facility-picker"):
+            html.Strong(title, classes="radar-facility-picker-title")
+            with html.Div(classes="radar-facility-path-row"):
+                vuetify.VTextField(
+                    v_model=(directory_model,),
+                    label="Current remote folder",
+                    readonly=True,
+                    density="compact",
+                    variant="outlined",
+                    hide_details=True,
+                )
+                vuetify.VBtn(
+                    icon="mdi-arrow-up",
+                    title="Go to parent folder",
+                    click=up_action,
+                    variant="outlined",
+                    size="small",
+                )
+            with html.Div(classes="radar-facility-path-row mt-2"):
+                vuetify.VSelect(
+                    v_model=(subdirectory_model,),
+                    items=(directory_items,),
+                    item_title="title",
+                    item_value="value",
+                    label="Subfolder",
+                    density="compact",
+                    variant="outlined",
+                    hide_details=True,
+                    clearable=True,
+                    no_data_text="No readable subfolders",
+                )
+                vuetify.VBtn(
+                    icon="mdi-folder-open-outline",
+                    title="Open selected folder",
+                    click=open_action,
+                    disabled=(f"!{subdirectory_model}",),
+                    variant="outlined",
+                    size="small",
+                )
+            vuetify.VSelect(
+                v_model=(file_model,),
+                items=(file_items,),
+                item_title="title",
+                item_value="value",
+                label=file_label,
+                density="compact",
+                variant="outlined",
+                clearable=True,
+                no_data_text="No compatible files in this folder",
+                update_modelValue=(select_action, "[$event]"),
+                classes="mt-2",
+            )
+
+    def _remote_source_controls(self) -> None:
+        with html.Div(classes="radar-field-pair"):
+            vuetify.VSelect(
+                label="Authorized file source",
+                v_model=("remote_source",),
+                items=("remote_sources",),
+                item_title="title",
+                item_value="value",
+                density="compact",
+                variant="outlined",
+                no_data_text="Discover sources first",
+            )
+            vuetify.VBtn(
+                "Discover SNS sources",
+                click=self.discover_remote_sources,
+                prepend_icon="mdi-cloud-search-outline",
+                variant="outlined",
+                color="#15543c",
+            )
+        vuetify.VAlert(
+            v_show="!!remote_message",
+            text=("remote_message",),
+            type=("remote_available ? 'info' : 'warning'",),
+            variant="tonal",
+            density="compact",
+            classes="mb-2",
+        )
 
     @contextmanager
     def _setup_section(self, number: int, title: str, value: str, status_expression: str) -> Any:
@@ -515,8 +907,10 @@ class RadarPdNovaApp(ThemedApp):
                                 variant="outlined",
                                 block=True,
                             )
-            data_ready = "(input_source === 'upload' && !!data_path && (!!instrument_path || (radiation === 'xray' && use_builtin_cuka))) || (input_source === 'galaxy' && !!history_data_id && (!!history_instrument_id || (radiation === 'xray' && use_builtin_cuka))) || (input_source === 'ipts_event' && !!event_file_path && !!bank) || (input_source === 'ipts_manual' && !!ipts_instrument && !!ipts && !!run_number && !!bank)"
+            instrument_ready = "((radiation === 'xray' && use_builtin_cuka) || (instrument_source === 'upload' && !!instrument_path) || (instrument_source === 'galaxy' && !!history_instrument_id) || (instrument_source === 'galaxy_remote' && !!remote_instrument_uri) || (instrument_source === 'ipts' && !!facility_instrument_path))"
+            data_ready = f"((input_source === 'upload' && !!data_path) || (input_source === 'galaxy' && !!history_data_id) || (input_source === 'galaxy_remote' && !!remote_data_uri) || (input_source === 'ipts_browser' && !!facility_data_path)) && {instrument_ready} || (input_source === 'ipts_event' && !!event_file_path && !!bank) || (input_source === 'ipts_manual' && !!ipts_instrument && !!ipts && !!run_number && !!bank)"
             with self._setup_section(3, "Data Collection", "data", data_ready):
+                self._facility_workspace_controls()
                 vuetify.VSelect(
                     label="Data source",
                     v_model=("input_source",),
@@ -533,13 +927,6 @@ class RadarPdNovaApp(ThemedApp):
                         help_text="Required measurement pattern",
                         extensions=[".dat", ".xye", ".xy", ".csv", ".txt", ".fxye", ".xrdml", ".xml"],
                         key="radar-diffraction-upload",
-                    )
-                    NamedFileUpload(
-                        "instrument_path",
-                        label="GSAS-II instrument profile",
-                        help_text="Required unless the built-in X-ray profile is used",
-                        extensions=[".instprm", ".prm", ".inst", ".ins"],
-                        key="radar-instrument-upload",
                     )
                 with html.Div(v_show="input_source === 'galaxy'", key="'radar-history-inputs'"):
                     vuetify.VTextField(
@@ -571,7 +958,75 @@ class RadarPdNovaApp(ThemedApp):
                         no_data_text="No compatible diffraction datasets",
                         key="radar-history-diffraction",
                     )
+                    vuetify.VBtn(
+                        "Load more",
+                        v_show="history_has_more",
+                        click=self.load_more_history,
+                        prepend_icon="mdi-chevron-down",
+                        variant="text",
+                        size="small",
+                        block=True,
+                    )
+                with html.Div(v_show="input_source === 'galaxy_remote'", key="'radar-remote-inputs'"):
+                    self._remote_source_controls()
+                    self._remote_picker(
+                        title="Diffraction data in the experiment filesystem",
+                        directory_model="remote_data_directory",
+                        subdirectory_model="remote_data_subdirectory",
+                        directory_items="remote_data_directories",
+                        file_model="remote_data_uri",
+                        file_items="remote_data_files",
+                        open_action=self.open_remote_data_directory,
+                        up_action=self.up_remote_data_directory,
+                        select_action=self.select_remote_data,
+                        file_label="Measured powder pattern",
+                    )
+                with html.Div(v_show="input_source === 'ipts_browser'", key="'radar-facility-inputs'"):
                     vuetify.VSelect(
+                        label="Diffraction data in working folder",
+                        v_model=("facility_data_relative_path",),
+                        items=("facility_data_files",),
+                        item_title="title",
+                        item_value="value",
+                        density="compact",
+                        variant="outlined",
+                        clearable=True,
+                        no_data_text="No compatible diffraction files in this folder",
+                        update_modelValue=(self.select_facility_data, "[$event]"),
+                    )
+                vuetify.VSwitch(
+                    v_show="radiation === 'xray' && instrument_mode !== 'tof' && (input_source === 'upload' || input_source === 'galaxy' || input_source === 'galaxy_remote' || input_source === 'ipts_browser')",
+                    v_model=("use_builtin_cuka",),
+                    label="Use built-in Cu K-alpha profile",
+                    color="#15543c",
+                    density="compact",
+                    inset=True,
+                )
+                with html.Div(
+                    v_show="(input_source === 'upload' || input_source === 'galaxy' || input_source === 'galaxy_remote' || input_source === 'ipts_browser') && !(radiation === 'xray' && use_builtin_cuka)",
+                    key="'radar-independent-instrument-profile'",
+                ):
+                    vuetify.VSelect(
+                        label="Instrument profile source",
+                        v_model=("instrument_source",),
+                        items=("instrument_source_options",),
+                        item_title="title",
+                        item_value="value",
+                        density="compact",
+                        variant="outlined",
+                        hint="The instrument profile may come from a different location than the diffraction pattern.",
+                        persistent_hint=True,
+                    )
+                    with html.Div(v_show="instrument_source === 'upload'", key="'radar-independent-instrument-upload'"):
+                        NamedFileUpload(
+                            "instrument_path",
+                            label="GSAS-II instrument profile",
+                            help_text="Instrument geometry and peak-profile parameters",
+                            extensions=[".instprm", ".prm", ".inst", ".ins"],
+                            key="radar-instrument-upload",
+                        )
+                    vuetify.VSelect(
+                        v_show="instrument_source === 'galaxy'",
                         label="Instrument profile from History",
                         v_model=("history_instrument_id",),
                         items=("history_instrument_datasets",),
@@ -582,23 +1037,34 @@ class RadarPdNovaApp(ThemedApp):
                         no_data_text="No GSAS-II instrument profiles",
                         key="radar-history-instrument",
                     )
-                    vuetify.VBtn(
-                        "Load more",
-                        v_show="history_has_more",
-                        click=self.load_more_history,
-                        prepend_icon="mdi-chevron-down",
-                        variant="text",
-                        size="small",
-                        block=True,
-                    )
-                vuetify.VSwitch(
-                    v_show="radiation === 'xray' && instrument_mode !== 'tof' && (input_source === 'upload' || input_source === 'galaxy')",
-                    v_model=("use_builtin_cuka",),
-                    label="Use built-in Cu K-alpha profile",
-                    color="#15543c",
-                    density="compact",
-                    inset=True,
-                )
+                    with html.Div(v_show="instrument_source === 'galaxy_remote'", key="'radar-remote-instrument'"):
+                        with html.Div(v_show="input_source !== 'galaxy_remote'"):
+                            self._remote_source_controls()
+                        self._remote_picker(
+                            title="Instrument profile in the experiment filesystem",
+                            directory_model="remote_instrument_directory",
+                            subdirectory_model="remote_instrument_subdirectory",
+                            directory_items="remote_instrument_directories",
+                            file_model="remote_instrument_uri",
+                            file_items="remote_instrument_files",
+                            open_action=self.open_remote_instrument_directory,
+                            up_action=self.up_remote_instrument_directory,
+                            select_action=self.select_remote_instrument,
+                            file_label="GSAS-II instrument profile",
+                        )
+                    with html.Div(v_show="instrument_source === 'ipts'"):
+                        vuetify.VSelect(
+                            label="Instrument profile in working folder",
+                            v_model=("facility_instrument_relative_path",),
+                            items=("facility_instrument_files",),
+                            item_title="title",
+                            item_value="value",
+                            density="compact",
+                            variant="outlined",
+                            clearable=True,
+                            no_data_text="No compatible instrument profiles in this folder",
+                            update_modelValue=(self.select_facility_instrument, "[$event]"),
+                        )
                 with html.Div(v_show="input_source === 'ipts_event'", key="'radar-event-inputs'"):
                     NamedFileUpload(
                         "event_file_path",
@@ -652,6 +1118,22 @@ class RadarPdNovaApp(ThemedApp):
                         optional=True,
                         key="radar-main-cif-upload",
                     )
+                with html.Div(
+                    v_show="main_cif_source === 'ipts'",
+                    key="'radar-independent-facility-cif'",
+                ):
+                    vuetify.VSelect(
+                        label="Known/main-phase CIF in working folder",
+                        v_model=("facility_main_cif_relative_path",),
+                        items=("facility_cif_files",),
+                        item_title="title",
+                        item_value="value",
+                        density="compact",
+                        variant="outlined",
+                        clearable=True,
+                        no_data_text="No CIF files in this folder",
+                        update_modelValue=(self.select_facility_main_cif, "[$event]"),
+                    )
                 vuetify.VSelect(
                     v_show="main_cif_source === 'galaxy'",
                     label="Main-phase CIF from History",
@@ -665,6 +1147,152 @@ class RadarPdNovaApp(ThemedApp):
                     no_data_text="No CIF datasets are in this history",
                     key="'radar-history-main-cif'",
                 )
+                with html.Div(v_show="main_cif_source === 'galaxy_remote'", key="'radar-remote-main-cif'"):
+                    with html.Div(v_show="input_source !== 'galaxy_remote' && instrument_source !== 'galaxy_remote'"):
+                        self._remote_source_controls()
+                    self._remote_picker(
+                        title="Known-phase CIF in the experiment filesystem",
+                        directory_model="remote_cif_directory",
+                        subdirectory_model="remote_cif_subdirectory",
+                        directory_items="remote_cif_directories",
+                        file_model="remote_main_cif_uri",
+                        file_items="remote_cif_files",
+                        open_action=self.open_remote_cif_directory,
+                        up_action=self.up_remote_cif_directory,
+                        select_action=self.select_remote_main_cif,
+                        file_label="Known/main-phase CIF",
+                    )
+                with vuetify.VExpansionPanels(
+                    v_show="false",
+                    variant="accordion",
+                    classes="mt-3",
+                ):
+                    with vuetify.VExpansionPanel(title="IPTS results and folder automation"):
+                        with vuetify.VExpansionPanelText():
+                            vuetify.VSwitch(
+                                v_model=("publish_results_to_ipts",),
+                                label="Publish completed results to this IPTS",
+                                color="#15543c",
+                                density="compact",
+                                inset=True,
+                            )
+                            with html.Div(v_show="publish_results_to_ipts || watch_enabled"):
+                                with html.Div(classes="radar-facility-path-row"):
+                                    vuetify.VTextField(
+                                        v_model=("facility_output_directory",),
+                                        label="Results parent folder",
+                                        readonly=True,
+                                        density="compact",
+                                        variant="outlined",
+                                        hide_details=True,
+                                    )
+                                    vuetify.VBtn(
+                                        icon="mdi-arrow-up",
+                                        title="Go to parent folder",
+                                        click=self.up_facility_output_directory,
+                                        variant="outlined",
+                                        size="small",
+                                    )
+                                with html.Div(classes="radar-facility-path-row mt-2"):
+                                    vuetify.VSelect(
+                                        v_model=("facility_output_subdirectory",),
+                                        items=("facility_output_directories",),
+                                        item_title="title",
+                                        item_value="value",
+                                        label="Open existing folder",
+                                        density="compact",
+                                        variant="outlined",
+                                        hide_details=True,
+                                        clearable=True,
+                                    )
+                                    vuetify.VBtn(
+                                        icon="mdi-folder-open-outline",
+                                        title="Open selected output folder",
+                                        click=self.open_facility_output_directory,
+                                        disabled=("!facility_output_subdirectory",),
+                                        variant="outlined",
+                                        size="small",
+                                    )
+                                with html.Div(classes="radar-facility-path-row mt-2"):
+                                    vuetify.VTextField(
+                                        v_model=("facility_new_output_folder",),
+                                        label="Create results folder",
+                                        density="compact",
+                                        variant="outlined",
+                                        hide_details=True,
+                                    )
+                                    vuetify.VBtn(
+                                        icon="mdi-folder-plus-outline",
+                                        title="Create and open folder",
+                                        click=self.create_facility_output_directory,
+                                        variant="outlined",
+                                        size="small",
+                                    )
+                            vuetify.VSwitch(
+                                v_model=("watch_enabled",),
+                                label="Prepare this data folder for automatic processing",
+                                color="#15543c",
+                                density="compact",
+                                inset=True,
+                            )
+                            with html.Div(v_show="watch_enabled"):
+                                vuetify.VTextField(
+                                    v_model=("watch_patterns",),
+                                    label="New-file patterns",
+                                    density="compact",
+                                    variant="outlined",
+                                    hint="Comma-separated filename patterns",
+                                    persistent_hint=True,
+                                )
+                                vuetify.VTextField(
+                                    v_model=("watch_settle_seconds",),
+                                    label="Wait after last file change (seconds)",
+                                    type="number",
+                                    min=10,
+                                    density="compact",
+                                    variant="outlined",
+                                )
+                                vuetify.VSwitch(
+                                    v_model=("watch_process_existing",),
+                                    label="Include files already present",
+                                    color="#15543c",
+                                    density="compact",
+                                    inset=True,
+                                )
+                                with html.Div(classes="radar-field-pair"):
+                                    vuetify.VTextField(
+                                        v_model=("watch_max_attempts",),
+                                        label="Maximum attempts per file",
+                                        type="number",
+                                        min=1,
+                                        max=10,
+                                        density="compact",
+                                        variant="outlined",
+                                    )
+                                    vuetify.VTextField(
+                                        v_model=("watch_retry_delay_seconds",),
+                                        label="Retry delay (seconds)",
+                                        type="number",
+                                        min=10,
+                                        density="compact",
+                                        variant="outlined",
+                                    )
+                                vuetify.VBtn(
+                                    "Save watch recipe in source folder",
+                                    click=self.save_watch_recipe,
+                                    prepend_icon="mdi-content-save-cog-outline",
+                                    color="#15543c",
+                                    variant="outlined",
+                                    block=True,
+                                )
+                                vuetify.VAlert(
+                                    v_show="!!watch_recipe_message",
+                                    text=("watch_recipe_message",),
+                                    type="info",
+                                    variant="tonal",
+                                    density="compact",
+                                    classes="mt-2",
+                                )
             with self._setup_section(4, "Chemistry Policy", "chemistry", "!!sample_elements"):
                 vuetify.VTextField(
                     label="Sample elements",
@@ -1287,6 +1915,408 @@ class RadarPdNovaApp(ThemedApp):
         return regions
 
     @staticmethod
+    def _selected_value(value: Any) -> str:
+        if isinstance(value, dict):
+            value = value.get("value", value.get("id", ""))
+        if isinstance(value, (list, tuple)):
+            value = value[0] if value else ""
+        text = str(value or "").strip()
+        if text[:1] in {"{", "[", "("} and text[-1:] in {"}", "]", ")"}:
+            try:
+                decoded = ast.literal_eval(text)
+            except (SyntaxError, ValueError):
+                pass
+            else:
+                if isinstance(decoded, (dict, list, tuple)):
+                    return RadarPdNovaApp._selected_value(decoded)
+        return text
+
+    def discover_remote_sources(self, **_: Any) -> None:
+        state = self.server.state
+        try:
+            sources = self.service.list_remote_file_sources()
+            state.remote_sources = sources
+            state.remote_available = bool(sources)
+            if not sources:
+                state.remote_message = (
+                    "Galaxy did not expose an authenticated remote file source to this session. "
+                    "Use Galaxy's Upload > Choose remote files, then select the imported file from Galaxy History."
+                )
+            else:
+                current = str(state.remote_source or "")
+                allowed = {str(item["value"]) for item in sources}
+                if current not in allowed:
+                    state.remote_source = str(sources[0]["value"])
+                state.remote_message = (
+                    "These folders are provided by Galaxy using your NDIP identity. "
+                    "Selected files are imported into this History before RADAR-PD starts."
+                )
+                self._remote_source_changed(state.remote_source)
+        except Exception as exc:
+            state.remote_available = False
+            state.remote_sources = []
+            state.remote_message = f"Could not discover Galaxy remote sources: {exc}"
+        state.flush()
+
+    def _remote_source_changed(self, remote_source: Any = None, **_: Any) -> None:
+        state = self.server.state
+        root = self._selected_value(remote_source or state.remote_source)
+        if not root:
+            return
+        for field in ("remote_data_directory", "remote_instrument_directory", "remote_cif_directory"):
+            setattr(state, field, root)
+        for field in (
+            "remote_data_subdirectory",
+            "remote_instrument_subdirectory",
+            "remote_cif_subdirectory",
+            "remote_data_uri",
+            "remote_instrument_uri",
+            "remote_main_cif_uri",
+        ):
+            setattr(state, field, "")
+        self.refresh_remote_browser()
+
+    def refresh_remote_browser(self, **_: Any) -> None:
+        state = self.server.state
+        root = str(state.remote_source or "")
+        if not root:
+            return
+        try:
+            for prefix, role in (("data", "data"), ("instrument", "instrument"), ("cif", "cif")):
+                directory_field = f"remote_{prefix}_directory"
+                directory = str(getattr(state, directory_field, "") or root)
+                entries = self.service.list_remote_files(directory, role=role)
+                setattr(
+                    state,
+                    f"remote_{prefix}_directories",
+                    [entry for entry in entries if entry["kind"] == "directory"],
+                )
+                setattr(
+                    state,
+                    f"remote_{prefix}_files",
+                    [entry for entry in entries if entry["kind"] == "file"],
+                )
+            state.remote_available = True
+        except Exception as exc:
+            state.remote_message = f"Could not browse the selected Galaxy source: {exc}"
+        state.flush()
+
+    def _open_remote_directory(self, prefix: str) -> None:
+        state = self.server.state
+        selection = str(getattr(state, f"remote_{prefix}_subdirectory", "") or "")
+        if not selection:
+            return
+        setattr(state, f"remote_{prefix}_directory", selection)
+        setattr(state, f"remote_{prefix}_subdirectory", "")
+        selected_file = "remote_main_cif_uri" if prefix == "cif" else f"remote_{prefix}_uri"
+        setattr(state, selected_file, "")
+        self.refresh_remote_browser()
+
+    def _up_remote_directory(self, prefix: str) -> None:
+        state = self.server.state
+        root = str(state.remote_source or "")
+        current = str(getattr(state, f"remote_{prefix}_directory", "") or root)
+        setattr(state, f"remote_{prefix}_directory", self.service.remote_parent_uri(current, root))
+        self.refresh_remote_browser()
+
+    def open_remote_data_directory(self, **_: Any) -> None:
+        self._open_remote_directory("data")
+
+    def up_remote_data_directory(self, **_: Any) -> None:
+        self._up_remote_directory("data")
+
+    def open_remote_instrument_directory(self, **_: Any) -> None:
+        self._open_remote_directory("instrument")
+
+    def up_remote_instrument_directory(self, **_: Any) -> None:
+        self._up_remote_directory("instrument")
+
+    def open_remote_cif_directory(self, **_: Any) -> None:
+        self._open_remote_directory("cif")
+
+    def up_remote_cif_directory(self, **_: Any) -> None:
+        self._up_remote_directory("cif")
+
+    def select_remote_data(self, value: Any = None, **_: Any) -> None:
+        self.server.state.remote_data_uri = self._selected_value(value)
+        self.server.state.flush()
+
+    def select_remote_instrument(self, value: Any = None, **_: Any) -> None:
+        self.server.state.remote_instrument_uri = self._selected_value(value)
+        self.server.state.flush()
+
+    def select_remote_main_cif(self, value: Any = None, **_: Any) -> None:
+        self.server.state.remote_main_cif_uri = self._selected_value(value)
+        self.server.state.flush()
+
+    def _facility_site_changed(self, facility_site: Any = None, **_: Any) -> None:
+        state = self.server.state
+        site = self._selected_value(facility_site or state.facility_site).upper() or "SNS"
+        try:
+            self.facility = FacilityBrowser(facility=site)
+            state.facility_site = self.facility.facility
+            state.facility_root = str(self.facility.root)
+            state.facility_available = self.facility.available
+            state.facility_instruments = self.facility.list_instruments()
+            state.facility_instrument = ""
+            state.facility_ipts = ""
+            state.facility_ipts_options = []
+            state.facility_browser_message = f"Select a {site} instrument and IPTS."
+        except Exception as exc:
+            state.facility_available = False
+            state.facility_instruments = []
+            state.facility_browser_message = str(exc)
+        self._reset_facility_browser()
+        state.flush()
+
+    def _facility_instrument_changed(self, facility_instrument: Any = None, **_: Any) -> None:
+        state = self.server.state
+        instrument = self._selected_value(facility_instrument or state.facility_instrument)
+        state.facility_instrument = instrument
+        state.facility_ipts = ""
+        state.facility_ipts_options = self.facility.list_ipts(instrument) if instrument else []
+        self._reset_facility_browser()
+        state.flush()
+
+    def _facility_ipts_changed(self, facility_ipts: Any = None, **_: Any) -> None:
+        state = self.server.state
+        ipts = self._selected_value(facility_ipts or state.facility_ipts)
+        state.facility_ipts = ipts
+        if ipts:
+            self.refresh_facility_browser()
+        else:
+            self._reset_facility_browser()
+            state.flush()
+
+    def _reset_facility_browser(self) -> None:
+        state = self.server.state
+        for field, value in (
+            ("facility_working_directory", "."),
+            ("facility_working_subdirectory", ""),
+            ("facility_working_directories", []),
+            ("facility_working_readable", False),
+            ("facility_working_writable", False),
+            ("facility_data_directory", "."),
+            ("facility_data_subdirectory", ""),
+            ("facility_data_directories", []),
+            ("facility_data_files", []),
+            ("facility_data_path", ""),
+            ("facility_data_relative_path", ""),
+            ("facility_instrument_directory", "."),
+            ("facility_instrument_subdirectory", ""),
+            ("facility_instrument_directories", []),
+            ("facility_instrument_files", []),
+            ("facility_cif_directory", "."),
+            ("facility_cif_subdirectory", ""),
+            ("facility_cif_directories", []),
+            ("facility_cif_files", []),
+            ("facility_instrument_path", ""),
+            ("facility_instrument_relative_path", ""),
+            ("facility_main_cif_path", ""),
+            ("facility_main_cif_relative_path", ""),
+            ("facility_output_directory", "."),
+            ("facility_output_subdirectory", ""),
+            ("facility_output_directories", []),
+        ):
+            setattr(state, field, value)
+
+    def refresh_facility_browser(self, **_: Any) -> None:
+        state = self.server.state
+        state.facility_browser_message = ""
+        try:
+            instrument = str(state.facility_instrument or "")
+            ipts = str(state.facility_ipts or "")
+            if not instrument or not ipts:
+                raise FacilityPathError(f"Choose a {self.facility.facility} instrument and IPTS")
+            directory = str(state.facility_working_directory or ".")
+            data_entries = self.facility.list_directory(
+                instrument, ipts, directory, role="data"
+            )
+            instrument_entries = self.facility.list_directory(
+                instrument, ipts, directory, role="instrument"
+            )
+            cif_entries = self.facility.list_directory(
+                instrument, ipts, directory, role="cif"
+            )
+            directories = [item.as_item() for item in data_entries if item.kind == "directory"]
+            state.facility_working_directories = directories
+            state.facility_data_directories = directories
+            state.facility_data_files = [item.as_item() for item in data_entries if item.kind == "file"]
+            state.facility_instrument_directories = directories
+            state.facility_instrument_files = [item.as_item() for item in instrument_entries if item.kind == "file"]
+            state.facility_cif_directories = directories
+            state.facility_cif_files = [item.as_item() for item in cif_entries if item.kind == "file"]
+            state.facility_output_directories = directories
+            state.facility_data_directory = directory
+            state.facility_instrument_directory = directory
+            state.facility_cif_directory = directory
+            state.facility_output_directory = directory
+            access = self.facility.directory_access(instrument, ipts, directory)
+            state.facility_working_readable = bool(access["readable"] and access["searchable"])
+            state.facility_working_writable = bool(access["writable"])
+            if not state.facility_working_writable:
+                state.publish_results_to_ipts = False
+            access_label = "read/write" if state.facility_working_writable else "read only"
+            state.facility_browser_message = (
+                f"Browsing {self.facility.root}/{instrument}/{ipts}/{directory} ({access_label}). "
+                "Only this folder's compatible files and immediate subfolders are shown."
+            )
+        except Exception as exc:
+            state.facility_working_readable = False
+            state.facility_working_writable = False
+            state.publish_results_to_ipts = False
+            state.facility_working_directories = []
+            state.facility_data_files = []
+            state.facility_instrument_files = []
+            state.facility_cif_files = []
+            state.facility_browser_message = str(exc)
+        state.flush()
+
+    def _clear_facility_file_selections(self) -> None:
+        state = self.server.state
+        for field in (
+            "facility_data_path",
+            "facility_data_relative_path",
+            "facility_instrument_path",
+            "facility_instrument_relative_path",
+            "facility_main_cif_path",
+            "facility_main_cif_relative_path",
+        ):
+            setattr(state, field, "")
+
+    def open_facility_working_directory(self, **_: Any) -> None:
+        state = self.server.state
+        selected = str(state.facility_working_subdirectory or "")
+        if not selected:
+            return
+        state.facility_working_directory = selected
+        state.facility_working_subdirectory = ""
+        self._clear_facility_file_selections()
+        self.refresh_facility_browser()
+
+    def up_facility_working_directory(self, **_: Any) -> None:
+        state = self.server.state
+        current = str(state.facility_working_directory or ".")
+        state.facility_working_directory = self.facility.parent_directory(current)
+        state.facility_working_subdirectory = ""
+        self._clear_facility_file_selections()
+        self.refresh_facility_browser()
+
+    # Kept for the currently hidden legacy automation panel while saved NOVA
+    # sessions transition to the single working-folder state model.
+    def open_facility_output_directory(self, **_: Any) -> None:
+        self.open_facility_working_directory()
+
+    def up_facility_output_directory(self, **_: Any) -> None:
+        self.up_facility_working_directory()
+
+    def _select_facility_file(self, value: Any, *, role: str, path_field: str, relative_field: str) -> None:
+        state = self.server.state
+        relative = self._selected_value(value)
+        setattr(state, relative_field, relative)
+        setattr(state, path_field, "")
+        if not relative:
+            state.flush()
+            return
+        try:
+            selection = self.facility.select_file(
+                str(state.facility_instrument or ""),
+                str(state.facility_ipts or ""),
+                relative,
+                role=role,
+            )
+            setattr(state, path_field, selection.absolute_path)
+            state.facility_browser_message = f"Selected {selection.relative_path}"
+        except Exception as exc:
+            state.facility_browser_message = str(exc)
+            setattr(state, relative_field, "")
+        state.flush()
+
+    def select_facility_data(self, value: Any = None, **_: Any) -> None:
+        self._select_facility_file(
+            value, role="data", path_field="facility_data_path", relative_field="facility_data_relative_path"
+        )
+
+    def select_facility_instrument(self, value: Any = None, **_: Any) -> None:
+        self._select_facility_file(
+            value,
+            role="instrument",
+            path_field="facility_instrument_path",
+            relative_field="facility_instrument_relative_path",
+        )
+
+    def select_facility_main_cif(self, value: Any = None, **_: Any) -> None:
+        self._select_facility_file(
+            value,
+            role="cif",
+            path_field="facility_main_cif_path",
+            relative_field="facility_main_cif_relative_path",
+        )
+
+    def create_facility_output_directory(self, **_: Any) -> None:
+        state = self.server.state
+        try:
+            created = self.facility.create_directory(
+                str(state.facility_instrument or ""),
+                str(state.facility_ipts or ""),
+                str(state.facility_output_directory or "shared"),
+                str(state.facility_new_output_folder or ""),
+            )
+            state.facility_output_directory = created
+            state.facility_new_output_folder = "radar-pd-results"
+            state.facility_browser_message = f"Created {created}"
+            self.refresh_facility_browser()
+        except Exception as exc:
+            state.facility_browser_message = str(exc)
+            state.flush()
+
+    def save_watch_recipe(self, **_: Any) -> None:
+        state = self.server.state
+        state.watch_recipe_message = ""
+        try:
+            if state.input_source != InputSource.IPTS_BROWSER.value:
+                raise ValueError("Choose Browse SNS IPTS shared files first")
+            if not state.use_builtin_cuka and state.instrument_source != "ipts":
+                raise ValueError("A folder watcher must use an instrument profile stored in this IPTS")
+            if state.main_cif_source not in {"none", "ipts"}:
+                raise ValueError("A folder watcher must use a main CIF stored in this IPTS or no main CIF")
+            config = self._configuration()
+            config_path = self.facility.write_configuration(
+                str(state.facility_instrument or ""),
+                str(state.facility_ipts or ""),
+                str(state.facility_data_directory or "shared"),
+                config.portable_contract(),
+            )
+            ipts_root = (self.facility.root / str(state.facility_instrument) / str(state.facility_ipts)).resolve()
+            config_relative = config_path.resolve().relative_to(ipts_root).as_posix()
+            recipe = WatchRecipe(
+                instrument=str(state.facility_instrument or ""),
+                ipts=str(state.facility_ipts or ""),
+                source_directory=str(state.facility_data_directory or "shared"),
+                output_directory=str(state.facility_output_directory or "shared"),
+                configuration=config_relative,
+                instrument_profile=str(state.facility_instrument_relative_path or "") or None,
+                use_builtin_cuka=bool(state.use_builtin_cuka),
+                main_cif=(str(state.facility_main_cif_relative_path or "") or None)
+                if state.main_cif_source == "ipts"
+                else None,
+                include_patterns=[item.strip() for item in str(state.watch_patterns or "").split(",") if item.strip()],
+                settle_seconds=int(state.watch_settle_seconds),
+                process_existing=bool(state.watch_process_existing),
+                max_attempts=int(state.watch_max_attempts),
+                retry_delay_seconds=int(state.watch_retry_delay_seconds),
+                analysis_mode=str(state.analysis_mode),
+            )
+            recipe_path = self.facility.write_watch_recipe(recipe)
+            state.watch_recipe_message = (
+                f"Saved {recipe_path.name} and {config_path.name} in {recipe.source_directory}. "
+                "The persistent NDIP watcher can now consume this recipe."
+            )
+        except Exception as exc:
+            state.watch_recipe_message = str(exc)
+        state.flush()
+
+    @staticmethod
     def _submission_payload_expression() -> str:
         return "{" + ",".join(f"{name}:{name}" for name in _SUBMISSION_FIELDS) + "}"
 
@@ -1317,6 +2347,8 @@ class RadarPdNovaApp(ThemedApp):
         has_main_phase = (
             (state.main_cif_source == "upload" and bool(state.main_cif_path))
             or (state.main_cif_source == "galaxy" and bool(state.history_main_cif_id))
+            or (state.main_cif_source == "galaxy_remote" and bool(state.remote_main_cif_uri))
+            or (state.main_cif_source == "ipts" and bool(state.facility_main_cif_path))
         )
         presets: dict[str, dict[str, Any]] = {
             "quick": {
@@ -1414,28 +2446,73 @@ class RadarPdNovaApp(ThemedApp):
     def _inputs(self, payload: dict[str, Any] | None = None) -> InputSelection:
         state = self._form_state(payload)
         source = InputSource(state.input_source)
+        instrument_source = "builtin" if bool(state.use_builtin_cuka) else str(state.instrument_source or "upload")
         if state.radiation == "xray" and source in {InputSource.IPTS_EVENT, InputSource.IPTS_MANUAL}:
             raise ValueError("SNS IPTS resolution is available only for neutron data")
-        main_cif_path = state.main_cif_path or None if state.main_cif_source == "upload" else None
+        if state.main_cif_source == "upload":
+            main_cif_path = state.main_cif_path or None
+        elif state.main_cif_source == "ipts":
+            main_cif_path = state.facility_main_cif_path or None
+        else:
+            main_cif_path = None
         main_cif_dataset_id = state.history_main_cif_id or None if state.main_cif_source == "galaxy" else None
+        main_cif_remote_uri = (
+            state.remote_main_cif_uri or None if state.main_cif_source == "galaxy_remote" else None
+        )
         database_archive_path = state.database_archive_path or None if state.database_source == "upload" else None
         database_dataset_id = state.history_database_id or None if state.database_source == "galaxy" else None
+        uses_facility_scope = (
+            bool(state.use_facility_workspace)
+            or source == InputSource.IPTS_BROWSER
+            or instrument_source == "ipts"
+            or state.main_cif_source == "ipts"
+            or bool(state.publish_results_to_ipts)
+        )
         return InputSelection(
             source=source,
-            data_path=(state.data_path or None) if source == InputSource.UPLOAD else None,
+            instrument_source=instrument_source,
+            data_path=(state.data_path or None)
+            if source == InputSource.UPLOAD
+            else ((state.facility_data_path or None) if source == InputSource.IPTS_BROWSER else None),
             data_dataset_id=(state.history_data_id or None) if source == InputSource.GALAXY else None,
-            instrument_path=(state.instrument_path or None) if source == InputSource.UPLOAD else None,
-            instrument_dataset_id=(state.history_instrument_id or None) if source == InputSource.GALAXY else None,
+            data_remote_uri=(state.remote_data_uri or None) if source == InputSource.GALAXY_REMOTE else None,
+            instrument_path=(state.instrument_path or None)
+            if instrument_source == "upload"
+            else ((state.facility_instrument_path or None) if instrument_source == "ipts" else None),
+            instrument_dataset_id=(state.history_instrument_id or None) if instrument_source == "galaxy" else None,
+            instrument_remote_uri=(state.remote_instrument_uri or None)
+            if instrument_source == "galaxy_remote"
+            else None,
             main_cif_path=main_cif_path,
             main_cif_dataset_id=main_cif_dataset_id,
+            main_cif_remote_uri=main_cif_remote_uri,
             database_archive_path=database_archive_path,
             database_dataset_id=database_dataset_id,
             use_builtin_cuka=bool(state.use_builtin_cuka) if state.radiation == "xray" else False,
             event_file_path=state.event_file_path or None,
-            instrument=state.ipts_instrument or None,
-            ipts=state.ipts or None,
+            facility_root=str(self.facility.root) if uses_facility_scope else "/SNS",
+            instrument=(state.facility_instrument or None)
+            if uses_facility_scope
+            else (state.ipts_instrument or None),
+            ipts=(state.facility_ipts or None) if uses_facility_scope else (state.ipts or None),
             run_number=int(state.run_number) if state.run_number not in (None, "") else None,
             bank=state.bank or None,
+            data_relative_path=(state.facility_data_relative_path or None)
+            if source == InputSource.IPTS_BROWSER
+            else None,
+            instrument_relative_path=(state.facility_instrument_relative_path or None)
+            if instrument_source == "ipts"
+            else None,
+            main_cif_relative_path=(state.facility_main_cif_relative_path or None)
+            if state.main_cif_source == "ipts"
+            else None,
+            publish_results_to_ipts=bool(state.publish_results_to_ipts) if uses_facility_scope else False,
+            publish_directory=(state.facility_working_directory or None)
+            if uses_facility_scope and state.publish_results_to_ipts
+            else None,
+            publish_subfolder=(state.facility_output_subfolder or None)
+            if uses_facility_scope and state.publish_results_to_ipts
+            else None,
         )
 
     def submit_run(self, submission_payload: dict[str, Any] | None = None, **_: Any) -> None:
@@ -1560,6 +2637,7 @@ class RadarPdNovaApp(ThemedApp):
             if record.status == RunStatus.OK:
                 try:
                     record = await asyncio.to_thread(self.service.collect_results, record)
+                    record = await asyncio.to_thread(self._publish_results_if_requested, record)
                 except Exception as exc:
                     record.analysis_status = RunStatus.OK
                     record.status = RunStatus.OK
@@ -1570,6 +2648,43 @@ class RadarPdNovaApp(ThemedApp):
                 self._monitor_update(record)
         finally:
             self._monitored_uids.discard(record.uid)
+
+    def _publish_results_if_requested(self, record: RunRecord) -> RunRecord:
+        """Copy a completed result bundle into an explicitly selected IPTS folder."""
+
+        inputs = record.inputs
+        if (
+            inputs is None
+            or not inputs.publish_results_to_ipts
+            or not record.output_dir
+            or record.published_output_dir
+        ):
+            return record
+        try:
+            run_token = re.sub(r"[^A-Za-z0-9_. -]+", "-", record.name).strip(" .-") or "radar-pd-run"
+            suffix = (record.galaxy_job_id or record.uid).replace("pending-", "")[:8]
+            browser = FacilityBrowser.for_root(inputs.facility_root)
+            publish_parent = browser.ensure_output_parent(
+                str(inputs.instrument or ""),
+                str(inputs.ipts or ""),
+                str(inputs.publish_directory or ""),
+                str(inputs.publish_subfolder or ""),
+            )
+            published = browser.publish_directory(
+                record.output_dir,
+                str(inputs.instrument or ""),
+                str(inputs.ipts or ""),
+                publish_parent,
+                f"{run_token}-{suffix}",
+            )
+            record.published_output_dir = str(published)
+            record.publish_message = f"Published results to {published}"
+        except Exception as exc:
+            # Galaxy remains the authoritative result store; an IPTS copy
+            # failure must be visible but must not invalidate the analysis.
+            record.publish_message = f"Analysis completed, but IPTS publishing failed: {exc}"
+            record.message = "\n".join(value for value in (record.message, record.publish_message) if value)
+        return record
 
     def _sync_runs(self) -> None:
         self.server.state.run_rows = [record.as_row() for record in sorted(self.records.values(), key=lambda item: item.created_utc, reverse=True)]
@@ -1937,19 +3052,102 @@ class RadarPdNovaApp(ThemedApp):
         state.main_cif_source = "none"
         state.database_source = "builtin"
         state.use_builtin_cuka = bool(selection.get("use_builtin_cuka", False)) if config.radiation.value == "xray" else False
-        state.input_source = str(selection.get("source") or state.input_source)
-        for path_key, state_name in (
-            ("data_path", "data_path"),
-            ("instrument_path", "instrument_path"),
-            ("main_cif_path", "main_cif_path"),
-            ("database_archive_path", "database_archive_path"),
-        ):
-            if selection.get(path_key):
-                setattr(state, state_name, selection[path_key])
-        if selection.get("main_cif_path"):
+        raw_source = selection.get("source") or state.input_source
+        state.input_source = raw_source.value if hasattr(raw_source, "value") else str(raw_source)
+        raw_instrument_source = selection.get("instrument_source")
+        if state.use_builtin_cuka:
+            state.instrument_source = "upload"
+        elif raw_instrument_source:
+            state.instrument_source = (
+                raw_instrument_source.value if hasattr(raw_instrument_source, "value") else str(raw_instrument_source)
+            )
+        elif selection.get("instrument_dataset_id"):
+            state.instrument_source = "galaxy"
+        elif selection.get("instrument_relative_path"):
+            state.instrument_source = "ipts"
+        else:
+            state.instrument_source = "upload"
+
+        uses_facility_scope = bool(
+            state.input_source == InputSource.IPTS_BROWSER.value
+            or state.instrument_source == "ipts"
+            or selection.get("main_cif_relative_path")
+            or selection.get("publish_results_to_ipts")
+        )
+        if uses_facility_scope:
+            self.facility = FacilityBrowser.for_root(str(selection.get("facility_root") or "/SNS"))
+            state.use_facility_workspace = True
+            state.facility_site = self.facility.facility
+            state.facility_root = str(self.facility.root)
+            state.facility_available = self.facility.available
+            state.facility_instruments = self.facility.list_instruments()
+            state.facility_instrument = str(selection.get("instrument") or "")
+            state.facility_ipts = str(selection.get("ipts") or "")
+            state.facility_ipts_options = (
+                self.facility.list_ipts(state.facility_instrument) if state.facility_instrument else []
+            )
+
+        if state.input_source == InputSource.IPTS_BROWSER.value:
+            state.facility_data_path = str(selection.get("data_path") or "")
+            state.facility_data_relative_path = str(selection.get("data_relative_path") or "")
+            if state.facility_data_relative_path:
+                state.facility_working_directory = Path(state.facility_data_relative_path).parent.as_posix()
+
+        if state.instrument_source == "ipts":
+            state.facility_instrument_path = str(selection.get("instrument_path") or "")
+            state.facility_instrument_relative_path = str(selection.get("instrument_relative_path") or "")
+            if state.facility_instrument_relative_path:
+                state.facility_working_directory = Path(state.facility_instrument_relative_path).parent.as_posix()
+
+        if selection.get("main_cif_relative_path"):
+            state.facility_main_cif_path = str(selection.get("main_cif_path") or "")
+            state.facility_main_cif_relative_path = str(selection.get("main_cif_relative_path") or "")
+            state.facility_working_directory = Path(state.facility_main_cif_relative_path).parent.as_posix()
+            state.main_cif_source = "ipts"
+
+        if uses_facility_scope:
+            state.publish_results_to_ipts = bool(selection.get("publish_results_to_ipts", False))
+            if selection.get("publish_directory"):
+                state.facility_working_directory = str(selection["publish_directory"])
+            state.facility_output_subfolder = str(selection.get("publish_subfolder") or "radar-pd-results")
+            self.refresh_facility_browser()
+        else:
+            state.use_facility_workspace = False
+            state.publish_results_to_ipts = False
+
+        state.data_path = str(selection.get("data_path") or "") if state.input_source == InputSource.UPLOAD.value else ""
+        state.history_data_id = str(selection.get("data_dataset_id") or "") if state.input_source == InputSource.GALAXY.value else ""
+        state.remote_data_uri = (
+            str(selection.get("data_remote_uri") or "")
+            if state.input_source == InputSource.GALAXY_REMOTE.value
+            else ""
+        )
+        state.instrument_path = (
+            str(selection.get("instrument_path") or "") if state.instrument_source == "upload" else ""
+        )
+        state.history_instrument_id = (
+            str(selection.get("instrument_dataset_id") or "") if state.instrument_source == "galaxy" else ""
+        )
+        state.remote_instrument_uri = (
+            str(selection.get("instrument_remote_uri") or "")
+            if state.instrument_source == "galaxy_remote"
+            else ""
+        )
+        if selection.get("main_cif_dataset_id"):
+            state.main_cif_source = "galaxy"
+            state.history_main_cif_id = str(selection["main_cif_dataset_id"])
+        elif selection.get("main_cif_remote_uri"):
+            state.main_cif_source = "galaxy_remote"
+            state.remote_main_cif_uri = str(selection["main_cif_remote_uri"])
+        elif selection.get("main_cif_path") and not selection.get("main_cif_relative_path"):
             state.main_cif_source = "upload"
+            state.main_cif_path = str(selection["main_cif_path"])
+        if selection.get("database_dataset_id"):
+            state.database_source = "galaxy"
+            state.history_database_id = str(selection["database_dataset_id"])
         if selection.get("database_archive_path"):
             state.database_source = "upload"
+            state.database_archive_path = str(selection["database_archive_path"])
         state.run_name = ""
 
     def refresh_selected_run(self, **_: Any) -> None:
@@ -1960,6 +3158,8 @@ class RadarPdNovaApp(ThemedApp):
             record = self.service.refresh(self.records[uid])
             if record.status == RunStatus.OK and not record.output_dir:
                 record = self.service.collect_results(record)
+            if record.status == RunStatus.OK and record.output_dir:
+                record = self._publish_results_if_requested(record)
             self.records[uid] = record
             self._select_record(record)
             if record.status == RunStatus.OK and record.output_dir:
@@ -1978,6 +3178,7 @@ class RadarPdNovaApp(ThemedApp):
         try:
             self.server.state.selected_run_loading = True
             record = self.service.collect_results(record, force=True)
+            record = self._publish_results_if_requested(record)
             self.records[uid] = record
             self._select_record(record)
             if record.result_status == ResultStatus.READY and record.output_dir:
@@ -1998,7 +3199,7 @@ class RadarPdNovaApp(ThemedApp):
             return
         payload = {
             "schema": "radar-pd-nova-diagnostics/v1",
-            "nova_version": "0.3.2",
+            "nova_version": "0.3.9",
             "run": {
                 "name": record.name,
                 "mode_submitted": record.mode.value,
@@ -2076,6 +3277,7 @@ class RadarPdNovaApp(ThemedApp):
         try:
             if not record.output_dir:
                 record = self.service.collect_results(record)
+                record = self._publish_results_if_requested(record)
                 self.records[record.uid] = record
                 self._select_record(record)
                 self._sync_runs()
@@ -2665,6 +3867,9 @@ class RadarPdNovaApp(ThemedApp):
         .radar-step-label { color: var(--radar-brand-900); font-weight: 750; }
         .radar-setup-panels .v-expansion-panel-text__wrapper, .radar-history-panel .v-expansion-panel-text__wrapper { padding: 8px 11px 13px; }
         .radar-field-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+        .radar-facility-picker { margin: 10px 0; padding: 10px; background: #fff; border: 1px solid var(--radar-line); border-radius: 8px; }
+        .radar-facility-picker-title { display: block; margin-bottom: 8px; color: var(--radar-brand-900); font-size: 12px; }
+        .radar-facility-path-row { display: grid; grid-template-columns: minmax(0, 1fr) 38px; gap: 7px; align-items: center; }
         .radar-mode-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
         .radar-mode-card { display: grid; grid-template-columns: auto 1fr; gap: 4px 7px; align-items: center; padding: 11px; border: 1px solid var(--radar-line-strong); border-radius: 8px; background: #fff; cursor: pointer; }
         .radar-mode-card strong { color: var(--radar-brand-900); font-size: 14px; }

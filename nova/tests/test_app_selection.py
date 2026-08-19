@@ -184,3 +184,38 @@ def test_history_search_preserves_selected_sibling_labels() -> None:
 
     assert [item["id"] for item in state.history_data_datasets] == ["data-id"]
     assert [item["id"] for item in state.history_instrument_datasets] == ["instrument-id"]
+
+
+def test_facility_instrument_dropdown_payload_is_normalized() -> None:
+    app = RadarPdNovaApp.__new__(RadarPdNovaApp)
+    state = _State(facility_instrument={"title": "HB2A", "value": "HB2A"}, facility_ipts="old")
+    app.server = SimpleNamespace(state=state)
+    seen: list[str] = []
+    app.facility = SimpleNamespace(
+        list_ipts=lambda instrument: seen.append(instrument) or [{"title": "IPTS-1", "value": "IPTS-1"}]
+    )
+
+    app._facility_instrument_changed(state.facility_instrument)
+
+    assert state.facility_instrument == "HB2A"
+    assert state.facility_ipts == ""
+    assert state.facility_ipts_options == [{"title": "IPTS-1", "value": "IPTS-1"}]
+    assert seen == ["HB2A"]
+
+
+def test_facility_ipts_dropdown_payload_is_normalized_before_refresh() -> None:
+    app = RadarPdNovaApp.__new__(RadarPdNovaApp)
+    state = _State(facility_ipts="{'title': 'IPTS-38548', 'value': 'IPTS-38548'}")
+    app.server = SimpleNamespace(state=state)
+    refreshed: list[str] = []
+    app.refresh_facility_browser = lambda **_: refreshed.append(state.facility_ipts)
+
+    app._facility_ipts_changed(state.facility_ipts)
+
+    assert state.facility_ipts == "IPTS-38548"
+    assert refreshed == ["IPTS-38548"]
+
+
+def test_selected_value_normalizes_serialized_option_payloads() -> None:
+    assert RadarPdNovaApp._selected_value("{'title': 'HB2A', 'value': 'HB2A'}") == "HB2A"
+    assert RadarPdNovaApp._selected_value('[{"title": "IPTS-1", "value": "IPTS-1"}]') == "IPTS-1"

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import posixpath
 import re
 import shutil
 import tempfile
@@ -16,6 +17,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator
+from urllib.parse import urlsplit, urlunsplit
 
 import requests
 import yaml
@@ -54,6 +56,13 @@ _UPLOAD_SUFFIX_POLICIES: dict[str, tuple[frozenset[str], str]] = {
     "main phase CIF": (frozenset({".cif"}), ".cif"),
     "candidate library": (frozenset({".zip"}), ".zip"),
     "NeXus event file": (frozenset({".nxs", ".h5", ".hdf5"}), ".nxs"),
+}
+
+_REMOTE_ROLE_SUFFIXES: dict[str, frozenset[str]] = {
+    "data": frozenset({".dat", ".xye", ".xy", ".csv", ".txt", ".fxye", ".xrdml", ".xml"}),
+    "instrument": frozenset({".instprm", ".prm", ".inst", ".ins"}),
+    "cif": frozenset({".cif"}),
+    "event": frozenset({".nxs", ".h5", ".hdf5"}),
 }
 
 
@@ -423,6 +432,151 @@ class GalaxyService:
                 }
             )
         return result
+
+    def list_remote_file_sources(self) -> list[dict[str, Any]]:
+        """Return Galaxy file sources available to the current NDIP user.
+
+        Galaxy applies the user's file-source authorization when this endpoint
+        is called.  RADAR-PD never accepts a native server path from the
+        browser; it retains the opaque ``gxfiles://`` URI until Galaxy imports
+        the selected object into the active History.
+        """
+
+        response = requests.get(
+            f"{self.galaxy_url}/api/remote_files/plugins",
+            headers=self._headers,
+            params={"browsable_only": "true"},
+            timeout=30,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, list):
+            raise RuntimeError("Galaxy returned an invalid remote-file-source response")
+        sources: list[dict[str, Any]] = []
+        for raw in payload:
+            if not isinstance(raw, dict) or raw.get("browsable") is False:
+                continue
+            source_id = str(raw.get("id") or raw.get("plugin_id") or "").strip()
+            uri_root = str(raw.get("uri_root") or raw.get("uri") or "").strip()
+            if not uri_root and source_id:
+                uri_root = f"gxfiles://{source_id}/"
+            if not source_id or not uri_root.startswith("gxfiles://"):
+                continue
+            sources.append(
+                {
+                    "id": source_id,
+                    "title": str(raw.get("label") or raw.get("name") or source_id),
+                    "value": uri_root.rstrip("/") + "/",
+                    "description": str(raw.get("doc") or raw.get("description") or ""),
+                    "writable": bool(raw.get("writable", False)),
+                }
+            )
+        return sorted(sources, key=lambda item: item["title"].lower())
+
+    @staticmethod
+    def remote_parent_uri(uri: str, root_uri: str) -> str:
+        """Move one directory up without escaping the selected file source."""
+
+        current = urlsplit(uri)
+        root = urlsplit(root_uri)
+        if current.scheme != "gxfiles" or (current.scheme, current.netloc) != (root.scheme, root.netloc):
+            return root_uri.rstrip("/") + "/"
+        root_path = root.path.rstrip("/") or "/"
+        current_path = current.path.rstrip("/") or "/"
+        parent = posixpath.dirname(current_path)
+        if root_path != "/" and not (parent == root_path or parent.startswith(root_path + "/")):
+            parent = root_path
+        return urlunsplit((current.scheme, current.netloc, parent.rstrip("/") + "/", "", ""))
+
+    def list_remote_files(self, target: str, *, role: str = "any") -> list[dict[str, Any]]:
+        """List one Galaxy remote directory and apply scientific file filters."""
+
+        if not target.startswith("gxfiles://"):
+            raise ValueError("Remote file target must be a gxfiles:// URI")
+        response = requests.get(
+            f"{self.galaxy_url}/api/remote_files",
+            headers=self._headers,
+            params={"target": target, "format": "uri", "recursive": "false"},
+            timeout=45,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if isinstance(payload, dict):
+            payload = payload.get("entries") or payload.get("items") or []
+        if not isinstance(payload, list):
+            raise RuntimeError("Galaxy returned an invalid remote-directory response")
+        accepted = _REMOTE_ROLE_SUFFIXES.get(role)
+        entries: list[dict[str, Any]] = []
+        for raw in payload:
+            if not isinstance(raw, dict):
+                continue
+            kind_text = str(raw.get("class") or raw.get("kind") or raw.get("type") or "").lower()
+            is_directory = kind_text in {"directory", "folder", "dir"} or bool(raw.get("is_directory"))
+            uri = str(raw.get("uri") or raw.get("url") or raw.get("path") or "").strip()
+            if not uri.startswith("gxfiles://"):
+                continue
+            name = str(raw.get("name") or Path(urlsplit(uri).path.rstrip("/")).name or uri)
+            if not is_directory and accepted is not None and Path(name).suffix.lower() not in accepted:
+                continue
+            entries.append(
+                {
+                    "title": name,
+                    "value": uri.rstrip("/") + "/" if is_directory else uri,
+                    "kind": "directory" if is_directory else "file",
+                    "size": raw.get("size"),
+                }
+            )
+        return sorted(entries, key=lambda item: (item["kind"] != "directory", item["title"].lower()))
+
+    def _import_remote_dataset(self, uri: str, label: str) -> str:
+        """Import an authorized Galaxy file-source URI into this History."""
+
+        if not uri.startswith("gxfiles://"):
+            raise ValueError(f"{label} is not a Galaxy remote-file URI")
+        filename = Path(urlsplit(uri).path).name or label.replace(" ", "_")
+        payload = {
+            "history_id": self.history_id,
+            "targets": [
+                {
+                    "destination": {"type": "hdas"},
+                    "items": [
+                        {
+                            "src": "url",
+                            "url": uri,
+                            "name": f"RADAR-PD {label} | {filename}",
+                            "ext": "auto",
+                        }
+                    ],
+                }
+            ],
+        }
+        response = requests.post(
+            f"{self.galaxy_url}/api/tools/fetch",
+            headers={**self._headers, "content-type": "application/json"},
+            json=payload,
+            timeout=60,
+        )
+        response.raise_for_status()
+        result = response.json()
+        outputs = result.get("outputs", []) if isinstance(result, dict) else []
+        if not outputs or not outputs[0].get("id"):
+            raise RuntimeError(f"Galaxy did not return a dataset after importing {label}")
+        dataset_id = str(outputs[0]["id"])
+        deadline = time.monotonic() + 600
+        while time.monotonic() < deadline:
+            status_response = requests.get(
+                f"{self.galaxy_url}/api/datasets/{dataset_id}",
+                headers=self._headers,
+                timeout=30,
+            )
+            status_response.raise_for_status()
+            state = str(status_response.json().get("state") or "").lower()
+            if state in {"ok", "deferred"}:
+                return dataset_id
+            if state in {"error", "discarded", "failed"}:
+                raise RuntimeError(f"Galaxy could not import {label} from the selected remote file")
+            time.sleep(1)
+        raise TimeoutError(f"Galaxy did not finish importing {label} within 10 minutes")
 
     def list_history_datasets(self, *, limit: int = 5000, page_size: int = 500) -> list[dict[str, Any]]:
         """Compatibility pagination API; new views should call search_history_datasets."""
@@ -905,6 +1059,9 @@ class GalaxyService:
             dataset = self._upload_dataset(path, store, label)
             return key, str(dataset.id)
 
+    def _import_one(self, key: str, uri: str, label: str) -> tuple[str, str]:
+        return key, self._import_remote_dataset(uri, label)
+
     def _prepare_datasets(
         self,
         snapshot: SubmissionSnapshot,
@@ -923,6 +1080,7 @@ class GalaxyService:
         }
         prepared.update({key: str(value) for key, value in existing.items() if value})
         uploads: dict[str, tuple[str, str]] = {"configuration": (str(config_path), "configuration")}
+        imports: dict[str, tuple[str, str]] = {}
         for key, path, label in (
             ("data", inputs.data_path, "diffraction data"),
             ("instrument", inputs.instrument_path, "instrument profile"),
@@ -932,25 +1090,42 @@ class GalaxyService:
         ):
             if path and key not in prepared:
                 uploads[key] = (path, label)
+        for key, uri, label in (
+            ("data", inputs.data_remote_uri, "diffraction data"),
+            ("instrument", inputs.instrument_remote_uri, "instrument profile"),
+            ("main_cif", inputs.main_cif_remote_uri, "main phase CIF"),
+        ):
+            if uri and key not in prepared:
+                imports[key] = (uri, label)
         if "configuration" in prepared:
             uploads.pop("configuration", None)
 
-        total = len(uploads) + len(prepared)
+        total = len(uploads) + len(imports) + len(prepared)
         completed = len(prepared)
         progress_lock = threading.Lock()
-        if not uploads:
+        if not uploads and not imports:
             return prepared
         first_key = next(
-            (key for key in ("configuration", "data", "event_file", "instrument", "main_cif", "database_archive") if key in uploads),
-            next(iter(uploads)),
+            (
+                key
+                for key in ("configuration", "data", "event_file", "instrument", "main_cif", "database_archive")
+                if key in uploads or key in imports
+            ),
+            next(iter(uploads or imports)),
         )
         phase, label = self._submission_label(first_key)
         self._emit_submission_progress(record, phase, label, completed, total, callback)
-        with ThreadPoolExecutor(max_workers=min(4, len(uploads)), thread_name_prefix="radar-upload") as pool:
+        with ThreadPoolExecutor(max_workers=min(4, len(uploads) + len(imports)), thread_name_prefix="radar-input") as pool:
             futures = {
                 pool.submit(self._upload_one, key, path, label): key
                 for key, (path, label) in uploads.items()
             }
+            futures.update(
+                {
+                    pool.submit(self._import_one, key, uri, label): key
+                    for key, (uri, label) in imports.items()
+                }
+            )
             failures: list[Exception] = []
             for future in as_completed(futures):
                 try:
@@ -988,7 +1163,12 @@ class GalaxyService:
         config_ds = self._existing_dataset(prepared["configuration"], store, "configuration")
         params.add_input(name="reproducibility|configuration_override|config_file", value=config_ds)
 
-        if inputs.source in {InputSource.UPLOAD, InputSource.GALAXY}:
+        if inputs.source in {
+            InputSource.UPLOAD,
+            InputSource.GALAXY,
+            InputSource.GALAXY_REMOTE,
+            InputSource.IPTS_BROWSER,
+        }:
             params.add_input(name="data_inputs|input_source|source_kind", value="history")
             if "data" not in prepared:
                 raise ValueError("A diffraction pattern is required")

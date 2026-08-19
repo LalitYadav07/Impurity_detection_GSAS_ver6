@@ -34,6 +34,7 @@ COPY --chown=radar:radar . /opt/radar-pd
 RUN python -m py_compile \
         scripts/ndip_contracts.py \
         scripts/ndip_gpx_handoff.py \
+        scripts/ndip_ipts_watch.py \
         scripts/ndip_outputs.py \
         scripts/ndip_runner.py
 

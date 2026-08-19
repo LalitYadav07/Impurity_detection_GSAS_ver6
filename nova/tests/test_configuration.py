@@ -42,6 +42,58 @@ def test_input_source_validation() -> None:
     assert valid.data_dataset_id == "data-id"
 
 
+def test_galaxy_remote_source_requires_and_accepts_authorized_uris() -> None:
+    with pytest.raises(ValueError, match="Galaxy remote file source"):
+        InputSelection(
+            source=InputSource.GALAXY_REMOTE,
+            data_dataset_id="history-data-is-not-a-remote-uri",
+            instrument_remote_uri="gxfiles://sns/HB2A/profile.instprm",
+        )
+
+    selection = InputSelection(
+        source=InputSource.GALAXY_REMOTE,
+        instrument_source="galaxy_remote",
+        data_remote_uri="gxfiles://sns/HB2A/IPTS-123/shared/scan.dat",
+        instrument_remote_uri="gxfiles://sns/HB2A/IPTS-123/shared/profile.instprm",
+        main_cif_remote_uri="gxfiles://sns/HB2A/IPTS-123/shared/main.cif",
+    )
+
+    assert selection.data_remote_uri.endswith("scan.dat")
+    assert selection.instrument_source == "galaxy_remote"
+
+
+def test_ipts_pattern_can_use_independent_uploaded_instrument() -> None:
+    selection = InputSelection(
+        source=InputSource.IPTS_BROWSER,
+        instrument_source="upload",
+        data_path="/SNS/HB2A/IPTS-123/shared/reduced/scan.dat",
+        data_relative_path="shared/reduced/scan.dat",
+        instrument_path="/tmp/profile.instprm",
+        instrument="HB2A",
+        ipts="IPTS-123",
+    )
+
+    assert selection.instrument_source == "upload"
+    assert selection.instrument_relative_path is None
+
+
+def test_uploaded_pattern_can_use_ipts_instrument_and_cif() -> None:
+    selection = InputSelection(
+        source=InputSource.UPLOAD,
+        instrument_source="ipts",
+        data_path="/tmp/scan.dat",
+        instrument_path="/SNS/HB2A/IPTS-123/shared/profiles/HB2A.instprm",
+        instrument_relative_path="shared/profiles/HB2A.instprm",
+        main_cif_path="/SNS/HB2A/IPTS-123/shared/structures/main.cif",
+        main_cif_relative_path="shared/structures/main.cif",
+        instrument="HB2A",
+        ipts="IPTS-123",
+    )
+
+    assert selection.instrument == "HB2A"
+    assert selection.main_cif_relative_path.endswith("main.cif")
+
+
 def test_invalid_ranges_are_rejected() -> None:
     with pytest.raises(ValueError, match="less than"):
         AnalysisConfig(sample_elements=["Fe"], limits=(8.0, 2.0))
