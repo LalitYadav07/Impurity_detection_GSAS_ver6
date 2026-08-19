@@ -86,6 +86,8 @@ Thumbs.db
 # Python test / cache
 .pytest_cache/
 .pytest_tmp*/
+.pytest_*/
+nova/pytest-cache-files-*/
 test_tmp_manual/
 
 # Misc
