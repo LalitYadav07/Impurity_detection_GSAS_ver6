@@ -58,7 +58,8 @@ def main() -> int:
             "Diffraction data in working folder",
             "Instrument profile in working folder",
             "Known/main-phase CIF in working folder",
-            "Copy completed results into this working folder",
+            "Export completed results into this working folder",
+            "A uniquely named results ZIP will be written directly into the current working folder.",
         ):
             assert text in template, text
         assert "Main-phase CIF from current IPTS auxiliary folder" not in template
@@ -66,7 +67,10 @@ def main() -> int:
         state.facility_instrument = "HB2A"
         state.facility_ipts = "IPTS-123"
         state.use_facility_workspace = True
-        state.facility_working_directory = "shared/reduced"
+        state.facility_working_directory = "shared"
+        app.refresh_facility_browser()
+        app.open_facility_working_directory("shared/reduced")
+        assert state.facility_working_directory == "shared/reduced"
         state.input_source = "ipts_browser"
         state.instrument_source = "upload"
         state.facility_data_path = str(data)
@@ -90,7 +94,7 @@ def main() -> int:
         assert selection.instrument_relative_path == "shared/reduced/HB2A.instprm"
         assert selection.main_cif_relative_path == "shared/reduced/main.cif"
         assert selection.publish_directory == "shared/reduced"
-        assert selection.publish_subfolder == "radar-pd-results"
+        assert selection.publish_subfolder is None
 
         symlink_root = root / "SNS"
         symlink_root.mkdir()

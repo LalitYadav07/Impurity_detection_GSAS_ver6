@@ -84,8 +84,8 @@ def test_results_export_uses_ndip_authenticated_export_contract() -> None:
         "series_0|input_mode|export_path": destination,
     }
     assert destination == (
-        "/HFIR/HB2A/IPTS-28749/shared/Lalit_radarpd/results/"
-        "scan 0003-analysis/results.zip"
+        "/HFIR/HB2A/IPTS-28749/shared/Lalit_radarpd/"
+        "scan_0003-analysis-results.zip"
     )
 
 

@@ -190,17 +190,15 @@ def test_builds_confined_authenticated_export_paths() -> None:
         "NOMAD",
         "IPTS-33088",
         "shared/Lalit_radarpd",
-        "results",
         "scan_001-job1234",
-    ) == "/SNS/NOMAD/IPTS-33088/shared/Lalit_radarpd/results/scan_001-job1234/results.zip"
+    ) == "/SNS/NOMAD/IPTS-33088/shared/Lalit_radarpd/scan_001-job1234-results.zip"
     assert build_facility_export_path(
         "/HFIR",
         "HB2A",
         "28749",
         "shared/Lalit_radarpd",
-        "RADAR-PD Results",
         "scan 0003-job5678",
-    ) == "/HFIR/HB2A/IPTS-28749/shared/Lalit_radarpd/RADAR-PD Results/scan 0003-job5678/results.zip"
+    ) == "/HFIR/HB2A/IPTS-28749/shared/Lalit_radarpd/scan_0003-job5678-results.zip"
 
 
 @pytest.mark.parametrize(
@@ -213,7 +211,7 @@ def test_builds_confined_authenticated_export_paths() -> None:
 )
 def test_authenticated_export_path_rejects_unmanaged_destinations(root: str, working: str) -> None:
     with pytest.raises(FacilityPathError):
-        build_facility_export_path(root, "HB2A", "IPTS-12345", working, "results", "run-1")
+        build_facility_export_path(root, "HB2A", "IPTS-12345", working, "run-1")
 
 
 def test_publishes_result_atomically_with_manifest(facility: tuple[FacilityBrowser, Path], tmp_path: Path) -> None:

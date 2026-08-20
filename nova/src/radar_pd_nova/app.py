@@ -578,20 +578,13 @@ class RadarPdNovaApp(ThemedApp):
                     items=("facility_working_directories",),
                     item_title="title",
                     item_value="value",
-                    label="Open subfolder",
+                    label="Enter subfolder",
                     density="compact",
                     variant="outlined",
                     hide_details=True,
                     clearable=True,
                     no_data_text="No readable subfolders",
-                )
-                vuetify.VBtn(
-                    icon="mdi-folder-open-outline",
-                    title="Open selected subfolder",
-                    click=self.open_facility_working_directory,
-                    disabled=("!facility_working_subdirectory",),
-                    variant="outlined",
-                    size="small",
+                    update_modelValue=(self.open_facility_working_directory, "[$event]"),
                 )
             vuetify.VBtn(
                 "Refresh folder",
@@ -618,15 +611,12 @@ class RadarPdNovaApp(ThemedApp):
                 inset=True,
                 disabled=("!facility_working_readable",),
             )
-            vuetify.VTextField(
+            vuetify.VAlert(
                 v_show="publish_results_to_ipts",
-                v_model=("facility_output_subfolder",),
-                label="Results subfolder",
-                placeholder="radar-pd-results",
+                text="A uniquely named results ZIP will be written directly into the current working folder.",
+                type="info",
+                variant="tonal",
                 density="compact",
-                variant="outlined",
-                hint="A run-specific folder will be created inside this subfolder.",
-                persistent_hint=True,
             )
 
     def _remote_picker(
@@ -2215,9 +2205,9 @@ class RadarPdNovaApp(ThemedApp):
         ):
             setattr(state, field, "")
 
-    def open_facility_working_directory(self, **_: Any) -> None:
+    def open_facility_working_directory(self, value: Any = None, **_: Any) -> None:
         state = self.server.state
-        selected = str(state.facility_working_subdirectory or "")
+        selected = self._selected_value(value) or str(state.facility_working_subdirectory or "")
         if not selected:
             return
         state.facility_working_directory = selected
@@ -2541,9 +2531,9 @@ class RadarPdNovaApp(ThemedApp):
             publish_directory=(state.facility_working_directory or None)
             if uses_facility_scope and state.publish_results_to_ipts
             else None,
-            publish_subfolder=(state.facility_output_subfolder or None)
-            if uses_facility_scope and state.publish_results_to_ipts
-            else None,
+            # Retained in the model only for recovery of older sessions. New
+            # exports write one uniquely named archive into publish_directory.
+            publish_subfolder=None,
         )
 
     def submit_run(self, submission_payload: dict[str, Any] | None = None, **_: Any) -> None:

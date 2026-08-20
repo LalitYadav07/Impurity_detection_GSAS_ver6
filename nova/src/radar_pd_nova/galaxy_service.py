@@ -1424,7 +1424,6 @@ class GalaxyService:
             str(inputs.instrument or ""),
             str(inputs.ipts or ""),
             str(inputs.publish_directory or ""),
-            str(inputs.publish_subfolder or ""),
             f"{run_token}-{suffix}",
         )
         action = self.submit_utility(

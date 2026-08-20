@@ -24,11 +24,12 @@ reduced pattern from `/SNS`, an instrument profile generated in the UI, and a
 CIF uploaded from a laptop. For suitable X-ray data, the built-in Cu K-alpha
 profile remains available.
 
-Galaxy History remains the authoritative result store. When the selected
-working folder is writable, the user may also request an atomic copy of the
-completed result package in a named subfolder below that folder. Publication is
-confined to the selected IPTS and cannot overwrite the working folder itself. A
-publication failure is reported separately and does not turn a successful
+Galaxy History remains the authoritative result store. The user may also ask
+NDIP's authenticated Export Datasets job to copy the complete results archive
+into the selected existing working folder. The archive receives a unique
+run-and-job filename because the NDIP exporter copies one file and does not
+create destination directories. Publication is confined to the selected IPTS.
+A publication failure is reported separately and does not turn a successful
 scientific job into a failed job.
 
 Galaxy's authenticated remote-file sources remain a fallback when `/SNS` or

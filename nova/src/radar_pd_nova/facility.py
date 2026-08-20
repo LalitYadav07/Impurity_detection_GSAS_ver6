@@ -63,10 +63,9 @@ def build_facility_export_path(
     instrument: str,
     ipts: str,
     working_directory: str,
-    result_container: str,
     result_name: str,
     *,
-    filename: str = "results.zip",
+    filename_suffix: str = "results.zip",
 ) -> str:
     """Build a confined SNS/HFIR destination for NDIP's export tool.
 
@@ -83,22 +82,21 @@ def build_facility_export_path(
     relative = PurePosixPath(_normalize_relative(working_directory))
     if not relative.parts or relative.parts[0].lower() != "shared":
         raise FacilityPathError("Authenticated result export is limited to the selected IPTS shared/ tree")
-    clean_container = str(result_container or "").strip()
     clean_result = str(result_name or "").strip()
-    if not _NEW_DIRECTORY_NAME.fullmatch(clean_container) or clean_container in {".", ".."}:
-        raise FacilityPathError("Invalid result container name")
     if not _NEW_DIRECTORY_NAME.fullmatch(clean_result) or clean_result in {".", ".."}:
-        raise FacilityPathError("Invalid result folder name")
-    clean_filename = str(filename or "").strip()
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", clean_filename):
-        raise FacilityPathError("Invalid exported filename")
+        raise FacilityPathError("Invalid result name")
+    clean_suffix = str(filename_suffix or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", clean_suffix):
+        raise FacilityPathError("Invalid exported filename suffix")
+    # NDIP's authenticated exporter copies to one exact file path and does not
+    # create missing parent directories. Keep every parent equal to the
+    # existing folder selected in NOVA and make the archive filename unique.
+    clean_filename = f"{clean_result}-{clean_suffix}".replace(" ", "_")
     destination = (
         PurePosixPath(FACILITY_ROOTS[facility])
         / _component(instrument, "instrument")
         / _ipts_component(ipts)
         / relative
-        / clean_container
-        / clean_result
         / clean_filename
     )
     return destination.as_posix()
