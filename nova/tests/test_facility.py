@@ -28,14 +28,14 @@ def facility(tmp_path: Path) -> tuple[FacilityBrowser, Path]:
     experiment = tmp_path / "HB2A" / "IPTS-12345" / "exp510" / "Datafiles"
     experiment.mkdir(parents=True)
     (experiment / "HB2A_exp0510_scan0001.dat").write_text("1 2\n", encoding="utf-8")
-    return FacilityBrowser(tmp_path), shared
+    return FacilityBrowser(tmp_path, facility="HFIR"), shared
 
 
 def test_lists_progressive_facility_tree(facility: tuple[FacilityBrowser, Path]) -> None:
     browser, _ = facility
     (browser.root / "groups" / "shared").mkdir(parents=True)
     (browser.root / "software" / "IPTS-not-a-number").mkdir(parents=True)
-    assert browser.list_instruments() == [{"title": "HB2A", "value": "HB2A"}]
+    assert [item["value"] for item in browser.list_instruments()] == ["HB2A"]
     assert browser.list_ipts("HB2A") == [{"title": "IPTS-12345", "value": "IPTS-12345"}]
     entries = browser.list_directory("HB2A", "12345", "shared/reduced/series-a", role="data")
     assert [entry.name for entry in entries] == ["scan_001.dat"]
@@ -55,6 +55,26 @@ def test_ipts_suggestions_are_recent_and_bounded(tmp_path: Path) -> None:
     ]
 
 
+def test_lists_only_supported_diffraction_beamlines_for_each_facility(tmp_path: Path) -> None:
+    sns = tmp_path / "SNS"
+    hfir = tmp_path / "HFIR"
+    for root, instruments in (
+        (sns, ("POWGEN", "SNAP", "ARCS")),
+        (hfir, ("HB2A", "HB2C", "CG2")),
+    ):
+        for instrument in instruments:
+            (root / instrument / "IPTS-123").mkdir(parents=True)
+
+    assert [item["value"] for item in FacilityBrowser(sns, facility="SNS").list_instruments()] == [
+        "POWGEN",
+        "SNAP",
+    ]
+    assert [item["value"] for item in FacilityBrowser(hfir, facility="HFIR").list_instruments()] == [
+        "HB2A",
+        "HB2C",
+    ]
+
+
 def test_skips_facility_entries_with_inaccessible_metadata(
     facility: tuple[FacilityBrowser, Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -69,7 +89,7 @@ def test_skips_facility_entries_with_inaccessible_metadata(
         return original_is_dir(path)
 
     monkeypatch.setattr(Path, "is_dir", guarded_is_dir)
-    assert browser.list_instruments() == [{"title": "HB2A", "value": "HB2A"}]
+    assert [item["value"] for item in browser.list_instruments()] == ["HB2A"]
 
 
 def test_browses_any_readable_folder_inside_selected_ipts(facility: tuple[FacilityBrowser, Path]) -> None:
@@ -98,7 +118,7 @@ def test_selects_role_checked_file_with_provenance(facility: tuple[FacilityBrows
         checksum=True,
     )
     assert selection.relative_path == "shared/reduced/series-a/scan_001.dat"
-    assert selection.facility == "SNS"
+    assert selection.facility == "HFIR"
     assert selection.facility_root == str(browser.root)
     assert selection.sha256
     with pytest.raises(FacilityPathError):
@@ -142,7 +162,7 @@ def test_supports_managed_instrument_symlink_but_rejects_child_escape(tmp_path: 
 
     browser = FacilityBrowser(facility_root)
 
-    assert browser.list_instruments() == [{"title": "SNAP", "value": "SNAP"}]
+    assert [item["value"] for item in browser.list_instruments()] == ["SNAP"]
     assert [entry.name for entry in browser.list_directory("SNAP", "33088", "shared/reduced")] == [
         "scan.gsa"
     ]

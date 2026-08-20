@@ -53,6 +53,26 @@ FACILITY_ROOTS = {
     "HFIR": "/HFIR",
 }
 
+# RADAR-PD consumes powder-diffraction patterns, so the interactive browser
+# should not expose spectroscopy, reflectometry, imaging, or SANS beamlines.
+# Keys are directory names used in the facility filesystems. Aliases cover
+# installations where the human-facing and filesystem instrument names differ.
+DIFFRACTION_BEAMLINES: dict[str, dict[str, str]] = {
+    "SNS": {
+        "NOM": "NOMAD (BL-1B) - total scattering / powder diffraction",
+        "NOMAD": "NOMAD (BL-1B) - total scattering / powder diffraction",
+        "POWGEN": "POWGEN (BL-11A) - powder diffraction",
+        "SNAP": "SNAP (BL-3) - high-pressure powder diffraction",
+        "VULCAN": "VULCAN (BL-7) - engineering diffraction",
+    },
+    "HFIR": {
+        "HB2A": "POWDER (HB-2A) - powder diffraction",
+        "HB2B": "HIDRA (HB-2B) - engineering diffraction",
+        "HB2C": "WAND2 (HB-2C) - powder diffraction",
+        "WAND": "WAND2 (HB-2C) - powder diffraction",
+    },
+}
+
 
 class FacilityPathError(ValueError):
     """Raised when a facility path is outside the permitted IPTS boundary."""
@@ -239,11 +259,14 @@ class FacilityBrowser:
     def list_instruments(self) -> list[dict[str, str]]:
         if not self.available:
             return []
-        return [
-            {"title": path.name, "value": path.name}
-            for path in _visible_directories(self.root)
-            if _FACILITY_COMPONENT.fullmatch(path.name) and _has_ipts_child(path)
-        ]
+        supported = DIFFRACTION_BEAMLINES[self.facility]
+        instruments: list[dict[str, str]] = []
+        for path in _visible_directories(self.root):
+            name = path.name.upper()
+            title = supported.get(name)
+            if title and _FACILITY_COMPONENT.fullmatch(path.name) and _has_ipts_child(path):
+                instruments.append({"title": title, "value": path.name})
+        return instruments
 
     def list_ipts(self, instrument: str, *, limit: int = 250) -> list[dict[str, str]]:
         """List recent IPTS names without stat'ing every entry on facility NFS.

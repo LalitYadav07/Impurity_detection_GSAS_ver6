@@ -10,11 +10,11 @@ import tempfile
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="radar-pd-ipts-ui-") as temporary:
         root = Path(temporary)
-        shared = root / "HB2A" / "IPTS-123" / "shared"
+        shared = root / "POWGEN" / "IPTS-123" / "shared"
         (shared / "reduced").mkdir(parents=True)
         (shared / "results").mkdir()
         data = shared / "reduced" / "scan.dat"
-        profile = shared / "reduced" / "HB2A.instprm"
+        profile = shared / "reduced" / "POWGEN.instprm"
         cif = shared / "reduced" / "main.cif"
         data.write_text("1 2\n", encoding="utf-8")
         profile.write_text("profile\n", encoding="utf-8")
@@ -23,7 +23,7 @@ def main() -> int:
         (blocked / "shared").mkdir(parents=True)
         (root / "software" / "IPTS-not-a-number").mkdir(parents=True)
         for number in (7, 999):
-            (root / "HB2A" / f"IPTS-{number}").mkdir(parents=True)
+            (root / "POWGEN" / f"IPTS-{number}").mkdir(parents=True)
         os.environ["RADAR_PD_FACILITY_ROOT"] = str(root)
 
         from radar_pd_nova.app import RadarPdNovaApp
@@ -44,17 +44,17 @@ def main() -> int:
         state = app.server.state
         template = app.layout.html
         assert state.facility_available is True
-        assert state.facility_instruments == [{"title": "HB2A", "value": "HB2A"}]
-        assert app.facility.list_ipts("HB2A", limit=2) == [
+        assert [item["value"] for item in state.facility_instruments] == ["POWGEN"]
+        assert app.facility.list_ipts("POWGEN", limit=2) == [
             {"title": "IPTS-999", "value": "IPTS-999"},
             {"title": "IPTS-123", "value": "IPTS-123"},
         ]
         assert any(option["value"] == "ipts_browser" for option in state.source_options)
         for text in (
-            "Use an SNS/HFIR experiment working folder",
             "Experiment working folder",
+            "Diffraction beamline",
             "Current working folder",
-            "Instrument profile source",
+            "Where is the GSAS-II instrument profile?",
             "Diffraction data in working folder",
             "Instrument profile in working folder",
             "Known/main-phase CIF in working folder",
@@ -64,7 +64,7 @@ def main() -> int:
             assert text in template, text
         assert "Main-phase CIF from current IPTS auxiliary folder" not in template
 
-        state.facility_instrument = "HB2A"
+        state.facility_instrument = "POWGEN"
         state.facility_ipts = "IPTS-123"
         state.use_facility_workspace = True
         state.facility_working_directory = "shared"
@@ -84,14 +84,14 @@ def main() -> int:
         state.instrument_source = "ipts"
         state.instrument_path = ""
         state.facility_instrument_path = str(profile)
-        state.facility_instrument_relative_path = "shared/reduced/HB2A.instprm"
+        state.facility_instrument_relative_path = "shared/reduced/POWGEN.instprm"
         state.main_cif_source = "ipts"
         state.facility_main_cif_path = str(cif)
         state.facility_main_cif_relative_path = "shared/reduced/main.cif"
         state.publish_results_to_ipts = True
         state.facility_output_subfolder = "radar-pd-results"
         selection = app._inputs()
-        assert selection.instrument_relative_path == "shared/reduced/HB2A.instprm"
+        assert selection.instrument_relative_path == "shared/reduced/POWGEN.instprm"
         assert selection.main_cif_relative_path == "shared/reduced/main.cif"
         assert selection.publish_directory == "shared/reduced"
         assert selection.publish_subfolder is None

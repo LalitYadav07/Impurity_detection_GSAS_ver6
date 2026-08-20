@@ -74,16 +74,15 @@ def test_facility_workspace_exposes_one_folder_and_independent_inputs() -> None:
         for option in app.server.state.source_options
     )
     for text in (
-        "Use an SNS/HFIR experiment working folder",
         "Experiment working folder",
-        "Facility",
-        "Instrument",
+        "Neutron facility",
+        "Diffraction beamline",
         "Experiment (IPTS)",
         "Current working folder",
         "Enter subfolder",
         "Export completed results into this working folder",
         "A uniquely named results ZIP will be written directly into the current working folder.",
-        "Instrument profile source",
+        "Where is the GSAS-II instrument profile?",
         "Diffraction data in working folder",
         "Instrument profile in working folder",
         "Known/main-phase CIF in working folder",
@@ -100,16 +99,24 @@ def test_facility_workspace_exposes_one_folder_and_independent_inputs() -> None:
     ]
 
 
-def test_galaxy_remote_browser_is_an_explicit_history_import_path() -> None:
+def test_data_collection_exposes_three_clear_standard_sources() -> None:
+    app = RadarPdNovaApp()
+
+    assert app.server.state.source_options == [
+        {"title": "Upload from this computer", "value": "upload"},
+        {"title": "Choose from Galaxy History", "value": "galaxy"},
+        {"title": "Browse an SNS/HFIR experiment folder", "value": "ipts_browser"},
+    ]
+    assert "Where is the diffraction pattern?" in app.layout.html
+    assert "Where is the GSAS-II instrument profile?" in app.layout.html
+    assert "Do you have a known/main-phase CIF?" in app.layout.html
+
+
+def test_galaxy_remote_browser_remains_available_for_restored_legacy_runs() -> None:
     app = RadarPdNovaApp()
     template = app.layout.html
 
-    remote_option = next(
-        option
-        for option in app.server.state.source_options
-        if option["value"] == "galaxy_remote"
-    )
-    assert remote_option["title"] == "Browse SNS files through Galaxy"
+    assert all(option["value"] != "galaxy_remote" for option in app.server.state.source_options)
     for text in (
         "Discover SNS sources",
         "Authorized file source",

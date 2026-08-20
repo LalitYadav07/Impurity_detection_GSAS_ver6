@@ -341,18 +341,14 @@ class RadarPdNovaApp(ThemedApp):
             {"title": "Full RADAR-PD", "value": "full"},
         ]
         state.source_options = [
-            {"title": "Computer", "value": "upload"},
-            {"title": "Galaxy History", "value": "galaxy"},
-            {"title": "Browse SNS files through Galaxy", "value": "galaxy_remote"},
-            {"title": "Experiment working folder (SNS/HFIR)", "value": "ipts_browser"},
-            {"title": "SNS IPTS / NeXus event file", "value": "ipts_event"},
-            {"title": "SNS IPTS / run lookup", "value": "ipts_manual"},
+            {"title": "Upload from this computer", "value": "upload"},
+            {"title": "Choose from Galaxy History", "value": "galaxy"},
+            {"title": "Browse an SNS/HFIR experiment folder", "value": "ipts_browser"},
         ]
         state.instrument_source_options = [
-            {"title": "Choose profile from computer", "value": "upload"},
-            {"title": "Choose profile from Galaxy History", "value": "galaxy"},
-            {"title": "Browse SNS profile through Galaxy", "value": "galaxy_remote"},
-            {"title": "Choose profile from experiment working folder", "value": "ipts"},
+            {"title": "Upload from this computer", "value": "upload"},
+            {"title": "Choose from Galaxy History", "value": "galaxy"},
+            {"title": "Choose from the experiment folder", "value": "ipts"},
         ]
         state.radiation_options = [
             {"title": "Neutron powder diffraction", "value": "neutron"},
@@ -360,10 +356,9 @@ class RadarPdNovaApp(ThemedApp):
         ]
         state.main_cif_source_options = [
             {"title": "No supplied main phase", "value": "none"},
-            {"title": "Choose CIF from computer", "value": "upload"},
+            {"title": "Upload CIF from this computer", "value": "upload"},
             {"title": "Choose CIF from Galaxy History", "value": "galaxy"},
-            {"title": "Browse SNS CIF through Galaxy", "value": "galaxy_remote"},
-            {"title": "Choose CIF from experiment working folder", "value": "ipts"},
+            {"title": "Choose CIF from the experiment folder", "value": "ipts"},
         ]
         state.database_source_options = [
             {"title": "Built-in MP/COD catalog", "value": "builtin"},
@@ -499,27 +494,18 @@ class RadarPdNovaApp(ThemedApp):
     def _facility_workspace_controls(self) -> None:
         """Render one lazy, IPTS-confined experiment working-folder browser."""
 
-        vuetify.VSwitch(
-            v_model=("use_facility_workspace",),
-            label="Use an SNS/HFIR experiment working folder",
-            hint="Enable this to select inputs from an IPTS folder or copy completed results back to it.",
-            persistent_hint=True,
-            color="#15543c",
-            density="compact",
-            inset=True,
-        )
         with html.Div(
-            v_show="use_facility_workspace || input_source === 'ipts_browser' || instrument_source === 'ipts' || main_cif_source === 'ipts' || publish_results_to_ipts",
+            v_show="input_source === 'ipts_browser' || instrument_source === 'ipts' || main_cif_source === 'ipts' || publish_results_to_ipts",
             classes="radar-facility-picker",
         ):
             html.Strong("Experiment working folder", classes="radar-facility-picker-title")
             html.P(
-                "Choose the facility, instrument, IPTS, and one folder. Only the immediate subfolders and compatible files are listed.",
+                "Select a neutron facility, a supported diffraction beamline, an IPTS, and the folder containing this analysis.",
                 classes="radar-help-copy",
             )
             with html.Div(classes="radar-field-pair"):
                 vuetify.VSelect(
-                    label="Facility",
+                    label="Neutron facility",
                     v_model=("facility_site",),
                     items=("facility_options",),
                     item_title="title",
@@ -528,15 +514,19 @@ class RadarPdNovaApp(ThemedApp):
                     variant="outlined",
                 )
                 vuetify.VSelect(
-                    label="Instrument",
+                    label="Diffraction beamline",
                     v_model=("facility_instrument",),
                     items=("facility_instruments",),
                     item_title="title",
                     item_value="value",
                     density="compact",
                     variant="outlined",
-                    no_data_text="No readable instruments",
+                    no_data_text="No supported diffraction beamlines are readable",
                 )
+            html.P(
+                "Only powder and engineering diffraction beamlines supported by RADAR-PD are listed.",
+                classes="radar-help-copy",
+            )
             vuetify.VCombobox(
                 label="Experiment (IPTS)",
                 v_model=("facility_ipts",),
@@ -904,16 +894,18 @@ class RadarPdNovaApp(ThemedApp):
             instrument_ready = "((radiation === 'xray' && use_builtin_cuka) || (instrument_source === 'upload' && !!instrument_path) || (instrument_source === 'galaxy' && !!history_instrument_id) || (instrument_source === 'galaxy_remote' && !!remote_instrument_uri) || (instrument_source === 'ipts' && !!facility_instrument_path))"
             data_ready = f"((input_source === 'upload' && !!data_path) || (input_source === 'galaxy' && !!history_data_id) || (input_source === 'galaxy_remote' && !!remote_data_uri) || (input_source === 'ipts_browser' && !!facility_data_path)) && {instrument_ready} || (input_source === 'ipts_event' && !!event_file_path && !!bank) || (input_source === 'ipts_manual' && !!ipts_instrument && !!ipts && !!run_number && !!bank)"
             with self._setup_section(3, "Data Collection", "data", data_ready):
-                self._facility_workspace_controls()
                 vuetify.VSelect(
-                    label="Data source",
+                    label="Where is the diffraction pattern?",
                     v_model=("input_source",),
                     items=("source_options",),
                     item_title="title",
                     item_value="value",
                     density="compact",
                     variant="outlined",
+                    hint="Upload a file, reuse a Galaxy dataset, or browse an experiment folder available to your NDIP account.",
+                    persistent_hint=True,
                 )
+                self._facility_workspace_controls()
                 with html.Div(v_show="input_source === 'upload'", key="'radar-computer-inputs'"):
                     NamedFileUpload(
                         "data_path",
@@ -1001,14 +993,14 @@ class RadarPdNovaApp(ThemedApp):
                     key="'radar-independent-instrument-profile'",
                 ):
                     vuetify.VSelect(
-                        label="Instrument profile source",
+                        label="Where is the GSAS-II instrument profile?",
                         v_model=("instrument_source",),
                         items=("instrument_source_options",),
                         item_title="title",
                         item_value="value",
                         density="compact",
                         variant="outlined",
-                        hint="The instrument profile may come from a different location than the diffraction pattern.",
+                        hint="This file can come from a different source than the diffraction pattern.",
                         persistent_hint=True,
                     )
                     with html.Div(v_show="instrument_source === 'upload'", key="'radar-independent-instrument-upload'"):
@@ -1093,7 +1085,7 @@ class RadarPdNovaApp(ThemedApp):
                 )
                 vuetify.VDivider(classes="my-3")
                 vuetify.VSelect(
-                    label="Known/main phase",
+                    label="Do you have a known/main-phase CIF?",
                     v_model=("main_cif_source",),
                     items=("main_cif_source_options",),
                     item_title="title",
