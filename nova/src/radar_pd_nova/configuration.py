@@ -7,14 +7,60 @@ from typing import Any
 
 import yaml
 
-from .models import AnalysisConfig
+from .models import AnalysisConfig, InputSelection
 
 
-def dump_configuration(config: AnalysisConfig, path: str | Path) -> Path:
+DELIVERY_SCHEMA = "radar-pd-delivery/v1"
+_DELIVERY_FIELDS = (
+    "facility_root",
+    "instrument",
+    "ipts",
+    "run_number",
+    "bank",
+    "data_relative_path",
+    "instrument_relative_path",
+    "main_cif_relative_path",
+    "publish_results_to_ipts",
+    "publish_directory",
+    "publish_subfolder",
+)
+
+
+def delivery_contract(inputs: InputSelection) -> dict[str, Any]:
+    """Return restart-safe facility context without local paths or credentials."""
+
+    payload = {
+        field: getattr(inputs, field)
+        for field in _DELIVERY_FIELDS
+        if getattr(inputs, field) is not None
+    }
+    payload["$schema"] = DELIVERY_SCHEMA
+    payload["original_source"] = inputs.source.value
+    return payload
+
+
+def delivery_from_contract(payload: dict[str, Any]) -> dict[str, Any]:
+    """Extract validated run-delivery fields from a submitted configuration."""
+
+    delivery = payload.get("ndip_delivery")
+    if not isinstance(delivery, dict) or delivery.get("$schema") != DELIVERY_SCHEMA:
+        return {}
+    return {field: delivery[field] for field in _DELIVERY_FIELDS if field in delivery}
+
+
+def dump_configuration(
+    config: AnalysisConfig,
+    path: str | Path,
+    *,
+    inputs: InputSelection | None = None,
+) -> Path:
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
+    payload = config.portable_contract()
+    if inputs is not None:
+        payload["ndip_delivery"] = delivery_contract(inputs)
     destination.write_text(
-        yaml.safe_dump(config.portable_contract(), sort_keys=False, allow_unicode=False),
+        yaml.safe_dump(payload, sort_keys=False, allow_unicode=False),
         encoding="utf-8",
     )
     return destination

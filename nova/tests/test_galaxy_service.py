@@ -778,6 +778,84 @@ def test_recovered_active_run_refreshes_through_galaxy_rest(tmp_path: Path, monk
     assert refreshed.inputs is not None
 
 
+def test_recovered_inputs_restore_persisted_ipts_export_selection(tmp_path: Path) -> None:
+    service = GalaxyService("https://galaxy.example", "key", "history", output_root=tmp_path)
+    service._dataset_document = lambda dataset_id: {  # type: ignore[method-assign]
+        "$schema": "radar-pd-config/v1",
+        "ndip_delivery": {
+            "$schema": "radar-pd-delivery/v1",
+            "facility_root": "/HFIR",
+            "instrument": "HB2A",
+            "ipts": "IPTS-28749",
+            "data_relative_path": "shared/Lalit_radarpd/Data/HB2A.dat",
+            "publish_results_to_ipts": True,
+            "publish_directory": "shared/Lalit_radarpd",
+            "publish_subfolder": "radar-pd-results",
+        },
+    }
+    parameters = {
+        "reproducibility|configuration_override|config_file": {"id": "config-id"},
+        "data_inputs|input_source|source_kind": "history",
+        "data_inputs|input_source|diffraction_pattern": {"id": "data-id"},
+        "data_inputs|input_source|instrument_source|kind": "uploaded",
+        "data_inputs|input_source|instrument_source|instrument_file": {"id": "instrument-id"},
+    }
+
+    inputs = service._inputs_from_parameters(parameters)
+
+    assert inputs is not None
+    assert inputs.source is InputSource.GALAXY
+    assert inputs.facility_root == "/HFIR"
+    assert inputs.instrument == "HB2A"
+    assert inputs.ipts == "IPTS-28749"
+    assert inputs.publish_results_to_ipts is True
+    assert inputs.publish_directory == "shared/Lalit_radarpd"
+    assert inputs.publish_subfolder == "radar-pd-results"
+
+
+def test_refresh_preserves_click_time_ipts_export_selection(tmp_path: Path) -> None:
+    service = GalaxyService("https://galaxy.example", "key", "history", output_root=tmp_path)
+    service._job_details = lambda uid: {  # type: ignore[method-assign]
+        "id": uid,
+        "state": "running",
+        "params": {
+            "data_inputs|input_source|source_kind": "history",
+            "data_inputs|input_source|diffraction_pattern": {"id": "recovered-data"},
+            "data_inputs|input_source|instrument_source|instrument_file": {"id": "recovered-instrument"},
+        },
+    }
+    original = InputSelection(
+        source=InputSource.IPTS_BROWSER,
+        data_dataset_id="submitted-data",
+        instrument_dataset_id="submitted-instrument",
+        facility_root="/HFIR",
+        instrument="HB2A",
+        ipts="IPTS-28749",
+        data_relative_path="shared/Lalit_radarpd/Data/HB2A.dat",
+        publish_results_to_ipts=True,
+        publish_directory="shared/Lalit_radarpd",
+        publish_subfolder="radar-pd-results",
+    )
+    record = RunRecord(
+        uid="active-job",
+        galaxy_job_id="active-job",
+        name="run",
+        mode=AnalysisMode.RAPID,
+        history_id="history",
+        inputs=original,
+    )
+
+    refreshed = service.refresh(record)
+
+    assert refreshed.inputs is not None
+    assert refreshed.inputs.source is InputSource.IPTS_BROWSER
+    assert refreshed.inputs.data_dataset_id == "recovered-data"
+    assert refreshed.inputs.instrument_dataset_id == "recovered-instrument"
+    assert refreshed.inputs.publish_results_to_ipts is True
+    assert refreshed.inputs.publish_directory == "shared/Lalit_radarpd"
+    assert refreshed.inputs.publish_subfolder == "radar-pd-results"
+
+
 def test_newly_submitted_run_uses_authoritative_galaxy_rest_state(tmp_path: Path) -> None:
     class StaleTool:
         def get_status(self) -> str:

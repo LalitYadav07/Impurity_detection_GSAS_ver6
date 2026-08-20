@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from radar_pd_nova.configuration import dump_configuration, load_configuration
+from radar_pd_nova.configuration import delivery_from_contract, dump_configuration, load_configuration
 from radar_pd_nova.models import AnalysisConfig, AnalysisMode, InputSelection, InputSource
 
 
@@ -27,6 +27,32 @@ def test_full_and_rapid_share_portable_contract(tmp_path: Path) -> None:
     restored = load_configuration(path)
     assert restored.mode is AnalysisMode.RAPID
     assert restored.exclude_regions == [(2.0, 2.2)]
+
+
+def test_submission_configuration_persists_safe_delivery_context(tmp_path: Path) -> None:
+    config = AnalysisConfig(run_name="export-run", sample_elements=["Tb", "Be", "Ge", "O"])
+    inputs = InputSelection(
+        source=InputSource.IPTS_BROWSER,
+        data_path="C:/temporary/upload.dat",
+        instrument_path="C:/temporary/profile.instprm",
+        facility_root="/HFIR",
+        instrument="HB2A",
+        ipts="IPTS-28749",
+        data_relative_path="shared/Lalit_radarpd/Data/HB2A.dat",
+        publish_results_to_ipts=True,
+        publish_directory="shared/Lalit_radarpd",
+        publish_subfolder="radar-pd-results",
+    )
+
+    path = dump_configuration(config, tmp_path / "submission.yaml", inputs=inputs)
+    payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+    delivery = delivery_from_contract(payload)
+
+    assert delivery["facility_root"] == "/HFIR"
+    assert delivery["publish_results_to_ipts"] is True
+    assert delivery["publish_directory"] == "shared/Lalit_radarpd"
+    assert delivery["publish_subfolder"] == "radar-pd-results"
+    assert "C:/temporary" not in path.read_text(encoding="utf-8")
 
 
 def test_input_source_validation() -> None:

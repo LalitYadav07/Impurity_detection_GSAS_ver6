@@ -22,7 +22,7 @@ from urllib.parse import urlsplit, urlunsplit
 import requests
 import yaml
 
-from .configuration import config_from_contract, dump_configuration
+from .configuration import config_from_contract, delivery_from_contract, dump_configuration
 from .facility import build_facility_export_path
 from .models import (
     AnalysisConfig,
@@ -916,6 +916,16 @@ class GalaxyService:
             "main_cif_dataset_id": dataset_ids.get("main_cif"),
             "database_dataset_id": dataset_ids.get("database_archive"),
         }
+        config_dataset_id = dataset_ids.get("configuration")
+        if config_dataset_id:
+            try:
+                contract = self._dataset_document(config_dataset_id)
+                if contract:
+                    kwargs.update(delivery_from_contract(contract))
+            except Exception:
+                # Scientific run recovery must remain available even if an old
+                # configuration dataset cannot be read.
+                pass
         if source_kind in {"history", "upload", "galaxy"}:
             kwargs.update(
                 source=InputSource.GALAXY,
@@ -1247,7 +1257,11 @@ class GalaxyService:
                 raise ValueError("The built-in Cu K-alpha profile is only valid for X-ray CW data")
             work_dir = self.output_root / "submissions" / snapshot.idempotency_token
             work_dir.mkdir(parents=True, exist_ok=True)
-            config_path = dump_configuration(config, work_dir / "radar_pd_config.yaml")
+            config_path = dump_configuration(
+                config,
+                work_dir / "radar_pd_config.yaml",
+                inputs=snapshot.inputs,
+            )
             prepared = self._prepare_datasets(snapshot, record, config_path, callback)
             if cancel_event.is_set() or record.cancel_requested:
                 record.status = RunStatus.CANCELLED
@@ -1651,7 +1665,7 @@ class GalaxyService:
                 record.name = recovered_config.run_name
         recovered_inputs = self._inputs_from_parameters(parameters, public_input_ids)
         if recovered_inputs is not None:
-            record.inputs = recovered_inputs
+            record.inputs = self._merge_recovered_inputs(record.inputs, recovered_inputs)
         stage, progress = stage_from_console(stdout, status)
         record.status = status
         record.analysis_status = status
@@ -1662,6 +1676,28 @@ class GalaxyService:
         if status == RunStatus.ERROR:
             record.message = (stderr or stdout or "Galaxy reported an error")[-4000:]
         return record
+
+    @staticmethod
+    def _merge_recovered_inputs(
+        current: InputSelection | None,
+        recovered: InputSelection,
+    ) -> InputSelection:
+        """Merge runtime Galaxy IDs without losing click-time facility intent."""
+
+        if current is None:
+            return recovered
+        merged = current.model_copy(deep=True)
+        for field in (
+            "data_dataset_id",
+            "instrument_dataset_id",
+            "main_cif_dataset_id",
+            "database_dataset_id",
+            "event_dataset_id",
+        ):
+            value = getattr(recovered, field)
+            if value:
+                setattr(merged, field, value)
+        return merged
 
     def cancel(self, uid: str) -> None:
         self._recover_tool(uid).stop()
