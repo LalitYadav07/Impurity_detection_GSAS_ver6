@@ -58,6 +58,52 @@ class FacilityPathError(ValueError):
     """Raised when a facility path is outside the permitted IPTS boundary."""
 
 
+def build_facility_export_path(
+    facility_root: str,
+    instrument: str,
+    ipts: str,
+    working_directory: str,
+    result_container: str,
+    result_name: str,
+    *,
+    filename: str = "results.zip",
+) -> str:
+    """Build a confined SNS/HFIR destination for NDIP's export tool.
+
+    This function intentionally performs no filesystem access. The NOVA pod
+    may browse a read-only mount while NDIP executes ``Export Datasets`` on an
+    authenticated analysis-cluster destination. Every user-controlled path
+    component is nevertheless validated before the destination is submitted.
+    """
+
+    normalized_root = str(facility_root or "").strip().replace("\\", "/").rstrip("/").upper()
+    facility = next((name for name, root in FACILITY_ROOTS.items() if normalized_root == root.upper()), None)
+    if facility is None:
+        raise FacilityPathError("Authenticated export supports only the /SNS and /HFIR facility roots")
+    relative = PurePosixPath(_normalize_relative(working_directory))
+    if not relative.parts or relative.parts[0].lower() != "shared":
+        raise FacilityPathError("Authenticated result export is limited to the selected IPTS shared/ tree")
+    clean_container = str(result_container or "").strip()
+    clean_result = str(result_name or "").strip()
+    if not _NEW_DIRECTORY_NAME.fullmatch(clean_container) or clean_container in {".", ".."}:
+        raise FacilityPathError("Invalid result container name")
+    if not _NEW_DIRECTORY_NAME.fullmatch(clean_result) or clean_result in {".", ".."}:
+        raise FacilityPathError("Invalid result folder name")
+    clean_filename = str(filename or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", clean_filename):
+        raise FacilityPathError("Invalid exported filename")
+    destination = (
+        PurePosixPath(FACILITY_ROOTS[facility])
+        / _component(instrument, "instrument")
+        / _ipts_component(ipts)
+        / relative
+        / clean_container
+        / clean_result
+        / clean_filename
+    )
+    return destination.as_posix()
+
+
 @dataclass(frozen=True)
 class FacilityEntry:
     name: str

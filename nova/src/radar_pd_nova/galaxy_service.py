@@ -23,6 +23,7 @@ import requests
 import yaml
 
 from .configuration import config_from_contract, dump_configuration
+from .facility import build_facility_export_path
 from .models import (
     AnalysisConfig,
     AnalysisMode,
@@ -44,6 +45,7 @@ LIBRARY_BUILDER_TOOL_ID = "neutrons_radar_pd_library_builder_prototype"
 GPX_HANDOFF_TOOL_ID = "neutrons_radar_pd_gpx_handoff_prototype"
 COMPARE_SERIES_TOOL_ID = "neutrons_radar_pd_compare_series_prototype"
 RESULT_EXPLORER_TOOL_ID = "neutrons_radar_pd_result_explorer_prototype"
+EXPORT_DATASETS_TOOL_ID = "neutrons_export"
 RUN_NAME_PREFIX = "RADAR-PD NOVA"
 SUBMISSION_ACK_TIMEOUT_SECONDS = float(os.getenv("RADAR_PD_SUBMISSION_ACK_TIMEOUT", "60"))
 
@@ -1383,6 +1385,45 @@ class GalaxyService:
             galaxy_job_id=uid,
             status=RunStatus.QUEUED,
         )
+
+    def submit_results_export(
+        self,
+        record: RunRecord,
+        *,
+        archive_dataset_id: str,
+    ) -> tuple[UtilityActionRecord, str]:
+        """Delegate one completed result archive to NDIP's authenticated exporter.
+
+        The export tool is routed by NDIP to its UCAMS-aware analysis-cluster
+        execution destination. RADAR-PD supplies only an HDA reference and a
+        validated facility path; it never handles a UCAMS password, OIDC token,
+        SSH key, or host credential.
+        """
+
+        inputs = record.inputs
+        if inputs is None:
+            raise ValueError("The run has no persisted input selection")
+        run_token = re.sub(r"[^A-Za-z0-9_. -]+", "-", record.name).strip(" .-") or "radar-pd-run"
+        suffix = (record.galaxy_job_id or record.uid).replace("pending-", "")[:8]
+        destination = build_facility_export_path(
+            inputs.facility_root,
+            str(inputs.instrument or ""),
+            str(inputs.ipts or ""),
+            str(inputs.publish_directory or ""),
+            str(inputs.publish_subfolder or ""),
+            f"{run_token}-{suffix}",
+        )
+        action = self.submit_utility(
+            tool_id=EXPORT_DATASETS_TOOL_ID,
+            name="Publish RADAR-PD results to IPTS",
+            inputs={
+                "series_0|input_mode|input_mode_collection": False,
+                "series_0|input_mode|input": {"dataset_id": archive_dataset_id},
+                "series_0|input_mode|export_path": destination,
+            },
+            associated_run_uid=record.uid,
+        )
+        return action, destination
 
     def refresh_utility(self, action: UtilityActionRecord) -> UtilityActionRecord:
         if not action.galaxy_job_id:

@@ -211,6 +211,9 @@ class RadarPdNovaApp(ThemedApp):
         state.selected_run_status = "-"
         state.selected_analysis_status = "-"
         state.selected_result_status = "-"
+        state.selected_publication_status = "-"
+        state.selected_publication_target = ""
+        state.selected_publish_message = ""
         state.selected_galaxy_job_id = "Pending"
         state.selected_run_stage = "-"
         state.selected_run_progress = 0
@@ -607,13 +610,13 @@ class RadarPdNovaApp(ThemedApp):
             )
             vuetify.VSwitch(
                 v_model=("publish_results_to_ipts",),
-                label="Copy completed results into this working folder",
-                hint="Galaxy History remains the authoritative result store. This creates a separate named subfolder here.",
+                label="Export completed results into this working folder",
+                hint="Galaxy History remains authoritative. NDIP exports the result archive under your authenticated facility identity.",
                 persistent_hint=True,
                 color="#15543c",
                 density="compact",
                 inset=True,
-                disabled=("!facility_working_writable",),
+                disabled=("!facility_working_readable",),
             )
             vuetify.VTextField(
                 v_show="publish_results_to_ipts",
@@ -1171,7 +1174,9 @@ class RadarPdNovaApp(ThemedApp):
                         with vuetify.VExpansionPanelText():
                             vuetify.VSwitch(
                                 v_model=("publish_results_to_ipts",),
-                                label="Publish completed results to this IPTS",
+                                label="Export completed results to this IPTS through NDIP",
+                                hint="The export runs as a separate Galaxy job using your authenticated facility access.",
+                                persistent_hint=True,
                                 color="#15543c",
                                 density="compact",
                                 inset=True,
@@ -1631,6 +1636,12 @@ class RadarPdNovaApp(ThemedApp):
                     )
                     vuetify.VChip(text=("'Analysis: ' + selected_analysis_status",), size="x-small", variant="tonal")
                     vuetify.VChip(text=("'Results: ' + selected_result_status",), size="x-small", variant="tonal")
+                    vuetify.VChip(
+                        v_show="selected_publication_status !== '-'",
+                        text=("'IPTS export: ' + selected_publication_status",),
+                        size="x-small",
+                        variant="tonal",
+                    )
             with html.Div(classes="radar-progress-number"):
                 html.Strong("{{ selected_run_progress }}%")
                 html.Span("complete")
@@ -1640,6 +1651,27 @@ class RadarPdNovaApp(ThemedApp):
         vuetify.VAlert(
             v_show="selected_analysis_status === 'Ok' && selected_result_status === 'Error'",
             text="The scientific analysis completed, but NOVA could not collect its archive. Use Reload results from Galaxy; the Galaxy job is not failed.",
+            type="warning",
+            variant="tonal",
+            classes="mb-3",
+        )
+        vuetify.VAlert(
+            v_show="selected_publication_status === 'Queued' || selected_publication_status === 'Running'",
+            text=("selected_publish_message",),
+            type="info",
+            variant="tonal",
+            classes="mb-3",
+        )
+        vuetify.VAlert(
+            v_show="selected_publication_status === 'Ok'",
+            text=("'Result archive exported to ' + selected_publication_target",),
+            type="success",
+            variant="tonal",
+            classes="mb-3",
+        )
+        vuetify.VAlert(
+            v_show="selected_publication_status === 'Error' || selected_publication_status === 'Cancelled'",
+            text=("selected_publish_message",),
             type="warning",
             variant="tonal",
             classes="mb-3",
@@ -2154,12 +2186,11 @@ class RadarPdNovaApp(ThemedApp):
             access = self.facility.directory_access(instrument, ipts, directory)
             state.facility_working_readable = bool(access["readable"] and access["searchable"])
             state.facility_working_writable = bool(access["writable"])
-            if not state.facility_working_writable:
-                state.publish_results_to_ipts = False
-            access_label = "read/write" if state.facility_working_writable else "read only"
+            access_label = "read/write" if state.facility_working_writable else "read only in this session"
             state.facility_browser_message = (
                 f"Browsing {self.facility.root}/{instrument}/{ipts}/{directory} ({access_label}). "
-                "Only this folder's compatible files and immediate subfolders are shown."
+                "Only this folder's compatible files and immediate subfolders are shown. "
+                "Result export is delegated to NDIP and does not require this NOVA pod to have write access."
             )
         except Exception as exc:
             state.facility_working_readable = False
@@ -2646,45 +2677,83 @@ class RadarPdNovaApp(ThemedApp):
                     record.progress = 100
                     record.message = f"Analysis finished, but result download failed: {exc}"
                 self._monitor_update(record)
+                if record.publication_job_id and record.publication_status not in {
+                    RunStatus.OK,
+                    RunStatus.ERROR,
+                    RunStatus.CANCELLED,
+                }:
+                    self._schedule_utility(
+                        self._monitor_results_publication(record),
+                        f"radar-publish-{record.uid}",
+                    )
         finally:
             self._monitored_uids.discard(record.uid)
 
     def _publish_results_if_requested(self, record: RunRecord) -> RunRecord:
-        """Copy a completed result bundle into an explicitly selected IPTS folder."""
+        """Submit or refresh NDIP's authenticated export of a result archive."""
 
         inputs = record.inputs
         if (
             inputs is None
             or not inputs.publish_results_to_ipts
-            or not record.output_dir
             or record.published_output_dir
         ):
             return record
+
+        def set_message(message: str) -> None:
+            previous = record.publish_message
+            if previous and previous in record.message:
+                record.message = record.message.replace(previous, "").strip()
+            record.publish_message = message
+            record.message = "\n".join(value for value in (record.message, message) if value)
+
         try:
-            run_token = re.sub(r"[^A-Za-z0-9_. -]+", "-", record.name).strip(" .-") or "radar-pd-run"
-            suffix = (record.galaxy_job_id or record.uid).replace("pending-", "")[:8]
-            browser = FacilityBrowser.for_root(inputs.facility_root)
-            publish_parent = browser.ensure_output_parent(
-                str(inputs.instrument or ""),
-                str(inputs.ipts or ""),
-                str(inputs.publish_directory or ""),
-                str(inputs.publish_subfolder or ""),
+            if record.publication_job_id:
+                action = UtilityActionRecord(
+                    uid=f"publication-{record.uid}",
+                    tool_id="neutrons_export",
+                    name="Publish RADAR-PD results to IPTS",
+                    associated_run_uid=record.uid,
+                    galaxy_job_id=record.publication_job_id,
+                    status=record.publication_status or RunStatus.QUEUED,
+                )
+                action = self.service.refresh_utility(action)
+                record.publication_status = action.status
+                if action.status == RunStatus.OK:
+                    record.published_output_dir = record.publication_target
+                    set_message(f"Published the complete result archive to {record.publication_target}")
+                elif action.status in {RunStatus.ERROR, RunStatus.CANCELLED}:
+                    detail = action.message or f"NDIP export ended with status {action.status.value}"
+                    set_message(f"Analysis completed, but authenticated IPTS export failed: {detail}")
+                else:
+                    set_message(f"Publishing the complete result archive to {record.publication_target}")
+                return record
+
+            archive_dataset_id = record.output_dataset_ids.get("results_archive")
+            if not archive_dataset_id:
+                raise RuntimeError("Galaxy did not expose the completed results archive for export")
+            action, destination = self.service.submit_results_export(
+                record,
+                archive_dataset_id=archive_dataset_id,
             )
-            published = browser.publish_directory(
-                record.output_dir,
-                str(inputs.instrument or ""),
-                str(inputs.ipts or ""),
-                publish_parent,
-                f"{run_token}-{suffix}",
-            )
-            record.published_output_dir = str(published)
-            record.publish_message = f"Published results to {published}"
+            record.publication_job_id = action.galaxy_job_id
+            record.publication_status = action.status
+            record.publication_target = destination
+            set_message(f"Publishing the complete result archive to {destination}")
         except Exception as exc:
-            # Galaxy remains the authoritative result store; an IPTS copy
-            # failure must be visible but must not invalidate the analysis.
-            record.publish_message = f"Analysis completed, but IPTS publishing failed: {exc}"
-            record.message = "\n".join(value for value in (record.message, record.publish_message) if value)
+            # Galaxy remains the authoritative result store. Publication is a
+            # separate provenance-tracked job and never invalidates analysis.
+            record.publication_status = RunStatus.ERROR
+            set_message(f"Analysis completed, but authenticated IPTS export failed: {exc}")
         return record
+
+    async def _monitor_results_publication(self, record: RunRecord) -> None:
+        terminal = {RunStatus.OK, RunStatus.ERROR, RunStatus.CANCELLED}
+        while record.publication_status not in terminal:
+            await asyncio.sleep(2.0)
+            record = await asyncio.to_thread(self._publish_results_if_requested, record)
+            self.records[record.uid] = record
+            self._monitor_update(record)
 
     def _sync_runs(self) -> None:
         self.server.state.run_rows = [record.as_row() for record in sorted(self.records.values(), key=lambda item: item.created_utc, reverse=True)]
@@ -2930,6 +2999,9 @@ class RadarPdNovaApp(ThemedApp):
         state.selected_run_status = record.status.value.title()
         state.selected_analysis_status = (record.analysis_status or record.status).value.title()
         state.selected_result_status = record.result_status.value.replace("_", " ").title()
+        state.selected_publication_status = record.publication_status.value.title() if record.publication_status else "-"
+        state.selected_publication_target = record.publication_target or ""
+        state.selected_publish_message = record.publish_message
         state.selected_galaxy_job_id = record.galaxy_job_id or "Pending"
         state.selected_run_stage = record.stage
         state.selected_run_progress = record.progress

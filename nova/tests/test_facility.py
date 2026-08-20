@@ -5,7 +5,12 @@ from pathlib import Path
 
 import pytest
 
-from radar_pd_nova.facility import FacilityBrowser, FacilityPathError, WatchRecipe
+from radar_pd_nova.facility import (
+    FacilityBrowser,
+    FacilityPathError,
+    WatchRecipe,
+    build_facility_export_path,
+)
 
 
 @pytest.fixture()
@@ -177,6 +182,38 @@ def test_supports_hfir_root_and_facility_metadata(tmp_path: Path) -> None:
     selection = browser.select_file("HB2A", "16534", "exp510/Datafiles/scan.dat", role="data")
     assert selection.facility == "HFIR"
     assert selection.absolute_path == str(pattern)
+
+
+def test_builds_confined_authenticated_export_paths() -> None:
+    assert build_facility_export_path(
+        "/SNS",
+        "NOMAD",
+        "IPTS-33088",
+        "shared/Lalit_radarpd",
+        "results",
+        "scan_001-job1234",
+    ) == "/SNS/NOMAD/IPTS-33088/shared/Lalit_radarpd/results/scan_001-job1234/results.zip"
+    assert build_facility_export_path(
+        "/HFIR",
+        "HB2A",
+        "28749",
+        "shared/Lalit_radarpd",
+        "RADAR-PD Results",
+        "scan 0003-job5678",
+    ) == "/HFIR/HB2A/IPTS-28749/shared/Lalit_radarpd/RADAR-PD Results/scan 0003-job5678/results.zip"
+
+
+@pytest.mark.parametrize(
+    ("root", "working"),
+    [
+        ("/tmp/SNS", "shared/results"),
+        ("/SNS", "../shared/results"),
+        ("/SNS", "raw/NeXus"),
+    ],
+)
+def test_authenticated_export_path_rejects_unmanaged_destinations(root: str, working: str) -> None:
+    with pytest.raises(FacilityPathError):
+        build_facility_export_path(root, "HB2A", "IPTS-12345", working, "results", "run-1")
 
 
 def test_publishes_result_atomically_with_manifest(facility: tuple[FacilityBrowser, Path], tmp_path: Path) -> None:

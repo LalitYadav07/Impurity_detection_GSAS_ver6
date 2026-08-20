@@ -49,7 +49,15 @@ collect         normalize an existing run directory
 
 The image writes Galaxy-ready collections under the selected output directory: `plots/`, `tables/`, `phases/`, `gpx/`, and `diagnostics/`. It also writes `summary.json`, `state.json`, `gpx_index.json`, `report.html`, and `results.zip`.
 
-## SNS IPTS folder watcher
+## Continuous IPTS processing
+
+The preferred NDIP-native route is **Ingress -> saved RADAR-PD workflow ->
+Export Datasets**. Ingress detects and imports each stable reduced file, Galaxy
+runs RADAR-PD, and the installed export tool writes the completed result archive
+through NDIP's authenticated analysis-cluster destination. The RADAR-PD image
+contains no UCAMS password, OIDC token, SSH key, or facility credential.
+
+## Optional managed folder watcher
 
 The same image contains a restart-safe worker for continuously arriving reduced
 patterns. The NOVA application writes a `radar-pd-watch/v1` recipe and its
@@ -77,10 +85,11 @@ interactive browser session.
 
 Ordinary one-off browsing should use Galaxy-authenticated remote-file sources;
 the selected object is imported into History before Analyze runs, and the NOVA
-pod does not need a native `/SNS` path. Mount the SNS tree read-only only when
-direct mounted browsing or run resolution is explicitly enabled. Publishing
-results and directory watching require a separate, narrowly scoped read-write
-mount that permits the worker identity to write only to the selected
-experiment's `shared/` tree. RADAR-PD rejects paths outside
-`/SNS/<instrument>/IPTS-*/shared`, path traversal, and symlink escapes. Raw
-NeXus directories are never writable through this integration.
+pod does not need a native facility path. Mount `/SNS` or `/HFIR` read-only only
+when direct mounted browsing or run resolution is explicitly enabled. Ordinary
+result publication does not require a writeable mount in the RADAR-PD pod: the
+app submits the completed `results.zip` to NDIP's installed `neutrons_export`
+tool with a validated `/SNS|HFIR/<instrument>/IPTS-*/shared/...` destination.
+Only the optional standalone watch worker requires an NDIP-operated, narrowly
+scoped read-write execution context. Raw NeXus directories are never writable
+through this integration.

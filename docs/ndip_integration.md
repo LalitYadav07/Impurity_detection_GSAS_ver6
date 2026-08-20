@@ -2,13 +2,13 @@
 
 ## Scope
 
-This integration runs RADAR-PD as an NDIP/Galaxy job. It does not call the Birthright VM and it does not start the Streamlit application. For one-off and mapped analyses, Galaxy owns input selection, job execution, history, collections, provenance, reruns, workflow mapping, and output retention. The optional managed watch worker uses the same immutable batch image but writes a self-contained, checksummed result bundle directly to the selected IPTS `shared/` folder; it is an NDIP-operated acquisition service rather than a browser session. The existing RADAR-PD Full and Rapid scientific pipelines remain the calculation engines.
+This integration runs RADAR-PD as an NDIP/Galaxy job. It does not call the Birthright VM and it does not start the Streamlit application. For one-off and mapped analyses, Galaxy owns input selection, job execution, history, collections, provenance, reruns, workflow mapping, and output retention. Optional publication composes RADAR-PD with NDIP's installed `Export Datasets` tool, which performs the facility write through NDIP's authenticated execution destination. The existing RADAR-PD Full and Rapid scientific pipelines remain the calculation engines.
 
 The Galaxy batch tools and NOVA interactive client are deployed through the
-NDIP prototype environment. The IPTS browser, atomic result publisher, and
-restart-safe watch worker described here are implemented in the application
-repository; mounting `/SNS` and operating the persistent watcher remain NDIP
-deployment responsibilities.
+NDIP prototype environment. RADAR-PD never receives a UCAMS password, OIDC
+token, SSH key, or analysis-cluster credential. NDIP owns identity delegation,
+job routing, and the write-capable destination. Operating continuous ingress
+or watch automation remains an NDIP workflow/deployment responsibility.
 
 ## Architecture
 
@@ -35,13 +35,28 @@ flowchart LR
     J --> O["Interactive result explorer"]
     L --> P["Typed GPX handoff"]
     P --> Q["Future NDIP interactive GSAS-II GPX opener"]
-    J --> R["Optional atomic curated IPTS copy"]
-    S["Saved watch recipe"] --> T["Managed restart-safe worker"]
+    J --> R["NDIP Export Datasets"]
+    R --> U["Authenticated IPTS shared output"]
+    S["NDIP Ingress watches reduced files"] --> T["Saved RADAR-PD workflow"]
     T --> D
     T --> R
 ```
 
 ## Components
+
+### Identity and facility authorization
+
+UCAMS authentication belongs to NDIP, not to the RADAR-PD container. The user
+signs in to NDIP; Galaxy/Pulsar route tools such as `neutrons_export` and
+`neutrons_ingress` to destinations that can act with the delegated facility
+identity. RADAR-PD composes those installed tools through Galaxy dataset IDs and
+validated parameters. It must not prompt for, store, forward, or mount a user's
+password, SSH key, browser cookie, OIDC token, or Kerberos credential.
+
+This separation also preserves authorization: a syntactically valid IPTS path
+does not grant access. The NDIP destination still decides whether the signed-in
+user may read or write that experiment. RADAR-PD reports that tool job's status
+without converting an export failure into an analysis failure.
 
 ### Portable configuration
 
@@ -92,9 +107,9 @@ The resolver searches the mounted read-only facility tree for exactly one reduce
 
 Both browser routes are distinct from inference-based resolution: the user sees
 and chooses the actual reduced file. Galaxy remote-source authorization governs
-the primary browser. Direct mounted browsing and publishing are additionally
-confined to `/SNS/<instrument>/IPTS-*/shared`; traversal, symlink escape, and
-writes to raw NeXus trees are rejected.
+the primary browser. Any requested export destination is confined to
+`/SNS|HFIR/<instrument>/IPTS-*/shared`; traversal and raw-tree destinations are
+rejected before the NDIP export job is submitted.
 
 ### Scientific execution
 
@@ -164,10 +179,17 @@ This supports finite temperature, field, pressure, time, and repeated-reduction
 series and is the preferred path when the scan set is already represented as a
 Galaxy collection.
 
-For an acquisition folder that receives new reduced files over time, NOVA can
-save a portable analysis configuration and a `radar-pd-watch/v1` recipe into the
-IPTS `shared/` tree. `scripts/ndip_ipts_watch.py` is a separate managed worker
-that:
+For an acquisition folder that receives new reduced files over time, the
+preferred NDIP-native design is an Ingress rule that launches a saved workflow:
+
+1. Ingress detects a stable new reduced file and imports it to Galaxy History.
+2. The saved workflow runs RADAR-PD with the versioned configuration and fixed
+   instrument/main-CIF inputs.
+3. `Export Datasets` writes the completed `results.zip` to the selected IPTS
+   `shared/` results folder using the user's delegated facility identity.
+
+`scripts/ndip_ipts_watch.py` remains a restart-safe worker implementation for a
+future NDIP-managed service or scheduler route. It:
 
 - discovers only configured filename patterns,
 - waits for size and modification time to remain stable,
@@ -177,8 +199,9 @@ that:
 - atomically renames successful results into a unique per-file directory, and
 - preserves numbered failure evidence without overwriting previous runs.
 
-The watcher deliberately does not run inside the NOVA browser pod. It therefore
-survives logout, browser closure, and interactive-session expiry.
+Neither Ingress nor the fallback watcher runs inside the NOVA browser pod. The
+automation therefore survives logout, browser closure, and interactive-session
+expiry.
 
 ## Intended NDIP Workflows
 
@@ -200,13 +223,13 @@ independently selected instrument/CIF -> import into Galaxy History -> Analyze
 
 NOVA instrument -> IPTS -> shared folder -> selected reduced pattern +
 independently selected instrument/CIF -> Galaxy Analyze -> Galaxy history ->
-optional atomic curated copy to a selected IPTS output folder.
+optional authenticated `Export Datasets` job to a selected IPTS output folder.
 
 ### Watched acquisition folder
 
-Saved configuration + CIF/instrument files in IPTS -> managed watcher -> stable
-new pattern -> Full/Rapid analysis -> unique atomic result folder with manifest,
-logs, report, tables, plots, CIFs, and GPX checkpoints.
+NDIP Ingress -> stable new pattern -> saved Full/Rapid workflow -> normalized
+Galaxy outputs -> authenticated result-archive export. A separately operated
+watch worker is retained only as a deployment fallback.
 
 ### Sequential scan series
 
@@ -237,10 +260,11 @@ Galaxy wrappers currently refer to `radar-pd-ndip:local`. Before deployment this
 - no Birthright VM credentials
 - no API token for batch execution
 
-Direct result publishing requires a narrowly scoped writer identity for selected
-IPTS `shared/` folders. Continuous watching additionally requires an NDIP-managed
-service or scheduled container using the same immutable application image and
-recipe contract.
+One-off result publication uses the installed NDIP `neutrons_export` tool.
+RADAR-PD passes only the completed Galaxy dataset reference and a validated IPTS
+`shared/` destination. NDIP's Pulsar/analysis-cluster destination supplies the
+authenticated user context and performs the copy. Continuous processing should
+compose NDIP Ingress, a saved RADAR-PD workflow, and the same export tool.
 
 The image uses a normal Docker `CMD`, not an `ENTRYPOINT`, so Galaxy can execute its generated Bash command.
 
@@ -253,8 +277,10 @@ The image uses a normal Docker `CMD`, not an `ENTRYPOINT`, so Galaxy can execute
 - Ambiguous facility-file matches fail closed.
 - Facility browsing and output paths are confined to an IPTS `shared/` tree;
   traversal and symlink escapes fail closed.
-- IPTS publication stages data before atomic rename and never overwrites a
-  completed result directory.
+- One-off IPTS publication is a separate Galaxy job with independent status and
+  provenance; an export failure never changes a successful scientific result.
+- Export paths include the RADAR-PD run and Galaxy-job suffix so separate runs
+  do not target the same result archive.
 - Watch state and fingerprints are atomic and restart-safe; unstable files are
   not processed.
 - Input files are checksummed in the manifest.
@@ -281,13 +307,13 @@ planemo lint tools/neutrons/powder_diffraction/radar_pd_*.xml
 
 1. ORNL registry project, image name, and immutable tag/digest policy.
 2. Versioned neutron and X-ray catalog mount paths.
-3. Production `/SNS` mount policy: read-only browsing for NOVA/batch jobs and a
-   narrowly scoped writer identity for curated publication/watch outputs.
+3. Production facility-source policy for read-only browsing, plus confirmation
+   that the installed `neutrons_export` destination is enabled for RADAR-PD
+   workflows on SNS and HFIR.
 4. CPU, memory, walltime, and concurrency destinations for Full and Rapid jobs.
 5. Galaxy datatype registration for `.gpx`.
 6. Ownership or source image for an interactive GSAS-II GPX opener.
 7. Retention policy for large GPX collections and complete result ZIP files.
 8. Prototype-branch permissions, review process, and who is authorized to publish the image.
-9. Owner and deployment model for the persistent watch worker (managed service
-   versus scheduler-driven `--once` sweeps), including monitoring and restart
-   policy.
+9. Ingress ownership, workflow registration, filename matching, and restart/
+   monitoring policy for continuous reduced-file processing.

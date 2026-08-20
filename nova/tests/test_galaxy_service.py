@@ -36,6 +36,59 @@ def test_galaxy_status_normalization() -> None:
     assert normalize_status("deleted") is RunStatus.CANCELLED
 
 
+def test_results_export_uses_ndip_authenticated_export_contract() -> None:
+    service = GalaxyService("https://example.invalid", "key", "history", output_root=Path("."))
+    seen: dict[str, Any] = {}
+
+    def submit_utility(**kwargs: Any) -> Any:
+        seen.update(kwargs)
+        from radar_pd_nova.models import UtilityActionRecord
+
+        return UtilityActionRecord(
+            uid="utility-export",
+            tool_id=kwargs["tool_id"],
+            name=kwargs["name"],
+            associated_run_uid=kwargs["associated_run_uid"],
+            galaxy_job_id="export-job",
+            status=RunStatus.QUEUED,
+        )
+
+    service.submit_utility = submit_utility  # type: ignore[method-assign]
+    selection = InputSelection(
+        source=InputSource.GALAXY,
+        data_dataset_id="data-id",
+        instrument_dataset_id="instrument-id",
+        facility_root="/HFIR",
+        instrument="HB2A",
+        ipts="IPTS-28749",
+        publish_results_to_ipts=True,
+        publish_directory="shared/Lalit_radarpd",
+        publish_subfolder="results",
+    )
+    record = RunRecord(
+        uid="run-uid",
+        galaxy_job_id="analysis123456",
+        name="scan 0003",
+        mode=AnalysisMode.RAPID,
+        history_id="history",
+        inputs=selection,
+    )
+
+    action, destination = service.submit_results_export(record, archive_dataset_id="archive-id")
+
+    assert action.galaxy_job_id == "export-job"
+    assert seen["tool_id"] == "neutrons_export"
+    assert seen["inputs"] == {
+        "series_0|input_mode|input_mode_collection": False,
+        "series_0|input_mode|input": {"dataset_id": "archive-id"},
+        "series_0|input_mode|export_path": destination,
+    }
+    assert destination == (
+        "/HFIR/HB2A/IPTS-28749/shared/Lalit_radarpd/results/"
+        "scan 0003-analysis/results.zip"
+    )
+
+
 def test_result_collector_uses_nova_collection_api(tmp_path: Path) -> None:
     class FakeData:
         id = "output-id"

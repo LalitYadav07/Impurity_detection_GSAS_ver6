@@ -366,6 +366,9 @@ class RunRecord(BaseModel):
     recovery_diagnostics: list[str] = Field(default_factory=list)
     published_output_dir: str | None = None
     publish_message: str = ""
+    publication_job_id: str | None = None
+    publication_status: RunStatus | None = None
+    publication_target: str | None = None
 
     @model_validator(mode="after")
     def adapt_legacy_record(self) -> "RunRecord":
