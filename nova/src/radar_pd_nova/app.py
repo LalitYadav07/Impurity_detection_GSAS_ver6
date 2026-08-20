@@ -213,6 +213,7 @@ class RadarPdNovaApp(ThemedApp):
         state.selected_result_status = "-"
         state.selected_publication_status = "-"
         state.selected_publication_target = ""
+        state.selected_publication_job_id = ""
         state.selected_publish_message = ""
         state.selected_galaxy_job_id = "Pending"
         state.selected_run_stage = "-"
@@ -1726,6 +1727,27 @@ class RadarPdNovaApp(ThemedApp):
         with html.Div(v_if="selected_run_status !== 'Ok'", classes="radar-result-not-ready"):
             vuetify.VAlert(text="Results will appear here after the selected Galaxy run completes.", type="info", variant="tonal")
         with html.Div(v_show="selected_run_status === 'Ok'"):
+            vuetify.VAlert(
+                v_show="selected_publication_status === 'Queued' || selected_publication_status === 'Running'",
+                text=("selected_publish_message",),
+                type="info",
+                variant="tonal",
+                classes="mb-3",
+            )
+            vuetify.VAlert(
+                v_show="selected_publication_status === 'Ok'",
+                text=("'Result archive exported to ' + selected_publication_target",),
+                type="success",
+                variant="tonal",
+                classes="mb-3",
+            )
+            vuetify.VAlert(
+                v_show="selected_publication_status === 'Error' || selected_publication_status === 'Cancelled'",
+                text=("selected_publish_message",),
+                type="warning",
+                variant="tonal",
+                classes="mb-3",
+            )
             with html.Div(classes="radar-metric-grid"):
                 with html.Div(v_for="metric in result_metrics", key="metric.label", classes="radar-metric-card"):
                     html.Div("{{ metric.label }}", classes="radar-metric-label")
@@ -2714,7 +2736,12 @@ class RadarPdNovaApp(ThemedApp):
                     set_message(f"Published the complete result archive to {record.publication_target}")
                 elif action.status in {RunStatus.ERROR, RunStatus.CANCELLED}:
                     detail = action.message or f"NDIP export ended with status {action.status.value}"
-                    set_message(f"Analysis completed, but authenticated IPTS export failed: {detail}")
+                    job_label = f" (Galaxy export job {record.publication_job_id})" if record.publication_job_id else ""
+                    set_message(
+                        "Analysis completed, but the IPTS copy"
+                        f"{job_label} failed. The complete archive remains available in Galaxy's "
+                        f"Run File Browser for manual download. {detail}"
+                    )
                 else:
                     set_message(f"Publishing the complete result archive to {record.publication_target}")
                 return record
@@ -2991,6 +3018,7 @@ class RadarPdNovaApp(ThemedApp):
         state.selected_result_status = record.result_status.value.replace("_", " ").title()
         state.selected_publication_status = record.publication_status.value.title() if record.publication_status else "-"
         state.selected_publication_target = record.publication_target or ""
+        state.selected_publication_job_id = record.publication_job_id or ""
         state.selected_publish_message = record.publish_message
         state.selected_galaxy_job_id = record.galaxy_job_id or "Pending"
         state.selected_run_stage = record.stage
