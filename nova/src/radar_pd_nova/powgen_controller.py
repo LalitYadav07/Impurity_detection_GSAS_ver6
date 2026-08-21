@@ -272,11 +272,13 @@ class PowgenWatchController:
             refreshed = self.service.refresh(record)
             self.records[run_id] = refreshed
             if refreshed.status.value == "ok" and run_id in self.state.submitted:
-                collected = self.service.collect_results(refreshed)
-                self.records[run_id] = collected
-                result_ids = tuple(str(value) for value in collected.output_dataset_ids.values() if value)
+                # Galaxy completion is authoritative. Do not make the live
+                # watcher download and unpack every result archive before it
+                # can acknowledge a finished scan. The NOVA results view
+                # collects the archive lazily when a user opens this record.
+                result_ids = tuple(str(value) for value in refreshed.output_dataset_ids.values() if value)
                 if result_ids:
-                    self.state.mark_completed(run_id, result_ids, galaxy_job_id=collected.galaxy_job_id)
+                    self.state.mark_completed(run_id, result_ids, galaxy_job_id=refreshed.galaxy_job_id)
                     state_changed = True
             elif refreshed.status.value in {"error", "cancelled"} and run_id in self.state.submitted:
                 self.state.mark_failed(

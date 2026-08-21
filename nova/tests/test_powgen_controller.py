@@ -55,6 +55,15 @@ class FakeGalaxyService:
     def recent_runs(self, *, limit=50):
         return list(self.recovered_runs[:limit])
 
+    def refresh(self, record):
+        record.status = RunStatus.OK
+        record.analysis_status = RunStatus.OK
+        record.output_dataset_ids = {"results_archive": "archive-hda"}
+        return record
+
+    def collect_results(self, _record):
+        raise AssertionError("POWGEN status refresh must not download the result archive")
+
 
 def test_bounded_listing_is_nonrecursive_and_ignores_directories(tmp_path: Path) -> None:
     (tmp_path / "PG3_63764.gsa").write_text("data", encoding="ascii")
@@ -126,6 +135,30 @@ def test_controller_starts_with_latest_gsa_then_submits_all_new_runs() -> None:
 
     assert [run.run_number for run in initial] == [63764]
     assert [run.run_number for run in later] == [63765, 63766]
+
+
+def test_controller_marks_finished_job_complete_without_downloading_archive() -> None:
+    service = FakeGalaxyService()
+    controller = PowgenWatchController(
+        service,
+        PowgenExperimentSettings(
+            ipts="IPTS-38000",
+            history_id="history-1",
+            configuration_dataset_id="config-hda",
+            wavelength_angstrom="1.5",
+        ),
+    )
+    run = controller.discover(
+        [{"path": "/SNS/PG3/IPTS-38000/shared/autoreduce/PG3_63765.gsa"}]
+    )[0]
+    controller.submit(run)
+
+    records = controller.refresh()
+
+    assert records[run.run_id].status == RunStatus.OK
+    assert run.run_id in controller.state.completed
+    assert run.run_id not in controller.state.submitted
+    assert controller.state.completed[run.run_id].galaxy_result_ids == ("archive-hda",)
 
 
 def test_controller_restores_galaxy_checkpoint_without_resubmitting_old_scan() -> None:
