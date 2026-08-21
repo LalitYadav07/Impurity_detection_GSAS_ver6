@@ -531,6 +531,23 @@ def test_server_selected_upload_keeps_supported_original_filename(tmp_path: Path
     assert _upload_filename(source, "main phase CIF") == "RADAR-PD main phase CIF | TbSSL.CIF"
 
 
+def test_gsas_diffraction_uploads_keep_original_filename_suffix(tmp_path: Path) -> None:
+    for suffix in (".gsa", ".gsas", ".gss"):
+        source = tmp_path / f"pattern{suffix}"
+
+        assert _upload_filename(source, "diffraction data") == f"RADAR-PD diffraction data | pattern{suffix}"
+
+
+def test_gsas_diffraction_datasets_are_classified_from_filename_or_datatype() -> None:
+    for extension in ("gsa", "gsas", "gss"):
+        assert GalaxyService._dataset_scientific_role(
+            {"name": f"RADAR-PD diffraction data | pattern.{extension}", "extension": "txt"}
+        ) == ("diffraction", False)
+        assert GalaxyService._dataset_scientific_role(
+            {"name": "pattern", "extension": extension}
+        ) == ("diffraction", False)
+
+
 def test_remote_sources_and_directory_entries_are_normalized(monkeypatch: Any) -> None:
     responses = [
         [
@@ -545,6 +562,9 @@ def test_remote_sources_and_directory_entries_are_normalized(monkeypatch: Any) -
         [
             {"class": "Directory", "name": "HB2A", "uri": "gxfiles://sns/HB2A"},
             {"class": "File", "name": "scan.dat", "uri": "gxfiles://sns/scan.dat"},
+            {"class": "File", "name": "scan.gsa", "uri": "gxfiles://sns/scan.gsa"},
+            {"class": "File", "name": "scan.gsas", "uri": "gxfiles://sns/scan.gsas"},
+            {"class": "File", "name": "scan.gss", "uri": "gxfiles://sns/scan.gss"},
             {"class": "File", "name": "notes.pdf", "uri": "gxfiles://sns/notes.pdf"},
         ],
     ]
@@ -577,7 +597,13 @@ def test_remote_sources_and_directory_entries_are_normalized(monkeypatch: Any) -
             "writable": False,
         }
     ]
-    assert [entry["title"] for entry in entries] == ["HB2A", "scan.dat"]
+    assert [entry["title"] for entry in entries] == [
+        "HB2A",
+        "scan.dat",
+        "scan.gsa",
+        "scan.gsas",
+        "scan.gss",
+    ]
     assert service.remote_parent_uri("gxfiles://sns/HB2A/IPTS-123/shared/", "gxfiles://sns/") == (
         "gxfiles://sns/HB2A/IPTS-123/"
     )

@@ -20,6 +20,7 @@ def test_container_reuses_supported_nova_supervisor_contract() -> None:
     assert "ENV PIXI_ENVIRONMENT_NAME=production" in dockerfile
     assert "PYTHONPATH=/src/src" in dockerfile
     assert "COPY src /src/src" in dockerfile
+    assert "python -m pip install --no-cache-dir --no-deps /src" in dockerfile
     assert "USER 1000:1000" not in dockerfile
     assert "nodaemon=true" in supervisor
     assert "command=/bin/bash /run_trame.sh" in supervisor

@@ -37,6 +37,31 @@ Galaxy's authenticated remote-file sources remain a fallback when `/SNS` or
 **Upload -> Choose remote files**, then select the resulting datasets from
 **Galaxy History** in RADAR-PD.
 
+### POWGEN live experiment monitor
+
+The **POWGEN Live Experiment** panel is a session-scoped orchestration layer
+around the existing RADAR-PD Analyze tool. It does not duplicate or modify the
+scientific pipeline. The user selects an IPTS, the experiment wavelength, a
+reusable Full/Rapid configuration, and an optional main-phase CIF. While the
+NOVA session remains open, the monitor:
+
+1. lists only `/SNS/PG3/<IPTS>/shared/autoreduce` without recursion;
+2. waits for the canonical `PG3_<run>.gsa` reduction;
+3. resolves an exact, checksum-verified packaged POWGEN `.instprm` profile;
+4. submits the unchanged `neutrons_radar_pd_analyze_prototype` tool; and
+5. displays discovered, submitted, completed, and failed scans as they change.
+
+The first poll submits only the newest completed scan, preventing an accidental
+historical backfill. Later polls submit every newly appearing run. Watch
+checkpoints are stored as Galaxy datasets and restored after a NOVA restart, so
+Galaxy-acknowledged jobs are not submitted twice. The IPTS is always read-only;
+results and provenance remain in Galaxy History.
+
+This panel is appropriate for a supervised beamline session. A permanent,
+unattended trigger must use **NDIP Ingress -> saved Galaxy workflow -> RADAR-PD
+Analyze**. That production trigger can reuse the same profile registry and
+Analyze contract without depending on a browser or NOVA pod lifetime.
+
 The setup rail can save a portable configuration plus a `radar-pd-watch/v1`
 recipe for a continuously arriving reduced-data folder. The recipe is consumed
 by `scripts/ndip_ipts_watch.py`, which must run as an NDIP-managed worker; it is

@@ -1,0 +1,21 @@
+#GSAS-II instrument parameter file; do not add/delete items!
+Type:PNT
+Z:0.0
+fltPath:63.183
+alpha:0.185
+sig-q:-252.239
+2-theta:90.0
+sig-1:-74.184
+sig-0:301.715
+sig-2:73.021
+Zero:0.0
+difA:-3.243350978923681
+difB:-5.08430883991017
+Azimuth:0.0
+Y:0.0
+X:0.0
+beta-q:0.211904
+beta-0:0.005383
+difC:22601.905185949065
+beta-1:-0.118589
+Bank:3.0

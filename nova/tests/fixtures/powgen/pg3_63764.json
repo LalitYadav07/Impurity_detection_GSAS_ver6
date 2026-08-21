@@ -1,0 +1,58 @@
+{
+  "facility": "SNS",
+  "instrument": "PG3",
+  "ipts": "IPTS-38000",
+  "subfolder": "shared/autoreduce",
+  "run_number": 63764,
+  "wavelength_angstrom": "1.50",
+  "frequency_hz": "60",
+  "history_id": "history-powgen-live",
+  "configuration_ref": "hda-radar-pd-config",
+  "instrument_profile_ref": "hda-pg3-2026b-b2-profile",
+  "listing": [
+    {
+      "path": "/SNS/PG3/IPTS-38000/shared/autoreduce",
+      "kind": "directory"
+    },
+    {
+      "path": "/SNS/PG3/IPTS-38000/shared/autoreduce/PG3_63763.gsa",
+      "size": 182430,
+      "modified": "2026-08-21T12:02:00-04:00"
+    },
+    {
+      "path": "/SNS/PG3/IPTS-38000/shared/autoreduce/PG3_63764-2.dat",
+      "size": 128640,
+      "modified": "2026-08-21T14:08:04-04:00"
+    },
+    {
+      "path": "/SNS/PG3/IPTS-38000/shared/autoreduce/PG3_63764-2.xye",
+      "size": 144896,
+      "modified": "2026-08-21T14:08:04-04:00"
+    },
+    {
+      "path": "/SNS/PG3/IPTS-38000/shared/autoreduce/PG3_63764.gsa",
+      "size": 196608,
+      "modified": "2026-08-21T14:08:04-04:00"
+    },
+    {
+      "path": "/SNS/PG3/IPTS-38000/shared/autoreduce/notes.txt",
+      "size": 120
+    },
+    {
+      "path": "/SNS/PG3/IPTS-99999/shared/autoreduce/PG3_99999.gsa",
+      "size": 200000
+    }
+  ],
+  "expected": {
+    "selected_path": "/SNS/PG3/IPTS-38000/shared/autoreduce/PG3_63764.gsa",
+    "profile_rule_id": "PG3-2026B-60Hz-CWL1p5",
+    "profile_filename": "2026B_HighRes_60HzB2_CWL1p5.instprm",
+    "profile_sha256": "24ac6a4daffe5cd655197dbc8a95218a3a177d881d2ded7c0d13a2fe7326322d",
+    "galaxy_job_id": "job-pg3-63764",
+    "galaxy_result_ids": [
+      "hda-scientific-summary",
+      "hda-results-dashboard",
+      "hda-complete-results"
+    ]
+  }
+}

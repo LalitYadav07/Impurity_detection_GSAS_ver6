@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "instrument": "PG3",
+  "source": {
+    "url": "https://neutrons.ornl.gov/powgen/users",
+    "description": "POWGEN GSAS-II instrument profiles published for the 2026B cycle"
+  },
+  "profiles": [
+    {
+      "id": "PG3-2026B-60Hz-CWL0p8",
+      "cycle": "2026B",
+      "run_min": 63383,
+      "run_max": null,
+      "wavelength_angstrom": "0.8",
+      "frequency_hz": "60",
+      "filename": "2026B_HighRes_60HzB1_CWL0p8.instprm",
+      "resource_filename": "powgen_profiles/2026B_HighRes_60HzB1_CWL0p8.instprm",
+      "sha256": "39e1985eb6e3f51aa94f4b2bba2736a9637ebda82eeb4e06ee026fe06f2ae283"
+    },
+    {
+      "id": "PG3-2026B-60Hz-CWL1p5",
+      "cycle": "2026B",
+      "run_min": 63383,
+      "run_max": null,
+      "wavelength_angstrom": "1.5",
+      "frequency_hz": "60",
+      "filename": "2026B_HighRes_60HzB2_CWL1p5.instprm",
+      "resource_filename": "powgen_profiles/2026B_HighRes_60HzB2_CWL1p5.instprm",
+      "sha256": "24ac6a4daffe5cd655197dbc8a95218a3a177d881d2ded7c0d13a2fe7326322d"
+    },
+    {
+      "id": "PG3-2026B-60Hz-CWL2p665",
+      "cycle": "2026B",
+      "run_min": 63383,
+      "run_max": null,
+      "wavelength_angstrom": "2.665",
+      "frequency_hz": "60",
+      "filename": "2026B_HighRes_60HzB3_CWL2p665.instprm",
+      "resource_filename": "powgen_profiles/2026B_HighRes_60HzB3_CWL2p665.instprm",
+      "sha256": "e1a27bebf9ef77d1ad085644867f5ca74843ce4dc49387147598361745e16264"
+    }
+  ]
+}

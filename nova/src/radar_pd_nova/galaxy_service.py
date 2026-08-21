@@ -49,9 +49,14 @@ EXPORT_DATASETS_TOOL_ID = "neutrons_export"
 RUN_NAME_PREFIX = "RADAR-PD NOVA"
 SUBMISSION_ACK_TIMEOUT_SECONDS = float(os.getenv("RADAR_PD_SUBMISSION_ACK_TIMEOUT", "60"))
 
+_DIFFRACTION_SUFFIXES = frozenset(
+    {".dat", ".xye", ".xy", ".csv", ".txt", ".fxye", ".gsa", ".gsas", ".gss", ".xrdml", ".xml"}
+)
+_DIFFRACTION_EXTENSIONS = frozenset(suffix.lstrip(".") for suffix in _DIFFRACTION_SUFFIXES)
+
 _UPLOAD_SUFFIX_POLICIES: dict[str, tuple[frozenset[str], str]] = {
     "diffraction data": (
-        frozenset({".dat", ".xye", ".xy", ".csv", ".txt", ".fxye", ".xrdml", ".xml"}),
+        _DIFFRACTION_SUFFIXES,
         ".dat",
     ),
     "instrument profile": (frozenset({".instprm", ".prm", ".inst", ".ins"}), ".instprm"),
@@ -61,7 +66,7 @@ _UPLOAD_SUFFIX_POLICIES: dict[str, tuple[frozenset[str], str]] = {
 }
 
 _REMOTE_ROLE_SUFFIXES: dict[str, frozenset[str]] = {
-    "data": frozenset({".dat", ".xye", ".xy", ".csv", ".txt", ".fxye", ".xrdml", ".xml"}),
+    "data": _DIFFRACTION_SUFFIXES,
     "instrument": frozenset({".instprm", ".prm", ".inst", ".ins"}),
     "cif": frozenset({".cif"}),
     "event": frozenset({".nxs", ".h5", ".hdf5"}),
@@ -336,6 +341,46 @@ class GalaxyService:
         galaxy_instance.datasets.wait_for_dataset(dataset.id)
         return dataset
 
+    def upload_document(self, path: str | Path, *, label: str) -> str:
+        """Upload one provenance document into the active Galaxy history.
+
+        This is intentionally a small public wrapper around the same upload
+        path used by Analyze submissions.  Watch state therefore remains a
+        Galaxy-owned dataset instead of being written into an experiment IPTS.
+        """
+
+        with self._store() as store:
+            dataset = self._upload_dataset(str(path), store, label)
+            return str(dataset.id)
+
+    def upload_json_document(self, payload: dict[str, Any], *, name: str, label: str) -> str:
+        """Serialize and upload a JSON provenance document via owned staging."""
+
+        safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(name)).strip(".-") or "document.json"
+        if not safe_name.lower().endswith(".json"):
+            safe_name += ".json"
+        staging = self.output_root / "provenance"
+        staging.mkdir(parents=True, exist_ok=True)
+        path = staging / safe_name
+        path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        return self.upload_document(path, label=label)
+
+    def load_configuration_dataset(self, dataset_id: str) -> AnalysisConfig:
+        """Load a reusable RADAR-PD configuration from Galaxy."""
+
+        contract = self._dataset_document(str(dataset_id))
+        if not contract:
+            raise ValueError(f"Galaxy configuration dataset {dataset_id!r} is empty")
+        return config_from_contract(contract)
+
+    def load_json_document(self, dataset_id: str) -> dict[str, Any]:
+        """Load one JSON/YAML provenance document from Galaxy History."""
+
+        document = self._dataset_document(str(dataset_id))
+        if not document:
+            raise ValueError(f"Galaxy provenance dataset {dataset_id!r} is empty")
+        return document
+
     @staticmethod
     def _dataset_scientific_role(row: dict[str, Any]) -> tuple[str, bool]:
         name = str(row.get("name") or "").lower()
@@ -365,9 +410,7 @@ class GalaxyService:
             return "candidate_library", False
         if preserved_suffix in {"nxs", "h5", "hdf5"} or extension in {"nxs", "h5", "hdf5"}:
             return "event", generated
-        if preserved_suffix in {"dat", "xye", "xy", "csv", "txt", "fxye", "xrdml", "xml"} or extension in {
-            "dat", "xye", "xy", "csv", "txt", "fxye", "xrdml", "xml"
-        }:
+        if preserved_suffix in _DIFFRACTION_EXTENSIONS or extension in _DIFFRACTION_EXTENSIONS:
             return "diffraction", generated
         if (preserved_suffix in {"yaml", "yml"} or extension in {"yaml", "yml"}) and (
             "config" in name or "radar" in name
