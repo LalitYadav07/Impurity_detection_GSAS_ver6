@@ -171,6 +171,8 @@ def test_full_runtime_profile_materializes_hosted_gui_budget(tmp_path: Path) -> 
     assert resolved["stage4"]["reps"] == 150
     assert resolved["stage4"]["len_tol_pct"] == 2.0
     assert resolved["stage4"]["ang_tol_deg"] == 5.0
+    assert resolved["runtime_profile"] == "thorough"
+    assert resolved["rwp_improve_eps"] == 0.0
     assert resolved["instrument_mode"] == "tof"
     assert resolved["datasets"][0]["mode"] == "tof"
 

@@ -88,7 +88,10 @@ FULL_RUNTIME_PROFILES: dict[str, dict[str, Any]] = {
         "nudge_representatives": 150,
         "compare_candidates": 3,
         "compare_cycles": 8,
-        "rwp_improvement_threshold": 0.03,
+        # Thorough search must not stop solely because one accepted impurity
+        # produces a small global Rwp change. Later residual passes can still
+        # recover scientifically meaningful weak phases.
+        "rwp_improvement_threshold": 0.0,
         "knee_keep_if_no_knee": 3,
         "knee_keep_at_most": 8,
     },
@@ -388,6 +391,7 @@ def _materialize_contract_config(
     nudge_candidates = int(full.get("nudge_candidates", 7))
     compare_candidates = int(full.get("compare_candidates", 2))
     advanced = {
+        "runtime_profile": str(full.get("profile", "custom")),
         "analysis_mode": "rapid_hypothesis" if mode == "rapid" else "full_radar_pd",
         "rapid_hypothesis": {
             "enabled": mode == "rapid",

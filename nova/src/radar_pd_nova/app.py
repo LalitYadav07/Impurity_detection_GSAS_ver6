@@ -1398,7 +1398,9 @@ class RadarPdNovaApp(ThemedApp):
                         density="compact",
                         variant="outlined",
                     )
-                    vuetify.VAlert(v_show="full_profile !== 'custom'", text="The profile applies a complete reproducible search budget.", type="info", variant="tonal", density="compact")
+                    vuetify.VAlert(v_show="full_profile === 'quick'", text="One discovery pass for a fast first assessment.", type="info", variant="tonal", density="compact")
+                    vuetify.VAlert(v_show="full_profile === 'balanced'", text="Up to two discovery passes; the search may stop early when the accepted model no longer improves.", type="info", variant="tonal", density="compact")
+                    vuetify.VAlert(v_show="full_profile === 'thorough'", text="Up to three discovery passes. Small Rwp changes alone do not stop the residual search, but scientific safety checks still apply.", type="info", variant="tonal", density="compact")
             with self._setup_section(10, "Expert Tuning", "expert", "true"):
                 vuetify.VSwitch(v_model=("reference_masks_enabled",), label="Mask reference/can peaks", color="#15543c", density="compact", inset=True)
                 vuetify.VSelect(v_show="reference_masks_enabled", label="Reference structures", v_model=("reference_mask_presets",), items=("['Al_fcc','Cu_fcc','V_bcc']",), multiple=True, chips=True, density="compact", variant="outlined")
@@ -2423,7 +2425,7 @@ class RadarPdNovaApp(ThemedApp):
                 "full_compare_cycles": 8,
                 "full_cell_length_tolerance_pct": 2.0,
                 "full_cell_angle_tolerance_deg": 5.0,
-                "full_rwp_improvement_threshold": 0.03,
+                "full_rwp_improvement_threshold": 0.0,
             },
         }
         values: dict[str, Any] = {

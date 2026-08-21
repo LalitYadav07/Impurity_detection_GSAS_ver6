@@ -4437,13 +4437,56 @@ class UnifiedPipeline:
                 # Early-stop decision based on polished result
                 delta = kept_rwp - kept_rwp_new   # improvement if positive
                 if rwp_improve_eps > 0 and delta < rwp_improve_eps:
+                    stop_reason = (
+                        "accepted model worsened Rwp"
+                        if delta < 0
+                        else "Rwp improvement below configured threshold"
+                    )
                     if delta < 0:
                         print(f"[INFO] Early stop: Rwp worsened by {abs(delta):.3f} (threshold {rwp_improve_eps}); stopping.")
                     else:
                         print(f"[INFO] Early stop: ΔRwp={delta:.3f} < eps {rwp_improve_eps}; stopping.")
+                    pass_record.update({
+                        "early_stop": True,
+                        "stop_reason": stop_reason,
+                        "rwp_improvement": float(delta),
+                        "rwp_improvement_threshold": float(rwp_improve_eps),
+                    })
+                    self.manifest.update_stage(f"Pass {pass_ix}", "complete", {
+                        "status": "stopped_after_acceptance",
+                        "reason": stop_reason,
+                        "rwp_before": kept_rwp,
+                        "rwp_accepted_polished": kept_rwp_new,
+                        "rwp_improvement": float(delta),
+                        "rwp_improvement_threshold": float(rwp_improve_eps),
+                        "accepted_this_pass": best_new,
+                        "accepted_phases": accepted_labels,
+                    })
                     kept_rwp = kept_rwp_new
                     break
                 kept_rwp = kept_rwp_new
+
+            pass_stop_reason = next(
+                (
+                    str(record.get("stop_reason") or record.get("reason"))
+                    for record in reversed(benchmark_pass_records)
+                    if record.get("stop_reason") or record.get("reason")
+                ),
+                "pass budget completed" if len(benchmark_pass_records) >= int(seq_max_passes) else "not recorded",
+            )
+            self.manifest.update_metrics({
+                "runtime_profile": str(self.top_cfg.get("runtime_profile", "custom")),
+                "passes_requested": int(seq_max_passes),
+                "passes_started": len(benchmark_pass_records),
+                "passes_accepted": len(accepted),
+                "sequential_stop_reason": pass_stop_reason,
+            })
+            print(
+                "[INFO] Sequential search summary: "
+                f"profile={self.top_cfg.get('runtime_profile', 'custom')}, "
+                f"requested={int(seq_max_passes)}, started={len(benchmark_pass_records)}, "
+                f"accepted={len(accepted)}, stop={pass_stop_reason}."
+            )
 
             # --------------------------------------------------------------------
             # FINAL MAIN-PHASE CELL POLISH
