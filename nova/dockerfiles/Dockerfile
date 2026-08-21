@@ -9,4 +9,4 @@ ENV PIXI_ENVIRONMENT_NAME=production \
 WORKDIR /src
 COPY pyproject.toml README.md /src/
 COPY src /src/src
-RUN python -m pip install --no-cache-dir --no-deps /src
+RUN python -m compileall -q /src/src/radar_pd_nova

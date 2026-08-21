@@ -2,7 +2,7 @@ import asyncio
 from types import SimpleNamespace
 
 from radar_pd_nova.app import RadarPdNovaApp
-from radar_pd_nova.models import AnalysisMode, RunRecord, RunStatus, selected_run_uid
+from radar_pd_nova.models import AnalysisMode, RunRecord, RunStatus, UtilityActionRecord, selected_run_uid
 
 
 def test_selected_run_uid_accepts_vuetify_payload_shapes() -> None:
@@ -184,6 +184,59 @@ def test_history_search_preserves_selected_sibling_labels() -> None:
 
     assert [item["id"] for item in state.history_data_datasets] == ["data-id"]
     assert [item["id"] for item in state.history_instrument_datasets] == ["instrument-id"]
+
+
+def test_integrated_library_builder_uses_deployed_conditional_contract() -> None:
+    app = RadarPdNovaApp.__new__(RadarPdNovaApp)
+    state = _State(
+        library_builder_cif_ids=["cif-1", "cif-2"],
+        library_builder_local_paths=[],
+        library_builder_name="Y Fe Si candidates",
+        library_builder_mode="mini",
+        library_builder_active=False,
+        library_builder_status="idle",
+        library_builder_progress=0,
+        library_builder_built_count=0,
+        library_builder_skipped_count=0,
+        library_builder_message="",
+        radiation="neutron",
+        error_message="",
+    )
+    app.server = SimpleNamespace(state=state)
+    created: list[tuple[str, list[str]]] = []
+    submitted: list[dict[str, object]] = []
+
+    class _Service:
+        def create_dataset_collection(self, name: str, dataset_ids: list[str]) -> str:
+            created.append((name, dataset_ids))
+            return "collection-1"
+
+    app.service = _Service()
+
+    async def _submit(**kwargs):
+        submitted.append(kwargs)
+        return UtilityActionRecord(
+            uid="utility-1",
+            tool_id=str(kwargs["tool_id"]),
+            name=str(kwargs["name"]),
+            status=RunStatus.OK,
+        )
+
+    app._submit_utility_action = _submit  # type: ignore[method-assign]
+    app._schedule_utility = lambda coroutine, _name: asyncio.run(coroutine)  # type: ignore[method-assign]
+
+    app.build_candidate_library()
+
+    assert created[0][0].startswith("RADAR-PD CIF input | Y Fe Si candidates | ")
+    assert created[0][1] == ["cif-1", "cif-2"]
+    assert submitted[0]["inputs"] == {
+        "cif_source|source_kind": "collection",
+        "cif_source|cif_collection": {"collection_id": "collection-1"},
+        "library_mode": "mini",
+        "radiation": "neutron",
+        "overwrite": "",
+    }
+    assert state.library_builder_active is False
 
 
 def test_facility_instrument_dropdown_payload_is_normalized() -> None:

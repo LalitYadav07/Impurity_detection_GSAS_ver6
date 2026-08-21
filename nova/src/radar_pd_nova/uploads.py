@@ -10,6 +10,7 @@ sources, so this component only handles direct browser uploads.
 from __future__ import annotations
 
 import itertools
+import hashlib
 import re
 import tempfile
 from pathlib import Path
@@ -39,6 +40,57 @@ def store_browser_upload(contents: bytes, original_name: Any) -> Path:
     target = directory / safe_client_filename(original_name)
     target.write_bytes(contents)
     return target
+
+
+def inspect_cif_upload(contents: bytes, original_name: Any) -> dict[str, Any]:
+    """Validate one browser CIF before it is uploaded to Galaxy.
+
+    This is intentionally a fast structural preflight rather than a diffraction
+    simulation. The database builder remains the scientific authority, but an
+    empty, mislabeled, duplicated, or obviously incomplete file should be
+    rejected while the user can still correct the selection.
+    """
+
+    name = safe_client_filename(original_name)
+    if Path(name).suffix.lower() != ".cif":
+        raise ValueError(f"{name}: expected a .cif file")
+    if not contents:
+        raise ValueError(f"{name}: file is empty")
+    if len(contents) > 20 * 1024 * 1024:
+        raise ValueError(f"{name}: file exceeds the 20 MB CIF limit")
+    text = contents.decode("utf-8-sig", errors="replace")
+    lowered = text.lower()
+    if not re.search(r"(?m)^\s*data_\S*", text, flags=re.IGNORECASE):
+        raise ValueError(f"{name}: no CIF data block was found")
+    required_cell_tags = (
+        "_cell_length_a",
+        "_cell_length_b",
+        "_cell_length_c",
+        "_cell_angle_alpha",
+        "_cell_angle_beta",
+        "_cell_angle_gamma",
+    )
+    missing = [tag for tag in required_cell_tags if tag not in lowered]
+    if missing:
+        raise ValueError(f"{name}: missing unit-cell fields ({', '.join(missing)})")
+
+    def _tag_value(*tags: str) -> str:
+        for tag in tags:
+            match = re.search(
+                rf"(?im)^\s*{re.escape(tag)}\s+(?:'([^']+)'|\"([^\"]+)\"|(\S+))",
+                text,
+            )
+            if match:
+                return next((value for value in match.groups() if value), "")
+        return ""
+
+    return {
+        "name": name,
+        "size": len(contents),
+        "digest": hashlib.sha256(contents).hexdigest(),
+        "formula": _tag_value("_chemical_formula_sum", "_chemical_formula_structural"),
+        "space_group": _tag_value("_space_group_it_number", "_symmetry_int_tables_number"),
+    }
 
 
 def display_filename(value: Any) -> str:
@@ -165,9 +217,145 @@ class NamedFileUpload:
                 )
 
 
+class NamedMultiCifUpload:
+    """Render a multi-file CIF picker with immediate, per-file preflight."""
+
+    def __init__(
+        self,
+        v_model: str,
+        rows_model: str,
+        *,
+        key: str = "radar-cif-library-upload",
+        color: str = "#15543c",
+    ) -> None:
+        self.server = get_server(None, client_type="vue3")
+        self.v_model = v_model
+        self.rows_model = rows_model
+        self.key = key
+        key_slug = key.replace("-", "_")
+        self.client_model = f"{key_slug}_browser_files"
+        self.ref_name = f"{key_slug}_input"
+        self.decode_trigger = f"decode_{key_slug}"
+        self.remove_trigger = f"remove_{key_slug}"
+        self.clear_trigger = f"clear_{key_slug}"
+
+        state = self.server.state
+        setattr(state, self.client_model, None)
+        if getattr(state, v_model, None) is None:
+            setattr(state, v_model, [])
+        if getattr(state, rows_model, None) is None:
+            setattr(state, rows_model, [])
+
+        @self.server.controller.trigger(self.decode_trigger)
+        def _decode_cif(contents: bytes, original_name: str = "candidate.cif") -> None:
+            rows = list(getattr(state, self.rows_model, []) or [])
+            paths = list(getattr(state, self.v_model, []) or [])
+            try:
+                metadata = inspect_cif_upload(contents, original_name)
+                duplicate = next((row for row in rows if row.get("digest") == metadata["digest"]), None)
+                if duplicate:
+                    raise ValueError(f"{metadata['name']}: duplicates {duplicate.get('name', 'an existing selection')}")
+                target = store_browser_upload(contents, metadata["name"])
+                metadata.update(
+                    {
+                        "path": str(target),
+                        "status": "Ready",
+                        "detail": " / ".join(
+                            value
+                            for value in (
+                                metadata.get("formula"),
+                                f"SG {metadata['space_group']}" if metadata.get("space_group") else "",
+                            )
+                            if value
+                        )
+                        or "CIF structure preflight passed",
+                    }
+                )
+                paths.append(str(target))
+            except Exception as exc:
+                metadata = {
+                    "name": safe_client_filename(original_name),
+                    "path": "",
+                    "digest": "",
+                    "status": "Rejected",
+                    "detail": str(exc),
+                }
+            rows.append(metadata)
+            setattr(state, self.v_model, paths)
+            setattr(state, self.rows_model, rows)
+            setattr(state, self.client_model, None)
+            state.flush()
+
+        @self.server.controller.trigger(self.remove_trigger)
+        def _remove_cif(path: str = "", name: str = "") -> None:
+            rows = list(getattr(state, self.rows_model, []) or [])
+            paths = list(getattr(state, self.v_model, []) or [])
+            setattr(
+                state,
+                self.rows_model,
+                [row for row in rows if not (str(row.get("path") or "") == str(path) and str(row.get("name") or "") == str(name))],
+            )
+            setattr(state, self.v_model, [item for item in paths if str(item) != str(path)])
+            state.flush()
+
+        @self.server.controller.trigger(self.clear_trigger)
+        def _clear_cifs() -> None:
+            setattr(state, self.v_model, [])
+            setattr(state, self.rows_model, [])
+            setattr(state, self.client_model, None)
+            state.flush()
+
+        decode_js = (
+            f"Array.from({self.client_model} || []).forEach((file) => "
+            f"file.arrayBuffer().then((contents) => trigger('{self.decode_trigger}', [contents, file.name])));"
+        )
+        with html.Div(classes="radar-multi-upload", key=repr(key)):
+            vuetify.VFileInput(
+                v_model=(self.client_model,),
+                multiple=True,
+                __properties=["accept"],
+                accept=".cif,chemical/x-cif",
+                classes="radar-hidden-file-input",
+                ref=self.ref_name,
+                key=repr(f"{key}-native"),
+                update_modelValue=decode_js,
+            )
+            with html.Div(classes="radar-button-row"):
+                vuetify.VBtn(
+                    "Add CIF files",
+                    size="small",
+                    variant="outlined",
+                    color=color,
+                    prepend_icon="mdi-file-plus-outline",
+                    click=f"trame.refs.{self.ref_name}.click()",
+                )
+                vuetify.VBtn(
+                    "Clear",
+                    size="small",
+                    variant="text",
+                    color="#7c2d2d",
+                    v_show=f"{self.rows_model}.length > 0",
+                    click=f"trigger('{self.clear_trigger}')",
+                )
+            with html.Div(v_for=f"item in {self.rows_model}", key="item.name + item.digest", classes="radar-cif-file-row"):
+                with html.Div(classes="radar-file-copy"):
+                    html.Strong("{{ item.name }}")
+                    html.Span("{{ item.status }} / {{ item.detail }}")
+                vuetify.VBtn(
+                    icon="mdi-close",
+                    title="Remove CIF",
+                    size="x-small",
+                    variant="text",
+                    color="#7c2d2d",
+                    click=f"trigger('{self.remove_trigger}', [item.path, item.name])",
+                )
+
+
 __all__ = [
     "NamedFileUpload",
+    "NamedMultiCifUpload",
     "display_filename",
+    "inspect_cif_upload",
     "safe_client_filename",
     "store_browser_upload",
 ]
