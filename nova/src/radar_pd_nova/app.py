@@ -41,7 +41,15 @@ from .models import (
     selected_run_uid,
 )
 from .powgen_controller import PowgenExperimentSettings, PowgenWatchController
-from .results import build_result_view, figure_for_payload, load_plot_with_fallback, read_plot_payload, read_table
+from .results import (
+    build_result_view,
+    experiment_fit_quality_figure,
+    experiment_phase_fraction_figure,
+    figure_for_payload,
+    load_plot_with_fallback,
+    read_plot_payload,
+    read_table,
+)
 from .uploads import NamedFileUpload, NamedMultiCifUpload, build_cif_source_archive
 
 
@@ -104,6 +112,8 @@ class RadarPdNovaApp(ThemedApp):
         self._opening_run_uid: str | None = None
         self._plot_widget: Any | None = None
         self._primary_plot_widget: Any | None = None
+        self._powgen_phase_widget: Any | None = None
+        self._powgen_quality_widget: Any | None = None
         self._auto_opened_uids: set[str] = set()
         self._initialize_state()
         self.server.state.change("run_selection")(self._run_selection_changed)
@@ -362,6 +372,11 @@ class RadarPdNovaApp(ThemedApp):
         state.powgen_main_cif_dataset_id = ""
         state.powgen_source_directory = "/SNS/PG3/<IPTS>/shared/autoreduce"
         state.powgen_rows = []
+        state.powgen_scientific_rows = []
+        state.powgen_dashboard_metrics = []
+        state.powgen_latest_phases = []
+        state.powgen_latest_run_id = "-"
+        state.powgen_dashboard_notice = "Completed scans will populate this experiment view."
         state.powgen_message = "Select an IPTS, wavelength, and reusable Galaxy configuration to begin."
         state.powgen_last_checked = "Not started"
         state.powgen_poll_seconds = 15
@@ -930,6 +945,16 @@ class RadarPdNovaApp(ThemedApp):
                             size="small",
                             disabled=("powgen_monitoring",),
                         )
+                    vuetify.VBtn(
+                        "Open experiment dashboard",
+                        v_show="powgen_rows.length",
+                        click=self.show_powgen_dashboard,
+                        prepend_icon="mdi-chart-timeline-variant",
+                        variant="outlined",
+                        size="small",
+                        block=True,
+                        classes="mt-2",
+                    )
                     html.P("{{ powgen_message }}", classes="radar-help-copy mt-2 mb-1")
                     html.Div("Last checked: {{ powgen_last_checked }}", classes="radar-run-list-meta")
                     with html.Div(classes="radar-run-list mt-2", v_if="powgen_rows.length"):
@@ -1729,7 +1754,7 @@ class RadarPdNovaApp(ThemedApp):
 
     def _workspace_page(self) -> None:
         with html.Div(classes="radar-workspace-inner"):
-            with html.Div(v_if="!selected_run_uid", classes="radar-workspace-empty"):
+            with html.Div(v_if="!selected_run_uid && workspace_view !== 'experiment'", classes="radar-workspace-empty"):
                 html.Div("RADAR-PD SCIENTIFIC AI WORKSPACE", classes="radar-kicker")
                 html.H1("Phase detection for powder diffraction")
                 html.P(
@@ -1754,7 +1779,10 @@ class RadarPdNovaApp(ThemedApp):
                         html.H3("Reproducibility")
                         html.P("Reports, tables, CIFs, GPX checkpoints, and configurations.")
 
-            with html.Div(v_if="!!selected_run_uid"):
+            with html.Div(v_show="workspace_view === 'experiment'", classes="radar-workspace-view"):
+                self._powgen_experiment_dashboard()
+
+            with html.Div(v_if="!!selected_run_uid && workspace_view !== 'experiment'"):
                 with html.Div(classes="radar-run-context"):
                     with html.Div():
                         html.Div("CURRENT GALAXY RUN", classes="radar-context-kicker")
@@ -1789,6 +1817,84 @@ class RadarPdNovaApp(ThemedApp):
                 with html.Div(v_show="workspace_view === 'files'", classes="radar-workspace-view"):
                     self._file_browser_view()
                 self._activity_panel()
+
+    def _powgen_experiment_dashboard(self) -> None:
+        with html.Div(classes="radar-section-heading"):
+            with html.Div():
+                html.Div("POWGEN LIVE EXPERIMENT", classes="radar-micro-label")
+                html.H2("{{ powgen_ipts || 'Experiment dashboard' }}")
+                html.P("Scan-by-scan phase evolution and refinement quality from completed RADAR-PD analyses.")
+            with html.Div(classes="radar-button-row"):
+                vuetify.VChip(
+                    text=("powgen_monitoring ? 'Monitoring' : 'Stopped'",),
+                    color=("powgen_monitoring ? '#dff2e8' : '#eef2ef'",),
+                    variant="flat",
+                    prepend_icon="mdi-access-point",
+                )
+                vuetify.VBtn(
+                    "Back to current run",
+                    v_show="!!selected_run_uid",
+                    click="workspace_view = 'monitor'",
+                    prepend_icon="mdi-arrow-left",
+                    variant="text",
+                    size="small",
+                )
+        vuetify.VAlert(
+            text=("powgen_dashboard_notice",),
+            type="info",
+            variant="tonal",
+            density="compact",
+            classes="mb-3",
+        )
+        with html.Div(classes="radar-metric-grid"):
+            with html.Div(v_for="metric in powgen_dashboard_metrics", key="metric.label", classes="radar-metric-card"):
+                html.Div("{{ metric.label }}", classes="radar-metric-label")
+                html.Div("{{ metric.value }}", classes="radar-metric-value")
+                html.Div("{{ metric.detail }}", classes="radar-run-list-meta")
+        with html.Div(v_if="powgen_scientific_rows.length", classes="radar-experiment-grid"):
+            with html.Section(classes="radar-result-card radar-experiment-phase-card"):
+                with html.Div(classes="radar-card-heading"):
+                    with html.Div():
+                        html.Div("PHASE EVOLUTION", classes="radar-micro-label")
+                        html.H3("Refined phase fractions")
+                with html.Div(classes="radar-plot-frame"):
+                    self._powgen_phase_widget = plotly.Figure(display_mode_bar=True)
+            with html.Section(classes="radar-result-card radar-experiment-quality-card"):
+                with html.Div(classes="radar-card-heading"):
+                    with html.Div():
+                        html.Div("FIT STABILITY", classes="radar-micro-label")
+                        html.H3("Refinement quality")
+                with html.Div(classes="radar-plot-frame"):
+                    self._powgen_quality_widget = plotly.Figure(display_mode_bar=True)
+            with html.Section(classes="radar-result-card radar-experiment-table-card"):
+                with html.Div(classes="radar-card-heading"):
+                    with html.Div():
+                        html.Div("SCAN RECORD", classes="radar-micro-label")
+                        html.H3("Completed analyses")
+                vuetify.VDataTable(
+                    headers=("[{title:'Scan',key:'run_number'},{title:'Rwp',key:'rwp_display'},{title:'Dominant refined phases',key:'phase_summary'},{title:'Runtime',key:'elapsed_display'},{title:'Mode',key:'analysis_mode'}]",),
+                    items=("powgen_scientific_rows",),
+                    density="compact",
+                    items_per_page=15,
+                    no_data_text="No completed scan summaries are available yet.",
+                )
+            with html.Section(classes="radar-result-card radar-experiment-latest-card"):
+                with html.Div(classes="radar-card-heading"):
+                    with html.Div():
+                        html.Div("LATEST COMPLETED SCAN", classes="radar-micro-label")
+                        html.H3("{{ powgen_latest_run_id }}")
+                with html.Div(v_if="powgen_latest_phases.length", classes="radar-phase-list"):
+                    with html.Div(v_for="phase in powgen_latest_phases", key="phase.label", classes="radar-phase-row"):
+                        with html.Div(classes="radar-phase-copy"):
+                            html.Strong("{{ phase.phase }}")
+                            html.Span("Space group {{ phase.space_group }}")
+                        html.Strong("{{ phase.weight_display }}", classes="radar-phase-weight")
+        with html.Div(v_else=True, classes="radar-result-not-ready"):
+            vuetify.VAlert(
+                text="The monitor has not collected a completed scientific summary yet. Status rows remain available in the setup rail.",
+                type="info",
+                variant="tonal",
+            )
 
     def _run_monitor_view(self) -> None:
         with html.Div(classes="radar-section-heading"):
@@ -2788,6 +2894,7 @@ class RadarPdNovaApp(ThemedApp):
         controller = self._powgen_controller
         if controller is None:
             self.server.state.powgen_rows = []
+            self.server.state.powgen_scientific_rows = []
             return
 
         rows: list[dict[str, Any]] = []
@@ -2843,7 +2950,117 @@ class RadarPdNovaApp(ThemedApp):
                         "detail": detail,
                     }
                 )
-        self.server.state.powgen_rows = sorted(rows, key=lambda item: item["run_number"], reverse=True)
+        state = self.server.state
+        state.powgen_rows = sorted(rows, key=lambda item: item["run_number"], reverse=True)
+
+        scientific_rows: list[dict[str, Any]] = []
+        for run_id, run in controller.state.completed.items():
+            summary = dict(run.scientific_summary or {})
+            if not summary:
+                continue
+            projected_phases: list[dict[str, Any]] = []
+            for phase in summary.get("phases") or []:
+                if not isinstance(phase, dict):
+                    continue
+                phase_name = str(phase.get("phase") or "Unknown")
+                space_group = str(phase.get("space_group") or "-")
+                weight = float(phase.get("weight_percent") or 0.0)
+                projected_phases.append(
+                    {
+                        "phase": phase_name,
+                        "space_group": space_group,
+                        "label": f"{phase_name} (SG {space_group})" if space_group != "-" else phase_name,
+                        "weight_percent": weight,
+                        "weight_display": f"{weight:.2f}%",
+                    }
+                )
+            elapsed = summary.get("elapsed_seconds")
+            elapsed_value = float(elapsed) if elapsed is not None else None
+            elapsed_display = (
+                f"{elapsed_value / 60:.1f} min" if elapsed_value is not None and elapsed_value >= 60
+                else f"{elapsed_value:.1f} s" if elapsed_value is not None
+                else "-"
+            )
+            rwp = summary.get("rwp")
+            rwp_value = float(rwp) if rwp is not None else None
+            scientific_rows.append(
+                {
+                    "run_id": run_id,
+                    "run_number": int(run.run_number),
+                    "rwp": rwp_value,
+                    "rwp_display": f"{rwp_value:.2f}%" if rwp_value is not None else "-",
+                    "phases": projected_phases,
+                    "phase_summary": " + ".join(
+                        f"{phase['label']} {phase['weight_percent']:.1f}%"
+                        for phase in projected_phases[:3]
+                    ) or "No refined phase fractions",
+                    "hypothesis": str(summary.get("hypothesis") or ""),
+                    "elapsed_seconds": elapsed_value,
+                    "elapsed_display": elapsed_display,
+                    "analysis_mode": str(summary.get("analysis_mode") or "-").title(),
+                    "warning_count": int(summary.get("warning_count") or 0),
+                }
+            )
+        scientific_rows.sort(key=lambda item: item["run_number"], reverse=True)
+        state.powgen_scientific_rows = scientific_rows
+        state.powgen_latest_phases = scientific_rows[0]["phases"] if scientific_rows else []
+        state.powgen_latest_run_id = scientific_rows[0]["run_id"] if scientific_rows else "-"
+
+        rwp_values = sorted(row["rwp"] for row in scientific_rows if row["rwp"] is not None)
+        median_rwp = None
+        if rwp_values:
+            middle = len(rwp_values) // 2
+            median_rwp = (
+                rwp_values[middle]
+                if len(rwp_values) % 2
+                else (rwp_values[middle - 1] + rwp_values[middle]) / 2
+            )
+        state.powgen_dashboard_metrics = [
+            {
+                "label": "Completed scans",
+                "value": str(len(controller.state.completed)),
+                "detail": f"{len(scientific_rows)} with scientific summaries",
+            },
+            {
+                "label": "Active analyses",
+                "value": str(len(controller.state.submitted)),
+                "detail": f"{len(controller.state.discovered)} awaiting submission",
+            },
+            {
+                "label": "Median Rwp",
+                "value": f"{median_rwp:.2f}%" if median_rwp is not None else "-",
+                "detail": "Across summarized scans",
+            },
+            {
+                "label": "Latest scan",
+                "value": state.powgen_latest_run_id,
+                "detail": scientific_rows[0]["rwp_display"] + " Rwp" if scientific_rows else "Awaiting results",
+            },
+            {
+                "label": "Failed scans",
+                "value": str(len(controller.state.failed)),
+                "detail": "Review before interpreting trends" if controller.state.failed else "No failed analyses",
+            },
+        ]
+        state.powgen_dashboard_notice = (
+            f"Showing {len(scientific_rows)} completed scan summaries from {controller.source_directory}. "
+            "Missing points mean that a phase was not reported for that scan, not a forced zero fraction."
+            if scientific_rows
+            else "Completed scans will populate this experiment view as their normalized Galaxy summaries become available."
+        )
+        self._update_powgen_dashboard_figures(scientific_rows)
+
+    def _update_powgen_dashboard_figures(self, rows: list[dict[str, Any]]) -> None:
+        if self._powgen_phase_widget is not None:
+            self._powgen_phase_widget.update(experiment_phase_fraction_figure(rows))
+        if self._powgen_quality_widget is not None:
+            self._powgen_quality_widget.update(experiment_fit_quality_figure(rows))
+
+    def show_powgen_dashboard(self, **_: Any) -> None:
+        self.server.state.workspace_view = "experiment"
+        self.server.state.setup_collapsed = True
+        self._sync_powgen_rows()
+        self.server.state.flush()
 
     def start_powgen_monitoring(self, **_: Any) -> None:
         """Start one session-scoped read-only POWGEN monitor."""
@@ -2895,6 +3112,7 @@ class RadarPdNovaApp(ThemedApp):
             )
             state.error_message = ""
             self._sync_powgen_rows()
+            self._sync_workspace_options(state.analysis_mode)
             state.flush()
             task = asyncio.create_task(
                 self._powgen_monitor_loop(),
@@ -3410,6 +3628,14 @@ class RadarPdNovaApp(ThemedApp):
                 {"title": "Interactive Plots", "value": "plots", "icon": "mdi-chart-scatter-plot"},
                 {"title": "Run File Browser", "value": "files", "icon": "mdi-folder-outline"},
             ]
+        if self._powgen_controller is not None:
+            options.append(
+                {
+                    "title": "Experiment Dashboard",
+                    "value": "experiment",
+                    "icon": "mdi-chart-timeline-variant",
+                }
+            )
         state.workspace_options = options
         if getattr(state, "workspace_view", "monitor") not in {item["value"] for item in options}:
             state.workspace_view = "monitor"
@@ -4606,6 +4832,12 @@ class RadarPdNovaApp(ThemedApp):
         .radar-workspace-nav { display: flex !important; width: 100%; min-height: 40px; margin-bottom: 20px; border: 1px solid var(--radar-line-strong); border-radius: 8px; background: #fff; overflow: hidden; }
         .radar-workspace-nav .v-btn { flex: 1 1 160px; text-transform: none; font-weight: 730; }
         .radar-workspace-view { min-width: 0; }
+        .radar-experiment-grid { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(320px, .75fr); gap: 16px; align-items: start; }
+        .radar-experiment-phase-card, .radar-experiment-table-card { grid-column: 1; }
+        .radar-experiment-quality-card, .radar-experiment-latest-card { grid-column: 2; }
+        .radar-experiment-quality-card { grid-row: 1; }
+        .radar-experiment-table-card { grid-row: 2; }
+        .radar-experiment-latest-card { grid-row: 2; }
         .radar-section-heading { display: flex; justify-content: space-between; align-items: flex-end; gap: 18px; margin: 0 0 15px; }
         .radar-section-heading h2 { margin: 0; color: var(--radar-brand-900); font-size: 27px; }
         .radar-section-heading p, .radar-section-help { margin: 4px 0 0; color: var(--radar-muted); font-size: 13px; line-height: 1.5; }
@@ -4697,6 +4929,9 @@ class RadarPdNovaApp(ThemedApp):
           .radar-run-context, .radar-section-heading { align-items: flex-start; flex-direction: column; }
           .radar-workspace-nav { overflow-x: auto; }
           .radar-workspace-nav .v-btn { flex: 0 0 auto; }
+          .radar-experiment-grid { grid-template-columns: minmax(0, 1fr); }
+          .radar-experiment-phase-card, .radar-experiment-quality-card,
+          .radar-experiment-table-card, .radar-experiment-latest-card { grid-column: 1; grid-row: auto; }
           .radar-metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
           .radar-field-pair { grid-template-columns: 1fr; }
           .radar-mode-cards, .radar-file-toolbar { grid-template-columns: 1fr; }

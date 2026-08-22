@@ -118,6 +118,7 @@ class WatchedRun:
     submission_attempts: int = 0
     last_attempt_utc: str | None = None
     next_retry_utc: str | None = None
+    scientific_summary: Mapping[str, Any] = field(default_factory=dict)
 
     @property
     def run_id(self) -> str:
@@ -132,6 +133,7 @@ class WatchedRun:
     def as_dict(self) -> dict[str, Any]:
         payload = asdict(self)
         payload["galaxy_result_ids"] = list(self.galaxy_result_ids)
+        payload["scientific_summary"] = dict(self.scientific_summary)
         return payload
 
     @classmethod
@@ -147,6 +149,11 @@ class WatchedRun:
             submission_attempts=max(0, int(value.get("submission_attempts", 0))),
             last_attempt_utc=(str(value["last_attempt_utc"]) if value.get("last_attempt_utc") else None),
             next_retry_utc=(str(value["next_retry_utc"]) if value.get("next_retry_utc") else None),
+            scientific_summary=(
+                dict(value.get("scientific_summary") or {})
+                if isinstance(value.get("scientific_summary") or {}, Mapping)
+                else {}
+            ),
         )
 
 
@@ -311,6 +318,7 @@ class WatchState:
         galaxy_result_ids: Sequence[str],
         *,
         galaxy_job_id: str | None = None,
+        scientific_summary: Mapping[str, Any] | None = None,
     ) -> WatchedRun:
         run_id = _coerce_run_id(run)
         result_ids = tuple(_nonempty(item, "galaxy_result_id") for item in galaxy_result_ids)
@@ -321,16 +329,38 @@ class WatchState:
             expected_job = galaxy_job_id or existing.galaxy_job_id
             if existing.galaxy_job_id != expected_job or existing.galaxy_result_ids != result_ids:
                 raise ValueError(f"{run_id} is already completed with different Galaxy identifiers")
+            if scientific_summary and dict(existing.scientific_summary) != dict(scientific_summary):
+                return self.set_scientific_summary(run_id, scientific_summary)
             return existing
         submitted = self.submitted.pop(run_id, None)
         if submitted is None:
             raise KeyError(f"{run_id} has not been submitted")
         if galaxy_job_id and submitted.galaxy_job_id != galaxy_job_id:
             raise ValueError(f"{run_id} Galaxy job identifier does not match its submission")
-        completed = _replace_run(submitted, galaxy_result_ids=result_ids)
+        completed = _replace_run(
+            submitted,
+            galaxy_result_ids=result_ids,
+            scientific_summary=dict(scientific_summary or {}),
+        )
         self.completed[run_id] = completed
         self.updated_utc = _utc_now()
         return completed
+
+    def set_scientific_summary(
+        self,
+        run: int | str | WatchedRun,
+        summary: Mapping[str, Any],
+    ) -> WatchedRun:
+        """Attach a compact, JSON-safe result summary to a completed scan."""
+
+        run_id = _coerce_run_id(run)
+        completed = self.completed.get(run_id)
+        if completed is None:
+            raise KeyError(f"{run_id} is not completed")
+        updated = _replace_run(completed, scientific_summary=dict(summary))
+        self.completed[run_id] = updated
+        self.updated_utc = _utc_now()
+        return updated
 
     def mark_failed(
         self,

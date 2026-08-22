@@ -805,6 +805,146 @@ def _best_rwp(result: dict[str, Any]) -> float | None:
     return min(candidates) if candidates else None
 
 
+def experiment_scan_summary(result: dict[str, Any]) -> dict[str, Any]:
+    """Build the small, durable scientific record used by experiment dashboards."""
+
+    hypotheses = [row for row in (result.get("hypotheses") or []) if isinstance(row, dict)]
+    successful = [
+        row
+        for row in hypotheses
+        if str(row.get("status") or "ok").strip().lower()
+        in {"ok", "complete", "converged", "success"}
+    ]
+    ranked = successful or hypotheses
+    ranked.sort(
+        key=lambda row: (
+            _rank_value(row.get("gsas_rwp_rank", row.get("rank512"))),
+            _as_float(row.get("rwp")) if _as_float(row.get("rwp")) is not None else float("inf"),
+        )
+    )
+    best = ranked[0] if ranked else {}
+    fractions_source = dict(result)
+    if best:
+        fractions_source["hypotheses"] = [best]
+    phases: list[dict[str, Any]] = []
+    for row in phase_fraction_rows(fractions_source):
+        weight = _as_float(row.get("weight_percent"))
+        if weight is None:
+            continue
+        phases.append(
+            {
+                "phase": str(row.get("phase") or "Unknown"),
+                "space_group": str(row.get("space_group") or "-"),
+                "weight_percent": round(weight, 6),
+            }
+        )
+    phases.sort(key=lambda row: (-float(row["weight_percent"]), row["phase"]))
+    elapsed = total_elapsed_seconds(result)
+    best_rwp = _best_rwp(result)
+    return {
+        "status": str(result.get("status") or "complete"),
+        "analysis_mode": str(result.get("analysis_mode") or ""),
+        "run_name": str(result.get("run_name") or ""),
+        "rwp": round(best_rwp, 6) if best_rwp is not None else None,
+        "elapsed_seconds": round(elapsed, 3) if elapsed is not None else None,
+        "phases": phases,
+        "hypothesis": " + ".join(
+            f"{row['phase']} (SG {row['space_group']})" if row["space_group"] != "-" else row["phase"]
+            for row in phases
+        ),
+        "warning_count": len(result.get("warnings") or []),
+        "error_count": len(result.get("errors") or []),
+    }
+
+
+def experiment_phase_fraction_figure(scans: list[dict[str, Any]]) -> go.Figure:
+    """Interactive phase-fraction trend with gaps where a phase was not reported."""
+
+    figure = go.Figure()
+    ordered = sorted(scans, key=lambda row: int(row.get("run_number") or 0))
+    labels = sorted(
+        {
+            str(phase.get("label") or "Unknown")
+            for scan in ordered
+            for phase in (scan.get("phases") or [])
+            if isinstance(phase, dict)
+        }
+    )
+    for label in labels:
+        values: list[float | None] = []
+        for scan in ordered:
+            match = next(
+                (
+                    phase
+                    for phase in (scan.get("phases") or [])
+                    if isinstance(phase, dict) and str(phase.get("label")) == label
+                ),
+                None,
+            )
+            values.append(float(match["weight_percent"]) if match is not None else None)
+        figure.add_trace(
+            go.Scatter(
+                x=[scan.get("run_number") for scan in ordered],
+                y=values,
+                mode="lines+markers",
+                name=label,
+                connectgaps=False,
+                hovertemplate="Scan %{x}<br>%{fullData.name}: %{y:.2f} wt%<extra></extra>",
+            )
+        )
+    figure.update_layout(
+        title="Refined phase fractions across scans",
+        xaxis_title="POWGEN scan number",
+        yaxis_title="Weight fraction (wt%)",
+        height=430,
+        margin=dict(l=62, r=24, t=62, b=58),
+        hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        paper_bgcolor="#ffffff",
+        plot_bgcolor="#ffffff",
+    )
+    figure.update_xaxes(showgrid=False, linecolor="#cbd5e1", type="linear")
+    figure.update_yaxes(gridcolor="#e8eef0", linecolor="#cbd5e1", rangemode="tozero")
+    return figure
+
+
+def experiment_fit_quality_figure(scans: list[dict[str, Any]]) -> go.Figure:
+    """Interactive Rwp trend for completed scans."""
+
+    ordered = sorted(
+        [row for row in scans if _as_float(row.get("rwp")) is not None],
+        key=lambda row: int(row.get("run_number") or 0),
+    )
+    figure = go.Figure(
+        go.Scatter(
+            x=[row.get("run_number") for row in ordered],
+            y=[float(row["rwp"]) for row in ordered],
+            text=[row.get("hypothesis") or "No phase summary" for row in ordered],
+            customdata=[row.get("elapsed_display") or "-" for row in ordered],
+            mode="lines+markers",
+            name="Rwp",
+            line=dict(color="#15543c", width=2),
+            marker=dict(color="#e57c46", size=9, line=dict(color="#ffffff", width=1)),
+            hovertemplate=(
+                "Scan %{x}<br>Rwp: %{y:.2f}%<br>%{text}<br>Runtime: %{customdata}<extra></extra>"
+            ),
+        )
+    )
+    figure.update_layout(
+        title="Refinement fit quality across scans",
+        xaxis_title="POWGEN scan number",
+        yaxis_title="Rwp (%) - lower is better",
+        height=340,
+        margin=dict(l=62, r=24, t=62, b=58),
+        paper_bgcolor="#ffffff",
+        plot_bgcolor="#ffffff",
+        showlegend=False,
+    )
+    figure.update_xaxes(showgrid=False, linecolor="#cbd5e1", type="linear")
+    figure.update_yaxes(gridcolor="#e8eef0", linecolor="#cbd5e1", rangemode="tozero")
+    return figure
+
+
 def _message_text(value: Any) -> str:
     if isinstance(value, dict):
         return str(value.get("message") or value.get("error") or json.dumps(value, default=str))

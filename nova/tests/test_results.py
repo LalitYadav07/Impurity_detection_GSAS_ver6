@@ -8,12 +8,71 @@ from radar_pd_nova.results import (
     curate_rapid_rows,
     discover_plot_payloads,
     discover_tables,
+    experiment_fit_quality_figure,
+    experiment_phase_fraction_figure,
+    experiment_scan_summary,
     figure_for_payload,
     load_plot_with_fallback,
     phase_fraction_rows,
     read_plot_payload,
     total_elapsed_seconds,
 )
+
+
+def test_experiment_scan_summary_uses_best_refined_rapid_hypothesis() -> None:
+    payload = {
+        "status": "complete",
+        "analysis_mode": "rapid",
+        "run_name": "IPTS-38000_PG3_63764",
+        "summary": {"live_run": {"timings": {"total_seconds": 123.4}}},
+        "hypotheses": [
+            {
+                "gsas_rwp_rank": "2",
+                "rwp": "18.0",
+                "status": "ok",
+                "weights_json": '{"Wrong (SG 1)": 100}',
+            },
+            {
+                "gsas_rwp_rank": "1",
+                "rwp": "11.25",
+                "status": "ok",
+                "weights_json": '{"YFeSi (SG 62)": 70, "Ga (SG 225)": 30}',
+            },
+        ],
+        "warnings": ["review"],
+    }
+
+    summary = experiment_scan_summary(payload)
+
+    assert summary["rwp"] == 11.25
+    assert summary["elapsed_seconds"] == 123.4
+    assert [row["phase"] for row in summary["phases"]] == ["YFeSi", "Ga"]
+    assert summary["warning_count"] == 1
+
+
+def test_experiment_figures_preserve_missing_phase_as_gap() -> None:
+    scans = [
+        {
+            "run_number": 10,
+            "rwp": 12.0,
+            "elapsed_display": "2 min",
+            "hypothesis": "A",
+            "phases": [{"label": "A (SG 1)", "weight_percent": 100.0}],
+        },
+        {
+            "run_number": 11,
+            "rwp": 10.0,
+            "elapsed_display": "2 min",
+            "hypothesis": "B",
+            "phases": [{"label": "B (SG 2)", "weight_percent": 100.0}],
+        },
+    ]
+
+    phase_figure = experiment_phase_fraction_figure(scans)
+    quality_figure = experiment_fit_quality_figure(scans)
+
+    assert list(phase_figure.data[0].y) in ([100.0, None], [None, 100.0])
+    assert list(quality_figure.data[0].x) == [10, 11]
 
 
 def test_discovers_and_renders_component_results(tmp_path: Path) -> None:

@@ -214,6 +214,53 @@ def test_controller_marks_finished_job_complete_without_downloading_archive() ->
     assert controller.state.completed[run.run_id].galaxy_result_ids == ("archive-hda",)
 
 
+def test_controller_persists_small_scientific_summary_without_archive_download() -> None:
+    class SummaryService(FakeGalaxyService):
+        def refresh(self, record):
+            record = super().refresh(record)
+            record.output_dataset_ids["summary"] = "summary-hda"
+            return record
+
+        def load_json_document(self, dataset_id):
+            if dataset_id == "summary-hda":
+                return {
+                    "status": "complete",
+                    "analysis_mode": "rapid",
+                    "summary": {"live_run": {"timings": {"total_seconds": 90}}},
+                    "hypotheses": [
+                        {
+                            "gsas_rwp_rank": "1",
+                            "rwp": "9.5",
+                            "status": "ok",
+                            "weights_json": '{"YFeSi (SG 62)": 75, "Ga (SG 225)": 25}',
+                        }
+                    ],
+                }
+            return super().load_json_document(dataset_id)
+
+    service = SummaryService()
+    controller = PowgenWatchController(
+        service,
+        PowgenExperimentSettings(
+            ipts="IPTS-38000",
+            history_id="history-1",
+            configuration_dataset_id="config-hda",
+            wavelength_angstrom="1.5",
+        ),
+    )
+    run = controller.discover(
+        [{"path": "/SNS/PG3/IPTS-38000/shared/autoreduce/PG3_63765.gsa"}]
+    )[0]
+    controller.submit(run)
+
+    controller.refresh()
+
+    summary = controller.state.completed[run.run_id].scientific_summary
+    assert summary["rwp"] == 9.5
+    assert summary["phases"][0]["phase"] == "YFeSi"
+    assert summary["elapsed_seconds"] == 90.0
+
+
 def test_controller_restores_galaxy_checkpoint_without_resubmitting_old_scan() -> None:
     service = FakeGalaxyService()
     settings = PowgenExperimentSettings(

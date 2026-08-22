@@ -26,6 +26,7 @@ from .powgen_watch import (
     build_submission_plan,
     discover_from_listing,
 )
+from .results import experiment_scan_summary
 
 
 @dataclass(frozen=True)
@@ -178,7 +179,7 @@ class PowgenWatchController:
             self._last_seen_run_number = max(run.run_number for run in all_runs)
             self._primed = True
 
-        for run_id, run in restored.submitted.items():
+        for run_id, run in {**restored.submitted, **restored.completed}.items():
             if run.galaxy_job_id:
                 self.records[run_id] = self._minimal_record(run)
 
@@ -356,7 +357,13 @@ class PowgenWatchController:
                 # collects the archive lazily when a user opens this record.
                 result_ids = tuple(str(value) for value in refreshed.output_dataset_ids.values() if value)
                 if result_ids:
-                    self.state.mark_completed(run_id, result_ids, galaxy_job_id=refreshed.galaxy_job_id)
+                    summary = self._scientific_summary(refreshed)
+                    self.state.mark_completed(
+                        run_id,
+                        result_ids,
+                        galaxy_job_id=refreshed.galaxy_job_id,
+                        scientific_summary=summary,
+                    )
                     state_changed = True
                 else:
                     refreshed.stage = "Finalizing Galaxy outputs"
@@ -368,9 +375,31 @@ class PowgenWatchController:
                     galaxy_job_id=refreshed.galaxy_job_id,
                 )
                 state_changed = True
+        for run_id, run in list(self.state.completed.items()):
+            if run.scientific_summary or not run.galaxy_job_id:
+                continue
+            record = self.records.get(run_id) or self._minimal_record(run)
+            try:
+                refreshed = self.service.refresh(record)
+                self.records[run_id] = refreshed
+                summary = self._scientific_summary(refreshed)
+                if summary:
+                    self.state.set_scientific_summary(run_id, summary)
+                    state_changed = True
+            except Exception as exc:
+                self.refresh_errors.setdefault(run_id, f"Scientific summary pending: {exc}")
         if state_changed:
             self.persist_state()
         return dict(self.records)
+
+    def _scientific_summary(self, record: RunRecord) -> dict[str, Any]:
+        """Load only the small normalized result JSON, never the result archive."""
+
+        dataset_id = str(record.output_dataset_ids.get("summary") or "").strip()
+        if not dataset_id:
+            return {}
+        payload = self.service.load_json_document(dataset_id)
+        return experiment_scan_summary(payload)
 
     def persist_state(self) -> str:
         """Write an immutable watch-state checkpoint to Galaxy History."""

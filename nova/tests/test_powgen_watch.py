@@ -90,7 +90,11 @@ def test_state_roundtrip_preserves_galaxy_job_and_result_ids(tmp_path: Path) -> 
     state = WatchState(history_id=definition.history_id)
     run = discover_from_listing(definition, ["PG3_100.gsa"], state)[0]
     state.mark_submitted(run, "galaxy-job-1")
-    state.mark_completed(run, ["result-archive", "result-report"])
+    state.mark_completed(
+        run,
+        ["result-archive", "result-report"],
+        scientific_summary={"rwp": 12.5, "phases": [{"phase": "A", "weight_percent": 100}]},
+    )
 
     state_path = tmp_path / "powgen-watch" / "history.json"
     save_watch_state(state_path, state)
@@ -100,6 +104,7 @@ def test_state_roundtrip_preserves_galaxy_job_and_result_ids(tmp_path: Path) -> 
     completed = restored.completed["PG3_100"]
     assert completed.galaxy_job_id == "galaxy-job-1"
     assert completed.galaxy_result_ids == ("result-archive", "result-report")
+    assert completed.scientific_summary["rwp"] == 12.5
     assert json.loads(state_path.read_text(encoding="utf-8"))["history_id"] == "galaxy-history"
 
 
