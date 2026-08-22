@@ -908,6 +908,122 @@ def experiment_phase_fraction_figure(scans: list[dict[str, Any]]) -> go.Figure:
     return figure
 
 
+def experiment_phase_heatmap_figure(scans: list[dict[str, Any]]) -> go.Figure:
+    """Compact scan-by-phase map for experiments with many evolving phases."""
+
+    ordered = sorted(scans, key=lambda row: int(row.get("run_number") or 0))
+    labels = sorted(
+        {
+            str(phase.get("label") or "Unknown")
+            for scan in ordered
+            for phase in (scan.get("phases") or [])
+            if isinstance(phase, dict)
+        },
+        key=lambda label: (
+            -max(
+                (
+                    float(phase.get("weight_percent") or 0.0)
+                    for scan in ordered
+                    for phase in (scan.get("phases") or [])
+                    if isinstance(phase, dict) and str(phase.get("label")) == label
+                ),
+                default=0.0,
+            ),
+            label,
+        ),
+    )
+    z_values: list[list[float | None]] = []
+    hover: list[list[str]] = []
+    for label in labels:
+        row_values: list[float | None] = []
+        row_hover: list[str] = []
+        for scan in ordered:
+            match = next(
+                (
+                    phase
+                    for phase in (scan.get("phases") or [])
+                    if isinstance(phase, dict) and str(phase.get("label")) == label
+                ),
+                None,
+            )
+            value = float(match["weight_percent"]) if match is not None else None
+            row_values.append(value)
+            row_hover.append(
+                f"Scan {scan.get('run_number')}<br>{label}<br>"
+                + (f"{value:.2f} wt%" if value is not None else "Not reported")
+            )
+        z_values.append(row_values)
+        hover.append(row_hover)
+
+    figure = go.Figure(
+        go.Heatmap(
+            x=[scan.get("run_number") for scan in ordered],
+            y=labels,
+            z=z_values,
+            text=hover,
+            hovertemplate="%{text}<extra></extra>",
+            colorscale=[
+                [0.0, "#edf7f2"],
+                [0.25, "#b8dfcf"],
+                [0.55, "#4da989"],
+                [1.0, "#0b5138"],
+            ],
+            colorbar=dict(title="wt%", thickness=12),
+            zmin=0,
+            zmax=100,
+            hoverongaps=False,
+        )
+    )
+    figure.update_layout(
+        title="Phase composition map",
+        xaxis_title="POWGEN scan number",
+        yaxis_title="",
+        height=max(300, min(720, 150 + 34 * max(1, len(labels)))),
+        margin=dict(l=140, r=28, t=58, b=58),
+        paper_bgcolor="#ffffff",
+        plot_bgcolor="#ffffff",
+    )
+    figure.update_xaxes(showgrid=False, linecolor="#cbd5e1", type="linear")
+    figure.update_yaxes(showgrid=False, linecolor="#cbd5e1", autorange="reversed")
+    return figure
+
+
+def experiment_fit_diagnostics(scans: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Classify relative Rwp excursions using the experiment's own history.
+
+    The labels are operational diagnostics, not scientific acceptance gates.
+    A median/MAD baseline avoids imposing one arbitrary Rwp threshold across
+    different instruments, samples, and acquisition conditions.
+    """
+
+    usable = [row for row in scans if _as_float(row.get("rwp")) is not None]
+    if not usable:
+        return {}
+    values = np.asarray([float(row["rwp"]) for row in usable], dtype=float)
+    median = float(np.median(values))
+    mad = float(np.median(np.abs(values - median)))
+    scale = max(1.4826 * mad, 0.5, 0.05 * max(median, 1.0))
+    diagnostics: dict[str, dict[str, Any]] = {}
+    for row in usable:
+        value = float(row["rwp"])
+        score = (value - median) / scale
+        if len(usable) < 4:
+            label, color = "Collecting baseline", "#64748b"
+        elif score >= 3.0:
+            label, color = "Rwp outlier", "#b42318"
+        elif score >= 2.0:
+            label, color = "Elevated Rwp", "#b4690e"
+        else:
+            label, color = "Within experiment trend", "#14734f"
+        diagnostics[str(row.get("run_id") or row.get("run_number"))] = {
+            "label": label,
+            "color": color,
+            "score": round(score, 4),
+            "baseline_median": round(median, 6),
+        }
+    return diagnostics
+
+
 def experiment_fit_quality_figure(scans: list[dict[str, Any]]) -> go.Figure:
     """Interactive Rwp trend for completed scans."""
 
@@ -915,6 +1031,11 @@ def experiment_fit_quality_figure(scans: list[dict[str, Any]]) -> go.Figure:
         [row for row in scans if _as_float(row.get("rwp")) is not None],
         key=lambda row: int(row.get("run_number") or 0),
     )
+    diagnostics = experiment_fit_diagnostics(ordered)
+    colors = [
+        diagnostics.get(str(row.get("run_id") or row.get("run_number")), {}).get("color", "#e57c46")
+        for row in ordered
+    ]
     figure = go.Figure(
         go.Scatter(
             x=[row.get("run_number") for row in ordered],
@@ -924,12 +1045,21 @@ def experiment_fit_quality_figure(scans: list[dict[str, Any]]) -> go.Figure:
             mode="lines+markers",
             name="Rwp",
             line=dict(color="#15543c", width=2),
-            marker=dict(color="#e57c46", size=9, line=dict(color="#ffffff", width=1)),
+            marker=dict(color=colors, size=9, line=dict(color="#ffffff", width=1)),
             hovertemplate=(
                 "Scan %{x}<br>Rwp: %{y:.2f}%<br>%{text}<br>Runtime: %{customdata}<extra></extra>"
             ),
         )
     )
+    if ordered:
+        median = float(np.median([float(row["rwp"]) for row in ordered]))
+        figure.add_hline(
+            y=median,
+            line_dash="dash",
+            line_color="#94a3b8",
+            annotation_text=f"Experiment median {median:.2f}%",
+            annotation_position="top left",
+        )
     figure.update_layout(
         title="Refinement fit quality across scans",
         xaxis_title="POWGEN scan number",

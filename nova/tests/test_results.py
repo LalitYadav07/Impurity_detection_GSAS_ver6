@@ -8,8 +8,10 @@ from radar_pd_nova.results import (
     curate_rapid_rows,
     discover_plot_payloads,
     discover_tables,
+    experiment_fit_diagnostics,
     experiment_fit_quality_figure,
     experiment_phase_fraction_figure,
+    experiment_phase_heatmap_figure,
     experiment_scan_summary,
     figure_for_payload,
     load_plot_with_fallback,
@@ -73,6 +75,45 @@ def test_experiment_figures_preserve_missing_phase_as_gap() -> None:
 
     assert list(phase_figure.data[0].y) in ([100.0, None], [None, 100.0])
     assert list(quality_figure.data[0].x) == [10, 11]
+
+
+def test_experiment_heatmap_preserves_missing_phases_and_orders_by_abundance() -> None:
+    scans = [
+        {
+            "run_number": 10,
+            "phases": [
+                {"label": "Minor (SG 2)", "weight_percent": 8.0},
+                {"label": "Major (SG 1)", "weight_percent": 92.0},
+            ],
+        },
+        {
+            "run_number": 11,
+            "phases": [{"label": "Major (SG 1)", "weight_percent": 100.0}],
+        },
+    ]
+
+    figure = experiment_phase_heatmap_figure(scans)
+
+    assert list(figure.data[0].y) == ["Major (SG 1)", "Minor (SG 2)"]
+    assert list(figure.data[0].z[0]) == [92.0, 100.0]
+    assert list(figure.data[0].z[1]) == [8.0, None]
+
+
+def test_experiment_fit_diagnostics_uses_relative_baseline_and_flags_outlier() -> None:
+    scans = [
+        {"run_id": "PG3_1", "run_number": 1, "rwp": 10.0},
+        {"run_id": "PG3_2", "run_number": 2, "rwp": 10.2},
+        {"run_id": "PG3_3", "run_number": 3, "rwp": 9.8},
+        {"run_id": "PG3_4", "run_number": 4, "rwp": 10.1},
+        {"run_id": "PG3_5", "run_number": 5, "rwp": 25.0},
+    ]
+
+    diagnostics = experiment_fit_diagnostics(scans)
+    figure = experiment_fit_quality_figure(scans)
+
+    assert diagnostics["PG3_1"]["label"] == "Within experiment trend"
+    assert diagnostics["PG3_5"]["label"] == "Rwp outlier"
+    assert len(figure.layout.shapes) == 1
 
 
 def test_discovers_and_renders_component_results(tmp_path: Path) -> None:

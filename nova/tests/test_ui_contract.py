@@ -55,14 +55,17 @@ def test_powgen_experiment_dashboard_exposes_scientific_trends() -> None:
         "POWGEN LIVE EXPERIMENT",
         "Refined phase fractions",
         "Refinement quality",
+        "All reported phases across scans",
         "Completed analyses",
-        "LATEST COMPLETED SCAN",
+        "Inspect one completed scan",
+        "Scan processing status",
     ):
         assert text in template
 
     assert "powgen_scientific_rows" in template
     assert "powgen_dashboard_metrics" in template
-    assert "powgen_latest_phases" in template
+    assert "powgen_selected_run_id" in template
+    assert "powgen_selected_phases" in template
 
 
 def test_workbench_exposes_atomic_pending_and_companion_actions() -> None:
