@@ -306,7 +306,7 @@ class CacheManifest(BaseModel):
     archive_dataset_id: str
     archive_size: int | None = Field(default=None, ge=0)
     archive_update_time: str | None = None
-    adapter_version: str = "0.3.26"
+    adapter_version: str = "0.3.27"
     collected_utc: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 

@@ -78,6 +78,15 @@ _SUBMISSION_FIELDS = (
 )
 
 
+# Galaxy's upload and tool-submission endpoints become unreliable when a NOVA
+# session opens a full five-scan batch simultaneously. Keep five analysis slots
+# available, but feed them through two bounded submission lanes.
+_POWGEN_SUBMISSION_CONCURRENCY = max(
+    1,
+    min(2, int(os.getenv("RADAR_PD_POWGEN_SUBMISSION_CONCURRENCY", "2"))),
+)
+
+
 def _list_value(value: Any) -> list[str]:
     if isinstance(value, list):
         return [str(item) for item in value]
@@ -919,7 +928,7 @@ class RadarPdNovaApp(ThemedApp):
                         html.Div("READ-ONLY SOURCE", classes="radar-micro-label")
                         html.Code("{{ powgen_source_directory }}")
                         html.P(
-                            "On first start, every compatible .gsa not already recorded in the Galaxy checkpoint is queued. Up to five scans run concurrently. RADAR-PD does not write into the IPTS.",
+                            "On first start, every compatible .gsa not already recorded in the Galaxy checkpoint is queued. Up to five analyses stay active while new submissions are opened through two protected lanes. RADAR-PD does not write into the IPTS.",
                             classes="radar-help-copy mb-0",
                         )
                     vuetify.VAlert(
@@ -3310,14 +3319,28 @@ class RadarPdNovaApp(ThemedApp):
 
                 due_runs = controller.due_submissions()
                 if due_runs and state.powgen_monitoring:
-                    async def launch(run: Any) -> tuple[Any, RunRecord | None, Exception | None]:
+                    submission_lanes = asyncio.Semaphore(_POWGEN_SUBMISSION_CONCURRENCY)
+
+                    async def launch(
+                        position: int,
+                        run: Any,
+                    ) -> tuple[Any, RunRecord | None, Exception | None]:
                         try:
-                            record = await asyncio.to_thread(controller.launch_submission, run)
+                            # A short offset prevents simultaneous multipart
+                            # uploads from arriving at the NDIP gateway in the
+                            # same instant. The semaphore remains the actual
+                            # concurrency boundary.
+                            await asyncio.sleep(min(position, 4) * 0.75)
+                            async with submission_lanes:
+                                record = await asyncio.to_thread(controller.launch_submission, run)
                             return run, record, None
                         except Exception as exc:
                             return run, None, exc
 
-                    pending = [asyncio.create_task(launch(run)) for run in due_runs]
+                    pending = [
+                        asyncio.create_task(launch(position, run))
+                        for position, run in enumerate(due_runs)
+                    ]
                     for future in asyncio.as_completed(pending):
                         # A cancelled asyncio task cannot stop work already
                         # running in ``to_thread``. Always acknowledge this
@@ -3337,11 +3360,14 @@ class RadarPdNovaApp(ThemedApp):
                             self.records[record.uid] = record
                             self._sync_runs()
                         except Exception as exc:
+                            warnings.append(f"{run.run_id} submission failed and will be retried: {exc}")
                             if run.run_id in controller.state.discovered:
                                 try:
                                     await asyncio.to_thread(controller.defer_submission, run, str(exc))
                                 except Exception as persist_exc:
-                                    warnings.append(f"{run.run_id} retry checkpoint failed: {persist_exc}")
+                                    warnings.append(
+                                        f"{run.run_id} retry checkpoint also failed: {persist_exc}"
+                                    )
                             else:
                                 warnings.append(f"{run.run_id} submission status uncertain: {exc}")
                         self._sync_powgen_rows()
@@ -4130,7 +4156,7 @@ class RadarPdNovaApp(ThemedApp):
             return
         payload = {
             "schema": "radar-pd-nova-diagnostics/v1",
-            "nova_version": "0.3.26",
+            "nova_version": "0.3.27",
             "run": {
                 "name": record.name,
                 "mode_submitted": record.mode.value,
