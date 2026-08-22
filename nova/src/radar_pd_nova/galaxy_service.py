@@ -1426,8 +1426,14 @@ class GalaxyService:
             for parameter_name, value in inputs.items():
                 resolved = value
                 if isinstance(value, dict) and value.get("dataset_id"):
-                    resolved = self._existing_dataset(str(value["dataset_id"]), store, parameter_name)
-                    serialized_inputs[parameter_name] = {"dataset_id": str(value["dataset_id"])}
+                    dataset_id = str(value["dataset_id"])
+                    # Utility tools receive existing History datasets, not new
+                    # uploads. Use Galaxy's native HDA reference here. The
+                    # nova-galaxy Dataset wrapper serializes an existing dataset
+                    # as a ``values`` list, which breaks scalar data parameters
+                    # nested inside conditionals (for example cif_archive).
+                    resolved = {"src": "hda", "id": dataset_id}
+                    serialized_inputs[parameter_name] = {"dataset_id": dataset_id}
                 elif isinstance(value, dict) and value.get("collection_id"):
                     collection_id = str(value["collection_id"])
                     # nova-galaxy only special-cases Dataset inputs. Passing its

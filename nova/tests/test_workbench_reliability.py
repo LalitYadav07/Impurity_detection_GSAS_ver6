@@ -324,11 +324,11 @@ def test_every_companion_action_serializes_dataset_and_collection_references(
         assert action.galaxy_job_id
 
     assert [tool_id for tool_id, _ in submissions] == [case[0] for case in cases]
-    assert submissions[0][1]["source|event_file"].id == "event"
+    assert submissions[0][1]["source|event_file"] == {"src": "hda", "id": "event"}
     assert submissions[1][1]["cif_files"] == {"src": "hdca", "id": "cifs"}
-    assert submissions[2][1]["gpx_index"].id == "index"
+    assert submissions[2][1]["gpx_index"] == {"src": "hda", "id": "index"}
     assert submissions[3][1]["summaries"] == {"src": "hdca", "id": "summaries"}
-    assert submissions[4][1]["result_source|results_archive"].id == "archive"
+    assert submissions[4][1]["result_source|results_archive"] == {"src": "hda", "id": "archive"}
 
 
 def test_utility_refresh_exposes_outputs_and_result_explorer_entrypoint(
