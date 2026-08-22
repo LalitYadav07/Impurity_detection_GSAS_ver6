@@ -486,9 +486,9 @@ class NamedMultiCifUpload:
             setattr(state, self.archive_client_model, None)
             state.flush()
 
-        def batch_js(trigger_name: str) -> str:
+        def batch_js(trigger_name: str, model_name: str) -> str:
             return (
-                "(async () => { const selected = Array.isArray($event) ? $event : ($event ? [$event] : []); "
+                f"(async () => {{ const selected = Array.isArray({model_name}) ? {model_name} : ({model_name} ? [{model_name}] : []); "
                 "const files=Array.from(selected); const items=[]; "
                 "for (const file of files) { items.push({name:file.name, bytes:new window.Uint8Array(await file.arrayBuffer())}); } "
                 "const header=new window.TextEncoder().encode(JSON.stringify(items.map(item => ({name:item.name,size:item.bytes.length})))); "
@@ -498,12 +498,13 @@ class NamedMultiCifUpload:
                 f"trigger('{trigger_name}', [packed.buffer]); }})()"
             )
 
-        decode_js = batch_js(self.decode_trigger)
+        decode_js = batch_js(self.decode_trigger, self.client_model)
         # Archive uploads use the same direct ArrayBuffer + filename contract
         # as NamedFileUpload. This avoids an extra browser-side binary packing
         # layer and lets each selected ZIP complete its own validation state.
         decode_archive_js = (
-            "(async () => { const selected = Array.isArray($event) ? $event : ($event ? [$event] : []); "
+            f"(async () => {{ const selected = Array.isArray({self.archive_client_model}) ? {self.archive_client_model} : "
+            f"({self.archive_client_model} ? [{self.archive_client_model}] : []); "
             "const files=Array.from(selected); "
             "for (const file of files) { const contents=await file.arrayBuffer(); "
             f"trigger('{self.decode_archive_trigger}', [contents, file.name]); }} }})()"

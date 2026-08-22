@@ -35,7 +35,12 @@ def test_setup_panels_and_uploads_have_single_stable_instances() -> None:
     # first rendered and causes Vuetify to discard that panel body.
     assert "Promise.all" not in template
     assert "for (const file of files)" in template
-    assert "Array.isArray($event) ? $event" in template
+    # Vuetify may update the v-model without forwarding the selected File[]
+    # as the custom handler's $event. Both local source pickers therefore read
+    # their bound models, matching the stable single-file upload contract.
+    assert "Array.isArray(radar_cif_library_upload_browser_files)" in template
+    assert "Array.isArray(radar_cif_library_upload_browser_archives)" in template
+    assert "Array.isArray($event) ? $event" not in template
     assert "new window.TextEncoder()" in template
     # Loose CIFs are batched; ZIP archives use the proven direct
     # ArrayBuffer + filename contract so each archive completes inspection.
