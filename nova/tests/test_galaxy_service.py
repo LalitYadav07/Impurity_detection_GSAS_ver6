@@ -502,11 +502,51 @@ def test_upload_dataset_targets_store_history_id(tmp_path: Path, monkeypatch: An
             "path": str(source),
             "history_id": "actual-history-id",
             "file_name": "RADAR-PD diffraction data | pattern.dat",
+            "file_type": "auto",
         }
     ]
     assert waited == ["uploaded-id"]
     assert dataset.id == "uploaded-id"
     assert dataset.store is store
+
+
+def test_upload_dataset_declares_zip_datatype_for_extensionless_browser_upload(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    source = tmp_path / "tmp-browser-upload"
+    source.write_bytes(b"PK\x05\x06" + b"\x00" * 18)
+    upload_calls: list[dict[str, Any]] = []
+
+    class FakeDataset:
+        def __init__(self, *, name: str, force_upload: bool) -> None:
+            self.name = name
+            self.id = ""
+            self.store: Any = None
+
+    class FakeTools:
+        def upload_file(self, **kwargs: Any) -> dict[str, Any]:
+            upload_calls.append(kwargs)
+            return {"outputs": [{"id": "zip-id"}]}
+
+    class FakeDatasets:
+        def wait_for_dataset(self, dataset_id: str) -> None:
+            assert dataset_id == "zip-id"
+
+    galaxy_module = ModuleType("nova.galaxy")
+    galaxy_module.Dataset = FakeDataset  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "nova.galaxy", galaxy_module)
+    galaxy_instance = type("GalaxyInstance", (), {"tools": FakeTools(), "datasets": FakeDatasets()})()
+    connection = type("Connection", (), {"galaxy_instance": galaxy_instance})()
+    store = type(
+        "Store",
+        (),
+        {"name": "RADAR-PD NOVA", "history_id": "history-id", "nova_connection": connection},
+    )()
+
+    GalaxyService._upload_dataset(str(source), store, "candidate library")
+
+    assert upload_calls[0]["file_name"].endswith("tmp-browser-upload.zip")
+    assert upload_calls[0]["file_type"] == "zip"
 
 
 def test_laptop_temporary_uploads_receive_scientific_filename_suffixes(tmp_path: Path) -> None:

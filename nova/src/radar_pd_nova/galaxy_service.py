@@ -93,6 +93,18 @@ def _upload_filename(source: Path, label: str) -> str:
     return f"RADAR-PD {label} | {name}"
 
 
+def _galaxy_upload_file_type(dataset_name: str) -> str:
+    """Return the Galaxy datatype needed by strict downstream tool inputs.
+
+    Galaxy cannot reliably sniff a ZIP archive from NOVA's extensionless
+    temporary upload paths.  The display filename has already recovered the
+    scientific suffix, so use it to declare archive uploads explicitly.
+    Other inputs retain Galaxy's normal automatic datatype detection.
+    """
+
+    return "zip" if Path(dataset_name).suffix.lower() == ".zip" else "auto"
+
+
 def _extract_results_archive(archive: Path, destination: Path) -> None:
     """Extract a RADAR-PD archive without allowing paths outside destination."""
 
@@ -330,6 +342,7 @@ class GalaxyService:
             path=str(source),
             history_id=store.history_id,
             file_name=dataset_name,
+            file_type=_galaxy_upload_file_type(dataset_name),
         )
         outputs = upload_result.get("outputs", []) if isinstance(upload_result, dict) else []
         if not outputs or not outputs[0].get("id"):
