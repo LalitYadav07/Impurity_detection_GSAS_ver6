@@ -7,6 +7,8 @@ import pytest
 
 from radar_pd_nova.uploads import (
     build_cif_source_archive,
+    browser_archive_batch_js,
+    browser_file_batch_js,
     display_filename,
     inspect_cif_archive,
     inspect_cif_upload,
@@ -110,3 +112,13 @@ def test_unpack_browser_file_batch_preserves_names_and_bytes() -> None:
     payload = len(header).to_bytes(4, "big") + header + b"".join(contents for _, contents in files)
 
     assert unpack_browser_file_batch(payload) == files
+
+
+def test_multi_upload_handlers_consume_the_current_vue_event() -> None:
+    cif_handler = browser_file_batch_js("decode_cifs")
+    zip_handler = browser_archive_batch_js("decode_zips")
+
+    assert "const value=$event" in cif_handler
+    assert "const value=$event" in zip_handler
+    assert "trigger('decode_cifs', [packed.buffer])" in cif_handler
+    assert "await trigger('decode_zips', [contents, file.name])" in zip_handler

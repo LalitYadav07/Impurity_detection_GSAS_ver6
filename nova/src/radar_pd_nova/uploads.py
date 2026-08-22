@@ -241,6 +241,39 @@ def display_filename(value: Any) -> str:
     return text.rsplit("/", 1)[-1] if text else ""
 
 
+def browser_file_batch_js(trigger_name: str, event_expr: str = "$event") -> str:
+    """Return a Vue file-input handler that consumes the current event value.
+
+    Reading the bound state model from ``update:modelValue`` is racy because
+    Vue may not have applied the v-model assignment when the custom handler
+    runs.  ``$event`` is the authoritative selection for that event.
+    """
+
+    return (
+        f"(async () => {{ const value={event_expr}; "
+        "const selected=Array.isArray(value) ? value : (value ? [value] : []); "
+        "const files=Array.from(selected); const items=[]; "
+        "for (const file of files) { items.push({name:file.name, bytes:new window.Uint8Array(await file.arrayBuffer())}); } "
+        "const header=new window.TextEncoder().encode(JSON.stringify(items.map(item => ({name:item.name,size:item.bytes.length})))); "
+        "const total=4+header.length+items.reduce((sum,item) => sum+item.bytes.length,0); const packed=new window.Uint8Array(total); "
+        "new window.DataView(packed.buffer).setUint32(0,header.length,false); packed.set(header,4); let offset=4+header.length; "
+        "items.forEach(item => { packed.set(item.bytes,offset); offset += item.bytes.length; }); "
+        f"trigger('{trigger_name}', [packed.buffer]); }})()"
+    )
+
+
+def browser_archive_batch_js(trigger_name: str, event_expr: str = "$event") -> str:
+    """Return a Vue handler that forwards every selected ZIP and its name."""
+
+    return (
+        f"(async () => {{ const value={event_expr}; "
+        "const selected=Array.isArray(value) ? value : (value ? [value] : []); "
+        "const files=Array.from(selected); "
+        "for (const file of files) { const contents=await file.arrayBuffer(); "
+        f"await trigger('{trigger_name}', [contents, file.name]); }} }})()"
+    )
+
+
 class NamedFileUpload:
     """Render one direct, stable local-file upload card.
 
@@ -486,29 +519,11 @@ class NamedMultiCifUpload:
             setattr(state, self.archive_client_model, None)
             state.flush()
 
-        def batch_js(trigger_name: str, model_name: str) -> str:
-            return (
-                f"(async () => {{ const selected = Array.isArray({model_name}) ? {model_name} : ({model_name} ? [{model_name}] : []); "
-                "const files=Array.from(selected); const items=[]; "
-                "for (const file of files) { items.push({name:file.name, bytes:new window.Uint8Array(await file.arrayBuffer())}); } "
-                "const header=new window.TextEncoder().encode(JSON.stringify(items.map(item => ({name:item.name,size:item.bytes.length})))); "
-                "const total=4+header.length+items.reduce((sum,item) => sum+item.bytes.length,0); const packed=new window.Uint8Array(total); "
-                "new window.DataView(packed.buffer).setUint32(0,header.length,false); packed.set(header,4); let offset=4+header.length; "
-                "items.forEach(item => { packed.set(item.bytes,offset); offset += item.bytes.length; }); "
-                f"trigger('{trigger_name}', [packed.buffer]); }})()"
-            )
-
-        decode_js = batch_js(self.decode_trigger, self.client_model)
+        decode_js = browser_file_batch_js(self.decode_trigger)
         # Archive uploads use the same direct ArrayBuffer + filename contract
         # as NamedFileUpload. This avoids an extra browser-side binary packing
         # layer and lets each selected ZIP complete its own validation state.
-        decode_archive_js = (
-            f"(async () => {{ const selected = Array.isArray({self.archive_client_model}) ? {self.archive_client_model} : "
-            f"({self.archive_client_model} ? [{self.archive_client_model}] : []); "
-            "const files=Array.from(selected); "
-            "for (const file of files) { const contents=await file.arrayBuffer(); "
-            f"trigger('{self.decode_archive_trigger}', [contents, file.name]); }} }})()"
-        )
+        decode_archive_js = browser_archive_batch_js(self.decode_archive_trigger)
         with html.Div(classes="radar-multi-upload", key=repr(key)):
             vuetify.VFileInput(
                 v_model=(self.client_model,),
@@ -602,6 +617,8 @@ class NamedMultiCifUpload:
 __all__ = [
     "NamedFileUpload",
     "NamedMultiCifUpload",
+    "browser_archive_batch_js",
+    "browser_file_batch_js",
     "display_filename",
     "build_cif_source_archive",
     "inspect_cif_archive",
