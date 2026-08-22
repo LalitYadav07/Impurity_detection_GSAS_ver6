@@ -9,6 +9,7 @@ sources, so this component only handles direct browser uploads.
 
 from __future__ import annotations
 
+import base64
 import itertools
 import hashlib
 import json
@@ -263,14 +264,26 @@ def browser_file_batch_js(trigger_name: str, event_expr: str = "$event") -> str:
 
 
 def browser_archive_batch_js(trigger_name: str, event_expr: str = "$event") -> str:
-    """Return the stable packed-payload handler used for archive batches.
+    """Return a JSON-safe handler for one or more ZIP archives.
 
-    Sending an ``ArrayBuffer`` and filename as separate trigger arguments is
-    not reliable through every Trame/NDIP websocket transport.  The packed
-    payload preserves all filenames and bytes in one binary trigger argument.
+    NDIP's Trame websocket can drop an ``ArrayBuffer`` payload emitted by a
+    multi-file input.  A data URL keeps each archive in ordinary JSON trigger
+    arguments while retaining the original filename and byte-exact content.
     """
 
-    return browser_file_batch_js(trigger_name, event_expr)
+    return (
+        f"(async () => {{ const value={event_expr}; "
+        "const selected=Array.isArray(value) ? value : (value ? [value] : []); "
+        "const files=Array.from(selected); "
+        "for (const file of files) { "
+        "const encoded=await new Promise((resolve,reject) => { "
+        "const reader=new window.FileReader(); "
+        "reader.onload=() => resolve(String(reader.result || '').split(',',2)[1] || ''); "
+        "reader.onerror=() => reject(reader.error || new Error('Could not read ZIP archive')); "
+        "reader.readAsDataURL(file); }); "
+        f"await trigger('{trigger_name}', [file.name, encoded]); "
+        "} })()"
+    )
 
 
 class NamedFileUpload:
@@ -471,31 +484,31 @@ class NamedMultiCifUpload:
             state.flush()
 
         @self.server.controller.trigger(self.decode_archive_trigger)
-        def _decode_archive(payload: bytes) -> None:
+        def _decode_archive(original_name: str, encoded_contents: str) -> None:
             rows = list(getattr(state, self.rows_model, []) or [])
             paths = list(getattr(state, self.v_model, []) or [])
-            for original_name, contents in unpack_browser_file_batch(payload):
-                try:
-                    metadata = inspect_cif_archive(contents, original_name)
-                    duplicate = next((row for row in rows if row.get("digest") == metadata["digest"]), None)
-                    if duplicate:
-                        Path(str(metadata.get("path") or "")).unlink(missing_ok=True)
-                        raise ValueError(
-                            f"{metadata['name']}: duplicates {duplicate.get('name', 'an existing selection')}"
-                        )
-                    paths.append(str(metadata["path"]))
-                except Exception as exc:
-                    metadata = {
-                        "name": safe_client_filename(original_name),
-                        "path": "",
-                        "digest": "",
-                        "source_type": "ZIP archive",
-                        "cif_count": 0,
-                        "rejected_count": 0,
-                        "status": "Rejected",
-                        "detail": str(exc),
-                    }
-                rows.append(metadata)
+            try:
+                contents = base64.b64decode(str(encoded_contents or ""), validate=True)
+                metadata = inspect_cif_archive(contents, original_name)
+                duplicate = next((row for row in rows if row.get("digest") == metadata["digest"]), None)
+                if duplicate:
+                    Path(str(metadata.get("path") or "")).unlink(missing_ok=True)
+                    raise ValueError(
+                        f"{metadata['name']}: duplicates {duplicate.get('name', 'an existing selection')}"
+                    )
+                paths.append(str(metadata["path"]))
+            except Exception as exc:
+                metadata = {
+                    "name": safe_client_filename(original_name),
+                    "path": "",
+                    "digest": "",
+                    "source_type": "ZIP archive",
+                    "cif_count": 0,
+                    "rejected_count": 0,
+                    "status": "Rejected",
+                    "detail": str(exc),
+                }
+            rows.append(metadata)
             setattr(state, self.v_model, paths)
             setattr(state, self.rows_model, rows)
             setattr(state, self.archive_client_model, None)
@@ -522,9 +535,8 @@ class NamedMultiCifUpload:
             state.flush()
 
         decode_js = browser_file_batch_js(self.decode_trigger)
-        # Archive uploads use the same direct ArrayBuffer + filename contract
-        # as NamedFileUpload. This avoids an extra browser-side binary packing
-        # layer and lets each selected ZIP complete its own validation state.
+        # ZIP archives use a JSON-safe Base64 trigger because NDIP's websocket
+        # does not reliably deliver multi-file ArrayBuffer payloads.
         decode_archive_js = browser_archive_batch_js(self.decode_archive_trigger)
         with html.Div(classes="radar-multi-upload", key=repr(key)):
             vuetify.VFileInput(
