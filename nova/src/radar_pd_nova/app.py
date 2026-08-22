@@ -1943,24 +1943,24 @@ class RadarPdNovaApp(ThemedApp):
                     classes="mt-3",
                     disabled=("!powgen_selected_run_id",),
                 )
-            with html.Section(classes="radar-result-card radar-experiment-queue-card"):
-                with html.Div(classes="radar-card-heading"):
-                    with html.Div():
-                        html.Div("LIVE QUEUE", classes="radar-micro-label")
-                        html.H3("Scan processing status")
-                        html.P("Updated {{ powgen_last_checked }}", classes="radar-section-help")
-                vuetify.VDataTable(
-                    headers=("[{title:'Scan',key:'run_number'},{title:'File',key:'file'},{title:'Status',key:'status'},{title:'Current activity',key:'detail'}]",),
-                    items=("powgen_rows",),
-                    density="compact",
-                    items_per_page=10,
-                    no_data_text="No POWGEN scans have been discovered yet.",
-                )
-        with html.Div(v_else=True, classes="radar-result-not-ready"):
+        with html.Div(v_if="!powgen_scientific_rows.length", classes="radar-result-not-ready"):
             vuetify.VAlert(
-                text="The monitor has not collected a completed scientific summary yet. Status rows remain available in the setup rail.",
+                text="Scientific trends will appear after the first scan finishes. Live discovery and processing status remain visible below.",
                 type="info",
                 variant="tonal",
+            )
+        with html.Section(classes="radar-result-card radar-experiment-queue-card"):
+            with html.Div(classes="radar-card-heading"):
+                with html.Div():
+                    html.Div("LIVE QUEUE", classes="radar-micro-label")
+                    html.H3("Scan processing status")
+                    html.P("Updated {{ powgen_last_checked }}", classes="radar-section-help")
+            vuetify.VDataTable(
+                headers=("[{title:'Scan',key:'run_number'},{title:'File',key:'file'},{title:'Status',key:'status'},{title:'Current activity',key:'detail'}]",),
+                items=("powgen_rows",),
+                density="compact",
+                items_per_page=10,
+                no_data_text="No POWGEN scans have been discovered yet.",
             )
 
     def _run_monitor_view(self) -> None:
@@ -3247,6 +3247,7 @@ class RadarPdNovaApp(ThemedApp):
             state.powgen_ipts = ipts
             state.powgen_source_directory = self._powgen_controller.source_directory
             state.powgen_monitoring = True
+            state.workspace_view = "experiment"
             recovery_note = " Previous Galaxy watch state was restored." if restored else ""
             state.powgen_message = (
                 f"Backfilling existing scans in {state.powgen_source_directory}, then monitoring for new scans. "
@@ -4156,7 +4157,7 @@ class RadarPdNovaApp(ThemedApp):
             return
         payload = {
             "schema": "radar-pd-nova-diagnostics/v1",
-            "nova_version": "0.3.27",
+            "nova_version": "0.3.28",
             "run": {
                 "name": record.name,
                 "mode_submitted": record.mode.value,
