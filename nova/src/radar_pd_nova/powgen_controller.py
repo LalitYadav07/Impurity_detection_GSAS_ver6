@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from .galaxy_service import GalaxyService
-from .models import AnalysisConfig, InputSelection, InputSource, RunRecord
+from .models import AnalysisConfig, AnalysisMode, InputSelection, InputSource, RunRecord, RunStatus
 from .powgen import (
     PowgenProfileResolution,
     resolve_packaged_powgen_profile_path,
@@ -41,10 +41,22 @@ class PowgenExperimentSettings:
     main_cif_dataset_id: str | None = None
     database_dataset_id: str | None = None
     initial_scan_count: int = 1
+    late_arrival_window: int = 100
+    max_submission_attempts: int = 5
+    retry_base_seconds: int = 15
+    retry_max_seconds: int = 300
 
     def __post_init__(self) -> None:
         if self.initial_scan_count < 1:
             raise ValueError("initial_scan_count must be positive")
+        if self.late_arrival_window < 0:
+            raise ValueError("late_arrival_window must not be negative")
+        if self.max_submission_attempts < 1:
+            raise ValueError("max_submission_attempts must be positive")
+        if self.retry_base_seconds < 0:
+            raise ValueError("retry_base_seconds must not be negative")
+        if self.retry_max_seconds < self.retry_base_seconds:
+            raise ValueError("retry_max_seconds must be at least retry_base_seconds")
 
     def definition(self, instrument_profile_ref: str = "packaged-official-profile") -> WatchDefinition:
         return WatchDefinition(
@@ -109,14 +121,17 @@ class PowgenWatchController:
         self._last_seen_run_number: int | None = None
         self._last_persisted_state: str | None = None
         self._configuration: AnalysisConfig | None = None
+        self.refresh_errors: dict[str, str] = {}
 
     def restore_latest_state(self) -> bool:
         """Recover the newest matching checkpoint and acknowledged Galaxy jobs.
 
         Checkpoints are ordinary Galaxy datasets, so this remains recoverable
         after a NOVA browser refresh without writing anything into the IPTS.
-        Runs that were only discovered, but never acknowledged by Galaxy, are
-        deliberately rediscovered and retried.
+        Pending discoveries and acknowledged Galaxy jobs are both restored.
+        A stored Galaxy job ID is sufficient to poll a job directly, so
+        recovery does not depend on the job still appearing in a bounded list
+        of recent History jobs.
         """
 
         query = f"POWGEN watch state {self.settings.ipts}"
@@ -152,11 +167,9 @@ class PowgenWatchController:
         if restored is None:
             return False
 
-        # Discovery is not a durable action. Only Galaxy-acknowledged jobs are
-        # protected from resubmission after restart.
-        restored.discovered.clear()
         self.state = restored
         all_runs = [
+            *restored.discovered.values(),
             *restored.submitted.values(),
             *restored.completed.values(),
             *restored.failed.values(),
@@ -165,19 +178,9 @@ class PowgenWatchController:
             self._last_seen_run_number = max(run.run_number for run in all_runs)
             self._primed = True
 
-        acknowledged_job_ids = {
-            run.galaxy_job_id
-            for run in restored.submitted.values()
-            if run.galaxy_job_id
-        }
-        if acknowledged_job_ids:
-            for record in self.service.recent_runs(limit=500):
-                if record.galaxy_job_id not in acknowledged_job_ids:
-                    continue
-                for run_id, run in restored.submitted.items():
-                    if run.galaxy_job_id == record.galaxy_job_id:
-                        self.records[run_id] = record
-                        break
+        for run_id, run in restored.submitted.items():
+            if run.galaxy_job_id:
+                self.records[run_id] = self._minimal_record(run)
 
         self.state_dataset_ids = [restored_dataset_id]
         self._last_persisted_state = self.state.to_json()
@@ -213,11 +216,66 @@ class PowgenWatchController:
             self.definition,
             completed_rows,
             self.state,
-            minimum_run_number=(self._last_seen_run_number or 0) + 1,
+            minimum_run_number=max(
+                1,
+                (self._last_seen_run_number or 0) - self.settings.late_arrival_window,
+            ),
         )
         if discovered:
-            self._last_seen_run_number = max(run.run_number for run in discovered)
+            self._last_seen_run_number = max(
+                self._last_seen_run_number or 0,
+                *(run.run_number for run in discovered),
+            )
         return discovered
+
+    def _minimal_record(self, run: WatchedRun) -> RunRecord:
+        """Rebuild enough state to poll an acknowledged Galaxy job by ID."""
+
+        job_id = str(run.galaxy_job_id or "").strip()
+        if not job_id:
+            raise ValueError(f"{run.run_id} has no acknowledged Galaxy job ID")
+        return RunRecord(
+            uid=job_id,
+            galaxy_job_id=job_id,
+            name=f"{self.settings.ipts}_{run.run_id}",
+            mode=AnalysisMode.FULL,
+            history_id=self.settings.history_id,
+            status=RunStatus.QUEUED,
+            analysis_status=RunStatus.QUEUED,
+            stage="Recovering Galaxy job",
+            progress=0,
+        )
+
+    def due_submissions(self) -> list[WatchedRun]:
+        """Return newly discovered or delayed runs ready for submission."""
+
+        return self.state.retryable_runs()
+
+    def defer_submission(self, run: WatchedRun, error: str) -> WatchedRun:
+        """Retry a pre-acknowledgement failure with bounded backoff."""
+
+        current = self.state.discovered.get(run.run_id)
+        if current is None:
+            raise KeyError(f"{run.run_id} is not awaiting submission")
+        next_attempt = current.submission_attempts + 1
+        if next_attempt >= self.settings.max_submission_attempts:
+            failed = self.state.mark_failed(
+                current,
+                f"Submission failed after {next_attempt} attempts: {error}",
+            )
+            self.persist_state()
+            return failed
+        delay = min(
+            self.settings.retry_max_seconds,
+            self.settings.retry_base_seconds * (2 ** current.submission_attempts),
+        )
+        pending = self.state.defer_submission(
+            current,
+            error,
+            retry_after_seconds=delay,
+        )
+        self.persist_state()
+        return pending
 
     def resolve_profile(self, run: WatchedRun) -> tuple[PowgenProfileResolution, Path]:
         resolution = resolve_powgen_profile(
@@ -268,8 +326,20 @@ class PowgenWatchController:
 
     def refresh(self) -> dict[str, RunRecord]:
         state_changed = False
-        for run_id, record in list(self.records.items()):
-            refreshed = self.service.refresh(record)
+        self.refresh_errors = {}
+        for run_id, run in list(self.state.submitted.items()):
+            record = self.records.get(run_id)
+            if record is None and run.galaxy_job_id:
+                record = self._minimal_record(run)
+                self.records[run_id] = record
+            if record is None:
+                self.refresh_errors[run_id] = "Acknowledged run has no Galaxy job ID"
+                continue
+            try:
+                refreshed = self.service.refresh(record)
+            except Exception as exc:
+                self.refresh_errors[run_id] = str(exc)
+                continue
             self.records[run_id] = refreshed
             if refreshed.status.value == "ok" and run_id in self.state.submitted:
                 # Galaxy completion is authoritative. Do not make the live
@@ -280,6 +350,9 @@ class PowgenWatchController:
                 if result_ids:
                     self.state.mark_completed(run_id, result_ids, galaxy_job_id=refreshed.galaxy_job_id)
                     state_changed = True
+                else:
+                    refreshed.stage = "Finalizing Galaxy outputs"
+                    refreshed.progress = max(refreshed.progress, 98)
             elif refreshed.status.value in {"error", "cancelled"} and run_id in self.state.submitted:
                 self.state.mark_failed(
                     run_id,

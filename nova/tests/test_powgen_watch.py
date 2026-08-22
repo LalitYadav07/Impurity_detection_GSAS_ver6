@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -100,6 +101,24 @@ def test_state_roundtrip_preserves_galaxy_job_and_result_ids(tmp_path: Path) -> 
     assert completed.galaxy_job_id == "galaxy-job-1"
     assert completed.galaxy_result_ids == ("result-archive", "result-report")
     assert json.loads(state_path.read_text(encoding="utf-8"))["history_id"] == "galaxy-history"
+
+
+def test_submission_retry_is_durable_and_only_due_after_delay() -> None:
+    definition = _definition()
+    state = WatchState(history_id=definition.history_id)
+    run = discover_from_listing(definition, ["PG3_100.gsa"], state)[0]
+
+    pending = state.defer_submission(run, "temporary Galaxy failure", retry_after_seconds=30)
+    before_retry = datetime.fromisoformat(pending.last_attempt_utc) + timedelta(seconds=10)
+    after_retry = datetime.fromisoformat(pending.next_retry_utc) + timedelta(seconds=1)
+    restored = WatchState.from_dict(state.as_dict())
+
+    assert pending.submission_attempts == 1
+    assert pending.error == "temporary Galaxy failure"
+    assert restored.retryable_runs(now=before_retry.astimezone(timezone.utc)) == []
+    assert [item.run_id for item in restored.retryable_runs(now=after_retry.astimezone(timezone.utc))] == [
+        "PG3_100"
+    ]
 
 
 @pytest.mark.parametrize(

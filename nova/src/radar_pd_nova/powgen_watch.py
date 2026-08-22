@@ -115,6 +115,9 @@ class WatchedRun:
     galaxy_job_id: str | None = None
     galaxy_result_ids: tuple[str, ...] = ()
     error: str | None = None
+    submission_attempts: int = 0
+    last_attempt_utc: str | None = None
+    next_retry_utc: str | None = None
 
     @property
     def run_id(self) -> str:
@@ -141,6 +144,9 @@ class WatchedRun:
             galaxy_job_id=(str(value["galaxy_job_id"]) if value.get("galaxy_job_id") else None),
             galaxy_result_ids=tuple(str(item) for item in value.get("galaxy_result_ids", ())),
             error=(str(value["error"]) if value.get("error") else None),
+            submission_attempts=max(0, int(value.get("submission_attempts", 0))),
+            last_attempt_utc=(str(value["last_attempt_utc"]) if value.get("last_attempt_utc") else None),
+            next_retry_utc=(str(value["next_retry_utc"]) if value.get("next_retry_utc") else None),
         )
 
 
@@ -233,10 +239,64 @@ class WatchState:
         discovered = self.discovered.pop(run_id, None)
         if discovered is None:
             raise KeyError(f"{run_id} has not been discovered")
-        submitted = _replace_run(discovered, galaxy_job_id=job_id)
+        submitted = _replace_run(
+            discovered,
+            galaxy_job_id=job_id,
+            error=None,
+            next_retry_utc=None,
+        )
         self.submitted[run_id] = submitted
         self.updated_utc = _utc_now()
         return submitted
+
+    def defer_submission(
+        self,
+        run: int | str | WatchedRun,
+        error: str,
+        *,
+        retry_after_seconds: int,
+    ) -> WatchedRun:
+        """Keep a pre-acknowledgement failure retryable and checkpoint it."""
+
+        run_id = _coerce_run_id(run)
+        message = _nonempty(error, "error")
+        if retry_after_seconds < 0:
+            raise ValueError("retry_after_seconds must not be negative")
+        discovered = self.discovered.get(run_id)
+        if discovered is None:
+            raise KeyError(f"{run_id} is not awaiting submission")
+        attempted_at = datetime.now(timezone.utc)
+        retry_at = attempted_at.timestamp() + retry_after_seconds
+        pending = _replace_run(
+            discovered,
+            error=message,
+            submission_attempts=discovered.submission_attempts + 1,
+            last_attempt_utc=attempted_at.isoformat(),
+            next_retry_utc=datetime.fromtimestamp(retry_at, timezone.utc).isoformat(),
+        )
+        self.discovered[run_id] = pending
+        self.updated_utc = _utc_now()
+        return pending
+
+    def retryable_runs(self, *, now: datetime | None = None) -> list[WatchedRun]:
+        """Return pending discoveries whose retry delay has elapsed."""
+
+        current = now or datetime.now(timezone.utc)
+        due: list[WatchedRun] = []
+        for run in self.discovered.values():
+            if not run.next_retry_utc:
+                due.append(run)
+                continue
+            try:
+                retry_at = datetime.fromisoformat(run.next_retry_utc.replace("Z", "+00:00"))
+            except ValueError:
+                due.append(run)
+                continue
+            if retry_at.tzinfo is None:
+                retry_at = retry_at.replace(tzinfo=timezone.utc)
+            if retry_at <= current:
+                due.append(run)
+        return sorted(due, key=lambda item: item.run_number)
 
     def mark_completed(
         self,

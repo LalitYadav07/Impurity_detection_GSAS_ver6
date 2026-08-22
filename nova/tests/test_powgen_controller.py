@@ -189,3 +189,121 @@ def test_controller_restores_galaxy_checkpoint_without_resubmitting_old_scan() -
 
     assert [run.run_id for run in discovered] == ["PG3_63765"]
     assert restarted.records["PG3_63764"].galaxy_job_id == "galaxy-job-1"
+
+
+def test_controller_recovers_acknowledged_job_directly_without_recent_history_scan() -> None:
+    service = FakeGalaxyService()
+    settings = PowgenExperimentSettings(
+        ipts="IPTS-38000",
+        history_id="history-1",
+        configuration_dataset_id="config-hda",
+        wavelength_angstrom="1.5",
+    )
+    original = PowgenWatchController(service, settings)
+    run = original.discover(
+        [{"path": "/SNS/PG3/IPTS-38000/shared/autoreduce/PG3_63764.gsa"}]
+    )[0]
+    original.submit(run)
+    service.history_documents = [{"id": "checkpoint-1", "payload": service.uploaded[-1][0]}]
+    service.recovered_runs = []
+
+    restarted = PowgenWatchController(service, settings)
+    assert restarted.restore_latest_state() is True
+    assert restarted.records[run.run_id].galaxy_job_id == "galaxy-job-1"
+
+    restarted.refresh()
+
+    assert run.run_id in restarted.state.completed
+    assert run.run_id not in restarted.state.submitted
+
+
+def test_controller_preserves_pending_retry_across_restart() -> None:
+    service = FakeGalaxyService()
+    settings = PowgenExperimentSettings(
+        ipts="IPTS-38000",
+        history_id="history-1",
+        configuration_dataset_id="config-hda",
+        wavelength_angstrom="1.5",
+        retry_base_seconds=0,
+        retry_max_seconds=0,
+    )
+    original = PowgenWatchController(service, settings)
+    run = original.discover(
+        [{"path": "/SNS/PG3/IPTS-38000/shared/autoreduce/PG3_63764.gsa"}]
+    )[0]
+    original.defer_submission(run, "temporary failure")
+    service.history_documents = [{"id": "checkpoint-1", "payload": service.uploaded[-1][0]}]
+
+    restarted = PowgenWatchController(service, settings)
+    assert restarted.restore_latest_state() is True
+
+    assert [item.run_id for item in restarted.due_submissions()] == [run.run_id]
+    assert restarted.state.discovered[run.run_id].submission_attempts == 1
+
+
+def test_controller_detects_late_lower_numbered_reduction_inside_window() -> None:
+    service = FakeGalaxyService()
+    controller = PowgenWatchController(
+        service,
+        PowgenExperimentSettings(
+            ipts="IPTS-38000",
+            history_id="history-1",
+            configuration_dataset_id="config-hda",
+            wavelength_angstrom="1.5",
+            late_arrival_window=10,
+        ),
+    )
+    first = controller.discover(
+        [{"path": "/SNS/PG3/IPTS-38000/shared/autoreduce/PG3_63766.gsa"}]
+    )
+    late = controller.discover(
+        [
+            {"path": "/SNS/PG3/IPTS-38000/shared/autoreduce/PG3_63765.gsa"},
+            {"path": "/SNS/PG3/IPTS-38000/shared/autoreduce/PG3_63766.gsa"},
+        ]
+    )
+
+    assert [run.run_number for run in first] == [63766]
+    assert [run.run_number for run in late] == [63765]
+
+
+def test_controller_refresh_failure_for_one_job_does_not_block_another() -> None:
+    class PartiallyFailingService(FakeGalaxyService):
+        def refresh(self, record):
+            if record.galaxy_job_id == "bad-job":
+                raise RuntimeError("temporary status endpoint failure")
+            return super().refresh(record)
+
+    service = PartiallyFailingService()
+    controller = PowgenWatchController(
+        service,
+        PowgenExperimentSettings(
+            ipts="IPTS-38000",
+            history_id="history-1",
+            configuration_dataset_id="config-hda",
+            wavelength_angstrom="1.5",
+        ),
+    )
+    runs = controller.discover(
+        [
+            {"path": "/SNS/PG3/IPTS-38000/shared/autoreduce/PG3_63764.gsa"},
+            {"path": "/SNS/PG3/IPTS-38000/shared/autoreduce/PG3_63765.gsa"},
+        ]
+    )
+    # Initial discovery deliberately selects one newest scan; add the older
+    # scan through the bounded late-arrival pass.
+    runs += controller.discover(
+        [
+            {"path": "/SNS/PG3/IPTS-38000/shared/autoreduce/PG3_63764.gsa"},
+            {"path": "/SNS/PG3/IPTS-38000/shared/autoreduce/PG3_63765.gsa"},
+        ]
+    )
+    by_id = {run.run_id: run for run in runs}
+    controller.state.mark_submitted(by_id["PG3_63764"], "bad-job")
+    controller.state.mark_submitted(by_id["PG3_63765"], "good-job")
+
+    controller.refresh()
+
+    assert "PG3_63764" in controller.state.submitted
+    assert controller.refresh_errors == {"PG3_63764": "temporary status endpoint failure"}
+    assert "PG3_63765" in controller.state.completed

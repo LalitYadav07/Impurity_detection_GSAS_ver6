@@ -2792,25 +2792,47 @@ class RadarPdNovaApp(ThemedApp):
 
         rows: list[dict[str, Any]] = []
         phases = (
-            ("Failed", controller.state.failed, "#fde7e7"),
-            ("Completed", controller.state.completed, "#dff2e8"),
-            ("Submitted", controller.state.submitted, "#fff0d4"),
-            ("Discovered", controller.state.discovered, "#eef2ef"),
+            ("Failed", controller.state.failed),
+            ("Completed", controller.state.completed),
+            ("Submitted", controller.state.submitted),
+            ("Discovered", controller.state.discovered),
         )
-        for status, runs, color in phases:
+        for lifecycle, runs in phases:
             for run_id, run in runs.items():
                 record = controller.records.get(run_id)
-                if status == "Failed":
+                status = lifecycle
+                color = "#eef2ef"
+                if lifecycle == "Failed":
+                    color = "#fde7e7"
                     detail = run.error or "RADAR-PD submission or analysis failed."
-                elif status == "Completed":
+                elif lifecycle == "Completed":
+                    color = "#dff2e8"
                     count = len(run.galaxy_result_ids)
                     detail = f"{count} Galaxy result dataset{'s' if count != 1 else ''} ready"
-                elif status == "Submitted":
+                elif lifecycle == "Submitted":
+                    record_status = str(getattr(getattr(record, "status", None), "value", "") or "")
+                    if record_status == "running":
+                        status = "Running"
+                        color = "#dcebf8"
+                    elif record_status in {"queued", "uploading", "new"}:
+                        status = "Queued"
+                        color = "#fff0d4"
+                    else:
+                        color = "#fff0d4"
                     stage = str(record.stage or "Waiting for Galaxy") if record is not None else "Waiting for Galaxy"
+                    progress = int(record.progress or 0) if record is not None else 0
                     job_id = run.galaxy_job_id or (record.galaxy_job_id if record is not None else "")
-                    detail = f"{stage}{f' (job {job_id[:8]})' if job_id else ''}"
+                    detail = f"{stage} · {progress}%{f' · job {job_id[:8]}' if job_id else ''}"
                 else:
-                    detail = "Discovered in the read-only autoreduce folder; preparing submission."
+                    if run.submission_attempts:
+                        status = "Retrying"
+                        color = "#fff0d4"
+                        detail = (
+                            f"Submission attempt {run.submission_attempts} failed; retry scheduled for "
+                            f"{run.next_retry_utc or 'the next monitor check'}. {run.error or ''}"
+                        ).strip()
+                    else:
+                        detail = "Discovered in the read-only autoreduce folder; preparing submission."
                 rows.append(
                     {
                         "run_id": run_id,
@@ -2911,54 +2933,63 @@ class RadarPdNovaApp(ThemedApp):
         try:
             while state.powgen_monitoring and controller is self._powgen_controller:
                 state.powgen_last_checked = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
+                warnings: list[str] = []
                 try:
-                    discovered = await asyncio.to_thread(controller.discover)
+                    await asyncio.to_thread(controller.discover)
+                except Exception as exc:
+                    warnings.append(f"source check failed: {exc}")
+
+                self._sync_powgen_rows()
+                state.flush()
+
+                for run in controller.due_submissions():
+                    if not state.powgen_monitoring:
+                        break
+                    try:
+                        record = await asyncio.to_thread(controller.submit, run)
+                        self.records[record.uid] = record
+                        self._sync_runs()
+                    except Exception as exc:
+                        # Retry only failures that happened before Galaxy
+                        # acknowledged a job. Acknowledged jobs remain in the
+                        # submitted map and are recovered by their job ID.
+                        if run.run_id in controller.state.discovered:
+                            try:
+                                await asyncio.to_thread(controller.defer_submission, run, str(exc))
+                            except Exception as persist_exc:
+                                warnings.append(f"{run.run_id} retry checkpoint failed: {persist_exc}")
+                        else:
+                            warnings.append(f"{run.run_id} submission status uncertain: {exc}")
                     self._sync_powgen_rows()
                     state.flush()
 
-                    for run in discovered:
-                        if not state.powgen_monitoring:
-                            break
-                        try:
-                            record = await asyncio.to_thread(controller.submit, run)
-                            self.records[record.uid] = record
-                            self._sync_runs()
-                        except Exception as exc:
-                            # A job that Galaxy already acknowledged remains
-                            # submitted even if a later state checkpoint failed.
-                            if run.run_id in controller.state.discovered:
-                                controller.state.mark_failed(run, str(exc))
-                                try:
-                                    await asyncio.to_thread(controller.persist_state)
-                                except Exception:
-                                    pass
-                            state.powgen_message = f"{run.run_id} could not be submitted: {exc}"
-                        self._sync_powgen_rows()
-                        state.flush()
-
-                    if controller.state.submitted:
+                if controller.state.submitted:
+                    try:
                         refreshed = await asyncio.to_thread(controller.refresh)
                         for record in refreshed.values():
                             self.records[record.uid] = record
                         self._sync_runs()
+                        if controller.refresh_errors:
+                            warnings.append(
+                                f"{len(controller.refresh_errors)} Galaxy status update(s) will be retried"
+                            )
+                    except Exception as exc:
+                        warnings.append(f"Galaxy status refresh failed: {exc}")
 
-                    self._sync_powgen_rows()
-                    counts = {
-                        "discovered": len(controller.state.discovered),
-                        "submitted": len(controller.state.submitted),
-                        "completed": len(controller.state.completed),
-                        "failed": len(controller.state.failed),
-                    }
-                    state.powgen_message = (
-                        f"Monitoring {controller.source_directory}: "
-                        f"{counts['discovered']} discovered, {counts['submitted']} submitted, "
-                        f"{counts['completed']} completed, {counts['failed']} failed."
-                    )
-                except Exception as exc:
-                    state.powgen_message = (
-                        f"POWGEN check failed: {exc}. Monitoring remains active and will retry; "
-                        "the IPTS has not been modified."
-                    )
+                self._sync_powgen_rows()
+                counts = {
+                    "discovered": len(controller.state.discovered),
+                    "submitted": len(controller.state.submitted),
+                    "completed": len(controller.state.completed),
+                    "failed": len(controller.state.failed),
+                }
+                state.powgen_message = (
+                    f"Monitoring {controller.source_directory}: "
+                    f"{counts['discovered']} awaiting submission, {counts['submitted']} active, "
+                    f"{counts['completed']} completed, {counts['failed']} failed."
+                )
+                if warnings:
+                    state.powgen_message += " " + " ".join(warnings) + ". Monitoring remains active."
                 state.flush()
                 await asyncio.sleep(max(5, int(state.powgen_poll_seconds or 15)))
         except asyncio.CancelledError:
