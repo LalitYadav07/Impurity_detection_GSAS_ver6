@@ -142,7 +142,10 @@ class RadarPdNovaApp(ThemedApp):
         state.trame__title = "RADAR-PD Interactive"
         state.active_page = "setup"
         state.setup_collapsed = False
-        state.setup_panels = ["measurement", "data"]
+        # Vuetify expansion groups reconcile numeric panel values reliably
+        # across Trame state flushes. Semantic string values can be replaced by
+        # positional values in the browser, leaving a clicked panel stuck shut.
+        state.setup_panels = [0, 2]
         state.workspace_view = "monitor"
         state.workspace_options = [
             {"title": "Run Monitor", "value": "monitor", "icon": "mdi-progress-clock"},
@@ -778,8 +781,8 @@ class RadarPdNovaApp(ThemedApp):
         )
 
     @contextmanager
-    def _setup_section(self, number: int, title: str, value: str, status_expression: str) -> Any:
-        with vuetify.VExpansionPanel(value=value, key=f"'setup-{value}'", classes="radar-setup-panel"):
+    def _setup_section(self, number: int, title: str, value: int, status_expression: str) -> Any:
+        with vuetify.VExpansionPanel(value=(str(value),), key=f"'setup-{number}'", classes="radar-setup-panel"):
             with vuetify.VExpansionPanelTitle(classes="radar-setup-title"):
                 html.Span(str(number), classes="radar-step-number")
                 html.Span(title, classes="radar-step-label")
@@ -1000,7 +1003,7 @@ class RadarPdNovaApp(ThemedApp):
             variant="accordion",
             classes="radar-setup-panels",
         ):
-            with self._setup_section(1, "Measurement Type", "measurement", "!!radiation && !!instrument_mode"):
+            with self._setup_section(1, "Measurement Type", 0, "!!radiation && !!instrument_mode"):
                 vuetify.VSelect(
                     label="Radiation source",
                     v_model=("radiation",),
@@ -1024,7 +1027,7 @@ class RadarPdNovaApp(ThemedApp):
             with self._setup_section(
                 2,
                 "Candidate Library",
-                "library",
+                1,
                 "database_source === 'builtin' || (database_source === 'archive' && ((library_archive_source === 'computer' && !!database_archive_path) || (library_archive_source === 'galaxy' && !!history_database_id)))",
             ):
                 vuetify.VSelect(
@@ -1139,7 +1142,7 @@ class RadarPdNovaApp(ThemedApp):
                     )
             instrument_ready = "((radiation === 'xray' && use_builtin_cuka) || (instrument_source === 'upload' && !!instrument_path) || (instrument_source === 'galaxy' && !!history_instrument_id) || (instrument_source === 'galaxy_remote' && !!remote_instrument_uri) || (instrument_source === 'ipts' && !!facility_instrument_path))"
             data_ready = f"((input_source === 'upload' && !!data_path) || (input_source === 'galaxy' && !!history_data_id) || (input_source === 'galaxy_remote' && !!remote_data_uri) || (input_source === 'ipts_browser' && !!facility_data_path)) && {instrument_ready} || (input_source === 'ipts_event' && !!event_file_path && !!bank) || (input_source === 'ipts_manual' && !!ipts_instrument && !!ipts && !!run_number && !!bank)"
-            with self._setup_section(3, "Data Collection", "data", data_ready):
+            with self._setup_section(3, "Data Collection", 2, data_ready):
                 vuetify.VSelect(
                     label="Where is the diffraction pattern?",
                     v_model=("input_source",),
@@ -1539,7 +1542,7 @@ class RadarPdNovaApp(ThemedApp):
                                     density="compact",
                                     classes="mt-2",
                                 )
-            with self._setup_section(4, "Chemistry Policy", "chemistry", "!!sample_elements"):
+            with self._setup_section(4, "Chemistry Policy", 3, "!!sample_elements"):
                 vuetify.VTextField(
                     label="Sample elements",
                     v_model=("sample_elements",),
@@ -1558,7 +1561,7 @@ class RadarPdNovaApp(ThemedApp):
                     hint="Allowed as environment phases, not mixed freely into sample chemistry",
                     persistent_hint=True,
                 )
-            with self._setup_section(5, "Pattern Regions", "pattern", "(!fit_start && !fit_end) || (!!fit_start && !!fit_end)"):
+            with self._setup_section(5, "Pattern Regions", 4, "(!fit_start && !fit_end) || (!!fit_start && !!fit_end)"):
                 with html.Div(classes="radar-field-pair"):
                     vuetify.VTextField(label="Fit start", v_model=("fit_start",), type="number", density="compact", variant="outlined", clearable=True)
                     vuetify.VTextField(label="Fit end", v_model=("fit_end",), type="number", density="compact", variant="outlined", clearable=True)
@@ -1571,7 +1574,7 @@ class RadarPdNovaApp(ThemedApp):
                     rows=2,
                     auto_grow=True,
                 )
-            with self._setup_section(6, "Background Correction", "background", "!!background_mode && !!background_type && background_terms > 0"):
+            with self._setup_section(6, "Background Correction", 5, "!!background_mode && !!background_type && background_terms > 0"):
                 vuetify.VSelect(
                     label="Background correction",
                     v_model=("background_mode",),
@@ -1584,7 +1587,7 @@ class RadarPdNovaApp(ThemedApp):
                 with html.Div(classes="radar-field-pair"):
                     vuetify.VSelect(label="Function", v_model=("background_type",), items=("['chebyschev-1','chebyschev','cosine','Q^2 power series']",), density="compact", variant="outlined")
                     vuetify.VTextField(label="Terms", v_model=("background_terms",), type="number", min=1, max=36, density="compact", variant="outlined")
-            with self._setup_section(7, "Magnetic Ordering Precheck", "magnetic", "true"):
+            with self._setup_section(7, "Magnetic Ordering Precheck", 6, "true"):
                 vuetify.VAlert(
                     v_show="main_cif_source === 'none' || radiation !== 'neutron'",
                     text="Available when a neutron run includes a known main-phase CIF.",
@@ -1617,7 +1620,7 @@ class RadarPdNovaApp(ThemedApp):
                     hint="Comma-separated integers, for example 2, 3, 4",
                     persistent_hint=True,
                 )
-            with self._setup_section(8, "Analysis Mode", "mode", "!!analysis_mode"):
+            with self._setup_section(8, "Analysis Mode", 7, "!!analysis_mode"):
                 with html.Div(classes="radar-mode-cards"):
                     with html.Div(
                         classes=("analysis_mode === 'rapid' ? 'radar-mode-card is-selected' : 'radar-mode-card'",),
@@ -1639,7 +1642,7 @@ class RadarPdNovaApp(ThemedApp):
                         vuetify.VIcon("mdi-layers-triple-outline", size="small")
                         html.Strong("Full")
                         html.Span("Residual-aware multi-pass discovery and refinement")
-            with self._setup_section(9, "Runtime Budget", "budget", "true"):
+            with self._setup_section(9, "Runtime Budget", 8, "true"):
                 with html.Div(v_show="analysis_mode === 'rapid'"):
                     with html.Div(classes="radar-field-pair"):
                         vuetify.VTextField(label="Phases / hypothesis", v_model=("rapid_phases_per_hypothesis",), type="number", min=1, max=5, density="compact", variant="outlined")
@@ -1659,7 +1662,7 @@ class RadarPdNovaApp(ThemedApp):
                     vuetify.VAlert(v_show="full_profile === 'quick'", text="One discovery pass for a fast first assessment.", type="info", variant="tonal", density="compact")
                     vuetify.VAlert(v_show="full_profile === 'balanced'", text="Up to two discovery passes; the search may stop early when the accepted model no longer improves.", type="info", variant="tonal", density="compact")
                     vuetify.VAlert(v_show="full_profile === 'thorough'", text="Up to three discovery passes. Small Rwp changes alone do not stop the residual search, but scientific safety checks still apply.", type="info", variant="tonal", density="compact")
-            with self._setup_section(10, "Expert Tuning", "expert", "true"):
+            with self._setup_section(10, "Expert Tuning", 9, "true"):
                 vuetify.VSwitch(v_model=("reference_masks_enabled",), label="Mask reference/can peaks", color="#15543c", density="compact", inset=True)
                 vuetify.VSelect(v_show="reference_masks_enabled", label="Reference structures", v_model=("reference_mask_presets",), items=("['Al_fcc','Cu_fcc','V_bcc']",), multiple=True, chips=True, density="compact", variant="outlined")
                 vuetify.VSelect(v_show="reference_masks_enabled", label="Reference-mask window", v_model=("reference_window_mode",), items=("[{title:'Automatic from resolution',value:'auto'},{title:'Fixed window',value:'fixed'}]",), item_title="title", item_value="value", density="compact", variant="outlined")
@@ -1693,7 +1696,7 @@ class RadarPdNovaApp(ThemedApp):
                         ):
                             vuetify.VTextField(label=label, v_model=(model,), type="number", min=0, density="compact", variant="outlined")
             ready_expression = f"connection_ok && !!sample_elements && ({data_ready}) && (database_source === 'builtin' || (database_source === 'archive' && ((library_archive_source === 'computer' && !!database_archive_path) || (library_archive_source === 'galaxy' && !!history_database_id))))"
-            with self._setup_section(11, "Review Run Plan", "review", ready_expression):
+            with self._setup_section(11, "Review Run Plan", 10, ready_expression):
                 vuetify.VTextField(label="Run name", v_model=("run_name",), density="compact", variant="outlined", placeholder="Generated automatically if blank")
                 with html.Div(classes="radar-checklist"):
                     for label, expression in (
@@ -3948,7 +3951,7 @@ class RadarPdNovaApp(ThemedApp):
             state.notice = f"Loaded the scientific configuration from {record.name}. Choose or replace any inputs, then submit a new run."
             state.active_page = "setup"
             state.setup_collapsed = False
-            state.setup_panels = ["data", "review"]
+            state.setup_panels = [2, 10]
         except Exception as exc:
             self.server.state.error_message = str(exc)
         self.server.state.flush()
@@ -3963,7 +3966,7 @@ class RadarPdNovaApp(ThemedApp):
             self.server.state.notice = "Loaded the saved scientific configuration. Choose inputs, review the setup, and submit a new run."
             self.server.state.active_page = "setup"
             self.server.state.setup_collapsed = False
-            self.server.state.setup_panels = ["data", "review"]
+            self.server.state.setup_panels = [2, 10]
         except Exception as exc:
             self.server.state.error_message = str(exc)
         self.server.state.flush()
@@ -3979,7 +3982,7 @@ class RadarPdNovaApp(ThemedApp):
             config = config_from_contract(payload)
             self._apply_configuration(config)
             self.server.state.notice = "Loaded the reusable Galaxy configuration. Input selections and run name remain independent."
-            self.server.state.setup_panels = ["data", "review"]
+            self.server.state.setup_panels = [2, 10]
         except Exception as exc:
             self.server.state.error_message = f"Could not load History configuration: {exc}"
         self.server.state.flush()
@@ -4157,7 +4160,7 @@ class RadarPdNovaApp(ThemedApp):
             return
         payload = {
             "schema": "radar-pd-nova-diagnostics/v1",
-            "nova_version": "0.3.28",
+            "nova_version": "0.3.29",
             "run": {
                 "name": record.name,
                 "mode_submitted": record.mode.value,

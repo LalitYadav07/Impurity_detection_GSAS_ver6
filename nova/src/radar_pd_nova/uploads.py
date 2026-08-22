@@ -489,13 +489,13 @@ class NamedMultiCifUpload:
 
         def batch_js(model: str, trigger_name: str) -> str:
             return (
-                f"(() => {{ const files=Array.from({model} || []); Promise.all(files.map(async (file) => "
-                "({name:file.name, bytes:new Uint8Array(await file.arrayBuffer())}))).then((items) => { "
+                f"(async () => {{ const files=Array.from({model} || []); const items=[]; "
+                "for (const file of files) { items.push({name:file.name, bytes:new Uint8Array(await file.arrayBuffer())}); } "
                 "const header=new TextEncoder().encode(JSON.stringify(items.map(item => ({name:item.name,size:item.bytes.length})))); "
                 "const total=4+header.length+items.reduce((sum,item) => sum+item.bytes.length,0); const packed=new Uint8Array(total); "
                 "new DataView(packed.buffer).setUint32(0,header.length,false); packed.set(header,4); let offset=4+header.length; "
                 "items.forEach(item => { packed.set(item.bytes,offset); offset += item.bytes.length; }); "
-                f"trigger('{trigger_name}', [packed.buffer]); }}); }})()"
+                f"trigger('{trigger_name}', [packed.buffer]); }})()"
             )
 
         decode_js = batch_js(self.client_model, self.decode_trigger)

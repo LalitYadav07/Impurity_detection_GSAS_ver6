@@ -7,6 +7,8 @@ def test_setup_panels_and_uploads_have_single_stable_instances() -> None:
     app = RadarPdNovaApp()
     template = app.layout.html
 
+    assert app.server.state.setup_panels == [0, 2]
+
     for title in (
         "Measurement Type",
         "Candidate Library",
@@ -25,6 +27,14 @@ def test_setup_panels_and_uploads_have_single_stable_instances() -> None:
     # Every numbered panel is eager-mounted: collapsing a panel must not
     # destroy and recreate its stateful file inputs.
     assert template.count("<VExpansionPanelText eager") == 11
+    for panel_value in range(11):
+        assert template.count(f':value="{panel_value}"') >= 1
+
+    # Vue's template compiler treats bare Promise as component scope. Using
+    # Promise.all in the multi-CIF handler raises while the library panel is
+    # first rendered and causes Vuetify to discard that panel body.
+    assert "Promise.all" not in template
+    assert "for (const file of files)" in template
 
     for stable_key in (
         "radar-diffraction-upload-native",
