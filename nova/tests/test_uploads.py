@@ -121,4 +121,5 @@ def test_multi_upload_handlers_consume_the_current_vue_event() -> None:
     assert "const value=$event" in cif_handler
     assert "const value=$event" in zip_handler
     assert "trigger('decode_cifs', [packed.buffer])" in cif_handler
-    assert "await trigger('decode_zips', [contents, file.name])" in zip_handler
+    assert "trigger('decode_zips', [packed.buffer])" in zip_handler
+    assert "file.name" in zip_handler

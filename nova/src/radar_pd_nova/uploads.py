@@ -263,15 +263,14 @@ def browser_file_batch_js(trigger_name: str, event_expr: str = "$event") -> str:
 
 
 def browser_archive_batch_js(trigger_name: str, event_expr: str = "$event") -> str:
-    """Return a Vue handler that forwards every selected ZIP and its name."""
+    """Return the stable packed-payload handler used for archive batches.
 
-    return (
-        f"(async () => {{ const value={event_expr}; "
-        "const selected=Array.isArray(value) ? value : (value ? [value] : []); "
-        "const files=Array.from(selected); "
-        "for (const file of files) { const contents=await file.arrayBuffer(); "
-        f"await trigger('{trigger_name}', [contents, file.name]); }} }})()"
-    )
+    Sending an ``ArrayBuffer`` and filename as separate trigger arguments is
+    not reliable through every Trame/NDIP websocket transport.  The packed
+    payload preserves all filenames and bytes in one binary trigger argument.
+    """
+
+    return browser_file_batch_js(trigger_name, event_expr)
 
 
 class NamedFileUpload:
@@ -472,28 +471,31 @@ class NamedMultiCifUpload:
             state.flush()
 
         @self.server.controller.trigger(self.decode_archive_trigger)
-        def _decode_archive(contents: bytes, original_name: str = "archive.zip") -> None:
+        def _decode_archive(payload: bytes) -> None:
             rows = list(getattr(state, self.rows_model, []) or [])
             paths = list(getattr(state, self.v_model, []) or [])
-            try:
-                metadata = inspect_cif_archive(contents, original_name)
-                duplicate = next((row for row in rows if row.get("digest") == metadata["digest"]), None)
-                if duplicate:
-                    Path(str(metadata.get("path") or "")).unlink(missing_ok=True)
-                    raise ValueError(f"{metadata['name']}: duplicates {duplicate.get('name', 'an existing selection')}")
-                paths.append(str(metadata["path"]))
-            except Exception as exc:
-                metadata = {
-                    "name": safe_client_filename(original_name),
-                    "path": "",
-                    "digest": "",
-                    "source_type": "ZIP archive",
-                    "cif_count": 0,
-                    "rejected_count": 0,
-                    "status": "Rejected",
-                    "detail": str(exc),
-                }
-            rows.append(metadata)
+            for original_name, contents in unpack_browser_file_batch(payload):
+                try:
+                    metadata = inspect_cif_archive(contents, original_name)
+                    duplicate = next((row for row in rows if row.get("digest") == metadata["digest"]), None)
+                    if duplicate:
+                        Path(str(metadata.get("path") or "")).unlink(missing_ok=True)
+                        raise ValueError(
+                            f"{metadata['name']}: duplicates {duplicate.get('name', 'an existing selection')}"
+                        )
+                    paths.append(str(metadata["path"]))
+                except Exception as exc:
+                    metadata = {
+                        "name": safe_client_filename(original_name),
+                        "path": "",
+                        "digest": "",
+                        "source_type": "ZIP archive",
+                        "cif_count": 0,
+                        "rejected_count": 0,
+                        "status": "Rejected",
+                        "detail": str(exc),
+                    }
+                rows.append(metadata)
             setattr(state, self.v_model, paths)
             setattr(state, self.rows_model, rows)
             setattr(state, self.archive_client_model, None)
