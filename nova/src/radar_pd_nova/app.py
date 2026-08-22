@@ -7,6 +7,7 @@ import asyncio
 import json
 import os
 import re
+import tempfile
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -4160,7 +4161,7 @@ class RadarPdNovaApp(ThemedApp):
             return
         payload = {
             "schema": "radar-pd-nova-diagnostics/v1",
-            "nova_version": "0.3.37",
+            "nova_version": "0.3.38",
             "run": {
                 "name": record.name,
                 "mode_submitted": record.mode.value,
@@ -4666,56 +4667,41 @@ class RadarPdNovaApp(ThemedApp):
 
         async def build() -> None:
             try:
-                source_inputs: dict[str, Any]
-                archive_id = ""
-                collection_id = ""
-                if local_paths:
-                    state.library_builder_message = "Validating and deduplicating selected CIF and ZIP sources..."
-                    state.library_builder_progress = 12
-                    state.flush()
-                    bundle_path, bundle_stats = await asyncio.to_thread(
-                        build_cif_source_archive,
-                        local_paths,
-                        library_name,
-                    )
-                    state.library_builder_skipped_count = int(bundle_stats.get("skipped_count") or 0)
-                    state.library_builder_failure_rows = [
-                        {"name": "Source preflight", "reason": str(reason)}
-                        for reason in list(bundle_stats.get("failures") or [])[:8]
-                    ]
-                    state.library_builder_message = (
-                        f"Uploading one validated bundle containing {int(bundle_stats.get('cif_count') or 0):,} unique CIF(s)..."
-                    )
-                    state.library_builder_progress = 24
-                    state.flush()
-                    _, archive_id = await asyncio.to_thread(
-                        self.service._upload_one,
-                        "library_cif_bundle",
-                        str(bundle_path),
-                        f"RADAR-PD CIF source bundle | {library_name}",
-                    )
-                if cif_ids:
-                    collection_id = await asyncio.to_thread(
-                        self.service.create_dataset_collection,
-                        f"RADAR-PD History CIF input | {library_name} | {datetime.now().strftime('%Y%m%d_%H%M%S')}",
-                        list(dict.fromkeys(cif_ids)),
-                    )
-                if archive_id and collection_id:
-                    source_inputs = {
-                        "cif_source|source_kind": "archives_and_collection",
-                        "cif_source|cif_archives": [{"dataset_id": archive_id}],
-                        "cif_source|cif_collection": {"collection_id": collection_id},
-                    }
-                elif archive_id:
-                    source_inputs = {
-                        "cif_source|source_kind": "archives",
-                        "cif_source|cif_archives": [{"dataset_id": archive_id}],
-                    }
-                else:
-                    source_inputs = {
-                        "cif_source|source_kind": "collection",
-                        "cif_source|cif_collection": {"collection_id": collection_id},
-                    }
+                state.library_builder_message = "Validating and deduplicating selected CIF and ZIP sources..."
+                state.library_builder_progress = 12
+                state.flush()
+
+                def prepare_bundle() -> tuple[Path, dict[str, Any]]:
+                    with tempfile.TemporaryDirectory(prefix="radar_pd_history_cifs_") as temporary:
+                        combined_paths = list(local_paths)
+                        for index, dataset_id in enumerate(dict.fromkeys(cif_ids), start=1):
+                            metadata = self.service._dataset_metadata(dataset_id)
+                            original_name = Path(str(metadata.get("name") or f"history_{index}.cif").replace("\\", "/")).name
+                            if not original_name.lower().endswith(".cif"):
+                                original_name = f"{original_name}.cif"
+                            target = Path(temporary) / f"{index:05d}_{original_name}"
+                            self.service._download_dataset(dataset_id, target)
+                            combined_paths.append(str(target))
+                        return build_cif_source_archive(combined_paths, library_name)
+
+                bundle_path, bundle_stats = await asyncio.to_thread(prepare_bundle)
+                state.library_builder_skipped_count = int(bundle_stats.get("skipped_count") or 0)
+                state.library_builder_failure_rows = [
+                    {"name": "Source preflight", "reason": str(reason)}
+                    for reason in list(bundle_stats.get("failures") or [])[:8]
+                ]
+                state.library_builder_message = (
+                    f"Uploading one validated bundle containing {int(bundle_stats.get('cif_count') or 0):,} unique CIF(s)..."
+                )
+                state.library_builder_progress = 24
+                state.flush()
+                _, archive_id = await asyncio.to_thread(
+                    self.service._upload_one,
+                    "library_cif_bundle",
+                    str(bundle_path),
+                    f"RADAR-PD CIF source bundle | {library_name}",
+                )
+                source_inputs = {"cif_archive": {"dataset_id": archive_id}}
                 state.library_builder_status = "building"
                 state.library_builder_progress = 35
                 state.library_builder_message = f"Building {library_name} in Galaxy..."

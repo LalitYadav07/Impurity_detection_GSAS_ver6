@@ -1,4 +1,5 @@
 import asyncio
+from pathlib import Path
 from types import SimpleNamespace
 
 from radar_pd_nova.app import RadarPdNovaApp
@@ -236,7 +237,7 @@ def test_history_refresh_keeps_reusable_configurations_visible_after_large_uploa
     assert state.flush_count == 1
 
 
-def test_integrated_library_builder_uses_deployed_conditional_contract() -> None:
+def test_integrated_library_builder_bundles_reusable_history_cifs(tmp_path) -> None:
     app = RadarPdNovaApp.__new__(RadarPdNovaApp)
     state = _State(
         library_builder_cif_ids=["cif-1", "cif-2"],
@@ -254,13 +255,34 @@ def test_integrated_library_builder_uses_deployed_conditional_contract() -> None
         error_message="",
     )
     app.server = SimpleNamespace(state=state)
-    created: list[tuple[str, list[str]]] = []
+    downloaded: list[str] = []
+    uploads: list[tuple[str, str, str]] = []
     submitted: list[dict[str, object]] = []
 
     class _Service:
-        def create_dataset_collection(self, name: str, dataset_ids: list[str]) -> str:
-            created.append((name, dataset_ids))
-            return "collection-1"
+        def _dataset_metadata(self, dataset_id: str):
+            return {"name": f"{dataset_id}.cif"}
+
+        def _download_dataset(self, dataset_id: str, destination: Path) -> None:
+            downloaded.append(dataset_id)
+            destination.write_text(
+                "\n".join(
+                    (
+                        f"data_{dataset_id}",
+                        "_cell_length_a 2.86",
+                        "_cell_length_b 2.86",
+                        "_cell_length_c 2.86",
+                        "_cell_angle_alpha 90",
+                        "_cell_angle_beta 90",
+                        "_cell_angle_gamma 90",
+                    )
+                ),
+                encoding="utf-8",
+            )
+
+        def _upload_one(self, key: str, path: str, label: str):
+            uploads.append((key, path, label))
+            return key, "bundle-1"
 
     app.service = _Service()
 
@@ -278,11 +300,10 @@ def test_integrated_library_builder_uses_deployed_conditional_contract() -> None
 
     app.build_candidate_library()
 
-    assert created[0][0].startswith("RADAR-PD History CIF input | Y Fe Si candidates | ")
-    assert created[0][1] == ["cif-1", "cif-2"]
+    assert downloaded == ["cif-1", "cif-2"]
+    assert len(uploads) == 1
     assert submitted[0]["inputs"] == {
-        "cif_source|source_kind": "collection",
-        "cif_source|cif_collection": {"collection_id": "collection-1"},
+        "cif_archive": {"dataset_id": "bundle-1"},
         "library_mode": "mini",
         "radiation": "neutron",
         "overwrite": "",
@@ -344,8 +365,7 @@ _cell_angle_gamma 90
     assert len(uploads) == 1
     assert uploads[0][0] == "library_cif_bundle"
     assert submitted[0]["inputs"] == {
-        "cif_source|source_kind": "archives",
-        "cif_source|cif_archives": [{"dataset_id": "bundle-1"}],
+        "cif_archive": {"dataset_id": "bundle-1"},
         "library_mode": "augmented",
         "radiation": "neutron",
         "overwrite": "",
