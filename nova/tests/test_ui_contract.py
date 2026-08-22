@@ -35,6 +35,9 @@ def test_setup_panels_and_uploads_have_single_stable_instances() -> None:
     # first rendered and causes Vuetify to discard that panel body.
     assert "Promise.all" not in template
     assert "for (const file of files)" in template
+    assert "Array.isArray($event) ? $event" in template
+    assert "ZIP archive(s) selected; inspecting CIF contents..." in template
+    assert "CIF file(s) selected; reading contents..." in template
 
     for stable_key in (
         "radar-diffraction-upload-native",

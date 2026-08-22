@@ -487,9 +487,10 @@ class NamedMultiCifUpload:
             setattr(state, self.archive_client_model, None)
             state.flush()
 
-        def batch_js(model: str, trigger_name: str) -> str:
+        def batch_js(trigger_name: str) -> str:
             return (
-                f"(async () => {{ const files=Array.from({model} || []); const items=[]; "
+                "(async () => { const selected = Array.isArray($event) ? $event : ($event ? [$event] : []); "
+                "const files=Array.from(selected); const items=[]; "
                 "for (const file of files) { items.push({name:file.name, bytes:new Uint8Array(await file.arrayBuffer())}); } "
                 "const header=new TextEncoder().encode(JSON.stringify(items.map(item => ({name:item.name,size:item.bytes.length})))); "
                 "const total=4+header.length+items.reduce((sum,item) => sum+item.bytes.length,0); const packed=new Uint8Array(total); "
@@ -498,8 +499,8 @@ class NamedMultiCifUpload:
                 f"trigger('{trigger_name}', [packed.buffer]); }})()"
             )
 
-        decode_js = batch_js(self.client_model, self.decode_trigger)
-        decode_archive_js = batch_js(self.archive_client_model, self.decode_archive_trigger)
+        decode_js = batch_js(self.decode_trigger)
+        decode_archive_js = batch_js(self.decode_archive_trigger)
         with html.Div(classes="radar-multi-upload", key=repr(key)):
             vuetify.VFileInput(
                 v_model=(self.client_model,),
@@ -533,6 +534,11 @@ class NamedMultiCifUpload:
                         prepend_icon="mdi-file-plus-outline",
                         click=f"trame.refs.{self.ref_name}.click()",
                     )
+                    html.Span(
+                        f"{{{{ Array.isArray({self.client_model}) ? {self.client_model}.length : 0 }}}} CIF file(s) selected; reading contents...",
+                        v_show=f"Array.isArray({self.client_model}) && {self.client_model}.length > 0",
+                        classes="radar-field-note",
+                    )
                 with html.Div(classes="radar-library-source-card"):
                     html.Strong("ZIP archives of CIFs")
                     html.Span("Choose one or many .zip archives containing CIF files.")
@@ -543,6 +549,11 @@ class NamedMultiCifUpload:
                         color=color,
                         prepend_icon="mdi-folder-zip-outline",
                         click=f"trame.refs.{self.archive_ref_name}.click()",
+                    )
+                    html.Span(
+                        f"{{{{ Array.isArray({self.archive_client_model}) ? {self.archive_client_model}.length : 0 }}}} ZIP archive(s) selected; inspecting CIF contents...",
+                        v_show=f"Array.isArray({self.archive_client_model}) && {self.archive_client_model}.length > 0",
+                        classes="radar-field-note",
                     )
             with html.Div(classes="radar-library-source-summary", v_show=f"{self.rows_model}.length > 0"):
                 html.Strong(
