@@ -439,29 +439,28 @@ class NamedMultiCifUpload:
             state.flush()
 
         @self.server.controller.trigger(self.decode_archive_trigger)
-        def _decode_archive_batch(payload: bytes) -> None:
+        def _decode_archive(contents: bytes, original_name: str = "archive.zip") -> None:
             rows = list(getattr(state, self.rows_model, []) or [])
             paths = list(getattr(state, self.v_model, []) or [])
-            for original_name, contents in unpack_browser_file_batch(payload):
-                try:
-                    metadata = inspect_cif_archive(contents, original_name)
-                    duplicate = next((row for row in rows if row.get("digest") == metadata["digest"]), None)
-                    if duplicate:
-                        Path(str(metadata.get("path") or "")).unlink(missing_ok=True)
-                        raise ValueError(f"{metadata['name']}: duplicates {duplicate.get('name', 'an existing selection')}")
-                    paths.append(str(metadata["path"]))
-                except Exception as exc:
-                    metadata = {
-                        "name": safe_client_filename(original_name),
-                        "path": "",
-                        "digest": "",
-                        "source_type": "ZIP archive",
-                        "cif_count": 0,
-                        "rejected_count": 0,
-                        "status": "Rejected",
-                        "detail": str(exc),
-                    }
-                rows.append(metadata)
+            try:
+                metadata = inspect_cif_archive(contents, original_name)
+                duplicate = next((row for row in rows if row.get("digest") == metadata["digest"]), None)
+                if duplicate:
+                    Path(str(metadata.get("path") or "")).unlink(missing_ok=True)
+                    raise ValueError(f"{metadata['name']}: duplicates {duplicate.get('name', 'an existing selection')}")
+                paths.append(str(metadata["path"]))
+            except Exception as exc:
+                metadata = {
+                    "name": safe_client_filename(original_name),
+                    "path": "",
+                    "digest": "",
+                    "source_type": "ZIP archive",
+                    "cif_count": 0,
+                    "rejected_count": 0,
+                    "status": "Rejected",
+                    "detail": str(exc),
+                }
+            rows.append(metadata)
             setattr(state, self.v_model, paths)
             setattr(state, self.rows_model, rows)
             setattr(state, self.archive_client_model, None)
@@ -500,7 +499,15 @@ class NamedMultiCifUpload:
             )
 
         decode_js = batch_js(self.decode_trigger)
-        decode_archive_js = batch_js(self.decode_archive_trigger)
+        # Archive uploads use the same direct ArrayBuffer + filename contract
+        # as NamedFileUpload. This avoids an extra browser-side binary packing
+        # layer and lets each selected ZIP complete its own validation state.
+        decode_archive_js = (
+            "(async () => { const selected = Array.isArray($event) ? $event : ($event ? [$event] : []); "
+            "const files=Array.from(selected); "
+            "for (const file of files) { const contents=await file.arrayBuffer(); "
+            f"trigger('{self.decode_archive_trigger}', [contents, file.name]); }} }})()"
+        )
         with html.Div(classes="radar-multi-upload", key=repr(key)):
             vuetify.VFileInput(
                 v_model=(self.client_model,),
