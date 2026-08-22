@@ -186,6 +186,56 @@ def test_history_search_preserves_selected_sibling_labels() -> None:
     assert [item["id"] for item in state.history_instrument_datasets] == ["instrument-id"]
 
 
+def test_history_refresh_keeps_reusable_configurations_visible_after_large_upload() -> None:
+    app = RadarPdNovaApp.__new__(RadarPdNovaApp)
+    newest = [
+        {
+            "id": f"cif-{index}",
+            "name": f"candidate-{index}.cif",
+            "display_name": f"candidate-{index}.cif",
+            "role": "cif",
+            "generated": False,
+        }
+        for index in range(100)
+    ]
+    configuration = {
+        "id": "config-id",
+        "name": "RADAR-PD configuration | run_radar_pd_config.yaml",
+        "display_name": "run_radar_pd_config.yaml",
+        "role": "configuration",
+        "generated": True,
+    }
+
+    class _Service:
+        def search_history_datasets(self, *, query: str, **_kwargs):
+            return [configuration] if query == "radar_pd_config" else newest
+
+    state = _State(
+        history_search="",
+        history_offset=0,
+        history_datasets=[],
+        history_show_all=False,
+        history_data_id="",
+        history_instrument_id="",
+        history_main_cif_id="",
+        history_database_id="",
+        history_configuration_id="",
+        powgen_configuration_dataset_id="",
+        powgen_main_cif_dataset_id="",
+        library_builder_cif_ids=[],
+        error_message="",
+        notice="",
+    )
+    app.server = SimpleNamespace(state=state)
+    app.service = _Service()
+
+    app.refresh_history()
+
+    assert [item["id"] for item in state.history_configuration_datasets] == ["config-id"]
+    assert state.history_has_more is True
+    assert state.flush_count == 1
+
+
 def test_integrated_library_builder_uses_deployed_conditional_contract() -> None:
     app = RadarPdNovaApp.__new__(RadarPdNovaApp)
     state = _State(

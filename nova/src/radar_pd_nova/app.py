@@ -3276,7 +3276,20 @@ class RadarPdNovaApp(ThemedApp):
                 offset=0,
                 include_generated=True,
             )
-            self._apply_history_page(datasets, append=False)
+            # Large CIF uploads can occupy the entire newest-history page. Keep
+            # reusable configurations discoverable independently so a fresh
+            # NOVA session can still start a POWGEN monitor or reuse a setup.
+            configurations = self.service.search_history_datasets(
+                query="radar_pd_config",
+                limit=100,
+                offset=0,
+                include_generated=True,
+            )
+            merged = list(datasets)
+            known_ids = {str(item.get("id")) for item in merged}
+            merged.extend(item for item in configurations if str(item.get("id")) not in known_ids)
+            self._apply_history_page(merged, append=False)
+            state.history_has_more = len(datasets) == 100
             state.notice = f"Loaded the newest {len(state.history_datasets)} relevant Galaxy inputs."
         except Exception as exc:
             state.error_message = f"Could not load Galaxy datasets: {exc}"
