@@ -36,6 +36,8 @@ def test_setup_panels_and_uploads_have_single_stable_instances() -> None:
     assert "Promise.all" not in template
     assert "for (const file of files)" in template
     assert "Array.isArray($event) ? $event" in template
+    assert "new window.TextEncoder()" in template
+    assert "new TextEncoder()" not in template
     assert "ZIP archive(s) selected; inspecting CIF contents..." in template
     assert "CIF file(s) selected; reading contents..." in template
 

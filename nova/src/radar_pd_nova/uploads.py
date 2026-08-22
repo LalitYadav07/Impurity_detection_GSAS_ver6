@@ -492,7 +492,7 @@ class NamedMultiCifUpload:
                 "(async () => { const selected = Array.isArray($event) ? $event : ($event ? [$event] : []); "
                 "const files=Array.from(selected); const items=[]; "
                 "for (const file of files) { items.push({name:file.name, bytes:new Uint8Array(await file.arrayBuffer())}); } "
-                "const header=new TextEncoder().encode(JSON.stringify(items.map(item => ({name:item.name,size:item.bytes.length})))); "
+                "const header=new window.TextEncoder().encode(JSON.stringify(items.map(item => ({name:item.name,size:item.bytes.length})))); "
                 "const total=4+header.length+items.reduce((sum,item) => sum+item.bytes.length,0); const packed=new Uint8Array(total); "
                 "new DataView(packed.buffer).setUint32(0,header.length,false); packed.set(header,4); let offset=4+header.length; "
                 "items.forEach(item => { packed.set(item.bytes,offset); offset += item.bytes.length; }); "
