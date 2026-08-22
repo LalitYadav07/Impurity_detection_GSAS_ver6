@@ -40,17 +40,17 @@ class PowgenExperimentSettings:
     subfolder: str = "shared/autoreduce"
     main_cif_dataset_id: str | None = None
     database_dataset_id: str | None = None
-    initial_scan_count: int = 1
     late_arrival_window: int = 100
+    max_active_jobs: int = 5
     max_submission_attempts: int = 5
     retry_base_seconds: int = 15
     retry_max_seconds: int = 300
 
     def __post_init__(self) -> None:
-        if self.initial_scan_count < 1:
-            raise ValueError("initial_scan_count must be positive")
         if self.late_arrival_window < 0:
             raise ValueError("late_arrival_window must not be negative")
+        if self.max_active_jobs < 1:
+            raise ValueError("max_active_jobs must be positive")
         if self.max_submission_attempts < 1:
             raise ValueError("max_submission_attempts must be positive")
         if self.retry_base_seconds < 0:
@@ -200,16 +200,23 @@ class PowgenWatchController:
             for row in rows
             if str(row.get("path") or row.get("name") or row).lower().endswith(".gsa")
         ]
-        if not self._primed:
+        if not self.state.initial_backfill_complete:
             discovered = discover_from_listing(
                 self.definition,
                 completed_rows,
                 self.state,
-                newest_limit=self.settings.initial_scan_count,
             )
-            if discovered:
-                self._last_seen_run_number = max(run.run_number for run in discovered)
-                self._primed = True
+            known_runs = [
+                *self.state.discovered.values(),
+                *self.state.submitted.values(),
+                *self.state.completed.values(),
+                *self.state.failed.values(),
+            ]
+            if known_runs:
+                self._last_seen_run_number = max(run.run_number for run in known_runs)
+            self.state.initial_backfill_complete = True
+            self._primed = True
+            self.persist_state()
             return discovered
 
         discovered = discover_from_listing(
@@ -247,9 +254,10 @@ class PowgenWatchController:
         )
 
     def due_submissions(self) -> list[WatchedRun]:
-        """Return newly discovered or delayed runs ready for submission."""
+        """Return ready runs without exceeding the active Galaxy-job cap."""
 
-        return self.state.retryable_runs()
+        available = max(0, self.settings.max_active_jobs - len(self.state.submitted))
+        return self.state.retryable_runs()[:available]
 
     def defer_submission(self, run: WatchedRun, error: str) -> WatchedRun:
         """Retry a pre-acknowledgement failure with bounded backoff."""

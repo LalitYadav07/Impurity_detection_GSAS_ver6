@@ -173,6 +173,7 @@ class WatchState:
     submitted: dict[str, WatchedRun] = field(default_factory=dict)
     completed: dict[str, WatchedRun] = field(default_factory=dict)
     failed: dict[str, WatchedRun] = field(default_factory=dict)
+    initial_backfill_complete: bool = False
     updated_utc: str = field(default_factory=_utc_now)
     schema: str = WATCH_STATE_SCHEMA
 
@@ -199,6 +200,7 @@ class WatchState:
             "submitted": {key: run.as_dict() for key, run in sorted(self.submitted.items())},
             "completed": {key: run.as_dict() for key, run in sorted(self.completed.items())},
             "failed": {key: run.as_dict() for key, run in sorted(self.failed.items())},
+            "initial_backfill_complete": self.initial_backfill_complete,
             "updated_utc": self.updated_utc,
         }
 
@@ -215,6 +217,11 @@ class WatchState:
             submitted=_run_map_from_dict(value.get("submitted", {}), "submitted"),
             completed=_run_map_from_dict(value.get("completed", {}), "completed"),
             failed=_run_map_from_dict(value.get("failed", {}), "failed"),
+            # Checkpoints written before full initial backfill was introduced
+            # deliberately omitted this field. Treat them as incomplete so a
+            # restored watch discovers historical scans that were skipped by
+            # the old newest-only startup policy.
+            initial_backfill_complete=bool(value.get("initial_backfill_complete", False)),
             updated_utc=str(value.get("updated_utc") or _utc_now()),
             schema=str(value["$schema"]),
         )

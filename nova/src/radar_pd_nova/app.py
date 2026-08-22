@@ -839,7 +839,7 @@ class RadarPdNovaApp(ThemedApp):
                     )
                 with vuetify.VExpansionPanelText():
                     html.P(
-                        "Watch completed POWGEN reductions and submit each new scan through the existing RADAR-PD Analyze tool.",
+                        "Analyze every completed POWGEN reduction already present, then continue with each new scan through the existing RADAR-PD Analyze tool.",
                         classes="radar-help-copy",
                     )
                     vuetify.VTextField(
@@ -893,7 +893,7 @@ class RadarPdNovaApp(ThemedApp):
                         html.Div("READ-ONLY SOURCE", classes="radar-micro-label")
                         html.Code("{{ powgen_source_directory }}")
                         html.P(
-                            "RADAR-PD does not write into the IPTS. Configurations, watch checkpoints, jobs, and results remain in Galaxy/NDIP.",
+                            "On first start, every compatible .gsa not already recorded in the Galaxy checkpoint is queued. Up to five scans run concurrently. RADAR-PD does not write into the IPTS.",
                             classes="radar-help-copy mb-0",
                         )
                     vuetify.VAlert(
@@ -2890,7 +2890,7 @@ class RadarPdNovaApp(ThemedApp):
             state.powgen_monitoring = True
             recovery_note = " Previous Galaxy watch state was restored." if restored else ""
             state.powgen_message = (
-                f"Monitoring {state.powgen_source_directory}. New scans will be submitted to Galaxy; "
+                f"Backfilling existing scans in {state.powgen_source_directory}, then monitoring for new scans. "
                 f"the IPTS remains read-only.{recovery_note}"
             )
             state.error_message = ""

@@ -105,7 +105,7 @@ def test_controller_submits_existing_analyze_contract_and_persists_state() -> No
     assert service.uploaded[-1][0]["watch"]["source_directory"].endswith("shared/autoreduce")
 
 
-def test_controller_starts_with_latest_gsa_then_submits_all_new_runs() -> None:
+def test_controller_backfills_all_existing_gsa_then_submits_all_new_runs() -> None:
     service = FakeGalaxyService()
     controller = PowgenWatchController(
         service,
@@ -133,8 +133,61 @@ def test_controller_starts_with_latest_gsa_then_submits_all_new_runs() -> None:
         ]
     )
 
-    assert [run.run_number for run in initial] == [63764]
+    assert [run.run_number for run in initial] == [63762, 63763, 63764]
     assert [run.run_number for run in later] == [63765, 63766]
+
+
+def test_controller_caps_concurrent_backfill_submissions() -> None:
+    service = FakeGalaxyService()
+    controller = PowgenWatchController(
+        service,
+        PowgenExperimentSettings(
+            ipts="IPTS-38000",
+            history_id="history-1",
+            configuration_dataset_id="config-hda",
+            wavelength_angstrom="1.5",
+            max_active_jobs=3,
+        ),
+    )
+    runs = controller.discover(
+        [
+            {"path": f"/SNS/PG3/IPTS-38000/shared/autoreduce/PG3_{run_number}.gsa"}
+            for run_number in range(63760, 63767)
+        ]
+    )
+    controller.state.mark_submitted(runs[0], "job-a")
+
+    assert [run.run_number for run in controller.due_submissions()] == [63761, 63762]
+
+
+def test_legacy_checkpoint_triggers_missing_initial_backfill() -> None:
+    service = FakeGalaxyService()
+    settings = PowgenExperimentSettings(
+        ipts="IPTS-38000",
+        history_id="history-1",
+        configuration_dataset_id="config-hda",
+        wavelength_angstrom="1.5",
+    )
+    original = PowgenWatchController(service, settings)
+    original.discover(
+        [{"path": "/SNS/PG3/IPTS-38000/shared/autoreduce/PG3_63764.gsa"}]
+    )
+    legacy_checkpoint = service.uploaded[-1][0]
+    legacy_checkpoint.pop("initial_backfill_complete", None)
+    service.history_documents = [{"id": "legacy-checkpoint", "payload": legacy_checkpoint}]
+
+    restored = PowgenWatchController(service, settings)
+    assert restored.restore_latest_state() is True
+    missing = restored.discover(
+        [
+            {"path": "/SNS/PG3/IPTS-38000/shared/autoreduce/PG3_63762.gsa"},
+            {"path": "/SNS/PG3/IPTS-38000/shared/autoreduce/PG3_63763.gsa"},
+            {"path": "/SNS/PG3/IPTS-38000/shared/autoreduce/PG3_63764.gsa"},
+        ]
+    )
+
+    assert [run.run_number for run in missing] == [63762, 63763]
+    assert restored.state.initial_backfill_complete is True
 
 
 def test_controller_marks_finished_job_complete_without_downloading_archive() -> None:
@@ -285,14 +338,6 @@ def test_controller_refresh_failure_for_one_job_does_not_block_another() -> None
         ),
     )
     runs = controller.discover(
-        [
-            {"path": "/SNS/PG3/IPTS-38000/shared/autoreduce/PG3_63764.gsa"},
-            {"path": "/SNS/PG3/IPTS-38000/shared/autoreduce/PG3_63765.gsa"},
-        ]
-    )
-    # Initial discovery deliberately selects one newest scan; add the older
-    # scan through the bounded late-arrival pass.
-    runs += controller.discover(
         [
             {"path": "/SNS/PG3/IPTS-38000/shared/autoreduce/PG3_63764.gsa"},
             {"path": "/SNS/PG3/IPTS-38000/shared/autoreduce/PG3_63765.gsa"},
