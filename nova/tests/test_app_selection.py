@@ -344,8 +344,8 @@ _cell_angle_gamma 90
     assert len(uploads) == 1
     assert uploads[0][0] == "library_cif_bundle"
     assert submitted[0]["inputs"] == {
-        "cif_source|source_kind": "archive",
-        "cif_source|cif_archive": {"dataset_id": "bundle-1"},
+        "cif_source|source_kind": "archives",
+        "cif_source|cif_archives": [{"dataset_id": "bundle-1"}],
         "library_mode": "augmented",
         "radiation": "neutron",
         "overwrite": "",

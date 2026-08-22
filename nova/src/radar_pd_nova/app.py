@@ -4160,7 +4160,7 @@ class RadarPdNovaApp(ThemedApp):
             return
         payload = {
             "schema": "radar-pd-nova-diagnostics/v1",
-            "nova_version": "0.3.36",
+            "nova_version": "0.3.37",
             "run": {
                 "name": record.name,
                 "mode_submitted": record.mode.value,
@@ -4702,14 +4702,14 @@ class RadarPdNovaApp(ThemedApp):
                     )
                 if archive_id and collection_id:
                     source_inputs = {
-                        "cif_source|source_kind": "archive_and_collection",
-                        "cif_source|cif_archive": {"dataset_id": archive_id},
+                        "cif_source|source_kind": "archives_and_collection",
+                        "cif_source|cif_archives": [{"dataset_id": archive_id}],
                         "cif_source|cif_collection": {"collection_id": collection_id},
                     }
                 elif archive_id:
                     source_inputs = {
-                        "cif_source|source_kind": "archive",
-                        "cif_source|cif_archive": {"dataset_id": archive_id},
+                        "cif_source|source_kind": "archives",
+                        "cif_source|cif_archives": [{"dataset_id": archive_id}],
                     }
                 else:
                     source_inputs = {

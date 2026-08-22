@@ -1425,7 +1425,20 @@ class GalaxyService:
             serialized_inputs: dict[str, Any] = {}
             for parameter_name, value in inputs.items():
                 resolved = value
-                if isinstance(value, dict) and value.get("dataset_id"):
+                if (
+                    isinstance(value, list)
+                    and value
+                    and all(isinstance(item, dict) and item.get("dataset_id") for item in value)
+                ):
+                    dataset_ids = [str(item["dataset_id"]) for item in value]
+                    # Galaxy multiple-data parameters require a list of native
+                    # HDA references. Keep this as an ordinary Parameters value;
+                    # nova-galaxy's Dataset wrapper is only suitable for uploads.
+                    resolved = [{"src": "hda", "id": dataset_id} for dataset_id in dataset_ids]
+                    serialized_inputs[parameter_name] = [
+                        {"dataset_id": dataset_id} for dataset_id in dataset_ids
+                    ]
+                elif isinstance(value, dict) and value.get("dataset_id"):
                     dataset_id = str(value["dataset_id"])
                     # Utility tools receive existing History datasets, not new
                     # uploads. Use Galaxy's native HDA reference here. The

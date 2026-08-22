@@ -303,7 +303,12 @@ def test_every_companion_action_serializes_dataset_and_collection_references(
         ),
         (
             LIBRARY_BUILDER_TOOL_ID,
-            {"cif_files": {"collection_id": "cifs"}, "library_mode": "mini", "radiation": "neutron"},
+            {
+                "cif_source|source_kind": "archives",
+                "cif_source|cif_archives": [{"dataset_id": "zip-1"}, {"dataset_id": "zip-2"}],
+                "library_mode": "mini",
+                "radiation": "neutron",
+            },
         ),
         (
             GPX_HANDOFF_TOOL_ID,
@@ -325,7 +330,10 @@ def test_every_companion_action_serializes_dataset_and_collection_references(
 
     assert [tool_id for tool_id, _ in submissions] == [case[0] for case in cases]
     assert submissions[0][1]["source|event_file"] == {"src": "hda", "id": "event"}
-    assert submissions[1][1]["cif_files"] == {"src": "hdca", "id": "cifs"}
+    assert submissions[1][1]["cif_source|cif_archives"] == [
+        {"src": "hda", "id": "zip-1"},
+        {"src": "hda", "id": "zip-2"},
+    ]
     assert submissions[2][1]["gpx_index"] == {"src": "hda", "id": "index"}
     assert submissions[3][1]["summaries"] == {"src": "hdca", "id": "summaries"}
     assert submissions[4][1]["result_source|results_archive"] == {"src": "hda", "id": "archive"}
