@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import threading
 from typing import Any, Iterable, Mapping
 
 from .galaxy_service import GalaxyService
@@ -122,6 +123,7 @@ class PowgenWatchController:
         self._last_seen_run_number: int | None = None
         self._last_persisted_state: str | None = None
         self._configuration: AnalysisConfig | None = None
+        self._configuration_lock = threading.Lock()
         self.refresh_errors: dict[str, str] = {}
 
     def restore_latest_state(self) -> bool:
@@ -294,7 +296,15 @@ class PowgenWatchController:
         )
         return resolution, resolve_packaged_powgen_profile_path(resolution)
 
-    def submit(self, run: WatchedRun) -> RunRecord:
+    def launch_submission(self, run: WatchedRun) -> RunRecord:
+        """Create one Galaxy job without moving the watch-state checkpoint.
+
+        This split lets the NOVA monitor launch independent scans concurrently
+        while keeping the state transition and immutable Galaxy checkpoint on
+        its event-loop thread.  ``submit`` remains the synchronous convenience
+        wrapper used by tests and non-interactive callers.
+        """
+
         plan = build_submission_plan(self.definition, run, self.state)
         if plan is None:
             existing = self.records.get(run.run_id)
@@ -303,9 +313,11 @@ class PowgenWatchController:
             return existing
 
         if self._configuration is None:
-            self._configuration = self.service.load_configuration_dataset(
-                self.settings.configuration_dataset_id
-            )
+            with self._configuration_lock:
+                if self._configuration is None:
+                    self._configuration = self.service.load_configuration_dataset(
+                        self.settings.configuration_dataset_id
+                    )
         config = self._configuration
         config = config.model_copy(update={"run_name": f"{self.settings.ipts}_{run.run_id}"})
         _, profile_path = self.resolve_profile(run)
@@ -328,10 +340,22 @@ class PowgenWatchController:
         record = self.service.submit_snapshot(snapshot)
         if not record.galaxy_job_id:
             raise RuntimeError(f"Galaxy did not acknowledge {run.run_id}")
+        return record
+
+    def acknowledge_submission(self, run: WatchedRun, record: RunRecord) -> RunRecord:
+        """Checkpoint one Galaxy-acknowledged scan in the watch state."""
+
+        if not record.galaxy_job_id:
+            raise RuntimeError(f"Galaxy did not acknowledge {run.run_id}")
         self.state.mark_submitted(run, record.galaxy_job_id)
         self.records[run.run_id] = record
         self.persist_state()
         return record
+
+    def submit(self, run: WatchedRun) -> RunRecord:
+        """Launch and durably acknowledge one scan synchronously."""
+
+        return self.acknowledge_submission(run, self.launch_submission(run))
 
     def refresh(self) -> dict[str, RunRecord]:
         state_changed = False

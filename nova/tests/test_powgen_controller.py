@@ -160,6 +160,33 @@ def test_controller_caps_concurrent_backfill_submissions() -> None:
     assert [run.run_number for run in controller.due_submissions()] == [63761, 63762]
 
 
+def test_launch_and_acknowledge_keep_checkpoint_transition_explicit() -> None:
+    service = FakeGalaxyService()
+    controller = PowgenWatchController(
+        service,
+        PowgenExperimentSettings(
+            ipts="IPTS-38000",
+            history_id="history-1",
+            configuration_dataset_id="config-hda",
+            wavelength_angstrom="1.5",
+        ),
+    )
+    run = controller.discover(
+        [{"path": "/SNS/PG3/IPTS-38000/shared/autoreduce/PG3_63764.gsa"}]
+    )[0]
+
+    record = controller.launch_submission(run)
+
+    assert run.run_id in controller.state.discovered
+    assert run.run_id not in controller.state.submitted
+
+    controller.acknowledge_submission(run, record)
+
+    assert run.run_id not in controller.state.discovered
+    assert controller.state.submitted[run.run_id].galaxy_job_id == "galaxy-job-1"
+    assert service.uploaded[-1][2] == "POWGEN watch state IPTS-38000"
+
+
 def test_legacy_checkpoint_triggers_missing_initial_backfill() -> None:
     service = FakeGalaxyService()
     settings = PowgenExperimentSettings(

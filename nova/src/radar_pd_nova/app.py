@@ -3293,27 +3293,8 @@ class RadarPdNovaApp(ThemedApp):
                 self._sync_powgen_rows()
                 state.flush()
 
-                for run in controller.due_submissions():
-                    if not state.powgen_monitoring:
-                        break
-                    try:
-                        record = await asyncio.to_thread(controller.submit, run)
-                        self.records[record.uid] = record
-                        self._sync_runs()
-                    except Exception as exc:
-                        # Retry only failures that happened before Galaxy
-                        # acknowledged a job. Acknowledged jobs remain in the
-                        # submitted map and are recovered by their job ID.
-                        if run.run_id in controller.state.discovered:
-                            try:
-                                await asyncio.to_thread(controller.defer_submission, run, str(exc))
-                            except Exception as persist_exc:
-                                warnings.append(f"{run.run_id} retry checkpoint failed: {persist_exc}")
-                        else:
-                            warnings.append(f"{run.run_id} submission status uncertain: {exc}")
-                    self._sync_powgen_rows()
-                    state.flush()
-
+                # Refresh first so jobs that finished since the last poll free
+                # their worker slots before this cycle chooses more scans.
                 if controller.state.submitted:
                     try:
                         refreshed = await asyncio.to_thread(controller.refresh)
@@ -3326,6 +3307,45 @@ class RadarPdNovaApp(ThemedApp):
                             )
                     except Exception as exc:
                         warnings.append(f"Galaxy status refresh failed: {exc}")
+
+                due_runs = controller.due_submissions()
+                if due_runs and state.powgen_monitoring:
+                    async def launch(run: Any) -> tuple[Any, RunRecord | None, Exception | None]:
+                        try:
+                            record = await asyncio.to_thread(controller.launch_submission, run)
+                            return run, record, None
+                        except Exception as exc:
+                            return run, None, exc
+
+                    pending = [asyncio.create_task(launch(run)) for run in due_runs]
+                    for future in asyncio.as_completed(pending):
+                        # A cancelled asyncio task cannot stop work already
+                        # running in ``to_thread``. Always acknowledge this
+                        # batch so every Galaxy job remains recoverable; the
+                        # monitoring flag prevents the next batch from starting.
+                        run, launched, launch_error = await future
+                        try:
+                            if launch_error is not None:
+                                raise launch_error
+                            if launched is None:
+                                raise RuntimeError(f"Galaxy did not return a record for {run.run_id}")
+                            record = await asyncio.to_thread(
+                                controller.acknowledge_submission,
+                                run,
+                                launched,
+                            )
+                            self.records[record.uid] = record
+                            self._sync_runs()
+                        except Exception as exc:
+                            if run.run_id in controller.state.discovered:
+                                try:
+                                    await asyncio.to_thread(controller.defer_submission, run, str(exc))
+                                except Exception as persist_exc:
+                                    warnings.append(f"{run.run_id} retry checkpoint failed: {persist_exc}")
+                            else:
+                                warnings.append(f"{run.run_id} submission status uncertain: {exc}")
+                        self._sync_powgen_rows()
+                        state.flush()
 
                 self._sync_powgen_rows()
                 counts = {
@@ -4110,7 +4130,7 @@ class RadarPdNovaApp(ThemedApp):
             return
         payload = {
             "schema": "radar-pd-nova-diagnostics/v1",
-            "nova_version": "0.3.9",
+            "nova_version": "0.3.26",
             "run": {
                 "name": record.name,
                 "mode_submitted": record.mode.value,
