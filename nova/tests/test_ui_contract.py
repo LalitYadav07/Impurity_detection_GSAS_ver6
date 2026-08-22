@@ -37,7 +37,12 @@ def test_setup_panels_and_uploads_have_single_stable_instances() -> None:
     assert "for (const file of files)" in template
     assert "Array.isArray($event) ? $event" in template
     assert "new window.TextEncoder()" in template
+    # Both the loose-CIF and ZIP uploaders pack browser files for Python.
+    assert template.count("new window.Uint8Array") == 4
+    assert "new window.DataView" in template
     assert "new TextEncoder()" not in template
+    assert "new Uint8Array" not in template
+    assert "new DataView" not in template
     assert "ZIP archive(s) selected; inspecting CIF contents..." in template
     assert "CIF file(s) selected; reading contents..." in template
 
