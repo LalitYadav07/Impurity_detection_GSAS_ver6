@@ -200,6 +200,7 @@ def test_integrated_library_builder_uses_deployed_conditional_contract() -> None
         library_builder_skipped_count=0,
         library_builder_message="",
         radiation="neutron",
+        database_source="custom_mini",
         error_message="",
     )
     app.server = SimpleNamespace(state=state)
@@ -227,7 +228,7 @@ def test_integrated_library_builder_uses_deployed_conditional_contract() -> None
 
     app.build_candidate_library()
 
-    assert created[0][0].startswith("RADAR-PD CIF input | Y Fe Si candidates | ")
+    assert created[0][0].startswith("RADAR-PD History CIF input | Y Fe Si candidates | ")
     assert created[0][1] == ["cif-1", "cif-2"]
     assert submitted[0]["inputs"] == {
         "cif_source|source_kind": "collection",
@@ -237,6 +238,68 @@ def test_integrated_library_builder_uses_deployed_conditional_contract() -> None
         "overwrite": "",
     }
     assert state.library_builder_active is False
+
+
+def test_integrated_library_builder_uploads_one_bundle_for_many_local_cifs(tmp_path) -> None:
+    cif = b"""data_Fe
+_cell_length_a 2.86
+_cell_length_b 2.86
+_cell_length_c 2.86
+_cell_angle_alpha 90
+_cell_angle_beta 90
+_cell_angle_gamma 90
+"""
+    paths = []
+    for index in range(3):
+        path = tmp_path / f"Fe_{index}.cif"
+        path.write_bytes(cif + f"# {index}\n".encode())
+        paths.append(str(path))
+    app = RadarPdNovaApp.__new__(RadarPdNovaApp)
+    state = _State(
+        library_builder_cif_ids=[],
+        library_builder_local_paths=paths,
+        library_builder_name="Fe candidates",
+        library_builder_mode="mini",
+        library_builder_active=False,
+        library_builder_status="idle",
+        library_builder_progress=0,
+        library_builder_built_count=0,
+        library_builder_skipped_count=0,
+        library_builder_failure_rows=[],
+        library_builder_message="",
+        radiation="neutron",
+        database_source="custom_augmented",
+        error_message="",
+    )
+    app.server = SimpleNamespace(state=state)
+    uploads: list[tuple[str, str, str]] = []
+    submitted: list[dict[str, object]] = []
+
+    class _Service:
+        def _upload_one(self, key: str, path: str, label: str):
+            uploads.append((key, path, label))
+            return key, "bundle-1"
+
+    app.service = _Service()
+
+    async def _submit(**kwargs):
+        submitted.append(kwargs)
+        return UtilityActionRecord(uid="utility-2", tool_id=str(kwargs["tool_id"]), name=str(kwargs["name"]), status=RunStatus.OK)
+
+    app._submit_utility_action = _submit  # type: ignore[method-assign]
+    app._schedule_utility = lambda coroutine, _name: asyncio.run(coroutine)  # type: ignore[method-assign]
+
+    app.build_candidate_library()
+
+    assert len(uploads) == 1
+    assert uploads[0][0] == "library_cif_bundle"
+    assert submitted[0]["inputs"] == {
+        "cif_source|source_kind": "archive",
+        "cif_source|cif_archive": {"dataset_id": "bundle-1"},
+        "library_mode": "augmented",
+        "radiation": "neutron",
+        "overwrite": "",
+    }
 
 
 def test_facility_instrument_dropdown_payload_is_normalized() -> None:

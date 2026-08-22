@@ -1,8 +1,31 @@
+import io
+import json
+import zipfile
 from pathlib import Path
 
 import pytest
 
-from radar_pd_nova.uploads import display_filename, inspect_cif_upload, safe_client_filename, store_browser_upload
+from radar_pd_nova.uploads import (
+    build_cif_source_archive,
+    display_filename,
+    inspect_cif_archive,
+    inspect_cif_upload,
+    safe_client_filename,
+    store_browser_upload,
+    unpack_browser_file_batch,
+)
+
+
+VALID_CIF = b"""data_Fe
+_chemical_formula_sum 'Fe'
+_space_group_IT_number 229
+_cell_length_a 2.86
+_cell_length_b 2.86
+_cell_length_c 2.86
+_cell_angle_alpha 90
+_cell_angle_beta 90
+_cell_angle_gamma 90
+"""
 
 
 def test_safe_client_filename_removes_browser_paths_and_unsafe_characters() -> None:
@@ -29,18 +52,7 @@ def test_display_filename_never_exposes_the_temporary_or_windows_path() -> None:
 
 
 def test_inspect_cif_upload_reports_formula_space_group_and_digest() -> None:
-    contents = b"""data_Fe
-_chemical_formula_sum 'Fe'
-_space_group_IT_number 229
-_cell_length_a 2.86
-_cell_length_b 2.86
-_cell_length_c 2.86
-_cell_angle_alpha 90
-_cell_angle_beta 90
-_cell_angle_gamma 90
-"""
-
-    result = inspect_cif_upload(contents, r"C:\fakepath\Fe.cif")
+    result = inspect_cif_upload(VALID_CIF, r"C:\fakepath\Fe.cif")
 
     assert result["name"] == "Fe.cif"
     assert result["formula"] == "Fe"
@@ -59,3 +71,42 @@ _cell_angle_gamma 90
 def test_inspect_cif_upload_rejects_obviously_unusable_inputs(contents: bytes, name: str, message: str) -> None:
     with pytest.raises(ValueError, match=message):
         inspect_cif_upload(contents, name)
+
+
+def test_inspect_cif_archive_reports_usable_and_rejected_members() -> None:
+    payload = io.BytesIO()
+    with zipfile.ZipFile(payload, "w") as archive:
+        archive.writestr("structures/Fe.cif", VALID_CIF)
+        archive.writestr("structures/broken.cif", b"data_broken\n")
+        archive.writestr("notes.txt", b"ignored")
+
+    result = inspect_cif_archive(payload.getvalue(), "candidate_structures.zip")
+
+    assert result["source_type"] == "ZIP archive"
+    assert result["cif_count"] == 1
+    assert result["rejected_count"] == 1
+    assert Path(result["path"]).is_file()
+
+
+def test_build_cif_source_archive_deduplicates_loose_and_zipped_cifs(tmp_path: Path) -> None:
+    loose = tmp_path / "Fe.cif"
+    loose.write_bytes(VALID_CIF)
+    source_zip = tmp_path / "more.zip"
+    with zipfile.ZipFile(source_zip, "w") as archive:
+        archive.writestr("duplicate_Fe.cif", VALID_CIF)
+        archive.writestr("bad.cif", b"data_bad\n")
+
+    bundle, stats = build_cif_source_archive([str(loose), str(source_zip)], "Fe candidates")
+
+    assert stats["cif_count"] == 1
+    assert stats["skipped_count"] == 2
+    with zipfile.ZipFile(bundle) as archive:
+        assert len([name for name in archive.namelist() if name.endswith(".cif")]) == 1
+
+
+def test_unpack_browser_file_batch_preserves_names_and_bytes() -> None:
+    files = [("Fe.cif", VALID_CIF), ("candidate set.zip", b"PK\x03\x04payload")]
+    header = json.dumps([{"name": name, "size": len(contents)} for name, contents in files]).encode("utf-8")
+    payload = len(header).to_bytes(4, "big") + header + b"".join(contents for _, contents in files)
+
+    assert unpack_browser_file_batch(payload) == files

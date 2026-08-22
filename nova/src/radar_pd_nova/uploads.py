@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import itertools
 import hashlib
+import json
 import re
 import tempfile
+import zipfile
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -21,6 +23,10 @@ from trame.widgets import html, vuetify3 as vuetify
 
 
 _UPLOAD_IDS = itertools.count(1)
+_MAX_CIF_BYTES = 20 * 1024 * 1024
+_MAX_ARCHIVE_BYTES = 500 * 1024 * 1024
+_MAX_ARCHIVE_CIFS = 5000
+_MAX_ARCHIVE_UNCOMPRESSED_BYTES = 2 * 1024 * 1024 * 1024
 
 
 def safe_client_filename(value: Any) -> str:
@@ -56,7 +62,7 @@ def inspect_cif_upload(contents: bytes, original_name: Any) -> dict[str, Any]:
         raise ValueError(f"{name}: expected a .cif file")
     if not contents:
         raise ValueError(f"{name}: file is empty")
-    if len(contents) > 20 * 1024 * 1024:
+    if len(contents) > _MAX_CIF_BYTES:
         raise ValueError(f"{name}: file exceeds the 20 MB CIF limit")
     text = contents.decode("utf-8-sig", errors="replace")
     lowered = text.lower()
@@ -91,6 +97,141 @@ def inspect_cif_upload(contents: bytes, original_name: Any) -> dict[str, Any]:
         "formula": _tag_value("_chemical_formula_sum", "_chemical_formula_structural"),
         "space_group": _tag_value("_space_group_it_number", "_symmetry_int_tables_number"),
     }
+
+
+def inspect_cif_archive(contents: bytes, original_name: Any) -> dict[str, Any]:
+    """Validate a ZIP as a bounded collection of CIF structures."""
+
+    name = safe_client_filename(original_name)
+    if Path(name).suffix.lower() != ".zip":
+        raise ValueError(f"{name}: expected a .zip archive")
+    if not contents:
+        raise ValueError(f"{name}: archive is empty")
+    if len(contents) > _MAX_ARCHIVE_BYTES:
+        raise ValueError(f"{name}: archive exceeds the 500 MB upload limit")
+
+    archive_path = store_browser_upload(contents, name)
+    try:
+        with zipfile.ZipFile(archive_path) as archive:
+            members = [item for item in archive.infolist() if not item.is_dir() and item.filename.lower().endswith(".cif")]
+            if not members:
+                raise ValueError(f"{name}: no CIF files were found")
+            if len(members) > _MAX_ARCHIVE_CIFS:
+                raise ValueError(f"{name}: contains more than {_MAX_ARCHIVE_CIFS:,} CIF files")
+            total_size = sum(max(0, item.file_size) for item in members)
+            if total_size > _MAX_ARCHIVE_UNCOMPRESSED_BYTES:
+                raise ValueError(f"{name}: uncompressed CIF content exceeds 2 GB")
+
+            rejected = 0
+            digests: set[str] = set()
+            for member in members:
+                if member.file_size > _MAX_CIF_BYTES:
+                    rejected += 1
+                    continue
+                try:
+                    metadata = inspect_cif_upload(archive.read(member), Path(member.filename).name)
+                    digests.add(str(metadata["digest"]))
+                except Exception:
+                    rejected += 1
+    except zipfile.BadZipFile as exc:
+        archive_path.unlink(missing_ok=True)
+        raise ValueError(f"{name}: invalid ZIP archive") from exc
+    except Exception:
+        archive_path.unlink(missing_ok=True)
+        raise
+
+    return {
+        "name": name,
+        "size": len(contents),
+        "digest": hashlib.sha256(contents).hexdigest(),
+        "path": str(archive_path),
+        "source_type": "ZIP archive",
+        "cif_count": len(digests),
+        "rejected_count": rejected,
+        "status": "Ready" if digests else "Rejected",
+        "detail": f"{len(digests):,} usable CIF(s)" + (f" / {rejected:,} skipped" if rejected else ""),
+    }
+
+
+def build_cif_source_archive(source_paths: Iterable[str], library_name: str) -> tuple[Path, dict[str, Any]]:
+    """Create one validated, deduplicated CIF bundle from CIF and ZIP sources."""
+
+    directory = Path(tempfile.mkdtemp(prefix="radar_pd_cif_bundle_"))
+    safe_name = safe_client_filename(library_name or "custom_library").rsplit(".", 1)[0] or "custom_library"
+    target = directory / f"{safe_name}_cif_sources.zip"
+    seen: set[str] = set()
+    skipped: list[str] = []
+    written = 0
+
+    def add_cif(output: zipfile.ZipFile, contents: bytes, original_name: str) -> None:
+        nonlocal written
+        try:
+            metadata = inspect_cif_upload(contents, original_name)
+        except Exception as exc:
+            skipped.append(str(exc))
+            return
+        digest = str(metadata["digest"])
+        if digest in seen:
+            skipped.append(f"{metadata['name']}: duplicate structure file")
+            return
+        seen.add(digest)
+        written += 1
+        output.writestr(f"cifs/{written:05d}_{safe_client_filename(metadata['name'])}", contents)
+
+    with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as output:
+        for raw_path in source_paths:
+            source = Path(str(raw_path))
+            if not source.is_file():
+                skipped.append(f"{source.name or source}: source is unavailable")
+                continue
+            if source.suffix.lower() == ".cif":
+                add_cif(output, source.read_bytes(), source.name)
+                continue
+            if source.suffix.lower() != ".zip":
+                skipped.append(f"{source.name}: expected CIF or ZIP")
+                continue
+            try:
+                with zipfile.ZipFile(source) as archive:
+                    members = [item for item in archive.infolist() if not item.is_dir() and item.filename.lower().endswith(".cif")]
+                    for member in members[:_MAX_ARCHIVE_CIFS]:
+                        if member.file_size > _MAX_CIF_BYTES:
+                            skipped.append(f"{Path(member.filename).name}: exceeds the 20 MB CIF limit")
+                            continue
+                        add_cif(output, archive.read(member), Path(member.filename).name)
+            except zipfile.BadZipFile:
+                skipped.append(f"{source.name}: invalid ZIP archive")
+
+    if not written:
+        target.unlink(missing_ok=True)
+        raise ValueError("No usable CIF structures remained after validation")
+    return target, {"cif_count": written, "skipped_count": len(skipped), "failures": skipped}
+
+
+def unpack_browser_file_batch(payload: bytes) -> list[tuple[str, bytes]]:
+    """Decode one compact browser batch into named file payloads."""
+
+    raw = bytes(payload or b"")
+    if len(raw) < 4:
+        raise ValueError("The browser file batch is incomplete")
+    header_size = int.from_bytes(raw[:4], byteorder="big", signed=False)
+    if header_size <= 0 or header_size > len(raw) - 4:
+        raise ValueError("The browser file batch header is invalid")
+    header = json.loads(raw[4 : 4 + header_size].decode("utf-8"))
+    if not isinstance(header, list):
+        raise ValueError("The browser file batch header must be a list")
+    offset = 4 + header_size
+    files: list[tuple[str, bytes]] = []
+    for item in header:
+        if not isinstance(item, dict):
+            raise ValueError("The browser file batch contains invalid metadata")
+        size = int(item.get("size") or 0)
+        if size < 0 or offset + size > len(raw):
+            raise ValueError("The browser file batch contains an invalid file size")
+        files.append((safe_client_filename(item.get("name")), raw[offset : offset + size]))
+        offset += size
+    if offset != len(raw):
+        raise ValueError("The browser file batch contains trailing data")
+    return files
 
 
 def display_filename(value: Any) -> str:
@@ -218,7 +359,7 @@ class NamedFileUpload:
 
 
 class NamedMultiCifUpload:
-    """Render a multi-file CIF picker with immediate, per-file preflight."""
+    """Render equivalent loose-CIF and multi-ZIP source pickers."""
 
     def __init__(
         self,
@@ -234,56 +375,96 @@ class NamedMultiCifUpload:
         self.key = key
         key_slug = key.replace("-", "_")
         self.client_model = f"{key_slug}_browser_files"
+        self.archive_client_model = f"{key_slug}_browser_archives"
         self.ref_name = f"{key_slug}_input"
+        self.archive_ref_name = f"{key_slug}_archive_input"
         self.decode_trigger = f"decode_{key_slug}"
+        self.decode_archive_trigger = f"decode_archive_{key_slug}"
         self.remove_trigger = f"remove_{key_slug}"
         self.clear_trigger = f"clear_{key_slug}"
 
         state = self.server.state
         setattr(state, self.client_model, None)
+        setattr(state, self.archive_client_model, None)
         if getattr(state, v_model, None) is None:
             setattr(state, v_model, [])
         if getattr(state, rows_model, None) is None:
             setattr(state, rows_model, [])
 
         @self.server.controller.trigger(self.decode_trigger)
-        def _decode_cif(contents: bytes, original_name: str = "candidate.cif") -> None:
+        def _decode_cif_batch(payload: bytes) -> None:
             rows = list(getattr(state, self.rows_model, []) or [])
             paths = list(getattr(state, self.v_model, []) or [])
-            try:
-                metadata = inspect_cif_upload(contents, original_name)
-                duplicate = next((row for row in rows if row.get("digest") == metadata["digest"]), None)
-                if duplicate:
-                    raise ValueError(f"{metadata['name']}: duplicates {duplicate.get('name', 'an existing selection')}")
-                target = store_browser_upload(contents, metadata["name"])
-                metadata.update(
-                    {
-                        "path": str(target),
-                        "status": "Ready",
-                        "detail": " / ".join(
-                            value
-                            for value in (
-                                metadata.get("formula"),
-                                f"SG {metadata['space_group']}" if metadata.get("space_group") else "",
+            for original_name, contents in unpack_browser_file_batch(payload):
+                try:
+                    metadata = inspect_cif_upload(contents, original_name)
+                    duplicate = next((row for row in rows if row.get("digest") == metadata["digest"]), None)
+                    if duplicate:
+                        raise ValueError(f"{metadata['name']}: duplicates {duplicate.get('name', 'an existing selection')}")
+                    target = store_browser_upload(contents, metadata["name"])
+                    metadata.update(
+                        {
+                            "path": str(target),
+                            "source_type": "Loose CIF",
+                            "cif_count": 1,
+                            "rejected_count": 0,
+                            "status": "Ready",
+                            "detail": " / ".join(
+                                value
+                                for value in (
+                                    metadata.get("formula"),
+                                    f"SG {metadata['space_group']}" if metadata.get("space_group") else "",
+                                )
+                                if value
                             )
-                            if value
-                        )
-                        or "CIF structure preflight passed",
+                            or "CIF structure preflight passed",
+                        }
+                    )
+                    paths.append(str(target))
+                except Exception as exc:
+                    metadata = {
+                        "name": safe_client_filename(original_name),
+                        "path": "",
+                        "digest": "",
+                        "source_type": "Loose CIF",
+                        "cif_count": 0,
+                        "rejected_count": 1,
+                        "status": "Rejected",
+                        "detail": str(exc),
                     }
-                )
-                paths.append(str(target))
-            except Exception as exc:
-                metadata = {
-                    "name": safe_client_filename(original_name),
-                    "path": "",
-                    "digest": "",
-                    "status": "Rejected",
-                    "detail": str(exc),
-                }
-            rows.append(metadata)
+                rows.append(metadata)
             setattr(state, self.v_model, paths)
             setattr(state, self.rows_model, rows)
             setattr(state, self.client_model, None)
+            state.flush()
+
+        @self.server.controller.trigger(self.decode_archive_trigger)
+        def _decode_archive_batch(payload: bytes) -> None:
+            rows = list(getattr(state, self.rows_model, []) or [])
+            paths = list(getattr(state, self.v_model, []) or [])
+            for original_name, contents in unpack_browser_file_batch(payload):
+                try:
+                    metadata = inspect_cif_archive(contents, original_name)
+                    duplicate = next((row for row in rows if row.get("digest") == metadata["digest"]), None)
+                    if duplicate:
+                        Path(str(metadata.get("path") or "")).unlink(missing_ok=True)
+                        raise ValueError(f"{metadata['name']}: duplicates {duplicate.get('name', 'an existing selection')}")
+                    paths.append(str(metadata["path"]))
+                except Exception as exc:
+                    metadata = {
+                        "name": safe_client_filename(original_name),
+                        "path": "",
+                        "digest": "",
+                        "source_type": "ZIP archive",
+                        "cif_count": 0,
+                        "rejected_count": 0,
+                        "status": "Rejected",
+                        "detail": str(exc),
+                    }
+                rows.append(metadata)
+            setattr(state, self.v_model, paths)
+            setattr(state, self.rows_model, rows)
+            setattr(state, self.archive_client_model, None)
             state.flush()
 
         @self.server.controller.trigger(self.remove_trigger)
@@ -303,12 +484,22 @@ class NamedMultiCifUpload:
             setattr(state, self.v_model, [])
             setattr(state, self.rows_model, [])
             setattr(state, self.client_model, None)
+            setattr(state, self.archive_client_model, None)
             state.flush()
 
-        decode_js = (
-            f"Array.from({self.client_model} || []).forEach((file) => "
-            f"file.arrayBuffer().then((contents) => trigger('{self.decode_trigger}', [contents, file.name])));"
-        )
+        def batch_js(model: str, trigger_name: str) -> str:
+            return (
+                f"(() => {{ const files=Array.from({model} || []); Promise.all(files.map(async (file) => "
+                "({name:file.name, bytes:new Uint8Array(await file.arrayBuffer())}))).then((items) => { "
+                "const header=new TextEncoder().encode(JSON.stringify(items.map(item => ({name:item.name,size:item.bytes.length})))); "
+                "const total=4+header.length+items.reduce((sum,item) => sum+item.bytes.length,0); const packed=new Uint8Array(total); "
+                "new DataView(packed.buffer).setUint32(0,header.length,false); packed.set(header,4); let offset=4+header.length; "
+                "items.forEach(item => { packed.set(item.bytes,offset); offset += item.bytes.length; }); "
+                f"trigger('{trigger_name}', [packed.buffer]); }}); }})()"
+            )
+
+        decode_js = batch_js(self.client_model, self.decode_trigger)
+        decode_archive_js = batch_js(self.archive_client_model, self.decode_archive_trigger)
         with html.Div(classes="radar-multi-upload", key=repr(key)):
             vuetify.VFileInput(
                 v_model=(self.client_model,),
@@ -320,42 +511,83 @@ class NamedMultiCifUpload:
                 key=repr(f"{key}-native"),
                 update_modelValue=decode_js,
             )
-            with html.Div(classes="radar-button-row"):
-                vuetify.VBtn(
-                    "Add CIF files",
-                    size="small",
-                    variant="outlined",
-                    color=color,
-                    prepend_icon="mdi-file-plus-outline",
-                    click=f"trame.refs.{self.ref_name}.click()",
+            vuetify.VFileInput(
+                v_model=(self.archive_client_model,),
+                multiple=True,
+                __properties=["accept"],
+                accept=".zip,application/zip",
+                classes="radar-hidden-file-input",
+                ref=self.archive_ref_name,
+                key=repr(f"{key}-archive-native"),
+                update_modelValue=decode_archive_js,
+            )
+            with html.Div(classes="radar-library-source-grid"):
+                with html.Div(classes="radar-library-source-card"):
+                    html.Strong("Loose CIF files")
+                    html.Span("Choose one or many .cif files from this computer.")
+                    vuetify.VBtn(
+                        "Choose CIF files",
+                        size="small",
+                        variant="outlined",
+                        color=color,
+                        prepend_icon="mdi-file-plus-outline",
+                        click=f"trame.refs.{self.ref_name}.click()",
+                    )
+                with html.Div(classes="radar-library-source-card"):
+                    html.Strong("ZIP archives of CIFs")
+                    html.Span("Choose one or many .zip archives containing CIF files.")
+                    vuetify.VBtn(
+                        "Choose ZIP archives",
+                        size="small",
+                        variant="outlined",
+                        color=color,
+                        prepend_icon="mdi-folder-zip-outline",
+                        click=f"trame.refs.{self.archive_ref_name}.click()",
+                    )
+            with html.Div(classes="radar-library-source-summary", v_show=f"{self.rows_model}.length > 0"):
+                html.Strong(
+                    f"{{{{ {self.rows_model}.filter(item => item.status === 'Ready').reduce((sum,item) => sum + (item.cif_count || 0), 0) }}}} usable CIF structure(s)"
+                )
+                html.Span(
+                    f"{{{{ {self.rows_model}.filter(item => item.status === 'Ready').length }}}} selected source(s); duplicates are removed before transfer."
                 )
                 vuetify.VBtn(
-                    "Clear",
+                    "Clear all",
                     size="small",
                     variant="text",
                     color="#7c2d2d",
-                    v_show=f"{self.rows_model}.length > 0",
                     click=f"trigger('{self.clear_trigger}')",
                 )
-            with html.Div(v_for=f"item in {self.rows_model}", key="item.name + item.digest", classes="radar-cif-file-row"):
-                with html.Div(classes="radar-file-copy"):
-                    html.Strong("{{ item.name }}")
-                    html.Span("{{ item.status }} / {{ item.detail }}")
-                vuetify.VBtn(
-                    icon="mdi-close",
-                    title="Remove CIF",
-                    size="x-small",
-                    variant="text",
-                    color="#7c2d2d",
-                    click=f"trigger('{self.remove_trigger}', [item.path, item.name])",
-                )
+            with vuetify.VExpansionPanels(variant="accordion", v_show=f"{self.rows_model}.length > 0", classes="radar-source-review"):
+                with vuetify.VExpansionPanel(title=(f"'Review selected sources (' + {self.rows_model}.length + ')'",)):
+                    with vuetify.VExpansionPanelText():
+                        with html.Div(v_for=f"item in {self.rows_model}.slice(0, 12)", key="item.name + item.digest", classes="radar-cif-file-row"):
+                            with html.Div(classes="radar-file-copy"):
+                                html.Strong("{{ item.name }}")
+                                html.Span("{{ item.source_type }} / {{ item.status }} / {{ item.detail }}")
+                            vuetify.VBtn(
+                                icon="mdi-close",
+                                title="Remove source",
+                                size="x-small",
+                                variant="text",
+                                color="#7c2d2d",
+                                click=f"trigger('{self.remove_trigger}', [item.path, item.name])",
+                            )
+                        html.P(
+                            f"{{{{ {self.rows_model}.length > 12 ? '+' + ({self.rows_model}.length - 12) + ' more sources selected' : '' }}}}",
+                            v_show=f"{self.rows_model}.length > 12",
+                            classes="radar-field-note",
+                        )
 
 
 __all__ = [
     "NamedFileUpload",
     "NamedMultiCifUpload",
     "display_filename",
+    "build_cif_source_archive",
+    "inspect_cif_archive",
     "inspect_cif_upload",
     "safe_client_filename",
     "store_browser_upload",
+    "unpack_browser_file_batch",
 ]

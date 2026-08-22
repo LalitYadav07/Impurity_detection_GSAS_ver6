@@ -42,12 +42,12 @@ from .models import (
 )
 from .powgen_controller import PowgenExperimentSettings, PowgenWatchController
 from .results import build_result_view, figure_for_payload, load_plot_with_fallback, read_plot_payload, read_table
-from .uploads import NamedFileUpload, NamedMultiCifUpload
+from .uploads import NamedFileUpload, NamedMultiCifUpload, build_cif_source_archive
 
 
 _SUBMISSION_FIELDS = (
     "analysis_mode", "radiation", "instrument_mode", "input_source", "instrument_source", "data_path", "instrument_path",
-    "main_cif_path", "database_archive_path", "main_cif_source", "database_source", "event_file_path",
+    "main_cif_path", "database_archive_path", "main_cif_source", "database_source", "library_archive_source", "event_file_path",
     "use_builtin_cuka", "ipts_instrument", "ipts", "run_number", "bank", "sample_elements",
     "environment_elements", "run_name", "fit_start", "fit_end", "ignore_regions", "reference_masks_enabled",
     "reference_mask_presets", "reference_window_mode", "include_cu_kbeta", "background_mode", "background_type",
@@ -148,6 +148,7 @@ class RadarPdNovaApp(ThemedApp):
         state.config_import_path = ""
         state.main_cif_source = "none"
         state.database_source = "builtin"
+        state.library_archive_source = "computer"
         state.event_file_path = ""
         state.use_builtin_cuka = False
         state.ipts_instrument = ""
@@ -391,8 +392,13 @@ class RadarPdNovaApp(ThemedApp):
         ]
         state.database_source_options = [
             {"title": "Built-in MP/COD catalog", "value": "builtin"},
-            {"title": "Candidate-library ZIP from computer", "value": "upload"},
-            {"title": "Library archive from Galaxy History", "value": "galaxy"},
+            {"title": "Create a mini-library from my CIFs", "value": "custom_mini"},
+            {"title": "Add my CIFs to the built-in MP/COD catalog", "value": "custom_augmented"},
+            {"title": "Use an existing RADAR-PD library archive", "value": "archive"},
+        ]
+        state.library_archive_source_options = [
+            {"title": "Upload archive from this computer", "value": "computer"},
+            {"title": "Choose archive from Galaxy History", "value": "galaxy"},
         ]
 
     def create_ui(self) -> None:
@@ -974,122 +980,118 @@ class RadarPdNovaApp(ThemedApp):
                 2,
                 "Candidate Library",
                 "library",
-                "database_source === 'builtin' || (database_source === 'upload' && !!database_archive_path) || (database_source === 'galaxy' && !!history_database_id)",
+                "database_source === 'builtin' || (database_source === 'archive' && ((library_archive_source === 'computer' && !!database_archive_path) || (library_archive_source === 'galaxy' && !!history_database_id)))",
             ):
                 vuetify.VSelect(
-                    label="Candidate library",
+                    label="Which candidate library should RADAR-PD search?",
                     v_model=("database_source",),
                     items=("database_source_options",),
                     item_title="title",
                     item_value="value",
                     density="compact",
                     variant="outlined",
+                    hint="Choose the scientific search scope first. CIF and ZIP uploads are equivalent ways to supply custom structures.",
+                    persistent_hint=True,
                 )
-                with html.Div(v_show="database_source === 'upload'", key="'radar-library-upload-panel'"):
-                    NamedFileUpload(
-                        "database_archive_path",
-                        label="Candidate-library ZIP",
-                        help_text="A reusable RADAR-PD CIF library archive (.zip)",
-                        extensions=[".zip"],
-                        optional=True,
-                        key="radar-database-upload",
+                with html.Div(v_show="database_source === 'archive'", key="'radar-library-archive-panel'", classes="radar-library-panel"):
+                    vuetify.VSelect(
+                        label="Where is the reusable library archive?",
+                        v_model=("library_archive_source",),
+                        items=("library_archive_source_options",),
+                        item_title="title",
+                        item_value="value",
+                        density="compact",
+                        variant="outlined",
                     )
-                vuetify.VSelect(
-                    v_show="database_source === 'galaxy'",
-                    label="Galaxy library archive",
-                    v_model=("history_database_id",),
-                    items=("history_archive_datasets",),
-                    item_title="display_name",
-                    item_value="id",
-                    density="compact",
-                    variant="outlined",
-                    no_data_text="No library archives are in this history",
-                )
-                with vuetify.VExpansionPanels(variant="accordion", classes="mt-2"):
-                    with vuetify.VExpansionPanel(title="Create a custom library from CIFs"):
-                        with vuetify.VExpansionPanelText():
-                            html.P(
-                                "Add CIFs from this computer or reuse CIFs already saved in Galaxy. "
-                                "RADAR-PD validates the selection, builds the library in Galaxy, and selects it automatically.",
-                                classes="radar-field-note",
-                            )
-                            vuetify.VTextField(
-                                label="Library name",
-                                v_model=("library_builder_name",),
-                                density="compact",
-                                variant="outlined",
-                                hint="A short scientific name, for example Y_Fe_Si_candidate_phases.",
-                                persistent_hint=True,
-                            )
-                            NamedMultiCifUpload(
-                                "library_builder_local_paths",
-                                "library_builder_file_rows",
-                            )
-                            html.Div("Or reuse structures already in this Galaxy History", classes="radar-inline-divider")
-                            vuetify.VSelect(
-                                label="Previously uploaded CIFs (optional)",
-                                v_model=("library_builder_cif_ids",),
-                                items=("history_cif_datasets",),
-                                item_title="display_name",
-                                item_value="id",
-                                multiple=True,
-                                chips=True,
-                                closable_chips=True,
-                                density="compact",
-                                variant="outlined",
-                            )
-                            vuetify.VSelect(
-                                label="How should these structures be searched?",
-                                v_model=("library_builder_mode",),
-                                items=("[{title:'Search only these CIFs',value:'mini'},{title:'Add these CIFs to the built-in MP/COD catalog',value:'augmented'}]",),
-                                item_title="title",
-                                item_value="value",
-                                density="compact",
-                                variant="outlined",
-                                hint="The compact option is best for a controlled candidate set; augmentation retains the full built-in catalog.",
-                                persistent_hint=True,
-                            )
-                            with html.Div(classes="radar-library-build-status", v_show="library_builder_status !== 'idle' || library_builder_file_rows.length > 0"):
-                                html.Strong(
-                                    "{{ library_builder_status === 'idle' "
-                                    "? (library_builder_local_paths.length + library_builder_cif_ids.length) "
-                                    "+ ' CIF structure(s) ready to build.' "
-                                    ": library_builder_message }}"
-                                )
-                                vuetify.VProgressLinear(
-                                    model_value=("library_builder_progress",),
-                                    color="#15543c",
-                                    height=6,
-                                    rounded=True,
-                                    classes="mt-2",
-                                )
-                                html.Span(
-                                    "{{ library_builder_built_count }} usable / {{ library_builder_skipped_count }} skipped",
-                                    v_show="library_builder_status === 'ready' || library_builder_status === 'partial'",
-                                )
-                                with html.Div(
-                                    v_for="failure in library_builder_failure_rows",
-                                    key="failure.name + failure.reason",
-                                    classes="radar-library-failure-row",
-                                ):
-                                    html.Strong("{{ failure.name }}")
-                                    html.Span("{{ failure.reason }}")
-                            vuetify.VBtn(
-                                text=("library_builder_active ? 'Building library…' : 'Build and use this library'",),
-                                click=self.build_candidate_library,
-                                disabled=("library_builder_active || (!library_builder_cif_ids.length && !library_builder_local_paths.length) || !library_builder_name.trim()",),
-                                loading=("library_builder_active",),
-                                prepend_icon="mdi-bookshelf",
-                                color="#15543c",
-                                variant="flat",
-                                block=True,
-                            )
-                            html.A(
-                                "Open the advanced Galaxy library utility",
-                                href="/?tool_id=neutrons_radar_pd_library_builder_prototype&version=latest",
-                                target="_blank",
-                                classes="radar-secondary-link mt-2",
-                            )
+                    with html.Div(v_show="library_archive_source === 'computer'"):
+                        NamedFileUpload(
+                            "database_archive_path",
+                            label="RADAR-PD library archive",
+                            help_text="A library previously produced by the RADAR-PD library builder (.zip)",
+                            extensions=[".zip"],
+                            optional=True,
+                            key="radar-database-upload",
+                        )
+                    vuetify.VSelect(
+                        v_show="library_archive_source === 'galaxy'",
+                        label="Galaxy library archive",
+                        v_model=("history_database_id",),
+                        items=("history_archive_datasets",),
+                        item_title="display_name",
+                        item_value="id",
+                        density="compact",
+                        variant="outlined",
+                        no_data_text="No library archives are in this history",
+                    )
+                with html.Div(
+                    v_show="database_source === 'custom_mini' || database_source === 'custom_augmented'",
+                    key="'radar-library-builder-panel'",
+                    classes="radar-library-panel",
+                ):
+                    with html.Div(classes="radar-library-scope-callout"):
+                        html.Strong("{{ database_source === 'custom_augmented' ? 'Built-in MP/COD + my structures' : 'Only my structures' }}")
+                        html.Span(
+                            "{{ database_source === 'custom_augmented' "
+                            "? 'Your CIFs will augment the full built-in catalog.' "
+                            ": 'RADAR-PD will search only the compact library built from your CIFs.' }}"
+                        )
+                    vuetify.VTextField(
+                        label="Library name",
+                        v_model=("library_builder_name",),
+                        density="compact",
+                        variant="outlined",
+                        hint="A short scientific name, for example Y_Fe_Si_candidate_phases.",
+                        persistent_hint=True,
+                    )
+                    NamedMultiCifUpload("library_builder_local_paths", "library_builder_file_rows")
+                    html.Div("Optional: add CIF datasets already saved in Galaxy", classes="radar-inline-divider")
+                    vuetify.VSelect(
+                        label="CIFs from Galaxy History",
+                        v_model=("library_builder_cif_ids",),
+                        items=("history_cif_datasets",),
+                        item_title="display_name",
+                        item_value="id",
+                        multiple=True,
+                        chips=True,
+                        closable_chips=True,
+                        density="compact",
+                        variant="outlined",
+                    )
+                    with html.Div(classes="radar-library-build-status", v_show="library_builder_status !== 'idle' || library_builder_file_rows.length > 0"):
+                        html.Strong(
+                            "{{ library_builder_status === 'idle' "
+                            "? library_builder_file_rows.filter(item => item.status === 'Ready').reduce((sum,item) => sum + (item.cif_count || 0), 0) "
+                            "+ library_builder_cif_ids.length + ' structure source(s) ready to build.' "
+                            ": library_builder_message }}"
+                        )
+                        vuetify.VProgressLinear(model_value=("library_builder_progress",), color="#15543c", height=6, rounded=True, classes="mt-2")
+                        html.Span(
+                            "{{ library_builder_built_count }} usable / {{ library_builder_skipped_count }} skipped",
+                            v_show="library_builder_status === 'ready' || library_builder_status === 'partial'",
+                        )
+                        with html.Div(
+                            v_for="failure in library_builder_failure_rows.slice(0, 8)",
+                            key="failure.name + failure.reason",
+                            classes="radar-library-failure-row",
+                        ):
+                            html.Strong("{{ failure.name }}")
+                            html.Span("{{ failure.reason }}")
+                    vuetify.VBtn(
+                        text=("library_builder_active ? 'Building library...' : 'Build and use this library'",),
+                        click=self.build_candidate_library,
+                        disabled=("library_builder_active || (!library_builder_cif_ids.length && !library_builder_local_paths.length) || !library_builder_name.trim()",),
+                        loading=("library_builder_active",),
+                        prepend_icon="mdi-bookshelf",
+                        color="#15543c",
+                        variant="flat",
+                        block=True,
+                    )
+                    html.A(
+                        "Open the standalone Galaxy library utility",
+                        href="/?tool_id=neutrons_radar_pd_library_builder_prototype&version=latest",
+                        target="_blank",
+                        classes="radar-secondary-link mt-2",
+                    )
             instrument_ready = "((radiation === 'xray' && use_builtin_cuka) || (instrument_source === 'upload' && !!instrument_path) || (instrument_source === 'galaxy' && !!history_instrument_id) || (instrument_source === 'galaxy_remote' && !!remote_instrument_uri) || (instrument_source === 'ipts' && !!facility_instrument_path))"
             data_ready = f"((input_source === 'upload' && !!data_path) || (input_source === 'galaxy' && !!history_data_id) || (input_source === 'galaxy_remote' && !!remote_data_uri) || (input_source === 'ipts_browser' && !!facility_data_path)) && {instrument_ready} || (input_source === 'ipts_event' && !!event_file_path && !!bank) || (input_source === 'ipts_manual' && !!ipts_instrument && !!ipts && !!run_number && !!bank)"
             with self._setup_section(3, "Data Collection", "data", data_ready):
@@ -1645,7 +1647,7 @@ class RadarPdNovaApp(ThemedApp):
                             ("Minimum Rwp improvement", "full_rwp_improvement_threshold"),
                         ):
                             vuetify.VTextField(label=label, v_model=(model,), type="number", min=0, density="compact", variant="outlined")
-            ready_expression = f"connection_ok && !!sample_elements && ({data_ready}) && (database_source === 'builtin' || (database_source === 'upload' && !!database_archive_path) || (database_source === 'galaxy' && !!history_database_id))"
+            ready_expression = f"connection_ok && !!sample_elements && ({data_ready}) && (database_source === 'builtin' || (database_source === 'archive' && ((library_archive_source === 'computer' && !!database_archive_path) || (library_archive_source === 'galaxy' && !!history_database_id))))"
             with self._setup_section(11, "Review Run Plan", "review", ready_expression):
                 vuetify.VTextField(label="Run name", v_model=("run_name",), density="compact", variant="outlined", placeholder="Generated automatically if blank")
                 with html.Div(classes="radar-checklist"):
@@ -1654,7 +1656,7 @@ class RadarPdNovaApp(ThemedApp):
                         ("Measurement selected", "!!radiation && !!instrument_mode"),
                         ("Data and instrument ready", data_ready),
                         ("Sample chemistry entered", "!!sample_elements"),
-                        ("Candidate library ready", "database_source === 'builtin' || !!database_archive_path || !!history_database_id"),
+                        ("Candidate library ready", "database_source === 'builtin' || (database_source === 'archive' && (!!database_archive_path || !!history_database_id))"),
                     ):
                         with html.Div(classes="radar-check-row"):
                             vuetify.VIcon(icon=(f"{expression} ? 'mdi-check-circle' : 'mdi-alert-circle-outline'",), color=(f"{expression} ? '#1f6b4b' : '#a66a00'",), size="small")
@@ -2707,8 +2709,16 @@ class RadarPdNovaApp(ThemedApp):
         main_cif_remote_uri = (
             state.remote_main_cif_uri or None if state.main_cif_source == "galaxy_remote" else None
         )
-        database_archive_path = state.database_archive_path or None if state.database_source == "upload" else None
-        database_dataset_id = state.history_database_id or None if state.database_source == "galaxy" else None
+        database_archive_path = (
+            state.database_archive_path or None
+            if state.database_source == "archive" and state.library_archive_source == "computer"
+            else None
+        )
+        database_dataset_id = (
+            state.history_database_id or None
+            if state.database_source == "archive" and state.library_archive_source == "galaxy"
+            else None
+        )
         uses_facility_scope = (
             bool(state.use_facility_workspace)
             or source == InputSource.IPTS_BROWSER
@@ -3482,7 +3492,8 @@ class RadarPdNovaApp(ThemedApp):
             if selection.get("main_cif_dataset_id"):
                 state.main_cif_source = "galaxy"
             if selection.get("database_dataset_id"):
-                state.database_source = "galaxy"
+                state.database_source = "archive"
+                state.library_archive_source = "galaxy"
             state.run_name = ""
             state.notice = f"Loaded the scientific configuration from {record.name}. Choose or replace any inputs, then submit a new run."
             state.active_page = "setup"
@@ -3545,6 +3556,7 @@ class RadarPdNovaApp(ThemedApp):
         selection = selection or {}
         state.main_cif_source = "none"
         state.database_source = "builtin"
+        state.library_archive_source = "computer"
         state.use_builtin_cuka = bool(selection.get("use_builtin_cuka", False)) if config.radiation.value == "xray" else False
         raw_source = selection.get("source") or state.input_source
         state.input_source = raw_source.value if hasattr(raw_source, "value") else str(raw_source)
@@ -3637,10 +3649,12 @@ class RadarPdNovaApp(ThemedApp):
             state.main_cif_source = "upload"
             state.main_cif_path = str(selection["main_cif_path"])
         if selection.get("database_dataset_id"):
-            state.database_source = "galaxy"
+            state.database_source = "archive"
+            state.library_archive_source = "galaxy"
             state.history_database_id = str(selection["database_dataset_id"])
         if selection.get("database_archive_path"):
-            state.database_source = "upload"
+            state.database_source = "archive"
+            state.library_archive_source = "computer"
             state.database_archive_path = str(selection["database_archive_path"])
         state.run_name = ""
 
@@ -4082,7 +4096,8 @@ class RadarPdNovaApp(ThemedApp):
     async def _utility_completed(self, action: UtilityActionRecord) -> None:
         state = self.server.state
         if action.tool_id == LIBRARY_BUILDER_TOOL_ID and action.outputs.get("library_archive"):
-            state.database_source = "galaxy"
+            state.database_source = "archive"
+            state.library_archive_source = "galaxy"
             state.history_database_id = action.outputs["library_archive"]
             manifest: dict[str, Any] = {}
             manifest_id = action.outputs.get("library_manifest")
@@ -4093,9 +4108,9 @@ class RadarPdNovaApp(ThemedApp):
                     manifest = {}
             built = int(manifest.get("phase_count") or manifest.get("n_phases") or 0)
             failures = list(manifest.get("failures") or [])
-            state.library_builder_built_count = built
-            state.library_builder_skipped_count = len(failures)
-            state.library_builder_failure_rows = [
+            preflight_failures = list(state.library_builder_failure_rows or [])
+            preflight_skipped = int(state.library_builder_skipped_count or 0)
+            builder_failure_rows = [
                 {
                     "name": str(item.get("source_name") or item.get("id") or "CIF"),
                     "reason": str(item.get("error") or "Could not be added"),
@@ -4103,11 +4118,15 @@ class RadarPdNovaApp(ThemedApp):
                 for item in failures
                 if isinstance(item, dict)
             ]
+            state.library_builder_built_count = built
+            total_skipped = preflight_skipped + len(failures)
+            state.library_builder_skipped_count = total_skipped
+            state.library_builder_failure_rows = [*preflight_failures, *builder_failure_rows][:8]
             state.library_builder_progress = 100
-            state.library_builder_status = "partial" if failures else "ready"
-            if failures:
+            state.library_builder_status = "partial" if total_skipped else "ready"
+            if total_skipped:
                 state.library_builder_message = (
-                    f"Library ready with {built} usable phase(s); {len(failures)} CIF(s) were skipped. "
+                    f"Library ready with {built} usable phase(s); {total_skipped} source item(s) were skipped. "
                     "Open the build log for details."
                 )
             else:
@@ -4181,6 +4200,8 @@ class RadarPdNovaApp(ThemedApp):
         if not library_name:
             state.error_message = "Enter a library name before building."
             return
+        library_mode = "augmented" if state.database_source == "custom_augmented" else "mini"
+        state.library_builder_mode = library_mode
         state.library_builder_active = True
         state.library_builder_status = "uploading"
         state.library_builder_progress = 5
@@ -4192,31 +4213,60 @@ class RadarPdNovaApp(ThemedApp):
 
         async def build() -> None:
             try:
-                uploaded_ids: list[str] = []
-                total_uploads = len(local_paths)
-                for index, path in enumerate(local_paths, start=1):
-                    state.library_builder_message = f"Uploading CIF {index} of {total_uploads}: {Path(path).name}"
-                    state.library_builder_progress = 5 + int(25 * index / max(1, total_uploads))
+                source_inputs: dict[str, Any]
+                archive_id = ""
+                collection_id = ""
+                if local_paths:
+                    state.library_builder_message = "Validating and deduplicating selected CIF and ZIP sources..."
+                    state.library_builder_progress = 12
                     state.flush()
-                    _, dataset_id = await asyncio.to_thread(
-                        self.service._upload_one,
-                        f"library_cif_{index}",
-                        path,
-                        f"candidate CIF | {Path(path).name}",
+                    bundle_path, bundle_stats = await asyncio.to_thread(
+                        build_cif_source_archive,
+                        local_paths,
+                        library_name,
                     )
-                    uploaded_ids.append(dataset_id)
-                all_ids = list(dict.fromkeys([*cif_ids, *uploaded_ids]))
+                    state.library_builder_skipped_count = int(bundle_stats.get("skipped_count") or 0)
+                    state.library_builder_failure_rows = [
+                        {"name": "Source preflight", "reason": str(reason)}
+                        for reason in list(bundle_stats.get("failures") or [])[:8]
+                    ]
+                    state.library_builder_message = (
+                        f"Uploading one validated bundle containing {int(bundle_stats.get('cif_count') or 0):,} unique CIF(s)..."
+                    )
+                    state.library_builder_progress = 24
+                    state.flush()
+                    _, archive_id = await asyncio.to_thread(
+                        self.service._upload_one,
+                        "library_cif_bundle",
+                        str(bundle_path),
+                        f"RADAR-PD CIF source bundle | {library_name}",
+                    )
+                if cif_ids:
+                    collection_id = await asyncio.to_thread(
+                        self.service.create_dataset_collection,
+                        f"RADAR-PD History CIF input | {library_name} | {datetime.now().strftime('%Y%m%d_%H%M%S')}",
+                        list(dict.fromkeys(cif_ids)),
+                    )
+                if archive_id and collection_id:
+                    source_inputs = {
+                        "cif_source|source_kind": "archive_and_collection",
+                        "cif_source|cif_archive": {"dataset_id": archive_id},
+                        "cif_source|cif_collection": {"collection_id": collection_id},
+                    }
+                elif archive_id:
+                    source_inputs = {
+                        "cif_source|source_kind": "archive",
+                        "cif_source|cif_archive": {"dataset_id": archive_id},
+                    }
+                else:
+                    source_inputs = {
+                        "cif_source|source_kind": "collection",
+                        "cif_source|cif_collection": {"collection_id": collection_id},
+                    }
                 state.library_builder_status = "building"
                 state.library_builder_progress = 35
-                state.library_builder_message = (
-                    f"Building {library_name} from {len(all_ids)} selected CIF dataset(s)…"
-                )
+                state.library_builder_message = f"Building {library_name} in Galaxy..."
                 state.flush()
-                collection_id = await asyncio.to_thread(
-                    self.service.create_dataset_collection,
-                    f"RADAR-PD CIF input | {library_name} | {datetime.now().strftime('%Y%m%d_%H%M%S')}",
-                    all_ids,
-                )
             except Exception as exc:
                 state.library_builder_active = False
                 state.library_builder_status = "error"
@@ -4228,9 +4278,8 @@ class RadarPdNovaApp(ThemedApp):
                 tool_id=LIBRARY_BUILDER_TOOL_ID,
                 name=f"Build custom library: {library_name}",
                 inputs={
-                    "cif_source|source_kind": "collection",
-                    "cif_source|cif_collection": {"collection_id": collection_id},
-                    "library_mode": str(state.library_builder_mode or "mini"),
+                    **source_inputs,
+                    "library_mode": library_mode,
                     "radiation": str(state.radiation or "neutron"),
                     "overwrite": "",
                 },
@@ -4465,9 +4514,22 @@ class RadarPdNovaApp(ThemedApp):
         .radar-upload-filename.is-ready { color: var(--radar-brand-600); font-weight: 720; }
         .radar-upload-actions { display: flex; align-items: center; gap: 2px; }
         .radar-multi-upload { display: grid; gap: 8px; margin: 4px 0 12px; }
+        .radar-library-panel { display: grid; gap: 8px; margin-top: 10px; }
+        .radar-library-scope-callout, .radar-library-source-summary {
+          display: grid; gap: 3px; padding: 10px 11px; border: 1px solid var(--radar-line); border-radius: 7px; background: var(--radar-brand-050);
+        }
+        .radar-library-scope-callout strong, .radar-library-source-summary strong { color: var(--radar-brand-900); font-size: 12px; }
+        .radar-library-scope-callout span, .radar-library-source-summary span { color: var(--radar-muted); font-size: 11px; line-height: 1.4; }
+        .radar-library-source-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+        .radar-library-source-card { display: grid; align-content: start; gap: 6px; padding: 10px; border: 1px solid var(--radar-line); border-radius: 7px; background: #fff; }
+        .radar-library-source-card strong { color: var(--radar-brand-900); font-size: 12px; }
+        .radar-library-source-card span { min-height: 31px; color: var(--radar-muted); font-size: 11px; line-height: 1.35; }
+        .radar-source-review .v-expansion-panel-title { min-height: 38px !important; font-size: 12px; }
+        .radar-source-review .v-expansion-panel-text__wrapper { display: grid; gap: 6px; padding: 7px !important; }
         .radar-cif-file-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px; border: 1px solid var(--radar-line); border-radius: 6px; background: #fff; }
-        .radar-cif-file-row .radar-file-copy strong { font-size: 12px; }
-        .radar-cif-file-row .radar-file-copy span { color: var(--radar-muted); font-size: 11px; }
+        .radar-cif-file-row .radar-file-copy { min-width: 0; }
+        .radar-cif-file-row .radar-file-copy strong { display: block; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+        .radar-cif-file-row .radar-file-copy span { display: block; color: var(--radar-muted); font-size: 11px; }
         .radar-inline-divider { color: var(--radar-muted); font-size: 11px; font-weight: 700; margin: 10px 0 6px; text-transform: uppercase; }
         .radar-library-build-status { padding: 10px 12px; margin: 8px 0 10px; border: 1px solid var(--radar-line); border-radius: 6px; background: var(--radar-brand-050); color: var(--radar-ink); font-size: 12px; }
         .radar-library-build-status span { display: block; color: var(--radar-muted); margin-top: 6px; }
@@ -4584,6 +4646,7 @@ class RadarPdNovaApp(ThemedApp):
           .radar-empty-grid { grid-template-columns: 1fr; }
         }
         @media (max-width: 700px) {
+          .radar-library-source-grid { grid-template-columns: 1fr; }
           .radar-context-header { padding: 8px 10px; }
           .radar-product-subtitle, .radar-run-chip { display: none; }
           .radar-workspace-inner { padding: 15px 10px 38px; }
