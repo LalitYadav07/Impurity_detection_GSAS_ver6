@@ -573,6 +573,45 @@ def _stage_from_log(line: str, mode: str) -> tuple[str, str] | None:
     return None
 
 
+def _finalize_successful_stages(state: Mapping[str, Any], mode: str) -> dict[str, Any]:
+    """Close every expected stage after the pipeline exits successfully.
+
+    Log parsing is intentionally best-effort and may not observe a unique phrase
+    for every transition. A zero pipeline exit code is the authoritative signal
+    that all required stages finished, so portable state must not retain stale
+    ``running`` labels for Galaxy or NOVA to display.
+    """
+
+    stage_names = (
+        (
+            "input_preparation",
+            "coarse_search",
+            "lattice_nudge",
+            "pattern_scoring",
+            "final_refinement",
+            "report",
+        )
+        if mode == "rapid"
+        else (
+            "main_phase",
+            "candidate_screening",
+            "lattice_nudge",
+            "refinement",
+            "report",
+        )
+    )
+    finalized = json.loads(json.dumps(state, default=str))
+    stages = finalized.setdefault("stages", {})
+    completed_at = utc_now()
+    for stage_name in stage_names:
+        block = stages.setdefault(stage_name, {})
+        block["status"] = "complete"
+        block.setdefault("message", "Stage completed")
+        block["updated_utc"] = completed_at
+    finalized["updated_utc"] = completed_at
+    return finalized
+
+
 def command_analyze(args: argparse.Namespace) -> int:
     data = Path(args.data).resolve()
     main_cif = Path(args.main_cif).resolve() if args.main_cif else None
@@ -743,6 +782,8 @@ def command_analyze(args: argparse.Namespace) -> int:
         errors=errors,
     )
     final_status = "failed" if return_code else "complete"
+    if not return_code:
+        state = _finalize_successful_stages(state, mode)
     state = update_state(
         state,
         status=final_status,

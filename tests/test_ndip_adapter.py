@@ -19,7 +19,12 @@ if str(SCRIPTS) not in sys.path:
 from ndip_contracts import CONFIG_SCHEMA, GPX_INDEX_SCHEMA, RESULT_SCHEMA, atomic_write_json  # noqa: E402
 from ndip_gpx_handoff import main as gpx_handoff_main  # noqa: E402
 from ndip_outputs import collect_outputs  # noqa: E402
-from ndip_runner import _extract_db_pack, _instrument_mode_from_instprm, main  # noqa: E402
+from ndip_runner import (  # noqa: E402
+    _extract_db_pack,
+    _finalize_successful_stages,
+    _instrument_mode_from_instprm,
+    main,
+)
 
 
 def test_atomic_json_is_readable_by_galaxy_postprocessing(tmp_path: Path) -> None:
@@ -29,6 +34,42 @@ def test_atomic_json_is_readable_by_galaxy_postprocessing(tmp_path: Path) -> Non
         mode = stat.S_IMODE(output.stat().st_mode)
         assert mode & stat.S_IRGRP
         assert mode & stat.S_IROTH
+
+
+def test_successful_full_run_finalizes_all_expected_stages() -> None:
+    state = {
+        "status": "running",
+        "stages": {
+            "candidate_screening": {"status": "running", "message": "Screening"},
+            "refinement": {"status": "running", "message": "Refining"},
+        },
+    }
+
+    finalized = _finalize_successful_stages(state, "full")
+
+    assert state["stages"]["candidate_screening"]["status"] == "running"
+    assert set(finalized["stages"]) == {
+        "main_phase",
+        "candidate_screening",
+        "lattice_nudge",
+        "refinement",
+        "report",
+    }
+    assert all(stage["status"] == "complete" for stage in finalized["stages"].values())
+
+
+def test_successful_rapid_run_finalizes_all_expected_stages() -> None:
+    finalized = _finalize_successful_stages({"stages": {}}, "rapid")
+
+    assert set(finalized["stages"]) == {
+        "input_preparation",
+        "coarse_search",
+        "lattice_nudge",
+        "pattern_scoring",
+        "final_refinement",
+        "report",
+    }
+    assert all(stage["status"] == "complete" for stage in finalized["stages"].values())
 
 
 def test_configure_and_direct_xray_dry_run(tmp_path: Path) -> None:
