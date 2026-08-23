@@ -10,6 +10,7 @@ from radar_pd_nova.results import (
     discover_tables,
     experiment_fit_diagnostics,
     experiment_fit_quality_figure,
+    experiment_axis_options,
     experiment_phase_fraction_figure,
     experiment_phase_heatmap_figure,
     experiment_scan_summary,
@@ -74,7 +75,36 @@ def test_experiment_figures_preserve_missing_phase_as_gap() -> None:
     quality_figure = experiment_fit_quality_figure(scans)
 
     assert list(phase_figure.data[0].y) in ([100.0, None], [None, 100.0])
-    assert list(quality_figure.data[0].x) == [10, 11]
+    assert list(quality_figure.data[0].x) == ["10", "11"]
+    assert quality_figure.layout.xaxis.type == "category"
+
+
+def test_experiment_figures_use_metadata_axis_and_limit_default_phase_traces() -> None:
+    scans = [
+        {
+            "run_number": 10 + scan_index,
+            "rwp": 10.0 + scan_index,
+            "metadata": {
+                "start_time": f"2026-08-21T0{scan_index}:00:00-04:00",
+                "temperature": {"value": 300.0 + 50 * scan_index, "unit": "K"},
+            },
+            "phases": [
+                {"label": f"Phase {phase_index} (SG 1)", "weight_percent": 20.0}
+                for phase_index in range(7)
+            ],
+        }
+        for scan_index in range(2)
+    ]
+
+    options = experiment_axis_options(scans)
+    phase_figure = experiment_phase_fraction_figure(scans, x_key="temperature")
+    quality_figure = experiment_fit_quality_figure(scans, x_key="start_time")
+
+    assert {row["value"] for row in options} >= {"run_number", "start_time", "temperature"}
+    assert len(phase_figure.data) == 5
+    assert list(phase_figure.data[0].x) == [300.0, 350.0]
+    assert phase_figure.layout.xaxis.title.text == "Sample temperature (K)"
+    assert quality_figure.layout.xaxis.type == "date"
 
 
 def test_experiment_heatmap_preserves_missing_phases_and_orders_by_abundance() -> None:

@@ -118,6 +118,7 @@ class WatchedRun:
     submission_attempts: int = 0
     last_attempt_utc: str | None = None
     next_retry_utc: str | None = None
+    scan_metadata: Mapping[str, Any] = field(default_factory=dict)
     scientific_summary: Mapping[str, Any] = field(default_factory=dict)
 
     @property
@@ -133,6 +134,7 @@ class WatchedRun:
     def as_dict(self) -> dict[str, Any]:
         payload = asdict(self)
         payload["galaxy_result_ids"] = list(self.galaxy_result_ids)
+        payload["scan_metadata"] = dict(self.scan_metadata)
         payload["scientific_summary"] = dict(self.scientific_summary)
         return payload
 
@@ -149,6 +151,11 @@ class WatchedRun:
             submission_attempts=max(0, int(value.get("submission_attempts", 0))),
             last_attempt_utc=(str(value["last_attempt_utc"]) if value.get("last_attempt_utc") else None),
             next_retry_utc=(str(value["next_retry_utc"]) if value.get("next_retry_utc") else None),
+            scan_metadata=(
+                dict(value.get("scan_metadata") or {})
+                if isinstance(value.get("scan_metadata") or {}, Mapping)
+                else {}
+            ),
             scientific_summary=(
                 dict(value.get("scientific_summary") or {})
                 if isinstance(value.get("scientific_summary") or {}, Mapping)

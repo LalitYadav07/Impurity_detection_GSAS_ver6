@@ -857,19 +857,114 @@ def experiment_scan_summary(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def experiment_phase_fraction_figure(scans: list[dict[str, Any]]) -> go.Figure:
-    """Interactive phase-fraction trend with gaps where a phase was not reported."""
+def experiment_phase_labels(scans: list[dict[str, Any]]) -> list[str]:
+    """Rank phase labels for a readable default display without hiding data."""
+
+    statistics: dict[str, dict[str, float]] = {}
+    for scan in scans:
+        for phase in scan.get("phases") or []:
+            if not isinstance(phase, dict):
+                continue
+            label = str(phase.get("label") or "Unknown")
+            weight = float(phase.get("weight_percent") or 0.0)
+            stats = statistics.setdefault(label, {"count": 0.0, "maximum": 0.0, "total": 0.0})
+            stats["count"] += 1.0
+            stats["maximum"] = max(stats["maximum"], weight)
+            stats["total"] += weight
+    return sorted(
+        statistics,
+        key=lambda label: (
+            -statistics[label]["maximum"],
+            -statistics[label]["total"],
+            -statistics[label]["count"],
+            label,
+        ),
+    )
+
+
+def _metadata_metric(scan: dict[str, Any], key: str) -> float | None:
+    metadata = scan.get("metadata") or {}
+    value = metadata.get(key) if isinstance(metadata, dict) else None
+    if not isinstance(value, dict):
+        return None
+    return _as_float(value.get("value"))
+
+
+def experiment_axis_options(scans: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """Return trend axes supported by the metadata available for this experiment."""
+
+    options = [{"title": "Scan number", "value": "run_number"}]
+    if any(str((scan.get("metadata") or {}).get("start_time") or "") for scan in scans):
+        options.append({"title": "Acquisition time", "value": "start_time"})
+    for title, key in (
+        ("Sample temperature (K)", "temperature"),
+        ("Magnetic field (T)", "magnetic_field"),
+        ("Wavelength (A)", "wavelength"),
+        ("Proton charge (C)", "proton_charge"),
+    ):
+        if any(_metadata_metric(scan, key) is not None for scan in scans):
+            options.append({"title": title, "value": key})
+    return options
+
+
+def _experiment_axis(
+    scans: list[dict[str, Any]],
+    x_key: str,
+) -> tuple[list[Any], str, str]:
+    if x_key == "start_time":
+        return (
+            [str((scan.get("metadata") or {}).get("start_time") or "") or None for scan in scans],
+            "Acquisition time",
+            "date",
+        )
+    metric_titles = {
+        "temperature": "Sample temperature (K)",
+        "magnetic_field": "Magnetic field (T)",
+        "wavelength": "Wavelength (A)",
+        "proton_charge": "Proton charge (C)",
+    }
+    if x_key in metric_titles:
+        return ([_metadata_metric(scan, x_key) for scan in scans], metric_titles[x_key], "linear")
+    # Use categorical strings so Plotly never abbreviates 63714 as 63.714k.
+    return ([str(scan.get("run_number") or "-") for scan in scans], "POWGEN scan", "category")
+
+
+def _scan_condition_text(scan: dict[str, Any]) -> str:
+    metadata = scan.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        return ""
+    conditions: list[str] = []
+    for label, key, fallback_unit in (
+        ("T", "temperature", "K"),
+        ("Field", "magnetic_field", "T"),
+        ("Wavelength", "wavelength", "A"),
+    ):
+        metric = metadata.get(key)
+        if not isinstance(metric, dict) or _as_float(metric.get("value")) is None:
+            continue
+        value = float(metric["value"])
+        unit = str(metric.get("unit") or fallback_unit)
+        conditions.append(f"{label}: {value:g} {unit}")
+    return " | ".join(conditions)
+
+
+def experiment_phase_fraction_figure(
+    scans: list[dict[str, Any]],
+    *,
+    selected_labels: list[str] | None = None,
+    x_key: str = "run_number",
+) -> go.Figure:
+    """Interactive phase-fraction trend with a deliberately bounded trace set."""
 
     figure = go.Figure()
     ordered = sorted(scans, key=lambda row: int(row.get("run_number") or 0))
-    labels = sorted(
-        {
-            str(phase.get("label") or "Unknown")
-            for scan in ordered
-            for phase in (scan.get("phases") or [])
-            if isinstance(phase, dict)
-        }
-    )
+    ranked_labels = experiment_phase_labels(ordered)
+    labels = [label for label in (selected_labels or ranked_labels[:5]) if label in ranked_labels]
+    x_values, x_title, x_type = _experiment_axis(ordered, x_key)
+    customdata = [
+        [str(scan.get("run_number") or "-"), _scan_condition_text(scan) or "No scan conditions"]
+        for scan in ordered
+    ]
     for label in labels:
         values: list[float | None] = []
         for scan in ordered:
@@ -884,54 +979,44 @@ def experiment_phase_fraction_figure(scans: list[dict[str, Any]]) -> go.Figure:
             values.append(float(match["weight_percent"]) if match is not None else None)
         figure.add_trace(
             go.Scatter(
-                x=[scan.get("run_number") for scan in ordered],
+                x=x_values,
                 y=values,
+                customdata=customdata,
                 mode="lines+markers",
                 name=label,
                 connectgaps=False,
-                hovertemplate="Scan %{x}<br>%{fullData.name}: %{y:.2f} wt%<extra></extra>",
+                hovertemplate=(
+                    "Scan %{customdata[0]}<br>%{fullData.name}: %{y:.2f} wt%"
+                    "<br>%{customdata[1]}<extra></extra>"
+                ),
             )
         )
     figure.update_layout(
-        title="Refined phase fractions across scans",
-        xaxis_title="POWGEN scan number",
+        title=None,
+        xaxis_title=x_title,
         yaxis_title="Weight fraction (wt%)",
         height=430,
-        margin=dict(l=62, r=24, t=62, b=58),
+        margin=dict(l=62, r=24, t=24, b=104),
         hovermode="x unified",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        legend=dict(orientation="h", yanchor="top", y=-0.20, xanchor="left", x=0),
         paper_bgcolor="#ffffff",
         plot_bgcolor="#ffffff",
     )
-    figure.update_xaxes(showgrid=False, linecolor="#cbd5e1", type="linear")
+    figure.update_xaxes(showgrid=False, linecolor="#cbd5e1", type=x_type)
     figure.update_yaxes(gridcolor="#e8eef0", linecolor="#cbd5e1", rangemode="tozero")
     return figure
 
 
-def experiment_phase_heatmap_figure(scans: list[dict[str, Any]]) -> go.Figure:
+def experiment_phase_heatmap_figure(
+    scans: list[dict[str, Any]],
+    *,
+    x_key: str = "run_number",
+) -> go.Figure:
     """Compact scan-by-phase map for experiments with many evolving phases."""
 
     ordered = sorted(scans, key=lambda row: int(row.get("run_number") or 0))
-    labels = sorted(
-        {
-            str(phase.get("label") or "Unknown")
-            for scan in ordered
-            for phase in (scan.get("phases") or [])
-            if isinstance(phase, dict)
-        },
-        key=lambda label: (
-            -max(
-                (
-                    float(phase.get("weight_percent") or 0.0)
-                    for scan in ordered
-                    for phase in (scan.get("phases") or [])
-                    if isinstance(phase, dict) and str(phase.get("label")) == label
-                ),
-                default=0.0,
-            ),
-            label,
-        ),
-    )
+    labels = experiment_phase_labels(ordered)
+    x_values, x_title, x_type = _experiment_axis(ordered, x_key)
     z_values: list[list[float | None]] = []
     hover: list[list[str]] = []
     for label in labels:
@@ -957,7 +1042,7 @@ def experiment_phase_heatmap_figure(scans: list[dict[str, Any]]) -> go.Figure:
 
     figure = go.Figure(
         go.Heatmap(
-            x=[scan.get("run_number") for scan in ordered],
+            x=x_values,
             y=labels,
             z=z_values,
             text=hover,
@@ -975,15 +1060,15 @@ def experiment_phase_heatmap_figure(scans: list[dict[str, Any]]) -> go.Figure:
         )
     )
     figure.update_layout(
-        title="Phase composition map",
-        xaxis_title="POWGEN scan number",
+        title=None,
+        xaxis_title=x_title,
         yaxis_title="",
         height=max(300, min(720, 150 + 34 * max(1, len(labels)))),
-        margin=dict(l=140, r=28, t=58, b=58),
+        margin=dict(l=140, r=28, t=24, b=58),
         paper_bgcolor="#ffffff",
         plot_bgcolor="#ffffff",
     )
-    figure.update_xaxes(showgrid=False, linecolor="#cbd5e1", type="linear")
+    figure.update_xaxes(showgrid=False, linecolor="#cbd5e1", type=x_type)
     figure.update_yaxes(showgrid=False, linecolor="#cbd5e1", autorange="reversed")
     return figure
 
@@ -1024,7 +1109,11 @@ def experiment_fit_diagnostics(scans: list[dict[str, Any]]) -> dict[str, dict[st
     return diagnostics
 
 
-def experiment_fit_quality_figure(scans: list[dict[str, Any]]) -> go.Figure:
+def experiment_fit_quality_figure(
+    scans: list[dict[str, Any]],
+    *,
+    x_key: str = "run_number",
+) -> go.Figure:
     """Interactive Rwp trend for completed scans."""
 
     ordered = sorted(
@@ -1032,22 +1121,31 @@ def experiment_fit_quality_figure(scans: list[dict[str, Any]]) -> go.Figure:
         key=lambda row: int(row.get("run_number") or 0),
     )
     diagnostics = experiment_fit_diagnostics(ordered)
+    x_values, x_title, x_type = _experiment_axis(ordered, x_key)
     colors = [
         diagnostics.get(str(row.get("run_id") or row.get("run_number")), {}).get("color", "#e57c46")
         for row in ordered
     ]
     figure = go.Figure(
         go.Scatter(
-            x=[row.get("run_number") for row in ordered],
+            x=x_values,
             y=[float(row["rwp"]) for row in ordered],
             text=[row.get("hypothesis") or "No phase summary" for row in ordered],
-            customdata=[row.get("elapsed_display") or "-" for row in ordered],
+            customdata=[
+                [
+                    str(row.get("run_number") or "-"),
+                    row.get("elapsed_display") or "-",
+                    _scan_condition_text(row) or "No scan conditions",
+                ]
+                for row in ordered
+            ],
             mode="lines+markers",
             name="Rwp",
             line=dict(color="#15543c", width=2),
             marker=dict(color=colors, size=9, line=dict(color="#ffffff", width=1)),
             hovertemplate=(
-                "Scan %{x}<br>Rwp: %{y:.2f}%<br>%{text}<br>Runtime: %{customdata}<extra></extra>"
+                "Scan %{customdata[0]}<br>Rwp: %{y:.2f}%<br>%{text}"
+                "<br>%{customdata[2]}<br>Runtime: %{customdata[1]}<extra></extra>"
             ),
         )
     )
@@ -1061,16 +1159,16 @@ def experiment_fit_quality_figure(scans: list[dict[str, Any]]) -> go.Figure:
             annotation_position="top left",
         )
     figure.update_layout(
-        title="Refinement fit quality across scans",
-        xaxis_title="POWGEN scan number",
+        title=None,
+        xaxis_title=x_title,
         yaxis_title="Rwp (%) - lower is better",
         height=340,
-        margin=dict(l=62, r=24, t=62, b=58),
+        margin=dict(l=62, r=24, t=24, b=58),
         paper_bgcolor="#ffffff",
         plot_bgcolor="#ffffff",
         showlegend=False,
     )
-    figure.update_xaxes(showgrid=False, linecolor="#cbd5e1", type="linear")
+    figure.update_xaxes(showgrid=False, linecolor="#cbd5e1", type=x_type)
     figure.update_yaxes(gridcolor="#e8eef0", linecolor="#cbd5e1", rangemode="tozero")
     return figure
 

@@ -44,8 +44,10 @@ from .models import (
 from .powgen_controller import PowgenExperimentSettings, PowgenWatchController
 from .results import (
     build_result_view,
+    experiment_axis_options,
     experiment_fit_diagnostics,
     experiment_fit_quality_figure,
+    experiment_phase_labels,
     experiment_phase_fraction_figure,
     experiment_phase_heatmap_figure,
     figure_for_payload,
@@ -398,6 +400,10 @@ class RadarPdNovaApp(ThemedApp):
         state.powgen_selected_quality_label = "Collecting baseline"
         state.powgen_selected_quality_color = "#eef2ef"
         state.powgen_selected_phases = []
+        state.powgen_phase_options = []
+        state.powgen_selected_phase_labels = []
+        state.powgen_x_axis = "run_number"
+        state.powgen_x_axis_options = [{"title": "Scan number", "value": "run_number"}]
         state.powgen_tracked_phase_count = 0
         state.powgen_attention_count = 0
         state.powgen_dashboard_notice = "Completed scans will populate this experiment view."
@@ -1881,6 +1887,28 @@ class RadarPdNovaApp(ThemedApp):
                     with html.Div():
                         html.Div("PHASE EVOLUTION", classes="radar-micro-label")
                         html.H3("Refined phase fractions")
+                with html.Div(classes="radar-experiment-controls"):
+                    vuetify.VSelect(
+                        label="Horizontal axis",
+                        v_model=("powgen_x_axis",),
+                        items=("powgen_x_axis_options",),
+                        density="compact",
+                        variant="outlined",
+                        hide_details=True,
+                        update_modelValue=(self.update_powgen_dashboard_axis, "[$event]"),
+                    )
+                    vuetify.VSelect(
+                        label="Phases shown",
+                        v_model=("powgen_selected_phase_labels",),
+                        items=("powgen_phase_options",),
+                        multiple=True,
+                        chips=True,
+                        closable_chips=True,
+                        density="compact",
+                        variant="outlined",
+                        hide_details=True,
+                        update_modelValue=(self.update_powgen_phase_selection, "[$event]"),
+                    )
                 with html.Div(classes="radar-plot-frame"):
                     self._powgen_phase_widget = plotly.Figure(display_mode_bar=True)
             with html.Section(classes="radar-result-card radar-experiment-quality-card"):
@@ -1903,7 +1931,7 @@ class RadarPdNovaApp(ThemedApp):
                         html.Div("SCAN RECORD", classes="radar-micro-label")
                         html.H3("Completed analyses")
                 vuetify.VDataTable(
-                    headers=("[{title:'Scan',key:'run_number'},{title:'Rwp',key:'rwp_display'},{title:'Trend check',key:'quality_label'},{title:'Dominant refined phases',key:'phase_summary'},{title:'Runtime',key:'elapsed_display'},{title:'Mode',key:'analysis_mode'}]",),
+                    headers=("[{title:'Scan',key:'run_number'},{title:'Conditions',key:'conditions_display'},{title:'Rwp',key:'rwp_display'},{title:'Trend check',key:'quality_label'},{title:'Dominant refined phases',key:'phase_summary'},{title:'Runtime',key:'elapsed_display'},{title:'Mode',key:'analysis_mode'}]",),
                     items=("powgen_scientific_rows",),
                     density="compact",
                     items_per_page=15,
@@ -1926,6 +1954,12 @@ class RadarPdNovaApp(ThemedApp):
                 with html.Div(v_if="powgen_selected_scan.run_id", classes="radar-scan-inspector-summary"):
                     html.Strong("{{ powgen_selected_scan.run_id }}")
                     html.Span("Rwp {{ powgen_selected_scan.rwp_display }} | {{ powgen_selected_scan.elapsed_display }} | {{ powgen_selected_scan.analysis_mode }}")
+                    html.Span("{{ powgen_selected_scan.conditions_display }}")
+                    html.Span("{{ powgen_selected_scan.run_title }}", v_if="powgen_selected_scan.run_title")
+                    html.Span(
+                        "Sample: {{ powgen_selected_scan.sample_display }}",
+                        v_if="powgen_selected_scan.sample_display",
+                    )
                     vuetify.VChip(
                         text=("powgen_selected_quality_label",),
                         color=("powgen_selected_quality_color",),
@@ -3026,6 +3060,7 @@ class RadarPdNovaApp(ThemedApp):
 
         scientific_rows: list[dict[str, Any]] = []
         for run_id, run in controller.state.completed.items():
+            record = controller.records.get(run_id)
             summary = dict(run.scientific_summary or {})
             if not summary:
                 continue
@@ -3054,6 +3089,31 @@ class RadarPdNovaApp(ThemedApp):
             )
             rwp = summary.get("rwp")
             rwp_value = float(rwp) if rwp is not None else None
+            metadata = dict(run.scan_metadata or {})
+
+            def metric_display(key: str, fallback_unit: str, *, digits: int = 3) -> str:
+                metric = metadata.get(key)
+                if not isinstance(metric, dict) or metric.get("value") is None:
+                    return ""
+                value = float(metric["value"])
+                unit = str(metric.get("unit") or fallback_unit)
+                return f"{value:.{digits}g} {unit}".strip()
+
+            temperature_display = metric_display("temperature", "K", digits=6)
+            field_display = metric_display("magnetic_field", "T", digits=4)
+            wavelength_display = metric_display("wavelength", "A", digits=5)
+            conditions = [
+                value
+                for value in (
+                    f"T {temperature_display}" if temperature_display else "",
+                    f"Field {field_display}" if field_display else "",
+                    f"lambda {wavelength_display}" if wavelength_display else "",
+                )
+                if value
+            ]
+            sample_name = str(metadata.get("sample_name") or "").strip()
+            sample_formula = str(metadata.get("sample_formula") or "").strip()
+            sample_display = " | ".join(value for value in (sample_name, sample_formula) if value)
             scientific_rows.append(
                 {
                     "run_id": run_id,
@@ -3070,6 +3130,13 @@ class RadarPdNovaApp(ThemedApp):
                     "elapsed_seconds": elapsed_value,
                     "elapsed_display": elapsed_display,
                     "analysis_mode": str(summary.get("analysis_mode") or "-").title(),
+                    "metadata": metadata,
+                    "conditions_display": " | ".join(conditions) or "Metadata unavailable",
+                    "temperature_display": temperature_display or "-",
+                    "field_display": field_display or "-",
+                    "wavelength_display": wavelength_display or "-",
+                    "run_title": str(metadata.get("run_title") or ""),
+                    "sample_display": sample_display,
                     "warning_count": int(summary.get("warning_count") or 0),
                     "error_count": int(summary.get("error_count") or 0),
                 }
@@ -3082,6 +3149,23 @@ class RadarPdNovaApp(ThemedApp):
             row["quality_color"] = str(diagnostic.get("color") or "#64748b")
 
         state.powgen_scientific_rows = scientific_rows
+        ranked_phase_labels = experiment_phase_labels(scientific_rows)
+        state.powgen_phase_options = [
+            {"title": label, "value": label}
+            for label in ranked_phase_labels
+        ]
+        selected_phase_labels = [
+            str(label)
+            for label in (state.powgen_selected_phase_labels or [])
+            if str(label) in ranked_phase_labels
+        ]
+        if not selected_phase_labels:
+            selected_phase_labels = ranked_phase_labels[:5]
+        state.powgen_selected_phase_labels = selected_phase_labels
+        state.powgen_x_axis_options = experiment_axis_options(scientific_rows)
+        valid_axes = {str(option["value"]) for option in state.powgen_x_axis_options}
+        if str(state.powgen_x_axis or "run_number") not in valid_axes:
+            state.powgen_x_axis = "run_number"
         state.powgen_latest_phases = scientific_rows[0]["phases"] if scientific_rows else []
         state.powgen_latest_run_id = scientific_rows[0]["run_id"] if scientific_rows else "-"
         state.powgen_scan_options = [
@@ -3159,19 +3243,51 @@ class RadarPdNovaApp(ThemedApp):
         ]
         state.powgen_dashboard_notice = (
             f"Showing {len(scientific_rows)} completed scan summaries from {controller.source_directory}. "
-            "Missing points mean that a phase was not reported for that scan, not a forced zero fraction."
+            "Conditions are read from each matching PG3 NeXus file. Missing phase points mean that a phase "
+            "was not reported for that scan, not a forced zero fraction."
             if scientific_rows
             else "Completed scans will populate this experiment view as their normalized Galaxy summaries become available."
         )
         self._update_powgen_dashboard_figures(scientific_rows)
 
     def _update_powgen_dashboard_figures(self, rows: list[dict[str, Any]]) -> None:
+        x_key = str(self.server.state.powgen_x_axis or "run_number")
+        selected_labels = [str(label) for label in (self.server.state.powgen_selected_phase_labels or [])]
         if self._powgen_phase_widget is not None:
-            self._powgen_phase_widget.update(experiment_phase_fraction_figure(rows))
+            self._powgen_phase_widget.update(
+                experiment_phase_fraction_figure(
+                    rows,
+                    selected_labels=selected_labels,
+                    x_key=x_key,
+                )
+            )
         if self._powgen_heatmap_widget is not None:
-            self._powgen_heatmap_widget.update(experiment_phase_heatmap_figure(rows))
+            self._powgen_heatmap_widget.update(experiment_phase_heatmap_figure(rows, x_key=x_key))
         if self._powgen_quality_widget is not None:
-            self._powgen_quality_widget.update(experiment_fit_quality_figure(rows))
+            self._powgen_quality_widget.update(experiment_fit_quality_figure(rows, x_key=x_key))
+
+    def update_powgen_dashboard_axis(self, value: Any = None, **_: Any) -> None:
+        """Redraw experiment trends against scan number or one NeXus condition."""
+
+        selected = str(value or self.server.state.powgen_x_axis or "run_number")
+        valid = {str(option["value"]) for option in (self.server.state.powgen_x_axis_options or [])}
+        self.server.state.powgen_x_axis = selected if selected in valid else "run_number"
+        self._update_powgen_dashboard_figures(list(self.server.state.powgen_scientific_rows or []))
+        self.server.state.flush()
+
+    def update_powgen_phase_selection(self, values: Any = None, **_: Any) -> None:
+        """Keep the line chart readable while retaining every phase in the selector."""
+
+        if isinstance(values, (list, tuple)):
+            requested = [str(value) for value in values]
+        else:
+            requested = [str(value) for value in (self.server.state.powgen_selected_phase_labels or [])]
+        ordered_valid = [str(option["value"]) for option in (self.server.state.powgen_phase_options or [])]
+        valid = set(ordered_valid)
+        selected = [value for value in requested if value in valid]
+        self.server.state.powgen_selected_phase_labels = selected or ordered_valid[:5]
+        self._update_powgen_dashboard_figures(list(self.server.state.powgen_scientific_rows or []))
+        self.server.state.flush()
 
     def select_powgen_scan(self, run_id: Any = None, **_: Any) -> None:
         """Keep the scan inspector synchronized with its experiment row."""
@@ -5014,6 +5130,10 @@ class RadarPdNovaApp(ThemedApp):
         .radar-experiment-phase-card .radar-plot-frame { height: 430px; min-height: 430px; }
         .radar-experiment-quality-card .radar-plot-frame { height: 340px; min-height: 340px; }
         .radar-experiment-heatmap-frame { height: 430px; min-height: 320px; }
+        .radar-experiment-controls { display: grid; grid-template-columns: minmax(180px, .55fr) minmax(320px, 1.45fr); gap: 10px; margin: 2px 0 10px; }
+        .radar-experiment-controls .v-field { background: #fff; }
+        .radar-experiment-controls .v-chip { max-width: 240px; }
+        .radar-experiment-controls .v-chip__content { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .radar-scan-inspector-summary { display: grid; gap: 4px; margin: 12px 0; padding: 10px 12px; border: 1px solid var(--radar-line); border-radius: 7px; background: var(--radar-soft); }
         .radar-scan-inspector-summary strong { color: var(--radar-brand-900); font-size: 14px; }
         .radar-scan-inspector-summary span { color: var(--radar-muted); font-size: 12px; }
@@ -5112,6 +5232,7 @@ class RadarPdNovaApp(ThemedApp):
           .radar-experiment-phase-card, .radar-experiment-quality-card,
           .radar-experiment-heatmap-card, .radar-experiment-table-card,
           .radar-experiment-latest-card, .radar-experiment-queue-card { grid-column: 1; grid-row: auto; }
+          .radar-experiment-controls { grid-template-columns: minmax(0, 1fr); }
           .radar-metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
           .radar-field-pair { grid-template-columns: 1fr; }
           .radar-mode-cards, .radar-file-toolbar { grid-template-columns: 1fr; }

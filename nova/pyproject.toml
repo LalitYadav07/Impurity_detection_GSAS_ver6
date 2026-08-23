@@ -1,6 +1,6 @@
 [project]
 name = "radar-pd-nova"
-version = "0.3.49"
+version = "0.3.50"
 description = "Interactive NDIP/NOVA workspace for RADAR-PD"
 requires-python = ">=3.10,<3.14"
 dependencies = [

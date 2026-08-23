@@ -8,7 +8,7 @@ instrument profile, and submits the same ``AnalysisConfig`` and
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 import threading
 from typing import Any, Iterable, Mapping
@@ -27,6 +27,7 @@ from .powgen_watch import (
     build_submission_plan,
     discover_from_listing,
 )
+from .powgen_metadata import read_powgen_scan_metadata
 from .results import experiment_scan_summary
 
 
@@ -171,6 +172,7 @@ class PowgenWatchController:
             return False
 
         self.state = restored
+        self._hydrate_missing_metadata()
         all_runs = [
             *restored.discovered.values(),
             *restored.submitted.values(),
@@ -209,6 +211,7 @@ class PowgenWatchController:
                 completed_rows,
                 self.state,
             )
+            discovered = self._attach_scan_metadata(discovered)
             known_runs = [
                 *self.state.discovered.values(),
                 *self.state.submitted.values(),
@@ -231,12 +234,47 @@ class PowgenWatchController:
                 (self._last_seen_run_number or 0) - self.settings.late_arrival_window,
             ),
         )
+        discovered = self._attach_scan_metadata(discovered)
         if discovered:
             self._last_seen_run_number = max(
                 self._last_seen_run_number or 0,
                 *(run.run_number for run in discovered),
             )
         return discovered
+
+    def _read_scan_metadata(self, run: WatchedRun) -> dict[str, Any]:
+        """Read optional NeXus conditions without making discovery fragile."""
+
+        try:
+            return read_powgen_scan_metadata(self.settings.ipts, run.run_number)
+        except (OSError, TypeError, ValueError):
+            return {}
+
+    def _attach_scan_metadata(self, runs: Iterable[WatchedRun]) -> list[WatchedRun]:
+        enriched: list[WatchedRun] = []
+        for run in runs:
+            metadata = dict(run.scan_metadata or {}) or self._read_scan_metadata(run)
+            updated = replace(run, scan_metadata=metadata) if metadata else run
+            if run.run_id in self.state.discovered:
+                self.state.discovered[run.run_id] = updated
+            enriched.append(updated)
+        return enriched
+
+    def _hydrate_missing_metadata(self) -> None:
+        """Backfill old checkpoints once when their matching NeXus is readable."""
+
+        for phase in (
+            self.state.discovered,
+            self.state.submitted,
+            self.state.completed,
+            self.state.failed,
+        ):
+            for run_id, run in list(phase.items()):
+                if run.scan_metadata:
+                    continue
+                metadata = self._read_scan_metadata(run)
+                if metadata:
+                    phase[run_id] = replace(run, scan_metadata=metadata)
 
     def _minimal_record(self, run: WatchedRun) -> RunRecord:
         """Rebuild enough state to poll an acknowledged Galaxy job by ID."""
