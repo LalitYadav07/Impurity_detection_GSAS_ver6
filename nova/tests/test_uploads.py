@@ -127,8 +127,10 @@ def test_library_upload_handler_accepts_single_or_multiple_files_and_uses_json_s
     assert "raw.target.value=''" in handler
 
 
-def test_native_file_inputs_register_the_change_event() -> None:
+def test_native_file_inputs_bind_the_change_event_directly() -> None:
     source = Path(__file__).parents[1] / "src" / "radar_pd_nova" / "uploads.py"
     text = source.read_text(encoding="utf-8")
 
-    assert text.count('__events=["change"]') == 2
+    assert text.count("v_on_change=decode_js") == 1
+    assert text.count("v_on_change=decode_archive_js") == 1
+    assert '__events=["change"]' not in text
