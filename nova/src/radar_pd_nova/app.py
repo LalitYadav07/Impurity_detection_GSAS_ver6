@@ -4161,7 +4161,7 @@ class RadarPdNovaApp(ThemedApp):
             return
         payload = {
             "schema": "radar-pd-nova-diagnostics/v1",
-            "nova_version": "0.3.41",
+            "nova_version": "0.3.42",
             "run": {
                 "name": record.name,
                 "mode_submitted": record.mode.value,

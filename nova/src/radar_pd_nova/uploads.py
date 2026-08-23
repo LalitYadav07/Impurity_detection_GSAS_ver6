@@ -242,28 +242,22 @@ def display_filename(value: Any) -> str:
     return text.rsplit("/", 1)[-1] if text else ""
 
 
-def browser_file_batch_js(trigger_name: str, event_expr: str = "$event") -> str:
-    """Return a Vue file-input handler that consumes the current event value.
-
-    Reading the bound state model from ``update:modelValue`` is racy because
-    Vue may not have applied the v-model assignment when the custom handler
-    runs.  ``$event`` is the authoritative selection for that event.
-    """
+def browser_file_batch_js(trigger_name: str, event_expr: str = "$event.target.files") -> str:
+    """Return a native file-input handler for one or more browser files."""
 
     return (
-        f"(async () => {{ const value={event_expr}; "
-        "const selected=Array.isArray(value) ? value : (value ? [value] : []); "
-        "const files=Array.from(selected); const items=[]; "
+        f"(async () => {{ const input=$event.currentTarget || $event.target; const value={event_expr}; "
+        "const files=value ? Array.from(value) : []; const items=[]; "
         "for (const file of files) { items.push({name:file.name, bytes:new window.Uint8Array(await file.arrayBuffer())}); } "
         "const header=new window.TextEncoder().encode(JSON.stringify(items.map(item => ({name:item.name,size:item.bytes.length})))); "
         "const total=4+header.length+items.reduce((sum,item) => sum+item.bytes.length,0); const packed=new window.Uint8Array(total); "
         "new window.DataView(packed.buffer).setUint32(0,header.length,false); packed.set(header,4); let offset=4+header.length; "
         "items.forEach(item => { packed.set(item.bytes,offset); offset += item.bytes.length; }); "
-        f"trigger('{trigger_name}', [packed.buffer]); }})()"
+        f"await trigger('{trigger_name}', [packed.buffer]); if (input) input.value=''; }})()"
     )
 
 
-def browser_archive_batch_js(trigger_name: str, event_expr: str = "$event") -> str:
+def browser_archive_batch_js(trigger_name: str, event_expr: str = "$event.target.files") -> str:
     """Return a JSON-safe handler for one or more ZIP archives.
 
     NDIP's Trame websocket can drop an ``ArrayBuffer`` payload emitted by a
@@ -272,9 +266,8 @@ def browser_archive_batch_js(trigger_name: str, event_expr: str = "$event") -> s
     """
 
     return (
-        f"(async () => {{ const value={event_expr}; "
-        "const selected=Array.isArray(value) ? value : (value ? [value] : []); "
-        "const files=Array.from(selected); "
+        f"(async () => {{ const input=$event.currentTarget || $event.target; const value={event_expr}; "
+        "const files=value ? Array.from(value) : []; "
         "for (const file of files) { "
         "const encoded=await new Promise((resolve,reject) => { "
         "const reader=new window.FileReader(); "
@@ -282,7 +275,7 @@ def browser_archive_batch_js(trigger_name: str, event_expr: str = "$event") -> s
         "reader.onerror=() => reject(reader.error || new Error('Could not read ZIP archive')); "
         "reader.readAsDataURL(file); }); "
         f"await trigger('{trigger_name}', [file.name, encoded]); "
-        "} })()"
+        "} if (input) input.value=''; })()"
     )
 
 
@@ -419,8 +412,6 @@ class NamedMultiCifUpload:
         self.rows_model = rows_model
         self.key = key
         key_slug = key.replace("-", "_")
-        self.client_model = f"{key_slug}_browser_files"
-        self.archive_client_model = f"{key_slug}_browser_archives"
         self.ref_name = f"{key_slug}_input"
         self.archive_ref_name = f"{key_slug}_archive_input"
         self.decode_trigger = f"decode_{key_slug}"
@@ -429,8 +420,6 @@ class NamedMultiCifUpload:
         self.clear_trigger = f"clear_{key_slug}"
 
         state = self.server.state
-        setattr(state, self.client_model, None)
-        setattr(state, self.archive_client_model, None)
         if getattr(state, v_model, None) is None:
             setattr(state, v_model, [])
         if getattr(state, rows_model, None) is None:
@@ -480,7 +469,6 @@ class NamedMultiCifUpload:
                 rows.append(metadata)
             setattr(state, self.v_model, paths)
             setattr(state, self.rows_model, rows)
-            setattr(state, self.client_model, None)
             state.flush()
 
         @self.server.controller.trigger(self.decode_archive_trigger)
@@ -511,7 +499,6 @@ class NamedMultiCifUpload:
             rows.append(metadata)
             setattr(state, self.v_model, paths)
             setattr(state, self.rows_model, rows)
-            setattr(state, self.archive_client_model, None)
             state.flush()
 
         @self.server.controller.trigger(self.remove_trigger)
@@ -530,8 +517,6 @@ class NamedMultiCifUpload:
         def _clear_cifs() -> None:
             setattr(state, self.v_model, [])
             setattr(state, self.rows_model, [])
-            setattr(state, self.client_model, None)
-            setattr(state, self.archive_client_model, None)
             state.flush()
 
         decode_js = browser_file_batch_js(self.decode_trigger)
@@ -539,25 +524,23 @@ class NamedMultiCifUpload:
         # does not reliably deliver multi-file ArrayBuffer payloads.
         decode_archive_js = browser_archive_batch_js(self.decode_archive_trigger)
         with html.Div(classes="radar-multi-upload", key=repr(key)):
-            vuetify.VFileInput(
-                v_model=(self.client_model,),
+            html.Input(
+                type="file",
                 multiple=True,
-                __properties=["accept"],
                 accept=".cif,chemical/x-cif",
                 classes="radar-hidden-file-input",
                 ref=self.ref_name,
                 key=repr(f"{key}-native"),
-                update_modelValue=decode_js,
+                change=decode_js,
             )
-            vuetify.VFileInput(
-                v_model=(self.archive_client_model,),
+            html.Input(
+                type="file",
                 multiple=True,
-                __properties=["accept"],
                 accept=".zip,application/zip",
                 classes="radar-hidden-file-input",
                 ref=self.archive_ref_name,
                 key=repr(f"{key}-archive-native"),
-                update_modelValue=decode_archive_js,
+                change=decode_archive_js,
             )
             with html.Div(classes="radar-library-source-grid"):
                 with html.Div(classes="radar-library-source-card"):
@@ -571,11 +554,6 @@ class NamedMultiCifUpload:
                         prepend_icon="mdi-file-plus-outline",
                         click=f"trame.refs.{self.ref_name}.click()",
                     )
-                    html.Span(
-                        f"{{{{ Array.isArray({self.client_model}) ? {self.client_model}.length : 0 }}}} CIF file(s) selected; reading contents...",
-                        v_show=f"Array.isArray({self.client_model}) && {self.client_model}.length > 0",
-                        classes="radar-field-note",
-                    )
                 with html.Div(classes="radar-library-source-card"):
                     html.Strong("ZIP archives of CIFs")
                     html.Span("Choose one or many .zip archives containing CIF files.")
@@ -586,11 +564,6 @@ class NamedMultiCifUpload:
                         color=color,
                         prepend_icon="mdi-folder-zip-outline",
                         click=f"trame.refs.{self.archive_ref_name}.click()",
-                    )
-                    html.Span(
-                        f"{{{{ Array.isArray({self.archive_client_model}) ? {self.archive_client_model}.length : 0 }}}} ZIP archive(s) selected; inspecting CIF contents...",
-                        v_show=f"Array.isArray({self.archive_client_model}) && {self.archive_client_model}.length > 0",
-                        classes="radar-field-note",
                     )
             with html.Div(classes="radar-library-source-summary", v_show=f"{self.rows_model}.length > 0"):
                 html.Strong(

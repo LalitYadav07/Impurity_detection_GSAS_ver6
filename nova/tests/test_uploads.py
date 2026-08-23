@@ -114,12 +114,16 @@ def test_unpack_browser_file_batch_preserves_names_and_bytes() -> None:
     assert unpack_browser_file_batch(payload) == files
 
 
-def test_multi_upload_handlers_consume_the_current_vue_event() -> None:
+def test_multi_upload_handlers_consume_native_file_input_events() -> None:
     cif_handler = browser_file_batch_js("decode_cifs")
     zip_handler = browser_archive_batch_js("decode_zips")
 
-    assert "const value=$event" in cif_handler
-    assert "const value=$event" in zip_handler
-    assert "trigger('decode_cifs', [packed.buffer])" in cif_handler
+    assert "const value=$event.target.files" in cif_handler
+    assert "const value=$event.target.files" in zip_handler
+    assert "Array.from(value)" in cif_handler
+    assert "Array.from(value)" in zip_handler
+    assert "await trigger('decode_cifs', [packed.buffer])" in cif_handler
     assert "trigger('decode_zips', [file.name, encoded])" in zip_handler
     assert "readAsDataURL(file)" in zip_handler
+    assert "input.value=''" in cif_handler
+    assert "input.value=''" in zip_handler
