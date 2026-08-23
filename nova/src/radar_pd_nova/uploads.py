@@ -236,7 +236,9 @@ def browser_library_upload_js(trigger_name: str, start_trigger_name: str, source
 
     return (
         "(async () => { const value=$event; "
-        "const selected=Array.isArray(value) ? value : (value ? [value] : []); "
+        "const selected=Array.isArray(value) ? value "
+        ": (value && typeof value.length === 'number' && !value.name ? Array.from(value) "
+        ": (value ? [value] : [])); "
         "for (const file of selected) { if (!file) continue; "
         f"trigger('{start_trigger_name}', [file.name, '{source_type}']); "
         "const encoded=await new Promise((resolve,reject) => { "

@@ -117,6 +117,8 @@ def test_library_upload_handler_accepts_single_or_multiple_files_and_uses_json_s
     handler = browser_library_upload_js("decode_archive", "mark_upload", "ZIP archive")
 
     assert "Array.isArray(value)" in handler
+    assert "Array.from(value)" in handler
+    assert "typeof value.length === 'number'" in handler
     assert "for (const file of selected)" in handler
     assert "trigger('mark_upload', [file.name, 'ZIP archive'])" in handler
     assert "reader.readAsDataURL(file)" in handler
