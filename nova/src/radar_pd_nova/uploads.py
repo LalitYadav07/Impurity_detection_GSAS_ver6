@@ -228,14 +228,15 @@ def browser_named_file_js(trigger_name: str) -> str:
 def browser_library_upload_js(trigger_name: str, start_trigger_name: str, source_type: str) -> str:
     """Transfer one or many CIF sources reliably through the NDIP websocket.
 
-    ``VFileInput`` emits either one ``File`` or an array depending on the
-    Vuetify/Trame versions in the running NOVA image.  Normalize both forms and
-    send each file as Base64 text; large binary ``ArrayBuffer`` trigger
-    arguments have proven unreliable through the NDIP reverse proxy.
+    The native browser input emits a DOM ``change`` event, while older callers
+    may still pass a ``File``, ``FileList``, or array directly. Normalize all
+    forms and send each file as Base64 text; large binary ``ArrayBuffer``
+    trigger arguments have proven unreliable through the NDIP reverse proxy.
     """
 
     return (
-        "(async () => { const value=$event; "
+        "(async () => { const raw=$event; "
+        "const value=raw && raw.target && raw.target.files ? raw.target.files : raw; "
         "const selected=Array.isArray(value) ? value "
         ": (value && typeof value.length === 'number' && !value.name ? Array.from(value) "
         ": (value ? [value] : [])); "
@@ -247,7 +248,7 @@ def browser_library_upload_js(trigger_name: str, start_trigger_name: str, source
         "reader.onerror=() => reject(reader.error || new Error('Could not read selected file')); "
         "reader.readAsDataURL(file); }); "
         f"await trigger('{trigger_name}', [file.name, encoded]); "
-        "} })()"
+        "} if (raw && raw.target) raw.target.value=''; })()"
     )
 
 
@@ -529,25 +530,23 @@ class NamedMultiCifUpload:
             "ZIP archive",
         )
         with html.Div(classes="radar-multi-upload", key=repr(key)):
-            vuetify.VFileInput(
-                v_model=(self.client_model,),
+            html.Input(
+                type="file",
                 multiple=True,
-                __properties=["accept"],
                 accept=".cif,chemical/x-cif",
                 classes="radar-hidden-file-input",
                 ref=self.ref_name,
                 key=repr(f"{key}-native"),
-                update_modelValue=decode_js,
+                change=decode_js,
             )
-            vuetify.VFileInput(
-                v_model=(self.archive_client_model,),
+            html.Input(
+                type="file",
                 multiple=True,
-                __properties=["accept"],
                 accept=".zip,application/zip",
                 classes="radar-hidden-file-input",
                 ref=self.archive_ref_name,
                 key=repr(f"{key}-archive-native"),
-                update_modelValue=decode_archive_js,
+                change=decode_archive_js,
             )
             with html.Div(classes="radar-library-source-grid"):
                 with html.Div(classes="radar-library-source-card"):

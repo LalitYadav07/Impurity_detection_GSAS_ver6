@@ -119,8 +119,9 @@ def test_library_upload_handler_accepts_single_or_multiple_files_and_uses_json_s
     assert "Array.isArray(value)" in handler
     assert "Array.from(value)" in handler
     assert "typeof value.length === 'number'" in handler
+    assert "raw.target.files" in handler
     assert "for (const file of selected)" in handler
     assert "trigger('mark_upload', [file.name, 'ZIP archive'])" in handler
     assert "reader.readAsDataURL(file)" in handler
     assert "await trigger('decode_archive', [file.name, encoded])" in handler
-    assert "$event.target.files" not in handler
+    assert "raw.target.value=''" in handler
