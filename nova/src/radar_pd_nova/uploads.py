@@ -9,10 +9,8 @@ sources, so this component only handles direct browser uploads.
 
 from __future__ import annotations
 
-import base64
 import itertools
 import hashlib
-import json
 import re
 import tempfile
 import zipfile
@@ -208,33 +206,6 @@ def build_cif_source_archive(source_paths: Iterable[str], library_name: str) -> 
     return target, {"cif_count": written, "skipped_count": len(skipped), "failures": skipped}
 
 
-def unpack_browser_file_batch(payload: bytes) -> list[tuple[str, bytes]]:
-    """Decode one compact browser batch into named file payloads."""
-
-    raw = bytes(payload or b"")
-    if len(raw) < 4:
-        raise ValueError("The browser file batch is incomplete")
-    header_size = int.from_bytes(raw[:4], byteorder="big", signed=False)
-    if header_size <= 0 or header_size > len(raw) - 4:
-        raise ValueError("The browser file batch header is invalid")
-    header = json.loads(raw[4 : 4 + header_size].decode("utf-8"))
-    if not isinstance(header, list):
-        raise ValueError("The browser file batch header must be a list")
-    offset = 4 + header_size
-    files: list[tuple[str, bytes]] = []
-    for item in header:
-        if not isinstance(item, dict):
-            raise ValueError("The browser file batch contains invalid metadata")
-        size = int(item.get("size") or 0)
-        if size < 0 or offset + size > len(raw):
-            raise ValueError("The browser file batch contains an invalid file size")
-        files.append((safe_client_filename(item.get("name")), raw[offset : offset + size]))
-        offset += size
-    if offset != len(raw):
-        raise ValueError("The browser file batch contains trailing data")
-    return files
-
-
 def display_filename(value: Any) -> str:
     """Return only the basename of a local, browser, or Windows-style path."""
 
@@ -242,40 +213,13 @@ def display_filename(value: Any) -> str:
     return text.rsplit("/", 1)[-1] if text else ""
 
 
-def browser_file_batch_js(trigger_name: str, event_expr: str = "$event.target.files") -> str:
-    """Return a native file-input handler for one or more browser files."""
+def browser_named_file_js(trigger_name: str) -> str:
+    """Return the Trame-supported bridge for one browser ``File`` object."""
 
     return (
-        f"(async () => {{ const input=$event.currentTarget || $event.target; const value={event_expr}; "
-        "const files=value ? Array.from(value) : []; const items=[]; "
-        "for (const file of files) { items.push({name:file.name, bytes:new window.Uint8Array(await file.arrayBuffer())}); } "
-        "const header=new window.TextEncoder().encode(JSON.stringify(items.map(item => ({name:item.name,size:item.bytes.length})))); "
-        "const total=4+header.length+items.reduce((sum,item) => sum+item.bytes.length,0); const packed=new window.Uint8Array(total); "
-        "new window.DataView(packed.buffer).setUint32(0,header.length,false); packed.set(header,4); let offset=4+header.length; "
-        "items.forEach(item => { packed.set(item.bytes,offset); offset += item.bytes.length; }); "
-        f"await trigger('{trigger_name}', [packed.buffer]); if (input) input.value=''; }})()"
-    )
-
-
-def browser_archive_batch_js(trigger_name: str, event_expr: str = "$event.target.files") -> str:
-    """Return a JSON-safe handler for one or more ZIP archives.
-
-    NDIP's Trame websocket can drop an ``ArrayBuffer`` payload emitted by a
-    multi-file input.  A data URL keeps each archive in ordinary JSON trigger
-    arguments while retaining the original filename and byte-exact content.
-    """
-
-    return (
-        f"(async () => {{ const input=$event.currentTarget || $event.target; const value={event_expr}; "
-        "const files=value ? Array.from(value) : []; "
-        "for (const file of files) { "
-        "const encoded=await new Promise((resolve,reject) => { "
-        "const reader=new window.FileReader(); "
-        "reader.onload=() => resolve(String(reader.result || '').split(',',2)[1] || ''); "
-        "reader.onerror=() => reject(reader.error || new Error('Could not read ZIP archive')); "
-        "reader.readAsDataURL(file); }); "
-        f"await trigger('{trigger_name}', [file.name, encoded]); "
-        "} if (input) input.value=''; })()"
+        "$event && $event.arrayBuffer().then((contents) => {"
+        f" trigger('{trigger_name}', [contents, $event.name]);"
+        "})"
     )
 
 
@@ -397,7 +341,12 @@ class NamedFileUpload:
 
 
 class NamedMultiCifUpload:
-    """Render equivalent loose-CIF and multi-ZIP source pickers."""
+    """Collect any number of validated CIF or ZIP sources, one at a time.
+
+    Trame's Vuetify bridge reliably transfers one browser ``File`` per event.
+    Repeated additions provide the same multi-source result without depending
+    on an unsupported native ``change`` event or fragile multi-file payload.
+    """
 
     def __init__(
         self,
@@ -414,6 +363,8 @@ class NamedMultiCifUpload:
         key_slug = key.replace("-", "_")
         self.ref_name = f"{key_slug}_input"
         self.archive_ref_name = f"{key_slug}_archive_input"
+        self.client_model = f"{key_slug}_browser_file"
+        self.archive_client_model = f"{key_slug}_browser_archive"
         self.decode_trigger = f"decode_{key_slug}"
         self.decode_archive_trigger = f"decode_archive_{key_slug}"
         self.remove_trigger = f"remove_{key_slug}"
@@ -424,59 +375,60 @@ class NamedMultiCifUpload:
             setattr(state, v_model, [])
         if getattr(state, rows_model, None) is None:
             setattr(state, rows_model, [])
+        setattr(state, self.client_model, None)
+        setattr(state, self.archive_client_model, None)
 
         @self.server.controller.trigger(self.decode_trigger)
-        def _decode_cif_batch(payload: bytes) -> None:
-            rows = list(getattr(state, self.rows_model, []) or [])
-            paths = list(getattr(state, self.v_model, []) or [])
-            for original_name, contents in unpack_browser_file_batch(payload):
-                try:
-                    metadata = inspect_cif_upload(contents, original_name)
-                    duplicate = next((row for row in rows if row.get("digest") == metadata["digest"]), None)
-                    if duplicate:
-                        raise ValueError(f"{metadata['name']}: duplicates {duplicate.get('name', 'an existing selection')}")
-                    target = store_browser_upload(contents, metadata["name"])
-                    metadata.update(
-                        {
-                            "path": str(target),
-                            "source_type": "Loose CIF",
-                            "cif_count": 1,
-                            "rejected_count": 0,
-                            "status": "Ready",
-                            "detail": " / ".join(
-                                value
-                                for value in (
-                                    metadata.get("formula"),
-                                    f"SG {metadata['space_group']}" if metadata.get("space_group") else "",
-                                )
-                                if value
-                            )
-                            or "CIF structure preflight passed",
-                        }
-                    )
-                    paths.append(str(target))
-                except Exception as exc:
-                    metadata = {
-                        "name": safe_client_filename(original_name),
-                        "path": "",
-                        "digest": "",
-                        "source_type": "Loose CIF",
-                        "cif_count": 0,
-                        "rejected_count": 1,
-                        "status": "Rejected",
-                        "detail": str(exc),
-                    }
-                rows.append(metadata)
-            setattr(state, self.v_model, paths)
-            setattr(state, self.rows_model, rows)
-            state.flush()
-
-        @self.server.controller.trigger(self.decode_archive_trigger)
-        def _decode_archive(original_name: str, encoded_contents: str) -> None:
+        def _decode_cif(contents: bytes, original_name: str = "upload.cif") -> None:
             rows = list(getattr(state, self.rows_model, []) or [])
             paths = list(getattr(state, self.v_model, []) or [])
             try:
-                contents = base64.b64decode(str(encoded_contents or ""), validate=True)
+                metadata = inspect_cif_upload(contents, original_name)
+                duplicate = next((row for row in rows if row.get("digest") == metadata["digest"]), None)
+                if duplicate:
+                    raise ValueError(f"{metadata['name']}: duplicates {duplicate.get('name', 'an existing selection')}")
+                target = store_browser_upload(contents, metadata["name"])
+                metadata.update(
+                    {
+                        "path": str(target),
+                        "source_type": "Loose CIF",
+                        "cif_count": 1,
+                        "rejected_count": 0,
+                        "status": "Ready",
+                        "detail": " / ".join(
+                            value
+                            for value in (
+                                metadata.get("formula"),
+                                f"SG {metadata['space_group']}" if metadata.get("space_group") else "",
+                            )
+                            if value
+                        )
+                        or "CIF structure preflight passed",
+                    }
+                )
+                paths.append(str(target))
+            except Exception as exc:
+                metadata = {
+                    "name": safe_client_filename(original_name),
+                    "path": "",
+                    "digest": "",
+                    "source_type": "Loose CIF",
+                    "cif_count": 0,
+                    "rejected_count": 1,
+                    "status": "Rejected",
+                    "detail": str(exc),
+                }
+            rows.append(metadata)
+            setattr(state, self.v_model, paths)
+            setattr(state, self.rows_model, rows)
+            setattr(state, self.client_model, None)
+            state.flush()
+
+        @self.server.controller.trigger(self.decode_archive_trigger)
+        def _decode_archive(contents: bytes, original_name: str = "archive.zip") -> None:
+            rows = list(getattr(state, self.rows_model, []) or [])
+            paths = list(getattr(state, self.v_model, []) or [])
+            try:
                 metadata = inspect_cif_archive(contents, original_name)
                 duplicate = next((row for row in rows if row.get("digest") == metadata["digest"]), None)
                 if duplicate:
@@ -499,6 +451,7 @@ class NamedMultiCifUpload:
             rows.append(metadata)
             setattr(state, self.v_model, paths)
             setattr(state, self.rows_model, rows)
+            setattr(state, self.archive_client_model, None)
             state.flush()
 
         @self.server.controller.trigger(self.remove_trigger)
@@ -511,43 +464,45 @@ class NamedMultiCifUpload:
                 [row for row in rows if not (str(row.get("path") or "") == str(path) and str(row.get("name") or "") == str(name))],
             )
             setattr(state, self.v_model, [item for item in paths if str(item) != str(path)])
+            setattr(state, self.client_model, None)
+            setattr(state, self.archive_client_model, None)
             state.flush()
 
         @self.server.controller.trigger(self.clear_trigger)
         def _clear_cifs() -> None:
             setattr(state, self.v_model, [])
             setattr(state, self.rows_model, [])
+            setattr(state, self.client_model, None)
+            setattr(state, self.archive_client_model, None)
             state.flush()
 
-        decode_js = browser_file_batch_js(self.decode_trigger)
-        # ZIP archives use a JSON-safe Base64 trigger because NDIP's websocket
-        # does not reliably deliver multi-file ArrayBuffer payloads.
-        decode_archive_js = browser_archive_batch_js(self.decode_archive_trigger)
+        decode_js = browser_named_file_js(self.decode_trigger)
+        decode_archive_js = browser_named_file_js(self.decode_archive_trigger)
         with html.Div(classes="radar-multi-upload", key=repr(key)):
-            html.Input(
-                type="file",
-                multiple=True,
+            vuetify.VFileInput(
+                v_model=self.client_model,
+                __properties=["accept"],
                 accept=".cif,chemical/x-cif",
                 classes="radar-hidden-file-input",
                 ref=self.ref_name,
                 key=repr(f"{key}-native"),
-                change=decode_js,
+                update_modelValue=decode_js,
             )
-            html.Input(
-                type="file",
-                multiple=True,
+            vuetify.VFileInput(
+                v_model=self.archive_client_model,
+                __properties=["accept"],
                 accept=".zip,application/zip",
                 classes="radar-hidden-file-input",
                 ref=self.archive_ref_name,
                 key=repr(f"{key}-archive-native"),
-                change=decode_archive_js,
+                update_modelValue=decode_archive_js,
             )
             with html.Div(classes="radar-library-source-grid"):
                 with html.Div(classes="radar-library-source-card"):
                     html.Strong("Loose CIF files")
-                    html.Span("Choose one or many .cif files from this computer.")
+                    html.Span("Add individual .cif files one at a time.")
                     vuetify.VBtn(
-                        "Choose CIF files",
+                        "Add CIF file",
                         size="small",
                         variant="outlined",
                         color=color,
@@ -556,15 +511,19 @@ class NamedMultiCifUpload:
                     )
                 with html.Div(classes="radar-library-source-card"):
                     html.Strong("ZIP archives of CIFs")
-                    html.Span("Choose one or many .zip archives containing CIF files.")
+                    html.Span("Add ZIP archives one at a time. Recommended for large CIF collections.")
                     vuetify.VBtn(
-                        "Choose ZIP archives",
+                        "Add ZIP archive",
                         size="small",
                         variant="outlined",
                         color=color,
                         prepend_icon="mdi-folder-zip-outline",
                         click=f"trame.refs.{self.archive_ref_name}.click()",
                     )
+            html.P(
+                "Repeat either action to combine multiple sources. Each source is validated immediately.",
+                classes="radar-field-note radar-library-source-note",
+            )
             with html.Div(classes="radar-library-source-summary", v_show=f"{self.rows_model}.length > 0"):
                 html.Strong(
                     f"{{{{ {self.rows_model}.filter(item => item.status === 'Ready').reduce((sum,item) => sum + (item.cif_count || 0), 0) }}}} usable CIF structure(s)"
@@ -604,13 +563,11 @@ class NamedMultiCifUpload:
 __all__ = [
     "NamedFileUpload",
     "NamedMultiCifUpload",
-    "browser_archive_batch_js",
-    "browser_file_batch_js",
+    "browser_named_file_js",
     "display_filename",
     "build_cif_source_archive",
     "inspect_cif_archive",
     "inspect_cif_upload",
     "safe_client_filename",
     "store_browser_upload",
-    "unpack_browser_file_batch",
 ]

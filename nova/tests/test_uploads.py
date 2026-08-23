@@ -1,5 +1,4 @@
 import io
-import json
 import zipfile
 from pathlib import Path
 
@@ -7,14 +6,12 @@ import pytest
 
 from radar_pd_nova.uploads import (
     build_cif_source_archive,
-    browser_archive_batch_js,
-    browser_file_batch_js,
+    browser_named_file_js,
     display_filename,
     inspect_cif_archive,
     inspect_cif_upload,
     safe_client_filename,
     store_browser_upload,
-    unpack_browser_file_batch,
 )
 
 
@@ -106,24 +103,9 @@ def test_build_cif_source_archive_deduplicates_loose_and_zipped_cifs(tmp_path: P
         assert len([name for name in archive.namelist() if name.endswith(".cif")]) == 1
 
 
-def test_unpack_browser_file_batch_preserves_names_and_bytes() -> None:
-    files = [("Fe.cif", VALID_CIF), ("candidate set.zip", b"PK\x03\x04payload")]
-    header = json.dumps([{"name": name, "size": len(contents)} for name, contents in files]).encode("utf-8")
-    payload = len(header).to_bytes(4, "big") + header + b"".join(contents for _, contents in files)
+def test_file_upload_handler_uses_supported_trame_file_event() -> None:
+    handler = browser_named_file_js("decode_source")
 
-    assert unpack_browser_file_batch(payload) == files
-
-
-def test_multi_upload_handlers_consume_native_file_input_events() -> None:
-    cif_handler = browser_file_batch_js("decode_cifs")
-    zip_handler = browser_archive_batch_js("decode_zips")
-
-    assert "const value=$event.target.files" in cif_handler
-    assert "const value=$event.target.files" in zip_handler
-    assert "Array.from(value)" in cif_handler
-    assert "Array.from(value)" in zip_handler
-    assert "await trigger('decode_cifs', [packed.buffer])" in cif_handler
-    assert "trigger('decode_zips', [file.name, encoded])" in zip_handler
-    assert "readAsDataURL(file)" in zip_handler
-    assert "input.value=''" in cif_handler
-    assert "input.value=''" in zip_handler
+    assert "$event && $event.arrayBuffer()" in handler
+    assert "trigger('decode_source', [contents, $event.name])" in handler
+    assert "$event.target.files" not in handler
