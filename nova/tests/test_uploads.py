@@ -6,6 +6,7 @@ import pytest
 
 from radar_pd_nova.uploads import (
     build_cif_source_archive,
+    browser_library_upload_js,
     browser_named_file_js,
     display_filename,
     inspect_cif_archive,
@@ -106,6 +107,18 @@ def test_build_cif_source_archive_deduplicates_loose_and_zipped_cifs(tmp_path: P
 def test_file_upload_handler_uses_supported_trame_file_event() -> None:
     handler = browser_named_file_js("decode_source")
 
-    assert "$event && $event.arrayBuffer()" in handler
-    assert "trigger('decode_source', [contents, $event.name])" in handler
+    assert "Array.isArray(value)" in handler
+    assert "file.arrayBuffer()" in handler
+    assert "trigger('decode_source', [contents, file.name])" in handler
+    assert "$event.target.files" not in handler
+
+
+def test_library_upload_handler_accepts_single_or_multiple_files_and_uses_json_safe_transport() -> None:
+    handler = browser_library_upload_js("decode_archive", "mark_upload", "ZIP archive")
+
+    assert "Array.isArray(value)" in handler
+    assert "for (const file of selected)" in handler
+    assert "trigger('mark_upload', [file.name, 'ZIP archive'])" in handler
+    assert "reader.readAsDataURL(file)" in handler
+    assert "await trigger('decode_archive', [file.name, encoded])" in handler
     assert "$event.target.files" not in handler

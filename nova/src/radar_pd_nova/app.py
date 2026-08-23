@@ -4963,6 +4963,7 @@ class RadarPdNovaApp(ThemedApp):
         .radar-library-source-card { display: grid; align-content: start; gap: 6px; padding: 10px; border: 1px solid var(--radar-line); border-radius: 7px; background: #fff; }
         .radar-library-source-card strong { color: var(--radar-brand-900); font-size: 12px; }
         .radar-library-source-card span { min-height: 31px; color: var(--radar-muted); font-size: 11px; line-height: 1.35; }
+        .radar-library-upload-pending { padding: 9px 11px; border: 1px solid #b8d2c7; border-radius: 6px; background: #edf7f2; color: var(--radar-brand-900); font-size: 12px; font-weight: 650; }
         .radar-source-review .v-expansion-panel-title { min-height: 38px !important; font-size: 12px; }
         .radar-source-review .v-expansion-panel-text__wrapper { display: grid; gap: 6px; padding: 7px !important; }
         .radar-cif-file-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px; border: 1px solid var(--radar-line); border-radius: 6px; background: #fff; }
