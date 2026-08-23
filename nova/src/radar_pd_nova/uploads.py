@@ -533,6 +533,7 @@ class NamedMultiCifUpload:
             html.Input(
                 type="file",
                 multiple=True,
+                __events=["change"],
                 accept=".cif,chemical/x-cif",
                 classes="radar-hidden-file-input",
                 ref=self.ref_name,
@@ -542,6 +543,7 @@ class NamedMultiCifUpload:
             html.Input(
                 type="file",
                 multiple=True,
+                __events=["change"],
                 accept=".zip,application/zip",
                 classes="radar-hidden-file-input",
                 ref=self.archive_ref_name,

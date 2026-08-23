@@ -125,3 +125,10 @@ def test_library_upload_handler_accepts_single_or_multiple_files_and_uses_json_s
     assert "reader.readAsDataURL(file)" in handler
     assert "await trigger('decode_archive', [file.name, encoded])" in handler
     assert "raw.target.value=''" in handler
+
+
+def test_native_file_inputs_register_the_change_event() -> None:
+    source = Path(__file__).parents[1] / "src" / "radar_pd_nova" / "uploads.py"
+    text = source.read_text(encoding="utf-8")
+
+    assert text.count('__events=["change"]') == 2
