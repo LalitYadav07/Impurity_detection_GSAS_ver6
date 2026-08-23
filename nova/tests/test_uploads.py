@@ -6,7 +6,6 @@ import pytest
 
 from radar_pd_nova.uploads import (
     build_cif_source_archive,
-    browser_library_upload_js,
     browser_named_file_js,
     display_filename,
     inspect_cif_archive,
@@ -113,24 +112,13 @@ def test_file_upload_handler_uses_supported_trame_file_event() -> None:
     assert "$event.target.files" not in handler
 
 
-def test_library_upload_handler_accepts_single_or_multiple_files_and_uses_json_safe_transport() -> None:
-    handler = browser_library_upload_js("decode_archive", "mark_upload", "ZIP archive")
-
-    assert "Array.isArray(value)" in handler
-    assert "Array.from(value)" in handler
-    assert "typeof value.length === 'number'" in handler
-    assert "raw.target.files" in handler
-    assert "for (const file of selected)" in handler
-    assert "trigger('mark_upload', [file.name, 'ZIP archive'])" in handler
-    assert "reader.readAsDataURL(file)" in handler
-    assert "await trigger('decode_archive', [file.name, encoded])" in handler
-    assert "raw.target.value=''" in handler
-
-
-def test_native_file_inputs_bind_the_change_event_directly() -> None:
+def test_library_uploads_use_the_same_supported_file_event_as_named_uploads() -> None:
     source = Path(__file__).parents[1] / "src" / "radar_pd_nova" / "uploads.py"
     text = source.read_text(encoding="utf-8")
 
-    assert text.count("v_on_change=decode_js") == 1
-    assert text.count("v_on_change=decode_archive_js") == 1
-    assert '__events=["change"]' not in text
+    assert "v_model=(self.client_model,)" in text
+    assert "v_model=(self.archive_client_model,)" in text
+    assert "update_modelValue=decode_js" in text
+    assert "update_modelValue=decode_archive_js" in text
+    assert "multiple=True" not in text
+    assert "reader.readAsDataURL" not in text
