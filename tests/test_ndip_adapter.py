@@ -407,6 +407,33 @@ def test_custom_database_archive_rejects_path_traversal(tmp_path: Path) -> None:
         raise AssertionError("unsafe archive was accepted")
 
 
+def test_custom_database_archive_resolves_portable_pack_root(tmp_path: Path) -> None:
+    archive = tmp_path / "library.zip"
+    with zipfile.ZipFile(archive, "w") as handle:
+        handle.writestr("library/catalog_deduplicated.csv", "id,pretty_formula\n1,Cu\n")
+        handle.writestr("library/mp_experimental_stable.csv", "id\n1\n")
+        handle.writestr("library/profiles64/profiles64.npz", b"npz")
+        handle.writestr("library/profiles64/index.csv", "id,row\n1,0\n")
+
+    extracted = _extract_db_pack(archive, tmp_path / "extract")
+
+    assert extracted == (tmp_path / "extract" / "library").resolve()
+
+
+def test_custom_database_archive_rejects_cif_source_bundle(tmp_path: Path) -> None:
+    archive = tmp_path / "sources.zip"
+    with zipfile.ZipFile(archive, "w") as handle:
+        handle.writestr("cifs/phase.cif", "data_phase\n")
+
+    try:
+        _extract_db_pack(archive, tmp_path / "extract")
+    except ValueError as exc:
+        assert "source CIF files" in str(exc)
+        assert "portable custom library" in str(exc)
+    else:
+        raise AssertionError("CIF source bundle was accepted as a database")
+
+
 def test_compare_series_writes_csv_and_html(tmp_path: Path) -> None:
     summaries = []
     for index, seconds in enumerate((10.0, 20.0), start=1):

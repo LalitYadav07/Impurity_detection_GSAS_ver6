@@ -588,6 +588,21 @@ def test_gsas_diffraction_datasets_are_classified_from_filename_or_datatype() ->
         ) == ("diffraction", False)
 
 
+def test_cif_source_bundle_is_not_classified_as_candidate_library() -> None:
+    assert GalaxyService._dataset_scientific_role(
+        {
+            "name": "RADAR-PD CIF source bundle | Y_Fe_Si_cif_sources.zip",
+            "extension": "zip",
+        }
+    ) == ("other", True)
+    assert GalaxyService._dataset_scientific_role(
+        {
+            "name": "RADAR-PD portable custom library | Y_Fe_Si.zip",
+            "extension": "zip",
+        }
+    ) == ("candidate_library", False)
+
+
 def test_remote_sources_and_directory_entries_are_normalized(monkeypatch: Any) -> None:
     responses = [
         [

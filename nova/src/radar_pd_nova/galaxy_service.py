@@ -419,6 +419,13 @@ class GalaxyService:
             return "instrument", generated
         if preserved_suffix == "cif" or extension == "cif":
             return "cif", generated
+        # The library builder uploads an intermediate ZIP containing the raw
+        # CIF inputs before producing the portable database archive.  It is a
+        # reproducibility artifact, not a searchable RADAR-PD library.
+        if preserved_suffix == "zip" and (
+            "cif source bundle" in name or preserved_name.endswith("_cif_sources.zip")
+        ):
+            return "other", True
         if (preserved_suffix == "zip" or extension == "zip") and not generated:
             return "candidate_library", False
         if preserved_suffix in {"nxs", "h5", "hdf5"} or extension in {"nxs", "h5", "hdf5"}:

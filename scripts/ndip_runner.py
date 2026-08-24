@@ -534,12 +534,31 @@ def _extract_db_pack(archive: Path, destination: Path) -> Path:
             handle.extractall(destination, filter="data")
     else:
         raise ValueError(f"Unsupported custom database archive: {archive}")
-    children = [path for path in destination.iterdir() if path.is_dir()]
-    candidates = [destination, *children]
-    for candidate in candidates:
-        if any((candidate / name).exists() for name in ("db_manifest.json", "highsymm_metadata.json", "catalog.csv")):
+    catalog_name = "catalog_deduplicated.csv"
+    candidates = [
+        catalog.parent
+        for catalog in destination.rglob(catalog_name)
+        if catalog.is_file()
+    ]
+    for candidate in sorted(candidates, key=lambda path: len(path.parts)):
+        if (
+            (candidate / "mp_experimental_stable.csv").is_file()
+            and (candidate / "profiles64").is_dir()
+        ):
             return candidate.resolve()
-    return children[0].resolve() if len(children) == 1 else destination.resolve()
+
+    if (destination / "cifs").is_dir() or any(destination.rglob("*.cif")):
+        raise ValueError(
+            "The selected ZIP contains source CIF files, not a built RADAR-PD "
+            "candidate library. Select the 'RADAR-PD portable custom library' "
+            "output produced by Build CIF Library."
+        )
+    raise ValueError(
+        "The selected custom-library archive is not a complete portable RADAR-PD "
+        "library. It must contain catalog_deduplicated.csv, "
+        "mp_experimental_stable.csv, and profiles64/. Select the portable library "
+        "output produced by Build CIF Library, not a CIF source ZIP."
+    )
 
 
 def _pipeline_command(config: Path, dataset: str, mode: str) -> list[str]:
