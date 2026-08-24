@@ -62,6 +62,9 @@ class PowgenExperimentSettings:
             raise ValueError("retry_max_seconds must be at least retry_base_seconds")
 
     def definition(self, instrument_profile_ref: str = "packaged-official-profile") -> WatchDefinition:
+        config_refs = {}
+        if self.database_dataset_id:
+            config_refs["candidate_library"] = self.database_dataset_id
         return WatchDefinition(
             facility="SNS",
             instrument="PG3",
@@ -71,6 +74,7 @@ class PowgenExperimentSettings:
             configuration_ref=self.configuration_dataset_id,
             instrument_profile_ref=instrument_profile_ref,
             main_cif_ref=self.main_cif_dataset_id,
+            config_refs=config_refs,
         )
 
 
@@ -159,6 +163,10 @@ class PowgenWatchController:
                     if str(watch.get("configuration_dataset_id") or "") != self.settings.configuration_dataset_id:
                         continue
                     if str(watch.get("wavelength_angstrom") or "") != self.settings.wavelength_angstrom:
+                        continue
+                    if str(watch.get("database_dataset_id") or "") != str(
+                        self.settings.database_dataset_id or ""
+                    ):
                         continue
                 candidate = WatchState.from_dict(payload)
                 if candidate.history_id != self.settings.history_id:
@@ -476,6 +484,7 @@ class PowgenWatchController:
             "ipts": self.settings.ipts,
             "source_directory": self.source_directory,
             "configuration_dataset_id": self.settings.configuration_dataset_id,
+            "database_dataset_id": self.settings.database_dataset_id,
             "wavelength_angstrom": self.settings.wavelength_angstrom,
         }
         dataset_id = self.service.upload_json_document(

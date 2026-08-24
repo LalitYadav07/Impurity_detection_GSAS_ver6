@@ -162,3 +162,26 @@ def test_submission_plan_only_targets_existing_galaxy_analyze() -> None:
     assert state.mark_submitted(run, "galaxy-job-1").galaxy_job_id == "galaxy-job-1"
     with pytest.raises(ValueError, match="another Galaxy job"):
         state.mark_submitted(run, "galaxy-job-2")
+
+
+def test_submission_plan_carries_custom_library_and_changes_identity() -> None:
+    builtin = _definition()
+    custom = WatchDefinition(
+        ipts=builtin.ipts,
+        subfolder=builtin.subfolder,
+        history_id=builtin.history_id,
+        configuration_ref=builtin.configuration_ref,
+        instrument_profile_ref=builtin.instrument_profile_ref,
+        config_refs={"candidate_library": "custom-library-hda"},
+    )
+    run = discover_from_listing(builtin, ["PG3_100.gsa"], WatchState(history_id=builtin.history_id))[0]
+
+    builtin_plan = build_submission_plan(builtin, run)
+    custom_plan = build_submission_plan(custom, run)
+
+    assert builtin_plan is not None
+    assert custom_plan is not None
+    assert builtin_plan.inputs["library|database|database_kind"] == "builtin"
+    assert custom_plan.inputs["library|database|database_kind"] == "custom"
+    assert custom_plan.inputs["library|database|database_archive"] == "custom-library-hda"
+    assert custom_plan.idempotency_key != builtin_plan.idempotency_key

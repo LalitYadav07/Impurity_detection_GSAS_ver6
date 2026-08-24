@@ -416,6 +416,7 @@ class RadarPdNovaApp(ThemedApp):
             {"title": "2.665 A (Bank 3)", "value": "2.665"},
         ]
         state.powgen_configuration_dataset_id = ""
+        state.powgen_database_dataset_id = ""
         state.powgen_main_cif_source = "none"
         state.powgen_main_cif_path = ""
         state.powgen_main_cif_dataset_id = ""
@@ -956,6 +957,20 @@ class RadarPdNovaApp(ThemedApp):
                         disabled=("powgen_monitoring",),
                         no_data_text="No reusable configurations are in this Galaxy History",
                         hint="Every discovered scan uses this saved Full or Rapid configuration.",
+                        persistent_hint=True,
+                    )
+                    vuetify.VSelect(
+                        label="Candidate library for monitored scans",
+                        v_model=("powgen_database_dataset_id",),
+                        items=("history_archive_datasets",),
+                        item_title="display_name",
+                        item_value="id",
+                        density="compact",
+                        variant="outlined",
+                        disabled=("powgen_monitoring",),
+                        clearable=True,
+                        no_data_text="No custom RADAR-PD libraries are in this Galaxy History",
+                        hint="Leave empty for the built-in catalog, or choose the custom library that every monitored scan should search.",
                         persistent_hint=True,
                     )
                     vuetify.VSelect(
@@ -3424,6 +3439,7 @@ class RadarPdNovaApp(ThemedApp):
             if not self.service.history_id:
                 raise RuntimeError("The active Galaxy History is not available to this NOVA session")
             main_cif_id = self._resolve_powgen_main_cif_id()
+            database_id = self._resolve_powgen_database_id()
 
             settings = PowgenExperimentSettings(
                 ipts=ipts,
@@ -3431,6 +3447,7 @@ class RadarPdNovaApp(ThemedApp):
                 configuration_dataset_id=configuration_id,
                 wavelength_angstrom=wavelength,
                 main_cif_dataset_id=main_cif_id,
+                database_dataset_id=database_id,
             )
             signature = (
                 settings.ipts,
@@ -3438,6 +3455,7 @@ class RadarPdNovaApp(ThemedApp):
                 settings.configuration_dataset_id,
                 settings.wavelength_angstrom,
                 settings.main_cif_dataset_id or "",
+                settings.database_dataset_id or "",
             )
             if self._powgen_controller is None or self._powgen_settings_signature != signature:
                 self._powgen_controller = PowgenWatchController(self.service, settings)
@@ -3454,7 +3472,8 @@ class RadarPdNovaApp(ThemedApp):
             recovery_note = " Previous Galaxy watch state was restored." if restored else ""
             state.powgen_message = (
                 f"Backfilling existing scans in {state.powgen_source_directory}, then monitoring for new scans. "
-                f"the IPTS remains read-only.{recovery_note}"
+                f"Candidate library: {'custom Galaxy archive' if database_id else 'built-in catalog'}. "
+                f"The IPTS remains read-only.{recovery_note}"
             )
             state.error_message = ""
             self._sync_powgen_rows()
@@ -3470,6 +3489,30 @@ class RadarPdNovaApp(ThemedApp):
             state.powgen_message = f"POWGEN monitor could not start: {exc}"
             state.error_message = str(exc)
             state.flush()
+
+    def _resolve_powgen_database_id(self) -> str | None:
+        """Return the immutable Galaxy library archive for monitored scans.
+
+        The POWGEN panel owns an explicit selection. For compatibility with
+        sessions created before that control existed, inherit the custom
+        Galaxy archive currently selected in the main Candidate Library panel.
+        Local archives are not accepted here because a monitor must retain a
+        durable Galaxy dataset after the browser upload object disappears.
+        """
+
+        state = self.server.state
+        dataset_id = str(getattr(state, "powgen_database_dataset_id", "") or "").strip()
+        if not dataset_id:
+            uses_selected_archive = (
+                str(getattr(state, "database_source", "") or "") == "archive"
+                and str(getattr(state, "library_archive_source", "") or "") == "galaxy"
+            )
+            if uses_selected_archive:
+                dataset_id = str(getattr(state, "history_database_id", "") or "").strip()
+        if dataset_id:
+            state.powgen_database_dataset_id = dataset_id
+            return dataset_id
+        return None
 
     def _resolve_powgen_main_cif_id(self) -> str | None:
         """Return the durable Galaxy dataset used as the main-phase anchor."""
@@ -4175,6 +4218,7 @@ class RadarPdNovaApp(ThemedApp):
             if selection.get("database_dataset_id"):
                 state.database_source = "archive"
                 state.library_archive_source = "galaxy"
+                state.powgen_database_dataset_id = str(selection["database_dataset_id"])
             state.run_name = ""
             state.notice = f"Loaded the scientific configuration from {record.name}. Choose or replace any inputs, then submit a new run."
             state.active_page = "setup"
@@ -4333,6 +4377,7 @@ class RadarPdNovaApp(ThemedApp):
             state.database_source = "archive"
             state.library_archive_source = "galaxy"
             state.history_database_id = str(selection["database_dataset_id"])
+            state.powgen_database_dataset_id = str(selection["database_dataset_id"])
         if selection.get("database_archive_path"):
             state.database_source = "archive"
             state.library_archive_source = "computer"
@@ -4780,6 +4825,7 @@ class RadarPdNovaApp(ThemedApp):
             state.database_source = "archive"
             state.library_archive_source = "galaxy"
             state.history_database_id = action.outputs["library_archive"]
+            state.powgen_database_dataset_id = action.outputs["library_archive"]
             manifest: dict[str, Any] = {}
             manifest_id = action.outputs.get("library_manifest")
             if manifest_id:

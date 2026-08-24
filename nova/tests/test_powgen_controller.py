@@ -105,6 +105,28 @@ def test_controller_submits_existing_analyze_contract_and_persists_state() -> No
     assert service.uploaded[-1][0]["watch"]["source_directory"].endswith("shared/autoreduce")
 
 
+def test_controller_propagates_custom_library_to_every_monitored_scan() -> None:
+    service = FakeGalaxyService()
+    settings = PowgenExperimentSettings(
+        ipts="IPTS-38000",
+        history_id="history-1",
+        configuration_dataset_id="config-hda",
+        database_dataset_id="custom-library-hda",
+        wavelength_angstrom="1.5",
+    )
+    controller = PowgenWatchController(service, settings)
+    run = controller.discover(
+        [{"path": "/SNS/PG3/IPTS-38000/shared/autoreduce/PG3_63764.gsa"}]
+    )[0]
+
+    controller.submit(run)
+
+    snapshot = service.snapshots[0]
+    assert snapshot.inputs.database_dataset_id == "custom-library-hda"
+    assert controller.definition.config_refs["candidate_library"] == "custom-library-hda"
+    assert service.uploaded[-1][0]["watch"]["database_dataset_id"] == "custom-library-hda"
+
+
 def test_controller_backfills_all_existing_gsa_then_submits_all_new_runs() -> None:
     service = FakeGalaxyService()
     controller = PowgenWatchController(

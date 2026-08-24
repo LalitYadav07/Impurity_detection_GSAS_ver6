@@ -554,7 +554,10 @@ def build_submission_plan(
     if source != run.source_path:
         raise ValueError("Run source is outside the configured read-only POWGEN folder")
 
-    key_material = f"{definition.history_id}\0{run.run_id}\0{run.fingerprint}".encode()
+    immutable_refs = json.dumps(dict(definition.config_refs), sort_keys=True, separators=(",", ":"))
+    key_material = (
+        f"{definition.history_id}\0{run.run_id}\0{run.fingerprint}\0{immutable_refs}"
+    ).encode()
     idempotency_key = sha256(key_material).hexdigest()
     inputs: dict[str, Any] = {
         "data_inputs|input_source|source_kind": "history",
@@ -567,6 +570,12 @@ def build_submission_plan(
     }
     if definition.main_cif_ref:
         inputs["data_inputs|main_cif"] = definition.main_cif_ref
+    candidate_library_ref = definition.config_refs.get("candidate_library")
+    if candidate_library_ref:
+        inputs["library|database|database_kind"] = "custom"
+        inputs["library|database|database_archive"] = candidate_library_ref
+    else:
+        inputs["library|database|database_kind"] = "builtin"
     return GalaxySubmissionPlan(
         history_id=definition.history_id,
         run_id=run.run_id,
