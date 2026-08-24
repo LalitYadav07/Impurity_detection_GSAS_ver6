@@ -104,6 +104,35 @@ def _optional_float(value: Any) -> float | None:
     return float(value)
 
 
+def _powgen_submission_error_summary(value: Any) -> str:
+    """Return a concise, non-HTML explanation for a watcher submission error."""
+
+    text = str(value or "").strip()
+    lowered = text.lower()
+    if "503" in lowered or "service temporarily unavailable" in lowered:
+        return "NDIP/Galaxy was temporarily unavailable (HTTP 503)."
+    if "galaxy was restarted" in lowered or "killed when galaxy was restarted" in lowered:
+        return "Galaxy restarted while the scan inputs were being submitted."
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    if not text:
+        return "The submission service did not accept the scan."
+    return text if len(text) <= 180 else f"{text[:177].rstrip()}..."
+
+
+def _powgen_retry_time(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        retry_at = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if retry_at.tzinfo is None:
+        retry_at = retry_at.replace(tzinfo=timezone.utc)
+    return retry_at.astimezone(timezone.utc)
+
+
 class RadarPdNovaApp(ThemedApp):
     """Interactive orchestration and results workspace backed by Galaxy."""
 
@@ -3003,6 +3032,9 @@ class RadarPdNovaApp(ThemedApp):
             return
 
         rows: list[dict[str, Any]] = []
+        active_count = len(controller.state.submitted)
+        active_limit = controller.settings.max_active_jobs
+        now_utc = datetime.now(timezone.utc)
         phases = (
             ("Failed", controller.state.failed),
             ("Completed", controller.state.completed),
@@ -3037,12 +3069,31 @@ class RadarPdNovaApp(ThemedApp):
                     detail = f"{stage} · {progress}%{f' · job {job_id[:8]}' if job_id else ''}"
                 else:
                     if run.submission_attempts:
-                        status = "Retrying"
                         color = "#fff0d4"
-                        detail = (
-                            f"Submission attempt {run.submission_attempts} failed; retry scheduled for "
-                            f"{run.next_retry_utc or 'the next monitor check'}. {run.error or ''}"
-                        ).strip()
+                        retry_at = _powgen_retry_time(run.next_retry_utc)
+                        reason = _powgen_submission_error_summary(run.error)
+                        attempt = (
+                            f"Attempt {run.submission_attempts} of "
+                            f"{controller.settings.max_submission_attempts} did not start."
+                        )
+                        if retry_at is not None and retry_at > now_utc:
+                            status = "Waiting to retry"
+                            detail = (
+                                f"{reason} {attempt} Automatic retry after "
+                                f"{retry_at.strftime('%H:%M:%S UTC')}."
+                            )
+                        elif active_count >= active_limit:
+                            status = "Waiting for slot"
+                            detail = (
+                                f"{reason} {attempt} Retry is ready and will start automatically "
+                                f"when one of the {active_limit} active analysis slots is available."
+                            )
+                        else:
+                            status = "Retry queued"
+                            detail = (
+                                f"{reason} {attempt} The monitor will retry automatically on its "
+                                "next submission check."
+                            )
                     else:
                         detail = "Discovered in the read-only autoreduce folder; preparing submission."
                 rows.append(

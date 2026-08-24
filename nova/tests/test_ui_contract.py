@@ -1,6 +1,24 @@
 """Structural regressions for the stateful NOVA interface tree."""
 
-from radar_pd_nova.app import RadarPdNovaApp
+from radar_pd_nova.app import (
+    RadarPdNovaApp,
+    _powgen_retry_time,
+    _powgen_submission_error_summary,
+)
+
+
+def test_powgen_retry_messages_hide_proxy_html_and_parse_utc() -> None:
+    proxy_error = "GET: error 503: <html><h1>503 Service Temporarily Unavailable</h1></html>"
+
+    assert _powgen_submission_error_summary(proxy_error) == (
+        "NDIP/Galaxy was temporarily unavailable (HTTP 503)."
+    )
+    assert _powgen_submission_error_summary(
+        "This job was killed when Galaxy was restarted. Please retry the job."
+    ) == "Galaxy restarted while the scan inputs were being submitted."
+    assert _powgen_retry_time("2026-08-24T17:48:35.680757+00:00").isoformat() == (
+        "2026-08-24T17:48:35.680757+00:00"
+    )
 
 
 def test_setup_panels_and_uploads_have_single_stable_instances() -> None:
