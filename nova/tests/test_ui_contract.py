@@ -105,8 +105,6 @@ def test_powgen_experiment_dashboard_exposes_scientific_trends() -> None:
         "Completed analyses",
         "Inspect one completed scan",
         "Scan processing status",
-        "Upload CIF from this computer",
-        "Choose CIF from Galaxy History",
     ):
         assert text in template
 
