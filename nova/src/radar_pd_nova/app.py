@@ -416,7 +416,14 @@ class RadarPdNovaApp(ThemedApp):
             {"title": "2.665 A (Bank 3)", "value": "2.665"},
         ]
         state.powgen_configuration_dataset_id = ""
+        state.powgen_main_cif_source = "none"
+        state.powgen_main_cif_path = ""
         state.powgen_main_cif_dataset_id = ""
+        state.powgen_main_cif_source_options = [
+            {"title": "No supplied main phase", "value": "none"},
+            {"title": "Upload CIF from this computer", "value": "computer"},
+            {"title": "Choose CIF from Galaxy History", "value": "galaxy"},
+        ]
         state.powgen_source_directory = "/SNS/PG3/<IPTS>/shared/autoreduce"
         state.powgen_rows = []
         state.powgen_scientific_rows = []
@@ -952,7 +959,32 @@ class RadarPdNovaApp(ThemedApp):
                         persistent_hint=True,
                     )
                     vuetify.VSelect(
-                        label="Known/main phase CIF (optional)",
+                        label="Known/main phase (optional)",
+                        v_model=("powgen_main_cif_source",),
+                        items=("powgen_main_cif_source_options",),
+                        item_title="title",
+                        item_value="value",
+                        density="compact",
+                        variant="outlined",
+                        disabled=("powgen_monitoring",),
+                        hint="Supply one dominant structural phase when it is already known.",
+                        persistent_hint=True,
+                    )
+                    with html.Div(
+                        v_show="powgen_main_cif_source === 'computer'",
+                        key="'powgen-main-cif-upload-panel'",
+                    ):
+                        NamedFileUpload(
+                            "powgen_main_cif_path",
+                            label="Known/main-phase CIF",
+                            help_text="The CIF will be saved to Galaxy History and reused for every monitored scan.",
+                            extensions=[".cif"],
+                            optional=True,
+                            key="powgen-main-cif-upload",
+                        )
+                    vuetify.VSelect(
+                        v_show="powgen_main_cif_source === 'galaxy'",
+                        label="Main-phase CIF from Galaxy History",
                         v_model=("powgen_main_cif_dataset_id",),
                         items=("history_cif_datasets",),
                         item_title="display_name",
@@ -3385,13 +3417,13 @@ class RadarPdNovaApp(ThemedApp):
             ipts = self._normalize_powgen_ipts(state.powgen_ipts)
             configuration_id = str(state.powgen_configuration_dataset_id or "").strip()
             wavelength = str(state.powgen_wavelength or "").strip()
-            main_cif_id = str(state.powgen_main_cif_dataset_id or "").strip() or None
             if not configuration_id:
                 raise ValueError("Choose a reusable Galaxy RADAR-PD configuration")
             if wavelength not in {"0.8", "1.5", "2.665"}:
                 raise ValueError("Choose one of the supported POWGEN wavelengths")
             if not self.service.history_id:
                 raise RuntimeError("The active Galaxy History is not available to this NOVA session")
+            main_cif_id = self._resolve_powgen_main_cif_id()
 
             settings = PowgenExperimentSettings(
                 ipts=ipts,
@@ -3438,6 +3470,34 @@ class RadarPdNovaApp(ThemedApp):
             state.powgen_message = f"POWGEN monitor could not start: {exc}"
             state.error_message = str(exc)
             state.flush()
+
+    def _resolve_powgen_main_cif_id(self) -> str | None:
+        """Return the durable Galaxy dataset used as the main-phase anchor."""
+
+        state = self.server.state
+        source = str(getattr(state, "powgen_main_cif_source", "none") or "none")
+        if source == "none":
+            return None
+        if source == "galaxy":
+            dataset_id = str(state.powgen_main_cif_dataset_id or "").strip()
+            if not dataset_id:
+                raise ValueError("Choose a main-phase CIF from Galaxy History")
+            return dataset_id
+        if source != "computer":
+            raise ValueError(f"Unsupported POWGEN main-phase source: {source}")
+
+        path = Path(str(getattr(state, "powgen_main_cif_path", "") or ""))
+        if not path.is_file():
+            raise ValueError("Choose a main-phase CIF from this computer")
+        if path.suffix.lower() != ".cif":
+            raise ValueError("The supplied main-phase file must use the .cif extension")
+
+        dataset_id = self.service.upload_document(path, label="POWGEN main phase CIF")
+        state.powgen_main_cif_dataset_id = dataset_id
+        state.powgen_main_cif_source = "galaxy"
+        self.refresh_history()
+        state.notice = f"Saved {path.name} to Galaxy History for POWGEN monitoring."
+        return dataset_id
 
     def stop_powgen_monitoring(self, **_: Any) -> None:
         """Stop discovery without cancelling Galaxy jobs already submitted."""

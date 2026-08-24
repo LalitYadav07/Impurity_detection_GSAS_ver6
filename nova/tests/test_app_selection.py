@@ -237,6 +237,46 @@ def test_history_refresh_keeps_reusable_configurations_visible_after_large_uploa
     assert state.flush_count == 1
 
 
+def test_powgen_main_cif_can_be_reused_from_galaxy_history() -> None:
+    app = RadarPdNovaApp.__new__(RadarPdNovaApp)
+    state = _State(
+        powgen_main_cif_source="galaxy",
+        powgen_main_cif_dataset_id="cif-dataset-1",
+        powgen_main_cif_path="",
+    )
+    app.server = SimpleNamespace(state=state)
+
+    assert app._resolve_powgen_main_cif_id() == "cif-dataset-1"
+
+
+def test_powgen_main_cif_upload_is_saved_and_selected(tmp_path) -> None:
+    cif_path = tmp_path / "known_phase.cif"
+    cif_path.write_text("data_known_phase\n", encoding="utf-8")
+    app = RadarPdNovaApp.__new__(RadarPdNovaApp)
+    state = _State(
+        powgen_main_cif_source="computer",
+        powgen_main_cif_dataset_id="",
+        powgen_main_cif_path=str(cif_path),
+        notice="",
+    )
+    app.server = SimpleNamespace(state=state)
+    uploads: list[tuple[Path, str]] = []
+
+    class _Service:
+        def upload_document(self, path: Path, *, label: str) -> str:
+            uploads.append((path, label))
+            return "uploaded-cif-1"
+
+    app.service = _Service()
+    app.refresh_history = lambda: None
+
+    assert app._resolve_powgen_main_cif_id() == "uploaded-cif-1"
+    assert uploads == [(cif_path, "POWGEN main phase CIF")]
+    assert state.powgen_main_cif_source == "galaxy"
+    assert state.powgen_main_cif_dataset_id == "uploaded-cif-1"
+    assert "known_phase.cif" in state.notice
+
+
 def test_integrated_library_builder_bundles_reusable_history_cifs(tmp_path) -> None:
     app = RadarPdNovaApp.__new__(RadarPdNovaApp)
     state = _State(

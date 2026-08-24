@@ -75,6 +75,7 @@ def test_setup_panels_and_uploads_have_single_stable_instances() -> None:
         "radar-diffraction-upload-native",
         "radar-instrument-upload-native",
         "radar-main-cif-upload-native",
+        "powgen-main-cif-upload-native",
     ):
         assert template.count(f":key=\"'{stable_key}'\"") == 1
 
@@ -104,6 +105,8 @@ def test_powgen_experiment_dashboard_exposes_scientific_trends() -> None:
         "Completed analyses",
         "Inspect one completed scan",
         "Scan processing status",
+        "Upload CIF from this computer",
+        "Choose CIF from Galaxy History",
     ):
         assert text in template
 
