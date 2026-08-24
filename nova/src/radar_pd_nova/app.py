@@ -58,6 +58,23 @@ from .results import (
 from .uploads import NamedFileUpload, NamedMultiCifUpload, build_cif_source_archive
 
 
+def _application_version() -> str:
+    """Read the source version shipped in this NOVA image."""
+    override = os.environ.get("RADAR_PD_NOVA_VERSION", "").strip()
+    if override:
+        return override
+    pyproject = Path(__file__).resolve().parents[2] / "pyproject.toml"
+    try:
+        match = re.search(
+            r'^version\s*=\s*["\']([^"\']+)["\']',
+            pyproject.read_text(encoding="utf-8"),
+            flags=re.MULTILINE,
+        )
+    except OSError:
+        match = None
+    return match.group(1) if match else "unknown"
+
+
 _SUBMISSION_FIELDS = (
     "analysis_mode", "radiation", "instrument_mode", "input_source", "instrument_source", "data_path", "instrument_path",
     "main_cif_path", "database_archive_path", "main_cif_source", "database_source", "library_archive_source", "event_file_path",
@@ -172,6 +189,7 @@ class RadarPdNovaApp(ThemedApp):
     def _initialize_state(self) -> None:
         state = self.server.state
         state.trame__title = "RADAR-PD Interactive"
+        state.application_version = f"v{_application_version()}"
         state.active_page = "setup"
         state.setup_collapsed = False
         # Vuetify expansion groups reconcile numeric panel values reliably
@@ -516,6 +534,13 @@ class RadarPdNovaApp(ThemedApp):
                 html.Div("RADAR-PD Interactive", classes="radar-product-name")
                 html.Div("Phase detection for powder diffraction", classes="radar-product-subtitle")
             vuetify.VSpacer()
+            vuetify.VChip(
+                text=("application_version",),
+                prepend_icon="mdi-source-branch",
+                variant="outlined",
+                size="small",
+                title="Running RADAR-PD Interactive version",
+            )
             vuetify.VChip(
                 text=("connection_status",),
                 color=("connection_ok ? '#dff2e8' : '#fff0d4'",),
