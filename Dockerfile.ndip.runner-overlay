@@ -1,0 +1,11 @@
+ARG RADAR_PD_BASE_IMAGE=savannah.ornl.gov/radar-pd/radar-pd:ndip-826c10e-catalog-20260617
+FROM ${RADAR_PD_BASE_IMAGE}
+
+USER root
+
+# Keep the validated scientific image and catalog unchanged while updating the
+# NDIP adapter's input-archive validation.
+COPY --chown=radar:radar scripts/ndip_runner.py /opt/radar-pd/scripts/ndip_runner.py
+RUN python -m py_compile /opt/radar-pd/scripts/ndip_runner.py
+
+USER radar
