@@ -259,6 +259,7 @@ def _plot_stage(path: Path, payload: dict[str, Any]) -> tuple[str, str, int | No
 
 
 def _plot_display_name(path: Path, payload: dict[str, Any], stage: str, rank: int | None) -> str:
+    lowered = path.as_posix().lower()
     if stage == "magnetic_precheck":
         return "Magnetic residual precheck"
     if stage == "main_phase_anchor":
@@ -269,7 +270,17 @@ def _plot_display_name(path: Path, payload: dict[str, Any], stage: str, rank: in
         return f"Pattern fit / {label}" if label else "Pattern fit"
     rwp = _as_float(payload.get("rwp"))
     if stage == "final_refinement":
-        prefix = f"Refinement rank {rank}" if rank is not None else "Refinement fit"
+        pass_match = re.search(r"(?:seq[_ -]?)?pass[_ -]?0*(\d+)", lowered)
+        if pass_match:
+            pass_number = int(pass_match.group(1))
+            if "trial_blend" in lowered or "trial" in lowered:
+                prefix = f"Pass {pass_number} trial model"
+            elif "accepted_model" in lowered or "accepted" in lowered:
+                prefix = f"Pass {pass_number} accepted model"
+            else:
+                prefix = f"Pass {pass_number} refinement"
+        else:
+            prefix = f"Refinement rank {rank}" if rank is not None else "Refinement fit"
         return f"{prefix} / Rwp {rwp:.2f}%" if rwp is not None else prefix
     title = str(payload.get("title") or "").strip()
     if title and not any(token in title.lower() for token in ("/mnt/", "\\", ".plotdata")):
@@ -1555,9 +1566,8 @@ def build_result_view(
     if primary_index is not None:
         plot_dicts[primary_index]["primary"] = True
         plot_dicts[primary_index]["category"] = "Best refinement"
-        plot_dicts[primary_index]["name"] = "Best refinement fit" + (
-            f" / Rwp {plot_dicts[primary_index]['rwp']:.2f}%" if plot_dicts[primary_index].get("rwp") is not None else ""
-        )
+        original_name = str(plot_dicts[primary_index].get("name") or "Refinement fit")
+        plot_dicts[primary_index]["name"] = f"Best refinement - {original_name}"
     plots = [PlotDescriptor(**item) for item in plot_dicts]
     tables = [TableDescriptor(**item) for item in discover_tables(base)]
 

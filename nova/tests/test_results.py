@@ -647,8 +647,10 @@ def test_builds_curated_rapid_result_and_selects_ranked_refinement(tmp_path: Pat
 
 def test_builds_full_result_and_prioritizes_latest_accepted_fit(tmp_path: Path) -> None:
     accepted = tmp_path / "gsas_projects" / "seq_pass2_accepted_model.png.plotdata.json"
+    trial = tmp_path / "gsas_projects" / "seq_pass2_trial_blend.png.plotdata.json"
     main = tmp_path / "main_phase_fit.png.plotdata.json"
     _write_gsas_payload(accepted, rwp=8.5, phase="Fe")
+    _write_gsas_payload(trial, rwp=10.2, phase="Fe")
     _write_gsas_payload(main, rwp=12.0, phase="Fe")
     result = {
         "$schema": "radar-pd-result/v1",
@@ -669,6 +671,11 @@ def test_builds_full_result_and_prioritizes_latest_accepted_fit(tmp_path: Path) 
     assert view.mode == "full"
     assert view.metrics[0]["value"] == "Full RADAR-PD"
     assert view.phases[0]["phase"] == "Fe"
+    assert {plot.name for plot in view.plots} == {
+        "Main-phase refinement fit",
+        "Best refinement - Pass 2 accepted model / Rwp 8.50%",
+        "Pass 2 trial model / Rwp 10.20%",
+    }
     assert view.full_progression == [{"stage": "Full pipeline pass", "status": "Accepted"}]
     assert view.full_models == [
         {

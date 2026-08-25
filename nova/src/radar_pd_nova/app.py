@@ -2408,7 +2408,7 @@ class RadarPdNovaApp(ThemedApp):
                     with html.Div(classes="radar-card-heading"):
                         with html.Div():
                             html.Div("PRIMARY SCIENTIFIC VIEW", classes="radar-micro-label")
-                            html.H3("Best refinement fit")
+                            html.H3("Refinement fit")
                     vuetify.VSelect(
                         v_show="plot_options.length > 1",
                         label="Inspect another published plot",
