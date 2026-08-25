@@ -14,6 +14,7 @@ from scripts.gsas_main_phase_refiner import (
     normalize_excluded_regions,
     normalize_background_config,
     parse_gsas_lst,
+    phase_display_label,
     resolve_polish_cell_targets,
 )
 
@@ -28,6 +29,13 @@ def _mk_results(rwp: float) -> RefinementResults:
         cell_params={},
         convergence_cycles=1,
     )
+
+
+def test_phase_display_label_removes_internal_custom_catalog_id() -> None:
+    phase_id = "user_00011_yourcustomfilename_collcode258024_bbac164417"
+    label = f"{phase_id} (Al0.5V0.5Fe1 - Pm-3m (221))"
+
+    assert phase_display_label(phase_id, label) == "Al0.5V0.5Fe1 - Pm-3m (221)"
 
 
 class _FakeProject:

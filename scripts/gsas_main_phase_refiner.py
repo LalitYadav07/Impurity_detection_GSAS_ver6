@@ -26,6 +26,23 @@ import json
 logger = logging.getLogger(__name__)
 
 
+def phase_display_label(phase_id: Any, label: Any = None) -> str:
+    """Return a concise scientific label while retaining ``phase_id`` as the data key."""
+
+    phase_text = str(phase_id or "").strip()
+    label_text = str(label or "").strip()
+    wrapped_prefix = f"{phase_text} ("
+    if phase_text and label_text.startswith(wrapped_prefix) and label_text.endswith(")"):
+        scientific_text = label_text[len(wrapped_prefix) : -1].strip()
+        if scientific_text:
+            return scientific_text
+    if label_text:
+        return label_text
+    if len(phase_text) > 48:
+        return phase_text[:45].rstrip("_-") + "..."
+    return phase_text or "Phase"
+
+
 def _reflection_hkl_label(row: np.ndarray, *, is_super: bool = False) -> str:
     """Return a compact HKL label for a GSAS-II RefList row."""
     try:
@@ -3382,10 +3399,8 @@ def plot_gpx_fit_with_ticks(
                 wt_str = f" ({wt_val:.1f}%)" if wt_val > 0 else ""
                 
                 # Prefer provided custom labels
-                if phase_labels and nm in phase_labels:
-                    label = f"{phase_labels[nm]}{wt_str}"
-                else:
-                    label = f"{nm}{wt_str}"
+                raw_label = phase_labels.get(nm) if phase_labels else None
+                label = f"{phase_display_label(nm, raw_label)}{wt_str}"
                 ylabels.append(label)
             
             ax_ticks.set_yticklabels(ylabels)
@@ -3525,7 +3540,10 @@ def plot_gpx_fit_with_ticks(
                     "instrument_type": inst,
                     "rwp": float(rwp) if rwp is not None else None,
                     "phase_order": [str(p) for p in phase_order],
-                    "phase_labels": {str(k): str(v) for k, v in (phase_labels or {}).items()},
+                    "phase_labels": {
+                        str(k): phase_display_label(k, v)
+                        for k, v in (phase_labels or {}).items()
+                    },
                     "phase_weights": {str(k): float(v) for k, v in wt.items()},
                     "phase_ticks": phase_ticks_json,
                     "phase_major_ticks": phase_major_ticks_json,

@@ -542,6 +542,27 @@ def test_gsas_plot_renders_ranked_strongest_bragg_ticks() -> None:
     assert figure.layout.title.text.endswith("Rwp 0.00%")
 
 
+def test_gsas_plot_hides_internal_custom_catalog_ids() -> None:
+    phase_id = "user_00011_yourcustomfilename_collcode258024_bbac164417"
+    payload = {
+        "plot_kind": "gsas_fit_with_ticks_v1",
+        "arrays": {
+            "x": [10.0, 20.0],
+            "yobs": [1.0, 2.0],
+            "ycalc": [1.0, 1.8],
+            "resid": [0.0, 0.2],
+        },
+        "phase_order": [phase_id],
+        "phase_labels": {phase_id: f"{phase_id} (Al0.5V0.5Fe1 - Pm-3m (221))"},
+        "phase_ticks": {phase_id: [12.0]},
+    }
+
+    figure = figure_for_payload(payload)
+
+    assert figure.layout.yaxis3.ticktext == ("Al0.5V0.5Fe1 - Pm-3m (221)",)
+    assert figure.data[-1].name == "Al0.5V0.5Fe1 - Pm-3m (221)"
+
+
 def _write_gsas_payload(path: Path, *, rwp: float, phase: str = "TbSSL") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(

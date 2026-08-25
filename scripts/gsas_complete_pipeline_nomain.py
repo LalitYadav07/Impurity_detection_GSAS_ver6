@@ -3906,7 +3906,7 @@ class UnifiedPipeline:
                 with bench.block("S1: plot main refinement"):
                     try:
                         main_plot = str(Path(plots_dir) / "main_phase_fit.png")
-                        labels = {main_phase_name: f"{main_phase_name} ({disp_main} — {sg_main_disp})"}
+                        labels = {main_phase_name: f"{disp_main} — {sg_main_disp}"}
                         plot_gpx_fit_with_ticks(pm.project.filename, main_plot, phase_labels=labels)
                         print(f"[INFO] Main phase plot saved: {main_plot}")
                         self.manifest.add_artifact(main_plot)
@@ -4387,11 +4387,11 @@ class UnifiedPipeline:
                     labels = {}
                     for p in active_pids:
                         if p == main_phase_name:
-                            labels[p] = f"{p} ({disp_main} — {sg_main_disp})"
+                            labels[p] = f"{disp_main} — {sg_main_disp}"
                         else:
                             d, s = self._safe_db_display_and_sg(p)
                             s_disp = s if s not in (None, "", "—") else "unknown"
-                            labels[p] = f"{p} ({d} — {s_disp})"
+                            labels[p] = f"{d} — {s_disp}"
                             
                     plot_gpx_fit_with_ticks(cmp_gpx, trial_png, phase_labels=labels)
                     plot_gpx_fit_with_ticks(kept_gpx, final_png, phase_labels=labels)

@@ -19,6 +19,23 @@ from plotly.subplots import make_subplots
 _EASTERN_TIME = tzstr("EST5EDT,M3.2.0/2,M11.1.0/2")
 
 
+def _display_phase_label(phase_id: Any, label: Any = None) -> str:
+    """Hide catalog storage identifiers from plot labels without changing data keys."""
+
+    phase_text = str(phase_id or "").strip()
+    label_text = str(label or "").strip()
+    wrapped_prefix = f"{phase_text} ("
+    if phase_text and label_text.startswith(wrapped_prefix) and label_text.endswith(")"):
+        scientific_text = label_text[len(wrapped_prefix) : -1].strip()
+        if scientific_text:
+            return scientific_text
+    if label_text:
+        return label_text
+    if len(phase_text) > 48:
+        return phase_text[:45].rstrip("_-") + "..."
+    return phase_text or "Phase"
+
+
 def _eastern_iso_timestamp(value: Any) -> str | None:
     """Return a browser-stable ISO timestamp with the Eastern UTC offset."""
 
@@ -454,7 +471,8 @@ def gsas_figure(payload: dict[str, Any]) -> go.Figure:
         ticks = {str(label): values for label, values in zip(phase_order, ticks)}
     axis_labels: list[str] = []
     for index, phase_name in enumerate(phase_order):
-        label = str(phase_labels.get(phase_name) or phase_name) if isinstance(phase_labels, dict) else str(phase_name)
+        raw_label = phase_labels.get(phase_name) if isinstance(phase_labels, dict) else None
+        label = _display_phase_label(phase_name, raw_label)
         axis_labels.append(label)
         positions = ticks.get(phase_name, []) if isinstance(ticks, dict) else []
         if isinstance(positions, dict):

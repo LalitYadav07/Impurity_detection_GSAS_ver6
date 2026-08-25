@@ -47,6 +47,17 @@ def _short_label(value: Any, limit: int = 72) -> str:
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "..."
 
 
+def _display_phase_label(phase_id: Any, label: Any = None) -> str:
+    phase_text = str(phase_id or "").strip()
+    label_text = str(label or "").strip()
+    wrapped_prefix = f"{phase_text} ("
+    if phase_text and label_text.startswith(wrapped_prefix) and label_text.endswith(")"):
+        scientific_text = label_text[len(wrapped_prefix) : -1].strip()
+        if scientific_text:
+            return scientific_text
+    return label_text or phase_text or "Phase"
+
+
 def _axis_label(payload: Dict[str, Any], inst: str) -> str:
     if inst == "CW":
         return "2-theta (degrees)"
@@ -219,7 +230,7 @@ def _fig_gsas_fit(payload: Dict[str, Any]) -> Optional[go.Figure]:
     y_tick_text = []
     for idx, phase_name in enumerate(phase_order):
         ticks = np.asarray(phase_ticks.get(phase_name, []), dtype=float)
-        label = str(phase_labels.get(phase_name) or phase_name)
+        label = _display_phase_label(phase_name, phase_labels.get(phase_name))
         weight = phase_weights.get(phase_name, None)
         y_tick_vals.append(float(idx))
         y_tick_text.append(_short_label(_phase_axis_label(label, phase_name, weight), 30))

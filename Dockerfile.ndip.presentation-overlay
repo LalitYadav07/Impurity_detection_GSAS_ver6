@@ -1,0 +1,16 @@
+ARG RADAR_PD_BASE_IMAGE=savannah.ornl.gov/radar-pd/radar-pd:ndip-8525c0f-catalog-20260617
+FROM ${RADAR_PD_BASE_IMAGE}
+
+USER root
+
+# Keep the validated scientific environment and catalog unchanged while
+# improving phase labels in generated fit plots and interactive payloads.
+COPY --chown=radar:radar scripts/gsas_complete_pipeline_nomain.py /opt/radar-pd/scripts/gsas_complete_pipeline_nomain.py
+COPY --chown=radar:radar scripts/gsas_main_phase_refiner.py /opt/radar-pd/scripts/gsas_main_phase_refiner.py
+COPY --chown=radar:radar scripts/plotly_interactive.py /opt/radar-pd/scripts/plotly_interactive.py
+RUN python -m py_compile \
+        /opt/radar-pd/scripts/gsas_complete_pipeline_nomain.py \
+        /opt/radar-pd/scripts/gsas_main_phase_refiner.py \
+        /opt/radar-pd/scripts/plotly_interactive.py
+
+USER radar
