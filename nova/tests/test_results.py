@@ -109,6 +109,23 @@ def test_experiment_figures_use_metadata_axis_and_limit_default_phase_traces() -
     assert quality_figure.layout.xaxis.type == "date"
 
 
+def test_experiment_temperature_axis_does_not_invent_missing_units() -> None:
+    scans = [
+        {
+            "run_number": 10,
+            "metadata": {"temperature": {"value": 25.0}},
+            "phases": [{"label": "Phase (SG 1)", "weight_percent": 100.0}],
+        }
+    ]
+
+    options = experiment_axis_options(scans)
+    figure = experiment_phase_fraction_figure(scans, x_key="temperature")
+
+    temperature_option = next(row for row in options if row["value"] == "temperature")
+    assert temperature_option["title"] == "Sample temperature (unit not reported)"
+    assert figure.layout.xaxis.title.text == "Sample temperature (unit not reported)"
+
+
 def test_experiment_sample_identity_prefers_sample_id_and_labels_fallbacks() -> None:
     identified = experiment_sample_identity(
         {

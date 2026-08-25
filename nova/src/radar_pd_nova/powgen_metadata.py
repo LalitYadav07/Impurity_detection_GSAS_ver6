@@ -21,7 +21,7 @@ from typing import Any, Iterable
 
 
 _MAX_LOG_VALUES = 200_000
-_METADATA_SCHEMA_VERSION = 2
+_METADATA_SCHEMA_VERSION = 3
 _NUMBER = re.compile(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][-+]?\d+)?")
 _DATA = re.compile(r"\bDATA\s*\{(.*?)\}", re.DOTALL)
 _DATASPACE_SIZE = re.compile(r"DATASPACE\s+SIMPLE\s*\{\s*\(\s*(\d+)")
@@ -149,6 +149,41 @@ def _numeric_log(snapshot: _Snapshot | None) -> dict[str, Any] | None:
     }
 
 
+def _temperature_in_kelvin(metric: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Normalize an explicitly labelled temperature while retaining provenance."""
+
+    if metric is None:
+        return None
+    unit = str(metric.get("unit") or "").strip()
+    normalized = re.sub(r"[\s_.-]+", "", unit.lower().replace("°", "deg"))
+    if normalized in {"k", "kelvin", "degk", "degreek", "degreeskelvin"}:
+        metric["unit"] = "K"
+        metric["source_unit"] = unit or "K"
+        return metric
+    if normalized not in {
+        "c",
+        "degc",
+        "celsius",
+        "degreec",
+        "degreesc",
+        "degreecelsius",
+        "degreescelsius",
+    }:
+        # Never infer a temperature unit from magnitude or a run-title suffix.
+        return metric
+
+    converted = dict(metric)
+    converted["source_unit"] = unit
+    converted["source_value"] = metric.get("value")
+    for key in ("value", "first", "last", "minimum", "maximum"):
+        value = metric.get(key)
+        if value is not None:
+            converted[key] = round(float(value) + 273.15, 8)
+    converted["unit"] = "K"
+    converted["converted_from"] = unit
+    return converted
+
+
 def _text_value(path: Path, candidates: Iterable[str]) -> str:
     snapshot = _first_snapshot(path, candidates)
     return snapshot.text if snapshot is not None else ""
@@ -191,13 +226,15 @@ def read_powgen_scan_metadata(
     if not path.is_file():
         return {"nexus_path": str(path).replace("\\", "/"), "available": False}
 
-    temperature = _numeric_log(
-        _first_snapshot(
-            path,
-            (
-                "/entry/DASlogs/BL11A:SE:SampleTemp/value",
-                "/entry/sample/temperature",
-            ),
+    temperature = _temperature_in_kelvin(
+        _numeric_log(
+            _first_snapshot(
+                path,
+                (
+                    "/entry/DASlogs/BL11A:SE:SampleTemp/value",
+                    "/entry/sample/temperature",
+                ),
+            )
         )
     )
     magnetic_field = _numeric_log(

@@ -40,6 +40,24 @@ def test_reads_bounded_powgen_nexus_conditions(tmp_path: Path) -> None:
     assert metadata["sample_id"] == "118950"
 
 
+def test_explicit_celsius_temperature_is_converted_to_kelvin(tmp_path: Path) -> None:
+    nexus = tmp_path / "PG3_63717.nxs.h5"
+    with h5py.File(nexus, "w") as handle:
+        logs = handle.create_group("entry").create_group("DASlogs")
+        temperature = logs.create_group("BL11A:SE:SampleTemp")
+        value = temperature.create_dataset("value", data=np.asarray([24.0, 26.0]))
+        value.attrs["units"] = "degC"
+
+    metadata = read_powgen_scan_metadata("IPTS-38000", 63717, nexus_path=nexus)
+
+    assert metadata["temperature"]["value"] == 298.15
+    assert metadata["temperature"]["minimum"] == 297.15
+    assert metadata["temperature"]["maximum"] == 299.15
+    assert metadata["temperature"]["unit"] == "K"
+    assert metadata["temperature"]["source_unit"] == "degC"
+    assert metadata["temperature"]["source_value"] == 25.0
+
+
 def test_watch_run_round_trip_preserves_scan_metadata() -> None:
     run = WatchedRun(
         run_number=63716,

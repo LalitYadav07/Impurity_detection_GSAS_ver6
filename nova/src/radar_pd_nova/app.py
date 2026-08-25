@@ -2075,6 +2075,11 @@ class RadarPdNovaApp(ThemedApp):
                     html.Strong("{{ powgen_selected_scan.run_id }}")
                     html.Span("Rwp {{ powgen_selected_scan.rwp_display }} | {{ powgen_selected_scan.elapsed_display }} | {{ powgen_selected_scan.analysis_mode }}")
                     html.Span("{{ powgen_selected_scan.conditions_display }}")
+                    html.Span(
+                        "{{ powgen_selected_scan.temperature_provenance }}",
+                        v_if="powgen_selected_scan.temperature_provenance",
+                        classes="radar-section-help",
+                    )
                     html.Span("{{ powgen_selected_scan.run_title }}", v_if="powgen_selected_scan.run_title")
                     html.Span(
                         "Sample: {{ powgen_selected_scan.sample_display }}",
@@ -3243,9 +3248,24 @@ class RadarPdNovaApp(ThemedApp):
                 unit = str(metric.get("unit") or fallback_unit)
                 return f"{value:.{digits}g} {unit}".strip()
 
-            temperature_display = metric_display("temperature", "K", digits=6)
-            field_display = metric_display("magnetic_field", "T", digits=4)
-            wavelength_display = metric_display("wavelength", "A", digits=5)
+            temperature_display = metric_display("temperature", "", digits=6)
+            field_display = metric_display("magnetic_field", "", digits=4)
+            wavelength_display = metric_display("wavelength", "", digits=5)
+            temperature_metric = metadata.get("temperature")
+            temperature_provenance = ""
+            if isinstance(temperature_metric, dict):
+                source = str(temperature_metric.get("source") or "").strip()
+                source_unit = str(temperature_metric.get("source_unit") or "").strip()
+                display_unit = str(temperature_metric.get("unit") or "").strip()
+                if source:
+                    unit_note = ""
+                    if source_unit and display_unit and source_unit != display_unit:
+                        unit_note = f"; recorded in {source_unit}, displayed in {display_unit}"
+                    elif display_unit:
+                        unit_note = f"; unit {display_unit}"
+                    else:
+                        unit_note = "; unit not reported"
+                    temperature_provenance = f"Temperature source: {source}{unit_note}"
             conditions = [
                 value
                 for value in (
@@ -3276,6 +3296,7 @@ class RadarPdNovaApp(ThemedApp):
                 "metadata": metadata,
                 "conditions_display": " | ".join(conditions) or "Metadata unavailable",
                 "temperature_display": temperature_display or "-",
+                "temperature_provenance": temperature_provenance,
                 "field_display": field_display or "-",
                 "wavelength_display": wavelength_display or "-",
                 "run_title": str(metadata.get("run_title") or ""),

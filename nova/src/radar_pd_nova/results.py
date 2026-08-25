@@ -890,6 +890,35 @@ def _metadata_metric(scan: dict[str, Any], key: str) -> float | None:
     return _as_float(value.get("value"))
 
 
+_EXPERIMENT_METRIC_TITLES = {
+    "temperature": "Sample temperature",
+    "magnetic_field": "Magnetic field",
+    "wavelength": "Wavelength",
+    "proton_charge": "Proton charge",
+}
+
+
+def _experiment_metric_unit(scans: list[dict[str, Any]], key: str) -> str:
+    units = {
+        str(metric.get("unit") or "").strip()
+        for scan in scans
+        for metric in [((scan.get("metadata") or {}).get(key))]
+        if isinstance(metric, dict) and _as_float(metric.get("value")) is not None
+        and str(metric.get("unit") or "").strip()
+    }
+    if len(units) == 1:
+        return next(iter(units))
+    if len(units) > 1:
+        return "mixed units"
+    return ""
+
+
+def _experiment_metric_title(scans: list[dict[str, Any]], key: str) -> str:
+    title = _EXPERIMENT_METRIC_TITLES[key]
+    unit = _experiment_metric_unit(scans, key)
+    return f"{title} ({unit})" if unit else f"{title} (unit not reported)"
+
+
 def experiment_sample_identity(scan: dict[str, Any]) -> dict[str, str]:
     """Return a stable sample key and a readable label for one experiment row."""
 
@@ -923,14 +952,9 @@ def experiment_axis_options(scans: list[dict[str, Any]]) -> list[dict[str, str]]
     options = [{"title": "Scan number", "value": "run_number"}]
     if any(str((scan.get("metadata") or {}).get("start_time") or "") for scan in scans):
         options.append({"title": "Acquisition time", "value": "start_time"})
-    for title, key in (
-        ("Sample temperature (K)", "temperature"),
-        ("Magnetic field (T)", "magnetic_field"),
-        ("Wavelength (A)", "wavelength"),
-        ("Proton charge (C)", "proton_charge"),
-    ):
+    for key in _EXPERIMENT_METRIC_TITLES:
         if any(_metadata_metric(scan, key) is not None for scan in scans):
-            options.append({"title": title, "value": key})
+            options.append({"title": _experiment_metric_title(scans, key), "value": key})
     return options
 
 
@@ -944,14 +968,12 @@ def _experiment_axis(
             "Acquisition time",
             "date",
         )
-    metric_titles = {
-        "temperature": "Sample temperature (K)",
-        "magnetic_field": "Magnetic field (T)",
-        "wavelength": "Wavelength (A)",
-        "proton_charge": "Proton charge (C)",
-    }
-    if x_key in metric_titles:
-        return ([_metadata_metric(scan, x_key) for scan in scans], metric_titles[x_key], "linear")
+    if x_key in _EXPERIMENT_METRIC_TITLES:
+        return (
+            [_metadata_metric(scan, x_key) for scan in scans],
+            _experiment_metric_title(scans, x_key),
+            "linear",
+        )
     # Use categorical strings so Plotly never abbreviates 63714 as 63.714k.
     return ([str(scan.get("run_number") or "-") for scan in scans], "POWGEN scan", "category")
 
@@ -961,17 +983,19 @@ def _scan_condition_text(scan: dict[str, Any]) -> str:
     if not isinstance(metadata, dict):
         return ""
     conditions: list[str] = []
-    for label, key, fallback_unit in (
-        ("T", "temperature", "K"),
-        ("Field", "magnetic_field", "T"),
-        ("Wavelength", "wavelength", "A"),
+    for label, key in (
+        ("T", "temperature"),
+        ("Field", "magnetic_field"),
+        ("Wavelength", "wavelength"),
     ):
         metric = metadata.get(key)
         if not isinstance(metric, dict) or _as_float(metric.get("value")) is None:
             continue
         value = float(metric["value"])
-        unit = str(metric.get("unit") or fallback_unit)
-        conditions.append(f"{label}: {value:g} {unit}")
+        unit = str(metric.get("unit") or "").strip()
+        conditions.append(
+            f"{label}: {value:g} {unit}" if unit else f"{label}: {value:g} [unit not reported]"
+        )
     return " | ".join(conditions)
 
 
