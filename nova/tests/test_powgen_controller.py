@@ -8,7 +8,9 @@ from radar_pd_nova.powgen_controller import (
     PowgenExperimentSettings,
     PowgenWatchController,
     bounded_directory_listing,
+    preflight_powgen_experiment,
 )
+from radar_pd_nova import powgen_controller
 
 
 class FakeGalaxyService:
@@ -160,6 +162,89 @@ def test_controller_backfills_all_existing_gsa_then_submits_all_new_runs() -> No
 
     assert [run.run_number for run in initial] == [63762, 63763, 63764]
     assert [run.run_number for run in later] == [63765, 63766]
+
+
+def test_controller_limits_initial_backfill_without_leaking_older_scans_later() -> None:
+    service = FakeGalaxyService()
+    controller = PowgenWatchController(
+        service,
+        PowgenExperimentSettings(
+            ipts="IPTS-38000",
+            history_id="history-1",
+            configuration_dataset_id="config-hda",
+            wavelength_angstrom="1.5",
+            initial_backfill_limit=2,
+        ),
+    )
+    initial_listing = [
+        {"path": f"/SNS/PG3/IPTS-38000/shared/autoreduce/PG3_{run_number}.gsa"}
+        for run_number in range(63760, 63766)
+    ]
+
+    initial = controller.discover(initial_listing)
+    later = controller.discover(
+        initial_listing
+        + [{"path": "/SNS/PG3/IPTS-38000/shared/autoreduce/PG3_63766.gsa"}]
+    )
+
+    assert [run.run_number for run in initial] == [63764, 63765]
+    assert [run.run_number for run in later] == [63766]
+
+
+def test_controller_new_only_ignores_startup_files_and_discovers_next_scan() -> None:
+    service = FakeGalaxyService()
+    controller = PowgenWatchController(
+        service,
+        PowgenExperimentSettings(
+            ipts="IPTS-38000",
+            history_id="history-1",
+            configuration_dataset_id="config-hda",
+            wavelength_angstrom="1.5",
+            initial_backfill_limit=0,
+        ),
+    )
+    initial_listing = [
+        {"path": "/SNS/PG3/IPTS-38000/shared/autoreduce/PG3_63764.gsa"},
+        {"path": "/SNS/PG3/IPTS-38000/shared/autoreduce/PG3_63765.gsa"},
+    ]
+
+    assert controller.discover(initial_listing) == []
+    discovered = controller.discover(
+        initial_listing
+        + [{"path": "/SNS/PG3/IPTS-38000/shared/autoreduce/PG3_63766.gsa"}]
+    )
+
+    assert [run.run_number for run in discovered] == [63766]
+
+
+def test_preflight_detects_latest_scan_wavelength_and_packaged_profile(monkeypatch) -> None:
+    monkeypatch.setattr(
+        powgen_controller,
+        "bounded_directory_listing",
+        lambda _directory: [
+            {"path": "/SNS/PG3/IPTS-38000/shared/autoreduce/PG3_63763.gsa"},
+            {"path": "/SNS/PG3/IPTS-38000/shared/autoreduce/PG3_63764.gsa"},
+        ],
+    )
+    monkeypatch.setattr(
+        powgen_controller,
+        "read_powgen_scan_metadata",
+        lambda _ipts, _run: {
+            "available": True,
+            "sample_id": "118950",
+            "temperature": {"value": 300.0, "unit": "K"},
+            "wavelength": {"value": 1.5, "unit": "A"},
+        },
+    )
+
+    result = preflight_powgen_experiment("IPTS-38000", requested_wavelength="0.8")
+
+    assert result["ready"] is True
+    assert result["scan_count"] == 2
+    assert result["latest_run"] == "PG3_63764"
+    assert result["detected_wavelength"] == "1.5"
+    assert result["selected_wavelength"] == "1.5"
+    assert result["profile_filename"].endswith("60HzB2_CWL1p5.instprm")
 
 
 def test_controller_caps_concurrent_backfill_submissions() -> None:

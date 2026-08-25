@@ -2,6 +2,7 @@
 
 from radar_pd_nova.app import (
     RadarPdNovaApp,
+    _format_eastern_time,
     _powgen_retry_time,
     _powgen_submission_error_summary,
 )
@@ -19,6 +20,11 @@ def test_powgen_retry_messages_hide_proxy_html_and_parse_utc() -> None:
     assert _powgen_retry_time("2026-08-24T17:48:35.680757+00:00").isoformat() == (
         "2026-08-24T17:48:35.680757+00:00"
     )
+
+
+def test_powgen_user_timestamps_are_explicitly_eastern_and_dst_aware() -> None:
+    assert _format_eastern_time("2026-01-15T18:00:00Z") == "2026-01-15 13:00:00 EST"
+    assert _format_eastern_time("2026-08-25T18:00:00Z") == "2026-08-25 14:00:00 EDT"
 
 
 def test_setup_panels_and_uploads_have_single_stable_instances() -> None:
@@ -48,28 +54,17 @@ def test_setup_panels_and_uploads_have_single_stable_instances() -> None:
     for panel_value in range(11):
         assert template.count(f':value="{panel_value}"') >= 1
 
-    # Vue's template compiler treats bare Promise as component scope. Using
-    # Promise.all in the multi-CIF handler raises while the library panel is
-    # first rendered and causes Vuetify to discard that panel body.
+    # Each browser File is decoded independently. A rejected file must not
+    # discard the library panel or the sources already accepted by the server.
     assert "Promise.all" not in template
-    assert "for (const file of files)" in template
-    # Vuetify may update the v-model without forwarding the selected File[]
-    # as the custom handler's $event. Both local source pickers therefore read
-    # their bound models, matching the stable single-file upload contract.
-    assert "Array.isArray(radar_cif_library_upload_browser_files)" in template
-    assert "Array.isArray(radar_cif_library_upload_browser_archives)" in template
-    assert "Array.isArray($event) ? $event" not in template
-    assert "new window.TextEncoder()" in template
-    # Loose CIFs are batched; ZIP archives use the proven direct
-    # ArrayBuffer + filename contract so each archive completes inspection.
-    assert template.count("new window.Uint8Array") == 2
-    assert "new window.DataView" in template
-    assert "[contents, file.name]" in template
-    assert "new TextEncoder()" not in template
-    assert "new Uint8Array" not in template
-    assert "new DataView" not in template
-    assert "ZIP archive(s) selected; inspecting CIF contents..." in template
-    assert "CIF file(s) selected; reading contents..." in template
+    assert ".arrayBuffer().then" in template
+    # Vuetify updates one bound File model per event. Users add more sources
+    # by repeating the action, avoiding browser-dependent File[] payloads.
+    assert 'v-model="radar_cif_library_upload_browser_file"' in template
+    assert 'v-model="radar_cif_library_upload_browser_archive"' in template
+    assert "decode_radar_cif_library_upload" in template
+    assert "decode_archive_radar_cif_library_upload" in template
+    assert "Array.isArray(radar_cif_library_upload" not in template
 
     for stable_key in (
         "radar-diffraction-upload-native",
@@ -123,7 +118,21 @@ def test_workbench_exposes_atomic_pending_and_companion_actions() -> None:
     assert "selected_run_stage" in template
     assert "Reload results from Galaxy" in template
     assert "Resolve and verify SNS input" in template
-    assert "Build and select library" in template
+    assert "Build and use this library" in template
+
+
+def test_powgen_monitor_requires_preflight_and_exposes_safe_backfill_controls() -> None:
+    app = RadarPdNovaApp()
+    template = app.layout.html
+
+    assert app.server.state.powgen_backfill_mode == "latest_5"
+    assert app.server.state.powgen_preflight_ready is False
+    assert app.server.state.powgen_backfill_options[0]["title"] == "Latest 5 existing scans, then new scans"
+    assert any(option["value"] == "new_only" for option in app.server.state.powgen_backfill_options)
+    assert "Check experiment and inputs" in template
+    assert "powgen_monitoring || !powgen_preflight_ready" in template
+    assert "Refresh now" in template
+    assert "Next check:" in template
     assert "Save reusable configuration to History" in template
     assert "Open Result Explorer" in template
     assert "Send checkpoint to GSAS-II handoff" in template

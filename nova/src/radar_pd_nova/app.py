@@ -10,11 +10,12 @@ import re
 import tempfile
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+from dateutil.tz import tzstr
 from nova.trame import ThemedApp
 from trame.app import get_server
 from trame.widgets import client, html, plotly, vuetify3 as vuetify
@@ -41,7 +42,11 @@ from .models import (
     UtilityActionRecord,
     selected_run_uid,
 )
-from .powgen_controller import PowgenExperimentSettings, PowgenWatchController
+from .powgen_controller import (
+    PowgenExperimentSettings,
+    PowgenWatchController,
+    preflight_powgen_experiment,
+)
 from .results import (
     build_result_view,
     experiment_axis_options,
@@ -57,6 +62,27 @@ from .results import (
     read_table,
 )
 from .uploads import NamedFileUpload, NamedMultiCifUpload, build_cif_source_archive
+
+
+_EASTERN_TIME = tzstr("EST5EDT,M3.2.0/2,M11.1.0/2")
+
+
+def _format_eastern_time(value: Any, format_string: str = "%Y-%m-%d %H:%M:%S %Z") -> str:
+    """Format an ISO timestamp or datetime explicitly in US Eastern time."""
+
+    if isinstance(value, datetime):
+        timestamp = value
+    else:
+        text = str(value or "").strip()
+        if not text:
+            return "Not reported"
+        try:
+            timestamp = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            return text
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=timezone.utc)
+    return timestamp.astimezone(_EASTERN_TIME).strftime(format_string)
 
 
 def _application_version() -> str:
@@ -106,6 +132,14 @@ _POWGEN_SUBMISSION_CONCURRENCY = max(
     1,
     min(2, int(os.getenv("RADAR_PD_POWGEN_SUBMISSION_CONCURRENCY", "2"))),
 )
+
+_POWGEN_BACKFILL_LIMITS: dict[str, int | None] = {
+    "new_only": 0,
+    "latest_1": 1,
+    "latest_5": 5,
+    "latest_20": 20,
+    "all": None,
+}
 
 
 def _list_value(value: Any) -> list[str]:
@@ -169,6 +203,7 @@ class RadarPdNovaApp(ThemedApp):
         self._history_search_task: asyncio.Task[None] | None = None
         self._powgen_controller: PowgenWatchController | None = None
         self._powgen_monitor_task: asyncio.Task[None] | None = None
+        self._powgen_wake_event = asyncio.Event()
         self._powgen_settings_signature: tuple[str, ...] | None = None
         self._opening_run_uid: str | None = None
         self._plot_widget: Any | None = None
@@ -428,6 +463,14 @@ class RadarPdNovaApp(ThemedApp):
         state.watch_recipe_message = ""
         state.powgen_monitoring = False
         state.powgen_ipts = ""
+        state.powgen_backfill_mode = "latest_5"
+        state.powgen_backfill_options = [
+            {"title": "Latest 5 existing scans, then new scans", "value": "latest_5"},
+            {"title": "Latest scan only, then new scans", "value": "latest_1"},
+            {"title": "Latest 20 existing scans, then new scans", "value": "latest_20"},
+            {"title": "New scans only", "value": "new_only"},
+            {"title": "All existing scans, then new scans", "value": "all"},
+        ]
         state.powgen_wavelength = "1.5"
         state.powgen_wavelength_options = [
             {"title": "0.8 A (Bank 1)", "value": "0.8"},
@@ -468,6 +511,11 @@ class RadarPdNovaApp(ThemedApp):
         state.powgen_dashboard_notice = "Completed scans will populate this experiment view."
         state.powgen_message = "Select an IPTS, wavelength, and reusable Galaxy configuration to begin."
         state.powgen_last_checked = "Not started"
+        state.powgen_next_check = "Not scheduled"
+        state.powgen_preflight_status = "idle"
+        state.powgen_preflight_ready = False
+        state.powgen_preflight_message = "Check the experiment before starting monitoring."
+        state.powgen_preflight_details = []
         state.powgen_poll_seconds = 15
         state.result_tab = "overview"
         state.mode_options = [
@@ -964,6 +1012,18 @@ class RadarPdNovaApp(ThemedApp):
                         persistent_hint=True,
                     )
                     vuetify.VSelect(
+                        label="Scans to process when monitoring starts",
+                        v_model=("powgen_backfill_mode",),
+                        items=("powgen_backfill_options",),
+                        item_title="title",
+                        item_value="value",
+                        density="compact",
+                        variant="outlined",
+                        disabled=("powgen_monitoring",),
+                        hint="Latest 5 is the safe default for a live demonstration. Every later scan is still monitored.",
+                        persistent_hint=True,
+                    )
+                    vuetify.VSelect(
                         label="POWGEN wavelength",
                         v_model=("powgen_wavelength",),
                         items=("powgen_wavelength_options",),
@@ -1039,11 +1099,43 @@ class RadarPdNovaApp(ThemedApp):
                         clearable=True,
                         no_data_text="No CIF datasets are in this Galaxy History",
                     )
+                    vuetify.VBtn(
+                        "Check experiment and inputs",
+                        click=self.check_powgen_experiment,
+                        prepend_icon="mdi-clipboard-check-outline",
+                        variant="outlined",
+                        size="small",
+                        block=True,
+                        classes="mb-2",
+                        disabled=(
+                            "powgen_monitoring || !powgen_ipts || !powgen_wavelength || "
+                            "!powgen_configuration_dataset_id || powgen_preflight_status === 'checking'",
+                        ),
+                    )
+                    vuetify.VAlert(
+                        v_show="powgen_preflight_status !== 'idle'",
+                        text=("powgen_preflight_message",),
+                        type=("powgen_preflight_ready ? 'success' : powgen_preflight_status === 'checking' ? 'info' : 'warning'",),
+                        variant="tonal",
+                        density="compact",
+                        classes="mb-2",
+                    )
+                    with html.Div(
+                        v_if="powgen_preflight_details.length",
+                        classes="radar-preflight-summary mb-2",
+                    ):
+                        with html.Div(
+                            v_for="item in powgen_preflight_details",
+                            key="item.label",
+                            classes="radar-preflight-row",
+                        ):
+                            html.Span("{{ item.label }}", classes="radar-preflight-label")
+                            html.Span("{{ item.value }}", classes="radar-preflight-value")
                     with html.Div(classes="radar-soft-panel mb-2"):
                         html.Div("READ-ONLY SOURCE", classes="radar-micro-label")
                         html.Code("{{ powgen_source_directory }}")
                         html.P(
-                            "On first start, every compatible .gsa not already recorded in the Galaxy checkpoint is queued. Up to five analyses stay active while new submissions are opened through two protected lanes. RADAR-PD does not write into the IPTS.",
+                            "Only the selected initial scan range is backfilled. Every later completed .gsa is monitored. Up to five analyses stay active while new submissions use two protected lanes. RADAR-PD does not write into the IPTS.",
                             classes="radar-help-copy mb-0",
                         )
                     vuetify.VAlert(
@@ -1061,7 +1153,7 @@ class RadarPdNovaApp(ThemedApp):
                             color="#15543c",
                             variant="flat",
                             size="small",
-                            disabled=("powgen_monitoring || !powgen_ipts || !powgen_wavelength || !powgen_configuration_dataset_id",),
+                            disabled=("powgen_monitoring || !powgen_preflight_ready",),
                         )
                         vuetify.VBtn(
                             "Stop",
@@ -1080,6 +1172,14 @@ class RadarPdNovaApp(ThemedApp):
                             size="small",
                             disabled=("powgen_monitoring",),
                         )
+                        vuetify.VBtn(
+                            "Refresh now",
+                            click=self.refresh_powgen_monitor_now,
+                            prepend_icon="mdi-refresh",
+                            variant="text",
+                            size="small",
+                            disabled=("!powgen_monitoring",),
+                        )
                     vuetify.VBtn(
                         "Open experiment dashboard",
                         v_show="powgen_rows.length",
@@ -1092,6 +1192,7 @@ class RadarPdNovaApp(ThemedApp):
                     )
                     html.P("{{ powgen_message }}", classes="radar-help-copy mt-2 mb-1")
                     html.Div("Last checked: {{ powgen_last_checked }}", classes="radar-run-list-meta")
+                    html.Div("Next check: {{ powgen_next_check }}", classes="radar-run-list-meta")
                     with html.Div(classes="radar-run-list mt-2", v_if="powgen_rows.length"):
                         with html.Div(
                             v_for="row in powgen_rows",
@@ -3178,7 +3279,7 @@ class RadarPdNovaApp(ThemedApp):
                             status = "Waiting to retry"
                             detail = (
                                 f"{reason} {attempt} Automatic retry after "
-                                f"{retry_at.strftime('%H:%M:%S UTC')}."
+                                f"{_format_eastern_time(retry_at, '%H:%M:%S %Z')}."
                             )
                         elif active_count >= active_limit:
                             status = "Waiting for slot"
@@ -3539,6 +3640,147 @@ class RadarPdNovaApp(ThemedApp):
         self._sync_powgen_rows()
         self.server.state.flush()
 
+    @staticmethod
+    def _powgen_dataset_label(items: Any, dataset_id: str, fallback: str) -> str:
+        selected = next(
+            (
+                item
+                for item in (items or [])
+                if str(item.get("id") or "") == str(dataset_id or "")
+            ),
+            None,
+        )
+        return str((selected or {}).get("display_name") or (selected or {}).get("name") or fallback)
+
+    def check_powgen_experiment(self, **_: Any) -> bool:
+        """Validate a live-monitor setup without writing to the IPTS or submitting jobs."""
+
+        state = self.server.state
+        state.powgen_preflight_status = "checking"
+        state.powgen_preflight_ready = False
+        state.powgen_preflight_message = "Checking the read-only POWGEN source and packaged instrument profile..."
+        state.powgen_preflight_details = []
+        state.flush()
+        try:
+            ipts = self._normalize_powgen_ipts(state.powgen_ipts)
+            configuration_id = str(state.powgen_configuration_dataset_id or "").strip()
+            if not configuration_id:
+                raise ValueError("Choose a reusable RADAR-PD configuration")
+            configuration = self.service.load_configuration_dataset(configuration_id)
+
+            backfill_mode = str(state.powgen_backfill_mode or "latest_5")
+            if backfill_mode not in _POWGEN_BACKFILL_LIMITS:
+                raise ValueError("Choose how many existing scans should be processed")
+
+            main_source = str(state.powgen_main_cif_source or "none")
+            if main_source == "computer":
+                main_path = Path(str(state.powgen_main_cif_path or ""))
+                if not main_path.is_file() or main_path.suffix.lower() != ".cif":
+                    raise ValueError("Choose a valid .cif main-phase file from this computer")
+                main_label = main_path.name
+            elif main_source == "galaxy":
+                main_id = str(state.powgen_main_cif_dataset_id or "").strip()
+                if not main_id:
+                    raise ValueError("Choose a main-phase CIF from Galaxy History")
+                main_label = self._powgen_dataset_label(
+                    state.history_cif_datasets,
+                    main_id,
+                    "Selected Galaxy CIF",
+                )
+            else:
+                main_label = "Not supplied"
+
+            result = preflight_powgen_experiment(
+                ipts,
+                requested_wavelength=str(state.powgen_wavelength or ""),
+            )
+            state.powgen_ipts = ipts
+            state.powgen_source_directory = str(result.get("source_directory") or "")
+            detected = str(result.get("detected_wavelength") or "")
+            if detected:
+                state.powgen_wavelength = detected
+
+            configuration_label = self._powgen_dataset_label(
+                state.history_configuration_datasets,
+                configuration_id,
+                "Selected Galaxy configuration",
+            )
+            database_id = str(state.powgen_database_dataset_id or "").strip()
+            database_label = (
+                self._powgen_dataset_label(
+                    state.history_archive_datasets,
+                    database_id,
+                    "Selected custom Galaxy library",
+                )
+                if database_id
+                else "Built-in MP/COD catalog"
+            )
+            backfill_label = next(
+                (
+                    str(option["title"])
+                    for option in state.powgen_backfill_options
+                    if option["value"] == backfill_mode
+                ),
+                backfill_mode,
+            )
+            scan_range = (
+                f"{result.get('first_run')} to {result.get('latest_run')}"
+                if result.get("scan_count")
+                else "No completed scans"
+            )
+            state.powgen_preflight_details = [
+                {"label": "Read-only source", "value": state.powgen_source_directory},
+                {
+                    "label": "Available reductions",
+                    "value": f"{result.get('scan_count', 0)} ({scan_range})",
+                },
+                {
+                    "label": "Latest scan",
+                    "value": str(result.get("latest_file") or "Not available"),
+                },
+                {
+                    "label": "Latest acquisition",
+                    "value": _format_eastern_time(result.get("latest_start_time")),
+                },
+                {
+                    "label": "Latest sample",
+                    "value": str(result.get("sample_display") or "Not reported"),
+                },
+                {
+                    "label": "Latest temperature",
+                    "value": str(result.get("temperature_display") or "Not reported"),
+                },
+                {
+                    "label": "Wavelength",
+                    "value": (
+                        f"{result.get('selected_wavelength')} A - {result.get('wavelength_source')}"
+                    ),
+                },
+                {
+                    "label": "Instrument profile",
+                    "value": str(result.get("profile_filename") or result.get("profile_error") or "Unavailable"),
+                },
+                {"label": "Initial processing", "value": backfill_label},
+                {
+                    "label": "RADAR-PD configuration",
+                    "value": f"{configuration_label} ({configuration.mode.value.title()})",
+                },
+                {"label": "Candidate library", "value": database_label},
+                {"label": "Known/main phase", "value": main_label},
+                {"label": "Application", "value": str(state.application_version)},
+            ]
+            state.powgen_preflight_ready = bool(result.get("ready"))
+            state.powgen_preflight_status = "ready" if state.powgen_preflight_ready else "warning"
+            state.powgen_preflight_message = str(result.get("message") or "Experiment check completed.")
+            state.error_message = "" if state.powgen_preflight_ready else state.powgen_preflight_message
+        except Exception as exc:
+            state.powgen_preflight_status = "error"
+            state.powgen_preflight_ready = False
+            state.powgen_preflight_message = _powgen_submission_error_summary(exc)
+            state.error_message = state.powgen_preflight_message
+        state.flush()
+        return bool(state.powgen_preflight_ready)
+
     def start_powgen_monitoring(self, **_: Any) -> None:
         """Start one session-scoped read-only POWGEN monitor."""
 
@@ -3546,6 +3788,8 @@ class RadarPdNovaApp(ThemedApp):
         if state.powgen_monitoring:
             return
         try:
+            if not self.check_powgen_experiment():
+                return
             ipts = self._normalize_powgen_ipts(state.powgen_ipts)
             configuration_id = str(state.powgen_configuration_dataset_id or "").strip()
             wavelength = str(state.powgen_wavelength or "").strip()
@@ -3557,6 +3801,8 @@ class RadarPdNovaApp(ThemedApp):
                 raise RuntimeError("The active Galaxy History is not available to this NOVA session")
             main_cif_id = self._resolve_powgen_main_cif_id()
             database_id = self._resolve_powgen_database_id()
+            backfill_mode = str(state.powgen_backfill_mode or "latest_5")
+            initial_backfill_limit = _POWGEN_BACKFILL_LIMITS[backfill_mode]
 
             settings = PowgenExperimentSettings(
                 ipts=ipts,
@@ -3565,6 +3811,7 @@ class RadarPdNovaApp(ThemedApp):
                 wavelength_angstrom=wavelength,
                 main_cif_dataset_id=main_cif_id,
                 database_dataset_id=database_id,
+                initial_backfill_limit=initial_backfill_limit,
             )
             signature = (
                 settings.ipts,
@@ -3573,6 +3820,7 @@ class RadarPdNovaApp(ThemedApp):
                 settings.wavelength_angstrom,
                 settings.main_cif_dataset_id or "",
                 settings.database_dataset_id or "",
+                str(settings.initial_backfill_limit),
             )
             if self._powgen_controller is None or self._powgen_settings_signature != signature:
                 self._powgen_controller = PowgenWatchController(self.service, settings)
@@ -3586,9 +3834,10 @@ class RadarPdNovaApp(ThemedApp):
             state.powgen_source_directory = self._powgen_controller.source_directory
             state.powgen_monitoring = True
             state.workspace_view = "experiment"
+            state.powgen_next_check = "Now"
             recovery_note = " Previous Galaxy watch state was restored." if restored else ""
             state.powgen_message = (
-                f"Backfilling existing scans in {state.powgen_source_directory}, then monitoring for new scans. "
+                f"Processing the selected initial scan range in {state.powgen_source_directory}, then monitoring for new scans. "
                 f"Candidate library: {'custom Galaxy archive' if database_id else 'built-in catalog'}. "
                 f"The IPTS remains read-only.{recovery_note}"
             )
@@ -3596,6 +3845,7 @@ class RadarPdNovaApp(ThemedApp):
             self._sync_powgen_rows()
             self._sync_workspace_options(state.analysis_mode)
             state.flush()
+            self._powgen_wake_event.clear()
             task = asyncio.create_task(
                 self._powgen_monitor_loop(),
                 name=f"radar-powgen-watch-{ipts.lower()}",
@@ -3668,10 +3918,23 @@ class RadarPdNovaApp(ThemedApp):
         self._powgen_monitor_task = None
         if task is not None and not task.done():
             task.cancel()
+        self._powgen_wake_event.set()
+        state.powgen_next_check = "Stopped"
         state.powgen_message = (
             "POWGEN monitoring stopped. Already-submitted RADAR-PD jobs continue in Galaxy and remain recoverable. "
             "Use NDIP Ingress for unattended triggering."
         )
+        state.flush()
+
+    def refresh_powgen_monitor_now(self, **_: Any) -> None:
+        """Wake the monitor without restarting it or duplicating its checkpoint."""
+
+        state = self.server.state
+        if not state.powgen_monitoring:
+            return
+        state.powgen_next_check = "Now"
+        state.powgen_message = "Refresh requested; checking the POWGEN source and Galaxy jobs now."
+        self._powgen_wake_event.set()
         state.flush()
 
     async def _powgen_monitor_loop(self) -> None:
@@ -3684,19 +3947,22 @@ class RadarPdNovaApp(ThemedApp):
             return
         try:
             while state.powgen_monitoring and controller is self._powgen_controller:
-                state.powgen_last_checked = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
+                state.powgen_last_checked = _format_eastern_time(datetime.now(timezone.utc))
                 warnings: list[str] = []
                 try:
                     await asyncio.to_thread(controller.discover)
                 except Exception as exc:
-                    warnings.append(f"source check failed: {exc}")
+                    warnings.append(f"Source check failed: {_powgen_submission_error_summary(exc)}")
 
                 try:
                     recovered = await asyncio.to_thread(controller.reconcile_recent_runs)
                     if recovered:
                         warnings.append(f"recovered {recovered} acknowledged Galaxy job(s) from recent History")
                 except Exception as exc:
-                    warnings.append(f"Galaxy job reconciliation will be retried: {exc}")
+                    warnings.append(
+                        "Galaxy job reconciliation will be retried: "
+                        f"{_powgen_submission_error_summary(exc)}"
+                    )
 
                 self._sync_powgen_rows()
                 state.flush()
@@ -3714,7 +3980,9 @@ class RadarPdNovaApp(ThemedApp):
                                 f"{len(controller.refresh_errors)} Galaxy status update(s) will be retried"
                             )
                     except Exception as exc:
-                        warnings.append(f"Galaxy status refresh failed: {exc}")
+                        warnings.append(
+                            f"Galaxy status refresh failed: {_powgen_submission_error_summary(exc)}"
+                        )
 
                 due_runs = controller.due_submissions()
                 if due_runs and state.powgen_monitoring:
@@ -3786,8 +4054,19 @@ class RadarPdNovaApp(ThemedApp):
                 )
                 if warnings:
                     state.powgen_message += " " + " ".join(warnings) + ". Monitoring remains active."
+                delay = max(5, int(state.powgen_poll_seconds or 15))
+                state.powgen_next_check = (
+                    _format_eastern_time(
+                        datetime.now(timezone.utc) + timedelta(seconds=delay),
+                        "%H:%M:%S %Z",
+                    )
+                )
                 state.flush()
-                await asyncio.sleep(max(5, int(state.powgen_poll_seconds or 15)))
+                try:
+                    await asyncio.wait_for(self._powgen_wake_event.wait(), timeout=delay)
+                    self._powgen_wake_event.clear()
+                except asyncio.TimeoutError:
+                    pass
         except asyncio.CancelledError:
             pass
         finally:
@@ -4097,7 +4376,11 @@ class RadarPdNovaApp(ThemedApp):
             item
             for item in datasets
             if item.get("role") in {"diffraction", "instrument", "cif", "candidate_library", "event", "configuration"}
-            and (state.history_show_all or not item.get("generated"))
+            and (
+                state.history_show_all
+                or not item.get("generated")
+                or item.get("role") in {"configuration", "candidate_library"}
+            )
         ]
         previous = list(state.history_datasets)
         if append:
@@ -4112,6 +4395,7 @@ class RadarPdNovaApp(ThemedApp):
                     state.history_database_id,
                     state.history_configuration_id,
                     getattr(state, "powgen_configuration_dataset_id", ""),
+                    getattr(state, "powgen_database_dataset_id", ""),
                     getattr(state, "powgen_main_cif_dataset_id", ""),
                     *(state.library_builder_cif_ids or []),
                 )
@@ -4206,7 +4490,7 @@ class RadarPdNovaApp(ThemedApp):
                 {"title": "Interactive Plots", "value": "plots", "icon": "mdi-chart-scatter-plot"},
                 {"title": "Run File Browser", "value": "files", "icon": "mdi-folder-outline"},
             ]
-        if self._powgen_controller is not None:
+        if getattr(self, "_powgen_controller", None) is not None:
             options.append(
                 {
                     "title": "Experiment Dashboard",
@@ -5326,6 +5610,11 @@ class RadarPdNovaApp(ThemedApp):
         .radar-facility-path-row { display: grid; grid-template-columns: minmax(0, 1fr) 38px; gap: 7px; align-items: center; }
         .radar-soft-panel { padding: 10px; background: var(--radar-surface-muted); border: 1px solid var(--radar-line); border-radius: 8px; }
         .radar-soft-panel code { display: block; margin: 5px 0 7px; color: var(--radar-brand-900); font-size: 11px; overflow-wrap: anywhere; }
+        .radar-preflight-summary { border-top: 1px solid var(--radar-line); border-bottom: 1px solid var(--radar-line); }
+        .radar-preflight-row { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 8px; padding: 6px 2px; border-bottom: 1px solid #e7efeb; }
+        .radar-preflight-row:last-child { border-bottom: 0; }
+        .radar-preflight-label { color: var(--radar-muted); font-size: 10px; font-weight: 750; text-transform: uppercase; }
+        .radar-preflight-value { min-width: 0; color: var(--radar-ink); font-size: 11px; line-height: 1.35; overflow-wrap: anywhere; }
         .radar-mode-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
         .radar-mode-card { display: grid; grid-template-columns: auto 1fr; gap: 4px 7px; align-items: center; padding: 11px; border: 1px solid var(--radar-line-strong); border-radius: 8px; background: #fff; cursor: pointer; }
         .radar-mode-card strong { color: var(--radar-brand-900); font-size: 14px; }

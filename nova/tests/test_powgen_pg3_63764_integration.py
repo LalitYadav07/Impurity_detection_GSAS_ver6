@@ -102,6 +102,7 @@ def test_pg3_63764_read_only_powgen_to_galaxy_flow(monkeypatch: pytest.MonkeyPat
         "reproducibility|configuration_override|config_file": fixture[
             "configuration_ref"
         ],
+        "library|database|database_kind": "builtin",
         "reproducibility|run_name": "PG3_63764",
     }
 

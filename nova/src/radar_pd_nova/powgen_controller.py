@@ -46,6 +46,7 @@ class PowgenExperimentSettings:
     subfolder: str = "shared/autoreduce"
     main_cif_dataset_id: str | None = None
     database_dataset_id: str | None = None
+    initial_backfill_limit: int | None = None
     late_arrival_window: int = 100
     max_active_jobs: int = 5
     max_submission_attempts: int = 5
@@ -53,6 +54,8 @@ class PowgenExperimentSettings:
     retry_max_seconds: int = 300
 
     def __post_init__(self) -> None:
+        if self.initial_backfill_limit is not None and self.initial_backfill_limit < 0:
+            raise ValueError("initial_backfill_limit must not be negative")
         if self.late_arrival_window < 0:
             raise ValueError("late_arrival_window must not be negative")
         if self.max_active_jobs < 1:
@@ -109,6 +112,116 @@ def bounded_directory_listing(directory: str | Path, *, max_entries: int = 5000)
     return rows
 
 
+_SUPPORTED_POWGEN_WAVELENGTHS = (0.8, 1.5, 2.665)
+
+
+def _metadata_wavelength(metadata: Mapping[str, Any]) -> str | None:
+    metric = metadata.get("wavelength")
+    if not isinstance(metric, Mapping) or metric.get("value") is None:
+        return None
+    unit = re.sub(r"[^a-z]", "", str(metric.get("unit") or "").lower())
+    if unit not in {"a", "angstrom", "angstroms"}:
+        return None
+    observed = float(metric["value"])
+    nearest = min(_SUPPORTED_POWGEN_WAVELENGTHS, key=lambda value: abs(value - observed))
+    return f"{nearest:g}" if abs(nearest - observed) <= 0.05 else None
+
+
+def preflight_powgen_experiment(
+    ipts: str,
+    *,
+    requested_wavelength: str | None = None,
+) -> dict[str, Any]:
+    """Inspect one POWGEN experiment without submitting jobs or writing files."""
+
+    definition = WatchDefinition(
+        ipts=ipts,
+        subfolder="shared/autoreduce",
+        history_id="preflight",
+        configuration_ref="preflight-configuration",
+        instrument_profile_ref="preflight-profile",
+    )
+    listing = bounded_directory_listing(definition.source_directory)
+    completed_rows = [
+        row
+        for row in listing
+        if str(row.get("path") or "").lower().endswith(".gsa")
+    ]
+    runs = discover_from_listing(definition, completed_rows)
+    if not runs:
+        return {
+            "ready": False,
+            "source_directory": definition.source_directory,
+            "scan_count": 0,
+            "message": "The directory is readable, but it contains no completed POWGEN .gsa reductions.",
+        }
+
+    latest = runs[-1]
+    metadata = read_powgen_scan_metadata(definition.ipts, latest.run_number)
+    detected_wavelength = _metadata_wavelength(metadata)
+    selected_wavelength = detected_wavelength or str(requested_wavelength or "").strip()
+    profile_filename = ""
+    profile_rule = ""
+    profile_error = ""
+    if not selected_wavelength:
+        profile_error = "Select a POWGEN wavelength because the latest NeXus file does not report one."
+    else:
+        try:
+            resolution = resolve_powgen_profile(
+                run_number=latest.run_number,
+                wavelength_angstrom=selected_wavelength,
+                frequency_hz="60",
+            )
+            resolve_packaged_powgen_profile_path(resolution)
+            profile_filename = resolution.profile_filename
+            profile_rule = resolution.provenance.rule_id
+        except (OSError, ValueError) as exc:
+            profile_error = str(exc)
+
+    sample_values = [
+        value
+        for value in (
+            f"ID {metadata.get('sample_id')}" if metadata.get("sample_id") else "",
+            str(metadata.get("sample_name") or "").strip(),
+            str(metadata.get("sample_formula") or "").strip(),
+        )
+        if value
+    ]
+    temperature = metadata.get("temperature")
+    temperature_display = ""
+    if isinstance(temperature, Mapping) and temperature.get("value") is not None:
+        unit = str(temperature.get("unit") or "").strip()
+        temperature_display = f"{float(temperature['value']):g} {unit}".strip()
+
+    return {
+        "ready": not profile_error,
+        "source_directory": definition.source_directory,
+        "scan_count": len(runs),
+        "first_run": runs[0].run_id,
+        "latest_run": latest.run_id,
+        "latest_file": Path(latest.source_path).name,
+        "latest_start_time": str(metadata.get("start_time") or ""),
+        "sample_display": " | ".join(sample_values) or "Not reported",
+        "temperature_display": temperature_display or "Not reported",
+        "metadata_available": bool(metadata.get("available")),
+        "detected_wavelength": detected_wavelength or "",
+        "selected_wavelength": selected_wavelength,
+        "wavelength_source": (
+            f"Detected from {latest.run_id} NeXus metadata"
+            if detected_wavelength
+            else "Selected manually; wavelength was not available from NeXus metadata"
+        ),
+        "profile_filename": profile_filename,
+        "profile_rule": profile_rule,
+        "profile_error": profile_error,
+        "message": (
+            f"Ready: {len(runs)} completed reductions from {runs[0].run_id} through {latest.run_id}."
+            if not profile_error
+            else f"Experiment found, but instrument setup is not ready: {profile_error}"
+        ),
+    }
+
+
 def _scandir(path: Path):
     import os
 
@@ -129,6 +242,7 @@ class PowgenWatchController:
         self.state_dataset_ids: list[str] = []
         self._primed = False
         self._last_seen_run_number: int | None = None
+        self._startup_run_floor: int | None = None
         self._last_persisted_state: str | None = None
         self._configuration: AnalysisConfig | None = None
         self._configuration_lock = threading.Lock()
@@ -173,6 +287,13 @@ class PowgenWatchController:
                         self.settings.database_dataset_id or ""
                     ):
                         continue
+                    stored_limit = (
+                        watch.get("initial_backfill_limit")
+                        if "initial_backfill_limit" in watch
+                        else None
+                    )
+                    if stored_limit != self.settings.initial_backfill_limit:
+                        continue
                 candidate = WatchState.from_dict(payload)
                 if candidate.history_id != self.settings.history_id:
                     continue
@@ -194,6 +315,7 @@ class PowgenWatchController:
         ]
         if all_runs:
             self._last_seen_run_number = max(run.run_number for run in all_runs)
+            self._startup_run_floor = self._last_seen_run_number
             self._primed = True
 
         for run_id, run in {**restored.submitted, **restored.completed}.items():
@@ -219,11 +341,18 @@ class PowgenWatchController:
             if str(row.get("path") or row.get("name") or row).lower().endswith(".gsa")
         ]
         if not self.state.initial_backfill_complete:
-            discovered = discover_from_listing(
-                self.definition,
-                completed_rows,
-                self.state,
-            )
+            available = discover_from_listing(self.definition, completed_rows)
+            if available:
+                self._startup_run_floor = max(run.run_number for run in available)
+            limit = self.settings.initial_backfill_limit
+            discovered = []
+            if limit != 0:
+                discovered = discover_from_listing(
+                    self.definition,
+                    completed_rows,
+                    self.state,
+                    newest_limit=limit,
+                )
             discovered = self._attach_scan_metadata(discovered)
             known_runs = [
                 *self.state.discovered.values(),
@@ -233,6 +362,8 @@ class PowgenWatchController:
             ]
             if known_runs:
                 self._last_seen_run_number = max(run.run_number for run in known_runs)
+            elif self._startup_run_floor is not None:
+                self._last_seen_run_number = self._startup_run_floor
             self.state.initial_backfill_complete = True
             self._primed = True
             self.persist_state()
@@ -245,6 +376,11 @@ class PowgenWatchController:
             minimum_run_number=max(
                 1,
                 (self._last_seen_run_number or 0) - self.settings.late_arrival_window,
+                (
+                    (self._startup_run_floor or 0) + 1
+                    if self.settings.initial_backfill_limit is not None
+                    else 1
+                ),
             ),
         )
         discovered = self._attach_scan_metadata(discovered)
@@ -284,7 +420,7 @@ class PowgenWatchController:
         ):
             for run_id, run in list(phase.items()):
                 current = dict(run.scan_metadata or {})
-                if int(current.get("schema_version") or 0) >= 2:
+                if int(current.get("schema_version") or 0) >= 3:
                     continue
                 metadata = self._read_scan_metadata(run)
                 if metadata:
@@ -606,6 +742,7 @@ class PowgenWatchController:
                 "configuration_dataset_id": self.settings.configuration_dataset_id,
                 "database_dataset_id": self.settings.database_dataset_id,
                 "wavelength_angstrom": self.settings.wavelength_angstrom,
+                "initial_backfill_limit": self.settings.initial_backfill_limit,
             }
             last_error: Exception | None = None
             for attempt in range(3):
@@ -629,4 +766,5 @@ __all__ = [
     "PowgenExperimentSettings",
     "PowgenWatchController",
     "bounded_directory_listing",
+    "preflight_powgen_experiment",
 ]

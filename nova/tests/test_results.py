@@ -107,6 +107,11 @@ def test_experiment_figures_use_metadata_axis_and_limit_default_phase_traces() -
     assert phase_figure.layout.xaxis.title.text == "Sample temperature (K)"
     assert phase_figure.data[0].mode == "markers"
     assert quality_figure.layout.xaxis.type == "date"
+    assert quality_figure.layout.xaxis.title.text == "Acquisition time (Eastern)"
+    assert list(quality_figure.data[0].x) == [
+        "2026-08-21T00:00:00-04:00",
+        "2026-08-21T01:00:00-04:00",
+    ]
 
 
 def test_experiment_temperature_axis_does_not_invent_missing_units() -> None:

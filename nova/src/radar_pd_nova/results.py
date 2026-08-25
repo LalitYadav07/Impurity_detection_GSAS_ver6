@@ -6,13 +6,32 @@ import csv
 import json
 import re
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
 import numpy as np
 import plotly.graph_objects as go
+from dateutil.tz import tzstr
 from plotly.subplots import make_subplots
+
+
+_EASTERN_TIME = tzstr("EST5EDT,M3.2.0/2,M11.1.0/2")
+
+
+def _eastern_iso_timestamp(value: Any) -> str | None:
+    """Return a browser-stable ISO timestamp with the Eastern UTC offset."""
+
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        timestamp = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return text
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=timezone.utc)
+    return timestamp.astimezone(_EASTERN_TIME).isoformat()
 
 
 def read_json(path: str | Path) -> dict[str, Any]:
@@ -951,7 +970,7 @@ def experiment_axis_options(scans: list[dict[str, Any]]) -> list[dict[str, str]]
 
     options = [{"title": "Scan number", "value": "run_number"}]
     if any(str((scan.get("metadata") or {}).get("start_time") or "") for scan in scans):
-        options.append({"title": "Acquisition time", "value": "start_time"})
+        options.append({"title": "Acquisition time (Eastern)", "value": "start_time"})
     for key in _EXPERIMENT_METRIC_TITLES:
         if any(_metadata_metric(scan, key) is not None for scan in scans):
             options.append({"title": _experiment_metric_title(scans, key), "value": key})
@@ -964,8 +983,8 @@ def _experiment_axis(
 ) -> tuple[list[Any], str, str]:
     if x_key == "start_time":
         return (
-            [str((scan.get("metadata") or {}).get("start_time") or "") or None for scan in scans],
-            "Acquisition time",
+            [_eastern_iso_timestamp((scan.get("metadata") or {}).get("start_time")) for scan in scans],
+            "Acquisition time (Eastern)",
             "date",
         )
     if x_key in _EXPERIMENT_METRIC_TITLES:
