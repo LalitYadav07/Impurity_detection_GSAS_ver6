@@ -1078,3 +1078,25 @@ def test_missing_galaxy_results_are_an_error(tmp_path: Path) -> None:
     assert result.status is RunStatus.OK
     assert result.result_status is ResultStatus.ERROR
     assert "did not return" in result.message
+
+
+def test_json_checkpoint_upload_uses_unique_staging_and_cleans_up(tmp_path: Path) -> None:
+    service = GalaxyService("https://example.invalid", "key", "history", output_root=tmp_path)
+    captured: list[tuple[str, str]] = []
+
+    def fake_upload(path, *, label):
+        source = Path(path)
+        assert source.is_file()
+        captured.append((source.name, source.read_text(encoding="utf-8")))
+        return f"dataset-{len(captured)}"
+
+    service.upload_document = fake_upload  # type: ignore[method-assign]
+
+    first = service.upload_json_document({"revision": 1}, name="watch.json", label="Watch")
+    second = service.upload_json_document({"revision": 2}, name="watch.json", label="Watch")
+
+    assert (first, second) == ("dataset-1", "dataset-2")
+    assert captured[0][0] != captured[1][0]
+    assert '"revision": 1' in captured[0][1]
+    assert '"revision": 2' in captured[1][1]
+    assert list((tmp_path / "provenance").iterdir()) == []

@@ -9,8 +9,11 @@ instrument profile, and submits the same ``AnalysisConfig`` and
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import re
 import threading
+import time
 from typing import Any, Iterable, Mapping
 
 from .galaxy_service import GalaxyService
@@ -129,6 +132,8 @@ class PowgenWatchController:
         self._last_persisted_state: str | None = None
         self._configuration: AnalysisConfig | None = None
         self._configuration_lock = threading.Lock()
+        self._persist_lock = threading.Lock()
+        self._recent_runs_reconciled = False
         self.refresh_errors: dict[str, str] = {}
 
     def restore_latest_state(self) -> bool:
@@ -398,6 +403,119 @@ class PowgenWatchController:
         self.persist_state()
         return record
 
+    @staticmethod
+    def _parse_timestamp(value: str) -> datetime | None:
+        try:
+            parsed = datetime.fromisoformat(str(value or "").replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed.astimezone(timezone.utc)
+
+    def _record_matches_watch(self, record: RunRecord, run: WatchedRun) -> bool:
+        """Reject similarly named jobs belonging to another monitor configuration."""
+
+        expected_name = f"{self.settings.ipts}_{run.run_id}"
+        if record.name.strip().upper() != expected_name.upper():
+            return False
+
+        created = self._parse_timestamp(record.created_utc)
+        discovered = self._parse_timestamp(run.discovered_utc)
+        if created is not None and discovered is not None and created < discovered - timedelta(minutes=5):
+            return False
+
+        inputs = record.inputs
+        candidate_database = (
+            str(inputs.database_dataset_id or "")
+            if inputs is not None
+            else str(record.input_dataset_ids.get("database_archive") or "")
+        )
+        candidate_main = (
+            str(inputs.main_cif_dataset_id or "")
+            if inputs is not None
+            else str(record.input_dataset_ids.get("main_cif") or "")
+        )
+        return candidate_database == str(self.settings.database_dataset_id or "") and candidate_main == str(
+            self.settings.main_cif_dataset_id or ""
+        )
+
+    def reconcile_recent_runs(self) -> int:
+        """Recover jobs that Galaxy accepted after a checkpoint write was lost.
+
+        Galaxy jobs and their outputs are authoritative. The immutable watch
+        checkpoint is a restart accelerator, but a transient checkpoint upload
+        must never make a completed scan disappear from the experiment view.
+        """
+
+        if self._recent_runs_reconciled:
+            return 0
+        active = {**self.state.discovered, **self.state.submitted}
+        if not active:
+            self._recent_runs_reconciled = True
+            return 0
+
+        recovered = self.service.recent_runs(limit=max(50, min(250, len(active) * 4)))
+        candidates: dict[str, RunRecord] = {}
+        pattern = re.compile(rf"^{re.escape(self.settings.ipts)}_(PG3_\d+)$", re.IGNORECASE)
+        for record in recovered:
+            match = pattern.fullmatch(record.name.strip())
+            if match is None:
+                continue
+            run_id = match.group(1).upper()
+            run = active.get(run_id)
+            if run is None or not self._record_matches_watch(record, run):
+                continue
+            acknowledged = self.state.submitted.get(run_id)
+            if acknowledged is not None and acknowledged.galaxy_job_id != record.galaxy_job_id:
+                continue
+            previous = candidates.get(run_id)
+            if previous is None or record.updated_utc > previous.updated_utc:
+                candidates[run_id] = record
+
+        recovered_count = 0
+        state_changed = False
+        for run_id, record in candidates.items():
+            run = self.state.discovered.get(run_id) or self.state.submitted.get(run_id)
+            if run is None or not record.galaxy_job_id:
+                continue
+            run_recovered = False
+            if run_id in self.state.discovered:
+                self.state.mark_submitted(run, record.galaxy_job_id)
+                run_recovered = True
+                state_changed = True
+            self.records[run_id] = record
+
+            if record.status == RunStatus.OK:
+                result_ids = tuple(str(value) for value in record.output_dataset_ids.values() if value)
+                if result_ids:
+                    try:
+                        summary = self._scientific_summary(record)
+                    except Exception as exc:
+                        summary = {}
+                        self.refresh_errors[run_id] = f"Scientific summary pending: {exc}"
+                    self.state.mark_completed(
+                        run_id,
+                        result_ids,
+                        galaxy_job_id=record.galaxy_job_id,
+                        scientific_summary=summary,
+                    )
+                    run_recovered = True
+                    state_changed = True
+            elif record.status in {RunStatus.ERROR, RunStatus.CANCELLED}:
+                self.state.mark_failed(
+                    run_id,
+                    record.message or f"Galaxy ended with status {record.status.value}",
+                    galaxy_job_id=record.galaxy_job_id,
+                )
+                run_recovered = True
+                state_changed = True
+            if run_recovered:
+                recovered_count += 1
+
+        self._recent_runs_reconciled = True
+        if state_changed:
+            self.persist_state()
+        return recovered_count
+
     def submit(self, run: WatchedRun) -> RunRecord:
         """Launch and durably acknowledge one scan synchronously."""
 
@@ -474,27 +592,36 @@ class PowgenWatchController:
     def persist_state(self) -> str:
         """Write an immutable watch-state checkpoint to Galaxy History."""
 
-        serialized = self.state.to_json()
-        if serialized == self._last_persisted_state and self.state_dataset_ids:
-            return self.state_dataset_ids[-1]
-        payload = self.state.as_dict()
-        payload["watch"] = {
-            "facility": "SNS",
-            "instrument": "PG3",
-            "ipts": self.settings.ipts,
-            "source_directory": self.source_directory,
-            "configuration_dataset_id": self.settings.configuration_dataset_id,
-            "database_dataset_id": self.settings.database_dataset_id,
-            "wavelength_angstrom": self.settings.wavelength_angstrom,
-        }
-        dataset_id = self.service.upload_json_document(
-            payload,
-            name=f"{self.settings.ipts}_powgen_watch_state.json",
-            label=f"POWGEN watch state {self.settings.ipts}",
-        )
-        self.state_dataset_ids.append(dataset_id)
-        self._last_persisted_state = serialized
-        return dataset_id
+        with self._persist_lock:
+            serialized = self.state.to_json()
+            if serialized == self._last_persisted_state and self.state_dataset_ids:
+                return self.state_dataset_ids[-1]
+            payload = self.state.as_dict()
+            payload["watch"] = {
+                "facility": "SNS",
+                "instrument": "PG3",
+                "ipts": self.settings.ipts,
+                "source_directory": self.source_directory,
+                "configuration_dataset_id": self.settings.configuration_dataset_id,
+                "database_dataset_id": self.settings.database_dataset_id,
+                "wavelength_angstrom": self.settings.wavelength_angstrom,
+            }
+            last_error: Exception | None = None
+            for attempt in range(3):
+                try:
+                    dataset_id = self.service.upload_json_document(
+                        payload,
+                        name=f"{self.settings.ipts}_powgen_watch_state.json",
+                        label=f"POWGEN watch state {self.settings.ipts}",
+                    )
+                    self.state_dataset_ids.append(dataset_id)
+                    self._last_persisted_state = serialized
+                    return dataset_id
+                except Exception as exc:
+                    last_error = exc
+                    if attempt < 2:
+                        time.sleep(0.5 * (2**attempt))
+            raise RuntimeError(f"Galaxy could not save the POWGEN watch checkpoint: {last_error}") from last_error
 
 
 __all__ = [

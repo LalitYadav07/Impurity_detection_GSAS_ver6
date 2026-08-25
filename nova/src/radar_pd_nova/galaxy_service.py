@@ -374,9 +374,13 @@ class GalaxyService:
             safe_name += ".json"
         staging = self.output_root / "provenance"
         staging.mkdir(parents=True, exist_ok=True)
-        path = staging / safe_name
-        path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        return self.upload_document(path, label=label)
+        unique_name = f"{Path(safe_name).stem}-{uuid.uuid4().hex}{Path(safe_name).suffix}"
+        path = staging / unique_name
+        try:
+            path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            return self.upload_document(path, label=label)
+        finally:
+            path.unlink(missing_ok=True)
 
     def load_configuration_dataset(self, dataset_id: str) -> AnalysisConfig:
         """Load a reusable RADAR-PD configuration from Galaxy."""

@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
-from radar_pd_nova.models import AnalysisConfig, AnalysisMode, RunRecord, RunStatus
+from radar_pd_nova.models import AnalysisConfig, AnalysisMode, InputSelection, RunRecord, RunStatus
 from radar_pd_nova.powgen_controller import (
     PowgenExperimentSettings,
     PowgenWatchController,
@@ -18,6 +18,7 @@ class FakeGalaxyService:
         self.snapshots = []
         self.uploaded = []
         self.history_documents = []
+        self.json_documents = {}
         self.recovered_runs = []
 
     def load_configuration_dataset(self, dataset_id: str) -> AnalysisConfig:
@@ -50,6 +51,8 @@ class FakeGalaxyService:
         return list(self.history_documents)
 
     def load_json_document(self, dataset_id):
+        if dataset_id in self.json_documents:
+            return self.json_documents[dataset_id]
         return next(row["payload"] for row in self.history_documents if row["id"] == dataset_id)
 
     def recent_runs(self, *, limit=50):
@@ -448,3 +451,165 @@ def test_controller_refresh_failure_for_one_job_does_not_block_another() -> None
     assert "PG3_63764" in controller.state.submitted
     assert controller.refresh_errors == {"PG3_63764": "temporary status endpoint failure"}
     assert "PG3_63765" in controller.state.completed
+
+
+def _recovered_record(
+    *,
+    run_number: int = 63764,
+    status: RunStatus = RunStatus.OK,
+    database_dataset_id: str | None = "custom-library-hda",
+) -> RunRecord:
+    return RunRecord(
+        uid=f"job-{run_number}",
+        galaxy_job_id=f"job-{run_number}",
+        name=f"IPTS-38000_PG3_{run_number}",
+        mode=AnalysisMode.RAPID,
+        history_id="history-1",
+        status=status,
+        analysis_status=status,
+        inputs=InputSelection(
+            data_dataset_id=f"data-{run_number}",
+            instrument_dataset_id="instrument-hda",
+            database_dataset_id=database_dataset_id,
+        ),
+        output_dataset_ids=(
+            {"summary": f"summary-{run_number}", "results_archive": f"archive-{run_number}"}
+            if status == RunStatus.OK
+            else {}
+        ),
+    )
+
+
+def test_controller_reconciles_completed_galaxy_job_missing_from_checkpoint() -> None:
+    service = FakeGalaxyService()
+    controller = PowgenWatchController(
+        service,
+        PowgenExperimentSettings(
+            ipts="IPTS-38000",
+            history_id="history-1",
+            configuration_dataset_id="config-hda",
+            database_dataset_id="custom-library-hda",
+            wavelength_angstrom="1.5",
+        ),
+    )
+    run = controller.discover(
+        [{"path": "/SNS/PG3/IPTS-38000/shared/autoreduce/PG3_63764.gsa"}]
+    )[0]
+    record = _recovered_record()
+    service.recovered_runs = [record]
+    service.json_documents["summary-63764"] = {
+        "status": "complete",
+        "analysis_mode": "rapid",
+        "hypotheses": [{"gsas_rwp_rank": "1", "rwp": "8.2", "status": "ok"}],
+    }
+
+    recovered = controller.reconcile_recent_runs()
+
+    assert recovered == 1
+    assert run.run_id in controller.state.completed
+    assert run.run_id not in controller.state.discovered
+    assert controller.state.completed[run.run_id].scientific_summary["rwp"] == 8.2
+    assert run.run_id in service.uploaded[-1][0]["completed"]
+    assert service.snapshots == []
+
+
+def test_controller_reconciles_previously_submitted_job_that_finished() -> None:
+    service = FakeGalaxyService()
+    controller = PowgenWatchController(
+        service,
+        PowgenExperimentSettings(
+            ipts="IPTS-38000",
+            history_id="history-1",
+            configuration_dataset_id="config-hda",
+            database_dataset_id="custom-library-hda",
+            wavelength_angstrom="1.5",
+        ),
+    )
+    run = controller.discover(
+        [{"path": "/SNS/PG3/IPTS-38000/shared/autoreduce/PG3_63764.gsa"}]
+    )[0]
+    controller.state.mark_submitted(run, "job-63764")
+    service.recovered_runs = [_recovered_record()]
+    service.json_documents["summary-63764"] = {
+        "status": "complete",
+        "analysis_mode": "rapid",
+        "hypotheses": [{"gsas_rwp_rank": "1", "rwp": "8.2", "status": "ok"}],
+    }
+
+    assert controller.reconcile_recent_runs() == 1
+    assert run.run_id in controller.state.completed
+    assert run.run_id in service.uploaded[-1][0]["completed"]
+
+
+def test_controller_reconciles_queued_job_without_resubmitting() -> None:
+    service = FakeGalaxyService()
+    controller = PowgenWatchController(
+        service,
+        PowgenExperimentSettings(
+            ipts="IPTS-38000",
+            history_id="history-1",
+            configuration_dataset_id="config-hda",
+            database_dataset_id="custom-library-hda",
+            wavelength_angstrom="1.5",
+        ),
+    )
+    run = controller.discover(
+        [{"path": "/SNS/PG3/IPTS-38000/shared/autoreduce/PG3_63764.gsa"}]
+    )[0]
+    service.recovered_runs = [_recovered_record(status=RunStatus.QUEUED)]
+
+    assert controller.reconcile_recent_runs() == 1
+    assert controller.state.submitted[run.run_id].galaxy_job_id == "job-63764"
+    assert service.snapshots == []
+
+
+def test_controller_does_not_reconcile_job_using_another_candidate_library() -> None:
+    service = FakeGalaxyService()
+    controller = PowgenWatchController(
+        service,
+        PowgenExperimentSettings(
+            ipts="IPTS-38000",
+            history_id="history-1",
+            configuration_dataset_id="config-hda",
+            database_dataset_id="expected-library-hda",
+            wavelength_angstrom="1.5",
+        ),
+    )
+    run = controller.discover(
+        [{"path": "/SNS/PG3/IPTS-38000/shared/autoreduce/PG3_63764.gsa"}]
+    )[0]
+    service.recovered_runs = [_recovered_record(database_dataset_id="other-library-hda")]
+
+    assert controller.reconcile_recent_runs() == 0
+    assert run.run_id in controller.state.discovered
+
+
+def test_checkpoint_upload_retries_transient_galaxy_failure() -> None:
+    class FlakyCheckpointService(FakeGalaxyService):
+        def __init__(self) -> None:
+            super().__init__()
+            self.upload_attempts = 0
+
+        def upload_json_document(self, payload, *, name, label):
+            self.upload_attempts += 1
+            if self.upload_attempts < 3:
+                raise RuntimeError("temporary Galaxy upload failure")
+            return super().upload_json_document(payload, name=name, label=label)
+
+    service = FlakyCheckpointService()
+    controller = PowgenWatchController(
+        service,
+        PowgenExperimentSettings(
+            ipts="IPTS-38000",
+            history_id="history-1",
+            configuration_dataset_id="config-hda",
+            wavelength_angstrom="1.5",
+        ),
+    )
+
+    controller.discover(
+        [{"path": "/SNS/PG3/IPTS-38000/shared/autoreduce/PG3_63764.gsa"}]
+    )
+
+    assert service.upload_attempts == 3
+    assert service.uploaded[-1][2] == "POWGEN watch state IPTS-38000"

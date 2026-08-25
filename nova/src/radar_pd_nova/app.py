@@ -3599,6 +3599,13 @@ class RadarPdNovaApp(ThemedApp):
                 except Exception as exc:
                     warnings.append(f"source check failed: {exc}")
 
+                try:
+                    recovered = await asyncio.to_thread(controller.reconcile_recent_runs)
+                    if recovered:
+                        warnings.append(f"recovered {recovered} acknowledged Galaxy job(s) from recent History")
+                except Exception as exc:
+                    warnings.append(f"Galaxy job reconciliation will be retried: {exc}")
+
                 self._sync_powgen_rows()
                 state.flush()
 

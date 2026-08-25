@@ -12,4 +12,5 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends hdf5-tools \
     && rm -rf /var/lib/apt/lists/*
 COPY src /src/src
-RUN python -m compileall -q /src/src/radar_pd_nova
+RUN python -m pip install --no-cache-dir --no-deps /src \
+    && python -m compileall -q /src/src/radar_pd_nova
