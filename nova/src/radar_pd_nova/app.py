@@ -50,6 +50,7 @@ from .results import (
     experiment_phase_labels,
     experiment_phase_fraction_figure,
     experiment_phase_heatmap_figure,
+    experiment_sample_identity,
     figure_for_payload,
     load_plot_with_fallback,
     read_plot_payload,
@@ -446,6 +447,7 @@ class RadarPdNovaApp(ThemedApp):
         state.powgen_source_directory = "/SNS/PG3/<IPTS>/shared/autoreduce"
         state.powgen_rows = []
         state.powgen_scientific_rows = []
+        state.powgen_all_scientific_rows = []
         state.powgen_dashboard_metrics = []
         state.powgen_latest_phases = []
         state.powgen_latest_run_id = "-"
@@ -457,6 +459,8 @@ class RadarPdNovaApp(ThemedApp):
         state.powgen_selected_phases = []
         state.powgen_phase_options = []
         state.powgen_selected_phase_labels = []
+        state.powgen_sample_options = []
+        state.powgen_selected_samples = []
         state.powgen_x_axis = "run_number"
         state.powgen_x_axis_options = [{"title": "Scan number", "value": "run_number"}]
         state.powgen_tracked_phase_count = 0
@@ -1990,6 +1994,21 @@ class RadarPdNovaApp(ThemedApp):
                         html.H3("Refined phase fractions")
                 with html.Div(classes="radar-experiment-controls"):
                     vuetify.VSelect(
+                        label="Samples shown",
+                        v_model=("powgen_selected_samples",),
+                        items=("powgen_sample_options",),
+                        multiple=True,
+                        chips=True,
+                        closable_chips=True,
+                        clearable=True,
+                        placeholder="All samples",
+                        persistent_placeholder=True,
+                        density="compact",
+                        variant="outlined",
+                        hide_details=True,
+                        update_modelValue=(self.update_powgen_sample_selection, "[$event]"),
+                    )
+                    vuetify.VSelect(
                         label="Horizontal axis",
                         v_model=("powgen_x_axis",),
                         items=("powgen_x_axis_options",),
@@ -2032,7 +2051,7 @@ class RadarPdNovaApp(ThemedApp):
                         html.Div("SCAN RECORD", classes="radar-micro-label")
                         html.H3("Completed analyses")
                 vuetify.VDataTable(
-                    headers=("[{title:'Scan',key:'run_number'},{title:'Conditions',key:'conditions_display'},{title:'Rwp',key:'rwp_display'},{title:'Trend check',key:'quality_label'},{title:'Dominant refined phases',key:'phase_summary'},{title:'Runtime',key:'elapsed_display'},{title:'Mode',key:'analysis_mode'}]",),
+                    headers=("[{title:'Scan',key:'run_number'},{title:'Sample',key:'sample_label'},{title:'Conditions',key:'conditions_display'},{title:'Rwp',key:'rwp_display'},{title:'Trend check',key:'quality_label'},{title:'Dominant refined phases',key:'phase_summary'},{title:'Runtime',key:'elapsed_display'},{title:'Mode',key:'analysis_mode'}]",),
                     items=("powgen_scientific_rows",),
                     density="compact",
                     items_per_page=15,
@@ -3101,6 +3120,8 @@ class RadarPdNovaApp(ThemedApp):
         if controller is None:
             self.server.state.powgen_rows = []
             self.server.state.powgen_scientific_rows = []
+            self.server.state.powgen_all_scientific_rows = []
+            self.server.state.powgen_sample_options = []
             return
 
         rows: list[dict[str, Any]] = []
@@ -3236,35 +3257,68 @@ class RadarPdNovaApp(ThemedApp):
             ]
             sample_name = str(metadata.get("sample_name") or "").strip()
             sample_formula = str(metadata.get("sample_formula") or "").strip()
-            sample_display = " | ".join(value for value in (sample_name, sample_formula) if value)
-            scientific_rows.append(
-                {
-                    "run_id": run_id,
-                    "record_uid": record.uid if record is not None else "",
-                    "run_number": int(run.run_number),
-                    "rwp": rwp_value,
-                    "rwp_display": f"{rwp_value:.2f}%" if rwp_value is not None else "-",
-                    "phases": projected_phases,
-                    "phase_summary": " + ".join(
-                        f"{phase['label']} {phase['weight_percent']:.1f}%"
-                        for phase in projected_phases[:3]
-                    ) or "No refined phase fractions",
-                    "hypothesis": str(summary.get("hypothesis") or ""),
-                    "elapsed_seconds": elapsed_value,
-                    "elapsed_display": elapsed_display,
-                    "analysis_mode": str(summary.get("analysis_mode") or "-").title(),
-                    "metadata": metadata,
-                    "conditions_display": " | ".join(conditions) or "Metadata unavailable",
-                    "temperature_display": temperature_display or "-",
-                    "field_display": field_display or "-",
-                    "wavelength_display": wavelength_display or "-",
-                    "run_title": str(metadata.get("run_title") or ""),
-                    "sample_display": sample_display,
-                    "warning_count": int(summary.get("warning_count") or 0),
-                    "error_count": int(summary.get("error_count") or 0),
-                }
-            )
+            sample_id = str(metadata.get("sample_id") or "").strip()
+            row = {
+                "run_id": run_id,
+                "record_uid": record.uid if record is not None else "",
+                "run_number": int(run.run_number),
+                "rwp": rwp_value,
+                "rwp_display": f"{rwp_value:.2f}%" if rwp_value is not None else "-",
+                "phases": projected_phases,
+                "phase_summary": " + ".join(
+                    f"{phase['label']} {phase['weight_percent']:.1f}%"
+                    for phase in projected_phases[:3]
+                ) or "No refined phase fractions",
+                "hypothesis": str(summary.get("hypothesis") or ""),
+                "elapsed_seconds": elapsed_value,
+                "elapsed_display": elapsed_display,
+                "analysis_mode": str(summary.get("analysis_mode") or "-").title(),
+                "metadata": metadata,
+                "conditions_display": " | ".join(conditions) or "Metadata unavailable",
+                "temperature_display": temperature_display or "-",
+                "field_display": field_display or "-",
+                "wavelength_display": wavelength_display or "-",
+                "run_title": str(metadata.get("run_title") or ""),
+                "sample_display": " | ".join(
+                    value
+                    for value in (
+                        f"ID {sample_id}" if sample_id else "",
+                        sample_name,
+                        sample_formula,
+                    )
+                    if value
+                ),
+                "warning_count": int(summary.get("warning_count") or 0),
+                "error_count": int(summary.get("error_count") or 0),
+            }
+            sample_identity = experiment_sample_identity(row)
+            row["sample_key"] = sample_identity["key"]
+            row["sample_label"] = sample_identity["label"]
+            scientific_rows.append(row)
         scientific_rows.sort(key=lambda item: item["run_number"], reverse=True)
+        state.powgen_all_scientific_rows = scientific_rows
+        sample_labels = {
+            str(row["sample_key"]): str(row["sample_label"])
+            for row in scientific_rows
+        }
+        state.powgen_sample_options = [
+            {"title": sample_labels[key], "value": key}
+            for key in sorted(sample_labels, key=lambda key: sample_labels[key].lower())
+        ]
+        valid_sample_keys = set(sample_labels)
+        selected_samples = [
+            str(value)
+            for value in (state.powgen_selected_samples or [])
+            if str(value) in valid_sample_keys
+        ]
+        state.powgen_selected_samples = selected_samples
+        all_scientific_rows = scientific_rows
+        if selected_samples:
+            selected_sample_keys = set(selected_samples)
+            scientific_rows = [
+                row for row in all_scientific_rows
+                if str(row.get("sample_key") or "unassigned") in selected_sample_keys
+            ]
         diagnostics = experiment_fit_diagnostics(scientific_rows)
         for row in scientific_rows:
             diagnostic = diagnostics.get(str(row["run_id"]), {})
@@ -3337,7 +3391,11 @@ class RadarPdNovaApp(ThemedApp):
             {
                 "label": "Completed scans",
                 "value": str(len(controller.state.completed)),
-                "detail": f"{len(scientific_rows)} with scientific summaries",
+                "detail": (
+                    f"Showing {len(scientific_rows)} of {len(all_scientific_rows)} scientific summaries"
+                    if selected_samples
+                    else f"{len(scientific_rows)} with scientific summaries"
+                ),
             },
             {
                 "label": "Active analyses",
@@ -3365,7 +3423,8 @@ class RadarPdNovaApp(ThemedApp):
             },
         ]
         state.powgen_dashboard_notice = (
-            f"Showing {len(scientific_rows)} completed scan summaries from {controller.source_directory}. "
+            f"Showing {len(scientific_rows)} of {len(all_scientific_rows)} completed scan summaries "
+            f"from {controller.source_directory}. "
             "Conditions are read from each matching PG3 NeXus file. Missing phase points mean that a phase "
             "was not reported for that scan, not a forced zero fraction."
             if scientific_rows
@@ -3410,6 +3469,18 @@ class RadarPdNovaApp(ThemedApp):
         selected = [value for value in requested if value in valid]
         self.server.state.powgen_selected_phase_labels = selected or ordered_valid[:5]
         self._update_powgen_dashboard_figures(list(self.server.state.powgen_scientific_rows or []))
+        self.server.state.flush()
+
+    def update_powgen_sample_selection(self, values: Any = None, **_: Any) -> None:
+        """Filter the experiment dashboard without changing the monitored scans."""
+
+        if isinstance(values, (list, tuple)):
+            requested = [str(value) for value in values]
+        else:
+            requested = [str(value) for value in (self.server.state.powgen_selected_samples or [])]
+        valid = {str(option["value"]) for option in (self.server.state.powgen_sample_options or [])}
+        self.server.state.powgen_selected_samples = [value for value in requested if value in valid]
+        self._sync_powgen_rows()
         self.server.state.flush()
 
     def select_powgen_scan(self, run_id: Any = None, **_: Any) -> None:
@@ -4465,7 +4536,7 @@ class RadarPdNovaApp(ThemedApp):
             return
         payload = {
             "schema": "radar-pd-nova-diagnostics/v1",
-            "nova_version": "0.3.43",
+            "nova_version": _application_version(),
             "run": {
                 "name": record.name,
                 "mode_submitted": record.mode.value,
@@ -5319,7 +5390,7 @@ class RadarPdNovaApp(ThemedApp):
         .radar-experiment-phase-card .radar-plot-frame { height: 430px; min-height: 430px; }
         .radar-experiment-quality-card .radar-plot-frame { height: 340px; min-height: 340px; }
         .radar-experiment-heatmap-frame { height: 430px; min-height: 320px; }
-        .radar-experiment-controls { display: grid; grid-template-columns: minmax(180px, .55fr) minmax(320px, 1.45fr); gap: 10px; margin: 2px 0 10px; }
+        .radar-experiment-controls { display: grid; grid-template-columns: minmax(180px, .7fr) minmax(170px, .55fr) minmax(300px, 1.35fr); gap: 10px; margin: 2px 0 10px; }
         .radar-experiment-controls .v-field { background: #fff; }
         .radar-experiment-controls .v-chip { max-width: 240px; }
         .radar-experiment-controls .v-chip__content { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

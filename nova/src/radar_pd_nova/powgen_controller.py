@@ -283,11 +283,12 @@ class PowgenWatchController:
             self.state.failed,
         ):
             for run_id, run in list(phase.items()):
-                if run.scan_metadata:
+                current = dict(run.scan_metadata or {})
+                if int(current.get("schema_version") or 0) >= 2:
                     continue
                 metadata = self._read_scan_metadata(run)
                 if metadata:
-                    phase[run_id] = replace(run, scan_metadata=metadata)
+                    phase[run_id] = replace(run, scan_metadata={**current, **metadata})
 
     def _minimal_record(self, run: WatchedRun) -> RunRecord:
         """Rebuild enough state to poll an acknowledged Galaxy job by ID."""

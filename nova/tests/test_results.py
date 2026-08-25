@@ -13,6 +13,7 @@ from radar_pd_nova.results import (
     experiment_axis_options,
     experiment_phase_fraction_figure,
     experiment_phase_heatmap_figure,
+    experiment_sample_identity,
     experiment_scan_summary,
     figure_for_payload,
     load_plot_with_fallback,
@@ -104,7 +105,51 @@ def test_experiment_figures_use_metadata_axis_and_limit_default_phase_traces() -
     assert len(phase_figure.data) == 5
     assert list(phase_figure.data[0].x) == [300.0, 350.0]
     assert phase_figure.layout.xaxis.title.text == "Sample temperature (K)"
+    assert phase_figure.data[0].mode == "markers"
     assert quality_figure.layout.xaxis.type == "date"
+
+
+def test_experiment_sample_identity_prefers_sample_id_and_labels_fallbacks() -> None:
+    identified = experiment_sample_identity(
+        {
+            "metadata": {
+                "sample_id": "118950",
+                "sample_name": "Ga flux",
+                "sample_formula": "YFeSiGa",
+            }
+        }
+    )
+    named = experiment_sample_identity({"metadata": {"sample_name": "PAC blank"}})
+    unknown = experiment_sample_identity({})
+
+    assert identified == {
+        "key": "id:118950",
+        "label": "Sample 118950 - Ga flux | YFeSiGa",
+        "id": "118950",
+    }
+    assert named["key"] == "name:PAC blank"
+    assert unknown["key"] == "unassigned"
+
+
+def test_phase_trend_breaks_chronological_lines_between_samples() -> None:
+    scans = [
+        {
+            "run_number": 10,
+            "metadata": {"sample_id": "A"},
+            "phases": [{"label": "Phase (SG 1)", "weight_percent": 40.0}],
+        },
+        {
+            "run_number": 11,
+            "metadata": {"sample_id": "B"},
+            "phases": [{"label": "Phase (SG 1)", "weight_percent": 60.0}],
+        },
+    ]
+
+    figure = experiment_phase_fraction_figure(scans)
+
+    assert figure.data[0].mode == "lines+markers"
+    assert list(figure.data[0].x) == ["10", None, "11"]
+    assert list(figure.data[0].y) == [40.0, None, 60.0]
 
 
 def test_experiment_heatmap_preserves_missing_phases_and_orders_by_abundance() -> None:

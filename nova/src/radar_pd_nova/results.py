@@ -890,6 +890,33 @@ def _metadata_metric(scan: dict[str, Any], key: str) -> float | None:
     return _as_float(value.get("value"))
 
 
+def experiment_sample_identity(scan: dict[str, Any]) -> dict[str, str]:
+    """Return a stable sample key and a readable label for one experiment row."""
+
+    metadata = scan.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+    sample_id = str(metadata.get("sample_id") or "").strip()
+    sample_name = str(metadata.get("sample_name") or "").strip()
+    sample_formula = str(metadata.get("sample_formula") or "").strip()
+    if sample_id:
+        detail = " | ".join(value for value in (sample_name, sample_formula) if value)
+        return {
+            "key": f"id:{sample_id}",
+            "label": f"Sample {sample_id}{f' - {detail}' if detail else ''}",
+            "id": sample_id,
+        }
+    if sample_name:
+        return {
+            "key": f"name:{sample_name}",
+            "label": f"{sample_name}{f' - {sample_formula}' if sample_formula else ''}",
+            "id": "",
+        }
+    if sample_formula:
+        return {"key": f"formula:{sample_formula}", "label": sample_formula, "id": ""}
+    return {"key": "unassigned", "label": "Sample not identified", "id": ""}
+
+
 def experiment_axis_options(scans: list[dict[str, Any]]) -> list[dict[str, str]]:
     """Return trend axes supported by the metadata available for this experiment."""
 
@@ -961,10 +988,17 @@ def experiment_phase_fraction_figure(
     ranked_labels = experiment_phase_labels(ordered)
     labels = [label for label in (selected_labels or ranked_labels[:5]) if label in ranked_labels]
     x_values, x_title, x_type = _experiment_axis(ordered, x_key)
-    customdata = [
-        [str(scan.get("run_number") or "-"), _scan_condition_text(scan) or "No scan conditions"]
-        for scan in ordered
-    ]
+    chronological_axis = x_key in {"run_number", "start_time"}
+    customdata = []
+    for scan in ordered:
+        sample = experiment_sample_identity(scan)
+        customdata.append(
+            [
+                str(scan.get("run_number") or "-"),
+                _scan_condition_text(scan) or "No scan conditions",
+                sample["label"],
+            ]
+        )
     for label in labels:
         values: list[float | None] = []
         for scan in ordered:
@@ -977,17 +1011,45 @@ def experiment_phase_fraction_figure(
                 None,
             )
             values.append(float(match["weight_percent"]) if match is not None else None)
+        trace_x = list(x_values)
+        trace_y = list(values)
+        trace_customdata = list(customdata)
+        if chronological_axis:
+            separated_x: list[Any] = []
+            separated_y: list[float | None] = []
+            separated_customdata: list[list[str]] = []
+            previous_sample = ""
+            for scan, x_value, y_value, hover_row in zip(
+                ordered,
+                trace_x,
+                trace_y,
+                trace_customdata,
+            ):
+                sample_key = experiment_sample_identity(scan)["key"]
+                if previous_sample and sample_key != previous_sample:
+                    separated_x.append(None)
+                    separated_y.append(None)
+                    separated_customdata.append(["", "", ""])
+                separated_x.append(x_value)
+                separated_y.append(y_value)
+                separated_customdata.append(hover_row)
+                previous_sample = sample_key
+            trace_x = separated_x
+            trace_y = separated_y
+            trace_customdata = separated_customdata
         figure.add_trace(
             go.Scatter(
-                x=x_values,
-                y=values,
-                customdata=customdata,
-                mode="lines+markers",
+                x=trace_x,
+                y=trace_y,
+                customdata=trace_customdata,
+                mode="lines+markers" if chronological_axis else "markers",
                 name=label,
                 connectgaps=False,
+                line=dict(width=1.5),
+                marker=dict(size=9, opacity=0.86, line=dict(color="#ffffff", width=1.2)),
                 hovertemplate=(
                     "Scan %{customdata[0]}<br>%{fullData.name}: %{y:.2f} wt%"
-                    "<br>%{customdata[1]}<extra></extra>"
+                    "<br>%{customdata[2]}<br>%{customdata[1]}<extra></extra>"
                 ),
             )
         )
@@ -997,8 +1059,16 @@ def experiment_phase_fraction_figure(
         yaxis_title="Weight fraction (wt%)",
         height=430,
         margin=dict(l=62, r=24, t=24, b=104),
-        hovermode="x unified",
-        legend=dict(orientation="h", yanchor="top", y=-0.20, xanchor="left", x=0),
+        hovermode="x unified" if chronological_axis else "closest",
+        legend=dict(
+            orientation="h",
+            yanchor="top",
+            y=-0.20,
+            xanchor="left",
+            x=0,
+            font=dict(size=11),
+            itemwidth=34,
+        ),
         paper_bgcolor="#ffffff",
         plot_bgcolor="#ffffff",
     )
@@ -1033,9 +1103,11 @@ def experiment_phase_heatmap_figure(
             )
             value = float(match["weight_percent"]) if match is not None else None
             row_values.append(value)
+            sample_label = experiment_sample_identity(scan)["label"]
             row_hover.append(
                 f"Scan {scan.get('run_number')}<br>{label}<br>"
                 + (f"{value:.2f} wt%" if value is not None else "Not reported")
+                + f"<br>{sample_label}"
             )
         z_values.append(row_values)
         hover.append(row_hover)
@@ -1122,30 +1194,68 @@ def experiment_fit_quality_figure(
     )
     diagnostics = experiment_fit_diagnostics(ordered)
     x_values, x_title, x_type = _experiment_axis(ordered, x_key)
+    y_values: list[float | None] = [float(row["rwp"]) for row in ordered]
+    text_values: list[str] = [str(row.get("hypothesis") or "No phase summary") for row in ordered]
+    customdata: list[list[str]] = [
+        [
+            str(row.get("run_number") or "-"),
+            str(row.get("elapsed_display") or "-"),
+            _scan_condition_text(row) or "No scan conditions",
+            experiment_sample_identity(row)["label"],
+        ]
+        for row in ordered
+    ]
     colors = [
         diagnostics.get(str(row.get("run_id") or row.get("run_number")), {}).get("color", "#e57c46")
         for row in ordered
     ]
+    if x_key in {"run_number", "start_time"}:
+        segmented_x: list[Any] = []
+        segmented_y: list[float | None] = []
+        segmented_text: list[str] = []
+        segmented_customdata: list[list[str]] = []
+        segmented_colors: list[str] = []
+        previous_sample = ""
+        for row, x_value, y_value, text_value, hover_row, color in zip(
+            ordered,
+            x_values,
+            y_values,
+            text_values,
+            customdata,
+            colors,
+        ):
+            sample_key = experiment_sample_identity(row)["key"]
+            if previous_sample and sample_key != previous_sample:
+                segmented_x.append(None)
+                segmented_y.append(None)
+                segmented_text.append("")
+                segmented_customdata.append(["", "", "", ""])
+                segmented_colors.append("rgba(0,0,0,0)")
+            segmented_x.append(x_value)
+            segmented_y.append(y_value)
+            segmented_text.append(text_value)
+            segmented_customdata.append(hover_row)
+            segmented_colors.append(color)
+            previous_sample = sample_key
+        x_values = segmented_x
+        y_values = segmented_y
+        text_values = segmented_text
+        customdata = segmented_customdata
+        colors = segmented_colors
     figure = go.Figure(
         go.Scatter(
             x=x_values,
-            y=[float(row["rwp"]) for row in ordered],
-            text=[row.get("hypothesis") or "No phase summary" for row in ordered],
-            customdata=[
-                [
-                    str(row.get("run_number") or "-"),
-                    row.get("elapsed_display") or "-",
-                    _scan_condition_text(row) or "No scan conditions",
-                ]
-                for row in ordered
-            ],
-            mode="lines+markers",
+            y=y_values,
+            text=text_values,
+            customdata=customdata,
+            mode="lines+markers" if x_key in {"run_number", "start_time"} else "markers",
             name="Rwp",
             line=dict(color="#15543c", width=2),
             marker=dict(color=colors, size=9, line=dict(color="#ffffff", width=1)),
             hovertemplate=(
                 "Scan %{customdata[0]}<br>Rwp: %{y:.2f}%<br>%{text}"
-                "<br>%{customdata[2]}<br>Runtime: %{customdata[1]}<extra></extra>"
+                "<br>%{customdata[3]}<br>%{customdata[2]}"
+                "<br>Runtime: %{customdata[1]}<extra></extra>"
             ),
         )
     )

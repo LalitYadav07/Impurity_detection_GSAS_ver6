@@ -21,6 +21,7 @@ from typing import Any, Iterable
 
 
 _MAX_LOG_VALUES = 200_000
+_METADATA_SCHEMA_VERSION = 2
 _NUMBER = re.compile(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][-+]?\d+)?")
 _DATA = re.compile(r"\bDATA\s*\{(.*?)\}", re.DOTALL)
 _DATASPACE_SIZE = re.compile(r"DATASPACE\s+SIMPLE\s*\{\s*\(\s*(\d+)")
@@ -153,6 +154,20 @@ def _text_value(path: Path, candidates: Iterable[str]) -> str:
     return snapshot.text if snapshot is not None else ""
 
 
+def _identifier_value(path: Path, candidates: Iterable[str]) -> str:
+    """Read a textual or integer NeXus identifier without loading large arrays."""
+
+    snapshot = _first_snapshot(path, candidates)
+    if snapshot is None:
+        return ""
+    if snapshot.text:
+        return snapshot.text
+    if snapshot.values:
+        value = snapshot.values[0]
+        return str(int(value)) if float(value).is_integer() else f"{value:g}"
+    return ""
+
+
 def _duration_seconds(start_time: str, end_time: str) -> float | None:
     if not start_time or not end_time:
         return None
@@ -212,10 +227,22 @@ def read_powgen_scan_metadata(
     start_time = _text_value(path, ("/entry/start_time",))
     end_time = _text_value(path, ("/entry/end_time",))
     metadata: dict[str, Any] = {
+        "schema_version": _METADATA_SCHEMA_VERSION,
         "available": True,
         "nexus_path": str(path).replace("\\", "/"),
         "run_title": _text_value(path, ("/entry/title",)),
         "experiment_title": _text_value(path, ("/entry/experiment_title",)),
+        "sample_id": _identifier_value(
+            path,
+            (
+                "/entry/sample/id",
+                "/entry/sample/identifier",
+                "/entry/sample/sample_id",
+                "/entry/sample/sample_identifier",
+                "/entry/DASlogs/SampleId/value",
+                "/entry/DASlogs/BL11A:SE:SampleId/value",
+            ),
+        ),
         "sample_name": _text_value(path, ("/entry/sample/name",)),
         "sample_formula": _text_value(
             path,

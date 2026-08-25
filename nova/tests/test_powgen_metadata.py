@@ -15,6 +15,7 @@ def test_reads_bounded_powgen_nexus_conditions(tmp_path: Path) -> None:
         entry.create_dataset("start_time", data=np.asarray([b"2026-08-21T10:00:00-04:00"]))
         entry.create_dataset("end_time", data=np.asarray([b"2026-08-21T10:30:00-04:00"]))
         sample = entry.create_group("sample")
+        sample.create_dataset("identifier", data=np.asarray([b"118950"]))
         sample.create_dataset("name", data=np.asarray([b"Ga flux"]))
         sample.create_dataset("chemical_formula", data=np.asarray([b"YFeSiGa"]))
         logs = entry.create_group("DASlogs")
@@ -36,6 +37,7 @@ def test_reads_bounded_powgen_nexus_conditions(tmp_path: Path) -> None:
     assert metadata["wavelength"]["value"] == 1.5
     assert metadata["duration_seconds"] == 1800.0
     assert metadata["sample_formula"] == "YFeSiGa"
+    assert metadata["sample_id"] == "118950"
 
 
 def test_watch_run_round_trip_preserves_scan_metadata() -> None:
