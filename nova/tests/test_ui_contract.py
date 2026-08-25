@@ -25,6 +25,10 @@ def test_powgen_retry_messages_hide_proxy_html_and_parse_utc() -> None:
 def test_powgen_user_timestamps_are_explicitly_eastern_and_dst_aware() -> None:
     assert _format_eastern_time("2026-01-15T18:00:00Z") == "2026-01-15 13:00:00 EST"
     assert _format_eastern_time("2026-08-25T18:00:00Z") == "2026-08-25 14:00:00 EDT"
+    assert (
+        _format_eastern_time("2026-08-24T04:21:26.974623667-04:00")
+        == "2026-08-24 04:21:26 EDT"
+    )
 
 
 def test_setup_panels_and_uploads_have_single_stable_instances() -> None:

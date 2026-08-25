@@ -246,6 +246,8 @@ class PowgenWatchController:
         self._last_persisted_state: str | None = None
         self._configuration: AnalysisConfig | None = None
         self._configuration_lock = threading.Lock()
+        self._profile_dataset_ids: dict[str, str] = {}
+        self._profile_upload_lock = threading.Lock()
         self._persist_lock = threading.Lock()
         self._recent_runs_reconciled = False
         self.refresh_errors: dict[str, str] = {}
@@ -450,7 +452,13 @@ class PowgenWatchController:
         available = max(0, self.settings.max_active_jobs - len(self.state.submitted))
         return self.state.retryable_runs()[:available]
 
-    def defer_submission(self, run: WatchedRun, error: str) -> WatchedRun:
+    def defer_submission(
+        self,
+        run: WatchedRun,
+        error: str,
+        *,
+        persist: bool = True,
+    ) -> WatchedRun:
         """Retry a pre-acknowledgement failure with bounded backoff."""
 
         current = self.state.discovered.get(run.run_id)
@@ -462,7 +470,8 @@ class PowgenWatchController:
                 current,
                 f"Submission failed after {next_attempt} attempts: {error}",
             )
-            self.persist_state()
+            if persist:
+                self.persist_state()
             return failed
         delay = min(
             self.settings.retry_max_seconds,
@@ -473,7 +482,8 @@ class PowgenWatchController:
             error,
             retry_after_seconds=delay,
         )
-        self.persist_state()
+        if persist:
+            self.persist_state()
         return pending
 
     def resolve_profile(self, run: WatchedRun) -> tuple[PowgenProfileResolution, Path]:
@@ -483,6 +493,21 @@ class PowgenWatchController:
             frequency_hz=self.settings.frequency_hz,
         )
         return resolution, resolve_packaged_powgen_profile_path(resolution)
+
+    def _profile_dataset_id(self, profile_path: Path) -> str:
+        """Upload each packaged profile once and reuse it for every matching scan."""
+
+        key = str(profile_path.resolve())
+        cached = self._profile_dataset_ids.get(key)
+        if cached:
+            return cached
+        with self._profile_upload_lock:
+            cached = self._profile_dataset_ids.get(key)
+            if cached:
+                return cached
+            dataset_id = self.service.upload_document(profile_path, label="POWGEN instrument profile")
+            self._profile_dataset_ids[key] = dataset_id
+            return dataset_id
 
     def launch_submission(self, run: WatchedRun) -> RunRecord:
         """Create one Galaxy job without moving the watch-state checkpoint.
@@ -509,10 +534,11 @@ class PowgenWatchController:
         config = self._configuration
         config = config.model_copy(update={"run_name": f"{self.settings.ipts}_{run.run_id}"})
         _, profile_path = self.resolve_profile(run)
+        profile_dataset_id = self._profile_dataset_id(profile_path)
         inputs = InputSelection(
             source=InputSource.UPLOAD,
             data_path=run.source_path,
-            instrument_path=str(profile_path),
+            instrument_dataset_id=profile_dataset_id,
             main_cif_dataset_id=self.settings.main_cif_dataset_id,
             database_dataset_id=self.settings.database_dataset_id,
             facility_root="/SNS",
@@ -524,20 +550,29 @@ class PowgenWatchController:
             config,
             inputs,
             idempotency_token=plan.idempotency_key,
+            output_profile="monitor",
+            prepared_dataset_ids={"configuration": self.settings.configuration_dataset_id},
         )
         record = self.service.submit_snapshot(snapshot)
         if not record.galaxy_job_id:
             raise RuntimeError(f"Galaxy did not acknowledge {run.run_id}")
         return record
 
-    def acknowledge_submission(self, run: WatchedRun, record: RunRecord) -> RunRecord:
+    def acknowledge_submission(
+        self,
+        run: WatchedRun,
+        record: RunRecord,
+        *,
+        persist: bool = True,
+    ) -> RunRecord:
         """Checkpoint one Galaxy-acknowledged scan in the watch state."""
 
         if not record.galaxy_job_id:
             raise RuntimeError(f"Galaxy did not acknowledge {run.run_id}")
         self.state.mark_submitted(run, record.galaxy_job_id)
         self.records[run.run_id] = record
-        self.persist_state()
+        if persist:
+            self.persist_state()
         return record
 
     @staticmethod

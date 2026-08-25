@@ -76,6 +76,9 @@ def _format_eastern_time(value: Any, format_string: str = "%Y-%m-%d %H:%M:%S %Z"
         text = str(value or "").strip()
         if not text:
             return "Not reported"
+        # NeXus timestamps may carry nanoseconds while Python datetime accepts
+        # at most microseconds. Preserve the offset and trim only extra digits.
+        text = re.sub(r"(\.\d{6})\d+(?=(?:Z|[+-]\d{2}:?\d{2})?$)", r"\1", text)
         try:
             timestamp = datetime.fromisoformat(text.replace("Z", "+00:00"))
         except ValueError:
@@ -2129,6 +2132,7 @@ class RadarPdNovaApp(ThemedApp):
                         variant="outlined",
                         hide_details=True,
                         update_modelValue=(self.update_powgen_phase_selection, "[$event]"),
+                        classes="radar-phase-selector",
                     )
                 with html.Div(classes="radar-plot-frame"):
                     self._powgen_phase_widget = plotly.Figure(display_mode_bar=True)
@@ -3728,6 +3732,21 @@ class RadarPdNovaApp(ThemedApp):
                 if result.get("scan_count")
                 else "No completed scans"
             )
+            available_scan_count = int(result.get("scan_count") or 0)
+            backfill_limit = _POWGEN_BACKFILL_LIMITS[backfill_mode]
+            selected_scan_count = (
+                available_scan_count
+                if backfill_limit is None
+                else min(available_scan_count, backfill_limit)
+            )
+            turnaround = (
+                "No existing scans; each new scan will be processed when it appears."
+                if selected_scan_count == 0
+                else (
+                    f"{selected_scan_count} scan(s); first dashboard result typically 1-3 min. "
+                    "Bulk backfills finish in batches of five."
+                )
+            )
             state.powgen_preflight_details = [
                 {"label": "Read-only source", "value": state.powgen_source_directory},
                 {
@@ -3761,6 +3780,10 @@ class RadarPdNovaApp(ThemedApp):
                     "value": str(result.get("profile_filename") or result.get("profile_error") or "Unavailable"),
                 },
                 {"label": "Initial processing", "value": backfill_label},
+                {
+                    "label": "Expected turnaround",
+                    "value": turnaround,
+                },
                 {
                     "label": "RADAR-PD configuration",
                     "value": f"{configuration_label} ({configuration.mode.value.title()})",
@@ -4023,6 +4046,7 @@ class RadarPdNovaApp(ThemedApp):
                                 controller.acknowledge_submission,
                                 run,
                                 launched,
+                                persist=False,
                             )
                             self.records[record.uid] = record
                             self._sync_runs()
@@ -4030,7 +4054,12 @@ class RadarPdNovaApp(ThemedApp):
                             warnings.append(f"{run.run_id} submission failed and will be retried: {exc}")
                             if run.run_id in controller.state.discovered:
                                 try:
-                                    await asyncio.to_thread(controller.defer_submission, run, str(exc))
+                                    await asyncio.to_thread(
+                                        controller.defer_submission,
+                                        run,
+                                        str(exc),
+                                        persist=False,
+                                    )
                                 except Exception as persist_exc:
                                     warnings.append(
                                         f"{run.run_id} retry checkpoint also failed: {persist_exc}"
@@ -4039,6 +4068,14 @@ class RadarPdNovaApp(ThemedApp):
                                 warnings.append(f"{run.run_id} submission status uncertain: {exc}")
                         self._sync_powgen_rows()
                         state.flush()
+
+                    try:
+                        await asyncio.to_thread(controller.persist_state)
+                    except Exception as exc:
+                        warnings.append(
+                            "The batch ran, but its recovery checkpoint will be retried: "
+                            f"{_powgen_submission_error_summary(exc)}"
+                        )
 
                 self._sync_powgen_rows()
                 counts = {
@@ -5700,7 +5737,8 @@ class RadarPdNovaApp(ThemedApp):
         .radar-experiment-phase-card .radar-plot-frame { height: 430px; min-height: 430px; }
         .radar-experiment-quality-card .radar-plot-frame { height: 340px; min-height: 340px; }
         .radar-experiment-heatmap-frame { height: 430px; min-height: 320px; }
-        .radar-experiment-controls { display: grid; grid-template-columns: minmax(180px, .7fr) minmax(170px, .55fr) minmax(300px, 1.35fr); gap: 10px; margin: 2px 0 10px; }
+        .radar-experiment-controls { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(180px, .7fr); gap: 10px; margin: 2px 0 10px; }
+        .radar-experiment-controls .radar-phase-selector { grid-column: 1 / -1; }
         .radar-experiment-controls .v-field { background: #fff; }
         .radar-experiment-controls .v-chip { max-width: 240px; }
         .radar-experiment-controls .v-chip__content { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

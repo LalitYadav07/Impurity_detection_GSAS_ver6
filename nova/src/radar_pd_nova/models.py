@@ -276,6 +276,8 @@ class SubmissionSnapshot(BaseModel):
 
     config: AnalysisConfig
     inputs: InputSelection
+    output_profile: Literal["full", "monitor"] = "full"
+    prepared_dataset_ids: dict[str, str] = Field(default_factory=dict)
     client_revision: int = Field(default=0, ge=0)
     display_summary: dict[str, str] = Field(default_factory=dict)
     idempotency_token: str = Field(min_length=8)
@@ -287,6 +289,7 @@ class SubmissionSnapshot(BaseModel):
         # Trame state changes cannot mutate nested values captured by a click.
         object.__setattr__(self, "config", self.config.model_copy(deep=True))
         object.__setattr__(self, "inputs", self.inputs.model_copy(deep=True))
+        object.__setattr__(self, "prepared_dataset_ids", dict(self.prepared_dataset_ids))
         object.__setattr__(self, "display_summary", dict(self.display_summary))
         return self
 

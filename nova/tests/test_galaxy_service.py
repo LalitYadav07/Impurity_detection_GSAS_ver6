@@ -314,7 +314,9 @@ def test_submit_persists_configuration_and_resolved_input_selection(tmp_path: Pa
         "data_inputs|main_cif",
         "library|database|database_kind",
         "reproducibility|run_name",
+        "output_profile",
     }.issubset(submitted_names)
+    assert ("output_profile", "full") in submitted_parameters
     assert not any(name.startswith("input_source|") for name in submitted_names)
     assert ("chemistry|sample_elements", "Cu, S") in submitted_parameters
     assert ("data_inputs|input_source|source_kind", "history") in submitted_parameters

@@ -27,8 +27,22 @@ class FakeGalaxyService:
         assert dataset_id == "config-hda"
         return AnalysisConfig(mode=AnalysisMode.RAPID, sample_elements=["Y", "Fe", "Si", "Ga"])
 
-    def create_submission_snapshot(self, config, inputs, *, idempotency_token):
-        snapshot = SimpleNamespace(config=config, inputs=inputs, idempotency_token=idempotency_token)
+    def create_submission_snapshot(
+        self,
+        config,
+        inputs,
+        *,
+        idempotency_token,
+        output_profile="full",
+        prepared_dataset_ids=None,
+    ):
+        snapshot = SimpleNamespace(
+            config=config,
+            inputs=inputs,
+            idempotency_token=idempotency_token,
+            output_profile=output_profile,
+            prepared_dataset_ids=dict(prepared_dataset_ids or {}),
+        )
         self.snapshots.append(snapshot)
         return snapshot
 
@@ -48,6 +62,10 @@ class FakeGalaxyService:
     def upload_json_document(self, payload, *, name, label):
         self.uploaded.append((payload, name, label))
         return f"state-{len(self.uploaded)}"
+
+    def upload_document(self, path, *, label):
+        self.uploaded.append((str(path), Path(path).name, label))
+        return f"document-{len(self.uploaded)}"
 
     def search_history_datasets(self, **_kwargs):
         return list(self.history_documents)
@@ -103,11 +121,42 @@ def test_controller_submits_existing_analyze_contract_and_persists_state() -> No
     snapshot = service.snapshots[0]
     assert snapshot.config.run_name == "IPTS-38000_PG3_63764"
     assert snapshot.inputs.data_path == run.source_path
-    assert snapshot.inputs.instrument_path.endswith("2026B_HighRes_60HzB2_CWL1p5.instprm")
+    assert snapshot.inputs.instrument_path is None
+    assert snapshot.inputs.instrument_dataset_id.startswith("document-")
+    assert snapshot.output_profile == "monitor"
+    assert snapshot.prepared_dataset_ids == {"configuration": "config-hda"}
     assert snapshot.inputs.publish_results_to_ipts is False
     assert service.uploaded[-1][2] == "POWGEN watch state IPTS-38000"
     assert "PG3_63764" in service.uploaded[-1][0]["submitted"]
     assert service.uploaded[-1][0]["watch"]["source_directory"].endswith("shared/autoreduce")
+
+
+def test_controller_reuses_one_packaged_profile_dataset_across_scans() -> None:
+    service = FakeGalaxyService()
+    controller = PowgenWatchController(
+        service,
+        PowgenExperimentSettings(
+            ipts="IPTS-38000",
+            history_id="history-1",
+            configuration_dataset_id="config-hda",
+            wavelength_angstrom="1.5",
+            frequency_hz="60",
+        ),
+    )
+    runs = controller.discover(
+        [
+            {"path": "/SNS/PG3/IPTS-38000/shared/autoreduce/PG3_63763.gsa"},
+            {"path": "/SNS/PG3/IPTS-38000/shared/autoreduce/PG3_63764.gsa"},
+        ]
+    )
+
+    records = [controller.launch_submission(run) for run in runs]
+
+    profile_uploads = [item for item in service.uploaded if item[2] == "POWGEN instrument profile"]
+    assert len(profile_uploads) == 1
+    profile_ids = {record.inputs.instrument_dataset_id for record in records if record.inputs}
+    assert len(profile_ids) == 1
+    assert next(iter(profile_ids)).startswith("document-")
 
 
 def test_controller_propagates_custom_library_to_every_monitored_scan() -> None:

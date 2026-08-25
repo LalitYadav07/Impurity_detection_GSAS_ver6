@@ -1048,12 +1048,16 @@ class GalaxyService:
         *,
         client_revision: int = 0,
         idempotency_token: str | None = None,
+        output_profile: str = "full",
+        prepared_dataset_ids: dict[str, str] | None = None,
     ) -> SubmissionSnapshot:
         """Capture the exact validated form values accepted for one click."""
 
         return SubmissionSnapshot(
             config=config.model_copy(deep=True),
             inputs=inputs.model_copy(deep=True),
+            output_profile=output_profile,
+            prepared_dataset_ids=dict(prepared_dataset_ids or {}),
             client_revision=client_revision,
             idempotency_token=idempotency_token or uuid.uuid4().hex,
             display_summary={
@@ -1084,6 +1088,7 @@ class GalaxyService:
                 config=snapshot.config.model_copy(deep=True),
                 inputs=snapshot.inputs.model_copy(deep=True),
                 idempotency_token=snapshot.idempotency_token,
+                prepared_dataset_ids=dict(snapshot.prepared_dataset_ids),
                 submission=SubmissionProgress(),
             )
             self._submissions[snapshot.idempotency_token] = record
@@ -1290,6 +1295,7 @@ class GalaxyService:
         else:
             params.add_input(name="library|database|database_kind", value="builtin")
         params.add_input(name="reproducibility|run_name", value=config.run_name)
+        params.add_input(name="output_profile", value=snapshot.output_profile)
         return params, inputs
 
     def submit(self, config: AnalysisConfig, inputs: InputSelection) -> RunRecord:
