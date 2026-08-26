@@ -5,6 +5,7 @@ import numpy as np
 
 from radar_pd_nova.results import (
     build_result_view,
+    complete_experiment_space_groups,
     curate_rapid_rows,
     discover_plot_payloads,
     discover_tables,
@@ -355,6 +356,59 @@ def test_selected_plot_falls_back_when_ranked_npz_is_corrupt(tmp_path: Path) -> 
     assert path == str(valid)
     assert payload["rwp"] == 4.0
     assert [trace.name for trace in figure.data[:3]] == ["Observed", "Calculated", "Difference"]
+
+
+def test_metadata_only_plot_is_excluded_and_falls_back_to_real_curves(tmp_path: Path) -> None:
+    empty = tmp_path / "accepted_model.plotdata.json"
+    empty.write_text(
+        json.dumps({"plot_kind": "gsas_fit_with_ticks_v1", "rwp": 3.0}),
+        encoding="utf-8",
+    )
+    valid = tmp_path / "final_refinement.plotdata.json"
+    _write_gsas_payload(valid, rwp=4.0)
+
+    options = discover_plot_payloads(tmp_path)
+    selected = load_plot_with_fallback(options, str(empty))
+
+    assert [Path(option["path"]) for option in options] == [valid]
+    assert selected is not None
+    assert selected[0] == str(valid)
+
+
+def test_empty_plot_has_explicit_unavailable_state() -> None:
+    figure = figure_for_payload({"plot_kind": "gsas_fit_with_ticks_v1", "rwp": 3.0})
+
+    assert not figure.data
+    assert figure.layout.title.text == "Refinement fit unavailable"
+    assert "No interactive refinement-fit curves" in figure.layout.annotations[0].text
+
+
+def test_symbol_only_space_groups_are_completed_from_experiment_peers() -> None:
+    scans = [
+        {
+            "phases": [
+                {
+                    "phase": "AlFe2V",
+                    "space_group": "F m -3 m",
+                    "label": "AlFe2V (SG F m -3 m)",
+                }
+            ]
+        },
+        {
+            "phases": [
+                {
+                    "phase": "AlVFe2",
+                    "space_group": "Fm-3m (225)",
+                    "label": "AlVFe2 (SG Fm-3m (225))",
+                }
+            ]
+        },
+    ]
+
+    complete_experiment_space_groups(scans)
+
+    assert scans[0]["phases"][0]["space_group"] == "F m -3 m (225)"
+    assert scans[0]["phases"][0]["label"] == "AlFe2V (SG F m -3 m (225))"
 
 
 def test_result_mode_document_is_authoritative_and_warns_on_mismatch(tmp_path: Path) -> None:

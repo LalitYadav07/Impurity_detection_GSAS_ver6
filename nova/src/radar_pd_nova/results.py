@@ -217,15 +217,27 @@ def discover_tables(root: str | Path) -> list[dict[str, Any]]:
 
 
 def _plot_payload_has_arrays(payload: dict[str, Any]) -> bool:
-    """Check a selected, fully loaded payload for declared numeric arrays."""
+    """Require the x/y curves needed to render a scientific fit."""
 
-    arrays_name = payload.get("arrays_npz")
-    if not isinstance(arrays_name, str) or not arrays_name.strip():
-        return True
-    arrays = payload.get("arrays")
-    if not isinstance(arrays, dict):
-        return False
-    return any(isinstance(value, list) and value for value in arrays.values())
+    arrays = payload.get("arrays") if isinstance(payload.get("arrays"), dict) else payload
+    kind = str(payload.get("plot_kind") or "").lower()
+    is_gsas = "gsas" in kind or any(
+        key in payload for key in ("phase_ticks", "phase_weights", "rwp")
+    )
+    if is_gsas:
+        return bool(_array(arrays, "x", "two_theta", "tof")) and bool(
+            _array(arrays, "yobs", "observed")
+            or _array(arrays, "ycalc", "calculated")
+        )
+
+    q = _array(payload, "q", "x") or _nested_array(payload, "data", "q", "x")
+    measured = _array(payload, "target", "measured", "y") or _nested_array(
+        payload, "data", "target", "measured"
+    )
+    fitted = _array(payload, "total_fit", "fit", "ycalc") or _nested_array(
+        payload, "data", "total_fit", "fit"
+    )
+    return bool(q) and bool(measured or fitted)
 
 
 def _plot_arrays_available(path: Path, payload: dict[str, Any]) -> bool:
@@ -233,7 +245,7 @@ def _plot_arrays_available(path: Path, payload: dict[str, Any]) -> bool:
 
     arrays_name = payload.get("arrays_npz")
     if not isinstance(arrays_name, str) or not arrays_name.strip():
-        return True
+        return _plot_payload_has_arrays(payload)
     parent = path.resolve().parent
     candidate = (parent / arrays_name).resolve()
     try:
@@ -550,6 +562,20 @@ def gsas_figure(payload: dict[str, Any]) -> go.Figure:
 
 
 def figure_for_payload(payload: dict[str, Any]) -> go.Figure:
+    if not payload or not _plot_payload_has_arrays(payload):
+        figure = go.Figure()
+        figure.add_annotation(
+            text="No interactive refinement-fit curves were published for this scan.",
+            x=0.5,
+            y=0.5,
+            xref="paper",
+            yref="paper",
+            showarrow=False,
+            font={"size": 16, "color": "#52635b"},
+        )
+        figure.update_xaxes(visible=False)
+        figure.update_yaxes(visible=False)
+        return _finish_figure(figure, "Refinement fit unavailable", height=420)
     kind = str(payload.get("plot_kind") or "").lower()
     if "gsas" in kind or any(key in payload for key in ("phase_ticks", "phase_weights", "rwp")):
         return gsas_figure(payload)
@@ -626,6 +652,36 @@ def _split_phase_label(label: str) -> tuple[str, str | None]:
     if not match:
         return label, None
     return match.group(1).strip() or label, match.group(2).strip()
+
+
+def complete_experiment_space_groups(scans: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Fill symbol-only SG labels from unambiguous peers in the same experiment."""
+
+    known: dict[str, set[str]] = {}
+    parsed: list[tuple[dict[str, Any], str, str | None]] = []
+    for scan in scans:
+        for phase in scan.get("phases") or []:
+            if not isinstance(phase, dict):
+                continue
+            value = str(phase.get("space_group") or "").strip()
+            match = re.match(r"^(.*?)\s*\((\d{1,3})\)\s*$", value)
+            symbol = (match.group(1) if match else value).strip()
+            number = match.group(2) if match else None
+            key = re.sub(r"\s+", "", symbol).lower()
+            if key and number:
+                known.setdefault(key, set()).add(number)
+            parsed.append((phase, key, number))
+
+    for phase, key, number in parsed:
+        candidates = known.get(key, set())
+        if number or len(candidates) != 1:
+            continue
+        symbol = str(phase.get("space_group") or "").strip()
+        completed = f"{symbol} ({next(iter(candidates))})"
+        phase["space_group"] = completed
+        phase_name = str(phase.get("phase") or "Unknown")
+        phase["label"] = f"{phase_name} (SG {completed})"
+    return scans
 
 
 def _rapid_final_fractions(summary: dict[str, Any]) -> list[dict[str, Any]]:

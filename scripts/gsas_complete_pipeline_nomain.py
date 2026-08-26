@@ -641,6 +641,27 @@ def _parse_cif_metadata(cif_path: Optional[str]) -> Tuple[Optional[str], Optiona
 
         if not name:
             name = data_label
+
+        # Some valid CIFs publish only the Hermann-Mauguin symbol.  Complete
+        # whichever space-group field is missing so downstream summaries do
+        # not lose the International Tables number.
+        if (not sg_sym or sg_num is None) and HAVE_PYMATGEN_MATCHER:
+            try:
+                structure = Structure.from_file(str(cif_path))  # type: ignore[union-attr]
+                analyzer = SpacegroupAnalyzer(  # type: ignore[misc]
+                    structure,
+                    symprec=1e-2,
+                    angle_tolerance=5.0,
+                )
+                if not sg_sym:
+                    sg_sym = str(analyzer.get_space_group_symbol())
+                if sg_num is None:
+                    sg_num = int(analyzer.get_space_group_number())
+            except Exception as e:
+                print(
+                    f"[WARN] CIF symmetry analysis failed for {cif_path}: "
+                    f"{type(e).__name__}: {e}"
+                )
             
         sg_final = None
         if sg_sym and sg_num:

@@ -18,7 +18,12 @@ from scripts.aniso_db_loader import CatalogPaths, DBLoader, build_mask
 from scripts.config_builder import build_pipeline_config
 from scripts.db_pack import build_db_config, get_db_pack_layout
 from scripts.db_pack_builder import _emit_progress, build_mini_db_pack
-from scripts.gsas_complete_pipeline_nomain import BenchTimer, UnifiedPipeline, _crop_native_arrays_by_q
+from scripts.gsas_complete_pipeline_nomain import (
+    BenchTimer,
+    UnifiedPipeline,
+    _crop_native_arrays_by_q,
+    _parse_cif_metadata,
+)
 
 
 def _write_catalog(path: Path, phase_id: str) -> None:
@@ -39,6 +44,24 @@ def _make_structure() -> Structure:
 
 
 class DBPackLayoutTests(unittest.TestCase):
+    def test_cif_metadata_fills_missing_space_group_number(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cif_path = Path(tmpdir) / "symbol_only.cif"
+            cif_text = _make_structure().to(fmt="cif")
+            cif_path.write_text(
+                "\n".join(
+                    line
+                    for line in cif_text.splitlines()
+                    if "int_tables_number" not in line.lower()
+                ),
+                encoding="utf-8",
+            )
+
+            _, space_group = _parse_cif_metadata(str(cif_path))
+
+            self.assertIsNotNone(space_group)
+            self.assertRegex(str(space_group), r"\(\d{1,3}\)$")
+
     def test_get_db_pack_layout_matches_runtime_directory_contract(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             layout = get_db_pack_layout(tmpdir)

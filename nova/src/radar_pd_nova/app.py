@@ -49,6 +49,7 @@ from .powgen_controller import (
 )
 from .results import (
     build_result_view,
+    complete_experiment_space_groups,
     experiment_axis_options,
     experiment_fit_diagnostics,
     experiment_fit_quality_figure,
@@ -3422,6 +3423,12 @@ class RadarPdNovaApp(ThemedApp):
             row["sample_label"] = sample_identity["label"]
             scientific_rows.append(row)
         scientific_rows.sort(key=lambda item: item["run_number"], reverse=True)
+        complete_experiment_space_groups(scientific_rows)
+        for row in scientific_rows:
+            row["phase_summary"] = " + ".join(
+                f"{phase['label']} {phase['weight_percent']:.1f}%"
+                for phase in row["phases"][:3]
+            ) or "No refined phase fractions"
         state.powgen_all_scientific_rows = scientific_rows
         sample_labels = {
             str(row["sample_key"]): str(row["sample_label"])
