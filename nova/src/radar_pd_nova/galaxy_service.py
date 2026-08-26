@@ -789,6 +789,28 @@ class GalaxyService:
                 if chunk:
                     handle.write(chunk)
 
+    def _download_collection(self, collection_id: str, destination: Path) -> None:
+        """Download a durable Galaxy collection without a live Tool object."""
+
+        archive = destination.parent / f".{destination.name}.zip"
+        archive.unlink(missing_ok=True)
+        destination.mkdir(parents=True, exist_ok=True)
+        try:
+            response = requests.get(
+                f"{self.galaxy_url}/api/dataset_collections/{collection_id}/download",
+                headers=self._headers,
+                timeout=120,
+                stream=True,
+            )
+            response.raise_for_status()
+            with archive.open("wb") as handle:
+                for chunk in response.iter_content(chunk_size=1024 * 1024):
+                    if chunk:
+                        handle.write(chunk)
+            _extract_results_archive(archive, destination)
+        finally:
+            archive.unlink(missing_ok=True)
+
     def _dataset_metadata(self, dataset_id: str) -> dict[str, Any]:
         response = requests.get(
             f"{self.galaxy_url}/api/datasets/{dataset_id}",
@@ -2022,22 +2044,28 @@ class GalaxyService:
             # fall back to named collection downloads for legacy jobs that did
             # not publish an extractable archive.
             for name in (() if archive_extracted else ("plots", "tables", "phases", "gpx_projects", "diagnostics")):
-                if outputs is None:
-                    continue
-                try:
-                    collection = outputs.get_collection(name)
-                except Exception:
-                    continue
+                collection_id = record.output_dataset_ids.get(name)
+                collection = None
+                if not collection_id:
+                    if outputs is None:
+                        continue
+                    try:
+                        collection = outputs.get_collection(name)
+                    except Exception:
+                        continue
                 target = staging / name
                 try:
-                    _download_collection_archive(collection, target)
+                    if collection_id:
+                        self._download_collection(collection_id, target)
+                    else:
+                        _download_collection_archive(collection, target)
                 except Exception as exc:
                     shutil.rmtree(target, ignore_errors=True)
                     failures.append(f"{name}: {exc}")
                     continue
                 downloaded += 1
                 usable_downloads += 1
-                output_ids[name] = str(getattr(collection, "id", ""))
+                output_ids[name] = collection_id or str(getattr(collection, "id", ""))
             if not downloaded or not usable_downloads:
                 details = "; ".join(failures)
                 message = (

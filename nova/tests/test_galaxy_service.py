@@ -206,6 +206,7 @@ def test_monitor_collection_reaches_interactive_refinement_view(tmp_path: Path) 
     record = RunRecord(uid="monitor-job", name="PG3_63787", mode=AnalysisMode.FULL, history_id="history")
 
     collected = service.collect_results(record)
+    assert collected.result_status is ResultStatus.READY, collected.message
     payload = service.result_payload(collected)
     view = build_result_view(payload["summary"], collected.local_output_dir, submitted_mode="full")
     selected = load_plot_with_fallback(view.plots, view.primary_plot_path)
@@ -214,6 +215,100 @@ def test_monitor_collection_reaches_interactive_refinement_view(tmp_path: Path) 
     assert len(view.plots) == 1
     assert selected is not None
     assert [trace.name for trace in selected[2].data[:3]] == ["Observed", "Calculated", "Difference"]
+
+
+def test_recovered_monitor_downloads_plot_collection_from_durable_id(tmp_path: Path) -> None:
+    service = GalaxyService("https://example.invalid", "key", "history", output_root=tmp_path)
+    service._job_details = lambda uid: {  # type: ignore[method-assign]
+        "outputs": {"summary": {"id": "summary-id"}},
+        "output_collections": {"plots": {"src": "hdca", "id": "plots-id"}},
+    }
+    service._recover_tool = lambda uid: (_ for _ in ()).throw(RuntimeError("no live tool"))  # type: ignore[method-assign]
+
+    def download_dataset(dataset_id: str, target: Path) -> None:
+        assert dataset_id == "summary-id"
+        target.write_text(
+            json.dumps(
+                {
+                    "$schema": "radar-pd-result/v1",
+                    "analysis_mode": "rapid",
+                    "status": "complete",
+                    "best_rwp": 31.49,
+                    "phases": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    def download_collection(collection_id: str, target: Path) -> None:
+        assert collection_id == "plots-id"
+        target.mkdir(parents=True)
+        sidecar = target / "rapid_results__live_run__curve.plotdata.json"
+        sidecar.write_text(
+            json.dumps(
+                {
+                    "plot_kind": "gsas_fit_with_ticks_v1",
+                    "rwp": 31.49,
+                    "x": [1.0, 2.0, 3.0],
+                    "yobs": [10.0, 20.0, 30.0],
+                    "ycalc": [9.0, 19.0, 29.0],
+                    "resid": [1.0, 1.0, 1.0],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    service._download_dataset = download_dataset  # type: ignore[method-assign]
+    service._download_collection = download_collection  # type: ignore[method-assign]
+    record = RunRecord(
+        uid="recovered-monitor-job",
+        name="IPTS-37876_PG3_63798",
+        mode=AnalysisMode.RAPID,
+        history_id="history",
+    )
+
+    collected = service.collect_results(record)
+    assert collected.result_status is ResultStatus.READY, collected.message
+    payload = service.result_payload(collected)
+    view = build_result_view(payload["summary"], collected.local_output_dir, submitted_mode="rapid")
+    selected = load_plot_with_fallback(view.plots, view.primary_plot_path)
+
+    assert collected.output_dataset_ids["plots"] == "plots-id"
+    assert len(view.plots) == 1
+    assert selected is not None
+    assert [trace.name for trace in selected[2].data[:3]] == ["Observed", "Calculated", "Difference"]
+
+
+def test_durable_collection_download_uses_galaxy_zip_endpoint(tmp_path: Path, monkeypatch: Any) -> None:
+    source_archive = tmp_path / "source.zip"
+    with zipfile.ZipFile(source_archive, "w") as handle:
+        handle.writestr("curve.png.plotdata.json", "{}")
+    payload = source_archive.read_bytes()
+    calls: list[dict[str, Any]] = []
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            pass
+
+        def iter_content(self, *, chunk_size: int) -> Iterator[bytes]:
+            assert chunk_size == 1024 * 1024
+            yield payload
+
+    def fake_get(url: str, **kwargs: Any) -> FakeResponse:
+        calls.append({"url": url, **kwargs})
+        return FakeResponse()
+
+    monkeypatch.setattr("radar_pd_nova.galaxy_service.requests.get", fake_get)
+    service = GalaxyService("https://galaxy.example", "key", "history", output_root=tmp_path)
+    destination = tmp_path / "downloaded" / "plots"
+
+    service._download_collection("plots-id", destination)
+
+    assert calls[0]["url"] == "https://galaxy.example/api/dataset_collections/plots-id/download"
+    assert calls[0]["headers"]["x-api-key"] == "key"
+    assert calls[0]["stream"] is True
+    assert (destination / "curve.png.plotdata.json").is_file()
+    assert not (destination.parent / ".plots.zip").exists()
 
 
 def test_result_collector_recovers_archive_when_collections_are_unavailable(tmp_path: Path) -> None:
