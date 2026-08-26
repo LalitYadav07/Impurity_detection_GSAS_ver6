@@ -490,6 +490,57 @@ def test_galaxy_flattened_plot_companions_keep_interactive_curves(tmp_path: Path
     assert len(selected[2].layout.images) == 0
 
 
+def test_result_view_deduplicates_manifest_png_represented_by_interactive_sidecar(tmp_path: Path) -> None:
+    image = tmp_path / "ndip" / "plots" / "Rapid_final_fit.png"
+    image.parent.mkdir(parents=True)
+    image.write_bytes(b"published-fit")
+    sidecar = Path(str(image) + ".plotdata.json")
+    arrays = Path(str(image) + ".plotdata_arrays.npz")
+    sidecar.write_text(
+        json.dumps(
+            {
+                "plot_kind": "gsas_fit_with_ticks_v1",
+                "source_plot": image.name,
+                "arrays_npz": arrays.name,
+                "rwp": 6.25,
+            }
+        ),
+        encoding="utf-8",
+    )
+    np.savez_compressed(
+        arrays,
+        x=np.array([1.0, 2.0]),
+        yobs=np.array([10.0, 20.0]),
+        ycalc=np.array([9.0, 19.0]),
+        resid=np.array([1.0, 1.0]),
+    )
+    result = {
+        "$schema": "radar-pd-result/v1",
+        "analysis_mode": "rapid",
+        "status": "complete",
+        "phases": [],
+        "hypotheses": [],
+        "gpx_projects": [],
+        "artifacts": {
+            "plots": [
+                {
+                    "name": image.name,
+                    "path": f"plots/{image.name}",
+                    "source_path": "rapid_results/live_run/curve.png",
+                }
+            ]
+        },
+    }
+
+    view = build_result_view(result, tmp_path)
+
+    assert len(view.plots) == 1
+    assert Path(view.plots[0].path) == sidecar
+    selected = load_plot_with_fallback(view.plots, view.primary_plot_path)
+    assert selected is not None
+    assert [trace.name for trace in selected[2].data[:3]] == ["Observed", "Calculated", "Difference"]
+
+
 def test_result_view_resolves_custom_named_plot_from_normalized_manifest(tmp_path: Path) -> None:
     image = tmp_path / "ndip" / "plots" / "custom_database_output_00017.png"
     image.parent.mkdir(parents=True)

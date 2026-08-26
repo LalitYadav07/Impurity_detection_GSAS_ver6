@@ -486,7 +486,18 @@ def _merge_manifest_plots(
     """Add every renderable plot declared by ``radar-pd-result/v1``."""
 
     merged = list(discovered)
-    represented = {Path(str(item.get("path") or "")).resolve() for item in merged if item.get("path")}
+    represented: set[Path] = set()
+    for item in merged:
+        item_path = Path(str(item.get("path") or ""))
+        if not item_path.name:
+            continue
+        represented.add(item_path.resolve())
+        if not item_path.name.endswith(".plotdata.json"):
+            continue
+        payload = read_json(item_path)
+        static_path = _static_plot_path(item_path, payload) if payload else None
+        if static_path is not None:
+            represented.add(static_path.resolve())
     artifacts = result.get("artifacts") or {}
     manifest_plots = artifacts.get("plots") if isinstance(artifacts, dict) else []
     for artifact in manifest_plots or []:
