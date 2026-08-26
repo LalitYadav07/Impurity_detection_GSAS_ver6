@@ -335,6 +335,7 @@ class RadarPdNovaApp(ThemedApp):
         state.selected_publication_target = ""
         state.selected_publication_job_id = ""
         state.selected_publish_message = ""
+        state.result_explorer_available = False
         state.selected_galaxy_job_id = "Pending"
         state.selected_run_stage = "-"
         state.selected_run_progress = 0
@@ -2371,6 +2372,7 @@ class RadarPdNovaApp(ThemedApp):
                     prepend_icon="mdi-open-in-new",
                     variant="outlined",
                     size="small",
+                    v_if="result_explorer_available",
                 )
                 vuetify.VBtn("Back to monitor", click="workspace_view = 'monitor'", prepend_icon="mdi-arrow-left", variant="text", size="small")
         with html.Div(v_if="selected_run_status !== 'Ok'", classes="radar-result-not-ready"):
@@ -4610,6 +4612,7 @@ class RadarPdNovaApp(ThemedApp):
         state.selected_publication_target = record.publication_target or ""
         state.selected_publication_job_id = record.publication_job_id or ""
         state.selected_publish_message = record.publish_message
+        state.result_explorer_available = bool(record.output_dataset_ids.get("results_archive"))
         state.selected_galaxy_job_id = record.galaxy_job_id or "Pending"
         state.selected_run_stage = record.stage
         state.selected_run_progress = record.progress

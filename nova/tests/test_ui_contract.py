@@ -131,6 +131,7 @@ def test_powgen_monitor_requires_preflight_and_exposes_safe_backfill_controls() 
 
     assert app.server.state.powgen_backfill_mode == "latest_5"
     assert app.server.state.powgen_preflight_ready is False
+    assert app.server.state.result_explorer_available is False
     assert app.server.state.powgen_backfill_options[0]["title"] == "Latest 5 existing scans, then new scans"
     assert any(option["value"] == "new_only" for option in app.server.state.powgen_backfill_options)
     assert "Check experiment and inputs" in template
@@ -139,6 +140,7 @@ def test_powgen_monitor_requires_preflight_and_exposes_safe_backfill_controls() 
     assert "Next check:" in template
     assert "Save reusable configuration to History" in template
     assert "Open Result Explorer" in template
+    assert 'v-if="result_explorer_available"' in template
     assert "Send checkpoint to GSAS-II handoff" in template
     assert "Compare selected series" in template
     assert "Companion-tool activity" in template

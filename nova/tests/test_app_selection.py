@@ -31,6 +31,7 @@ def _app_with_record(record: RunRecord) -> tuple[RadarPdNovaApp, _State]:
         selected_run_message="",
         selected_run_console="",
         selected_run_loading=False,
+        result_explorer_available=False,
         viewed_configuration="",
         active_page="runs",
         error_message="",
@@ -57,7 +58,25 @@ def test_selecting_completed_run_opens_results() -> None:
     app._run_selection_changed([record.uid])
 
     assert state.selected_run_uid == record.uid
+    assert state.result_explorer_available is False
     assert opened == [record.uid]
+
+
+def test_result_explorer_is_available_only_with_a_complete_archive() -> None:
+    record = RunRecord(
+        uid="completed-archive",
+        name="completed run with archive",
+        mode=AnalysisMode.FULL,
+        history_id="history-1",
+        status=RunStatus.OK,
+        output_dataset_ids={"results_archive": "archive-hda"},
+    )
+    app, state = _app_with_record(record)
+    app._open_record_results = lambda selected: None
+
+    app._run_selection_changed([record.uid])
+
+    assert state.result_explorer_available is True
 
 
 def test_selecting_active_run_keeps_run_monitor_visible() -> None:
