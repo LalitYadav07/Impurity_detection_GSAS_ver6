@@ -318,6 +318,7 @@ def _looks_like_published_fit(path: Path) -> bool:
         token in lowered
         for token in (
             "accepted_model",
+            "accepted_fit",
             "main_phase_fit",
             "refinement_fit",
             "seq_final",

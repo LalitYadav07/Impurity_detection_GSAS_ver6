@@ -430,6 +430,27 @@ def test_result_archive_uses_orphan_accepted_fit_image(tmp_path: Path) -> None:
     assert len(selected[2].layout.images) == 1
 
 
+def test_result_archive_uses_galaxy_published_accepted_fit_name(tmp_path: Path) -> None:
+    """NDIP renames accepted model plots when publishing the Galaxy collection."""
+
+    image = tmp_path / "ndip" / "plots" / "Accepted_fit_after_pass_1.png"
+    image.parent.mkdir(parents=True)
+    image.write_bytes(
+        bytes.fromhex(
+            "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+            "0000000d49444154789c63600000020001e221bc330000000049454e44ae426082"
+        )
+    )
+
+    plots = discover_plot_payloads(tmp_path)
+    assert [plot["name"] for plot in plots] == ["Pass 1 accepted model"]
+
+    selected = load_plot_with_fallback(plots, plots[0]["path"])
+    assert selected is not None
+    assert selected[0].endswith("Accepted_fit_after_pass_1.png")
+    assert len(selected[2].layout.images) == 1
+
+
 def test_empty_plot_has_explicit_unavailable_state() -> None:
     figure = figure_for_payload({"plot_kind": "gsas_fit_with_ticks_v1", "rwp": 3.0})
 
