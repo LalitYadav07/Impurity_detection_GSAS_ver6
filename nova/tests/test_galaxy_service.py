@@ -98,11 +98,11 @@ def test_result_collector_uses_nova_collection_api(tmp_path: Path) -> None:
 
         def download(self, target: str) -> None:
             path = Path(target)
-            if path.suffix:
+            if path.name == "summary.json":
                 path.write_text("{}", encoding="utf-8")
             else:
-                path.mkdir(parents=True, exist_ok=True)
-                (path / "member.txt").write_text("ok", encoding="utf-8")
+                with zipfile.ZipFile(path, "w") as handle:
+                    handle.writestr("member.txt", "ok")
 
     class FakeOutputs:
         def __init__(self) -> None:
@@ -161,27 +161,29 @@ def test_monitor_collection_reaches_interactive_refinement_view(tmp_path: Path) 
         id = "plots-id"
 
         def download(self, target: str) -> None:
-            root = Path(target)
-            root.mkdir(parents=True, exist_ok=True)
             prefix = "Technical__Plots__main_phase_fit.png"
-            (root / f"{prefix}.plotdata.json").write_text(
-                json.dumps(
-                    {
-                        "plot_kind": "gsas_fit_with_ticks_v1",
-                        "source_plot": "main_phase_fit.png",
-                        "arrays_npz": "main_phase_fit.png.plotdata.npz",
-                        "rwp": 6.25,
-                    }
-                ),
-                encoding="utf-8",
-            )
+            npz_path = Path(target).with_suffix(".npz")
             np.savez_compressed(
-                root / f"{prefix}.plotdata.npz",
+                npz_path,
                 x=np.array([1.0, 2.0, 3.0]),
                 yobs=np.array([10.0, 20.0, 30.0]),
                 ycalc=np.array([9.0, 19.0, 29.0]),
                 resid=np.array([1.0, 1.0, 1.0]),
             )
+            with zipfile.ZipFile(target, "w") as handle:
+                handle.writestr(
+                    f"{prefix}.plotdata.json",
+                    json.dumps(
+                        {
+                            "plot_kind": "gsas_fit_with_ticks_v1",
+                            "source_plot": "main_phase_fit.png",
+                            "arrays_npz": "main_phase_fit.png.plotdata.npz",
+                            "rwp": 6.25,
+                        }
+                    ),
+                )
+                handle.write(npz_path, f"{prefix}.plotdata.npz")
+            npz_path.unlink()
 
     class MonitorOutputs:
         def get_dataset(self, name: str) -> SummaryData:

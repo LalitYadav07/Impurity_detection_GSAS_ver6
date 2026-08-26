@@ -117,6 +117,21 @@ def _extract_results_archive(archive: Path, destination: Path) -> None:
         handle.extractall(destination)
 
 
+def _download_collection_archive(collection: Any, destination: Path) -> None:
+    """Download and extract a Galaxy collection using Bioblend's archive contract."""
+
+    archive = destination.parent / f".{destination.name}.zip"
+    archive.unlink(missing_ok=True)
+    destination.mkdir(parents=True, exist_ok=True)
+    try:
+        # nova-galaxy delegates to Bioblend, whose ``file_path`` argument is
+        # the destination archive itself rather than an extraction directory.
+        collection.download(str(archive))
+        _extract_results_archive(archive, destination)
+    finally:
+        archive.unlink(missing_ok=True)
+
+
 def _decode_parameter(value: Any) -> Any:
     if not isinstance(value, str):
         return value
@@ -2014,9 +2029,8 @@ class GalaxyService:
                 except Exception:
                     continue
                 target = staging / name
-                target.mkdir(exist_ok=True)
                 try:
-                    collection.download(str(target))
+                    _download_collection_archive(collection, target)
                 except Exception as exc:
                     shutil.rmtree(target, ignore_errors=True)
                     failures.append(f"{name}: {exc}")
