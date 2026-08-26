@@ -26,6 +26,7 @@ from ndip_runner import (  # noqa: E402
     _extract_db_pack,
     _finalize_successful_stages,
     _instrument_mode_from_instprm,
+    _resolve_db_pack_original_json,
     main,
 )
 from radar_pd_nova.results import build_result_view, load_plot_with_fallback  # noqa: E402
@@ -454,6 +455,120 @@ def test_custom_database_archive_resolves_portable_pack_root(tmp_path: Path) -> 
     extracted = _extract_db_pack(archive, tmp_path / "extract")
 
     assert extracted == (tmp_path / "extract" / "library").resolve()
+
+
+def test_augmented_database_uses_mounted_builtin_structure_metadata(tmp_path: Path) -> None:
+    pack_root = tmp_path / "augmented"
+    pack_root.mkdir()
+    (pack_root / "manifest.json").write_text(
+        json.dumps({"kind": "augmented", "source_type": "neutron"}),
+        encoding="utf-8",
+    )
+    builtin_root = tmp_path / "database_neutron"
+    builtin_root.mkdir()
+    builtin_original = builtin_root / "highsymm_metadata.json"
+    builtin_original.write_text("{}", encoding="utf-8")
+
+    resolved = _resolve_db_pack_original_json(
+        pack_root,
+        builtin_db_root=builtin_root,
+        radiation="neutron",
+    )
+
+    assert resolved == builtin_original.resolve()
+
+
+def test_augmented_database_rejects_radiation_mismatch(tmp_path: Path) -> None:
+    pack_root = tmp_path / "augmented"
+    pack_root.mkdir()
+    (pack_root / "manifest.json").write_text(
+        json.dumps({"kind": "augmented", "source_type": "xray"}),
+        encoding="utf-8",
+    )
+
+    try:
+        _resolve_db_pack_original_json(
+            pack_root,
+            builtin_db_root=tmp_path / "database_neutron",
+            radiation="neutron",
+        )
+    except ValueError as exc:
+        assert "built for xray" in str(exc)
+    else:
+        raise AssertionError("an X-ray augmented library was accepted for neutron data")
+
+
+def test_augmented_database_dry_run_materializes_hybrid_structure_sources(tmp_path: Path) -> None:
+    config = tmp_path / "config.yaml"
+    assert main(
+        [
+            "configure",
+            "--mode",
+            "full",
+            "--radiation",
+            "neutron",
+            "--allowed-elements",
+            "Fe, V, Al",
+            "--output",
+            str(config),
+        ]
+    ) == 0
+    data = tmp_path / "scan.gsa"
+    data.write_text("BANK 1\n", encoding="utf-8")
+    instrument = tmp_path / "instrument.instprm"
+    instrument.write_text(
+        "#GSAS-II instrument parameter file\nType:PNT\ndifC:22598.5\n",
+        encoding="utf-8",
+    )
+
+    builtin_root = tmp_path / "database_neutron"
+    builtin_root.mkdir()
+    builtin_original = builtin_root / "highsymm_metadata.json"
+    builtin_original.write_text("{}", encoding="utf-8")
+
+    archive = tmp_path / "augmented.zip"
+    with zipfile.ZipFile(archive, "w") as handle:
+        handle.writestr(
+            "library/catalog_deduplicated.csv",
+            "id,pretty_formula,space_group,SG_symbol,elements_list,elements_mask_hi,elements_mask_lo,npz,n_reflections\n",
+        )
+        handle.writestr("library/mp_experimental_stable.csv", "material_id\n")
+        handle.writestr("library/profiles64/profiles64.npz", b"npz")
+        handle.writestr("library/profiles64/index.csv", "id,row\n")
+        handle.writestr("library/cif_map.json", "{}")
+        handle.writestr(
+            "library/manifest.json",
+            json.dumps({"kind": "augmented", "source_type": "neutron"}),
+        )
+
+    work = tmp_path / "work"
+    portal = tmp_path / "portal"
+    assert main(
+        [
+            "analyze",
+            "--config",
+            str(config),
+            "--data",
+            str(data),
+            "--instrument",
+            str(instrument),
+            "--db-root",
+            str(builtin_root),
+            "--db-pack",
+            str(archive),
+            "--work-dir",
+            str(work),
+            "--output-dir",
+            str(portal),
+            "--dry-run",
+        ]
+    ) == 0
+
+    resolved = yaml.safe_load((portal / "resolved_config.yaml").read_text(encoding="utf-8"))
+    extracted_root = (work / "custom_database" / "library").resolve()
+    assert Path(resolved["db"]["catalog_csv"]) == extracted_root / "catalog_deduplicated.csv"
+    assert Path(resolved["db"]["cif_map_json"]) == extracted_root / "cif_map.json"
+    assert Path(resolved["db"]["original_json"]) == builtin_original.resolve()
 
 
 def test_custom_database_archive_rejects_cif_source_bundle(tmp_path: Path) -> None:

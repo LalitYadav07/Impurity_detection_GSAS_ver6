@@ -375,6 +375,7 @@ def _materialize_contract_config(
     main_cif: Path | None,
     work_root: Path,
     db_root: Path,
+    original_json_override: Path | None = None,
 ) -> dict[str, Any]:
     from config_builder import build_pipeline_config
 
@@ -477,6 +478,9 @@ def _materialize_contract_config(
         work_root=str(work_root),
         project_root=str(PROJECT_ROOT),
         db_root=str(db_root),
+        original_json_override=(
+            str(original_json_override) if original_json_override is not None else None
+        ),
         min_impurity_percent=float(full.get("min_phase_percent", 0.5)),
         max_passes=int(full.get("max_passes", 2)),
         sample_env_elements=_split_elements(chemistry.get("environment_elements")),
@@ -559,6 +563,63 @@ def _extract_db_pack(archive: Path, destination: Path) -> Path:
         "mp_experimental_stable.csv, and profiles64/. Select the portable library "
         "output produced by Build CIF Library, not a CIF source ZIP."
     )
+
+
+def _resolve_db_pack_original_json(
+    db_root: Path,
+    *,
+    builtin_db_root: Path,
+    radiation: str,
+) -> Path:
+    """Resolve structure metadata for a mini or augmented database archive.
+
+    Mini packs carry their own metadata JSON. Augmented packs deliberately keep
+    the immutable base structures in the mounted built-in catalog and carry a
+    CIF map only for user-added phases.
+    """
+    local_original = (db_root / "highsymm_metadata.json").resolve()
+    if local_original.is_file():
+        return local_original
+
+    manifest_path = db_root / "manifest.json"
+    if not manifest_path.is_file():
+        raise FileNotFoundError(
+            "The selected custom library is missing highsymm_metadata.json and "
+            "does not declare itself as an augmented library. Rebuild it with "
+            "RADAR-PD CIF Library Builder."
+        )
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Invalid custom-library manifest: {manifest_path}") from exc
+
+    library_mode = str(
+        manifest.get("library_mode") or manifest.get("kind") or ""
+    ).strip().lower()
+    if library_mode != "augmented":
+        raise FileNotFoundError(
+            "The selected mini library is incomplete: highsymm_metadata.json "
+            "is missing. Rebuild the library before running RADAR-PD."
+        )
+
+    pack_radiation = str(
+        manifest.get("radiation") or manifest.get("source_type") or ""
+    ).strip().lower()
+    requested_radiation = str(radiation or "").strip().lower()
+    if pack_radiation and pack_radiation != requested_radiation:
+        raise ValueError(
+            f"The augmented library was built for {pack_radiation}, but this "
+            f"analysis uses {requested_radiation}. Build or select a matching library."
+        )
+
+    builtin_original = (builtin_db_root / "highsymm_metadata.json").resolve()
+    if not builtin_original.is_file():
+        raise FileNotFoundError(
+            "The augmented library requires the mounted built-in "
+            f"{requested_radiation} structure metadata, but it was not found at "
+            f"{builtin_original}."
+        )
+    return builtin_original
 
 
 def _pipeline_command(config: Path, dataset: str, mode: str) -> list[str]:
@@ -691,9 +752,21 @@ def command_analyze(args: argparse.Namespace) -> int:
     atomic_write_json(state_path, state)
 
     radiation = str((raw_config.get("analysis") or {}).get("radiation") or args.radiation or "neutron").lower()
-    db_root = _db_root_for(radiation, args.db_root)
+    builtin_db_root = _db_root_for(radiation, args.db_root)
+    db_root = builtin_db_root
+    original_json_override = None
     if args.db_pack:
         db_root = _extract_db_pack(Path(args.db_pack).resolve(), work / "custom_database")
+        original_json_override = _resolve_db_pack_original_json(
+            db_root,
+            builtin_db_root=builtin_db_root,
+            radiation=radiation,
+        )
+        if original_json_override.parent != db_root:
+            print(
+                "[DB] augmented library base metadata: "
+                f"{original_json_override}"
+            )
 
     if raw_config.get("$schema") == CONFIG_SCHEMA:
         resolved = _materialize_contract_config(
@@ -704,6 +777,7 @@ def command_analyze(args: argparse.Namespace) -> int:
             main_cif=copied_main,
             work_root=run_dir,
             db_root=db_root,
+            original_json_override=original_json_override,
         )
     else:
         resolved = _materialize_legacy_config(
