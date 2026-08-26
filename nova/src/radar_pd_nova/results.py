@@ -308,6 +308,29 @@ def _static_plot_figure(path: Path, payload: dict[str, Any]) -> go.Figure:
     return _finish_figure(figure, title, height=720)
 
 
+def _looks_like_published_fit(path: Path) -> bool:
+    """Identify refinement images from older archives that lack plot sidecars."""
+
+    lowered = path.as_posix().lower()
+    if path.suffix.lower() not in {".png", ".jpg", ".jpeg", ".svg"}:
+        return False
+    if any(
+        token in lowered
+        for token in (
+            "accepted_model",
+            "main_phase_fit",
+            "refinement_fit",
+            "seq_final",
+            "kept_polished",
+            "final_polish",
+        )
+    ):
+        return True
+    return path.name.lower() in {"curve.png", "fit.png"} and any(
+        token in lowered for token in ("/gsas/", "rank512", "refinement")
+    )
+
+
 def _plot_stage(path: Path, payload: dict[str, Any]) -> tuple[str, str, int | None]:
     lowered = f"{path.as_posix()} {payload.get('plot_kind', '')}".lower()
     rank_match = re.search(r"rank(?:512)?[_ -]?0*(\d+)", lowered)
@@ -358,10 +381,14 @@ def discover_plot_payloads(root: str | Path) -> list[dict[str, Any]]:
 
     base = Path(root)
     options: list[dict[str, Any]] = []
+    represented_images: set[Path] = set()
     for index, path in enumerate(sorted(base.rglob("*.plotdata.json"))):
         payload = read_json(path)
         if not payload or not _plot_arrays_available(path, payload):
             continue
+        static_path = _static_plot_path(path, payload)
+        if static_path is not None:
+            represented_images.add(static_path.resolve())
         category, stage, rank = _plot_stage(path, payload)
         options.append(
             asdict(
@@ -374,6 +401,30 @@ def discover_plot_payloads(root: str | Path) -> list[dict[str, Any]]:
                     stage=stage,
                     rank=rank,
                     rwp=_as_float(payload.get("rwp")),
+                )
+            )
+        )
+    for path in sorted(base.rglob("*")):
+        if not path.is_file() or not _looks_like_published_fit(path):
+            continue
+        if path.resolve() in represented_images:
+            continue
+        payload = {
+            "plot_kind": "gsas_static_fit_v1",
+            "source_plot": path.name,
+            "title": _humanize(path.stem),
+        }
+        category, stage, rank = _plot_stage(path, payload)
+        options.append(
+            asdict(
+                PlotDescriptor(
+                    id=f"plot-{len(options)}",
+                    name=_plot_display_name(path, payload, stage, rank),
+                    path=str(path),
+                    kind="published static fit",
+                    category=category,
+                    stage=stage,
+                    rank=rank,
                 )
             )
         )
@@ -399,6 +450,16 @@ def load_plot_with_fallback(
         path = str(item.get("path") or "")
         if not path:
             continue
+        image_path = Path(path)
+        if image_path.suffix.lower() in {".png", ".jpg", ".jpeg", ".svg"}:
+            try:
+                payload = {
+                    "plot_kind": "gsas_static_fit_v1",
+                    "source_plot": image_path.name,
+                }
+                return path, payload, _static_plot_figure(image_path, payload)
+            except Exception:
+                continue
         payload = read_plot_payload(path)
         if not payload:
             continue

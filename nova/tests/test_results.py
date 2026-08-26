@@ -1,4 +1,5 @@
 import json
+import zipfile
 from pathlib import Path
 
 import numpy as np
@@ -398,6 +399,34 @@ def test_plot_uses_published_static_image_when_interactive_arrays_are_missing(tm
     assert selected is not None
     assert selected[0] == str(sidecar)
     assert selected[2].layout.title.text == "Published refinement fit / Rwp 7.50%"
+    assert len(selected[2].layout.images) == 1
+
+
+def test_result_archive_uses_orphan_accepted_fit_image(tmp_path: Path) -> None:
+    """Older result archives can contain an accepted PNG without a plot sidecar."""
+
+    source = tmp_path / "source" / "gsas_projects" / "seq_pass1_accepted_model.png"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(
+        bytes.fromhex(
+            "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+            "0000000d49444154789c63600000020001e221bc330000000049454e44ae426082"
+        )
+    )
+    archive = tmp_path / "results.zip"
+    with zipfile.ZipFile(archive, "w") as handle:
+        handle.write(source, "gsas_projects/seq_pass1_accepted_model.png")
+    extracted = tmp_path / "extracted"
+    with zipfile.ZipFile(archive) as handle:
+        handle.extractall(extracted)
+
+    plots = discover_plot_payloads(extracted)
+    assert [plot["name"] for plot in plots] == ["Pass 1 accepted model"]
+
+    selected = load_plot_with_fallback(plots, plots[0]["path"])
+    assert selected is not None
+    assert selected[0].endswith("seq_pass1_accepted_model.png")
+    assert selected[2].layout.title.text == "Published refinement fit"
     assert len(selected[2].layout.images) == 1
 
 
