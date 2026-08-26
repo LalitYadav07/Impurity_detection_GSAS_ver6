@@ -1,3 +1,4 @@
+import json
 import sys
 import threading
 import time
@@ -8,6 +9,7 @@ from types import ModuleType
 from typing import Any, Iterator
 
 import yaml
+import numpy as np
 
 from radar_pd_nova.galaxy_service import GalaxyService, _upload_filename, normalize_status, stage_from_console
 from radar_pd_nova.models import (
@@ -20,6 +22,7 @@ from radar_pd_nova.models import (
     RunStatus,
     SubmissionPhase,
 )
+from radar_pd_nova.results import build_result_view, load_plot_with_fallback
 
 
 def test_progress_stage_inference() -> None:
@@ -134,6 +137,81 @@ def test_result_collector_uses_nova_collection_api(tmp_path: Path) -> None:
     assert result.analysis_status is RunStatus.OK
     assert result.result_status is ResultStatus.READY
     assert (Path(result.output_dir) / "plots" / "member.txt").read_text(encoding="utf-8") == "ok"
+
+
+def test_monitor_collection_reaches_interactive_refinement_view(tmp_path: Path) -> None:
+    class SummaryData:
+        id = "summary-id"
+
+        def download(self, target: str) -> None:
+            Path(target).write_text(
+                json.dumps(
+                    {
+                        "$schema": "radar-pd-result/v1",
+                        "analysis_mode": "full",
+                        "status": "complete",
+                        "best_rwp": 6.25,
+                        "phases": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+    class PlotCollection:
+        id = "plots-id"
+
+        def download(self, target: str) -> None:
+            root = Path(target)
+            root.mkdir(parents=True, exist_ok=True)
+            prefix = "Technical__Plots__main_phase_fit.png"
+            (root / f"{prefix}.plotdata.json").write_text(
+                json.dumps(
+                    {
+                        "plot_kind": "gsas_fit_with_ticks_v1",
+                        "source_plot": "main_phase_fit.png",
+                        "arrays_npz": "main_phase_fit.png.plotdata.npz",
+                        "rwp": 6.25,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            np.savez_compressed(
+                root / f"{prefix}.plotdata.npz",
+                x=np.array([1.0, 2.0, 3.0]),
+                yobs=np.array([10.0, 20.0, 30.0]),
+                ycalc=np.array([9.0, 19.0, 29.0]),
+                resid=np.array([1.0, 1.0, 1.0]),
+            )
+
+    class MonitorOutputs:
+        def get_dataset(self, name: str) -> SummaryData:
+            if name == "summary":
+                return SummaryData()
+            raise RuntimeError("not published in monitor profile")
+
+        def get_collection(self, name: str) -> PlotCollection:
+            if name == "plots":
+                return PlotCollection()
+            raise RuntimeError("not published in monitor profile")
+
+    class MonitorTool:
+        def get_results(self) -> MonitorOutputs:
+            return MonitorOutputs()
+
+    service = GalaxyService("https://example.invalid", "key", "history", output_root=tmp_path)
+    service._job_details = lambda uid: {}  # type: ignore[method-assign]
+    service._recover_tool = lambda uid: MonitorTool()  # type: ignore[method-assign]
+    record = RunRecord(uid="monitor-job", name="PG3_63787", mode=AnalysisMode.FULL, history_id="history")
+
+    collected = service.collect_results(record)
+    payload = service.result_payload(collected)
+    view = build_result_view(payload["summary"], collected.local_output_dir, submitted_mode="full")
+    selected = load_plot_with_fallback(view.plots, view.primary_plot_path)
+
+    assert collected.result_status is ResultStatus.READY
+    assert len(view.plots) == 1
+    assert selected is not None
+    assert [trace.name for trace in selected[2].data[:3]] == ["Observed", "Calculated", "Difference"]
 
 
 def test_result_collector_recovers_archive_when_collections_are_unavailable(tmp_path: Path) -> None:
