@@ -1,0 +1,26 @@
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - numpy=2.2
+  - scipy
+  - wxpython>=4.2
+  - matplotlib-base
+  - pyopengl
+  - imageio
+  - h5py
+  - hdf5
+  - pillow
+  - requests
+  - pycifrw
+  - pybaselines
+  - xmltodict
+  - seekpath
+  - gitpython
+  - zarr
+  - sympy
+  - meson-python
+  - ninja
+  - cython
+  - pip
+  - wheel
