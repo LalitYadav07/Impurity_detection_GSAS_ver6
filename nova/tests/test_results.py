@@ -375,6 +375,32 @@ def test_metadata_only_plot_is_excluded_and_falls_back_to_real_curves(tmp_path: 
     assert selected[0] == str(valid)
 
 
+def test_plot_uses_published_static_image_when_interactive_arrays_are_missing(tmp_path: Path) -> None:
+    image = tmp_path / "accepted_model.png"
+    image.write_bytes(b"published-refinement-image")
+    sidecar = tmp_path / "accepted_model.png.plotdata.json"
+    sidecar.write_text(
+        json.dumps(
+            {
+                "plot_kind": "gsas_fit_with_ticks_v1",
+                "source_plot": image.name,
+                "arrays_npz": "missing.plotdata.npz",
+                "rwp": 7.5,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    options = discover_plot_payloads(tmp_path)
+    selected = load_plot_with_fallback(options, str(sidecar))
+
+    assert len(options) == 1
+    assert selected is not None
+    assert selected[0] == str(sidecar)
+    assert selected[2].layout.title.text == "Published refinement fit / Rwp 7.50%"
+    assert len(selected[2].layout.images) == 1
+
+
 def test_empty_plot_has_explicit_unavailable_state() -> None:
     figure = figure_for_payload({"plot_kind": "gsas_fit_with_ticks_v1", "rwp": 3.0})
 

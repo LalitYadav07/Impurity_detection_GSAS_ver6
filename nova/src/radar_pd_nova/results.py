@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import csv
+import base64
 import json
+import mimetypes
 import re
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -245,14 +247,65 @@ def _plot_arrays_available(path: Path, payload: dict[str, Any]) -> bool:
 
     arrays_name = payload.get("arrays_npz")
     if not isinstance(arrays_name, str) or not arrays_name.strip():
-        return _plot_payload_has_arrays(payload)
+        return _plot_payload_has_arrays(payload) or _static_plot_path(path, payload) is not None
     parent = path.resolve().parent
     candidate = (parent / arrays_name).resolve()
     try:
         candidate.relative_to(parent)
-        return candidate.is_file() and candidate.stat().st_size > 0
+        return (
+            candidate.is_file() and candidate.stat().st_size > 0
+        ) or _static_plot_path(path, payload) is not None
     except (ValueError, OSError):
         return False
+
+
+def _static_plot_path(path: Path, payload: dict[str, Any]) -> Path | None:
+    """Resolve a plot sidecar's published image without leaving its directory."""
+
+    source_name = str(payload.get("source_plot") or "").strip()
+    if not source_name:
+        sidecar_suffix = ".plotdata.json"
+        source_name = path.name[: -len(sidecar_suffix)] if path.name.endswith(sidecar_suffix) else ""
+    if not source_name:
+        return None
+    parent = path.resolve().parent
+    candidate = (parent / Path(source_name).name).resolve()
+    try:
+        candidate.relative_to(parent)
+    except ValueError:
+        return None
+    if candidate.suffix.lower() not in {".png", ".jpg", ".jpeg", ".svg"}:
+        return None
+    try:
+        return candidate if candidate.is_file() and candidate.stat().st_size > 0 else None
+    except OSError:
+        return None
+
+
+def _static_plot_figure(path: Path, payload: dict[str, Any]) -> go.Figure:
+    """Render a published static fit when interactive curve arrays are unavailable."""
+
+    mime_type = mimetypes.guess_type(path.name)[0] or "image/png"
+    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+    figure = go.Figure()
+    figure.add_layout_image(
+        source=f"data:{mime_type};base64,{encoded}",
+        xref="paper",
+        yref="paper",
+        x=0,
+        y=1,
+        sizex=1,
+        sizey=1,
+        sizing="contain",
+        xanchor="left",
+        yanchor="top",
+        layer="above",
+    )
+    figure.update_xaxes(visible=False, range=[0, 1])
+    figure.update_yaxes(visible=False, range=[0, 1], scaleanchor="x")
+    rwp = _as_float(payload.get("rwp"))
+    title = "Published refinement fit" + (f" / Rwp {rwp:.2f}%" if rwp is not None else "")
+    return _finish_figure(figure, title, height=720)
 
 
 def _plot_stage(path: Path, payload: dict[str, Any]) -> tuple[str, str, int | None]:
@@ -347,7 +400,15 @@ def load_plot_with_fallback(
         if not path:
             continue
         payload = read_plot_payload(path)
-        if not payload or not _plot_payload_has_arrays(payload):
+        if not payload:
+            continue
+        if not _plot_payload_has_arrays(payload):
+            static_path = _static_plot_path(Path(path), payload)
+            if static_path is not None:
+                try:
+                    return path, payload, _static_plot_figure(static_path, payload)
+                except Exception:
+                    pass
             continue
         try:
             figure = figure_for_payload(payload)
