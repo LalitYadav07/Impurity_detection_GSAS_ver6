@@ -70,13 +70,8 @@ def read_plot_payload(path: str | Path) -> dict[str, Any]:
     if not isinstance(arrays_name, str) or not arrays_name.strip():
         return payload
 
-    parent = payload_path.resolve().parent
-    arrays_path = (parent / arrays_name).resolve()
-    try:
-        arrays_path.relative_to(parent)
-    except ValueError:
-        return payload
-    if not arrays_path.is_file():
+    arrays_path = _resolve_plot_companion(payload_path, arrays_name, {".npz"})
+    if arrays_path is None:
         return payload
 
     try:
@@ -85,6 +80,38 @@ def read_plot_payload(path: str | Path) -> dict[str, Any]:
     except Exception:
         pass
     return payload
+
+
+def _resolve_plot_companion(
+    sidecar: Path,
+    declared_name: str,
+    allowed_suffixes: set[str],
+) -> Path | None:
+    """Resolve exact or Galaxy-flattened files declared by a plot sidecar."""
+
+    basename = Path(str(declared_name or "")).name
+    if not basename or Path(basename).suffix.lower() not in allowed_suffixes:
+        return None
+    parent = sidecar.resolve().parent
+    exact = (parent / basename).resolve()
+    try:
+        exact.relative_to(parent)
+        if exact.is_file() and exact.stat().st_size > 0:
+            return exact
+    except (ValueError, OSError):
+        pass
+    try:
+        candidates = sorted(
+            candidate
+            for candidate in parent.iterdir()
+            if candidate.is_file()
+            and candidate.name.endswith(basename)
+            and candidate.suffix.lower() in allowed_suffixes
+            and candidate.stat().st_size > 0
+        )
+    except OSError:
+        return None
+    return candidates[0] if candidates else None
 
 
 def read_table(path: str | Path, *, limit: int = 500) -> list[dict[str, Any]]:
@@ -248,15 +275,7 @@ def _plot_arrays_available(path: Path, payload: dict[str, Any]) -> bool:
     arrays_name = payload.get("arrays_npz")
     if not isinstance(arrays_name, str) or not arrays_name.strip():
         return _plot_payload_has_arrays(payload) or _static_plot_path(path, payload) is not None
-    parent = path.resolve().parent
-    candidate = (parent / arrays_name).resolve()
-    try:
-        candidate.relative_to(parent)
-        return (
-            candidate.is_file() and candidate.stat().st_size > 0
-        ) or _static_plot_path(path, payload) is not None
-    except (ValueError, OSError):
-        return False
+    return _resolve_plot_companion(path, arrays_name, {".npz"}) is not None or _static_plot_path(path, payload) is not None
 
 
 def _static_plot_path(path: Path, payload: dict[str, Any]) -> Path | None:
@@ -268,18 +287,7 @@ def _static_plot_path(path: Path, payload: dict[str, Any]) -> Path | None:
         source_name = path.name[: -len(sidecar_suffix)] if path.name.endswith(sidecar_suffix) else ""
     if not source_name:
         return None
-    parent = path.resolve().parent
-    candidate = (parent / Path(source_name).name).resolve()
-    try:
-        candidate.relative_to(parent)
-    except ValueError:
-        return None
-    if candidate.suffix.lower() not in {".png", ".jpg", ".jpeg", ".svg"}:
-        return None
-    try:
-        return candidate if candidate.is_file() and candidate.stat().st_size > 0 else None
-    except OSError:
-        return None
+    return _resolve_plot_companion(path, source_name, {".png", ".jpg", ".jpeg", ".svg"})
 
 
 def _static_plot_figure(path: Path, payload: dict[str, Any]) -> go.Figure:
@@ -430,6 +438,87 @@ def discover_plot_payloads(root: str | Path) -> list[dict[str, Any]]:
             )
         )
     return options
+
+
+def _resolve_manifest_plot(root: Path, artifact: dict[str, Any]) -> Path | None:
+    """Resolve one normalized plot artifact inside an extracted result archive."""
+
+    relative_values = [artifact.get("path"), artifact.get("source_path"), artifact.get("name")]
+    candidates: list[Path] = []
+    for value in relative_values:
+        text = str(value or "").strip().replace("\\", "/")
+        if not text:
+            continue
+        relative = Path(text)
+        if relative.is_absolute() or ".." in relative.parts:
+            continue
+        candidates.extend((root / relative, root / "ndip" / relative))
+    for candidate in candidates:
+        if candidate.suffix.lower() not in {".png", ".jpg", ".jpeg", ".svg"}:
+            continue
+        try:
+            if candidate.is_file() and candidate.stat().st_size > 0:
+                return candidate
+        except OSError:
+            continue
+
+    names = {
+        Path(str(value)).name
+        for value in relative_values
+        if str(value or "").strip()
+        and Path(str(value)).suffix.lower() in {".png", ".jpg", ".jpeg", ".svg"}
+    }
+    for name in sorted(names):
+        for candidate in sorted(root.rglob(name)):
+            try:
+                if candidate.is_file() and candidate.stat().st_size > 0:
+                    return candidate
+            except OSError:
+                continue
+    return None
+
+
+def _merge_manifest_plots(
+    root: Path,
+    result: dict[str, Any],
+    discovered: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Add every renderable plot declared by ``radar-pd-result/v1``."""
+
+    merged = list(discovered)
+    represented = {Path(str(item.get("path") or "")).resolve() for item in merged if item.get("path")}
+    artifacts = result.get("artifacts") or {}
+    manifest_plots = artifacts.get("plots") if isinstance(artifacts, dict) else []
+    for artifact in manifest_plots or []:
+        if not isinstance(artifact, dict):
+            continue
+        path = _resolve_manifest_plot(root, artifact)
+        if path is None or path.resolve() in represented:
+            continue
+        source_text = str(artifact.get("source_path") or artifact.get("path") or path.name)
+        payload = {
+            "plot_kind": "gsas_static_fit_v1",
+            "source_plot": path.name,
+            "title": _humanize(Path(source_text).stem),
+        }
+        category, stage, rank = _plot_stage(Path(source_text), payload)
+        if stage == "diagnostic":
+            category, stage = "Refinement fits", "final_refinement"
+        merged.append(
+            asdict(
+                PlotDescriptor(
+                    id=f"plot-{len(merged)}",
+                    name=_plot_display_name(Path(source_text), payload, stage, rank),
+                    path=str(path),
+                    kind="published static fit",
+                    category=category,
+                    stage=stage,
+                    rank=rank,
+                )
+            )
+        )
+        represented.add(path.resolve())
+    return merged
 
 
 def load_plot_with_fallback(
@@ -1740,7 +1829,7 @@ def build_result_view(
     elapsed = total_elapsed_seconds(result)
     best_rwp = _best_rwp(result)
 
-    plot_dicts = discover_plot_payloads(base)
+    plot_dicts = _merge_manifest_plots(base, result, discover_plot_payloads(base))
     primary_index = _primary_plot_index(plot_dicts, result, mode)
     if primary_index is not None:
         plot_dicts[primary_index]["primary"] = True

@@ -15,6 +15,9 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
+NOVA_SRC = ROOT / "nova" / "src"
+if str(NOVA_SRC) not in sys.path:
+    sys.path.insert(0, str(NOVA_SRC))
 
 from ndip_contracts import CONFIG_SCHEMA, GPX_INDEX_SCHEMA, RESULT_SCHEMA, atomic_write_json  # noqa: E402
 from ndip_gpx_handoff import main as gpx_handoff_main  # noqa: E402
@@ -25,6 +28,7 @@ from ndip_runner import (  # noqa: E402
     _instrument_mode_from_instprm,
     main,
 )
+from radar_pd_nova.results import build_result_view, load_plot_with_fallback  # noqa: E402
 
 
 def test_atomic_json_is_readable_by_galaxy_postprocessing(tmp_path: Path) -> None:
@@ -317,6 +321,38 @@ def test_normalized_outputs_publish_handoff_projects_and_archive_all_checkpoints
     assert "ndip/report.html" in names
     assert "ndip/overview.tsv" in names
     assert any(name.startswith("ndip/plots/") for name in names)
+
+
+def test_full_archive_plot_manifest_renders_in_scientific_results(tmp_path: Path) -> None:
+    run = tmp_path / "run"
+    run.mkdir()
+    (run / "pipeline_summary.json").write_text(
+        json.dumps({"final": {"final_rwp": 8.5}}),
+        encoding="utf-8",
+    )
+    source_plot = run / "plots" / "custom_database_output_00017.png"
+    source_plot.parent.mkdir()
+    source_plot.write_bytes(
+        bytes.fromhex(
+            "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+            "0000000d49444154789c63600000020001e221bc330000000049454e44ae426082"
+        )
+    )
+
+    portal = tmp_path / "portal"
+    collect_outputs(run, portal, mode="full", run_name="full-plot-contract")
+    extracted = tmp_path / "extracted"
+    with zipfile.ZipFile(portal / "results.zip") as archive:
+        archive.extractall(extracted)
+    result = json.loads((extracted / "ndip" / "summary.json").read_text(encoding="utf-8"))
+
+    view = build_result_view(result, extracted)
+    selected = load_plot_with_fallback(view.plots, view.primary_plot_path)
+
+    assert len(result["artifacts"]["plots"]) == 1
+    assert len(view.plots) == 1
+    assert selected is not None
+    assert len(selected[2].layout.images) == 1
 
 
 def test_normalized_outputs_fall_back_to_pattern_rank_when_gsas_is_skipped(tmp_path: Path) -> None:

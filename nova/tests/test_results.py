@@ -451,6 +451,81 @@ def test_result_archive_uses_galaxy_published_accepted_fit_name(tmp_path: Path) 
     assert len(selected[2].layout.images) == 1
 
 
+def test_galaxy_flattened_plot_companions_keep_interactive_curves(tmp_path: Path) -> None:
+    sidecar = tmp_path / "Technical__Plots__main_phase_fit.png.plotdata.json"
+    arrays = tmp_path / "Technical__Plots__main_phase_fit.png.plotdata.npz"
+    image = tmp_path / "Technical__Plots__main_phase_fit.png"
+    sidecar.write_text(
+        json.dumps(
+            {
+                "plot_kind": "gsas_fit_with_ticks_v1",
+                "source_plot": "main_phase_fit.png",
+                "arrays_npz": "main_phase_fit.png.plotdata.npz",
+                "rwp": 6.25,
+            }
+        ),
+        encoding="utf-8",
+    )
+    np.savez_compressed(
+        arrays,
+        x=np.array([1.0, 2.0, 3.0]),
+        yobs=np.array([10.0, 20.0, 30.0]),
+        ycalc=np.array([9.0, 19.0, 29.0]),
+        resid=np.array([1.0, 1.0, 1.0]),
+    )
+    image.write_bytes(
+        bytes.fromhex(
+            "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+            "0000000d49444154789c63600000020001e221bc330000000049454e44ae426082"
+        )
+    )
+
+    plots = discover_plot_payloads(tmp_path)
+    selected = load_plot_with_fallback(plots, str(sidecar))
+
+    assert len(plots) == 1
+    assert selected is not None
+    assert selected[0] == str(sidecar)
+    assert [trace.name for trace in selected[2].data[:3]] == ["Observed", "Calculated", "Difference"]
+    assert len(selected[2].layout.images) == 0
+
+
+def test_result_view_resolves_custom_named_plot_from_normalized_manifest(tmp_path: Path) -> None:
+    image = tmp_path / "ndip" / "plots" / "custom_database_output_00017.png"
+    image.parent.mkdir(parents=True)
+    image.write_bytes(
+        bytes.fromhex(
+            "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+            "0000000d49444154789c63600000020001e221bc330000000049454e44ae426082"
+        )
+    )
+    result = {
+        "$schema": "radar-pd-result/v1",
+        "analysis_mode": "full",
+        "status": "complete",
+        "phases": [],
+        "hypotheses": [],
+        "gpx_projects": [],
+        "artifacts": {
+            "plots": [
+                {
+                    "name": image.name,
+                    "path": f"plots/{image.name}",
+                    "source_path": "unexpected/location/custom_database_output_00017.png",
+                }
+            ]
+        },
+    }
+
+    view = build_result_view(result, tmp_path)
+
+    assert len(view.plots) == 1
+    assert Path(view.primary_plot_path) == image
+    selected = load_plot_with_fallback(view.plots, view.primary_plot_path)
+    assert selected is not None
+    assert len(selected[2].layout.images) == 1
+
+
 def test_empty_plot_has_explicit_unavailable_state() -> None:
     figure = figure_for_payload({"plot_kind": "gsas_fit_with_ticks_v1", "rwp": 3.0})
 
