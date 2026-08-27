@@ -35,6 +35,7 @@ RUN apt-get update \
         libgl1-mesa-dri \
         libglu1-mesa \
         libgtk-3-0 \
+        libnss-wrapper \
         libxkbcommon-x11-0 \
         nginx \
         novnc \
@@ -42,6 +43,7 @@ RUN apt-get update \
         supervisor \
         websockify \
         x11-utils \
+        x11-xserver-utils \
         x11vnc \
         xvfb \
     && rm -rf /var/lib/apt/lists/*

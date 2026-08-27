@@ -19,6 +19,8 @@ def test_gui_image_pins_gsasii_and_provides_native_desktop_stack() -> None:
     assert "wxpython>=4.2" in _read("environment.yml")
     for package in ("nginx", "novnc", "openbox", "websockify", "x11vnc", "xvfb"):
         assert package in dockerfile
+    assert "libnss-wrapper" in dockerfile
+    assert "x11-xserver-utils" in dockerfile
     assert "EXPOSE 8080" in dockerfile
 
 
@@ -42,6 +44,9 @@ def test_gpx_is_edited_as_a_copy_and_continuously_preserved() -> None:
     assert "install -o gsasii" not in start
     assert "gsasii-session-$(id -u)" in start
     assert 'export HOME="${session_dir}/home"' in start
+    assert 'export NSS_WRAPPER_PASSWD="${session_dir}/passwd"' in start
+    assert "libnss_wrapper.so" in start
+    assert 'export USER="$(id -un)"' in start
     assert '"${session_dir}/radar_pd_project.gpx"' in start
     assert 'source_digest="$(sha256sum "${source_project}"' in sync
     assert 'cat "${snapshot}" > "${output_project}"' in sync
