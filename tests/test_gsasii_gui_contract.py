@@ -16,7 +16,9 @@ def test_gui_image_pins_gsasii_and_provides_native_desktop_stack() -> None:
 
     assert "ARG GSASII_REF=dcd09eb2a4392b94d22cda3c69021137e6b14620" in dockerfile
     assert "git checkout --detach \"${GSASII_REF}\"" in dockerfile
-    assert "wxpython>=4.2" in _read("environment.yml")
+    environment = _read("environment.yml")
+    assert "wxpython>=4.2,<4.2.5" in environment
+    assert "hdf5plugin" in environment
     for package in ("nginx", "novnc", "openbox", "websockify", "x11vnc", "xvfb"):
         assert package in dockerfile
     assert "libnss-wrapper" in dockerfile
@@ -41,7 +43,7 @@ def test_desktop_gateway_obeys_ndip_path_prefix() -> None:
     assert "^(/[A-Za-z0-9._~-]+)+$" in launcher
     assert "wait_for_port 127.0.0.1 5900 x11vnc" in launcher
     assert "wait_for_port 127.0.0.1 6080 websockify" in launcher
-    assert "exec nginx -c /tmp/gsasii-nginx.conf" in launcher
+    assert "exec nginx -e /dev/stderr -c /tmp/gsasii-nginx.conf" in launcher
     assert "error_log /dev/stderr warn" in nginx
 
 
@@ -101,3 +103,4 @@ def test_release_smoke_checks_http_redirect_and_websocket_upgrade() -> None:
     assert "docker inspect --format '{{.State.Running}}'" in workflow
     assert "container exited before becoming ready" in workflow
     assert "docker logs" in workflow
+    assert "No GSAS-II importer load errors" in workflow

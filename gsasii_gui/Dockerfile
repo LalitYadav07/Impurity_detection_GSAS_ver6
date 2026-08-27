@@ -3,7 +3,7 @@ FROM mambaorg/micromamba:2.9.0-ubuntu22.04
 ARG GSASII_REF=dcd09eb2a4392b94d22cda3c69021137e6b14620
 ARG GSASII_UID=1000
 ARG GSASII_GID=1000
-ARG RADAR_PD_GSASII_GUI_VERSION=0.1.9
+ARG RADAR_PD_GSASII_GUI_VERSION=0.1.10
 
 LABEL org.opencontainers.image.title="RADAR-PD GSAS-II Interactive" \
       org.opencontainers.image.description="Browser-hosted native GSAS-II desktop for RADAR-PD GPX handoff" \

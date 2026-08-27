@@ -4,12 +4,13 @@ dependencies:
   - python=3.12
   - numpy=2.2
   - scipy
-  - wxpython>=4.2
+  - wxpython>=4.2,<4.2.5
   - matplotlib-base
   - pyopengl
   - imageio
   - h5py
   - hdf5
+  - hdf5plugin
   - pillow
   - requests
   - pycifrw

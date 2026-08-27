@@ -58,6 +58,17 @@ jobs:
         run: |
           docker run --rm "${IMAGE_NAME}:gsasii-gui" \
             /opt/conda/bin/python -c "import GSASII; import wx; print(wx.version())"
+          docker run --rm -i "${IMAGE_NAME}:gsasii-gui" \
+            /opt/conda/bin/python - <<'PY'
+          from GSASII import GSASIIfiles as G2fil
+
+          for prefix in ("img", "pdf", "phase", "pwd", "rfd", "sad", "sfact"):
+              G2fil.LoadImportRoutines(prefix)
+          errors = G2fil.ImportErrorMsg()
+          if errors:
+              raise SystemExit("GSAS-II importer load errors:\n" + "\n".join(errors))
+          print("No GSAS-II importer load errors")
+          PY
           docker run --rm "${IMAGE_NAME}:gsasii-gui" \
             bash -n /opt/gsasii-gui/start.sh
           smoke_dir="$(mktemp -d)"
