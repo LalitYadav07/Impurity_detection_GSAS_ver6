@@ -398,6 +398,30 @@ def test_result_explorer_inactive_entrypoint_is_reported_as_error(tmp_path: Path
     assert refreshed.message == "container stopped"
 
 
+def test_result_explorer_missing_entrypoint_is_reported_as_error(tmp_path: Path, monkeypatch: Any) -> None:
+    class Response:
+        def raise_for_status(self) -> None:
+            pass
+
+        def json(self) -> list[dict[str, Any]]:
+            return []
+
+    monkeypatch.setattr("radar_pd_nova.galaxy_service.requests.get", lambda *args, **kwargs: Response())
+    service = GalaxyService("https://example.invalid", "key", "history", output_root=tmp_path)
+    service._job_details = lambda job_id: {"state": "ok"}  # type: ignore[method-assign]
+    action = UtilityActionRecord(
+        uid="utility",
+        tool_id=RESULT_EXPLORER_TOOL_ID,
+        name="Explorer",
+        galaxy_job_id="job",
+    )
+
+    refreshed = service.refresh_utility(action)
+
+    assert refreshed.status is RunStatus.ERROR
+    assert refreshed.message == "Result Explorer stopped before its NDIP entry point became active"
+
+
 def test_gsasii_interactive_session_tracks_ready_and_normal_close(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
@@ -445,6 +469,31 @@ def test_gsasii_interactive_session_tracks_ready_and_normal_close(
     assert "launch_url" not in closed.outputs
     assert closed.outputs["edited_project"] == "saved-gpx"
     assert closed.message == "GSAS-II session closed; the saved project is available in Galaxy History"
+
+
+def test_gsasii_interactive_session_explains_pending_entrypoint(tmp_path: Path, monkeypatch: Any) -> None:
+    class Response:
+        def raise_for_status(self) -> None:
+            pass
+
+        def json(self) -> list[dict[str, Any]]:
+            return []
+
+    monkeypatch.setattr("radar_pd_nova.galaxy_service.requests.get", lambda *args, **kwargs: Response())
+    service = GalaxyService("https://example.invalid", "key", "history", output_root=tmp_path)
+    service._job_details = lambda job_id: {"state": "running"}  # type: ignore[method-assign]
+    action = UtilityActionRecord(
+        uid="utility",
+        tool_id=GSASII_INTERACTIVE_TOOL_ID,
+        name="GSAS-II",
+        galaxy_job_id="job",
+    )
+
+    pending = service.refresh_utility(action)
+
+    assert pending.status is RunStatus.RUNNING
+    assert "Waiting for NDIP to allocate the GSAS-II desktop" in pending.message
+    assert "Interactive Tool" in pending.message
 
 
 def test_collection_creation_and_element_mapping_use_public_galaxy_ids(

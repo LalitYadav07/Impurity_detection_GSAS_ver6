@@ -339,6 +339,7 @@ class RadarPdNovaApp(ThemedApp):
         state.result_explorer_available = False
         state.gsasii_launch_url = ""
         state.gsasii_session_status = ""
+        state.gsasii_status_message = ""
         state.selected_galaxy_job_id = "Pending"
         state.selected_run_stage = "-"
         state.selected_run_progress = 0
@@ -2400,6 +2401,14 @@ class RadarPdNovaApp(ThemedApp):
                     v_if="result_explorer_available",
                 )
                 vuetify.VBtn("Back to monitor", click="workspace_view = 'monitor'", prepend_icon="mdi-arrow-left", variant="text", size="small")
+        vuetify.VAlert(
+            v_if="gsasii_session_status === 'starting'",
+            text=("gsasii_status_message",),
+            type="info",
+            variant="tonal",
+            density="compact",
+            classes="mb-3",
+        )
         with html.Div(v_if="selected_run_status !== 'Ok'", classes="radar-result-not-ready"):
             vuetify.VAlert(text="Results will appear here after the selected Galaxy run completes.", type="info", variant="tonal")
         with html.Div(v_show="selected_run_status === 'Ok'"):
@@ -2561,6 +2570,14 @@ class RadarPdNovaApp(ThemedApp):
                 size="small",
                 v_if="gsasii_session_status === 'ready' && !!gsasii_launch_url",
             )
+        vuetify.VAlert(
+            v_if="gsasii_session_status === 'starting'",
+            text=("gsasii_status_message",),
+            type="info",
+            variant="tonal",
+            density="compact",
+            classes="mb-3",
+        )
         with html.Div(classes="radar-file-toolbar"):
             vuetify.VSelect(
                 label="GSAS-II checkpoint",
@@ -5313,6 +5330,10 @@ class RadarPdNovaApp(ThemedApp):
                 action = await asyncio.to_thread(self.service.refresh_utility, action)
             except Exception as exc:
                 action.message = str(exc)
+            if action.tool_id == GSASII_INTERACTIVE_TOOL_ID:
+                self.server.state.gsasii_status_message = (
+                    action.message or "Waiting for NDIP to allocate the GSAS-II desktop."
+                )
             self._register_utility(action)
             if action.outputs.get("launch_url") and not entrypoint_announced:
                 entrypoint_announced = True
@@ -5323,6 +5344,7 @@ class RadarPdNovaApp(ThemedApp):
             state = self.server.state
             state.gsasii_launch_url = ""
             state.gsasii_session_status = "closed" if action.status == RunStatus.CANCELLED else "error"
+            state.gsasii_status_message = action.message or "The GSAS-II session failed to start."
             if action.status == RunStatus.ERROR:
                 state.error_message = action.message or "The GSAS-II session failed to start."
             else:
@@ -5334,6 +5356,7 @@ class RadarPdNovaApp(ThemedApp):
         if action.tool_id == GSASII_INTERACTIVE_TOOL_ID:
             state.gsasii_launch_url = self._absolute_launch_url(action.outputs.get("launch_url", ""))
             state.gsasii_session_status = "ready"
+            state.gsasii_status_message = "GSAS-II is ready. Open the desktop session to continue refinement."
             state.notice = "GSAS-II is ready. Open the desktop session to continue refinement."
         elif action.tool_id == RESULT_EXPLORER_TOOL_ID:
             state.notice = "Result Explorer is ready; open it from Companion-tool activity."
@@ -5413,6 +5436,7 @@ class RadarPdNovaApp(ThemedApp):
         elif action.tool_id == GSASII_INTERACTIVE_TOOL_ID:
             state.gsasii_launch_url = ""
             state.gsasii_session_status = "closed"
+            state.gsasii_status_message = "GSAS-II session closed; the saved project is available in Galaxy History."
             state.notice = "GSAS-II session closed; the saved project is available in Galaxy History."
         elif action.tool_id == COMPARE_SERIES_TOOL_ID:
             state.notice = "Series comparison completed; open its report from Companion-tool activity."
@@ -5635,12 +5659,16 @@ class RadarPdNovaApp(ThemedApp):
             return
         state.gsasii_launch_url = ""
         state.gsasii_session_status = "starting"
+        state.gsasii_status_message = (
+            "Submitting the selected checkpoint and waiting for NDIP to allocate the GSAS-II desktop."
+        )
         state.flush()
 
         async def launch() -> None:
             match = await self._selected_checkpoint_element(record, selected, checkpoint_rows)
             if match is None:
                 state.gsasii_session_status = "error"
+                state.gsasii_status_message = "Could not map the selected checkpoint to its Galaxy collection element."
                 state.flush()
                 return
             action = await self._submit_utility_action(
@@ -5654,6 +5682,7 @@ class RadarPdNovaApp(ThemedApp):
             )
             if action is None:
                 state.gsasii_session_status = "error"
+                state.gsasii_status_message = "Galaxy did not accept the GSAS-II launch request."
                 state.flush()
 
         self._schedule_utility(launch(), "radar-gsasii-interactive")

@@ -52,6 +52,16 @@ SUBMISSION_ACK_TIMEOUT_SECONDS = float(os.getenv("RADAR_PD_SUBMISSION_ACK_TIMEOU
 
 _INTERACTIVE_TOOL_IDS = frozenset({RESULT_EXPLORER_TOOL_ID, GSASII_INTERACTIVE_TOOL_ID})
 
+
+def _interactive_pending_message(tool_id: str) -> str:
+    if tool_id == GSASII_INTERACTIVE_TOOL_ID:
+        return (
+            "Waiting for NDIP to allocate the GSAS-II desktop. If this lasts more than a few minutes, "
+            "close an unused Galaxy Interactive Tool; session limits can delay startup."
+        )
+    return "Waiting for NDIP to allocate the interactive result viewer."
+
+
 _DIFFRACTION_SUFFIXES = frozenset(
     {".dat", ".xye", ".xy", ".csv", ".txt", ".fxye", ".gsa", ".gsas", ".gss", ".xrdml", ".xml"}
 )
@@ -1634,8 +1644,16 @@ class GalaxyService:
                         else:
                             action.status = RunStatus.ERROR
                             action.message = stderr[-2000:] or "Result Explorer stopped before its NDIP entry point became active"
+                    elif action.status == RunStatus.RUNNING and not active and not action.outputs.get("launch_url"):
+                        action.message = _interactive_pending_message(action.tool_id)
+                elif action.status == RunStatus.RUNNING and not action.outputs.get("launch_url"):
+                    action.message = _interactive_pending_message(action.tool_id)
+                elif action.status == RunStatus.OK and action.tool_id == RESULT_EXPLORER_TOOL_ID:
+                    action.status = RunStatus.ERROR
+                    action.message = stderr[-2000:] or "Result Explorer stopped before its NDIP entry point became active"
             except Exception:
-                pass
+                if action.status == RunStatus.RUNNING and not action.outputs.get("launch_url"):
+                    action.message = _interactive_pending_message(action.tool_id)
         action.updated_utc = datetime.now(timezone.utc).isoformat()
         return action
 
