@@ -39,6 +39,36 @@ def test_galaxy_status_normalization() -> None:
     assert normalize_status("deleted") is RunStatus.CANCELLED
 
 
+def test_job_output_ids_include_dataset_collection_associations(monkeypatch, tmp_path: Path) -> None:
+    captured: dict[str, Any] = {}
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> list[dict[str, Any]]:
+            return [
+                {"name": "summary", "dataset": {"src": "hda", "id": "summary-id"}},
+                {
+                    "name": "gpx_projects",
+                    "dataset_collection_instance": {"src": "hdca", "id": "gpx-collection-id"},
+                },
+            ]
+
+    def fake_get(url: str, **kwargs: Any) -> FakeResponse:
+        captured.update({"url": url, **kwargs})
+        return FakeResponse()
+
+    monkeypatch.setattr("radar_pd_nova.galaxy_service.requests.get", fake_get)
+    service = GalaxyService("https://galaxy.example", "key", "history", output_root=tmp_path)
+
+    output_ids = service.job_output_ids("analysis-job")
+
+    assert output_ids == {"summary": "summary-id", "gpx_projects": "gpx-collection-id"}
+    assert captured["url"] == "https://galaxy.example/api/jobs/analysis-job/outputs"
+    assert captured["headers"]["x-api-key"] == "key"
+
+
 def test_results_export_uses_ndip_authenticated_export_contract() -> None:
     service = GalaxyService("https://example.invalid", "key", "history", output_root=Path("."))
     seen: dict[str, Any] = {}

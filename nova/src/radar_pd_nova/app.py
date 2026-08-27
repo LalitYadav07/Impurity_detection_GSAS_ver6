@@ -5641,6 +5641,15 @@ class RadarPdNovaApp(ThemedApp):
     ) -> dict[str, Any] | None:
         collection_id = record.output_dataset_ids.get("gpx_projects")
         if not collection_id:
+            job_id = str(record.galaxy_job_id or record.uid or "").strip()
+            if job_id:
+                try:
+                    output_ids = await asyncio.to_thread(self.service.job_output_ids, job_id)
+                except Exception:
+                    output_ids = {}
+                record.output_dataset_ids.update(output_ids)
+                collection_id = record.output_dataset_ids.get("gpx_projects")
+        if not collection_id:
             return None
         try:
             elements = await asyncio.to_thread(self.service.collection_elements, collection_id)

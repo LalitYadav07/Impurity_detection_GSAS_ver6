@@ -542,6 +542,68 @@ def test_selected_checkpoint_uses_collection_when_galaxy_omits_element_view() ->
     }
 
 
+def test_selected_checkpoint_recovers_collection_id_from_job_outputs() -> None:
+    record = RunRecord(
+        uid="recovered-run-without-gpx-id",
+        galaxy_job_id="analysis-job",
+        name="IPTS-37876_PG3_63802",
+        mode=AnalysisMode.FULL,
+        history_id="history",
+        status=RunStatus.OK,
+        output_dataset_ids={},
+    )
+    app = RadarPdNovaApp.__new__(RadarPdNovaApp)
+    state = _State(
+        selected_run_uid=record.uid,
+        selected_checkpoint="checkpoint-0",
+        checkpoint_rows=[
+            {
+                "id": "checkpoint-0",
+                "name": "Seq final main polished (GPX)",
+                "path": "",
+                "galaxy_element_name": "02_Main_phase_anchor",
+            }
+        ],
+        gsasii_launch_url="",
+        gsasii_session_status="",
+        notice="",
+        error_message="",
+    )
+    app.server = SimpleNamespace(state=state)
+    app.records = {record.uid: record}
+    requested_jobs: list[str] = []
+    app.service = SimpleNamespace(
+        job_output_ids=lambda job_id: requested_jobs.append(job_id)
+        or {"gpx_projects": "recovered-gpx-collection"},
+        collection_elements=lambda collection_id: [
+            {"id": "main-anchor-gpx", "name": "02_Main_phase_anchor"}
+        ],
+    )
+    submitted: list[dict[str, object]] = []
+
+    async def _submit(**kwargs):
+        submitted.append(kwargs)
+        return UtilityActionRecord(
+            uid="gsasii-action",
+            tool_id=str(kwargs["tool_id"]),
+            name=str(kwargs["name"]),
+            status=RunStatus.RUNNING,
+        )
+
+    app._submit_utility_action = _submit  # type: ignore[method-assign]
+    app._schedule_utility = lambda coroutine, _name: asyncio.run(coroutine)  # type: ignore[method-assign]
+
+    app.open_selected_checkpoint_in_gsasii()
+
+    assert requested_jobs == ["analysis-job"]
+    assert record.output_dataset_ids["gpx_projects"] == "recovered-gpx-collection"
+    assert state.gsasii_session_status == "starting"
+    assert submitted[0]["inputs"] == {
+        "project_source|source_kind": "single",
+        "project_source|gpx_project": {"dataset_id": "main-anchor-gpx"},
+    }
+
+
 def test_checkpoint_alias_maps_technical_name_to_published_anchor() -> None:
     record = RunRecord(
         uid="run-with-renamed-gpx",

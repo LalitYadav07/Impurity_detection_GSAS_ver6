@@ -265,7 +265,7 @@ def _dataset_id(value: Any) -> str | None:
     if isinstance(decoded, dict):
         if decoded.get("id"):
             return str(decoded["id"])
-        for key in ("value", "values", "dataset"):
+        for key in ("value", "values", "dataset", "dataset_collection_instance"):
             if key in decoded:
                 found = _dataset_id(decoded[key])
                 if found:
@@ -733,6 +733,17 @@ class GalaxyService:
         if isinstance(payload, dict):
             details.update(payload)
         return details
+
+    def job_output_ids(self, job_id: str) -> dict[str, str]:
+        """Fetch authoritative dataset and collection associations for one job."""
+
+        response = requests.get(
+            f"{self.galaxy_url}/api/jobs/{job_id}/outputs",
+            headers=self._headers,
+            timeout=30,
+        )
+        response.raise_for_status()
+        return self._named_output_ids(response.json())
 
     @staticmethod
     def _job_parameters(job: dict[str, Any]) -> Any:
