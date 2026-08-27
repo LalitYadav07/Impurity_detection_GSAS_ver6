@@ -66,7 +66,9 @@ jobs:
               G2fil.LoadImportRoutines(prefix)
           errors = G2fil.ImportErrorMsg()
           if errors:
-              raise SystemExit("GSAS-II importer load errors:\n" + "\n".join(errors))
+              detail = " | ".join(str(item).replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A") for item in errors)
+              print(f"::error title=GSAS-II importer load errors::{detail}")
+              raise SystemExit(1)
           print("No GSAS-II importer load errors")
           PY
           docker run --rm "${IMAGE_NAME}:gsasii-gui" \

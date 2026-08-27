@@ -104,3 +104,4 @@ def test_release_smoke_checks_http_redirect_and_websocket_upgrade() -> None:
     assert "container exited before becoming ready" in workflow
     assert "docker logs" in workflow
     assert "No GSAS-II importer load errors" in workflow
+    assert "::error title=GSAS-II importer load errors::" in workflow
