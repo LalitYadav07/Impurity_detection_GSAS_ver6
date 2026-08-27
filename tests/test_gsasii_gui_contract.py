@@ -83,3 +83,6 @@ def test_release_smoke_checks_http_redirect_and_websocket_upgrade() -> None:
     assert "path=gsasii/websockify" in workflow
     assert "Upgrade: websocket" in workflow
     assert 'b" 101 "' in workflow
+    assert "docker inspect --format '{{.State.Running}}'" in workflow
+    assert "container exited before becoming ready" in workflow
+    assert "docker logs" in workflow

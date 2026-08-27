@@ -67,7 +67,7 @@ jobs:
             "${IMAGE_NAME}:gsasii-gui" \
             /opt/conda/bin/python -c \
             'import os; from GSASII import GSASIIscriptable as G2sc; G2sc.G2Project(newgpx="/job/input.gpx").save(); os.chmod("/job/input.gpx", 0o666)'
-          container_id="$(docker run --detach --rm --user 12345:12345 \
+          container_id="$(docker run --detach --user 12345:12345 \
             -e EP_PATH=/gsasii \
             -e GSASII_SOURCE_PROJECT=/job/input.gpx \
             -e GSASII_OUTPUT_PROJECT=/job/output.gpx \
@@ -75,19 +75,28 @@ jobs:
             -v "${smoke_dir}:/job" \
             "${IMAGE_NAME}:gsasii-gui")"
           cleanup() {
-            docker stop --time 10 "${container_id}" >/dev/null 2>&1 || true
+            if [[ -n "${container_id}" ]]; then
+              docker logs "${container_id}" >/dev/null 2>&1 || true
+              docker rm --force "${container_id}" >/dev/null 2>&1 || true
+            fi
             rm -rf "${smoke_dir}"
           }
           trap cleanup EXIT
-          for attempt in $(seq 1 60); do
+          for attempt in $(seq 1 120); do
             if curl --fail --silent http://127.0.0.1:18080/gsasii/healthz >/dev/null; then
               break
             fi
-            if [[ "${attempt}" -eq 60 ]]; then
+            if [[ "$(docker inspect --format '{{.State.Running}}' "${container_id}")" != "true" ]]; then
+              echo "GSAS-II GUI container exited before becoming ready" >&2
+              docker logs "${container_id}" >&2
+              exit 1
+            fi
+            if [[ "${attempt}" -eq 120 ]]; then
+              echo "GSAS-II GUI did not become ready within 60 seconds" >&2
               docker logs "${container_id}"
               exit 1
             fi
-            sleep 0.25
+            sleep 0.5
           done
           curl --fail --silent --show-error --output /tmp/gsasii-vnc.html \
             http://127.0.0.1:18080/gsasii/vnc.html
@@ -115,8 +124,9 @@ jobs:
               raise SystemExit(f"WebSocket upgrade failed: {status!r}")
           PY
           docker stop --time 10 "${container_id}"
-          container_id=""
           test -s "${smoke_dir}/output.gpx"
+          docker rm "${container_id}"
+          container_id=""
 
       - name: Push Docker schema v2 manifests
         shell: bash
