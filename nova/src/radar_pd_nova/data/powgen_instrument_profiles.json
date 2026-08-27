@@ -15,7 +15,7 @@
       "frequency_hz": "60",
       "filename": "2026B_HighRes_60HzB1_CWL0p8.instprm",
       "resource_filename": "powgen_profiles/2026B_HighRes_60HzB1_CWL0p8.instprm",
-      "sha256": "39e1985eb6e3f51aa94f4b2bba2736a9637ebda82eeb4e06ee026fe06f2ae283"
+      "sha256": "396e12327b46e94cbbc0b2015aea5afb5fbecff2dd7b21bea0b904b26ac42456"
     },
     {
       "id": "PG3-2026B-60Hz-CWL1p5",
@@ -26,7 +26,7 @@
       "frequency_hz": "60",
       "filename": "2026B_HighRes_60HzB2_CWL1p5.instprm",
       "resource_filename": "powgen_profiles/2026B_HighRes_60HzB2_CWL1p5.instprm",
-      "sha256": "24ac6a4daffe5cd655197dbc8a95218a3a177d881d2ded7c0d13a2fe7326322d"
+      "sha256": "851ca0f2bc2eed0ca6ddc38a48736ccccb1a7fcf7133e297950355d77c8dae19"
     },
     {
       "id": "PG3-2026B-60Hz-CWL2p665",
@@ -37,7 +37,7 @@
       "frequency_hz": "60",
       "filename": "2026B_HighRes_60HzB3_CWL2p665.instprm",
       "resource_filename": "powgen_profiles/2026B_HighRes_60HzB3_CWL2p665.instprm",
-      "sha256": "e1a27bebf9ef77d1ad085644867f5ca74843ce4dc49387147598361745e16264"
+      "sha256": "e4ab35b5d44069d47352a4a8b717aa5f3131b0c682cbe969eeee852bb0d1c571"
     }
   ]
 }

@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import replace
 from hashlib import sha256
+from pathlib import Path
 
 import pytest
 
@@ -16,6 +17,11 @@ from radar_pd_nova.powgen import (
     resolve_powgen_profile,
     select_preferred_reduced_file,
 )
+
+
+def _canonical_text_digest(raw: bytes) -> str:
+    canonical = raw.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    return sha256(canonical).hexdigest()
 
 
 def test_parses_run_number_from_raw_and_reduced_paths() -> None:
@@ -134,7 +140,7 @@ def test_resolves_2026b_profile_by_exact_run_wavelength_and_frequency(
     assert result.as_dict()["provenance"]["rule_id"].startswith("PG3-2026B-")
     profile_path = resolve_packaged_powgen_profile_path(result)
     assert profile_path.name == expected
-    assert sha256(profile_path.read_bytes()).hexdigest() == result.profile_sha256
+    assert _canonical_text_digest(profile_path.read_bytes()) == result.profile_sha256
 
 
 def test_resolves_and_verifies_packaged_profile_path() -> None:
@@ -148,7 +154,30 @@ def test_resolves_and_verifies_packaged_profile_path() -> None:
 
     assert profile_path.name == "2026B_HighRes_60HzB2_CWL1p5.instprm"
     assert profile_path.is_file()
-    assert sha256(profile_path.read_bytes()).hexdigest() == result.profile_sha256
+    assert _canonical_text_digest(profile_path.read_bytes()) == result.profile_sha256
+
+
+def test_packaged_profile_checksum_is_independent_of_checkout_newlines(
+    tmp_path: Path,
+) -> None:
+    result = resolve_powgen_profile(
+        run_number=63764,
+        wavelength_angstrom="1.5",
+        frequency_hz=60,
+    )
+    source = resolve_packaged_powgen_profile_path(result)
+    canonical = source.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    profile_root = tmp_path / "powgen_profiles"
+    profile_root.mkdir()
+    candidate = profile_root / result.profile_filename
+    candidate.write_bytes(canonical.replace(b"\n", b"\r\n"))
+
+    resolved = resolve_packaged_powgen_profile_path(
+        result,
+        package_data_root=tmp_path,
+    )
+
+    assert resolved == candidate.resolve()
 
 
 def test_packaged_profile_path_rejects_checksum_mismatch() -> None:

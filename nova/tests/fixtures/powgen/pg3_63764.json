@@ -47,7 +47,7 @@
     "selected_path": "/SNS/PG3/IPTS-38000/shared/autoreduce/PG3_63764.gsa",
     "profile_rule_id": "PG3-2026B-60Hz-CWL1p5",
     "profile_filename": "2026B_HighRes_60HzB2_CWL1p5.instprm",
-    "profile_sha256": "24ac6a4daffe5cd655197dbc8a95218a3a177d881d2ded7c0d13a2fe7326322d",
+    "profile_sha256": "851ca0f2bc2eed0ca6ddc38a48736ccccb1a7fcf7133e297950355d77c8dae19",
     "galaxy_job_id": "job-pg3-63764",
     "galaxy_result_ids": [
       "hda-scientific-summary",

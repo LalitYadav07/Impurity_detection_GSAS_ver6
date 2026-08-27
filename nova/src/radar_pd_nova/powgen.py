@@ -225,6 +225,13 @@ def _canonical_json(payload: Mapping[str, Any], location: str) -> bytes:
         ) from exc
 
 
+def _canonical_text_sha256(raw: bytes) -> str:
+    """Hash text resources independently of platform newline conversion."""
+
+    canonical = raw.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    return sha256(canonical).hexdigest()
+
+
 def _registry_payload(
     registry: Mapping[str, Any] | str | Path | None,
 ) -> tuple[dict[str, Any], bytes, str]:
@@ -450,7 +457,8 @@ def resolve_packaged_powgen_profile_path(
     The registry resource is constrained to the package's ``powgen_profiles``
     directory. The file must exist, remain inside that directory after path
     resolution, match the public profile filename, and have the registered
-    SHA-256 digest.
+    SHA-256 digest. Profile digests use LF-normalized text so Git checkouts on
+    Windows and Linux verify the same scientific profile.
     """
 
     root = Path(package_data_root) if package_data_root is not None else _PACKAGE_DATA_ROOT
@@ -488,7 +496,7 @@ def resolve_packaged_powgen_profile_path(
         )
 
     try:
-        digest = sha256(candidate.read_bytes()).hexdigest()
+        digest = _canonical_text_sha256(candidate.read_bytes())
     except OSError as exc:
         raise PowgenResolutionError(
             f"Could not read packaged POWGEN profile: {resource}"
