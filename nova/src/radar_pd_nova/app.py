@@ -2372,7 +2372,7 @@ class RadarPdNovaApp(ThemedApp):
             with html.Div(classes="radar-button-row"):
                 vuetify.VBtn(
                     text=(
-                        "gsasii_session_status === 'starting' ? 'Starting GSAS-II...' : 'Start GSAS-II session'",
+                        "gsasii_session_status === 'starting' ? 'Starting GSAS-II...' : 'Open GPX in GSAS-II'",
                     ),
                     click=self.open_selected_checkpoint_in_gsasii,
                     prepend_icon="mdi-tune-vertical",
@@ -2402,9 +2402,9 @@ class RadarPdNovaApp(ThemedApp):
                 )
                 vuetify.VBtn("Back to monitor", click="workspace_view = 'monitor'", prepend_icon="mdi-arrow-left", variant="text", size="small")
         vuetify.VAlert(
-            v_if="gsasii_session_status === 'starting'",
+            v_if="gsasii_session_status === 'starting' || gsasii_session_status === 'error'",
             text=("gsasii_status_message",),
-            type="info",
+            type=("gsasii_session_status === 'error' ? 'error' : 'info'",),
             variant="tonal",
             density="compact",
             classes="mb-3",
@@ -2501,9 +2501,9 @@ class RadarPdNovaApp(ThemedApp):
                             html.Div("Rwp {{ row.rwp }}%", classes="radar-refinement-rwp")
                             html.P("{{ row.phase_fractions }}")
                             html.Span("{{ row.status }} / {{ row.time }}")
-                    vuetify.VSelect(label="GSAS-II checkpoint", v_model=("selected_checkpoint",), items=("checkpoint_rows",), item_title="name", item_value="path", density="compact", variant="outlined", no_data_text="No published GPX checkpoint is available")
+                    vuetify.VSelect(label="GSAS-II checkpoint", v_model=("selected_checkpoint",), items=("checkpoint_rows",), item_title="name", item_value="id", density="compact", variant="outlined", no_data_text="No published GPX checkpoint is available")
                     with html.Div(classes="radar-button-row"):
-                        vuetify.VBtn("Download selected checkpoint", click=self.download_checkpoint, disabled=("!selected_checkpoint",), prepend_icon="mdi-download", color="#15543c", variant="outlined")
+                        vuetify.VBtn("Download selected checkpoint", click=self.download_checkpoint, disabled=("!checkpoint_rows.some(item => item.id === selected_checkpoint && item.local_available)",), prepend_icon="mdi-download", color="#15543c", variant="outlined")
 
             with html.Section(v_show="viewed_run_mode === 'full'", classes="radar-full-results"):
                 html.H3("Full refinement progression")
@@ -2551,13 +2551,14 @@ class RadarPdNovaApp(ThemedApp):
                 html.H2("Run File Browser")
                 html.P("Published results grouped by scientific purpose; local container paths remain hidden.")
             vuetify.VBtn(
-                "Start GSAS-II session",
+                "Open GPX in GSAS-II",
                 click=self.open_selected_checkpoint_in_gsasii,
                 disabled=("!selected_checkpoint || gsasii_session_status === 'starting'",),
                 loading=("gsasii_session_status === 'starting'",),
                 prepend_icon="mdi-tune-vertical",
                 variant="outlined",
                 size="small",
+                classes="radar-gsasii-launch",
                 v_if="gsasii_session_status !== 'ready'",
             )
             vuetify.VBtn(
@@ -2571,12 +2572,17 @@ class RadarPdNovaApp(ThemedApp):
                 v_if="gsasii_session_status === 'ready' && !!gsasii_launch_url",
             )
         vuetify.VAlert(
-            v_if="gsasii_session_status === 'starting'",
+            v_if="gsasii_session_status === 'starting' || gsasii_session_status === 'error'",
             text=("gsasii_status_message",),
-            type="info",
+            type=("gsasii_session_status === 'error' ? 'error' : 'info'",),
             variant="tonal",
             density="compact",
             classes="mb-3",
+        )
+        html.P(
+            "Choose a published GPX checkpoint, then open it in the hosted GSAS-II desktop. The RADAR-PD result remains unchanged; saved edits return to Galaxy History.",
+            v_show="checkpoint_rows.length > 0",
+            classes="radar-section-help mb-3",
         )
         with html.Div(classes="radar-file-toolbar"):
             vuetify.VSelect(
@@ -2584,7 +2590,7 @@ class RadarPdNovaApp(ThemedApp):
                 v_model=("selected_checkpoint",),
                 items=("checkpoint_rows",),
                 item_title="name",
-                item_value="path",
+                item_value="id",
                 density="compact",
                 variant="outlined",
                 hide_details=True,
@@ -5104,7 +5110,7 @@ class RadarPdNovaApp(ThemedApp):
             state.selected_artifact = state.artifact_options[0]["path"]
         if state.checkpoint_rows:
             state.selected_checkpoint = next(
-                (item["path"] for item in state.checkpoint_rows if item.get("handoff_available")),
+                (item["id"] for item in state.checkpoint_rows if item.get("handoff_available")),
                 "",
             )
         if state.rapid_final_rows:
@@ -5231,7 +5237,22 @@ class RadarPdNovaApp(ThemedApp):
 
     def download_checkpoint(self, **_: Any) -> None:
         selected = str(self.server.state.selected_checkpoint or "")
-        self.download_artifact(selected)
+        checkpoint = next(
+            (
+                item
+                for item in self.server.state.checkpoint_rows or []
+                if str(item.get("id") or "") == selected or str(item.get("path") or "") == selected
+            ),
+            {},
+        )
+        path = str(checkpoint.get("path") or "")
+        if not path:
+            self.server.state.error_message = (
+                "This GPX is available in Galaxy for GSAS-II, but no downloadable copy was included in the local result bundle."
+            )
+            self.server.state.flush()
+            return
+        self.download_artifact(path)
 
     def _absolute_launch_url(self, launch_url: str) -> str:
         if launch_url.startswith("/"):
@@ -5615,7 +5636,7 @@ class RadarPdNovaApp(ThemedApp):
     async def _selected_checkpoint_element(
         self,
         record: RunRecord,
-        selected: Path,
+        selected: str,
         checkpoint_rows: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any] | None:
         collection_id = record.output_dataset_ids.get("gpx_projects")
@@ -5627,12 +5648,13 @@ class RadarPdNovaApp(ThemedApp):
             (
                 item
                 for item in checkpoint_rows or self.server.state.checkpoint_rows or []
-                if Path(str(item.get("path") or "")) == selected
+                if str(item.get("id") or "") == selected or str(item.get("path") or "") == selected
             ),
             {},
         )
         published_name = str(checkpoint.get("galaxy_element_name") or "")
-        target_stems = {selected.stem.casefold(), Path(published_name).stem.casefold()}
+        selected_path = Path(str(checkpoint.get("path") or selected))
+        target_stems = {selected_path.stem.casefold(), Path(published_name).stem.casefold()}
         target_stems.discard("")
         match = next(
             (
@@ -5649,9 +5671,9 @@ class RadarPdNovaApp(ThemedApp):
     def open_selected_checkpoint_in_gsasii(self, **_: Any) -> None:
         state = self.server.state
         record = self.records.get(state.selected_run_uid)
-        selected = Path(str(state.selected_checkpoint or ""))
+        selected = str(state.selected_checkpoint or "")
         checkpoint_rows = list(state.checkpoint_rows or [])
-        if record is None or not selected.name:
+        if record is None or not selected:
             return
         if state.gsasii_session_status in {"starting", "ready"}:
             state.notice = "A GSAS-II session is already starting or ready."
@@ -5689,8 +5711,8 @@ class RadarPdNovaApp(ThemedApp):
 
     def handoff_selected_checkpoint(self, **_: Any) -> None:
         record = self.records.get(self.server.state.selected_run_uid)
-        selected = Path(str(self.server.state.selected_checkpoint or ""))
-        if record is None or not selected.name:
+        selected = str(self.server.state.selected_checkpoint or "")
+        if record is None or not selected:
             return
 
         async def handoff() -> None:
@@ -5959,7 +5981,8 @@ class RadarPdNovaApp(ThemedApp):
         .radar-progression-item span { margin-top: 3px; font-size: 11px; color: var(--radar-muted); }
         .radar-plot-category-row { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 10px; }
         .radar-file-groups { border: 1px solid var(--radar-line); border-radius: 8px; overflow: hidden; }
-        .radar-file-toolbar { display: grid; grid-template-columns: minmax(240px, 1fr) auto; gap: 12px; align-items: center; margin-bottom: 11px; }
+        .radar-gsasii-launch { flex: 0 0 auto; }
+        .radar-file-toolbar { display: grid; grid-template-columns: minmax(240px, 1fr) minmax(210px, 280px); gap: 12px; align-items: center; margin-bottom: 11px; }
         .radar-file-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 9px 2px; border-bottom: 1px solid var(--radar-line); }
         .radar-file-row:last-child { border-bottom: 0; }
         .radar-file-copy { min-width: 0; }

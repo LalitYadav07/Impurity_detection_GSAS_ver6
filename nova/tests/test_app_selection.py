@@ -433,7 +433,6 @@ _cell_angle_gamma 90
 
 
 def test_selected_checkpoint_starts_native_gsasii_session() -> None:
-    checkpoint = Path("Technical/GSAS_Projects/Accepted_model_after_pass_2.gpx")
     record = RunRecord(
         uid="run-with-gpx",
         name="completed run",
@@ -445,10 +444,11 @@ def test_selected_checkpoint_starts_native_gsasii_session() -> None:
     app = RadarPdNovaApp.__new__(RadarPdNovaApp)
     state = _State(
         selected_run_uid=record.uid,
-        selected_checkpoint=str(checkpoint),
+        selected_checkpoint="checkpoint-0",
         checkpoint_rows=[
             {
-                "path": str(checkpoint),
+                "id": "checkpoint-0",
+                "path": "",
                 "galaxy_element_name": "Accepted_model_after_pass_2.gpx",
             }
         ],

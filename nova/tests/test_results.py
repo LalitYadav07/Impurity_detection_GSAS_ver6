@@ -975,6 +975,35 @@ def test_checkpoint_prefers_galaxy_collection_alias_over_technical_copy(tmp_path
     assert Path(view.checkpoints[0].path) == published
     assert view.checkpoints[0].galaxy_element_name == "02_Main_phase_anchor"
     assert view.checkpoints[0].handoff_available is True
+    assert view.checkpoints[0].local_available is True
+
+
+def test_checkpoint_can_launch_from_galaxy_without_local_gpx_copy(tmp_path: Path) -> None:
+    result = {
+        "$schema": "radar-pd-result/v1",
+        "analysis_mode": "full",
+        "status": "complete",
+        "phases": [],
+        "hypotheses": [],
+        "gpx_projects": [
+            {
+                "label": "seq_final_main_polished",
+                "path": "Technical/GSAS_Projects/seq_final_main_polished.gpx",
+                "collection_path": "gpx/02_Main_phase_anchor.gpx",
+                "collection_name": "02_Main_phase_anchor.gpx",
+                "stage": "final_refinement",
+                "status": "accepted",
+            }
+        ],
+    }
+
+    view = build_result_view(result, tmp_path)
+
+    assert view.checkpoints[0].id == "checkpoint-0"
+    assert view.checkpoints[0].path == ""
+    assert view.checkpoints[0].handoff_available is True
+    assert view.checkpoints[0].local_available is False
+    assert view.checkpoints[0].name == "Seq final main polished (GPX)"
 
 
 def test_pattern_only_result_warns_that_coefficients_are_not_phase_fractions(tmp_path: Path) -> None:

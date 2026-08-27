@@ -141,8 +141,9 @@ def test_powgen_monitor_requires_preflight_and_exposes_safe_backfill_controls() 
     assert "Save reusable configuration to History" in template
     assert "Open Result Explorer" in template
     assert 'v-if="result_explorer_available"' in template
-    assert "Start GSAS-II session" in template
+    assert "Open GPX in GSAS-II" in template
     assert "Open GSAS-II" in template
+    assert 'itemValue="id"' in template
     assert "Compare selected series" in template
     assert "Companion-tool activity" in template
     assert "Technical files" in template

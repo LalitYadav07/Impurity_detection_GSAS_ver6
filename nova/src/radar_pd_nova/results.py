@@ -160,6 +160,7 @@ class CheckpointDescriptor:
     stage: str
     status: str
     handoff_available: bool
+    local_available: bool
     galaxy_element_name: str = ""
 
 
@@ -1771,14 +1772,18 @@ def _checkpoint_descriptors(result: dict[str, Any], root: Path) -> list[Checkpoi
         if path is None:
             path = next((candidate for candidate in local if candidate.name in candidates), None)
         label = str(item.get("label") or (path.stem if path else "GSAS-II checkpoint"))
+        display_name = _humanize(label)
+        if "gpx" not in display_name.casefold():
+            display_name = f"{display_name} (GPX)"
         descriptors.append(
             CheckpointDescriptor(
                 id=f"checkpoint-{index}",
-                name=_humanize(label),
+                name=display_name,
                 path=str(path) if path else "",
                 stage=_humanize(str(item.get("stage") or "Refinement checkpoint")),
                 status=_humanize(str(item.get("status") or "Available")),
-                handoff_available=path is not None,
+                handoff_available=bool(collection_name or path),
+                local_available=path is not None,
                 galaxy_element_name=Path(collection_name).stem if collection_name else (path.stem if path else ""),
             )
         )
