@@ -19,7 +19,6 @@ ENV DEBIAN_FRONTEND=noninteractive \
     USER=gsasii \
     LOGNAME=gsasii \
     XDG_RUNTIME_DIR=/tmp/runtime-gsasii \
-    GSASII_SESSION_DIR=/workspace \
     GSASII_REF=${GSASII_REF}
 
 RUN apt-get update \
@@ -76,6 +75,7 @@ RUN chmod 0755 /opt/gsasii-gui/*.sh
 
 EXPOSE 8080
 WORKDIR /workspace
+USER gsasii
 
 ENTRYPOINT []
 CMD ["/opt/gsasii-gui/start.sh"]

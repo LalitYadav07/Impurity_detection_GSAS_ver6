@@ -38,10 +38,22 @@ def test_gpx_is_edited_as_a_copy_and_continuously_preserved() -> None:
     sync = _read("scripts/run_project_sync.sh")
     gui = _read("scripts/run_gsasii.sh")
 
-    assert "install -o gsasii -g gsasii -m 0644" in start
+    assert "install -m 0644" in start
+    assert "install -o gsasii" not in start
+    assert "gsasii-session-$(id -u)" in start
+    assert 'export HOME="${session_dir}/home"' in start
     assert '"${session_dir}/radar_pd_project.gpx"' in start
     assert 'source_digest="$(sha256sum "${source_project}"' in sync
     assert 'cat "${snapshot}" > "${output_project}"' in sync
     assert "sleep 0.5" in sync
     assert '/opt/conda/bin/GSAS-II "${project}"' in gui
     assert 'cat "${project}" > "${output_project}"' in gui
+
+
+def test_gui_processes_run_as_the_ndip_runtime_uid() -> None:
+    supervisor = _read("supervisord.conf")
+    dockerfile = _read("Dockerfile")
+
+    assert "user=gsasii" not in supervisor
+    assert "GSASII_SESSION_DIR=/workspace" not in dockerfile
+    assert "USER gsasii" in dockerfile

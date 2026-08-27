@@ -60,6 +60,25 @@ jobs:
             /opt/conda/bin/python -c "import GSASII; import wx; print(wx.version())"
           docker run --rm "${IMAGE_NAME}:gsasii-gui" \
             bash -n /opt/gsasii-gui/start.sh
+          smoke_dir="$(mktemp -d)"
+          chmod 0777 "${smoke_dir}"
+          docker run --rm \
+            -v "${smoke_dir}:/job" \
+            "${IMAGE_NAME}:gsasii-gui" \
+            /opt/conda/bin/python -c \
+            'from GSASII import GSASIIscriptable as G2sc; G2sc.G2Project(newgpx="/job/input.gpx").save()'
+          chmod 0666 "${smoke_dir}/input.gpx"
+          set +e
+          timeout 15 docker run --rm --user 12345:12345 \
+            -e EP_PATH=/gsasii \
+            -e GSASII_SOURCE_PROJECT=/job/input.gpx \
+            -e GSASII_OUTPUT_PROJECT=/job/output.gpx \
+            -v "${smoke_dir}:/job" \
+            "${IMAGE_NAME}:gsasii-gui"
+          smoke_status=$?
+          set -e
+          test "${smoke_status}" -eq 124
+          test -s "${smoke_dir}/output.gpx"
 
       - name: Push Docker schema v2 manifests
         shell: bash
