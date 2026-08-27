@@ -66,8 +66,7 @@ jobs:
             -v "${smoke_dir}:/job" \
             "${IMAGE_NAME}:gsasii-gui" \
             /opt/conda/bin/python -c \
-            'from GSASII import GSASIIscriptable as G2sc; G2sc.G2Project(newgpx="/job/input.gpx").save()'
-          chmod 0666 "${smoke_dir}/input.gpx"
+            'import os; from GSASII import GSASIIscriptable as G2sc; G2sc.G2Project(newgpx="/job/input.gpx").save(); os.chmod("/job/input.gpx", 0o666)'
           set +e
           timeout 15 docker run --rm --user 12345:12345 \
             -e EP_PATH=/gsasii \
