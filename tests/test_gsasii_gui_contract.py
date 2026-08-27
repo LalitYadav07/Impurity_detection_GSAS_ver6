@@ -39,7 +39,8 @@ def test_desktop_gateway_obeys_ndip_path_prefix() -> None:
     assert 'export EP_WS_PATH="${EP_PATH#/}"' in launcher
     assert "envsubst '${EP_PATH} ${EP_WS_PATH} ${GUI_VERSION}'" in launcher
     assert "^(/[A-Za-z0-9._~-]+)+$" in launcher
-    assert "nginx -e /dev/stderr" in launcher
+    assert "exec nginx -c /tmp/gsasii-nginx.conf" in launcher
+    assert "error_log /dev/stderr warn" in nginx
 
 
 def test_gpx_is_edited_as_a_copy_and_continuously_preserved() -> None:
@@ -72,6 +73,18 @@ def test_gui_processes_run_as_the_ndip_runtime_uid() -> None:
     assert "GSASII_SESSION_DIR=/workspace" not in dockerfile
     assert "chmod 1777 /tmp/.X11-unix" in dockerfile
     assert "USER gsasii" in dockerfile
+
+
+def test_supervisor_listener_uses_protocol_and_waits_for_gsasii_exit() -> None:
+    supervisor = _read("supervisord.conf")
+    listener = _read("scripts/run_exit_listener.sh")
+
+    assert "command=/opt/gsasii-gui/run_exit_listener.sh" in supervisor
+    assert "events=PROCESS_STATE_EXITED,PROCESS_STATE_FATAL" in supervisor
+    assert "printf 'READY\\n'" in listener
+    assert "printf 'RESULT 2\\nOK'" in listener
+    assert '"${process_name}" == "gsasii"' in listener
+    assert '"${event_name}" == "PROCESS_STATE_FATAL"' in listener
 
 
 def test_release_smoke_checks_http_redirect_and_websocket_upgrade() -> None:

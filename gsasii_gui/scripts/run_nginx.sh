@@ -30,4 +30,4 @@ envsubst '${EP_PATH} ${EP_WS_PATH} ${GUI_VERSION}' \
     < /etc/nginx/gsasii.conf.template \
     > /tmp/gsasii-nginx.conf
 
-exec nginx -e /dev/stderr -c /tmp/gsasii-nginx.conf -g 'daemon off;'
+exec nginx -c /tmp/gsasii-nginx.conf -g 'daemon off;'
