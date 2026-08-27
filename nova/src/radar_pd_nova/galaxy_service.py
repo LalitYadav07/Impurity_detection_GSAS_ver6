@@ -1679,6 +1679,7 @@ class GalaxyService:
         response = requests.get(
             f"{self.galaxy_url}/api/dataset_collections/{collection_id}",
             headers=self._headers,
+            params={"view": "element"},
             timeout=30,
         )
         response.raise_for_status()

@@ -500,6 +500,7 @@ def test_collection_creation_and_element_mapping_use_public_galaxy_ids(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
     captured: dict[str, Any] = {}
+    get_captured: dict[str, Any] = {}
 
     class Response:
         def __init__(self, payload: Any) -> None:
@@ -516,6 +517,7 @@ def test_collection_creation_and_element_mapping_use_public_galaxy_ids(
         return Response({"id": "collection-id"})
 
     def get(url: str, **kwargs: Any) -> Response:
+        get_captured.update(kwargs)
         return Response(
             {
                 "elements": [
@@ -535,6 +537,7 @@ def test_collection_creation_and_element_mapping_use_public_galaxy_ids(
     assert collection_id == "collection-id"
     assert captured["history_id"] == "history"
     assert [item["id"] for item in captured["element_identifiers"]] == ["summary-1", "summary-2"]
+    assert get_captured["params"] == {"view": "element"}
     assert elements == [
         {"id": "gpx-dataset", "name": "best.gpx"},
         {"id": "gpx-dataset-2", "name": "second.gpx"},

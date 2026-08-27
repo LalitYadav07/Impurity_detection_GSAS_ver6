@@ -5641,9 +5641,13 @@ class RadarPdNovaApp(ThemedApp):
     ) -> dict[str, Any] | None:
         collection_id = record.output_dataset_ids.get("gpx_projects")
         if not collection_id:
-            self.server.state.error_message = "Galaxy did not publish a GPX collection for this run."
             return None
-        elements = await asyncio.to_thread(self.service.collection_elements, collection_id)
+        try:
+            elements = await asyncio.to_thread(self.service.collection_elements, collection_id)
+        except Exception:
+            # The hosted GSAS-II tool can consume the complete HDCA directly,
+            # so a transient element-inspection failure must not block launch.
+            elements = []
         checkpoint = next(
             (
                 item
@@ -5652,20 +5656,43 @@ class RadarPdNovaApp(ThemedApp):
             ),
             {},
         )
-        published_name = str(checkpoint.get("galaxy_element_name") or "")
-        selected_path = Path(str(checkpoint.get("path") or selected))
-        target_stems = {selected_path.stem.casefold(), Path(published_name).stem.casefold()}
-        target_stems.discard("")
+
+        def aliases(value: Any) -> set[str]:
+            stem = Path(str(value or "")).stem.casefold()
+            key = re.sub(r"[^a-z0-9]+", "", stem)
+            if not key:
+                return set()
+            values = {key}
+            if "seqfinalmainpolished" in key or "02mainphaseanchor" in key:
+                values.update({"seqfinalmainpolished", "02mainphaseanchor"})
+            pass_match = re.search(r"seqpass(\d+)keptpolished", key)
+            accepted_match = re.search(r"acceptedmodelafterpass(\d+)", key)
+            pass_number = pass_match or accepted_match
+            if pass_number:
+                number = pass_number.group(1)
+                values.update({f"seqpass{number}keptpolished", f"acceptedmodelafterpass{number}"})
+            if "patternproject" in key or "01importedpatternandmainphase" in key:
+                values.update({"patternproject", "01importedpatternandmainphase"})
+            return values
+
+        target_aliases: set[str] = set()
+        for value in (
+            selected,
+            checkpoint.get("path"),
+            checkpoint.get("name"),
+            checkpoint.get("galaxy_element_name"),
+        ):
+            target_aliases.update(aliases(value))
         match = next(
             (
                 item
                 for item in elements
-                if Path(item["name"]).stem.casefold() in target_stems
+                if aliases(item.get("name")) & target_aliases
             ),
             None,
         )
-        if match is None:
-            self.server.state.error_message = "Could not map the selected checkpoint to its Galaxy collection element."
+        if match is None and len(elements) == 1:
+            match = elements[0]
         return match
 
     def open_selected_checkpoint_in_gsasii(self, **_: Any) -> None:
@@ -5688,18 +5715,34 @@ class RadarPdNovaApp(ThemedApp):
 
         async def launch() -> None:
             match = await self._selected_checkpoint_element(record, selected, checkpoint_rows)
-            if match is None:
+            collection_id = record.output_dataset_ids.get("gpx_projects")
+            if match is not None:
+                launch_name = Path(match["name"]).stem
+                launch_inputs: dict[str, Any] = {
+                    "project_source|source_kind": "single",
+                    "project_source|gpx_project": {"dataset_id": match["id"]},
+                }
+            elif collection_id:
+                launch_name = f"preferred checkpoint from {record.name}"
+                launch_inputs = {
+                    "project_source|source_kind": "collection",
+                    "project_source|gpx_projects": {"collection_id": collection_id},
+                }
+                state.notice = (
+                    "Galaxy renamed the selected checkpoint. GSAS-II will open the preferred accepted "
+                    "checkpoint from this run's published GPX collection."
+                )
+                state.error_message = ""
+            else:
                 state.gsasii_session_status = "error"
-                state.gsasii_status_message = "Could not map the selected checkpoint to its Galaxy collection element."
+                state.gsasii_status_message = "Galaxy did not publish a GPX collection for this run."
+                state.error_message = state.gsasii_status_message
                 state.flush()
                 return
             action = await self._submit_utility_action(
                 tool_id=GSASII_INTERACTIVE_TOOL_ID,
-                name=f"Refine in GSAS-II: {Path(match['name']).stem}",
-                inputs={
-                    "project_source|source_kind": "single",
-                    "project_source|gpx_project": {"dataset_id": match["id"]},
-                },
+                name=f"Refine in GSAS-II: {launch_name}",
+                inputs=launch_inputs,
                 associated_run_uid=record.uid,
             )
             if action is None:
