@@ -29,9 +29,11 @@ def test_desktop_gateway_obeys_ndip_path_prefix() -> None:
     launcher = _read("scripts/run_nginx.sh")
 
     assert "location ${EP_PATH}/websockify" in nginx
-    assert "path=${EP_PATH}/websockify" in nginx
+    assert "path=${EP_WS_PATH}/websockify" in nginx
+    assert "path=${EP_PATH}/websockify" not in nginx
     assert "alias /usr/share/novnc/" in nginx
-    assert "envsubst '${EP_PATH}'" in launcher
+    assert 'export EP_WS_PATH="${EP_PATH#/}"' in launcher
+    assert "envsubst '${EP_PATH} ${EP_WS_PATH}'" in launcher
     assert "^(/[A-Za-z0-9._~-]+)+$" in launcher
 
 

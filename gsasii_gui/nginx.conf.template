@@ -21,11 +21,11 @@ http {
         absolute_redirect off;
 
         location = ${EP_PATH} {
-            return 302 ${EP_PATH}/vnc.html?autoconnect=1&resize=scale&reconnect=1&path=${EP_PATH}/websockify;
+            return 302 ${EP_PATH}/vnc.html?autoconnect=1&resize=scale&reconnect=1&path=${EP_WS_PATH}/websockify;
         }
 
         location = ${EP_PATH}/ {
-            return 302 ${EP_PATH}/vnc.html?autoconnect=1&resize=scale&reconnect=1&path=${EP_PATH}/websockify;
+            return 302 ${EP_PATH}/vnc.html?autoconnect=1&resize=scale&reconnect=1&path=${EP_WS_PATH}/websockify;
         }
 
         location ${EP_PATH}/websockify {

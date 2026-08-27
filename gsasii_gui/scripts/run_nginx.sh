@@ -11,6 +11,7 @@ if [[ -z "${ep_path}" || ! "${ep_path}" =~ ^(/[A-Za-z0-9._~-]+)+$ ]]; then
     exit 64
 fi
 export EP_PATH="${ep_path}"
+export EP_WS_PATH="${EP_PATH#/}"
 
 runtime_dir=/tmp/gsasii-nginx
 mkdir -p \
@@ -20,7 +21,7 @@ mkdir -p \
     "${runtime_dir}/uwsgi" \
     "${runtime_dir}/scgi"
 
-envsubst '${EP_PATH}' \
+envsubst '${EP_PATH} ${EP_WS_PATH}' \
     < /etc/nginx/gsasii.conf.template \
     > /tmp/gsasii-nginx.conf
 
