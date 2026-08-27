@@ -45,9 +45,12 @@ LIBRARY_BUILDER_TOOL_ID = "neutrons_radar_pd_library_builder_prototype"
 GPX_HANDOFF_TOOL_ID = "neutrons_radar_pd_gpx_handoff_prototype"
 COMPARE_SERIES_TOOL_ID = "neutrons_radar_pd_compare_series_prototype"
 RESULT_EXPLORER_TOOL_ID = "neutrons_radar_pd_result_explorer_prototype"
+GSASII_INTERACTIVE_TOOL_ID = "neutrons_radar_pd_gsasii_interactive_prototype"
 EXPORT_DATASETS_TOOL_ID = "neutrons_export"
 RUN_NAME_PREFIX = "RADAR-PD NOVA"
 SUBMISSION_ACK_TIMEOUT_SECONDS = float(os.getenv("RADAR_PD_SUBMISSION_ACK_TIMEOUT", "60"))
+
+_INTERACTIVE_TOOL_IDS = frozenset({RESULT_EXPLORER_TOOL_ID, GSASII_INTERACTIVE_TOOL_ID})
 
 _DIFFRACTION_SUFFIXES = frozenset(
     {".dat", ".xye", ".xy", ".csv", ".txt", ".fxye", ".gsa", ".gsas", ".gss", ".xrdml", ".xml"}
@@ -130,6 +133,31 @@ def _download_collection_archive(collection: Any, destination: Path) -> None:
         _extract_results_archive(archive, destination)
     finally:
         archive.unlink(missing_ok=True)
+
+
+def _publish_staging_directory(staging: Path, destination: Path) -> None:
+    """Publish a complete result directory despite short-lived file scanners.
+
+    Windows can temporarily hold an extracted ZIP member open after the writer
+    closes it. Retrying preserves the atomic directory swap in the common case;
+    the copy fallback is limited to Windows and only runs after every retry.
+    """
+
+    delays = (0.05, 0.1, 0.2, 0.4, 0.8)
+    last_error: PermissionError | None = None
+    for attempt in range(len(delays) + 1):
+        try:
+            staging.replace(destination)
+            return
+        except PermissionError as exc:
+            last_error = exc
+            if attempt < len(delays):
+                time.sleep(delays[attempt])
+    if os.name != "nt":
+        assert last_error is not None
+        raise last_error
+    shutil.copytree(staging, destination)
+    shutil.rmtree(staging, ignore_errors=True)
 
 
 def _decode_parameter(value: Any) -> Any:
@@ -1576,7 +1604,7 @@ class GalaxyService:
         stderr = str(job.get("stderr") or job.get("tool_stderr") or job.get("job_stderr") or "")
         if action.status == RunStatus.ERROR:
             action.message = stderr[-2000:] or "Galaxy reported a utility-tool error"
-        if action.tool_id == RESULT_EXPLORER_TOOL_ID and action.status in {RunStatus.RUNNING, RunStatus.OK}:
+        if action.tool_id in _INTERACTIVE_TOOL_IDS and action.status in {RunStatus.RUNNING, RunStatus.OK}:
             try:
                 response = requests.get(
                     f"{self.galaxy_url}/api/entry_points",
@@ -1593,11 +1621,19 @@ class GalaxyService:
                     active = bool(entry.get("active"))
                     if active and target:
                         action.outputs["launch_url"] = str(target)
-                        action.status = RunStatus.OK
-                        action.message = "Result Explorer is ready"
+                        action.status = RunStatus.RUNNING
+                        action.message = (
+                            "GSAS-II session is ready"
+                            if action.tool_id == GSASII_INTERACTIVE_TOOL_ID
+                            else "Result Explorer is ready"
+                        )
                     elif action.status == RunStatus.OK and not active:
-                        action.status = RunStatus.ERROR
-                        action.message = stderr[-2000:] or "Result Explorer stopped before its NDIP entry point became active"
+                        action.outputs.pop("launch_url", None)
+                        if action.tool_id == GSASII_INTERACTIVE_TOOL_ID:
+                            action.message = "GSAS-II session closed; the saved project is available in Galaxy History"
+                        else:
+                            action.status = RunStatus.ERROR
+                            action.message = stderr[-2000:] or "Result Explorer stopped before its NDIP entry point became active"
             except Exception:
                 pass
         action.updated_utc = datetime.now(timezone.utc).isoformat()
@@ -2074,14 +2110,15 @@ class GalaxyService:
                     else "Galaxy returned no downloadable RADAR-PD result artifacts"
                 )
                 raise RuntimeError(f"{message}: {details}" if details else message)
-            if destination.exists():
-                shutil.rmtree(destination)
             manifest = current_manifest or CacheManifest(
                 job_id=job_id,
                 archive_dataset_id=record.output_dataset_ids.get("results_archive", "legacy-no-archive"),
             )
             (staging / ".radar-pd-cache.json").write_text(manifest.model_dump_json(indent=2), encoding="utf-8")
-            staging.replace(destination)
+            with self._lock:
+                if destination.exists():
+                    shutil.rmtree(destination)
+                _publish_staging_directory(staging, destination)
             record.output_dataset_ids.update(output_ids)
             record.output_dir = str(destination)
             record.status = record.analysis_status or RunStatus.OK

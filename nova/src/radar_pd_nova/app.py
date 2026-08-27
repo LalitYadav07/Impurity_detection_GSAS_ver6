@@ -25,6 +25,7 @@ from .facility import FacilityBrowser, FacilityPathError, WatchRecipe
 from .galaxy_service import (
     COMPARE_SERIES_TOOL_ID,
     GPX_HANDOFF_TOOL_ID,
+    GSASII_INTERACTIVE_TOOL_ID,
     LIBRARY_BUILDER_TOOL_ID,
     RESULT_EXPLORER_TOOL_ID,
     SNS_RESOLVER_TOOL_ID,
@@ -336,6 +337,8 @@ class RadarPdNovaApp(ThemedApp):
         state.selected_publication_job_id = ""
         state.selected_publish_message = ""
         state.result_explorer_available = False
+        state.gsasii_launch_url = ""
+        state.gsasii_session_status = ""
         state.selected_galaxy_job_id = "Pending"
         state.selected_run_stage = "-"
         state.selected_run_progress = 0
@@ -2367,6 +2370,28 @@ class RadarPdNovaApp(ThemedApp):
                 html.P("Curated from the normalized Galaxy result; technical fields remain available below.")
             with html.Div(classes="radar-button-row"):
                 vuetify.VBtn(
+                    text=(
+                        "gsasii_session_status === 'starting' ? 'Starting GSAS-II...' : 'Start GSAS-II session'",
+                    ),
+                    click=self.open_selected_checkpoint_in_gsasii,
+                    prepend_icon="mdi-tune-vertical",
+                    variant="outlined",
+                    size="small",
+                    loading=("gsasii_session_status === 'starting'",),
+                    disabled=("!selected_checkpoint || gsasii_session_status === 'starting'",),
+                    v_if="checkpoint_rows.length > 0 && gsasii_session_status !== 'ready'",
+                )
+                vuetify.VBtn(
+                    "Open GSAS-II",
+                    href=("gsasii_launch_url",),
+                    target="_blank",
+                    prepend_icon="mdi-open-in-new",
+                    color="#15543c",
+                    variant="flat",
+                    size="small",
+                    v_if="gsasii_session_status === 'ready' && !!gsasii_launch_url",
+                )
+                vuetify.VBtn(
                     "Open Result Explorer",
                     click=self.launch_result_explorer,
                     prepend_icon="mdi-open-in-new",
@@ -2470,8 +2495,6 @@ class RadarPdNovaApp(ThemedApp):
                     vuetify.VSelect(label="GSAS-II checkpoint", v_model=("selected_checkpoint",), items=("checkpoint_rows",), item_title="name", item_value="path", density="compact", variant="outlined", no_data_text="No published GPX checkpoint is available")
                     with html.Div(classes="radar-button-row"):
                         vuetify.VBtn("Download selected checkpoint", click=self.download_checkpoint, disabled=("!selected_checkpoint",), prepend_icon="mdi-download", color="#15543c", variant="outlined")
-                        vuetify.VBtn("Send checkpoint to GSAS-II handoff", click=self.handoff_selected_checkpoint, disabled=("!selected_checkpoint",), prepend_icon="mdi-send-outline", color="#15543c", variant="outlined")
-                    vuetify.VAlert(text="This release reviews and hands off existing checkpoints. Editing a phase combination and launching a targeted refinement requires a future Galaxy backend action.", type="info", variant="tonal", density="compact", classes="mt-3")
 
             with html.Section(v_show="viewed_run_mode === 'full'", classes="radar-full-results"):
                 html.H3("Full refinement progression")
@@ -2518,7 +2541,26 @@ class RadarPdNovaApp(ThemedApp):
             with html.Div():
                 html.H2("Run File Browser")
                 html.P("Published results grouped by scientific purpose; local container paths remain hidden.")
-            vuetify.VBtn("Send selected GPX to handoff", click=self.handoff_selected_checkpoint, disabled=("!selected_checkpoint",), prepend_icon="mdi-send-outline", variant="outlined", size="small")
+            vuetify.VBtn(
+                "Start GSAS-II session",
+                click=self.open_selected_checkpoint_in_gsasii,
+                disabled=("!selected_checkpoint || gsasii_session_status === 'starting'",),
+                loading=("gsasii_session_status === 'starting'",),
+                prepend_icon="mdi-tune-vertical",
+                variant="outlined",
+                size="small",
+                v_if="gsasii_session_status !== 'ready'",
+            )
+            vuetify.VBtn(
+                "Open GSAS-II",
+                href=("gsasii_launch_url",),
+                target="_blank",
+                prepend_icon="mdi-open-in-new",
+                color="#15543c",
+                variant="flat",
+                size="small",
+                v_if="gsasii_session_status === 'ready' && !!gsasii_launch_url",
+            )
         with html.Div(classes="radar-file-toolbar"):
             vuetify.VSelect(
                 label="GSAS-II checkpoint",
@@ -5174,11 +5216,14 @@ class RadarPdNovaApp(ThemedApp):
         selected = str(self.server.state.selected_checkpoint or "")
         self.download_artifact(selected)
 
+    def _absolute_launch_url(self, launch_url: str) -> str:
+        if launch_url.startswith("/"):
+            return f"{self.service.galaxy_url}{launch_url}"
+        return launch_url
+
     def _activity_row(self, action: UtilityActionRecord) -> dict[str, str]:
         run = self.records.get(action.associated_run_uid or "")
-        launch_url = action.outputs.get("launch_url", "")
-        if launch_url.startswith("/"):
-            launch_url = f"{self.service.galaxy_url}{launch_url}"
+        launch_url = self._absolute_launch_url(action.outputs.get("launch_url", ""))
         if not launch_url and action.status == RunStatus.OK:
             preferred = next(
                 (
@@ -5261,6 +5306,7 @@ class RadarPdNovaApp(ThemedApp):
 
     async def _monitor_utility(self, action: UtilityActionRecord) -> None:
         terminal = {RunStatus.OK, RunStatus.ERROR, RunStatus.CANCELLED}
+        entrypoint_announced = False
         while action.status not in terminal:
             await asyncio.sleep(2.0)
             try:
@@ -5268,11 +5314,31 @@ class RadarPdNovaApp(ThemedApp):
             except Exception as exc:
                 action.message = str(exc)
             self._register_utility(action)
-            if action.tool_id == RESULT_EXPLORER_TOOL_ID and action.outputs.get("launch_url"):
-                await self._utility_completed(action)
-                return
+            if action.outputs.get("launch_url") and not entrypoint_announced:
+                entrypoint_announced = True
+                await self._utility_ready(action)
         if action.status == RunStatus.OK:
             await self._utility_completed(action)
+        elif action.tool_id == GSASII_INTERACTIVE_TOOL_ID:
+            state = self.server.state
+            state.gsasii_launch_url = ""
+            state.gsasii_session_status = "closed" if action.status == RunStatus.CANCELLED else "error"
+            if action.status == RunStatus.ERROR:
+                state.error_message = action.message or "The GSAS-II session failed to start."
+            else:
+                state.notice = "GSAS-II session stopped; the last stable project snapshot remains in Galaxy History."
+            state.flush()
+
+    async def _utility_ready(self, action: UtilityActionRecord) -> None:
+        state = self.server.state
+        if action.tool_id == GSASII_INTERACTIVE_TOOL_ID:
+            state.gsasii_launch_url = self._absolute_launch_url(action.outputs.get("launch_url", ""))
+            state.gsasii_session_status = "ready"
+            state.notice = "GSAS-II is ready. Open the desktop session to continue refinement."
+        elif action.tool_id == RESULT_EXPLORER_TOOL_ID:
+            state.notice = "Result Explorer is ready; open it from Companion-tool activity."
+        self._sync_activities()
+        state.flush()
 
     async def _utility_completed(self, action: UtilityActionRecord) -> None:
         state = self.server.state
@@ -5344,6 +5410,10 @@ class RadarPdNovaApp(ThemedApp):
                 state.notice = "SNS input resolved and selected from Galaxy History."
         elif action.tool_id == GPX_HANDOFF_TOOL_ID:
             state.notice = "The selected GSAS-II checkpoint is ready in Galaxy History."
+        elif action.tool_id == GSASII_INTERACTIVE_TOOL_ID:
+            state.gsasii_launch_url = ""
+            state.gsasii_session_status = "closed"
+            state.notice = "GSAS-II session closed; the saved project is available in Galaxy History."
         elif action.tool_id == COMPARE_SERIES_TOOL_ID:
             state.notice = "Series comparison completed; open its report from Companion-tool activity."
         elif action.tool_id == RESULT_EXPLORER_TOOL_ID:
@@ -5518,6 +5588,76 @@ class RadarPdNovaApp(ThemedApp):
             "radar-result-explorer",
         )
 
+    async def _selected_checkpoint_element(
+        self,
+        record: RunRecord,
+        selected: Path,
+        checkpoint_rows: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any] | None:
+        collection_id = record.output_dataset_ids.get("gpx_projects")
+        if not collection_id:
+            self.server.state.error_message = "Galaxy did not publish a GPX collection for this run."
+            return None
+        elements = await asyncio.to_thread(self.service.collection_elements, collection_id)
+        checkpoint = next(
+            (
+                item
+                for item in checkpoint_rows or self.server.state.checkpoint_rows or []
+                if Path(str(item.get("path") or "")) == selected
+            ),
+            {},
+        )
+        published_name = str(checkpoint.get("galaxy_element_name") or "")
+        target_stems = {selected.stem.casefold(), Path(published_name).stem.casefold()}
+        target_stems.discard("")
+        match = next(
+            (
+                item
+                for item in elements
+                if Path(item["name"]).stem.casefold() in target_stems
+            ),
+            None,
+        )
+        if match is None:
+            self.server.state.error_message = "Could not map the selected checkpoint to its Galaxy collection element."
+        return match
+
+    def open_selected_checkpoint_in_gsasii(self, **_: Any) -> None:
+        state = self.server.state
+        record = self.records.get(state.selected_run_uid)
+        selected = Path(str(state.selected_checkpoint or ""))
+        checkpoint_rows = list(state.checkpoint_rows or [])
+        if record is None or not selected.name:
+            return
+        if state.gsasii_session_status in {"starting", "ready"}:
+            state.notice = "A GSAS-II session is already starting or ready."
+            state.flush()
+            return
+        state.gsasii_launch_url = ""
+        state.gsasii_session_status = "starting"
+        state.flush()
+
+        async def launch() -> None:
+            match = await self._selected_checkpoint_element(record, selected, checkpoint_rows)
+            if match is None:
+                state.gsasii_session_status = "error"
+                state.flush()
+                return
+            action = await self._submit_utility_action(
+                tool_id=GSASII_INTERACTIVE_TOOL_ID,
+                name=f"Refine in GSAS-II: {Path(match['name']).stem}",
+                inputs={
+                    "project_source|source_kind": "single",
+                    "project_source|gpx_project": {"dataset_id": match["id"]},
+                },
+                associated_run_uid=record.uid,
+            )
+            if action is None:
+                state.gsasii_session_status = "error"
+                state.flush()
+
+        self._schedule_utility(launch(), "radar-gsasii-interactive")
+
     def handoff_selected_checkpoint(self, **_: Any) -> None:
         record = self.records.get(self.server.state.selected_run_uid)
         selected = Path(str(self.server.state.selected_checkpoint or ""))
@@ -5525,32 +5665,8 @@ class RadarPdNovaApp(ThemedApp):
             return
 
         async def handoff() -> None:
-            collection_id = record.output_dataset_ids.get("gpx_projects")
-            if not collection_id:
-                self.server.state.error_message = "Galaxy did not publish a GPX collection for this run."
-                return
-            elements = await asyncio.to_thread(self.service.collection_elements, collection_id)
-            checkpoint = next(
-                (
-                    item
-                    for item in self.server.state.checkpoint_rows or []
-                    if Path(str(item.get("path") or "")) == selected
-                ),
-                {},
-            )
-            published_name = str(checkpoint.get("galaxy_element_name") or "")
-            target_stems = {selected.stem.casefold(), Path(published_name).stem.casefold()}
-            target_stems.discard("")
-            match = next(
-                (
-                    item
-                    for item in elements
-                    if Path(item["name"]).stem.casefold() in target_stems
-                ),
-                None,
-            )
+            match = await self._selected_checkpoint_element(record, selected)
             if match is None:
-                self.server.state.error_message = "Could not map the selected local checkpoint to its Galaxy collection element."
                 return
             inputs: dict[str, Any] = {"gpx_project": {"dataset_id": match["id"]}}
             if record.output_dataset_ids.get("gpx_index"):

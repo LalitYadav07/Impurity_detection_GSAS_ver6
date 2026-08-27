@@ -9,6 +9,7 @@ import pytest
 from radar_pd_nova.galaxy_service import (
     COMPARE_SERIES_TOOL_ID,
     GPX_HANDOFF_TOOL_ID,
+    GSASII_INTERACTIVE_TOOL_ID,
     LIBRARY_BUILDER_TOOL_ID,
     RESULT_EXPLORER_TOOL_ID,
     SNS_RESOLVER_TOOL_ID,
@@ -364,7 +365,7 @@ def test_utility_refresh_exposes_outputs_and_result_explorer_entrypoint(
 
     refreshed = service.refresh_utility(action)
 
-    assert refreshed.status is RunStatus.OK
+    assert refreshed.status is RunStatus.RUNNING
     assert refreshed.outputs["result_report"] == "report-id"
     assert refreshed.outputs["launch_url"] == "/interactivetool/ep/entry/token/"
     assert refreshed.entrypoint_id == "entry"
@@ -395,6 +396,55 @@ def test_result_explorer_inactive_entrypoint_is_reported_as_error(tmp_path: Path
 
     assert refreshed.status is RunStatus.ERROR
     assert refreshed.message == "container stopped"
+
+
+def test_gsasii_interactive_session_tracks_ready_and_normal_close(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    class Response:
+        def __init__(self, active: bool) -> None:
+            self.active = active
+
+        def raise_for_status(self) -> None:
+            pass
+
+        def json(self) -> list[dict[str, Any]]:
+            return [
+                {
+                    "id": "gsas-entry",
+                    "active": self.active,
+                    "target": "/interactivetool/ep/gsas/token/" if self.active else None,
+                }
+            ]
+
+    active = True
+    monkeypatch.setattr(
+        "radar_pd_nova.galaxy_service.requests.get",
+        lambda *args, **kwargs: Response(active),
+    )
+    service = GalaxyService("https://example.invalid", "key", "history", output_root=tmp_path)
+    service._job_details = lambda job_id: {  # type: ignore[method-assign]
+        "state": "running" if active else "ok",
+        "outputs": {"edited_project": {"id": "saved-gpx"}},
+    }
+    action = UtilityActionRecord(
+        uid="utility",
+        tool_id=GSASII_INTERACTIVE_TOOL_ID,
+        name="GSAS-II",
+        galaxy_job_id="job",
+    )
+
+    ready = service.refresh_utility(action)
+    assert ready.status is RunStatus.RUNNING
+    assert ready.outputs["launch_url"] == "/interactivetool/ep/gsas/token/"
+    assert ready.message == "GSAS-II session is ready"
+
+    active = False
+    closed = service.refresh_utility(ready)
+    assert closed.status is RunStatus.OK
+    assert "launch_url" not in closed.outputs
+    assert closed.outputs["edited_project"] == "saved-gpx"
+    assert closed.message == "GSAS-II session closed; the saved project is available in Galaxy History"
 
 
 def test_collection_creation_and_element_mapping_use_public_galaxy_ids(

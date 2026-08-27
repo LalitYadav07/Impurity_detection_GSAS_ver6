@@ -3,6 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from radar_pd_nova.app import RadarPdNovaApp
+from radar_pd_nova.galaxy_service import GSASII_INTERACTIVE_TOOL_ID
 from radar_pd_nova.models import AnalysisMode, RunRecord, RunStatus, UtilityActionRecord, selected_run_uid
 
 
@@ -428,6 +429,62 @@ _cell_angle_gamma 90
         "library_mode": "augmented",
         "radiation": "neutron",
         "overwrite": "",
+    }
+
+
+def test_selected_checkpoint_starts_native_gsasii_session() -> None:
+    checkpoint = Path("Technical/GSAS_Projects/Accepted_model_after_pass_2.gpx")
+    record = RunRecord(
+        uid="run-with-gpx",
+        name="completed run",
+        mode=AnalysisMode.FULL,
+        history_id="history",
+        status=RunStatus.OK,
+        output_dataset_ids={"gpx_projects": "gpx-collection"},
+    )
+    app = RadarPdNovaApp.__new__(RadarPdNovaApp)
+    state = _State(
+        selected_run_uid=record.uid,
+        selected_checkpoint=str(checkpoint),
+        checkpoint_rows=[
+            {
+                "path": str(checkpoint),
+                "galaxy_element_name": "Accepted_model_after_pass_2.gpx",
+            }
+        ],
+        gsasii_launch_url="",
+        gsasii_session_status="",
+        notice="",
+        error_message="",
+    )
+    app.server = SimpleNamespace(state=state)
+    app.records = {record.uid: record}
+    app.service = SimpleNamespace(
+        collection_elements=lambda collection_id: [
+            {"id": "accepted-gpx", "name": "Accepted_model_after_pass_2.gpx"}
+        ]
+    )
+    submitted: list[dict[str, object]] = []
+
+    async def _submit(**kwargs):
+        submitted.append(kwargs)
+        return UtilityActionRecord(
+            uid="gsasii-action",
+            tool_id=str(kwargs["tool_id"]),
+            name=str(kwargs["name"]),
+            status=RunStatus.RUNNING,
+        )
+
+    app._submit_utility_action = _submit  # type: ignore[method-assign]
+    app._schedule_utility = lambda coroutine, _name: asyncio.run(coroutine)  # type: ignore[method-assign]
+
+    app.open_selected_checkpoint_in_gsasii()
+
+    assert state.gsasii_session_status == "starting"
+    assert submitted[0]["tool_id"] == GSASII_INTERACTIVE_TOOL_ID
+    assert submitted[0]["inputs"] == {
+        "project_source|source_kind": "single",
+        "project_source|gpx_project": {"dataset_id": "accepted-gpx"},
     }
 
 
