@@ -15,7 +15,8 @@ def test_container_reuses_supported_nova_supervisor_contract() -> None:
     supervisor = _read("dockerfiles/supervisord.conf")
 
     assert dockerfile.startswith(
-        "FROM savannah.ornl.gov/radar-pd/radar-pd-nova:nova-0.3.2\n"
+        "FROM savannah.ornl.gov/radar-pd/radar-pd-nova:nova-0.3.2"
+        "@sha256:657057335458b5484853494ed929470bd0817bf83a4afcb3e0320a026889d7d7\n"
     )
     assert "ENV PIXI_ENVIRONMENT_NAME=production" in dockerfile
     assert "PYTHONPATH=/src/src" in dockerfile
@@ -82,6 +83,17 @@ def test_package_and_galaxy_tool_versions_match() -> None:
     )
 
     assert version_match.group(1) == tool_version
+
+
+def test_release_workflow_builds_and_smoke_tests_versioned_image() -> None:
+    workflow = _read("../.github/workflows/publish-nova-to-ghcr.yaml")
+
+    assert "context: nova" in workflow
+    assert "file: nova/dockerfiles/Dockerfile" in workflow
+    assert "nova-${{ env.NOVA_VERSION }}" in workflow
+    assert "nova-${{ github.sha }}" in workflow
+    assert 'version("radar-pd-nova")' in workflow
+    assert "nginx" in workflow
 
 
 def test_sns_resolver_uses_existing_lightweight_ndip_command() -> None:

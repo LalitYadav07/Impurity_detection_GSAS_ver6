@@ -94,10 +94,11 @@ path and proxies HTTP and WebSocket traffic to the Trame server on port `8080`.
 
 ## NDIP deployment
 
-1. Build and publish an immutable image, for example
-   `savannah.ornl.gov/radar-pd/radar-pd-nova:<git-sha>`.
-2. Replace `REPLACE_WITH_IMMUTABLE_TAG` in
-   `nova/galaxy/radar_pd_nova.xml` with that tag.
+1. Push the `birthright-container` branch and wait for the
+   **Publish NOVA image to GitHub Container Registry** workflow to pass. It
+   publishes both `nova-<version>` and immutable `nova-<git-sha>` tags.
+2. Pin `nova/galaxy/radar_pd_nova.xml` to the immutable Git SHA tag from that
+   successful workflow.
 3. Copy the XML into the `prototype` branch under
    `tools/neutrons/powder_diffraction/radar_pd_nova.xml`.
 4. Push `prototype` and launch **RADAR-PD Interactive** on `ndip-test`.
