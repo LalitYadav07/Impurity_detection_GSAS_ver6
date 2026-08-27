@@ -6,6 +6,7 @@ until xdpyinfo -display "${DISPLAY:-:1}" >/dev/null 2>&1; do
 done
 
 exec x11vnc \
+    -quiet \
     -display "${DISPLAY:-:1}" \
     -forever \
     -shared \

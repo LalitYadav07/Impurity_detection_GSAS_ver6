@@ -67,16 +67,55 @@ jobs:
             "${IMAGE_NAME}:gsasii-gui" \
             /opt/conda/bin/python -c \
             'import os; from GSASII import GSASIIscriptable as G2sc; G2sc.G2Project(newgpx="/job/input.gpx").save(); os.chmod("/job/input.gpx", 0o666)'
-          set +e
-          timeout 15 docker run --rm --user 12345:12345 \
+          container_id="$(docker run --detach --rm --user 12345:12345 \
             -e EP_PATH=/gsasii \
             -e GSASII_SOURCE_PROJECT=/job/input.gpx \
             -e GSASII_OUTPUT_PROJECT=/job/output.gpx \
+            -p 127.0.0.1:18080:8080 \
             -v "${smoke_dir}:/job" \
-            "${IMAGE_NAME}:gsasii-gui"
-          smoke_status=$?
-          set -e
-          test "${smoke_status}" -eq 124
+            "${IMAGE_NAME}:gsasii-gui")"
+          cleanup() {
+            docker stop --time 10 "${container_id}" >/dev/null 2>&1 || true
+            rm -rf "${smoke_dir}"
+          }
+          trap cleanup EXIT
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:18080/gsasii/healthz >/dev/null; then
+              break
+            fi
+            if [[ "${attempt}" -eq 60 ]]; then
+              docker logs "${container_id}"
+              exit 1
+            fi
+            sleep 0.25
+          done
+          curl --fail --silent --show-error --output /tmp/gsasii-vnc.html \
+            http://127.0.0.1:18080/gsasii/vnc.html
+          grep --quiet 'noVNC' /tmp/gsasii-vnc.html
+          curl --silent --show-error --dump-header /tmp/gsasii-redirect.headers --output /dev/null \
+            http://127.0.0.1:18080/gsasii
+          grep --quiet 'path=gsasii/websockify' /tmp/gsasii-redirect.headers
+          python - <<'PY'
+          import socket
+
+          request = (
+              "GET /gsasii/websockify HTTP/1.1\r\n"
+              "Host: 127.0.0.1:18080\r\n"
+              "Upgrade: websocket\r\n"
+              "Connection: Upgrade\r\n"
+              "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+              "Sec-WebSocket-Version: 13\r\n"
+              "Sec-WebSocket-Protocol: binary\r\n\r\n"
+          )
+          with socket.create_connection(("127.0.0.1", 18080), timeout=5) as connection:
+              connection.sendall(request.encode("ascii"))
+              response = connection.recv(4096)
+          status = response.split(b"\r\n", 1)[0]
+          if b" 101 " not in status:
+              raise SystemExit(f"WebSocket upgrade failed: {status!r}")
+          PY
+          docker stop --time 10 "${container_id}"
+          container_id=""
           test -s "${smoke_dir}/output.gpx"
 
       - name: Push Docker schema v2 manifests

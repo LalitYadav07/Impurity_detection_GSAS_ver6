@@ -19,11 +19,13 @@ if [[ ! -w "${session_dir}" ]]; then
     session_dir="${TMPDIR:-/tmp}/gsasii-session-$(id -u)"
     mkdir -p "${session_dir}"
 fi
+mkdir -p "$(dirname "${output_project}")"
 install -m 0644 "${source_project}" "${session_dir}/radar_pd_project.gpx"
-install -m 0666 "${session_dir}/radar_pd_project.gpx" "${output_project}"
+install -m 0644 "${session_dir}/radar_pd_project.gpx" "${output_project}"
 
 export GSASII_PROJECT_PATH="${session_dir}/radar_pd_project.gpx"
 export GSASII_OUTPUT_PROJECT="${output_project}"
+export GSASII_SESSION_DIR="${session_dir}"
 export HOME="${session_dir}/home"
 export DISPLAY=:1
 export XDG_RUNTIME_DIR="${session_dir}/runtime"
@@ -47,6 +49,7 @@ export USER="$(id -un)"
 export LOGNAME="${USER}"
 
 echo "Starting browser-hosted GSAS-II"
+echo "RADAR-PD GSAS-II integration: ${GSASII_GUI_VERSION:-unknown}"
 echo "GSAS-II source revision: ${GSASII_REF:-unknown}"
 echo "Input GPX: ${source_project}"
 echo "Writable session GPX: ${GSASII_PROJECT_PATH}"

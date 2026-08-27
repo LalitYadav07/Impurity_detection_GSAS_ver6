@@ -28,13 +28,18 @@ def test_desktop_gateway_obeys_ndip_path_prefix() -> None:
     nginx = _read("nginx.conf.template")
     launcher = _read("scripts/run_nginx.sh")
 
-    assert "location ${EP_PATH}/websockify" in nginx
+    assert "location = ${EP_PATH}/websockify" in nginx
     assert "path=${EP_WS_PATH}/websockify" in nginx
     assert "path=${EP_PATH}/websockify" not in nginx
     assert "alias /usr/share/novnc/" in nginx
+    assert "location = ${EP_PATH}/healthz" in nginx
+    assert "location = ${EP_PATH}/websockify" in nginx
+    assert "proxy_buffering off" in nginx
+    assert "RADAR-PD GSAS-II ${GUI_VERSION}" in nginx
     assert 'export EP_WS_PATH="${EP_PATH#/}"' in launcher
-    assert "envsubst '${EP_PATH} ${EP_WS_PATH}'" in launcher
+    assert "envsubst '${EP_PATH} ${EP_WS_PATH} ${GUI_VERSION}'" in launcher
     assert "^(/[A-Za-z0-9._~-]+)+$" in launcher
+    assert "nginx -e /dev/stderr" in launcher
 
 
 def test_gpx_is_edited_as_a_copy_and_continuously_preserved() -> None:
@@ -51,10 +56,12 @@ def test_gpx_is_edited_as_a_copy_and_continuously_preserved() -> None:
     assert 'export USER="$(id -un)"' in start
     assert '"${session_dir}/radar_pd_project.gpx"' in start
     assert 'source_digest="$(sha256sum "${source_project}"' in sync
-    assert 'cat "${snapshot}" > "${output_project}"' in sync
+    assert 'mv -f "${output_copy}" "${output_project}"' in sync
     assert "sleep 0.5" in sync
+    assert "set -uo pipefail" in sync
+    assert "retrying" in sync
     assert '/opt/conda/bin/GSAS-II "${project}"' in gui
-    assert 'cat "${project}" > "${output_project}"' in gui
+    assert 'mv -f "${final_copy}" "${output_project}"' in gui
 
 
 def test_gui_processes_run_as_the_ndip_runtime_uid() -> None:
@@ -63,4 +70,16 @@ def test_gui_processes_run_as_the_ndip_runtime_uid() -> None:
 
     assert "user=gsasii" not in supervisor
     assert "GSASII_SESSION_DIR=/workspace" not in dockerfile
+    assert "chmod 1777 /tmp/.X11-unix" in dockerfile
     assert "USER gsasii" in dockerfile
+
+
+def test_release_smoke_checks_http_redirect_and_websocket_upgrade() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "publish-gsasii-gui-to-ghcr.yaml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "/gsasii/healthz" in workflow
+    assert "path=gsasii/websockify" in workflow
+    assert "Upgrade: websocket" in workflow
+    assert 'b" 101 "' in workflow

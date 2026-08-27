@@ -12,6 +12,11 @@ if [[ -z "${ep_path}" || ! "${ep_path}" =~ ^(/[A-Za-z0-9._~-]+)+$ ]]; then
 fi
 export EP_PATH="${ep_path}"
 export EP_WS_PATH="${EP_PATH#/}"
+gui_version="${GSASII_GUI_VERSION:-unknown}"
+if [[ ! "${gui_version}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+    gui_version="unknown"
+fi
+export GUI_VERSION="${gui_version}"
 
 runtime_dir=/tmp/gsasii-nginx
 mkdir -p \
@@ -21,8 +26,8 @@ mkdir -p \
     "${runtime_dir}/uwsgi" \
     "${runtime_dir}/scgi"
 
-envsubst '${EP_PATH} ${EP_WS_PATH}' \
+envsubst '${EP_PATH} ${EP_WS_PATH} ${GUI_VERSION}' \
     < /etc/nginx/gsasii.conf.template \
     > /tmp/gsasii-nginx.conf
 
-exec nginx -c /tmp/gsasii-nginx.conf -g 'daemon off;'
+exec nginx -e /dev/stderr -c /tmp/gsasii-nginx.conf -g 'daemon off;'

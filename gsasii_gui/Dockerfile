@@ -3,11 +3,13 @@ FROM mambaorg/micromamba:2.9.0-ubuntu22.04
 ARG GSASII_REF=dcd09eb2a4392b94d22cda3c69021137e6b14620
 ARG GSASII_UID=1000
 ARG GSASII_GID=1000
+ARG RADAR_PD_GSASII_GUI_VERSION=0.1.9
 
 LABEL org.opencontainers.image.title="RADAR-PD GSAS-II Interactive" \
       org.opencontainers.image.description="Browser-hosted native GSAS-II desktop for RADAR-PD GPX handoff" \
       org.opencontainers.image.source="https://github.com/LalitYadav07/Impurity_detection_GSAS_ver6" \
-      org.opencontainers.image.gsasii.revision="${GSASII_REF}"
+      org.opencontainers.image.gsasii.revision="${GSASII_REF}" \
+      org.opencontainers.image.version="${RADAR_PD_GSASII_GUI_VERSION}"
 
 USER root
 
@@ -19,7 +21,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
     USER=gsasii \
     LOGNAME=gsasii \
     XDG_RUNTIME_DIR=/tmp/runtime-gsasii \
-    GSASII_REF=${GSASII_REF}
+    GSASII_REF=${GSASII_REF} \
+    GSASII_GUI_VERSION=${RADAR_PD_GSASII_GUI_VERSION}
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -67,7 +70,8 @@ RUN /opt/conda/bin/python -m pip install \
 
 RUN groupadd --gid "${GSASII_GID}" gsasii \
     && useradd --uid "${GSASII_UID}" --gid gsasii --create-home --shell /bin/bash gsasii \
-    && mkdir -p /workspace /tmp/runtime-gsasii \
+    && mkdir -p /workspace /tmp/runtime-gsasii /tmp/.X11-unix \
+    && chmod 1777 /tmp/.X11-unix \
     && chown -R gsasii:gsasii /workspace /tmp/runtime-gsasii /home/gsasii
 
 COPY gsasii_gui/nginx.conf.template /etc/nginx/gsasii.conf.template

@@ -17,8 +17,16 @@ status=$?
 set -e
 
 if [[ -s "${project}" ]]; then
-    cat "${project}" > "${output_project}"
-    chmod a+r "${output_project}"
+    final_copy="${output_project}.final.$$"
+    if cp "${project}" "${final_copy}" \
+        && mv -f "${final_copy}" "${output_project}" \
+        && chmod a+r "${output_project}"; then
+        echo "Saved final GPX project to the Galaxy output"
+    else
+        rm -f "${final_copy}"
+        echo "Could not save the final GPX project" >&2
+        [[ "${status}" -ne 0 ]] || status=74
+    fi
 fi
 
 exit "${status}"
