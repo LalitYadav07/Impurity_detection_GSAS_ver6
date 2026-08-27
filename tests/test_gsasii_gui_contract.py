@@ -23,6 +23,7 @@ def test_gui_image_pins_gsasii_and_provides_native_desktop_stack() -> None:
         assert package in dockerfile
     assert "libnss-wrapper" in dockerfile
     assert "x11-xserver-utils" in dockerfile
+    assert "ln -sf /dev/stderr /var/log/nginx/error.log" in dockerfile
     assert "EXPOSE 8080" in dockerfile
 
 
@@ -43,7 +44,7 @@ def test_desktop_gateway_obeys_ndip_path_prefix() -> None:
     assert "^(/[A-Za-z0-9._~-]+)+$" in launcher
     assert "wait_for_port 127.0.0.1 5900 x11vnc" in launcher
     assert "wait_for_port 127.0.0.1 6080 websockify" in launcher
-    assert "exec nginx -e /dev/stderr -c /tmp/gsasii-nginx.conf" in launcher
+    assert "exec nginx -c /tmp/gsasii-nginx.conf" in launcher
     assert "error_log /dev/stderr warn" in nginx
 
 
@@ -105,3 +106,6 @@ def test_release_smoke_checks_http_redirect_and_websocket_upgrade() -> None:
     assert "docker logs" in workflow
     assert "No GSAS-II importer load errors" in workflow
     assert "::error title=GSAS-II importer load errors::" in workflow
+    assert "Smoke test GSAS-II Python runtime" in workflow
+    assert "Smoke test GSAS-II importer registry" in workflow
+    assert "Smoke test the noVNC gateway" in workflow

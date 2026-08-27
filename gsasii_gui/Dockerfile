@@ -49,6 +49,7 @@ RUN apt-get update \
         x11-xserver-utils \
         x11vnc \
         xvfb \
+    && ln -sf /dev/stderr /var/log/nginx/error.log \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --chown=$MAMBA_USER:$MAMBA_USER gsasii_gui/environment.yml /tmp/gsasii-environment.yml

@@ -53,11 +53,15 @@ jobs:
           cache-from: type=registry,ref=${{ env.IMAGE_NAME }}:gsasii-gui-buildcache
           cache-to: type=registry,ref=${{ env.IMAGE_NAME }}:gsasii-gui-buildcache,mode=max
 
-      - name: Smoke test GSAS-II and the noVNC gateway
+      - name: Smoke test GSAS-II Python runtime
         shell: bash
         run: |
           docker run --rm "${IMAGE_NAME}:gsasii-gui" \
             /opt/conda/bin/python -c "import GSASII; import wx; print(wx.version())"
+
+      - name: Smoke test GSAS-II importer registry
+        shell: bash
+        run: |
           docker run --rm -i "${IMAGE_NAME}:gsasii-gui" \
             /opt/conda/bin/python - <<'PY'
           from GSASII import GSASIIfiles as G2fil
@@ -71,6 +75,10 @@ jobs:
               raise SystemExit(1)
           print("No GSAS-II importer load errors")
           PY
+
+      - name: Smoke test the noVNC gateway
+        shell: bash
+        run: |
           docker run --rm "${IMAGE_NAME}:gsasii-gui" \
             bash -n /opt/gsasii-gui/start.sh
           smoke_dir="$(mktemp -d)"
