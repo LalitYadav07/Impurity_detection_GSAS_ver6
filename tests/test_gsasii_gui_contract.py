@@ -39,6 +39,8 @@ def test_desktop_gateway_obeys_ndip_path_prefix() -> None:
     assert 'export EP_WS_PATH="${EP_PATH#/}"' in launcher
     assert "envsubst '${EP_PATH} ${EP_WS_PATH} ${GUI_VERSION}'" in launcher
     assert "^(/[A-Za-z0-9._~-]+)+$" in launcher
+    assert "wait_for_port 127.0.0.1 5900 x11vnc" in launcher
+    assert "wait_for_port 127.0.0.1 6080 websockify" in launcher
     assert "exec nginx -c /tmp/gsasii-nginx.conf" in launcher
     assert "error_log /dev/stderr warn" in nginx
 
