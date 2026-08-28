@@ -325,6 +325,36 @@ def test_normalized_outputs_publish_handoff_projects_and_archive_all_checkpoints
     assert any(name.startswith("ndip/plots/") for name in names)
 
 
+def test_full_main_only_project_is_published_as_the_main_phase_anchor(tmp_path: Path) -> None:
+    run = tmp_path / "run"
+    projects = run / "Technical" / "GSAS_Projects"
+    projects.mkdir(parents=True)
+    (projects / "IPTS-37876_PG3_63799_project.gpx").write_bytes(b"GPX")
+    (projects / "IPTS-37876_PG3_63799_stage0.gpx").write_bytes(b"STAGE-0")
+
+    result = collect_outputs(run, tmp_path / "portal", mode="full", run_name="main-only")
+
+    assert [item["collection_name"] for item in result["gpx_projects"]] == [
+        "02_Main_phase_anchor.gpx"
+    ]
+    assert result["gpx_projects"][0]["stage"] == "main_phase_anchor"
+    assert result["gpx_projects"][0]["status"] == "accepted"
+
+
+def test_full_polished_main_anchor_supersedes_the_fallback_project(tmp_path: Path) -> None:
+    run = tmp_path / "run"
+    projects = run / "Technical" / "GSAS_Projects"
+    projects.mkdir(parents=True)
+    (projects / "demo_project.gpx").write_bytes(b"FALLBACK")
+    (projects / "seq_final_main_polished.gpx").write_bytes(b"POLISHED")
+
+    result = collect_outputs(run, tmp_path / "portal", mode="full", run_name="polished-main")
+
+    assert len(result["gpx_projects"]) == 1
+    assert result["gpx_projects"][0]["collection_name"] == "02_Main_phase_anchor.gpx"
+    assert result["gpx_projects"][0]["source_path"].endswith("seq_final_main_polished.gpx")
+
+
 def test_published_gpx_uses_unique_scientific_phase_names(tmp_path: Path) -> None:
     run = tmp_path / "run"
     checkpoints = run / "checkpoints"

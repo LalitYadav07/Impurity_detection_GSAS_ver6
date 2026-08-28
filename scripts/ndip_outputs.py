@@ -91,10 +91,15 @@ def _publish_gpx(path: Path, run_dir: Path) -> bool:
     if "rapid_results" in relative:
         return any(token in name for token in ("stable_", "accepted", "final"))
     if "gsas_projects" in relative:
+        fallback_main_project = name.endswith("_project.gpx") and not any(
+            "seq_final_main_polished" in candidate.name.lower()
+            for candidate in path.parent.glob("*.gpx")
+        )
         return (
             "pattern_project" in name
             or "seq_final_main_polished" in name
             or ("seq_pass" in name and "kept_polished" in name)
+            or fallback_main_project
         )
     return any(token in name for token in ("accepted", "final", "kept", "polished"))
 
@@ -133,6 +138,8 @@ def _published_name(path: Path, run_dir: Path, collection: str) -> str:
         if "pattern_project" in relative:
             stem = "01_Imported_pattern_and_main_phase"
         elif "seq_final_main_polished" in relative:
+            stem = "02_Main_phase_anchor"
+        elif path.name.lower().endswith("_project.gpx"):
             stem = "02_Main_phase_anchor"
         else:
             pass_match = re.search(r"seq_pass(\d+)_kept_polished", relative)
@@ -289,6 +296,8 @@ def _iter_artifacts(run_dir: Path) -> Iterable[Path]:
 
 def _gpx_stage(relative: str) -> str:
     lowered = relative.lower()
+    if "gsas_projects" in lowered and lowered.endswith("_project.gpx"):
+        return "main_phase_anchor"
     if "main" in lowered and ("anchor" in lowered or "phase" in lowered):
         return "main_phase_anchor"
     if "target" in lowered:
@@ -318,6 +327,8 @@ def build_gpx_index(
             status = "rollback"
         elif any(token in lowered for token in ("failed", "error", "bad")):
             status = "failed"
+        elif "gsas_projects" in lowered and lowered.endswith("_project.gpx"):
+            status = "accepted"
         elif any(token in lowered for token in ("accepted", "final", "polish")):
             status = "accepted"
         else:

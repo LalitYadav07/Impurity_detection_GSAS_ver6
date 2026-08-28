@@ -1,0 +1,11 @@
+ARG RADAR_PD_BASE_IMAGE=savannah.ornl.gov/radar-pd/radar-pd:ndip-space-groups-20260825
+FROM ${RADAR_PD_BASE_IMAGE}
+
+USER root
+
+# Preserve the validated scientific environment and catalog while correcting
+# publication of a successful Full run that retains only its main phase.
+COPY --chown=radar:radar scripts/ndip_outputs.py /opt/radar-pd/scripts/ndip_outputs.py
+RUN python -m py_compile /opt/radar-pd/scripts/ndip_outputs.py
+
+USER radar
