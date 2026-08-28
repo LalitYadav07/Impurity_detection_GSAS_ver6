@@ -95,6 +95,16 @@ def test_inspect_cif_upload_does_not_repeat_equivalent_formula_and_name() -> Non
     assert result["display_name"] == "Fe"
 
 
+def test_inspect_cif_upload_does_not_use_numeric_phase_id_as_name() -> None:
+    result = inspect_cif_upload(
+        VALID_CIF + b"_pd_phase_id 1\n",
+        "iron_reference.cif",
+    )
+
+    assert result["phase_name"] == ""
+    assert result["display_name"] == "Fe"
+
+
 @pytest.mark.parametrize(
     ("contents", "name", "message"),
     [

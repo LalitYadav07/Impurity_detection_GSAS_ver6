@@ -87,6 +87,10 @@ class DBPackBuilderTests(unittest.TestCase):
             infer_phase_display_name("Fe2VAl_L21.cif", "data_unknown\n", ""),
             "Fe2VAl L21",
         )
+        self.assertEqual(
+            infer_phase_display_name("iron.cif", "_pd_phase_id 1\n", "Fe"),
+            "Fe",
+        )
 
     def test_normalize_catalog_df_preserves_uint64_element_masks(self):
         import pandas as pd

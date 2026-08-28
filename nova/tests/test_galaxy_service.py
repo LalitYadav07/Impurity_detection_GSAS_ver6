@@ -1250,6 +1250,23 @@ def test_recovered_inputs_restore_persisted_ipts_export_selection(tmp_path: Path
     assert inputs.publish_subfolder == "radar-pd-results"
 
 
+def test_history_dataset_item_formats_exact_dataset_metadata() -> None:
+    item = GalaxyService._history_dataset_item(
+        {
+            "id": "d752ff5cff7bdcbb",
+            "name": "RADAR-PD diffraction data | PG3_63798.gsa",
+            "file_ext": "txt",
+            "state": "ok",
+            "update_time": "2026-08-28T14:20:45.123456",
+        }
+    )
+
+    assert item is not None
+    assert item["id"] == "d752ff5cff7bdcbb"
+    assert item["display_name"] == "PG3_63798.gsa · 2026-08-28 14:20 · d752ff5c"
+    assert item["role"] == "diffraction"
+
+
 def test_refresh_preserves_click_time_ipts_export_selection(tmp_path: Path) -> None:
     service = GalaxyService("https://galaxy.example", "key", "history", output_root=tmp_path)
     service._job_details = lambda uid: {  # type: ignore[method-assign]

@@ -148,7 +148,6 @@ def _sanitize_token(text: str) -> str:
 
 _CIF_PHASE_NAME_TAGS = (
     "_pd_phase_name",
-    "_pd_phase_id",
     "_chemical_name_common",
     "_chemical_name_mineral",
     "_chemical_name_systematic",

@@ -113,7 +113,6 @@ def inspect_cif_upload(contents: bytes, original_name: Any) -> dict[str, Any]:
     formula = _tag_value("_chemical_formula_sum", "_chemical_formula_structural")
     declared_name = _tag_value(
         "_pd_phase_name",
-        "_pd_phase_id",
         "_chemical_name_common",
         "_chemical_name_mineral",
         "_chemical_name_systematic",

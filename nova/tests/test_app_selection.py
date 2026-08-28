@@ -319,6 +319,107 @@ def test_history_refresh_keeps_reusable_configurations_visible_after_large_uploa
     assert state.flush_count == 1
 
 
+def test_use_configuration_restores_durable_galaxy_inputs_and_full_mode() -> None:
+    inputs = InputSelection(
+        source="upload",
+        instrument_source="upload",
+        data_path="/transient/pattern.gsa",
+        data_dataset_id="data-id",
+        instrument_path="/transient/profile.instprm",
+        instrument_dataset_id="instrument-id",
+        main_cif_path="/transient/main.cif",
+        main_cif_dataset_id="main-id",
+        database_archive_path="/transient/library.zip",
+        database_dataset_id="library-id",
+    )
+    record = RunRecord(
+        uid="reusable-full-run",
+        name="FeVAl full run",
+        mode=AnalysisMode.FULL,
+        history_id="history-1",
+        status=RunStatus.OK,
+        config=AnalysisConfig(mode=AnalysisMode.FULL, sample_elements=["Fe", "V", "Al"]),
+        inputs=inputs,
+    )
+    app, state = _app_with_record(record)
+    state.selected_run_uid = record.uid
+    state.input_source = "upload"
+    state.instrument_source = "upload"
+    state.main_cif_source = "upload"
+    state.database_source = "archive"
+    state.library_archive_source = "computer"
+    state.data_path = "/stale/data.gsa"
+    state.instrument_path = "/stale/profile.instprm"
+    state.main_cif_path = "/stale/main.cif"
+    state.database_archive_path = "/stale/library.zip"
+    state.history_datasets = []
+    state.history_show_all = False
+    state.history_data_id = ""
+    state.history_instrument_id = ""
+    state.history_main_cif_id = ""
+    state.history_database_id = ""
+    state.history_configuration_id = ""
+    state.powgen_configuration_dataset_id = ""
+    state.powgen_database_dataset_id = ""
+    state.powgen_main_cif_dataset_id = ""
+    state.library_builder_cif_ids = []
+
+    items = {
+        "data-id": {
+            "id": "data-id",
+            "name": "RADAR-PD diffraction data | pattern.gsa",
+            "display_name": "pattern.gsa · data-id",
+            "role": "diffraction",
+            "generated": True,
+        },
+        "instrument-id": {
+            "id": "instrument-id",
+            "name": "RADAR-PD instrument profile | profile.instprm",
+            "display_name": "profile.instprm · instrument-id",
+            "role": "instrument",
+            "generated": True,
+        },
+        "main-id": {
+            "id": "main-id",
+            "name": "RADAR-PD main phase | main.cif",
+            "display_name": "main.cif · main-id",
+            "role": "cif",
+            "generated": True,
+        },
+        "library-id": {
+            "id": "library-id",
+            "name": "RADAR-PD portable custom library | FeVAl.zip",
+            "display_name": "FeVAl candidate library · library-id",
+            "role": "candidate_library",
+            "generated": False,
+        },
+    }
+    app.service = SimpleNamespace(history_dataset_item=lambda dataset_id: items[dataset_id])
+
+    app.use_selected_configuration()
+
+    assert state.analysis_mode == "full"
+    assert state.input_source == "galaxy"
+    assert state.instrument_source == "galaxy"
+    assert state.main_cif_source == "galaxy"
+    assert state.database_source == "archive"
+    assert state.library_archive_source == "galaxy"
+    assert state.data_path == ""
+    assert state.instrument_path == ""
+    assert state.main_cif_path == ""
+    assert state.database_archive_path == ""
+    assert state.history_data_id == "data-id"
+    assert state.history_instrument_id == "instrument-id"
+    assert state.history_main_cif_id == "main-id"
+    assert state.history_database_id == "library-id"
+    assert state.history_data_datasets[0]["display_name"] == "pattern.gsa · data-id"
+    assert state.history_instrument_datasets[0]["display_name"] == "profile.instprm · instrument-id"
+    assert state.history_cif_datasets[0]["display_name"] == "main.cif · main-id"
+    assert state.history_archive_datasets[0]["display_name"] == "FeVAl candidate library · library-id"
+    assert "durable Galaxy inputs" in state.notice
+    assert state.active_page == "setup"
+
+
 def test_xray_mode_clears_neutron_only_setup_and_restores_options() -> None:
     app = RadarPdNovaApp.__new__(RadarPdNovaApp)
     state = _State(
@@ -329,6 +430,7 @@ def test_xray_mode_clears_neutron_only_setup_and_restores_options() -> None:
         main_cif_source="ipts",
         use_facility_workspace=True,
         magnetic_precheck=True,
+        use_builtin_cuka=True,
         busy=False,
         notice="",
     )
@@ -351,6 +453,55 @@ def test_xray_mode_clears_neutron_only_setup_and_restores_options() -> None:
 
     assert [item["value"] for item in state.instrument_mode_options] == ["auto", "cw", "tof"]
     assert "ipts_browser" in [item["value"] for item in state.source_options]
+    assert state.use_builtin_cuka is False
+
+
+def test_applying_saved_configuration_preserves_compatible_inputs() -> None:
+    app = RadarPdNovaApp.__new__(RadarPdNovaApp)
+    state = _State(
+        radiation="neutron",
+        analysis_mode="rapid",
+        instrument_mode="tof",
+        input_source="galaxy",
+        instrument_source="galaxy",
+        main_cif_source="galaxy",
+        database_source="archive",
+        library_archive_source="galaxy",
+        history_data_id="data-id",
+        history_instrument_id="instrument-id",
+        history_main_cif_id="main-id",
+        history_database_id="library-id",
+        use_facility_workspace=False,
+        magnetic_precheck=False,
+        busy=False,
+        notice="",
+        run_name="old name",
+    )
+    app.server = SimpleNamespace(state=state)
+    config = AnalysisConfig(
+        mode=AnalysisMode.FULL,
+        radiation="xray",
+        instrument_mode="cw",
+        sample_elements=["Fe", "O"],
+    )
+
+    app._apply_configuration(config)
+
+    assert state.analysis_mode == "full"
+    assert state.radiation == "xray"
+    assert state.instrument_mode == "cw"
+    assert [item["value"] for item in state.instrument_mode_options] == ["auto", "cw"]
+    assert [item["value"] for item in state.source_options] == ["upload", "galaxy"]
+    assert state.input_source == "galaxy"
+    assert state.instrument_source == "galaxy"
+    assert state.main_cif_source == "galaxy"
+    assert state.database_source == "archive"
+    assert state.library_archive_source == "galaxy"
+    assert state.history_data_id == "data-id"
+    assert state.history_instrument_id == "instrument-id"
+    assert state.history_main_cif_id == "main-id"
+    assert state.history_database_id == "library-id"
+    assert state.run_name == ""
 
 
 def test_powgen_configuration_preview_shows_summary_and_exact_yaml() -> None:

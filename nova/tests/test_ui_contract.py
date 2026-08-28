@@ -128,6 +128,8 @@ def test_workbench_exposes_atomic_pending_and_companion_actions() -> None:
     assert "Reload results from Galaxy" in template
     assert "Resolve and verify SNS input" in template
     assert "Build and use this library" in template
+    assert "full_profile + ' search profile'" in template
+    assert "rapid_gsas_validation_limit + ' final refinements'" in template
 
 
 def test_powgen_monitor_requires_preflight_and_exposes_safe_backfill_controls() -> None:

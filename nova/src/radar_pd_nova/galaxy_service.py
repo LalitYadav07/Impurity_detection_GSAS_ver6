@@ -508,6 +508,36 @@ class GalaxyService:
             return "diffraction", generated
         return "other", True
 
+    @classmethod
+    def _history_dataset_item(cls, row: dict[str, Any]) -> dict[str, Any] | None:
+        if row.get("history_content_type", "dataset") != "dataset" or row.get("deleted"):
+            return None
+        if str(row.get("state") or "ok") not in {"ok", "deferred"}:
+            return None
+        dataset_id = str(row.get("id") or "").strip()
+        if not dataset_id:
+            return None
+        role, generated = cls._dataset_scientific_role(row)
+        dataset_name = str(row.get("name") or row.get("hid") or "dataset")
+        original_name = dataset_name.rsplit("|", 1)[-1].strip()
+        update_time = str(row.get("update_time") or "")[:16].replace("T", " ")
+        display_suffix = " · ".join(value for value in (update_time, dataset_id[:8]) if value)
+        return {
+            "id": dataset_id,
+            "name": dataset_name,
+            "display_name": f"{original_name} · {display_suffix}" if display_suffix else original_name,
+            "extension": str(row.get("extension") or row.get("file_ext") or "data"),
+            "state": str(row.get("state") or ""),
+            "update_time": str(row.get("update_time") or ""),
+            "role": role,
+            "generated": generated,
+        }
+
+    def history_dataset_item(self, dataset_id: str) -> dict[str, Any] | None:
+        """Return one durable History dataset in the same shape as search results."""
+
+        return self._history_dataset_item(self._dataset_metadata(str(dataset_id)))
+
     def search_history_datasets(
         self,
         *,
@@ -542,30 +572,10 @@ class GalaxyService:
         for row in page:
             if not isinstance(row, dict):
                 continue
-            if row.get("history_content_type", "dataset") != "dataset" or row.get("deleted"):
+            item = self._history_dataset_item(row)
+            if item is None or (item["generated"] and not include_generated):
                 continue
-            if str(row.get("state") or "ok") not in {"ok", "deferred"}:
-                continue
-            role, generated = self._dataset_scientific_role(row)
-            if generated and not include_generated:
-                continue
-            dataset_id = str(row.get("id"))
-            dataset_name = str(row.get("name") or row.get("hid") or "dataset")
-            original_name = dataset_name.rsplit("|", 1)[-1].strip()
-            update_time = str(row.get("update_time") or "")[:16].replace("T", " ")
-            display_suffix = " · ".join(value for value in (update_time, dataset_id[:8]) if value)
-            result.append(
-                {
-                    "id": dataset_id,
-                    "name": dataset_name,
-                    "display_name": f"{original_name} · {display_suffix}" if display_suffix else original_name,
-                    "extension": str(row.get("extension") or row.get("file_ext") or "data"),
-                    "state": str(row.get("state") or ""),
-                    "update_time": str(row.get("update_time") or ""),
-                    "role": role,
-                    "generated": generated,
-                }
-            )
+            result.append(item)
         return result
 
     def list_remote_file_sources(self) -> list[dict[str, Any]]:

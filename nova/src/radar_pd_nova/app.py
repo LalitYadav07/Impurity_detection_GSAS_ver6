@@ -2063,7 +2063,12 @@ class RadarPdNovaApp(ThemedApp):
                         f"Main phase: {{{{ ({main_phase_ready}) ? 'selected' : 'not supplied' }}}}",
                         classes="radar-review-secondary",
                     )
-                    html.Div("Server request: {{ analysis_mode.toUpperCase() }} / {{ analysis_mode === 'full' ? full_profile : 'Rapid budget' }} / {{ rapid_gsas_validation_limit }} final refinements", classes="radar-review-secondary radar-server-summary")
+                    html.Div(
+                        "{{ analysis_mode === 'full' "
+                        "? 'Server request: FULL / ' + full_profile + ' search profile' "
+                        ": 'Server request: RAPID / ' + rapid_phases_per_hypothesis + ' phases per hypothesis / ' + rapid_gsas_validation_limit + ' final refinements' }}",
+                        classes="radar-review-secondary radar-server-summary",
+                    )
                 vuetify.VAlert(
                     v_show="busy && !!selected_run_uid",
                     text=("selected_run_stage + ' — ' + selected_run_elapsed",),
@@ -3283,6 +3288,7 @@ class RadarPdNovaApp(ThemedApp):
             state.source_options = list(_GENERAL_SOURCE_OPTIONS)
             state.instrument_source_options = list(_GENERAL_INSTRUMENT_SOURCE_OPTIONS)
             state.main_cif_source_options = list(_GENERAL_MAIN_CIF_SOURCE_OPTIONS)
+            state.use_builtin_cuka = False
         state.flush()
 
     @staticmethod
@@ -4815,6 +4821,21 @@ class RadarPdNovaApp(ThemedApp):
 
     def _apply_history_page(self, datasets: list[dict[str, Any]], *, append: bool) -> None:
         state = self.server.state
+        selected_ids = {
+            str(identifier)
+            for identifier in (
+                state.history_data_id,
+                state.history_instrument_id,
+                state.history_main_cif_id,
+                state.history_database_id,
+                state.history_configuration_id,
+                getattr(state, "powgen_configuration_dataset_id", ""),
+                getattr(state, "powgen_database_dataset_id", ""),
+                getattr(state, "powgen_main_cif_dataset_id", ""),
+                *(state.library_builder_cif_ids or []),
+            )
+            if identifier
+        }
         visible = [
             item
             for item in datasets
@@ -4823,27 +4844,13 @@ class RadarPdNovaApp(ThemedApp):
                 state.history_show_all
                 or not item.get("generated")
                 or item.get("role") in {"configuration", "candidate_library"}
+                or str(item.get("id") or "") in selected_ids
             )
         ]
         previous = list(state.history_datasets)
         if append:
             combined = previous
         else:
-            selected_ids = {
-                str(identifier)
-                for identifier in (
-                    state.history_data_id,
-                    state.history_instrument_id,
-                    state.history_main_cif_id,
-                    state.history_database_id,
-                    state.history_configuration_id,
-                    getattr(state, "powgen_configuration_dataset_id", ""),
-                    getattr(state, "powgen_database_dataset_id", ""),
-                    getattr(state, "powgen_main_cif_dataset_id", ""),
-                    *(state.library_builder_cif_ids or []),
-                )
-                if identifier
-            }
             # Retain selected records while the user searches for a sibling
             # input. Otherwise Vuetify can only render the opaque Galaxy ID.
             combined = [item for item in previous if str(item.get("id")) in selected_ids]
@@ -4863,6 +4870,35 @@ class RadarPdNovaApp(ThemedApp):
                 cache[identifier] = label
         self._dataset_label_cache = cache
         state.history_has_more = len(datasets) == 100
+
+    def _restore_selected_history_labels(self) -> None:
+        """Resolve exact reused inputs even when generated copies are hidden."""
+
+        state = self.server.state
+        selected_ids = [
+            str(identifier)
+            for identifier in (
+                state.history_data_id,
+                state.history_instrument_id,
+                state.history_main_cif_id,
+                state.history_database_id,
+            )
+            if identifier
+        ]
+        known_ids = {str(item.get("id") or "") for item in (state.history_datasets or [])}
+        restored: list[dict[str, Any]] = []
+        for dataset_id in selected_ids:
+            if dataset_id in known_ids:
+                continue
+            try:
+                item = self.service.history_dataset_item(dataset_id)
+            except Exception:
+                item = None
+            if item is not None:
+                restored.append(item)
+                known_ids.add(dataset_id)
+        if restored:
+            self._apply_history_page(restored, append=True)
 
     def search_history(self, query: str | None = None, **_: Any) -> None:
         state = self.server.state
@@ -5198,8 +5234,12 @@ class RadarPdNovaApp(ThemedApp):
                 state.database_source = "archive"
                 state.library_archive_source = "galaxy"
                 state.powgen_database_dataset_id = str(selection["database_dataset_id"])
+            self._restore_selected_history_labels()
             state.run_name = ""
-            state.notice = f"Loaded the scientific configuration from {record.name}. Choose or replace any inputs, then submit a new run."
+            state.notice = (
+                f"Loaded the scientific configuration and durable Galaxy inputs from {record.name}. "
+                "Review or replace any input, then submit a new run."
+            )
             state.active_page = "setup"
             state.setup_collapsed = False
             state.setup_panels = [2, 10]
@@ -5244,7 +5284,7 @@ class RadarPdNovaApp(ThemedApp):
             if field == "run_name":
                 continue
             value = getattr(config, field)
-            state_field = field
+            state_field = "analysis_mode" if field == "mode" else field
             if field in {"sample_elements", "environment_elements"}:
                 value = ", ".join(value)
             elif field == "magnetic_denominators":
@@ -5257,22 +5297,31 @@ class RadarPdNovaApp(ThemedApp):
                 state.fit_end = value[1] if value else None
                 continue
             setattr(state, state_field, value.value if hasattr(value, "value") else value)
+        self._radiation_changed(config.radiation.value)
+        if selection is None:
+            # A reusable configuration contains scientific settings, not data
+            # provenance. Keep all compatible input choices independent.
+            state.run_name = ""
+            return
         selection = selection or {}
         state.main_cif_source = "none"
         state.database_source = "builtin"
         state.library_archive_source = "computer"
         state.use_builtin_cuka = bool(selection.get("use_builtin_cuka", False)) if config.radiation.value == "xray" else False
         raw_source = selection.get("source") or state.input_source
-        state.input_source = raw_source.value if hasattr(raw_source, "value") else str(raw_source)
+        if selection.get("data_dataset_id"):
+            state.input_source = InputSource.GALAXY.value
+        else:
+            state.input_source = raw_source.value if hasattr(raw_source, "value") else str(raw_source)
         raw_instrument_source = selection.get("instrument_source")
         if state.use_builtin_cuka:
             state.instrument_source = "upload"
+        elif selection.get("instrument_dataset_id"):
+            state.instrument_source = "galaxy"
         elif raw_instrument_source:
             state.instrument_source = (
                 raw_instrument_source.value if hasattr(raw_instrument_source, "value") else str(raw_instrument_source)
             )
-        elif selection.get("instrument_dataset_id"):
-            state.instrument_source = "galaxy"
         elif selection.get("instrument_relative_path"):
             state.instrument_source = "ipts"
         else:
@@ -5343,6 +5392,11 @@ class RadarPdNovaApp(ThemedApp):
             if state.instrument_source == "galaxy_remote"
             else ""
         )
+        state.main_cif_path = ""
+        state.history_main_cif_id = ""
+        state.remote_main_cif_uri = ""
+        state.database_archive_path = ""
+        state.history_database_id = ""
         if selection.get("main_cif_dataset_id"):
             state.main_cif_source = "galaxy"
             state.history_main_cif_id = str(selection["main_cif_dataset_id"])
@@ -5357,7 +5411,7 @@ class RadarPdNovaApp(ThemedApp):
             state.library_archive_source = "galaxy"
             state.history_database_id = str(selection["database_dataset_id"])
             state.powgen_database_dataset_id = str(selection["database_dataset_id"])
-        if selection.get("database_archive_path"):
+        elif selection.get("database_archive_path"):
             state.database_source = "archive"
             state.library_archive_source = "computer"
             state.database_archive_path = str(selection["database_archive_path"])
