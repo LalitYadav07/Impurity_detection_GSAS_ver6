@@ -234,6 +234,20 @@ def test_discovers_and_renders_component_results(tmp_path: Path) -> None:
     assert [trace.name for trace in figure.data] == ["Measured", "Background", "Cu (SG 225)", "Total hypothesis fit", "Difference"]
 
 
+def test_discover_tables_hides_named_collection_aliases(tmp_path: Path) -> None:
+    archive_table = tmp_path / "complete_archive" / "final_phase_fractions.csv"
+    collection_table = tmp_path / "named_collection" / "summary_fractions.csv"
+    archive_table.parent.mkdir(parents=True)
+    collection_table.parent.mkdir(parents=True)
+    content = "phase,weight_percent\nFe,100\n"
+    archive_table.write_text(content, encoding="utf-8")
+    collection_table.write_text(content, encoding="utf-8")
+
+    tables = discover_tables(tmp_path)
+
+    assert [table["name"] for table in tables] == ["Final phase fractions"]
+
+
 def test_loads_companion_npz_arrays_for_gsas_plot(tmp_path: Path) -> None:
     plot_path = tmp_path / "accepted.png.plotdata.json"
     arrays_path = tmp_path / "accepted.png.plotdata.npz"
@@ -678,7 +692,7 @@ def test_phase_fraction_normalization_compacts_formula_and_space_group_not_names
     rows = phase_fraction_rows(
         {
             "phases": [
-                {"phase": "Al Fe2 V", "space_group": "F m -3 m (225)", "weight_percent": 72.6},
+                {"phase": "Al1 Fe2 V1", "space_group": "F m -3 m (225)", "weight_percent": 72.6},
                 {"phase": "alpha iron", "space_group": "I m -3 m", "weight_percent": 27.4},
                 {"phase": "Al0.5 Fe V0.5 (SG P m -3 m (221))", "weight_percent": 0.0},
             ]
@@ -1002,6 +1016,26 @@ def test_builds_full_result_and_prioritizes_latest_accepted_fit(tmp_path: Path) 
             "note": "-",
         }
     ]
+
+
+def test_full_result_hides_duplicate_named_plot_collection_aliases(tmp_path: Path) -> None:
+    archive_copy = tmp_path / "complete_archive" / "seq_pass1_accepted_model.png.plotdata.json"
+    collection_copy = tmp_path / "named_plot_collection" / "seq_pass1_accepted_model.png.plotdata.json"
+    _write_gsas_payload(archive_copy, rwp=9.5, phase="Fe")
+    _write_gsas_payload(collection_copy, rwp=9.5, phase="Fe")
+    result = {
+        "$schema": "radar-pd-result/v1",
+        "analysis_mode": "full",
+        "status": "complete",
+        "summary": {"final": {"final_rwp": 9.5}},
+        "phases": [{"formula": "Fe", "space_group": 225, "weight_percent": 100.0}],
+    }
+
+    view = build_result_view(result, tmp_path)
+
+    assert len(view.plots) == 1
+    assert Path(view.primary_plot_path) == archive_copy
+    assert view.plots[0].name == "Best refinement - Pass 1 accepted model / Rwp 9.50%"
 
 
 def test_checkpoint_prefers_galaxy_collection_alias_over_technical_copy(tmp_path: Path) -> None:

@@ -26,6 +26,7 @@ _MAX_CIF_BYTES = 20 * 1024 * 1024
 _MAX_ARCHIVE_BYTES = 500 * 1024 * 1024
 _MAX_ARCHIVE_CIFS = 5000
 _MAX_ARCHIVE_UNCOMPRESSED_BYTES = 2 * 1024 * 1024 * 1024
+_FORMULA_TOKEN = r"[A-Z][a-z]?(?:\d+(?:\.\d*)?|\.\d+)?"
 
 
 def safe_client_filename(value: Any) -> str:
@@ -51,6 +52,13 @@ def _scientific_cif_display_name(name: str, formula: str, declared_name: str) ->
     """Mirror the database builder's scientific-name fallback in upload previews."""
 
     reduced_formula = re.sub(r"\s+", "", str(formula or "").strip())
+    formula_tokens = re.findall(_FORMULA_TOKEN, reduced_formula)
+    if formula_tokens and "".join(formula_tokens) == reduced_formula:
+        reduced_formula = re.sub(
+            r"([A-Z][a-z]?)1(?:\.0+)?(?=[A-Z]|$)",
+            r"\1",
+            reduced_formula,
+        )
     phase_name = str(declared_name or "").strip()
     if reduced_formula and phase_name:
         formula_key = re.sub(r"[^a-z0-9]+", "", reduced_formula.casefold())

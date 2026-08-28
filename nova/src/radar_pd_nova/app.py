@@ -250,6 +250,7 @@ class RadarPdNovaApp(ThemedApp):
         self._initialize_state()
         self.server.state.change("run_selection")(self._run_selection_changed)
         self.server.state.change(*_SUBMISSION_FIELDS[:-2])(self._submission_form_changed)
+        self.server.state.change("workflow_mode")(self._workflow_mode_changed)
         self.server.state.change("radiation")(self._radiation_changed)
         self.server.state.change("facility_site")(self._facility_site_changed)
         self.server.state.change("facility_instrument")(self._facility_instrument_changed)
@@ -280,6 +281,7 @@ class RadarPdNovaApp(ThemedApp):
             {"title": "Run File Browser", "value": "files", "icon": "mdi-folder-outline"},
         ]
         state.run_search = ""
+        state.history_panels = []
         state.cancel_dialog = False
         state.connection_status = "Checking NDIP connection"
         state.connection_ok = False
@@ -363,6 +365,10 @@ class RadarPdNovaApp(ThemedApp):
         state.history_main_cif_id = ""
         state.history_database_id = ""
         state.history_configuration_id = ""
+        state.history_configuration_title = "No reusable configuration selected"
+        state.history_configuration_summary = []
+        state.history_configuration_yaml = ""
+        state.history_configuration_error = ""
         state.run_rows = []
         state.run_selection = []
         state.selected_run_uid = ""
@@ -1019,7 +1025,12 @@ class RadarPdNovaApp(ThemedApp):
                 vuetify.VIcon(icon=("item.icon",), size="small", classes="mr-1")
                 html.Span("{{ item.title }}")
 
-        with vuetify.VExpansionPanels(multiple=True, variant="accordion", classes="radar-history-panel mb-3"):
+        with vuetify.VExpansionPanels(
+            v_model=("history_panels",),
+            multiple=True,
+            variant="accordion",
+            classes="radar-history-panel mb-3",
+        ):
             with vuetify.VExpansionPanel(value="history"):
                 with vuetify.VExpansionPanelTitle():
                     vuetify.VIcon("mdi-history", size="small", classes="mr-2")
@@ -2162,7 +2173,37 @@ class RadarPdNovaApp(ThemedApp):
                                 density="compact",
                                 variant="outlined",
                                 classes="mt-3",
+                                no_data_text="No reusable configurations are in this Galaxy History",
+                                update_modelValue=(self._history_configuration_changed, "[$event]"),
                             )
+                            with vuetify.VExpansionPanels(
+                                v_show="!!history_configuration_id",
+                                variant="accordion",
+                                classes="radar-config-import mt-2",
+                            ):
+                                with vuetify.VExpansionPanel(title=("history_configuration_title",)):
+                                    with vuetify.VExpansionPanelText():
+                                        vuetify.VAlert(
+                                            v_show="!!history_configuration_error",
+                                            text=("history_configuration_error",),
+                                            type="warning",
+                                            variant="tonal",
+                                            density="compact",
+                                            classes="mb-2",
+                                        )
+                                        with html.Div(classes="radar-preflight-summary"):
+                                            with html.Div(
+                                                v_for="item in history_configuration_summary",
+                                                key="item.label",
+                                                classes="radar-preflight-row",
+                                            ):
+                                                html.Span("{{ item.label }}", classes="radar-preflight-label")
+                                                html.Span("{{ item.value }}", classes="radar-preflight-value")
+                                        html.Pre(
+                                            "{{ history_configuration_yaml }}",
+                                            v_show="!!history_configuration_yaml",
+                                            classes="radar-config-preview mt-2",
+                                        )
                             vuetify.VBtn(
                                 "Apply History configuration",
                                 click=self.apply_history_configuration,
@@ -2241,7 +2282,7 @@ class RadarPdNovaApp(ThemedApp):
                         key="item.value",
                         value=("item.value",),
                         size="small",
-                        click="workspace_view = item.value; $nextTick(() => setTimeout(() => document.querySelectorAll('.js-plotly-plot').forEach(el => window.Plotly && Plotly.Plots.resize(el)), 80))",
+                        click="workspace_view = item.value; $nextTick(() => window.setTimeout(() => document.querySelectorAll('.js-plotly-plot').forEach(el => window.Plotly && Plotly.Plots.resize(el)), 80))",
                     ):
                         # Plotly measures a hidden v-show panel as zero width.
                         # Resize after the selected workspace becomes visible.
@@ -2581,16 +2622,15 @@ class RadarPdNovaApp(ThemedApp):
                     disabled=("!selected_checkpoint || gsasii_session_status === 'starting'",),
                     v_if="checkpoint_rows.length > 0 && gsasii_session_status !== 'ready'",
                 )
-                vuetify.VBtn(
-                    "Open GSAS-II",
+                with html.A(
                     href=("gsasii_launch_url",),
                     target="_blank",
-                    prepend_icon="mdi-open-in-new",
-                    color="#15543c",
-                    variant="flat",
-                    size="small",
+                    rel="noopener noreferrer",
+                    classes="radar-secondary-link as-button radar-gsasii-launch",
                     v_if="gsasii_session_status === 'ready' && !!gsasii_launch_url",
-                )
+                ):
+                    vuetify.VIcon(icon="mdi-open-in-new", size="small", classes="mr-1")
+                    html.Span("Open GSAS-II")
                 vuetify.VBtn(
                     "Open Result Explorer",
                     click=self.launch_result_explorer,
@@ -2794,16 +2834,15 @@ class RadarPdNovaApp(ThemedApp):
                 classes="radar-gsasii-launch",
                 v_if="checkpoint_rows.length > 0 && gsasii_session_status !== 'ready'",
             )
-            vuetify.VBtn(
-                "Open GSAS-II",
+            with html.A(
                 href=("gsasii_launch_url",),
                 target="_blank",
-                prepend_icon="mdi-open-in-new",
-                color="#15543c",
-                variant="flat",
-                size="small",
+                rel="noopener noreferrer",
+                classes="radar-secondary-link as-button radar-gsasii-launch",
                 v_if="gsasii_session_status === 'ready' && !!gsasii_launch_url",
-            )
+            ):
+                vuetify.VIcon(icon="mdi-open-in-new", size="small", classes="mr-1")
+                html.Span("Open GSAS-II")
         vuetify.VAlert(
             v_if="gsasii_session_status === 'starting' || gsasii_session_status === 'error'",
             text=("gsasii_status_message",),
@@ -3332,6 +3371,14 @@ class RadarPdNovaApp(ThemedApp):
     def _submission_payload_expression() -> str:
         return "{" + ",".join(f"{name}:{name}" for name in _SUBMISSION_FIELDS) + "}"
 
+    def _workflow_mode_changed(self, **_: Any) -> None:
+        """Keep the setup form visible when users leave the run-history drawer."""
+
+        state = self.server.state
+        state.history_panels = []
+        state.run_search = ""
+        state.flush()
+
     def _radiation_changed(self, radiation: Any = None, **_: Any) -> None:
         """Keep single-pattern controls scientifically compatible with the source."""
 
@@ -3414,11 +3461,12 @@ class RadarPdNovaApp(ThemedApp):
             limits = f"{config.limits[0]:g} to {config.limits[1]:g} (pattern x-axis units)"
         sample = ", ".join(config.sample_elements) or "Not constrained"
         environment = ", ".join(config.environment_elements) or "None"
+        radiation = "X-ray" if config.radiation.value == "xray" else "Neutron"
         rows = [
             {"label": "Mode", "value": config.mode.value.title()},
             {
                 "label": "Measurement",
-                "value": f"{config.radiation.value.title()} / {config.instrument_mode.upper()}",
+                "value": f"{radiation} / {config.instrument_mode.upper()}",
             },
             {"label": "Sample elements", "value": sample},
             {"label": "Can / environment", "value": environment},
@@ -3504,6 +3552,41 @@ class RadarPdNovaApp(ThemedApp):
         state.powgen_preflight_message = "Check the experiment after changing its configuration."
         state.powgen_preflight_details = []
         state.flush()
+
+    def _set_history_configuration_preview(
+        self,
+        dataset_id: str,
+        config: AnalysisConfig | None = None,
+    ) -> None:
+        state = self.server.state
+        state.history_configuration_id = dataset_id
+        state.history_configuration_summary = []
+        state.history_configuration_yaml = ""
+        state.history_configuration_error = ""
+        state.history_configuration_title = "No reusable configuration selected"
+        if not dataset_id:
+            return
+        try:
+            selected = config or self.service.load_configuration_dataset(dataset_id)
+            state.history_configuration_title = f"{selected.mode.value.title()} configuration details"
+            state.history_configuration_summary = self._configuration_summary_rows(selected)
+            try:
+                contract = self.service.load_json_document(dataset_id)
+            except Exception:
+                contract = selected.portable_contract()
+                contract.pop("created_utc", None)
+            state.history_configuration_yaml = yaml.safe_dump(
+                contract,
+                sort_keys=False,
+                allow_unicode=False,
+            )
+        except Exception as exc:
+            state.history_configuration_title = "Configuration could not be read"
+            state.history_configuration_error = str(exc)
+
+    def _history_configuration_changed(self, value: Any = None, **_: Any) -> None:
+        self._set_history_configuration_preview(self._selected_value(value))
+        self.server.state.flush()
 
     def _submission_form_changed(self, **_: Any) -> None:
         """Rotate idempotency only after a material form edit reaches the server."""
@@ -5387,10 +5470,8 @@ class RadarPdNovaApp(ThemedApp):
         if not dataset_id:
             return
         try:
-            payload = self.service._dataset_document(dataset_id)
-            if not isinstance(payload, dict):
-                raise ValueError("Galaxy did not return a RADAR-PD configuration document")
-            config = config_from_contract(payload)
+            config = self.service.load_configuration_dataset(dataset_id)
+            self._set_history_configuration_preview(dataset_id, config)
             self._apply_configuration(config)
             self.server.state.notice = "Loaded the reusable Galaxy configuration. Input selections and run name remain independent."
             self.server.state.setup_panels = [2, 10]

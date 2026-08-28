@@ -150,19 +150,28 @@ def test_powgen_monitor_requires_preflight_and_exposes_safe_backfill_controls() 
     template = app.layout.html
 
     assert app.server.state.powgen_backfill_mode == "latest_5"
+    assert app.server.state.history_panels == []
     assert app.server.state.powgen_preflight_ready is False
     assert app.server.state.result_explorer_available is False
     assert app.server.state.powgen_backfill_options[0]["title"] == "Latest 5 existing scans, then new scans"
     assert any(option["value"] == "new_only" for option in app.server.state.powgen_backfill_options)
     assert "Check experiment and inputs" in template
+    assert 'v-model="history_panels"' in template
     assert "powgen_monitoring || !powgen_preflight_ready" in template
     assert "Refresh now" in template
     assert "Next check:" in template
     assert "Save reusable configuration to History" in template
+    assert "history_configuration_summary" in template
+    assert "history_configuration_yaml" in template
+    assert "No reusable configurations are in this Galaxy History" in template
     assert "Open Result Explorer" in template
     assert 'v-if="result_explorer_available"' in template
     assert "Open GPX in GSAS-II" in template
     assert "Open GSAS-II" in template
+    assert 'target="_blank"' in template
+    assert 'rel="noopener noreferrer"' in template
+    assert "window.setTimeout" in template
+    assert "() => setTimeout" not in template
     assert "No GPX checkpoint was published for this run." in template
     assert "checkpoint_rows.length > 0" in template
     assert "POWGEN live uses a low-latency publication profile" in template

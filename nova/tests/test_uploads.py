@@ -99,6 +99,15 @@ def test_inspect_cif_upload_compacts_formula_whitespace() -> None:
     assert result["display_name_source"] == "formula"
 
 
+def test_inspect_cif_upload_removes_explicit_unit_stoichiometry() -> None:
+    result = inspect_cif_upload(
+        VALID_CIF.replace(b"_chemical_formula_sum 'Fe'", b"_chemical_formula_sum 'Al1 Fe2 V1'"),
+        "ordered_heusler.cif",
+    )
+
+    assert result["display_name"] == "AlFe2V"
+
+
 def test_inspect_cif_upload_does_not_repeat_equivalent_formula_and_name() -> None:
     result = inspect_cif_upload(
         VALID_CIF + b"_chemical_name_common 'Fe'\n",

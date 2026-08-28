@@ -44,6 +44,29 @@ def _make_structure() -> Structure:
 
 
 class DBPackLayoutTests(unittest.TestCase):
+    def test_cif_metadata_normalizes_explicit_unit_stoichiometry(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cif_path = Path(tmpdir) / "ordered_heusler.cif"
+            cif_path.write_text(
+                "\n".join(
+                    (
+                        "data_ordered_heusler",
+                        "_chemical_formula_sum 'Al1 Fe2 V1'",
+                        "_cell_length_a 5.7",
+                        "_cell_length_b 5.7",
+                        "_cell_length_c 5.7",
+                        "_cell_angle_alpha 90",
+                        "_cell_angle_beta 90",
+                        "_cell_angle_gamma 90",
+                    )
+                ),
+                encoding="utf-8",
+            )
+
+            phase_name, _ = _parse_cif_metadata(str(cif_path))
+
+            self.assertEqual(phase_name, "AlFe2V")
+
     def test_cif_metadata_fills_missing_space_group_number(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             cif_path = Path(tmpdir) / "symbol_only.cif"

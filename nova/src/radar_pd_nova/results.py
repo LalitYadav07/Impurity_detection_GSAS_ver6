@@ -25,11 +25,13 @@ _FORMULA_TOKEN = r"[A-Z][a-z]?(?:\d+(?:\.\d*)?|\.\d+)?"
 
 
 def _canonical_phase_name(value: Any) -> str:
-    """Remove presentation whitespace only when the whole value is a formula."""
+    """Normalize formula typography without altering ordinary phase names."""
 
     text = " ".join(str(value or "").split())
-    if re.fullmatch(rf"{_FORMULA_TOKEN}(?:\s+{_FORMULA_TOKEN})+", text):
-        return re.sub(r"\s+", "", text)
+    compact = re.sub(r"\s+", "", text)
+    tokens = re.findall(_FORMULA_TOKEN, compact)
+    if tokens and "".join(tokens) == compact:
+        return re.sub(r"([A-Z][a-z]?)1(?:\.0+)?(?=[A-Z]|$)", r"\1", compact)
     return text
 
 
@@ -316,7 +318,19 @@ def discover_tables(root: str | Path) -> list[dict[str, Any]]:
             )
         )
     category_order = {"Scientific result": 0, "Rapid results": 1, "Technical tables": 2}
-    return sorted(options, key=lambda item: (category_order.get(item["category"], 9), not item["primary"], item["name"]))
+    ordered = sorted(
+        options,
+        key=lambda item: (category_order.get(item["category"], 9), not item["primary"], item["name"]),
+    )
+    unique: list[dict[str, Any]] = []
+    seen_names: set[str] = set()
+    for item in ordered:
+        name_key = str(item.get("name") or "").strip().casefold()
+        if name_key in seen_names:
+            continue
+        seen_names.add(name_key)
+        unique.append(item)
+    return unique
 
 
 def _plot_payload_has_arrays(payload: dict[str, Any]) -> bool:
@@ -604,6 +618,40 @@ def _merge_manifest_plots(
         )
         represented.add(path.resolve())
     return merged
+
+
+def _deduplicate_named_plots(
+    plots: list[dict[str, Any]],
+    *,
+    preferred_path: str = "",
+) -> list[dict[str, Any]]:
+    """Hide collection aliases that publish the same scientific plot twice.
+
+    Galaxy may expose one fit through both the complete archive and a named
+    output collection. If both copies have the same scientific label, keeping
+    both makes the plot selector look broken. Prefer the scientifically ranked
+    copy and otherwise keep the first renderable descriptor.
+    """
+
+    preferred = str(preferred_path or "")
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    order: list[str] = []
+    for plot in plots:
+        name = str(plot.get("name") or "Published plot").strip().casefold()
+        if name not in grouped:
+            grouped[name] = []
+            order.append(name)
+        grouped[name].append(plot)
+
+    deduplicated: list[dict[str, Any]] = []
+    for name in order:
+        candidates = grouped[name]
+        selected = next(
+            (item for item in candidates if preferred and str(item.get("path") or "") == preferred),
+            candidates[0],
+        )
+        deduplicated.append(selected)
+    return deduplicated
 
 
 def load_plot_with_fallback(
@@ -1958,6 +2006,13 @@ def build_result_view(
     best_rwp = _best_rwp(result)
 
     plot_dicts = _merge_manifest_plots(base, result, discover_plot_payloads(base))
+    original_primary_index = _primary_plot_index(plot_dicts, result, mode)
+    preferred_plot_path = (
+        str(plot_dicts[original_primary_index].get("path") or "")
+        if original_primary_index is not None
+        else ""
+    )
+    plot_dicts = _deduplicate_named_plots(plot_dicts, preferred_path=preferred_plot_path)
     primary_index = _primary_plot_index(plot_dicts, result, mode)
     if primary_index is not None:
         plot_dicts[primary_index]["primary"] = True

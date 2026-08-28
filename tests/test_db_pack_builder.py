@@ -95,6 +95,10 @@ class DBPackBuilderTests(unittest.TestCase):
             infer_phase_display_name("collcode258024.cif", "data_collcode258024\n", "Al Fe2 V"),
             "AlFe2V",
         )
+        self.assertEqual(
+            infer_phase_display_name("ordered_heusler.cif", "data_ordered\n", "Al1 Fe2 V1"),
+            "AlFe2V",
+        )
 
     def test_normalize_catalog_df_preserves_uint64_element_masks(self):
         import pandas as pd

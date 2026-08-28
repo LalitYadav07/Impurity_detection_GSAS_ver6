@@ -161,6 +161,7 @@ _UNHELPFUL_PHASE_NAMES = {
     "?",
     ".",
 }
+_FORMULA_TOKEN = r"[A-Z][a-z]?(?:\d+(?:\.\d*)?|\.\d+)?"
 
 
 def _cif_scalar_value(cif_content: str, tags: Sequence[str]) -> str:
@@ -183,6 +184,13 @@ def infer_phase_display_name(source_name: str, cif_content: str, formula: str) -
     """Choose a stable scientific label while retaining formula separately."""
 
     reduced_formula = re.sub(r"\s+", "", str(formula or "").strip())
+    formula_tokens = re.findall(_FORMULA_TOKEN, reduced_formula)
+    if formula_tokens and "".join(formula_tokens) == reduced_formula:
+        reduced_formula = re.sub(
+            r"([A-Z][a-z]?)1(?:\.0+)?(?=[A-Z]|$)",
+            r"\1",
+            reduced_formula,
+        )
     declared_name = _cif_scalar_value(cif_content, _CIF_PHASE_NAME_TAGS)
     if reduced_formula and declared_name:
         formula_key = re.sub(r"[^a-z0-9]+", "", reduced_formula.casefold())

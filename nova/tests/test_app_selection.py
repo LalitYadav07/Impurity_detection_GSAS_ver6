@@ -23,6 +23,18 @@ def test_selected_run_uid_accepts_vuetify_payload_shapes() -> None:
     assert selected_run_uid([]) == ""
 
 
+def test_workflow_mode_change_collapses_previous_run_history() -> None:
+    app = RadarPdNovaApp.__new__(RadarPdNovaApp)
+    state = _State(history_panels=["history"], run_search="PG3_63802")
+    app.server = SimpleNamespace(state=state)
+
+    app._workflow_mode_changed()
+
+    assert state.history_panels == []
+    assert state.run_search == ""
+    assert state.flush_count == 1
+
+
 class _State(SimpleNamespace):
     def flush(self) -> None:
         self.flush_count = getattr(self, "flush_count", 0) + 1
@@ -583,6 +595,35 @@ def test_powgen_configuration_preview_shows_summary_and_exact_yaml() -> None:
     assert "- Fe" in state.powgen_configuration_yaml
     assert "instrument_mode: tof" in state.powgen_configuration_yaml
     assert "created_utc" not in state.powgen_configuration_yaml
+
+
+def test_standard_configuration_preview_shows_summary_and_exact_yaml() -> None:
+    app = RadarPdNovaApp.__new__(RadarPdNovaApp)
+    config = AnalysisConfig(
+        mode=AnalysisMode.RAPID,
+        radiation="xray",
+        instrument_mode="cw",
+        sample_elements=["Fe", "O"],
+        full_profile="quick",
+    )
+    state = _State(
+        history_configuration_id="",
+        history_configuration_summary=[],
+        history_configuration_yaml="",
+        history_configuration_error="",
+        history_configuration_title="",
+    )
+    app.server = SimpleNamespace(state=state)
+
+    app._set_history_configuration_preview("config-id", config)
+
+    assert state.history_configuration_id == "config-id"
+    assert state.history_configuration_title == "Rapid configuration details"
+    assert state.history_configuration_summary[0] == {"label": "Mode", "value": "Rapid"}
+    assert {"label": "Measurement", "value": "X-ray / CW"} in state.history_configuration_summary
+    assert "sample_elements:" in state.history_configuration_yaml
+    assert "- Fe" in state.history_configuration_yaml
+    assert "created_utc" not in state.history_configuration_yaml
 
 
 def test_powgen_completed_scan_projects_scientific_summary_into_dashboard() -> None:

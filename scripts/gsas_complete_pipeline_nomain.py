@@ -570,6 +570,7 @@ def _write_xye_from_arrays(out_path: str, x, y, sigma=None, shift_positive: bool
 # ---------------------------
 
 _CIF_QUOTE_RE = re.compile(r"^[\s\t]*['\"]?(.*?)['\"]?[\s\t]*$")
+_FORMULA_TOKEN_RE = re.compile(r"[A-Z][a-z]?(?:\d+(?:\.\d*)?|\.\d+)?")
 
 def _strip_cif_value(v: str) -> str:
     if v is None:
@@ -577,6 +578,14 @@ def _strip_cif_value(v: str) -> str:
     v = v.strip()
     m = _CIF_QUOTE_RE.match(v)
     return m.group(1) if m else v
+
+
+def _canonical_cif_formula(value: str) -> str:
+    text = "".join(str(value or "").split())
+    tokens = _FORMULA_TOKEN_RE.findall(text)
+    if not tokens or "".join(tokens) != text:
+        return str(value or "").strip()
+    return re.sub(r"([A-Z][a-z]?)1(?:\.0+)?(?=[A-Z]|$)", r"\1", text)
 
 def _parse_cif_metadata(cif_path: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
     if not cif_path or not Path(cif_path).exists():
@@ -647,6 +656,8 @@ def _parse_cif_metadata(cif_path: Optional[str]) -> Tuple[Optional[str], Optiona
 
         if not name:
             name = data_label
+        if name:
+            name = _canonical_cif_formula(name)
 
         # Some valid CIFs publish only the Hermann-Mauguin symbol.  Complete
         # whichever space-group field is missing so downstream summaries do
