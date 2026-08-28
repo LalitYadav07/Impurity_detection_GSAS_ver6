@@ -173,6 +173,8 @@ def test_powgen_monitor_requires_preflight_and_exposes_safe_backfill_controls() 
     assert "Compare selected series" in template
     assert "Companion-tool activity" in template
     assert "Technical files" in template
+    assert "No published files match these filters." in template
+    assert "group.files.filter(item =>" in template
     assert template.count("radar-mode-card") >= 2
 
 

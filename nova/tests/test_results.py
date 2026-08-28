@@ -711,6 +711,26 @@ def test_gsas_phase_tick_labels_compact_formula_and_space_group() -> None:
     assert figure.layout.yaxis3.ticktext == ("AlFe2V (SG Fm-3m (225))",)
 
 
+def test_gsas_phase_tick_labels_parse_pipeline_dash_separator() -> None:
+    figure = figure_for_payload(
+        {
+            "plot_kind": "gsas_fit_with_ticks_v1",
+            "phase_order": ["catalog_phase"],
+            "phase_labels": {"catalog_phase": "Al Fe2 V \u2014 F m -3 m (225)"},
+            "phase_ticks": {"catalog_phase": [1.5]},
+            "arrays": {
+                "x": [1.0, 2.0],
+                "yobs": [1.0, 2.0],
+                "ycalc": [1.0, 2.0],
+                "resid": [0.0, 0.0],
+            },
+        }
+    )
+
+    assert figure.layout.yaxis3.ticktext == ("AlFe2V (SG Fm-3m (225))",)
+    assert figure.data[3].name == "AlFe2V (SG Fm-3m (225))"
+
+
 def test_renders_real_rapid_phase_components_and_zero_contribution() -> None:
     payload = {
         "plot_kind": "rapid_refined_pattern_match",

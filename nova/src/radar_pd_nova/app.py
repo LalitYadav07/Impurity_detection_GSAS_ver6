@@ -2775,6 +2775,10 @@ class RadarPdNovaApp(ThemedApp):
             html.Div("No interactive plots were published.", v_if="!plot_options.length", classes="radar-empty-compact")
 
     def _file_browser_view(self) -> None:
+        visible_file_filter = (
+            "(show_technical_files || !item.technical) && "
+            "(!file_search || (item.name + ' ' + item.filename).toLowerCase().includes(file_search.toLowerCase()))"
+        )
         with html.Div(classes="radar-section-heading"):
             with html.Div():
                 html.H2("Run File Browser")
@@ -2847,14 +2851,24 @@ class RadarPdNovaApp(ThemedApp):
                 hide_details=True,
             )
         with vuetify.VExpansionPanels(multiple=True, variant="accordion", classes="radar-file-groups"):
-            with vuetify.VExpansionPanel(v_for="group in file_groups", key="group.name", value=("group.name",)):
+            with vuetify.VExpansionPanel(
+                v_for="group in file_groups",
+                key="group.name",
+                value=("group.name",),
+                v_show=f"group.files.some(item => {visible_file_filter})",
+            ):
                 with vuetify.VExpansionPanelTitle():
                     html.Strong("{{ group.name }}")
                     vuetify.VSpacer()
-                    vuetify.VChip(text=("String(group.files.length)",), size="x-small", variant="tonal", color="#15543c")
+                    vuetify.VChip(
+                        text=(f"String(group.files.filter(item => {visible_file_filter}).length)",),
+                        size="x-small",
+                        variant="tonal",
+                        color="#15543c",
+                    )
                 with vuetify.VExpansionPanelText():
                     with html.Div(
-                        v_for="file in group.files.filter(item => (show_technical_files || !item.technical) && (!file_search || (item.name + ' ' + item.filename).toLowerCase().includes(file_search.toLowerCase())))",
+                        v_for=f"file in group.files.filter(item => {visible_file_filter})",
                         key="file.id",
                         classes="radar-file-row",
                     ):
@@ -2863,6 +2877,11 @@ class RadarPdNovaApp(ThemedApp):
                             html.Span("{{ file.filename }} / {{ file.size }}")
                         vuetify.VBtn(icon="mdi-download", title="Download", size="small", variant="text", color="#15543c", click=(self.download_artifact, "[file.path]"))
         html.Div("No downloadable files are available for this run.", v_if="!file_groups.length", classes="radar-empty-compact")
+        html.Div(
+            "No published files match these filters.",
+            v_if=f"file_groups.length && !file_groups.some(group => group.files.some(item => {visible_file_filter}))",
+            classes="radar-empty-compact",
+        )
 
     def _activity_panel(self) -> None:
         with vuetify.VExpansionPanels(variant="accordion", classes="radar-activity-panel mt-4"):

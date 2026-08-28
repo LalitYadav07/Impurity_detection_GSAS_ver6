@@ -50,10 +50,18 @@ def _canonical_space_group(value: Any) -> str:
 
 def _split_phase_label(label: str) -> tuple[str, str | None]:
     match = re.match(r"^(.*?)\s*\(SG\s+(.+)\)\s*$", label, flags=re.IGNORECASE)
-    if not match:
+    if match:
+        phase = _canonical_phase_name(match.group(1).strip())
+        space_group = _canonical_space_group(match.group(2).strip())
+        return phase or label, space_group or None
+    separated = re.match(
+        r"^(.*?)\s+(?:[\u2013\u2014]|--|\|)\s+(.+?\(\d{1,3}\))\s*$",
+        label,
+    )
+    if not separated:
         return _canonical_phase_name(label), None
-    phase = _canonical_phase_name(match.group(1).strip())
-    space_group = _canonical_space_group(match.group(2).strip())
+    phase = _canonical_phase_name(separated.group(1).strip())
+    space_group = _canonical_space_group(separated.group(2).strip())
     return phase or label, space_group or None
 
 
