@@ -157,6 +157,7 @@ def test_powgen_monitor_requires_preflight_and_exposes_safe_backfill_controls() 
     assert any(option["value"] == "new_only" for option in app.server.state.powgen_backfill_options)
     assert "Check experiment and inputs" in template
     assert 'v-model="history_panels"' in template
+    assert "history_panels = []; run_search = ''" in template
     assert "powgen_monitoring || !powgen_preflight_ready" in template
     assert "Refresh now" in template
     assert "Next check:" in template

@@ -1021,6 +1021,7 @@ class RadarPdNovaApp(ThemedApp):
                 key="item.value",
                 value=("item.value",),
                 size="small",
+                click="history_panels = []; run_search = ''",
             ):
                 vuetify.VIcon(icon=("item.icon",), size="small", classes="mr-1")
                 html.Span("{{ item.title }}")
