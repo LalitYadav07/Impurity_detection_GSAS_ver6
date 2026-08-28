@@ -289,6 +289,7 @@ class RadarPdNovaApp(ThemedApp):
         state.error_message = ""
         state.analysis_mode = "rapid"
         state.radiation = "neutron"
+        state.last_radiation = "neutron"
         state.instrument_mode = "auto"
         state.instrument_mode_options = list(_NEUTRON_GEOMETRY_OPTIONS)
         state.input_source = "upload"
@@ -1120,7 +1121,7 @@ class RadarPdNovaApp(ThemedApp):
                         hint="Select the wavelength used by the experiment. The matching official packaged profile is resolved automatically.",
                         persistent_hint=True,
                     )
-                    vuetify.VSelect(
+                    vuetify.VAutocomplete(
                         label="Reusable RADAR-PD configuration",
                         v_model=("powgen_configuration_dataset_id",),
                         items=("history_configuration_datasets",),
@@ -1162,7 +1163,7 @@ class RadarPdNovaApp(ThemedApp):
                                     v_show="!!powgen_configuration_yaml",
                                     classes="radar-config-preview mt-2",
                                 )
-                    vuetify.VSelect(
+                    vuetify.VAutocomplete(
                         label="Candidate library for monitored scans",
                         v_model=("powgen_database_dataset_id",),
                         items=("history_archive_datasets",),
@@ -1200,7 +1201,7 @@ class RadarPdNovaApp(ThemedApp):
                             optional=True,
                             key="powgen-main-cif-upload",
                         )
-                    vuetify.VSelect(
+                    vuetify.VAutocomplete(
                         v_show="powgen_main_cif_source === 'galaxy'",
                         label="Main-phase CIF from Galaxy History",
                         v_model=("powgen_main_cif_dataset_id",),
@@ -1394,7 +1395,7 @@ class RadarPdNovaApp(ThemedApp):
                             optional=False,
                             key="radar-database-upload",
                         )
-                    vuetify.VSelect(
+                    vuetify.VAutocomplete(
                         v_show="library_archive_source === 'galaxy'",
                         label="Galaxy library archive",
                         v_model=("history_database_id",),
@@ -1427,7 +1428,7 @@ class RadarPdNovaApp(ThemedApp):
                     )
                     NamedMultiCifUpload("library_builder_local_paths", "library_builder_file_rows")
                     html.Div("Optional: add CIF datasets already saved in Galaxy", classes="radar-inline-divider")
-                    vuetify.VSelect(
+                    vuetify.VAutocomplete(
                         label="CIFs from Galaxy History",
                         v_model=("library_builder_cif_ids",),
                         items=("history_cif_datasets",),
@@ -1531,7 +1532,7 @@ class RadarPdNovaApp(ThemedApp):
                         persistent_hint=True,
                         update_modelValue=(self.search_history, "[history_search]"),
                     )
-                    vuetify.VSelect(
+                    vuetify.VAutocomplete(
                         label="Diffraction data from History",
                         v_model=("history_data_id",),
                         items=("history_data_datasets",),
@@ -1609,7 +1610,7 @@ class RadarPdNovaApp(ThemedApp):
                             extensions=[".instprm", ".prm", ".inst", ".ins"],
                             key="radar-instrument-upload",
                         )
-                    vuetify.VSelect(
+                    vuetify.VAutocomplete(
                         v_show="instrument_source === 'galaxy'",
                         label="Instrument profile from History",
                         v_model=("history_instrument_id",),
@@ -1718,7 +1719,7 @@ class RadarPdNovaApp(ThemedApp):
                         no_data_text="No CIF files in this folder",
                         update_modelValue=(self.select_facility_main_cif, "[$event]"),
                     )
-                vuetify.VSelect(
+                vuetify.VAutocomplete(
                     v_show="main_cif_source === 'galaxy'",
                     label="Main-phase CIF from History",
                     v_model=("history_main_cif_id",),
@@ -2090,7 +2091,7 @@ class RadarPdNovaApp(ThemedApp):
                                 key="radar-config-upload",
                             )
                             vuetify.VBtn("Apply configuration", click=self.apply_uploaded_configuration, variant="outlined", size="small", block=True, disabled=("!config_import_path",), classes="mt-2")
-                            vuetify.VSelect(
+                            vuetify.VAutocomplete(
                                 label="Reusable configuration from Galaxy History",
                                 v_model=("history_configuration_id",),
                                 items=("history_configuration_datasets",),
@@ -3257,7 +3258,34 @@ class RadarPdNovaApp(ThemedApp):
         selected = self._selected_value(radiation if radiation is not None else state.radiation)
         if selected not in {"neutron", "xray"}:
             return
+        previous = str(getattr(state, "last_radiation", selected) or selected)
+        measurement_changed = previous in {"neutron", "xray"} and previous != selected
         state.radiation = selected
+        if measurement_changed:
+            # A diffraction pattern, instrument profile, and simulated candidate
+            # library are radiation-specific. Requiring an explicit reselection
+            # prevents a restored POWGEN neutron run from appearing valid after
+            # the user changes only the measurement type to X-ray (or vice versa).
+            for field in (
+                "data_path",
+                "history_data_id",
+                "remote_data_uri",
+                "facility_data_path",
+                "facility_data_relative_path",
+                "event_file_path",
+                "instrument_path",
+                "history_instrument_id",
+                "remote_instrument_uri",
+                "facility_instrument_path",
+                "facility_instrument_relative_path",
+                "database_archive_path",
+                "history_database_id",
+            ):
+                setattr(state, field, "")
+            state.instrument_source = "upload"
+            state.database_source = "builtin"
+            state.library_archive_source = "computer"
+            state.use_builtin_cuka = False
         if selected == "xray":
             state.instrument_mode_options = list(_XRAY_GEOMETRY_OPTIONS)
             state.source_options = list(_XRAY_SOURCE_OPTIONS)
@@ -3278,10 +3306,11 @@ class RadarPdNovaApp(ThemedApp):
                 incompatible = True
             state.use_facility_workspace = False
             state.magnetic_precheck = False
-            if incompatible and not getattr(state, "busy", False):
+            if (incompatible or measurement_changed) and not getattr(state, "busy", False):
                 state.notice = (
                     "X-ray mode uses upload or Galaxy History inputs and constant-wavelength geometry. "
-                    "Neutron facility selections were cleared."
+                    "Reselect the diffraction pattern, instrument profile, and candidate library for X-ray. "
+                    "Chemistry and the optional main-phase CIF were preserved."
                 )
         else:
             state.instrument_mode_options = list(_NEUTRON_GEOMETRY_OPTIONS)
@@ -3289,6 +3318,12 @@ class RadarPdNovaApp(ThemedApp):
             state.instrument_source_options = list(_GENERAL_INSTRUMENT_SOURCE_OPTIONS)
             state.main_cif_source_options = list(_GENERAL_MAIN_CIF_SOURCE_OPTIONS)
             state.use_builtin_cuka = False
+            if measurement_changed and not getattr(state, "busy", False):
+                state.notice = (
+                    "Measurement type changed to neutron. Reselect the diffraction pattern, instrument "
+                    "profile, and candidate library. Chemistry and the optional main-phase CIF were preserved."
+                )
+        state.last_radiation = selected
         state.flush()
 
     @staticmethod

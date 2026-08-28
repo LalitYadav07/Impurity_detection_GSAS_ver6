@@ -91,6 +91,10 @@ class DBPackBuilderTests(unittest.TestCase):
             infer_phase_display_name("iron.cif", "_pd_phase_id 1\n", "Fe"),
             "Fe",
         )
+        self.assertEqual(
+            infer_phase_display_name("collcode258024.cif", "data_collcode258024\n", "Al Fe2 V"),
+            "AlFe2V",
+        )
 
     def test_normalize_catalog_df_preserves_uint64_element_masks(self):
         import pandas as pd
@@ -113,6 +117,23 @@ class DBPackBuilderTests(unittest.TestCase):
 
         self.assertEqual(str(out["elements_mask_lo"].dtype), "UInt64")
         self.assertEqual(int(out.loc[0, "elements_mask_lo"]), 17221765249978874268)
+
+    def test_loader_compacts_formula_style_catalog_names(self):
+        import pandas as pd
+
+        loader = DBLoader.__new__(DBLoader)
+        loader.catalog = pd.DataFrame(
+            [
+                {
+                    "id": "user_phase",
+                    "display_name": "Al Fe2 V",
+                    "pretty_formula": "Al Fe2 V",
+                }
+            ]
+        )
+        loader._row_index = {"user_phase": 0}
+
+        self.assertEqual(loader.get_pretty_name("user_phase"), "AlFe2V")
 
     def test_build_mini_db_pack_writes_runtime_artifacts(self):
         with tempfile.TemporaryDirectory() as tmpdir:

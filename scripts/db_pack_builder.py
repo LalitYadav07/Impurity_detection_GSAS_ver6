@@ -182,7 +182,7 @@ def _cif_scalar_value(cif_content: str, tags: Sequence[str]) -> str:
 def infer_phase_display_name(source_name: str, cif_content: str, formula: str) -> str:
     """Choose a stable scientific label while retaining formula separately."""
 
-    reduced_formula = str(formula or "").strip()
+    reduced_formula = re.sub(r"\s+", "", str(formula or "").strip())
     declared_name = _cif_scalar_value(cif_content, _CIF_PHASE_NAME_TAGS)
     if reduced_formula and declared_name:
         formula_key = re.sub(r"[^a-z0-9]+", "", reduced_formula.casefold())

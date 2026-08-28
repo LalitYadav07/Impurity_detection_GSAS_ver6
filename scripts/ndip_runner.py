@@ -873,6 +873,7 @@ def command_analyze(args: argparse.Namespace) -> int:
         include_archive=not args.no_archive,
         status="failed" if return_code else "complete",
         errors=errors,
+        phase_catalog_csv=db_root / "catalog_deduplicated.csv",
     )
     final_status = "failed" if return_code else "complete"
     if not return_code:

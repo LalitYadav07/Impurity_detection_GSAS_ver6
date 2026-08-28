@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import json
 import os
+import pickle
 import stat
 import sys
 import zipfile
@@ -21,7 +22,7 @@ if str(NOVA_SRC) not in sys.path:
 
 from ndip_contracts import CONFIG_SCHEMA, GPX_INDEX_SCHEMA, RESULT_SCHEMA, atomic_write_json  # noqa: E402
 from ndip_gpx_handoff import main as gpx_handoff_main  # noqa: E402
-from ndip_outputs import collect_outputs  # noqa: E402
+from ndip_outputs import _read_gpx_records, collect_outputs  # noqa: E402
 from ndip_runner import (  # noqa: E402
     _extract_db_pack,
     _finalize_successful_stages,
@@ -322,6 +323,76 @@ def test_normalized_outputs_publish_handoff_projects_and_archive_all_checkpoints
     assert "ndip/report.html" in names
     assert "ndip/overview.tsv" in names
     assert any(name.startswith("ndip/plots/") for name in names)
+
+
+def test_published_gpx_uses_unique_scientific_phase_names(tmp_path: Path) -> None:
+    run = tmp_path / "run"
+    checkpoints = run / "checkpoints"
+    checkpoints.mkdir(parents=True)
+    source = checkpoints / "accepted.gpx"
+    phase_ids = (
+        "user_00011_yourcustomfilename_collcode258024_bbac164417",
+        "user_00012_another_filename_abc123",
+    )
+    records = [
+        [["Controls", {}]],
+        [
+            ["PWDR test", [None]],
+            ["Reflection Lists", {phase_ids[0]: {"RefList": []}, phase_ids[1]: {"RefList": []}}],
+        ],
+        [
+            ["Phases", None],
+            [phase_ids[0], {"General": {"Name": phase_ids[0]}}],
+            [phase_ids[1], {"General": {"Name": phase_ids[1]}}],
+        ],
+        [["Restraints", {phase_ids[0]: {"Bond": []}, phase_ids[1]: {"Bond": []}}]],
+    ]
+    with source.open("wb") as handle:
+        for record in records:
+            pickle.dump(record, handle, protocol=1)
+
+    catalog = tmp_path / "catalog_deduplicated.csv"
+    with catalog.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=["id", "display_name", "pretty_formula", "SG_symbol", "space_group"],
+        )
+        writer.writeheader()
+        for phase_id in phase_ids:
+            writer.writerow(
+                {
+                    "id": phase_id,
+                    "display_name": "Al Fe2 V",
+                    "pretty_formula": "Al Fe2 V",
+                    "SG_symbol": "F m -3 m",
+                    "space_group": "225.0",
+                }
+            )
+
+    portal = tmp_path / "portal"
+    collect_outputs(
+        run,
+        portal,
+        mode="full",
+        run_name="friendly-gpx",
+        phase_catalog_csv=catalog,
+        include_archive=False,
+    )
+
+    published = next((portal / "gpx").glob("*.gpx"))
+    published_records = _read_gpx_records(published)
+    phase_record = next(record for record in published_records if record[0][0] == "Phases")
+    names = [item[0] for item in phase_record[1:]]
+    assert names == ["AlFe2V (SG Fm-3m, 225)", "AlFe2V (SG Fm-3m, 225) [2]"]
+    assert [item[1]["General"]["Name"] for item in phase_record[1:]] == names
+    histogram = next(record for record in published_records if record[0][0] == "PWDR test")
+    assert list(histogram[1][1]) == names
+    restraints = next(record for record in published_records if record[0][0] == "Restraints")
+    assert list(restraints[0][1]) == names
+
+    original_records = _read_gpx_records(source)
+    original_phase_record = next(record for record in original_records if record[0][0] == "Phases")
+    assert [item[0] for item in original_phase_record[1:]] == list(phase_ids)
 
 
 def test_full_archive_plot_manifest_renders_in_scientific_results(tmp_path: Path) -> None:

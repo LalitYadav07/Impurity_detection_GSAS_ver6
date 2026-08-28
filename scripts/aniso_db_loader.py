@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -399,19 +400,31 @@ class DBLoader:
         if row_ix is None:
             raise KeyError(f"phase id not in catalog: {pid}")
         s = self.catalog.iloc[row_ix]
+        formula = next(
+            (
+                str(s.get(key)).strip()
+                for key in ("pretty_formula", "formula_pretty", "formula")
+                if isinstance(s.get(key), str) and str(s.get(key)).strip()
+            ),
+            "",
+        )
+        compact_formula = re.sub(r"\s+", "", formula)
         display_name = s.get("display_name")
         if (
             isinstance(display_name, str)
             and display_name.strip()
             and display_name.strip().casefold() not in {"nan", "none", "unknown"}
         ):
-            return display_name.strip()
+            display_name = display_name.strip()
+            display_key = re.sub(r"[^a-z0-9]+", "", display_name.casefold())
+            formula_key = re.sub(r"[^a-z0-9]+", "", compact_formula.casefold())
+            return compact_formula if compact_formula and display_key == formula_key else display_name
         if hasattr(self, "_pretty_by_id") and pid in self._pretty_by_id:
             return self._pretty_by_id[pid]
         for k in ("pretty_formula", "formula_pretty", "formula", "pretty_name", "elements_list"):
             val = s.get(k)
             if isinstance(val, str) and val.strip():
-                return val
+                return re.sub(r"\s+", "", val) if k in {"pretty_formula", "formula_pretty", "formula"} else val
         return "unknown"
 
     def get_space_group_number(self, pid: str):

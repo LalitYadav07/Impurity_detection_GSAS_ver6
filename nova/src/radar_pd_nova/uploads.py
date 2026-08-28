@@ -50,7 +50,7 @@ def store_browser_upload(contents: bytes, original_name: Any) -> Path:
 def _scientific_cif_display_name(name: str, formula: str, declared_name: str) -> str:
     """Mirror the database builder's scientific-name fallback in upload previews."""
 
-    reduced_formula = str(formula or "").strip()
+    reduced_formula = re.sub(r"\s+", "", str(formula or "").strip())
     phase_name = str(declared_name or "").strip()
     if reduced_formula and phase_name:
         formula_key = re.sub(r"[^a-z0-9]+", "", reduced_formula.casefold())
@@ -120,6 +120,12 @@ def inspect_cif_upload(contents: bytes, original_name: Any) -> dict[str, Any]:
     if declared_name.casefold() in {"#(c)", "global", "none", "unknown", "vesta_phase_1", "?", "."}:
         declared_name = ""
     display_name = _scientific_cif_display_name(name, formula, declared_name)
+    if formula:
+        display_name_source = "formula"
+    elif declared_name:
+        display_name_source = "declared_name"
+    else:
+        display_name_source = "filename"
 
     return {
         "name": name,
@@ -128,6 +134,7 @@ def inspect_cif_upload(contents: bytes, original_name: Any) -> dict[str, Any]:
         "formula": formula,
         "phase_name": declared_name,
         "display_name": display_name,
+        "display_name_source": display_name_source,
         "space_group": _tag_value("_space_group_it_number", "_symmetry_int_tables_number"),
     }
 
@@ -445,8 +452,12 @@ class NamedMultiCifUpload:
                         "detail": " / ".join(
                             value
                             for value in (
-                                metadata.get("display_name")
-                                or "Scientific name will be derived from the atomic composition during build",
+                                metadata.get("display_name") or "Unknown phase",
+                                (
+                                    "formula will be derived from atomic sites during build"
+                                    if metadata.get("display_name_source") == "filename"
+                                    else ""
+                                ),
                                 f"SG {metadata['space_group']}" if metadata.get("space_group") else "",
                             )
                             if value

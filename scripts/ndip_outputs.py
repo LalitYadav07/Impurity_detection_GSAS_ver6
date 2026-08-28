@@ -5,11 +5,12 @@ import csv
 import html
 import json
 import os
+import pickle
 import re
 import shutil
 import zipfile
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 try:
     from .ndip_contracts import (
@@ -142,6 +143,140 @@ def _published_name(path: Path, run_dir: Path, collection: str) -> str:
     return safe_name(f"{stem}{suffix}", path.name)
 
 
+def _read_gpx_records(path: Path) -> list[list[list[Any]]]:
+    """Read the sequential pickle records used by a GSAS-II project file."""
+
+    records: list[list[list[Any]]] = []
+    with path.open("rb") as handle:
+        while True:
+            try:
+                record = pickle.load(handle)
+            except EOFError:
+                break
+            if not isinstance(record, list):
+                raise ValueError(f"Unexpected GPX record in {path.name}")
+            records.append(record)
+    return records
+
+
+def _gpx_phase_names(records: Iterable[list[list[Any]]]) -> list[str]:
+    for record in records:
+        if record and record[0][0] == "Phases":
+            return [str(item[0]) for item in record[1:] if item]
+    return []
+
+
+def _phase_label_key(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").casefold())
+
+
+def _compact_formula(value: Any) -> str:
+    return re.sub(r"\s+", "", str(value or "").strip())
+
+
+def _catalog_phase_labels(catalog_csv: Path | None, phase_ids: set[str]) -> dict[str, str]:
+    """Resolve only the GPX phase IDs needed for the published checkpoints."""
+
+    if not catalog_csv or not catalog_csv.is_file() or not phase_ids:
+        return {}
+    labels: dict[str, str] = {}
+    with catalog_csv.open("r", encoding="utf-8-sig", errors="replace", newline="") as handle:
+        reader = csv.DictReader(handle)
+        for row in reader:
+            phase_id = str(row.get("id") or row.get("material_id") or "").strip()
+            if phase_id not in phase_ids:
+                continue
+            formula = _compact_formula(row.get("pretty_formula") or row.get("formula_pretty"))
+            declared = str(row.get("display_name") or "").strip()
+            if formula and _phase_label_key(formula) == _phase_label_key(declared):
+                base = formula
+            else:
+                base = declared or formula or phase_id
+            symbol = re.sub(
+                r"\s+",
+                "",
+                str(row.get("SG_symbol") or row.get("spacegroup_symbol") or "").strip(),
+            )
+            number = str(row.get("space_group") or row.get("spacegroup_number") or "").strip()
+            if number.endswith(".0"):
+                number = number[:-2]
+            if symbol and number:
+                label = f"{base} (SG {symbol}, {number})"
+            elif symbol or number:
+                label = f"{base} (SG {symbol or number})"
+            else:
+                label = base
+            labels[phase_id] = label[:120]
+            if len(labels) == len(phase_ids):
+                break
+    return labels
+
+
+def _unique_phase_name_map(old_names: Iterable[str], labels: Mapping[str, str]) -> dict[str, str]:
+    result: dict[str, str] = {}
+    used: set[str] = set()
+    for old_name in old_names:
+        preferred = str(labels.get(old_name) or old_name).strip() or old_name
+        candidate = preferred
+        index = 2
+        while candidate.casefold() in used:
+            candidate = f"{preferred} [{index}]"
+            index += 1
+        used.add(candidate.casefold())
+        result[old_name] = candidate
+    return result
+
+
+def _rename_mapping_keys(value: Any, name_map: Mapping[str, str]) -> None:
+    if not isinstance(value, dict):
+        return
+    for old_name, new_name in name_map.items():
+        if old_name in value and new_name != old_name:
+            value[new_name] = value.pop(old_name)
+
+
+def _rewrite_gpx_phase_names(path: Path, labels: Mapping[str, str]) -> bool:
+    """Rewrite one published GPX with names suitable for the native GSAS-II GUI."""
+
+    if not labels:
+        return False
+    records = _read_gpx_records(path)
+    name_map = _unique_phase_name_map(_gpx_phase_names(records), labels)
+    if not any(old != new for old, new in name_map.items()):
+        return False
+
+    for record in records:
+        if not record:
+            continue
+        tree_name = str(record[0][0])
+        if tree_name == "Phases":
+            for item in record[1:]:
+                old_name = str(item[0])
+                new_name = name_map.get(old_name, old_name)
+                item[0] = new_name
+                phase_data = item[1]
+                if isinstance(phase_data, dict):
+                    general = phase_data.get("General")
+                    if isinstance(general, dict):
+                        general["Name"] = new_name
+        elif tree_name == "Restraints":
+            _rename_mapping_keys(record[0][1], name_map)
+        else:
+            for item in record[1:]:
+                if item and item[0] == "Reflection Lists":
+                    _rename_mapping_keys(item[1], name_map)
+
+    temporary = path.with_name(f".{path.name}.friendly.tmp")
+    try:
+        with temporary.open("wb") as handle:
+            for record in records:
+                pickle.dump(record, handle, protocol=1)
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return True
+
+
 def _iter_artifacts(run_dir: Path) -> Iterable[Path]:
     for path in sorted(run_dir.rglob("*")):
         if not path.is_file():
@@ -207,7 +342,12 @@ def build_gpx_index(
     }
 
 
-def _copy_collections(run_dir: Path, portal: Path) -> dict[str, list[dict[str, Any]]]:
+def _copy_collections(
+    run_dir: Path,
+    portal: Path,
+    *,
+    gpx_phase_labels: Mapping[str, str] | None = None,
+) -> dict[str, list[dict[str, Any]]]:
     records: dict[str, list[dict[str, Any]]] = {name: [] for name in COLLECTION_RULES}
     for source in _iter_artifacts(run_dir):
         suffix = source.suffix.lower()
@@ -223,6 +363,11 @@ def _copy_collections(run_dir: Path, portal: Path) -> dict[str, list[dict[str, A
             destination = destination.with_name(f"{destination.stem}_{len(records[collection]) + 1}{destination.suffix}")
         if destination.resolve() != source.resolve():
             shutil.copy2(source, destination)
+        if collection == "gpx" and gpx_phase_labels:
+            try:
+                _rewrite_gpx_phase_names(destination, gpx_phase_labels)
+            except Exception as exc:
+                print(f"[WARN] Could not apply scientific phase names to {destination.name}: {exc}")
         record = file_record(destination, role=collection.rstrip("s"), root=portal)
         record["source_path"] = source.relative_to(run_dir).as_posix()
         records[collection].append(record)
@@ -628,6 +773,7 @@ def collect_outputs(
     include_archive: bool = True,
     status: str = "complete",
     errors: list[dict[str, Any]] | None = None,
+    phase_catalog_csv: str | Path | None = None,
 ) -> dict[str, Any]:
     run_root = Path(run_dir).resolve()
     portal = Path(output_dir).resolve()
@@ -635,7 +781,29 @@ def collect_outputs(
     if not run_root.exists():
         raise FileNotFoundError(f"RADAR-PD run directory does not exist: {run_root}")
 
-    collection_records = _copy_collections(run_root, portal)
+    published_gpx_sources = [
+        path
+        for path in _iter_artifacts(run_root)
+        if path.suffix.casefold() == ".gpx" and _publish_gpx(path, run_root)
+    ]
+    gpx_phase_ids: set[str] = set()
+    for source in published_gpx_sources:
+        try:
+            gpx_phase_ids.update(_gpx_phase_names(_read_gpx_records(source)))
+        except Exception as exc:
+            print(f"[WARN] Could not inspect GPX phase names in {source.name}: {exc}")
+    catalog = Path(phase_catalog_csv).resolve() if phase_catalog_csv else None
+    try:
+        gpx_phase_labels = _catalog_phase_labels(catalog, gpx_phase_ids)
+    except Exception as exc:
+        print(f"[WARN] Could not resolve scientific GPX phase names from {catalog}: {exc}")
+        gpx_phase_labels = {}
+
+    collection_records = _copy_collections(
+        run_root,
+        portal,
+        gpx_phase_labels=gpx_phase_labels,
+    )
     published_gpx_paths = {
         str(item.get("source_path"))
         for item in collection_records.get("gpx", [])

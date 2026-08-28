@@ -56,6 +56,7 @@ def test_inspect_cif_upload_reports_formula_space_group_and_digest() -> None:
     assert result["name"] == "Fe.cif"
     assert result["formula"] == "Fe"
     assert result["display_name"] == "Fe"
+    assert result["display_name_source"] == "formula"
     assert result["space_group"] == "229"
     assert len(result["digest"]) == 64
 
@@ -84,6 +85,18 @@ _cell_angle_gamma 90
     assert result["formula"] == ""
     assert result["phase_name"] == ""
     assert result["display_name"] == "L21 ordered reference"
+    assert result["display_name_source"] == "filename"
+
+
+def test_inspect_cif_upload_compacts_formula_whitespace() -> None:
+    result = inspect_cif_upload(
+        VALID_CIF.replace(b"_chemical_formula_sum 'Fe'", b"_chemical_formula_sum 'Al Fe2 V'"),
+        "collcode258024.cif",
+    )
+
+    assert result["formula"] == "Al Fe2 V"
+    assert result["display_name"] == "AlFe2V"
+    assert result["display_name_source"] == "formula"
 
 
 def test_inspect_cif_upload_does_not_repeat_equivalent_formula_and_name() -> None:

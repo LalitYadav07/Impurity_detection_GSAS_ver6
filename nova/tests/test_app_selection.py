@@ -456,6 +456,55 @@ def test_xray_mode_clears_neutron_only_setup_and_restores_options() -> None:
     assert state.use_builtin_cuka is False
 
 
+def test_radiation_change_clears_measurement_specific_restored_inputs() -> None:
+    app = RadarPdNovaApp.__new__(RadarPdNovaApp)
+    state = _State(
+        radiation="xray",
+        last_radiation="neutron",
+        instrument_mode="auto",
+        input_source="galaxy",
+        instrument_source="galaxy",
+        main_cif_source="galaxy",
+        database_source="archive",
+        library_archive_source="galaxy",
+        data_path="pattern.gsa",
+        history_data_id="neutron-pattern-id",
+        remote_data_uri="gxfiles://pattern",
+        facility_data_path="/SNS/PG3/pattern.gsa",
+        facility_data_relative_path="shared/pattern.gsa",
+        event_file_path="events.nxs",
+        instrument_path="powgen.instprm",
+        history_instrument_id="neutron-profile-id",
+        remote_instrument_uri="gxfiles://profile",
+        facility_instrument_path="/SNS/PG3/profile.instprm",
+        facility_instrument_relative_path="shared/profile.instprm",
+        database_archive_path="neutron-library.zip",
+        history_database_id="neutron-library-id",
+        history_main_cif_id="main-phase-id",
+        use_facility_workspace=False,
+        magnetic_precheck=False,
+        use_builtin_cuka=False,
+        busy=False,
+        notice="",
+    )
+    app.server = SimpleNamespace(state=state)
+
+    app._radiation_changed("xray")
+
+    assert state.input_source == "galaxy"
+    assert state.history_data_id == ""
+    assert state.instrument_source == "upload"
+    assert state.history_instrument_id == ""
+    assert state.instrument_path == ""
+    assert state.database_source == "builtin"
+    assert state.history_database_id == ""
+    assert state.database_archive_path == ""
+    assert state.main_cif_source == "galaxy"
+    assert state.history_main_cif_id == "main-phase-id"
+    assert state.last_radiation == "xray"
+    assert "Reselect the diffraction pattern" in state.notice
+
+
 def test_applying_saved_configuration_preserves_compatible_inputs() -> None:
     app = RadarPdNovaApp.__new__(RadarPdNovaApp)
     state = _State(
