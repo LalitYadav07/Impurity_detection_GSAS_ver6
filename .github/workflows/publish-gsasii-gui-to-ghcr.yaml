@@ -92,6 +92,7 @@ jobs:
             -e EP_PATH=/gsasii \
             -e GSASII_SOURCE_PROJECT=/job/input.gpx \
             -e GSASII_OUTPUT_PROJECT=/job/output.gpx \
+            -e GSASII_OUTPUT_ARCHIVE=/job/exports.zip \
             -p 127.0.0.1:18080:8080 \
             -v "${smoke_dir}:/job" \
             "${IMAGE_NAME}:gsasii-gui")"

@@ -3,6 +3,7 @@ set -euo pipefail
 
 source_project="${GSASII_SOURCE_PROJECT:-}"
 output_project="${GSASII_OUTPUT_PROJECT:-}"
+output_archive="${GSASII_OUTPUT_ARCHIVE:-}"
 session_dir="${GSASII_SESSION_DIR:-${TMPDIR:-/tmp}/gsasii-session-$(id -u)}"
 
 if [[ -z "${source_project}" || ! -s "${source_project}" ]]; then
@@ -13,6 +14,10 @@ if [[ -z "${output_project}" ]]; then
     echo "GSASII_OUTPUT_PROJECT must name the Galaxy output GPX" >&2
     exit 64
 fi
+if [[ -z "${output_archive}" ]]; then
+    echo "GSASII_OUTPUT_ARCHIVE must name the Galaxy export archive" >&2
+    exit 64
+fi
 
 mkdir -p "${session_dir}"
 if [[ ! -w "${session_dir}" ]]; then
@@ -20,11 +25,22 @@ if [[ ! -w "${session_dir}" ]]; then
     mkdir -p "${session_dir}"
 fi
 mkdir -p "$(dirname "${output_project}")"
+mkdir -p "$(dirname "${output_archive}")"
 install -m 0644 "${source_project}" "${session_dir}/radar_pd_project.gpx"
 install -m 0644 "${session_dir}/radar_pd_project.gpx" "${output_project}"
 
+export_dir="${session_dir}/Exports"
+mkdir -p "${export_dir}"
+cat > "${export_dir}/README.txt" <<'EOF'
+Save plots, CIFs, tables, and other GSAS-II exports in this folder.
+The folder is preserved in Galaxy History as "GSAS-II exported files".
+The working GPX is preserved separately and does not need to be copied here.
+EOF
+
 export GSASII_PROJECT_PATH="${session_dir}/radar_pd_project.gpx"
 export GSASII_OUTPUT_PROJECT="${output_project}"
+export GSASII_EXPORT_DIR="${export_dir}"
+export GSASII_OUTPUT_ARCHIVE="${output_archive}"
 export GSASII_SESSION_DIR="${session_dir}"
 export HOME="${session_dir}/home"
 export DISPLAY=:1
@@ -54,5 +70,10 @@ echo "GSAS-II source revision: ${GSASII_REF:-unknown}"
 echo "Input GPX: ${source_project}"
 echo "Writable session GPX: ${GSASII_PROJECT_PATH}"
 echo "Galaxy output GPX: ${GSASII_OUTPUT_PROJECT}"
+echo "Export folder: ${GSASII_EXPORT_DIR}"
+echo "Galaxy export archive: ${GSASII_OUTPUT_ARCHIVE}"
+
+/opt/conda/bin/python /opt/gsasii-gui/snapshot_exports.py \
+    "${GSASII_EXPORT_DIR}" "${GSASII_OUTPUT_ARCHIVE}" "${GSASII_SESSION_DIR}/export-manifest.json"
 
 exec /usr/bin/supervisord -c /etc/supervisor/conf.d/gsasii.conf

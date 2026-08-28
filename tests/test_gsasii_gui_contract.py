@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import subprocess
+import sys
+import zipfile
 from pathlib import Path
 
 
@@ -15,11 +18,14 @@ def test_gui_image_pins_gsasii_and_provides_native_desktop_stack() -> None:
     dockerfile = _read("Dockerfile")
 
     assert "ARG GSASII_REF=dcd09eb2a4392b94d22cda3c69021137e6b14620" in dockerfile
+    assert "ARG NOVNC_REF=9e7def8703ac3234c4bae0cd08663f5dd526ee22" in dockerfile
     assert "git checkout --detach \"${GSASII_REF}\"" in dockerfile
+    assert "https://github.com/novnc/noVNC.git /opt/noVNC" in dockerfile
+    assert "git submodule update --init --depth 1" in dockerfile
     environment = _read("environment.yml")
     assert "wxpython>=4.2,<4.2.5" in environment
     assert "hdf5plugin" in environment
-    for package in ("nginx", "novnc", "openbox", "websockify", "x11vnc", "xvfb"):
+    for package in ("nginx", "openbox", "websockify", "x11vnc", "xvfb"):
         assert package in dockerfile
     assert "libnss-wrapper" in dockerfile
     assert "x11-xserver-utils" in dockerfile
@@ -34,7 +40,7 @@ def test_desktop_gateway_obeys_ndip_path_prefix() -> None:
     assert "location = ${EP_PATH}/websockify" in nginx
     assert "path=${EP_WS_PATH}/websockify" in nginx
     assert "path=${EP_PATH}/websockify" not in nginx
-    assert "alias /usr/share/novnc/" in nginx
+    assert "alias /opt/noVNC/" in nginx
     assert "location = ${EP_PATH}/healthz" in nginx
     assert "location = ${EP_PATH}/websockify" in nginx
     assert "proxy_buffering off" in nginx
@@ -68,6 +74,52 @@ def test_gpx_is_edited_as_a_copy_and_continuously_preserved() -> None:
     assert "retrying" in sync
     assert '/opt/conda/bin/GSAS-II "${project}"' in gui
     assert 'mv -f "${final_copy}" "${output_project}"' in gui
+
+
+def test_exports_are_visible_and_continuously_preserved() -> None:
+    start = _read("scripts/start.sh")
+    sync = _read("scripts/run_export_sync.sh")
+    supervisor = _read("supervisord.conf")
+
+    assert 'export_dir="${session_dir}/Exports"' in start
+    assert "GSASII_OUTPUT_ARCHIVE must name the Galaxy export archive" in start
+    assert 'export GSASII_EXPORT_DIR="${export_dir}"' in start
+    assert "snapshot_exports.py" in start
+    assert "snapshot_exports.py" in sync
+    assert "sleep 1" in sync
+    assert "[program:export_sync]" in supervisor
+    assert "command=/opt/gsasii-gui/run_export_sync.sh" in supervisor
+
+
+def test_export_snapshot_is_atomic_and_skips_unchanged_archives(tmp_path: Path) -> None:
+    export_dir = tmp_path / "Exports"
+    export_dir.mkdir()
+    (export_dir / "README.txt").write_text("save exports here", encoding="utf-8")
+    (export_dir / "final-fit.png").write_bytes(b"png-data")
+    archive = tmp_path / "exports.zip"
+    state = tmp_path / "manifest.json"
+    script = GUI / "scripts" / "snapshot_exports.py"
+
+    command = [sys.executable, str(script), str(export_dir), str(archive), str(state)]
+    subprocess.run(command, check=True)
+    first_mtime = archive.stat().st_mtime_ns
+    with zipfile.ZipFile(archive) as bundle:
+        assert set(bundle.namelist()) == {"README.txt", "final-fit.png"}
+        assert bundle.read("final-fit.png") == b"png-data"
+
+    subprocess.run(command, check=True)
+    assert archive.stat().st_mtime_ns == first_mtime
+
+
+def test_vnc_path_prefers_damage_events_and_low_interaction_delay() -> None:
+    x11vnc = _read("scripts/run_x11vnc.sh")
+
+    assert "-xdamage" in x11vnc
+    assert "-noxdamage" not in x11vnc
+    assert "-defer 5" in x11vnc
+    assert "-wait 10" in x11vnc
+    assert "-cursor most" in x11vnc
+    assert "-cursorpos" in x11vnc
 
 
 def test_gui_processes_run_as_the_ndip_runtime_uid() -> None:

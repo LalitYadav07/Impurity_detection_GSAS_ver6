@@ -1,14 +1,16 @@
 FROM mambaorg/micromamba:2.9.0-ubuntu22.04
 
 ARG GSASII_REF=dcd09eb2a4392b94d22cda3c69021137e6b14620
+ARG NOVNC_REF=9e7def8703ac3234c4bae0cd08663f5dd526ee22
 ARG GSASII_UID=1000
 ARG GSASII_GID=1000
-ARG RADAR_PD_GSASII_GUI_VERSION=0.1.10
+ARG RADAR_PD_GSASII_GUI_VERSION=0.1.11
 
 LABEL org.opencontainers.image.title="RADAR-PD GSAS-II Interactive" \
       org.opencontainers.image.description="Browser-hosted native GSAS-II desktop for RADAR-PD GPX handoff" \
       org.opencontainers.image.source="https://github.com/LalitYadav07/Impurity_detection_GSAS_ver6" \
       org.opencontainers.image.gsasii.revision="${GSASII_REF}" \
+      org.opencontainers.image.novnc.revision="${NOVNC_REF}" \
       org.opencontainers.image.version="${RADAR_PD_GSASII_GUI_VERSION}"
 
 USER root
@@ -41,7 +43,6 @@ RUN apt-get update \
         libnss-wrapper \
         libxkbcommon-x11-0 \
         nginx \
-        novnc \
         openbox \
         supervisor \
         websockify \
@@ -61,6 +62,11 @@ USER root
 RUN git clone --filter=blob:none https://github.com/AdvancedPhotonSource/GSAS-II.git /opt/GSAS-II \
     && cd /opt/GSAS-II \
     && git checkout --detach "${GSASII_REF}"
+
+RUN git clone --filter=blob:none https://github.com/novnc/noVNC.git /opt/noVNC \
+    && cd /opt/noVNC \
+    && git checkout --detach "${NOVNC_REF}" \
+    && git submodule update --init --depth 1
 
 RUN /opt/conda/bin/python -m pip install \
         --no-build-isolation \

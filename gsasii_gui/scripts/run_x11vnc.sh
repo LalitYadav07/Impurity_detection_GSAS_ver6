@@ -12,6 +12,10 @@ exec x11vnc \
     -shared \
     -nopw \
     -rfbport 5900 \
-    -noxdamage \
+    -xdamage \
+    -defer 5 \
+    -wait 10 \
+    -cursor most \
+    -cursorpos \
     -repeat \
     -xkb

@@ -49,7 +49,7 @@ http {
         }
 
         location ${EP_PATH}/ {
-            alias /usr/share/novnc/;
+            alias /opt/noVNC/;
             sub_filter '<title>noVNC</title>' '<title>RADAR-PD GSAS-II ${GUI_VERSION}</title>';
             sub_filter_once on;
         }
