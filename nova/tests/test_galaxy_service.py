@@ -69,6 +69,52 @@ def test_job_output_ids_include_dataset_collection_associations(monkeypatch, tmp
     assert captured["headers"]["x-api-key"] == "key"
 
 
+def test_job_output_ids_recovers_gpx_collection_from_history(monkeypatch, tmp_path: Path) -> None:
+    requested: list[tuple[str, dict[str, Any]]] = []
+
+    class FakeResponse:
+        def __init__(self, payload: Any) -> None:
+            self.payload = payload
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> Any:
+            return self.payload
+
+    def fake_get(url: str, **kwargs: Any) -> FakeResponse:
+        requested.append((url, kwargs))
+        if url.endswith("/api/jobs/analysis-job/outputs"):
+            return FakeResponse([{"name": "summary", "dataset": {"id": "summary-id"}}])
+        return FakeResponse(
+            [
+                {
+                    "history_content_type": "dataset_collection",
+                    "id": "other-collection",
+                    "job_source_id": "other-job",
+                    "implicit_output_name": "gpx_projects",
+                    "name": "RADAR-PD 5 | GSAS-II handoff projects",
+                },
+                {
+                    "history_content_type": "dataset_collection",
+                    "id": "recovered-gpx-collection",
+                    "job_source_id": "analysis-job",
+                    "implicit_output_name": "gpx_projects",
+                    "name": "RADAR-PD 5 | GSAS-II handoff projects",
+                },
+            ]
+        )
+
+    monkeypatch.setattr("radar_pd_nova.galaxy_service.requests.get", fake_get)
+    service = GalaxyService("https://galaxy.example", "key", "history", output_root=tmp_path)
+
+    output_ids = service.job_output_ids("analysis-job")
+
+    assert output_ids == {"summary": "summary-id", "gpx_projects": "recovered-gpx-collection"}
+    assert requested[1][0] == "https://galaxy.example/api/histories/history/contents"
+    assert requested[1][1]["params"]["qv"] == "GSAS-II handoff projects"
+
+
 def test_results_export_uses_ndip_authenticated_export_contract() -> None:
     service = GalaxyService("https://example.invalid", "key", "history", output_root=Path("."))
     seen: dict[str, Any] = {}

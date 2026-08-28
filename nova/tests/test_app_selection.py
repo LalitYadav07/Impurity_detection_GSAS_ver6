@@ -80,6 +80,27 @@ def test_result_explorer_is_available_only_with_a_complete_archive() -> None:
     assert state.result_explorer_available is True
 
 
+def test_selecting_another_run_clears_stale_gsasii_status() -> None:
+    record = RunRecord(
+        uid="completed-next",
+        name="completed next run",
+        mode=AnalysisMode.FULL,
+        history_id="history-1",
+        status=RunStatus.OK,
+    )
+    app, state = _app_with_record(record)
+    state.selected_run_uid = "completed-previous"
+    state.gsasii_launch_url = "/interactivetool/old"
+    state.gsasii_session_status = "error"
+    state.gsasii_status_message = "Galaxy did not publish a GPX collection for this run."
+
+    app._select_record(record)
+
+    assert state.gsasii_launch_url == ""
+    assert state.gsasii_session_status == ""
+    assert state.gsasii_status_message == ""
+
+
 def test_selecting_active_run_keeps_run_monitor_visible() -> None:
     record = RunRecord(
         uid="running-1",

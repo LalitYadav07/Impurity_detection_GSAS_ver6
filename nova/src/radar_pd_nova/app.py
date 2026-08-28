@@ -4667,6 +4667,7 @@ class RadarPdNovaApp(ThemedApp):
 
     def _select_record(self, record: RunRecord) -> None:
         state = self.server.state
+        previous_run_uid = str(getattr(state, "selected_run_uid", "") or "")
         state.selected_run_uid = record.uid
         state.run_selection = [record.uid]
         state.selected_run_name = record.name
@@ -4685,6 +4686,10 @@ class RadarPdNovaApp(ThemedApp):
         state.selected_run_console = record.console_tail
         state.viewed_run_mode = record.mode.value
         state.monitor_stages = self._monitor_stage_rows(record)
+        if previous_run_uid != record.uid:
+            state.gsasii_launch_url = ""
+            state.gsasii_session_status = ""
+            state.gsasii_status_message = ""
         try:
             created = datetime.fromisoformat(record.created_utc.replace("Z", "+00:00"))
             if created.tzinfo is None:

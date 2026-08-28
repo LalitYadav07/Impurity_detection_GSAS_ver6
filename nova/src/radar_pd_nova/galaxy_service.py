@@ -743,7 +743,70 @@ class GalaxyService:
             timeout=30,
         )
         response.raise_for_status()
-        return self._named_output_ids(response.json())
+        output_ids = self._named_output_ids(response.json())
+        if "gpx_projects" not in output_ids:
+            collection_id = self._history_job_collection_id(
+                job_id,
+                output_name="gpx_projects",
+                name_contains="GSAS-II handoff projects",
+            )
+            if collection_id:
+                output_ids["gpx_projects"] = collection_id
+        return output_ids
+
+    def _history_job_collection_id(
+        self,
+        job_id: str,
+        *,
+        output_name: str,
+        name_contains: str,
+        limit: int = 500,
+    ) -> str | None:
+        """Recover an HDCA when Galaxy's job-output endpoint omits collections.
+
+        NDIP History collection records retain the encoded producing job ID as
+        ``job_source_id``. Matching that ID avoids guessing from duplicate run
+        names or collection labels.
+        """
+
+        page_size = 100
+        offset = 0
+        while offset < limit:
+            requested = min(page_size, limit - offset)
+            response = requests.get(
+                f"{self.galaxy_url}/api/histories/{self.history_id}/contents",
+                headers=self._headers,
+                params={
+                    "v": "dev",
+                    "limit": requested,
+                    "offset": offset,
+                    "order": "update_time-dsc",
+                    "q": "name-contains",
+                    "qv": name_contains,
+                },
+                timeout=30,
+            )
+            response.raise_for_status()
+            page = response.json()
+            if not isinstance(page, list):
+                return None
+            for row in page:
+                if not isinstance(row, dict):
+                    continue
+                if row.get("history_content_type") != "dataset_collection" or row.get("deleted"):
+                    continue
+                if str(row.get("job_source_id") or "") != job_id:
+                    continue
+                implicit_name = str(row.get("implicit_output_name") or "")
+                collection_name = str(row.get("name") or "")
+                if implicit_name == output_name or name_contains.casefold() in collection_name.casefold():
+                    identifier = str(row.get("id") or "").strip()
+                    if identifier:
+                        return identifier
+            if len(page) < requested:
+                break
+            offset += requested
+        return None
 
     @staticmethod
     def _job_parameters(job: dict[str, Any]) -> Any:
