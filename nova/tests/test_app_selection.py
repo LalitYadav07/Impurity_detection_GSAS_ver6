@@ -35,6 +35,70 @@ def test_workflow_mode_change_collapses_previous_run_history() -> None:
     assert state.flush_count == 1
 
 
+def test_loading_results_publishes_only_the_final_plot_figure(monkeypatch, tmp_path: Path) -> None:
+    app = RadarPdNovaApp.__new__(RadarPdNovaApp)
+    state = _State(workspace_view="monitor")
+    app.server = SimpleNamespace(state=state)
+    app.service = SimpleNamespace(result_payload=lambda _record: {"summary": {}})
+    app._powgen_controller = None
+
+    class _Widget:
+        def __init__(self) -> None:
+            self.updates: list[object] = []
+
+        def update(self, figure: object) -> None:
+            self.updates.append(figure)
+
+    primary = _Widget()
+    gallery = _Widget()
+    app._primary_plot_widget = primary
+    app._plot_widget = gallery
+    expected_figure = object()
+    plot_path = str(tmp_path / "best.plotdata.json")
+    view = {
+        "mode": "full",
+        "metrics": [],
+        "warnings": [],
+        "phases": [],
+        "phase_total": "-",
+        "tables": [],
+        "plots": [{"name": "Best refinement", "path": plot_path, "category": "Best refinement"}],
+        "primary_plot_path": plot_path,
+        "file_groups": [],
+        "checkpoints": [],
+        "rapid_stages": {
+            "coarse_search": [],
+            "lattice_nudge": [],
+            "pattern_scoring": [],
+            "final_refinement": [],
+        },
+        "top_refinements": [],
+        "full_progression": [],
+        "full_models": [],
+    }
+    monkeypatch.setattr(
+        "radar_pd_nova.app.build_result_view",
+        lambda *_args, **_kwargs: SimpleNamespace(to_state=lambda: view),
+    )
+    monkeypatch.setattr(
+        "radar_pd_nova.app.load_plot_with_fallback",
+        lambda _options, path: (path, {}, expected_figure),
+    )
+    record = RunRecord(
+        uid="completed-with-plot",
+        name="completed with plot",
+        mode=AnalysisMode.FULL,
+        history_id="history-1",
+        status=RunStatus.OK,
+        output_dir=str(tmp_path),
+    )
+
+    app._load_results(record)
+
+    assert primary.updates == [expected_figure]
+    assert gallery.updates == [expected_figure]
+
+
 class _State(SimpleNamespace):
     def flush(self) -> None:
         self.flush_count = getattr(self, "flush_count", 0) + 1

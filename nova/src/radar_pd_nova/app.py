@@ -5842,6 +5842,14 @@ class RadarPdNovaApp(ThemedApp):
             state.gallery_selected_plot = state.selected_plot
             self._primary_plot_changed()
             self._gallery_plot_changed()
+        else:
+            # Avoid an empty-then-final update while the hidden Plotly panels
+            # become visible. That race can leave the empty figure mounted
+            # until the user visits another tab.
+            if self._plot_widget is not None:
+                self._plot_widget.update(figure_for_payload({}))
+            if self._primary_plot_widget is not None:
+                self._primary_plot_widget.update(figure_for_payload({}))
         if state.artifact_options:
             state.selected_artifact = state.artifact_options[0]["path"]
         if state.checkpoint_rows:
@@ -5924,10 +5932,6 @@ class RadarPdNovaApp(ThemedApp):
         state.selected_hypothesis = None
         state.comparison_hypothesis = None
         state.result_tab = "overview"
-        if self._plot_widget is not None:
-            self._plot_widget.update(figure_for_payload({}))
-        if self._primary_plot_widget is not None:
-            self._primary_plot_widget.update(figure_for_payload({}))
 
     def _table_changed(self, path: str | None = None, **_: Any) -> None:
         path = path or self.server.state.selected_table
