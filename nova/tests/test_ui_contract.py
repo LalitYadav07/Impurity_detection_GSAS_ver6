@@ -107,6 +107,7 @@ def test_plotly_canvases_have_nonzero_layout_frames() -> None:
     assert template.count('class="radar-plot-frame"') == 4
     assert ".radar-plot-frame { position: relative; width: 100%; height: 720px;" in app._css()
     assert "Plotly.Plots.resize" in template
+    assert "window.document.querySelectorAll" in template
 
 
 def test_powgen_experiment_dashboard_exposes_scientific_trends() -> None:

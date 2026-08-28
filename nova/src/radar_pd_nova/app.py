@@ -2283,7 +2283,7 @@ class RadarPdNovaApp(ThemedApp):
                         key="item.value",
                         value=("item.value",),
                         size="small",
-                        click="workspace_view = item.value; $nextTick(() => window.setTimeout(() => document.querySelectorAll('.js-plotly-plot').forEach(el => window.Plotly && Plotly.Plots.resize(el)), 80))",
+                        click="workspace_view = item.value; $nextTick(() => window.setTimeout(() => window.document.querySelectorAll('.js-plotly-plot').forEach(el => window.Plotly && Plotly.Plots.resize(el)), 80))",
                     ):
                         # Plotly measures a hidden v-show panel as zero width.
                         # Resize after the selected workspace becomes visible.
