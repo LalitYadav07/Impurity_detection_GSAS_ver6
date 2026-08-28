@@ -625,6 +625,103 @@ def test_selected_checkpoint_recovers_collection_id_from_job_outputs() -> None:
     }
 
 
+def test_monitor_checkpoint_is_published_before_native_gsasii_launch(tmp_path: Path) -> None:
+    checkpoint_path = tmp_path / "Seq_final_main_polished.gpx"
+    checkpoint_path.write_bytes(b"GSAS-II project")
+    record = RunRecord(
+        uid="monitor-run-with-archive-gpx",
+        galaxy_job_id="monitor-job",
+        name="IPTS-37876_PG3_63802",
+        mode=AnalysisMode.FULL,
+        history_id="history",
+        status=RunStatus.OK,
+        output_dataset_ids={},
+    )
+    app = RadarPdNovaApp.__new__(RadarPdNovaApp)
+    state = _State(
+        selected_run_uid=record.uid,
+        selected_checkpoint="checkpoint-0",
+        checkpoint_rows=[
+            {
+                "id": "checkpoint-0",
+                "name": "Seq final main polished (GPX)",
+                "path": str(checkpoint_path),
+                "galaxy_element_name": "Seq_final_main_polished",
+            }
+        ],
+        gsasii_launch_url="",
+        gsasii_session_status="",
+        notice="",
+        error_message="stale error",
+    )
+    app.server = SimpleNamespace(state=state)
+    app.records = {record.uid: record}
+    uploads: list[tuple[Path, str]] = []
+    app.service = SimpleNamespace(
+        job_output_ids=lambda _job_id: {},
+        upload_document=lambda path, *, label: uploads.append((Path(path), label)) or "uploaded-gpx",
+    )
+    submitted: list[dict[str, object]] = []
+
+    async def _submit(**kwargs):
+        submitted.append(kwargs)
+        return UtilityActionRecord(
+            uid="gsasii-action",
+            tool_id=str(kwargs["tool_id"]),
+            name=str(kwargs["name"]),
+            status=RunStatus.RUNNING,
+        )
+
+    app._submit_utility_action = _submit  # type: ignore[method-assign]
+    app._schedule_utility = lambda coroutine, _name: asyncio.run(coroutine)  # type: ignore[method-assign]
+
+    app.open_selected_checkpoint_in_gsasii()
+
+    assert uploads == [(checkpoint_path, "GSAS-II checkpoint IPTS-37876_PG3_63802")]
+    assert state.error_message == ""
+    assert submitted[0]["inputs"] == {
+        "project_source|source_kind": "single",
+        "project_source|gpx_project": {"dataset_id": "uploaded-gpx"},
+    }
+
+    state.gsasii_session_status = ""
+    app.open_selected_checkpoint_in_gsasii()
+
+    assert len(uploads) == 1
+    assert len(submitted) == 2
+
+
+def test_monitor_checkpoint_reports_missing_archive_gpx() -> None:
+    record = RunRecord(
+        uid="monitor-run-without-gpx",
+        galaxy_job_id="monitor-job",
+        name="IPTS-37876_PG3_63802",
+        mode=AnalysisMode.FULL,
+        history_id="history",
+        status=RunStatus.OK,
+        output_dataset_ids={},
+    )
+    app = RadarPdNovaApp.__new__(RadarPdNovaApp)
+    state = _State(
+        selected_run_uid=record.uid,
+        selected_checkpoint="checkpoint-0",
+        checkpoint_rows=[{"id": "checkpoint-0", "path": ""}],
+        gsasii_launch_url="",
+        gsasii_session_status="",
+        notice="",
+        error_message="",
+    )
+    app.server = SimpleNamespace(state=state)
+    app.records = {record.uid: record}
+    app.service = SimpleNamespace(job_output_ids=lambda _job_id: {})
+    app._schedule_utility = lambda coroutine, _name: asyncio.run(coroutine)  # type: ignore[method-assign]
+
+    app.open_selected_checkpoint_in_gsasii()
+
+    assert state.gsasii_session_status == "error"
+    assert "neither a published Galaxy GPX nor an available GPX checkpoint" in state.error_message
+
+
 def test_checkpoint_alias_maps_technical_name_to_published_anchor() -> None:
     record = RunRecord(
         uid="run-with-renamed-gpx",

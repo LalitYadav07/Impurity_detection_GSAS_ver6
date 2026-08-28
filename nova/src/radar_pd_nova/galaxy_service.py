@@ -109,13 +109,16 @@ def _upload_filename(source: Path, label: str) -> str:
 def _galaxy_upload_file_type(dataset_name: str) -> str:
     """Return the Galaxy datatype needed by strict downstream tool inputs.
 
-    Galaxy cannot reliably sniff a ZIP archive from NOVA's extensionless
-    temporary upload paths.  The display filename has already recovered the
-    scientific suffix, so use it to declare archive uploads explicitly.
-    Other inputs retain Galaxy's normal automatic datatype detection.
+    Galaxy cannot reliably sniff strict downstream formats from NOVA's
+    temporary upload paths. The display filename has already recovered the
+    scientific suffix, so declare ZIP archives and GSAS-II projects
+    explicitly. Other inputs retain Galaxy's normal automatic detection.
     """
 
-    return "zip" if Path(dataset_name).suffix.lower() == ".zip" else "auto"
+    return {
+        ".gpx": "gpx",
+        ".zip": "zip",
+    }.get(Path(dataset_name).suffix.lower(), "auto")
 
 
 def _extract_results_archive(archive: Path, destination: Path) -> None:

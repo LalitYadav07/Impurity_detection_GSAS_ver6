@@ -11,7 +11,13 @@ from typing import Any, Iterator
 import yaml
 import numpy as np
 
-from radar_pd_nova.galaxy_service import GalaxyService, _upload_filename, normalize_status, stage_from_console
+from radar_pd_nova.galaxy_service import (
+    GalaxyService,
+    _galaxy_upload_file_type,
+    _upload_filename,
+    normalize_status,
+    stage_from_console,
+)
 from radar_pd_nova.models import (
     AnalysisConfig,
     AnalysisMode,
@@ -822,6 +828,12 @@ def test_server_selected_upload_keeps_supported_original_filename(tmp_path: Path
     source = tmp_path / "TbSSL.CIF"
 
     assert _upload_filename(source, "main phase CIF") == "RADAR-PD main phase CIF | TbSSL.CIF"
+
+
+def test_strict_uploaded_formats_are_declared_from_display_filename() -> None:
+    assert _galaxy_upload_file_type("RADAR-PD candidate library | phases.zip") == "zip"
+    assert _galaxy_upload_file_type("RADAR-PD GSAS-II checkpoint | refined.gpx") == "gpx"
+    assert _galaxy_upload_file_type("RADAR-PD diffraction data | pattern.gsa") == "auto"
 
 
 def test_gsas_diffraction_uploads_keep_original_filename_suffix(tmp_path: Path) -> None:

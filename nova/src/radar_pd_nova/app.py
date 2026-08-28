@@ -216,6 +216,7 @@ class RadarPdNovaApp(ThemedApp):
         self._powgen_phase_widget: Any | None = None
         self._powgen_heatmap_widget: Any | None = None
         self._powgen_quality_widget: Any | None = None
+        self._published_checkpoint_ids: dict[tuple[str, str], str] = {}
         self._auto_opened_uids: set[str] = set()
         self._initialize_state()
         self.server.state.change("run_selection")(self._run_selection_changed)
@@ -5644,6 +5645,14 @@ class RadarPdNovaApp(ThemedApp):
         selected: str,
         checkpoint_rows: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any] | None:
+        checkpoint = next(
+            (
+                item
+                for item in checkpoint_rows or self.server.state.checkpoint_rows or []
+                if str(item.get("id") or "") == selected or str(item.get("path") or "") == selected
+            ),
+            {},
+        )
         collection_id = record.output_dataset_ids.get("gpx_projects")
         if not collection_id:
             job_id = str(record.galaxy_job_id or record.uid or "").strip()
@@ -5655,22 +5664,29 @@ class RadarPdNovaApp(ThemedApp):
                 record.output_dataset_ids.update(output_ids)
                 collection_id = record.output_dataset_ids.get("gpx_projects")
         if not collection_id:
-            return None
+            local_path = Path(str(checkpoint.get("path") or ""))
+            if local_path.suffix.casefold() != ".gpx" or not local_path.is_file():
+                return None
+            cache = getattr(self, "_published_checkpoint_ids", None)
+            if cache is None:
+                cache = {}
+                self._published_checkpoint_ids = cache
+            cache_key = (record.uid, selected)
+            dataset_id = cache.get(cache_key)
+            if not dataset_id:
+                dataset_id = await asyncio.to_thread(
+                    self.service.upload_document,
+                    local_path,
+                    label=f"GSAS-II checkpoint {record.name}",
+                )
+                cache[cache_key] = dataset_id
+            return {"id": dataset_id, "name": local_path.name}
         try:
             elements = await asyncio.to_thread(self.service.collection_elements, collection_id)
         except Exception:
             # The hosted GSAS-II tool can consume the complete HDCA directly,
             # so a transient element-inspection failure must not block launch.
             elements = []
-        checkpoint = next(
-            (
-                item
-                for item in checkpoint_rows or self.server.state.checkpoint_rows or []
-                if str(item.get("id") or "") == selected or str(item.get("path") or "") == selected
-            ),
-            {},
-        )
-
         def aliases(value: Any) -> set[str]:
             stem = Path(str(value or "")).stem.casefold()
             key = re.sub(r"[^a-z0-9]+", "", stem)
@@ -5722,13 +5738,21 @@ class RadarPdNovaApp(ThemedApp):
             return
         state.gsasii_launch_url = ""
         state.gsasii_session_status = "starting"
+        state.error_message = ""
         state.gsasii_status_message = (
             "Submitting the selected checkpoint and waiting for NDIP to allocate the GSAS-II desktop."
         )
         state.flush()
 
         async def launch() -> None:
-            match = await self._selected_checkpoint_element(record, selected, checkpoint_rows)
+            try:
+                match = await self._selected_checkpoint_element(record, selected, checkpoint_rows)
+            except Exception as exc:
+                state.gsasii_session_status = "error"
+                state.gsasii_status_message = f"Could not publish the selected GPX checkpoint to Galaxy: {exc}"
+                state.error_message = state.gsasii_status_message
+                state.flush()
+                return
             collection_id = record.output_dataset_ids.get("gpx_projects")
             if match is not None:
                 launch_name = Path(match["name"]).stem
@@ -5749,7 +5773,9 @@ class RadarPdNovaApp(ThemedApp):
                 state.error_message = ""
             else:
                 state.gsasii_session_status = "error"
-                state.gsasii_status_message = "Galaxy did not publish a GPX collection for this run."
+                state.gsasii_status_message = (
+                    "This run has neither a published Galaxy GPX nor an available GPX checkpoint in its results archive."
+                )
                 state.error_message = state.gsasii_status_message
                 state.flush()
                 return
