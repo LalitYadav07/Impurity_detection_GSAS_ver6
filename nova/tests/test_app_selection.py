@@ -37,7 +37,7 @@ def test_workflow_mode_change_collapses_previous_run_history() -> None:
 
 def test_loading_results_publishes_only_the_final_plot_figure(monkeypatch, tmp_path: Path) -> None:
     app = RadarPdNovaApp.__new__(RadarPdNovaApp)
-    state = _State(workspace_view="monitor")
+    state = _State(workspace_view="monitor", file_search="summary", show_technical_files=True)
     app.server = SimpleNamespace(state=state)
     app.service = SimpleNamespace(result_payload=lambda _record: {"summary": {}})
     app._powgen_controller = None
@@ -97,6 +97,8 @@ def test_loading_results_publishes_only_the_final_plot_figure(monkeypatch, tmp_p
 
     assert primary.updates == [expected_figure]
     assert gallery.updates == [expected_figure]
+    assert state.file_search == ""
+    assert state.show_technical_files is False
 
 
 class _State(SimpleNamespace):

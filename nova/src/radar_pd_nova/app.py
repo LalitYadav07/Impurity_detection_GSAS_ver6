@@ -5917,6 +5917,8 @@ class RadarPdNovaApp(ThemedApp):
         state.artifact_options = []
         state.selected_artifact = ""
         state.file_groups = []
+        state.file_search = ""
+        state.show_technical_files = False
         state.gpx_rows = []
         state.checkpoint_rows = []
         state.selected_checkpoint = ""
