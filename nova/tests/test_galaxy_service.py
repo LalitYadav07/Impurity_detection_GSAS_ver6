@@ -946,6 +946,23 @@ def test_cif_source_bundle_is_not_classified_as_candidate_library() -> None:
     ) == ("candidate_library", False)
 
 
+def test_legacy_candidate_library_is_labeled_as_unnamed() -> None:
+    item = GalaxyService._history_dataset_item(
+        {
+            "id": "1234567890abcdef",
+            "name": "RADAR-PD portable custom library",
+            "extension": "zip",
+            "state": "ok",
+            "update_time": "2026-08-27T14:11:00",
+        }
+    )
+
+    assert item is not None
+    assert item["display_name"] == (
+        "Legacy custom library (name unavailable) · 2026-08-27 14:11 · 12345678"
+    )
+
+
 def test_generated_text_and_csv_results_are_not_diffraction_inputs() -> None:
     for name, extension in (
         ("RADAR-PD 8 | Analysis log", "txt"),

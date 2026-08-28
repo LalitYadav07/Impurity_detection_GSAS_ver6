@@ -142,6 +142,17 @@ class DBPackBuilderTests(unittest.TestCase):
             cif2 = tmpdir / "phase_b.cif"
             _write_cif(cif1, ["Na", "Cl"], [[0, 0, 0], [0.5, 0.5, 0.5]], a=5.63)
             _write_cif(cif2, ["Li", "F"], [[0, 0, 0], [0.5, 0.5, 0.5]], a=4.03)
+            # A formula/name scalar is optional. The builder must derive the
+            # scientific label from atom sites instead of exposing phase_a.
+            cif1.write_text(
+                "\n".join(
+                    line
+                    for line in cif1.read_text(encoding="utf-8").splitlines()
+                    if not line.lstrip().startswith("_chemical_formula")
+                )
+                + "\n",
+                encoding="utf-8",
+            )
 
             out_root = tmpdir / "mini_xray_pack"
             result = build_mini_db_pack(

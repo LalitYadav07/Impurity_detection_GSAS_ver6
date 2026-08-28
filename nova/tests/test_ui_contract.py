@@ -60,6 +60,19 @@ def test_setup_panels_and_uploads_have_single_stable_instances() -> None:
     # Every numbered panel is eager-mounted: collapsing a panel must not
     # destroy and recreate its stateful file inputs.
     assert template.count("<VExpansionPanelText eager") == 11
+    assert 'v-show="radiation === \'neutron\'"' in template
+    assert "{{ radiation === 'neutron' ? '8' : '7' }}" in template
+    assert "{{ radiation === 'neutron' ? '11' : '10' }}" in template
+    assert app.server.state.powgen_wavelength == ""
+    assert app.server.state.powgen_wavelength_options[0] == {
+        "title": "Auto-detect from latest scan (recommended)",
+        "value": "",
+    }
+    assert "!powgen_wavelength" not in template
+    assert "The wavelength is auto-detected unless you choose an override." in (
+        app.server.state.powgen_message
+    )
+    assert "The packaged Cu K-alpha GSAS-II profile will be used" in template
     for panel_value in range(11):
         assert template.count(f':value="{panel_value}"') >= 1
 

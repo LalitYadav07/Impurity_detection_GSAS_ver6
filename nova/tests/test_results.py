@@ -609,8 +609,8 @@ def test_symbol_only_space_groups_are_completed_from_experiment_peers() -> None:
 
     complete_experiment_space_groups(scans)
 
-    assert scans[0]["phases"][0]["space_group"] == "F m -3 m (225)"
-    assert scans[0]["phases"][0]["label"] == "AlFe2V (SG F m -3 m (225))"
+    assert scans[0]["phases"][0]["space_group"] == "Fm-3m (225)"
+    assert scans[0]["phases"][0]["label"] == "AlFe2V (SG Fm-3m (225))"
 
 
 def test_result_mode_document_is_authoritative_and_warns_on_mismatch(tmp_path: Path) -> None:
@@ -672,6 +672,43 @@ def test_phase_fraction_normalization() -> None:
         {"phase": "Fe", "space_group": 225, "weight_percent": 91.2},
         {"phase": "Cr", "space_group": 229, "weight_percent": 0.0},
     ]
+
+
+def test_phase_fraction_normalization_compacts_formula_and_space_group_not_names() -> None:
+    rows = phase_fraction_rows(
+        {
+            "phases": [
+                {"phase": "Al Fe2 V", "space_group": "F m -3 m (225)", "weight_percent": 72.6},
+                {"phase": "alpha iron", "space_group": "I m -3 m", "weight_percent": 27.4},
+                {"phase": "Al0.5 Fe V0.5 (SG P m -3 m (221))", "weight_percent": 0.0},
+            ]
+        }
+    )
+
+    assert rows == [
+        {"phase": "AlFe2V", "space_group": "Fm-3m (225)", "weight_percent": 72.6},
+        {"phase": "alpha iron", "space_group": "Im-3m", "weight_percent": 27.4},
+        {"phase": "Al0.5FeV0.5", "space_group": "Pm-3m (221)", "weight_percent": 0.0},
+    ]
+
+
+def test_gsas_phase_tick_labels_compact_formula_and_space_group() -> None:
+    figure = figure_for_payload(
+        {
+            "plot_kind": "gsas_fit_with_ticks_v1",
+            "phase_order": ["catalog_phase"],
+            "phase_labels": {"catalog_phase": "Al Fe2 V (SG F m -3 m (225))"},
+            "phase_ticks": {"catalog_phase": [1.5]},
+            "arrays": {
+                "x": [1.0, 2.0],
+                "yobs": [1.0, 2.0],
+                "ycalc": [1.0, 2.0],
+                "resid": [0.0, 0.0],
+            },
+        }
+    )
+
+    assert figure.layout.yaxis3.ticktext == ("AlFe2V (SG Fm-3m (225))",)
 
 
 def test_renders_real_rapid_phase_components_and_zero_contribution() -> None:
@@ -1029,10 +1066,10 @@ def test_curated_rapid_rows_hide_internal_paths_and_json_fields() -> None:
         [
             {
                 "gsas_rwp_rank": 1,
-                "formulas": "Cu|Cu2S",
-                "space_groups": "225|14",
+                "formulas": "Al Fe2 V|Cu2S",
+                "space_groups": "F m -3 m (225)|P 21/c (14)",
                 "rwp": 9.25,
-                "weights_json": '{"Cu": 80, "Cu2S": 20}',
+                "weights_json": '{"Al Fe2 V": 80, "Cu2S": 20}',
                 "cif_paths": "/internal/a.cif|/internal/b.cif",
                 "stdout_tail": "technical",
                 "status": "ok",
@@ -1042,6 +1079,8 @@ def test_curated_rapid_rows_hide_internal_paths_and_json_fields() -> None:
 
     assert list(rows[0]) == ["rank", "hypothesis", "rwp", "phase_fractions", "pattern_rank", "status", "time"]
     assert "/internal" not in str(rows[0])
+    assert rows[0]["hypothesis"] == "AlFe2V (SG Fm-3m (225)) + Cu2S (SG P21/c (14))"
+    assert rows[0]["phase_fractions"] == "AlFe2V: 80.0%; Cu2S: 20.0%"
 
 
 def test_fixed_result_contract_fixtures_cover_rapid_full_partial_and_failure(tmp_path: Path) -> None:

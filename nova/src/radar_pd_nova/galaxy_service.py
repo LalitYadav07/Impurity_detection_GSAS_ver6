@@ -520,6 +520,8 @@ class GalaxyService:
         role, generated = cls._dataset_scientific_role(row)
         dataset_name = str(row.get("name") or row.get("hid") or "dataset")
         original_name = dataset_name.rsplit("|", 1)[-1].strip()
+        if role == "candidate_library" and original_name.casefold() == "radar-pd portable custom library":
+            original_name = "Legacy custom library (name unavailable)"
         update_time = str(row.get("update_time") or "")[:16].replace("T", " ")
         display_suffix = " · ".join(value for value in (update_time, dataset_id[:8]) if value)
         return {

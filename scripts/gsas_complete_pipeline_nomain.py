@@ -37,10 +37,16 @@ from pathlib import Path
 
 import numpy as np
 
-# Force UTF-8 for stdout/stderr to avoid 'charmap' errors on Windows
+# Force UTF-8 for stdout/stderr to avoid 'charmap' errors on Windows without
+# replacing streams owned by pytest, notebooks, NOVA, or another host.
 if sys.platform == "win32":
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except (AttributeError, OSError, ValueError):
+                pass
 
 from typing import Any, Dict, Optional, Tuple, List, Iterable, Set
 from time import perf_counter

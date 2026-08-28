@@ -519,8 +519,9 @@ class RadarPdNovaApp(ThemedApp):
             {"title": "New scans only", "value": "new_only"},
             {"title": "All existing scans, then new scans", "value": "all"},
         ]
-        state.powgen_wavelength = "1.5"
+        state.powgen_wavelength = ""
         state.powgen_wavelength_options = [
+            {"title": "Auto-detect from latest scan (recommended)", "value": ""},
             {"title": "0.8 A (Bank 1)", "value": "0.8"},
             {"title": "1.5 A (Bank 2)", "value": "1.5"},
             {"title": "2.665 A (Bank 3)", "value": "2.665"},
@@ -563,7 +564,10 @@ class RadarPdNovaApp(ThemedApp):
         state.powgen_tracked_phase_count = 0
         state.powgen_attention_count = 0
         state.powgen_dashboard_notice = "Completed scans will populate this experiment view."
-        state.powgen_message = "Select an IPTS, wavelength, and reusable Galaxy configuration to begin."
+        state.powgen_message = (
+            "Select an IPTS and reusable Galaxy configuration. "
+            "The wavelength is auto-detected unless you choose an override."
+        )
         state.powgen_last_checked = "Not started"
         state.powgen_preflight_checked = "Not checked"
         state.powgen_next_check = "Not scheduled"
@@ -955,10 +959,29 @@ class RadarPdNovaApp(ThemedApp):
         )
 
     @contextmanager
-    def _setup_section(self, number: int, title: str, value: int, status_expression: str) -> Any:
-        with vuetify.VExpansionPanel(value=(str(value),), key=f"'setup-{number}'", classes="radar-setup-panel"):
+    def _setup_section(
+        self,
+        number: int,
+        title: str,
+        value: int,
+        status_expression: str,
+        *,
+        v_show: str | None = None,
+        display_number: str | None = None,
+    ) -> Any:
+        panel_options: dict[str, Any] = {
+            "value": (str(value),),
+            "key": f"'setup-{number}'",
+            "classes": "radar-setup-panel",
+        }
+        if v_show:
+            panel_options["v_show"] = v_show
+        with vuetify.VExpansionPanel(**panel_options):
             with vuetify.VExpansionPanelTitle(classes="radar-setup-title"):
-                html.Span(str(number), classes="radar-step-number")
+                if display_number:
+                    html.Span(f"{{{{ {display_number} }}}}", classes="radar-step-number")
+                else:
+                    html.Span(str(number), classes="radar-step-number")
                 html.Span(title, classes="radar-step-label")
                 vuetify.VSpacer()
                 vuetify.VIcon(
@@ -1118,7 +1141,7 @@ class RadarPdNovaApp(ThemedApp):
                         density="compact",
                         variant="outlined",
                         disabled=("powgen_monitoring",),
-                        hint="Select the wavelength used by the experiment. The matching official packaged profile is resolved automatically.",
+                        hint="Auto-detect is recommended. The three explicit choices are the supported POWGEN bank/wavelength modes.",
                         persistent_hint=True,
                     )
                     vuetify.VAutocomplete(
@@ -1223,7 +1246,7 @@ class RadarPdNovaApp(ThemedApp):
                         block=True,
                         classes="mb-2",
                         disabled=(
-                            "powgen_monitoring || !powgen_ipts || !powgen_wavelength || "
+                            "powgen_monitoring || !powgen_ipts || "
                             "!powgen_configuration_dataset_id || powgen_preflight_status === 'checking'",
                         ),
                     )
@@ -1587,6 +1610,14 @@ class RadarPdNovaApp(ThemedApp):
                     density="compact",
                     inset=True,
                 )
+                vuetify.VAlert(
+                    v_show="radiation === 'xray' && use_builtin_cuka",
+                    text="The packaged Cu K-alpha GSAS-II profile will be used; no instrument file is required.",
+                    type="info",
+                    variant="tonal",
+                    density="compact",
+                    classes="mb-2",
+                )
                 with html.Div(
                     v_show="(input_source === 'upload' || input_source === 'galaxy' || input_source === 'galaxy_remote' || input_source === 'ipts_browser') && !(radiation === 'xray' && use_builtin_cuka)",
                     key="'radar-independent-instrument-profile'",
@@ -1934,7 +1965,13 @@ class RadarPdNovaApp(ThemedApp):
                 with html.Div(classes="radar-field-pair"):
                     vuetify.VSelect(label="Function", v_model=("background_type",), items=("['chebyschev-1','chebyschev','cosine','Q^2 power series']",), density="compact", variant="outlined")
                     vuetify.VTextField(label="Terms", v_model=("background_terms",), type="number", min=1, max=36, density="compact", variant="outlined")
-            with self._setup_section(7, "Magnetic Ordering Precheck", 6, "true"):
+            with self._setup_section(
+                7,
+                "Magnetic Ordering Precheck",
+                6,
+                "true",
+                v_show="radiation === 'neutron'",
+            ):
                 vuetify.VAlert(
                     v_show=f"!({main_phase_ready}) || radiation !== 'neutron'",
                     text="Available when a neutron run includes a known main-phase CIF.",
@@ -1967,7 +2004,13 @@ class RadarPdNovaApp(ThemedApp):
                     hint="Comma-separated integers, for example 2, 3, 4",
                     persistent_hint=True,
                 )
-            with self._setup_section(8, "Analysis Mode", 7, "!!analysis_mode"):
+            with self._setup_section(
+                8,
+                "Analysis Mode",
+                7,
+                "!!analysis_mode",
+                display_number="radiation === 'neutron' ? '8' : '7'",
+            ):
                 with html.Div(classes="radar-mode-cards"):
                     with html.Div(
                         classes=("analysis_mode === 'rapid' ? 'radar-mode-card is-selected' : 'radar-mode-card'",),
@@ -1989,7 +2032,13 @@ class RadarPdNovaApp(ThemedApp):
                         vuetify.VIcon("mdi-layers-triple-outline", size="small")
                         html.Strong("Full")
                         html.Span("Residual-aware multi-pass discovery and refinement")
-            with self._setup_section(9, "Runtime Budget", 8, "true"):
+            with self._setup_section(
+                9,
+                "Runtime Budget",
+                8,
+                "true",
+                display_number="radiation === 'neutron' ? '9' : '8'",
+            ):
                 with html.Div(v_show="analysis_mode === 'rapid'"):
                     with html.Div(classes="radar-field-pair"):
                         vuetify.VTextField(label="Phases / hypothesis", v_model=("rapid_phases_per_hypothesis",), type="number", min=1, max=5, density="compact", variant="outlined")
@@ -2009,7 +2058,13 @@ class RadarPdNovaApp(ThemedApp):
                     vuetify.VAlert(v_show="full_profile === 'quick'", text="One discovery pass for a fast first assessment.", type="info", variant="tonal", density="compact")
                     vuetify.VAlert(v_show="full_profile === 'balanced'", text="Up to two discovery passes; the search may stop early when the accepted model no longer improves.", type="info", variant="tonal", density="compact")
                     vuetify.VAlert(v_show="full_profile === 'thorough'", text="Up to three discovery passes. Small Rwp changes alone do not stop the residual search, but scientific safety checks still apply.", type="info", variant="tonal", density="compact")
-            with self._setup_section(10, "Expert Tuning", 9, "true"):
+            with self._setup_section(
+                10,
+                "Expert Tuning",
+                9,
+                "true",
+                display_number="radiation === 'neutron' ? '10' : '9'",
+            ):
                 vuetify.VSwitch(v_model=("reference_masks_enabled",), label="Mask reference/can peaks", color="#15543c", density="compact", inset=True)
                 vuetify.VSelect(v_show="reference_masks_enabled", label="Reference structures", v_model=("reference_mask_presets",), items=("['Al_fcc','Cu_fcc','V_bcc']",), multiple=True, chips=True, density="compact", variant="outlined")
                 vuetify.VSelect(v_show="reference_masks_enabled", label="Reference-mask window", v_model=("reference_window_mode",), items=("[{title:'Automatic from resolution',value:'auto'},{title:'Fixed window',value:'fixed'}]",), item_title="title", item_value="value", density="compact", variant="outlined")
@@ -2043,7 +2098,13 @@ class RadarPdNovaApp(ThemedApp):
                         ):
                             vuetify.VTextField(label=label, v_model=(model,), type="number", min=0, density="compact", variant="outlined")
             ready_expression = f"connection_ok && !!sample_elements && ({data_ready}) && (database_source === 'builtin' || (database_source === 'archive' && ((library_archive_source === 'computer' && !!database_archive_path) || (library_archive_source === 'galaxy' && !!history_database_id))))"
-            with self._setup_section(11, "Review Run Plan", 10, ready_expression):
+            with self._setup_section(
+                11,
+                "Review Run Plan",
+                10,
+                ready_expression,
+                display_number="radiation === 'neutron' ? '11' : '10'",
+            ):
                 vuetify.VTextField(label="Run name", v_model=("run_name",), density="compact", variant="outlined", placeholder="Generated automatically if blank")
                 with html.Div(classes="radar-checklist"):
                     for label, expression in (
@@ -3732,9 +3793,7 @@ class RadarPdNovaApp(ThemedApp):
             if not summary:
                 continue
             projected_phases: list[dict[str, Any]] = []
-            for phase in summary.get("phases") or []:
-                if not isinstance(phase, dict):
-                    continue
+            for phase in phase_fraction_rows({"phases": summary.get("phases") or []}):
                 phase_name = str(phase.get("phase") or "Unknown")
                 space_group = str(phase.get("space_group") or "-")
                 weight = float(phase.get("weight_percent") or 0.0)
@@ -3837,6 +3896,12 @@ class RadarPdNovaApp(ThemedApp):
         scientific_rows.sort(key=lambda item: item["run_number"], reverse=True)
         complete_experiment_space_groups(scientific_rows)
         for row in scientific_rows:
+            for phase in row["phases"]:
+                phase_name = str(phase.get("phase") or "Unknown")
+                space_group = str(phase.get("space_group") or "-")
+                phase["label"] = (
+                    f"{phase_name} (SG {space_group})" if space_group != "-" else phase_name
+                )
             row["phase_summary"] = " + ".join(
                 f"{phase['label']} {phase['weight_percent']:.1f}%"
                 for phase in row["phases"][:3]

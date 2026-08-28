@@ -21,6 +21,47 @@ from plotly.subplots import make_subplots
 _EASTERN_TIME = tzstr("EST5EDT,M3.2.0/2,M11.1.0/2")
 
 
+_FORMULA_TOKEN = r"[A-Z][a-z]?(?:\d+(?:\.\d*)?|\.\d+)?"
+
+
+def _canonical_phase_name(value: Any) -> str:
+    """Remove presentation whitespace only when the whole value is a formula."""
+
+    text = " ".join(str(value or "").split())
+    if re.fullmatch(rf"{_FORMULA_TOKEN}(?:\s+{_FORMULA_TOKEN})+", text):
+        return re.sub(r"\s+", "", text)
+    return text
+
+
+def _canonical_space_group(value: Any) -> str:
+    """Compact a Hermann-Mauguin symbol while retaining its group number."""
+
+    text = " ".join(str(value or "").split())
+    if not text:
+        return text
+    number_match = re.match(r"^(.*?)\s*\((\d{1,3})\)\s*$", text)
+    symbol = (number_match.group(1) if number_match else text).strip()
+    number = number_match.group(2) if number_match else None
+    compact_symbol = re.sub(r"\s+", "", symbol)
+    if number and compact_symbol:
+        return f"{compact_symbol} ({number})"
+    return compact_symbol or (f"({number})" if number else text)
+
+
+def _split_phase_label(label: str) -> tuple[str, str | None]:
+    match = re.match(r"^(.*?)\s*\(SG\s+(.+)\)\s*$", label, flags=re.IGNORECASE)
+    if not match:
+        return _canonical_phase_name(label), None
+    phase = _canonical_phase_name(match.group(1).strip())
+    space_group = _canonical_space_group(match.group(2).strip())
+    return phase or label, space_group or None
+
+
+def _canonical_phase_label(value: Any) -> str:
+    phase, space_group = _split_phase_label(str(value or "").strip())
+    return f"{phase} (SG {space_group})" if space_group else phase
+
+
 def _display_phase_label(phase_id: Any, label: Any = None) -> str:
     """Hide catalog storage identifiers from plot labels without changing data keys."""
 
@@ -30,19 +71,19 @@ def _display_phase_label(phase_id: Any, label: Any = None) -> str:
     if phase_text and label_text.startswith(wrapped_prefix) and label_text.endswith(")"):
         scientific_text = label_text[len(wrapped_prefix) : -1].strip()
         if scientific_text:
-            return scientific_text
+            return _canonical_phase_label(scientific_text)
     if label_text:
-        return label_text
+        return _canonical_phase_label(label_text)
     if len(phase_text) > 48:
         return phase_text[:45].rstrip("_-") + "..."
-    return phase_text or "Phase"
+    return _canonical_phase_label(phase_text) or "Phase"
 
 
 def _phase_axis_label(label: Any) -> str:
     """Compact a scientific phase label for the dedicated Bragg-tick axis."""
 
-    text = " ".join(str(label or "Phase").split())
-    if re.search(r"\(SG\s+[^)]+\)$", text, flags=re.IGNORECASE):
+    text = _canonical_phase_label(label or "Phase")
+    if re.search(r"\(SG\s+.+\)$", text, flags=re.IGNORECASE):
         return text
     number_match = re.search(r"\((\d{1,3})\)\)?$", text)
     if not number_match:
@@ -688,7 +729,12 @@ def component_figure(payload: dict[str, Any]) -> go.Figure:
         if not isinstance(component, dict):
             continue
         values = _array(component, "scaled", "component", "values", "intensity", "y")
-        label = str(component.get("label") or component.get("phase") or component.get("formula") or f"Phase {index + 1}")
+        label = _canonical_phase_label(
+            component.get("label")
+            or component.get("phase")
+            or component.get("formula")
+            or f"Phase {index + 1}"
+        )
         contribution = _component_contribution_percent(component)
         if contribution is not None:
             label = f"{label} ({float(contribution):.1f}%)"
@@ -896,19 +942,18 @@ def phase_fraction_rows(summary: dict[str, Any]) -> list[dict[str, Any]]:
         )
         rows.append(
             {
-                "phase": phase,
-                "space_group": space_group if space_group is not None else (label_space_group or "-"),
+                "phase": _canonical_phase_name(phase),
+                "space_group": (
+                    space_group
+                    if isinstance(space_group, (int, float)) and not isinstance(space_group, bool)
+                    else _canonical_space_group(space_group)
+                    if space_group is not None
+                    else (label_space_group or "-")
+                ),
                 "weight_percent": weight if weight is not None else "-",
             }
         )
     return rows
-
-
-def _split_phase_label(label: str) -> tuple[str, str | None]:
-    match = re.match(r"^(.*?)\s*\(SG\s+([^()]+)\)\s*$", label, flags=re.IGNORECASE)
-    if not match:
-        return label, None
-    return match.group(1).strip() or label, match.group(2).strip()
 
 
 def complete_experiment_space_groups(scans: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -920,7 +965,9 @@ def complete_experiment_space_groups(scans: list[dict[str, Any]]) -> list[dict[s
         for phase in scan.get("phases") or []:
             if not isinstance(phase, dict):
                 continue
-            value = str(phase.get("space_group") or "").strip()
+            phase["phase"] = _canonical_phase_name(phase.get("phase") or "Unknown")
+            value = _canonical_space_group(phase.get("space_group") or "")
+            phase["space_group"] = value or "-"
             match = re.match(r"^(.*?)\s*\((\d{1,3})\)\s*$", value)
             symbol = (match.group(1) if match else value).strip()
             number = match.group(2) if match else None
@@ -933,11 +980,20 @@ def complete_experiment_space_groups(scans: list[dict[str, Any]]) -> list[dict[s
         candidates = known.get(key, set())
         if number or len(candidates) != 1:
             continue
-        symbol = str(phase.get("space_group") or "").strip()
+        symbol = _canonical_space_group(phase.get("space_group") or "")
         completed = f"{symbol} ({next(iter(candidates))})"
         phase["space_group"] = completed
-        phase_name = str(phase.get("phase") or "Unknown")
-        phase["label"] = f"{phase_name} (SG {completed})"
+    for scan in scans:
+        for phase in scan.get("phases") or []:
+            if not isinstance(phase, dict):
+                continue
+            phase_name = _canonical_phase_name(phase.get("phase") or "Unknown")
+            space_group = _canonical_space_group(phase.get("space_group") or "") or "-"
+            phase["phase"] = phase_name
+            phase["space_group"] = space_group
+            phase["label"] = (
+                f"{phase_name} (SG {space_group})" if space_group != "-" else phase_name
+            )
     return scans
 
 
@@ -1021,8 +1077,16 @@ def _rank_value(value: Any, fallback: int = 999999) -> int:
 
 def _hypothesis_label(row: dict[str, Any]) -> str:
     raw = _first_value(row, "hypothesis", "formulas", "formula_keys", "phases")
-    formulas = [part.strip() for part in str(raw or "").replace(" + ", "|").split("|") if part.strip()]
-    groups = [part.strip() for part in str(row.get("space_groups") or "").split("|") if part.strip()]
+    formulas = [
+        _canonical_phase_name(part)
+        for part in str(raw or "").replace(" + ", "|").split("|")
+        if part.strip()
+    ]
+    groups = [
+        _canonical_space_group(part)
+        for part in str(row.get("space_groups") or "").split("|")
+        if part.strip()
+    ]
     if formulas and len(formulas) == len(groups):
         return " + ".join(f"{formula} (SG {group})" for formula, group in zip(formulas, groups))
     return " + ".join(formulas) if formulas else "-"
@@ -1038,7 +1102,12 @@ def _weights_label(value: Any) -> str:
         rendered: list[str] = []
         for label, raw in value.items():
             number = _as_float(raw)
-            rendered.append(f"{label}: {number:.1f}%" if number is not None else f"{label}: {raw}")
+            display_label = _canonical_phase_label(label)
+            rendered.append(
+                f"{display_label}: {number:.1f}%"
+                if number is not None
+                else f"{display_label}: {raw}"
+            )
         return "; ".join(rendered) if rendered else "-"
     return str(value) if value not in (None, "") else "-"
 
@@ -1095,11 +1164,13 @@ def curate_rapid_rows(stage: str, rows: Iterable[dict[str, Any]], *, limit: int 
                 }
             )
         elif stage == "lattice_nudge":
-            formula = _first_value(row, "formula", "formula_key", "phase_id") or "-"
+            formula = _canonical_phase_name(
+                _first_value(row, "formula", "formula_key", "phase_id") or "-"
+            )
             projected.append(
                 {
                     "phase": str(formula),
-                    "space_group": str(row.get("space_group") or "-"),
+                    "space_group": _canonical_space_group(row.get("space_group") or "-"),
                     "nudge_match": _number_text(row.get("best_score")),
                     "cell_adjustment": _number_text(row.get("distance_from_start"), 4),
                     "best_cell": _cell_summary(row),
