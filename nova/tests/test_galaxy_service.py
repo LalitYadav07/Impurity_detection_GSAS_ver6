@@ -900,6 +900,14 @@ def test_server_selected_upload_keeps_supported_original_filename(tmp_path: Path
     assert _upload_filename(source, "main phase CIF") == "RADAR-PD main phase CIF | TbSSL.CIF"
 
 
+def test_library_source_bundle_has_one_product_prefix(tmp_path: Path) -> None:
+    source = tmp_path / "Audit_Fe2VAl_cif_sources.zip"
+
+    assert _upload_filename(source, "CIF source bundle") == (
+        "RADAR-PD CIF source bundle | Audit_Fe2VAl_cif_sources.zip"
+    )
+
+
 def test_strict_uploaded_formats_are_declared_from_display_filename() -> None:
     assert _galaxy_upload_file_type("RADAR-PD candidate library | phases.zip") == "zip"
     assert _galaxy_upload_file_type("RADAR-PD GSAS-II checkpoint | refined.gpx") == "gpx"
@@ -1097,6 +1105,7 @@ def test_recent_runs_recovers_config_and_inputs_without_command_guessing(
         "params": {
             "reproducibility|run_name": "recovered-rapid-run",
             "analysis|strategy|analysis_mode": "full",
+            "output_profile": "monitor",
             "data_inputs|input_source|source_kind": "history",
             "data_inputs|input_source|diffraction_pattern": {"src": "hda", "id": 292227},
             "data_inputs|input_source|instrument_source|kind": "uploaded",
@@ -1147,6 +1156,7 @@ def test_recent_runs_recovers_config_and_inputs_without_command_guessing(
     record = records[0]
     assert record.name == "recovered-rapid-run"
     assert record.mode is AnalysisMode.RAPID
+    assert record.output_profile == "monitor"
     assert record.config is not None and record.config.sample_elements == ["Cu", "S"]
     assert record.inputs is not None
     assert record.inputs.source is InputSource.GALAXY

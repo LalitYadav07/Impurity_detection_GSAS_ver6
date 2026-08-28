@@ -47,6 +47,27 @@ def store_browser_upload(contents: bytes, original_name: Any) -> Path:
     return target
 
 
+def _scientific_cif_display_name(name: str, formula: str, declared_name: str) -> str:
+    """Mirror the database builder's scientific-name fallback in upload previews."""
+
+    reduced_formula = str(formula or "").strip()
+    phase_name = str(declared_name or "").strip()
+    if reduced_formula and phase_name:
+        formula_key = re.sub(r"[^a-z0-9]+", "", reduced_formula.casefold())
+        name_key = re.sub(r"[^a-z0-9]+", "", phase_name.casefold())
+        if formula_key == name_key:
+            return reduced_formula
+        if formula_key and formula_key in name_key:
+            return phase_name
+        return f"{reduced_formula} - {phase_name}"
+    if reduced_formula:
+        return reduced_formula
+    if phase_name:
+        return phase_name
+    filename_label = re.sub(r"[_-]+", " ", Path(name).stem).strip()
+    return filename_label or "Unknown phase"
+
+
 def inspect_cif_upload(contents: bytes, original_name: Any) -> dict[str, Any]:
     """Validate one browser CIF before it is uploaded to Galaxy.
 
@@ -99,10 +120,7 @@ def inspect_cif_upload(contents: bytes, original_name: Any) -> dict[str, Any]:
     )
     if declared_name.casefold() in {"#(c)", "global", "none", "unknown", "vesta_phase_1", "?", "."}:
         declared_name = ""
-    if formula and declared_name:
-        display_name = f"{formula} - {declared_name}"
-    else:
-        display_name = formula or declared_name
+    display_name = _scientific_cif_display_name(name, formula, declared_name)
 
     return {
         "name": name,

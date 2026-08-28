@@ -150,6 +150,9 @@ def test_powgen_monitor_requires_preflight_and_exposes_safe_backfill_controls() 
     assert "Open GSAS-II" in template
     assert "No GPX checkpoint was published for this run." in template
     assert "checkpoint_rows.length > 0" in template
+    assert "POWGEN live uses a low-latency publication profile" in template
+    assert "item.created_display" in template
+    assert "job {{ run.job_short }}" in template
     assert "gsasii_session_status !== 'ready'" in template
     assert 'itemValue="id"' in template
     assert "Compare selected series" in template

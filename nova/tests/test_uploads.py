@@ -69,6 +69,32 @@ def test_inspect_cif_upload_previews_declared_phase_name() -> None:
     assert result["display_name"] == "Fe - alpha iron"
 
 
+def test_inspect_cif_upload_uses_filename_when_scientific_name_is_missing() -> None:
+    contents = b"""data_candidate
+_cell_length_a 4.0
+_cell_length_b 4.0
+_cell_length_c 4.0
+_cell_angle_alpha 90
+_cell_angle_beta 90
+_cell_angle_gamma 90
+"""
+
+    result = inspect_cif_upload(contents, "L21_ordered_reference.cif")
+
+    assert result["formula"] == ""
+    assert result["phase_name"] == ""
+    assert result["display_name"] == "L21 ordered reference"
+
+
+def test_inspect_cif_upload_does_not_repeat_equivalent_formula_and_name() -> None:
+    result = inspect_cif_upload(
+        VALID_CIF + b"_chemical_name_common 'Fe'\n",
+        "iron_reference.cif",
+    )
+
+    assert result["display_name"] == "Fe"
+
+
 @pytest.mark.parametrize(
     ("contents", "name", "message"),
     [

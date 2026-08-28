@@ -439,6 +439,7 @@ class PowgenWatchController:
             galaxy_job_id=job_id,
             name=f"{self.settings.ipts}_{run.run_id}",
             mode=AnalysisMode.FULL,
+            output_profile="monitor",
             history_id=self.settings.history_id,
             status=RunStatus.QUEUED,
             analysis_status=RunStatus.QUEUED,

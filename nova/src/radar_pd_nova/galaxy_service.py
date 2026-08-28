@@ -1248,6 +1248,7 @@ class GalaxyService:
                 uid=f"pending-{snapshot.idempotency_token}",
                 name=snapshot.config.run_name,
                 mode=snapshot.config.mode,
+                output_profile=snapshot.output_profile,
                 history_id=self.history_id,
                 status=RunStatus.UPLOADING,
                 analysis_status=RunStatus.UPLOADING,
@@ -2014,6 +2015,8 @@ class GalaxyService:
             mode_text = _text(
                 _parameter_value(parameters, "analysis.strategy.analysis_mode", "analysis.analysis_mode", "analysis_mode")
             )
+            output_profile_text = _text(_parameter_value(parameters, "output_profile")).lower()
+            output_profile = "monitor" if output_profile_text == "monitor" else "full"
             if config is not None:
                 mode = config.mode
             elif mode_text and mode_text.lower() in {item.value for item in AnalysisMode}:
@@ -2028,6 +2031,7 @@ class GalaxyService:
                     galaxy_job_id=uid,
                     name=run_name,
                     mode=mode,
+                    output_profile=output_profile,
                     history_id=self.history_id,
                     status=state,
                     analysis_status=state,

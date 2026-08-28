@@ -309,7 +309,7 @@ class CacheManifest(BaseModel):
     archive_dataset_id: str
     archive_size: int | None = Field(default=None, ge=0)
     archive_update_time: str | None = None
-    adapter_version: str = "0.3.79"
+    adapter_version: str = "0.3.80"
     collected_utc: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
@@ -346,6 +346,7 @@ class RunRecord(BaseModel):
     galaxy_job_id: str | None = None
     name: str
     mode: AnalysisMode
+    output_profile: Literal["full", "monitor"] = "full"
     history_id: str
     status: RunStatus = RunStatus.NEW
     analysis_status: RunStatus | None = None

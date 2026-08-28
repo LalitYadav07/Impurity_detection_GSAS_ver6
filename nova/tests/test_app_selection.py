@@ -52,6 +52,27 @@ def _app_with_record(record: RunRecord) -> tuple[RadarPdNovaApp, _State]:
     return app, state
 
 
+def test_run_rows_disambiguate_repeated_scans_with_eastern_time_and_job_id() -> None:
+    record = RunRecord(
+        uid="job-2a64efc6f78b0ea3",
+        galaxy_job_id="2a64efc6f78b0ea3",
+        name="IPTS-37876_PG3_63798",
+        mode=AnalysisMode.FULL,
+        history_id="history-1",
+        status=RunStatus.OK,
+        created_utc="2026-08-25T21:14:18Z",
+    )
+    app = RadarPdNovaApp.__new__(RadarPdNovaApp)
+    state = _State(run_rows=[])
+    app.server = SimpleNamespace(state=state)
+    app.records = {record.uid: record}
+
+    app._sync_runs()
+
+    assert state.run_rows[0]["created_display"] == "2026-08-25 17:14 EDT"
+    assert state.run_rows[0]["job_short"] == "2a64efc6"
+
+
 def test_selecting_completed_run_opens_results() -> None:
     record = RunRecord(
         uid="completed-1",

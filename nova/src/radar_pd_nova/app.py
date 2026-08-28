@@ -389,6 +389,7 @@ class RadarPdNovaApp(ThemedApp):
         state.result_warnings = []
         state.phase_total = "-"
         state.viewed_run_mode = ""
+        state.viewed_output_profile = ""
         state.viewed_run_name = ""
         state.viewed_configuration = ""
         state.run_provenance_rows = []
@@ -1010,13 +1011,13 @@ class RadarPdNovaApp(ThemedApp):
                     )
                     with html.Div(classes="radar-run-list"):
                         with vuetify.VListItem(
-                            v_for="run in run_rows.filter(item => !run_search || item.name.toLowerCase().includes(run_search.toLowerCase()))",
+                            v_for="run in run_rows.filter(item => !run_search || (item.name + ' ' + item.mode + ' ' + item.status + ' ' + item.created_display + ' ' + item.job_id).toLowerCase().includes(run_search.toLowerCase()))",
                             key="run.uid",
                             click=(self._run_selection_changed, "[run.uid]"),
                             classes="radar-run-list-item",
                         ):
                             html.Div("{{ run.name }}", classes="radar-run-list-name")
-                            html.Div("{{ run.mode }} / {{ run.status }}", classes="radar-run-list-meta")
+                            html.Div("{{ run.mode }} / {{ run.status }} · {{ run.created_display }} · job {{ run.job_short }}", classes="radar-run-list-meta")
                             html.Div("{{ run.stage }}", classes="radar-run-list-stage")
                         html.Div("No RADAR-PD runs are in this Galaxy history.", v_if="!run_rows.length", classes="radar-empty-compact")
                     vuetify.VBtn(
@@ -1172,7 +1173,7 @@ class RadarPdNovaApp(ThemedApp):
                         disabled=("powgen_monitoring",),
                         clearable=True,
                         no_data_text="No custom RADAR-PD libraries are in this Galaxy History",
-                        hint="Leave empty for the built-in catalog, or choose the custom library that every monitored scan should search.",
+                        hint="Leave empty for the built-in catalog. To add CIFs, build or upload a reusable library under Single pattern first, then select it here for every monitored scan.",
                         persistent_hint=True,
                     )
                     vuetify.VSelect(
@@ -2535,6 +2536,19 @@ class RadarPdNovaApp(ThemedApp):
             v_if="gsasii_session_status === 'starting' || gsasii_session_status === 'error'",
             text=("gsasii_status_message",),
             type=("gsasii_session_status === 'error' ? 'error' : 'info'",),
+            variant="tonal",
+            density="compact",
+            classes="mb-3",
+        )
+        vuetify.VAlert(
+            v_if="viewed_output_profile === 'monitor'",
+            text=(
+                "POWGEN live uses a low-latency publication profile: the normalized dashboard, fit plots, "
+                "and any usable GPX checkpoints are published immediately. Run a standard Full "
+                "single-pattern analysis when you need the complete table, phase-CIF, configuration, "
+                "and results-archive collections."
+            ),
+            type="info",
             variant="tonal",
             density="compact",
             classes="mb-3",
@@ -4703,7 +4717,13 @@ class RadarPdNovaApp(ThemedApp):
             self._monitor_update(record)
 
     def _sync_runs(self) -> None:
-        self.server.state.run_rows = [record.as_row() for record in sorted(self.records.values(), key=lambda item: item.created_utc, reverse=True)]
+        rows: list[dict[str, Any]] = []
+        for record in sorted(self.records.values(), key=lambda item: item.created_utc, reverse=True):
+            row = record.as_row()
+            row["created_display"] = _format_eastern_time(record.created_utc, "%Y-%m-%d %H:%M %Z")
+            row["job_short"] = (record.galaxy_job_id or "pending")[:8]
+            rows.append(row)
+        self.server.state.run_rows = rows
 
     def _recover_runs(self, **_: Any) -> None:
         state = self.server.state
@@ -5119,6 +5139,7 @@ class RadarPdNovaApp(ThemedApp):
         state.selected_run_message = record.message
         state.selected_run_console = record.console_tail
         state.viewed_run_mode = record.mode.value
+        state.viewed_output_profile = record.output_profile
         state.monitor_stages = self._monitor_stage_rows(record)
         if previous_run_uid != record.uid:
             state.gsasii_launch_url = ""
@@ -5495,6 +5516,7 @@ class RadarPdNovaApp(ThemedApp):
         payload = self.service.result_payload(record)
         result_document = payload.get("summary") or {}
         state.viewed_run_mode = record.mode.value
+        state.viewed_output_profile = record.output_profile
         state.viewed_run_name = record.name
         root = record.local_output_dir
         if root is None:
@@ -5597,6 +5619,7 @@ class RadarPdNovaApp(ThemedApp):
         state.result_warnings = []
         state.phase_rows = []
         state.phase_total = "-"
+        state.viewed_output_profile = ""
         state.table_options = []
         state.selected_table = ""
         state.table_rows = []
@@ -6011,7 +6034,7 @@ class RadarPdNovaApp(ThemedApp):
                     self.service._upload_one,
                     "library_cif_bundle",
                     str(bundle_path),
-                    f"RADAR-PD CIF source bundle | {library_name}",
+                    "CIF source bundle",
                 )
                 source_inputs = {"cif_archive": {"dataset_id": archive_id}}
                 state.library_builder_status = "building"
