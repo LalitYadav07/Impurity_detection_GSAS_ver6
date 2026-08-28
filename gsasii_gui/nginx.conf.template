@@ -20,16 +20,16 @@ http {
         server_name _;
         server_tokens off;
         absolute_redirect off;
-        add_header Cache-Control "no-store" always;
+        add_header Cache-Control "no-cache" always;
         add_header Referrer-Policy "no-referrer" always;
         add_header X-Content-Type-Options "nosniff" always;
 
         location = ${EP_PATH} {
-            return 302 ${EP_PATH}/vnc.html?autoconnect=1&resize=scale&reconnect=1&path=${EP_WS_PATH}/websockify;
+            return 302 ${EP_PATH}/vnc.html?autoconnect=1&resize=scale&reconnect=1&quality=6&compression=1&path=${EP_WS_PATH}/websockify;
         }
 
         location = ${EP_PATH}/ {
-            return 302 ${EP_PATH}/vnc.html?autoconnect=1&resize=scale&reconnect=1&path=${EP_WS_PATH}/websockify;
+            return 302 ${EP_PATH}/vnc.html?autoconnect=1&resize=scale&reconnect=1&quality=6&compression=1&path=${EP_WS_PATH}/websockify;
         }
 
         location = ${EP_PATH}/healthz {
@@ -41,6 +41,7 @@ http {
             proxy_pass http://127.0.0.1:6080;
             proxy_http_version 1.1;
             proxy_buffering off;
+            proxy_socket_keepalive on;
             proxy_set_header Host $host;
             proxy_set_header Upgrade $http_upgrade;
             proxy_set_header Connection "upgrade";

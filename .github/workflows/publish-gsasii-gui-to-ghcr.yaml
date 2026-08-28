@@ -58,6 +58,9 @@ jobs:
         run: |
           docker run --rm "${IMAGE_NAME}:gsasii-gui" \
             /opt/conda/bin/python -c "import GSASII; import wx; print(wx.version())"
+          docker run --rm "${IMAGE_NAME}:gsasii-gui" \
+            /opt/conda/bin/python -c \
+            "import importlib.metadata as m; assert m.version('websockify') == '0.13.0'"
 
       - name: Smoke test GSAS-II importer registry
         shell: bash

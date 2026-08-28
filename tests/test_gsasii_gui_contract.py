@@ -25,8 +25,10 @@ def test_gui_image_pins_gsasii_and_provides_native_desktop_stack() -> None:
     environment = _read("environment.yml")
     assert "wxpython>=4.2,<4.2.5" in environment
     assert "hdf5plugin" in environment
-    for package in ("nginx", "openbox", "websockify", "x11vnc", "xvfb"):
+    for package in ("nginx", "openbox", "x11vnc", "xvfb"):
         assert package in dockerfile
+    assert "ARG WEBSOCKIFY_VERSION=0.13.0" in dockerfile
+    assert '"websockify==${WEBSOCKIFY_VERSION}"' in dockerfile
     assert "libnss-wrapper" in dockerfile
     assert "x11-xserver-utils" in dockerfile
     assert "ln -sf /dev/stderr /var/log/nginx/error.log" in dockerfile
@@ -44,6 +46,9 @@ def test_desktop_gateway_obeys_ndip_path_prefix() -> None:
     assert "location = ${EP_PATH}/healthz" in nginx
     assert "location = ${EP_PATH}/websockify" in nginx
     assert "proxy_buffering off" in nginx
+    assert "proxy_socket_keepalive on" in nginx
+    assert 'Cache-Control "no-cache"' in nginx
+    assert "quality=6&compression=1" in nginx
     assert "RADAR-PD GSAS-II ${GUI_VERSION}" in nginx
     assert 'export EP_WS_PATH="${EP_PATH#/}"' in launcher
     assert "envsubst '${EP_PATH} ${EP_WS_PATH} ${GUI_VERSION}'" in launcher
@@ -113,6 +118,7 @@ def test_export_snapshot_is_atomic_and_skips_unchanged_archives(tmp_path: Path) 
 
 def test_vnc_path_prefers_damage_events_and_low_interaction_delay() -> None:
     x11vnc = _read("scripts/run_x11vnc.sh")
+    supervisor = _read("supervisord.conf")
 
     assert "-xdamage" in x11vnc
     assert "-noxdamage" not in x11vnc
@@ -120,6 +126,7 @@ def test_vnc_path_prefers_damage_events_and_low_interaction_delay() -> None:
     assert "-wait 10" in x11vnc
     assert "-cursor most" in x11vnc
     assert "-cursorpos" in x11vnc
+    assert "/opt/conda/bin/websockify --heartbeat 30" in supervisor
 
 
 def test_gui_processes_run_as_the_ndip_runtime_uid() -> None:
@@ -159,5 +166,6 @@ def test_release_smoke_checks_http_redirect_and_websocket_upgrade() -> None:
     assert "No GSAS-II importer load errors" in workflow
     assert "::error title=GSAS-II importer load errors::" in workflow
     assert "Smoke test GSAS-II Python runtime" in workflow
+    assert "m.version('websockify') == '0.13.0'" in workflow
     assert "Smoke test GSAS-II importer registry" in workflow
     assert "Smoke test the noVNC gateway" in workflow

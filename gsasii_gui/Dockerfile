@@ -2,15 +2,17 @@ FROM mambaorg/micromamba:2.9.0-ubuntu22.04
 
 ARG GSASII_REF=dcd09eb2a4392b94d22cda3c69021137e6b14620
 ARG NOVNC_REF=9e7def8703ac3234c4bae0cd08663f5dd526ee22
+ARG WEBSOCKIFY_VERSION=0.13.0
 ARG GSASII_UID=1000
 ARG GSASII_GID=1000
-ARG RADAR_PD_GSASII_GUI_VERSION=0.1.11
+ARG RADAR_PD_GSASII_GUI_VERSION=0.1.12
 
 LABEL org.opencontainers.image.title="RADAR-PD GSAS-II Interactive" \
       org.opencontainers.image.description="Browser-hosted native GSAS-II desktop for RADAR-PD GPX handoff" \
       org.opencontainers.image.source="https://github.com/LalitYadav07/Impurity_detection_GSAS_ver6" \
       org.opencontainers.image.gsasii.revision="${GSASII_REF}" \
       org.opencontainers.image.novnc.revision="${NOVNC_REF}" \
+      org.opencontainers.image.websockify.version="${WEBSOCKIFY_VERSION}" \
       org.opencontainers.image.version="${RADAR_PD_GSASII_GUI_VERSION}"
 
 USER root
@@ -45,7 +47,6 @@ RUN apt-get update \
         nginx \
         openbox \
         supervisor \
-        websockify \
         x11-utils \
         x11-xserver-utils \
         x11vnc \
@@ -73,6 +74,10 @@ RUN /opt/conda/bin/python -m pip install \
         --no-cache-dir \
         --no-deps \
         /opt/GSAS-II \
+    && /opt/conda/bin/python -m pip install \
+        --no-cache-dir \
+        --no-deps \
+        "websockify==${WEBSOCKIFY_VERSION}" \
     && /opt/conda/bin/python -c "import GSASII; import wx; print('GSAS-II and wxPython imports succeeded')"
 
 RUN groupadd --gid "${GSASII_GID}" gsasii \
