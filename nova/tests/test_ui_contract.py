@@ -166,6 +166,13 @@ def test_powgen_monitor_requires_preflight_and_exposes_safe_backfill_controls() 
     assert "history_configuration_summary" in template
     assert "history_configuration_yaml" in template
     assert "No reusable configurations are in this Galaxy History" in template
+    assert "POWGEN instrument profile fallback" in template
+    assert app.server.state.powgen_instrument_source == "automatic"
+    assert any(
+        option["value"] == "computer" and "Upload a GSAS-II profile" in option["title"]
+        for option in app.server.state.powgen_instrument_source_options
+    )
+    assert "/SNS/PG3/run_cycle_" in template
     assert "Open Result Explorer" in template
     assert 'v-if="result_explorer_available"' in template
     assert "Open GPX in GSAS-II" in template

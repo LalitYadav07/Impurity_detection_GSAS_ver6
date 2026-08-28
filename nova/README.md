@@ -47,7 +47,9 @@ NOVA session remains open, the monitor:
 
 1. lists only `/SNS/PG3/<IPTS>/shared/autoreduce` without recursion;
 2. waits for the canonical `PG3_<run>.gsa` reduction;
-3. resolves an exact, checksum-verified packaged POWGEN `.instprm` profile;
+3. resolves an exact, checksum-verified packaged POWGEN `.instprm` profile, or
+   uses an explicitly supplied cycle profile saved in Galaxy when the cycle is
+   not packaged;
 4. submits the unchanged `neutrons_radar_pd_analyze_prototype` tool; and
 5. displays discovered, submitted, completed, and failed scans as they change.
 

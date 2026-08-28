@@ -159,6 +159,33 @@ def test_controller_reuses_one_packaged_profile_dataset_across_scans() -> None:
     assert next(iter(profile_ids)).startswith("document-")
 
 
+def test_controller_reuses_selected_history_profile_without_packaged_resolution() -> None:
+    service = FakeGalaxyService()
+    controller = PowgenWatchController(
+        service,
+        PowgenExperimentSettings(
+            ipts="IPTS-12000",
+            history_id="history-1",
+            configuration_dataset_id="config-hda",
+            wavelength_angstrom="1.5",
+            instrument_profile_dataset_id="legacy-profile-hda",
+            instrument_profile_name="2011A_bank2.instprm",
+        ),
+    )
+    run = controller.discover(
+        [{"path": "/SNS/PG3/IPTS-12000/shared/autoreduce/PG3_10000.gsa"}]
+    )[0]
+
+    record = controller.launch_submission(run)
+
+    assert record.inputs is not None
+    assert record.inputs.instrument_dataset_id == "legacy-profile-hda"
+    assert controller.definition.instrument_profile_ref == "legacy-profile-hda"
+    assert not [item for item in service.uploaded if item[2] == "POWGEN instrument profile"]
+    checkpoint = next(item[0] for item in service.uploaded if item[2] == "POWGEN watch state IPTS-12000")
+    assert checkpoint["watch"]["instrument_profile_dataset_id"] == "legacy-profile-hda"
+
+
 def test_controller_propagates_custom_library_to_every_monitored_scan() -> None:
     service = FakeGalaxyService()
     settings = PowgenExperimentSettings(
@@ -294,6 +321,39 @@ def test_preflight_detects_latest_scan_wavelength_and_packaged_profile(monkeypat
     assert result["detected_wavelength"] == "1.5"
     assert result["selected_wavelength"] == "1.5"
     assert result["profile_filename"].endswith("60HzB2_CWL1p5.instprm")
+
+
+def test_preflight_accepts_user_profile_when_cycle_is_not_packaged(monkeypatch) -> None:
+    monkeypatch.setattr(
+        powgen_controller,
+        "bounded_directory_listing",
+        lambda _directory: [
+            {"path": "/SNS/PG3/IPTS-12000/shared/autoreduce/PG3_10000.gsa"},
+        ],
+    )
+    monkeypatch.setattr(
+        powgen_controller,
+        "read_powgen_scan_metadata",
+        lambda _ipts, _run: {
+            "available": True,
+            "wavelength": {"value": 1.5, "unit": "A"},
+        },
+    )
+    monkeypatch.setattr(
+        powgen_controller,
+        "resolve_powgen_profile",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("packaged lookup was used")),
+    )
+
+    result = preflight_powgen_experiment(
+        "IPTS-12000",
+        instrument_profile_name="2011A_bank2.instprm",
+    )
+
+    assert result["ready"] is True
+    assert result["profile_filename"] == "2011A_bank2.instprm"
+    assert result["profile_rule"] == "user-supplied"
+    assert result["profile_source"] == "User-supplied GSAS-II profile"
 
 
 def test_controller_caps_concurrent_backfill_submissions() -> None:

@@ -1186,6 +1186,41 @@ def test_recent_runs_recovers_config_and_inputs_without_command_guessing(
     assert record.output_dataset_ids["resolved_config"] == "resolved-config-id"
 
 
+def test_recent_runs_defaults_missing_output_profile_to_full(monkeypatch: Any) -> None:
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            pass
+
+        def json(self) -> list[dict[str, Any]]:
+            return [{"id": "legacy-job", "state": "ok"}]
+
+    monkeypatch.setattr(
+        "radar_pd_nova.galaxy_service.requests.get",
+        lambda *_args, **_kwargs: FakeResponse(),
+    )
+    service = GalaxyService("https://galaxy.example", "key", "history")
+    job = {
+        "id": "legacy-job",
+        "state": "ok",
+        "create_time": "2026-01-01T00:00:00Z",
+        "update_time": "2026-01-01T00:01:00Z",
+        "params": {
+            "reproducibility|run_name": "legacy-run",
+            "analysis|strategy|analysis_mode": "rapid",
+            "chemistry|sample_elements": "Fe, V, Al",
+        },
+    }
+    monkeypatch.setattr(service, "_job_details", lambda *_args: job)
+    monkeypatch.setattr(service, "_job_output_ids", lambda *_args: {})
+    monkeypatch.setattr(service, "_public_input_dataset_ids", lambda *_args: {})
+
+    records = service.recent_runs()
+
+    assert len(records) == 1
+    assert records[0].name == "legacy-run"
+    assert records[0].output_profile == "full"
+
+
 def test_recovered_active_run_refreshes_through_galaxy_rest(tmp_path: Path, monkeypatch: Any) -> None:
     details = {
         "id": "active-job",

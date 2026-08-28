@@ -2027,7 +2027,10 @@ class GalaxyService:
             mode_text = _text(
                 _parameter_value(parameters, "analysis.strategy.analysis_mode", "analysis.analysis_mode", "analysis_mode")
             )
-            output_profile_text = _text(_parameter_value(parameters, "output_profile")).lower()
+            # Jobs created before output profiles were added do not carry this
+            # parameter. Treat them as ordinary full-result runs instead of
+            # failing History recovery for the entire interactive session.
+            output_profile_text = (_text(_parameter_value(parameters, "output_profile")) or "").lower()
             output_profile = "monitor" if output_profile_text == "monitor" else "full"
             if config is not None:
                 mode = config.mode

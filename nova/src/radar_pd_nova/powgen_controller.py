@@ -42,6 +42,8 @@ class PowgenExperimentSettings:
     history_id: str
     configuration_dataset_id: str
     wavelength_angstrom: str
+    instrument_profile_dataset_id: str | None = None
+    instrument_profile_name: str | None = None
     frequency_hz: str = "60"
     subfolder: str = "shared/autoreduce"
     main_cif_dataset_id: str | None = None
@@ -67,10 +69,15 @@ class PowgenExperimentSettings:
         if self.retry_max_seconds < self.retry_base_seconds:
             raise ValueError("retry_max_seconds must be at least retry_base_seconds")
 
-    def definition(self, instrument_profile_ref: str = "packaged-official-profile") -> WatchDefinition:
+    def definition(self, instrument_profile_ref: str | None = None) -> WatchDefinition:
         config_refs = {}
         if self.database_dataset_id:
             config_refs["candidate_library"] = self.database_dataset_id
+        profile_ref = (
+            instrument_profile_ref
+            or self.instrument_profile_dataset_id
+            or "packaged-official-profile"
+        )
         return WatchDefinition(
             facility="SNS",
             instrument="PG3",
@@ -78,7 +85,7 @@ class PowgenExperimentSettings:
             subfolder=self.subfolder,
             history_id=self.history_id,
             configuration_ref=self.configuration_dataset_id,
-            instrument_profile_ref=instrument_profile_ref,
+            instrument_profile_ref=profile_ref,
             main_cif_ref=self.main_cif_dataset_id,
             config_refs=config_refs,
         )
@@ -113,6 +120,7 @@ def bounded_directory_listing(directory: str | Path, *, max_entries: int = 5000)
 
 
 _SUPPORTED_POWGEN_WAVELENGTHS = (0.8, 1.5, 2.665)
+_POWGEN_PROFILE_SUFFIXES = {".instprm", ".prm", ".inst", ".ins"}
 
 
 def _metadata_wavelength(metadata: Mapping[str, Any]) -> str | None:
@@ -131,6 +139,7 @@ def preflight_powgen_experiment(
     ipts: str,
     *,
     requested_wavelength: str | None = None,
+    instrument_profile_name: str | None = None,
 ) -> dict[str, Any]:
     """Inspect one POWGEN experiment without submitting jobs or writing files."""
 
@@ -163,8 +172,20 @@ def preflight_powgen_experiment(
     profile_filename = ""
     profile_rule = ""
     profile_error = ""
+    override_name = str(instrument_profile_name or "").strip()
+    if override_name:
+        if Path(override_name).name != override_name:
+            profile_error = "The supplied POWGEN instrument profile name is not valid."
+        elif Path(override_name).suffix.lower() not in _POWGEN_PROFILE_SUFFIXES:
+            profile_error = (
+                "The supplied POWGEN instrument profile must be a GSAS-II "
+                ".instprm, .prm, .inst, or .ins file."
+            )
     if not selected_wavelength:
         profile_error = "Select a POWGEN wavelength because the latest NeXus file does not report one."
+    elif override_name and not profile_error:
+        profile_filename = override_name
+        profile_rule = "user-supplied"
     else:
         try:
             resolution = resolve_powgen_profile(
@@ -213,6 +234,11 @@ def preflight_powgen_experiment(
         ),
         "profile_filename": profile_filename,
         "profile_rule": profile_rule,
+        "profile_source": (
+            "User-supplied GSAS-II profile"
+            if profile_rule == "user-supplied"
+            else "Packaged POWGEN cycle profile"
+        ),
         "profile_error": profile_error,
         "message": (
             f"Ready: {len(runs)} completed reductions from {runs[0].run_id} through {latest.run_id}."
@@ -284,6 +310,10 @@ class PowgenWatchController:
                     if str(watch.get("configuration_dataset_id") or "") != self.settings.configuration_dataset_id:
                         continue
                     if str(watch.get("wavelength_angstrom") or "") != self.settings.wavelength_angstrom:
+                        continue
+                    if str(watch.get("instrument_profile_dataset_id") or "") != str(
+                        self.settings.instrument_profile_dataset_id or ""
+                    ):
                         continue
                     if str(watch.get("database_dataset_id") or "") != str(
                         self.settings.database_dataset_id or ""
@@ -534,8 +564,11 @@ class PowgenWatchController:
                     )
         config = self._configuration
         config = config.model_copy(update={"run_name": f"{self.settings.ipts}_{run.run_id}"})
-        _, profile_path = self.resolve_profile(run)
-        profile_dataset_id = self._profile_dataset_id(profile_path)
+        if self.settings.instrument_profile_dataset_id:
+            profile_dataset_id = self.settings.instrument_profile_dataset_id
+        else:
+            _, profile_path = self.resolve_profile(run)
+            profile_dataset_id = self._profile_dataset_id(profile_path)
         inputs = InputSelection(
             source=InputSource.UPLOAD,
             data_path=run.source_path,
@@ -607,8 +640,19 @@ class PowgenWatchController:
             if inputs is not None
             else str(record.input_dataset_ids.get("main_cif") or "")
         )
-        return candidate_database == str(self.settings.database_dataset_id or "") and candidate_main == str(
-            self.settings.main_cif_dataset_id or ""
+        candidate_instrument = (
+            str(inputs.instrument_dataset_id or "")
+            if inputs is not None
+            else str(record.input_dataset_ids.get("instrument") or "")
+        )
+        matches_custom_profile = (
+            not self.settings.instrument_profile_dataset_id
+            or candidate_instrument == self.settings.instrument_profile_dataset_id
+        )
+        return (
+            candidate_database == str(self.settings.database_dataset_id or "")
+            and candidate_main == str(self.settings.main_cif_dataset_id or "")
+            and matches_custom_profile
         )
 
     def reconcile_recent_runs(self) -> int:
@@ -777,6 +821,8 @@ class PowgenWatchController:
                 "source_directory": self.source_directory,
                 "configuration_dataset_id": self.settings.configuration_dataset_id,
                 "database_dataset_id": self.settings.database_dataset_id,
+                "instrument_profile_dataset_id": self.settings.instrument_profile_dataset_id,
+                "instrument_profile_name": self.settings.instrument_profile_name,
                 "wavelength_angstrom": self.settings.wavelength_angstrom,
                 "initial_backfill_limit": self.settings.initial_backfill_limit,
             }

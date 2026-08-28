@@ -959,6 +959,124 @@ def test_powgen_main_cif_upload_is_saved_and_selected(tmp_path) -> None:
     assert "known_phase.cif" in state.notice
 
 
+def test_powgen_instrument_profile_can_be_reused_from_galaxy_history() -> None:
+    app = RadarPdNovaApp.__new__(RadarPdNovaApp)
+    state = _State(
+        powgen_instrument_source="galaxy",
+        powgen_instrument_dataset_id="instrument-dataset-1",
+        powgen_instrument_path="",
+    )
+    app.server = SimpleNamespace(state=state)
+
+    assert app._resolve_powgen_instrument_profile_id() == "instrument-dataset-1"
+
+
+def test_powgen_instrument_profile_upload_is_saved_and_selected(tmp_path) -> None:
+    profile_path = tmp_path / "2011A_bank2.instprm"
+    profile_path.write_text("# GSAS-II profile\n", encoding="utf-8")
+    app = RadarPdNovaApp.__new__(RadarPdNovaApp)
+    state = _State(
+        powgen_instrument_source="computer",
+        powgen_instrument_dataset_id="",
+        powgen_instrument_path=str(profile_path),
+        powgen_instrument_label="",
+        notice="",
+    )
+    app.server = SimpleNamespace(state=state)
+    uploads: list[tuple[Path, str]] = []
+
+    class _Service:
+        def upload_document(self, path: Path, *, label: str) -> str:
+            uploads.append((path, label))
+            return "uploaded-instrument-1"
+
+    app.service = _Service()
+    app.refresh_history = lambda: None
+
+    assert app._resolve_powgen_instrument_profile_id() == "uploaded-instrument-1"
+    assert uploads == [(profile_path, "POWGEN instrument profile fallback")]
+    assert state.powgen_instrument_source == "galaxy"
+    assert state.powgen_instrument_dataset_id == "uploaded-instrument-1"
+    assert state.powgen_instrument_label == "2011A_bank2.instprm"
+    assert "2011A_bank2.instprm" in state.notice
+
+
+def test_powgen_preflight_passes_uploaded_instrument_profile_to_resolution(
+    tmp_path, monkeypatch
+) -> None:
+    profile_path = tmp_path / "2011A_bank2.instprm"
+    profile_path.write_text("# GSAS-II profile\n", encoding="utf-8")
+    app = RadarPdNovaApp.__new__(RadarPdNovaApp)
+    state = _State(
+        powgen_preflight_status="idle",
+        powgen_preflight_ready=False,
+        powgen_preflight_checked="Not checked",
+        powgen_preflight_message="",
+        powgen_preflight_details=[],
+        powgen_profile_error="",
+        powgen_ipts="IPTS-12000",
+        powgen_configuration_dataset_id="config-hda",
+        powgen_backfill_mode="latest_5",
+        powgen_instrument_source="computer",
+        powgen_instrument_path=str(profile_path),
+        powgen_instrument_dataset_id="",
+        powgen_instrument_label="",
+        powgen_main_cif_source="none",
+        powgen_main_cif_path="",
+        powgen_main_cif_dataset_id="",
+        powgen_wavelength="1.5",
+        powgen_source_directory="",
+        powgen_database_dataset_id="",
+        powgen_configuration_label="",
+        powgen_database_label="",
+        powgen_backfill_options=[{"title": "Latest 5", "value": "latest_5"}],
+        history_configuration_datasets=[{"id": "config-hda", "display_name": "Legacy config"}],
+        history_archive_datasets=[],
+        history_cif_datasets=[],
+        history_instrument_datasets=[],
+        application_version="v0.3.91",
+        powgen_message="",
+        error_message="",
+    )
+    app.server = SimpleNamespace(state=state)
+    config = AnalysisConfig(mode=AnalysisMode.RAPID, sample_elements=["Fe", "V", "Al"])
+    app.service = SimpleNamespace(load_configuration_dataset=lambda _dataset_id: config)
+    app._set_powgen_configuration_preview = lambda *_args: None
+    captured: dict[str, object] = {}
+
+    def fake_preflight(ipts, **kwargs):
+        captured.update({"ipts": ipts, **kwargs})
+        return {
+            "ready": True,
+            "source_directory": "/SNS/PG3/IPTS-12000/shared/autoreduce",
+            "scan_count": 1,
+            "first_run": "PG3_10000",
+            "latest_run": "PG3_10000",
+            "latest_file": "PG3_10000.gsa",
+            "latest_start_time": "2026-01-01T00:00:00Z",
+            "sample_display": "Legacy sample",
+            "temperature_display": "300 K",
+            "detected_wavelength": "1.5",
+            "selected_wavelength": "1.5",
+            "wavelength_source": "Detected from NeXus metadata",
+            "profile_filename": "2011A_bank2.instprm",
+            "profile_source": "User-supplied GSAS-II profile",
+            "profile_error": "",
+            "message": "Ready",
+        }
+
+    monkeypatch.setattr("radar_pd_nova.app.preflight_powgen_experiment", fake_preflight)
+
+    assert app.check_powgen_experiment() is True
+    assert captured["instrument_profile_name"] == "2011A_bank2.instprm"
+    assert state.powgen_instrument_label == "2011A_bank2.instprm"
+    assert state.powgen_preflight_ready is True
+    profile_row = next(
+        row for row in state.powgen_preflight_details if row["label"] == "Instrument profile"
+    )
+    assert profile_row["value"] == "2011A_bank2.instprm - User-supplied GSAS-II profile"
+
+
 def test_integrated_library_builder_bundles_reusable_history_cifs(tmp_path) -> None:
     app = RadarPdNovaApp.__new__(RadarPdNovaApp)
     state = _State(

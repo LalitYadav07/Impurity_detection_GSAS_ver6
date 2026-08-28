@@ -533,6 +533,16 @@ class RadarPdNovaApp(ThemedApp):
             {"title": "1.5 A (Bank 2)", "value": "1.5"},
             {"title": "2.665 A (Bank 3)", "value": "2.665"},
         ]
+        state.powgen_instrument_source = "automatic"
+        state.powgen_instrument_source_options = [
+            {"title": "Use the official cycle profile automatically", "value": "automatic"},
+            {"title": "Upload a GSAS-II profile from this computer", "value": "computer"},
+            {"title": "Choose a GSAS-II profile from Galaxy History", "value": "galaxy"},
+        ]
+        state.powgen_instrument_path = ""
+        state.powgen_instrument_dataset_id = ""
+        state.powgen_instrument_label = "Automatic POWGEN cycle profile"
+        state.powgen_profile_error = ""
         state.powgen_configuration_dataset_id = ""
         state.powgen_configuration_title = "No reusable configuration selected"
         state.powgen_configuration_summary = []
@@ -1157,6 +1167,58 @@ class RadarPdNovaApp(ThemedApp):
                         hint="Auto-detect is recommended. The three explicit choices are the supported POWGEN bank/wavelength modes.",
                         persistent_hint=True,
                     )
+                    with html.Div(
+                        v_show="!!powgen_profile_error || powgen_instrument_source !== 'automatic'",
+                        classes="radar-soft-panel mb-2",
+                    ):
+                        vuetify.VAlert(
+                            v_show="!!powgen_profile_error",
+                            text=("'Automatic profile unavailable: ' + powgen_profile_error",),
+                            type="warning",
+                            variant="tonal",
+                            density="compact",
+                            classes="mb-2",
+                        )
+                        vuetify.VSelect(
+                            label="POWGEN instrument profile fallback",
+                            v_model=("powgen_instrument_source",),
+                            items=("powgen_instrument_source_options",),
+                            item_title="title",
+                            item_value="value",
+                            density="compact",
+                            variant="outlined",
+                            disabled=("powgen_monitoring",),
+                            hint=(
+                                "Use the GSAS-II parameter file for the experiment cycle. "
+                                "It can be downloaded from POWGEN or found under "
+                                "/SNS/PG3/run_cycle_<cycle>_CAL on an analysis system."
+                            ),
+                            persistent_hint=True,
+                        )
+                        with html.Div(
+                            v_show="powgen_instrument_source === 'computer'",
+                            key="'powgen-instrument-upload-panel'",
+                        ):
+                            NamedFileUpload(
+                                "powgen_instrument_path",
+                                label="GSAS-II instrument profile",
+                                help_text="This file is saved to Galaxy History and reused for every monitored scan.",
+                                extensions=[".instprm", ".prm", ".inst", ".ins"],
+                                key="powgen-instrument-upload",
+                            )
+                        vuetify.VAutocomplete(
+                            v_show="powgen_instrument_source === 'galaxy'",
+                            label="Instrument profile from Galaxy History",
+                            v_model=("powgen_instrument_dataset_id",),
+                            items=("history_instrument_datasets",),
+                            item_title="display_name",
+                            item_value="id",
+                            density="compact",
+                            variant="outlined",
+                            disabled=("powgen_monitoring",),
+                            clearable=True,
+                            no_data_text="No GSAS-II instrument profiles are in this Galaxy History",
+                        )
                     vuetify.VAutocomplete(
                         label="Reusable RADAR-PD configuration",
                         v_model=("powgen_configuration_dataset_id",),
@@ -4271,8 +4333,9 @@ class RadarPdNovaApp(ThemedApp):
         state.powgen_preflight_status = "checking"
         state.powgen_preflight_ready = False
         state.powgen_preflight_checked = "Checking now"
-        state.powgen_preflight_message = "Checking the read-only POWGEN source and packaged instrument profile..."
+        state.powgen_preflight_message = "Checking the read-only POWGEN source and instrument profile..."
         state.powgen_preflight_details = []
+        state.powgen_profile_error = ""
         state.flush()
         try:
             ipts = self._normalize_powgen_ipts(state.powgen_ipts)
@@ -4285,6 +4348,29 @@ class RadarPdNovaApp(ThemedApp):
             backfill_mode = str(state.powgen_backfill_mode or "latest_5")
             if backfill_mode not in _POWGEN_BACKFILL_LIMITS:
                 raise ValueError("Choose how many existing scans should be processed")
+
+            instrument_source = str(state.powgen_instrument_source or "automatic")
+            instrument_profile_name: str | None = None
+            if instrument_source == "computer":
+                instrument_path = Path(str(state.powgen_instrument_path or ""))
+                if not instrument_path.is_file():
+                    raise ValueError("Choose a GSAS-II instrument profile from this computer")
+                if instrument_path.suffix.lower() not in {".instprm", ".prm", ".inst", ".ins"}:
+                    raise ValueError(
+                        "The POWGEN instrument profile must use .instprm, .prm, .inst, or .ins"
+                    )
+                instrument_profile_name = instrument_path.name
+            elif instrument_source == "galaxy":
+                instrument_id = str(state.powgen_instrument_dataset_id or "").strip()
+                if not instrument_id:
+                    raise ValueError("Choose a GSAS-II instrument profile from Galaxy History")
+                instrument_profile_name = self._powgen_dataset_label(
+                    state.history_instrument_datasets,
+                    instrument_id,
+                    "Selected Galaxy instrument profile",
+                ).split(" · ", 1)[0]
+            elif instrument_source != "automatic":
+                raise ValueError(f"Unsupported POWGEN instrument-profile source: {instrument_source}")
 
             main_source = str(state.powgen_main_cif_source or "none")
             if main_source == "computer":
@@ -4307,9 +4393,16 @@ class RadarPdNovaApp(ThemedApp):
             result = preflight_powgen_experiment(
                 ipts,
                 requested_wavelength=str(state.powgen_wavelength or ""),
+                instrument_profile_name=instrument_profile_name,
             )
             state.powgen_ipts = ipts
             state.powgen_source_directory = str(result.get("source_directory") or "")
+            state.powgen_profile_error = str(result.get("profile_error") or "")
+            state.powgen_instrument_label = str(
+                result.get("profile_filename")
+                or instrument_profile_name
+                or "Automatic POWGEN cycle profile"
+            )
             detected = str(result.get("detected_wavelength") or "")
             if detected:
                 state.powgen_wavelength = detected
@@ -4389,7 +4482,11 @@ class RadarPdNovaApp(ThemedApp):
                 },
                 {
                     "label": "Instrument profile",
-                    "value": str(result.get("profile_filename") or result.get("profile_error") or "Unavailable"),
+                    "value": (
+                        f"{result.get('profile_filename')} - {result.get('profile_source')}"
+                        if result.get("profile_filename")
+                        else str(result.get("profile_error") or "Unavailable")
+                    ),
                 },
                 {"label": "Initial processing", "value": backfill_label},
                 {
@@ -4442,6 +4539,7 @@ class RadarPdNovaApp(ThemedApp):
                 raise RuntimeError("The active Galaxy History is not available to this NOVA session")
             main_cif_id = self._resolve_powgen_main_cif_id()
             database_id = self._resolve_powgen_database_id()
+            instrument_profile_id = self._resolve_powgen_instrument_profile_id()
             backfill_mode = str(state.powgen_backfill_mode or "latest_5")
             initial_backfill_limit = _POWGEN_BACKFILL_LIMITS[backfill_mode]
 
@@ -4450,6 +4548,8 @@ class RadarPdNovaApp(ThemedApp):
                 history_id=self.service.history_id,
                 configuration_dataset_id=configuration_id,
                 wavelength_angstrom=wavelength,
+                instrument_profile_dataset_id=instrument_profile_id,
+                instrument_profile_name=str(state.powgen_instrument_label or "") or None,
                 main_cif_dataset_id=main_cif_id,
                 database_dataset_id=database_id,
                 initial_backfill_limit=initial_backfill_limit,
@@ -4459,6 +4559,7 @@ class RadarPdNovaApp(ThemedApp):
                 settings.history_id,
                 settings.configuration_dataset_id,
                 settings.wavelength_angstrom,
+                settings.instrument_profile_dataset_id or "",
                 settings.main_cif_dataset_id or "",
                 settings.database_dataset_id or "",
                 str(settings.initial_backfill_limit),
@@ -4480,6 +4581,7 @@ class RadarPdNovaApp(ThemedApp):
             recovery_note = " Previous Galaxy watch state was restored." if restored else ""
             state.powgen_message = (
                 f"Processing the selected initial scan range in {state.powgen_source_directory}, then monitoring for new scans. "
+                f"Instrument profile: {state.powgen_instrument_label}. "
                 f"Candidate library: {'custom Galaxy archive' if database_id else 'built-in catalog'}. "
                 f"The IPTS remains read-only.{recovery_note}"
             )
@@ -4498,6 +4600,37 @@ class RadarPdNovaApp(ThemedApp):
             state.powgen_message = f"POWGEN monitor could not start: {exc}"
             state.error_message = str(exc)
             state.flush()
+
+    def _resolve_powgen_instrument_profile_id(self) -> str | None:
+        """Return a durable fallback profile, or ``None`` for cycle resolution."""
+
+        state = self.server.state
+        source = str(getattr(state, "powgen_instrument_source", "automatic") or "automatic")
+        if source == "automatic":
+            return None
+        if source == "galaxy":
+            dataset_id = str(getattr(state, "powgen_instrument_dataset_id", "") or "").strip()
+            if not dataset_id:
+                raise ValueError("Choose a GSAS-II instrument profile from Galaxy History")
+            return dataset_id
+        if source != "computer":
+            raise ValueError(f"Unsupported POWGEN instrument-profile source: {source}")
+
+        path = Path(str(getattr(state, "powgen_instrument_path", "") or ""))
+        if not path.is_file():
+            raise ValueError("Choose a GSAS-II instrument profile from this computer")
+        if path.suffix.lower() not in {".instprm", ".prm", ".inst", ".ins"}:
+            raise ValueError(
+                "The POWGEN instrument profile must use .instprm, .prm, .inst, or .ins"
+            )
+
+        dataset_id = self.service.upload_document(path, label="POWGEN instrument profile fallback")
+        state.powgen_instrument_dataset_id = dataset_id
+        state.powgen_instrument_source = "galaxy"
+        state.powgen_instrument_label = path.name
+        self.refresh_history()
+        state.notice = f"Saved {path.name} to Galaxy History for POWGEN monitoring."
+        return dataset_id
 
     def _resolve_powgen_database_id(self) -> str | None:
         """Return the immutable Galaxy library archive for monitored scans.
