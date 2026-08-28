@@ -61,6 +61,7 @@ from .results import (
     experiment_sample_identity,
     figure_for_payload,
     load_plot_with_fallback,
+    phase_fraction_rows,
     read_plot_payload,
     read_table,
 )

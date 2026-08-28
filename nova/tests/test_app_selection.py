@@ -585,6 +585,68 @@ def test_powgen_configuration_preview_shows_summary_and_exact_yaml() -> None:
     assert "created_utc" not in state.powgen_configuration_yaml
 
 
+def test_powgen_completed_scan_projects_scientific_summary_into_dashboard() -> None:
+    app = RadarPdNovaApp.__new__(RadarPdNovaApp)
+    state = _State(
+        powgen_rows=[],
+        powgen_scientific_rows=[],
+        powgen_all_scientific_rows=[],
+        powgen_sample_options=[],
+        powgen_selected_samples=[],
+        powgen_selected_phase_labels=[],
+        powgen_x_axis="run_number",
+        powgen_selected_run_id="",
+    )
+    app.server = SimpleNamespace(state=state)
+    completed_run = SimpleNamespace(
+        run_number=63802,
+        source_path="/SNS/PG3/IPTS-37876/shared/autoreduce/PG3_63802.gsa",
+        galaxy_result_ids=["result-1"],
+        scientific_summary={
+            "rwp": 8.25,
+            "elapsed_seconds": 31.0,
+            "analysis_mode": "full",
+            "phases": [
+                {
+                    "phase": "Al Fe2 V",
+                    "space_group": "F m -3 m (225)",
+                    "weight_percent": 100.0,
+                }
+            ],
+        },
+        scan_metadata={
+            "sample_id": "118400",
+            "sample_name": "Fe2VAl Base Alloy",
+            "temperature": {"value": 193.657, "unit": "K", "source": "NeXus"},
+        },
+        error="",
+        galaxy_job_id="job-1",
+    )
+    app._powgen_controller = SimpleNamespace(
+        state=SimpleNamespace(
+            submitted={},
+            failed={},
+            completed={"PG3_63802": completed_run},
+            discovered={},
+        ),
+        settings=SimpleNamespace(max_active_jobs=5),
+        records={},
+        source_directory=Path("/SNS/PG3/IPTS-37876/shared/autoreduce"),
+    )
+    app._powgen_phase_widget = None
+    app._powgen_quality_widget = None
+    app._powgen_heatmap_widget = None
+    app._update_powgen_dashboard_figures = lambda rows: None  # type: ignore[method-assign]
+
+    app._sync_powgen_rows()
+
+    assert state.powgen_rows[0]["status"] == "Completed"
+    assert state.powgen_dashboard_metrics[0]["value"] == "1"
+    phase = state.powgen_scientific_rows[0]["phases"][0]
+    assert phase["phase"] == "AlFe2V"
+    assert phase["label"] == "AlFe2V (SG Fm-3m (225))"
+
+
 def test_run_configuration_prefers_published_resolved_yaml(tmp_path: Path) -> None:
     output = tmp_path / "result"
     output.mkdir()
