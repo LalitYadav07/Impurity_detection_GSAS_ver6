@@ -688,6 +688,47 @@ def test_powgen_completed_scan_projects_scientific_summary_into_dashboard() -> N
     assert phase["label"] == "AlFe2V (SG Fm-3m (225))"
 
 
+def test_open_powgen_completed_scan_rehydrates_restored_galaxy_record() -> None:
+    app = RadarPdNovaApp.__new__(RadarPdNovaApp)
+    restored = RunRecord(
+        uid="job-1",
+        galaxy_job_id="job-1",
+        name="IPTS-37876_PG3_63802",
+        mode=AnalysisMode.FULL,
+        history_id="history-1",
+        status=RunStatus.QUEUED,
+        stage="Recovering Galaxy job",
+    )
+    refreshed = restored.model_copy(deep=True)
+    refreshed.status = RunStatus.OK
+    refreshed.analysis_status = RunStatus.OK
+    refreshed.output_dataset_ids = {
+        "summary": "summary-hda",
+        "results_archive": "archive-hda",
+    }
+    state = _State(powgen_selected_run_id="PG3_63802", error_message="")
+    app.server = SimpleNamespace(state=state)
+    app.service = SimpleNamespace(refresh=lambda record: refreshed)
+    controller = SimpleNamespace(
+        records={"PG3_63802": restored},
+        state=SimpleNamespace(completed={"PG3_63802": SimpleNamespace()}),
+    )
+    app._powgen_controller = controller
+    app.records = {}
+    selected: list[RunRecord] = []
+    opened: list[RunRecord] = []
+    app._select_record = selected.append  # type: ignore[method-assign]
+    app._open_record_results = opened.append  # type: ignore[method-assign]
+
+    app.open_powgen_selected_run()
+
+    assert controller.records["PG3_63802"] is refreshed
+    assert app.records["job-1"] is refreshed
+    assert selected == [refreshed]
+    assert opened == [refreshed]
+    assert state.error_message == ""
+
+
 def test_run_configuration_prefers_published_resolved_yaml(tmp_path: Path) -> None:
     output = tmp_path / "result"
     output.mkdir()

@@ -4222,6 +4222,26 @@ class RadarPdNovaApp(ThemedApp):
             self.server.state.error_message = "The selected scan is not available in this monitor session."
             self.server.state.flush()
             return
+        completed = controller.state.completed.get(run_id)
+        if completed is not None and (
+            record.status != RunStatus.OK or not record.output_dataset_ids
+        ):
+            try:
+                record = self.service.refresh(record)
+                controller.records[run_id] = record
+            except Exception as exc:
+                self.server.state.error_message = (
+                    f"Could not recover the published result for {run_id}: {exc}"
+                )
+                self.server.state.flush()
+                return
+        if record.status != RunStatus.OK:
+            self.server.state.error_message = (
+                f"The published result for {run_id} is not ready in Galaxy "
+                f"(current state: {record.status.value})."
+            )
+            self.server.state.flush()
+            return
         self.records[record.uid] = record
         self._select_record(record)
         self._open_record_results(record)
