@@ -757,31 +757,33 @@ class GalaxyService:
         )
         response.raise_for_status()
         output_ids = self._named_output_ids(response.json())
-        if "gpx_projects" not in output_ids:
-            collection_id = self._history_job_collection_id(
-                job_id,
-                output_name="gpx_projects",
-                name_contains="GSAS-II handoff projects",
-            )
-            if collection_id:
-                output_ids["gpx_projects"] = collection_id
+        collection_labels = {
+            "plots": "Accepted fit and diagnostic plots",
+            "tables": "Scientific result tables",
+            "phases": "Candidate and refined phase CIFs",
+            "gpx_projects": "GSAS-II handoff projects",
+            "diagnostics": "RADAR-PD diagnostics",
+        }
+        missing = {name: label for name, label in collection_labels.items() if name not in output_ids}
+        if missing:
+            output_ids.update(self._history_job_collection_ids(job_id, expected=missing))
         return output_ids
 
-    def _history_job_collection_id(
+    def _history_job_collection_ids(
         self,
         job_id: str,
         *,
-        output_name: str,
-        name_contains: str,
+        expected: dict[str, str],
         limit: int = 500,
-    ) -> str | None:
-        """Recover an HDCA when Galaxy's job-output endpoint omits collections.
+    ) -> dict[str, str]:
+        """Recover HDCAs when Galaxy's job-output endpoint omits collections.
 
         NDIP History collection records retain the encoded producing job ID as
         ``job_source_id``. Matching that ID avoids guessing from duplicate run
         names or collection labels.
         """
 
+        found: dict[str, str] = {}
         page_size = 100
         offset = 0
         while offset < limit:
@@ -794,15 +796,13 @@ class GalaxyService:
                     "limit": requested,
                     "offset": offset,
                     "order": "update_time-dsc",
-                    "q": "name-contains",
-                    "qv": name_contains,
                 },
                 timeout=30,
             )
             response.raise_for_status()
             page = response.json()
             if not isinstance(page, list):
-                return None
+                return found
             for row in page:
                 if not isinstance(row, dict):
                     continue
@@ -812,14 +812,21 @@ class GalaxyService:
                     continue
                 implicit_name = str(row.get("implicit_output_name") or "")
                 collection_name = str(row.get("name") or "")
-                if implicit_name == output_name or name_contains.casefold() in collection_name.casefold():
-                    identifier = str(row.get("id") or "").strip()
-                    if identifier:
-                        return identifier
+                identifier = str(row.get("id") or "").strip()
+                if not identifier:
+                    continue
+                for output_name, name_contains in expected.items():
+                    if output_name in found:
+                        continue
+                    if implicit_name == output_name or name_contains.casefold() in collection_name.casefold():
+                        found[output_name] = identifier
+                        break
+            if len(found) == len(expected):
+                break
             if len(page) < requested:
                 break
             offset += requested
-        return None
+        return found
 
     @staticmethod
     def _job_parameters(job: dict[str, Any]) -> Any:
@@ -2189,10 +2196,16 @@ class GalaxyService:
                     archive_extracted = True
                 except Exception as exc:
                     failures.append(f"results_archive extraction: {exc}")
-            # The archive is canonical and preserves plot JSON/NPZ pairs. Only
-            # fall back to named collection downloads for legacy jobs that did
-            # not publish an extractable archive.
-            for name in (() if archive_extracted else ("plots", "tables", "phases", "gpx_projects", "diagnostics")):
+            # The archive is canonical for plots and diagnostics because it
+            # preserves JSON/NPZ pairs. Galaxy's table, CIF, and GPX
+            # collections are separate published outputs, so retain them even
+            # when an archive was extracted successfully.
+            collection_names = (
+                ("tables", "phases", "gpx_projects")
+                if archive_extracted
+                else ("plots", "tables", "phases", "gpx_projects", "diagnostics")
+            )
+            for name in collection_names:
                 collection_id = record.output_dataset_ids.get(name)
                 collection = None
                 if not collection_id:
@@ -2210,7 +2223,8 @@ class GalaxyService:
                         _download_collection_archive(collection, target)
                 except Exception as exc:
                     shutil.rmtree(target, ignore_errors=True)
-                    failures.append(f"{name}: {exc}")
+                    if not archive_extracted:
+                        failures.append(f"{name}: {exc}")
                     continue
                 downloaded += 1
                 usable_downloads += 1

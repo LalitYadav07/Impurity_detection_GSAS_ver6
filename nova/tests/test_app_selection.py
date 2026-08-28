@@ -392,7 +392,7 @@ def test_run_configuration_prefers_published_resolved_yaml(tmp_path: Path) -> No
 def test_run_provenance_carries_configuration_and_library_names_forward() -> None:
     app = RadarPdNovaApp.__new__(RadarPdNovaApp)
     state = _State(
-        application_version="v0.3.78",
+        application_version="v0.3.79",
         history_datasets=[
             {"id": "config-id", "display_name": "FeVAl full configuration"},
             {"id": "library-id", "display_name": "FeVAl candidate family"},
@@ -595,6 +595,7 @@ def test_integrated_library_builder_bundles_reusable_history_cifs(tmp_path) -> N
     assert len(uploads) == 1
     assert submitted[0]["inputs"] == {
         "cif_archive": {"dataset_id": "bundle-1"},
+        "library_name": "Y Fe Si candidates",
         "library_mode": "mini",
         "radiation": "neutron",
         "overwrite": "",
@@ -657,6 +658,7 @@ _cell_angle_gamma 90
     assert uploads[0][0] == "library_cif_bundle"
     assert submitted[0]["inputs"] == {
         "cif_archive": {"dataset_id": "bundle-1"},
+        "library_name": "Fe candidates",
         "library_mode": "augmented",
         "radiation": "neutron",
         "overwrite": "",

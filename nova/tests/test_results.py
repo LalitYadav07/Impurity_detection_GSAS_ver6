@@ -796,6 +796,7 @@ def test_gsas_plot_renders_ranked_strongest_bragg_ticks() -> None:
     assert strongest.marker.line.width == 3
     assert "Relative strength=0.000" in strongest.text[0]
     assert figure.layout.title.text.endswith("Rwp 0.00%")
+    assert figure.data[3].showlegend is False
 
 
 def test_gsas_plot_hides_internal_custom_catalog_ids() -> None:
@@ -815,8 +816,10 @@ def test_gsas_plot_hides_internal_custom_catalog_ids() -> None:
 
     figure = figure_for_payload(payload)
 
-    assert figure.layout.yaxis3.ticktext == ("Al0.5V0.5Fe1 - Pm-3m (221)",)
+    assert figure.layout.yaxis3.ticktext == ("Al0.5V0.5Fe1 (SG 221)",)
     assert figure.data[-1].name == "Al0.5V0.5Fe1 - Pm-3m (221)"
+    assert figure.data[-1].showlegend is False
+    assert figure.layout.margin.l >= 180
 
 
 def _write_gsas_payload(path: Path, *, rwp: float, phase: str = "TbSSL") -> None:

@@ -2706,7 +2706,7 @@ class RadarPdNovaApp(ThemedApp):
                 variant="outlined",
                 size="small",
                 classes="radar-gsasii-launch",
-                v_if="gsasii_session_status !== 'ready'",
+                v_if="checkpoint_rows.length > 0 && gsasii_session_status !== 'ready'",
             )
             vuetify.VBtn(
                 "Open GSAS-II",
@@ -2729,6 +2729,11 @@ class RadarPdNovaApp(ThemedApp):
         html.P(
             "Choose a published GPX checkpoint, then open it in the hosted GSAS-II desktop. The RADAR-PD result remains unchanged; saved edits return to Galaxy History.",
             v_show="checkpoint_rows.length > 0",
+            classes="radar-section-help mb-3",
+        )
+        html.P(
+            "No GPX checkpoint was published for this run. The GSAS-II action appears only when the analysis produced a usable checkpoint.",
+            v_if="!checkpoint_rows.length",
             classes="radar-section-help mb-3",
         )
         with html.Div(classes="radar-file-toolbar"):
@@ -4158,6 +4163,11 @@ class RadarPdNovaApp(ThemedApp):
             state.powgen_preflight_ready = bool(result.get("ready"))
             state.powgen_preflight_status = "ready" if state.powgen_preflight_ready else "warning"
             state.powgen_preflight_message = str(result.get("message") or "Experiment check completed.")
+            state.powgen_message = (
+                "Inputs verified. Start monitoring when ready."
+                if state.powgen_preflight_ready
+                else state.powgen_preflight_message
+            )
             state.error_message = "" if state.powgen_preflight_ready else state.powgen_preflight_message
         except Exception as exc:
             state.powgen_preflight_status = "error"
@@ -6020,6 +6030,7 @@ class RadarPdNovaApp(ThemedApp):
                 name=f"Build custom library: {library_name}",
                 inputs={
                     **source_inputs,
+                    "library_name": library_name,
                     "library_mode": library_mode,
                     "radiation": str(state.radiation or "neutron"),
                     "overwrite": "",

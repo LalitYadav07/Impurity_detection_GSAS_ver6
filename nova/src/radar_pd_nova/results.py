@@ -38,6 +38,30 @@ def _display_phase_label(phase_id: Any, label: Any = None) -> str:
     return phase_text or "Phase"
 
 
+def _phase_axis_label(label: Any) -> str:
+    """Compact a scientific phase label for the dedicated Bragg-tick axis."""
+
+    text = " ".join(str(label or "Phase").split())
+    if re.search(r"\(SG\s+[^)]+\)$", text, flags=re.IGNORECASE):
+        return text
+    number_match = re.search(r"\((\d{1,3})\)\)?$", text)
+    if not number_match:
+        return text if len(text) <= 48 else text[:45].rstrip(" _-") + "..."
+    number = number_match.group(1)
+    prefix = text[: number_match.start()].rstrip(" )")
+    formula = prefix
+    for separator in (" - ", " | ", " / ", " -- "):
+        if separator in prefix:
+            formula = prefix.split(separator, 1)[0].strip()
+            break
+    if formula == prefix:
+        formula = re.split(r"\s+[\u2013\u2014]\s+", prefix, maxsplit=1)[0].strip()
+    if formula and formula != prefix:
+        compact = f"{formula} (SG {number})"
+        return compact if len(compact) <= 48 else compact[:45].rstrip(" _-") + "..."
+    return text if len(text) <= 48 else text[:45].rstrip(" _-") + "..."
+
+
 def _eastern_iso_timestamp(value: Any) -> str | None:
     """Return a browser-stable ISO timestamp with the Eastern UTC offset."""
 
@@ -720,7 +744,7 @@ def gsas_figure(payload: dict[str, Any]) -> go.Figure:
     for index, phase_name in enumerate(phase_order):
         raw_label = phase_labels.get(phase_name) if isinstance(phase_labels, dict) else None
         label = _display_phase_label(phase_name, raw_label)
-        axis_labels.append(label)
+        axis_labels.append(_phase_axis_label(label))
         positions = ticks.get(phase_name, []) if isinstance(ticks, dict) else []
         if isinstance(positions, dict):
             positions = positions.get("all") or positions.get("positions") or []
@@ -733,6 +757,7 @@ def gsas_figure(payload: dict[str, Any]) -> go.Figure:
                 name=str(label),
                 marker={"symbol": "line-ns", "size": 11, "line": {"width": 2, "color": color}},
                 hovertemplate=f"{label}<br>%{{x:.5g}}<extra></extra>",
+                showlegend=False,
             ),
             row=3,
             col=1,
@@ -782,7 +807,9 @@ def gsas_figure(payload: dict[str, Any]) -> go.Figure:
     figure.update_xaxes(title_text=axis_title, row=3, col=1)
     rwp = payload.get("rwp")
     title = "Refinement fit" + (f" / Rwp {float(rwp):.2f}%" if rwp is not None else "")
-    return _finish_figure(figure, title, height=720)
+    longest_label = max((len(label) for label in axis_labels), default=0)
+    left_margin = min(250, max(110, 45 + longest_label * 7))
+    return _finish_figure(figure, title, height=720, left_margin=left_margin)
 
 
 def figure_for_payload(payload: dict[str, Any]) -> go.Figure:
@@ -806,11 +833,17 @@ def figure_for_payload(payload: dict[str, Any]) -> go.Figure:
     return component_figure(payload)
 
 
-def _finish_figure(figure: go.Figure, title: str, *, height: int) -> go.Figure:
+def _finish_figure(
+    figure: go.Figure,
+    title: str,
+    *,
+    height: int,
+    left_margin: int = 70,
+) -> go.Figure:
     figure.update_layout(
         title={"text": title, "x": 0.01, "xanchor": "left"},
         height=height,
-        margin={"l": 70, "r": 25, "t": 60, "b": 55},
+        margin={"l": left_margin, "r": 25, "t": 60, "b": 55},
         plot_bgcolor="#ffffff",
         paper_bgcolor="#ffffff",
         hovermode="x unified",

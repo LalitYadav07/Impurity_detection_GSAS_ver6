@@ -67,6 +67,7 @@ def test_job_output_ids_include_dataset_collection_associations(monkeypatch, tmp
 
     monkeypatch.setattr("radar_pd_nova.galaxy_service.requests.get", fake_get)
     service = GalaxyService("https://galaxy.example", "key", "history", output_root=tmp_path)
+    service._history_job_collection_ids = lambda _job_id, *, expected: {}  # type: ignore[method-assign]
 
     output_ids = service.job_output_ids("analysis-job")
 
@@ -75,7 +76,7 @@ def test_job_output_ids_include_dataset_collection_associations(monkeypatch, tmp
     assert captured["headers"]["x-api-key"] == "key"
 
 
-def test_job_output_ids_recovers_gpx_collection_from_history(monkeypatch, tmp_path: Path) -> None:
+def test_job_output_ids_recovers_all_collections_from_history(monkeypatch, tmp_path: Path) -> None:
     requested: list[tuple[str, dict[str, Any]]] = []
 
     class FakeResponse:
@@ -96,15 +97,24 @@ def test_job_output_ids_recovers_gpx_collection_from_history(monkeypatch, tmp_pa
             [
                 {
                     "history_content_type": "dataset_collection",
-                    "id": "other-collection",
-                    "job_source_id": "other-job",
-                    "implicit_output_name": "gpx_projects",
-                    "name": "RADAR-PD 5 | GSAS-II handoff projects",
-                },
+                    "id": f"{output_name}-collection",
+                    "job_source_id": "analysis-job",
+                    "implicit_output_name": output_name,
+                    "name": label,
+                }
+                for output_name, label in (
+                    ("plots", "RADAR-PD 2 | Accepted fit and diagnostic plots"),
+                    ("tables", "RADAR-PD 3 | Scientific result tables"),
+                    ("phases", "RADAR-PD 4 | Candidate and refined phase CIFs"),
+                    ("gpx_projects", "RADAR-PD 5 | GSAS-II handoff projects"),
+                    ("diagnostics", "RADAR-PD diagnostics"),
+                )
+            ]
+            + [
                 {
                     "history_content_type": "dataset_collection",
-                    "id": "recovered-gpx-collection",
-                    "job_source_id": "analysis-job",
+                    "id": "other-collection",
+                    "job_source_id": "other-job",
                     "implicit_output_name": "gpx_projects",
                     "name": "RADAR-PD 5 | GSAS-II handoff projects",
                 },
@@ -116,9 +126,17 @@ def test_job_output_ids_recovers_gpx_collection_from_history(monkeypatch, tmp_pa
 
     output_ids = service.job_output_ids("analysis-job")
 
-    assert output_ids == {"summary": "summary-id", "gpx_projects": "recovered-gpx-collection"}
+    assert output_ids == {
+        "summary": "summary-id",
+        "plots": "plots-collection",
+        "tables": "tables-collection",
+        "phases": "phases-collection",
+        "gpx_projects": "gpx_projects-collection",
+        "diagnostics": "diagnostics-collection",
+    }
     assert requested[1][0] == "https://galaxy.example/api/histories/history/contents"
-    assert requested[1][1]["params"]["qv"] == "GSAS-II handoff projects"
+    assert "q" not in requested[1][1]["params"]
+    assert len(requested) == 2
 
 
 def test_results_export_uses_ndip_authenticated_export_contract() -> None:
@@ -438,6 +456,58 @@ def test_result_collector_recovers_archive_when_collections_are_unavailable(tmp_
     assert result.message == ""
     assert payload["summary"]["analysis_mode"] == "full"
     assert (Path(result.output_dir) / "ndip" / "tables" / "Final_phase_fractions.csv").is_file()
+
+
+def test_result_archive_is_augmented_with_tables_phase_cifs_and_gpx(tmp_path: Path) -> None:
+    service = GalaxyService("https://example.invalid", "key", "history", output_root=tmp_path)
+    service._job_details = lambda _uid: {  # type: ignore[method-assign]
+        "outputs": {"results_archive": {"id": "archive-id"}},
+        "output_collections": {
+            "plots": {"src": "hdca", "id": "plots-id"},
+            "tables": {"src": "hdca", "id": "tables-id"},
+            "phases": {"src": "hdca", "id": "phases-id"},
+            "gpx_projects": {"src": "hdca", "id": "gpx-id"},
+            "diagnostics": {"src": "hdca", "id": "diagnostics-id"},
+        },
+    }
+    service.job_output_ids = lambda _job_id: {}  # type: ignore[method-assign]
+    service._recover_tool = lambda _uid: (_ for _ in ()).throw(RuntimeError("no live tool"))  # type: ignore[method-assign]
+
+    def download_dataset(dataset_id: str, target: Path) -> None:
+        assert dataset_id == "archive-id"
+        with zipfile.ZipFile(target, "w") as handle:
+            handle.writestr("ndip/summary.json", '{"analysis_mode":"full","phases":[]}')
+            handle.writestr(
+                "ndip/plots/final_fit.plotdata.json",
+                '{"plot_kind":"rapid_component_fit_v1","q":[1],"target":[1],"total_fit":[1]}',
+            )
+
+    downloaded_collections: list[str] = []
+
+    def download_collection(collection_id: str, target: Path) -> None:
+        downloaded_collections.append(collection_id)
+        target.mkdir(parents=True)
+        filename, content = {
+            "tables-id": ("Final_phase_fractions.csv", "phase,weight_percent\nFe,100\n"),
+            "phases-id": ("Fe_refined.cif", "data_Fe\n_chemical_formula_sum Fe\n"),
+            "gpx-id": ("Accepted_model.gpx", "GSAS-II project"),
+        }[collection_id]
+        (target / filename).write_text(content, encoding="utf-8")
+
+    service._download_dataset = download_dataset  # type: ignore[method-assign]
+    service._download_collection = download_collection  # type: ignore[method-assign]
+    record = RunRecord(uid="supplemented-job", name="run", mode=AnalysisMode.FULL, history_id="history")
+
+    result = service.collect_results(record)
+
+    assert result.result_status is ResultStatus.READY, result.message
+    assert downloaded_collections == ["tables-id", "phases-id", "gpx-id"]
+    output_dir = Path(result.output_dir)
+    assert (output_dir / "tables" / "Final_phase_fractions.csv").is_file()
+    assert (output_dir / "phases" / "Fe_refined.cif").is_file()
+    assert (output_dir / "gpx_projects" / "Accepted_model.gpx").is_file()
+    assert not (output_dir / "plots").exists()
+    assert not (output_dir / "diagnostics").exists()
 
 
 def test_result_collector_uses_durable_dataset_ids_for_recovered_jobs(tmp_path: Path) -> None:

@@ -148,6 +148,9 @@ def test_powgen_monitor_requires_preflight_and_exposes_safe_backfill_controls() 
     assert 'v-if="result_explorer_available"' in template
     assert "Open GPX in GSAS-II" in template
     assert "Open GSAS-II" in template
+    assert "No GPX checkpoint was published for this run." in template
+    assert "checkpoint_rows.length > 0" in template
+    assert "gsasii_session_status !== 'ready'" in template
     assert 'itemValue="id"' in template
     assert "Compare selected series" in template
     assert "Companion-tool activity" in template
