@@ -25,6 +25,7 @@ from scripts.db_pack_builder import (
     _normalize_catalog_df,
     _build_base_duplicate_index,
     _find_matching_base_phase_ids,
+    infer_phase_display_name,
     build_augmented_db_pack,
     collect_phase_inputs,
     build_mini_db_pack,
@@ -71,6 +72,22 @@ class SimulationSettingsTests(unittest.TestCase):
 
 
 class DBPackBuilderTests(unittest.TestCase):
+    def test_phase_display_name_uses_formula_then_declared_name_then_filename(self):
+        cif = "_chemical_name_common 'rock salt reference'\n"
+
+        self.assertEqual(
+            infer_phase_display_name("collcode123.cif", cif, "NaCl"),
+            "NaCl - rock salt reference",
+        )
+        self.assertEqual(
+            infer_phase_display_name("collcode123.cif", "data_collcode123\n", "NaCl"),
+            "NaCl",
+        )
+        self.assertEqual(
+            infer_phase_display_name("Fe2VAl_L21.cif", "data_unknown\n", ""),
+            "Fe2VAl L21",
+        )
+
     def test_normalize_catalog_df_preserves_uint64_element_masks(self):
         import pandas as pd
 
@@ -129,6 +146,7 @@ class DBPackBuilderTests(unittest.TestCase):
                 original_json=str(result.db_config["original_json"]),
             ))
             self.assertEqual(len(loader.catalog), 2)
+            self.assertEqual(loader.get_pretty_name(result.phase_ids[0]), "NaCl")
             s0 = loader.load_structure(result.phase_ids[0])
             self.assertGreater(len(s0), 0)
 

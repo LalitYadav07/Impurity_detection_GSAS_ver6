@@ -466,6 +466,7 @@ class GalaxyService:
         preserved_suffix = Path(preserved_name).suffix.lower().lstrip(".")
         generated_tokens = (
             "results archive",
+            "analysis log",
             "radar-pd summary",
             "resolved config",
             "input manifest",
@@ -473,12 +474,20 @@ class GalaxyService:
             "plot payload",
             "phase fractions",
             "gpx index",
+            "result overview",
+            "scientific result tables",
+            "diagnostic plots",
+            "handoff projects",
         )
         generated = any(token in name for token in generated_tokens)
         if preserved_suffix in {"instprm", "prm", "inst", "ins"} or "instrument profile" in name:
             return "instrument", generated
         if preserved_suffix == "cif" or extension == "cif":
             return "cif", generated
+        if (preserved_suffix in {"yaml", "yml"} or extension in {"yaml", "yml"}) and (
+            "config" in name or "radar" in name
+        ):
+            return "configuration", generated
         # The library builder uploads an intermediate ZIP containing the raw
         # CIF inputs before producing the portable database archive.  It is a
         # reproducibility artifact, not a searchable RADAR-PD library.
@@ -488,14 +497,15 @@ class GalaxyService:
             return "other", True
         if (preserved_suffix == "zip" or extension == "zip") and not generated:
             return "candidate_library", False
+        # Generated reports, logs, tables, and plot payloads can carry generic
+        # text/CSV datatypes that are also accepted for diffraction uploads.
+        # They are result artifacts, never compatible measurement inputs.
+        if generated:
+            return "other", True
         if preserved_suffix in {"nxs", "h5", "hdf5"} or extension in {"nxs", "h5", "hdf5"}:
             return "event", generated
         if preserved_suffix in _DIFFRACTION_EXTENSIONS or extension in _DIFFRACTION_EXTENSIONS:
             return "diffraction", generated
-        if (preserved_suffix in {"yaml", "yml"} or extension in {"yaml", "yml"}) and (
-            "config" in name or "radar" in name
-        ):
-            return "configuration", generated
         return "other", True
 
     def search_history_datasets(
@@ -2085,6 +2095,13 @@ class GalaxyService:
             try:
                 job = self._job_details(job_id)
                 record.output_dataset_ids.update(self._job_output_ids(job))
+            except Exception:
+                pass
+            try:
+                # Galaxy's full job record may omit output collections. Resolve
+                # those associations while results are collected in the
+                # background, not while the result page is being rendered.
+                record.output_dataset_ids.update(self.job_output_ids(job_id))
             except Exception:
                 pass
 

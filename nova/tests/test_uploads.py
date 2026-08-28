@@ -55,8 +55,18 @@ def test_inspect_cif_upload_reports_formula_space_group_and_digest() -> None:
 
     assert result["name"] == "Fe.cif"
     assert result["formula"] == "Fe"
+    assert result["display_name"] == "Fe"
     assert result["space_group"] == "229"
     assert len(result["digest"]) == 64
+
+
+def test_inspect_cif_upload_previews_declared_phase_name() -> None:
+    contents = VALID_CIF + b"_chemical_name_common 'alpha iron'\n"
+
+    result = inspect_cif_upload(contents, "iron_reference.cif")
+
+    assert result["phase_name"] == "alpha iron"
+    assert result["display_name"] == "Fe - alpha iron"
 
 
 @pytest.mark.parametrize(

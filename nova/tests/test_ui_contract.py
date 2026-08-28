@@ -36,6 +36,11 @@ def test_setup_panels_and_uploads_have_single_stable_instances() -> None:
     template = app.layout.html
 
     assert app.server.state.setup_panels == [0, 2]
+    assert app.server.state.workflow_mode == "single"
+    assert [item["value"] for item in app.server.state.workflow_options] == ["single", "powgen"]
+    assert 'v-model="workflow_mode"' in template
+    assert 'v-show="workflow_mode === \'powgen\'"' in template
+    assert template.count('v-show="workflow_mode === \'single\'"') == 2
 
     for title in (
         "Measurement Type",

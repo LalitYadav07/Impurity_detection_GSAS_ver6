@@ -395,12 +395,19 @@ class DBLoader:
 
     def get_pretty_name(self, pid: str) -> str:
         pid = str(pid)
-        if hasattr(self, "_pretty_by_id") and pid in self._pretty_by_id:
-            return self._pretty_by_id[pid]
         row_ix = self._row_index.get(pid)
         if row_ix is None:
             raise KeyError(f"phase id not in catalog: {pid}")
         s = self.catalog.iloc[row_ix]
+        display_name = s.get("display_name")
+        if (
+            isinstance(display_name, str)
+            and display_name.strip()
+            and display_name.strip().casefold() not in {"nan", "none", "unknown"}
+        ):
+            return display_name.strip()
+        if hasattr(self, "_pretty_by_id") and pid in self._pretty_by_id:
+            return self._pretty_by_id[pid]
         for k in ("pretty_formula", "formula_pretty", "formula", "pretty_name", "elements_list"):
             val = s.get(k)
             if isinstance(val, str) and val.strip():

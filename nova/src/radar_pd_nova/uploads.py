@@ -89,11 +89,28 @@ def inspect_cif_upload(contents: bytes, original_name: Any) -> dict[str, Any]:
                 return next((value for value in match.groups() if value), "")
         return ""
 
+    formula = _tag_value("_chemical_formula_sum", "_chemical_formula_structural")
+    declared_name = _tag_value(
+        "_pd_phase_name",
+        "_pd_phase_id",
+        "_chemical_name_common",
+        "_chemical_name_mineral",
+        "_chemical_name_systematic",
+    )
+    if declared_name.casefold() in {"#(c)", "global", "none", "unknown", "vesta_phase_1", "?", "."}:
+        declared_name = ""
+    if formula and declared_name:
+        display_name = f"{formula} - {declared_name}"
+    else:
+        display_name = formula or declared_name
+
     return {
         "name": name,
         "size": len(contents),
         "digest": hashlib.sha256(contents).hexdigest(),
-        "formula": _tag_value("_chemical_formula_sum", "_chemical_formula_structural"),
+        "formula": formula,
+        "phase_name": declared_name,
+        "display_name": display_name,
         "space_group": _tag_value("_space_group_it_number", "_symmetry_int_tables_number"),
     }
 
@@ -411,7 +428,8 @@ class NamedMultiCifUpload:
                         "detail": " / ".join(
                             value
                             for value in (
-                                metadata.get("formula"),
+                                metadata.get("display_name")
+                                or "Scientific name will be derived from the atomic composition during build",
                                 f"SG {metadata['space_group']}" if metadata.get("space_group") else "",
                             )
                             if value
@@ -531,7 +549,7 @@ class NamedMultiCifUpload:
                     html.Strong("Loose CIF files")
                     html.Span("Add one CIF file at a time; repeat to include more.")
                     vuetify.VBtn(
-                        "Choose CIF files",
+                        "Choose a CIF file",
                         size="small",
                         variant="outlined",
                         color=color,
@@ -542,7 +560,7 @@ class NamedMultiCifUpload:
                     html.Strong("ZIP archives of CIFs")
                     html.Span("Add one ZIP at a time; repeat for more archives. Recommended for large collections.")
                     vuetify.VBtn(
-                        "Choose ZIP archives",
+                        "Choose a ZIP archive",
                         size="small",
                         variant="outlined",
                         color=color,

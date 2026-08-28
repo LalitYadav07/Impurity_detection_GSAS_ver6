@@ -19,6 +19,7 @@ from dateutil.tz import tzstr
 from nova.trame import ThemedApp
 from trame.app import get_server
 from trame.widgets import client, html, plotly, vuetify3 as vuetify
+import yaml
 
 from .configuration import config_from_contract, load_configuration
 from .facility import FacilityBrowser, FacilityPathError, WatchRecipe
@@ -146,6 +147,32 @@ _POWGEN_BACKFILL_LIMITS: dict[str, int | None] = {
     "all": None,
 }
 
+_GENERAL_SOURCE_OPTIONS = [
+    {"title": "Upload from this computer", "value": "upload"},
+    {"title": "Choose from Galaxy History", "value": "galaxy"},
+    {"title": "Browse an SNS/HFIR experiment folder", "value": "ipts_browser"},
+]
+_XRAY_SOURCE_OPTIONS = _GENERAL_SOURCE_OPTIONS[:2]
+_GENERAL_INSTRUMENT_SOURCE_OPTIONS = [
+    {"title": "Upload from this computer", "value": "upload"},
+    {"title": "Choose from Galaxy History", "value": "galaxy"},
+    {"title": "Choose from the experiment folder", "value": "ipts"},
+]
+_XRAY_INSTRUMENT_SOURCE_OPTIONS = _GENERAL_INSTRUMENT_SOURCE_OPTIONS[:2]
+_GENERAL_MAIN_CIF_SOURCE_OPTIONS = [
+    {"title": "No supplied main phase", "value": "none"},
+    {"title": "Upload CIF from this computer", "value": "upload"},
+    {"title": "Choose CIF from Galaxy History", "value": "galaxy"},
+    {"title": "Choose CIF from the experiment folder", "value": "ipts"},
+]
+_XRAY_MAIN_CIF_SOURCE_OPTIONS = _GENERAL_MAIN_CIF_SOURCE_OPTIONS[:3]
+_NEUTRON_GEOMETRY_OPTIONS = [
+    {"title": "Auto detect", "value": "auto"},
+    {"title": "Constant wavelength", "value": "cw"},
+    {"title": "Time of flight", "value": "tof"},
+]
+_XRAY_GEOMETRY_OPTIONS = _NEUTRON_GEOMETRY_OPTIONS[:2]
+
 
 def _list_value(value: Any) -> list[str]:
     if isinstance(value, list):
@@ -217,10 +244,12 @@ class RadarPdNovaApp(ThemedApp):
         self._powgen_heatmap_widget: Any | None = None
         self._powgen_quality_widget: Any | None = None
         self._published_checkpoint_ids: dict[tuple[str, str], str] = {}
+        self._dataset_label_cache: dict[str, str] = {}
         self._auto_opened_uids: set[str] = set()
         self._initialize_state()
         self.server.state.change("run_selection")(self._run_selection_changed)
         self.server.state.change(*_SUBMISSION_FIELDS[:-2])(self._submission_form_changed)
+        self.server.state.change("radiation")(self._radiation_changed)
         self.server.state.change("facility_site")(self._facility_site_changed)
         self.server.state.change("facility_instrument")(self._facility_instrument_changed)
         self.server.state.change("facility_ipts")(self._facility_ipts_changed)
@@ -238,6 +267,11 @@ class RadarPdNovaApp(ThemedApp):
         # across Trame state flushes. Semantic string values can be replaced by
         # positional values in the browser, leaving a clicked panel stuck shut.
         state.setup_panels = [0, 2]
+        state.workflow_mode = "single"
+        state.workflow_options = [
+            {"title": "Single pattern", "value": "single", "icon": "mdi-file-chart-outline"},
+            {"title": "POWGEN live", "value": "powgen", "icon": "mdi-access-point"},
+        ]
         state.workspace_view = "monitor"
         state.workspace_options = [
             {"title": "Run Monitor", "value": "monitor", "icon": "mdi-progress-clock"},
@@ -256,6 +290,7 @@ class RadarPdNovaApp(ThemedApp):
         state.analysis_mode = "rapid"
         state.radiation = "neutron"
         state.instrument_mode = "auto"
+        state.instrument_mode_options = list(_NEUTRON_GEOMETRY_OPTIONS)
         state.input_source = "upload"
         state.instrument_source = "upload"
         state.data_path = ""
@@ -356,6 +391,7 @@ class RadarPdNovaApp(ThemedApp):
         state.viewed_run_mode = ""
         state.viewed_run_name = ""
         state.viewed_configuration = ""
+        state.run_provenance_rows = []
         state.phase_rows = []
         state.table_options = []
         state.selected_table = ""
@@ -488,7 +524,13 @@ class RadarPdNovaApp(ThemedApp):
             {"title": "2.665 A (Bank 3)", "value": "2.665"},
         ]
         state.powgen_configuration_dataset_id = ""
+        state.powgen_configuration_title = "No reusable configuration selected"
+        state.powgen_configuration_summary = []
+        state.powgen_configuration_yaml = ""
+        state.powgen_configuration_error = ""
         state.powgen_database_dataset_id = ""
+        state.powgen_configuration_label = "Not selected"
+        state.powgen_database_label = "Built-in MP/COD catalog"
         state.powgen_main_cif_source = "none"
         state.powgen_main_cif_path = ""
         state.powgen_main_cif_dataset_id = ""
@@ -521,6 +563,7 @@ class RadarPdNovaApp(ThemedApp):
         state.powgen_dashboard_notice = "Completed scans will populate this experiment view."
         state.powgen_message = "Select an IPTS, wavelength, and reusable Galaxy configuration to begin."
         state.powgen_last_checked = "Not started"
+        state.powgen_preflight_checked = "Not checked"
         state.powgen_next_check = "Not scheduled"
         state.powgen_preflight_status = "idle"
         state.powgen_preflight_ready = False
@@ -532,26 +575,13 @@ class RadarPdNovaApp(ThemedApp):
             {"title": "Rapid Hypothesis Mode", "value": "rapid"},
             {"title": "Full RADAR-PD", "value": "full"},
         ]
-        state.source_options = [
-            {"title": "Upload from this computer", "value": "upload"},
-            {"title": "Choose from Galaxy History", "value": "galaxy"},
-            {"title": "Browse an SNS/HFIR experiment folder", "value": "ipts_browser"},
-        ]
-        state.instrument_source_options = [
-            {"title": "Upload from this computer", "value": "upload"},
-            {"title": "Choose from Galaxy History", "value": "galaxy"},
-            {"title": "Choose from the experiment folder", "value": "ipts"},
-        ]
+        state.source_options = list(_GENERAL_SOURCE_OPTIONS)
+        state.instrument_source_options = list(_GENERAL_INSTRUMENT_SOURCE_OPTIONS)
         state.radiation_options = [
             {"title": "Neutron powder diffraction", "value": "neutron"},
             {"title": "X-ray powder diffraction", "value": "xray"},
         ]
-        state.main_cif_source_options = [
-            {"title": "No supplied main phase", "value": "none"},
-            {"title": "Upload CIF from this computer", "value": "upload"},
-            {"title": "Choose CIF from Galaxy History", "value": "galaxy"},
-            {"title": "Choose CIF from the experiment folder", "value": "ipts"},
-        ]
+        state.main_cif_source_options = list(_GENERAL_MAIN_CIF_SOURCE_OPTIONS)
         state.database_source_options = [
             {"title": "Built-in MP/COD catalog", "value": "builtin"},
             {"title": "Create a mini-library from my CIFs", "value": "custom_mini"},
@@ -730,6 +760,17 @@ class RadarPdNovaApp(ThemedApp):
             html.P(
                 "Only powder and engineering diffraction beamlines supported by RADAR-PD are listed.",
                 classes="radar-help-copy",
+            )
+            vuetify.VAlert(
+                v_show="facility_site === 'SNS'",
+                text=(
+                    "POWGEN (PG3) live experiments use the dedicated POWGEN Live Experiment panel above. "
+                    "This folder browser is for supported one-pattern neutron analyses."
+                ),
+                type="info",
+                variant="tonal",
+                density="compact",
+                classes="mb-2",
             )
             vuetify.VCombobox(
                 label="Experiment (IPTS)",
@@ -934,6 +975,24 @@ class RadarPdNovaApp(ThemedApp):
         html.H2("Configure analysis", classes="radar-rail-heading")
         html.P("Work from top to bottom. Earlier choices control the options that follow.", classes="radar-rail-help")
 
+        html.Div("WORKFLOW", classes="radar-rail-kicker mt-2 mb-1")
+        with vuetify.VBtnToggle(
+            v_model=("workflow_mode",),
+            mandatory=True,
+            divided=True,
+            color="#15543c",
+            classes="radar-workflow-toggle mb-3",
+            disabled=("powgen_monitoring",),
+        ):
+            with vuetify.VBtn(
+                v_for="item in workflow_options",
+                key="item.value",
+                value=("item.value",),
+                size="small",
+            ):
+                vuetify.VIcon(icon=("item.icon",), size="small", classes="mr-1")
+                html.Span("{{ item.title }}")
+
         with vuetify.VExpansionPanels(multiple=True, variant="accordion", classes="radar-history-panel mb-3"):
             with vuetify.VExpansionPanel(value="history"):
                 with vuetify.VExpansionPanelTitle():
@@ -994,7 +1053,12 @@ class RadarPdNovaApp(ThemedApp):
                         block=True,
                     )
 
-        with vuetify.VExpansionPanels(multiple=True, variant="accordion", classes="radar-history-panel mb-3"):
+        with vuetify.VExpansionPanels(
+            model_value="powgen-live",
+            variant="accordion",
+            classes="radar-history-panel mb-3",
+            v_show="workflow_mode === 'powgen'",
+        ):
             with vuetify.VExpansionPanel(value="powgen-live"):
                 with vuetify.VExpansionPanelTitle():
                     vuetify.VIcon("mdi-access-point", size="small", classes="mr-2")
@@ -1007,6 +1071,16 @@ class RadarPdNovaApp(ThemedApp):
                         variant="flat",
                     )
                 with vuetify.VExpansionPanelText():
+                    vuetify.VAlert(
+                        text=(
+                            "Dedicated neutron time-of-flight workflow. Only the inputs in this panel control "
+                            "live monitoring. Use the workflow selector above to return to one-pattern analysis."
+                        ),
+                        type="info",
+                        variant="tonal",
+                        density="compact",
+                        classes="mb-2",
+                    )
                     html.P(
                         "Analyze every completed POWGEN reduction already present, then continue with each new scan through the existing RADAR-PD Analyze tool.",
                         classes="radar-help-copy",
@@ -1057,7 +1131,36 @@ class RadarPdNovaApp(ThemedApp):
                         no_data_text="No reusable configurations are in this Galaxy History",
                         hint="Every discovered scan uses this saved Full or Rapid configuration.",
                         persistent_hint=True,
+                        update_modelValue=(self._powgen_configuration_changed, "[$event]"),
                     )
+                    with vuetify.VExpansionPanels(
+                        v_show="!!powgen_configuration_dataset_id",
+                        variant="accordion",
+                        classes="radar-config-import mb-2",
+                    ):
+                        with vuetify.VExpansionPanel(title=("powgen_configuration_title",)):
+                            with vuetify.VExpansionPanelText():
+                                vuetify.VAlert(
+                                    v_show="!!powgen_configuration_error",
+                                    text=("powgen_configuration_error",),
+                                    type="warning",
+                                    variant="tonal",
+                                    density="compact",
+                                    classes="mb-2",
+                                )
+                                with html.Div(classes="radar-preflight-summary"):
+                                    with html.Div(
+                                        v_for="item in powgen_configuration_summary",
+                                        key="item.label",
+                                        classes="radar-preflight-row",
+                                    ):
+                                        html.Span("{{ item.label }}", classes="radar-preflight-label")
+                                        html.Span("{{ item.value }}", classes="radar-preflight-value")
+                                html.Pre(
+                                    "{{ powgen_configuration_yaml }}",
+                                    v_show="!!powgen_configuration_yaml",
+                                    classes="radar-config-preview mt-2",
+                                )
                     vuetify.VSelect(
                         label="Candidate library for monitored scans",
                         v_model=("powgen_database_dataset_id",),
@@ -1201,7 +1304,8 @@ class RadarPdNovaApp(ThemedApp):
                         classes="mt-2",
                     )
                     html.P("{{ powgen_message }}", classes="radar-help-copy mt-2 mb-1")
-                    html.Div("Last checked: {{ powgen_last_checked }}", classes="radar-run-list-meta")
+                    html.Div("Inputs checked: {{ powgen_preflight_checked }}", classes="radar-run-list-meta")
+                    html.Div("Monitor last polled: {{ powgen_last_checked }}", classes="radar-run-list-meta")
                     html.Div("Next check: {{ powgen_next_check }}", classes="radar-run-list-meta")
                     with html.Div(classes="radar-run-list mt-2", v_if="powgen_rows.length"):
                         with html.Div(
@@ -1220,11 +1324,17 @@ class RadarPdNovaApp(ThemedApp):
                             html.Div("{{ row.file }}", classes="radar-run-list-meta")
                             html.Div("{{ row.detail }}", classes="radar-run-list-stage")
 
+        html.Div(
+            "SINGLE-PATTERN ANALYSIS",
+            classes="radar-rail-kicker mb-1",
+            v_show="workflow_mode === 'single'",
+        )
         with vuetify.VExpansionPanels(
             v_model=("setup_panels",),
             multiple=True,
             variant="accordion",
             classes="radar-setup-panels",
+            v_show="workflow_mode === 'single'",
         ):
             with self._setup_section(1, "Measurement Type", 0, "!!radiation && !!instrument_mode"):
                 vuetify.VSelect(
@@ -1239,7 +1349,7 @@ class RadarPdNovaApp(ThemedApp):
                 vuetify.VSelect(
                     label="Pattern geometry",
                     v_model=("instrument_mode",),
-                    items=("[{title:'Auto detect',value:'auto'},{title:'Constant wavelength',value:'cw'},{title:'Time of flight',value:'tof'}]",),
+                    items=("instrument_mode_options",),
                     item_title="title",
                     item_value="value",
                     density="compact",
@@ -1280,7 +1390,7 @@ class RadarPdNovaApp(ThemedApp):
                             label="RADAR-PD library archive",
                             help_text="A library previously produced by the RADAR-PD library builder (.zip)",
                             extensions=[".zip"],
-                            optional=True,
+                            optional=False,
                             key="radar-database-upload",
                         )
                     vuetify.VSelect(
@@ -1365,6 +1475,7 @@ class RadarPdNovaApp(ThemedApp):
                     )
             instrument_ready = "((radiation === 'xray' && use_builtin_cuka) || (instrument_source === 'upload' && !!instrument_path) || (instrument_source === 'galaxy' && !!history_instrument_id) || (instrument_source === 'galaxy_remote' && !!remote_instrument_uri) || (instrument_source === 'ipts' && !!facility_instrument_path))"
             data_ready = f"((input_source === 'upload' && !!data_path) || (input_source === 'galaxy' && !!history_data_id) || (input_source === 'galaxy_remote' && !!remote_data_uri) || (input_source === 'ipts_browser' && !!facility_data_path)) && {instrument_ready} || (input_source === 'ipts_event' && !!event_file_path && !!bank) || (input_source === 'ipts_manual' && !!ipts_instrument && !!ipts && !!run_number && !!bank)"
+            main_phase_ready = "((main_cif_source === 'upload' && !!main_cif_path) || (main_cif_source === 'galaxy' && !!history_main_cif_id) || (main_cif_source === 'galaxy_remote' && !!remote_main_cif_uri) || (main_cif_source === 'ipts' && !!facility_main_cif_path))"
             with self._setup_section(3, "Data Collection", 2, data_ready):
                 vuetify.VSelect(
                     label="Where is the diffraction pattern?",
@@ -1412,9 +1523,11 @@ class RadarPdNovaApp(ThemedApp):
                     )
                     vuetify.VSwitch(
                         v_model=("history_show_all",),
-                        label="Show all compatible datasets",
+                        label="Include RADAR-PD input copies",
                         density="compact",
                         color="#15543c",
+                        hint="Includes reusable diffraction inputs produced by earlier RADAR-PD runs; logs and result artifacts remain excluded.",
+                        persistent_hint=True,
                         update_modelValue=(self.search_history, "[history_search]"),
                     )
                     vuetify.VSelect(
@@ -1784,10 +1897,15 @@ class RadarPdNovaApp(ThemedApp):
                     hint="Allowed as environment phases, not mixed freely into sample chemistry",
                     persistent_hint=True,
                 )
-            with self._setup_section(5, "Pattern Regions", 4, "(!fit_start && !fit_end) || (!!fit_start && !!fit_end)"):
+            with self._setup_section(
+                5,
+                "Pattern Regions",
+                4,
+                "((fit_start == null || fit_start === '') && (fit_end == null || fit_end === '')) || ((fit_start != null && fit_start !== '') && (fit_end != null && fit_end !== ''))",
+            ):
                 with html.Div(classes="radar-field-pair"):
-                    vuetify.VTextField(label="Fit start", v_model=("fit_start",), type="number", density="compact", variant="outlined", clearable=True)
-                    vuetify.VTextField(label="Fit end", v_model=("fit_end",), type="number", density="compact", variant="outlined", clearable=True)
+                    vuetify.VTextField(label="Fit start (pattern x-axis)", v_model=("fit_start",), type="number", density="compact", variant="outlined", clearable=True)
+                    vuetify.VTextField(label="Fit end (pattern x-axis)", v_model=("fit_end",), type="number", density="compact", variant="outlined", clearable=True)
                 vuetify.VTextarea(
                     label="Ignored regions",
                     v_model=("ignore_regions",),
@@ -1796,6 +1914,10 @@ class RadarPdNovaApp(ThemedApp):
                     variant="outlined",
                     rows=2,
                     auto_grow=True,
+                )
+                html.P(
+                    "Use the same coordinate and units as the measured pattern: TOF in microseconds for GSAS/POWGEN data, or 2-theta in degrees for constant-wavelength data.",
+                    classes="radar-field-note",
                 )
             with self._setup_section(6, "Background Correction", 5, "!!background_mode && !!background_type && background_terms > 0"):
                 vuetify.VSelect(
@@ -1812,14 +1934,14 @@ class RadarPdNovaApp(ThemedApp):
                     vuetify.VTextField(label="Terms", v_model=("background_terms",), type="number", min=1, max=36, density="compact", variant="outlined")
             with self._setup_section(7, "Magnetic Ordering Precheck", 6, "true"):
                 vuetify.VAlert(
-                    v_show="main_cif_source === 'none' || radiation !== 'neutron'",
+                    v_show=f"!({main_phase_ready}) || radiation !== 'neutron'",
                     text="Available when a neutron run includes a known main-phase CIF.",
                     type="info",
                     variant="tonal",
                     density="compact",
                 )
                 vuetify.VSwitch(
-                    v_show="main_cif_source !== 'none' && radiation === 'neutron'",
+                    v_show=f"({main_phase_ready}) && radiation === 'neutron'",
                     v_model=("magnetic_precheck",),
                     label="Check residual peaks for commensurate magnetic indexing",
                     color="#15543c",
@@ -1827,7 +1949,7 @@ class RadarPdNovaApp(ThemedApp):
                     inset=True,
                 )
                 vuetify.VTextField(
-                    v_show="main_cif_source !== 'none' && radiation === 'neutron' && magnetic_precheck",
+                    v_show=f"({main_phase_ready}) && radiation === 'neutron' && magnetic_precheck",
                     label="Q maximum",
                     v_model=("magnetic_q_max",),
                     type="number",
@@ -1835,7 +1957,7 @@ class RadarPdNovaApp(ThemedApp):
                     variant="outlined",
                 )
                 vuetify.VTextField(
-                    v_show="main_cif_source !== 'none' && radiation === 'neutron' && magnetic_precheck",
+                    v_show=f"({main_phase_ready}) && radiation === 'neutron' && magnetic_precheck",
                     label="Commensurate denominators",
                     v_model=("magnetic_denominators",),
                     density="compact",
@@ -1891,12 +2013,12 @@ class RadarPdNovaApp(ThemedApp):
                 vuetify.VSelect(v_show="reference_masks_enabled", label="Reference-mask window", v_model=("reference_window_mode",), items=("[{title:'Automatic from resolution',value:'auto'},{title:'Fixed window',value:'fixed'}]",), item_title="title", item_value="value", density="compact", variant="outlined")
                 vuetify.VSwitch(v_show="radiation === 'xray' && reference_masks_enabled", v_model=("include_cu_kbeta",), label="Mask Cu K-beta companions", color="#15543c", density="compact", inset=True)
                 vuetify.VDivider(classes="my-3")
-                vuetify.VAlert(v_show="main_cif_source === 'none'", text="Main-phase safeguards become available when a CIF is supplied.", type="info", variant="tonal", density="compact")
-                vuetify.VSwitch(v_show="main_cif_source !== 'none'", v_model=("main_prenudge",), label="Anchor supplied main-phase cell", color="#15543c", density="compact", inset=True)
-                vuetify.VSwitch(v_show="main_cif_source !== 'none'", v_model=("main_shadow_filter",), label="Filter main-shadow-only candidates", color="#15543c", density="compact", inset=True)
-                vuetify.VSwitch(v_show="main_cif_source !== 'none'", v_model=("cleanup_enabled",), label="Clean up main-CIF internal parameters", color="#15543c", density="compact", inset=True)
-                vuetify.VCheckbox(v_show="main_cif_source !== 'none' && cleanup_enabled", v_model=("refine_u_iso",), label="Refine isotropic displacement parameters", density="compact")
-                vuetify.VCheckbox(v_show="main_cif_source !== 'none' && cleanup_enabled", v_model=("refine_positions",), label="Refine atomic positions", density="compact")
+                vuetify.VAlert(v_show=f"!({main_phase_ready})", text="Main-phase safeguards become available after a CIF is actually selected.", type="info", variant="tonal", density="compact")
+                vuetify.VSwitch(v_show=main_phase_ready, v_model=("main_prenudge",), label="Anchor supplied main-phase cell", color="#15543c", density="compact", inset=True)
+                vuetify.VSwitch(v_show=main_phase_ready, v_model=("main_shadow_filter",), label="Filter main-shadow-only candidates", color="#15543c", density="compact", inset=True)
+                vuetify.VSwitch(v_show=main_phase_ready, v_model=("cleanup_enabled",), label="Clean up main-CIF internal parameters", color="#15543c", density="compact", inset=True)
+                vuetify.VCheckbox(v_show=f"({main_phase_ready}) && cleanup_enabled", v_model=("refine_u_iso",), label="Refine isotropic displacement parameters", density="compact")
+                vuetify.VCheckbox(v_show=f"({main_phase_ready}) && cleanup_enabled", v_model=("refine_positions",), label="Refine atomic positions", density="compact")
                 with html.Div(v_show="analysis_mode === 'rapid'"):
                     vuetify.VDivider(classes="my-3")
                     vuetify.VSwitch(v_model=("rapid_show_family_variants",), label="Keep family variants in Solution Inspector", color="#15543c", density="compact", inset=True)
@@ -1936,7 +2058,10 @@ class RadarPdNovaApp(ThemedApp):
                     html.Div("{{ analysis_mode === 'rapid' ? 'Rapid Hypothesis Mode' : 'Full RADAR-PD' }}", classes="radar-review-primary")
                     html.Div("{{ radiation === 'neutron' ? 'Neutron' : 'X-ray' }} / {{ instrument_mode.toUpperCase() }}", classes="radar-review-secondary")
                     html.Div("Sample: {{ sample_elements || 'not entered' }}", classes="radar-review-secondary")
-                    html.Div("Main phase: {{ main_cif_source === 'none' ? 'not supplied' : 'supplied' }}", classes="radar-review-secondary")
+                    html.Div(
+                        f"Main phase: {{{{ ({main_phase_ready}) ? 'selected' : 'not supplied' }}}}",
+                        classes="radar-review-secondary",
+                    )
                     html.Div("Server request: {{ analysis_mode.toUpperCase() }} / {{ analysis_mode === 'full' ? full_profile : 'Rapid budget' }} / {{ rapid_gsas_validation_limit }} final refinements", classes="radar-review-secondary radar-server-summary")
                 vuetify.VAlert(
                     v_show="busy && !!selected_run_uid",
@@ -2085,6 +2210,10 @@ class RadarPdNovaApp(ThemedApp):
                     variant="text",
                     size="small",
                 )
+        with html.Div(classes="radar-experiment-provenance mb-3"):
+            html.Span("Configuration: {{ powgen_configuration_label }}")
+            html.Span("Candidate library: {{ powgen_database_label }}")
+            html.Span("Wavelength: {{ powgen_wavelength }} A")
         vuetify.VAlert(
             text=("powgen_dashboard_notice",),
             type="info",
@@ -2434,6 +2563,23 @@ class RadarPdNovaApp(ThemedApp):
                 variant="tonal",
                 classes="mb-3",
             )
+            with html.Section(classes="radar-run-provenance mb-3", v_if="run_provenance_rows.length"):
+                with html.Div(classes="radar-run-provenance-grid"):
+                    with html.Div(
+                        v_for="item in run_provenance_rows",
+                        key="item.label",
+                        classes="radar-run-provenance-item",
+                    ):
+                        html.Span("{{ item.label }}")
+                        html.Strong("{{ item.value }}")
+                with vuetify.VExpansionPanels(
+                    v_if="!!viewed_configuration",
+                    variant="accordion",
+                    classes="radar-detail-panels mt-2",
+                ):
+                    with vuetify.VExpansionPanel(title="Resolved settings used for this run"):
+                        with vuetify.VExpansionPanelText():
+                            html.Pre("{{ viewed_configuration }}", classes="radar-config-preview")
             with html.Div(classes="radar-metric-grid"):
                 with html.Div(v_for="metric in result_metrics", key="metric.label", classes="radar-metric-card"):
                     html.Div("{{ metric.label }}", classes="radar-metric-label")
@@ -3079,6 +3225,144 @@ class RadarPdNovaApp(ThemedApp):
     @staticmethod
     def _submission_payload_expression() -> str:
         return "{" + ",".join(f"{name}:{name}" for name in _SUBMISSION_FIELDS) + "}"
+
+    def _radiation_changed(self, radiation: Any = None, **_: Any) -> None:
+        """Keep single-pattern controls scientifically compatible with the source."""
+
+        state = self.server.state
+        selected = self._selected_value(radiation if radiation is not None else state.radiation)
+        if selected not in {"neutron", "xray"}:
+            return
+        state.radiation = selected
+        if selected == "xray":
+            state.instrument_mode_options = list(_XRAY_GEOMETRY_OPTIONS)
+            state.source_options = list(_XRAY_SOURCE_OPTIONS)
+            state.instrument_source_options = list(_XRAY_INSTRUMENT_SOURCE_OPTIONS)
+            state.main_cif_source_options = list(_XRAY_MAIN_CIF_SOURCE_OPTIONS)
+            incompatible = False
+            if state.instrument_mode == "tof":
+                state.instrument_mode = "auto"
+                incompatible = True
+            if state.input_source in {"ipts_browser", "ipts_event", "ipts_manual"}:
+                state.input_source = "upload"
+                incompatible = True
+            if state.instrument_source == "ipts":
+                state.instrument_source = "upload"
+                incompatible = True
+            if state.main_cif_source == "ipts":
+                state.main_cif_source = "none"
+                incompatible = True
+            state.use_facility_workspace = False
+            state.magnetic_precheck = False
+            if incompatible and not getattr(state, "busy", False):
+                state.notice = (
+                    "X-ray mode uses upload or Galaxy History inputs and constant-wavelength geometry. "
+                    "Neutron facility selections were cleared."
+                )
+        else:
+            state.instrument_mode_options = list(_NEUTRON_GEOMETRY_OPTIONS)
+            state.source_options = list(_GENERAL_SOURCE_OPTIONS)
+            state.instrument_source_options = list(_GENERAL_INSTRUMENT_SOURCE_OPTIONS)
+            state.main_cif_source_options = list(_GENERAL_MAIN_CIF_SOURCE_OPTIONS)
+        state.flush()
+
+    @staticmethod
+    def _configuration_summary_rows(config: AnalysisConfig) -> list[dict[str, str]]:
+        limits = "Full pattern"
+        if config.limits:
+            limits = f"{config.limits[0]:g} to {config.limits[1]:g} (pattern x-axis units)"
+        sample = ", ".join(config.sample_elements) or "Not constrained"
+        environment = ", ".join(config.environment_elements) or "None"
+        rows = [
+            {"label": "Mode", "value": config.mode.value.title()},
+            {
+                "label": "Measurement",
+                "value": f"{config.radiation.value.title()} / {config.instrument_mode.upper()}",
+            },
+            {"label": "Sample elements", "value": sample},
+            {"label": "Can / environment", "value": environment},
+            {"label": "Fit region", "value": limits},
+            {
+                "label": "Background",
+                "value": f"{config.background_mode.replace('_', ' ')} / {config.background_type} / {config.background_terms} terms",
+            },
+        ]
+        if config.mode == AnalysisMode.FULL:
+            rows.append(
+                {
+                    "label": "Full search",
+                    "value": f"{config.full_profile.title()} / up to {config.full_max_passes} discovery pass(es)",
+                }
+            )
+        else:
+            rows.append(
+                {
+                    "label": "Rapid budget",
+                    "value": (
+                        f"{config.rapid_phases_per_hypothesis} phase(s) per hypothesis / "
+                        f"{config.rapid_gsas_validation_limit} final refinements"
+                    ),
+                }
+            )
+        rows.append(
+            {
+                "label": "Main-phase refinement",
+                "value": (
+                    "Cell anchor enabled"
+                    if config.main_prenudge
+                    else "No main-phase cell anchor in this configuration"
+                ),
+            }
+        )
+        return rows
+
+    def _set_powgen_configuration_preview(
+        self,
+        dataset_id: str,
+        config: AnalysisConfig | None = None,
+    ) -> None:
+        state = self.server.state
+        state.powgen_configuration_dataset_id = dataset_id
+        state.powgen_configuration_summary = []
+        state.powgen_configuration_yaml = ""
+        state.powgen_configuration_error = ""
+        state.powgen_configuration_title = "No reusable configuration selected"
+        state.powgen_configuration_label = "Not selected"
+        if not dataset_id:
+            return
+        try:
+            selected = config or self.service.load_configuration_dataset(dataset_id)
+            label = self._powgen_dataset_label(
+                state.history_configuration_datasets,
+                dataset_id,
+                "Selected Galaxy configuration",
+            )
+            state.powgen_configuration_label = label
+            state.powgen_configuration_title = f"{selected.mode.value.title()} configuration details"
+            state.powgen_configuration_summary = self._configuration_summary_rows(selected)
+            try:
+                contract = self.service.load_json_document(dataset_id)
+            except Exception:
+                contract = selected.portable_contract()
+                contract.pop("created_utc", None)
+            state.powgen_configuration_yaml = yaml.safe_dump(
+                contract,
+                sort_keys=False,
+                allow_unicode=False,
+            )
+        except Exception as exc:
+            state.powgen_configuration_title = "Configuration could not be read"
+            state.powgen_configuration_error = str(exc)
+
+    def _powgen_configuration_changed(self, value: Any = None, **_: Any) -> None:
+        state = self.server.state
+        dataset_id = self._selected_value(value)
+        self._set_powgen_configuration_preview(dataset_id)
+        state.powgen_preflight_ready = False
+        state.powgen_preflight_status = "idle"
+        state.powgen_preflight_message = "Check the experiment after changing its configuration."
+        state.powgen_preflight_details = []
+        state.flush()
 
     def _submission_form_changed(self, **_: Any) -> None:
         """Rotate idempotency only after a material form edit reaches the server."""
@@ -3737,6 +4021,7 @@ class RadarPdNovaApp(ThemedApp):
         state = self.server.state
         state.powgen_preflight_status = "checking"
         state.powgen_preflight_ready = False
+        state.powgen_preflight_checked = "Checking now"
         state.powgen_preflight_message = "Checking the read-only POWGEN source and packaged instrument profile..."
         state.powgen_preflight_details = []
         state.flush()
@@ -3746,6 +4031,7 @@ class RadarPdNovaApp(ThemedApp):
             if not configuration_id:
                 raise ValueError("Choose a reusable RADAR-PD configuration")
             configuration = self.service.load_configuration_dataset(configuration_id)
+            self._set_powgen_configuration_preview(configuration_id, configuration)
 
             backfill_mode = str(state.powgen_backfill_mode or "latest_5")
             if backfill_mode not in _POWGEN_BACKFILL_LIMITS:
@@ -3794,6 +4080,8 @@ class RadarPdNovaApp(ThemedApp):
                 if database_id
                 else "Built-in MP/COD catalog"
             )
+            state.powgen_configuration_label = configuration_label
+            state.powgen_database_label = database_label
             backfill_label = next(
                 (
                     str(option["title"])
@@ -3876,6 +4164,7 @@ class RadarPdNovaApp(ThemedApp):
             state.powgen_preflight_ready = False
             state.powgen_preflight_message = _powgen_submission_error_summary(exc)
             state.error_message = state.powgen_preflight_message
+        state.powgen_preflight_checked = _format_eastern_time(datetime.now(timezone.utc))
         state.flush()
         return bool(state.powgen_preflight_ready)
 
@@ -3930,6 +4219,7 @@ class RadarPdNovaApp(ThemedApp):
 
             state.powgen_ipts = ipts
             state.powgen_source_directory = self._powgen_controller.source_directory
+            state.workflow_mode = "powgen"
             state.powgen_monitoring = True
             state.workspace_view = "experiment"
             state.powgen_next_check = "Now"
@@ -4463,18 +4753,29 @@ class RadarPdNovaApp(ThemedApp):
                 offset=0,
                 include_generated=True,
             )
-            # Large CIF uploads can occupy the entire newest-history page. Keep
-            # reusable configurations discoverable independently so a fresh
-            # NOVA session can still start a POWGEN monitor or reuse a setup.
-            configurations = self.service.search_history_datasets(
-                query="radar_pd_config",
-                limit=100,
-                offset=0,
-                include_generated=True,
-            )
             merged = list(datasets)
             known_ids = {str(item.get("id")) for item in merged}
-            merged.extend(item for item in configurations if str(item.get("id")) not in known_ids)
+            # Large uploads and repeated analyses can fill the newest page.
+            # Query each durable input class independently so POWGEN setup does
+            # not lose an older configuration, library, CIF, or profile.
+            for targeted_query in (
+                "radar_pd_config",
+                "portable custom library",
+                ".cif",
+                ".instprm",
+            ):
+                targeted = self.service.search_history_datasets(
+                    query=targeted_query,
+                    limit=100,
+                    offset=0,
+                    include_generated=True,
+                )
+                for item in targeted:
+                    identifier = str(item.get("id"))
+                    if identifier in known_ids:
+                        continue
+                    merged.append(item)
+                    known_ids.add(identifier)
             self._apply_history_page(merged, append=False)
             state.history_has_more = len(datasets) == 100
             state.notice = f"Loaded the newest {len(state.history_datasets)} relevant Galaxy inputs."
@@ -4524,6 +4825,13 @@ class RadarPdNovaApp(ThemedApp):
         state.history_cif_datasets = [item for item in combined if item.get("role") == "cif"]
         state.history_archive_datasets = [item for item in combined if item.get("role") == "candidate_library"]
         state.history_configuration_datasets = [item for item in combined if item.get("role") == "configuration"]
+        cache = getattr(self, "_dataset_label_cache", {})
+        for item in combined:
+            identifier = str(item.get("id") or "").strip()
+            label = str(item.get("display_name") or item.get("name") or "").strip()
+            if identifier and label:
+                cache[identifier] = label
+        self._dataset_label_cache = cache
         state.history_has_more = len(datasets) == 100
 
     def search_history(self, query: str | None = None, **_: Any) -> None:
@@ -4666,6 +4974,121 @@ class RadarPdNovaApp(ThemedApp):
             for index, name in enumerate(names)
         ]
 
+    def _dataset_display_label(self, dataset_id: str, fallback: str) -> str:
+        identifier = str(dataset_id or "").strip()
+        if not identifier:
+            return fallback
+        state = self.server.state
+        selected = next(
+            (
+                item
+                for item in (getattr(state, "history_datasets", []) or [])
+                if str(item.get("id") or "") == identifier
+            ),
+            None,
+        )
+        if selected:
+            return str(selected.get("display_name") or selected.get("name") or fallback)
+        cache = getattr(self, "_dataset_label_cache", {})
+        if identifier in cache:
+            return cache[identifier]
+        return f"{fallback} ({identifier[:8]})"
+
+    @staticmethod
+    def _input_value(inputs: InputSelection | dict[str, Any] | None, name: str) -> Any:
+        if isinstance(inputs, InputSelection):
+            return getattr(inputs, name, None)
+        if isinstance(inputs, dict):
+            return inputs.get(name)
+        return None
+
+    def _run_provenance(self, record: RunRecord) -> list[dict[str, str]]:
+        inputs = getattr(record, "inputs", None) or getattr(record, "input_selection", None)
+        config = getattr(record, "config", None)
+        data_id = str(self._input_value(inputs, "data_dataset_id") or "")
+        instrument_id = str(self._input_value(inputs, "instrument_dataset_id") or "")
+        main_id = str(self._input_value(inputs, "main_cif_dataset_id") or "")
+        database_id = str(self._input_value(inputs, "database_dataset_id") or "")
+        configuration_id = str(
+            (record.input_dataset_ids or {}).get("configuration")
+            or (record.prepared_dataset_ids or {}).get("configuration")
+            or ""
+        )
+
+        data_path = str(self._input_value(inputs, "data_path") or "")
+        instrument_path = str(self._input_value(inputs, "instrument_path") or "")
+        main_path = str(self._input_value(inputs, "main_cif_path") or "")
+        use_builtin_cuka = bool(self._input_value(inputs, "use_builtin_cuka"))
+        configuration_label = (
+            f"{config.mode.value.title()} / {config.radiation.value.title()} / {config.instrument_mode.upper()}"
+            if isinstance(config, AnalysisConfig)
+            else record.mode.value.title()
+        )
+        return [
+            {
+                "label": "Saved configuration",
+                "value": self._dataset_display_label(configuration_id, "Galaxy configuration")
+                if configuration_id
+                else "Inline run configuration",
+            },
+            {"label": "Analysis profile", "value": configuration_label},
+            {
+                "label": "Candidate library",
+                "value": self._dataset_display_label(database_id, "Custom Galaxy library")
+                if database_id
+                else "Built-in MP/COD catalog",
+            },
+            {
+                "label": "Diffraction data",
+                "value": self._dataset_display_label(data_id, "Galaxy diffraction dataset")
+                if data_id
+                else (Path(data_path).name if data_path else "Facility-resolved input"),
+            },
+            {
+                "label": "Instrument profile",
+                "value": (
+                    "Built-in Cu K-alpha profile"
+                    if use_builtin_cuka
+                    else self._dataset_display_label(instrument_id, "Galaxy instrument profile")
+                    if instrument_id
+                    else (Path(instrument_path).name if instrument_path else "Facility-resolved profile")
+                ),
+            },
+            {
+                "label": "Known/main phase",
+                "value": self._dataset_display_label(main_id, "Galaxy main-phase CIF")
+                if main_id
+                else (Path(main_path).name if main_path else "Not supplied"),
+            },
+            {"label": "Application", "value": str(getattr(self.server.state, "application_version", "RADAR-PD"))},
+        ]
+
+    @staticmethod
+    def _record_configuration_yaml(record: RunRecord) -> str:
+        root = record.local_output_dir
+        if root is not None and root.is_dir():
+            resolved = next(root.rglob("resolved_config.yaml"), None)
+            if resolved is not None:
+                try:
+                    raw_document = resolved.read_text(encoding="utf-8")
+                    document = yaml.safe_load(raw_document)
+                    if isinstance(document, dict):
+                        return raw_document
+                except Exception:
+                    pass
+        saved = getattr(record, "config", None)
+        if isinstance(saved, AnalysisConfig):
+            contract = saved.portable_contract()
+            # ``portable_contract`` timestamps newly serialized files. A
+            # reconstructed run record does not know that original timestamp,
+            # so do not present a synthetic time as saved provenance.
+            contract.pop("created_utc", None)
+            return yaml.safe_dump(contract, sort_keys=False, allow_unicode=False)
+        configuration = getattr(record, "configuration", {}) or {}
+        if isinstance(configuration, dict) and configuration:
+            return yaml.safe_dump(configuration, sort_keys=False, allow_unicode=False)
+        return ""
+
     def _select_record(self, record: RunRecord) -> None:
         state = self.server.state
         previous_run_uid = str(getattr(state, "selected_run_uid", "") or "")
@@ -4700,9 +5123,8 @@ class RadarPdNovaApp(ThemedApp):
         except (TypeError, ValueError):
             state.selected_run_elapsed = "-"
         self._sync_workspace_options(record.mode)
-        saved_config = getattr(record, "config", None)
-        configuration = saved_config.portable_contract() if isinstance(saved_config, AnalysisConfig) else (getattr(record, "configuration", {}) or {})
-        state.viewed_configuration = json.dumps(configuration, indent=2, sort_keys=False) if configuration else ""
+        state.viewed_configuration = self._record_configuration_yaml(record)
+        state.run_provenance_rows = self._run_provenance(record)
 
     def use_selected_configuration(self, **_: Any) -> None:
         uid = self.server.state.selected_run_uid
@@ -5078,7 +5500,7 @@ class RadarPdNovaApp(ThemedApp):
         state.plot_options = view["plots"]
         state.primary_plot_path = view["primary_plot_path"]
         state.file_groups = view["file_groups"]
-        state.checkpoint_rows = view["checkpoints"]
+        state.checkpoint_rows = self._launchable_checkpoint_rows(record, view["checkpoints"])
         state.gpx_rows = view["checkpoints"]
         state.rapid_coarse_rows = view["rapid_stages"]["coarse_search"]
         state.rapid_nudge_rows = view["rapid_stages"]["lattice_nudge"]
@@ -5126,6 +5548,37 @@ class RadarPdNovaApp(ThemedApp):
             )
         self._sync_workspace_options(view["mode"])
         state.flush()
+
+    def _launchable_checkpoint_rows(
+        self,
+        record: RunRecord,
+        checkpoints: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Expose a GSAS-II action only when a real GPX source is reachable."""
+
+        rows = list(checkpoints or [])
+        if not rows:
+            return []
+        collection_id = str(record.output_dataset_ids.get("gpx_projects") or "").strip()
+
+        launchable: list[dict[str, Any]] = []
+        for item in rows:
+            local_path = Path(str(item.get("path") or ""))
+            local_available = (
+                bool(item.get("local_available"))
+                and local_path.suffix.casefold() == ".gpx"
+                and local_path.is_file()
+            )
+            if not local_available and not collection_id:
+                continue
+            launchable.append(
+                {
+                    **item,
+                    "local_available": local_available,
+                    "handoff_available": True,
+                }
+            )
+        return launchable
 
     def _reset_result_state(self) -> None:
         state = self.server.state
@@ -5891,6 +6344,8 @@ class RadarPdNovaApp(ThemedApp):
         }
         .radar-rail-heading { margin: 5px 0 4px; color: var(--radar-brand-900); font-size: 23px; line-height: 1.2; }
         .radar-rail-help { margin: 0 0 15px; color: var(--radar-muted); font-size: 13px; line-height: 1.45; }
+        .radar-workflow-toggle { display: flex !important; width: 100%; border: 1px solid var(--radar-line-strong); border-radius: 6px; overflow: hidden; }
+        .radar-workflow-toggle .v-btn { flex: 1 1 50%; min-width: 0; text-transform: none; font-weight: 730; }
         .radar-history-panel, .radar-setup-panels { border: 1px solid var(--radar-line-strong); border-radius: 8px; overflow: hidden; box-shadow: none; }
         .radar-setup-panel { border-left: 3px solid var(--radar-brand-700); }
         .radar-setup-panel + .radar-setup-panel { border-top: 1px solid var(--radar-line); }
@@ -6002,6 +6457,8 @@ class RadarPdNovaApp(ThemedApp):
         .radar-experiment-controls .v-field { background: #fff; }
         .radar-experiment-controls .v-chip { max-width: 240px; }
         .radar-experiment-controls .v-chip__content { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .radar-experiment-provenance { display: flex; flex-wrap: wrap; gap: 7px 16px; color: var(--radar-muted); font-size: 12px; }
+        .radar-experiment-provenance span { overflow-wrap: anywhere; }
         .radar-scan-inspector-summary { display: grid; gap: 4px; margin: 12px 0; padding: 10px 12px; border: 1px solid var(--radar-line); border-radius: 7px; background: var(--radar-soft); }
         .radar-scan-inspector-summary strong { color: var(--radar-brand-900); font-size: 14px; }
         .radar-scan-inspector-summary span { color: var(--radar-muted); font-size: 12px; }
@@ -6028,6 +6485,12 @@ class RadarPdNovaApp(ThemedApp):
         .radar-console, .radar-config-preview { max-height: 440px; overflow: auto; margin: 0; padding: 14px; border-radius: 7px; font: 12px/1.45 Consolas, "Courier New", monospace; white-space: pre-wrap; }
         .radar-console { background: #17251f; color: #e7f2ed; }
         .radar-config-preview { background: #f5f8f7; color: #263a32; border: 1px solid var(--radar-line); }
+        .radar-run-provenance { padding: 12px; background: #fff; border: 1px solid var(--radar-line); border-radius: 8px; }
+        .radar-run-provenance-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(185px, 1fr)); gap: 8px; }
+        .radar-run-provenance-item { min-width: 0; padding: 8px 9px; background: var(--radar-surface-muted); border-radius: 6px; }
+        .radar-run-provenance-item span, .radar-run-provenance-item strong { display: block; overflow-wrap: anywhere; }
+        .radar-run-provenance-item span { color: var(--radar-muted); font-size: 10px; font-weight: 760; text-transform: uppercase; }
+        .radar-run-provenance-item strong { margin-top: 3px; color: var(--radar-ink); font-size: 12px; }
         .radar-metric-grid { display: grid; grid-template-columns: repeat(6, minmax(118px, 1fr)); gap: 9px; margin-bottom: 14px; }
         .radar-metric-card { min-width: 0; min-height: 78px; padding: 12px 13px; background: #fff; border: 1px solid var(--radar-line); border-top: 3px solid var(--radar-brand-700); border-radius: 8px; }
         .radar-metric-label { color: var(--radar-muted); font-size: 10px; font-weight: 800; letter-spacing: .055em; text-transform: uppercase; }

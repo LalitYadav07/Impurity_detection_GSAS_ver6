@@ -146,6 +146,61 @@ def _sanitize_token(text: str) -> str:
     return token or "phase"
 
 
+_CIF_PHASE_NAME_TAGS = (
+    "_pd_phase_name",
+    "_pd_phase_id",
+    "_chemical_name_common",
+    "_chemical_name_mineral",
+    "_chemical_name_systematic",
+)
+_UNHELPFUL_PHASE_NAMES = {
+    "#(c)",
+    "global",
+    "none",
+    "unknown",
+    "vesta_phase_1",
+    "?",
+    ".",
+}
+
+
+def _cif_scalar_value(cif_content: str, tags: Sequence[str]) -> str:
+    """Read a quoted or unquoted scalar CIF tag without treating IDs as names."""
+
+    for tag in tags:
+        match = re.search(
+            rf"(?im)^\s*{re.escape(tag)}\s+(?:'([^']+)'|\"([^\"]+)\"|(\S+))",
+            cif_content,
+        )
+        if not match:
+            continue
+        value = next((part for part in match.groups() if part is not None), "").strip()
+        if value and value.casefold() not in _UNHELPFUL_PHASE_NAMES:
+            return value
+    return ""
+
+
+def infer_phase_display_name(source_name: str, cif_content: str, formula: str) -> str:
+    """Choose a stable scientific label while retaining formula separately."""
+
+    reduced_formula = str(formula or "").strip()
+    declared_name = _cif_scalar_value(cif_content, _CIF_PHASE_NAME_TAGS)
+    if reduced_formula and declared_name:
+        formula_key = re.sub(r"[^a-z0-9]+", "", reduced_formula.casefold())
+        name_key = re.sub(r"[^a-z0-9]+", "", declared_name.casefold())
+        if formula_key == name_key:
+            return reduced_formula
+        if formula_key and formula_key in name_key:
+            return declared_name
+        return f"{reduced_formula} - {declared_name}"
+    if reduced_formula:
+        return reduced_formula
+    if declared_name:
+        return declared_name
+    filename_label = re.sub(r"[_-]+", " ", Path(source_name).stem).strip()
+    return filename_label or "Unknown phase"
+
+
 def _pick_workers(n_items: int) -> int:
     if n_items <= 1:
         return 1
@@ -368,6 +423,11 @@ def _materialize_phase(
             msg = str(fail.get("error") or fail)
         return None, None, None, {"id": phase.phase_id, "source_name": phase.source_name, "error": msg}
 
+    row["display_name"] = infer_phase_display_name(
+        phase.source_name,
+        phase.cif_content,
+        str(row.get("pretty_formula") or ""),
+    )
     profile = _build_profile_from_phase_npz(layout.root / row["npz"], settings)
     stable_row = {
         "material_id": phase.phase_id,
@@ -380,6 +440,7 @@ def _materialize_phase(
         "cif_content": phase.cif_content,
         "composition": {},
         "formula_pretty": row["pretty_formula"],
+        "display_name": row["display_name"],
         "space_group": int(row["space_group"]),
         "SG_symbol": row["SG_symbol"],
         "source_name": phase.source_name,
@@ -439,6 +500,8 @@ def _normalize_catalog_df(catalog_df: pd.DataFrame) -> pd.DataFrame:
     for col in ("id", "pretty_formula", "SG_symbol", "elements_list", "npz"):
         if col in out.columns:
             out[col] = out[col].astype(str)
+    if "display_name" in out.columns:
+        out["display_name"] = out["display_name"].fillna("").astype(str)
     return out
 
 
@@ -618,6 +681,7 @@ def _build_phase_batch(
                 meta_rows[phase_id] = {
                     "composition": {},
                     "formula_pretty": row["pretty_formula"],
+                    "display_name": row["display_name"],
                     "space_group": int(row["space_group"]),
                     "SG_symbol": row["SG_symbol"],
                     "source_name": source_name,
@@ -713,7 +777,7 @@ def build_mini_db_pack(
         raise RuntimeError(f"All CIF phases failed to build: {failures}")
 
     catalog_df = pd.DataFrame(rows, columns=[
-        "id", "pretty_formula", "space_group", "SG_symbol",
+        "id", "display_name", "pretty_formula", "space_group", "SG_symbol",
         "elements_list", "elements_mask_hi", "elements_mask_lo",
         "npz", "n_reflections",
     ])
@@ -990,7 +1054,7 @@ def build_augmented_db_pack(
         raise RuntimeError(f"No new phases were built for augmentation: {failures}")
 
     new_catalog_df = pd.DataFrame(rows, columns=[
-        "id", "pretty_formula", "space_group", "SG_symbol",
+        "id", "display_name", "pretty_formula", "space_group", "SG_symbol",
         "elements_list", "elements_mask_hi", "elements_mask_lo",
         "npz", "n_reflections",
     ])

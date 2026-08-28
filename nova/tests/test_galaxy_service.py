@@ -868,6 +868,17 @@ def test_cif_source_bundle_is_not_classified_as_candidate_library() -> None:
     ) == ("candidate_library", False)
 
 
+def test_generated_text_and_csv_results_are_not_diffraction_inputs() -> None:
+    for name, extension in (
+        ("RADAR-PD 8 | Analysis log", "txt"),
+        ("RADAR-PD 1 | Result overview", "csv"),
+        ("RADAR-PD 3 | Scientific result tables", "csv"),
+    ):
+        assert GalaxyService._dataset_scientific_role(
+            {"name": name, "extension": extension}
+        ) == ("other", True)
+
+
 def test_remote_sources_and_directory_entries_are_normalized(monkeypatch: Any) -> None:
     responses = [
         [

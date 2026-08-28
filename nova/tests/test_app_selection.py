@@ -4,7 +4,15 @@ from types import SimpleNamespace
 
 from radar_pd_nova.app import RadarPdNovaApp
 from radar_pd_nova.galaxy_service import GSASII_INTERACTIVE_TOOL_ID
-from radar_pd_nova.models import AnalysisMode, RunRecord, RunStatus, UtilityActionRecord, selected_run_uid
+from radar_pd_nova.models import (
+    AnalysisConfig,
+    AnalysisMode,
+    InputSelection,
+    RunRecord,
+    RunStatus,
+    UtilityActionRecord,
+    selected_run_uid,
+)
 
 
 def test_selected_run_uid_accepts_vuetify_payload_shapes() -> None:
@@ -247,10 +255,21 @@ def test_history_refresh_keeps_reusable_configurations_visible_after_large_uploa
         "role": "configuration",
         "generated": True,
     }
+    library = {
+        "id": "library-id",
+        "name": "RADAR-PD portable custom library | Fe_Al.zip",
+        "display_name": "Fe_Al custom library",
+        "role": "candidate_library",
+        "generated": False,
+    }
 
     class _Service:
         def search_history_datasets(self, *, query: str, **_kwargs):
-            return [configuration] if query == "radar_pd_config" else newest
+            if query == "radar_pd_config":
+                return [configuration]
+            if query == "portable custom library":
+                return [library]
+            return newest if not query or query == ".cif" else []
 
     state = _State(
         history_search="",
@@ -274,8 +293,199 @@ def test_history_refresh_keeps_reusable_configurations_visible_after_large_uploa
     app.refresh_history()
 
     assert [item["id"] for item in state.history_configuration_datasets] == ["config-id"]
+    assert [item["id"] for item in state.history_archive_datasets] == ["library-id"]
     assert state.history_has_more is True
     assert state.flush_count == 1
+
+
+def test_xray_mode_clears_neutron_only_setup_and_restores_options() -> None:
+    app = RadarPdNovaApp.__new__(RadarPdNovaApp)
+    state = _State(
+        radiation="xray",
+        instrument_mode="tof",
+        input_source="ipts_browser",
+        instrument_source="ipts",
+        main_cif_source="ipts",
+        use_facility_workspace=True,
+        magnetic_precheck=True,
+        busy=False,
+        notice="",
+    )
+    app.server = SimpleNamespace(state=state)
+
+    app._radiation_changed("xray")
+
+    assert [item["value"] for item in state.instrument_mode_options] == ["auto", "cw"]
+    assert [item["value"] for item in state.source_options] == ["upload", "galaxy"]
+    assert [item["value"] for item in state.instrument_source_options] == ["upload", "galaxy"]
+    assert [item["value"] for item in state.main_cif_source_options] == ["none", "upload", "galaxy"]
+    assert state.instrument_mode == "auto"
+    assert state.input_source == "upload"
+    assert state.instrument_source == "upload"
+    assert state.main_cif_source == "none"
+    assert state.use_facility_workspace is False
+    assert state.magnetic_precheck is False
+
+    app._radiation_changed("neutron")
+
+    assert [item["value"] for item in state.instrument_mode_options] == ["auto", "cw", "tof"]
+    assert "ipts_browser" in [item["value"] for item in state.source_options]
+
+
+def test_powgen_configuration_preview_shows_summary_and_exact_yaml() -> None:
+    app = RadarPdNovaApp.__new__(RadarPdNovaApp)
+    config = AnalysisConfig(
+        mode=AnalysisMode.FULL,
+        sample_elements=["Fe", "Al", "V"],
+        environment_elements=["V"],
+        instrument_mode="tof",
+        limits=(10000, 80000),
+    )
+    state = _State(
+        powgen_configuration_dataset_id="",
+        powgen_configuration_summary=[],
+        powgen_configuration_yaml="",
+        powgen_configuration_error="",
+        powgen_configuration_title="",
+        powgen_configuration_label="",
+        history_configuration_datasets=[
+            {"id": "config-id", "display_name": "FeVAl full configuration"}
+        ],
+    )
+    app.server = SimpleNamespace(state=state)
+
+    app._set_powgen_configuration_preview("config-id", config)
+
+    assert state.powgen_configuration_label == "FeVAl full configuration"
+    assert state.powgen_configuration_summary[0] == {"label": "Mode", "value": "Full"}
+    assert "sample_elements:" in state.powgen_configuration_yaml
+    assert "- Fe" in state.powgen_configuration_yaml
+    assert "instrument_mode: tof" in state.powgen_configuration_yaml
+    assert "created_utc" not in state.powgen_configuration_yaml
+
+
+def test_run_configuration_prefers_published_resolved_yaml(tmp_path: Path) -> None:
+    output = tmp_path / "result"
+    output.mkdir()
+    resolved = output / "resolved_config.yaml"
+    resolved.write_text(
+        "$schema: radar-pd-config/v1\ncreated_utc: 2026-08-24T04:21:26Z\nanalysis:\n  mode: full\n",
+        encoding="utf-8",
+    )
+    record = RunRecord(
+        uid="run-with-resolved-config",
+        name="resolved run",
+        mode=AnalysisMode.FULL,
+        history_id="history-1",
+        status=RunStatus.OK,
+        output_dir=str(output),
+        config=AnalysisConfig(sample_elements=["Fe"], mode=AnalysisMode.RAPID),
+    )
+
+    rendered = RadarPdNovaApp._record_configuration_yaml(record)
+
+    assert "created_utc: 2026-08-24T04:21:26Z" in rendered
+    assert "mode: full" in rendered
+    assert "mode: rapid" not in rendered
+
+
+def test_run_provenance_carries_configuration_and_library_names_forward() -> None:
+    app = RadarPdNovaApp.__new__(RadarPdNovaApp)
+    state = _State(
+        application_version="v0.3.78",
+        history_datasets=[
+            {"id": "config-id", "display_name": "FeVAl full configuration"},
+            {"id": "library-id", "display_name": "FeVAl candidate family"},
+        ],
+    )
+    app.server = SimpleNamespace(state=state)
+    app._dataset_label_cache = {}
+    record = RunRecord(
+        uid="provenance-run",
+        name="provenance run",
+        mode=AnalysisMode.FULL,
+        history_id="history-1",
+        status=RunStatus.OK,
+        input_dataset_ids={"configuration": "config-id"},
+        config=AnalysisConfig(
+            sample_elements=["Fe", "V", "Al"],
+            mode=AnalysisMode.FULL,
+            instrument_mode="tof",
+        ),
+        inputs=InputSelection(
+            source="upload",
+            data_path="pattern.gsa",
+            instrument_path="profile.instprm",
+            database_dataset_id="library-id",
+        ),
+    )
+
+    provenance = {item["label"]: item["value"] for item in app._run_provenance(record)}
+
+    assert provenance["Saved configuration"] == "FeVAl full configuration"
+    assert provenance["Analysis profile"] == "Full / Neutron / TOF"
+    assert provenance["Candidate library"] == "FeVAl candidate family"
+
+
+def test_phantom_checkpoint_is_not_exposed_as_gsasii_action(tmp_path: Path) -> None:
+    app = RadarPdNovaApp.__new__(RadarPdNovaApp)
+    record = RunRecord(
+        uid="job-with-phantom-gpx",
+        name="old result",
+        mode=AnalysisMode.FULL,
+        history_id="history-1",
+        status=RunStatus.OK,
+    )
+    rows = [
+        {
+            "id": "checkpoint-0",
+            "path": "",
+            "local_available": False,
+            "handoff_available": True,
+            "galaxy_element_name": "02_Main_phase_anchor",
+        }
+    ]
+
+    assert app._launchable_checkpoint_rows(record, rows) == []
+
+
+def test_real_galaxy_checkpoint_collection_enables_gsasii_action() -> None:
+    app = RadarPdNovaApp.__new__(RadarPdNovaApp)
+    record = RunRecord(
+        uid="job-with-real-gpx",
+        name="new result",
+        mode=AnalysisMode.FULL,
+        history_id="history-1",
+        status=RunStatus.OK,
+        output_dataset_ids={"gpx_projects": "gpx-collection"},
+    )
+    rows = [{"id": "checkpoint-0", "path": "", "local_available": False}]
+
+    launchable = app._launchable_checkpoint_rows(record, rows)
+
+    assert record.output_dataset_ids["gpx_projects"] == "gpx-collection"
+    assert launchable[0]["handoff_available"] is True
+    assert launchable[0]["local_available"] is False
+
+
+def test_archived_local_gpx_enables_action_without_collection(tmp_path: Path) -> None:
+    project = tmp_path / "accepted.gpx"
+    project.write_bytes(b"GPX")
+    app = RadarPdNovaApp.__new__(RadarPdNovaApp)
+    record = RunRecord(
+        uid="job-with-local-gpx",
+        name="archived result",
+        mode=AnalysisMode.FULL,
+        history_id="history-1",
+        status=RunStatus.OK,
+    )
+
+    launchable = app._launchable_checkpoint_rows(
+        record,
+        [{"id": "checkpoint-0", "path": str(project), "local_available": True}],
+    )
+
+    assert launchable[0]["local_available"] is True
 
 
 def test_powgen_main_cif_can_be_reused_from_galaxy_history() -> None:
