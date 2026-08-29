@@ -385,6 +385,7 @@ def _materialize_contract_config(
     background = dict(contract.get("background") or {})
     main_phase = dict(contract.get("main_phase") or {})
     cleanup = dict(main_phase.get("cleanup") or {})
+    light_calibration = dict(contract.get("light_calibration") or {})
     rapid = dict(contract.get("rapid") or {})
     full = dict(contract.get("full") or {})
     mode = "rapid" if analysis.get("mode") == "rapid" else "full"
@@ -419,18 +420,19 @@ def _materialize_contract_config(
         "adaptive_compare_keep": max(1, min(2, compare_candidates)),
         "adaptive_compare_cycles": 1,
         "rwp_improve_eps": float(full.get("rwp_improvement_threshold", 0.06)),
-        "corr_threshold": 0.95,
+        "corr_threshold": float(full.get("dedup_threshold", 0.95)),
+        "exclude_sg": [int(value) for value in full.get("excluded_space_groups", [1, 2])],
         "knee_filter": {
             "enable_hist": True,
-            "enable_nudge": True,
-            "enable_pearson": True,
-            "min_points_hist": 5,
+            "enable_nudge": bool(full.get("candidate_pruning", True)),
+            "enable_pearson": bool(full.get("candidate_pruning", True)),
+            "min_points_hist": int(full.get("knee_min_points_hist", 5)),
             "min_points_nudge": 3,
             "min_points_pearson": 2,
-            "min_rel_span": 0.03,
+            "min_rel_span": float(full.get("knee_min_relative_span", 0.03)),
             "guard_frac": 0.05,
             "max_keep_if_no_knee": int(full.get("knee_keep_if_no_knee", 2)),
-            "min_keep_at_least": 1,
+            "min_keep_at_least": 1 if bool(full.get("candidate_pruning", True)) else 0,
             "max_keep_at_most": int(full.get("knee_keep_at_most", 5)),
         },
         "background": {
@@ -454,17 +456,24 @@ def _materialize_contract_config(
             "refine_positions": bool(cleanup.get("refine_positions", False)),
         },
         "magnetic_precheck": dict(contract.get("magnetic_precheck") or {"enabled": False}),
+        "light_calibration": {
+            "enabled": bool(light_calibration.get("enabled", False)),
+            "zero_cycles": int(light_calibration.get("zero_cycles", 1)),
+            "profile_cycles": int(light_calibration.get("profile_cycles", 2)),
+            "accept_rwp_worsen": float(light_calibration.get("accept_rwp_worsen", 0.15)),
+            "terms": list(light_calibration.get("terms") or ["Zero", "U", "V", "W"]),
+        },
         "stage4": {
             "radiation": radiation,
             "samples": int(full.get("nudge_samples", 5000)),
             "reps": int(full.get("nudge_representatives", 50)),
             "len_tol_pct": float(full.get("cell_length_tolerance_pct", 1.0)),
             "ang_tol_deg": float(full.get("cell_angle_tolerance_deg", 3.0)),
-            "score_q_max": 8.0,
-            "pearson_q_max": 8.0,
+            "score_q_max": float(full.get("score_q_max", 8.0)),
+            "pearson_q_max": float(full.get("score_q_max", 8.0)),
             "pearson_defer_export": True,
-            "lattice_tiebreak_score_tol": 0.0005,
-            "pearson_cell_refine_min_r": 0.50,
+            "lattice_tiebreak_score_tol": float(full.get("lattice_tiebreak_score_tol", 0.0005)),
+            "pearson_cell_refine_min_r": float(full.get("pearson_cell_min_r", 0.50)),
         },
         "db_source": radiation,
     }

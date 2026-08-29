@@ -142,6 +142,12 @@ class AnalysisConfig(BaseModel):
     reference_masks_enabled: bool = False
     reference_mask_presets: list[Literal["Al_fcc", "Cu_fcc", "V_bcc"]] = Field(default_factory=list)
     reference_window_mode: Literal["auto", "fixed"] = "auto"
+    reference_fixed_half_width: float | None = Field(default=None, gt=0)
+    reference_fwhm_factor: float = Field(default=6.0, gt=0)
+    reference_fractional_d_tolerance: float = Field(default=0.003, ge=0)
+    reference_zero_tolerance: float | None = Field(default=None, ge=0)
+    reference_min_half_width: float | None = Field(default=None, gt=0)
+    reference_max_half_width: float | None = Field(default=None, gt=0)
     include_cu_kbeta: bool = False
     background_mode: str = "auto_fixed_points"
     background_type: str = "chebyschev-1"
@@ -151,6 +157,7 @@ class AnalysisConfig(BaseModel):
     cleanup_enabled: bool = False
     refine_u_iso: bool = False
     refine_positions: bool = False
+    light_calibration_enabled: bool = False
     magnetic_precheck: bool = False
     magnetic_q_max: float = Field(default=4.0, gt=0)
     magnetic_denominators: list[int] = Field(default_factory=lambda: [2, 3, 4])
@@ -166,6 +173,16 @@ class AnalysisConfig(BaseModel):
     full_cell_length_tolerance_pct: float = Field(default=1.0, gt=0)
     full_cell_angle_tolerance_deg: float = Field(default=3.0, gt=0)
     full_rwp_improvement_threshold: float = Field(default=0.06, ge=0)
+    full_dedup_threshold: float = Field(default=0.95, ge=0, le=1)
+    full_score_q_max: float = Field(default=8.0, gt=0)
+    full_pearson_cell_min_r: float = Field(default=0.50, ge=0, le=1)
+    full_lattice_tiebreak_score_tol: float = Field(default=0.0005, ge=0)
+    full_candidate_pruning: bool = True
+    full_knee_min_points_hist: int = Field(default=5, ge=1)
+    full_knee_min_relative_span: float = Field(default=0.03, ge=0, le=1)
+    full_knee_keep_if_no_knee: int = Field(default=2, ge=0)
+    full_knee_keep_at_most: int = Field(default=5, ge=0)
+    excluded_space_groups: list[int] = Field(default_factory=lambda: [1, 2])
     rapid_phases_per_hypothesis: int = Field(default=3, ge=1, le=5)
     rapid_stage_output_limit: int = Field(default=10, ge=3, le=50)
     rapid_gsas_validation_limit: int = Field(default=5, ge=0)
@@ -198,10 +215,37 @@ class AnalysisConfig(BaseModel):
         if not denominators or any(value < 2 for value in denominators):
             raise ValueError("Magnetic denominators must contain integers greater than or equal to 2")
         self.magnetic_denominators = denominators
+        excluded = list(dict.fromkeys(int(value) for value in self.excluded_space_groups))
+        if any(value < 1 or value > 230 for value in excluded):
+            raise ValueError("Excluded space groups must be integers from 1 to 230")
+        self.excluded_space_groups = excluded
+        if (
+            self.reference_min_half_width is not None
+            and self.reference_max_half_width is not None
+            and self.reference_min_half_width > self.reference_max_half_width
+        ):
+            raise ValueError("Reference-mask minimum half-width must not exceed its maximum")
         return self
 
     def portable_contract(self) -> dict[str, Any]:
         """Return the exact `radar-pd-config/v1` contract consumed by NDIP."""
+
+        reference_masks: dict[str, Any] = {
+            "enabled": self.reference_masks_enabled,
+            "presets": self.reference_mask_presets,
+            "window_mode": self.reference_window_mode,
+            "fwhm_factor": self.reference_fwhm_factor,
+            "fractional_d_tolerance": self.reference_fractional_d_tolerance,
+            "include_cu_kbeta": self.include_cu_kbeta,
+        }
+        for key, value in (
+            ("half_width", self.reference_fixed_half_width),
+            ("zero_tolerance", self.reference_zero_tolerance),
+            ("min_half_width", self.reference_min_half_width),
+            ("max_half_width", self.reference_max_half_width),
+        ):
+            if value is not None:
+                reference_masks[key] = value
 
         return {
             "$schema": "radar-pd-config/v1",
@@ -218,12 +262,7 @@ class AnalysisConfig(BaseModel):
             "pattern": {
                 "limits": list(self.limits) if self.limits else None,
                 "exclude_regions": [list(region) for region in self.exclude_regions],
-                "reference_phase_exclusions": {
-                    "enabled": self.reference_masks_enabled,
-                    "presets": self.reference_mask_presets,
-                    "window_mode": self.reference_window_mode,
-                    "include_cu_kbeta": self.include_cu_kbeta,
-                },
+                "reference_phase_exclusions": reference_masks,
             },
             "background": {
                 "mode": self.background_mode,
@@ -244,6 +283,9 @@ class AnalysisConfig(BaseModel):
                 "q_max": self.magnetic_q_max,
                 "denominators": self.magnetic_denominators,
             },
+            "light_calibration": {
+                "enabled": self.light_calibration_enabled,
+            },
             "full": {
                 "profile": self.full_profile,
                 "max_passes": self.full_max_passes,
@@ -257,6 +299,16 @@ class AnalysisConfig(BaseModel):
                 "compare_candidates": self.full_compare_candidates,
                 "compare_cycles": self.full_compare_cycles,
                 "rwp_improvement_threshold": self.full_rwp_improvement_threshold,
+                "dedup_threshold": self.full_dedup_threshold,
+                "score_q_max": self.full_score_q_max,
+                "pearson_cell_min_r": self.full_pearson_cell_min_r,
+                "lattice_tiebreak_score_tol": self.full_lattice_tiebreak_score_tol,
+                "candidate_pruning": self.full_candidate_pruning,
+                "knee_min_points_hist": self.full_knee_min_points_hist,
+                "knee_min_relative_span": self.full_knee_min_relative_span,
+                "knee_keep_if_no_knee": self.full_knee_keep_if_no_knee,
+                "knee_keep_at_most": self.full_knee_keep_at_most,
+                "excluded_space_groups": self.excluded_space_groups,
             },
             "rapid": {
                 "phases_per_hypothesis": self.rapid_phases_per_hypothesis,

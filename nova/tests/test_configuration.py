@@ -55,6 +55,23 @@ def test_submission_configuration_persists_safe_delivery_context(tmp_path: Path)
     assert "C:/temporary" not in path.read_text(encoding="utf-8")
 
 
+def test_reusable_configuration_excludes_single_pattern_inputs(tmp_path: Path) -> None:
+    config = AnalysisConfig(run_name="reusable", sample_elements=["Fe", "O"])
+
+    path = dump_configuration(config, tmp_path / "reusable.yaml")
+    payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+
+    assert "ndip_delivery" not in payload
+    serialized = path.read_text(encoding="utf-8")
+    for input_field in (
+        "data_path",
+        "instrument_path",
+        "main_cif_path",
+        "database_archive_path",
+    ):
+        assert input_field not in serialized
+
+
 def test_input_source_validation() -> None:
     with pytest.raises(ValueError, match="diffraction pattern"):
         InputSelection(source=InputSource.UPLOAD, instrument_path="profile.instprm")
@@ -123,3 +140,60 @@ def test_uploaded_pattern_can_use_ipts_instrument_and_cif() -> None:
 def test_invalid_ranges_are_rejected() -> None:
     with pytest.raises(ValueError, match="less than"):
         AnalysisConfig(sample_elements=["Fe"], limits=(8.0, 2.0))
+
+
+def test_advanced_controls_round_trip_through_portable_contract(tmp_path: Path) -> None:
+    config = AnalysisConfig(
+        mode="full",
+        radiation="xray",
+        sample_elements=["Fe", "O"],
+        reference_masks_enabled=True,
+        reference_mask_presets=["Al_fcc"],
+        reference_window_mode="fixed",
+        reference_fixed_half_width=0.42,
+        reference_fwhm_factor=7.0,
+        reference_fractional_d_tolerance=0.004,
+        reference_zero_tolerance=0.08,
+        reference_min_half_width=0.2,
+        reference_max_half_width=1.6,
+        light_calibration_enabled=True,
+        full_profile="custom",
+        full_dedup_threshold=0.91,
+        full_score_q_max=9.5,
+        full_pearson_cell_min_r=0.35,
+        full_lattice_tiebreak_score_tol=0.0012,
+        full_candidate_pruning=False,
+        full_knee_min_points_hist=7,
+        full_knee_min_relative_span=0.08,
+        full_knee_keep_if_no_knee=4,
+        full_knee_keep_at_most=11,
+        excluded_space_groups=[1, 2, 15],
+    )
+
+    path = dump_configuration(config, tmp_path / "advanced.yaml")
+    payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+    masks = payload["pattern"]["reference_phase_exclusions"]
+    assert masks["half_width"] == 0.42
+    assert masks["fractional_d_tolerance"] == 0.004
+    assert payload["light_calibration"]["enabled"] is True
+    assert payload["full"]["candidate_pruning"] is False
+    assert payload["full"]["excluded_space_groups"] == [1, 2, 15]
+
+    restored = load_configuration(path)
+    assert restored.reference_fixed_half_width == config.reference_fixed_half_width
+    assert restored.reference_max_half_width == config.reference_max_half_width
+    assert restored.light_calibration_enabled is True
+    assert restored.full_dedup_threshold == config.full_dedup_threshold
+    assert restored.full_candidate_pruning is False
+    assert restored.excluded_space_groups == config.excluded_space_groups
+
+
+def test_advanced_reference_ranges_and_space_groups_are_validated() -> None:
+    with pytest.raises(ValueError, match="minimum half-width"):
+        AnalysisConfig(
+            sample_elements=["Fe"],
+            reference_min_half_width=5.0,
+            reference_max_half_width=2.0,
+        )
+    with pytest.raises(ValueError, match="1 to 230"):
+        AnalysisConfig(sample_elements=["Fe"], excluded_space_groups=[231])

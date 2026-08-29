@@ -224,6 +224,92 @@ def test_full_runtime_profile_materializes_hosted_gui_budget(tmp_path: Path) -> 
     assert resolved["datasets"][0]["mode"] == "tof"
 
 
+def test_advanced_portable_controls_materialize_without_default_substitution(tmp_path: Path) -> None:
+    config = tmp_path / "advanced_config.yaml"
+    assert main(
+        [
+            "configure",
+            "--mode",
+            "full",
+            "--radiation",
+            "neutron",
+            "--allowed-elements",
+            "Fe, O",
+            "--runtime-profile",
+            "custom",
+            "--output",
+            str(config),
+        ]
+    ) == 0
+    portable = yaml.safe_load(config.read_text(encoding="utf-8"))
+    portable["pattern"]["reference_phase_exclusions"] = {
+        "enabled": True,
+        "presets": ["V_bcc"],
+        "window_mode": "fixed",
+        "half_width": 120.0,
+        "fwhm_factor": 7.0,
+        "fractional_d_tolerance": 0.004,
+        "zero_tolerance": 30.0,
+        "min_half_width": 80.0,
+        "max_half_width": 600.0,
+        "include_cu_kbeta": False,
+    }
+    portable["light_calibration"] = {"enabled": True}
+    portable["full"].update(
+        {
+            "dedup_threshold": 0.91,
+            "score_q_max": 9.5,
+            "pearson_cell_min_r": 0.35,
+            "lattice_tiebreak_score_tol": 0.0012,
+            "candidate_pruning": False,
+            "knee_min_points_hist": 7,
+            "knee_min_relative_span": 0.08,
+            "knee_keep_if_no_knee": 4,
+            "knee_keep_at_most": 11,
+            "excluded_space_groups": [1, 2, 15],
+        }
+    )
+    config.write_text(yaml.safe_dump(portable, sort_keys=False), encoding="utf-8")
+
+    data = tmp_path / "scan.dat"
+    instrument = tmp_path / "scan.instprm"
+    data.write_text("1 1 1\n2 2 1\n", encoding="utf-8")
+    instrument.write_text("Type:PNT\ndifC:10000\n", encoding="utf-8")
+    portal = tmp_path / "portal"
+    work = tmp_path / "work"
+    assert main(
+        [
+            "analyze",
+            "--config",
+            str(config),
+            "--data",
+            str(data),
+            "--instrument",
+            str(instrument),
+            "--db-root",
+            str(tmp_path / "database_neutron"),
+            "--work-dir",
+            str(work),
+            "--output-dir",
+            str(portal),
+            "--dry-run",
+        ]
+    ) == 0
+    resolved = yaml.safe_load((portal / "resolved_config.yaml").read_text(encoding="utf-8"))
+    assert resolved["reference_phase_exclusions"]["half_width"] == 120.0
+    assert resolved["corr_threshold"] == 0.91
+    assert resolved["exclude_sg"] == [1, 2, 15]
+    assert resolved["knee_filter"]["enable_nudge"] is False
+    assert resolved["knee_filter"]["min_points_hist"] == 7
+    assert resolved["knee_filter"]["min_rel_span"] == 0.08
+    assert resolved["knee_filter"]["max_keep_if_no_knee"] == 4
+    assert resolved["knee_filter"]["max_keep_at_most"] == 11
+    assert resolved["stage4"]["score_q_max"] == 9.5
+    assert resolved["stage4"]["pearson_cell_refine_min_r"] == 0.35
+    assert resolved["stage4"]["lattice_tiebreak_score_tol"] == 0.0012
+    assert resolved["light_calibration"]["enabled"] is True
+
+
 def test_instrument_mode_is_inferred_from_real_gsasii_profiles() -> None:
     assert _instrument_mode_from_instprm(ROOT / "examples" / "tbssl" / "hb2a_si_ge113.instprm") == "cw"
     assert (

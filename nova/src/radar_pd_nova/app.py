@@ -114,12 +114,19 @@ _SUBMISSION_FIELDS = (
     "main_cif_path", "database_archive_path", "main_cif_source", "database_source", "library_archive_source", "event_file_path",
     "use_builtin_cuka", "ipts_instrument", "ipts", "run_number", "bank", "sample_elements",
     "environment_elements", "run_name", "fit_start", "fit_end", "ignore_regions", "reference_masks_enabled",
-    "reference_mask_presets", "reference_window_mode", "include_cu_kbeta", "background_mode", "background_type",
+    "reference_mask_presets", "reference_window_mode", "reference_fixed_half_width", "reference_fwhm_factor",
+    "reference_fractional_d_tolerance", "reference_zero_tolerance", "reference_min_half_width",
+    "reference_max_half_width", "include_cu_kbeta", "background_mode", "background_type",
     "background_terms", "main_prenudge", "main_shadow_filter", "cleanup_enabled", "refine_u_iso",
-    "refine_positions", "magnetic_precheck", "magnetic_q_max", "magnetic_denominators", "full_profile",
+    "refine_positions", "light_calibration_enabled", "magnetic_precheck", "magnetic_q_max",
+    "magnetic_denominators", "full_profile",
     "full_max_passes", "full_min_phase_percent", "full_top_n_ml", "full_nudge_candidates", "full_nudge_samples",
     "full_nudge_representatives", "full_compare_candidates", "full_compare_cycles",
     "full_cell_length_tolerance_pct", "full_cell_angle_tolerance_deg", "full_rwp_improvement_threshold",
+    "full_dedup_threshold", "full_score_q_max", "full_pearson_cell_min_r",
+    "full_lattice_tiebreak_score_tol", "full_candidate_pruning", "full_knee_min_points_hist",
+    "full_knee_min_relative_span", "full_knee_keep_if_no_knee", "full_knee_keep_at_most",
+    "excluded_space_groups",
     "rapid_phases_per_hypothesis", "rapid_stage_output_limit", "rapid_gsas_validation_limit",
     "rapid_parallel_workers", "rapid_show_family_variants", "rapid_final_polish_enabled", "history_data_id",
     "history_instrument_id", "history_main_cif_id", "history_database_id",
@@ -320,6 +327,12 @@ class RadarPdNovaApp(ThemedApp):
         state.reference_masks_enabled = False
         state.reference_mask_presets = []
         state.reference_window_mode = "auto"
+        state.reference_fixed_half_width = None
+        state.reference_fwhm_factor = 6.0
+        state.reference_fractional_d_tolerance = 0.003
+        state.reference_zero_tolerance = None
+        state.reference_min_half_width = None
+        state.reference_max_half_width = None
         state.include_cu_kbeta = False
         state.background_mode = "auto_fixed_points"
         state.background_type = "chebyschev-1"
@@ -329,6 +342,7 @@ class RadarPdNovaApp(ThemedApp):
         state.cleanup_enabled = False
         state.refine_u_iso = False
         state.refine_positions = False
+        state.light_calibration_enabled = False
         state.magnetic_precheck = False
         state.magnetic_q_max = 4.0
         state.magnetic_denominators = "2, 3, 4"
@@ -344,6 +358,16 @@ class RadarPdNovaApp(ThemedApp):
         state.full_cell_length_tolerance_pct = 1.0
         state.full_cell_angle_tolerance_deg = 3.0
         state.full_rwp_improvement_threshold = 0.06
+        state.full_dedup_threshold = 0.95
+        state.full_score_q_max = 8.0
+        state.full_pearson_cell_min_r = 0.50
+        state.full_lattice_tiebreak_score_tol = 0.0005
+        state.full_candidate_pruning = True
+        state.full_knee_min_points_hist = 5
+        state.full_knee_min_relative_span = 0.03
+        state.full_knee_keep_if_no_knee = 2
+        state.full_knee_keep_at_most = 5
+        state.excluded_space_groups = "1, 2"
         state.rapid_phases_per_hypothesis = 3
         state.rapid_stage_output_limit = 10
         state.rapid_gsas_validation_limit = 5
@@ -1229,7 +1253,10 @@ class RadarPdNovaApp(ThemedApp):
                         variant="outlined",
                         disabled=("powgen_monitoring",),
                         no_data_text="No reusable configurations are in this Galaxy History",
-                        hint="Every discovered scan uses this saved Full or Rapid configuration.",
+                        hint=(
+                            "Applies analysis settings only. POWGEN takes scans, its instrument profile, "
+                            "candidate library, and optional main phase from this panel."
+                        ),
                         persistent_hint=True,
                         update_modelValue=(self._powgen_configuration_changed, "[$event]"),
                     )
@@ -1853,6 +1880,17 @@ class RadarPdNovaApp(ThemedApp):
                         select_action=self.select_remote_main_cif,
                         file_label="Known/main-phase CIF",
                     )
+                vuetify.VAlert(
+                    text=(
+                        "These files stay with this single-pattern session if you switch back. "
+                        "A reusable configuration saves analysis settings only; POWGEN uses the inputs "
+                        "selected in its own panel."
+                    ),
+                    type="info",
+                    variant="tonal",
+                    density="compact",
+                    classes="mt-3",
+                )
                 with vuetify.VExpansionPanels(
                     v_show="false",
                     variant="accordion",
@@ -1996,15 +2034,6 @@ class RadarPdNovaApp(ThemedApp):
                     hint="Comma- or space-separated symbols",
                     persistent_hint=True,
                 )
-                vuetify.VTextField(
-                    label="Sample can / environment",
-                    v_model=("environment_elements",),
-                    placeholder="Al, V",
-                    density="compact",
-                    variant="outlined",
-                    hint="Allowed as environment phases, not mixed freely into sample chemistry",
-                    persistent_hint=True,
-                )
             with self._setup_section(
                 5,
                 "Pattern Regions",
@@ -2133,6 +2162,35 @@ class RadarPdNovaApp(ThemedApp):
                     vuetify.VAlert(v_show="full_profile === 'quick'", text="One discovery pass for a fast first assessment.", type="info", variant="tonal", density="compact")
                     vuetify.VAlert(v_show="full_profile === 'balanced'", text="Up to two discovery passes; the search may stop early when the accepted model no longer improves.", type="info", variant="tonal", density="compact")
                     vuetify.VAlert(v_show="full_profile === 'thorough'", text="Up to three discovery passes. Small Rwp changes alone do not stop the residual search, but scientific safety checks still apply.", type="info", variant="tonal", density="compact")
+                    with html.Div(
+                        v_show="full_profile === 'custom'",
+                        classes="radar-custom-budget-controls",
+                    ):
+                        with html.Div(classes="radar-custom-budget-grid"):
+                            for label, model in (
+                                ("Discovery rounds", "full_max_passes"),
+                                ("Minimum phase wt%", "full_min_phase_percent"),
+                                ("ML candidates", "full_top_n_ml"),
+                                ("Nudge candidates", "full_nudge_candidates"),
+                                ("Nudge samples", "full_nudge_samples"),
+                                ("Nudge representatives", "full_nudge_representatives"),
+                                ("Comparison candidates", "full_compare_candidates"),
+                                ("Comparison cycles", "full_compare_cycles"),
+                                ("Cell length tolerance %", "full_cell_length_tolerance_pct"),
+                                ("Cell angle tolerance (deg)", "full_cell_angle_tolerance_deg"),
+                                ("Minimum Rwp improvement", "full_rwp_improvement_threshold"),
+                                ("Duplicate-candidate threshold", "full_dedup_threshold"),
+                                ("Nudge scoring Q max", "full_score_q_max"),
+                                ("Pearson cell-refine cutoff", "full_pearson_cell_min_r"),
+                                ("Nudge near-tie score tolerance", "full_lattice_tiebreak_score_tol"),
+                            ):
+                                vuetify.VTextField(label=label, v_model=(model,), type="number", min=0, density="compact", variant="outlined")
+                        vuetify.VSwitch(v_model=("full_candidate_pruning",), label="Use automatic candidate pruning", color="#15543c", density="compact", inset=True)
+                        with html.Div(v_show="full_candidate_pruning", classes="radar-custom-budget-grid"):
+                            vuetify.VTextField(label="Knee minimum points", v_model=("full_knee_min_points_hist",), type="number", min=1, density="compact", variant="outlined")
+                            vuetify.VTextField(label="Knee minimum relative span", v_model=("full_knee_min_relative_span",), type="number", min=0, max=1, step="0.01", density="compact", variant="outlined")
+                            vuetify.VTextField(label="Keep when no knee is found", v_model=("full_knee_keep_if_no_knee",), type="number", min=0, density="compact", variant="outlined", hint="0 keeps every candidate", persistent_hint=True)
+                            vuetify.VTextField(label="Maximum candidates after pruning", v_model=("full_knee_keep_at_most",), type="number", min=0, density="compact", variant="outlined", hint="0 removes the cap", persistent_hint=True)
             with self._setup_section(
                 10,
                 "Expert Tuning",
@@ -2143,6 +2201,24 @@ class RadarPdNovaApp(ThemedApp):
                 vuetify.VSwitch(v_model=("reference_masks_enabled",), label="Mask reference/can peaks", color="#15543c", density="compact", inset=True)
                 vuetify.VSelect(v_show="reference_masks_enabled", label="Reference structures", v_model=("reference_mask_presets",), items=("['Al_fcc','Cu_fcc','V_bcc']",), multiple=True, chips=True, density="compact", variant="outlined")
                 vuetify.VSelect(v_show="reference_masks_enabled", label="Reference-mask window", v_model=("reference_window_mode",), items=("[{title:'Automatic from resolution',value:'auto'},{title:'Fixed window',value:'fixed'}]",), item_title="title", item_value="value", density="compact", variant="outlined")
+                vuetify.VTextField(
+                    v_show="reference_masks_enabled && reference_window_mode === 'fixed'",
+                    label="Fixed half-width (pattern x-axis units)",
+                    v_model=("reference_fixed_half_width",),
+                    type="number",
+                    min=0,
+                    clearable=True,
+                    density="compact",
+                    variant="outlined",
+                    hint="Blank uses the instrument-aware default",
+                    persistent_hint=True,
+                )
+                with html.Div(v_show="reference_masks_enabled && reference_window_mode === 'auto'", classes="radar-field-pair"):
+                    vuetify.VTextField(label="FWHM multiplier", v_model=("reference_fwhm_factor",), type="number", min=0, step="0.1", density="compact", variant="outlined")
+                    vuetify.VTextField(label="Fractional d tolerance", v_model=("reference_fractional_d_tolerance",), type="number", min=0, step="0.001", density="compact", variant="outlined")
+                    vuetify.VTextField(label="Zero-offset tolerance", v_model=("reference_zero_tolerance",), type="number", min=0, clearable=True, density="compact", variant="outlined", hint="Pattern x-axis units; blank uses the instrument default", persistent_hint=True)
+                    vuetify.VTextField(label="Minimum half-width", v_model=("reference_min_half_width",), type="number", min=0, clearable=True, density="compact", variant="outlined", hint="Pattern x-axis units", persistent_hint=True)
+                    vuetify.VTextField(label="Maximum half-width", v_model=("reference_max_half_width",), type="number", min=0, clearable=True, density="compact", variant="outlined", hint="Pattern x-axis units", persistent_hint=True)
                 vuetify.VSwitch(v_show="radiation === 'xray' && reference_masks_enabled", v_model=("include_cu_kbeta",), label="Mask Cu K-beta companions", color="#15543c", density="compact", inset=True)
                 vuetify.VDivider(classes="my-3")
                 vuetify.VAlert(v_show=f"!({main_phase_ready})", text="Main-phase safeguards become available after a CIF is actually selected.", type="info", variant="tonal", density="compact")
@@ -2151,27 +2227,26 @@ class RadarPdNovaApp(ThemedApp):
                 vuetify.VSwitch(v_show=main_phase_ready, v_model=("cleanup_enabled",), label="Clean up main-CIF internal parameters", color="#15543c", density="compact", inset=True)
                 vuetify.VCheckbox(v_show=f"({main_phase_ready}) && cleanup_enabled", v_model=("refine_u_iso",), label="Refine isotropic displacement parameters", density="compact")
                 vuetify.VCheckbox(v_show=f"({main_phase_ready}) && cleanup_enabled", v_model=("refine_positions",), label="Refine atomic positions", density="compact")
+                vuetify.VSwitch(
+                    v_show=f"radiation === 'xray' && ({main_phase_ready})",
+                    v_model=("light_calibration_enabled",),
+                    label="Calibrate Zero and U/V/W from the supplied main phase",
+                    color="#15543c",
+                    density="compact",
+                    inset=True,
+                )
                 with html.Div(v_show="analysis_mode === 'rapid'"):
                     vuetify.VDivider(classes="my-3")
                     vuetify.VSwitch(v_model=("rapid_show_family_variants",), label="Keep family variants in Solution Inspector", color="#15543c", density="compact", inset=True)
                     vuetify.VSwitch(v_model=("rapid_final_polish_enabled",), label="Run final polish after ranking", color="#15543c", density="compact", inset=True)
-                with html.Div(v_show="analysis_mode === 'full' && full_profile === 'custom'"):
-                    vuetify.VDivider(classes="my-3")
-                    with html.Div(classes="radar-field-pair"):
-                        for label, model in (
-                            ("Discovery rounds", "full_max_passes"),
-                            ("Minimum phase wt%", "full_min_phase_percent"),
-                            ("ML candidates", "full_top_n_ml"),
-                            ("Nudge candidates", "full_nudge_candidates"),
-                            ("Nudge samples", "full_nudge_samples"),
-                            ("Nudge representatives", "full_nudge_representatives"),
-                            ("Comparison candidates", "full_compare_candidates"),
-                            ("Comparison cycles", "full_compare_cycles"),
-                            ("Cell length tolerance %", "full_cell_length_tolerance_pct"),
-                            ("Cell angle tolerance (deg)", "full_cell_angle_tolerance_deg"),
-                            ("Minimum Rwp improvement", "full_rwp_improvement_threshold"),
-                        ):
-                            vuetify.VTextField(label=label, v_model=(model,), type="number", min=0, density="compact", variant="outlined")
+                vuetify.VTextField(
+                    label="Excluded space groups",
+                    v_model=("excluded_space_groups",),
+                    density="compact",
+                    variant="outlined",
+                    hint="Comma-separated space-group numbers; leave blank to allow all",
+                    persistent_hint=True,
+                )
             ready_expression = f"connection_ok && !!sample_elements && ({data_ready}) && (database_source === 'builtin' || (database_source === 'archive' && ((library_archive_source === 'computer' && !!database_archive_path) || (library_archive_source === 'galaxy' && !!history_database_id))))"
             with self._setup_section(
                 11,
@@ -3509,6 +3584,7 @@ class RadarPdNovaApp(ThemedApp):
             state.instrument_source_options = list(_GENERAL_INSTRUMENT_SOURCE_OPTIONS)
             state.main_cif_source_options = list(_GENERAL_MAIN_CIF_SOURCE_OPTIONS)
             state.use_builtin_cuka = False
+            state.light_calibration_enabled = False
             if measurement_changed and not getattr(state, "busy", False):
                 state.notice = (
                     "Measurement type changed to neutron. Reselect the diffraction pattern, instrument "
@@ -3554,6 +3630,39 @@ class RadarPdNovaApp(ThemedApp):
                         f"{config.rapid_phases_per_hypothesis} phase(s) per hypothesis / "
                         f"{config.rapid_gsas_validation_limit} final refinements"
                     ),
+                }
+            )
+        if config.reference_masks_enabled:
+            width = config.reference_window_mode.title()
+            if config.reference_window_mode == "fixed" and config.reference_fixed_half_width is not None:
+                width = f"Fixed half-width {config.reference_fixed_half_width:g}"
+            rows.append(
+                {
+                    "label": "Reference masks",
+                    "value": f"{', '.join(config.reference_mask_presets) or 'No structures selected'} / {width}",
+                }
+            )
+        rows.append(
+            {
+                "label": "Candidate controls",
+                "value": (
+                    f"dedup {config.full_dedup_threshold:g} / Q max {config.full_score_q_max:g} / "
+                    f"Pearson cutoff {config.full_pearson_cell_min_r:g} / "
+                    f"pruning {'on' if config.full_candidate_pruning else 'off'}"
+                ),
+            }
+        )
+        rows.append(
+            {
+                "label": "Excluded space groups",
+                "value": ", ".join(str(value) for value in config.excluded_space_groups) or "None",
+            }
+        )
+        if config.radiation.value == "xray":
+            rows.append(
+                {
+                    "label": "Light PXRD calibration",
+                    "value": "Enabled" if config.light_calibration_enabled else "Disabled",
                 }
             )
         rows.append(
@@ -3694,6 +3803,15 @@ class RadarPdNovaApp(ThemedApp):
                 "full_cell_length_tolerance_pct": 0.6,
                 "full_cell_angle_tolerance_deg": 1.5,
                 "full_rwp_improvement_threshold": 0.12,
+                "full_dedup_threshold": 0.95,
+                "full_score_q_max": 8.0,
+                "full_pearson_cell_min_r": 0.50,
+                "full_lattice_tiebreak_score_tol": 0.0005,
+                "full_candidate_pruning": True,
+                "full_knee_min_points_hist": 5,
+                "full_knee_min_relative_span": 0.03,
+                "full_knee_keep_if_no_knee": 1,
+                "full_knee_keep_at_most": 3,
             },
             "balanced": {
                 "full_max_passes": 2,
@@ -3707,6 +3825,15 @@ class RadarPdNovaApp(ThemedApp):
                 "full_cell_length_tolerance_pct": 1.0,
                 "full_cell_angle_tolerance_deg": 3.0,
                 "full_rwp_improvement_threshold": 0.06,
+                "full_dedup_threshold": 0.95,
+                "full_score_q_max": 8.0,
+                "full_pearson_cell_min_r": 0.50,
+                "full_lattice_tiebreak_score_tol": 0.0005,
+                "full_candidate_pruning": True,
+                "full_knee_min_points_hist": 5,
+                "full_knee_min_relative_span": 0.03,
+                "full_knee_keep_if_no_knee": 2,
+                "full_knee_keep_at_most": 5,
             },
             "thorough": {
                 "full_max_passes": 3,
@@ -3720,6 +3847,15 @@ class RadarPdNovaApp(ThemedApp):
                 "full_cell_length_tolerance_pct": 2.0,
                 "full_cell_angle_tolerance_deg": 5.0,
                 "full_rwp_improvement_threshold": 0.0,
+                "full_dedup_threshold": 0.95,
+                "full_score_q_max": 8.0,
+                "full_pearson_cell_min_r": 0.10,
+                "full_lattice_tiebreak_score_tol": 0.0005,
+                "full_candidate_pruning": True,
+                "full_knee_min_points_hist": 5,
+                "full_knee_min_relative_span": 0.03,
+                "full_knee_keep_if_no_knee": 0,
+                "full_knee_keep_at_most": 10,
             },
         }
         values: dict[str, Any] = {
@@ -3733,6 +3869,12 @@ class RadarPdNovaApp(ThemedApp):
             "reference_masks_enabled": bool(state.reference_masks_enabled),
             "reference_mask_presets": _list_value(state.reference_mask_presets),
             "reference_window_mode": state.reference_window_mode,
+            "reference_fixed_half_width": _optional_float(state.reference_fixed_half_width),
+            "reference_fwhm_factor": float(state.reference_fwhm_factor),
+            "reference_fractional_d_tolerance": float(state.reference_fractional_d_tolerance),
+            "reference_zero_tolerance": _optional_float(state.reference_zero_tolerance),
+            "reference_min_half_width": _optional_float(state.reference_min_half_width),
+            "reference_max_half_width": _optional_float(state.reference_max_half_width),
             "include_cu_kbeta": bool(state.include_cu_kbeta) if state.radiation == "xray" else False,
             "background_mode": state.background_mode,
             "background_type": state.background_type,
@@ -3742,6 +3884,7 @@ class RadarPdNovaApp(ThemedApp):
             "cleanup_enabled": bool(state.cleanup_enabled) if has_main_phase else False,
             "refine_u_iso": bool(state.refine_u_iso) if has_main_phase and state.cleanup_enabled else False,
             "refine_positions": bool(state.refine_positions) if has_main_phase and state.cleanup_enabled else False,
+            "light_calibration_enabled": bool(state.light_calibration_enabled) if has_main_phase and state.radiation == "xray" else False,
             "magnetic_precheck": bool(state.magnetic_precheck) if has_main_phase and state.radiation == "neutron" else False,
             "magnetic_q_max": float(state.magnetic_q_max),
             "magnetic_denominators": [
@@ -3761,6 +3904,20 @@ class RadarPdNovaApp(ThemedApp):
             "full_cell_length_tolerance_pct": float(state.full_cell_length_tolerance_pct),
             "full_cell_angle_tolerance_deg": float(state.full_cell_angle_tolerance_deg),
             "full_rwp_improvement_threshold": float(state.full_rwp_improvement_threshold),
+            "full_dedup_threshold": float(state.full_dedup_threshold),
+            "full_score_q_max": float(state.full_score_q_max),
+            "full_pearson_cell_min_r": float(state.full_pearson_cell_min_r),
+            "full_lattice_tiebreak_score_tol": float(state.full_lattice_tiebreak_score_tol),
+            "full_candidate_pruning": bool(state.full_candidate_pruning),
+            "full_knee_min_points_hist": int(state.full_knee_min_points_hist),
+            "full_knee_min_relative_span": float(state.full_knee_min_relative_span),
+            "full_knee_keep_if_no_knee": int(state.full_knee_keep_if_no_knee),
+            "full_knee_keep_at_most": int(state.full_knee_keep_at_most),
+            "excluded_space_groups": [
+                int(value)
+                for value in re.split(r"[,;\s]+", str(state.excluded_space_groups or "").strip())
+                if value
+            ],
             "rapid_phases_per_hypothesis": int(state.rapid_phases_per_hypothesis),
             "rapid_stage_output_limit": int(state.rapid_stage_output_limit),
             "rapid_gsas_validation_limit": int(state.rapid_gsas_validation_limit),
@@ -5644,6 +5801,8 @@ class RadarPdNovaApp(ThemedApp):
                 value = ", ".join(value)
             elif field == "magnetic_denominators":
                 value = ", ".join(str(item) for item in value)
+            elif field == "excluded_space_groups":
+                value = ", ".join(str(item) for item in value)
             elif field == "exclude_regions":
                 value = "\n".join(f"{start}, {end}" for start, end in value)
                 state_field = "ignore_regions"
@@ -6806,6 +6965,9 @@ class RadarPdNovaApp(ThemedApp):
         .radar-step-label { color: var(--radar-brand-900); font-weight: 750; }
         .radar-setup-panels .v-expansion-panel-text__wrapper, .radar-history-panel .v-expansion-panel-text__wrapper { padding: 8px 11px 13px; }
         .radar-field-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+        .radar-custom-budget-controls { display: grid; gap: 8px; margin-top: 10px; }
+        .radar-custom-budget-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); gap: 8px; }
+        .radar-custom-budget-grid .v-input { min-width: 0; }
         .radar-facility-picker { margin: 10px 0; padding: 10px; background: #fff; border: 1px solid var(--radar-line); border-radius: 8px; }
         .radar-facility-picker-title { display: block; margin-bottom: 8px; color: var(--radar-brand-900); font-size: 12px; }
         .radar-facility-path-row { display: grid; grid-template-columns: minmax(0, 1fr) 38px; gap: 7px; align-items: center; }
@@ -6849,7 +7011,10 @@ class RadarPdNovaApp(ThemedApp):
         .radar-library-source-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
         .radar-library-source-card { display: grid; align-content: start; gap: 6px; padding: 10px; border: 1px solid var(--radar-line); border-radius: 7px; background: #fff; }
         .radar-library-source-card strong { color: var(--radar-brand-900); font-size: 12px; }
-        .radar-library-source-card span { min-height: 31px; color: var(--radar-muted); font-size: 11px; line-height: 1.35; }
+        .radar-library-source-card > span { min-height: 31px; color: var(--radar-muted); font-size: 11px; line-height: 1.35; }
+        .radar-library-source-action { align-self: end; width: 100%; min-width: 0; height: auto !important; min-height: 36px; padding-block: 6px !important; }
+        .radar-library-source-action .v-btn__content { min-width: 0; max-width: 100%; white-space: normal; overflow-wrap: anywhere; line-height: 1.25; text-align: center; }
+        .radar-library-source-action .v-btn__prepend { flex: 0 0 auto; margin-inline-end: 6px; }
         .radar-library-upload-pending { padding: 9px 11px; border: 1px solid #b8d2c7; border-radius: 6px; background: #edf7f2; color: var(--radar-brand-900); font-size: 12px; font-weight: 650; }
         .radar-source-review .v-expansion-panel-title { min-height: 38px !important; font-size: 12px; }
         .radar-source-review .v-expansion-panel-text__wrapper { display: grid; gap: 6px; padding: 7px !important; }

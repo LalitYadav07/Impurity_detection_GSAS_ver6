@@ -1024,6 +1024,7 @@ class GalaxyService:
             "background_mode": ("background.background_mode", "background.mode", "background_mode"),
             "background_type": ("background.background_type", "background.type", "background_type"),
             "full_profile": ("analysis.strategy.full_profile", "full_profile"),
+            "reference_window_mode": ("pattern.reference_window_mode", "reference_window_mode"),
         }
         for field, aliases in text_fields.items():
             value = _text(_parameter_value(parameters, *aliases))
@@ -1043,6 +1044,32 @@ class GalaxyService:
         if regions:
             kwargs["exclude_regions"] = regions
 
+        mask_presets = _decode_parameter(
+            _parameter_value(parameters, "pattern.reference_mask_presets", "reference_mask_presets")
+        )
+        if isinstance(mask_presets, str):
+            mask_presets = re.split(r"[,;\s]+", mask_presets.strip())
+        if isinstance(mask_presets, list):
+            kwargs["reference_mask_presets"] = [str(value) for value in mask_presets if str(value).strip()]
+
+        denominators = _decode_parameter(
+            _parameter_value(parameters, "magnetic.magnetic_denominators", "magnetic_denominators")
+        )
+        if isinstance(denominators, str):
+            denominators = re.split(r"[,;\s]+", denominators.strip())
+        if isinstance(denominators, list):
+            parsed_denominators = [_number(value, int) for value in denominators]
+            kwargs["magnetic_denominators"] = [value for value in parsed_denominators if value is not None]
+
+        excluded = _decode_parameter(
+            _parameter_value(parameters, "full.excluded_space_groups", "excluded_space_groups")
+        )
+        if isinstance(excluded, str):
+            excluded = re.split(r"[,;\s]+", excluded.strip())
+        if isinstance(excluded, list):
+            parsed_excluded = [_number(value, int) for value in excluded]
+            kwargs["excluded_space_groups"] = [value for value in parsed_excluded if value is not None]
+
         boolean_fields = {
             "reference_masks_enabled": ("pattern.reference_masks_enabled", "reference_masks_enabled"),
             "include_cu_kbeta": ("pattern.include_cu_kbeta", "include_cu_kbeta"),
@@ -1051,9 +1078,11 @@ class GalaxyService:
             "cleanup_enabled": ("cleanup.cleanup_enabled", "cleanup_enabled"),
             "refine_u_iso": ("cleanup.refine_u_iso", "refine_u_iso"),
             "refine_positions": ("cleanup.refine_positions", "refine_positions"),
+            "light_calibration_enabled": ("light_calibration.enabled", "light_calibration_enabled"),
             "magnetic_precheck": ("magnetic.magnetic_precheck", "magnetic_precheck"),
             "rapid_show_family_variants": ("rapid.show_family_variants", "show_family_variants"),
             "rapid_final_polish_enabled": ("rapid.final_polish_enabled", "final_polish_enabled"),
+            "full_candidate_pruning": ("full.candidate_pruning", "full_candidate_pruning"),
         }
         for field, aliases in boolean_fields.items():
             value = _boolean(_parameter_value(parameters, *aliases))
@@ -1063,6 +1092,12 @@ class GalaxyService:
         number_fields: dict[str, tuple[type[int] | type[float], tuple[str, ...]]] = {
             "background_terms": (int, ("background.background_terms", "background.terms", "background_terms")),
             "magnetic_q_max": (float, ("magnetic.magnetic_q_max", "magnetic.q_max", "magnetic_q_max")),
+            "reference_fixed_half_width": (float, ("pattern.reference_fixed_half_width", "reference_fixed_half_width")),
+            "reference_fwhm_factor": (float, ("pattern.reference_fwhm_factor", "reference_fwhm_factor")),
+            "reference_fractional_d_tolerance": (float, ("pattern.reference_fractional_d_tolerance", "reference_fractional_d_tolerance")),
+            "reference_zero_tolerance": (float, ("pattern.reference_zero_tolerance", "reference_zero_tolerance")),
+            "reference_min_half_width": (float, ("pattern.reference_min_half_width", "reference_min_half_width")),
+            "reference_max_half_width": (float, ("pattern.reference_max_half_width", "reference_max_half_width")),
             "full_max_passes": (int, ("full.max_passes", "full_max_passes")),
             "full_min_phase_percent": (float, ("full.min_phase_percent", "full_min_phase_percent")),
             "full_top_n_ml": (int, ("full.top_n_ml", "full_top_n_ml")),
@@ -1071,6 +1106,17 @@ class GalaxyService:
             "full_nudge_representatives": (int, ("full.nudge_representatives", "full_nudge_representatives")),
             "full_compare_candidates": (int, ("full.compare_candidates", "full_compare_candidates")),
             "full_compare_cycles": (int, ("full.compare_cycles", "full_compare_cycles")),
+            "full_cell_length_tolerance_pct": (float, ("full.cell_length_tolerance_pct", "full_cell_length_tolerance_pct")),
+            "full_cell_angle_tolerance_deg": (float, ("full.cell_angle_tolerance_deg", "full_cell_angle_tolerance_deg")),
+            "full_rwp_improvement_threshold": (float, ("full.rwp_improvement_threshold", "full_rwp_improvement_threshold")),
+            "full_dedup_threshold": (float, ("full.dedup_threshold", "full_dedup_threshold")),
+            "full_score_q_max": (float, ("full.score_q_max", "full_score_q_max")),
+            "full_pearson_cell_min_r": (float, ("full.pearson_cell_min_r", "full_pearson_cell_min_r")),
+            "full_lattice_tiebreak_score_tol": (float, ("full.lattice_tiebreak_score_tol", "full_lattice_tiebreak_score_tol")),
+            "full_knee_min_points_hist": (int, ("full.knee_min_points_hist", "full_knee_min_points_hist")),
+            "full_knee_min_relative_span": (float, ("full.knee_min_relative_span", "full_knee_min_relative_span")),
+            "full_knee_keep_if_no_knee": (int, ("full.knee_keep_if_no_knee", "full_knee_keep_if_no_knee")),
+            "full_knee_keep_at_most": (int, ("full.knee_keep_at_most", "full_knee_keep_at_most")),
             "rapid_phases_per_hypothesis": (int, ("rapid.phases_per_hypothesis", "phases_per_hypothesis")),
             "rapid_stage_output_limit": (int, ("rapid.stage_output_limit", "stage_output_limit")),
             "rapid_gsas_validation_limit": (int, ("rapid.gsas_validation_limit", "gsas_validation_limit")),

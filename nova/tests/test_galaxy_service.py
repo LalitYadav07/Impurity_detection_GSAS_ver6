@@ -45,6 +45,44 @@ def test_galaxy_status_normalization() -> None:
     assert normalize_status("deleted") is RunStatus.CANCELLED
 
 
+def test_parameter_fallback_recovers_advanced_scientific_controls(tmp_path: Path) -> None:
+    service = GalaxyService("https://galaxy.example", "key", "history", output_root=tmp_path)
+    config = service._config_from_parameters(
+        {
+            "sample_elements": "Fe, O",
+            "reference_mask_presets": ["Al_fcc"],
+            "reference_window_mode": "fixed",
+            "reference_fixed_half_width": "0.4",
+            "light_calibration_enabled": "true",
+            "magnetic_denominators": "2,4",
+            "full_cell_length_tolerance_pct": "1.2",
+            "full_cell_angle_tolerance_deg": "3.5",
+            "full_rwp_improvement_threshold": "0.04",
+            "full_dedup_threshold": "0.91",
+            "full_score_q_max": "9.5",
+            "full_pearson_cell_min_r": "0.35",
+            "full_candidate_pruning": "false",
+            "full_knee_keep_at_most": "11",
+            "excluded_space_groups": "1, 2, 15",
+        }
+    )
+
+    assert config is not None
+    assert config.reference_mask_presets == ["Al_fcc"]
+    assert config.reference_fixed_half_width == 0.4
+    assert config.light_calibration_enabled is True
+    assert config.magnetic_denominators == [2, 4]
+    assert config.full_cell_length_tolerance_pct == 1.2
+    assert config.full_cell_angle_tolerance_deg == 3.5
+    assert config.full_rwp_improvement_threshold == 0.04
+    assert config.full_dedup_threshold == 0.91
+    assert config.full_score_q_max == 9.5
+    assert config.full_pearson_cell_min_r == 0.35
+    assert config.full_candidate_pruning is False
+    assert config.full_knee_keep_at_most == 11
+    assert config.excluded_space_groups == [1, 2, 15]
+
+
 def test_job_output_ids_include_dataset_collection_associations(monkeypatch, tmp_path: Path) -> None:
     captured: dict[str, Any] = {}
 

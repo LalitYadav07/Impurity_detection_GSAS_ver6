@@ -591,6 +591,7 @@ class NamedMultiCifUpload:
                         color=color,
                         prepend_icon="mdi-file-plus-outline",
                         click=f"trame.refs.{self.ref_name}.click()",
+                        classes="radar-library-source-action",
                     )
                 with html.Div(classes="radar-library-source-card"):
                     html.Strong("ZIP archives of CIFs")
@@ -602,6 +603,7 @@ class NamedMultiCifUpload:
                         color=color,
                         prepend_icon="mdi-folder-zip-outline",
                         click=f"trame.refs.{self.archive_ref_name}.click()",
+                        classes="radar-library-source-action",
                     )
             html.P(
                 "Both choices are equivalent inputs. Every selected source is validated before Build becomes available.",

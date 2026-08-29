@@ -100,6 +100,64 @@ def test_setup_panels_and_uploads_have_single_stable_instances() -> None:
     assert 'activator="parent"' not in template
 
 
+def test_advanced_scientific_controls_are_visible_and_reach_configuration() -> None:
+    app = RadarPdNovaApp()
+    template = app.layout.html
+    state = app.server.state
+
+    for label in (
+        "Fixed half-width (pattern x-axis units)",
+        "FWHM multiplier",
+        "Fractional d tolerance",
+        "Calibrate Zero and U/V/W from the supplied main phase",
+        "Duplicate-candidate threshold",
+        "Nudge scoring Q max",
+        "Pearson cell-refine cutoff",
+        "Use automatic candidate pruning",
+        "Excluded space groups",
+    ):
+        assert label in template
+
+    state.sample_elements = "Fe, O"
+    state.radiation = "xray"
+    state.main_cif_source = "upload"
+    state.main_cif_path = "main.cif"
+    state.reference_masks_enabled = True
+    state.reference_mask_presets = ["Al_fcc"]
+    state.reference_window_mode = "fixed"
+    state.reference_fixed_half_width = 0.4
+    state.light_calibration_enabled = True
+    state.analysis_mode = "full"
+    state.full_profile = "custom"
+    state.full_dedup_threshold = 0.9
+    state.full_score_q_max = 9.0
+    state.full_pearson_cell_min_r = 0.4
+    state.full_lattice_tiebreak_score_tol = 0.001
+    state.full_candidate_pruning = False
+    state.excluded_space_groups = "1, 2, 15"
+
+    config = app._configuration()
+    assert config.reference_fixed_half_width == 0.4
+    assert config.light_calibration_enabled is True
+    assert config.full_dedup_threshold == 0.9
+    assert config.full_score_q_max == 9.0
+    assert config.full_candidate_pruning is False
+    assert config.excluded_space_groups == [1, 2, 15]
+
+
+def test_full_custom_controls_belong_to_runtime_budget_and_use_responsive_columns() -> None:
+    app = RadarPdNovaApp()
+    template = app.layout.html
+    css = app._css()
+
+    custom_controls = template.index('class="radar-custom-budget-controls"')
+    assert template.index("Runtime Budget") < custom_controls < template.index("Expert Tuning")
+    assert template.count('class="radar-custom-budget-controls"') == 1
+    assert template.count("Minimum phase wt%") == 1
+    assert ".radar-custom-budget-grid" in css
+    assert "repeat(auto-fit, minmax(min(300px, 100%), 1fr))" in css
+
+
 def test_plotly_canvases_have_nonzero_layout_frames() -> None:
     app = RadarPdNovaApp()
     template = app.layout.html
@@ -232,15 +290,51 @@ def test_facility_workspace_exposes_one_folder_and_independent_inputs() -> None:
 
 def test_data_collection_exposes_three_clear_standard_sources() -> None:
     app = RadarPdNovaApp()
+    template = app.layout.html
 
     assert app.server.state.source_options == [
         {"title": "Upload from this computer", "value": "upload"},
         {"title": "Choose from Galaxy History", "value": "galaxy"},
         {"title": "Browse an SNS/HFIR experiment folder", "value": "ipts_browser"},
     ]
-    assert "Where is the diffraction pattern?" in app.layout.html
-    assert "Where is the GSAS-II instrument profile?" in app.layout.html
-    assert "Do you have a known/main-phase CIF?" in app.layout.html
+    assert "Where is the diffraction pattern?" in template
+    assert "Where is the GSAS-II instrument profile?" in template
+    assert "Do you have a known/main-phase CIF?" in template
+    assert "These files stay with this single-pattern session if you switch back." in template
+    assert "A reusable configuration saves analysis settings only" in template
+    assert "POWGEN uses the inputs selected in its own panel" in template
+
+
+def test_chemistry_policy_uses_sample_elements_without_legacy_environment_input() -> None:
+    app = RadarPdNovaApp()
+    template = app.layout.html
+
+    assert "Sample elements" in template
+    assert "Sample can / environment" not in template
+    assert 'v-model="environment_elements"' not in template
+    assert "Ignored regions" in template
+
+
+def test_candidate_library_upload_actions_wrap_without_styling_button_internals() -> None:
+    app = RadarPdNovaApp()
+    template = app.layout.html
+    css = app._css()
+
+    assert template.count('class="radar-library-source-action"') == 2
+    assert ".radar-library-source-card > span" in css
+    assert ".radar-library-source-card span {" not in css
+    assert ".radar-library-source-action .v-btn__content" in css
+    assert "white-space: normal" in css
+    assert "overflow-wrap: anywhere" in css
+
+
+def test_powgen_configuration_copy_keeps_run_inputs_independent() -> None:
+    app = RadarPdNovaApp()
+    template = app.layout.html
+
+    assert "Applies analysis settings only." in template
+    assert "POWGEN takes scans, its instrument profile" in template
+    assert "candidate library, and optional main phase from this panel" in template
 
 
 def test_galaxy_remote_browser_remains_available_for_restored_legacy_runs() -> None:

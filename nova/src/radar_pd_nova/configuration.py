@@ -82,6 +82,7 @@ def config_from_contract(payload: dict[str, Any]) -> AnalysisConfig:
     main_phase = payload.get("main_phase") or {}
     cleanup = main_phase.get("cleanup") or {}
     magnetic = payload.get("magnetic_precheck") or {}
+    light_calibration = payload.get("light_calibration") or {}
     full = payload.get("full") or {}
     rapid = payload.get("rapid") or {}
     return AnalysisConfig(
@@ -95,6 +96,12 @@ def config_from_contract(payload: dict[str, Any]) -> AnalysisConfig:
         reference_masks_enabled=bool(masks.get("enabled", False)),
         reference_mask_presets=masks.get("presets") or [],
         reference_window_mode=masks.get("window_mode", "auto"),
+        reference_fixed_half_width=masks.get("half_width"),
+        reference_fwhm_factor=float(masks.get("fwhm_factor", 6.0)),
+        reference_fractional_d_tolerance=float(masks.get("fractional_d_tolerance", 0.003)),
+        reference_zero_tolerance=masks.get("zero_tolerance"),
+        reference_min_half_width=masks.get("min_half_width"),
+        reference_max_half_width=masks.get("max_half_width"),
         include_cu_kbeta=bool(masks.get("include_cu_kbeta", False)),
         background_mode=background.get("mode", "auto_fixed_points"),
         background_type=background.get("type", "chebyschev-1"),
@@ -104,6 +111,7 @@ def config_from_contract(payload: dict[str, Any]) -> AnalysisConfig:
         cleanup_enabled=bool(cleanup.get("enabled", False)),
         refine_u_iso=bool(cleanup.get("refine_u_iso", False)),
         refine_positions=bool(cleanup.get("refine_positions", False)),
+        light_calibration_enabled=bool(light_calibration.get("enabled", False)),
         magnetic_precheck=bool(magnetic.get("enabled", False)),
         magnetic_q_max=float(magnetic.get("q_max", 4.0)),
         magnetic_denominators=magnetic.get("denominators") or [2, 3, 4],
@@ -119,6 +127,16 @@ def config_from_contract(payload: dict[str, Any]) -> AnalysisConfig:
         full_cell_length_tolerance_pct=float(full.get("cell_length_tolerance_pct", 1.0)),
         full_cell_angle_tolerance_deg=float(full.get("cell_angle_tolerance_deg", 3.0)),
         full_rwp_improvement_threshold=float(full.get("rwp_improvement_threshold", 0.06)),
+        full_dedup_threshold=float(full.get("dedup_threshold", 0.95)),
+        full_score_q_max=float(full.get("score_q_max", 8.0)),
+        full_pearson_cell_min_r=float(full.get("pearson_cell_min_r", 0.50)),
+        full_lattice_tiebreak_score_tol=float(full.get("lattice_tiebreak_score_tol", 0.0005)),
+        full_candidate_pruning=bool(full.get("candidate_pruning", True)),
+        full_knee_min_points_hist=int(full.get("knee_min_points_hist", 5)),
+        full_knee_min_relative_span=float(full.get("knee_min_relative_span", 0.03)),
+        full_knee_keep_if_no_knee=int(full.get("knee_keep_if_no_knee", 2)),
+        full_knee_keep_at_most=int(full.get("knee_keep_at_most", 5)),
+        excluded_space_groups=full.get("excluded_space_groups", [1, 2]),
         rapid_phases_per_hypothesis=int(rapid.get("phases_per_hypothesis", 3)),
         rapid_stage_output_limit=int(rapid.get("stage_output_limit", 10)),
         rapid_gsas_validation_limit=int(rapid.get("gsas_validation_limit", 5)),
