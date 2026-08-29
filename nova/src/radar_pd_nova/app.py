@@ -1036,6 +1036,14 @@ class RadarPdNovaApp(ThemedApp):
             with vuetify.VExpansionPanelText(eager=True):
                 yield
 
+    @staticmethod
+    def _number_field(*children: Any, **kwargs: Any) -> Any:
+        """Create a keyboard-editable numeric field without browser wheel stepping."""
+
+        kwargs.setdefault("type", "text")
+        kwargs.setdefault("inputmode", "decimal")
+        return vuetify.VTextField(*children, **kwargs)
+
     def _setup_page(self) -> None:
         html.Div("SETUP", classes="radar-rail-kicker")
         html.H2("Configure analysis", classes="radar-rail-heading")
@@ -1795,7 +1803,7 @@ class RadarPdNovaApp(ThemedApp):
                     vuetify.VTextField(label="SNS instrument", v_model=("ipts_instrument",), density="compact", variant="outlined", placeholder="HB2A")
                     vuetify.VTextField(label="IPTS", v_model=("ipts",), density="compact", variant="outlined", placeholder="IPTS-12345")
                     with html.Div(classes="radar-field-pair"):
-                        vuetify.VTextField(label="Run number", v_model=("run_number",), type="number", density="compact", variant="outlined")
+                        self._number_field(label="Run number", v_model=("run_number",), density="compact", variant="outlined")
                         vuetify.VTextField(label="Detector bank", v_model=("bank",), density="compact", variant="outlined")
                 vuetify.VBtn(
                     "Resolve and verify SNS input",
@@ -1975,10 +1983,9 @@ class RadarPdNovaApp(ThemedApp):
                                     hint="Comma-separated filename patterns",
                                     persistent_hint=True,
                                 )
-                                vuetify.VTextField(
+                                self._number_field(
                                     v_model=("watch_settle_seconds",),
                                     label="Wait after last file change (seconds)",
-                                    type="number",
                                     min=10,
                                     density="compact",
                                     variant="outlined",
@@ -1991,19 +1998,17 @@ class RadarPdNovaApp(ThemedApp):
                                     inset=True,
                                 )
                                 with html.Div(classes="radar-field-pair"):
-                                    vuetify.VTextField(
+                                    self._number_field(
                                         v_model=("watch_max_attempts",),
                                         label="Maximum attempts per file",
-                                        type="number",
                                         min=1,
                                         max=10,
                                         density="compact",
                                         variant="outlined",
                                     )
-                                    vuetify.VTextField(
+                                    self._number_field(
                                         v_model=("watch_retry_delay_seconds",),
                                         label="Retry delay (seconds)",
-                                        type="number",
                                         min=10,
                                         density="compact",
                                         variant="outlined",
@@ -2041,8 +2046,8 @@ class RadarPdNovaApp(ThemedApp):
                 "((fit_start == null || fit_start === '') && (fit_end == null || fit_end === '')) || ((fit_start != null && fit_start !== '') && (fit_end != null && fit_end !== ''))",
             ):
                 with html.Div(classes="radar-field-pair"):
-                    vuetify.VTextField(label="Fit start (pattern x-axis)", v_model=("fit_start",), type="number", density="compact", variant="outlined", clearable=True)
-                    vuetify.VTextField(label="Fit end (pattern x-axis)", v_model=("fit_end",), type="number", density="compact", variant="outlined", clearable=True)
+                    self._number_field(label="Fit start (pattern x-axis)", v_model=("fit_start",), density="compact", variant="outlined", clearable=True)
+                    self._number_field(label="Fit end (pattern x-axis)", v_model=("fit_end",), density="compact", variant="outlined", clearable=True)
                 vuetify.VTextarea(
                     label="Ignored regions",
                     v_model=("ignore_regions",),
@@ -2068,7 +2073,7 @@ class RadarPdNovaApp(ThemedApp):
                 )
                 with html.Div(classes="radar-field-pair"):
                     vuetify.VSelect(label="Function", v_model=("background_type",), items=("['chebyschev-1','chebyschev','cosine','Q^2 power series']",), density="compact", variant="outlined")
-                    vuetify.VTextField(label="Terms", v_model=("background_terms",), type="number", min=1, max=36, density="compact", variant="outlined")
+                    self._number_field(label="Terms", v_model=("background_terms",), min=1, max=36, density="compact", variant="outlined")
             with self._setup_section(
                 7,
                 "Magnetic Ordering Precheck",
@@ -2091,11 +2096,10 @@ class RadarPdNovaApp(ThemedApp):
                     density="compact",
                     inset=True,
                 )
-                vuetify.VTextField(
+                self._number_field(
                     v_show=f"({main_phase_ready}) && radiation === 'neutron' && magnetic_precheck",
                     label="Q maximum",
                     v_model=("magnetic_q_max",),
-                    type="number",
                     density="compact",
                     variant="outlined",
                 )
@@ -2145,10 +2149,10 @@ class RadarPdNovaApp(ThemedApp):
             ):
                 with html.Div(v_show="analysis_mode === 'rapid'"):
                     with html.Div(classes="radar-field-pair"):
-                        vuetify.VTextField(label="Phases / hypothesis", v_model=("rapid_phases_per_hypothesis",), type="number", min=1, max=5, density="compact", variant="outlined")
-                        vuetify.VTextField(label="Retained / stage", v_model=("rapid_stage_output_limit",), type="number", min=3, max=50, density="compact", variant="outlined")
-                        vuetify.VTextField(label="Final refinements", v_model=("rapid_gsas_validation_limit",), type="number", min=0, density="compact", variant="outlined")
-                        vuetify.VTextField(label="Parallel workers", v_model=("rapid_parallel_workers",), type="number", min=1, max=16, density="compact", variant="outlined")
+                        self._number_field(label="Phases / hypothesis", v_model=("rapid_phases_per_hypothesis",), min=1, max=5, density="compact", variant="outlined")
+                        self._number_field(label="Retained / stage", v_model=("rapid_stage_output_limit",), min=3, max=50, density="compact", variant="outlined")
+                        self._number_field(label="Final refinements", v_model=("rapid_gsas_validation_limit",), min=0, density="compact", variant="outlined")
+                        self._number_field(label="Parallel workers", v_model=("rapid_parallel_workers",), min=1, max=16, density="compact", variant="outlined")
                 with html.Div(v_show="analysis_mode === 'full'"):
                     vuetify.VSelect(
                         label="Search profile",
@@ -2184,13 +2188,13 @@ class RadarPdNovaApp(ThemedApp):
                                 ("Pearson cell-refine cutoff", "full_pearson_cell_min_r"),
                                 ("Nudge near-tie score tolerance", "full_lattice_tiebreak_score_tol"),
                             ):
-                                vuetify.VTextField(label=label, v_model=(model,), type="number", min=0, density="compact", variant="outlined")
+                                self._number_field(label=label, v_model=(model,), min=0, density="compact", variant="outlined")
                         vuetify.VSwitch(v_model=("full_candidate_pruning",), label="Use automatic candidate pruning", color="#15543c", density="compact", inset=True)
                         with html.Div(v_show="full_candidate_pruning", classes="radar-custom-budget-grid"):
-                            vuetify.VTextField(label="Knee minimum points", v_model=("full_knee_min_points_hist",), type="number", min=1, density="compact", variant="outlined")
-                            vuetify.VTextField(label="Knee minimum relative span", v_model=("full_knee_min_relative_span",), type="number", min=0, max=1, step="0.01", density="compact", variant="outlined")
-                            vuetify.VTextField(label="Keep when no knee is found", v_model=("full_knee_keep_if_no_knee",), type="number", min=0, density="compact", variant="outlined", hint="0 keeps every candidate", persistent_hint=True)
-                            vuetify.VTextField(label="Maximum candidates after pruning", v_model=("full_knee_keep_at_most",), type="number", min=0, density="compact", variant="outlined", hint="0 removes the cap", persistent_hint=True)
+                            self._number_field(label="Knee minimum points", v_model=("full_knee_min_points_hist",), min=1, density="compact", variant="outlined")
+                            self._number_field(label="Knee minimum relative span", v_model=("full_knee_min_relative_span",), min=0, max=1, step="0.01", density="compact", variant="outlined")
+                            self._number_field(label="Keep when no knee is found", v_model=("full_knee_keep_if_no_knee",), min=0, density="compact", variant="outlined", hint="0 keeps every candidate", persistent_hint=True)
+                            self._number_field(label="Maximum candidates after pruning", v_model=("full_knee_keep_at_most",), min=0, density="compact", variant="outlined", hint="0 removes the cap", persistent_hint=True)
             with self._setup_section(
                 10,
                 "Expert Tuning",
@@ -2201,11 +2205,10 @@ class RadarPdNovaApp(ThemedApp):
                 vuetify.VSwitch(v_model=("reference_masks_enabled",), label="Mask reference/can peaks", color="#15543c", density="compact", inset=True)
                 vuetify.VSelect(v_show="reference_masks_enabled", label="Reference structures", v_model=("reference_mask_presets",), items=("['Al_fcc','Cu_fcc','V_bcc']",), multiple=True, chips=True, density="compact", variant="outlined")
                 vuetify.VSelect(v_show="reference_masks_enabled", label="Reference-mask window", v_model=("reference_window_mode",), items=("[{title:'Automatic from resolution',value:'auto'},{title:'Fixed window',value:'fixed'}]",), item_title="title", item_value="value", density="compact", variant="outlined")
-                vuetify.VTextField(
+                self._number_field(
                     v_show="reference_masks_enabled && reference_window_mode === 'fixed'",
                     label="Fixed half-width (pattern x-axis units)",
                     v_model=("reference_fixed_half_width",),
-                    type="number",
                     min=0,
                     clearable=True,
                     density="compact",
@@ -2214,11 +2217,11 @@ class RadarPdNovaApp(ThemedApp):
                     persistent_hint=True,
                 )
                 with html.Div(v_show="reference_masks_enabled && reference_window_mode === 'auto'", classes="radar-field-pair"):
-                    vuetify.VTextField(label="FWHM multiplier", v_model=("reference_fwhm_factor",), type="number", min=0, step="0.1", density="compact", variant="outlined")
-                    vuetify.VTextField(label="Fractional d tolerance", v_model=("reference_fractional_d_tolerance",), type="number", min=0, step="0.001", density="compact", variant="outlined")
-                    vuetify.VTextField(label="Zero-offset tolerance", v_model=("reference_zero_tolerance",), type="number", min=0, clearable=True, density="compact", variant="outlined", hint="Pattern x-axis units; blank uses the instrument default", persistent_hint=True)
-                    vuetify.VTextField(label="Minimum half-width", v_model=("reference_min_half_width",), type="number", min=0, clearable=True, density="compact", variant="outlined", hint="Pattern x-axis units", persistent_hint=True)
-                    vuetify.VTextField(label="Maximum half-width", v_model=("reference_max_half_width",), type="number", min=0, clearable=True, density="compact", variant="outlined", hint="Pattern x-axis units", persistent_hint=True)
+                    self._number_field(label="FWHM multiplier", v_model=("reference_fwhm_factor",), min=0, step="0.1", density="compact", variant="outlined")
+                    self._number_field(label="Fractional d tolerance", v_model=("reference_fractional_d_tolerance",), min=0, step="0.001", density="compact", variant="outlined")
+                    self._number_field(label="Zero-offset tolerance", v_model=("reference_zero_tolerance",), min=0, clearable=True, density="compact", variant="outlined", hint="Pattern x-axis units; blank uses the instrument default", persistent_hint=True)
+                    self._number_field(label="Minimum half-width", v_model=("reference_min_half_width",), min=0, clearable=True, density="compact", variant="outlined", hint="Pattern x-axis units", persistent_hint=True)
+                    self._number_field(label="Maximum half-width", v_model=("reference_max_half_width",), min=0, clearable=True, density="compact", variant="outlined", hint="Pattern x-axis units", persistent_hint=True)
                 vuetify.VSwitch(v_show="radiation === 'xray' && reference_masks_enabled", v_model=("include_cu_kbeta",), label="Mask Cu K-beta companions", color="#15543c", density="compact", inset=True)
                 vuetify.VDivider(classes="my-3")
                 vuetify.VAlert(v_show=f"!({main_phase_ready})", text="Main-phase safeguards become available after a CIF is actually selected.", type="info", variant="tonal", density="compact")
@@ -3761,11 +3764,12 @@ class RadarPdNovaApp(ThemedApp):
         self.server.state.flush()
 
     def _submission_form_changed(self, **_: Any) -> None:
-        """Rotate idempotency only after a material form edit reaches the server."""
+        """Invalidate stale validation feedback and rotate form idempotency."""
 
         state = self.server.state
         if getattr(state, "busy", False):
             return
+        state.error_message = ""
         state.form_revision = int(getattr(state, "form_revision", 0) or 0) + 1
         state.submission_token = uuid.uuid4().hex
 
@@ -6534,21 +6538,28 @@ class RadarPdNovaApp(ThemedApp):
         state.flush()
 
     def save_current_configuration(self, submission_payload: dict[str, Any] | None = None, **_: Any) -> None:
+        state = self.server.state
         try:
             config = self._configuration(submission_payload)
         except Exception as exc:
-            self.server.state.error_message = str(exc)
+            state.error_message = str(exc)
+            state.flush()
             return
+
+        state.error_message = ""
+        state.flush()
 
         async def save() -> None:
             try:
                 action = await asyncio.to_thread(self.service.save_configuration, config)
                 self._register_utility(action)
-                self.server.state.notice = "Reusable configuration saved to Galaxy History."
+                state.error_message = ""
+                state.notice = "Reusable configuration saved to Galaxy History."
                 self.refresh_history()
+                state.flush()
             except Exception as exc:
-                self.server.state.error_message = f"Could not save configuration: {exc}"
-                self.server.state.flush()
+                state.error_message = f"Could not save configuration: {exc}"
+                state.flush()
 
         self._schedule_utility(save(), "radar-save-configuration")
 

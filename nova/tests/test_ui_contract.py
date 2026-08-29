@@ -158,6 +158,18 @@ def test_full_custom_controls_belong_to_runtime_budget_and_use_responsive_column
     assert "repeat(auto-fit, minmax(min(300px, 100%), 1fr))" in css
 
 
+def test_all_numeric_fields_ignore_mouse_wheel_changes() -> None:
+    app = RadarPdNovaApp()
+    number_fields = [
+        line for line in app.layout.html.splitlines() if '<VTextField' in line and 'inputmode="decimal"' in line
+    ]
+
+    assert number_fields
+    assert len(number_fields) == 37
+    assert all('type="text"' in field for field in number_fields)
+    assert 'type="number"' not in app.layout.html
+
+
 def test_plotly_canvases_have_nonzero_layout_frames() -> None:
     app = RadarPdNovaApp()
     template = app.layout.html

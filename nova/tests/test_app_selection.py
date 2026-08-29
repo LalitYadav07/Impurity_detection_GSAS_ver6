@@ -35,6 +35,40 @@ def test_workflow_mode_change_collapses_previous_run_history() -> None:
     assert state.flush_count == 1
 
 
+def test_form_edit_clears_stale_validation_error_and_rotates_submission() -> None:
+    app = RadarPdNovaApp.__new__(RadarPdNovaApp)
+    state = _State(
+        busy=False,
+        error_message="old validation error",
+        form_revision=4,
+        submission_token="old-token",
+    )
+    app.server = SimpleNamespace(state=state)
+
+    app._submission_form_changed()
+
+    assert state.error_message == ""
+    assert state.form_revision == 5
+    assert state.submission_token != "old-token"
+
+
+def test_valid_configuration_save_clears_previous_validation_error() -> None:
+    app = RadarPdNovaApp.__new__(RadarPdNovaApp)
+    state = _State(error_message="old validation error", notice="")
+    app.server = SimpleNamespace(state=state)
+    app.service = SimpleNamespace(save_configuration=lambda _config: object())
+    app._configuration = lambda _payload=None: AnalysisConfig(sample_elements=["Fe"])  # type: ignore[method-assign]
+    app._register_utility = lambda _action: None  # type: ignore[method-assign]
+    app.refresh_history = lambda: None  # type: ignore[method-assign]
+    app._schedule_utility = lambda coroutine, _name: asyncio.run(coroutine)  # type: ignore[method-assign]
+
+    app.save_current_configuration({})
+
+    assert state.error_message == ""
+    assert state.notice == "Reusable configuration saved to Galaxy History."
+    assert state.flush_count >= 2
+
+
 def test_loading_results_publishes_only_the_final_plot_figure(monkeypatch, tmp_path: Path) -> None:
     app = RadarPdNovaApp.__new__(RadarPdNovaApp)
     state = _State(workspace_view="monitor", file_search="summary", show_technical_files=True)
