@@ -1594,17 +1594,28 @@ def experiment_phase_heatmap_figure(
     *,
     x_key: str = "run_number",
 ) -> go.Figure:
-    """Compact scan-by-phase map for experiments with many evolving phases."""
+    """Compact scan-by-phase map that remains truthful on irregular axes."""
 
     ordered = sorted(scans, key=lambda row: int(row.get("run_number") or 0))
+    if x_key in _EXPERIMENT_METRIC_TITLES:
+        # Heatmap cells use adjacent x values to determine their widths. Keep
+        # numeric condition axes monotonic so an acquisition sequence that
+        # heats and then cools cannot produce overlapping or hidden cells.
+        ordered.sort(
+            key=lambda row: (
+                _metadata_metric(row, x_key) is None,
+                _metadata_metric(row, x_key) or 0.0,
+                int(row.get("run_number") or 0),
+            )
+        )
     labels = experiment_phase_labels(ordered)
     x_values, x_title, x_type = _experiment_axis(ordered, x_key)
-    z_values: list[list[float | None]] = []
-    hover: list[list[str]] = []
+    point_x: list[Any] = []
+    point_y: list[str] = []
+    point_weights: list[float] = []
+    point_hover: list[str] = []
     for label in labels:
-        row_values: list[float | None] = []
-        row_hover: list[str] = []
-        for scan in ordered:
+        for scan, x_value in zip(ordered, x_values):
             match = next(
                 (
                     phase
@@ -1613,34 +1624,46 @@ def experiment_phase_heatmap_figure(
                 ),
                 None,
             )
-            value = float(match["weight_percent"]) if match is not None else None
-            row_values.append(value)
+            if match is None or x_value is None:
+                continue
+            value = float(match["weight_percent"])
             sample_label = experiment_sample_identity(scan)["label"]
-            row_hover.append(
+            point_x.append(x_value)
+            point_y.append(label)
+            point_weights.append(value)
+            point_hover.append(
                 f"Scan {scan.get('run_number')}<br>{label}<br>"
-                + (f"{value:.2f} wt%" if value is not None else "Not reported")
+                + f"{value:.2f} wt%"
                 + f"<br>{sample_label}"
             )
-        z_values.append(row_values)
-        hover.append(row_hover)
 
+    marker_size = max(8, min(22, round(760 / max(1, len(ordered)))))
     figure = go.Figure(
-        go.Heatmap(
-            x=x_values,
-            y=labels,
-            z=z_values,
-            text=hover,
+        go.Scatter(
+            x=point_x,
+            y=point_y,
+            text=point_hover,
+            mode="markers",
             hovertemplate="%{text}<extra></extra>",
-            colorscale=[
-                [0.0, "#edf7f2"],
-                [0.25, "#b8dfcf"],
-                [0.55, "#4da989"],
-                [1.0, "#0b5138"],
-            ],
-            colorbar=dict(title="wt%", thickness=12),
-            zmin=0,
-            zmax=100,
-            hoverongaps=False,
+            marker=dict(
+                symbol="square",
+                size=marker_size,
+                color=point_weights,
+                colorscale=[
+                    # Reported trace abundances must remain distinguishable
+                    # from the white background used for "not reported".
+                    [0.0, "#d6ebe2"],
+                    [0.25, "#a8d7c4"],
+                    [0.55, "#4da989"],
+                    [1.0, "#0b5138"],
+                ],
+                cmin=0,
+                cmax=100,
+                showscale=True,
+                colorbar=dict(title="wt%", thickness=12),
+                line=dict(color="#7aa995", width=0.6),
+            ),
+            showlegend=False,
         )
     )
     figure.update_layout(
@@ -1652,8 +1675,20 @@ def experiment_phase_heatmap_figure(
         paper_bgcolor="#ffffff",
         plot_bgcolor="#ffffff",
     )
-    figure.update_xaxes(showgrid=False, linecolor="#cbd5e1", type=x_type)
-    figure.update_yaxes(showgrid=False, linecolor="#cbd5e1", autorange="reversed")
+    figure.update_xaxes(
+        showgrid=False,
+        linecolor="#cbd5e1",
+        type=x_type,
+        categoryorder="array" if x_type == "category" else None,
+        categoryarray=x_values if x_type == "category" else None,
+    )
+    figure.update_yaxes(
+        showgrid=False,
+        linecolor="#cbd5e1",
+        autorange="reversed",
+        categoryorder="array",
+        categoryarray=labels,
+    )
     return figure
 
 

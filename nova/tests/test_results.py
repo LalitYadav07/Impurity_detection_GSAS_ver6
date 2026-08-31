@@ -193,9 +193,54 @@ def test_experiment_heatmap_preserves_missing_phases_and_orders_by_abundance() -
 
     figure = experiment_phase_heatmap_figure(scans)
 
-    assert list(figure.data[0].y) == ["Major (SG 1)", "Minor (SG 2)"]
-    assert list(figure.data[0].z[0]) == [92.0, 100.0]
-    assert list(figure.data[0].z[1]) == [8.0, None]
+    points = {
+        (x_value, y_value): weight
+        for x_value, y_value, weight in zip(
+            figure.data[0].x,
+            figure.data[0].y,
+            figure.data[0].marker.color,
+        )
+    }
+    assert list(figure.layout.yaxis.categoryarray) == ["Major (SG 1)", "Minor (SG 2)"]
+    assert points[("10", "Major (SG 1)")] == 92.0
+    assert points[("11", "Major (SG 1)")] == 100.0
+    assert points[("10", "Minor (SG 2)")] == 8.0
+    assert ("11", "Minor (SG 2)") not in points
+
+
+def test_experiment_heatmap_keeps_low_temperature_trace_phases_visible() -> None:
+    scans = [
+        {
+            "run_number": 12,
+            "metadata": {"temperature": {"value": 300.0, "unit": "K"}},
+            "phases": [{"label": "High-temperature phase", "weight_percent": 95.0}],
+        },
+        {
+            "run_number": 10,
+            "metadata": {"temperature": {"value": 4.0, "unit": "K"}},
+            "phases": [{"label": "Low-temperature trace", "weight_percent": 2.0}],
+        },
+        {
+            "run_number": 11,
+            "metadata": {"temperature": {"value": 80.0, "unit": "K"}},
+            "phases": [{"label": "Low-temperature trace", "weight_percent": 7.0}],
+        },
+    ]
+
+    figure = experiment_phase_heatmap_figure(scans, x_key="temperature")
+    trace = figure.data[0]
+    points = {
+        (x_value, y_value): weight
+        for x_value, y_value, weight in zip(trace.x, trace.y, trace.marker.color)
+    }
+
+    assert trace.type == "scatter"
+    assert points[(4.0, "Low-temperature trace")] == 2.0
+    assert points[(80.0, "Low-temperature trace")] == 7.0
+    assert (300.0, "Low-temperature trace") not in points
+    assert trace.marker.colorscale[0] == (0.0, "#d6ebe2")
+    assert trace.marker.symbol == "square"
+    assert figure.layout.xaxis.type == "linear"
 
 
 def test_experiment_fit_diagnostics_uses_relative_baseline_and_flags_outlier() -> None:

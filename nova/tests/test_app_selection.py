@@ -788,6 +788,62 @@ def test_powgen_completed_scan_projects_scientific_summary_into_dashboard() -> N
     assert phase["label"] == "AlFe2V (SG Fm-3m (225))"
 
 
+def test_powgen_axis_toggle_replaces_scan_map_with_temperature_tiles() -> None:
+    app = RadarPdNovaApp.__new__(RadarPdNovaApp)
+    rows = [
+        {
+            "run_id": "PG3_10",
+            "run_number": 10,
+            "rwp": 8.0,
+            "metadata": {"temperature": {"value": 4.0, "unit": "K"}},
+            "phases": [{"label": "Trace phase", "weight_percent": 3.0}],
+        },
+        {
+            "run_id": "PG3_11",
+            "run_number": 11,
+            "rwp": 9.0,
+            "metadata": {"temperature": {"value": 300.0, "unit": "K"}},
+            "phases": [{"label": "Trace phase", "weight_percent": 6.0}],
+        },
+    ]
+    state = _State(
+        powgen_x_axis="run_number",
+        powgen_x_axis_options=[
+            {"title": "Scan number", "value": "run_number"},
+            {"title": "Sample temperature (K)", "value": "temperature"},
+        ],
+        powgen_scientific_rows=rows,
+        powgen_selected_phase_labels=["Trace phase"],
+    )
+    app.server = SimpleNamespace(state=state)
+
+    class _Widget:
+        def __init__(self) -> None:
+            self.updates: list[object] = []
+
+        def update(self, figure: object) -> None:
+            self.updates.append(figure)
+
+    app._powgen_phase_widget = _Widget()
+    app._powgen_quality_widget = _Widget()
+    app._powgen_heatmap_widget = _Widget()
+
+    app.update_powgen_dashboard_axis("temperature")
+
+    assert state.powgen_x_axis == "temperature"
+    temperature_map = app._powgen_heatmap_widget.updates[-1]
+    assert temperature_map.layout.xaxis.type == "linear"
+    assert list(temperature_map.data[0].x) == [4.0, 300.0]
+    assert temperature_map.data[0].type == "scatter"
+
+    app.update_powgen_dashboard_axis("run_number")
+
+    scan_map = app._powgen_heatmap_widget.updates[-1]
+    assert scan_map.layout.xaxis.type == "category"
+    assert list(scan_map.data[0].x) == ["10", "11"]
+    assert state.flush_count == 2
+
+
 def test_open_powgen_completed_scan_rehydrates_restored_galaxy_record() -> None:
     app = RadarPdNovaApp.__new__(RadarPdNovaApp)
     restored = RunRecord(
