@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+import pytest
 
 from radar_pd_nova.models import AnalysisConfig, AnalysisMode, InputSelection, RunRecord, RunStatus
 from radar_pd_nova.powgen_controller import (
@@ -96,6 +97,97 @@ def test_bounded_listing_is_nonrecursive_and_ignores_directories(tmp_path: Path)
     rows = bounded_directory_listing(tmp_path)
 
     assert [Path(row["path"]).name for row in rows] == ["PG3_63764.gsa"]
+
+
+def test_large_listing_filters_before_stat_and_does_not_truncate(tmp_path, monkeypatch):
+    class Entry:
+        def __init__(self, name): self.name = name
+        def is_file(self, **kwargs):
+            assert self.name.endswith(".gsa"), "Unrelated entry was stat'ed"
+            return True
+        def stat(self, **kwargs): return SimpleNamespace(st_size=10, st_mtime_ns=1)
+    class Listing:
+        def __enter__(self):
+            return iter([*[Entry(f"auxiliary-{n}.png") for n in range(6000)],
+                         *[Entry(f"PG3_{n}.gsa") for n in range(6001)]])
+        def __exit__(self, *args): pass
+    monkeypatch.setattr(powgen_controller, "_scandir", lambda _: Listing())
+    rows = bounded_directory_listing(tmp_path)
+    assert len(rows) == 6001
+    assert Path(rows[-1]["path"]).name == "PG3_6000.gsa"
+
+
+def test_sample_selection_precedes_backfill_and_applies_to_new_scans(monkeypatch):
+    service = FakeGalaxyService()
+    settings = PowgenExperimentSettings("IPTS-38000", "history-1", "config-hda", "1.5",
+        initial_backfill_limit=2, selected_sample_ids=("A",))
+    index = SimpleNamespace(identity=lambda run: {"sample_id": "A" if run.run_number % 2 else "B"})
+    controller = PowgenWatchController(service, settings, sample_index=index)
+    monkeypatch.setattr(controller, "_read_scan_metadata", lambda run: {})
+    listing = [{"path": f"PG3_{n}.gsa"} for n in range(1, 7)]
+    assert [r.run_number for r in controller.discover(listing)] == [3, 5]
+    assert set(controller.state.discovered) == {"PG3_3", "PG3_5"}
+    assert [r.run_number for r in controller.discover(listing + [{"path":"PG3_7.gsa"}, {"path":"PG3_8.gsa"}])] == [7]
+    assert "PG3_8" not in controller.state.discovered
+    assert controller.discover(listing + [{"path":"PG3_7.gsa"}]) == []
+    watch = service.uploaded[0][0]["watch"]
+    assert watch["selected_sample_ids"] == ["A"]
+
+
+def test_all_samples_includes_unknown_ids_without_reading_identity(monkeypatch):
+    controller = PowgenWatchController(FakeGalaxyService(),
+        PowgenExperimentSettings("IPTS-38000", "history-1", "config-hda", "1.5"),
+        sample_index=SimpleNamespace(identity=lambda _: pytest.fail("All samples read an identity")))
+    monkeypatch.setattr(controller, "_read_scan_metadata", lambda _: {})
+    assert len(controller.discover([{"path":"PG3_1.gsa"}, {"path":"PG3_2.gsa"}])) == 2
+
+
+def test_selected_samples_excludes_unknown_and_retries_later_metadata(monkeypatch):
+    metadata = {}
+    controller = PowgenWatchController(FakeGalaxyService(),
+        PowgenExperimentSettings("IPTS-38000", "history-1", "config-hda", "1.5", selected_sample_ids=("A",)),
+        sample_index=SimpleNamespace(identity=lambda run: metadata.get(run.run_number, {})))
+    monkeypatch.setattr(controller, "_read_scan_metadata", lambda _: {})
+    rows = [{"path":"PG3_1.gsa"}]
+    assert controller.discover(rows) == []
+    metadata[1] = {"sample_id":"A"}
+    assert [r.run_number for r in controller.discover(rows)] == [1]
+
+
+def test_watch_recovery_requires_the_same_sample_selection(monkeypatch):
+    service = FakeGalaxyService()
+    settings = PowgenExperimentSettings("IPTS-38000", "history-1", "config-hda", "1.5", selected_sample_ids=("A",))
+    first = PowgenWatchController(service, settings, sample_index=SimpleNamespace(identity=lambda _: {"sample_id":"A"}))
+    monkeypatch.setattr(first, "_read_scan_metadata", lambda _: {})
+    first.discover([{"path":"PG3_1.gsa"}])
+    payload = service.uploaded[-1][0]
+    service.history_documents = [{"id":"state-hda", "payload":payload}]
+    restored = PowgenWatchController(service, settings)
+    assert restored.restore_latest_state() is True
+    assert set(restored.state.discovered) == {"PG3_1"}
+    other = PowgenWatchController(service, PowgenExperimentSettings("IPTS-38000", "history-1", "config-hda", "1.5"))
+    assert other.restore_latest_state() is False
+
+
+def test_preflight_uses_latest_matching_sample_and_reports_total(monkeypatch):
+    monkeypatch.setattr(powgen_controller, "bounded_directory_listing", lambda _: [{"path":"PG3_63763.gsa"}, {"path":"PG3_63764.gsa"}])
+    calls = []
+    def metadata(ipts, run):
+        calls.append(run)
+        return {"available":True, "sample_id":"A", "wavelength":{"value":1.5,"unit":"A"}}
+    monkeypatch.setattr(powgen_controller, "read_powgen_scan_metadata", metadata)
+    index = SimpleNamespace(identity=lambda run: {"sample_id":"A" if run.run_number==63763 else "B"})
+    result = preflight_powgen_experiment("IPTS-38000", selected_sample_ids=("A",), sample_index=index)
+    assert result["scan_count"] == 1 and result["total_scan_count"] == 2
+    assert result["latest_run"] == "PG3_63763"
+    assert calls == [63763]
+    result = preflight_powgen_experiment("IPTS-38000", selected_sample_ids=("missing",), sample_index=index)
+    assert result["ready"] is False and "match" in result["message"]
+
+
+def test_empty_selected_sample_list_cannot_start():
+    with pytest.raises(ValueError, match="at least one sample"):
+        PowgenExperimentSettings("IPTS-1", "history-1", "config-hda", "1.5", selected_sample_ids=())
 
 
 def test_controller_submits_existing_analyze_contract_and_persists_state() -> None:

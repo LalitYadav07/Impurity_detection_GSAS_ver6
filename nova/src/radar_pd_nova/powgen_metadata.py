@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
 from pathlib import Path
 import math
 import re
@@ -27,6 +28,85 @@ _DATA = re.compile(r"\bDATA\s*\{(.*?)\}", re.DOTALL)
 _DATASPACE_SIZE = re.compile(r"DATASPACE\s+SIMPLE\s*\{\s*\(\s*(\d+)")
 _UNIT = re.compile(r'ATTRIBUTE\s+"units?".*?\bDATA\s*\{\s*"([^"]*)"', re.DOTALL)
 _QUOTED = re.compile(r'"((?:[^"\\]|\\.)*)"')
+_SAMPLE_ID_PATHS = (
+    "/entry/sample/id", "/entry/sample/identifier", "/entry/sample/sample_id",
+    "/entry/sample/sample_identifier", "/entry/DASlogs/SampleId/value",
+    "/entry/DASlogs/BL11A:SE:SampleId/value",
+)
+
+
+def _decode_h5dump_text(text: str) -> str:
+    # Some HDF5 builds print UTF-8 bytes as sign-extended octal escapes.
+    # Decode those as bytes, rather than interpreting them as Unicode points.
+    data = bytearray()
+    for part in re.split(r"(\\[0-7]{3,11}|\\.)", text):
+        if re.fullmatch(r"\\[0-7]{3,11}", part):
+            data.append(int(part[1:], 8) & 255)
+        elif part.startswith("\\") and len(part) == 2:
+            data.extend({"n": "\n", "r": "\r", "t": "\t", '"': '"', "\\": "\\"}.get(part[1], part).encode("utf-8"))
+        else:
+            data.extend(part.encode("utf-8"))
+    return data.decode("utf-8", errors="replace").strip()
+
+
+def _sample_identifier_number(raw: str) -> str:
+    value = Decimal(raw)
+    if not value.is_finite():
+        return ""
+    return str(int(value)) if value == value.to_integral_value() else format(value.normalize(), "f")
+
+
+def read_powgen_sample_identity(ipts: str, run_number: int) -> dict[str, str]:
+    """Read sample identity only, in one HDF5 command per run, never event data."""
+
+    path = powgen_nexus_path(ipts, run_number)
+    fields = (*_SAMPLE_ID_PATHS, "/entry/sample/name")
+    values: dict[str, str] = {}
+    executable = shutil.which("h5dump")
+    if executable:
+        # Request only named sample fields. Missing aliases do not invalidate
+        # fields which h5dump successfully returned in the same invocation.
+        command = [executable, "-y", "-w", "0"]
+        for field in fields:
+            command.extend(("-d", field))
+        completed = subprocess.run(
+            [*command, str(path)], capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=20, check=False,
+        )
+        sections = re.split(r'(?m)^\s*DATASET "([^"]+)" \{', completed.stdout)
+        for field, body in zip(sections[1::2], sections[2::2]):
+            match = _DATA.search(body)
+            if not match:
+                continue
+            quoted = _QUOTED.findall(match.group(1))
+            if quoted:
+                values[field] = _decode_h5dump_text(quoted[0])
+            elif field in _SAMPLE_ID_PATHS:
+                numeric = _NUMBER.search(match.group(1))
+                if numeric:
+                    values[field] = _sample_identifier_number(numeric.group())
+    else:
+        import h5py  # type: ignore
+
+        with h5py.File(path, "r") as handle:
+            for field in fields:
+                dataset = handle.get(field)
+                if not isinstance(dataset, h5py.Dataset) or not dataset.size:
+                    continue
+                # Even an identity stored as a time series only needs its first value.
+                raw = dataset[tuple(0 for _ in dataset.shape)] if dataset.shape else dataset[()]
+                if isinstance(raw, bytes):
+                    values[field] = raw.decode("utf-8", errors="replace").strip()
+                elif field in _SAMPLE_ID_PATHS and (
+                    isinstance(raw, (int, float)) or getattr(getattr(raw, "dtype", None), "kind", "") in {"i", "u", "f"}
+                ):
+                    values[field] = _sample_identifier_number(str(raw))
+                else:
+                    values[field] = str(raw).strip()
+    return {
+        "sample_id": next((values[field] for field in _SAMPLE_ID_PATHS if values.get(field)), ""),
+        "sample_name": values.get("/entry/sample/name", ""),
+    }
 
 
 @dataclass(frozen=True)

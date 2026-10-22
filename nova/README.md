@@ -39,6 +39,22 @@ Galaxy's authenticated remote-file sources remain a fallback when `/SNS` or
 
 ### POWGEN live experiment monitor
 
+The monitor handles large `shared/autoreduce` folders by considering only
+canonical `PG3_<run>.gsa` files, without a 5,000-entry cutoff or recursive
+searches. After entering an IPTS, leave the field or click **Refresh sample IDs**
+to populate sample IDs, all reported names, and completed-scan counts from
+the corresponding NeXus files. Only sample identity fields are read for this
+list; detector events are never loaded.
+
+Choose **All samples** or select one or more **Sample IDs and names**. The initial
+scan limit (including **All existing scans**) applies after this selection;
+subsequent matching scans are monitored with the same selection. Scans without
+a readable sample ID are reported separately and remain available with
+**All samples**. Stop monitoring before changing the sample selection. It is
+saved in the Galaxy watch checkpoint so a restart cannot restore a different
+sample selection. Completed identity reads are cached until their NeXus file
+changes; missing metadata is retried when the sample list is refreshed.
+
 The **POWGEN Live Experiment** panel is a session-scoped orchestration layer
 around the existing RADAR-PD Analyze tool. It does not duplicate or modify the
 scientific pipeline. The user selects an IPTS, the experiment wavelength, a

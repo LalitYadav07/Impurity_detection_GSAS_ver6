@@ -48,7 +48,9 @@ from .powgen_controller import (
     PowgenExperimentSettings,
     PowgenWatchController,
     preflight_powgen_experiment,
+    discover_powgen_samples,
 )
+from .powgen_samples import PowgenSampleIndex
 from .results import (
     build_result_view,
     complete_experiment_space_groups,
@@ -245,6 +247,7 @@ class RadarPdNovaApp(ThemedApp):
         self._powgen_monitor_task: asyncio.Task[None] | None = None
         self._powgen_wake_event = asyncio.Event()
         self._powgen_settings_signature: tuple[str, ...] | None = None
+        self._powgen_sample_indexes: dict[str, PowgenSampleIndex] = {}
         self._opening_run_uid: str | None = None
         self._plot_widget: Any | None = None
         self._primary_plot_widget: Any | None = None
@@ -262,6 +265,8 @@ class RadarPdNovaApp(ThemedApp):
         self.server.state.change("facility_site")(self._facility_site_changed)
         self.server.state.change("facility_instrument")(self._facility_instrument_changed)
         self.server.state.change("facility_ipts")(self._facility_ipts_changed)
+        self.server.state.change("powgen_ipts")(self._powgen_ipts_changed)
+        self.server.state.change("powgen_processing_scope", "powgen_processing_sample_ids")(self._powgen_processing_changed)
         self.server.state.change("remote_source")(self._remote_source_changed)
         self.create_ui()
         self.server.controller.on_server_ready.add(self._recover_runs)
@@ -584,6 +589,16 @@ class RadarPdNovaApp(ThemedApp):
             {"title": "Choose CIF from Galaxy History", "value": "galaxy"},
         ]
         state.powgen_source_directory = "/SNS/PG3/<IPTS>/shared/autoreduce"
+        state.powgen_processing_scope = "all"
+        state.powgen_processing_options = [
+            {"title": "All samples", "value": "all"},
+            {"title": "Only selected sample IDs", "value": "selected"},
+        ]
+        state.powgen_processing_sample_ids = []
+        state.powgen_discovered_sample_options = []
+        state.powgen_sample_discovery_ipts = ""
+        state.powgen_sample_loading = False
+        state.powgen_sample_message = "Enter an IPTS to discover its sample IDs and names."
         state.powgen_rows = []
         state.powgen_scientific_rows = []
         state.powgen_all_scientific_rows = []
@@ -1174,6 +1189,32 @@ class RadarPdNovaApp(ThemedApp):
                         disabled=("powgen_monitoring",),
                         hint="Enter the IPTS that owns the PG3 experiment.",
                         persistent_hint=True,
+                        blur=self.refresh_powgen_samples,
+                    )
+                    vuetify.VBtn(
+                        "Refresh sample IDs",
+                        click=self.refresh_powgen_samples,
+                        loading=("powgen_sample_loading",),
+                        disabled=("powgen_monitoring || powgen_sample_loading || !powgen_ipts",),
+                        prepend_icon="mdi-refresh", variant="outlined", block=True, classes="mb-2",
+                    )
+                    html.P("{{ powgen_sample_message }}", classes="radar-help-copy")
+                    vuetify.VSelect(
+                        label="Samples to process", v_model=("powgen_processing_scope",),
+                        items=("powgen_processing_options",),
+                        item_title="title", item_value="value", density="compact", variant="outlined",
+                        disabled=("powgen_monitoring || powgen_sample_loading",),
+                    )
+                    vuetify.VAutocomplete(
+                        v_show="powgen_processing_scope === 'selected'",
+                        label="Sample IDs and names", v_model=("powgen_processing_sample_ids",),
+                        items=("powgen_discovered_sample_options",), item_title="title", item_value="value",
+                        multiple=True, chips=True, closable_chips=True, clearable=True,
+                        density="compact", variant="outlined",
+                        disabled=("powgen_monitoring || powgen_sample_loading",),
+                        no_data_text="No sample IDs found. Refresh sample IDs after entering the IPTS.",
+                        hint="Only matching samples are processed, including later scans. Scans without a readable ID require All samples.",
+                        persistent_hint=True,
                     )
                     vuetify.VSelect(
                         label="Scans to process when monitoring starts",
@@ -1184,7 +1225,7 @@ class RadarPdNovaApp(ThemedApp):
                         density="compact",
                         variant="outlined",
                         disabled=("powgen_monitoring",),
-                        hint="Latest 5 is the safe default for a live demonstration. Every later scan is still monitored.",
+                        hint="This limit applies after sample selection. Every later matching scan is still monitored.",
                         persistent_hint=True,
                     )
                     vuetify.VSelect(
@@ -1357,7 +1398,7 @@ class RadarPdNovaApp(ThemedApp):
                         classes="mb-2",
                         disabled=(
                             "powgen_monitoring || !powgen_ipts || "
-                            "!powgen_configuration_dataset_id || powgen_preflight_status === 'checking'",
+                            "!powgen_configuration_dataset_id || powgen_sample_loading || powgen_preflight_status === 'checking'",
                         ),
                     )
                     vuetify.VAlert(
@@ -1383,7 +1424,7 @@ class RadarPdNovaApp(ThemedApp):
                         html.Div("READ-ONLY SOURCE", classes="radar-micro-label")
                         html.Code("{{ powgen_source_directory }}")
                         html.P(
-                            "Only the selected initial scan range is backfilled. Every later completed .gsa is monitored. Up to five analyses stay active while new submissions use two protected lanes. RADAR-PD does not write into the IPTS.",
+                            "The initial scan limit applies to the selected samples. Every later matching .gsa is monitored. Up to five analyses stay active. RADAR-PD does not write into the IPTS.",
                             classes="radar-help-copy mb-0",
                         )
                     vuetify.VAlert(
@@ -1401,7 +1442,7 @@ class RadarPdNovaApp(ThemedApp):
                             color="#15543c",
                             variant="flat",
                             size="small",
-                            disabled=("powgen_monitoring || !powgen_preflight_ready",),
+                            disabled=("powgen_monitoring || !powgen_preflight_ready || powgen_sample_loading",),
                         )
                         vuetify.VBtn(
                             "Stop",
@@ -4487,6 +4528,80 @@ class RadarPdNovaApp(ThemedApp):
         )
         return str((selected or {}).get("display_name") or (selected or {}).get("name") or fallback)
 
+    def _powgen_processing_changed(self, **_: Any) -> None:
+        state = self.server.state
+        state.powgen_preflight_ready = False
+        state.powgen_preflight_status = "idle"
+        state.powgen_preflight_message = "Check experiment and inputs after changing the sample selection."
+        state.flush()
+
+    def _powgen_ipts_changed(self, **_: Any) -> None:
+        state = self.server.state
+        try:
+            ipts = self._normalize_powgen_ipts(state.powgen_ipts)
+        except ValueError:
+            ipts = str(state.powgen_ipts or "")
+        if ipts == getattr(self, "_powgen_form_ipts", None):
+            return
+        self._powgen_form_ipts = ipts
+        self._powgen_sample_request = object()  # Discard a previous IPTS's in-flight discovery.
+        state.powgen_sample_loading = False
+        state.powgen_sample_discovery_ipts = ""
+        state.powgen_discovered_sample_options = []
+        state.powgen_processing_sample_ids = []
+        state.powgen_sample_message = "Leave the IPTS field or refresh sample IDs to discover samples."
+        self._powgen_processing_changed()
+
+    def _powgen_sample_index(self, ipts: str) -> PowgenSampleIndex:
+        if not hasattr(self, "_powgen_sample_indexes"):
+            self._powgen_sample_indexes = {}
+        if ipts not in self._powgen_sample_indexes:
+            self._powgen_sample_indexes[ipts] = PowgenSampleIndex(ipts)
+        return self._powgen_sample_indexes[ipts]
+
+    def _powgen_processing_ids(self) -> tuple[str, ...] | None:
+        state = self.server.state
+        scope = getattr(state, "powgen_processing_scope", "all") or "all"
+        if scope == "all":
+            return None
+        if scope != "selected":
+            raise ValueError("Choose All samples or Only selected sample IDs")
+        selected = tuple(sorted({str(value).strip() for value in (state.powgen_processing_sample_ids or []) if str(value).strip()}))
+        if not selected:
+            raise ValueError("Select at least one sample ID, or choose All samples")
+        return selected
+
+    async def refresh_powgen_samples(self, **_: Any) -> None:
+        """Discover identities off-thread; stale IPTS responses never update the form."""
+        state = self.server.state
+        if state.powgen_monitoring or state.powgen_sample_loading:
+            return
+        token = object()
+        self._powgen_sample_request = token
+        try:
+            ipts = self._normalize_powgen_ipts(state.powgen_ipts)
+            state.powgen_sample_loading = True
+            state.powgen_sample_message = "Finding sample IDs and names from completed scans…"
+            state.flush()
+            result = await asyncio.to_thread(discover_powgen_samples, ipts, self._powgen_sample_index(ipts))
+            if self._powgen_sample_request is not token:
+                return
+            state.powgen_discovered_sample_options = result["options"]
+            state.powgen_sample_discovery_ipts = ipts
+            unknown = int(result["unidentified_count"])
+            state.powgen_sample_message = (
+                f"Found {len(result['options'])} sample IDs across {result['scan_count']} completed scans. "
+                + (f"{unknown} scans have no readable sample ID; All samples includes them." if unknown else "")
+            )
+        except Exception as exc:
+            if self._powgen_sample_request is token:
+                state.powgen_sample_message = f"Sample discovery failed: {exc}. You can still check All samples."
+                state.powgen_discovered_sample_options = []
+        finally:
+            if self._powgen_sample_request is token:
+                state.powgen_sample_loading = False
+                state.flush()
+
     def check_powgen_experiment(self, **_: Any) -> bool:
         """Validate a live-monitor setup without writing to the IPTS or submitting jobs."""
 
@@ -4555,6 +4670,8 @@ class RadarPdNovaApp(ThemedApp):
                 ipts,
                 requested_wavelength=str(state.powgen_wavelength or ""),
                 instrument_profile_name=instrument_profile_name,
+                selected_sample_ids=self._powgen_processing_ids(),
+                sample_index=self._powgen_sample_index(ipts),
             )
             state.powgen_ipts = ipts
             state.powgen_source_directory = str(result.get("source_directory") or "")
@@ -4615,6 +4732,7 @@ class RadarPdNovaApp(ThemedApp):
             )
             state.powgen_preflight_details = [
                 {"label": "Read-only source", "value": state.powgen_source_directory},
+                {"label": "Samples to process", "value": ", ".join(self._powgen_processing_ids() or ()) or "All samples"},
                 {
                     "label": "Available reductions",
                     "value": f"{result.get('scan_count', 0)} ({scan_range})",
@@ -4714,6 +4832,7 @@ class RadarPdNovaApp(ThemedApp):
                 main_cif_dataset_id=main_cif_id,
                 database_dataset_id=database_id,
                 initial_backfill_limit=initial_backfill_limit,
+                selected_sample_ids=self._powgen_processing_ids(),
             )
             signature = (
                 settings.ipts,
@@ -4724,9 +4843,10 @@ class RadarPdNovaApp(ThemedApp):
                 settings.main_cif_dataset_id or "",
                 settings.database_dataset_id or "",
                 str(settings.initial_backfill_limit),
+                json.dumps(settings.selected_sample_ids),
             )
             if self._powgen_controller is None or self._powgen_settings_signature != signature:
-                self._powgen_controller = PowgenWatchController(self.service, settings)
+                self._powgen_controller = PowgenWatchController(self.service, settings, sample_index=self._powgen_sample_index(ipts))
                 restored = self._powgen_controller.restore_latest_state()
                 self._powgen_settings_signature = signature
 

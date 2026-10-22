@@ -1,4 +1,5 @@
 import asyncio
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -13,6 +14,60 @@ from radar_pd_nova.models import (
     UtilityActionRecord,
     selected_run_uid,
 )
+
+
+def test_powgen_sample_selection_invalidates_preflight_and_is_exact():
+    app = RadarPdNovaApp.__new__(RadarPdNovaApp)
+    state = _State(powgen_preflight_ready=True, powgen_processing_scope="selected",
+                   powgen_processing_sample_ids=["00123", "B", "00123"])
+    app.server = SimpleNamespace(state=state)
+    app._powgen_processing_changed()
+    assert state.powgen_preflight_ready is False
+    assert app._powgen_processing_ids() == ("00123", "B")
+    state.powgen_processing_scope = "all"
+    assert app._powgen_processing_ids() is None
+
+
+def test_powgen_sample_discovery_discards_old_ipts_and_preserves_same_ipts_selection(monkeypatch):
+    app = RadarPdNovaApp.__new__(RadarPdNovaApp)
+    state = _State(powgen_ipts="35915", powgen_monitoring=False, powgen_sample_loading=False,
+        powgen_processing_sample_ids=["A"], powgen_discovered_sample_options=[])
+    app.server = SimpleNamespace(state=state)
+    app._powgen_form_ipts = "IPTS-35915"
+    started, release = threading.Event(), threading.Event()
+    def discover(ipts, index):
+        started.set()
+        assert release.wait(5)
+        return {"options":[{"value":"A","title":"A — Copper (1 scans)"}],"scan_count":1,"unidentified_count":0}
+    monkeypatch.setattr("radar_pd_nova.app.discover_powgen_samples", discover)
+    async def check():
+        task = asyncio.create_task(app.refresh_powgen_samples())
+        assert await asyncio.to_thread(started.wait, 5)
+        assert state.powgen_sample_loading is True
+        state.powgen_ipts = "IPTS-35915"
+        app._powgen_ipts_changed()
+        assert state.powgen_processing_sample_ids == ["A"]
+        state.powgen_ipts = "IPTS-99999"
+        app._powgen_ipts_changed()
+        release.set()
+        await task
+        assert state.powgen_discovered_sample_options == []
+        assert state.powgen_processing_sample_ids == []
+        assert state.powgen_sample_loading is False
+    asyncio.run(check())
+
+
+def test_powgen_sample_discovery_populates_dropdown_and_unknown_count(monkeypatch):
+    app = RadarPdNovaApp.__new__(RadarPdNovaApp)
+    state = _State(powgen_ipts="35915", powgen_monitoring=False, powgen_sample_loading=False)
+    app.server = SimpleNamespace(state=state)
+    monkeypatch.setattr("radar_pd_nova.app.discover_powgen_samples", lambda *args: {
+        "options":[{"value":"123","title":"123 — Copper (2 scans)"}],"scan_count":3,"unidentified_count":1})
+    asyncio.run(app.refresh_powgen_samples())
+    assert state.powgen_discovered_sample_options[0]["value"] == "123"
+    assert state.powgen_sample_discovery_ipts == "IPTS-35915"
+    assert "1 scans have no readable sample ID" in state.powgen_sample_message
+    assert state.powgen_sample_loading is False
 
 
 def test_selected_run_uid_accepts_vuetify_payload_shapes() -> None:

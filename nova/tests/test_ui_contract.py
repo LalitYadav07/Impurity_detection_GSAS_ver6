@@ -227,6 +227,11 @@ def test_powgen_monitor_requires_preflight_and_exposes_safe_backfill_controls() 
     assert app.server.state.powgen_backfill_options[0]["title"] == "Latest 5 existing scans, then new scans"
     assert any(option["value"] == "new_only" for option in app.server.state.powgen_backfill_options)
     assert "Check experiment and inputs" in template
+    assert "html-error" not in template
+    assert "Samples to process" in template
+    assert "Sample IDs and names" in template
+    assert "Refresh sample IDs" in template
+    assert app.server.state.powgen_processing_scope == "all"
     assert 'v-model="history_panels"' in template
     assert "history_panels = []; run_search = ''" in template
     assert "powgen_monitoring || !powgen_preflight_ready" in template

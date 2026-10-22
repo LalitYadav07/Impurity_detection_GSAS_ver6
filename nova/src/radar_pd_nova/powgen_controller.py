@@ -9,6 +9,7 @@ instrument profile, and submits the same ``AnalysisConfig`` and
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import re
@@ -31,6 +32,7 @@ from .powgen_watch import (
     discover_from_listing,
 )
 from .powgen_metadata import read_powgen_scan_metadata
+from .powgen_samples import PowgenSampleIndex
 from .results import experiment_scan_summary
 
 
@@ -54,8 +56,14 @@ class PowgenExperimentSettings:
     max_submission_attempts: int = 5
     retry_base_seconds: int = 15
     retry_max_seconds: int = 300
+    selected_sample_ids: tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
+        if self.selected_sample_ids is not None:
+            selected = tuple(sorted({str(value).strip() for value in self.selected_sample_ids if str(value).strip()}))
+            if not selected:
+                raise ValueError("Choose at least one sample ID, or process all samples")
+            object.__setattr__(self, "selected_sample_ids", selected)
         if self.initial_backfill_limit is not None and self.initial_backfill_limit < 0:
             raise ValueError("initial_backfill_limit must not be negative")
         if self.late_arrival_window < 0:
@@ -91,24 +99,28 @@ class PowgenExperimentSettings:
         )
 
 
-def bounded_directory_listing(directory: str | Path, *, max_entries: int = 5000) -> list[dict[str, Any]]:
-    """List one directory without recursion, following links, or file reads."""
+def bounded_directory_listing(directory: str | Path) -> list[dict[str, Any]]:
+    """Stream one folder, stat'ing only completed PG3 reductions; never recurse.
 
-    if max_entries < 1:
-        raise ValueError("max_entries must be positive")
+    Large autoreduce folders contain many ancillary files per scan. A limit on
+    raw directory entries blocks normal experiments and cannot safely truncate
+    an unordered listing. Filter filenames before any filesystem metadata call.
+    """
+
     root = Path(directory)
     if not root.is_dir():
         raise FileNotFoundError(f"POWGEN reduced-data directory does not exist: {root}")
     rows: list[dict[str, Any]] = []
     with _scandir(root) as entries:
-        for index, entry in enumerate(entries):
-            if index >= max_entries:
-                raise RuntimeError(
-                    f"POWGEN directory contains more than {max_entries} entries; narrow the watch folder"
-                )
-            if not entry.is_file(follow_symlinks=False):
+        for entry in entries:
+            if not re.fullmatch(r"PG3_\d+\.gsa", entry.name, re.IGNORECASE):
                 continue
-            stat = entry.stat(follow_symlinks=False)
+            try:
+                if not entry.is_file(follow_symlinks=False):
+                    continue
+                stat = entry.stat(follow_symlinks=False)
+            except FileNotFoundError:
+                continue  # Autoreduction may atomically replace a file mid-listing.
             rows.append(
                 {
                     "path": str(root / entry.name).replace("\\", "/"),
@@ -117,6 +129,12 @@ def bounded_directory_listing(directory: str | Path, *, max_entries: int = 5000)
                 }
             )
     return rows
+
+
+def discover_powgen_samples(ipts: str, sample_index: PowgenSampleIndex) -> dict[str, Any]:
+    definition = PowgenExperimentSettings(ipts, "samples", "samples", "1.5").definition()
+    runs = discover_from_listing(definition, bounded_directory_listing(definition.source_directory))
+    return sample_index.inventory(runs)
 
 
 _SUPPORTED_POWGEN_WAVELENGTHS = (0.8, 1.5, 2.665)
@@ -140,6 +158,8 @@ def preflight_powgen_experiment(
     *,
     requested_wavelength: str | None = None,
     instrument_profile_name: str | None = None,
+    selected_sample_ids: tuple[str, ...] | None = None,
+    sample_index: PowgenSampleIndex | None = None,
 ) -> dict[str, Any]:
     """Inspect one POWGEN experiment without submitting jobs or writing files."""
 
@@ -157,12 +177,24 @@ def preflight_powgen_experiment(
         if str(row.get("path") or "").lower().endswith(".gsa")
     ]
     runs = discover_from_listing(definition, completed_rows)
+    total_scan_count = len(runs)
+    if selected_sample_ids is not None:
+        index = sample_index or PowgenSampleIndex(definition.ipts)
+        selected = set(selected_sample_ids)
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            identities = list(pool.map(index.identity, runs))
+        runs = [run for run, metadata in zip(runs, identities) if metadata.get("sample_id") in selected]
     if not runs:
         return {
             "ready": False,
             "source_directory": definition.source_directory,
             "scan_count": 0,
-            "message": "The directory is readable, but it contains no completed POWGEN .gsa reductions.",
+            "total_scan_count": total_scan_count,
+            "message": (
+                "No completed reductions match the selected sample IDs. Refresh samples or choose all samples."
+                if total_scan_count and selected_sample_ids is not None
+                else "The directory is readable, but it contains no completed POWGEN .gsa reductions."
+            ),
         }
 
     latest = runs[-1]
@@ -218,6 +250,7 @@ def preflight_powgen_experiment(
         "ready": not profile_error,
         "source_directory": definition.source_directory,
         "scan_count": len(runs),
+        "total_scan_count": total_scan_count,
         "first_run": runs[0].run_id,
         "latest_run": latest.run_id,
         "latest_file": Path(latest.source_path).name,
@@ -257,11 +290,13 @@ def _scandir(path: Path):
 class PowgenWatchController:
     """Coordinate discovery, submission, and Galaxy-owned watch state."""
 
-    def __init__(self, service: GalaxyService, settings: PowgenExperimentSettings) -> None:
+    def __init__(self, service: GalaxyService, settings: PowgenExperimentSettings,
+                 *, sample_index: PowgenSampleIndex | None = None) -> None:
         if service.history_id != settings.history_id:
             raise ValueError("POWGEN settings must target the active Galaxy history")
         self.service = service
         self.settings = settings
+        self.sample_index = sample_index or PowgenSampleIndex(settings.ipts)
         self.definition = settings.definition()
         self.state = WatchState(history_id=settings.history_id)
         self.records: dict[str, RunRecord] = {}
@@ -304,6 +339,8 @@ class PowgenWatchController:
             try:
                 payload = self.service.load_json_document(dataset_id)
                 watch = payload.get("watch") if isinstance(payload, Mapping) else None
+                if not isinstance(watch, Mapping) and self.settings.selected_sample_ids is not None:
+                    continue
                 if isinstance(watch, Mapping):
                     if str(watch.get("ipts") or "").upper() != self.settings.ipts.upper():
                         continue
@@ -325,6 +362,9 @@ class PowgenWatchController:
                         else None
                     )
                     if stored_limit != self.settings.initial_backfill_limit:
+                        continue
+                    stored_samples = watch.get("selected_sample_ids")
+                    if (tuple(sorted(stored_samples)) if stored_samples is not None else None) != self.settings.selected_sample_ids:
                         continue
                 candidate = WatchState.from_dict(payload)
                 if candidate.history_id != self.settings.history_id:
@@ -377,14 +417,12 @@ class PowgenWatchController:
             if available:
                 self._startup_run_floor = max(run.run_number for run in available)
             limit = self.settings.initial_backfill_limit
-            discovered = []
-            if limit != 0:
-                discovered = discover_from_listing(
-                    self.definition,
-                    completed_rows,
-                    self.state,
-                    newest_limit=limit,
-                )
+            discovered = self._matching_samples(available)
+            if limit == 0:
+                discovered = []
+            elif limit is not None:
+                discovered = discovered[-limit:]
+            discovered = self._remember_discoveries(discovered)
             discovered = self._attach_scan_metadata(discovered)
             known_runs = [
                 *self.state.discovered.values(),
@@ -404,7 +442,6 @@ class PowgenWatchController:
         discovered = discover_from_listing(
             self.definition,
             completed_rows,
-            self.state,
             minimum_run_number=max(
                 1,
                 (self._last_seen_run_number or 0) - self.settings.late_arrival_window,
@@ -415,6 +452,7 @@ class PowgenWatchController:
                 ),
             ),
         )
+        discovered = self._remember_discoveries(self._matching_samples(discovered))
         discovered = self._attach_scan_metadata(discovered)
         if discovered:
             self._last_seen_run_number = max(
@@ -422,6 +460,19 @@ class PowgenWatchController:
                 *(run.run_number for run in discovered),
             )
         return discovered
+
+    def _matching_samples(self, runs: list[WatchedRun]) -> list[WatchedRun]:
+        if self.settings.selected_sample_ids is None:
+            return runs
+        selected = set(self.settings.selected_sample_ids)
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            identities = list(pool.map(self.sample_index.identity, runs))
+        return [run for run, metadata in zip(runs, identities) if metadata.get("sample_id") in selected]
+
+    def _remember_discoveries(self, runs: list[WatchedRun]) -> list[WatchedRun]:
+        new = [run for run in runs if not self.state.contains(run)]
+        self.state.discovered.update({run.run_id: run for run in new})
+        return new
 
     def _read_scan_metadata(self, run: WatchedRun) -> dict[str, Any]:
         """Read optional NeXus conditions without making discovery fragile."""
@@ -825,6 +876,7 @@ class PowgenWatchController:
                 "instrument_profile_name": self.settings.instrument_profile_name,
                 "wavelength_angstrom": self.settings.wavelength_angstrom,
                 "initial_backfill_limit": self.settings.initial_backfill_limit,
+                "selected_sample_ids": list(self.settings.selected_sample_ids) if self.settings.selected_sample_ids is not None else None,
             }
             last_error: Exception | None = None
             for attempt in range(3):
