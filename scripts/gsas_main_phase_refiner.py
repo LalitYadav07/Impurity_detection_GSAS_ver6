@@ -655,10 +655,22 @@ class GSASMainPhaseRefiner:
             orig_max_cyc = None
 
         cell_before = self._read_cell_from_data()
+        from copy import deepcopy
+        checkpoint = deepcopy(self.project.data) if getattr(self, "phase", None) is not None else None
+        phase_name = self.phase.name if checkpoint is not None else None
+
+        def restore_checkpoint():
+            if checkpoint is not None:
+                self.project.data.clear()
+                self.project.data.update(deepcopy(checkpoint))
+                self.histogram = self.project.histograms()[0]
+                self.phase = next(p for p in self.project.phases() if p.name == phase_name)
+
         last_exc: Optional[Exception] = None
 
         for attempt, (max_cyc, perturb_pct, label) in enumerate(schedule):
             if attempt > 0:
+                restore_checkpoint()
                 logger.warning(f"Cell refinement attempt {attempt + 1}/{len(schedule)}: {label}")
                 if cell_before is not None:
                     self._write_cell_to_data(cell_before, perturb_pct=perturb_pct, seed=attempt)
@@ -680,6 +692,11 @@ class GSASMainPhaseRefiner:
 
                 results = self._extract_refinement_results("Full")
                 silent_metric = _is_metric_stdout(captured) or results.rwp >= degenerate_rwp
+                if cell_before is not None:
+                    reason = candidate_cell_rejection(cell_before, self._read_cell_from_data(), 0.0, 1.0)
+                    if reason:
+                        silent_metric = True
+                        last_exc = RuntimeError(f"Cell trial rejected: {reason}")
                 if silent_metric:
                     if attempt < len(schedule) - 1:
                         logger.warning(
@@ -724,6 +741,10 @@ class GSASMainPhaseRefiner:
         )
         self._disable_cell_refinement()
         try:
+                restore_checkpoint()
+                if cell_before is not None:
+                    self._write_cell_to_data(cell_before, perturb_pct=0.0, seed=1)
+                self._disable_cell_refinement()
                 self.project.refine()
                 results = self._extract_refinement_results("Scale+Background")
                 results.error_message = f"Cell refinement failed: {last_exc}"
@@ -1505,6 +1526,31 @@ def compute_gsas_ycalc_pearson(project_manager) -> float:
         return float('nan')
     return pearson_corr(yobs, ycalc)
 
+def candidate_cell_rejection(before, after, r_before, r_after,
+                             max_length_change_pct=2.0, max_angle_change_deg=2.0):
+    """Bound a screening step relative to its input, without asserting a phase identity."""
+    try:
+        old = np.asarray(before, dtype=float)[:6]
+        new = np.asarray(after, dtype=float)[:6]
+        if old.size != 6 or new.size != 6 or not np.all(np.isfinite(new)):
+            return "nonfinite_cell"
+        a, b, c, alpha, beta, gamma = new
+        ca, cb, cg = np.cos(np.radians([alpha, beta, gamma]))
+        if min(a, b, c) <= 0 or not np.all((new[3:] > 0) & (new[3:] < 180)):
+            return "invalid_cell"
+        if 1 + 2*ca*cb*cg - ca*ca - cb*cb - cg*cg <= 1e-10:
+            return "invalid_metric"
+        if np.any(np.abs(new[:3] / old[:3] - 1) * 100 > max_length_change_pct):
+            return "cell_length_out_of_bounds"
+        if np.any(np.abs(new[3:] - old[3:]) > max_angle_change_deg):
+            return "cell_angle_out_of_bounds"
+        if not math.isfinite(r_after) or r_after < r_before - 1e-8:
+            return "score_did_not_improve"
+    except (ValueError, TypeError, ZeroDivisionError):
+        return "invalid_cell"
+    return ""
+
+
 def compute_gsas_pearson_for_cif(
     data_path: str,
     instprm_path: str,
@@ -1529,6 +1575,8 @@ def compute_gsas_pearson_for_cif(
     cell_refine_min_r: float = 0.5,
     export_refined_cif: bool = True,
     return_diagnostics: bool = False,
+    max_cell_length_change_pct: float = 2.0,
+    max_cell_angle_change_deg: float = 2.0,
 ) -> Any:
     """
     Build a tiny GSAS-II project, run staged refinement (Pass-1: Scale; optional
@@ -1691,9 +1739,17 @@ def compute_gsas_pearson_for_cif(
         t_refine = perf_counter()
         try:
             hist.set_refinements({'Background': {'refine': False}})
-            pm.project.do_refinements([{'refine': True}])
-        except Exception:
-            pass
+            from contextlib import redirect_stdout
+            from io import StringIO
+            captured = StringIO()
+            with redirect_stdout(captured):
+                pm.project.do_refinements([{'refine': True}])
+            output = captured.getvalue()
+            print(output, end="")
+            if any(s in output.lower() for s in ("invalid cell metric", "recip-matrix error", "refinement error", "error - refinement failed")):
+                raise RuntimeError("GSAS-II reported a failed screening refinement")
+        except Exception as exc:
+            raise RuntimeError(f"Pearson refinement failed for {ph_name}: {exc}") from exc
         try:
             Yo = np.asarray(hist.getdata('yobs'), float)
             Yc = np.asarray(hist.getdata('ycalc'), float)
@@ -1705,6 +1761,8 @@ def compute_gsas_pearson_for_cif(
         logger.info(f"[PEARSON] {ph_name} {label}: r={r:.6f} dt={dt:.3f}s")
         return r, dt
 
+    # Screening must observe the same physical TOF variance limits as refinement.
+    apply_safe_limits(pm.project)
     # Pass-1: Scale only
     _set_flags(hist_scale=True, cell=False)
     r1, pass1_s = _run_and_r(1, "pass1-scale")
@@ -1730,10 +1788,33 @@ def compute_gsas_pearson_for_cif(
         cell_skip_reason = f"r1_below_{min_r_for_cell:.4f}"
     else:
         # Pass-2: Scale + Cell
+        from copy import deepcopy
+        checkpoint = deepcopy(pm.project.data)
+        cell_before = list(phase.data['General']['Cell'][1:7])
         _set_flags(hist_scale=True, cell=True)
-        r2, pass2_s = _run_and_r(1, "pass2-scale+cell")
+        t_cell = perf_counter()
+        try:
+            r2, pass2_s = _run_and_r(1, "pass2-scale+cell")
+            cell_skip_reason = candidate_cell_rejection(
+                cell_before, phase.data['General']['Cell'][1:7], r1, r2,
+                max_cell_length_change_pct, max_cell_angle_change_deg,
+            )
+        except Exception as exc:
+            cell_skip_reason = f"refinement_failed: {exc}"
+            pass2_s = perf_counter() - t_cell
+        if cell_skip_reason:
+            pm.project.data.clear()
+            pm.project.data.update(checkpoint)
+            hist = pm.project.histograms()[0]
+            phase = next(p for p in pm.project.phases() if p.name == ph_name)
+            pm.main_histogram = hist
+            pm.main_phase = phase
+            r2 = r1
+            _set_flags(hist_scale=True, cell=False)
+            pm.project.save()
+            logger.warning("[PEARSON] %s: rejected cell trial (%s); restored scale-only checkpoint", ph_name, cell_skip_reason)
         timings["pass2_cell_s"] = pass2_s
-        used_cell_refinement = True
+        used_cell_refinement = not bool(cell_skip_reason)
 
     # ---- Export refined CIF via GSAS-II (always to a separate file) ----
     stem = _Path(cif_path).stem
@@ -2670,9 +2751,11 @@ def joint_refine_polish(
                 return False, reference_results, reference_rwp
 
             proj_temp = _open(temp_gpx)
+            reference_project = _open(str(checkpoint))
             for phase_name in enabled_names:
                 c6 = _phase_cell6(proj_temp, phase_name)
-                if (c6 is None) or (not _posdef_G6(c6)):
+                before = _phase_cell6(reference_project, phase_name)
+                if (c6 is None) or (not _posdef_G6(c6)) or candidate_cell_rejection(before, c6, 0.0, 1.0):
                     _trace(
                         "cell_trial_rejected",
                         label=label,

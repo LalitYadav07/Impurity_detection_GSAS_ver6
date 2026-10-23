@@ -124,6 +124,7 @@ def config_from_contract(payload: dict[str, Any]) -> AnalysisConfig:
         full_nudge_representatives=int(full.get("nudge_representatives", 50)),
         full_compare_candidates=int(full.get("compare_candidates", 2)),
         full_compare_cycles=int(full.get("compare_cycles", 6)),
+        full_final_joint_cell_cycles=int(full.get("final_joint_cell_cycles", 12)),
         full_cell_length_tolerance_pct=float(full.get("cell_length_tolerance_pct", 1.0)),
         full_cell_angle_tolerance_deg=float(full.get("cell_angle_tolerance_deg", 3.0)),
         full_rwp_improvement_threshold=float(full.get("rwp_improvement_threshold", 0.06)),

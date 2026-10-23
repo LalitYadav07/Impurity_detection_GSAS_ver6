@@ -98,6 +98,7 @@ def _publish_gpx(path: Path, run_dir: Path) -> bool:
         return (
             "pattern_project" in name
             or "seq_final_main_polished" in name
+            or "seq_final_joint_polished" in name
             or ("seq_pass" in name and "kept_polished" in name)
             or fallback_main_project
         )
@@ -831,6 +832,27 @@ def collect_outputs(
             project["collection_name"] = output_record.get("name")
     atomic_write_json(portal / "gpx_index.json", gpx_index)
     summary, hypotheses, phases, hypothesis_stage = _summary_sources(run_root, mode)
+    lattice, final_rwp, scientific_warnings = [], None, []
+    if mode == "full" and published_gpx_sources:
+        try:
+            try:
+                from .ndip_lattice import extract_lattice, final_project_key, lattice_quality
+            except ImportError:
+                from ndip_lattice import extract_lattice, final_project_key, lattice_quality
+            final_gpx = max(published_gpx_sources, key=final_project_key)
+            lattice, final_rwp = extract_lattice(final_gpx, _read_gpx_records(final_gpx),
+                source=final_gpx.relative_to(run_root).as_posix(), labels=gpx_phase_labels)
+            scientific_warnings = lattice_quality(lattice)
+        except Exception as exc:
+            scientific_warnings.append({"code": "lattice_unavailable", "message": f"Could not inspect final lattice parameters: {exc}"})
+    if lattice:
+        lattice_path = portal / "tables" / "Final_lattice_parameters.csv"
+        lattice_path.parent.mkdir(parents=True, exist_ok=True)
+        with lattice_path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=list(lattice[0]))
+            writer.writeheader()
+            writer.writerows(lattice)
+        collection_records["tables"].append(file_record(lattice_path, role="table", root=portal))
     manifest_path = _find_suffix(run_root, "run_manifest.json")
     manifest = read_json(manifest_path) if manifest_path else {}
     effective_status = "failed" if status == "failed" else ("complete" if manifest.get("status", status) == "complete" else status)
@@ -843,6 +865,9 @@ def collect_outputs(
         "status": effective_status,
         "summary": summary,
         "phases": phases,
+        "lattice_parameters": lattice,
+        "final_rwp": final_rwp,
+        "scientific_status": "needs_review" if scientific_warnings else "not_assessed" if not lattice else "checks_passed",
         "hypotheses": hypotheses,
         "hypothesis_stage": hypothesis_stage,
         "gpx_projects": gpx_index["projects"],
@@ -853,7 +878,7 @@ def collect_outputs(
             "source_manifest": manifest,
         },
         "artifacts": collection_records,
-        "warnings": [],
+        "warnings": scientific_warnings,
         "errors": list(errors or []),
     }
     atomic_write_json(portal / "summary.json", result)

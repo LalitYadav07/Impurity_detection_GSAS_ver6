@@ -4588,6 +4588,28 @@ class UnifiedPipeline:
                                 metrics={"event": "final_main_polish_failed", "error": str(exc)},
                             )
 
+            # Final TOF cell covariance must describe the accepted multiphase
+            # model together. Earlier screening/polish steps deliberately hold
+            # other cells and cannot supply their final joint uncertainties.
+            joint_cell_cycles = int(self.top_cfg.get("final_joint_cell_cycles", 12))
+            if mode == "tof" and accepted and joint_cell_cycles > 0:
+                with bench.block("Stage 5: Final joint-cell refinement"):
+                    joint_final = str(Path(joint_dir) / "seq_final_joint_polished.gpx")
+                    try:
+                        fractions_joint, rwp_joint = joint_refine_polish(
+                            base_gpx=kept_gpx, out_gpx=joint_final,
+                            main_phase_name=main_phase_name,
+                            max_polish_cycles=joint_cell_cycles,
+                            refine_cell_for_all=True, refine_background=True,
+                            target_phase_names=[main_phase_name, *accepted],
+                            polish_strategy="legacy", refine_main_cell=True,
+                            refine_existing_cells=True, stabilization_cycles=0,
+                        )
+                        kept_gpx, kept_rwp, fractions_kept = joint_final, float(rwp_joint), fractions_joint
+                        self.manifest.add_artifact(kept_gpx)
+                    except Exception as exc:
+                        print(f"[WARN] Final joint-cell refinement failed; retaining the accepted model: {exc}")
+
             # --------------------------------------------------------------------
             # FINAL SUMMARY & CSV
             # --------------------------------------------------------------------

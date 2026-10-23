@@ -38,6 +38,14 @@ def test_phase_display_label_removes_internal_custom_catalog_id() -> None:
     assert phase_display_label(phase_id, label) == "Al0.5V0.5Fe1 - Pm-3m (221)"
 
 
+def test_candidate_cell_rejects_drift_and_worse_scores():
+    before = [4.8, 4.8, 13.0, 90, 90, 120]
+    assert refiner_mod.candidate_cell_rejection(before, [5.7, 5.7, 15.5, 90, 90, 120], .59, .60) == "cell_length_out_of_bounds"
+    assert refiner_mod.candidate_cell_rejection(before, before, .59, .58) == "score_did_not_improve"
+    assert refiner_mod.candidate_cell_rejection(before, [4.81, 4.81, 13.02, 90, 90, 120], .59, .60) == ""
+    assert refiner_mod.candidate_cell_rejection(before, [4.8, 4.8, 13, 10, 10, 170], .59, .60) == "invalid_metric"
+
+
 class _FakeProject:
     def __init__(self, behavior):
         self.behavior = list(behavior)

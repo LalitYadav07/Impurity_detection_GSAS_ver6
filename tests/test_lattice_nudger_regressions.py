@@ -23,10 +23,17 @@ from scripts.lattice_nudger import (
     _lattice_constraint_violations,
     _pack_vector_from_lattice,
     infer_constraints,
+    bootstrap_fraction_window,
 )
 
 
 class Stage4WorkerPolicyTests(unittest.TestCase):
+    def test_bootstrap_percent_conversion_is_unambiguous(self):
+        for percent in (0, 0.6, 1.0, 2.0, 10.0):
+            self.assertAlmostEqual(bootstrap_fraction_window({"len_tol_pct": percent}), percent / 100)
+        self.assertEqual(bootstrap_fraction_window({"frac_window": .025}), .025)
+        self.assertEqual(bootstrap_fraction_window({"len_tol_pct": .6, "frac_window": .6}), .006)
+
     def test_stage4_seed_defaults_to_deterministic_zero(self):
         nudger = LatticeNudger.__new__(LatticeNudger)
         LatticeNudger.__init__(nudger, db_loader=None, radiation="neutron")

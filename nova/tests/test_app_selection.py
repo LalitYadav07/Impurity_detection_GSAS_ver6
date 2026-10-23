@@ -1212,7 +1212,7 @@ def test_powgen_preflight_passes_uploaded_instrument_profile_to_resolution(
 
     monkeypatch.setattr("radar_pd_nova.app.preflight_powgen_experiment", fake_preflight)
 
-    assert app.check_powgen_experiment() is True
+    assert asyncio.run(app.check_powgen_experiment()) is True
     assert captured["instrument_profile_name"] == "2011A_bank2.instprm"
     assert state.powgen_instrument_label == "2011A_bank2.instprm"
     assert state.powgen_preflight_ready is True
@@ -1717,3 +1717,31 @@ def test_facility_ipts_dropdown_payload_is_normalized_before_refresh() -> None:
 def test_selected_value_normalizes_serialized_option_payloads() -> None:
     assert RadarPdNovaApp._selected_value("{'title': 'HB2A', 'value': 'HB2A'}") == "HB2A"
     assert RadarPdNovaApp._selected_value('[{"title": "IPTS-1", "value": "IPTS-1"}]') == "IPTS-1"
+
+
+def test_powgen_preflight_runs_off_thread_and_discards_changed_selection(monkeypatch):
+    app = RadarPdNovaApp.__new__(RadarPdNovaApp)
+    state = _State(powgen_ipts="IPTS-2767", powgen_configuration_dataset_id="config-hda",
+                   powgen_backfill_mode="all", powgen_instrument_source="automatic",
+                   powgen_main_cif_source="none", powgen_wavelength="",
+                   powgen_preflight_ready=False)
+    app.server = SimpleNamespace(state=state)
+    app.service = SimpleNamespace(load_configuration_dataset=lambda _: AnalysisConfig(sample_elements=["Al","Mg","O"]))
+    app._set_powgen_configuration_preview = lambda *_: None
+    started, release = threading.Event(), threading.Event()
+    def inspect(*args, **kwargs):
+        started.set()
+        assert release.wait(5)
+        return {"ready":True}
+    monkeypatch.setattr("radar_pd_nova.app.preflight_powgen_experiment", inspect)
+    async def check():
+        task = asyncio.create_task(app.check_powgen_experiment())
+        assert await asyncio.to_thread(started.wait, 5)
+        assert state.powgen_preflight_status == "checking"
+        assert await app.check_powgen_experiment() is False
+        state.powgen_wavelength = "0.8"
+        release.set()
+        assert await task is False
+        assert state.powgen_preflight_ready is False
+        assert "Inputs changed" in state.powgen_preflight_message
+    asyncio.run(check())

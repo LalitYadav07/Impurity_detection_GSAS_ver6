@@ -65,7 +65,7 @@ def test_setup_panels_and_uploads_have_single_stable_instances() -> None:
     assert "{{ radiation === 'neutron' ? '11' : '10' }}" in template
     assert app.server.state.powgen_wavelength == ""
     assert app.server.state.powgen_wavelength_options[0] == {
-        "title": "Auto-detect from latest scan (recommended)",
+        "title": "Auto-detect separately for each run (recommended)",
         "value": "",
     }
     assert "!powgen_wavelength" not in template
@@ -165,7 +165,7 @@ def test_all_numeric_fields_ignore_mouse_wheel_changes() -> None:
     ]
 
     assert number_fields
-    assert len(number_fields) == 37
+    assert len(number_fields) == 38
     assert all('type="text"' in field for field in number_fields)
     assert 'type="number"' not in app.layout.html
 
@@ -174,7 +174,7 @@ def test_plotly_canvases_have_nonzero_layout_frames() -> None:
     app = RadarPdNovaApp()
     template = app.layout.html
 
-    assert template.count('class="radar-plot-frame"') == 4
+    assert template.count('class="radar-plot-frame"') == 5
     assert ".radar-plot-frame { position: relative; width: 100%; height: 720px;" in app._css()
     assert "Plotly.Plots.resize" in template
     assert "window.Plotly && window.Plotly.Plots.resize" in template

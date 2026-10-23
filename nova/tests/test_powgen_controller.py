@@ -14,6 +14,23 @@ from radar_pd_nova.powgen_controller import (
 from radar_pd_nova import powgen_controller
 
 
+@pytest.fixture(autouse=True)
+def isolated_reduced_metadata(monkeypatch):
+    """Controller lifecycle tests use an in-memory source; real parsing/staging
+    and multibank submission are exercised in test_powgen_setup.py."""
+    from radar_pd_nova.powgen_setup import ReducedSetup, ReducedBank
+    import re
+    def inspect(path):
+        run = int(re.search(r"PG3_(\d+)", str(path))[1])
+        return ReducedSetup(run, 1.5, 60, -54,
+            (ReducedBank(2, 2, 2, "SLOG", "FXYE", "BANK 2 2 2 SLOG 1 2 .01 0 FXYE"),),
+            ("/SNS/PG3/shared/CALIBRATION/2026-2_11A_CAL/PG3_PAC.h5",), (), (),
+            "2026-2_11A_CAL", "HR", (10, 1))
+    monkeypatch.setattr(powgen_controller, "inspect_reduced_setup", inspect)
+    monkeypatch.setattr(PowgenWatchController, "_setup", lambda self, run: inspect(run.source_path))
+    monkeypatch.setattr(powgen_controller, "stage_bank", lambda source, setup, bank, profile, dest: (source, profile.path))
+
+
 class FakeGalaxyService:
     history_id = "history-1"
 
@@ -405,7 +422,7 @@ def test_preflight_detects_latest_scan_wavelength_and_packaged_profile(monkeypat
         },
     )
 
-    result = preflight_powgen_experiment("IPTS-38000", requested_wavelength="0.8")
+    result = preflight_powgen_experiment("IPTS-38000")
 
     assert result["ready"] is True
     assert result["scan_count"] == 2
@@ -433,8 +450,8 @@ def test_preflight_accepts_user_profile_when_cycle_is_not_packaged(monkeypatch) 
     )
     monkeypatch.setattr(
         powgen_controller,
-        "resolve_powgen_profile",
-        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("packaged lookup was used")),
+        "resolve_bank_profile",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("packaged lookup was used")),
     )
 
     result = preflight_powgen_experiment(

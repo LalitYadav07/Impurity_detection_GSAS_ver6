@@ -170,6 +170,7 @@ class AnalysisConfig(BaseModel):
     full_nudge_representatives: int = Field(default=50, ge=1)
     full_compare_candidates: int = Field(default=2, ge=1)
     full_compare_cycles: int = Field(default=6, ge=1)
+    full_final_joint_cell_cycles: int = Field(default=12, ge=0, le=50)
     full_cell_length_tolerance_pct: float = Field(default=1.0, gt=0)
     full_cell_angle_tolerance_deg: float = Field(default=3.0, gt=0)
     full_rwp_improvement_threshold: float = Field(default=0.06, ge=0)
@@ -298,6 +299,7 @@ class AnalysisConfig(BaseModel):
                 "nudge_representatives": self.full_nudge_representatives,
                 "compare_candidates": self.full_compare_candidates,
                 "compare_cycles": self.full_compare_cycles,
+                "final_joint_cell_cycles": self.full_final_joint_cell_cycles,
                 "rwp_improvement_threshold": self.full_rwp_improvement_threshold,
                 "dedup_threshold": self.full_dedup_threshold,
                 "score_q_max": self.full_score_q_max,
@@ -417,6 +419,7 @@ class RunRecord(BaseModel):
     submission: SubmissionProgress | None = None
     idempotency_token: str | None = None
     prepared_dataset_ids: dict[str, str] = Field(default_factory=dict)
+    provenance: dict[str, Any] = Field(default_factory=dict)
     cancel_requested: bool = False
     cache_manifest: CacheManifest | None = None
     recovery_diagnostics: list[str] = Field(default_factory=list)

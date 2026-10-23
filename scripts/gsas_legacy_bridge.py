@@ -956,7 +956,7 @@ def stage0_bootstrap_no_cif(
     logger.info(f"[stage0] sending top-{len(phase_ids)} to nudger: {phase_ids}")
 
     # 7) Nudger
-    from lattice_nudger import LatticeNudger
+    from lattice_nudger import LatticeNudger, bootstrap_fraction_window
     nudger = LatticeNudger(
         db_loader,
         wavelength_ang=s4_cfg["wavelength"],
@@ -966,7 +966,9 @@ def stage0_bootstrap_no_cif(
         phase_ids, Q, residual_Q,
         reps=s4_cfg.get("reps", 50),
         samples=s4_cfg.get("samples", 5000),
-        frac_window=s4_cfg.get("len_tol_pct", s4_cfg.get("frac_window", 1.0)),
+        # optimize_many accepts a fraction for values <= 1. A percent such as
+        # 0.6 must become 0.006 here, otherwise bootstrap permits 60% drift.
+        frac_window=bootstrap_fraction_window(s4_cfg),
         angle_window_deg=s4_cfg.get("ang_tol_deg", s4_cfg.get("angle_window_deg", 3.0)),
         out_cif_dir=models_refined_dir,
     )

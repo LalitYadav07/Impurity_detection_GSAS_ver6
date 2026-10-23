@@ -1268,6 +1268,9 @@ def curate_rapid_rows(stage: str, rows: Iterable[dict[str, Any]], *, limit: int 
 
 
 def _best_rwp(result: dict[str, Any]) -> float | None:
+    final = _as_float(result.get("final_rwp"))
+    if final is not None:
+        return final
     candidates: list[float] = []
     for row in result.get("hypotheses") or []:
         if not isinstance(row, dict):
@@ -1336,6 +1339,9 @@ def experiment_scan_summary(result: dict[str, Any]) -> dict[str, Any]:
         "rwp": round(best_rwp, 6) if best_rwp is not None else None,
         "elapsed_seconds": round(elapsed, 3) if elapsed is not None else None,
         "phases": phases,
+        "lattice_parameters": [dict(row) for row in result.get("lattice_parameters", []) if isinstance(row, dict)],
+        "scientific_status": str(result.get("scientific_status") or "not_assessed"),
+        "scientific_warnings": [str(w.get("message") or w) if isinstance(w, dict) else str(w) for w in result.get("warnings", [])],
         "hypothesis": " + ".join(
             f"{row['phase']} (SG {row['space_group']})" if row["space_group"] != "-" else row["phase"]
             for row in phases
@@ -1368,6 +1374,36 @@ def experiment_phase_labels(scans: list[dict[str, Any]]) -> list[str]:
             label,
         ),
     )
+
+
+def experiment_lattice_figure(scans: list[dict[str, Any]], *, parameter="a", x_key="run_number"):
+    """Plot independent phase/bank/sample series with covariance ESD error bars."""
+    import plotly.graph_objects as go
+    if parameter not in {"a", "b", "c", "alpha", "beta", "gamma", "volume"}:
+        parameter = "a"
+    ordered = sorted(scans, key=lambda r: int(r.get("run_number") or 0))
+    xs, title, axis_type = _experiment_axis(ordered, x_key)
+    groups = {}
+    for scan, x in zip(ordered, xs):
+        for row in scan.get("lattice_parameters") or []:
+            value = _as_float(row.get(parameter))
+            if value is None:
+                continue
+            sample = experiment_sample_identity(scan)
+            key = (str(row.get("phase") or row.get("phase_id")), scan.get("bank"), sample["key"])
+            groups.setdefault(key, []).append((x, value, _as_float(row.get(parameter + "_esd")), str(scan.get("run_id") or "")))
+    figure = go.Figure()
+    for (phase, bank, sample), points in groups.items():
+        figure.add_trace(go.Scatter(x=[p[0] for p in points], y=[p[1] for p in points],
+            error_y={"type": "data", "array": [p[2] for p in points], "visible": True},
+            text=[p[3] for p in points], mode="markers", connectgaps=False,
+            name=f"{phase} · Bank {bank or '?'} · {sample}",
+            hovertemplate="%{text}<br>%{y:.7g}<extra>%{fullData.name}</extra>"))
+    unit = "Å³" if parameter == "volume" else "°" if parameter in {"alpha", "beta", "gamma"} else "Å"
+    figure.update_layout(template="plotly_white", xaxis={"title": title, "type": axis_type},
+        yaxis_title=f"{parameter} ({unit})", margin={"l": 65, "r": 20, "t": 25, "b": 55},
+        legend={"orientation": "h"})
+    return figure
 
 
 def _metadata_metric(scan: dict[str, Any], key: str) -> float | None:
@@ -1495,6 +1531,19 @@ def experiment_phase_fraction_figure(
 ) -> go.Figure:
     """Interactive phase-fraction trend with a deliberately bounded trace set."""
 
+    banks = {row.get("bank") for row in scans}
+    if len(banks) > 1:
+        combined = None
+        for bank in sorted(banks, key=lambda b: (b is None, b or 0)):
+            part = experiment_phase_fraction_figure([r for r in scans if r.get("bank") == bank],
+                selected_labels=selected_labels, x_key=x_key)
+            if combined is None:
+                combined = go.Figure(layout=part.layout)
+            for trace in part.data:
+                trace.name = f"{trace.name} · Bank {bank if bank is not None else 'unspecified'}"
+                trace.legendgroup = trace.name
+                combined.add_trace(trace)
+        return combined
     figure = go.Figure()
     ordered = sorted(scans, key=lambda row: int(row.get("run_number") or 0))
     ranked_labels = experiment_phase_labels(ordered)
@@ -1596,6 +1645,9 @@ def experiment_phase_heatmap_figure(
 ) -> go.Figure:
     """Compact scan-by-phase map that remains truthful on irregular axes."""
 
+    if len({row.get("bank") for row in scans}) > 1:
+        scans = [{**row, "phases": [{**phase, "label": f"{phase.get('label')} · Bank {row.get('bank', 'unspecified')}"}
+                  for phase in row.get("phases", [])]} for row in scans]
     ordered = sorted(scans, key=lambda row: int(row.get("run_number") or 0))
     if x_key in _EXPERIMENT_METRIC_TITLES:
         # Heatmap cells use adjacent x values to determine their widths. Keep
@@ -1700,6 +1752,12 @@ def experiment_fit_diagnostics(scans: list[dict[str, Any]]) -> dict[str, dict[st
     different instruments, samples, and acquisition conditions.
     """
 
+    banks = {row.get("bank") for row in scans}
+    if len(banks) > 1:
+        result = {}
+        for bank in banks:
+            result.update(experiment_fit_diagnostics([row for row in scans if row.get("bank") == bank]))
+        return result
     usable = [row for row in scans if _as_float(row.get("rwp")) is not None]
     if not usable:
         return {}
@@ -1735,6 +1793,18 @@ def experiment_fit_quality_figure(
 ) -> go.Figure:
     """Interactive Rwp trend for completed scans."""
 
+    banks = {row.get("bank") for row in scans}
+    if len(banks) > 1:
+        combined = None
+        for bank in sorted(banks, key=lambda b: (b is None, b or 0)):
+            part = experiment_fit_quality_figure([r for r in scans if r.get("bank") == bank], x_key=x_key)
+            if combined is None:
+                combined = go.Figure(layout=part.layout)
+            for trace in part.data:
+                trace.name = f"{trace.name} · Bank {bank if bank is not None else 'unspecified'}"
+                trace.showlegend = True
+                combined.add_trace(trace)
+        return combined
     ordered = sorted(
         [row for row in scans if _as_float(row.get("rwp")) is not None],
         key=lambda row: int(row.get("run_number") or 0),

@@ -39,6 +39,7 @@ pip-wheel-metadata/
 !/docs/VALIDATION_CHECKLIST.md
 !/docs/ndip_container.md
 !/docs/ndip_integration.md
+!/docs/powgen_profile_resolution.md
 !/docs/user_manual/
 !/docs/user_manual/**
 /docs/user_manual/dist/*

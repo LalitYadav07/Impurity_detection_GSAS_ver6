@@ -475,6 +475,7 @@ def _materialize_contract_config(
             "lattice_tiebreak_score_tol": float(full.get("lattice_tiebreak_score_tol", 0.0005)),
             "pearson_cell_refine_min_r": float(full.get("pearson_cell_min_r", 0.50)),
         },
+        "final_joint_cell_cycles": max(0, min(50, int(full.get("final_joint_cell_cycles", 12)))),
         "db_source": radiation,
     }
     reference_exclusions = dict(pattern.get("reference_phase_exclusions") or {})

@@ -120,10 +120,15 @@ class WatchedRun:
     next_retry_utc: str | None = None
     scan_metadata: Mapping[str, Any] = field(default_factory=dict)
     scientific_summary: Mapping[str, Any] = field(default_factory=dict)
+    bank: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.bank is not None and (isinstance(self.bank, bool) or not isinstance(self.bank, int) or self.bank <= 0):
+            raise ValueError("POWGEN bank must be a positive integer")
 
     @property
     def run_id(self) -> str:
-        return f"PG3_{self.run_number}"
+        return f"PG3_{self.run_number}" + (f"_BANK{self.bank}" if self.bank is not None else "")
 
     @property
     def result_dataset_ids(self) -> tuple[str, ...]:
@@ -144,6 +149,7 @@ class WatchedRun:
             run_number=int(value["run_number"]),
             source_path=str(value["source_path"]),
             fingerprint=str(value["fingerprint"]),
+            bank=value.get("bank"),
             discovered_utc=str(value.get("discovered_utc") or _utc_now()),
             galaxy_job_id=(str(value["galaxy_job_id"]) if value.get("galaxy_job_id") else None),
             galaxy_result_ids=tuple(str(item) for item in value.get("galaxy_result_ids", ())),

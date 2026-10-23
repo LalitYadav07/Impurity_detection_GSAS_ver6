@@ -75,7 +75,8 @@
         "nudge_samples": {"type": "integer", "minimum": 1},
         "nudge_representatives": {"type": "integer", "minimum": 1},
         "compare_candidates": {"type": "integer", "minimum": 1},
-        "compare_cycles": {"type": "integer", "minimum": 1}
+        "compare_cycles": {"type": "integer", "minimum": 1},
+        "final_joint_cell_cycles": {"type": "integer", "minimum": 0, "maximum": 50}
       }
     },
     "rapid": {

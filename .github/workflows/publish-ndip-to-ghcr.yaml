@@ -58,6 +58,23 @@ jobs:
           cache-from: type=registry,ref=${{ env.IMAGE_NAME }}:ndip-buildcache
           cache-to: type=registry,ref=${{ env.IMAGE_NAME }}:ndip-buildcache,mode=max
 
+      - name: Check scientific contracts in the built image
+        shell: bash
+        run: |
+          docker run --rm --entrypoint python "${IMAGE_NAME}:ndip-${GITHUB_SHA}" -c '
+          from lattice_nudger import bootstrap_fraction_window
+          from gsas_main_phase_refiner import candidate_cell_rejection
+          from ndip_lattice import lattice_quality
+          from GSASII import GSASIIscriptable
+          assert bootstrap_fraction_window({"len_tol_pct": 0.6}) == 0.006
+          cell = [4.8, 4.8, 13., 90., 90., 120.]
+          assert candidate_cell_rejection(cell, [5.7, 5.7, 15.5, 90., 90., 120.], .59, .60)
+          assert candidate_cell_rejection(cell, cell, .59, .58)
+          assert not candidate_cell_rejection(cell, cell, .59, .60)
+          assert lattice_quality([]) == []
+          print("Scientific contract checks passed")
+          '
+
       - name: Push Docker schema v2 manifests
         shell: bash
         run: |

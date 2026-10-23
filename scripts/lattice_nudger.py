@@ -108,6 +108,16 @@ DEFAULT_LATTICE_TIEBREAK_SCORE_TOL = float(
 DEFAULT_STAGE4_SEED = int(os.environ.get("STAGE4_SEED", "0"))
 DEFAULT_FWHM_Q = float(os.environ.get("STAGE4_FWHM_Q", 0.03))  # Å^-1 peak width in Q
 
+
+def bootstrap_fraction_window(config: Dict) -> float:
+    """Translate the explicitly percent-valued bootstrap setting exactly once."""
+    if config.get("len_tol_pct") is not None:
+        percent = float(config["len_tol_pct"])
+        if not math.isfinite(percent) or not 0 <= percent <= 100:
+            raise ValueError("Lattice length tolerance must be between 0 and 100 percent")
+        return percent / 100.0
+    return float(config.get("frac_window", 0.01))
+
 # Debug / Strategy
 _DEBUG = bool(int(os.environ.get("STAGE4_DEBUG", "0")))
 _QWIN_PCT = float(os.environ.get("STAGE4_QWIN_PCT", "20.0"))     # ±percent window per HKL Q

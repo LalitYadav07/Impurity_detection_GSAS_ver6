@@ -5,6 +5,8 @@ from __future__ import annotations
 import ast
 import asyncio
 import json
+import csv
+import io
 import os
 import re
 import tempfile
@@ -60,6 +62,7 @@ from .results import (
     experiment_phase_labels,
     experiment_phase_fraction_figure,
     experiment_phase_heatmap_figure,
+    experiment_lattice_figure,
     experiment_sample_identity,
     figure_for_payload,
     load_plot_with_fallback,
@@ -125,6 +128,7 @@ _SUBMISSION_FIELDS = (
     "full_max_passes", "full_min_phase_percent", "full_top_n_ml", "full_nudge_candidates", "full_nudge_samples",
     "full_nudge_representatives", "full_compare_candidates", "full_compare_cycles",
     "full_cell_length_tolerance_pct", "full_cell_angle_tolerance_deg", "full_rwp_improvement_threshold",
+    "full_final_joint_cell_cycles",
     "full_dedup_threshold", "full_score_q_max", "full_pearson_cell_min_r",
     "full_lattice_tiebreak_score_tol", "full_candidate_pruning", "full_knee_min_points_hist",
     "full_knee_min_relative_span", "full_knee_keep_if_no_knee", "full_knee_keep_at_most",
@@ -198,6 +202,15 @@ def _optional_float(value: Any) -> float | None:
     return float(value)
 
 
+def _powgen_bank_number(run: Any) -> int | None:
+    return getattr(run, "bank", None) or (getattr(run, "scan_metadata", None) or {}).get("source_bank")
+
+
+def _powgen_scan_label(run: Any) -> str:
+    bank = _powgen_bank_number(run)
+    return f"{run.run_number} · Bank {bank}" if bank else str(run.run_number)
+
+
 def _powgen_submission_error_summary(value: Any) -> str:
     """Return a concise, non-HTML explanation for a watcher submission error."""
 
@@ -254,6 +267,7 @@ class RadarPdNovaApp(ThemedApp):
         self._powgen_phase_widget: Any | None = None
         self._powgen_heatmap_widget: Any | None = None
         self._powgen_quality_widget: Any | None = None
+        self._powgen_lattice_widget: Any | None = None
         self._published_checkpoint_ids: dict[tuple[str, str], str] = {}
         self._dataset_label_cache: dict[str, str] = {}
         self._auto_opened_uids: set[str] = set()
@@ -266,7 +280,8 @@ class RadarPdNovaApp(ThemedApp):
         self.server.state.change("facility_instrument")(self._facility_instrument_changed)
         self.server.state.change("facility_ipts")(self._facility_ipts_changed)
         self.server.state.change("powgen_ipts")(self._powgen_ipts_changed)
-        self.server.state.change("powgen_processing_scope", "powgen_processing_sample_ids")(self._powgen_processing_changed)
+        self.server.state.change("powgen_source_subfolder")(self._powgen_source_changed)
+        self.server.state.change("powgen_processing_scope", "powgen_processing_sample_ids", "powgen_bank_scope", "powgen_processing_banks", "powgen_wavelength", "powgen_backfill_mode", "powgen_excluded_runs", "powgen_include_background", "powgen_include_ramps")(self._powgen_processing_changed)
         self.server.state.change("remote_source")(self._remote_source_changed)
         self.create_ui()
         self.server.controller.on_server_ready.add(self._recover_runs)
@@ -360,6 +375,7 @@ class RadarPdNovaApp(ThemedApp):
         state.full_nudge_representatives = 50
         state.full_compare_candidates = 2
         state.full_compare_cycles = 6
+        state.full_final_joint_cell_cycles = 12
         state.full_cell_length_tolerance_pct = 1.0
         state.full_cell_angle_tolerance_deg = 3.0
         state.full_rwp_improvement_threshold = 0.06
@@ -555,12 +571,17 @@ class RadarPdNovaApp(ThemedApp):
             {"title": "New scans only", "value": "new_only"},
             {"title": "All existing scans, then new scans", "value": "all"},
         ]
+        state.powgen_source_subfolder = "shared/autoreduce"
+        state.powgen_source_options = [{"title": "Current autoreduce folder", "value": "shared/autoreduce"}]
+        state.powgen_bank_scope = "all"
+        state.powgen_processing_banks = []
+        state.powgen_bank_options = []
         state.powgen_wavelength = ""
         state.powgen_wavelength_options = [
-            {"title": "Auto-detect from latest scan (recommended)", "value": ""},
-            {"title": "0.8 A (Bank 1)", "value": "0.8"},
-            {"title": "1.5 A (Bank 2)", "value": "1.5"},
-            {"title": "2.665 A (Bank 3)", "value": "2.665"},
+            {"title": "Auto-detect separately for each run (recommended)", "value": ""},
+            {"title": "Require 0.8 A for every selected run", "value": "0.8"},
+            {"title": "Require 1.5 A for every selected run", "value": "1.5"},
+            {"title": "Require 2.665 A for every selected run", "value": "2.665"},
         ]
         state.powgen_instrument_source = "automatic"
         state.powgen_instrument_source_options = [
@@ -595,12 +616,18 @@ class RadarPdNovaApp(ThemedApp):
             {"title": "Only selected sample IDs", "value": "selected"},
         ]
         state.powgen_processing_sample_ids = []
+        state.powgen_run_options = []
+        state.powgen_excluded_runs = []
+        state.powgen_include_background = False
+        state.powgen_include_ramps = False
         state.powgen_discovered_sample_options = []
         state.powgen_sample_discovery_ipts = ""
         state.powgen_sample_loading = False
         state.powgen_sample_message = "Enter an IPTS to discover its sample IDs and names."
         state.powgen_rows = []
         state.powgen_scientific_rows = []
+        state.powgen_lattice_parameter = "a"
+        state.powgen_selected_lattice = []
         state.powgen_all_scientific_rows = []
         state.powgen_dashboard_metrics = []
         state.powgen_latest_phases = []
@@ -1191,6 +1218,13 @@ class RadarPdNovaApp(ThemedApp):
                         persistent_hint=True,
                         blur=self.refresh_powgen_samples,
                     )
+                    vuetify.VSelect(
+                        label="Reduction data folder", v_model=("powgen_source_subfolder",),
+                        items=("powgen_source_options",), item_title="title", item_value="value",
+                        density="compact", variant="outlined", disabled=("powgen_monitoring || powgen_sample_loading",),
+                        hint="Refresh sample IDs to find archived cycle folders. Choose one folder to avoid mixing reprocessed copies of a run.",
+                        persistent_hint=True,
+                    )
                     vuetify.VBtn(
                         "Refresh sample IDs",
                         click=self.refresh_powgen_samples,
@@ -1228,6 +1262,37 @@ class RadarPdNovaApp(ThemedApp):
                         hint="This limit applies after sample selection. Every later matching scan is still monitored.",
                         persistent_hint=True,
                     )
+                    vuetify.VSwitch(
+                        label="Include scans labeled background or empty", v_model=("powgen_include_background",),
+                        disabled=("powgen_monitoring",), density="compact", hide_details=True,
+                    )
+                    vuetify.VSwitch(
+                        label="Include scans labeled ramp or cooling", v_model=("powgen_include_ramps",),
+                        disabled=("powgen_monitoring",), density="compact", hide_details=True,
+                    )
+                    vuetify.VAutocomplete(
+                        label="Review run titles / exclude individual runs", v_model=("powgen_excluded_runs",),
+                        items=("powgen_run_options.filter(r => powgen_processing_scope === 'all' || powgen_processing_sample_ids.includes(r.sample_id))",),
+                        item_title="title", item_value="value", multiple=True, chips=True, closable_chips=True,
+                        density="compact", variant="outlined", disabled=("powgen_monitoring",),
+                        hint="Selected entries are excluded. Role hints use run titles only; unclassified scans stay included. Review titles before starting.",
+                        persistent_hint=True,
+                    )
+                    vuetify.VSelect(
+                        label="Diffraction banks to process", v_model=("powgen_bank_scope",),
+                        items=([{"title": "All banks, separate analyses", "value": "all"},
+                                {"title": "Only selected banks", "value": "selected"}],),
+                        item_title="title", item_value="value", density="compact", variant="outlined",
+                        disabled=("powgen_monitoring",),
+                    )
+                    vuetify.VSelect(
+                        v_show="powgen_bank_scope === 'selected'", label="Bank selection",
+                        v_model=("powgen_processing_banks",), items=("powgen_bank_options",),
+                        item_title="title", item_value="value", multiple=True, chips=True,
+                        density="compact", variant="outlined", disabled=("powgen_monitoring",),
+                        hint="Check the experiment with All banks first to discover bank IDs. Each selected bank gets its own analysis.",
+                        persistent_hint=True,
+                    )
                     vuetify.VSelect(
                         label="POWGEN wavelength",
                         v_model=("powgen_wavelength",),
@@ -1237,7 +1302,7 @@ class RadarPdNovaApp(ThemedApp):
                         density="compact",
                         variant="outlined",
                         disabled=("powgen_monitoring",),
-                        hint="Auto-detect is recommended. The three explicit choices are the supported POWGEN bank/wavelength modes.",
+                        hint="Automatic detection uses each file’s recorded wavelength, frequency, calibration cycle and bank. An explicit wavelength must agree with every selected run.",
                         persistent_hint=True,
                     )
                     with html.Div(
@@ -2221,6 +2286,7 @@ class RadarPdNovaApp(ThemedApp):
                                 ("Nudge representatives", "full_nudge_representatives"),
                                 ("Comparison candidates", "full_compare_candidates"),
                                 ("Comparison cycles", "full_compare_cycles"),
+                                ("Final joint-cell cycles (TOF; 0 disables)", "full_final_joint_cell_cycles"),
                                 ("Cell length tolerance %", "full_cell_length_tolerance_pct"),
                                 ("Cell angle tolerance (deg)", "full_cell_angle_tolerance_deg"),
                                 ("Minimum Rwp improvement", "full_rwp_improvement_threshold"),
@@ -2505,7 +2571,7 @@ class RadarPdNovaApp(ThemedApp):
         with html.Div(classes="radar-experiment-provenance mb-3"):
             html.Span("Configuration: {{ powgen_configuration_label }}")
             html.Span("Candidate library: {{ powgen_database_label }}")
-            html.Span("Wavelength: {{ powgen_wavelength }} A")
+            html.Span("Wavelength: {{ powgen_wavelength || 'Automatic per run' }}")
         vuetify.VAlert(
             text=("powgen_dashboard_notice",),
             type="info",
@@ -2584,12 +2650,22 @@ class RadarPdNovaApp(ThemedApp):
                         html.Div("SCAN RECORD", classes="radar-micro-label")
                         html.H3("Completed analyses")
                 vuetify.VDataTable(
-                    headers=("[{title:'Scan',key:'run_number'},{title:'Sample',key:'sample_label'},{title:'Conditions',key:'conditions_display'},{title:'Rwp',key:'rwp_display'},{title:'Trend check',key:'quality_label'},{title:'Dominant refined phases',key:'phase_summary'},{title:'Runtime',key:'elapsed_display'},{title:'Mode',key:'analysis_mode'}]",),
+                    headers=("[{title:'Scan / bank',key:'scan_label'},{title:'Sample',key:'sample_label'},{title:'Conditions',key:'conditions_display'},{title:'Rwp',key:'rwp_display'},{title:'Trend check',key:'quality_label'},{title:'Dominant refined phases',key:'phase_summary'},{title:'Runtime',key:'elapsed_display'},{title:'Mode',key:'analysis_mode'}]",),
                     items=("powgen_scientific_rows",),
                     density="compact",
                     items_per_page=15,
                     no_data_text="No completed scan summaries are available yet.",
                 )
+            with html.Section(classes="radar-result-card radar-experiment-table-card"):
+                html.H3("Lattice parameters across scans")
+                html.P("Error bars show covariance standard uncertainties when available. Missing uncertainties are not zero. Banks are analyzed independently.", classes="radar-section-help")
+                vuetify.VSelect(label="Lattice parameter", v_model=("powgen_lattice_parameter",),
+                    items=(["a", "b", "c", "alpha", "beta", "gamma", "volume"],), density="compact",
+                    update_modelValue=(self.update_powgen_dashboard_axis, "[]"))
+                with html.Div(classes="radar-plot-frame"):
+                    self._powgen_lattice_widget = plotly.Figure(display_mode_bar=True)
+                vuetify.VBtn("Download lattice series CSV", click=self.download_powgen_lattice,
+                    prepend_icon="mdi-download", variant="outlined", size="small")
             with html.Section(classes="radar-result-card radar-experiment-latest-card"):
                 with html.Div(classes="radar-card-heading"):
                     with html.Div():
@@ -2630,6 +2706,11 @@ class RadarPdNovaApp(ThemedApp):
                             html.Strong("{{ phase.phase }}")
                             html.Span("Space group {{ phase.space_group }}")
                         html.Strong("{{ phase.weight_display }}", classes="radar-phase-weight")
+                vuetify.VAlert(v_if="powgen_selected_scan.scientific_status === 'needs_review'",
+                    text=("(powgen_selected_scan.scientific_warnings || []).join('; ')",), type="warning", variant="tonal")
+                vuetify.VDataTable(items=("powgen_selected_lattice",), density="compact", items_per_page=5,
+                    headers=([{"title": "Phase", "key": "phase"}, *[{"title": k + " ± s.u.", "key": k + "_display"} for k in ("a", "b", "c", "alpha", "beta", "gamma", "volume")]],),
+                    no_data_text="Lattice parameters were not published by this run's batch image.")
                 vuetify.VBtn(
                     "Open full scan result",
                     click=self.open_powgen_selected_run,
@@ -2652,7 +2733,7 @@ class RadarPdNovaApp(ThemedApp):
                     html.H3("Scan processing status")
                     html.P("Updated {{ powgen_last_checked }}", classes="radar-section-help")
             vuetify.VDataTable(
-                headers=("[{title:'Scan',key:'run_number'},{title:'File',key:'file'},{title:'Status',key:'status'},{title:'Current activity',key:'detail'}]",),
+                headers=("[{title:'Scan / bank',key:'scan_label'},{title:'File',key:'file'},{title:'Status',key:'status'},{title:'Current activity',key:'detail'}]",),
                 items=("powgen_rows",),
                 density="compact",
                 items_per_page=10,
@@ -3946,6 +4027,7 @@ class RadarPdNovaApp(ThemedApp):
             "full_nudge_representatives": int(state.full_nudge_representatives),
             "full_compare_candidates": int(state.full_compare_candidates),
             "full_compare_cycles": int(state.full_compare_cycles),
+            "full_final_joint_cell_cycles": int(getattr(state, "full_final_joint_cell_cycles", 12)),
             "full_cell_length_tolerance_pct": float(state.full_cell_length_tolerance_pct),
             "full_cell_angle_tolerance_deg": float(state.full_cell_angle_tolerance_deg),
             "full_rwp_improvement_threshold": float(state.full_rwp_improvement_threshold),
@@ -4145,6 +4227,8 @@ class RadarPdNovaApp(ThemedApp):
                     {
                         "run_id": run_id,
                         "run_number": int(run.run_number),
+                        "bank": _powgen_bank_number(run),
+                        "scan_label": _powgen_scan_label(run),
                         "file": Path(run.source_path).name,
                         "status": status,
                         "color": color,
@@ -4217,6 +4301,7 @@ class RadarPdNovaApp(ThemedApp):
                     f"T {temperature_display}" if temperature_display else "",
                     f"Field {field_display}" if field_display else "",
                     f"lambda {wavelength_display}" if wavelength_display else "",
+                    f"Bank {_powgen_bank_number(run)}" if _powgen_bank_number(run) else "",
                 )
                 if value
             ]
@@ -4227,6 +4312,8 @@ class RadarPdNovaApp(ThemedApp):
                 "run_id": run_id,
                 "record_uid": record.uid if record is not None else "",
                 "run_number": int(run.run_number),
+                "bank": _powgen_bank_number(run),
+                "scan_label": _powgen_scan_label(run),
                 "rwp": rwp_value,
                 "rwp_display": f"{rwp_value:.2f}%" if rwp_value is not None else "-",
                 "phases": projected_phases,
@@ -4256,6 +4343,9 @@ class RadarPdNovaApp(ThemedApp):
                 ),
                 "warning_count": int(summary.get("warning_count") or 0),
                 "error_count": int(summary.get("error_count") or 0),
+                "lattice_parameters": list(summary.get("lattice_parameters") or []),
+                "scientific_status": str(summary.get("scientific_status") or "not_assessed"),
+                "scientific_warnings": list(summary.get("scientific_warnings") or []),
             }
             sample_identity = experiment_sample_identity(row)
             row["sample_key"] = sample_identity["key"]
@@ -4302,6 +4392,9 @@ class RadarPdNovaApp(ThemedApp):
             diagnostic = diagnostics.get(str(row["run_id"]), {})
             row["quality_label"] = str(diagnostic.get("label") or "No Rwp reported")
             row["quality_color"] = str(diagnostic.get("color") or "#64748b")
+            if row.get("scientific_status") == "needs_review":
+                row["quality_label"] = "Needs scientific review"
+                row["quality_color"] = "#b45309"
 
         state.powgen_scientific_rows = scientific_rows
         ranked_phase_labels = experiment_phase_labels(scientific_rows)
@@ -4340,6 +4433,7 @@ class RadarPdNovaApp(ThemedApp):
         state.powgen_selected_quality_label = str((selected or {}).get("quality_label") or "Collecting baseline")
         state.powgen_selected_quality_color = str((selected or {}).get("quality_color") or "#eef2ef")
         state.powgen_selected_phases = list(selected.get("phases") or []) if selected is not None else []
+        state.powgen_selected_lattice = self._powgen_lattice_rows(selected or {})
         state.powgen_tracked_phase_count = len(
             {
                 str(phase.get("label") or "Unknown")
@@ -4425,6 +4519,35 @@ class RadarPdNovaApp(ThemedApp):
             self._powgen_heatmap_widget.update(experiment_phase_heatmap_figure(rows, x_key=x_key))
         if self._powgen_quality_widget is not None:
             self._powgen_quality_widget.update(experiment_fit_quality_figure(rows, x_key=x_key))
+        if getattr(self, "_powgen_lattice_widget", None) is not None:
+            self._powgen_lattice_widget.update(experiment_lattice_figure(rows,
+                parameter=str(self.server.state.powgen_lattice_parameter or "a"), x_key=x_key))
+
+    @staticmethod
+    def _powgen_lattice_rows(scan):
+        rows = []
+        for source in scan.get("lattice_parameters") or []:
+            row = dict(source)
+            for key in ("a", "b", "c", "alpha", "beta", "gamma", "volume"):
+                value, error = row.get(key), row.get(key + "_esd")
+                row[key + "_display"] = (f"{value:.7g}" + (f" ± {error:.2g}" if error is not None else " (s.u. unavailable)")) if value is not None else "—"
+            rows.append(row)
+        return rows
+
+    def download_powgen_lattice(self, **_):
+        rows = []
+        for scan in self.server.state.powgen_scientific_rows or []:
+            for lattice in scan.get("lattice_parameters") or []:
+                rows.append({"run_number": scan["run_number"], "bank": scan.get("bank"),
+                    "sample": scan.get("sample_label"), "temperature": scan.get("temperature_display"),
+                    "rwp": scan.get("rwp"), "scientific_status": scan.get("scientific_status"), **lattice})
+        if not rows:
+            return
+        output = io.StringIO(newline="")
+        writer = csv.DictWriter(output, fieldnames=list(dict.fromkeys(k for row in rows for k in row)))
+        writer.writeheader()
+        writer.writerows(rows)
+        self.download_file("powgen_lattice_series.csv", "text/csv", output.getvalue().encode("utf-8"))
 
     def update_powgen_dashboard_axis(self, value: Any = None, **_: Any) -> None:
         """Redraw experiment trends against scan number or one NeXus condition."""
@@ -4474,6 +4597,7 @@ class RadarPdNovaApp(ThemedApp):
         self.server.state.powgen_selected_quality_label = str((selected or {}).get("quality_label") or "Collecting baseline")
         self.server.state.powgen_selected_quality_color = str((selected or {}).get("quality_color") or "#eef2ef")
         self.server.state.powgen_selected_phases = list(selected.get("phases") or []) if selected is not None else []
+        self.server.state.powgen_selected_lattice = self._powgen_lattice_rows(selected or {})
         self.server.state.flush()
 
     def open_powgen_selected_run(self, **_: Any) -> None:
@@ -4532,8 +4656,17 @@ class RadarPdNovaApp(ThemedApp):
         state = self.server.state
         state.powgen_preflight_ready = False
         state.powgen_preflight_status = "idle"
-        state.powgen_preflight_message = "Check experiment and inputs after changing the sample selection."
+        state.powgen_preflight_message = "Check experiment and inputs after changing the scan, sample, wavelength or bank selection."
         state.flush()
+
+    def _powgen_processing_bank_ids(self) -> tuple[int, ...] | None:
+        state = self.server.state
+        if str(getattr(state, "powgen_bank_scope", "all") or "all") == "all":
+            return None
+        banks = tuple(sorted({int(b) for b in (state.powgen_processing_banks or [])}))
+        if not banks:
+            raise ValueError("Choose at least one diffraction bank, or All banks")
+        return banks
 
     def _powgen_ipts_changed(self, **_: Any) -> None:
         state = self.server.state
@@ -4544,12 +4677,33 @@ class RadarPdNovaApp(ThemedApp):
         if ipts == getattr(self, "_powgen_form_ipts", None):
             return
         self._powgen_form_ipts = ipts
+        state.powgen_source_subfolder = "shared/autoreduce"
+        state.powgen_source_options = [{"title": "Current autoreduce folder", "value": "shared/autoreduce"}]
         self._powgen_sample_request = object()  # Discard a previous IPTS's in-flight discovery.
         state.powgen_sample_loading = False
         state.powgen_sample_discovery_ipts = ""
         state.powgen_discovered_sample_options = []
         state.powgen_processing_sample_ids = []
+        state.powgen_run_options = []
+        state.powgen_excluded_runs = []
         state.powgen_sample_message = "Leave the IPTS field or refresh sample IDs to discover samples."
+        self._powgen_processing_changed()
+
+    def _powgen_source_changed(self, **_: Any) -> None:
+        state = self.server.state
+        folder = str(getattr(state, "powgen_source_subfolder", "shared/autoreduce") or "shared/autoreduce")
+        if folder == getattr(self, "_powgen_form_source", "shared/autoreduce"):
+            return
+        self._powgen_form_source = folder
+        self._powgen_sample_request = object()
+        state.powgen_sample_discovery_ipts = ""
+        state.powgen_discovered_sample_options = []
+        state.powgen_processing_sample_ids = []
+        state.powgen_run_options = []
+        state.powgen_excluded_runs = []
+        state.powgen_bank_options = []
+        state.powgen_processing_banks = []
+        state.powgen_sample_message = "Refresh sample IDs for this reduction folder."
         self._powgen_processing_changed()
 
     def _powgen_sample_index(self, ipts: str) -> PowgenSampleIndex:
@@ -4583,10 +4737,16 @@ class RadarPdNovaApp(ThemedApp):
             state.powgen_sample_loading = True
             state.powgen_sample_message = "Finding sample IDs and names from completed scans…"
             state.flush()
-            result = await asyncio.to_thread(discover_powgen_samples, ipts, self._powgen_sample_index(ipts))
+            folder = str(getattr(state, "powgen_source_subfolder", "shared/autoreduce") or "shared/autoreduce")
+            args = (ipts, self._powgen_sample_index(ipts))
+            if folder != "shared/autoreduce":
+                args += (folder,)
+            result = await asyncio.to_thread(discover_powgen_samples, *args)
             if self._powgen_sample_request is not token:
                 return
+            state.powgen_source_options = result.get("source_options") or getattr(state, "powgen_source_options", [])
             state.powgen_discovered_sample_options = result["options"]
+            state.powgen_run_options = result.get("run_options", [])
             state.powgen_sample_discovery_ipts = ipts
             unknown = int(result["unidentified_count"])
             state.powgen_sample_message = (
@@ -4602,10 +4762,30 @@ class RadarPdNovaApp(ThemedApp):
                 state.powgen_sample_loading = False
                 state.flush()
 
-    def check_powgen_experiment(self, **_: Any) -> bool:
+    def _powgen_preflight_signature(self) -> str:
+        fields = ("powgen_ipts", "powgen_source_subfolder", "powgen_configuration_dataset_id",
+                  "powgen_backfill_mode", "powgen_processing_scope", "powgen_processing_sample_ids",
+                  "powgen_bank_scope", "powgen_processing_banks", "powgen_wavelength",
+                  "powgen_instrument_source", "powgen_instrument_path", "powgen_instrument_dataset_id",
+                  "powgen_main_cif_source", "powgen_main_cif_path", "powgen_main_cif_dataset_id",
+                  "powgen_database_dataset_id")
+        fields += ("powgen_excluded_runs", "powgen_include_background", "powgen_include_ramps")
+        return json.dumps({key: getattr(self.server.state, key, None) for key in fields}, sort_keys=True)
+
+    async def check_powgen_experiment(self, **_: Any) -> bool:
+        if getattr(self, "_powgen_check_running", False):
+            return False
+        self._powgen_check_running = True
+        try:
+            return await self._check_powgen_experiment()
+        finally:
+            self._powgen_check_running = False
+
+    async def _check_powgen_experiment(self) -> bool:
         """Validate a live-monitor setup without writing to the IPTS or submitting jobs."""
 
         state = self.server.state
+        signature = self._powgen_preflight_signature()
         state.powgen_preflight_status = "checking"
         state.powgen_preflight_ready = False
         state.powgen_preflight_checked = "Checking now"
@@ -4619,6 +4799,8 @@ class RadarPdNovaApp(ThemedApp):
             if not configuration_id:
                 raise ValueError("Choose a reusable RADAR-PD configuration")
             configuration = self.service.load_configuration_dataset(configuration_id)
+            if configuration.radiation.value != "neutron" or configuration.instrument_mode == "cw":
+                raise ValueError("POWGEN requires a neutron configuration with automatic or time-of-flight instrument mode")
             self._set_powgen_configuration_preview(configuration_id, configuration)
 
             backfill_mode = str(state.powgen_backfill_mode or "latest_5")
@@ -4666,13 +4848,26 @@ class RadarPdNovaApp(ThemedApp):
             else:
                 main_label = "Not supplied"
 
-            result = preflight_powgen_experiment(
-                ipts,
+            result = await asyncio.to_thread(
+                preflight_powgen_experiment, ipts,
                 requested_wavelength=str(state.powgen_wavelength or ""),
                 instrument_profile_name=instrument_profile_name,
                 selected_sample_ids=self._powgen_processing_ids(),
                 sample_index=self._powgen_sample_index(ipts),
+                selected_banks=self._powgen_processing_bank_ids(),
+                excluded_run_numbers=tuple(int(n) for n in (getattr(state, "powgen_excluded_runs", []) or [])),
+                include_background_runs=bool(getattr(state, "powgen_include_background", False)),
+                include_ramp_runs=bool(getattr(state, "powgen_include_ramps", False)),
+                initial_backfill_limit=_POWGEN_BACKFILL_LIMITS[backfill_mode],
+                subfolder=str(getattr(state, "powgen_source_subfolder", "shared/autoreduce") or "shared/autoreduce"),
             )
+            if signature != self._powgen_preflight_signature():
+                state.powgen_preflight_ready = False
+                state.powgen_preflight_status = "idle"
+                state.powgen_preflight_message = "Inputs changed during the experiment check. Check the current selection again."
+                state.flush()
+                return False
+            state.powgen_bank_options = [{"title": f"Bank {b}", "value": b} for b in result.get("available_banks", [])]
             state.powgen_ipts = ipts
             state.powgen_source_directory = str(result.get("source_directory") or "")
             state.powgen_profile_error = str(result.get("profile_error") or "")
@@ -4682,8 +4877,6 @@ class RadarPdNovaApp(ThemedApp):
                 or "Automatic POWGEN cycle profile"
             )
             detected = str(result.get("detected_wavelength") or "")
-            if detected:
-                state.powgen_wavelength = detected
 
             configuration_label = self._powgen_dataset_label(
                 state.history_configuration_datasets,
@@ -4733,6 +4926,8 @@ class RadarPdNovaApp(ThemedApp):
             state.powgen_preflight_details = [
                 {"label": "Read-only source", "value": state.powgen_source_directory},
                 {"label": "Samples to process", "value": ", ".join(self._powgen_processing_ids() or ()) or "All samples"},
+                {"label": "Run review", "value": f"{result.get('excluded_count', 0)} excluded by role or individual selection; unclassified titles remain included"},
+                {"label": "Bank analyses", "value": f"{result.get('analysis_count', 0)}; banks {result.get('available_banks', [])}; each bank is analyzed separately"},
                 {
                     "label": "Available reductions",
                     "value": f"{result.get('scan_count', 0)} ({scan_range})",
@@ -4798,22 +4993,21 @@ class RadarPdNovaApp(ThemedApp):
         state.flush()
         return bool(state.powgen_preflight_ready)
 
-    def start_powgen_monitoring(self, **_: Any) -> None:
+    async def start_powgen_monitoring(self, **_: Any) -> None:
         """Start one session-scoped read-only POWGEN monitor."""
 
         state = self.server.state
         if state.powgen_monitoring:
             return
         try:
-            if not self.check_powgen_experiment():
+            if not await self.check_powgen_experiment():
                 return
             ipts = self._normalize_powgen_ipts(state.powgen_ipts)
             configuration_id = str(state.powgen_configuration_dataset_id or "").strip()
             wavelength = str(state.powgen_wavelength or "").strip()
             if not configuration_id:
                 raise ValueError("Choose a reusable Galaxy RADAR-PD configuration")
-            if wavelength not in {"0.8", "1.5", "2.665"}:
-                raise ValueError("Choose one of the supported POWGEN wavelengths")
+
             if not self.service.history_id:
                 raise RuntimeError("The active Galaxy History is not available to this NOVA session")
             main_cif_id = self._resolve_powgen_main_cif_id()
@@ -4833,10 +5027,16 @@ class RadarPdNovaApp(ThemedApp):
                 database_dataset_id=database_id,
                 initial_backfill_limit=initial_backfill_limit,
                 selected_sample_ids=self._powgen_processing_ids(),
+                selected_banks=self._powgen_processing_bank_ids(),
+                excluded_run_numbers=tuple(int(n) for n in (getattr(state, "powgen_excluded_runs", []) or [])),
+                include_background_runs=bool(getattr(state, "powgen_include_background", False)),
+                include_ramp_runs=bool(getattr(state, "powgen_include_ramps", False)),
+                subfolder=str(getattr(state, "powgen_source_subfolder", "shared/autoreduce") or "shared/autoreduce"),
             )
             signature = (
                 settings.ipts,
                 settings.history_id,
+                settings.subfolder,
                 settings.configuration_dataset_id,
                 settings.wavelength_angstrom,
                 settings.instrument_profile_dataset_id or "",
@@ -4844,6 +5044,10 @@ class RadarPdNovaApp(ThemedApp):
                 settings.database_dataset_id or "",
                 str(settings.initial_backfill_limit),
                 json.dumps(settings.selected_sample_ids),
+                json.dumps(settings.selected_banks),
+                json.dumps(settings.excluded_run_numbers),
+                str(settings.include_background_runs),
+                str(settings.include_ramp_runs),
             )
             if self._powgen_controller is None or self._powgen_settings_signature != signature:
                 self._powgen_controller = PowgenWatchController(self.service, settings, sample_index=self._powgen_sample_index(ipts))

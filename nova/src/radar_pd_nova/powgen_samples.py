@@ -3,10 +3,43 @@
 from concurrent.futures import ThreadPoolExecutor
 import threading
 import subprocess
+from pathlib import Path
+import re
 from typing import Any, Iterable
 
 from .powgen_metadata import powgen_nexus_path, read_powgen_sample_identity
 from .powgen_watch import WatchedRun
+
+
+def run_role(run: WatchedRun) -> dict[str, str]:
+    """Conservative title hints, shown for review rather than inferred chemistry."""
+    title = ""
+    try:
+        with Path(run.source_path).open(encoding="utf-8", errors="replace") as handle:
+            for _ in range(24):
+                line = handle.readline(4096)
+                if line.startswith("# "):
+                    title = line[2:].strip()
+                    break
+    except OSError:
+        pass
+    text = title.casefold()
+    if re.search(r"\b(empty|background|bkgd|no sample|without sample)\b", text):
+        role = "background"
+    elif re.search(r"\b(ramp(?:ing)?|cool(?:ing)?(?: down| to)?|heat(?:ing)? up)\b", text):
+        role = "ramp"
+    else:
+        role = "unclassified"
+    return {"run_title": title, "run_role": role}
+
+
+def include_run(run: WatchedRun, *, excluded_run_numbers=(), include_background_runs=False,
+                include_ramp_runs=False) -> bool:
+    if run.run_number in excluded_run_numbers:
+        return False
+    role = run_role(run)["run_role"]
+    return ((role != "background" or include_background_runs)
+            and (role != "ramp" or include_ramp_runs))
 
 
 class PowgenSampleIndex:
@@ -56,4 +89,11 @@ class PowgenSampleIndex:
             names = " / ".join(sorted(group["names"])) or "Name not reported"
             options.append({"value": sample_id, "title": f"{sample_id} — {names} ({group['count']} scans)",
                             "scan_count": group["count"]})
-        return {"options": options, "scan_count": len(runs), "unidentified_count": unidentified}
+        run_options = []
+        for run, metadata in zip(runs, identities):
+            role = run_role(run)
+            title = role["run_title"] or "Title not reported"
+            run_options.append({"value": run.run_number, "sample_id": metadata.get("sample_id", ""),
+                                "title": f"{run.run_id} — {role['run_role']}: {title}", **role})
+        return {"options": options, "run_options": run_options,
+                "scan_count": len(runs), "unidentified_count": unidentified}
