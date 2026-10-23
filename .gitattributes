@@ -2,3 +2,7 @@
 
 # POWGEN profile checksums are defined over canonical LF text.
 *.instprm text eol=lf
+
+# Preserve the checksummed, fixed-column facility calibration resources.
+nova/src/radar_pd_nova/data/powgen_calibrations/*.prm -whitespace
+nova/src/radar_pd_nova/data/powgen_calibrations/*.instprm -whitespace
