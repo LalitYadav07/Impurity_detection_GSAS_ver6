@@ -1872,6 +1872,14 @@ def clone_gpx(src_gpx: str, dst_gpx: str) -> None:
     logger.info(f"[clone] {src} -> {dst}")
 
 
+def reject_gpx_checkpoint(path: str) -> None:
+    """Retain a rejected trial for audit without publishing it as accepted."""
+    project=Path(path)
+    for item in (project, project.with_suffix('.lst')):
+        if item.exists():
+            item.replace(item.with_name(item.stem+'.rejected'+item.suffix))
+
+
 def get_hist_and_main_phase(proj, main_phase_name: str):
     hists = proj.histograms()
     if not hists:

@@ -4332,6 +4332,7 @@ class UnifiedPipeline:
                         trace_path=polish_trace,
                     )
 
+                    from gsas_main_phase_refiner import reject_gpx_checkpoint
                     wf_polished = self._phase_weight_fraction(fractions_polished, best_new)
                     if wf_polished is None or wf_polished < float(min_impurity_percent):
                         wf_label = "invalid" if wf_polished is None else f"{wf_polished:.3f}"
@@ -4355,6 +4356,7 @@ class UnifiedPipeline:
                             "reason": "candidate failed commit polish sanity",
                             "wf_polished": wf_polished,
                         })
+                        reject_gpx_checkpoint(polished_gpx)
                         break
 
                     main_guard_hit, main_wf_polished, main_guard_cfg = self._main_phase_guard_violation(
@@ -4396,12 +4398,14 @@ class UnifiedPipeline:
                             "min_main_wf": min_main_wf,
                             "wf_polished": wf_polished,
                         })
+                        reject_gpx_checkpoint(polished_gpx)
                         break
 
                     if not math.isfinite(float(rwp_polished)) or float(rwp_polished) > float(kept_rwp) + 1e-6:
                         print(f"[WARN] [pass {pass_ix}] Rejecting worsened model: Rwp {kept_rwp:.6f}% -> {rwp_polished:.6f}%; keeping last accepted model.")
                         pass_record.update({"status": "stopped", "reason": "Rwp regression", "rwp_rejected": float(rwp_polished)})
                         self.manifest.update_stage(f"Pass {pass_ix}", "complete", {"status": "stopped", "reason": "Rwp regression"})
+                        reject_gpx_checkpoint(polished_gpx)
                         break
                     accepted.append(best_new)
                     kept_gpx = polished_gpx
@@ -4585,6 +4589,8 @@ class UnifiedPipeline:
                                 metrics={"event": "final_main_polish_done", "rwp": float(rwp_final_main)},
                             )
                     except Exception as exc:
+                        from gsas_main_phase_refiner import reject_gpx_checkpoint
+                        reject_gpx_checkpoint(final_main_polished_gpx)
                         print(f"[WARN] Final main-phase polish failed; keeping last accepted model: {type(exc).__name__}: {exc}")
                         if self.emitter:
                             self.emitter.emit(
@@ -4620,6 +4626,8 @@ class UnifiedPipeline:
                         plot_gpx_fit_with_ticks(kept_gpx, final_plot, phase_labels=labels)
                         self.manifest.add_artifact(final_plot)
                     except Exception as exc:
+                        from gsas_main_phase_refiner import reject_gpx_checkpoint
+                        reject_gpx_checkpoint(joint_final)
                         print(f"[WARN] Final joint-cell refinement failed; retaining the accepted model: {exc}")
 
             # --------------------------------------------------------------------

@@ -62,6 +62,15 @@ class _FakeProject:
 
 
 class JointCheckpointTests(unittest.TestCase):
+    def test_rejected_checkpoint_retains_both_project_and_listing_for_audit(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/'final.gpx';path.write_bytes(b'failed model')
+            path.with_suffix('.lst').write_bytes(b'failed fractions')
+            refiner_mod.reject_gpx_checkpoint(str(path))
+            self.assertFalse(path.exists())
+            self.assertEqual((Path(folder)/'final.rejected.gpx').read_bytes(),b'failed model')
+            self.assertEqual((Path(folder)/'final.rejected.lst').read_bytes(),b'failed fractions')
+
     def test_joint_stall_restores_last_good_gpx_and_matching_fraction_listing(self):
         with tempfile.TemporaryDirectory() as folder:
             base=Path(folder)/'base.gpx';out=Path(folder)/'trial.gpx'

@@ -77,7 +77,7 @@ def _flatten_name(path: Path, root: Path) -> str:
 
 def _is_intermediate_file(path: Path) -> bool:
     name = path.name.lower()
-    return any(token in name for token in (".bak", ".temp.", ".checkpoint"))
+    return any(token in name for token in (".bak", ".temp.", ".checkpoint", ".rejected."))
 
 
 def _publish_gpx(path: Path, run_dir: Path) -> bool:
@@ -93,6 +93,7 @@ def _publish_gpx(path: Path, run_dir: Path) -> bool:
     if "gsas_projects" in relative:
         fallback_main_project = name.endswith("_project.gpx") and not any(
             "seq_final_main_polished" in candidate.name.lower()
+            and not _is_intermediate_file(candidate)
             for candidate in path.parent.glob("*.gpx")
         )
         return (

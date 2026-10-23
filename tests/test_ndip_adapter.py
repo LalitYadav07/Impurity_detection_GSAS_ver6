@@ -438,6 +438,22 @@ def test_full_main_only_project_is_published_as_the_main_phase_anchor(tmp_path: 
     assert result["gpx_projects"][0]["status"] == "accepted"
 
 
+def test_rejected_polish_cannot_hide_or_replace_the_retained_handoff(tmp_path: Path) -> None:
+    run=tmp_path/'run';projects=run/'Technical/GSAS_Projects';projects.mkdir(parents=True)
+    (projects/'demo_project.gpx').write_bytes(b'accepted main')
+    (projects/'seq_pass1_kept_polished.gpx').write_bytes(b'accepted phase addition')
+    (projects/'seq_final_main_polished.rejected.gpx').write_bytes(b'rejected main polish')
+    (projects/'seq_final_joint_polished.rejected.gpx').write_bytes(b'rejected final polish')
+    result=collect_outputs(run,tmp_path/'portal',mode='full',run_name='rollback')
+    paths={p['source_path'] for p in result['gpx_projects']}
+    assert len(paths)==2
+    assert any(p.endswith('demo_project.gpx') for p in paths)
+    assert any(p.endswith('seq_pass1_kept_polished.gpx') for p in paths)
+    assert not any('rejected' in p for p in paths)
+    with zipfile.ZipFile(tmp_path/'portal/results.zip') as archive:
+        assert any('seq_final_joint_polished.rejected.gpx' in p for p in archive.namelist())
+
+
 def test_full_polished_main_anchor_supersedes_the_fallback_project(tmp_path: Path) -> None:
     run = tmp_path / "run"
     projects = run / "Technical" / "GSAS_Projects"
