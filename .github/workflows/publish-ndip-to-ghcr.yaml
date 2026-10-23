@@ -65,6 +65,11 @@ jobs:
           from lattice_nudger import bootstrap_fraction_window
           from gsas_main_phase_refiner import candidate_cell_rejection
           from ndip_lattice import lattice_quality
+          from ndip_input_provenance import read_input_provenance, PREFIX
+          from ndip_outputs import collect_outputs
+          from pathlib import Path
+          from tempfile import TemporaryDirectory
+          import json
           from GSASII import GSASIIscriptable
           assert bootstrap_fraction_window({"len_tol_pct": 0.6}) == 0.006
           cell = [4.8, 4.8, 13., 90., 90., 120.]
@@ -72,6 +77,18 @@ jobs:
           assert candidate_cell_rejection(cell, cell, .59, .58)
           assert not candidate_cell_rejection(cell, cell, .59, .60)
           assert lattice_quality([]) == []
+          with TemporaryDirectory() as folder:
+              root = Path(folder)
+              metadata = {"schema": "radar-pd-input-provenance/v1", "instrument": "NOM", "source_bank": 5, "warnings": [{"code": "unverified_nomad_profile", "message": "NOMAD scientific calibration acceptance is pending"}]}
+              source = root / "bank.gsa"
+              source.write_bytes(PREFIX + json.dumps(metadata).encode() + b"\nBANK 1 1 1 SLOG 1 2 .1 0 FXYE\n1 2 3\n")
+              run = root / "run"
+              run.mkdir()
+              (run / "input_provenance.json").write_text(json.dumps(read_input_provenance(source)))
+              result = collect_outputs(run, root / "portal", mode="full", include_archive=False)
+              assert result["scientific_status"] == "needs_review"
+              assert result["provenance"]["input"]["source_bank"] == 5
+              assert "NOMAD scientific calibration acceptance is pending" in (root / "portal/report.html").read_text()
           print("Scientific contract checks passed")
           '
 

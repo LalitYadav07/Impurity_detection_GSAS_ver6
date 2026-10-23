@@ -60,7 +60,7 @@ jobs:
         run: |
           docker run --rm --entrypoint python \
             "${IMAGE_NAME}:nova-${NOVA_VERSION}" \
-            -c 'from importlib.metadata import version; from radar_pd_nova.app import RadarPdNovaApp; actual = version("radar-pd-nova"); assert actual == "'"${NOVA_VERSION}"'", actual; print(actual, RadarPdNovaApp.__name__)'
+            -c 'from importlib.metadata import version; from radar_pd_nova.app import RadarPdNovaApp; from radar_pd_nova.live_beamlines import BEAMLINES; from radar_pd_nova.nomad_controller import NomadExperimentSettings; actual = version("radar-pd-nova"); assert actual == "'"${NOVA_VERSION}"'", actual; assert not BEAMLINES["NOM"].automatic_profiles; assert NomadExperimentSettings("IPTS-1", "h", "c", selected_banks=(5,), profile_bank=1).definition().instrument == "NOM"; print(actual, RadarPdNovaApp.__name__, "NOMAD adapter imports passed")'
           docker run --rm --entrypoint nginx \
             "${IMAGE_NAME}:nova-${NOVA_VERSION}" -t
 
