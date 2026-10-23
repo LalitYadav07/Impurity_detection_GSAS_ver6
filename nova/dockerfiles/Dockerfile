@@ -1,4 +1,6 @@
-FROM savannah.ornl.gov/radar-pd/radar-pd-nova:nova-0.3.2@sha256:657057335458b5484853494ed929470bd0817bf83a4afcb3e0320a026889d7d7
+# Verified NDIP-test runtime from the 0.4.0 release. Application source below
+# replaces the prior package; builds do not require Savannah availability.
+FROM ghcr.io/lalityadav07/impurity_detection_gsas_ver6:nova-78f2dcedcd5eed1db1c0885a47dc47cac18d63e0@sha256:9bd0abb274eec3bfe4a55a01b4beccecf55660afa920be7d4be6e1ef46aa0a5e
 
 USER root
 
