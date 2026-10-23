@@ -1352,8 +1352,13 @@ class LatticeNudger:
                         symprec: float = 1e-3, angle_tolerance: float = 5.0) -> str:
         os.makedirs(out_dir, exist_ok=True)
         path = os.path.join(out_dir, f"{pid}_nudged.cif")
-        # Write CIF via pymatgen
-        structure.to(fmt="cif", filename=path, symprec=symprec, angle_tolerance=angle_tolerance)
+        # Nuclear neutron scattering uses elements, not ionic X-ray form
+        # factors. Fractional oxidation-state labels emitted by pymatgen can
+        # otherwise be misread by GSAS-II as unknown atoms (falling back to H).
+        exported = structure.copy()
+        if self.radiation == "neutron":
+            exported.remove_oxidation_states()
+        exported.to(fmt="cif", filename=path, symprec=symprec, angle_tolerance=angle_tolerance)
         # Enforce a short, GSAS-II-friendly data_ label
         _sanitize_cif_data_block(path, pid, suffix="nudged", maxlen=5)
 

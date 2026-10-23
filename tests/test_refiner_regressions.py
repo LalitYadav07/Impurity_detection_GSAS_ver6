@@ -61,6 +61,39 @@ class _FakeProject:
             print(action)
 
 
+class JointCheckpointTests(unittest.TestCase):
+    def test_joint_stall_restores_last_good_gpx_and_matching_fraction_listing(self):
+        with tempfile.TemporaryDirectory() as folder:
+            base=Path(folder)/'base.gpx';out=Path(folder)/'trial.gpx'
+            base.write_text('base');base.with_suffix('.lst').write_text('base fractions')
+            class Project:
+                data={'Controls':{'data':{}}}
+                rwp=5.0
+                steps=iter([4.0,100.0])
+                def histograms(self):return [self]
+                def get_wR(self):return self.rwp
+                def do_refinements(self, steps):
+                    self.rwp=next(self.steps)
+                    out.write_text(str(self.rwp));out.with_suffix('.lst').write_text('fractions '+str(self.rwp))
+            refiner_mod.refine_joint_checkpoints(Project(),str(out),str(base),6)
+            self.assertEqual(out.read_text(),'4.0')
+            self.assertEqual(out.with_suffix('.lst').read_text(),'fractions 4.0')
+
+    def test_nonfinite_first_cycle_preserves_original_without_stale_listing(self):
+        with tempfile.TemporaryDirectory() as folder:
+            base=Path(folder)/'base.gpx';out=Path(folder)/'trial.gpx';base.write_text('base')
+            class Project:
+                data={'Controls':{'data':{}}}
+                rwp=5.0
+                def histograms(self):return [self]
+                def get_wR(self):return self.rwp
+                def do_refinements(self, steps):
+                    self.rwp=float('nan');out.write_text('invalid');out.with_suffix('.lst').write_text('invalid fractions')
+            refiner_mod.refine_joint_checkpoints(Project(),str(out),str(base),3)
+            self.assertEqual(out.read_text(),'base')
+            self.assertFalse(out.with_suffix('.lst').exists())
+
+
 class RefineStageCellTests(unittest.TestCase):
     def _make_refiner(self, project):
         refiner = GSASMainPhaseRefiner.__new__(GSASMainPhaseRefiner)

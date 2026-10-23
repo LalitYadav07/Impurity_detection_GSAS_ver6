@@ -1153,7 +1153,8 @@ class GalaxyService:
         output_ids: dict[str, str],
     ) -> AnalysisConfig | None:
         dataset_ids = [output_ids.get("resolved_config")]
-        dataset_ids.append(_dataset_id(_parameter_value(parameters, "configuration.config_file", "config_file")))
+        dataset_ids.append(_dataset_id(_parameter_value(parameters,
+            "reproducibility.configuration_override.config_file", "configuration.config_file", "config_file")))
         for dataset_id in dataset_ids:
             if not dataset_id:
                 continue

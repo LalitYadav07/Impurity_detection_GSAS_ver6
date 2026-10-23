@@ -42,6 +42,17 @@ def test_atomic_json_is_readable_by_galaxy_postprocessing(tmp_path: Path) -> Non
         assert mode & stat.S_IROTH
 
 
+def test_explicit_carbon_chemistry_can_discover_graphite(tmp_path: Path) -> None:
+    from config_builder import build_pipeline_config
+    for elements, carbon_allowed in [(['Li','C','O'],True), (['Fe','O'],False)]:
+        resolved=yaml.safe_load(build_pipeline_config(
+            run_name='carbon-policy',data_file=str(tmp_path/'pattern.gsa'),
+            instprm_file=str(tmp_path/'profile.instprm'),allowed_elements=elements,
+            db_root=str(tmp_path/'database')))
+        assert ('C' not in resolved['element_filter']['disallow_pure']) is carbon_allowed
+        assert 'O' in resolved['element_filter']['disallow_pure']
+
+
 def test_successful_full_run_finalizes_all_expected_stages() -> None:
     state = {
         "status": "running",

@@ -40,10 +40,37 @@ Truncated or changing files cannot be submitted successfully and remain in
 the shared retry lifecycle.
 
 The profile must contain a complete neutron TOF parameter set with unique
-declared Bank labels. Its DIFC must agree with the selected bank export within
-0.5%, and its scattering angle within 5 degrees. These are structural
-compatibility checks, **not scientific calibration acceptance**. A profile
+declared Bank labels. Calibrated DIFC is checked within 5% of nominal export
+geometry, with the scattering angle within 5 degrees. Differences above 0.5%
+produce a durable review notice. The published 2019B bank-2 and bank-3
+profiles differ from nominal geometry by about 0.84% and 2.44%, respectively;
+the previous 0.5% rejection threshold incorrectly excluded them. These are
+wrong-bank sanity checks, **not scientific calibration acceptance**. A profile
 with duplicated Bank labels is rejected, rather than silently repaired.
+
+## Battery discovery safeguards
+
+Carbon explicitly included in sample chemistry now admits elemental carbon
+candidates such as graphite. The previous generic C-only exclusion could
+silently remove a supplied graphite CIF. Oxygen-only phases remain excluded
+by the generic policy unless explicitly overridden in the pipeline settings.
+
+For neutron lattice-nudge exports, oxidation-state decorations are removed
+from an exported structure copy; elements, occupancies and the source model
+are preserved. This prevents GSAS-II from substituting hydrogen for unsupported
+fractional ionic atom labels. X-ray ionic labels retain their existing behavior.
+
+Joint scale/background refinement now keeps finite, non-worsening one-cycle
+checkpoints, including the matching fraction listing. Failed solver iterates
+cannot replace the last accepted model. Phase acceptance and final polishing
+also reject Rwp regressions. Full mode can consider up to eight phases using
+an automatic starting phase and seven phase-addition passes; candidates still
+have to survive screening and refinement rather than being forced present.
+
+Recovered Galaxy jobs read their exact saved configuration through the deployed
+configuration-override parameter, rather than showing the UI defaults for
+limits and pass counts. These safeguards apply beyond the battery dataset;
+private patterns and CIFs are not added to the repository as test fixtures.
 
 The original reduction input JSON supplies calibration and environment
 provenance. Placeholder/unconfirmed sample corrections, an intensity

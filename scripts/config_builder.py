@@ -256,7 +256,10 @@ def build_pipeline_config(
                 "ban_cross_with_base": True,
                 "ignore_in_budget": True
             },
-            "disallow_pure": ["O", "C"]
+            # Explicit carbon chemistry includes elemental carbon (graphite,
+            # diamond, etc.); the generic contaminant default must not silently
+            # remove a supplied carbon phase from a carbon-bearing sample.
+            "disallow_pure": ["O"] if "C" in allowed_elements else ["O", "C"]
         }
     })
 

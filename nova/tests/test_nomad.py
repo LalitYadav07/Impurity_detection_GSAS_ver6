@@ -81,6 +81,20 @@ def test_modern_product_uses_sibling_input_json(source,tmp_path):
     assert setup.sidecar_path==str(side) and not setup.warnings
 
 
+@pytest.mark.parametrize('bank,difc,angle',[(2,2837.58510543,31.),(3,5743.19050836,65.)])
+def test_calibrated_profiles_are_not_confused_with_nominal_export_geometry(source,tmp_path,bank,difc,angle):
+    supplied=tmp_path/'calibrated.instprm';supplied.write_text(profile(bank,difc,angle))
+    setup=nomad.inspect_reduced_setup(source)
+    data,inst,receipt=nomad.stage_bank(source,setup,bank,supplied,bank,tmp_path/'out',acknowledged=True)
+    assert receipt['nominal_geometry_notice']
+    assert f'difC:{difc}' in inst.read_text()
+    assert 'nomad_profile_nominal_geometry_offset' in data.read_text()
+    # A profile from another physical bank is still rejected.
+    wrong=tmp_path/'wrong.instprm';wrong.write_text(profile(bank,difc*1.1,angle))
+    with pytest.raises(ValueError,match='DIFC'):
+        nomad.validate_profile(setup,bank,wrong,bank,acknowledged=True)
+
+
 @pytest.mark.parametrize('change,message',[
     (lambda s:s.replace('1100 5.25 0.2','900 5.25 0.2'),'increase'),
     (lambda s:s.replace('1100 5.25 0.2','1100 5.25 0'),'uncertainty'),

@@ -45,6 +45,24 @@ def test_galaxy_status_normalization() -> None:
     assert normalize_status("deleted") is RunStatus.CANCELLED
 
 
+def test_recovery_reads_deployed_configuration_override_before_defaults(tmp_path: Path) -> None:
+    service=GalaxyService('https://galaxy.example','key','history',output_root=tmp_path)
+    config=AnalysisConfig(sample_elements=['Li','C'],mode='full',full_profile='custom',
+                          full_max_passes=7,limits=(3000,15000))
+    seen=[]
+    def document(identifier):
+        seen.append(identifier)
+        return config.portable_contract()
+    service._dataset_document=document
+    recovered=service._config_from_job({}, {
+        'reproducibility|configuration_override|config_file':{'id':'exact-settings'},
+        'reproducibility|run_name':'battery'}, {})
+    assert seen==['exact-settings']
+    assert recovered.full_max_passes==7
+    assert recovered.full_profile=='custom'
+    assert recovered.limits==(3000.,15000.)
+
+
 def test_text_input_download_is_bounded_and_closes_response(monkeypatch,tmp_path):
     import pytest
     closed=[]

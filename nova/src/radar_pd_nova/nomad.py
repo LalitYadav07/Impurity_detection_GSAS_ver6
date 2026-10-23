@@ -228,14 +228,21 @@ def validate_profile(setup, bank, path, profile_bank, *, acknowledged=False):
     blocks=profile_blocks(path)
     if profile_bank not in blocks:raise ValueError('Selected profile Bank label is absent; ordinal block numbers are not bank labels')
     text,coeff=blocks[profile_bank]
-    if coeff['difC']<=0 or abs(coeff['difC']/selected.difc-1)>.005:
+    # Export DIFC describes nominal geometry, not the calibrated TOF polynomial.
+    # Published 2019B bank 2/3 calibrations differ by ~0.84%/2.44%; a 0.5%
+    # cutoff incorrectly rejects them. This remains a wrong-bank sanity bound,
+    # with explicit acknowledgement and review, never calibration acceptance.
+    difference=abs(coeff['difC']/selected.difc-1)
+    if coeff['difC']<=0 or difference>.05:
         raise ValueError('Profile DIFC is incompatible with this bank export; do not substitute another bank or nominal geometry')
     if abs(coeff['2-theta']-selected.angle)>5:
         raise ValueError('Profile scattering angle conflicts with the selected physical bank')
     return text,{'resolver':VERSION,'verification':'user_supplied_not_automatically_validated',
         'source_bank':bank,'profile_bank':profile_bank,'profile_filename':Path(path).name,
         'profile_sha256':sha256(Path(path).read_bytes()).hexdigest(),'calibration':setup.calibration,
-        'environment':setup.environment,'export_difc':selected.difc,'profile_difc':coeff['difC']}
+        'environment':setup.environment,'export_difc':selected.difc,'profile_difc':coeff['difC'],
+        'nominal_difc_relative_difference':difference,
+        'nominal_geometry_notice':('Calibrated profile DIFC differs from nominal export geometry by more than 0.5%; verify the calibration and physical-bank mapping' if difference>.005 else '')}
 
 
 def stage_bank(source, setup, bank, profile_path, profile_bank, destination, *, acknowledged=False):
@@ -271,11 +278,13 @@ def stage_bank(source, setup, bank, profile_path, profile_bank, destination, *, 
     data=out/f'NOM_{setup.run_number}_bank{bank}.gsa';profile=out/f'bank{bank}_profile.instprm'
     header.append(f'# Source NOMAD physical bank {bank}; staged local bank 1\n'.encode())
     header.append((selected.geometry_header+'\n').encode('ascii'))
+    geometry_notices=([{'code':'nomad_profile_nominal_geometry_offset','message':receipt['nominal_geometry_notice']}] if receipt['nominal_geometry_notice'] else [])
     input_provenance={'schema':'radar-pd-input-provenance/v1','instrument':'NOM',
         'source_bank':bank,'profile_bank':profile_bank,'calibration':setup.calibration,
         'source_sha256':setup.source_sha256,'reduction_input_sha256':setup.sidecar_sha256,
         'profile_sha256':receipt['profile_sha256'],
         'warnings':[{'code':'unverified_nomad_profile','message':'NOMAD profile supplied by user; scientific calibration acceptance is pending'},
+                    *geometry_notices,
                     *[{'code':'nomad_reduction_quality','message':message} for message in setup.warnings]]}
     header.append(('# RADAR-PD input provenance: '+json.dumps(input_provenance,separators=(',',':'))+'\n').encode('ascii'))
     data.write_bytes(b''.join(header+payload));profile.write_text(text,encoding='utf-8')

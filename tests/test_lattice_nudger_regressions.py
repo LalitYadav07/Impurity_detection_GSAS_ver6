@@ -1,6 +1,7 @@
 import os
 import sys
 import unittest
+import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -28,6 +29,21 @@ from scripts.lattice_nudger import (
 
 
 class Stage4WorkerPolicyTests(unittest.TestCase):
+    def test_neutron_cif_export_preserves_elements_and_occupancies_without_ionic_labels(self):
+        from pymatgen.io.cif import CifParser
+        structure = Structure(Lattice.hexagonal(2.47, 14.13),
+                              [{"Li+": .444}, {"C0.055-": 1}], [[0,0,0], [.333,.667,.25]])
+        original = structure.as_dict()
+        nudger = LatticeNudger(db_loader=None, radiation="neutron")
+        with tempfile.TemporaryDirectory() as folder:
+            path = nudger._write_nudged_cif("charged-carbon", structure, folder)
+            block = next(iter(CifParser(path).as_dict().values()))
+            self.assertEqual(set(block['_atom_site_type_symbol']), {'Li', 'C'})
+            exported = CifParser(path).parse_structures(primitive=False)[0]
+            self.assertAlmostEqual(exported.composition.get_atomic_fraction('Li'),
+                                   structure.composition.element_composition.get_atomic_fraction('Li'))
+        self.assertEqual(structure.as_dict(), original)
+
     def test_bootstrap_percent_conversion_is_unambiguous(self):
         for percent in (0, 0.6, 1.0, 2.0, 10.0):
             self.assertAlmostEqual(bootstrap_fraction_window({"len_tol_pct": percent}), percent / 100)

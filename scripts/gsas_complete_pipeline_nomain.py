@@ -4398,6 +4398,11 @@ class UnifiedPipeline:
                         })
                         break
 
+                    if not math.isfinite(float(rwp_polished)) or float(rwp_polished) > float(kept_rwp) + 1e-6:
+                        print(f"[WARN] [pass {pass_ix}] Rejecting worsened model: Rwp {kept_rwp:.6f}% -> {rwp_polished:.6f}%; keeping last accepted model.")
+                        pass_record.update({"status": "stopped", "reason": "Rwp regression", "rwp_rejected": float(rwp_polished)})
+                        self.manifest.update_stage(f"Pass {pass_ix}", "complete", {"status": "stopped", "reason": "Rwp regression"})
+                        break
                     accepted.append(best_new)
                     kept_gpx = polished_gpx
                     kept_rwp_new = rwp_polished
@@ -4564,6 +4569,8 @@ class UnifiedPipeline:
                             skip_fresh_lst_regen=bool(ds.get("polish_skip_fresh_lst_regen", self.top_cfg.get("polish_skip_fresh_lst_regen", True))),
                             trace_path=final_main_trace,
                         )
+                        if not math.isfinite(float(rwp_final_main)) or float(rwp_final_main) > float(kept_rwp) + 1e-6:
+                            raise RuntimeError(f"Final main-phase polish worsened Rwp {kept_rwp} -> {rwp_final_main}")
                         kept_gpx = final_main_polished_gpx
                         kept_rwp = float(rwp_final_main)
                         fractions_kept = fractions_final_main
@@ -4605,6 +4612,8 @@ class UnifiedPipeline:
                             polish_strategy="legacy", refine_main_cell=True,
                             refine_existing_cells=True, stabilization_cycles=0,
                         )
+                        if not math.isfinite(float(rwp_joint)) or float(rwp_joint) > float(kept_rwp) + 1e-6:
+                            raise RuntimeError(f"Final joint-cell polish worsened Rwp {kept_rwp} -> {rwp_joint}")
                         kept_gpx, kept_rwp, fractions_kept = joint_final, float(rwp_joint), fractions_joint
                         self.manifest.add_artifact(kept_gpx)
                         final_plot = str(Path(plots_dir) / "seq_final_joint_accepted_model.png")

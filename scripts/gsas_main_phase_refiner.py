@@ -2107,6 +2107,54 @@ def _validate_candidates_individually(
     return validated_cifs
 # === END ADD =================================================================
 # === BEGIN ADD: joint_refine_add_phases ======================================
+def refine_joint_checkpoints(proj, out_gpx: str, base_gpx: str, max_cycles: int) -> None:
+    """Keep only finite, non-worsening one-cycle scale/background checkpoints.
+
+    GSAS-II can report success after an optimizer stall and save a much worse
+    last iterate. A later polish guard cannot repair an already damaged base.
+    Keep the GPX and its fraction-bearing listing together when rolling back.
+    """
+    import shutil
+    import tempfile
+    out = Path(out_gpx)
+    try:
+        best_rwp = float(proj.histograms()[0].get_wR())
+    except (TypeError, ValueError):
+        best_rwp = float('inf')
+    if not math.isfinite(best_rwp) or best_rwp < 0:
+        best_rwp = float('inf')
+    with tempfile.TemporaryDirectory(prefix='joint-checkpoint-', dir=out.parent) as temp:
+        checkpoint = Path(temp) / 'accepted.gpx'
+        shutil.copyfile(base_gpx, checkpoint)
+        base_lst = Path(base_gpx).with_suffix('.lst')
+        checkpoint_lst = checkpoint.with_suffix('.lst')
+        if base_lst.exists():
+            shutil.copyfile(base_lst, checkpoint_lst)
+        for cycle in range(max(1, int(max_cycles))):
+            proj.data['Controls']['data']['max cyc'] = 1
+            proj.do_refinements([{'refine': True}])
+            try:
+                current = float(proj.histograms()[0].get_wR())
+            except (TypeError, ValueError):
+                current = float('nan')
+            if not math.isfinite(current) or current < 0 or current > best_rwp + 1e-6:
+                logger.warning('[joint+] Rejecting cycle %s: Rwp %s -> %s; restoring accepted checkpoint',
+                               cycle+1, best_rwp, current)
+                shutil.copyfile(checkpoint, out)
+                if checkpoint_lst.exists():
+                    shutil.copyfile(checkpoint_lst, out.with_suffix('.lst'))
+                else:
+                    out.with_suffix('.lst').unlink(missing_ok=True)
+                break
+            improvement = best_rwp-current
+            best_rwp = current
+            shutil.copyfile(out, checkpoint)
+            if out.with_suffix('.lst').exists():
+                shutil.copyfile(out.with_suffix('.lst'), checkpoint_lst)
+            if improvement <= 1e-6:
+                break
+
+
 def joint_refine_add_phases(
     base_gpx: str,
     out_gpx: str,
@@ -2171,7 +2219,7 @@ def joint_refine_add_phases(
         old_stdout = sys.stdout
         try:
             sys.stdout = capture
-            proj.do_refinements([{'refine': True}])
+            refine_joint_checkpoints(proj, out_gpx, base_gpx, max_joint_cycles)
         finally:
             sys.stdout = old_stdout
             
