@@ -62,6 +62,7 @@ class PowgenExperimentSettings:
     excluded_run_numbers: tuple[int, ...] = ()
     include_background_runs: bool = False
     include_ramp_runs: bool = False
+    instrument: str = "PG3"
 
     def __post_init__(self) -> None:
         if any(isinstance(n, bool) or not isinstance(n, int) or n <= 0 for n in self.excluded_run_numbers):
@@ -277,6 +278,26 @@ def _scandir(path: Path):
 class PowgenWatchController:
     """Coordinate discovery, submission, and Galaxy-owned watch state."""
 
+    resolver_version = RESOLVER_VERSION
+    bank_provenance_key = "powgen_bank"
+    setup_metadata_key = "powgen_setup"
+
+    @property
+    def beamline_label(self):
+        return "NOMAD" if self.settings.instrument == "NOM" else "POWGEN"
+
+    def _catalog_digest(self):
+        return sha256(CATALOG_PATH.read_bytes()).hexdigest()
+
+    def _watch_extension(self):
+        return {}
+
+    def _run_name(self, run):
+        return f"{self.settings.ipts}_{run.run_id}"
+
+    def _list_source_directory(self):
+        return bounded_directory_listing(self.source_directory)
+
     def __init__(self, service: GalaxyService, settings: PowgenExperimentSettings,
                  *, sample_index: PowgenSampleIndex | None = None) -> None:
         if service.history_id != settings.history_id:
@@ -285,7 +306,7 @@ class PowgenWatchController:
         self.settings = settings
         self.sample_index = sample_index or PowgenSampleIndex(settings.ipts)
         self.definition = settings.definition()
-        self.state = WatchState(history_id=settings.history_id)
+        self.state = WatchState(history_id=settings.history_id, instrument=settings.instrument)
         self.records: dict[str, RunRecord] = {}
         self.state_dataset_ids: list[str] = []
         self._primed = False
@@ -315,7 +336,7 @@ class PowgenWatchController:
         of recent History jobs.
         """
 
-        query = f"POWGEN watch state {self.settings.ipts}"
+        query = f"{self.beamline_label} watch state {self.settings.ipts}"
         datasets = self.service.search_history_datasets(
             query=query,
             limit=25,
@@ -333,9 +354,13 @@ class PowgenWatchController:
                 if not isinstance(watch, Mapping) and self.settings.selected_sample_ids is not None:
                     continue
                 if isinstance(watch, Mapping):
-                    if watch.get("catalog_sha256") != sha256(CATALOG_PATH.read_bytes()).hexdigest():
+                    if watch.get("instrument", "PG3") != self.settings.instrument:
                         continue
-                    if watch.get("resolver") != RESOLVER_VERSION:
+                    if any(watch.get(key) != value for key,value in self._watch_extension().items()):
+                        continue
+                    if watch.get("catalog_sha256") != self._catalog_digest():
+                        continue
+                    if watch.get("resolver") != self.resolver_version:
                         continue
                     if tuple(watch.get("excluded_run_numbers") or ()) != self.settings.excluded_run_numbers:
                         continue
@@ -373,7 +398,7 @@ class PowgenWatchController:
                     if (tuple(sorted(stored_samples)) if stored_samples is not None else None) != self.settings.selected_sample_ids:
                         continue
                 candidate = WatchState.from_dict(payload)
-                if candidate.history_id != self.settings.history_id:
+                if candidate.history_id != self.settings.history_id or candidate.instrument != self.settings.instrument:
                     continue
             except (OSError, TypeError, ValueError):
                 continue
@@ -411,7 +436,7 @@ class PowgenWatchController:
         return self.definition.source_directory
 
     def discover(self, listing: Iterable[str | Path | Mapping[str, Any]] | None = None) -> list[WatchedRun]:
-        rows = list(listing) if listing is not None else bounded_directory_listing(self.source_directory)
+        rows = list(listing) if listing is not None else self._list_source_directory()
         # POWGEN autoreduction can expose auxiliary text products before the
         # canonical GSAS file. Waiting for .gsa prevents submitting a partial
         # representation and gives GSAS-II the format it handles directly.
@@ -492,7 +517,7 @@ class PowgenWatchController:
                     # multiple banks have distinct lifecycle and Galaxy jobs.
                     selected = replace(run, bank=bank.bank if len(setup.banks) > 1 else None,
                         scan_metadata={**run.scan_metadata, "source_bank": bank.bank,
-                                       "powgen_setup": setup.as_dict()})
+                                       self.setup_metadata_key: setup.as_dict()})
                     expanded.append(selected)
             except (OSError, ValueError, UnicodeError) as exc:
                 expanded.append(replace(run, scan_metadata={**run.scan_metadata, "setup_error": str(exc)}))
@@ -632,7 +657,7 @@ class PowgenWatchController:
             cached = self._profile_dataset_ids.get(key)
             if cached:
                 return cached
-            dataset_id = self.service.upload_document(profile_path, label="POWGEN instrument profile")
+            dataset_id = self.service.upload_document(profile_path, label=f"{self.beamline_label} instrument profile")
             self._profile_dataset_ids[key] = dataset_id
             return dataset_id
 
@@ -661,7 +686,7 @@ class PowgenWatchController:
         config = self._configuration
         if config.radiation.value != "neutron" or config.instrument_mode == "cw":
             raise ValueError("POWGEN requires a neutron time-of-flight configuration")
-        config = config.model_copy(update={"run_name": f"{self.settings.ipts}_{run.run_id}"})
+        config = config.model_copy(update={"run_name": self._run_name(run)})
         setup = self._setup(run)
         data_path = run.source_path
         bank_provenance = {"resolver": RESOLVER_VERSION, "source_path": run.source_path,
@@ -724,10 +749,10 @@ class PowgenWatchController:
 
         if not record.galaxy_job_id:
             raise RuntimeError(f"Galaxy did not acknowledge {run.run_id}")
-        if record.provenance.get("powgen_bank") and run.run_id in self.state.discovered:
+        if record.provenance.get(self.bank_provenance_key) and run.run_id in self.state.discovered:
             current = self.state.discovered[run.run_id]
             self.state.discovered[run.run_id] = replace(current, scan_metadata={
-                **current.scan_metadata, "powgen_bank_provenance": record.provenance["powgen_bank"]})
+                **current.scan_metadata, self.bank_provenance_key + "_provenance": record.provenance[self.bank_provenance_key]})
         self.state.mark_submitted(run, record.galaxy_job_id)
         self.records[run.run_id] = record
         if persist:
@@ -745,7 +770,7 @@ class PowgenWatchController:
     def _record_matches_watch(self, record: RunRecord, run: WatchedRun) -> bool:
         """Reject similarly named jobs belonging to another monitor configuration."""
 
-        expected_name = f"{self.settings.ipts}_{run.run_id}"
+        expected_name = self._run_name(run)
         if record.name.strip().upper() != expected_name.upper():
             return False
 
@@ -770,14 +795,17 @@ class PowgenWatchController:
             if inputs is not None
             else str(record.input_dataset_ids.get("instrument") or "")
         )
-        matches_custom_profile = (
-            not self.settings.instrument_profile_dataset_id
-            or candidate_instrument == self.settings.instrument_profile_dataset_id
-        )
+        matches_custom_profile = self._profile_matches_watch(record, run, candidate_instrument)
         return (
             candidate_database == str(self.settings.database_dataset_id or "")
             and candidate_main == str(self.settings.main_cif_dataset_id or "")
             and matches_custom_profile
+        )
+
+    def _profile_matches_watch(self, record, run, candidate_instrument):
+        return (
+            not self.settings.instrument_profile_dataset_id
+            or candidate_instrument == self.settings.instrument_profile_dataset_id
         )
 
     def reconcile_recent_runs(self) -> int:
@@ -797,12 +825,11 @@ class PowgenWatchController:
 
         recovered = self.service.recent_runs(limit=max(50, min(250, len(active) * 4)))
         candidates: dict[str, RunRecord] = {}
-        pattern = re.compile(rf"^{re.escape(self.settings.ipts)}_(PG3_\d+(?:_BANK\d+)?)$", re.IGNORECASE)
+        runs_by_name = {self._run_name(run).upper(): run_id for run_id, run in active.items()}
         for record in recovered:
-            match = pattern.fullmatch(record.name.strip())
-            if match is None:
+            run_id = runs_by_name.get(record.name.strip().upper())
+            if run_id is None:
                 continue
-            run_id = match.group(1).upper()
             run = active.get(run_id)
             if run is None or not self._record_matches_watch(record, run):
                 continue
@@ -941,7 +968,7 @@ class PowgenWatchController:
             payload = self.state.as_dict()
             payload["watch"] = {
                 "facility": "SNS",
-                "instrument": "PG3",
+                "instrument": self.settings.instrument,
                 "ipts": self.settings.ipts,
                 "source_directory": self.source_directory,
                 "configuration_dataset_id": self.settings.configuration_dataset_id,
@@ -955,17 +982,18 @@ class PowgenWatchController:
                 "excluded_run_numbers": list(self.settings.excluded_run_numbers),
                 "include_background_runs": self.settings.include_background_runs,
                 "include_ramp_runs": self.settings.include_ramp_runs,
-                "resolver": RESOLVER_VERSION,
-                "catalog_sha256": sha256(CATALOG_PATH.read_bytes()).hexdigest(),
+                "resolver": self.resolver_version,
+                "catalog_sha256": self._catalog_digest(),
                 "manual_setup_signature": self._manual_setup_signature,
+                **self._watch_extension(),
             }
             last_error: Exception | None = None
             for attempt in range(3):
                 try:
                     dataset_id = self.service.upload_json_document(
                         payload,
-                        name=f"{self.settings.ipts}_powgen_watch_state.json",
-                        label=f"POWGEN watch state {self.settings.ipts}",
+                        name=f"{self.settings.ipts}_{self.beamline_label.lower()}_watch_state.json",
+                        label=f"{self.beamline_label} watch state {self.settings.ipts}",
                     )
                     self.state_dataset_ids.append(dataset_id)
                     self._last_persisted_state = serialized

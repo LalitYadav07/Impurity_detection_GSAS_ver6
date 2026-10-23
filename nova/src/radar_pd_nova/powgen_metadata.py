@@ -147,7 +147,7 @@ def _h5dump_snapshot(path: Path, dataset: str) -> _Snapshot | None:
         return None
     body = data_match.group(1)
     quoted = _QUOTED.findall(body)
-    text_value = bytes(quoted[0], "utf-8").decode("unicode_escape").strip() if quoted else ""
+    text_value = _decode_h5dump_text(quoted[0]) if quoted else ""
     values: list[float] = []
     if not quoted:
         for token in _NUMBER.findall(body):

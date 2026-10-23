@@ -28,6 +28,74 @@ def test_powgen_sample_selection_invalidates_preflight_and_is_exact():
     assert app._powgen_processing_ids() is None
 
 
+def test_live_beamline_switch_clears_incompatible_inputs_and_results():
+    app = RadarPdNovaApp()
+    state = app.server.state
+    state.powgen_processing_sample_ids = ['old-sample']
+    state.powgen_instrument_dataset_id = 'old-profile'
+    state.powgen_configuration_dataset_id = 'old-config'
+    state.powgen_selected_scan = {'run_id':'PG3_42'}
+    state.powgen_dashboard_metrics = [{'value':'99'}]
+    state.powgen_scientific_rows = [{'run_id':'PG3_42'}]
+    old_request = app._powgen_sample_request = object()
+    state.live_beamline = 'NOM'
+    app._live_beamline_changed()
+    state.flush()
+    assert state.live_beamline_label == 'NOMAD'
+    assert len(state.powgen_bank_options) == 6
+    assert state.powgen_source_subfolder == 'shared/autoreduce/multi_banks/GSAS'
+    assert state.powgen_instrument_source == 'computer'
+    assert not any(option['value']=='automatic' for option in state.powgen_instrument_source_options)
+    assert not state.powgen_instrument_dataset_id and not state.powgen_configuration_dataset_id
+    assert not state.powgen_processing_sample_ids and not state.powgen_processing_banks
+    assert not state.powgen_selected_scan and not state.powgen_dashboard_metrics
+    assert not state.powgen_scientific_rows and not state.nomad_profile_acknowledged
+    assert app._powgen_sample_request is not old_request
+    state.live_beamline = 'PG3'
+    app._live_beamline_changed()
+    assert state.powgen_instrument_source == 'automatic' and state.powgen_bank_scope == 'all'
+
+
+def test_live_beamline_cannot_change_while_monitoring():
+    app = RadarPdNovaApp.__new__(RadarPdNovaApp)
+    state = _State(powgen_monitoring=True, live_beamline='NOM')
+    app.server = SimpleNamespace(state=state)
+    app._powgen_controller = SimpleNamespace(settings=SimpleNamespace(instrument='PG3'))
+    app._live_beamline_changed()
+    assert state.live_beamline == 'PG3' and 'Stop monitoring' in state.notice
+
+
+def test_stale_nomad_preflight_cannot_restore_notices_into_powgen(tmp_path,monkeypatch):
+    from dataclasses import replace
+    from radar_pd_nova.live_beamlines import BEAMLINES
+    app = RadarPdNovaApp()
+    state = app.server.state
+    state.live_beamline = 'NOM'
+    app._live_beamline_changed()
+    profile = tmp_path/'manual.instprm';profile.write_text('# user profile\n')
+    state.powgen_ipts = '1'
+    app._powgen_ipts_changed()
+    state.powgen_configuration_dataset_id = 'config'
+    state.powgen_instrument_path = str(profile)
+    state.nomad_physical_bank = 5
+    app.service = SimpleNamespace(load_configuration_dataset=lambda _: AnalysisConfig(radiation='neutron',instrument_mode='tof',sample_elements=['Si']))
+    started, release = threading.Event(), threading.Event()
+    def preflight(*args,**kwargs):
+        started.set();assert release.wait(5)
+        return {'ready':True,'quality_notices':['Old NOMAD notice'],'available_banks':[5]}
+    monkeypatch.setitem(BEAMLINES,'NOM',replace(BEAMLINES['NOM'],preflight=preflight))
+    async def check():
+        task = asyncio.create_task(app.check_powgen_experiment())
+        assert await asyncio.to_thread(started.wait,5), state.powgen_preflight_message
+        state.live_beamline = 'PG3'
+        app._live_beamline_changed()
+        release.set()
+        assert not await task
+        assert not state.nomad_quality_notices and not state.powgen_preflight_ready
+        assert state.live_beamline_label == 'POWGEN'
+    asyncio.run(check())
+
+
 def test_powgen_sample_discovery_discards_old_ipts_and_preserves_same_ipts_selection(monkeypatch):
     app = RadarPdNovaApp.__new__(RadarPdNovaApp)
     state = _State(powgen_ipts="35915", powgen_monitoring=False, powgen_sample_loading=False,
@@ -1139,7 +1207,7 @@ def test_powgen_instrument_profile_upload_is_saved_and_selected(tmp_path) -> Non
     app.refresh_history = lambda: None
 
     assert app._resolve_powgen_instrument_profile_id() == "uploaded-instrument-1"
-    assert uploads == [(profile_path, "POWGEN instrument profile fallback")]
+    assert uploads == [(profile_path, "POWGEN instrument profile")]
     assert state.powgen_instrument_source == "galaxy"
     assert state.powgen_instrument_dataset_id == "uploaded-instrument-1"
     assert state.powgen_instrument_label == "2011A_bank2.instprm"

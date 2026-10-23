@@ -21,6 +21,7 @@ from .powgen import PowgenReducedFile, select_preferred_reduced_file
 
 
 WATCH_STATE_SCHEMA = "radar-pd-powgen-watch-state/v1"
+LIVE_STATE_SCHEMA = "radar-pd-live-watch-state/v2"
 ANALYZE_TOOL_ID = "neutrons_radar_pd_analyze_prototype"
 _IPTS_RE = re.compile(r"^IPTS-\d+$", re.IGNORECASE)
 _FACILITY_ROOTS = frozenset({"SNS", "HFIR"})
@@ -70,8 +71,10 @@ class WatchDefinition:
         ipts = str(self.ipts).strip().upper()
         if facility != "SNS":
             raise ValueError("POWGEN watches are limited to the SNS facility")
-        if instrument != "PG3":
-            raise ValueError("POWGEN watches require the PG3 instrument")
+        if instrument not in {"PG3", "NOM"}:
+            raise ValueError("Live watches support PG3 (POWGEN) and NOM (NOMAD)")
+        if instrument == "NOM" and self.subfolder not in {"shared/autoreduce", "shared/autoreduce/multi_banks/GSAS"}:
+            raise ValueError("NOMAD live mode accepts individual normalized Bragg product folders only")
         if not _IPTS_RE.fullmatch(ipts):
             raise ValueError("POWGEN watch IPTS must have the form IPTS-<number>")
 
@@ -101,7 +104,7 @@ class WatchDefinition:
 
     @property
     def source_directory(self) -> str:
-        return f"/SNS/PG3/{self.ipts}/{self.subfolder}"
+        return f"/SNS/{self.instrument}/{self.ipts}/{self.subfolder}"
 
 
 @dataclass(frozen=True)
@@ -121,14 +124,17 @@ class WatchedRun:
     scan_metadata: Mapping[str, Any] = field(default_factory=dict)
     scientific_summary: Mapping[str, Any] = field(default_factory=dict)
     bank: int | None = None
+    instrument: str = "PG3"
 
     def __post_init__(self) -> None:
+        if self.instrument not in {"PG3", "NOM"}:
+            raise ValueError("Unsupported live-run instrument")
         if self.bank is not None and (isinstance(self.bank, bool) or not isinstance(self.bank, int) or self.bank <= 0):
             raise ValueError("POWGEN bank must be a positive integer")
 
     @property
     def run_id(self) -> str:
-        return f"PG3_{self.run_number}" + (f"_BANK{self.bank}" if self.bank is not None else "")
+        return f"{self.instrument}_{self.run_number}" + (f"_BANK{self.bank}" if self.bank is not None else "")
 
     @property
     def result_dataset_ids(self) -> tuple[str, ...]:
@@ -150,6 +156,7 @@ class WatchedRun:
             source_path=str(value["source_path"]),
             fingerprint=str(value["fingerprint"]),
             bank=value.get("bank"),
+            instrument=str(value.get("instrument") or "PG3"),
             discovered_utc=str(value.get("discovered_utc") or _utc_now()),
             galaxy_job_id=(str(value["galaxy_job_id"]) if value.get("galaxy_job_id") else None),
             galaxy_result_ids=tuple(str(item) for item in value.get("galaxy_result_ids", ())),
@@ -196,26 +203,34 @@ class WatchState:
     initial_backfill_complete: bool = False
     updated_utc: str = field(default_factory=_utc_now)
     schema: str = WATCH_STATE_SCHEMA
+    instrument: str = "PG3"
 
     def __post_init__(self) -> None:
         self.history_id = _nonempty(self.history_id, "history_id")
-        if self.schema != WATCH_STATE_SCHEMA:
+        if self.instrument not in {"PG3", "NOM"}:
+            raise ValueError("Unsupported watch instrument")
+        if self.instrument != "PG3" and self.schema == WATCH_STATE_SCHEMA:
+            self.schema = LIVE_STATE_SCHEMA
+        if self.schema not in {WATCH_STATE_SCHEMA, LIVE_STATE_SCHEMA}:
             raise ValueError(f"Unsupported POWGEN watch state schema: {self.schema!r}")
         seen: set[str] = set()
         for phase in (self.discovered, self.submitted, self.completed, self.failed):
+            if any(run.instrument != self.instrument for run in phase.values()):
+                raise ValueError("Watch state contains a different beamline")
             overlap = seen.intersection(phase)
             if overlap:
                 raise ValueError(f"Runs occur in more than one watch phase: {sorted(overlap)}")
             seen.update(phase)
 
     def contains(self, run: int | str | WatchedRun) -> bool:
-        run_id = _coerce_run_id(run)
+        run_id = _coerce_run_id(run, self.instrument)
         return any(run_id in phase for phase in (self.discovered, self.submitted, self.completed, self.failed))
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "$schema": self.schema,
             "history_id": self.history_id,
+            "instrument": self.instrument,
             "discovered": {key: run.as_dict() for key, run in sorted(self.discovered.items())},
             "submitted": {key: run.as_dict() for key, run in sorted(self.submitted.items())},
             "completed": {key: run.as_dict() for key, run in sorted(self.completed.items())},
@@ -229,10 +244,13 @@ class WatchState:
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "WatchState":
-        if value.get("$schema") != WATCH_STATE_SCHEMA:
+        if value.get("$schema") not in {WATCH_STATE_SCHEMA, LIVE_STATE_SCHEMA}:
             raise ValueError("Expected a radar-pd-powgen-watch-state/v1 document")
+        if value.get("$schema") == WATCH_STATE_SCHEMA and value.get("instrument", "PG3") != "PG3":
+            raise ValueError("A legacy POWGEN checkpoint cannot contain NOMAD runs")
         return cls(
             history_id=str(value.get("history_id") or ""),
+            instrument=str(value.get("instrument") or "PG3"),
             discovered=_run_map_from_dict(value.get("discovered", {}), "discovered"),
             submitted=_run_map_from_dict(value.get("submitted", {}), "submitted"),
             completed=_run_map_from_dict(value.get("completed", {}), "completed"),
@@ -254,7 +272,7 @@ class WatchState:
         return cls.from_dict(payload)
 
     def mark_submitted(self, run: int | str | WatchedRun, galaxy_job_id: str) -> WatchedRun:
-        run_id = _coerce_run_id(run)
+        run_id = _coerce_run_id(run, self.instrument)
         job_id = _nonempty(galaxy_job_id, "galaxy_job_id")
         existing = self.submitted.get(run_id) or self.completed.get(run_id)
         if existing is not None:
@@ -285,7 +303,7 @@ class WatchState:
     ) -> WatchedRun:
         """Keep a pre-acknowledgement failure retryable and checkpoint it."""
 
-        run_id = _coerce_run_id(run)
+        run_id = _coerce_run_id(run, self.instrument)
         message = _nonempty(error, "error")
         if retry_after_seconds < 0:
             raise ValueError("retry_after_seconds must not be negative")
@@ -333,7 +351,7 @@ class WatchState:
         galaxy_job_id: str | None = None,
         scientific_summary: Mapping[str, Any] | None = None,
     ) -> WatchedRun:
-        run_id = _coerce_run_id(run)
+        run_id = _coerce_run_id(run, self.instrument)
         result_ids = tuple(_nonempty(item, "galaxy_result_id") for item in galaxy_result_ids)
         if not result_ids:
             raise ValueError("At least one Galaxy result identifier is required")
@@ -366,7 +384,7 @@ class WatchState:
     ) -> WatchedRun:
         """Attach a compact, JSON-safe result summary to a completed scan."""
 
-        run_id = _coerce_run_id(run)
+        run_id = _coerce_run_id(run, self.instrument)
         completed = self.completed.get(run_id)
         if completed is None:
             raise KeyError(f"{run_id} is not completed")
@@ -382,7 +400,7 @@ class WatchState:
         *,
         galaxy_job_id: str | None = None,
     ) -> WatchedRun:
-        run_id = _coerce_run_id(run)
+        run_id = _coerce_run_id(run, self.instrument)
         message = _nonempty(error, "error")
         existing = self.failed.get(run_id)
         if existing is not None:
@@ -406,13 +424,13 @@ def _replace_run(run: WatchedRun, **changes: Any) -> WatchedRun:
     return WatchedRun.from_dict(payload)
 
 
-def _coerce_run_id(value: int | str | WatchedRun) -> str:
+def _coerce_run_id(value: int | str | WatchedRun, instrument: str = "PG3") -> str:
     if isinstance(value, WatchedRun):
         return value.run_id
     if isinstance(value, int):
-        return f"PG3_{value}"
+        return f"{instrument}_{value}"
     text = str(value).strip().upper()
-    return text if text.startswith("PG3_") else f"PG3_{int(text)}"
+    return text if re.fullmatch(r"(?:PG3|NOM)_\d+(?:_BANK\d+)?", text) else f"{instrument}_{int(text)}"
 
 
 def _listing_path(entry: str | Path | Mapping[str, Any]) -> tuple[str, Mapping[str, Any]]:
@@ -476,6 +494,8 @@ def discover_from_listing(
 
     if state is not None and state.history_id != definition.history_id:
         raise ValueError("Watch definition and state refer to different Galaxy histories")
+    if state is not None and state.instrument != definition.instrument:
+        raise ValueError("Watch definition and state refer to different beamlines")
     if minimum_run_number is not None and minimum_run_number < 0:
         raise ValueError("minimum_run_number must be non-negative")
     if newest_limit is not None and newest_limit < 1:
@@ -488,7 +508,13 @@ def discover_from_listing(
         if candidate_path is None:
             continue
         try:
-            parsed = select_preferred_reduced_file([candidate_path])
+            if definition.instrument == "NOM":
+                match = re.fullmatch(r"NOM_(\d+)\.gsa", PurePosixPath(candidate_path).name, re.I)
+                if match is None:
+                    continue
+                parsed = PowgenReducedFile(candidate_path, PurePosixPath(candidate_path).name, int(match[1]), None, ".gsa")
+            else:
+                parsed = select_preferred_reduced_file([candidate_path])
         except ValueError:
             continue
         if minimum_run_number is not None and parsed.run_number < minimum_run_number:
@@ -501,12 +527,13 @@ def discover_from_listing(
         run_numbers = run_numbers[-newest_limit:]
     for run_number in run_numbers:
         candidates = by_run[run_number]
-        preferred = select_preferred_reduced_file([item.path for item, _ in candidates], run_number=run_number)
+        preferred = candidates[0][0] if definition.instrument == "NOM" else select_preferred_reduced_file([item.path for item, _ in candidates], run_number=run_number)
         metadata = next(metadata for item, metadata in candidates if item.path == preferred.path)
         run = WatchedRun(
             run_number=run_number,
             source_path=preferred.path,
             fingerprint=_fingerprint(preferred.path, metadata),
+            instrument=definition.instrument,
         )
         if state is not None:
             if state.contains(run):
@@ -548,7 +575,11 @@ def build_submission_plan(
     experiment output path.
     """
 
+    if run.instrument != definition.instrument:
+        raise ValueError("Run belongs to a different live beamline")
     if state is not None:
+        if state.instrument != definition.instrument:
+            raise ValueError("Watch state belongs to a different live beamline")
         if state.history_id != definition.history_id:
             raise ValueError("Watch definition and state refer to different Galaxy histories")
         if run.run_id in state.submitted or run.run_id in state.completed or run.run_id in state.failed:

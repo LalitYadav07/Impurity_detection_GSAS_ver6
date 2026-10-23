@@ -446,6 +446,18 @@ class GalaxyService:
             raise ValueError(f"Galaxy configuration dataset {dataset_id!r} is empty")
         return config_from_contract(contract)
 
+    def load_text_document(self, dataset_id: str, *, max_bytes: int = 1048576) -> str:
+        """Read a bounded text input without downloading an arbitrary large dataset."""
+        with requests.get(f"{self.galaxy_url}/api/datasets/{dataset_id}/display",
+                          headers=self._headers, params={"raw": "true"}, timeout=30, stream=True) as response:
+            response.raise_for_status()
+            chunks = bytearray()
+            for chunk in response.iter_content(chunk_size=65536):
+                chunks.extend(chunk)
+                if len(chunks) > max_bytes:
+                    raise ValueError("Text input exceeds the supported metadata size")
+            return chunks.decode("utf-8")
+
     def load_json_document(self, dataset_id: str) -> dict[str, Any]:
         """Load one JSON/YAML provenance document from Galaxy History."""
 

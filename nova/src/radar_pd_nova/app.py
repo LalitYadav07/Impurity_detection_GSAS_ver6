@@ -53,6 +53,7 @@ from .powgen_controller import (
     discover_powgen_samples,
 )
 from .powgen_samples import PowgenSampleIndex
+from .live_beamlines import beamline_adapter, BEAMLINES
 from .results import (
     build_result_view,
     complete_experiment_space_groups,
@@ -280,6 +281,9 @@ class RadarPdNovaApp(ThemedApp):
         self.server.state.change("facility_instrument")(self._facility_instrument_changed)
         self.server.state.change("facility_ipts")(self._facility_ipts_changed)
         self.server.state.change("powgen_ipts")(self._powgen_ipts_changed)
+        self.server.state.change("live_beamline")(self._live_beamline_changed)
+        self.server.state.change("nomad_physical_bank")(self._powgen_processing_changed)
+        self.server.state.change("nomad_profile_bank", "nomad_profile_acknowledged", "nomad_allow_exploratory")(self._powgen_processing_changed)
         self.server.state.change("powgen_source_subfolder")(self._powgen_source_changed)
         self.server.state.change("powgen_processing_scope", "powgen_processing_sample_ids", "powgen_bank_scope", "powgen_processing_banks", "powgen_wavelength", "powgen_backfill_mode", "powgen_excluded_runs", "powgen_include_background", "powgen_include_ramps")(self._powgen_processing_changed)
         self.server.state.change("remote_source")(self._remote_source_changed)
@@ -299,7 +303,7 @@ class RadarPdNovaApp(ThemedApp):
         state.workflow_mode = "single"
         state.workflow_options = [
             {"title": "Single pattern", "value": "single", "icon": "mdi-file-chart-outline"},
-            {"title": "POWGEN live", "value": "powgen", "icon": "mdi-access-point"},
+            {"title": "Live", "value": "powgen", "icon": "mdi-access-point"},
         ]
         state.workspace_view = "monitor"
         state.workspace_options = [
@@ -562,6 +566,14 @@ class RadarPdNovaApp(ThemedApp):
         state.watch_retry_delay_seconds = 120
         state.watch_recipe_message = ""
         state.powgen_monitoring = False
+        state.live_beamline = "PG3"
+        state.nomad_physical_bank = None
+        state.live_beamline_label = "POWGEN"
+        state.live_beamline_options = [{"title": adapter.name, "value": key} for key,adapter in BEAMLINES.items()]
+        state.nomad_profile_bank = 1
+        state.nomad_profile_acknowledged = False
+        state.nomad_allow_exploratory = False
+        state.nomad_quality_notices = []
         state.powgen_ipts = ""
         state.powgen_backfill_mode = "latest_5"
         state.powgen_backfill_options = [
@@ -1175,6 +1187,14 @@ class RadarPdNovaApp(ThemedApp):
                         block=True,
                     )
 
+        vuetify.VSelect(
+            v_show="workflow_mode === 'powgen'", label="Live beamline",
+            v_model=("live_beamline",), items=("live_beamline_options",),
+            item_title="title", item_value="value", disabled=("powgen_monitoring",),
+            density="compact", variant="outlined",
+            hint="Stop monitoring before changing the beamline. Each beamline uses its own reduced products and calibration rules.",
+            persistent_hint=True,
+        )
         with vuetify.VExpansionPanels(
             model_value="powgen-live",
             variant="accordion",
@@ -1184,7 +1204,7 @@ class RadarPdNovaApp(ThemedApp):
             with vuetify.VExpansionPanel(value="powgen-live"):
                 with vuetify.VExpansionPanelTitle():
                     vuetify.VIcon("mdi-access-point", size="small", classes="mr-2")
-                    html.Span("POWGEN Live Experiment")
+                    html.Span("{{ live_beamline_label }} Live Experiment")
                     vuetify.VSpacer()
                     vuetify.VChip(
                         text=("powgen_monitoring ? 'Monitoring' : 'Stopped'",),
@@ -1204,17 +1224,17 @@ class RadarPdNovaApp(ThemedApp):
                         classes="mb-2",
                     )
                     html.P(
-                        "Analyze every completed POWGEN reduction already present, then continue with each new scan through the existing RADAR-PD Analyze tool.",
+                        "Analyze selected completed Bragg reductions, then continue with new scans through RADAR-PD Analyze.",
                         classes="radar-help-copy",
                     )
                     vuetify.VTextField(
-                        label="POWGEN experiment (IPTS)",
+                        label=("live_beamline_label + ' experiment (IPTS)'",),
                         v_model=("powgen_ipts",),
                         placeholder="IPTS-38000",
                         density="compact",
                         variant="outlined",
                         disabled=("powgen_monitoring",),
-                        hint="Enter the IPTS that owns the PG3 experiment.",
+                        hint=("'Enter the IPTS that owns the ' + live_beamline_label + ' experiment.'",),
                         persistent_hint=True,
                         blur=self.refresh_powgen_samples,
                     )
@@ -1279,6 +1299,7 @@ class RadarPdNovaApp(ThemedApp):
                         persistent_hint=True,
                     )
                     vuetify.VSelect(
+                        v_show="live_beamline === 'PG3'",
                         label="Diffraction banks to process", v_model=("powgen_bank_scope",),
                         items=([{"title": "All banks, separate analyses", "value": "all"},
                                 {"title": "Only selected banks", "value": "selected"}],),
@@ -1286,7 +1307,7 @@ class RadarPdNovaApp(ThemedApp):
                         disabled=("powgen_monitoring",),
                     )
                     vuetify.VSelect(
-                        v_show="powgen_bank_scope === 'selected'", label="Bank selection",
+                        v_show="live_beamline === 'PG3' && powgen_bank_scope === 'selected'", label="Bank selection",
                         v_model=("powgen_processing_banks",), items=("powgen_bank_options",),
                         item_title="title", item_value="value", multiple=True, chips=True,
                         density="compact", variant="outlined", disabled=("powgen_monitoring",),
@@ -1294,6 +1315,15 @@ class RadarPdNovaApp(ThemedApp):
                         persistent_hint=True,
                     )
                     vuetify.VSelect(
+                        v_show="live_beamline === 'NOM'", label="Physical bank to analyze",
+                        v_model=("nomad_physical_bank",), items=("powgen_bank_options",),
+                        item_title="title", item_value="value", density="compact", variant="outlined",
+                        disabled=("powgen_monitoring",),
+                        hint="Analyze one physical bank per watch. Bank 5 is backscattering; bank 6 is forward. The profile Bank label may differ.",
+                        persistent_hint=True,
+                    )
+                    vuetify.VSelect(
+                        v_show="live_beamline === 'PG3'",
                         label="POWGEN wavelength",
                         v_model=("powgen_wavelength",),
                         items=("powgen_wavelength_options",),
@@ -1306,19 +1336,19 @@ class RadarPdNovaApp(ThemedApp):
                         persistent_hint=True,
                     )
                     with html.Div(
-                        v_show="!!powgen_profile_error || powgen_instrument_source !== 'automatic'",
+                        v_show="live_beamline === 'NOM' || !!powgen_profile_error || powgen_instrument_source !== 'automatic'",
                         classes="radar-soft-panel mb-2",
                     ):
                         vuetify.VAlert(
                             v_show="!!powgen_profile_error",
-                            text=("'Automatic profile unavailable: ' + powgen_profile_error",),
+                            text=("(live_beamline === 'NOM' ? 'Profile check: ' : 'Automatic profile unavailable: ') + powgen_profile_error",),
                             type="warning",
                             variant="tonal",
                             density="compact",
                             classes="mb-2",
                         )
                         vuetify.VSelect(
-                            label="POWGEN instrument profile fallback",
+                            label=("live_beamline_label + ' instrument profile'",),
                             v_model=("powgen_instrument_source",),
                             items=("powgen_instrument_source_options",),
                             item_title="title",
@@ -1326,11 +1356,7 @@ class RadarPdNovaApp(ThemedApp):
                             density="compact",
                             variant="outlined",
                             disabled=("powgen_monitoring",),
-                            hint=(
-                                "Use the GSAS-II parameter file for the experiment cycle. "
-                                "It can be downloaded from POWGEN or found under "
-                                "/SNS/PG3/run_cycle_<cycle>_CAL on an analysis system."
-                            ),
+                            hint=("live_beamline === 'NOM' ? 'Supply a GSAS-II .instprm matching the exported physical bank, calibration and sample environment. Detector calibration HDF5 files are not refinement profiles.' : 'Use the GSAS-II profile for the POWGEN experiment cycle; historical files may be under /SNS/PG3/run_cycle_<cycle>_CAL.'",),
                             persistent_hint=True,
                         )
                         with html.Div(
@@ -1357,6 +1383,12 @@ class RadarPdNovaApp(ThemedApp):
                             clearable=True,
                             no_data_text="No GSAS-II instrument profiles are in this Galaxy History",
                         )
+                    with html.Div(v_show="live_beamline === 'NOM'", classes="radar-soft-panel mb-2"):
+                        vuetify.VAlert(text="NOMAD Bragg analysis uses broadband TOF. Supplied profiles require scientific review; automatic NOMAD profile mappings are not yet validated.", type="info", variant="tonal", density="compact")
+                        vuetify.VTextField(label="Bank label in profile", v_model=("nomad_profile_bank",), type="text", inputmode="numeric", disabled=("powgen_monitoring",), density="compact", variant="outlined", hint="Enter the Bank: value from the selected .instprm block, not its position in the file.", persistent_hint=True)
+                        vuetify.VSwitch(label="Confirm the supplied profile and physical-bank mapping", v_model=("nomad_profile_acknowledged",), disabled=("powgen_monitoring",), density="compact")
+                        vuetify.VSwitch(label="Allow unconfirmed sample corrections for exploratory analysis", v_model=("nomad_allow_exploratory",), disabled=("powgen_monitoring",), density="compact")
+                        vuetify.VAlert(v_show="nomad_quality_notices.length > 0", text=("nomad_quality_notices.join('; ')",), type="warning", variant="tonal", density="compact")
                     vuetify.VAutocomplete(
                         label="Reusable RADAR-PD configuration",
                         v_model=("powgen_configuration_dataset_id",),
@@ -1368,7 +1400,7 @@ class RadarPdNovaApp(ThemedApp):
                         disabled=("powgen_monitoring",),
                         no_data_text="No reusable configurations are in this Galaxy History",
                         hint=(
-                            "Applies analysis settings only. POWGEN takes scans, its instrument profile, "
+                            "Applies analysis settings only. Live mode takes scans, the instrument profile, "
                             "candidate library, and optional main phase from this panel."
                         ),
                         persistent_hint=True,
@@ -1997,7 +2029,7 @@ class RadarPdNovaApp(ThemedApp):
                 vuetify.VAlert(
                     text=(
                         "These files stay with this single-pattern session if you switch back. "
-                        "A reusable configuration saves analysis settings only; POWGEN uses the inputs "
+                        "A reusable configuration saves analysis settings only; Live mode uses the inputs "
                         "selected in its own panel."
                     ),
                     type="info",
@@ -2550,7 +2582,7 @@ class RadarPdNovaApp(ThemedApp):
     def _powgen_experiment_dashboard(self) -> None:
         with html.Div(classes="radar-section-heading"):
             with html.Div():
-                html.Div("POWGEN LIVE EXPERIMENT", classes="radar-micro-label")
+                html.Div("{{ live_beamline_label }} LIVE EXPERIMENT", classes="radar-micro-label")
                 html.H2("{{ powgen_ipts || 'Experiment dashboard' }}")
                 html.P("Scan-by-scan phase evolution and refinement quality from completed RADAR-PD analyses.")
             with html.Div(classes="radar-button-row"):
@@ -2737,7 +2769,7 @@ class RadarPdNovaApp(ThemedApp):
                 items=("powgen_rows",),
                 density="compact",
                 items_per_page=10,
-                no_data_text="No POWGEN scans have been discovered yet.",
+                no_data_text="No live scans have been discovered yet.",
             )
 
     def _run_monitor_view(self) -> None:
@@ -2914,7 +2946,7 @@ class RadarPdNovaApp(ThemedApp):
         vuetify.VAlert(
             v_if="viewed_output_profile === 'monitor'",
             text=(
-                "POWGEN live uses a low-latency publication profile: the normalized dashboard, fit plots, "
+                "Live mode uses a low-latency publication profile: the normalized dashboard, fit plots, "
                 "and any usable GPX checkpoints are published immediately. Run a standard Full "
                 "single-pattern analysis when you need the complete table, phase-CIF, configuration, "
                 "and results-archive collections."
@@ -4144,7 +4176,7 @@ class RadarPdNovaApp(ThemedApp):
         if text.isdigit():
             text = f"IPTS-{text}"
         if not re.fullmatch(r"IPTS-[1-9][0-9]*", text):
-            raise ValueError("POWGEN experiment must have the form IPTS-<number>")
+            raise ValueError("Live experiment must have the form IPTS-<number>")
         return text
 
     def _sync_powgen_rows(self) -> None:
@@ -4155,7 +4187,23 @@ class RadarPdNovaApp(ThemedApp):
             self.server.state.powgen_rows = []
             self.server.state.powgen_scientific_rows = []
             self.server.state.powgen_all_scientific_rows = []
-            self.server.state.powgen_sample_options = []
+            state = self.server.state
+            for field in ("powgen_dashboard_metrics", "powgen_latest_phases", "powgen_scan_options",
+                          "powgen_selected_phases", "powgen_selected_lattice", "powgen_phase_options",
+                          "powgen_selected_phase_labels", "powgen_selected_samples"):
+                setattr(state, field, [])
+            state.powgen_sample_options = []
+            state.powgen_latest_run_id = "-"
+            state.powgen_selected_run_id = ""
+            state.powgen_selected_scan = {}
+            state.powgen_selected_quality_label = "Collecting baseline"
+            state.powgen_selected_quality_color = "#eef2ef"
+            state.powgen_tracked_phase_count = 0
+            state.powgen_attention_count = 0
+            state.powgen_dashboard_notice = "Completed scans will populate this experiment view."
+            state.powgen_x_axis = "run_number"
+            state.powgen_x_axis_options = [{"title": "Scan number", "value": "run_number"}]
+            self._update_powgen_dashboard_figures([])
             return
 
         rows: list[dict[str, Any]] = []
@@ -4497,7 +4545,7 @@ class RadarPdNovaApp(ThemedApp):
         state.powgen_dashboard_notice = (
             f"Showing {len(scientific_rows)} of {len(all_scientific_rows)} completed scan summaries "
             f"from {controller.source_directory}. "
-            "Conditions are read from each matching PG3 NeXus file. Missing phase points mean that a phase "
+            f"Conditions are read from each matching {self._live_adapter().instrument} NeXus file. Missing phase points mean that a phase "
             "was not reported for that scan, not a forced zero fraction."
             if scientific_rows
             else "Completed scans will populate this experiment view as their normalized Galaxy summaries become available."
@@ -4652,6 +4700,50 @@ class RadarPdNovaApp(ThemedApp):
         )
         return str((selected or {}).get("display_name") or (selected or {}).get("name") or fallback)
 
+    def _live_adapter(self):
+        return beamline_adapter(getattr(self.server.state, "live_beamline", None) or "PG3")
+
+    def _live_beamline_changed(self, **_: Any) -> None:
+        state = self.server.state
+        if state.powgen_monitoring:
+            state.live_beamline = self._powgen_controller.settings.instrument
+            state.notice = "Stop monitoring before changing the beamline."
+            return
+        adapter = self._live_adapter()
+        if getattr(self, "_active_live_beamline", None) == adapter.instrument:
+            return
+        self._active_live_beamline = adapter.instrument
+        state.live_beamline_label = adapter.name
+        self._powgen_sample_request = object()
+        self._powgen_controller = None
+        self._powgen_settings_signature = None
+        self._sync_powgen_rows()
+        self._powgen_form_ipts = None
+        self._powgen_ipts_changed()
+        state.powgen_source_subfolder = adapter.default_folder
+        state.powgen_source_options = [{"title": "Individual Bragg reductions" if adapter.instrument == "NOM" else "Current autoreduce folder", "value": adapter.default_folder}]
+        state.powgen_source_directory = f"/SNS/{adapter.instrument}/<IPTS>/{adapter.default_folder}"
+        state.powgen_bank_scope = "selected" if adapter.instrument == "NOM" else "all"
+        state.powgen_processing_banks = []
+        state.nomad_physical_bank = None
+        state.powgen_bank_options = [{"title": f"Bank {n}", "value": n} for n in range(1,7)] if adapter.instrument == "NOM" else []
+        state.powgen_wavelength = ""
+        state.powgen_instrument_source_options = [
+            *([{"title":"Use the official cycle profile automatically","value":"automatic"}] if adapter.automatic_profiles else []),
+            {"title":"Upload a GSAS-II profile from this computer","value":"computer"},
+            {"title":"Choose a GSAS-II profile from Galaxy History","value":"galaxy"}]
+        state.powgen_instrument_source = "automatic" if adapter.automatic_profiles else "computer"
+        for field in ("powgen_instrument_path", "powgen_instrument_dataset_id", "powgen_configuration_dataset_id", "powgen_database_dataset_id", "powgen_main_cif_path", "powgen_main_cif_dataset_id"):
+            setattr(state, field, "")
+        state.powgen_main_cif_source = "none"
+        state.nomad_profile_acknowledged = False
+        state.nomad_allow_exploratory = False
+        state.nomad_quality_notices = []
+        state.powgen_instrument_label = "Automatic POWGEN cycle profile" if adapter.automatic_profiles else "Matching NOMAD profile required"
+        state.powgen_message = ("Select an IPTS, physical bank, matching profile and reusable configuration. NOMAD uses broadband neutron TOF."
+                                if adapter.instrument == "NOM" else "Select an IPTS and reusable configuration. The wavelength is auto-detected unless you choose an override.")
+        self._powgen_processing_changed()
+
     def _powgen_processing_changed(self, **_: Any) -> None:
         state = self.server.state
         state.powgen_preflight_ready = False
@@ -4661,6 +4753,11 @@ class RadarPdNovaApp(ThemedApp):
 
     def _powgen_processing_bank_ids(self) -> tuple[int, ...] | None:
         state = self.server.state
+        if self._live_adapter().instrument == "NOM":
+            bank = getattr(state, "nomad_physical_bank", None)
+            if isinstance(bank, bool) or bank not in range(1, 7):
+                raise ValueError("Choose exactly one NOMAD physical bank for this watch")
+            return (int(bank),)
         if str(getattr(state, "powgen_bank_scope", "all") or "all") == "all":
             return None
         banks = tuple(sorted({int(b) for b in (state.powgen_processing_banks or [])}))
@@ -4677,8 +4774,9 @@ class RadarPdNovaApp(ThemedApp):
         if ipts == getattr(self, "_powgen_form_ipts", None):
             return
         self._powgen_form_ipts = ipts
-        state.powgen_source_subfolder = "shared/autoreduce"
-        state.powgen_source_options = [{"title": "Current autoreduce folder", "value": "shared/autoreduce"}]
+        adapter = self._live_adapter()
+        state.powgen_source_subfolder = adapter.default_folder
+        state.powgen_source_options = [{"title": "Individual Bragg reductions" if adapter.instrument == "NOM" else "Current autoreduce folder", "value": adapter.default_folder}]
         self._powgen_sample_request = object()  # Discard a previous IPTS's in-flight discovery.
         state.powgen_sample_loading = False
         state.powgen_sample_discovery_ipts = ""
@@ -4701,17 +4799,20 @@ class RadarPdNovaApp(ThemedApp):
         state.powgen_processing_sample_ids = []
         state.powgen_run_options = []
         state.powgen_excluded_runs = []
-        state.powgen_bank_options = []
+        state.powgen_bank_options = [{"title": f"Bank {n}", "value": n} for n in range(1,7)] if self._live_adapter().instrument == "NOM" else []
         state.powgen_processing_banks = []
+        state.nomad_physical_bank = None
         state.powgen_sample_message = "Refresh sample IDs for this reduction folder."
         self._powgen_processing_changed()
 
     def _powgen_sample_index(self, ipts: str) -> PowgenSampleIndex:
         if not hasattr(self, "_powgen_sample_indexes"):
             self._powgen_sample_indexes = {}
-        if ipts not in self._powgen_sample_indexes:
-            self._powgen_sample_indexes[ipts] = PowgenSampleIndex(ipts)
-        return self._powgen_sample_indexes[ipts]
+        adapter = self._live_adapter()
+        key = ipts if adapter.instrument == "PG3" else f"{adapter.instrument}:{ipts}"
+        if key not in self._powgen_sample_indexes:
+            self._powgen_sample_indexes[key] = adapter.sample_index(ipts)
+        return self._powgen_sample_indexes[key]
 
     def _powgen_processing_ids(self) -> tuple[str, ...] | None:
         state = self.server.state
@@ -4739,9 +4840,10 @@ class RadarPdNovaApp(ThemedApp):
             state.flush()
             folder = str(getattr(state, "powgen_source_subfolder", "shared/autoreduce") or "shared/autoreduce")
             args = (ipts, self._powgen_sample_index(ipts))
-            if folder != "shared/autoreduce":
+            if folder != "shared/autoreduce" or self._live_adapter().instrument == "NOM":
                 args += (folder,)
-            result = await asyncio.to_thread(discover_powgen_samples, *args)
+            discovery = discover_powgen_samples if self._live_adapter().instrument == "PG3" else self._live_adapter().discover_samples
+            result = await asyncio.to_thread(discovery, *args)
             if self._powgen_sample_request is not token:
                 return
             state.powgen_source_options = result.get("source_options") or getattr(state, "powgen_source_options", [])
@@ -4770,6 +4872,7 @@ class RadarPdNovaApp(ThemedApp):
                   "powgen_main_cif_source", "powgen_main_cif_path", "powgen_main_cif_dataset_id",
                   "powgen_database_dataset_id")
         fields += ("powgen_excluded_runs", "powgen_include_background", "powgen_include_ramps")
+        fields += ("live_beamline", "nomad_physical_bank", "nomad_profile_bank", "nomad_profile_acknowledged", "nomad_allow_exploratory")
         return json.dumps({key: getattr(self.server.state, key, None) for key in fields}, sort_keys=True)
 
     async def check_powgen_experiment(self, **_: Any) -> bool:
@@ -4789,7 +4892,7 @@ class RadarPdNovaApp(ThemedApp):
         state.powgen_preflight_status = "checking"
         state.powgen_preflight_ready = False
         state.powgen_preflight_checked = "Checking now"
-        state.powgen_preflight_message = "Checking the read-only POWGEN source and instrument profile..."
+        state.powgen_preflight_message = f"Checking the read-only {self._live_adapter().name} source and instrument profile..."
         state.powgen_preflight_details = []
         state.powgen_profile_error = ""
         state.flush()
@@ -4800,7 +4903,7 @@ class RadarPdNovaApp(ThemedApp):
                 raise ValueError("Choose a reusable RADAR-PD configuration")
             configuration = self.service.load_configuration_dataset(configuration_id)
             if configuration.radiation.value != "neutron" or configuration.instrument_mode == "cw":
-                raise ValueError("POWGEN requires a neutron configuration with automatic or time-of-flight instrument mode")
+                raise ValueError("Live mode requires a neutron configuration with automatic or time-of-flight instrument mode")
             self._set_powgen_configuration_preview(configuration_id, configuration)
 
             backfill_mode = str(state.powgen_backfill_mode or "latest_5")
@@ -4815,7 +4918,7 @@ class RadarPdNovaApp(ThemedApp):
                     raise ValueError("Choose a GSAS-II instrument profile from this computer")
                 if instrument_path.suffix.lower() not in {".instprm", ".prm", ".inst", ".ins"}:
                     raise ValueError(
-                        "The POWGEN instrument profile must use .instprm, .prm, .inst, or .ins"
+                        "The instrument profile must use .instprm, .prm, .inst, or .ins; NOMAD requires .instprm"
                     )
                 instrument_profile_name = instrument_path.name
             elif instrument_source == "galaxy":
@@ -4828,7 +4931,7 @@ class RadarPdNovaApp(ThemedApp):
                     "Selected Galaxy instrument profile",
                 ).split(" · ", 1)[0]
             elif instrument_source != "automatic":
-                raise ValueError(f"Unsupported POWGEN instrument-profile source: {instrument_source}")
+                raise ValueError(f"Unsupported instrument-profile source: {instrument_source}")
 
             main_source = str(state.powgen_main_cif_source or "none")
             if main_source == "computer":
@@ -4848,10 +4951,7 @@ class RadarPdNovaApp(ThemedApp):
             else:
                 main_label = "Not supplied"
 
-            result = await asyncio.to_thread(
-                preflight_powgen_experiment, ipts,
-                requested_wavelength=str(state.powgen_wavelength or ""),
-                instrument_profile_name=instrument_profile_name,
+            preflight_arguments = dict(
                 selected_sample_ids=self._powgen_processing_ids(),
                 sample_index=self._powgen_sample_index(ipts),
                 selected_banks=self._powgen_processing_bank_ids(),
@@ -4861,13 +4961,35 @@ class RadarPdNovaApp(ThemedApp):
                 initial_backfill_limit=_POWGEN_BACKFILL_LIMITS[backfill_mode],
                 subfolder=str(getattr(state, "powgen_source_subfolder", "shared/autoreduce") or "shared/autoreduce"),
             )
+            if self._live_adapter().instrument == "NOM":
+                if instrument_source == "automatic":
+                    raise ValueError("Supply a NOMAD profile; automatic calibration mappings are not yet validated")
+                profile_path = str(state.powgen_instrument_path or "")
+                if instrument_source == "galaxy":
+                    profile_text = await asyncio.to_thread(self.service.load_text_document, instrument_id)
+                    if not hasattr(self, "_nomad_profile_directory"):
+                        self._nomad_profile_directory = tempfile.TemporaryDirectory(prefix="radar-nomad-profile-")
+                    materialized = Path(self._nomad_profile_directory.name) / "selected.instprm"
+                    materialized.write_text(profile_text, encoding="utf-8")
+                    profile_path = str(materialized)
+                preflight_arguments.update(profile_path=profile_path,
+                    profile_bank=int(state.nomad_profile_bank or 0),
+                    profile_acknowledged=bool(state.nomad_profile_acknowledged),
+                    allow_exploratory=bool(state.nomad_allow_exploratory))
+                result = await asyncio.to_thread(self._live_adapter().preflight, ipts, **preflight_arguments)
+            else:
+                result = await asyncio.to_thread(preflight_powgen_experiment, ipts,
+                    requested_wavelength=str(state.powgen_wavelength or ""),
+                    instrument_profile_name=instrument_profile_name, **preflight_arguments)
             if signature != self._powgen_preflight_signature():
                 state.powgen_preflight_ready = False
                 state.powgen_preflight_status = "idle"
                 state.powgen_preflight_message = "Inputs changed during the experiment check. Check the current selection again."
                 state.flush()
                 return False
-            state.powgen_bank_options = [{"title": f"Bank {b}", "value": b} for b in result.get("available_banks", [])]
+            state.nomad_quality_notices = result.get("quality_notices", []) if self._live_adapter().instrument == "NOM" else []
+            details = {b["bank"]: b for b in result.get("bank_details", [])}
+            state.powgen_bank_options = [{"title": (f"Bank {b} · {details[b]['angle']:.1f}° · d ≈ {details[b]['approx_d_min']:.2f}-{details[b]['approx_d_max']:.2f} Å" if b in details else f"Bank {b}"), "value": b} for b in result.get("available_banks", [])]
             state.powgen_ipts = ipts
             state.powgen_source_directory = str(result.get("source_directory") or "")
             state.powgen_profile_error = str(result.get("profile_error") or "")
@@ -4951,7 +5073,7 @@ class RadarPdNovaApp(ThemedApp):
                 {
                     "label": "Wavelength",
                     "value": (
-                        f"{result.get('selected_wavelength')} A - {result.get('wavelength_source')}"
+                        ("Broadband neutron TOF; no monochromatic wavelength selection" if self._live_adapter().instrument == "NOM" else f"{result.get('selected_wavelength')} A - {result.get('wavelength_source')}")
                     ),
                 },
                 {
@@ -4985,6 +5107,8 @@ class RadarPdNovaApp(ThemedApp):
             )
             state.error_message = "" if state.powgen_preflight_ready else state.powgen_preflight_message
         except Exception as exc:
+            if signature != self._powgen_preflight_signature():
+                return False
             state.powgen_preflight_status = "error"
             state.powgen_preflight_ready = False
             state.powgen_preflight_message = _powgen_submission_error_summary(exc)
@@ -5016,7 +5140,11 @@ class RadarPdNovaApp(ThemedApp):
             backfill_mode = str(state.powgen_backfill_mode or "latest_5")
             initial_backfill_limit = _POWGEN_BACKFILL_LIMITS[backfill_mode]
 
-            settings = PowgenExperimentSettings(
+            adapter = self._live_adapter()
+            extra_settings = ({"profile_bank": int(state.nomad_profile_bank or 0),
+                "profile_acknowledged": bool(state.nomad_profile_acknowledged),
+                "allow_exploratory": bool(state.nomad_allow_exploratory)} if adapter.instrument == "NOM" else {})
+            settings = adapter.settings(
                 ipts=ipts,
                 history_id=self.service.history_id,
                 configuration_dataset_id=configuration_id,
@@ -5032,8 +5160,11 @@ class RadarPdNovaApp(ThemedApp):
                 include_background_runs=bool(getattr(state, "powgen_include_background", False)),
                 include_ramp_runs=bool(getattr(state, "powgen_include_ramps", False)),
                 subfolder=str(getattr(state, "powgen_source_subfolder", "shared/autoreduce") or "shared/autoreduce"),
+                **extra_settings,
             )
             signature = (
+                adapter.instrument,
+                json.dumps(extra_settings, sort_keys=True),
                 settings.ipts,
                 settings.history_id,
                 settings.subfolder,
@@ -5050,7 +5181,8 @@ class RadarPdNovaApp(ThemedApp):
                 str(settings.include_ramp_runs),
             )
             if self._powgen_controller is None or self._powgen_settings_signature != signature:
-                self._powgen_controller = PowgenWatchController(self.service, settings, sample_index=self._powgen_sample_index(ipts))
+                controller_class = PowgenWatchController if adapter.instrument == "PG3" else adapter.controller
+                self._powgen_controller = controller_class(self.service, settings, sample_index=self._powgen_sample_index(ipts))
                 restored = self._powgen_controller.restore_latest_state()
                 self._powgen_settings_signature = signature
 
@@ -5082,7 +5214,7 @@ class RadarPdNovaApp(ThemedApp):
             self._powgen_monitor_task = task
         except Exception as exc:
             state.powgen_monitoring = False
-            state.powgen_message = f"POWGEN monitor could not start: {exc}"
+            state.powgen_message = f"{self._live_adapter().name} monitor could not start: {exc}"
             state.error_message = str(exc)
             state.flush()
 
@@ -5099,22 +5231,22 @@ class RadarPdNovaApp(ThemedApp):
                 raise ValueError("Choose a GSAS-II instrument profile from Galaxy History")
             return dataset_id
         if source != "computer":
-            raise ValueError(f"Unsupported POWGEN instrument-profile source: {source}")
+            raise ValueError(f"Unsupported instrument-profile source: {source}")
 
         path = Path(str(getattr(state, "powgen_instrument_path", "") or ""))
         if not path.is_file():
             raise ValueError("Choose a GSAS-II instrument profile from this computer")
         if path.suffix.lower() not in {".instprm", ".prm", ".inst", ".ins"}:
             raise ValueError(
-                "The POWGEN instrument profile must use .instprm, .prm, .inst, or .ins"
+                "The instrument profile must use .instprm, .prm, .inst, or .ins; NOMAD requires .instprm"
             )
 
-        dataset_id = self.service.upload_document(path, label="POWGEN instrument profile fallback")
+        dataset_id = self.service.upload_document(path, label=f"{self._live_adapter().name} instrument profile")
         state.powgen_instrument_dataset_id = dataset_id
         state.powgen_instrument_source = "galaxy"
         state.powgen_instrument_label = path.name
         self.refresh_history()
-        state.notice = f"Saved {path.name} to Galaxy History for POWGEN monitoring."
+        state.notice = f"Saved {path.name} to Galaxy History for {self._live_adapter().name} monitoring."
         return dataset_id
 
     def _resolve_powgen_database_id(self) -> str | None:
@@ -5154,7 +5286,7 @@ class RadarPdNovaApp(ThemedApp):
                 raise ValueError("Choose a main-phase CIF from Galaxy History")
             return dataset_id
         if source != "computer":
-            raise ValueError(f"Unsupported POWGEN main-phase source: {source}")
+            raise ValueError(f"Unsupported live main-phase source: {source}")
 
         path = Path(str(getattr(state, "powgen_main_cif_path", "") or ""))
         if not path.is_file():
@@ -5162,11 +5294,11 @@ class RadarPdNovaApp(ThemedApp):
         if path.suffix.lower() != ".cif":
             raise ValueError("The supplied main-phase file must use the .cif extension")
 
-        dataset_id = self.service.upload_document(path, label="POWGEN main phase CIF")
+        dataset_id = self.service.upload_document(path, label=f"{self._live_adapter().name} main phase CIF")
         state.powgen_main_cif_dataset_id = dataset_id
         state.powgen_main_cif_source = "galaxy"
         self.refresh_history()
-        state.notice = f"Saved {path.name} to Galaxy History for POWGEN monitoring."
+        state.notice = f"Saved {path.name} to Galaxy History for {self._live_adapter().name} monitoring."
         return dataset_id
 
     def stop_powgen_monitoring(self, **_: Any) -> None:
@@ -5181,7 +5313,7 @@ class RadarPdNovaApp(ThemedApp):
         self._powgen_wake_event.set()
         state.powgen_next_check = "Stopped"
         state.powgen_message = (
-            "POWGEN monitoring stopped. Already-submitted RADAR-PD jobs continue in Galaxy and remain recoverable. "
+            f"{self._live_adapter().name} monitoring stopped. Already-submitted RADAR-PD jobs continue in Galaxy and remain recoverable. "
             "Use NDIP Ingress for unattended triggering."
         )
         state.flush()
@@ -5193,7 +5325,7 @@ class RadarPdNovaApp(ThemedApp):
         if not state.powgen_monitoring:
             return
         state.powgen_next_check = "Now"
-        state.powgen_message = "Refresh requested; checking the POWGEN source and Galaxy jobs now."
+        state.powgen_message = f"Refresh requested; checking the {self._live_adapter().name} source and Galaxy jobs now."
         self._powgen_wake_event.set()
         state.flush()
 

@@ -45,6 +45,23 @@ def test_galaxy_status_normalization() -> None:
     assert normalize_status("deleted") is RunStatus.CANCELLED
 
 
+def test_text_input_download_is_bounded_and_closes_response(monkeypatch,tmp_path):
+    import pytest
+    closed=[]
+    class Response:
+        def __enter__(self):return self
+        def __exit__(self,*args):closed.append(True)
+        def raise_for_status(self):pass
+        def iter_content(self,**kwargs):
+            yield b'a'*20
+            yield b'b'*20
+            raise AssertionError('An oversized profile must not continue downloading')
+    monkeypatch.setattr('radar_pd_nova.galaxy_service.requests.get',lambda *args,**kwargs:Response())
+    service=GalaxyService('https://galaxy.example','key','history',output_root=tmp_path)
+    with pytest.raises(ValueError,match='size'):service.load_text_document('profile',max_bytes=30)
+    assert closed==[True]
+
+
 def test_parameter_fallback_recovers_advanced_scientific_controls(tmp_path: Path) -> None:
     service = GalaxyService("https://galaxy.example", "key", "history", output_root=tmp_path)
     config = service._config_from_parameters(

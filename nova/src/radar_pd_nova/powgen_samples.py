@@ -43,8 +43,10 @@ def include_run(run: WatchedRun, *, excluded_run_numbers=(), include_background_
 
 
 class PowgenSampleIndex:
-    def __init__(self, ipts: str) -> None:
+    def __init__(self, ipts: str, *, nexus_path=None, identity_reader=None) -> None:
         self.ipts = ipts
+        self.nexus_path = nexus_path or powgen_nexus_path
+        self.identity_reader = identity_reader or read_powgen_sample_identity
         self._cache: dict[int, tuple[tuple[int, int], dict[str, str]]] = {}
         self._lock = threading.Lock()
 
@@ -52,13 +54,13 @@ class PowgenSampleIndex:
         """Retry missing/unreadable NeXus files; refresh identities when they change."""
 
         try:
-            stat = powgen_nexus_path(self.ipts, run.run_number).stat()
+            stat = self.nexus_path(self.ipts, run.run_number).stat()
             signature = (stat.st_size, stat.st_mtime_ns)
             with self._lock:
                 cached = self._cache.get(run.run_number)
             if cached and cached[0] == signature:
                 return dict(cached[1])
-            metadata = read_powgen_sample_identity(self.ipts, run.run_number)
+            metadata = self.identity_reader(self.ipts, run.run_number)
             # Empty metadata may belong to a file still being written.
             if metadata.get("sample_id"):
                 with self._lock:

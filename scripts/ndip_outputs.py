@@ -859,6 +859,10 @@ def collect_outputs(
         collection_records["tables"].append(file_record(lattice_path, role="table", root=portal))
     manifest_path = _find_suffix(run_root, "run_manifest.json")
     manifest = read_json(manifest_path) if manifest_path else {}
+    input_provenance_path = _find_suffix(run_root, "input_provenance.json")
+    input_provenance = read_json(input_provenance_path) if input_provenance_path else {}
+    if isinstance(input_provenance, dict):
+        scientific_warnings.extend(input_provenance.get("warnings") or [])
     effective_status = "failed" if status == "failed" else ("complete" if manifest.get("status", status) == "complete" else status)
     root = Path(project_root).resolve() if project_root else Path(__file__).resolve().parents[1]
     result: dict[str, Any] = {
@@ -880,6 +884,7 @@ def collect_outputs(
             "container_digest": os.environ.get("RADAR_PD_CONTAINER_DIGEST", "unknown"),
             "database_version": os.environ.get("RADAR_PD_DATABASE_VERSION", "unknown"),
             "source_manifest": manifest,
+            "input": input_provenance,
         },
         "artifacts": collection_records,
         "warnings": scientific_warnings,

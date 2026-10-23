@@ -40,6 +40,7 @@ from ndip_contracts import (  # noqa: E402
     utc_now,
 )
 from ndip_outputs import collect_outputs  # noqa: E402
+from ndip_input_provenance import read_input_provenance  # noqa: E402
 
 
 PLACEHOLDER_DATA = "RADAR_PD_NDIP_WILL_REWRITE_DATA"
@@ -707,6 +708,7 @@ def command_analyze(args: argparse.Namespace) -> int:
     main_cif = Path(args.main_cif).resolve() if args.main_cif else None
     if not data.is_file():
         raise FileNotFoundError(f"Missing diffraction data: {data}")
+    input_provenance = read_input_provenance(data)
     if main_cif and not main_cif.is_file():
         raise FileNotFoundError(f"Missing main-phase CIF: {main_cif}")
 
@@ -872,6 +874,8 @@ def command_analyze(args: argparse.Namespace) -> int:
     if nested.exists() and any(nested.iterdir()):
         pipeline_run_dir = nested
     errors = list(state.get("errors") or [])
+    if input_provenance:
+        atomic_write_json(pipeline_run_dir / "input_provenance.json", input_provenance)
     if return_code:
         errors.append({"stage": "analysis", "message": f"Pipeline exited with code {return_code}"})
     collect_outputs(

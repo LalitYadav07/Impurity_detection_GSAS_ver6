@@ -37,7 +37,16 @@ Galaxy's authenticated remote-file sources remain a fallback when `/SNS` or
 **Upload -> Choose remote files**, then select the resulting datasets from
 **Galaxy History** in RADAR-PD.
 
-### POWGEN live experiment monitor
+### Live experiment monitor
+
+Select **Live** and choose a beamline. POWGEN retains its cycle-profile and
+bank-selection workflow. The NOMAD development adapter supports individual
+Bragg reductions with an explicit single physical bank and user-supplied
+profile; it remains exploratory pending calibration-standard acceptance.
+See [NOMAD integration](../docs/nomad_integration.md) for supported layouts,
+bank mapping, correction notices and release requirements.
+
+#### POWGEN
 
 The monitor handles large `shared/autoreduce` folders by considering only
 canonical `PG3_<run>.gsa` files, without a 5,000-entry cutoff or recursive
@@ -69,8 +78,9 @@ NOVA session remains open, the monitor:
 4. submits the unchanged `neutrons_radar_pd_analyze_prototype` tool; and
 5. displays discovered, submitted, completed, and failed scans as they change.
 
-The first poll submits only the newest completed scan, preventing an accidental
-historical backfill. Later polls submit every newly appearing run. Watch
+The default initial selection is the latest five matching scans. Users can
+choose a different initial limit, all existing scans, or new scans only.
+Later polls submit newly appearing matching runs. Watch
 checkpoints are stored as Galaxy datasets and restored after a NOVA restart, so
 Galaxy-acknowledged jobs are not submitted twice. The IPTS is always read-only;
 results and provenance remain in Galaxy History.

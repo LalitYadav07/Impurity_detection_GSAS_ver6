@@ -186,7 +186,7 @@ def test_powgen_experiment_dashboard_exposes_scientific_trends() -> None:
 
     for text in (
         "Open experiment dashboard",
-        "POWGEN LIVE EXPERIMENT",
+        "{{ live_beamline_label }} LIVE EXPERIMENT",
         "Refined phase fractions",
         "Refinement quality",
         "All reported phases across scans",
@@ -241,7 +241,7 @@ def test_powgen_monitor_requires_preflight_and_exposes_safe_backfill_controls() 
     assert "history_configuration_summary" in template
     assert "history_configuration_yaml" in template
     assert "No reusable configurations are in this Galaxy History" in template
-    assert "POWGEN instrument profile fallback" in template
+    assert "live_beamline_label + ' instrument profile'" in template
     assert app.server.state.powgen_instrument_source == "automatic"
     assert any(
         option["value"] == "computer" and "Upload a GSAS-II profile" in option["title"]
@@ -258,7 +258,7 @@ def test_powgen_monitor_requires_preflight_and_exposes_safe_backfill_controls() 
     assert "() => setTimeout" not in template
     assert "No GPX checkpoint was published for this run." in template
     assert "checkpoint_rows.length > 0" in template
-    assert "POWGEN live uses a low-latency publication profile" in template
+    assert "Live mode uses a low-latency publication profile" in template
     assert "item.created_display" in template
     assert "job {{ run.job_short }}" in template
     assert "gsasii_session_status !== 'ready'" in template
@@ -319,7 +319,7 @@ def test_data_collection_exposes_three_clear_standard_sources() -> None:
     assert "Do you have a known/main-phase CIF?" in template
     assert "These files stay with this single-pattern session if you switch back." in template
     assert "A reusable configuration saves analysis settings only" in template
-    assert "POWGEN uses the inputs selected in its own panel" in template
+    assert "Live mode uses the inputs selected in its own panel" in template
 
 
 def test_chemistry_policy_uses_sample_elements_without_legacy_environment_input() -> None:
@@ -350,7 +350,7 @@ def test_powgen_configuration_copy_keeps_run_inputs_independent() -> None:
     template = app.layout.html
 
     assert "Applies analysis settings only." in template
-    assert "POWGEN takes scans, its instrument profile" in template
+    assert "Live mode takes scans, the instrument profile" in template
     assert "candidate library, and optional main phase from this panel" in template
 
 
