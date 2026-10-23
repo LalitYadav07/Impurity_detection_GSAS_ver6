@@ -1,7 +1,8 @@
 # NOMAD Live integration
 
-Status: development branch, 2026-10-23. Not yet deployed or scientifically
-accepted for automatic profile selection or quantitative phase analysis.
+Status: deployed to NDIP-test on 2026-10-23 as Interactive 0.4.0 and Analyze
+0.5.16. NOMAD remains exploratory and is not scientifically accepted for
+automatic profile selection or quantitative phase analysis.
 
 ## Supported workflow
 
@@ -113,19 +114,57 @@ those acquisition dates. Import equivalence alone does not establish correct
 peak widths, lattice parameters or phase fractions. Private facility files
 and local import artifacts are not committed as test fixtures.
 
-Before deployment:
+Before automatic profile selection or quantitative acceptance:
 
 1. Obtain a verified profile for the current calibration, bank and sample
    environment, including its validity range and uncertainty in coefficients.
 2. Benchmark an appropriate standard, checking positions, widths, residuals,
    d range and known lattice parameters through the exact batch-image importer.
 3. Test a representative multiphase sample before accepting phase fractions.
-4. Verify NOMAD mount/ACL access from a fresh NDIP NOVA session and Galaxy job;
-   DGX access alone does not prove that access.
-5. Run an end-to-end selected-bank analysis, dashboard, GPX handoff and GSAS-II
-   export on NDIP-test. Build and deploy both NOVA and Analyze: the batch change
-   preserves durable NOMAD review notices. Use the normal full-SHA image pins
-   and verify both GitLab deployment jobs.
+4. Verify access for each user's proposal from NOVA. This adapter uploads the
+   selected bank to Galaxy History, so Analyze consumes History datasets and
+   does not require its own `/SNS` mount. Any future direct batch resolver
+   needs a separate mount/ACL check; DGX readability alone does not establish it.
+5. Repeat the end-to-end selected-bank analysis, dashboard, GPX handoff and
+   GSAS-II export checks for each release. Deploy both NOVA and Analyze when
+   the input/result contract changes, using successful full-SHA image pins and
+   checking both GitLab deployment jobs.
+
+## NDIP-test deployment verification
+
+Both images were built and tested from source commit
+`78f2dcedcd5eed1db1c0885a47dc47cac18d63e0`. The Analyze deployment commit was
+`2fb50685fa563d739ab49943c55a0dc243f80e19`, followed by the Interactive
+deployment commit `74509ac27fed0f4c33e98fb9764bcdb6162f5e28`. Tool sync and
+Galaxy rollout succeeded for both stages. The live catalog and a fresh browser
+session confirmed the new versions.
+
+The deployed NOVA session discovered two sample IDs across all twelve modern
+individual reductions in IPTS-38746, with the expected names and counts.
+A Full-mode silicon bank-5 smoke analysis completed and published its fit,
+tables, GPX and result archive. Its normalized summary and rendered results
+retain the unverified-profile warning and `needs_review` status. The smoke
+test used [COD 9008565](https://www.crystallography.net/cod/9008565.html) as its
+single reference candidate, built through the existing Build CIF Library tool.
+Analyze requires the built portable library output from that tool.
+
+The existing POWGEN regression reproduced the previous release's Rwp, phase
+fractions and lattice parameters exactly. These checks establish deployment
+and data-handling behavior. They do not qualify the historical NOMAD 2019B
+profile for the 2022 silicon acquisition or for current experiments.
+
+The NOMAD GPX opened in the existing hosted GSAS-II desktop. Save project,
+Quick CIF export into `Exports`, and Save and Exit completed successfully.
+The finalized Galaxy GPX and ZIP were downloaded and checked; the archive
+contains the silicon CIF with cell parameters.
+
+During this check, closing GSAS-II's plot window caused a later phase-selection
+callback to raise `RuntimeError: wrapped C/C++ object of type AuiNotebook has
+been deleted`. Keep that window open or minimize it during editing. Saving
+and export still completed; a fresh desktop can reopen the saved project.
+The saved-project reopen test confirmed that the phase controls and unit cell
+load correctly when the plot window is minimized rather than closed.
+The hosted GSAS-II image was not changed by the NOMAD release.
 
 Joint multi-bank refinement, simultaneous multiple-bank watches, automatic
 raw-event reduction, PDF analysis and summed-product revision processing are
