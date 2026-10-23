@@ -4607,6 +4607,9 @@ class UnifiedPipeline:
                         )
                         kept_gpx, kept_rwp, fractions_kept = joint_final, float(rwp_joint), fractions_joint
                         self.manifest.add_artifact(kept_gpx)
+                        final_plot = str(Path(plots_dir) / "seq_final_joint_accepted_model.png")
+                        plot_gpx_fit_with_ticks(kept_gpx, final_plot, phase_labels=labels)
+                        self.manifest.add_artifact(final_plot)
                     except Exception as exc:
                         print(f"[WARN] Final joint-cell refinement failed; retaining the accepted model: {exc}")
 

@@ -1249,3 +1249,10 @@ def test_run112_archive_fixture_recovers_five_refinements_and_scientific_traces(
         assert len(names["Calculated"].x) == 5
         assert len(names["Difference"].x) == 5
         assert any(name not in {"Observed", "Calculated", "Difference"} for name in names)
+
+
+def test_final_joint_plot_is_preferred_to_latest_discovery_pass():
+    from radar_pd_nova.results import _primary_plot_index
+    plots = [{'path': 'seq_pass10_accepted_model.png', 'stage': 'full_pipeline_pass'},
+             {'path': 'seq_final_joint_accepted_model.png', 'stage': 'final_refinement'}]
+    assert _primary_plot_index(plots, {}, 'full') == 1

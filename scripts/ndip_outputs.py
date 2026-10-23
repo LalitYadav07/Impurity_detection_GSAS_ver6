@@ -136,7 +136,9 @@ def _published_name(path: Path, run_dir: Path, collection: str) -> str:
         elif "reranked_512" in relative:
             stem = "Lattice_aware_pattern_ranking"
     elif collection == "gpx":
-        if "pattern_project" in relative:
+        if "seq_final_joint_polished" in relative:
+            stem = "03_Final_accepted_joint_cell_model"
+        elif "pattern_project" in relative:
             stem = "01_Imported_pattern_and_main_phase"
         elif "seq_final_main_polished" in relative:
             stem = "02_Main_phase_anchor"
@@ -297,6 +299,8 @@ def _iter_artifacts(run_dir: Path) -> Iterable[Path]:
 
 def _gpx_stage(relative: str) -> str:
     lowered = relative.lower()
+    if "seq_final_joint_polished" in lowered:
+        return "final_refinement"
     if "gsas_projects" in lowered and lowered.endswith("_project.gpx"):
         return "main_phase_anchor"
     if "main" in lowered and ("anchor" in lowered or "phase" in lowered):

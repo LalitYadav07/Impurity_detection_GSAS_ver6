@@ -1933,7 +1933,7 @@ def _primary_plot_index(plots: list[dict[str, Any]], result: dict[str, Any], mod
             rank_match = rank is not None and int(rank) == best_pattern_rank
             stage_score = 0 if curve_match else 1 if stage == "final_refinement" and rank_match else 2 if stage == "final_refinement" else 4 if stage == "pattern_scoring" else 8
             return (stage_score, rwp if rwp is not None else float("inf"), _rank_value(rank))
-        final_score = 0 if any(token in lowered for token in ("seq_final", "accepted_model", "final", "polish")) else 2 if stage == "final_refinement" else 4 if stage == "main_phase_anchor" else 8
+        final_score = -2 if "seq_final_joint" in lowered else 0 if any(token in lowered for token in ("seq_final", "accepted_model", "final", "polish")) else 2 if stage == "final_refinement" else 4 if stage == "main_phase_anchor" else 8
         pass_match = re.search(r"pass[_ -]?(\d+)", lowered)
         latest_pass = -int(pass_match.group(1)) if pass_match else 0
         return (final_score, latest_pass, rwp if rwp is not None else float("inf"))
