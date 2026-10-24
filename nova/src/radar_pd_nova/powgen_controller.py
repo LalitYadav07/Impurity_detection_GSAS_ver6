@@ -448,6 +448,9 @@ class PowgenWatchController:
             for row in rows
             if str(row.get("path") or row.get("name") or row).lower().endswith(".gsa")
         ]
+        self._refresh_incomplete_discoveries(completed_rows)
+        if self.settings.instrument == "PG3":
+            self._flag_powgen_revisions(completed_rows)
         if not self.state.initial_backfill_complete:
             available = discover_from_listing(self.definition, completed_rows)
             if available:
@@ -496,6 +499,90 @@ class PowgenWatchController:
                 *(run.run_number for run in discovered),
             )
         return discovered
+
+    def _refresh_incomplete_discoveries(self, rows):
+        """Replace an unsubmitted parse-error placeholder when writing finishes.
+
+        A partial multi-bank file initially has no known bank labels. Keeping
+        that placeholder beside the completed bank-specific discoveries would
+        submit the same run twice. Check pending paths independently of the
+        startup backfill floor, which already includes the partial run number.
+        Acknowledged jobs and completed results are never replaced here.
+        """
+        pending = {r.source_path: r for r in self.state.discovered.values()
+                   if r.scan_metadata.get("setup_error")}
+        if not pending:
+            return
+        observed = discover_from_listing(self.definition, rows)
+        changed = False
+        for run in observed:
+            if run.source_path not in pending:
+                continue
+            expanded = self._expand_banks(self._matching_samples([run]))
+            if any(r.scan_metadata.get("setup_error") for r in expanded):
+                continue
+            for key, old in list(self.state.discovered.items()):
+                if old.source_path == run.source_path:
+                    del self.state.discovered[key]
+            self._attach_scan_metadata(self._remember_discoveries(expanded))
+            changed = True
+        if changed:
+            self.persist_state()
+
+    def _flag_powgen_revisions(self, rows):
+        """Keep result provenance when a POWGEN reduction/receipt is replaced."""
+        observed = {r.source_path: r for r in discover_from_listing(self.definition, rows)}
+        changed = False
+        for phase in (self.state.discovered, self.state.submitted, self.state.completed, self.state.failed):
+            for key, old in list(phase.items()):
+                current = observed.get(old.source_path)
+                setup = old.scan_metadata.get(self.setup_metadata_key) or {}
+                if current is None or not setup or old.scan_metadata.get("setup_error"):
+                    continue
+                path = Path(old.source_path)
+                signatures = []
+                for suffix in (".py", ".xml"):
+                    try:
+                        stat = path.with_suffix(suffix).stat()
+                        signatures.append([stat.st_size, stat.st_mtime_ns])
+                    except FileNotFoundError:
+                        signatures.append(None)
+                expected = [list(setup[k]) if setup.get(k) is not None else None
+                            for k in ("reduction_script_signature", "reduction_xml_signature")]
+                revision = [current.fingerprint, *signatures]
+                if ((current.fingerprint == old.fingerprint and signatures == expected)
+                        or old.scan_metadata.get("replacement_revision") == revision):
+                    continue
+                # An atomic rewrite with identical content is not a new input.
+                provenance = old.scan_metadata.get("powgen_bank_provenance") or {}
+                known_hash = provenance.get("source_sha256")
+                def bounded_digest(candidate, limit):
+                    try:
+                        with candidate.open("rb") as stream:
+                            raw = stream.read(limit + 1)
+                    except FileNotFoundError:
+                        return ""
+                    return sha256(raw).hexdigest() if len(raw) <= limit else None
+                same_source = known_hash and bounded_digest(path, 64 * 1024 * 1024) == known_hash
+                same_receipts = all(
+                    bounded_digest(path.with_suffix(suffix), limit) == setup.get(field, "")
+                    for suffix, field, limit in ((".py", "reduction_script_sha256", 262144),
+                                                 (".xml", "reduction_xml_sha256", 1024 * 1024))
+                )
+                if same_source and same_receipts:
+                    continue
+                notice = ("Source reduction or reduction receipt was replaced after discovery; retained results "
+                          "belong to the original input. Start a separately checked watch to reprocess.")
+                summary = dict(old.scientific_summary)
+                if summary:
+                    summary["scientific_status"] = "needs_review"
+                    summary["scientific_warnings"] = list(dict.fromkeys([
+                        *summary.get("scientific_warnings", []), notice]))
+                phase[key] = replace(old, scan_metadata={**old.scan_metadata,
+                    "replacement_revision": revision, "source_revision_warning": notice}, scientific_summary=summary)
+                changed = True
+        if changed:
+            self.persist_state()
 
     def _setup(self, run: WatchedRun):
         path = Path(run.source_path)
@@ -610,7 +697,10 @@ class PowgenWatchController:
         """Return ready runs without exceeding the active Galaxy-job cap."""
 
         available = max(0, self.settings.max_active_jobs - len(self.state.submitted))
-        return self.state.retryable_runs()[:available]
+        ready = [run for run in self.state.retryable_runs()
+                 if not run.scan_metadata.get("setup_error")
+                 and not run.scan_metadata.get("source_revision_warning")]
+        return ready[:available]
 
     def defer_submission(
         self,
@@ -678,6 +768,8 @@ class PowgenWatchController:
         wrapper used by tests and non-interactive callers.
         """
 
+        if run.scan_metadata.get("source_revision_warning"):
+            raise ValueError("POWGEN input changed after discovery; check a new watch before reprocessing")
         plan = build_submission_plan(self.definition, run, self.state)
         if plan is None:
             existing = self.records.get(run.run_id)

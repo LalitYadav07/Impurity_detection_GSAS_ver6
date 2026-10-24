@@ -20,11 +20,11 @@ import statistics
 import subprocess
 from typing import Any, Iterable
 
-from .facility_metadata import resolve_nexus_path, resolve_identity, qualify_temperature
+from .facility_metadata import resolve_nexus_path, resolve_identity, qualify_temperature, parse_nexus_timestamp
 
 
 _MAX_LOG_VALUES = 200_000
-_METADATA_SCHEMA_VERSION = 4
+_METADATA_SCHEMA_VERSION = 5
 _NUMBER = re.compile(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][-+]?\d+)?")
 _DATA = re.compile(r"\bDATA\s*\{(.*?)\}", re.DOTALL)
 _DATASPACE_SIZE = re.compile(r"DATASPACE\s+SIMPLE\s*\{\s*\(\s*(\d+)")
@@ -71,7 +71,7 @@ def read_powgen_sample_identity(ipts: str, run_number: int, *, nexus_path=None, 
     if executable:
         # Request only named sample fields. Missing aliases do not invalidate
         # fields which h5dump successfully returned in the same invocation.
-        command = [executable, "-y", "-w", "0"]
+        command = [executable, "-y", "-w", "0", "-m", "%.17g"]
         for field in fields:
             command.extend(("-d", field))
         # Check declared shapes before requesting values, including identity
@@ -176,7 +176,7 @@ def _h5dump_snapshot(path: Path, dataset: str) -> _Snapshot | None:
     if not executable:
         return None
     completed = subprocess.run(
-        [executable, "-d", dataset, "-y", "-w", "0", str(path)],
+        [executable, "-d", dataset, "-y", "-w", "0", "-m", "%.17g", str(path)],
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -335,9 +335,11 @@ def _duration_seconds(start_time: str, end_time: str) -> float | None:
     if not start_time or not end_time:
         return None
     try:
-        start = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
-        end = datetime.fromisoformat(end_time.replace("Z", "+00:00"))
+        start = parse_nexus_timestamp(start_time)
+        end = parse_nexus_timestamp(end_time)
     except ValueError:
+        return None
+    if (start.tzinfo is None) != (end.tzinfo is None):
         return None
     return round(max(0.0, (end - start).total_seconds()), 3)
 

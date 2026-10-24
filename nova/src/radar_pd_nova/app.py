@@ -3039,6 +3039,7 @@ class RadarPdNovaApp(PostAnalysisMixin, ThemedApp):
                     )
                     with html.Div(classes="radar-plot-frame"):
                         self._primary_plot_widget = plotly.Figure(display_mode_bar=True)
+                    html.Div("Scroll horizontally to inspect the full fit and legend.", classes="radar-plot-scroll-hint")
                     html.Div("No interactive refinement payload was published for this run.", v_if="!plot_options.length", classes="radar-empty-compact")
 
             with html.Section(v_show="viewed_run_mode === 'rapid'", classes="radar-stage-results"):
@@ -4261,7 +4262,15 @@ class RadarPdNovaApp(PostAnalysisMixin, ThemedApp):
                     job_id = run.galaxy_job_id or (record.galaxy_job_id if record is not None else "")
                     detail = f"{stage} · {progress}%{f' · job {job_id[:8]}' if job_id else ''}"
                 else:
-                    if run.submission_attempts:
+                    if run.scan_metadata.get("setup_error"):
+                        status = "Waiting for complete data"
+                        color = "#fff0d4"
+                        detail = str(run.scan_metadata["setup_error"])
+                    elif run.scan_metadata.get("source_revision_warning"):
+                        status = "Input changed"
+                        color = "#fff0d4"
+                        detail = str(run.scan_metadata["source_revision_warning"])
+                    elif run.submission_attempts:
                         color = "#fff0d4"
                         retry_at = _powgen_retry_time(run.next_retry_utc)
                         reason = _powgen_submission_error_summary(run.error)
@@ -7675,6 +7684,12 @@ class RadarPdNovaApp(PostAnalysisMixin, ThemedApp):
         .radar-primary-plot-card { overflow: hidden; }
         .radar-plot-frame { position: relative; width: 100%; height: 720px; min-height: 560px; overflow: hidden; }
         .radar-plot-frame > div { width: 100% !important; height: 100% !important; }
+        .radar-plot-scroll-hint { display: none; }
+        @media (max-width: 600px) {
+            .radar-primary-plot-card .radar-plot-frame { overflow-x: auto; }
+            .radar-primary-plot-card .radar-plot-frame > div { min-width: 650px; }
+            .radar-plot-scroll-hint { display: block; margin-top: 6px; font-size: 0.85rem; color: #52635b; }
+        }
         .radar-stage-results, .radar-full-results { margin-top: 18px; }
         .radar-stage-results > h3, .radar-full-results > h3 { margin: 0; color: var(--radar-brand-900); font-size: 20px; }
         .radar-stage-tabs { margin: 12px 0 10px; border-bottom: 1px solid var(--radar-line); }

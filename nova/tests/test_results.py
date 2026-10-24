@@ -56,6 +56,36 @@ def test_experiment_scan_summary_uses_best_refined_rapid_hypothesis() -> None:
     assert summary["warning_count"] == 1
 
 
+def test_refinement_plot_uses_explicit_limits_and_preserves_excluded_gaps():
+    payload = {
+        "plot_kind": "gsas_fit_with_ticks_v1",
+        "fit_limits": [2, 8],
+        "excluded_ranges": [[4, 6]],
+        "arrays": {
+            "x": [1, 2, 3, 7, 8, 9],
+            "yobs": [100, 20, 30, 70, 80, 900],
+            "ycalc": [0, 19, 29, 69, 79, 0],
+            "resid": [100, 1, 1, 1, 1, 900],
+        },
+    }
+    figure = figure_for_payload(payload)
+    assert list(figure.data[0].y) == payload["arrays"]["yobs"]
+    assert list(figure.data[1].x) == [1, 2, 3, None, 7, 8, 9]
+    assert list(figure.data[1].y) == [None, 19, 29, None, 69, 79, None]
+    assert list(figure.data[2].y) == [None, 1, 1, None, 1, 1, None]
+    assert list(figure.layout.xaxis.range) == [2, 8]
+    assert list(figure.layout.xaxis3.range) == [2, 8]
+    assert figure.data[1].connectgaps is False
+
+
+def test_legacy_refinement_plot_does_not_guess_limits_from_zero_calculated_values():
+    payload = {"plot_kind": "gsas_fit_with_ticks_v1", "arrays": {
+        "x": [1, 2, 3], "yobs": [3, 2, 1], "ycalc": [0, 2, 0], "resid": [3, 0, 1]}}
+    figure = figure_for_payload(payload)
+    assert list(figure.data[1].y) == [0, 2, 0]
+    assert figure.layout.xaxis.range is None
+
+
 def test_experiment_figures_preserve_missing_phase_as_gap() -> None:
     scans = [
         {

@@ -7,6 +7,19 @@ from radar_pd_nova.powgen_metadata import read_powgen_scan_metadata
 from radar_pd_nova.powgen_watch import WatchedRun
 
 
+def test_h5dump_numeric_snapshot_requests_roundtrip_precision(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from radar_pd_nova import powgen_metadata
+
+    monkeypatch.setattr(powgen_metadata.shutil, "which", lambda _: "/usr/bin/h5dump")
+    def run(command, **kwargs):
+        assert command[command.index("-m") + 1] == "%.17g"
+        return SimpleNamespace(returncode=0, stdout='DATASPACE SIMPLE { ( 1 ) / ( 1 ) }\nDATA { 29.334920630000001 }')
+    monkeypatch.setattr(powgen_metadata.subprocess, "run", run)
+    snapshot = powgen_metadata._h5dump_snapshot(tmp_path / "test.h5", "/entry/log")
+    assert snapshot.values == (29.334920630000001,)
+
+
 def test_reads_bounded_powgen_nexus_conditions(tmp_path: Path) -> None:
     nexus = tmp_path / "PG3_63716.nxs.h5"
     with h5py.File(nexus, "w") as handle:

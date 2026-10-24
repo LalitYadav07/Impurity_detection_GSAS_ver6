@@ -95,6 +95,24 @@ def values(result):
     return [p["value"] for s in result["series"] for p in s["points"]]
 
 
+def test_input_scientific_review_status_survives_derived_plot_and_csv_export():
+    observation = scan(1)
+    observation["scientific_status"] = "needs_review"
+    observation["scientific_warnings"] = ["Supplied profile has not been scientifically qualified"]
+    config = settings()
+    result = calculate_views([observation], config)
+    derived = result["views"][0]
+    assert derived["review_required"]
+    assert any("Supplied profile" in n for n in derived["notices"])
+    assert derived["series"][0]["points"][0]["scientific_status"] == "needs_review"
+    figure = view_figure(derived, config.views[0])
+    assert figure.layout.title.text == "Scientific review required"
+    with zipfile.ZipFile(io.BytesIO(export_bundle(result, config, [observation]))) as archive:
+        assert "scientific_status" in archive.read("view-01.csv").decode()
+        assert "needs_review" in archive.read("view-01.csv").decode()
+        assert "Scientific review required" in archive.read("view-01.html").decode()
+
+
 def test_configuration_and_checkpoint_round_trip_keep_instances_and_pinned_references():
     post = PostAnalysisSettings(
         views=[

@@ -9,6 +9,7 @@ from __future__ import annotations
 import csv
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
+from datetime import datetime
 from hashlib import sha256
 import io
 from pathlib import Path
@@ -27,6 +28,17 @@ _FIELDS = {"ITEMS-ID": "sample_id", "SAMPLE": "sample_name", "TITLE": "run_title
            "FREQUENCY": "chopper_speed_readback", "GUIDE": "guide",
            "VAN RUN": "vanadium_run", "VAN BACKGROUND RUN": "vanadium_background_run",
            "EMPTY CAN RUN": "empty_container_run", "CONTAINER": "registered_container"}
+
+
+def parse_nexus_timestamp(value: Any) -> datetime:
+    """Parse facility nanoseconds on Python 3.10, preserving the UTC offset.
+
+    datetime resolution is microseconds. Trim only excess fractional digits;
+    original timestamp strings remain unchanged in the metadata record.
+    """
+    text = str(value).strip()
+    text = re.sub(r"(\.\d{6})\d+(?=(?:Z|[+-]\d{2}:?\d{2})?$)", r"\1", text)
+    return datetime.fromisoformat(text.replace("Z", "+00:00"))
 
 
 def sample_identifier(value: Any) -> str:

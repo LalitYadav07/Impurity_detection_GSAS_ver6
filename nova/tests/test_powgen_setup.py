@@ -92,8 +92,9 @@ def test_wrong_run_duplicate_banks_and_truncation_are_rejected(tmp_path):
     with pytest.raises(ValueError,match='duplicate'):inspect_reduced_setup(p)
     p=source(tmp_path);setup=inspect_reduced_setup(p);profile=resolve_bank_profile(setup,2)
     p.write_text(p.read_text().rsplit('\n',2)[0]+'\n')
-    setup=inspect_reduced_setup(p)
-    with pytest.raises(ValueError,match='Incomplete'):stage_bank(p,setup,2,profile,tmp_path/'out')
+    with pytest.raises(ValueError,match='Incomplete'):
+        inspect_reduced_setup(p)
+    with pytest.raises(ValueError,match='changed after preflight'):stage_bank(p,setup,2,profile,tmp_path/'out')
     assert not (tmp_path/'out').exists()
 
 

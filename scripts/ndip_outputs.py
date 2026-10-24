@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import csv
 import html
+import hashlib
 import json
 import os
 import pickle
@@ -366,6 +367,7 @@ def _copy_collections(
     gpx_phase_labels: Mapping[str, str] | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     records: dict[str, list[dict[str, Any]]] = {name: [] for name in COLLECTION_RULES}
+    destinations: set[Path] = set()
     for source in _iter_artifacts(run_dir):
         suffix = source.suffix.lower()
         collection = next((name for name, suffixes in COLLECTION_RULES.items() if suffix in suffixes), None)
@@ -376,8 +378,13 @@ def _copy_collections(
         destination_dir = portal / collection
         destination_dir.mkdir(parents=True, exist_ok=True)
         destination = destination_dir / _published_name(source, run_dir, collection)
-        if destination.exists() and destination.resolve() != source.resolve():
-            destination = destination.with_name(f"{destination.stem}_{len(records[collection]) + 1}{destination.suffix}")
+        if destination in destinations:
+            # A real within-run naming collision needs a stable suffix. Files
+            # left by an earlier collection are the same publication targets,
+            # not new collisions: overwrite them so JSON/NPZ links stay current.
+            identity = hashlib.sha256(source.relative_to(run_dir).as_posix().encode()).hexdigest()[:12]
+            destination = destination.with_name(f"{destination.stem}_{identity}{destination.suffix}")
+        destinations.add(destination)
         if destination.resolve() != source.resolve():
             shutil.copy2(source, destination)
         if collection == "gpx" and gpx_phase_labels:

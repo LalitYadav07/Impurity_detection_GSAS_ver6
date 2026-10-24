@@ -134,13 +134,19 @@ def inspect_reduced_setup(path: str | Path) -> ReducedSetup:
     header: list[str] = []
     banks: list[ReducedBank] = []
     expected = None
+    record_count = 0
+    def check_records():
+        if banks and banks[-1].encoding == "FXYE" and record_count != banks[-1].records:
+            raise PowgenResolutionError("Incomplete POWGEN FXYE bank; wait for autoreduction to finish")
     with path.open(encoding="ascii", errors="strict") as stream:
         for line in stream:
             if len(line) > 8192:
                 raise PowgenResolutionError("POWGEN header line exceeds the metadata size limit")
             match = _BANK.fullmatch(line.strip())
             if match:
+                check_records()
                 banks.append(ReducedBank(int(match[1]), int(match[2]), int(match[3]), match[4], match[5], line.rstrip()))
+                record_count = 0
             elif not banks:
                 header.append(line)
                 count = re.match(r"#\s*(\d+)\s+Histograms", line)
@@ -148,6 +154,9 @@ def inspect_reduced_setup(path: str | Path) -> ReducedSetup:
                     expected = int(count[1])
                 if len(header) > 100:
                     raise PowgenResolutionError("No GSAS BANK header in the bounded POWGEN header")
+            elif line.strip() and not line.lstrip().startswith("#"):
+                record_count += 1
+    check_records()
     if not banks or expected is None or len(banks) != expected or len({b.bank for b in banks}) != len(banks):
         raise PowgenResolutionError("Missing, duplicate, or incomplete POWGEN diffraction banks")
     if any(b.bank <= 0 or b.channels <= 0 or b.records <= 0 for b in banks):

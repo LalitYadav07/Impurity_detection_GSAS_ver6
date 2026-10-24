@@ -1885,6 +1885,7 @@ def get_hist_and_main_phase(proj, main_phase_name: str):
     if not hists:
         raise RuntimeError("No histograms in project.")
     hist = hists[0]
+
     phases = {p.name: p for p in proj.phases()}
     if main_phase_name not in phases:
         raise RuntimeError(f"Main phase '{main_phase_name}' not found. Have: {list(phases)}")
@@ -3213,6 +3214,8 @@ def plot_gpx_fit_with_ticks(
         logger.warning(f"[plot] No histogram in {gpx_path}")
         return
     hist = hists[0]
+    from plot_payload import histogram_fit_region
+    fit_limits, excluded_ranges = histogram_fit_region(hist)
 
     # ---------------------------
     # Data arrays
@@ -3226,6 +3229,15 @@ def plot_gpx_fit_with_ticks(
         return
 
     resid = yobs - ycalc
+
+    # The reported Rwp describes the active refinement range. Do not plot
+    # uncalculated GSAS-II zeros outside that range as a failed model fit.
+    if fit_limits is not None:
+        fitted = (x >= fit_limits[0]) & (x <= fit_limits[1])
+        x, yobs, ycalc, resid = (v[fitted] for v in (x, yobs, ycalc, resid))
+        if not x.size:
+            logger.warning("[plot] No observations inside the explicit refinement limits")
+            return
 
     if downsample and downsample > 1:
         x = x[::downsample]
@@ -3619,8 +3631,7 @@ def plot_gpx_fit_with_ticks(
         
         # Add subtle annotation about data quality
         if rwp is not None:
-            quality = "Excellent" if rwp < 5 else "Good" if rwp < 10 else "Acceptable" if rwp < 15 else "Poor"
-            ax.text(0.02, 0.98, f"Fit Quality: {quality}", 
+            ax.text(0.02, 0.98, f"Rwp: {rwp:.2f}% (fitted range)",
                    transform=ax.transAxes, fontsize=8,
                    va='top', ha='left', style='italic',
                    bbox=dict(boxstyle="round,pad=0.3", 
@@ -3678,6 +3689,8 @@ def plot_gpx_fit_with_ticks(
                     "x_label": xlabel,
                     "instrument_type": inst,
                     "rwp": float(rwp) if rwp is not None else None,
+                    "fit_limits": fit_limits,
+                    "excluded_ranges": excluded_ranges,
                     "phase_order": [str(p) for p in phase_order],
                     "phase_labels": {
                         str(k): phase_display_label(k, v)

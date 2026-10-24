@@ -13,6 +13,7 @@ import math
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from .facility_metadata import parse_nexus_timestamp
 
 
 RECIPES = {
@@ -237,7 +238,7 @@ def metric_unit(metric, representation):
 
 def timestamp(value):
     try:
-        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        parsed = parse_nexus_timestamp(value)
         return parsed.timestamp() if parsed.tzinfo is not None else None
     except (ValueError, OverflowError, OSError):
         return None
@@ -642,6 +643,18 @@ def calculate_views(
             axis=axis,
             value_unit=metric_unit(metric, representation),
         )
+        review_scans = [
+            s
+            for s in scans
+            if s.get("scientific_status") == "needs_review"
+            and (not view.samples or _sample(s) in view.samples)
+            and (not view.banks or s.get("bank") in view.banks)
+        ]
+        result["review_required"] = bool(review_scans)
+        if review_scans:
+            result["notices"].append(
+                f"{len(review_scans)} scan(s) require scientific review. Derived values remain conditional on the accepted model, input profile and recorded metadata."
+            )
         groups = {}
         cohorts = {}
         skipped = {}
@@ -670,7 +683,10 @@ def calculate_views(
                     reason = "missing or unqualified horizontal-axis metadata"
                 elif scan.get("post_analysis_revision_conflict"):
                     reason = "conflicting active revisions; select one accepted revision"
-                elif metric == "weight_percent" and state not in {"refined", "constraint-derived"}:
+                elif metric == "weight_percent" and state not in {
+                    "refined",
+                    "constraint-derived",
+                }:
                     # Legacy fractions are exploratory, never silently represented as qualified.
                     state = "unverified-fraction"
                 if reason:
@@ -681,6 +697,7 @@ def calculate_views(
                     "value": value,
                     "variance": variance,
                     "state": state,
+                    "scientific_status": scan.get("scientific_status", "not_assessed"),
                     "x": x["value"] if x else None,
                     "axis_unit": x["unit"] if x else "",
                     "axis_source": x["source"] if x else "",
@@ -759,7 +776,11 @@ def calculate_views(
                 continue
             reference_key = f"{view.id}:{key}"
             reference_id = view.reference_run or references.get(reference_key)
-            needs_reference = representation in {"difference", "relative", "microstrain"}
+            needs_reference = representation in {
+                "difference",
+                "relative",
+                "microstrain",
+            }
             if needs_reference and not reference_id:
                 earlier_pending = any(
                     (number(p.get("run_number")) or math.inf)
@@ -811,7 +832,14 @@ def calculate_views(
                 if explicit:
                     branch = str(explicit)
                 elif (
-                    axis in {"temperature", "magnetic_field", "pressure", "voltage", "capacity"}
+                    axis
+                    in {
+                        "temperature",
+                        "magnetic_field",
+                        "pressure",
+                        "voltage",
+                        "capacity",
+                    }
                     and number(x) is not None
                 ):
                     new = (
@@ -858,7 +886,7 @@ def calculate_views(
                         elif representation == "difference":
                             point.update(
                                 value=raw - base,
-                                variance=va + vb if va is not None and vb is not None else None,
+                                variance=(va + vb if va is not None and vb is not None else None),
                             )
                         else:
                             factor = 1e6 if representation == "microstrain" else 100
@@ -873,7 +901,9 @@ def calculate_views(
                 elif representation == "progress":
                     if view.progress_start is None or view.progress_end is None:
                         point.update(
-                            value=None, variance=None, reason="fixed progress endpoints required"
+                            value=None,
+                            variance=None,
+                            reason="fixed progress endpoints required",
                         )
                     else:
                         span = view.progress_end - view.progress_start

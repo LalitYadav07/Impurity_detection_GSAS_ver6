@@ -133,7 +133,7 @@ def view_figure(view, settings: ViewSettings):
                     error_y={
                         "type": "data",
                         "array": [
-                            math.sqrt(p["variance"]) if p.get("variance") is not None else None
+                            (math.sqrt(p["variance"]) if p.get("variance") is not None else None)
                             for p in points
                         ],
                         "visible": settings.show_uncertainty,
@@ -161,6 +161,15 @@ def view_figure(view, settings: ViewSettings):
         legend={"orientation": "h"},
         uirevision=f"{view['id']}:{view.get('axis')}:{view.get('metric')}:{view.get('representation')}",
     )
+    if view.get("review_required"):
+        figure.update_layout(
+            title={
+                "text": "Scientific review required",
+                "font": {"size": 14},
+                "x": 0.02,
+            },
+            margin={"l": 75, "r": 20, "t": 85, "b": 65},
+        )
     figure.update_xaxes(
         title_text=axis_title(view),
         row=len(banks),
@@ -230,6 +239,7 @@ def export_bundle(result, settings, scans):
                 "raw_value",
                 "raw_variance",
                 "state",
+                "scientific_status",
                 "branch",
                 "reference_run",
                 "excluded",
@@ -247,7 +257,12 @@ def export_bundle(result, settings, scans):
                             **point,
                             **{
                                 key: view.get(key)
-                                for key in ["metric", "representation", "value_unit", "axis"]
+                                for key in [
+                                    "metric",
+                                    "representation",
+                                    "value_unit",
+                                    "axis",
+                                ]
                             },
                         }
                     )

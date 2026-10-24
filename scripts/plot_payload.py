@@ -8,6 +8,22 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 
+def histogram_fit_region(histogram):
+    """Read explicit GSAS-II active limits/exclusions, never infer from ycalc."""
+    limits = histogram.data.get("Limits") or []
+    def interval(value):
+        if not isinstance(value, (list, tuple, np.ndarray)) or len(value) != 2:
+            return None
+        try:
+            pair = [float(v) for v in value]
+        except (TypeError, ValueError):
+            return None
+        return pair if all(np.isfinite(pair)) and pair[0] < pair[1] else None
+    active = interval(limits[1]) if len(limits) > 1 else None
+    excluded = [pair for value in limits[2:] if (pair := interval(value)) is not None]
+    return active, excluded
+
+
 def _to_jsonable(value: Any) -> Any:
     if isinstance(value, dict):
         return {str(k): _to_jsonable(v) for k, v in value.items()}

@@ -120,7 +120,8 @@ def _eastern_iso_timestamp(value: Any) -> str | None:
     if not text:
         return None
     try:
-        timestamp = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        from .facility_metadata import parse_nexus_timestamp
+        timestamp = parse_nexus_timestamp(text)
     except ValueError:
         return text
     if timestamp.tzinfo is None:
@@ -816,6 +817,26 @@ def gsas_figure(payload: dict[str, Any]) -> go.Figure:
     yobs = _array(arrays, "yobs", "observed")
     ycalc = _array(arrays, "ycalc", "calculated")
     residual = _array(arrays, "resid", "difference")
+    def interval(value):
+        if not isinstance(value, (list, tuple)) or len(value) != 2:
+            return None
+        pair = [_as_float(v) for v in value]
+        return pair if all(v is not None and np.isfinite(v) for v in pair) and pair[0] < pair[1] else None
+    fit_limits = interval(payload.get("fit_limits"))
+    excluded_ranges = [pair for value in payload.get("excluded_ranges", [])
+                       if (pair := interval(value)) is not None]
+    model_x, model_y, model_residual = [], [], []
+    previous = None
+    for index, value in enumerate(x):
+        if previous is not None and any(previous < high and value > low
+                                        for low, high in excluded_ranges):
+            model_x.append(None); model_y.append(None); model_residual.append(None)
+        eligible = (fit_limits is None or fit_limits[0] <= value <= fit_limits[1]) and not any(
+            low <= value <= high for low, high in excluded_ranges)
+        model_x.append(value)
+        model_y.append(ycalc[index] if eligible and index < len(ycalc) else None)
+        model_residual.append(residual[index] if eligible and index < len(residual) else None)
+        previous = value
     phase_order = payload.get("phase_order") or []
     phase_labels = payload.get("phase_labels") or {}
     ticks = payload.get("phase_ticks") or payload.get("ticks") or {}
@@ -836,8 +857,8 @@ def gsas_figure(payload: dict[str, Any]) -> go.Figure:
         vertical_spacing=0.035,
     )
     figure.add_trace(go.Scatter(x=x, y=yobs, mode="markers", name="Observed", marker={"size": 3, "color": "#27313d", "opacity": 0.55}), row=1, col=1)
-    figure.add_trace(go.Scatter(x=x, y=ycalc, mode="lines", name="Calculated", line={"color": "#dc2626", "width": 2}), row=1, col=1)
-    figure.add_trace(go.Scatter(x=x, y=residual, mode="lines", name="Difference", line={"color": "#0f766e", "width": 1.2}), row=2, col=1)
+    figure.add_trace(go.Scatter(x=model_x, y=model_y, mode="lines", name="Calculated", connectgaps=False, line={"color": "#dc2626", "width": 2}), row=1, col=1)
+    figure.add_trace(go.Scatter(x=model_x, y=model_residual, mode="lines", name="Difference", connectgaps=False, line={"color": "#0f766e", "width": 1.2}), row=2, col=1)
     figure.add_hline(y=0, line={"color": "#94a3b8", "width": 1}, row=2, col=1)
     colors = ["#0f766e", "#2563eb", "#c2410c", "#7c3aed", "#a16207"]
     if isinstance(ticks, list):
@@ -907,6 +928,8 @@ def gsas_figure(payload: dict[str, Any]) -> go.Figure:
     figure.update_yaxes(title_text="Difference", row=2, col=1)
     figure.update_yaxes(title_text="Phases", tickmode="array", tickvals=list(range(len(axis_labels))), ticktext=axis_labels, row=3, col=1)
     figure.update_xaxes(title_text=axis_title, row=3, col=1)
+    if fit_limits is not None:
+        figure.update_xaxes(range=fit_limits, autorange=False)
     rwp = payload.get("rwp")
     title = "Refinement fit" + (f" / Rwp {float(rwp):.2f}%" if rwp is not None else "")
     longest_label = max((len(label) for label in axis_labels), default=0)
