@@ -1,8 +1,23 @@
 # NOMAD Live integration
 
-Status: deployed to NDIP-test on 2026-10-23 as Interactive 0.4.0 and Analyze
-0.5.16. NOMAD remains exploratory and is not scientifically accepted for
+Status: the last verified live catalog on 2026-10-23 registered Interactive
+0.4.0 and Analyze 0.5.16. Correction images for Interactive 0.4.1 and Analyze
+0.5.17 passed their build checks. Analyze XML synchronization completed, but
+Galaxy rollout failed because Savannah returned HTTP 503 for
+`savannah.ornl.gov/ndip/galaxy:k8` (`Init:ImagePullBackOff`). Interactive 0.4.1
+has not yet been synchronized. This correction release is not deployed or
+verified end-to-end on NDIP. NOMAD remains exploratory and is not scientifically accepted for
 automatic profile selection or quantitative phase analysis.
+
+The pending images are `nova-0bc0c70f19f7e5f7b6a9aa5c7603c1e8dcd347f2` and
+`ndip-b453687ddf6007f127772b03a4433e03a321dd5a`. Prototype commit
+`e71f80d47355b64bfad9965815ee8d3ccb2774c6` removes the unused global Savannah
+Docker login from the SSH/rsync synchronization job and cleans its temporary
+key. Source sync succeeded (job 4463678); rollout job 4463679 in pipeline
+1037860 timed out. Registry/Galaxy image recovery requires the NDIP team.
+Keep CI credentials in GitLab. After recovery, verify both jobs and the live
+Analyze catalog before deploying the separately pinned Interactive XML and
+starting a fresh session.
 
 ## Supported workflow
 
