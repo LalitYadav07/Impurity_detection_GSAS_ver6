@@ -204,9 +204,14 @@ class WatchState:
     updated_utc: str = field(default_factory=_utc_now)
     schema: str = WATCH_STATE_SCHEMA
     instrument: str = "PG3"
+    post_analysis: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.history_id = _nonempty(self.history_id, "history_id")
+        if self.post_analysis:
+            from .post_analysis import PostAnalysisSettings
+
+            self.post_analysis = PostAnalysisSettings.model_validate(self.post_analysis).model_dump(mode="json")
         if self.instrument not in {"PG3", "NOM"}:
             raise ValueError("Unsupported watch instrument")
         if self.instrument != "PG3" and self.schema == WATCH_STATE_SCHEMA:
@@ -236,6 +241,7 @@ class WatchState:
             "completed": {key: run.as_dict() for key, run in sorted(self.completed.items())},
             "failed": {key: run.as_dict() for key, run in sorted(self.failed.items())},
             "initial_backfill_complete": self.initial_backfill_complete,
+            "post_analysis": self.post_analysis,
             "updated_utc": self.updated_utc,
         }
 
@@ -260,6 +266,7 @@ class WatchState:
             # restored watch discovers historical scans that were skipped by
             # the old newest-only startup policy.
             initial_backfill_complete=bool(value.get("initial_backfill_complete", False)),
+            post_analysis=dict(value.get("post_analysis") or {}),
             updated_utc=str(value.get("updated_utc") or _utc_now()),
             schema=str(value["$schema"]),
         )

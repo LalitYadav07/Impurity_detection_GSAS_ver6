@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "radar-pd-observables/v1",
+  "title": "Trusted RADAR-PD GPX observations",
+  "type": "object",
+  "required": ["$schema", "extractor_version", "source_gpx_sha256", "context", "phases", "fraction_basis"],
+  "properties": {
+    "$schema": {"const": "radar-pd-observables/v1"},
+    "extractor_version": {"const": 1},
+    "source_gpx_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "model_selection": {"type": "string"},
+    "fraction_basis": {"type": "string"},
+    "context": {"type": "object"},
+    "phases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["phase_key", "basis_key", "metric_states", "covariance_fresh", "fraction_state"],
+        "properties": {
+          "phase_key": {"type": "string", "minLength": 1},
+          "basis_key": {"type": "string"},
+          "metric_states": {
+            "type": "object",
+            "additionalProperties": {"enum": ["refined", "constraint-derived", "fixed", "unknown", "stale"]}
+          },
+          "covariance_fresh": {"type": "boolean"},
+          "fraction_state": {"enum": ["refined", "constraint-derived", "fixed_or_unverified", "unknown"]},
+          "weight_percent": {"type": ["number", "null"], "minimum": 0, "maximum": 100},
+          "cell_covariance": {
+            "anyOf": [
+              {"type": "null"},
+              {"type": "array", "minItems": 7, "maxItems": 7,
+                "items": {"type": "array", "minItems": 7, "maxItems": 7, "items": {"type": "number"}}}
+            ]
+          }
+        }
+      }
+    }
+  }
+}

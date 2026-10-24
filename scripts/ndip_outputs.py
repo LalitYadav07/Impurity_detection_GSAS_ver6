@@ -838,6 +838,7 @@ def collect_outputs(
     atomic_write_json(portal / "gpx_index.json", gpx_index)
     summary, hypotheses, phases, hypothesis_stage = _summary_sources(run_root, mode)
     lattice, final_rwp, scientific_warnings = [], None, []
+    final_gpx = None
     if mode == "full" and published_gpx_sources:
         try:
             try:
@@ -864,6 +865,20 @@ def collect_outputs(
     input_provenance = read_json(input_provenance_path) if input_provenance_path else {}
     if isinstance(input_provenance, dict):
         scientific_warnings.extend(input_provenance.get("warnings") or [])
+    observables = {}
+    if final_gpx is not None and lattice:
+        try:
+            try:
+                from .ndip_observables import observations_from_project
+            except ImportError:
+                from ndip_observables import observations_from_project
+            observables = observations_from_project(final_gpx, lattice, _read_gpx_records(final_gpx),
+                mode=mode, input_provenance=input_provenance if isinstance(input_provenance,dict) else {})
+            observations_path = portal / "tables" / "Scientific_observables.json"
+            atomic_write_json(observations_path, observables)
+            collection_records["tables"].append(file_record(observations_path, role="table", root=portal))
+        except Exception as exc:
+            scientific_warnings.append({"code":"observables_unavailable","message":f"Could not extract scientific observables: {exc}"})
     effective_status = "failed" if status == "failed" else ("complete" if manifest.get("status", status) == "complete" else status)
     root = Path(project_root).resolve() if project_root else Path(__file__).resolve().parents[1]
     result: dict[str, Any] = {
@@ -875,6 +890,7 @@ def collect_outputs(
         "summary": summary,
         "phases": phases,
         "lattice_parameters": lattice,
+        "observables": observables,
         "final_rwp": final_rwp,
         "scientific_status": "needs_review" if scientific_warnings else "not_assessed" if not lattice else "checks_passed",
         "hypotheses": hypotheses,

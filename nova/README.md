@@ -101,6 +101,10 @@ recipe for a continuously arriving reduced-data folder. The recipe is consumed
 by `scripts/ndip_ipts_watch.py`, which must run as an NDIP-managed worker; it is
 not tied to the lifetime of the NOVA browser session.
 
+## Selectable post-analysis
+
+Select scientific views before running and adjust their axes, phases, references and representation in the dashboard. Configurations and live checkpoints preserve these choices; presentation changes do not launch refinements. The matching Analyze extractor supplies final fit-state and covariance information. See [post-analysis usage and scientific limits](../docs/ndip_post_analysis.md) for the implemented calculations, reviewed axis mappings and prerequisites for advanced recipes.
+
 ## Local checks
 
 ```bash

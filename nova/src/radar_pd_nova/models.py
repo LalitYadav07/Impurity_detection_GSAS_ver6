@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from .post_analysis import PostAnalysisSettings
 
 
 class AnalysisMode(str, Enum):
@@ -190,6 +191,7 @@ class AnalysisConfig(BaseModel):
     rapid_parallel_workers: int = Field(default=4, ge=1, le=16)
     rapid_show_family_variants: bool = True
     rapid_final_polish_enabled: bool = False
+    post_analysis: PostAnalysisSettings = Field(default_factory=PostAnalysisSettings)
 
     @field_validator("sample_elements", "environment_elements", mode="before")
     @classmethod
@@ -250,6 +252,7 @@ class AnalysisConfig(BaseModel):
 
         return {
             "$schema": "radar-pd-config/v1",
+            "post_analysis": self.post_analysis.model_dump(mode="json"),
             "created_utc": datetime.now(timezone.utc).isoformat(),
             "analysis": {
                 "mode": self.mode.value,

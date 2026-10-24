@@ -165,7 +165,7 @@ def test_all_numeric_fields_ignore_mouse_wheel_changes() -> None:
     ]
 
     assert number_fields
-    assert len(number_fields) == 38
+    assert len(number_fields) == 50
     assert all('type="text"' in field for field in number_fields)
     assert 'type="number"' not in app.layout.html
 
@@ -174,7 +174,7 @@ def test_plotly_canvases_have_nonzero_layout_frames() -> None:
     app = RadarPdNovaApp()
     template = app.layout.html
 
-    assert template.count('class="radar-plot-frame"') == 5
+    assert template.count('class="radar-plot-frame"') == 6
     assert ".radar-plot-frame { position: relative; width: 100%; height: 720px;" in app._css()
     assert "Plotly.Plots.resize" in template
     assert "window.Plotly && window.Plotly.Plots.resize" in template

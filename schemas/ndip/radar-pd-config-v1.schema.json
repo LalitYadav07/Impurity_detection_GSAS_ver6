@@ -6,6 +6,68 @@
   "required": ["$schema", "analysis", "chemistry", "pattern", "background", "main_phase", "full", "rapid"],
   "properties": {
     "$schema": {"const": "radar-pd-config/v1"},
+    "post_analysis": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": 1,
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "axis": {
+          "default": "auto",
+          "enum": [
+            "auto",
+            "run_number",
+            "start_time",
+            "elapsed_time",
+            "temperature",
+            "magnetic_field",
+            "pressure",
+            "voltage",
+            "capacity",
+            "sample_state"
+          ],
+          "title": "Axis",
+          "type": "string"
+        },
+        "views": {
+          "items": {
+            "$ref": "#/$defs/ViewSettings"
+          },
+          "maxItems": 30,
+          "title": "Views",
+          "type": "array"
+        },
+        "axis_mappings": {
+          "additionalProperties": {
+            "additionalProperties": {
+              "$ref": "#/$defs/AxisMapping"
+            },
+            "type": "object"
+          },
+          "title": "Axis Mappings",
+          "type": "object"
+        },
+        "references": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "References",
+          "type": "object"
+        },
+        "phase_colors": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "Phase Colors",
+          "type": "object"
+        }
+      },
+      "title": "PostAnalysisSettings",
+      "type": "object"
+    },
     "created_utc": {"type": "string"},
     "analysis": {
       "type": "object",
@@ -89,6 +151,374 @@
         "show_family_variants": {"type": "boolean"},
         "final_polish_enabled": {"type": "boolean"}
       }
+    }
+  },
+  "$defs": {
+    "AxisMapping": {
+      "additionalProperties": false,
+      "description": "An explicit reviewed sample/run mapping; never inferred from a title.",
+      "properties": {
+        "value": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "title": "Value"
+        },
+        "unit": {
+          "title": "Unit",
+          "type": "string"
+        },
+        "source": {
+          "minLength": 1,
+          "title": "Source",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "measured",
+            "nominal_composition",
+            "preparation_history",
+            "user_supplied"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "verified": {
+          "default": false,
+          "title": "Verified",
+          "type": "boolean"
+        },
+        "branch": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Branch"
+        },
+        "cycle": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cycle"
+        }
+      },
+      "required": [
+        "value",
+        "unit",
+        "source",
+        "kind"
+      ],
+      "title": "AxisMapping",
+      "type": "object"
+    },
+    "ViewSettings": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "phase_evolution",
+            "thermal_expansion",
+            "distortion",
+            "lattice_strain",
+            "transition_hysteresis",
+            "reaction_progress",
+            "operando",
+            "sample_composition",
+            "broadening",
+            "atomic_structure"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "metric": {
+          "default": "",
+          "title": "Metric",
+          "type": "string"
+        },
+        "representation": {
+          "default": "auto",
+          "enum": [
+            "auto",
+            "absolute",
+            "difference",
+            "relative",
+            "microstrain",
+            "progress"
+          ],
+          "title": "Representation",
+          "type": "string"
+        },
+        "axis": {
+          "default": "shared",
+          "enum": [
+            "shared",
+            "auto",
+            "run_number",
+            "start_time",
+            "elapsed_time",
+            "temperature",
+            "magnetic_field",
+            "pressure",
+            "voltage",
+            "capacity",
+            "sample_state"
+          ],
+          "title": "Axis",
+          "type": "string"
+        },
+        "phases": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Phases",
+          "type": "array"
+        },
+        "samples": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Samples",
+          "type": "array"
+        },
+        "banks": {
+          "items": {
+            "type": "integer"
+          },
+          "title": "Banks",
+          "type": "array"
+        },
+        "branch": {
+          "default": "all",
+          "title": "Branch",
+          "type": "string"
+        },
+        "reference_run": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reference Run"
+        },
+        "connect": {
+          "default": false,
+          "title": "Connect",
+          "type": "boolean"
+        },
+        "show_uncertainty": {
+          "default": true,
+          "title": "Show Uncertainty",
+          "type": "boolean"
+        },
+        "x_range": {
+          "anyOf": [
+            {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ]
+                },
+                {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ]
+                }
+              ],
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "X Range"
+        },
+        "y_range": {
+          "anyOf": [
+            {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Y Range"
+        },
+        "include_fixed": {
+          "default": false,
+          "title": "Include Fixed",
+          "type": "boolean"
+        },
+        "excluded_runs": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Excluded Runs",
+          "type": "array"
+        },
+        "hkl": {
+          "default": [
+            1,
+            0,
+            0
+          ],
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "integer"
+            }
+          ],
+          "title": "Hkl",
+          "type": "array"
+        },
+        "progress_start": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Progress Start"
+        },
+        "progress_end": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Progress End"
+        },
+        "time_zero": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Time Zero"
+        },
+        "threshold": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Threshold"
+        },
+        "fit_expansion": {
+          "default": false,
+          "title": "Fit Expansion",
+          "type": "boolean"
+        },
+        "fit_min": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fit Min"
+        },
+        "fit_max": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fit Max"
+        },
+        "max_temperature_span": {
+          "default": 2.0,
+          "minimum": 0,
+          "title": "Max Temperature Span",
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "kind"
+      ],
+      "title": "ViewSettings",
+      "type": "object"
     }
   }
 }

@@ -24,6 +24,8 @@ from trame.widgets import client, html, plotly, vuetify3 as vuetify
 import yaml
 
 from .configuration import config_from_contract, load_configuration
+from .post_analysis_ui import PostAnalysisMixin
+from .post_analysis import PostAnalysisSettings
 from .facility import FacilityBrowser, FacilityPathError, WatchRecipe
 from .galaxy_service import (
     COMPARE_SERIES_TOOL_ID,
@@ -65,6 +67,7 @@ from .results import (
     experiment_phase_heatmap_figure,
     experiment_lattice_figure,
     experiment_sample_identity,
+    experiment_scan_summary,
     figure_for_payload,
     load_plot_with_fallback,
     phase_fraction_rows,
@@ -134,6 +137,7 @@ _SUBMISSION_FIELDS = (
     "full_lattice_tiebreak_score_tol", "full_candidate_pruning", "full_knee_min_points_hist",
     "full_knee_min_relative_span", "full_knee_keep_if_no_knee", "full_knee_keep_at_most",
     "excluded_space_groups",
+    "post_analysis",
     "rapid_phases_per_hypothesis", "rapid_stage_output_limit", "rapid_gsas_validation_limit",
     "rapid_parallel_workers", "rapid_show_family_variants", "rapid_final_polish_enabled", "history_data_id",
     "history_instrument_id", "history_main_cif_id", "history_database_id",
@@ -241,7 +245,7 @@ def _powgen_retry_time(value: Any) -> datetime | None:
     return retry_at.astimezone(timezone.utc)
 
 
-class RadarPdNovaApp(ThemedApp):
+class RadarPdNovaApp(PostAnalysisMixin, ThemedApp):
     """Interactive orchestration and results workspace backed by Galaxy."""
 
     def __init__(self) -> None:
@@ -399,6 +403,7 @@ class RadarPdNovaApp(ThemedApp):
         state.rapid_parallel_workers = 4
         state.rapid_show_family_variants = True
         state.rapid_final_polish_enabled = False
+        self._init_post_analysis()
         state.history_datasets = []
         state.history_search = ""
         state.history_offset = 0
@@ -1436,6 +1441,7 @@ class RadarPdNovaApp(ThemedApp):
                                     v_show="!!powgen_configuration_yaml",
                                     classes="radar-config-preview mt-2",
                                 )
+                    self._post_analysis_setup()
                     vuetify.VAutocomplete(
                         label="Candidate library for monitored scans",
                         v_model=("powgen_database_dataset_id",),
@@ -2413,6 +2419,7 @@ class RadarPdNovaApp(ThemedApp):
                 display_number="radiation === 'neutron' ? '11' : '10'",
             ):
                 vuetify.VTextField(label="Run name", v_model=("run_name",), density="compact", variant="outlined", placeholder="Generated automatically if blank")
+                self._post_analysis_setup()
                 with html.Div(classes="radar-checklist"):
                     for label, expression in (
                         ("Connected to NDIP", "connection_ok"),
@@ -2631,6 +2638,7 @@ class RadarPdNovaApp(ThemedApp):
                 html.Div("{{ metric.label }}", classes="radar-metric-label")
                 html.Div("{{ metric.value }}", classes="radar-metric-value")
                 html.Div("{{ metric.detail }}", classes="radar-run-list-meta")
+        self._post_analysis_dashboard()
         with html.Div(v_if="powgen_scientific_rows.length", classes="radar-experiment-grid"):
             with html.Section(classes="radar-result-card radar-experiment-phase-card"):
                 with html.Div(classes="radar-card-heading"):
@@ -2703,16 +2711,6 @@ class RadarPdNovaApp(ThemedApp):
                     items_per_page=15,
                     no_data_text="No completed scan summaries are available yet.",
                 )
-            with html.Section(classes="radar-result-card radar-experiment-table-card"):
-                html.H3("Lattice parameters across scans")
-                html.P("Error bars show covariance standard uncertainties when available. Missing uncertainties are not zero. Banks are analyzed independently.", classes="radar-section-help")
-                vuetify.VSelect(label="Lattice parameter", v_model=("powgen_lattice_parameter",),
-                    items=(["a", "b", "c", "alpha", "beta", "gamma", "volume"],), density="compact",
-                    update_modelValue=(self.update_powgen_dashboard_axis, "[]"))
-                with html.Div(classes="radar-plot-frame"):
-                    self._powgen_lattice_widget = plotly.Figure(display_mode_bar=True)
-                vuetify.VBtn("Download lattice series CSV", click=self.download_powgen_lattice,
-                    prepend_icon="mdi-download", variant="outlined", size="small")
             with html.Section(classes="radar-result-card radar-experiment-latest-card"):
                 with html.Div(classes="radar-card-heading"):
                     with html.Div():
@@ -2915,6 +2913,7 @@ class RadarPdNovaApp(ThemedApp):
             html.Div("Phase fractions are not available in this result.", v_if="!phase_rows.length", classes="radar-empty-compact")
 
     def _results_dashboard(self) -> None:
+        self._post_analysis_dashboard()
         with html.Div(classes="radar-section-heading"):
             with html.Div():
                 html.H2("{{ viewed_run_mode === 'rapid' ? 'Rapid Results' : 'Scientific Results' }}")
@@ -3865,6 +3864,9 @@ class RadarPdNovaApp(ThemedApp):
             return
         try:
             selected = config or self.service.load_configuration_dataset(dataset_id)
+            if dataset_id != getattr(self, "_post_configuration_preview_id", None):
+                self._set_post_settings(selected.post_analysis)
+                self._post_configuration_preview_id = dataset_id
             label = self._powgen_dataset_label(
                 state.history_configuration_datasets,
                 dataset_id,
@@ -4098,6 +4100,7 @@ class RadarPdNovaApp(ThemedApp):
             "rapid_parallel_workers": int(state.rapid_parallel_workers),
             "rapid_show_family_variants": bool(state.rapid_show_family_variants),
             "rapid_final_polish_enabled": bool(state.rapid_final_polish_enabled),
+            "post_analysis": state.post_analysis,
         }
         if state.analysis_mode == "full" and state.full_profile in presets:
             values.update(presets[state.full_profile])
@@ -4407,6 +4410,10 @@ class RadarPdNovaApp(ThemedApp):
                 "warning_count": int(summary.get("warning_count") or 0),
                 "error_count": int(summary.get("error_count") or 0),
                 "lattice_parameters": list(summary.get("lattice_parameters") or []),
+                "observables": dict(summary.get("observables") or {}),
+                "instrument": getattr(controller.settings, "instrument", "PG3"),
+                "ipts": getattr(controller.settings, "ipts", ""),
+                "configuration_id": getattr(controller.settings, "configuration_dataset_id", ""),
                 "scientific_status": str(summary.get("scientific_status") or "not_assessed"),
                 "scientific_warnings": list(summary.get("scientific_warnings") or []),
             }
@@ -4568,6 +4575,29 @@ class RadarPdNovaApp(ThemedApp):
         self._update_powgen_dashboard_figures(scientific_rows)
 
     def _update_powgen_dashboard_figures(self, rows: list[dict[str, Any]]) -> None:
+        controller = getattr(self, "_powgen_controller", None)
+        pending = (
+            [
+                {
+                    "run_id": run.run_id,
+                    "run_number": run.run_number,
+                    "metadata": dict(run.scan_metadata),
+                    "bank": run.bank,
+                }
+                for phase in (controller.state.discovered, controller.state.submitted)
+                for run in phase.values()
+            ]
+            if controller is not None else []
+        )
+        scope = "watch:" + (controller.source_directory if controller is not None else "none")
+        if str(getattr(self.server.state, "workspace_view", "")) != "results":
+            if getattr(self, "_post_analysis_scope", None) != scope:
+                if controller is not None and controller.state.post_analysis:
+                    self._set_post_settings(
+                        PostAnalysisSettings.model_validate(controller.state.post_analysis)
+                    )
+                self._post_analysis_scope = scope
+            self._refresh_post_analysis(rows, pending=pending)
         x_key = str(self.server.state.powgen_x_axis or "run_number")
         selected_labels = [str(label) for label in (self.server.state.powgen_selected_phase_labels or [])]
         if self._powgen_phase_widget is not None:
@@ -4618,6 +4648,10 @@ class RadarPdNovaApp(ThemedApp):
         selected = str(value or self.server.state.powgen_x_axis or "run_number")
         valid = {str(option["value"]) for option in (self.server.state.powgen_x_axis_options or [])}
         self.server.state.powgen_x_axis = selected if selected in valid else "run_number"
+        if hasattr(self, "_post_analysis_scans"):
+            settings = self._post_settings()
+            settings.axis = self.server.state.powgen_x_axis
+            self.server.state.post_analysis = settings.model_dump(mode="json")
         self._update_powgen_dashboard_figures(list(self.server.state.powgen_scientific_rows or []))
         self.server.state.flush()
 
@@ -5207,6 +5241,12 @@ class RadarPdNovaApp(ThemedApp):
                 controller_class = PowgenWatchController if adapter.instrument == "PG3" else adapter.controller
                 self._powgen_controller = controller_class(self.service, settings, sample_index=self._powgen_sample_index(ipts))
                 restored = self._powgen_controller.restore_latest_state()
+                if restored and self._powgen_controller.state.post_analysis:
+                    self._set_post_settings(
+                        PostAnalysisSettings.model_validate(self._powgen_controller.state.post_analysis)
+                    )
+                else:
+                    self._powgen_controller.state.post_analysis = self._post_settings().model_dump(mode="json")
                 self._powgen_settings_signature = signature
 
             else:
@@ -6279,6 +6319,9 @@ class RadarPdNovaApp(ThemedApp):
             if field == "run_name":
                 continue
             value = getattr(config, field)
+            if field == "post_analysis":
+                self._set_post_settings(value)
+                continue
             state_field = "analysis_mode" if field == "mode" else field
             if field in {"sample_elements", "environment_elements"}:
                 value = ", ".join(value)
@@ -6566,6 +6609,24 @@ class RadarPdNovaApp(ThemedApp):
         self._reset_result_state()
         payload = self.service.result_payload(record)
         result_document = payload.get("summary") or {}
+        self._post_analysis_scope = "single:" + record.uid
+        if record.config is not None:
+            self._set_post_settings(record.config.post_analysis)
+        single_scan = experiment_scan_summary(result_document)
+        single_scan.update(
+            run_id=record.name,
+            run_number=(record.inputs.run_number if record.inputs else None) or 1,
+            instrument=record.inputs.instrument if record.inputs else None,
+            ipts=record.inputs.ipts if record.inputs else None,
+            metadata=dict(record.provenance.get("scan_metadata") or {}),
+            bank=record.inputs.bank if record.inputs else None,
+        )
+        single_scan["configuration_id"] = (
+            record.input_dataset_ids.get("configuration")
+            or record.prepared_dataset_ids.get("configuration")
+            or ""
+        )
+        self._refresh_post_analysis([single_scan], pending=[])
         state.viewed_run_mode = record.mode.value
         state.viewed_output_profile = record.output_profile
         state.viewed_run_name = record.name
