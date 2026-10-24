@@ -14,9 +14,11 @@ def test_container_reuses_supported_nova_supervisor_contract() -> None:
     dockerfile = _read("dockerfiles/Dockerfile")
     supervisor = _read("dockerfiles/supervisord.conf")
 
-    assert dockerfile.startswith(
-        "FROM savannah.ornl.gov/radar-pd/radar-pd-nova:nova-0.3.2"
-        "@sha256:657057335458b5484853494ed929470bd0817bf83a4afcb3e0320a026889d7d7\n"
+    base = next(line for line in dockerfile.splitlines() if line.startswith("FROM "))
+    assert base == (
+        "FROM ghcr.io/lalityadav07/impurity_detection_gsas_ver6:"
+        "nova-78f2dcedcd5eed1db1c0885a47dc47cac18d63e0"
+        "@sha256:9bd0abb274eec3bfe4a55a01b4beccecf55660afa920be7d4be6e1ef46aa0a5e"
     )
     assert "ENV PIXI_ENVIRONMENT_NAME=production" in dockerfile
     assert "PYTHONPATH=/src/src" in dockerfile
