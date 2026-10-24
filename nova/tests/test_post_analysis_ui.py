@@ -30,6 +30,130 @@ def test_selecting_no_views_removes_all_panels_and_survives_config_round_trip():
     assert config.post_analysis.views == []
 
 
+def test_point_inspection_outside_watch_exposes_provenance_without_opening_a_job():
+    app = app_with_data()
+    app._post_analysis_scope = "single:saved-result"
+    view = next(v for v in app._post_analysis_result["views"] if v["id"] == "cells")
+    series = view["series"][0]
+    point = series["points"][0]
+    app.select_post_analysis_point(
+        {"points": [{"customdata": [point["run_id"], "", "", "", "", "", series["phase_key"]]}]},
+        "cells",
+    )
+    state = app.server.state
+    assert state.post_analysis_point_open
+    assert not state.post_analysis_point_can_open
+    details = {row["label"]: row["value"] for row in state.post_analysis_point_details}
+    assert details["Scan"] == point["run_id"]
+    assert details["Phase"] == series["phase"]
+    assert details["Source bank"] == str(series["bank"])
+    assert "GPX SHA-256" in details
+
+
+def test_live_point_opens_details_before_explicit_scan_navigation():
+    app = app_with_data()
+    app._post_analysis_scope = "watch:/SNS/NOM/IPTS-1/shared/autoreduce"
+    navigation = []
+    opened = []
+    app.select_powgen_scan = navigation.append
+    app.open_powgen_selected_run = lambda: opened.append(True)
+    view = next(v for v in app._post_analysis_result["views"] if v["id"] == "cells")
+    series = view["series"][0]
+    point = series["points"][0]
+    app.select_post_analysis_point(
+        {"points": [{"customdata": [point["run_id"], "", "", "", "", "", series["phase_key"]]}]},
+        "cells",
+    )
+    assert app.server.state.post_analysis_point_can_open
+    assert navigation == []
+    app.open_post_analysis_scan()
+    assert navigation == [point["run_id"]]
+    assert opened == [True]
+    assert not app.server.state.post_analysis_point_open
+
+
+def test_expanding_a_saved_view_preserves_data_and_scientific_settings():
+    app = app_with_data()
+    settings = copy.deepcopy(app.server.state.post_analysis)
+    data = copy.deepcopy(app._post_analysis_result)
+    app.open_plot_inspector("post", "cells")
+    assert app.server.state.post_analysis_inspector_open
+    assert app.server.state.post_analysis_inspector_figure["data"]
+    assert app.server.state.post_analysis == settings
+    assert app._post_analysis_result == data
+
+
+def test_observations_keep_missing_and_excluded_values_with_reasons():
+    app = app_with_data()
+    app.update_post_analysis_setting("excluded_runs", ["NOM_1_BANK1"])
+    rows = app.server.state.post_analysis_observation_rows
+    excluded = next(row for row in rows if row["scan"] == "NOM_1_BANK1")
+    assert "Excluded" in excluded["status"]
+    assert excluded["value"] == "Unavailable"
+    assert len(rows) == 2
+
+
+@pytest.mark.parametrize("field", ["phases", "banks", "samples"])
+def test_clearing_a_display_filter_means_all_and_does_not_leave_an_error(field):
+    app = app_with_data()
+    app.update_post_analysis_setting(field, None)
+    assert getattr(next(v for v in app._post_settings().views if v.id == "cells"), field) == []
+    assert not app.server.state.post_analysis_error
+
+
+def test_focus_defaults_to_one_view_and_reference_controls_follow_the_metric():
+    app = app_with_data()
+    assert app.server.state.post_analysis_show_all is False
+    app.select_post_analysis_view("phases")
+    assert app.server.state.post_analysis_reference_needed is False
+    app.update_post_analysis_setting("representation", "difference")
+    assert app.server.state.post_analysis_reference_needed is True
+
+
+def test_unimplemented_recipes_are_labeled_and_disabled_in_the_picker():
+    app = app_with_data()
+    choices = {row["value"]: row for row in app.server.state.post_analysis_recipes}
+    for key in ["broadening", "atomic_structure"]:
+        assert choices[key]["props"]["disabled"]
+        assert "not available yet" in choices[key]["title"]
+    assert not choices["phase_evolution"].get("props", {}).get("disabled")
+
+
+def test_observation_table_preserves_categorical_preparation_states():
+    rows = RadarPdNovaApp._post_observations(
+        {
+            "series": [
+                {
+                    "phase": "Fe",
+                    "bank": 1,
+                    "points": [
+                        {
+                            "run_id": "scan-1",
+                            "x": "annealed",
+                            "axis_unit": "preparation state",
+                            "value": None,
+                            "reason": "missing cell value",
+                        }
+                    ],
+                }
+            ]
+        }
+    )
+    assert rows[0]["x"] == "annealed preparation state"
+    assert rows[0]["value"] == "Unavailable"
+    assert rows[0]["status"] == "missing cell value"
+
+
+def test_empty_axis_explains_the_missing_input_and_how_to_change_it():
+    app = app_with_data()
+    app.update_post_analysis_setting("axis", "voltage")
+    panel = next(p for p in app.server.state.post_analysis_panels if p["id"] == "cells")
+    assert panel["point_count"] == 0
+    assert "No qualified voltage values" in panel["empty_reason"]
+    assert "Choose another horizontal axis" in panel["empty_reason"]
+    assert app.server.state.post_analysis_active_points == 0
+
+
 def test_duplicate_views_keep_independent_axes_and_references():
     app = app_with_data()
     app.duplicate_post_analysis_view()

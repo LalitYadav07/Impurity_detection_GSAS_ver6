@@ -77,6 +77,9 @@ def view_figure(view, settings: ViewSettings):
         "#476963",
         "#845b80",
     )
+    samples = {s["sample"] for s in view.get("series", [])}
+    all_branches = {p.get("branch") for s in view.get("series", []) for p in s["points"]}
+    legend_keys = set()
     for series in view.get("series", []):
         branches = list(dict.fromkeys(p.get("branch") for p in series["points"]))
         color = colors[
@@ -105,7 +108,12 @@ def view_figure(view, settings: ViewSettings):
                 )
                 for p in points
             ]
-            name = f"{series['phase']} · sample {series['sample']} · {branch}"
+            name = series["phase"]
+            if len(samples) > 1:
+                name += f" · sample {series['sample']}"
+            if len(all_branches) > 1:
+                name += f" · {branch}"
+            legend_key = (series["phase_key"], series["sample"], branch)
             figure.add_trace(
                 go.Scatter(
                     x=xs,
@@ -114,6 +122,7 @@ def view_figure(view, settings: ViewSettings):
                     connectgaps=False,
                     name=name,
                     legendgroup=series["phase_key"],
+                    showlegend=legend_key not in legend_keys,
                     line={
                         "color": color,
                         "dash": (
@@ -146,19 +155,28 @@ def view_figure(view, settings: ViewSettings):
                             p.get("reference_run") or "none",
                             p.get("reason") or "",
                             p.get("source_gpx_sha256") or "legacy",
+                            series["phase_key"],
+                            series["bank"],
+                            series["sample"],
+                            branch,
+                            series["phase"],
                         ]
                         for p in points
                     ],
-                    hovertemplate="%{customdata[0]}<br>x=%{x}<br>value=%{y:.7g}<br>%{customdata[2]}<br>reference: %{customdata[3]}<br>%{customdata[1]}<extra>%{fullData.name}</extra>",
+                    hovertemplate="%{customdata[10]}<br>%{customdata[0]} · bank %{customdata[7]} · sample %{customdata[8]}<br>x=%{x}<br>value=%{y:.7g}<br>%{customdata[2]}<br>reference: %{customdata[3]}<br>%{customdata[1]}<extra>%{fullData.name}</extra>",
                 ),
                 row=banks.index(series.get("bank")) + 1,
                 col=1,
             )
+            legend_keys.add(legend_key)
     figure.update_layout(
         template="plotly_white",
-        height=max(340, len(banks) * 300),
-        margin={"l": 75, "r": 20, "t": 45, "b": 65},
-        legend={"orientation": "h"},
+        height=max(460, len(banks) * 300 + 180),
+        margin={"l": 75, "r": 20, "t": 45, "b": 155},
+        # Plotly 5 remains supported; it omits the newer legend height cap.
+        legend=go.layout.Legend(
+            orientation="h", y=-0.18, yanchor="top", maxheight=120, skip_invalid=True
+        ),
         uirevision=f"{view['id']}:{view.get('axis')}:{view.get('metric')}:{view.get('representation')}",
     )
     if view.get("review_required"):
@@ -168,7 +186,7 @@ def view_figure(view, settings: ViewSettings):
                 "font": {"size": 14},
                 "x": 0.02,
             },
-            margin={"l": 75, "r": 20, "t": 85, "b": 65},
+            margin={"l": 75, "r": 20, "t": 85, "b": 155},
         )
     figure.update_xaxes(
         title_text=axis_title(view),
@@ -179,6 +197,8 @@ def view_figure(view, settings: ViewSettings):
             if view.get("axis") == "run_number"
             else "date" if view.get("axis") == "start_time" else "-"
         ),
+        nticks=6,
+        automargin=True,
     )
     figure.update_yaxes(title_text=y_title(view), zeroline=view.get("representation") != "absolute")
     if settings.x_range is not None:

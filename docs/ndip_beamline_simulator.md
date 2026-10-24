@@ -114,6 +114,22 @@ prefer a stale plot from an earlier collection.
 Unsupported size/strain and atomic/site-order recipes remain unavailable until
 their required refinement and calibration contracts are implemented and tested.
 
+## Critical GUI acceptance
+
+Check actual inspection paths, not only successful rendering or page width.
+Keep one selected scientific view in focus by default; comparisons and advanced
+definitions should remain available through explicit controls. Verify that the
+first plot is reachable without scrolling past a wall of settings, that legends
+remain readable, and that blocked views explain the action required.
+
+Use native pointer clicks on actual plot points. Verify scan, phase/model, bank,
+reference, units and source details, plus an explicit route to a live scan's fit.
+Do not serialize the full Plotly event object; transmit only the required point
+identifiers. Exercise searchable observations including missing/excluded values,
+categorical preparation states, bank/sample filters, expanded plots and narrow
+screens. A display change or zoom must preserve scientific arrays and must not
+submit a refinement. Clearly label unavailable recipes in the picker.
+
 ## What still requires NDIP
 
 Local tests cannot establish current Galaxy wrapper behavior, facility mount

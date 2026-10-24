@@ -2600,6 +2600,7 @@ class RadarPdNovaApp(PostAnalysisMixin, ThemedApp):
                 with html.Div(v_show="workspace_view === 'files'", classes="radar-workspace-view"):
                     self._file_browser_view()
                 self._activity_panel()
+        self._post_analysis_inspection_dialogs()
 
     def _powgen_experiment_dashboard(self) -> None:
         with html.Div(classes="radar-section-heading"):
@@ -2639,132 +2640,135 @@ class RadarPdNovaApp(PostAnalysisMixin, ThemedApp):
                 html.Div("{{ metric.value }}", classes="radar-metric-value")
                 html.Div("{{ metric.detail }}", classes="radar-run-list-meta")
         self._post_analysis_dashboard()
-        with html.Div(v_if="powgen_scientific_rows.length", classes="radar-experiment-grid"):
-            with html.Section(classes="radar-result-card radar-experiment-phase-card"):
-                with html.Div(classes="radar-card-heading"):
-                    with html.Div():
-                        html.Div("PHASE EVOLUTION", classes="radar-micro-label")
-                        html.H3("Refined phase fractions")
-                with html.Div(classes="radar-experiment-controls"):
-                    vuetify.VSelect(
-                        label="Samples shown",
-                        v_model=("powgen_selected_samples",),
-                        items=("powgen_sample_options",),
-                        multiple=True,
-                        chips=True,
-                        closable_chips=True,
-                        clearable=True,
-                        placeholder="All samples",
-                        persistent_placeholder=True,
-                        density="compact",
-                        variant="outlined",
-                        hide_details=True,
-                        update_modelValue=(self.update_powgen_sample_selection, "[$event]"),
-                    )
-                    vuetify.VSelect(
-                        label="Horizontal axis",
-                        v_model=("powgen_x_axis",),
-                        items=("powgen_x_axis_options",),
-                        density="compact",
-                        variant="outlined",
-                        hide_details=True,
-                        update_modelValue=(self.update_powgen_dashboard_axis, "[$event]"),
-                    )
-                    vuetify.VSelect(
-                        label="Phases shown",
-                        v_model=("powgen_selected_phase_labels",),
-                        items=("powgen_phase_options",),
-                        multiple=True,
-                        chips=True,
-                        closable_chips=True,
-                        density="compact",
-                        variant="outlined",
-                        hide_details=True,
-                        update_modelValue=(self.update_powgen_phase_selection, "[$event]"),
-                        classes="radar-phase-selector",
-                    )
-                with html.Div(classes="radar-plot-frame"):
-                    self._powgen_phase_widget = plotly.Figure(display_mode_bar=True)
-            with html.Section(classes="radar-result-card radar-experiment-quality-card"):
-                with html.Div(classes="radar-card-heading"):
-                    with html.Div():
-                        html.Div("FIT STABILITY", classes="radar-micro-label")
-                        html.H3("Refinement quality")
-                with html.Div(classes="radar-plot-frame"):
-                    self._powgen_quality_widget = plotly.Figure(display_mode_bar=True)
-            with html.Section(classes="radar-result-card radar-experiment-heatmap-card"):
-                with html.Div(classes="radar-card-heading"):
-                    with html.Div():
-                        html.Div("COMPOSITION MAP", classes="radar-micro-label")
-                        html.H3("All reported phases across scans")
-                with html.Div(classes="radar-plot-frame radar-experiment-heatmap-frame"):
-                    self._powgen_heatmap_widget = plotly.Figure(display_mode_bar=True)
-            with html.Section(classes="radar-result-card radar-experiment-table-card"):
-                with html.Div(classes="radar-card-heading"):
-                    with html.Div():
-                        html.Div("SCAN RECORD", classes="radar-micro-label")
-                        html.H3("Completed analyses")
-                vuetify.VDataTable(
-                    headers=("[{title:'Scan / bank',key:'scan_label'},{title:'Sample',key:'sample_label'},{title:'Conditions',key:'conditions_display'},{title:'Rwp',key:'rwp_display'},{title:'Trend check',key:'quality_label'},{title:'Dominant refined phases',key:'phase_summary'},{title:'Runtime',key:'elapsed_display'},{title:'Mode',key:'analysis_mode'}]",),
-                    items=("powgen_scientific_rows",),
-                    density="compact",
-                    items_per_page=15,
-                    no_data_text="No completed scan summaries are available yet.",
-                )
-            with html.Section(classes="radar-result-card radar-experiment-latest-card"):
-                with html.Div(classes="radar-card-heading"):
-                    with html.Div():
-                        html.Div("SCAN INSPECTOR", classes="radar-micro-label")
-                        html.H3("Inspect one completed scan")
-                vuetify.VSelect(
-                    label="Completed scan",
-                    v_model=("powgen_selected_run_id",),
-                    items=("powgen_scan_options",),
-                    density="compact",
-                    variant="outlined",
-                    hide_details=True,
-                    update_modelValue=(self.select_powgen_scan, "[$event]"),
-                )
-                with html.Div(v_if="powgen_selected_scan.run_id", classes="radar-scan-inspector-summary"):
-                    html.Strong("{{ powgen_selected_scan.run_id }}")
-                    html.Span("Rwp {{ powgen_selected_scan.rwp_display }} | {{ powgen_selected_scan.elapsed_display }} | {{ powgen_selected_scan.analysis_mode }}")
-                    html.Span("{{ powgen_selected_scan.conditions_display }}")
-                    html.Span(
-                        "{{ powgen_selected_scan.temperature_provenance }}",
-                        v_if="powgen_selected_scan.temperature_provenance",
-                        classes="radar-section-help",
-                    )
-                    html.Span("{{ powgen_selected_scan.run_title }}", v_if="powgen_selected_scan.run_title")
-                    html.Span(
-                        "Sample: {{ powgen_selected_scan.sample_display }}",
-                        v_if="powgen_selected_scan.sample_display",
-                    )
-                    vuetify.VChip(
-                        text=("powgen_selected_quality_label",),
-                        color=("powgen_selected_quality_color",),
-                        variant="tonal",
-                        size="small",
-                    )
-                with html.Div(v_if="powgen_selected_phases.length", classes="radar-phase-list"):
-                    with html.Div(v_for="phase in powgen_selected_phases", key="phase.label", classes="radar-phase-row"):
-                        with html.Div(classes="radar-phase-copy"):
-                            html.Strong("{{ phase.phase }}")
-                            html.Span("Space group {{ phase.space_group }}")
-                        html.Strong("{{ phase.weight_display }}", classes="radar-phase-weight")
-                vuetify.VAlert(v_if="powgen_selected_scan.scientific_status === 'needs_review'",
-                    text=("(powgen_selected_scan.scientific_warnings || []).join('; ')",), type="warning", variant="tonal")
-                vuetify.VDataTable(items=("powgen_selected_lattice",), density="compact", items_per_page=5,
-                    headers=([{"title": "Phase", "key": "phase"}, *[{"title": k + " ± s.u.", "key": k + "_display"} for k in ("a", "b", "c", "alpha", "beta", "gamma", "volume")]],),
-                    no_data_text="Lattice parameters were not published by this run's batch image.")
-                vuetify.VBtn(
-                    "Open full scan result",
-                    click=self.open_powgen_selected_run,
-                    prepend_icon="mdi-open-in-new",
-                    variant="outlined",
-                    size="small",
-                    classes="mt-3",
-                    disabled=("!powgen_selected_run_id",),
-                )
+        with vuetify.VExpansionPanels(v_if="powgen_scientific_rows.length", variant="accordion", classes="my-3"):
+            with vuetify.VExpansionPanel(title="Experiment overview and scan results"):
+                with vuetify.VExpansionPanelText():
+                    with html.Div(v_if="powgen_scientific_rows.length", classes="radar-experiment-grid"):
+                        with html.Section(classes="radar-result-card radar-experiment-phase-card"):
+                            with html.Div(classes="radar-card-heading"):
+                                with html.Div():
+                                    html.Div("PHASE EVOLUTION", classes="radar-micro-label")
+                                    html.H3("Refined phase fractions")
+                            with html.Div(classes="radar-experiment-controls"):
+                                vuetify.VSelect(
+                                    label="Samples shown",
+                                    v_model=("powgen_selected_samples",),
+                                    items=("powgen_sample_options",),
+                                    multiple=True,
+                                    chips=True,
+                                    closable_chips=True,
+                                    clearable=True,
+                                    placeholder="All samples",
+                                    persistent_placeholder=True,
+                                    density="compact",
+                                    variant="outlined",
+                                    hide_details=True,
+                                    update_modelValue=(self.update_powgen_sample_selection, "[$event]"),
+                                )
+                                vuetify.VSelect(
+                                    label="Horizontal axis",
+                                    v_model=("powgen_x_axis",),
+                                    items=("powgen_x_axis_options",),
+                                    density="compact",
+                                    variant="outlined",
+                                    hide_details=True,
+                                    update_modelValue=(self.update_powgen_dashboard_axis, "[$event]"),
+                                )
+                                vuetify.VSelect(
+                                    label="Phases shown",
+                                    v_model=("powgen_selected_phase_labels",),
+                                    items=("powgen_phase_options",),
+                                    multiple=True,
+                                    chips=True,
+                                    closable_chips=True,
+                                    density="compact",
+                                    variant="outlined",
+                                    hide_details=True,
+                                    update_modelValue=(self.update_powgen_phase_selection, "[$event]"),
+                                    classes="radar-phase-selector",
+                                )
+                            with html.Div(classes="radar-plot-frame"):
+                                self._powgen_phase_widget = plotly.Figure(display_mode_bar=True)
+                        with html.Section(classes="radar-result-card radar-experiment-quality-card"):
+                            with html.Div(classes="radar-card-heading"):
+                                with html.Div():
+                                    html.Div("FIT STABILITY", classes="radar-micro-label")
+                                    html.H3("Refinement quality")
+                            with html.Div(classes="radar-plot-frame"):
+                                self._powgen_quality_widget = plotly.Figure(display_mode_bar=True)
+                        with html.Section(classes="radar-result-card radar-experiment-heatmap-card"):
+                            with html.Div(classes="radar-card-heading"):
+                                with html.Div():
+                                    html.Div("COMPOSITION MAP", classes="radar-micro-label")
+                                    html.H3("All reported phases across scans")
+                            with html.Div(classes="radar-plot-frame radar-experiment-heatmap-frame"):
+                                self._powgen_heatmap_widget = plotly.Figure(display_mode_bar=True)
+                        with html.Section(classes="radar-result-card radar-experiment-table-card"):
+                            with html.Div(classes="radar-card-heading"):
+                                with html.Div():
+                                    html.Div("SCAN RECORD", classes="radar-micro-label")
+                                    html.H3("Completed analyses")
+                            vuetify.VDataTable(
+                                headers=("[{title:'Scan / bank',key:'scan_label'},{title:'Sample',key:'sample_label'},{title:'Conditions',key:'conditions_display'},{title:'Rwp',key:'rwp_display'},{title:'Trend check',key:'quality_label'},{title:'Dominant refined phases',key:'phase_summary'},{title:'Runtime',key:'elapsed_display'},{title:'Mode',key:'analysis_mode'}]",),
+                                items=("powgen_scientific_rows",),
+                                density="compact",
+                                items_per_page=15,
+                                no_data_text="No completed scan summaries are available yet.",
+                            )
+                        with html.Section(classes="radar-result-card radar-experiment-latest-card"):
+                            with html.Div(classes="radar-card-heading"):
+                                with html.Div():
+                                    html.Div("SCAN INSPECTOR", classes="radar-micro-label")
+                                    html.H3("Inspect one completed scan")
+                            vuetify.VSelect(
+                                label="Completed scan",
+                                v_model=("powgen_selected_run_id",),
+                                items=("powgen_scan_options",),
+                                density="compact",
+                                variant="outlined",
+                                hide_details=True,
+                                update_modelValue=(self.select_powgen_scan, "[$event]"),
+                            )
+                            with html.Div(v_if="powgen_selected_scan.run_id", classes="radar-scan-inspector-summary"):
+                                html.Strong("{{ powgen_selected_scan.run_id }}")
+                                html.Span("Rwp {{ powgen_selected_scan.rwp_display }} | {{ powgen_selected_scan.elapsed_display }} | {{ powgen_selected_scan.analysis_mode }}")
+                                html.Span("{{ powgen_selected_scan.conditions_display }}")
+                                html.Span(
+                                    "{{ powgen_selected_scan.temperature_provenance }}",
+                                    v_if="powgen_selected_scan.temperature_provenance",
+                                    classes="radar-section-help",
+                                )
+                                html.Span("{{ powgen_selected_scan.run_title }}", v_if="powgen_selected_scan.run_title")
+                                html.Span(
+                                    "Sample: {{ powgen_selected_scan.sample_display }}",
+                                    v_if="powgen_selected_scan.sample_display",
+                                )
+                                vuetify.VChip(
+                                    text=("powgen_selected_quality_label",),
+                                    color=("powgen_selected_quality_color",),
+                                    variant="tonal",
+                                    size="small",
+                                )
+                            with html.Div(v_if="powgen_selected_phases.length", classes="radar-phase-list"):
+                                with html.Div(v_for="phase in powgen_selected_phases", key="phase.label", classes="radar-phase-row"):
+                                    with html.Div(classes="radar-phase-copy"):
+                                        html.Strong("{{ phase.phase }}")
+                                        html.Span("Space group {{ phase.space_group }}")
+                                    html.Strong("{{ phase.weight_display }}", classes="radar-phase-weight")
+                            vuetify.VAlert(v_if="powgen_selected_scan.scientific_status === 'needs_review'",
+                                text=("(powgen_selected_scan.scientific_warnings || []).join('; ')",), type="warning", variant="tonal")
+                            vuetify.VDataTable(items=("powgen_selected_lattice",), density="compact", items_per_page=5,
+                                headers=([{"title": "Phase", "key": "phase"}, *[{"title": k + " ± s.u.", "key": k + "_display"} for k in ("a", "b", "c", "alpha", "beta", "gamma", "volume")]],),
+                                no_data_text="Lattice parameters were not published by this run's batch image.")
+                            vuetify.VBtn(
+                                "Open full scan result",
+                                click=self.open_powgen_selected_run,
+                                prepend_icon="mdi-open-in-new",
+                                variant="outlined",
+                                size="small",
+                                classes="mt-3",
+                                disabled=("!powgen_selected_run_id",),
+                            )
         with html.Div(v_if="!powgen_scientific_rows.length", classes="radar-result-not-ready"):
             vuetify.VAlert(
                 text="Scientific trends will appear after the first scan finishes. Live discovery and processing status remain visible below.",
@@ -2913,7 +2917,6 @@ class RadarPdNovaApp(PostAnalysisMixin, ThemedApp):
             html.Div("Phase fractions are not available in this result.", v_if="!phase_rows.length", classes="radar-empty-compact")
 
     def _results_dashboard(self) -> None:
-        self._post_analysis_dashboard()
         with html.Div(classes="radar-section-heading"):
             with html.Div():
                 html.H2("{{ viewed_run_mode === 'rapid' ? 'Rapid Results' : 'Scientific Results' }}")
@@ -3024,6 +3027,7 @@ class RadarPdNovaApp(PostAnalysisMixin, ThemedApp):
                         with html.Div():
                             html.Div("PRIMARY SCIENTIFIC VIEW", classes="radar-micro-label")
                             html.H3("Refinement fit")
+                        vuetify.VBtn("Expand fit", click=(self.open_plot_inspector, "['fit']"), variant="outlined", size="small", disabled=("!plot_options.length",))
                     vuetify.VSelect(
                         v_show="plot_options.length > 1",
                         label="Inspect another published plot",
@@ -3042,6 +3046,7 @@ class RadarPdNovaApp(PostAnalysisMixin, ThemedApp):
                     html.Div("Scroll horizontally to inspect the full fit and legend.", classes="radar-plot-scroll-hint")
                     html.Div("No interactive refinement payload was published for this run.", v_if="!plot_options.length", classes="radar-empty-compact")
 
+            self._post_analysis_dashboard()
             with html.Section(v_show="viewed_run_mode === 'rapid'", classes="radar-stage-results"):
                 html.H3("Rapid hypothesis path")
                 html.P("Coarse search / lattice nudge / pattern scoring / final refinement ranking / solution inspector", classes="radar-section-help")
@@ -3120,6 +3125,7 @@ class RadarPdNovaApp(PostAnalysisMixin, ThemedApp):
                 with vuetify.VChip(v_for="group in plot_groups", key="group.name", size="small", variant="outlined", color="#15543c"):
                     html.Span("{{ group.name }} / {{ group.count }}")
             vuetify.VSelect(label="Published interactive plot", v_model=("gallery_selected_plot",), items=("plot_options",), item_title="name", item_value="path", density="compact", variant="outlined", update_modelValue=(self._gallery_plot_changed, "[$event]"))
+            vuetify.VBtn("Expand plot", click=(self.open_plot_inspector, "['gallery']"), variant="outlined", size="small", disabled=("!plot_options.length",))
             with html.Div(classes="radar-plot-frame"):
                 self._plot_widget = plotly.Figure(display_mode_bar=True)
             html.Div("No interactive plots were published.", v_if="!plot_options.length", classes="radar-empty-compact")
@@ -7685,6 +7691,19 @@ class RadarPdNovaApp(PostAnalysisMixin, ThemedApp):
         .radar-plot-frame { position: relative; width: 100%; height: 720px; min-height: 560px; overflow: hidden; }
         .radar-plot-frame > div { width: 100% !important; height: 100% !important; }
         .radar-plot-scroll-hint { display: none; }
+        .radar-post-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 12px; }
+        .radar-post-toolbar > .v-input { flex: 1 1 260px; min-width: 0; }
+        .radar-post-controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr)); gap: 12px; }
+        .radar-inspector-card { height: 100vh; overflow: auto; }
+        .radar-inspector-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 16px; position: sticky; top: 0; z-index: 2; background: white; }
+        .radar-inspector-frame { width: 100%; min-height: 680px; overflow: auto; }
+        .radar-inspector-frame > div { min-width: 0; width: 100%; }
+        .radar-inspector-fit > div { min-width: 650px; }
+        .radar-observation-details { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 330px), 1fr)); column-gap: 20px; }
+        .radar-observation-details > div { padding: 8px 0; border-bottom: 1px solid #dce5df; }
+        .radar-observation-details dt { font-weight: 700; }
+        .radar-observation-details dd { margin: 2px 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+        .radar-observations-table { overflow-x: auto; }
         @media (max-width: 600px) {
             .radar-primary-plot-card .radar-plot-frame { overflow-x: auto; }
             .radar-primary-plot-card .radar-plot-frame > div { min-width: 650px; }
