@@ -64,6 +64,33 @@ def test_nonfirst_bank_staging_preserves_observations_and_uncertainties(source,s
     assert setup.warnings==()  # Instrument: Dummy is an export convention, not DummyInfo.
 
 
+def test_invalid_unused_bank_does_not_rewrite_or_block_selected_bank(source,supplied,tmp_path):
+    source.write_text(source.read_text().replace('1100 1.25 0.2','1100 1.25 0'))
+    with pytest.raises(ValueError,match='uncertainty'):
+        nomad.inspect_reduced_setup(source)
+    selected=nomad.inspect_reduced_setup(source,selected_bank=5)
+    assert selected.banks[0].quality_errors and not selected.banks[4].quality_errors
+    data,_,_=nomad.stage_bank(source,selected,5,supplied,1,tmp_path/'valid-bank',acknowledged=True)
+    assert b'1000 -5.5 0.1\n1100 5.25 0.2\n' in data.read_bytes()
+    with pytest.raises(ValueError,match='uncertainty'):
+        nomad.inspect_reduced_setup(source,selected_bank=1)
+    with pytest.raises(ValueError,match='invalid numerical'):
+        nomad.validate_profile(selected,1,supplied,1,acknowledged=True)
+
+
+def test_preflight_invalid_selected_bank_keeps_alternatives_visible(source,supplied,monkeypatch):
+    source.write_text(source.read_text().replace('1100 1.25 0.2','1100 1.25 0'))
+    monkeypatch.setattr(WatchDefinition,'source_directory',property(lambda self:str(source.parent)))
+    monkeypatch.setattr('radar_pd_nova.nomad_controller.read_nomad_scan_metadata',lambda *a:{})
+    args=dict(profile_path=supplied,profile_bank=1,profile_acknowledged=True)
+    blocked=preflight_nomad_experiment('IPTS-1',selected_banks=(1,),**args)
+    assert not blocked['ready'] and blocked['available_banks']==[1,2,3,4,5,6]
+    assert blocked['bank_details'][0]['quality_errors']
+    assert not blocked['bank_details'][4]['quality_errors']
+    allowed=preflight_nomad_experiment('IPTS-1',selected_banks=(5,),**args)
+    assert allowed['ready']
+
+
 def test_unicode_sample_titles_and_profile_comments_are_preserved(source,supplied,tmp_path):
     source.write_text(source.read_text().replace('Synthetic standard','α-Al₂O₃ — synthetic'))
     supplied.write_text(profile().replace('Type:PNT','# Résolution — synthetic\nType:PNT'))
@@ -174,7 +201,13 @@ def test_nomad_settings_require_one_bank_and_no_monochromatic_override():
 
 def test_nomad_temperature_uses_selected_summary_and_explicit_units(tmp_path,monkeypatch):
     from radar_pd_nova.powgen_metadata import _Snapshot
-    file=tmp_path/'metadata.h5';file.touch();seen=[]
+    import h5py
+    file=tmp_path/'metadata.h5';seen=[]
+    with h5py.File(file,'w') as h:
+        h.create_dataset('entry/run_number', data=[42])
+        h.create_dataset('entry/experiment_identifier', data=[b'IPTS-1'])
+        h.create_dataset('entry/sample/identifier', data=[b'123'])
+        h.create_dataset('entry/DASlogs/SampleId/value', data=[123])
     mapping={
         '/entry/run_number':_Snapshot('run',text='42'),
         '/entry/experiment_identifier':_Snapshot('ipts',text='IPTS-1'),
@@ -194,6 +227,8 @@ def test_nomad_temperature_uses_selected_summary_and_explicit_units(tmp_path,mon
     assert not any('levitator' in field.lower() or 'event' in field.lower() for field in seen)
     assert 'wavelength' not in result
     mapping['/entry/DASlogs/SampleId/value']=_Snapshot('bad',values=(124,))
+    with h5py.File(file,'r+') as h:
+        h['entry/DASlogs/SampleId/value'][0]=124
     result=nomad_metadata.read_nomad_sample_identity('IPTS-1',42,nexus_path=file)
     assert not result['sample_id'] and result['identity_warning']
 

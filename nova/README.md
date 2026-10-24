@@ -41,7 +41,7 @@ Galaxy's authenticated remote-file sources remain a fallback when `/SNS` or
 
 Select **Live** and choose a beamline. POWGEN retains its cycle-profile and
 bank-selection workflow. The NOMAD development adapter supports individual
-Bragg reductions with an explicit single physical bank and user-supplied
+Bragg reductions with an explicit source bank/focused histogram and user-supplied
 profile; it remains exploratory pending calibration-standard acceptance.
 See [NOMAD integration](../docs/nomad_integration.md) for supported layouts,
 bank mapping, correction notices and release requirements.
@@ -52,7 +52,8 @@ The monitor handles large `shared/autoreduce` folders by considering only
 canonical `PG3_<run>.gsa` files, without a 5,000-entry cutoff or recursive
 searches. After entering an IPTS, leave the field or click **Refresh sample IDs**
 to populate sample IDs, all reported names, and completed-scan counts from
-the corresponding NeXus files. Only sample identity fields are read for this
+the corresponding NeXus files, per-run run-info XML and validated scan tables.
+Only bounded sample identity fields are read for this
 list; detector events are never loaded.
 
 Choose **All samples** or select one or more **Sample IDs and names**. The initial
@@ -63,6 +64,11 @@ a readable sample ID are reported separately and remain available with
 saved in the Galaxy watch checkpoint so a restart cannot restore a different
 sample selection. Completed identity reads are cached until their NeXus file
 changes; missing metadata is retried when the sample list is refreshed.
+Independent sources must agree on an ID. The expandable identity check shows
+sources, unresolved runs and conflicts; malformed rows, placeholder IDs and
+foreign-proposal log entries are not guessed into a sample. Table fields do
+not authorize a profile. See the metadata resolver section in the NOMAD
+integration document for the 0.4.2 development behavior and validation limits.
 
 The **POWGEN Live Experiment** panel is a session-scoped orchestration layer
 around the existing RADAR-PD Analyze tool. It does not duplicate or modify the

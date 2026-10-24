@@ -83,3 +83,12 @@ def test_numeric_sample_id_does_not_lose_integer_precision(tmp_path, monkeypatch
     elif not powgen_metadata.shutil.which("h5dump"):
         pytest.skip("native HDF5 tool unavailable")
     assert powgen_metadata.read_powgen_sample_identity("IPTS-1", 1)["sample_id"] == "9007199254740993"
+
+
+def test_identity_change_inside_run_is_not_hidden_by_matching_endpoints(tmp_path,monkeypatch):
+    path=tmp_path/'run.h5';make_nexus(path,'123','sample')
+    with h5py.File(path,'r+')as h:
+        h.create_dataset('entry/DASlogs/SampleId/value',data=[123,124,123])
+    monkeypatch.setattr(powgen_metadata.shutil,'which',lambda _:None)
+    result=powgen_metadata.read_powgen_sample_identity('IPTS-1',1,nexus_path=path)
+    assert result['sample_id']=='' and result['identity_status']=='conflict'

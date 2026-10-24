@@ -97,6 +97,34 @@ def test_wrong_run_duplicate_banks_and_truncation_are_rejected(tmp_path):
     assert not (tmp_path/'out').exists()
 
 
+def test_single_declared_histogram_does_not_hide_trailing_or_duplicate_banks(tmp_path):
+    for banks in [(2,3),(2,2)]:
+        p=source(tmp_path,banks=banks)
+        p.write_text(p.read_text().replace('# 2 Histograms','# 1 Histograms'))
+        with pytest.raises(ValueError,match='duplicate|incomplete'):
+            inspect_reduced_setup(p)
+
+
+def test_saved_xml_can_supply_missing_receipt_and_cannot_override_conflicting_python(tmp_path):
+    p=source(tmp_path)
+    xml=p.with_suffix('.xml')
+    xml.write_text('''<receipt><instrument_name>PG3</instrument_name><runnumber>43124</runnumber>
+    <calibrationfile>/SNS/PG3/shared/CALIBRATION/2019_1_11A_CAL/PG3_PAC.h5</calibrationfile>
+    <characterizationrunsfile>/SNS/PG3/shared/CALIBRATION/2019_1_11A_CAL/PG3_char-HighRes.txt</characterizationrunsfile>
+    <saveas>gsas topas</saveas></receipt>''')
+    assert inspect_reduced_setup(p).reduction_xml_sha256
+    p.with_suffix('.py').unlink()
+    setup=inspect_reduced_setup(p)
+    assert setup.cycle=='2019_1_11A_CAL' and setup.mode=='HR'
+    profile=resolve_bank_profile(setup,2)
+    xml.write_text(xml.read_text()+'\n')
+    with pytest.raises(ValueError,match='XML changed'):
+        stage_bank(p,setup,2,profile,tmp_path/'out')
+    p=source(tmp_path,calibration='different.h5')
+    with pytest.raises(ValueError,match='receipts disagree'):
+        inspect_reduced_setup(p)
+
+
 def test_file_change_and_checksum_change_fail_before_staging(tmp_path):
     p=source(tmp_path);setup=inspect_reduced_setup(p);profile=resolve_bank_profile(setup,2)
     p.write_text(p.read_text()+'\n')
@@ -184,11 +212,11 @@ def test_archived_folder_choices_are_bounded_and_not_merged(monkeypatch):
     class Entry:
         def __init__(self,name):self.name=name
         def is_dir(self,**kwargs):
-            assert self.name in {'2017-B','2019_B'}
+            assert self.name in {'2016','2017-B','2019_B'}
             assert kwargs=={'follow_symlinks':False}
             return True
     class Listing:
-        def __enter__(self):return iter([Entry(n) for n in ['2017-B','2019_B','cache','nexus','PG3_1.gsa']])
+        def __enter__(self):return iter([Entry(n) for n in ['2016','2017-B','2019_B','cache','nexus','PG3_1.gsa']])
         def __exit__(self,*args):pass
     paths=[]
     monkeypatch.setattr(module,'bounded_directory_listing',lambda p: paths.append(p) or [])
@@ -197,7 +225,7 @@ def test_archived_folder_choices_are_bounded_and_not_merged(monkeypatch):
     index=SimpleNamespace(inventory=lambda _: {'options':[],'scan_count':0,'unidentified_count':0})
     result=discover_powgen_samples('IPTS-2767',index,'shared/autoreduce/2017-B')
     assert paths==['/SNS/PG3/IPTS-2767/shared/autoreduce/2017-B']
-    assert {x['value'] for x in result['source_options']}=={'shared/autoreduce','shared/autoreduce/2017-B','shared/autoreduce/2019_B'}
+    assert {x['value'] for x in result['source_options']}=={'shared/autoreduce','shared/autoreduce/2016','shared/autoreduce/2017-B','shared/autoreduce/2019_B'}
 
 
 def test_checkpoint_retains_bank_profile_hash_and_original_source(monkeypatch,tmp_path):

@@ -69,3 +69,19 @@ def test_watch_run_round_trip_preserves_scan_metadata() -> None:
     restored = WatchedRun.from_dict(run.as_dict())
 
     assert restored.scan_metadata == {"temperature": {"value": 1050.0, "unit": "K"}}
+
+
+def test_summary_mean_and_separate_chopper_and_beam_rates(tmp_path):
+    path=tmp_path/'metadata.h5'
+    with h5py.File(path,'w')as h:
+        for name,v in [('BL11A:SE:SampleTemp/average_value',143.3),('BL11A:SE:SampleTemp/minimum_value',134.),
+            ('BL11A:SE:SampleTemp/maximum_value',152.)]:
+            d=h.create_dataset('entry/DASlogs/'+name,data=[v]);d.attrs['units']='K'
+        h.create_dataset('entry/DASlogs/BL11A:Chop:Skf1:SpeedUserReq/value',data=[10.])
+        h.create_dataset('entry/DASlogs/Speed1/average_value',data=[9.9993])
+        h.create_dataset('entry/DASlogs/frequency/average_value',data=[59.9957])
+    result=read_powgen_scan_metadata('IPTS-1',42,nexus_path=path)
+    assert result['temperature']['value']==143.3 and result['temperature']['statistic']=='mean'
+    assert result['temperature']['quality']=='changing'
+    assert result['chopper_frequency_request']['value']==10
+    assert result['beam_frequency']['value']>59

@@ -629,6 +629,8 @@ class RadarPdNovaApp(ThemedApp):
         ]
         state.powgen_processing_sample_ids = []
         state.powgen_run_options = []
+        state.powgen_metadata_resolution = []
+        state.powgen_metadata_notices = []
         state.powgen_excluded_runs = []
         state.powgen_include_background = False
         state.powgen_include_ramps = False
@@ -1315,11 +1317,11 @@ class RadarPdNovaApp(ThemedApp):
                         persistent_hint=True,
                     )
                     vuetify.VSelect(
-                        v_show="live_beamline === 'NOM'", label="Physical bank to analyze",
+                        v_show="live_beamline === 'NOM'", label="Source bank / focused histogram to analyze",
                         v_model=("nomad_physical_bank",), items=("powgen_bank_options",),
                         item_title="title", item_value="value", density="compact", variant="outlined",
                         disabled=("powgen_monitoring",),
-                        hint="Analyze one physical bank per watch. Bank 5 is backscattering; bank 6 is forward. The profile Bank label may differ.",
+                        hint="Analyze one source histogram per watch. Bank numbers depend on the reduction: focused Bank 1 is not necessarily detector bank 1. Verify the matching profile and its Bank label.",
                         persistent_hint=True,
                     )
                     vuetify.VSelect(
@@ -1517,6 +1519,19 @@ class RadarPdNovaApp(ThemedApp):
                         ):
                             html.Span("{{ item.label }}", classes="radar-preflight-label")
                             html.Span("{{ item.value }}", classes="radar-preflight-value")
+                    vuetify.VAlert(
+                        v_show="powgen_metadata_notices.length > 0",
+                        text=("powgen_metadata_notices.join('; ')",),
+                        type="warning", variant="tonal", density="compact", classes="mb-2",
+                    )
+                    with html.Details(v_if="powgen_metadata_resolution.length", classes="radar-soft-panel mb-2"):
+                        html.Summary("Sample identity checks and choices")
+                        html.P("Resolved identities retain their recorded sources. Conflicting or unidentified runs remain visible; choosing All samples includes unidentified runs. Instrument profiles and diffraction banks are checked separately.", classes="radar-help-copy")
+                        with html.Div(v_for="row in powgen_metadata_resolution.slice(0, 100)", key="row.run_number", classes="radar-preflight-row"):
+                            html.Span("Run {{ row.run_number }} · {{ row.status }} · {{ row.sample_id || 'No verified sample ID' }}")
+                            html.Span("{{ (row.actions || []).map(a => a.message).join('; ') }}", classes="radar-help-copy")
+                            html.Span("{{ (row.sources || []).map(s => s.kind + ': ' + s.value + (s.path ? ' (' + s.path + (s.line ? ':' + s.line : '') + ')' : '')).join('; ') }}", classes="radar-help-copy")
+                        html.P("Showing the first 100 checks; narrow the sample selection to review a smaller group.", v_if="powgen_metadata_resolution.length > 100", classes="radar-help-copy")
                     with html.Div(classes="radar-soft-panel mb-2"):
                         html.Div("READ-ONLY SOURCE", classes="radar-micro-label")
                         html.Code("{{ powgen_source_directory }}")
@@ -4740,7 +4755,7 @@ class RadarPdNovaApp(ThemedApp):
         state.nomad_allow_exploratory = False
         state.nomad_quality_notices = []
         state.powgen_instrument_label = "Automatic POWGEN cycle profile" if adapter.automatic_profiles else "Matching NOMAD profile required"
-        state.powgen_message = ("Select an IPTS, physical bank, matching profile and reusable configuration. NOMAD uses broadband neutron TOF."
+        state.powgen_message = ("Select an IPTS, source histogram, matching profile and reusable configuration. NOMAD uses broadband neutron TOF."
                                 if adapter.instrument == "NOM" else "Select an IPTS and reusable configuration. The wavelength is auto-detected unless you choose an override.")
         self._powgen_processing_changed()
 
@@ -4748,6 +4763,8 @@ class RadarPdNovaApp(ThemedApp):
         state = self.server.state
         state.powgen_preflight_ready = False
         state.powgen_preflight_status = "idle"
+        state.powgen_metadata_resolution = []
+        state.powgen_metadata_notices = []
         state.powgen_preflight_message = "Check experiment and inputs after changing the scan, sample, wavelength or bank selection."
         state.flush()
 
@@ -4756,7 +4773,7 @@ class RadarPdNovaApp(ThemedApp):
         if self._live_adapter().instrument == "NOM":
             bank = getattr(state, "nomad_physical_bank", None)
             if isinstance(bank, bool) or bank not in range(1, 7):
-                raise ValueError("Choose exactly one NOMAD physical bank for this watch")
+                raise ValueError("Choose exactly one NOMAD source histogram for this watch")
             return (int(bank),)
         if str(getattr(state, "powgen_bank_scope", "all") or "all") == "all":
             return None
@@ -4783,6 +4800,8 @@ class RadarPdNovaApp(ThemedApp):
         state.powgen_discovered_sample_options = []
         state.powgen_processing_sample_ids = []
         state.powgen_run_options = []
+        state.powgen_metadata_resolution = []
+        state.powgen_metadata_notices = []
         state.powgen_excluded_runs = []
         state.powgen_sample_message = "Leave the IPTS field or refresh sample IDs to discover samples."
         self._powgen_processing_changed()
@@ -4849,6 +4868,8 @@ class RadarPdNovaApp(ThemedApp):
             state.powgen_source_options = result.get("source_options") or getattr(state, "powgen_source_options", [])
             state.powgen_discovered_sample_options = result["options"]
             state.powgen_run_options = result.get("run_options", [])
+            state.powgen_metadata_resolution = result.get('metadata_resolution', [])
+            state.powgen_metadata_notices = result.get('metadata_notices', [])
             state.powgen_sample_discovery_ipts = ipts
             unknown = int(result["unidentified_count"])
             state.powgen_sample_message = (
@@ -4988,8 +5009,10 @@ class RadarPdNovaApp(ThemedApp):
                 state.flush()
                 return False
             state.nomad_quality_notices = result.get("quality_notices", []) if self._live_adapter().instrument == "NOM" else []
+            state.powgen_metadata_resolution = result.get('metadata_resolution', [])
+            state.powgen_metadata_notices = result.get('metadata_notices', [])
             details = {b["bank"]: b for b in result.get("bank_details", [])}
-            state.powgen_bank_options = [{"title": (f"Bank {b} · {details[b]['angle']:.1f}° · d ≈ {details[b]['approx_d_min']:.2f}-{details[b]['approx_d_max']:.2f} Å" if b in details else f"Bank {b}"), "value": b} for b in result.get("available_banks", [])]
+            state.powgen_bank_options = [{"title": (f"Bank {b} · {details[b]['angle']:.1f}° · d ≈ {details[b]['approx_d_min']:.2f}-{details[b]['approx_d_max']:.2f} Å" if b in details else f"Bank {b}") + (" · invalid records in checked selection" if details.get(b,{}).get('quality_errors') else ""), "value": b} for b in result.get("available_banks", [])]
             state.powgen_ipts = ipts
             state.powgen_source_directory = str(result.get("source_directory") or "")
             state.powgen_profile_error = str(result.get("profile_error") or "")

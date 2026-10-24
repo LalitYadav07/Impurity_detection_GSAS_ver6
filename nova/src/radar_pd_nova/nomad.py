@@ -72,6 +72,7 @@ class NomadBank:
     maximum_tof: float
     numeric_sha256: str
     geometry_header: str
+    quality_errors: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -92,8 +93,10 @@ class NomadSetup:
         return asdict(self)
 
 
-def inspect_reduced_setup(path):
+def inspect_reduced_setup(path, *, selected_bank=None, inventory_only=False):
     path = Path(path)
+    if selected_bank is not None and (isinstance(selected_bank,bool) or selected_bank not in range(1,7)):
+        raise ValueError('Choose a supported NOMAD histogram label')
     name = _FILE.fullmatch(path.name)
     before = signature(path)
     if not name or before[0] > _MAX_GSA:
@@ -102,12 +105,15 @@ def inspect_reduced_setup(path):
     geometry = None
     declared = None
     count = 0
+    quality_errors = []
     def finish():
         if values is None:
             return
         if count != values['records']:
             raise ValueError('NOMAD bank is truncated or still being written')
-        banks.append(NomadBank(**values, numeric_sha256=bank_digest.hexdigest()))
+        if quality_errors and not inventory_only and (selected_bank is None or values['bank']==selected_bank):
+            raise ValueError(quality_errors[0])
+        banks.append(NomadBank(**values, numeric_sha256=bank_digest.hexdigest(), quality_errors=tuple(dict.fromkeys(quality_errors))))
     with path.open('rb') as stream:
         for line in stream:
             digest.update(line)
@@ -131,7 +137,7 @@ def inspect_reduced_setup(path):
                         'minimum_tof':0.,'maximum_tof':0.}
                 if not all(math.isfinite(v) and v>0 for v in geometry[:2]) or geometry[0]>=180:
                     raise ValueError('Invalid NOMAD export geometry')
-                geometry=None;count=0;bank_digest=sha256()
+                geometry=None;count=0;bank_digest=sha256();quality_errors=[]
                 continue
             if values is None:
                 prefix.append(text)
@@ -142,14 +148,22 @@ def inspect_reduced_setup(path):
             elif text and not text.startswith('#'):
                 parts=text.split()
                 if len(parts)!=3:
-                    raise ValueError('Malformed NOMAD FXYE record')
-                x,y,sigma=map(float,parts)
+                    quality_errors.append('Malformed NOMAD FXYE record')
+                    count+=1;bank_digest.update(line)
+                    continue
+                try:x,y,sigma=map(float,parts)
+                except ValueError:
+                    quality_errors.append('Malformed NOMAD FXYE record')
+                    count+=1;bank_digest.update(line)
+                    continue
                 if not all(math.isfinite(v) for v in (x,y,sigma)) or sigma<=0 or x<=0:
-                    raise ValueError('Nonfinite data or nonpositive uncertainty/TOF in NOMAD bank')
+                    quality_errors.append('Nonfinite data or nonpositive uncertainty/TOF in NOMAD bank')
                 if count and x<=values['maximum_tof']:
-                    raise ValueError('NOMAD bank TOF must increase strictly')
-                if not count:values['minimum_tof']=x
-                values['maximum_tof']=x;count+=1;bank_digest.update(line)
+                    quality_errors.append('NOMAD bank TOF must increase strictly')
+                if math.isfinite(x) and x>0:
+                    if not values['minimum_tof']:values['minimum_tof']=x
+                    values['maximum_tof']=x
+                count+=1;bank_digest.update(line)
     finish()
     header='\n'.join(prefix);run=re.search(r'Sample Run:\s*(\d+)',header)
     if not run or int(run[1])!=int(name[1]):
@@ -225,6 +239,7 @@ def validate_profile(setup, bank, path, profile_bank, *, acknowledged=False):
         raise ValueError('Confirm the supplied profile and its physical-bank mapping; automatic NOMAD profiles are not yet validated')
     selected=next((b for b in setup.banks if b.bank==bank),None)
     if not selected:raise ValueError('Selected physical bank is absent from this run')
+    if selected.quality_errors:raise ValueError('Selected NOMAD bank has invalid numerical records; choose a usable bank or obtain a corrected reduction')
     blocks=profile_blocks(path)
     if profile_bank not in blocks:raise ValueError('Selected profile Bank label is absent; ordinal block numbers are not bank labels')
     text,coeff=blocks[profile_bank]

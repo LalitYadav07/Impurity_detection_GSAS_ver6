@@ -33,7 +33,7 @@ from .powgen_watch import (
     discover_from_listing,
 )
 from .powgen_metadata import read_powgen_scan_metadata
-from .powgen_samples import PowgenSampleIndex, include_run, run_role
+from .powgen_samples import PowgenSampleIndex, include_run, run_role, identity_readiness
 from .results import experiment_scan_summary
 
 
@@ -156,7 +156,7 @@ def discover_powgen_samples(ipts: str, sample_index: PowgenSampleIndex,
     root = Path(f"/SNS/PG3/{definition.ipts}/shared/autoreduce")
     if root.is_dir():
         with _scandir(root) as entries:
-            names = sorted([e.name for e in entries if re.fullmatch(r"\d{4}[-_][AB12]", e.name, re.I)
+            names = sorted([e.name for e in entries if re.fullmatch(r"(?:19|20)\d{2}(?:[-_]?[AB12])?", e.name, re.I)
                             and e.is_dir(follow_symlinks=False)], reverse=True)
         options += [{"title": f"Archived cycle {n}", "value": f"shared/autoreduce/{n}"} for n in names]
     inventory["source_options"] = options
@@ -242,6 +242,7 @@ def preflight_powgen_experiment(
         errors.append("None of the selected banks occurs in the selected scans")
     latest = runs[-1]
     metadata = read_powgen_scan_metadata(definition.ipts, latest.run_number)
+    identity_rows = identity_readiness(sample_index or PowgenSampleIndex(definition.ipts), runs)
     wave_values = sorted({v.wavelength for v in setups})
     wave = f"{wave_values[0]:g}" if len(wave_values) == 1 else ""
     names = sorted({p.profile_filename for p in profiles})
@@ -264,6 +265,8 @@ def preflight_powgen_experiment(
         "profile_rule": "user-supplied" if override else RESOLVER_VERSION,
         "profile_source": "User-supplied GSAS-II profile" if override else "Verified reduction cycle, mode, frequency, wavelength and bank",
         "profile_error": profile_error,
+        "metadata_resolution": identity_rows,
+        "metadata_notices": metadata.get('metadata_notices', []),
         "message": (f"Ready: {len(runs)} scans, {analysis_count} separate bank analyses. Every arriving scan is checked again."
                     if not errors else f"Instrument setup needs attention: {profile_error}"),
     }
@@ -499,8 +502,11 @@ class PowgenWatchController:
         stat = path.stat()
         sidecar = path.with_suffix(".py")
         side_stat = sidecar.stat() if sidecar.is_file() else None
+        xml = path.with_suffix('.xml')
+        xml_stat = xml.stat() if xml.is_file() else None
         key = (str(path), stat.st_size, stat.st_mtime_ns,
-               (side_stat.st_size, side_stat.st_mtime_ns) if side_stat else None)
+               (side_stat.st_size, side_stat.st_mtime_ns) if side_stat else None,
+               (xml_stat.st_size, xml_stat.st_mtime_ns) if xml_stat else None)
         if key not in self._setup_cache:
             self._setup_cache[key] = inspect_reduced_setup(path)
         return self._setup_cache[key]
@@ -555,6 +561,8 @@ class PowgenWatchController:
             if run.source_path not in by_source:
                 by_source[run.source_path] = self._read_scan_metadata(run)
             metadata = {**by_source[run.source_path], **dict(run.scan_metadata or {})}
+            if hasattr(self.sample_index, 'metadata_index'):
+                metadata.update(self.sample_index.metadata_index.enrich(run.run_number, metadata))
             metadata.update(run_role(run))
             updated = replace(run, scan_metadata=metadata) if metadata else run
             if run.run_id in self.state.discovered:

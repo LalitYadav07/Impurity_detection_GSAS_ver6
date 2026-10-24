@@ -20,9 +20,11 @@ import statistics
 import subprocess
 from typing import Any, Iterable
 
+from .facility_metadata import resolve_nexus_path, resolve_identity, qualify_temperature
+
 
 _MAX_LOG_VALUES = 200_000
-_METADATA_SCHEMA_VERSION = 3
+_METADATA_SCHEMA_VERSION = 4
 _NUMBER = re.compile(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][-+]?\d+)?")
 _DATA = re.compile(r"\bDATA\s*\{(.*?)\}", re.DOTALL)
 _DATASPACE_SIZE = re.compile(r"DATASPACE\s+SIMPLE\s*\{\s*\(\s*(\d+)")
@@ -56,12 +58,15 @@ def _sample_identifier_number(raw: str) -> str:
     return str(int(value)) if value == value.to_integral_value() else format(value.normalize(), "f")
 
 
-def read_powgen_sample_identity(ipts: str, run_number: int) -> dict[str, str]:
-    """Read sample identity only, in one HDF5 command per run, never event data."""
+def read_powgen_sample_identity(ipts: str, run_number: int, *, nexus_path=None, instrument="PG3") -> dict[str, Any]:
+    """Read bounded sample identity fields, never detector event data."""
 
-    path = powgen_nexus_path(ipts, run_number)
-    fields = (*_SAMPLE_ID_PATHS, "/entry/sample/name")
+    path = Path(nexus_path) if nexus_path is not None else powgen_nexus_path(ipts, run_number)
+    fields = (*_SAMPLE_ID_PATHS, "/entry/sample/name", "/entry/run_number", "/entry/experiment_identifier", "/entry/instrument/name")
+    numeric_fields = (*_SAMPLE_ID_PATHS, "/entry/run_number")
+    before = path.stat()
     values: dict[str, str] = {}
+    identity_observations: dict[str, list[str]] = {}
     executable = shutil.which("h5dump")
     if executable:
         # Request only named sample fields. Missing aliases do not invalidate
@@ -69,6 +74,18 @@ def read_powgen_sample_identity(ipts: str, run_number: int) -> dict[str, str]:
         command = [executable, "-y", "-w", "0"]
         for field in fields:
             command.extend(("-d", field))
+        # Check declared shapes before requesting values, including identity
+        # time series. A corrupt/oversized field must not allocate huge output.
+        header = subprocess.run(
+            [*command, '-H', str(path)], capture_output=True, text=True,
+            encoding='utf-8', errors='replace', timeout=20, check=False,
+        )
+        if header.returncode and not re.search(r'\bDATASET\s+"', header.stdout):
+            raise OSError('Cannot read raw HDF5 identity metadata')
+        for dimensions in re.findall(r'DATASPACE\s+SIMPLE\s*\{\s*\(([^)]*)\)', header.stdout):
+            sizes = [int(n) for n in re.findall(r'\d+', dimensions)]
+            if math.prod(sizes)>1000:
+                raise ValueError('Sample identity log exceeds the bounded identity limit')
         completed = subprocess.run(
             [*command, str(path)], capture_output=True, text=True,
             encoding="utf-8", errors="replace", timeout=20, check=False,
@@ -81,10 +98,17 @@ def read_powgen_sample_identity(ipts: str, run_number: int) -> dict[str, str]:
             quoted = _QUOTED.findall(match.group(1))
             if quoted:
                 values[field] = _decode_h5dump_text(quoted[0])
-            elif field in _SAMPLE_ID_PATHS:
+                if field in _SAMPLE_ID_PATHS:
+                    if len(quoted)>1000:raise ValueError('Sample identity log exceeds the bounded identity limit')
+                    identity_observations[field] = [_decode_h5dump_text(v) for v in quoted]
+            elif field in numeric_fields:
                 numeric = _NUMBER.search(match.group(1))
                 if numeric:
                     values[field] = _sample_identifier_number(numeric.group())
+                if field in _SAMPLE_ID_PATHS:
+                    tokens = _NUMBER.findall(match.group(1))
+                    if len(tokens)>1000:raise ValueError('Sample identity log exceeds the bounded identity limit')
+                    identity_observations[field] = [_sample_identifier_number(v) for v in tokens]
     else:
         import h5py  # type: ignore
 
@@ -93,20 +117,44 @@ def read_powgen_sample_identity(ipts: str, run_number: int) -> dict[str, str]:
                 dataset = handle.get(field)
                 if not isinstance(dataset, h5py.Dataset) or not dataset.size:
                     continue
-                # Even an identity stored as a time series only needs its first value.
+                if dataset.size>1000:
+                    raise ValueError('Sample identity log exceeds the bounded identity limit')
+                # Read all bounded ID observations below to detect changes
+                # within a run, even when the first and last values agree.
                 raw = dataset[tuple(0 for _ in dataset.shape)] if dataset.shape else dataset[()]
                 if isinstance(raw, bytes):
                     values[field] = raw.decode("utf-8", errors="replace").strip()
-                elif field in _SAMPLE_ID_PATHS and (
+                elif field in numeric_fields and (
                     isinstance(raw, (int, float)) or getattr(getattr(raw, "dtype", None), "kind", "") in {"i", "u", "f"}
                 ):
                     values[field] = _sample_identifier_number(str(raw))
                 else:
                     values[field] = str(raw).strip()
-    return {
-        "sample_id": next((values[field] for field in _SAMPLE_ID_PATHS if values.get(field)), ""),
-        "sample_name": values.get("/entry/sample/name", ""),
-    }
+                if field in _SAMPLE_ID_PATHS:
+                    if dataset.size>1000:raise ValueError('Sample identity log exceeds the bounded identity limit')
+                    observations=[]
+                    for item in dataset[()].reshape(-1) if dataset.shape else [raw]:
+                        if isinstance(item,bytes):observations.append(item.decode('utf-8',errors='replace').strip())
+                        elif getattr(getattr(item,'dtype',None),'kind','') in {'i','u','f'} or isinstance(item,(int,float)):
+                            observations.append(_sample_identifier_number(str(item)))
+                        else:observations.append(str(item).strip())
+                    identity_observations[field]=observations
+    after = path.stat()
+    if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+        raise ValueError("Raw identity metadata changed during inspection; retry")
+    if values.get("/entry/run_number") and values["/entry/run_number"] != str(run_number):
+        raise ValueError("NeXus run identifier disagrees with the selected run")
+    if values.get("/entry/experiment_identifier") and values["/entry/experiment_identifier"].upper() != str(ipts).upper():
+        raise ValueError("NeXus proposal disagrees with the selected IPTS")
+    stored_instrument = values.get('/entry/instrument/name', '').upper()
+    aliases = {'POWGEN':'PG3','PG3':'PG3','NOMAD':'NOM','NOM':'NOM'}
+    if stored_instrument in aliases and aliases[stored_instrument] != instrument:
+        raise ValueError('NeXus instrument disagrees with the selected beamline')
+    result = resolve_identity([{"value": observed, "field": field, "path": str(path), "kind": "nexus"}
+                               for field in _SAMPLE_ID_PATHS if field in values
+                               for observed in dict.fromkeys(identity_observations.get(field,[values[field]]))])
+    result["sample_name"] = values.get("/entry/sample/name", "")
+    return result
 
 
 @dataclass(frozen=True)
@@ -120,7 +168,7 @@ class _Snapshot:
 def powgen_nexus_path(ipts: str, run_number: int) -> Path:
     """Return the canonical read-only NeXus path for a PG3 run."""
 
-    return Path("/SNS") / "PG3" / str(ipts).upper() / "nexus" / f"PG3_{int(run_number)}.nxs.h5"
+    return resolve_nexus_path("PG3", ipts, run_number)
 
 
 def _h5dump_snapshot(path: Path, dataset: str) -> _Snapshot | None:
@@ -306,17 +354,21 @@ def read_powgen_scan_metadata(
     if not path.is_file():
         return {"nexus_path": str(path).replace("\\", "/"), "available": False}
 
-    temperature = _temperature_in_kelvin(
-        _numeric_log(
-            _first_snapshot(
-                path,
-                (
-                    "/entry/DASlogs/BL11A:SE:SampleTemp/value",
-                    "/entry/sample/temperature",
-                ),
-            )
-        )
-    )
+    # Prefer the facility's bounded selected-channel mean. A median of
+    # irregular updates is a different statistic, retained only as fallback.
+    prefix = '/entry/DASlogs/BL11A:SE:SampleTemp/'
+    mean = _numeric_log(_first_snapshot(path, (prefix+'average_value', '/entry/DASlogs/SampleTemp/average_value')))
+    if mean:
+        mean['statistic'] = 'mean'
+        for key, name in [('minimum','minimum_value'),('maximum','maximum_value')]:
+            bound = _numeric_log(_first_snapshot(path, (prefix+name, '/entry/DASlogs/SampleTemp/'+name)))
+            if bound and bound['unit'] == mean['unit']:
+                mean[key] = bound['value']
+        temperature = _temperature_in_kelvin(mean)
+    else:
+        temperature = _temperature_in_kelvin(_numeric_log(_first_snapshot(path,
+            (prefix+'value', '/entry/sample/temperature'))))
+        if temperature:temperature['statistic'] = 'median_of_recorded_updates'
     magnetic_field = _numeric_log(
         _first_snapshot(
             path,
@@ -369,6 +421,17 @@ def read_powgen_scan_metadata(
         "end_time": end_time,
         "duration_seconds": _duration_seconds(start_time, end_time),
     }
+    metadata.update(read_powgen_sample_identity(ipts, run_number, nexus_path=path))
+    metadata['temperature_observation'] = temperature
+    temperature, notices = qualify_temperature(temperature, metadata["run_title"])
+    metadata["metadata_notices"] = notices
+    metadata["temperature_sensor"] = _text_value(path, ("/entry/DASlogs/BL11A:SE:SelectSampleTemp/value_strings",))
+    for key, fields in [
+        ('chopper_frequency_request', ('/entry/DASlogs/BL11A:Chop:Skf1:SpeedUserReq/value',)),
+        ('chopper_speed_readback', ('/entry/DASlogs/BL11A:Chop:Skf1:MotorSpeed/average_value', '/entry/DASlogs/Speed1/average_value')),
+        ('beam_frequency', ('/entry/DASlogs/frequency/average_value',))]:
+        observation = _numeric_log(_first_snapshot(path, fields))
+        if observation:metadata[key] = observation
     for key, value in (
         ("temperature", temperature),
         ("magnetic_field", magnetic_field),

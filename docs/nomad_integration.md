@@ -32,12 +32,14 @@ The default source is the immediate folder
 is a separate selection when present. The adapter never recursively combines
 these folders, summed products, `GSAS_unnorm`, XYE, S(Q), PDF or raw events.
 
-Select exactly one physical bank per watch and provide a matching GSAS-II
+Select exactly one source bank or focused histogram per watch and provide a matching GSAS-II
 `.instprm`. Enter the **Bank label declared inside the profile**, which can
-differ from the physical bank number and the ordinal position of a block.
+differ from the source bank number and the ordinal position of a block.
 Confirm this mapping explicitly. The interface shows available bank angles
-and approximate d ranges after checking the experiment. Bank 5 is the
-backscattering bank in the inspected six-bank products; bank 6 is forward.
+and approximate d ranges after checking the experiment. In the inspected
+six-bank products, bank 5 is backscattering and bank 6 is forward. A focused
+single-histogram export can instead label its combined product Bank 1; this
+does not identify detector bank 1. Never transfer a mapping by number alone.
 Unsupported file layouts fail explicitly.
 
 NOMAD uses broadband neutron TOF. A `Wavelength: 1.5 A` GSA header or chopper
@@ -127,12 +129,60 @@ attaching an earlier reduction of the same run.
 ## Metadata, recovery and future beamlines
 
 Sample IDs come from NeXus sample identifiers and `SampleId`; conflicting
-identifiers remain unidentified. Repeated names do not merge different IDs.
+identifiers remain unresolved and are displayed for review. Repeated names do not merge different IDs.
 Temperature comes from the selected `SampleTemp` mean and recorded units,
 with minimum/maximum when available. Celsius is explicitly converted to
 kelvin. Inactive furnace or levitator channels and run-title numbers are not
 temperature fallbacks. Run and IPTS identifiers are cross-checked when read.
 Only small metadata fields are read; event arrays are never loaded.
+
+### Metadata resolver development release 0.4.2
+
+This work is on `codex/facility-metadata-readiness` and is not deployed. It
+does not resolve the deployment outage or certify a NOMAD profile.
+
+Both beamlines check named modern and legacy NeXus paths, deduplicating links
+to the same file. Distinct raw copies require source review. Per-run run-info
+XML and bounded scan tables add independent identity evidence when present;
+missing/unreadable raw identity can use a valid independent fallback, with a
+notice. Changed identifiers within a run and disagreement across sources
+remain unresolved. Placeholder IDs (`None`, `-1`, zero) and scan notes are
+not selectable sample IDs. NOMAD LOS titles remain run titles, not IDs.
+
+The parser joins only exact run/proposal keys, checks row width and preserves
+conflicts per field. It supports legacy carriage-return CSVs, suppresses
+unqualified text without guessing its encoding, and excludes foreign-proposal
+rows. It never repairs a shifted row or uses a scan table as calibration
+authority. File revisions invalidate cached evidence and transient read
+failures are retried. The sample panel exposes per-run status, sources and
+required choices; All samples still includes unidentified runs explicitly.
+
+Temperature uses the selected-channel facility summary, with units and range.
+Zero Kelvin, unknown units or contradictory historical unit evidence are
+withheld from a qualified temperature axis. A changing temperature retains
+its range and a review notice. No inactive sensor or title value substitutes
+for the selected measurement. POWGEN chopper request, chopper readback and
+beam pulse frequency are recorded separately.
+
+NOMAD validates file structure across every bank, but numeric defects in an
+unused bank no longer reject a separately selected valid bank. The selected
+bank must pass all numeric checks and staging preserves its original records.
+POWGEN structural preflight now catches undeclared/duplicate trailing banks
+before launch. A named per-run reduction XML can supply missing Python
+receipt fields; disagreement between the two receipts blocks resolution.
+Mutable proposal defaults and current calibration interval tables never
+overwrite a historical product receipt.
+
+An all-proposal inventory covered 1,783 NOMAD and 1,708 POWGEN IPTS directories
+visible through the DGX on 2026-10-23. This is inventory/scan-table validation,
+not scientific acceptance of every run. Direct replay additionally checked
+224 raw identity cases, 208 reduced products and 24 condition summaries.
+Private evidence and the per-IPTS decision report are kept in the local
+workspace audit directory, outside this source repository. Existing IDL
+`NOM<run>tof.gsa` families still require an explicit conversion/adapter;
+automatic NOMAD profile selection remains unqualified. All-IPTS raw-event
+reduction, all-run raw metadata inspection, fits and NDIP browser acceptance
+have not been performed.
 
 `live_beamlines.py` registers discovery, metadata, preflight, settings and
 controller behavior. Shared orchestration retains retries, submission limits,

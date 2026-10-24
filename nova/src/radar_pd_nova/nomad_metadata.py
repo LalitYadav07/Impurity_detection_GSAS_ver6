@@ -4,30 +4,26 @@ from typing import Any
 import re
 
 from .powgen_metadata import (_first_snapshot, _text_value, _identifier_value,
-    _numeric_log, _temperature_in_kelvin, _duration_seconds)
+    _numeric_log, _temperature_in_kelvin, _duration_seconds, read_powgen_sample_identity)
 from .powgen_samples import PowgenSampleIndex
+from .facility_metadata import resolve_nexus_path, qualify_temperature
 
 
 def nomad_nexus_path(ipts: str, run: int) -> Path:
     proposal = str(ipts).upper()
     if not re.fullmatch(r"IPTS-\d+", proposal) or isinstance(run, bool) or int(run) < 1:
         raise ValueError("NOMAD requires an IPTS identifier and a positive run number")
-    return Path('/SNS/NOM') / proposal / 'nexus' / f'NOM_{int(run)}.nxs.h5'
+    return resolve_nexus_path('NOM', proposal, run)
 
 
-def read_nomad_sample_identity(ipts: str, run: int, *, nexus_path=None) -> dict[str, str]:
+def read_nomad_sample_identity(ipts: str, run: int, *, nexus_path=None) -> dict[str, Any]:
     path = Path(nexus_path) if nexus_path else nomad_nexus_path(ipts, run)
-    primary = _identifier_value(path, ('/entry/sample/identifier',))
-    alternate = _identifier_value(path, ('/entry/DASlogs/SampleId/value',))
-    conflict = bool(primary and alternate and primary != alternate)
-    return {'sample_id': '' if conflict else primary or alternate,
-            'sample_name': _text_value(path, ('/entry/sample/name',)),
-            'identity_warning': 'Conflicting NeXus sample identifiers; select All samples and review this run' if conflict else ''}
+    return read_powgen_sample_identity(ipts, run, nexus_path=path, instrument='NOM')
 
 
 class NomadSampleIndex(PowgenSampleIndex):
     def __init__(self, ipts: str):
-        super().__init__(ipts, nexus_path=nomad_nexus_path, identity_reader=read_nomad_sample_identity)
+        super().__init__(ipts, nexus_path=nomad_nexus_path, identity_reader=read_nomad_sample_identity, instrument='NOM')
 
 
 def read_nomad_scan_metadata(ipts: str, run: int, *, nexus_path=None) -> dict[str, Any]:
@@ -58,7 +54,13 @@ def read_nomad_scan_metadata(ipts: str, run: int, *, nexus_path=None) -> dict[st
             value = _numeric_log(_first_snapshot(path, (prefix+field,)))
             if value and value['unit'] == temp['unit']:
                 temp[key] = value['value']
-        result['temperature'] = _temperature_in_kelvin(temp)
+        result['temperature_observation'] = _temperature_in_kelvin(temp)
+        qualified, notices = qualify_temperature(result['temperature_observation'], result.get('run_title',''))
+        result['metadata_notices'] = notices
+        if qualified:
+            result['temperature'] = qualified
+    else:
+        result['metadata_notices'] = ['Selected sample temperature is unavailable']
     charge = _numeric_log(_first_snapshot(path, ('/entry/proton_charge',)))
     if charge:
         result['proton_charge'] = charge

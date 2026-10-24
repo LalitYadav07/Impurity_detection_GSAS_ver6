@@ -9,7 +9,7 @@ from . import nomad
 from .models import InputSelection, InputSource
 from .nomad_metadata import NomadSampleIndex, read_nomad_scan_metadata
 from .powgen_controller import PowgenExperimentSettings, PowgenWatchController
-from .powgen_samples import include_run
+from .powgen_samples import include_run, identity_readiness
 from .powgen_watch import WatchDefinition, discover_from_listing, build_submission_plan
 
 
@@ -65,13 +65,18 @@ def preflight_nomad_experiment(ipts, *, selected_sample_ids=None, selected_banks
           include_background_runs=include_background_runs,include_ramp_runs=include_ramp_runs)]
     excluded=before-len(runs)
     if initial_backfill_limit is not None:runs=runs[-max(1,initial_backfill_limit):]
-    errors=[];setups=[];available=set();notices=[];mapping=[]
+    errors=[];setups=[];available=set();notices=[];mapping=[];bank_quality={}
     for run in runs:
         try:
-            setup=nomad.inspect_reduced_setup(run.source_path);setups.append(setup)
+            # Enumerate structure even when the selected bank is invalid, so
+            # the user can still choose a valid alternative. validate_profile
+            # below enforces the selected bank's numerical checks.
+            setup=nomad.inspect_reduced_setup(run.source_path, inventory_only=True);setups.append(setup)
             available.update(b.bank for b in setup.banks);notices.extend(setup.warnings)
+            for bank in setup.banks:
+                bank_quality.setdefault(bank.bank,set()).update(bank.quality_errors)
             if selected_banks is None or len(selected_banks)!=1:
-                raise ValueError('Choose one physical NOMAD bank; each bank needs its own verified profile mapping')
+                raise ValueError('Choose one NOMAD source histogram; each needs its own verified profile mapping')
             if not profile_path or profile_bank is None:
                 raise ValueError('Supply a matching .instprm and its Bank label; automatic NOMAD profiles are not yet validated')
             _,receipt=nomad.validate_profile(setup,selected_banks[0],profile_path,profile_bank,acknowledged=profile_acknowledged)
@@ -88,7 +93,8 @@ def preflight_nomad_experiment(ipts, *, selected_sample_ids=None, selected_banks
     return {'ready':not errors,'source_directory':definition.source_directory,'scan_count':len(runs),
         'total_scan_count':total,'excluded_count':excluded,'analysis_count':len(mapping),
         'available_banks':sorted(available), 'bank_details':[{'bank':b.bank,'angle':b.angle,
-            'approx_d_min':b.minimum_tof/b.difc,'approx_d_max':b.maximum_tof/b.difc} for b in (setups[-1].banks if setups else [])],
+            'approx_d_min':b.minimum_tof/b.difc,'approx_d_max':b.maximum_tof/b.difc,
+            'quality_errors':sorted(bank_quality.get(b.bank,()))} for b in (setups[-1].banks if setups else [])],
         'first_run':runs[0].run_id if runs else '', 'latest_run':latest.run_id if latest else '',
         'latest_file':Path(latest.source_path).name if latest else '',
         'latest_start_time':metadata.get('start_time',''),'sample_display':f"{metadata.get('sample_id','')} | {metadata.get('sample_name','')}",
@@ -97,6 +103,8 @@ def preflight_nomad_experiment(ipts, *, selected_sample_ids=None, selected_banks
         'profile_filename':Path(profile_path).name if profile_path else '',
         'profile_source':'Explicit user-supplied physical/profile bank mapping; not automatically validated',
         'profile_error':'; '.join(errors[:5]),'quality_notices':list(dict.fromkeys(notices)),
+        'metadata_resolution':identity_readiness(index,runs),
+        'metadata_notices':metadata.get('metadata_notices',[]),
         'message':('; '.join(errors[:5]) if errors else f'Ready for exploratory analysis: {len(runs)} individual runs, physical bank {selected_banks[0]}. Review reduction and profile notices.')}
 
 
@@ -136,8 +144,9 @@ class NomadWatchController(PowgenWatchController):
 
     def _setup(self,run):
         path=Path(run.source_path);sidecar=nomad.reduction_input_path(path)
-        key=(str(path),nomad.signature(path),nomad.signature(sidecar) if sidecar.is_file() else None)
-        if key not in self._setup_cache:self._setup_cache[key]=nomad.inspect_reduced_setup(path)
+        bank=self.settings.selected_banks[0]
+        key=(str(path),nomad.signature(path),nomad.signature(sidecar) if sidecar.is_file() else None,bank)
+        if key not in self._setup_cache:self._setup_cache[key]=nomad.inspect_reduced_setup(path,selected_bank=bank)
         return self._setup_cache[key]
 
     def _read_scan_metadata(self,run):

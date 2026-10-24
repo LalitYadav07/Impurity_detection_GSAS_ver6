@@ -18,6 +18,7 @@ import re
 from typing import Any, Mapping
 
 from .powgen import PowgenResolutionError, AmbiguousPowgenInputError
+from .facility_metadata import reduction_xml
 
 DATA_ROOT = Path(__file__).resolve().parent / "data" / "powgen_calibrations"
 CATALOG_PATH = DATA_ROOT / "catalog.json"
@@ -53,6 +54,8 @@ class ReducedSetup:
     title: str = ""
     reduction_script_signature: tuple[int, int] | None = None
     reduction_script_sha256: str = ""
+    reduction_xml_signature: tuple[int, int] | None = None
+    reduction_xml_sha256: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -123,9 +126,11 @@ def _paths(args: list[dict[str, str]], keys: tuple[str, ...]) -> tuple[str, ...]
 
 
 def inspect_reduced_setup(path: str | Path) -> ReducedSetup:
-    """Read bounded metadata; stream the complete file only for multiple banks."""
+    """Inspect complete bounded structure, including undeclared trailing banks."""
     path = Path(path)
     before = path.stat()
+    if before.st_size > 64 * 1024 * 1024:
+        raise PowgenResolutionError("POWGEN reduction exceeds the structural inspection size limit")
     header: list[str] = []
     banks: list[ReducedBank] = []
     expected = None
@@ -136,8 +141,6 @@ def inspect_reduced_setup(path: str | Path) -> ReducedSetup:
             match = _BANK.fullmatch(line.strip())
             if match:
                 banks.append(ReducedBank(int(match[1]), int(match[2]), int(match[3]), match[4], match[5], line.rstrip()))
-                if expected == 1:
-                    break
             elif not banks:
                 header.append(line)
                 count = re.match(r"#\s*(\d+)\s+Histograms", line)
@@ -178,6 +181,18 @@ def inspect_reduced_setup(path: str | Path) -> ReducedSetup:
     calibration = _paths(args, ("CalibrationFile", "CalFileName", "CalFilename"))
     characterization = _paths(args, ("CharacterizationRunsFile",))
     grouping = _paths(args, ("GroupingFile",))
+    xml = path.with_suffix('.xml')
+    xml_signature, xml_sha256 = None, ''
+    if xml.is_file():
+        receipt, xml_signature, xml_sha256 = reduction_xml(xml, 'PG3', int(run[1]))
+        xml_args = [receipt]
+        xml_paths = (_paths(xml_args, ('CalibrationFile',)), _paths(xml_args, ('CharacterizationRunsFile',)),
+                     _paths(xml_args, ('GroupingFile',)))
+        if script.is_file():
+            if (calibration, characterization, grouping) != xml_paths:
+                raise AmbiguousPowgenInputError('Saved Python and XML reduction receipts disagree; review the product revision')
+        else:
+            calibration, characterization, grouping = xml_paths
     cycles = {m[1] for p in (*calibration, *characterization, *grouping) if (m := _CYCLE.search(p))}
     if len(cycles) > 1:
         raise AmbiguousPowgenInputError(f"Conflicting reduction calibration cycles: {sorted(cycles)}")
@@ -198,7 +213,7 @@ def inspect_reduced_setup(path: str | Path) -> ReducedSetup:
     return ReducedSetup(int(run[1]), _positive(wave[1], "wavelength"), _positive(freq[1], "frequency"),
                         float(guide[1]) if guide else None, tuple(banks), calibration, characterization,
                         grouping, next(iter(cycles), ""), next(iter(modes), ""), signature,
-                        titles[0] if titles else "", script_signature, script_sha256)
+                        titles[0] if titles else "", script_signature, script_sha256, xml_signature, xml_sha256)
 
 
 @lru_cache(maxsize=1)
@@ -309,6 +324,13 @@ def stage_bank(source: Path, setup: ReducedSetup, bank: int, profile: BankProfil
         signature = (stat.st_size, stat.st_mtime_ns) if stat else None
         if signature != setup.reduction_script_signature:
             raise PowgenResolutionError("POWGEN reduction script changed after preflight")
+        xml = source.with_suffix('.xml')
+        stat = xml.stat() if xml.is_file() else None
+        xml_signature = (stat.st_size,stat.st_mtime_ns) if stat else None
+        if xml_signature != setup.reduction_xml_signature:
+            raise PowgenResolutionError('POWGEN reduction XML changed after preflight')
+        if stat and sha256(xml.read_bytes()).hexdigest() != setup.reduction_xml_sha256:
+            raise PowgenResolutionError('POWGEN reduction XML content changed after preflight')
     check_script()
     selected = next((b for b in setup.banks if b.bank == bank), None)
     if selected is None or selected.encoding != "FXYE" or selected.channels != selected.records:
