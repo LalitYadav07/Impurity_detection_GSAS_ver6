@@ -64,6 +64,15 @@ def test_nonfirst_bank_staging_preserves_observations_and_uncertainties(source,s
     assert setup.warnings==()  # Instrument: Dummy is an export convention, not DummyInfo.
 
 
+def test_verbose_nomad_header_keeps_comparison_receipt_in_the_bounded_prefix(source,supplied,tmp_path):
+    source.write_text(source.read_text().replace('# Synthetic standard\n','# Synthetic standard\n'+'# facility comment\n'*70))
+    setup=nomad.inspect_reduced_setup(source)
+    data,_,_=nomad.stage_bank(source,setup,5,supplied,1,tmp_path/'out',acknowledged=True)
+    marker=next(line for line in data.read_text().splitlines()[:64]if line.startswith('# RADAR-PD input provenance: '))
+    receipt=json.loads(marker.split(': ',1)[1])
+    assert receipt['source_bank']==5 and receipt['reduction_family']=='NOMAD individual GSAS/SLOG'
+
+
 def test_invalid_unused_bank_does_not_rewrite_or_block_selected_bank(source,supplied,tmp_path):
     source.write_text(source.read_text().replace('1100 1.25 0.2','1100 1.25 0'))
     with pytest.raises(ValueError,match='uncertainty'):

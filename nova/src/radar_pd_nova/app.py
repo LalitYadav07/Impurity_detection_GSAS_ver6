@@ -138,6 +138,7 @@ _SUBMISSION_FIELDS = (
     "full_knee_min_relative_span", "full_knee_keep_if_no_knee", "full_knee_keep_at_most",
     "excluded_space_groups",
     "post_analysis",
+    "scan_interpretation",
     "rapid_phases_per_hypothesis", "rapid_stage_output_limit", "rapid_gsas_validation_limit",
     "rapid_parallel_workers", "rapid_show_family_variants", "rapid_final_polish_enabled", "history_data_id",
     "history_instrument_id", "history_main_cif_id", "history_database_id",
@@ -2601,6 +2602,7 @@ class RadarPdNovaApp(PostAnalysisMixin, ThemedApp):
                     self._file_browser_view()
                 self._activity_panel()
         self._post_analysis_inspection_dialogs()
+        self._scan_change_dialog()
 
     def _powgen_experiment_dashboard(self) -> None:
         with html.Div(classes="radar-section-heading"):
@@ -2639,6 +2641,7 @@ class RadarPdNovaApp(PostAnalysisMixin, ThemedApp):
                 html.Div("{{ metric.label }}", classes="radar-metric-label")
                 html.Div("{{ metric.value }}", classes="radar-metric-value")
                 html.Div("{{ metric.detail }}", classes="radar-run-list-meta")
+        self._scan_change_dashboard()
         self._post_analysis_dashboard()
         with vuetify.VExpansionPanels(v_if="powgen_scientific_rows.length", variant="accordion", classes="my-3"):
             with vuetify.VExpansionPanel(title="Experiment overview and scan results"):
@@ -3873,6 +3876,7 @@ class RadarPdNovaApp(PostAnalysisMixin, ThemedApp):
             selected = config or self.service.load_configuration_dataset(dataset_id)
             if dataset_id != getattr(self, "_post_configuration_preview_id", None):
                 self._set_post_settings(selected.post_analysis)
+                state.scan_interpretation = selected.scan_interpretation.model_dump(mode="json")
                 self._post_configuration_preview_id = dataset_id
             label = self._powgen_dataset_label(
                 state.history_configuration_datasets,
@@ -4108,6 +4112,7 @@ class RadarPdNovaApp(PostAnalysisMixin, ThemedApp):
             "rapid_show_family_variants": bool(state.rapid_show_family_variants),
             "rapid_final_polish_enabled": bool(state.rapid_final_polish_enabled),
             "post_analysis": state.post_analysis,
+            "scan_interpretation": state.scan_interpretation,
         }
         if state.analysis_mode == "full" and state.full_profile in presets:
             values.update(presets[state.full_profile])
@@ -4209,6 +4214,7 @@ class RadarPdNovaApp(PostAnalysisMixin, ThemedApp):
 
         controller = self._powgen_controller
         if controller is None:
+            self._interpretation_all_watch_scans = []
             self.server.state.powgen_rows = []
             self.server.state.powgen_scientific_rows = []
             self.server.state.powgen_all_scientific_rows = []
@@ -4426,9 +4432,13 @@ class RadarPdNovaApp(PostAnalysisMixin, ThemedApp):
                 "error_count": int(summary.get("error_count") or 0),
                 "lattice_parameters": list(summary.get("lattice_parameters") or []),
                 "observables": dict(summary.get("observables") or {}),
+                "pattern_observation": dict(summary.get("pattern_observation") or {}),
+                "pattern_path": (summary.get("pattern_observation") or {}).get("local_path"),
+                "source_family": metadata.get("source_family") or (metadata.get("nomad_setup") or {}).get("source_family"),
                 "instrument": getattr(controller.settings, "instrument", "PG3"),
                 "ipts": getattr(controller.settings, "ipts", ""),
                 "configuration_id": getattr(controller.settings, "configuration_dataset_id", ""),
+                "candidate_library_id": getattr(controller.settings, "database_dataset_id", ""),
                 "scientific_status": str(summary.get("scientific_status") or "not_assessed"),
                 "scientific_warnings": list(summary.get("scientific_warnings") or []),
             }
@@ -4587,6 +4597,7 @@ class RadarPdNovaApp(PostAnalysisMixin, ThemedApp):
             if scientific_rows
             else "Completed scans will populate this experiment view as their normalized Galaxy summaries become available."
         )
+        self._interpretation_all_watch_scans = all_scientific_rows
         self._update_powgen_dashboard_figures(scientific_rows)
 
     def _update_powgen_dashboard_figures(self, rows: list[dict[str, Any]]) -> None:
@@ -4598,6 +4609,8 @@ class RadarPdNovaApp(PostAnalysisMixin, ThemedApp):
                     "run_number": run.run_number,
                     "metadata": dict(run.scan_metadata),
                     "bank": run.bank,
+                    "instrument": run.instrument,
+                    "ipts": controller.settings.ipts,
                 }
                 for phase in (controller.state.discovered, controller.state.submitted)
                 for run in phase.values()
@@ -4607,6 +4620,10 @@ class RadarPdNovaApp(PostAnalysisMixin, ThemedApp):
         scope = "watch:" + (controller.source_directory if controller is not None else "none")
         if str(getattr(self.server.state, "workspace_view", "")) != "results":
             if getattr(self, "_post_analysis_scope", None) != scope:
+                from .scan_interpretation import InterpretationSettings
+                self.server.state.scan_interpretation = InterpretationSettings.model_validate(
+                    controller.state.scan_interpretation if controller is not None else {}
+                ).model_dump(mode="json")
                 if controller is not None and controller.state.post_analysis:
                     self._set_post_settings(
                         PostAnalysisSettings.model_validate(controller.state.post_analysis)
@@ -4777,6 +4794,7 @@ class RadarPdNovaApp(PostAnalysisMixin, ThemedApp):
         if getattr(self, "_active_live_beamline", None) == adapter.instrument:
             return
         self._active_live_beamline = adapter.instrument
+        self._init_scan_interpretation()
         state.live_beamline_label = adapter.name
         self._powgen_sample_request = object()
         self._powgen_controller = None
@@ -5262,6 +5280,8 @@ class RadarPdNovaApp(PostAnalysisMixin, ThemedApp):
                     )
                 else:
                     self._powgen_controller.state.post_analysis = self._post_settings().model_dump(mode="json")
+                if not (restored and self._powgen_controller.state.scan_interpretation):
+                    self._powgen_controller.state.scan_interpretation = dict(state.scan_interpretation)
                 self._powgen_settings_signature = signature
 
             else:
@@ -6337,6 +6357,9 @@ class RadarPdNovaApp(PostAnalysisMixin, ThemedApp):
             if field == "post_analysis":
                 self._set_post_settings(value)
                 continue
+            if field == "scan_interpretation":
+                state.scan_interpretation = value.model_dump(mode="json")
+                continue
             state_field = "analysis_mode" if field == "mode" else field
             if field in {"sample_elements", "environment_elements"}:
                 value = ", ".join(value)
@@ -6627,6 +6650,7 @@ class RadarPdNovaApp(PostAnalysisMixin, ThemedApp):
         self._post_analysis_scope = "single:" + record.uid
         if record.config is not None:
             self._set_post_settings(record.config.post_analysis)
+            state.scan_interpretation = record.config.scan_interpretation.model_dump(mode="json")
         single_scan = experiment_scan_summary(result_document)
         single_scan.update(
             run_id=record.name,
@@ -6641,6 +6665,9 @@ class RadarPdNovaApp(PostAnalysisMixin, ThemedApp):
             or record.prepared_dataset_ids.get("configuration")
             or ""
         )
+        if record.local_output_dir is not None and single_scan.get("pattern_observation"):
+            pattern_path = record.local_output_dir / "tables" / "Pattern_observation.json"
+            if pattern_path.is_file(): single_scan["pattern_path"] = str(pattern_path)
         self._refresh_post_analysis([single_scan], pending=[])
         state.viewed_run_mode = record.mode.value
         state.viewed_output_profile = record.output_profile

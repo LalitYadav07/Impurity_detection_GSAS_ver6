@@ -20,9 +20,10 @@ from .post_analysis import (
 )
 from .post_analysis_plot import view_figure, export_bundle
 from .uploads import NamedFileUpload
+from .scan_interpretation_ui import ScanInterpretationMixin
 
 
-class PostAnalysisMixin:
+class PostAnalysisMixin(ScanInterpretationMixin):
     def _init_post_analysis(self):
         state = self.server.state
         state.post_analysis = PostAnalysisSettings().model_dump(mode="json")
@@ -71,6 +72,7 @@ class PostAnalysisMixin:
         self._post_analysis_scans = []
         self._post_analysis_result = {"views": []}
         self._select_post_analysis_editor()
+        self._init_scan_interpretation()
 
     def _post_analysis_setup(self):
         vuetify.VAutocomplete(
@@ -802,6 +804,10 @@ class PostAnalysisMixin:
             self._post_analysis_scans = list(scans)
         if pending is not None:
             self._post_analysis_pending = list(pending)
+        interpretation_scans = getattr(self, "_interpretation_all_watch_scans", None)
+        if not str(getattr(self, "_post_analysis_scope", "")).startswith("watch:") or interpretation_scans is None:
+            interpretation_scans = self._post_analysis_scans
+        self._refresh_scan_interpretation(interpretation_scans, getattr(self, "_post_analysis_pending", []))
         settings = self._post_settings()
         result = calculate_views(
             self._post_analysis_scans, settings, pending=getattr(self, "_post_analysis_pending", [])

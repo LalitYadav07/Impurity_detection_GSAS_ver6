@@ -6,6 +6,167 @@
   "required": ["$schema", "analysis", "chemistry", "pattern", "background", "main_phase", "full", "rapid"],
   "properties": {
     "$schema": {"const": "radar-pd-config/v1"},
+    "scan_interpretation": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": 1,
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "min_points": {
+          "default": 64,
+          "maximum": 10000,
+          "minimum": 32,
+          "title": "Min Points",
+          "type": "integer"
+        },
+        "peak_error_ratio": {
+          "default": 8,
+          "maximum": 100,
+          "minimum": 3,
+          "title": "Peak Error Ratio",
+          "type": "number"
+        },
+        "difference_error_ratio": {
+          "default": 6,
+          "maximum": 100,
+          "minimum": 3,
+          "title": "Difference Error Ratio",
+          "type": "number"
+        },
+        "min_peak_fraction": {
+          "default": 0.02,
+          "exclusiveMinimum": 0,
+          "maximum": 0.5,
+          "title": "Min Peak Fraction",
+          "type": "number"
+        },
+        "shape_effect": {
+          "default": 0.03,
+          "exclusiveMinimum": 0,
+          "maximum": 1,
+          "title": "Shape Effect",
+          "type": "number"
+        },
+        "peak_shift_bins": {
+          "default": 0.5,
+          "maximum": 10,
+          "minimum": 0.2,
+          "title": "Peak Shift Bins",
+          "type": "number"
+        },
+        "width_fraction": {
+          "default": 0.3,
+          "maximum": 3,
+          "minimum": 0.1,
+          "title": "Width Fraction",
+          "type": "number"
+        },
+        "intensity_fraction": {
+          "default": 0.25,
+          "maximum": 3,
+          "minimum": 0.05,
+          "title": "Intensity Fraction",
+          "type": "number"
+        },
+        "scale_fraction": {
+          "default": 0.15,
+          "maximum": 3,
+          "minimum": 0.01,
+          "title": "Scale Fraction",
+          "type": "number"
+        },
+        "background_fraction": {
+          "default": 0.1,
+          "maximum": 2,
+          "minimum": 0.01,
+          "title": "Background Fraction",
+          "type": "number"
+        },
+        "cell_fraction": {
+          "default": 0.0001,
+          "exclusiveMinimum": 0,
+          "maximum": 0.1,
+          "title": "Cell Fraction",
+          "type": "number"
+        },
+        "fraction_points": {
+          "default": 1,
+          "exclusiveMinimum": 0,
+          "maximum": 50,
+          "title": "Fraction Points",
+          "type": "number"
+        },
+        "max_history": {
+          "default": 2000,
+          "maximum": 10000,
+          "minimum": 2,
+          "title": "Max History",
+          "type": "integer"
+        },
+        "history_search_limit": {
+          "default": 32,
+          "maximum": 128,
+          "minimum": 2,
+          "title": "History Search Limit",
+          "type": "integer"
+        },
+        "condition_tolerances": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "title": "Condition Tolerances",
+          "type": "object"
+        },
+        "condition_bindings": {
+          "additionalProperties": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "title": "Condition Bindings",
+          "type": "object"
+        },
+        "references": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "References",
+          "type": "object"
+        },
+        "reference_hashes": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Reference Hashes",
+          "type": "object"
+        },
+        "active_revisions": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Active Revisions",
+          "type": "object"
+        },
+        "reviewed_candidate_equivalences": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Reviewed Candidate Equivalences",
+          "type": "object"
+        }
+      },
+      "title": "InterpretationSettings",
+      "type": "object"
+    },
     "post_analysis": {
       "additionalProperties": false,
       "properties": {

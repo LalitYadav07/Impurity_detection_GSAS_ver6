@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import posixpath
 import re
@@ -465,6 +466,63 @@ class GalaxyService:
         if not document:
             raise ValueError(f"Galaxy provenance dataset {dataset_id!r} is empty")
         return document
+
+    def cache_pattern_observation(self, descriptor: dict, *, collection_id=None) -> dict:
+        """Fetch only the checksum-addressed curve receipt, never a run archive."""
+        from .scan_interpretation import MAX_BYTES, Pattern, load_pattern
+        receipt = dict(descriptor)
+        if collection_id:
+            receipt["collection_id"] = str(collection_id)
+        collection_id = collection_id or receipt.get("collection_id")
+        receipt.pop("notice", None)
+        checksum = str(receipt.get("sha256") or "")
+        if not re.fullmatch(r"[0-9a-f]{64}", checksum) or receipt.get("name") != "Pattern_observation.json":
+            raise ValueError("Pattern observation has no valid immutable receipt")
+        destination = self.output_root / "observations" / f"{checksum}.json"
+        validated=getattr(self,"_validated_pattern_cache",None)
+        if validated is None:
+            validated=self._validated_pattern_cache={}
+        if destination.is_file():
+            stat=destination.stat()
+            stamp=(stat.st_size,stat.st_mtime_ns,receipt.get("source_gpx_sha256"))
+            if validated.get(checksum)!=stamp:
+                packet=load_pattern(destination, expected_sha256=checksum)
+                Pattern.parse(packet)
+                if packet.get("source_gpx_sha256")!=receipt.get("source_gpx_sha256"):
+                    raise ValueError("Pattern observation belongs to a different fitted project")
+                validated[checksum]=stamp
+            return {**receipt, "local_path": str(destination)}
+        dataset_id = receipt.get("dataset_id")
+        if not dataset_id and collection_id:
+            matches = [row for row in self.collection_elements(collection_id)
+                       if row["name"] == receipt["name"]]
+            if len(matches) != 1:
+                raise ValueError("Pattern observation is missing or ambiguous in the result tables")
+            dataset_id = matches[0]["id"]
+        if not dataset_id:
+            raise ValueError("Pattern observation dataset is not yet available")
+        raw = self.load_text_document(str(dataset_id), max_bytes=MAX_BYTES).encode("utf-8")
+        if hashlib.sha256(raw).hexdigest() != checksum:
+            raise ValueError("Pattern observation checksum disagrees with the published receipt")
+        packet = json.loads(raw)
+        Pattern.parse(packet)
+        if packet.get("source_gpx_sha256") != receipt.get("source_gpx_sha256"):
+            raise ValueError("Pattern observation belongs to a different fitted project")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        # Concurrent restore/download workers may resolve the same immutable
+        # observation. Each owns its temporary file before atomic publication.
+        with tempfile.NamedTemporaryFile(dir=destination.parent, suffix=".partial",delete=False) as handle:
+            temporary=Path(handle.name)
+            handle.write(raw)
+        try:
+            temporary.replace(destination)
+        finally:
+            temporary.unlink(missing_ok=True)
+        stat=destination.stat()
+        validated[checksum]=(stat.st_size,stat.st_mtime_ns,receipt.get("source_gpx_sha256"))
+        if len(validated)>10000:
+            validated.pop(next(iter(validated)))
+        return {**receipt, "dataset_id": str(dataset_id), "local_path": str(destination)}
 
     @staticmethod
     def _dataset_scientific_role(row: dict[str, Any]) -> tuple[str, bool]:

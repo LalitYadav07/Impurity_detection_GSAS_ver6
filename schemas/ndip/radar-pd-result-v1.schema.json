@@ -13,6 +13,7 @@
     "phases": {"type": "array"},
     "lattice_parameters": {"type": "array"},
     "observables": {"type": "object"},
+    "pattern_observation": {"type": "object"},
     "final_rwp": {"type": ["number", "null"]},
     "scientific_status": {"enum": ["checks_passed", "needs_review", "not_assessed"]},
     "hypotheses": {"type": "array"},

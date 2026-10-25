@@ -87,6 +87,7 @@ def config_from_contract(payload: dict[str, Any]) -> AnalysisConfig:
     rapid = payload.get("rapid") or {}
     return AnalysisConfig(
         post_analysis=payload.get("post_analysis", {}),
+        scan_interpretation=payload.get("scan_interpretation", {}),
         mode=analysis.get("mode", "rapid"),
         radiation=analysis.get("radiation", "neutron"),
         instrument_mode=analysis.get("instrument_mode", "auto"),

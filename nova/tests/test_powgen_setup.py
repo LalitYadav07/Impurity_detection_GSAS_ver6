@@ -36,6 +36,17 @@ def test_2019_case_uses_header_bank_not_profile_local_bank(tmp_path):
     assert json.loads((tmp_path/'staged/PG3_43124_bank2.json').read_text())['source_bank']==2
 
 
+def test_verbose_headers_do_not_hide_the_comparison_receipt_from_the_bounded_reader(tmp_path):
+    p=source(tmp_path)
+    p.write_text(p.read_text().replace('# calibration test\n','# calibration test\n'+'# facility comment\n'*70))
+    setup=inspect_reduced_setup(p);profile=resolve_bank_profile(setup,2)
+    data,_=stage_bank(p,setup,2,profile,tmp_path/'staged')
+    marker=next(line for line in data.read_text().splitlines()[:64]if line.startswith('# RADAR-PD input provenance: '))
+    receipt=json.loads(marker.split(': ',1)[1])
+    assert receipt['source_bank']==2 and receipt['reduction_family']=='POWGEN individual GSAS/FXYE'
+    assert data.read_text().splitlines()[0]==p.read_text().splitlines()[0]
+
+
 def test_real_2017_two_bank_mapping_and_coefficients_are_distinct(tmp_path):
     p=source(tmp_path,37875,(3,4),cycle='2017_1_2_11A_CAL',calibration='PG3_PAC_2BANKS.h5')
     setup=inspect_reduced_setup(p);assert [b.bank for b in setup.banks]==[3,4]

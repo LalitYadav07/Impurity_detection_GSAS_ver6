@@ -442,7 +442,8 @@ def read_powgen_scan_metadata(
     ):
         if value is not None:
             metadata[key] = value
-    return metadata
+    from .scan_conditions import attach_conditions
+    return attach_conditions(metadata, path, "PG3")
 
 
 __all__ = ["powgen_nexus_path", "read_powgen_scan_metadata"]

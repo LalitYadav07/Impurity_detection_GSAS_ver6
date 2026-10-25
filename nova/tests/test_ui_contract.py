@@ -165,7 +165,7 @@ def test_all_numeric_fields_ignore_mouse_wheel_changes() -> None:
     ]
 
     assert number_fields
-    assert len(number_fields) == 50
+    assert len(number_fields) == 51
     assert all('type="text"' in field for field in number_fields)
     assert 'type="number"' not in app.layout.html
 

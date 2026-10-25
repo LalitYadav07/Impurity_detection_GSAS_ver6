@@ -153,3 +153,49 @@ browsing requires read-only `/SNS` and `/HFIR` mounts. Direct result publication
 and directory watching are separate operational features and require a narrowly
 scoped writer identity with access only to approved experiment folders. Raw data
 trees must remain read-only.
+
+## Scan interpretation (0.4.4)
+
+Live results include **What changed?**, comparing each acquisition with the
+previous compatible scan, a pinned reference, matching recorded conditions,
+and a bounded search of similar recent history. Separate specimen, bank,
+profile, reduction-family and setup identities are retained. Job completion
+order does not define acquisition order. Earlier pending jobs keep reference
+and persistence conclusions provisional; multiple fits of one acquisition need
+an explicit active revision.
+
+The updated Analyze collector publishes `tables/Pattern_observation.json` from
+its selected full-mode GPX. It preserves native histogram coordinates, measured
+intensities, reported errors, calculated intensities, masks and fit domains.
+NOVA fetches this checksum-addressed artifact independently of the large result
+archive. Older outputs and Rapid results without a selected project show missing
+curve evidence explicitly; updating NOVA alone cannot supply that evidence.
+
+Named NeXus condition logs carry units, readback/request roles, time origins,
+coverage, exposure-weighted summaries and trajectories. Parent-run conditions
+are labeled when a reduced product's narrower time interval is unconfirmed.
+Pressure/gas devices and ambiguous field readbacks require a verified,
+specimen-scoped device mapping. Unqualified units and incomplete time coverage
+cannot be repaired by choosing a device. Raw receipts remain unchanged.
+
+Findings are deterministic candidates with alternatives and inspectable curve
+regions. Practical effect thresholds and conservative reported-error gates
+are engineering defaults, not calibrated event probabilities or phase detection
+limits. Missing candidates are not zero fractions. Model comparisons require a
+compatible candidate basis, recipe and fitted domain. Scientific input warnings
+remain applicable. This feature issues no experiment-completion or beamline
+control command.
+
+Settings, pinned reference hashes, active revisions and a compact findings index
+are saved with the watch checkpoint. **Export this comparison** includes exact
+curve packets, the pair's metadata, settings and evidence. After extracting it:
+
+```bash
+python -m radar_pd_nova.scan_interpretation manifest.json \
+  --settings settings.json --output replay.json
+```
+
+Replaying a pair does not reproduce full-history persistence conclusions without
+the original history receipts. UI phase filters, zoom, feature-region selection
+and fit visibility do not alter the inference inputs. Historical replay runs in
+a coalescing background worker so the interface remains responsive.

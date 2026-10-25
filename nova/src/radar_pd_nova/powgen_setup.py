@@ -387,6 +387,21 @@ def stage_bank(source: Path, setup: ReducedSetup, bank: int, profile: BankProfil
     destination.mkdir(parents=True, exist_ok=True)
     data = destination / f"PG3_{setup.run_number}_bank{bank}.gsa"
     instrument = destination / (f"bank{bank}_" + profile.path.name)
+    observation_provenance = {
+        "schema": "radar-pd-input-provenance/v1", "instrument": "PG3", "source_bank": bank,
+        "source_sha256": source_digest.hexdigest(), "reduction_family": "POWGEN individual GSAS/FXYE",
+        "reduction_setup": {"cycle": setup.cycle, "mode": setup.mode, "wavelength": setup.wavelength,
+            "frequency": setup.frequency, "guide": setup.guide, "calibration_files": setup.calibration_files,
+            "characterization_files": setup.characterization_files, "grouping_files": setup.grouping_files},
+        "profile_sha256": profile.sha256, "warnings": [],
+    }
+    marker = ("# RADAR-PD input provenance: " + json.dumps(observation_provenance, separators=(",", ":")) + "\n").encode("ascii")
+    if len(marker) > 8192:
+        raise PowgenResolutionError("POWGEN observation provenance exceeds its supported header size")
+    # Preserve the original title, but keep the receipt inside the batch
+    # reader's bounded first-64-line probe even on verbose facility exports.
+    insertion = header.find(b"\n") + 1
+    header[insertion:insertion] = marker
     data.write_bytes(header + payload)
     instrument.write_text(instrument_text, encoding="ascii")
     receipt = {"resolver": RESOLVER_VERSION, "source_path": str(source), "source_bank": bank,

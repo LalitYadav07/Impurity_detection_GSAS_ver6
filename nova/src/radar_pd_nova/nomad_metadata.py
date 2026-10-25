@@ -68,4 +68,5 @@ def read_nomad_scan_metadata(ipts: str, run: int, *, nexus_path=None) -> dict[st
     request = _numeric_log(_first_snapshot(path, ('/entry/DASlogs/BL1B:Chop:Skf1:WavelengthUserReq/value',)))
     if request:
         result['chopper_wavelength_request'] = request
-    return result
+    from .scan_conditions import attach_conditions
+    return attach_conditions(result, path, "NOM")

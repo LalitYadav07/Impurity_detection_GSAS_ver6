@@ -886,6 +886,19 @@ def collect_outputs(
             collection_records["tables"].append(file_record(observations_path, role="table", root=portal))
         except Exception as exc:
             scientific_warnings.append({"code":"observables_unavailable","message":f"Could not extract scientific observables: {exc}"})
+    pattern_observation = {}
+    if final_gpx is not None:
+        try:
+            try:
+                from .ndip_pattern_observation import publish_pattern
+            except ImportError:
+                from ndip_pattern_observation import publish_pattern
+            pattern_path = portal / "tables" / "Pattern_observation.json"
+            pattern_observation = publish_pattern(final_gpx, _read_gpx_records(final_gpx), pattern_path,
+                input_provenance=input_provenance if isinstance(input_provenance, dict) else {}, mode=mode)
+            collection_records["tables"].append(file_record(pattern_path, role="table", root=portal))
+        except Exception as exc:
+            scientific_warnings.append({"code": "pattern_observation_unavailable", "message": f"Curve-comparison observation unavailable: {exc}"})
     effective_status = "failed" if status == "failed" else ("complete" if manifest.get("status", status) == "complete" else status)
     root = Path(project_root).resolve() if project_root else Path(__file__).resolve().parents[1]
     result: dict[str, Any] = {
@@ -898,6 +911,7 @@ def collect_outputs(
         "phases": phases,
         "lattice_parameters": lattice,
         "observables": observables,
+        "pattern_observation": pattern_observation,
         "final_rwp": final_rwp,
         "scientific_status": "needs_review" if scientific_warnings else "not_assessed" if not lattice else "checks_passed",
         "hypotheses": hypotheses,

@@ -1364,6 +1364,7 @@ def experiment_scan_summary(result: dict[str, Any]) -> dict[str, Any]:
         "phases": phases,
         "lattice_parameters": [dict(row) for row in result.get("lattice_parameters", []) if isinstance(row, dict)],
         "observables": dict(result.get("observables") or {}),
+        "pattern_observation": dict(result.get("pattern_observation") or {}),
         "scientific_status": str(result.get("scientific_status") or "not_assessed"),
         "scientific_warnings": [str(w.get("message") or w) if isinstance(w, dict) else str(w) for w in result.get("warnings", [])],
         "hypothesis": " + ".join(

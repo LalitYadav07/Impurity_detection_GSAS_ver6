@@ -9,6 +9,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from .post_analysis import PostAnalysisSettings
+from .scan_interpretation import InterpretationSettings
 
 
 class AnalysisMode(str, Enum):
@@ -192,6 +193,7 @@ class AnalysisConfig(BaseModel):
     rapid_show_family_variants: bool = True
     rapid_final_polish_enabled: bool = False
     post_analysis: PostAnalysisSettings = Field(default_factory=PostAnalysisSettings)
+    scan_interpretation: InterpretationSettings = Field(default_factory=InterpretationSettings)
 
     @field_validator("sample_elements", "environment_elements", mode="before")
     @classmethod
@@ -253,6 +255,7 @@ class AnalysisConfig(BaseModel):
         return {
             "$schema": "radar-pd-config/v1",
             "post_analysis": self.post_analysis.model_dump(mode="json"),
+            "scan_interpretation": self.scan_interpretation.model_dump(mode="json"),
             "created_utc": datetime.now(timezone.utc).isoformat(),
             "analysis": {
                 "mode": self.mode.value,

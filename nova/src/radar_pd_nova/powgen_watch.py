@@ -205,6 +205,8 @@ class WatchState:
     schema: str = WATCH_STATE_SCHEMA
     instrument: str = "PG3"
     post_analysis: dict[str, Any] = field(default_factory=dict)
+    scan_interpretation: dict[str, Any] = field(default_factory=dict)
+    interpretation_report: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.history_id = _nonempty(self.history_id, "history_id")
@@ -214,6 +216,9 @@ class WatchState:
             self.post_analysis = PostAnalysisSettings.model_validate(self.post_analysis).model_dump(mode="json")
         if self.instrument not in {"PG3", "NOM"}:
             raise ValueError("Unsupported watch instrument")
+        if self.scan_interpretation:
+            from .scan_interpretation import InterpretationSettings
+            self.scan_interpretation = InterpretationSettings.model_validate(self.scan_interpretation).model_dump(mode="json")
         if self.instrument != "PG3" and self.schema == WATCH_STATE_SCHEMA:
             self.schema = LIVE_STATE_SCHEMA
         if self.schema not in {WATCH_STATE_SCHEMA, LIVE_STATE_SCHEMA}:
@@ -242,6 +247,8 @@ class WatchState:
             "failed": {key: run.as_dict() for key, run in sorted(self.failed.items())},
             "initial_backfill_complete": self.initial_backfill_complete,
             "post_analysis": self.post_analysis,
+            "scan_interpretation": self.scan_interpretation,
+            "interpretation_report": self.interpretation_report,
             "updated_utc": self.updated_utc,
         }
 
@@ -267,6 +274,8 @@ class WatchState:
             # the old newest-only startup policy.
             initial_backfill_complete=bool(value.get("initial_backfill_complete", False)),
             post_analysis=dict(value.get("post_analysis") or {}),
+            scan_interpretation=dict(value.get("scan_interpretation") or {}),
+            interpretation_report=dict(value.get("interpretation_report") or {}),
             updated_utc=str(value.get("updated_utc") or _utc_now()),
             schema=str(value["$schema"]),
         )

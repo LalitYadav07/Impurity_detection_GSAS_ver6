@@ -1033,7 +1033,19 @@ class PowgenWatchController:
                 )
                 state_changed = True
         for run_id, run in list(self.state.completed.items()):
-            if run.scientific_summary or not run.galaxy_job_id:
+            if run.scientific_summary:
+                receipt = run.scientific_summary.get("pattern_observation") or {}
+                # Restore just this small artifact after a NOVA session restart.
+                if receipt.get("sha256") and hasattr(self.service, "cache_pattern_observation"):
+                    try:
+                        cached = self.service.cache_pattern_observation(receipt)
+                        if cached != receipt:
+                            self.state.set_scientific_summary(run_id, {**run.scientific_summary, "pattern_observation": cached})
+                            state_changed = True
+                    except Exception as exc:
+                        self.refresh_errors.setdefault(run_id, f"Curve observation pending: {exc}")
+                continue
+            if not run.galaxy_job_id:
                 continue
             record = self.records.get(run_id) or self._minimal_record(run)
             try:
@@ -1056,7 +1068,15 @@ class PowgenWatchController:
         if not dataset_id:
             return {}
         payload = self.service.load_json_document(dataset_id)
-        return experiment_scan_summary(payload)
+        summary = experiment_scan_summary(payload)
+        receipt = summary.get("pattern_observation") or {}
+        if receipt.get("sha256") and hasattr(self.service, "cache_pattern_observation"):
+            try:
+                summary["pattern_observation"] = self.service.cache_pattern_observation(
+                    receipt, collection_id=record.output_dataset_ids.get("tables"))
+            except Exception as exc:
+                summary["pattern_observation"] = {**receipt, "collection_id":record.output_dataset_ids.get("tables"), "notice": str(exc)}
+        return summary
 
     def persist_state(self) -> str:
         """Write an immutable watch-state checkpoint to Galaxy History."""
