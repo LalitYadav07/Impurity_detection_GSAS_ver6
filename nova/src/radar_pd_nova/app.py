@@ -732,8 +732,7 @@ class RadarPdNovaApp(PostAnalysisMixin, ThemedApp):
                 click="setup_collapsed = !setup_collapsed",
             )
             with html.Div(classes="radar-context-title"):
-                html.Div("RADAR-PD Interactive", classes="radar-product-name")
-                html.Div("Phase detection for powder diffraction", classes="radar-product-subtitle")
+                html.Div("{{ workspace_view === 'experiment' ? 'Live experiment' : 'Analysis workspace' }}", classes="radar-product-name")
             vuetify.VSpacer()
             vuetify.VChip(
                 text=("application_version",),
@@ -2607,9 +2606,7 @@ class RadarPdNovaApp(PostAnalysisMixin, ThemedApp):
     def _powgen_experiment_dashboard(self) -> None:
         with html.Div(classes="radar-section-heading"):
             with html.Div():
-                html.Div("{{ live_beamline_label }} LIVE EXPERIMENT", classes="radar-micro-label")
-                html.H2("{{ powgen_ipts || 'Experiment dashboard' }}")
-                html.P("Scan-by-scan phase evolution and refinement quality from completed RADAR-PD analyses.")
+                html.H2("{{ live_beamline_label }} · {{ powgen_ipts || 'Live experiment' }}")
             with html.Div(classes="radar-button-row"):
                 vuetify.VChip(
                     text=("powgen_monitoring ? 'Monitoring' : 'Stopped'",),
@@ -2625,24 +2622,29 @@ class RadarPdNovaApp(PostAnalysisMixin, ThemedApp):
                     variant="text",
                     size="small",
                 )
-        with html.Div(classes="radar-experiment-provenance mb-3"):
-            html.Span("Configuration: {{ powgen_configuration_label }}")
-            html.Span("Candidate library: {{ powgen_database_label }}")
-            html.Span("Wavelength: {{ powgen_wavelength || 'Automatic per run' }}")
-        vuetify.VAlert(
-            text=("powgen_dashboard_notice",),
-            type="info",
-            variant="tonal",
-            density="compact",
-            classes="mb-3",
-        )
-        with html.Div(classes="radar-metric-grid"):
-            with html.Div(v_for="metric in powgen_dashboard_metrics", key="metric.label", classes="radar-metric-card"):
-                html.Div("{{ metric.label }}", classes="radar-metric-label")
-                html.Div("{{ metric.value }}", classes="radar-metric-value")
-                html.Div("{{ metric.detail }}", classes="radar-run-list-meta")
-        self._scan_change_dashboard()
-        self._post_analysis_dashboard()
+        with vuetify.VExpansionPanels(variant="accordion", classes="radar-experiment-meta mb-3"):
+            with vuetify.VExpansionPanel(title="Monitor setup and processing summary"):
+                with vuetify.VExpansionPanelText():
+                    with html.Div(classes="radar-experiment-provenance mb-3"):
+                        html.Span("Monitor configuration: {{ powgen_configuration_label }}")
+                        html.Span("Monitor candidate library: {{ powgen_database_label }}")
+                        html.Span("Wavelength: {{ powgen_wavelength || 'Automatic per run' }}")
+                    html.P("{{ powgen_dashboard_notice }}", classes="radar-section-help mb-3")
+                    with html.Div(classes="radar-metric-grid"):
+                        with html.Div(v_for="metric in powgen_dashboard_metrics", key="metric.label", classes="radar-metric-card"):
+                            html.Div("{{ metric.label }}", classes="radar-metric-label")
+                            html.Div("{{ metric.value }}", classes="radar-metric-value")
+                            html.Div("{{ metric.detail }}", classes="radar-run-list-meta")
+        with vuetify.VTabs(v_model=("experiment_result_view",), color="#15543c", classes="radar-experiment-result-tabs"):
+            for title, value in (("Compare scans", "comparison"), ("Experiment trends", "trends")):
+                vuetify.VTab(
+                    title, value=value,
+                    click="$nextTick(() => window.setTimeout(() => window.document.querySelectorAll('.js-plotly-plot').forEach(el => window.Plotly && window.Plotly.Plots.resize(el)), 80))",
+                )
+        with html.Div(v_show="experiment_result_view === 'comparison'"):
+            self._scan_change_dashboard()
+        with html.Div(v_show="experiment_result_view === 'trends'"):
+            self._post_analysis_dashboard()
         with vuetify.VExpansionPanels(v_if="powgen_scientific_rows.length", variant="accordion", classes="my-3"):
             with vuetify.VExpansionPanel(title="Experiment overview and scan results"):
                 with vuetify.VExpansionPanelText():
@@ -7721,6 +7723,61 @@ class RadarPdNovaApp(PostAnalysisMixin, ThemedApp):
         .radar-post-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 12px; }
         .radar-post-toolbar > .v-input { flex: 1 1 260px; min-width: 0; }
         .radar-post-controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr)); gap: 12px; }
+        .radar-experiment-result-tabs { border-bottom: 1px solid var(--radar-line); }
+        .radar-experiment-result-tabs .v-tab, .radar-scan-evidence-tabs .v-tab { text-transform: none; letter-spacing: 0; }
+        .radar-scan-workspace { padding: 18px; scroll-margin-top: 150px; }
+        .radar-scan-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+        .radar-scan-heading h3 { margin: 0; font-size: 19px; color: var(--radar-brand-900); }
+        .radar-scan-selectors { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 14px; }
+        .radar-scan-conditions-line { margin: 10px 0 16px; color: var(--radar-muted); font-size: 13px; }
+        .radar-scan-evidence-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(270px, 320px); gap: 22px; align-items: start; }
+        .radar-scan-curve, .radar-scan-evidence { min-width: 0; }
+        .radar-scan-curve-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+        .radar-scan-curve-controls > .v-autocomplete { flex: 1 1 240px; min-width: 0; }
+        .radar-scan-curve-controls > .v-checkbox { flex: 0 0 auto; }
+        .radar-scan-chart { width: 100%; height: 460px; min-width: 0; }
+        .radar-scan-chart.is-expanded { height: 680px; }
+        .radar-scan-caption { margin-top: 0; }
+        .radar-scan-evidence { border-left: 1px solid var(--radar-line); padding-left: 18px; }
+        .radar-scan-evidence-tabs .v-tab { min-width: 0; padding: 0 9px; font-size: 13px; }
+        .radar-scan-findings { display: grid; gap: 0; }
+        .radar-scan-finding { display: block; width: 100%; text-align: left; padding: 11px 9px; color: var(--radar-ink); border-bottom: 1px solid var(--radar-line); border-left: 3px solid transparent; cursor: pointer; }
+        .radar-scan-finding:hover { background: var(--radar-soft); }
+        .radar-scan-finding[aria-pressed='true'] { border-left-color: var(--radar-brand-700); background: var(--radar-soft); }
+        .radar-scan-finding strong, .radar-scan-finding span, .radar-scan-finding small { display: block; overflow-wrap: anywhere; }
+        .radar-scan-finding strong { font-size: 14px; font-weight: 650; }
+        .radar-scan-finding span { margin-top: 3px; font-size: 13px; line-height: 1.45; }
+        .radar-scan-finding small { margin-top: 4px; color: var(--radar-muted); font-size: 12px; }
+        .radar-scan-selected-evidence { margin-top: 16px; font-size: 13px; overflow-wrap: anywhere; }
+        .radar-scan-selected-evidence h4 { margin: 0 0 7px; font-size: 14px; }
+        .radar-scan-notes { padding-left: 18px; font-size: 13px; line-height: 1.55; overflow-wrap: anywhere; }
+        .radar-scan-notes li { margin: 7px 0; }
+        .radar-scan-model table { table-layout: fixed; }
+        .radar-scan-model td { white-space: normal; overflow-wrap: anywhere; font-size: 13px; }
+        .radar-scan-model th:last-child, .radar-scan-model td:last-child { width: 100px; white-space: nowrap; text-align: right; font-variant-numeric: tabular-nums; }
+        .radar-scan-model-note { margin: 14px 0; font-size: 13px; }
+        .radar-scan-review-note { margin: 16px 0 0; padding-top: 10px; border-top: 1px solid var(--radar-line); color: var(--radar-muted); font-size: 12px; }
+        .radar-scan-settings .v-expansion-panel-title, .radar-experiment-meta .v-expansion-panel-title { background: var(--radar-soft) !important; color: var(--radar-ink) !important; box-shadow: none; font-size: 13px; min-height: 38px; }
+        .radar-scan-settings .v-expansion-panel { box-shadow: none; }
+        .radar-experiment-meta .v-expansion-panel { box-shadow: none; }
+        .radar-scan-empty { padding: 32px 0; color: var(--radar-muted); }
+        .radar-scan-inspector .v-card-text { padding: 16px 24px; }
+        @media (max-width: 1000px) {
+          .radar-scan-evidence-grid { grid-template-columns: minmax(0, 1fr); }
+          .radar-scan-evidence { border-left: 0; border-top: 1px solid var(--radar-line); padding: 12px 0 0; }
+        }
+        @media (max-width: 600px) {
+          .radar-scan-workspace { padding: 12px; }
+          .radar-scan-selectors { grid-template-columns: minmax(0,1fr); gap: 12px; }
+          .radar-scan-heading { align-items: flex-start; flex-wrap: wrap; }
+          .radar-scan-curve-controls > .v-autocomplete { flex-basis: 100%; }
+          .radar-scan-chart { height: 420px; }
+          .radar-scan-chart.is-expanded { height: 520px; }
+          .radar-scan-inspector .v-card-text { padding: 12px; }
+          .radar-scan-workspace > .radar-scan-heading { margin-bottom: 10px; flex-wrap: nowrap; }
+          .radar-scan-heading .v-btn { min-width: 0; padding: 0 6px; }
+          .radar-experiment-result-tabs .v-tab { min-width: 0; }
+        }
         .radar-inspector-card { height: 100vh; overflow: auto; }
         .radar-inspector-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 16px; position: sticky; top: 0; z-index: 2; background: white; }
         .radar-inspector-frame { width: 100%; min-height: 680px; overflow: auto; }

@@ -156,13 +156,21 @@ trees must remain read-only.
 
 ## Scan interpretation (0.4.4)
 
-Live results include **What changed?**, comparing each acquisition with the
+Live results include **Compare scans**, comparing each acquisition with the
 previous compatible scan, a pinned reference, matching recorded conditions,
 and a bounded search of similar recent history. Separate specimen, bank,
 profile, reduction-family and setup identities are retained. Job completion
 order does not define acquisition order. Earlier pending jobs keep reference
 and persistence conclusions provisional; multiple fits of one acquisition need
 an explicit active revision.
+
+The measured overlay and difference are visible on the main page. Selecting a
+pattern observation focuses both axes on its region; refinement changes use a
+separate table with readable candidate labels, and conditions have their own
+tab. Each visible observation belongs to the selected pair, rather than mixing
+adjacent-scan and pinned-reference findings. **Experiment trends** is a separate
+view. Curve zoom, the calculated-fit toggle and these view choices do not rerun
+or change the analysis. The expanded inspector retains the same evidence.
 
 The updated Analyze collector publishes `tables/Pattern_observation.json` from
 its selected full-mode GPX. It preserves native histogram coordinates, measured
@@ -187,7 +195,7 @@ remain applicable. This feature issues no experiment-completion or beamline
 control command.
 
 Settings, pinned reference hashes, active revisions and a compact findings index
-are saved with the watch checkpoint. **Export this comparison** includes exact
+are saved with the watch checkpoint. **Export comparison** includes exact
 curve packets, the pair's metadata, settings and evidence. After extracting it:
 
 ```bash

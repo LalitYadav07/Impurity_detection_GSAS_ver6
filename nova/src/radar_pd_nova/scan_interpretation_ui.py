@@ -5,13 +5,89 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import math
 from pathlib import Path
 import zipfile
 
 from trame.widgets import html, plotly, vuetify3 as vuetify
 
 from .scan_interpretation import InterpretationSettings, ScanInterpreter, digest
-from .scan_interpretation_plot import comparison_figure
+from .scan_interpretation_plot import comparison_figure, observation_figure
+
+
+def scan_label(scan):
+    """Use acquisition labels in controls; preserve the exact ID in receipts."""
+    number = scan.get("run_number")
+    bank = scan.get("bank")
+    return (
+        f"Run {number}" + (f" · bank {bank}" if bank is not None else "")
+        if number is not None
+        else str(scan.get("run_id", ""))
+    )
+
+
+def phase_labels(*scans):
+    """Readable labels never merge distinct candidate identities."""
+    names = {}
+    for scan in scans:
+        for phase in (scan.get("observables") or {}).get("phases", []):
+            key = str(phase.get("phase_id", ""))
+            names[key] = str(phase.get("phase") or key)
+    duplicates = {name for name in names.values() if list(names.values()).count(name) > 1}
+    return {
+        key: f"{name} · {key}" if name in duplicates else name
+        for key, name in names.items()
+    }
+
+
+FINDING_LABELS = {
+    "peak_movement": "Peak positions",
+    "new_features": "Unmatched current features",
+    "lost_features": "Unmatched earlier features",
+    "profile_shape_change": "Peak shapes",
+    "relative_intensity_redistribution": "Relative peak intensities",
+    "global_scale_change": "Overall intensity",
+    "background_change": "Background difference",
+    "persistent_unexplained_features": "Residual features in both fits",
+    "unresolved_pattern_change": "Unexplained pattern difference",
+    "no_resolved_event": "No change resolved",
+    "refined_cell_change": "Lattice parameters",
+    "modeled_fraction_change": "Modeled phase fractions",
+    "candidate_assignment_changed": "Candidate selection changed",
+}
+MODEL_FINDINGS = {
+    "refined_cell_change", "modeled_fraction_change", "candidate_assignment_changed"
+}
+
+
+def model_change_rows(model, labels, settings):
+    """Display equal cell lengths together without changing the stored metrics."""
+    groups = []
+    for cell in model.get("cell_changes", []):
+        if abs(cell["relative_change"]) < settings.cell_fraction:
+            continue
+        match = next((g for g in groups if
+            cell["metric"] in {"a", "b", "c"}
+            and set(g["metrics"]) <= {"a", "b", "c"}
+            and g["phase_id"] == cell["phase_id"]
+            and all(math.isclose(g[k], cell[k], rel_tol=1e-12, abs_tol=1e-12)
+                    for k in ("previous", "current"))), None)
+        if match:
+            match["metrics"].append(cell["metric"])
+        else:
+            groups.append({**cell, "metrics": [cell["metric"]]})
+    rows = [
+        {"label": labels.get(g["phase_id"], g["phase_id"]) + " · " + " = ".join(g["metrics"]),
+         "change": f"{100*g['relative_change']:+.3g}%"}
+        for g in groups
+    ]
+    rows.extend(
+        {"label": labels.get(c["phase_id"], c["phase_id"]) + " · modeled fraction",
+         "change": f"{c['percentage_point_difference']:+.3g} pp"}
+        for c in model.get("fraction_changes", [])
+        if abs(c["percentage_point_difference"]) >= settings.fraction_points
+    )
+    return rows
 
 
 def compact_report(report):
@@ -75,6 +151,7 @@ class ScanInterpretationMixin:
             "scan_change_region": "full",
             "scan_change_figure": {"data": [], "layout": {}},
             "scan_change_can_plot": False,
+            "scan_change_has_curve": False,
             "scan_change_error": "",
             "scan_change_open": False,
             "scan_change_fit": True,
@@ -83,214 +160,268 @@ class ScanInterpretationMixin:
             "scan_change_binding_confirmed": False,
             "scan_change_revision_options": [],
             "scan_change_revision": "",
+            "scan_change_context": "",
+            "scan_change_evidence_tab": "pattern",
+            "scan_change_items": [],
+            "scan_change_finding": "",
+            "scan_change_selected_evidence": {},
+            "scan_change_model_rows": [],
+            "scan_change_model_notice": "",
+            "scan_change_review_required": False,
+            "experiment_result_view": "comparison",
         }.items():
             setattr(state, key, value)
 
     def _scan_change_dashboard(self):
-        with html.Section(classes="radar-result-card my-3", style="scroll-margin-top:180px"):
-            html.H3("What changed?", classes="radar-card-title")
-            html.P("{{ scan_change_summary }}", classes="radar-section-help")
-            with html.Div(style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px"):
+        with html.Section(classes="radar-result-card radar-scan-workspace my-3"):
+            with html.Div(classes="radar-scan-heading"):
+                with html.Div():
+                    html.H3("Scan comparison", classes="radar-card-title")
+                    html.P("{{ scan_change_context }}", classes="radar-section-help")
+                vuetify.VBtn(
+                    "Export comparison", variant="text", size="small",
+                    disabled=("!scan_change_can_plot",), click=self.download_scan_change,
+                )
+            with html.Div(classes="radar-scan-selectors"):
                 vuetify.VAutocomplete(
-                    label="Acquisition / bank",
-                    v_model=("scan_change_run",),
-                    items=("scan_change_runs",),
-                    density="compact",
-                    variant="outlined",
-                    hide_details=True,
-                    style="flex:1;min-width:230px",
-                    update_modelValue=(self.select_scan_change, "[$event]"),
+                    label="Scan / bank", v_model=("scan_change_run",),
+                    items=("scan_change_runs",), density="compact", variant="outlined",
+                    hide_details=True, update_modelValue=(self.select_scan_change, "[$event]"),
                 )
                 vuetify.VSelect(
-                    label="Compare with",
-                    v_model=("scan_change_pair",),
-                    items=("scan_change_pairs",),
-                    density="compact",
-                    variant="outlined",
-                    hide_details=True,
-                    style="flex:1;min-width:230px",
-                    disabled=("!scan_change_pairs.length",),
+                    label="Reference", v_model=("scan_change_pair",),
+                    items=("scan_change_pairs",), density="compact", variant="outlined",
+                    hide_details=True, disabled=("!scan_change_pairs.length",),
                     update_modelValue=(self.select_scan_change_pair, "[$event]"),
                 )
             html.P(
-                "{{ scan_change_condition_summary }}",
-                v_if="scan_change_condition_summary",
-                classes="radar-section-help",
+                "{{ scan_change_condition_summary }}", v_if="scan_change_condition_summary",
+                classes="radar-scan-conditions-line",
             )
-            with html.Div(
-                v_for="finding in scan_change_findings", key="finding.code", classes="mb-2"
-            ):
-                html.Div("{{ finding.title }}", style="font-weight:600")
-                html.Div(
-                    "{{ finding.status.replaceAll('_',' ') }} · {{ finding.evidence.slice(0,2).join(' · ') }}{{ finding.evidence.length>2 ? ' · '+(finding.evidence.length-2)+' more measurements in evidence' : '' }}",
-                    classes="radar-section-help",
+            html.P("{{ scan_change_summary }}", v_if="scan_change_has_curve && !scan_change_can_plot", classes="radar-section-help mb-3")
+            with html.Div(v_if="scan_change_has_curve", classes="radar-scan-evidence-grid"):
+                self._scan_change_curve_view()
+                self._scan_change_evidence_view()
+            with html.Div(v_else=True, classes="radar-scan-empty", role="status"):
+                html.H4("Comparison unavailable")
+                html.P("{{ scan_change_summary }}")
+            self._scan_change_settings()
+
+    def _scan_change_curve_view(self, *, expanded=False):
+        with html.Div(classes="radar-scan-curve"):
+            with html.Div(classes="radar-scan-curve-controls"):
+                vuetify.VAutocomplete(
+                    label="Pattern region", v_model=("scan_change_region",),
+                    items=("scan_change_regions",), variant="outlined", density="compact",
+                    hide_details=True,
+                    update_modelValue=(self.select_scan_change_region, "[$event]"),
                 )
-            with html.Div(style="display:flex;gap:8px;flex-wrap:wrap"):
-                vuetify.VBtn(
-                    "Inspect curves and evidence",
-                    variant="outlined",
-                    size="small",
-                    disabled=("!scan_change_can_plot",),
-                    click=self.open_scan_change,
+                vuetify.VCheckbox(
+                    label="Calculated fit", v_model=("scan_change_fit",), hide_details=True,
+                    density="compact",
+                    update_modelValue=(self.toggle_scan_change_fit, "[$event]"),
                 )
-                vuetify.VBtn(
-                    "Export this comparison",
-                    variant="text",
-                    size="small",
-                    disabled=("!scan_change_can_plot",),
-                    click=self.download_scan_change,
-                )
-            with vuetify.VExpansionPanels(variant="accordion", classes="mt-2"):
-                with vuetify.VExpansionPanel(
-                    title="Conditions, qualifications and comparison settings"
-                ):
-                    with vuetify.VExpansionPanelText():
-                        html.P(
-                            "Recorded conditions describe available sensors. Matching these does not establish that every specimen condition is controlled.",
-                            classes="radar-section-help",
-                        )
-                        with html.Div(
-                            v_for="condition in scan_change_conditions",
-                            key="condition",
-                            classes="mb-1",
-                        ):
-                            html.Span("{{ condition }}")
-                        with html.Div(
-                            v_for="notice in scan_change_qualifications",
-                            key="notice",
-                            classes="mb-1",
-                        ):
-                            html.Span("{{ notice }}")
-                        with html.Div(
-                            v_for="notice in scan_change_notices", key="notice", classes="mb-1"
-                        ):
-                            html.Span("{{ notice }}")
-                        with html.Div(v_if="scan_change_binding_options.length"):
-                            vuetify.VSelect(
-                                label="Specimen-connected readback",
-                                v_model=("scan_change_binding",),
-                                items=("scan_change_binding_options",),
-                                density="compact",
-                                variant="outlined",
-                                hide_details=True,
-                            )
-                            vuetify.VCheckbox(
-                                label="I verified that this device measured this specimen during these runs",
-                                v_model=("scan_change_binding_confirmed",),
-                                hide_details=True,
-                            )
-                            vuetify.VBtn(
-                                "Apply verified device mapping",
-                                size="small",
-                                variant="outlined",
-                                click=self.bind_scan_change_condition,
-                                disabled=(
-                                    "!scan_change_binding || !scan_change_binding_confirmed",
-                                ),
-                            )
-                        with html.Div(v_if="scan_change_revision_options.length"):
-                            vuetify.VSelect(
-                                label="Active fit revision",
-                                v_model=("scan_change_revision",),
-                                items=("scan_change_revision_options",),
-                                density="compact",
-                                variant="outlined",
-                                hide_details=True,
-                            )
-                            vuetify.VBtn(
-                                "Use this fit revision",
-                                size="small",
-                                variant="outlined",
-                                click=self.choose_scan_change_revision,
-                                disabled=("!scan_change_revision",),
-                            )
-                        html.P(
-                            "Feature thresholds are engineering settings; event sensitivity and false-alert rates are not certified. No stopping or phase-absence decision is made.",
-                            classes="radar-section-help mt-2",
-                        )
-                        vuetify.VTextField(
-                            label="Shape difference threshold",
-                            type="text",
-                            inputmode="decimal",
-                            model_value=("scan_interpretation.shape_effect",),
-                            density="compact",
-                            variant="outlined",
-                            update_modelValue=(
-                                self.update_scan_change_setting,
-                                "['shape_effect',$event]",
-                            ),
-                        )
-                        with html.Div(style="display:flex;gap:8px;flex-wrap:wrap"):
-                            vuetify.VBtn(
-                                "Use this scan as reference",
-                                size="small",
-                                variant="outlined",
-                                click=self.pin_scan_change_reference,
-                                disabled=("!scan_change_runs.length",),
-                            )
-                            vuetify.VBtn(
-                                "Save interpretation settings",
-                                size="small",
-                                variant="outlined",
-                                click=self.save_scan_change,
-                            )
-            vuetify.VAlert(
-                v_if="scan_change_error",
-                text=("scan_change_error",),
-                type="error",
-                variant="tonal",
-                classes="mt-2",
+                if not expanded:
+                    vuetify.VBtn(
+                        "Expand", variant="text", size="small", click=self.open_scan_change,
+                        prepend_icon="mdi-arrow-expand",
+                    )
+            with html.Div(classes="radar-scan-chart" + (" is-expanded" if expanded else "")):
+                figure = plotly.Figure(display_mode_bar=True, style="height:100%;width:100%")
+                figure.data = ("scan_change_figure.data",)
+                figure.layout = ("scan_change_figure.layout",)
+            html.P(
+                "{{ scan_change_can_plot ? 'Reference intensity is adjusted by one scale and offset. The difference shows current minus adjusted reference.' : 'Measured pattern and current refinement. A compatible reference is not yet available.' }}",
+                classes="radar-section-help radar-scan-caption",
             )
 
-    def _scan_change_dialog(self):
-        with vuetify.VDialog(v_model=("scan_change_open",), fullscreen=True, scrollable=True):
-            with vuetify.VCard():
-                with vuetify.VCardTitle(
-                    style="display:flex;justify-content:space-between;align-items:center;gap:12px"
+    def _scan_change_evidence_view(self):
+        with html.Aside(classes="radar-scan-evidence", aria_label="Comparison evidence"):
+            with vuetify.VTabs(
+                v_model=("scan_change_evidence_tab",), density="compact",
+                classes="radar-scan-evidence-tabs", color="#15543c",
+            ):
+                vuetify.VTab("Pattern", value="pattern")
+                vuetify.VTab("Refinement", value="model")
+                vuetify.VTab("Conditions", value="conditions")
+            with html.Div(v_show="scan_change_evidence_tab === 'pattern'"):
+                html.P("Automated observations · select to inspect", v_if="scan_change_can_plot", classes="radar-section-help mb-2")
+                with html.Div(classes="radar-scan-findings"):
+                    with html.Button(
+                        v_for="finding in scan_change_items.filter(f => f.group === 'pattern')",
+                        key="finding.code", type="button", classes="radar-scan-finding",
+                        aria_pressed=("scan_change_finding === finding.code",),
+                        click=(self.select_scan_change_finding, "[finding.code]"),
+                    ):
+                        html.Strong("{{ finding.label }}")
+                        html.Span("{{ finding.summary }}")
+                        html.Small("{{ finding.region_count ? finding.region_count + (finding.region_count === 1 ? ' region' : ' regions') + ' · inspect curves' : 'Whole-pattern observation' }}")
+                html.P(
+                    "No local change was resolved by these checks. This does not establish that the sample is unchanged.",
+                    v_if="scan_change_can_plot && !scan_change_items.some(f => f.group === 'pattern')",
+                    classes="radar-section-help",
+                )
+                html.P("Another compatible measured curve is needed for a comparison.", v_if="!scan_change_can_plot", classes="radar-section-help my-2")
+            with html.Div(v_show="scan_change_evidence_tab === 'model'", classes="radar-scan-model"):
+                html.P("{{ scan_change_model_notice }}", classes="radar-section-help my-2")
+                vuetify.VDataTable(
+                    items=("scan_change_model_rows",),
+                    headers=([{"title":"Candidate / property", "key":"label"},
+                              {"title":"Change", "key":"change"}],),
+                    density="compact", items_per_page=-1, hide_default_footer=True,
+                    no_data_text="No comparable refined change above the display threshold.",
+                )
+                with html.Div(
+                    v_for="finding in scan_change_items.filter(f => f.group === 'model')",
+                    key="finding.code", classes="radar-scan-model-note",
                 ):
-                    html.Span("Scan comparison evidence")
-                    vuetify.VBtn("Close", click="scan_change_open=false", variant="text")
-                with vuetify.VCardText(style="overflow:auto"):
-                    html.P("{{ scan_change_summary }}")
-                    with html.Div(style="display:flex;gap:12px;align-items:center;flex-wrap:wrap"):
-                        vuetify.VAutocomplete(
-                            label="Feature region",
-                            v_model=("scan_change_region",),
-                            items=("scan_change_regions",),
-                            variant="outlined",
-                            density="compact",
-                            hide_details=True,
-                            style="min-width:260px;max-width:600px",
-                            update_modelValue=(self.select_scan_change_region, "[$event]"),
-                        )
-                        vuetify.VCheckbox(
-                            label="Show current calculated fit",
-                            v_model=("scan_change_fit",),
-                            hide_details=True,
-                            update_modelValue=(self.toggle_scan_change_fit, "[$event]"),
-                        )
+                    html.Strong("{{ finding.label }}")
+                    html.P("{{ finding.alternatives.join(' ') }}", classes="radar-section-help")
+                    with html.Div(v_if="finding.code === 'candidate_assignment_changed'"):
+                        html.P("{{ finding.evidence.join(' · ') }}")
+            with html.Div(v_show="scan_change_evidence_tab === 'conditions'"):
+                html.P("{{ scan_change_condition_summary }}", classes="radar-section-help my-2")
+                with html.Ul(classes="radar-scan-notes"):
+                    html.Li("{{ condition }}", v_for="condition in scan_change_conditions", key="condition")
+                    html.Li("{{ notice }}", v_for="notice in scan_change_qualifications", key="notice")
+                    html.Li("{{ notice }}", v_for="notice in scan_change_notices", key="notice")
+                html.P("Sensor sources and device mapping are under Metadata and comparison settings.", classes="radar-section-help")
+            with html.Div(
+                v_if="scan_change_evidence_tab === 'pattern' && scan_change_selected_evidence.code",
+                classes="radar-scan-selected-evidence", aria_live="polite",
+            ):
+                html.H4("{{ scan_change_selected_evidence.label }}")
+                html.P("{{ scan_change_selected_evidence.evidence.join(' · ') }}")
+                with html.Ul(classes="radar-scan-notes"):
+                    html.Li(
+                        "{{ alternative }}", v_for="alternative in scan_change_selected_evidence.alternatives",
+                        key="alternative",
+                    )
+            html.P(
+                "Fit or calibration review is pending.", v_if="scan_change_review_required",
+                classes="radar-scan-review-note",
+            )
+
+    def _scan_change_settings(self):
+        with vuetify.VExpansionPanels(variant="accordion", classes="radar-scan-settings mt-3"):
+            with vuetify.VExpansionPanel(
+                title="Metadata and comparison settings"
+            ):
+                with vuetify.VExpansionPanelText():
                     html.P(
-                        "Reference scale and offset are fitted separately; the lower curve retains local differences. Zoom and display choices do not alter the detector inputs.",
+                        "Recorded conditions describe available sensors. Matching these does not establish that every specimen condition is controlled.",
                         classes="radar-section-help",
                     )
-                    with html.Div(style="min-width:0;width:100%"):
-                        figure = plotly.Figure(
-                            display_mode_bar=True, style="height:680px;width:100%"
-                        )
-                        figure.data = ("scan_change_figure.data",)
-                        figure.layout = ("scan_change_figure.layout",)
+                    with html.Div(
+                        v_for="condition in scan_change_conditions",
+                        key="condition",
+                        classes="mb-1",
+                    ):
+                        html.Span("{{ condition }}")
+                    with html.Div(
+                        v_for="notice in scan_change_qualifications",
+                        key="notice",
+                        classes="mb-1",
+                    ):
+                        html.Span("{{ notice }}")
+                    with html.Div(
+                        v_for="notice in scan_change_notices", key="notice", classes="mb-1"
+                    ):
+                        html.Span("{{ notice }}")
                     with html.Div(
                         v_for="metric in scan_change_metrics", key="metric", classes="mb-1"
                     ):
                         html.Span("{{ metric }}")
-                    with html.Div(
-                        v_for="finding in scan_change_details", key="finding.code", classes="my-3"
-                    ):
-                        html.H4("{{ finding.title }}")
-                        html.Div("{{ finding.evidence.join(' · ') }}")
-                        html.Div(
-                            "{{ finding.alternatives.join(' · ') }}", classes="radar-section-help"
+                    with html.Div(v_if="scan_change_binding_options.length"):
+                        vuetify.VSelect(
+                            label="Specimen-connected readback",
+                            v_model=("scan_change_binding",),
+                            items=("scan_change_binding_options",),
+                            density="compact",
+                            variant="outlined",
+                            hide_details=True,
                         )
+                        vuetify.VCheckbox(
+                            label="I verified that this device measured this specimen during these runs",
+                            v_model=("scan_change_binding_confirmed",),
+                            hide_details=True,
+                        )
+                        vuetify.VBtn(
+                            "Apply verified device mapping",
+                            size="small",
+                            variant="outlined",
+                            click=self.bind_scan_change_condition,
+                            disabled=(
+                                "!scan_change_binding || !scan_change_binding_confirmed",
+                            ),
+                        )
+                    with html.Div(v_if="scan_change_revision_options.length"):
+                        vuetify.VSelect(
+                            label="Active fit revision",
+                            v_model=("scan_change_revision",),
+                            items=("scan_change_revision_options",),
+                            density="compact",
+                            variant="outlined",
+                            hide_details=True,
+                        )
+                        vuetify.VBtn(
+                            "Use this fit revision",
+                            size="small",
+                            variant="outlined",
+                            click=self.choose_scan_change_revision,
+                            disabled=("!scan_change_revision",),
+                        )
+                    html.P(
+                        "Feature thresholds are engineering settings; event sensitivity and false-alert rates are not certified. No stopping or phase-absence decision is made.",
+                        classes="radar-section-help mt-2",
+                    )
+                    vuetify.VTextField(
+                        label="Shape difference threshold",
+                        type="text",
+                        inputmode="decimal",
+                        model_value=("scan_interpretation.shape_effect",),
+                        density="compact",
+                        variant="outlined",
+                        update_modelValue=(
+                            self.update_scan_change_setting,
+                            "['shape_effect',$event]",
+                        ),
+                    )
+                    with html.Div(style="display:flex;gap:8px;flex-wrap:wrap"):
+                        vuetify.VBtn(
+                            "Use this scan as reference",
+                            size="small",
+                            variant="outlined",
+                            click=self.pin_scan_change_reference,
+                            disabled=("!scan_change_runs.length",),
+                        )
+                        vuetify.VBtn(
+                            "Save interpretation settings",
+                            size="small",
+                            variant="outlined",
+                            click=self.save_scan_change,
+                        )
+        vuetify.VAlert(
+            v_if="scan_change_error",
+            text=("scan_change_error",),
+            type="error",
+            variant="tonal",
+            classes="mt-2",
+        )
+
+    def _scan_change_dialog(self):
+        with vuetify.VDialog(v_model=("scan_change_open",), fullscreen=True, scrollable=True):
+            with vuetify.VCard(classes="radar-scan-inspector"):
+                with vuetify.VCardTitle(classes="radar-scan-heading"):
+                    with html.Div():
+                        html.Span("Scan comparison")
+                        html.P("{{ scan_change_context }}", classes="radar-section-help")
+                    vuetify.VBtn("Close", click="scan_change_open=false", variant="text")
+                with vuetify.VCardText():
+                    html.P("{{ scan_change_summary }}", classes="radar-section-help mb-3")
+                    with html.Div(classes="radar-scan-evidence-grid"):
+                        self._scan_change_curve_view(expanded=True)
+                        self._scan_change_evidence_view()
 
     def _refresh_scan_interpretation(self, scans, pending=()):
         if not hasattr(self, "_scan_interpreter"):
@@ -368,7 +499,7 @@ class ScanInterpretationMixin:
             metadata = scan.get("metadata") or {}
             choices.append(
                 {
-                    "title": f"{row['run_id']} · sample {metadata.get('sample_id','unknown')}",
+                    "title": f"{scan_label(scan)} · sample {metadata.get('sample_id','unknown')}",
                     "value": row["run_id"],
                 }
             )
@@ -415,8 +546,21 @@ class ScanInterpretationMixin:
         state = self.server.state
         state.scan_change_run = value
         row = next((r for r in self._interpretation_report["records"] if r["run_id"] == value), {})
+        changed_acquisition = getattr(self, "_selected_interpretation", {}).get("run_id") != row.get("run_id")
         self._selected_interpretation = row
         from .scan_interpretation import _measurement, _revision
+
+        current_scan = next((s for s in self._interpretation_scans
+                             if str(s.get("run_id")) == str(value)), {})
+        metadata = current_scan.get("metadata") or {}
+        state.scan_change_context = " · ".join(str(v) for v in [
+            {"NOM": "NOMAD", "PG3": "POWGEN"}.get(current_scan.get("instrument")),
+            current_scan.get("ipts"),
+            ("Sample " + str(metadata.get("sample_name") or metadata.get("sample_id")))
+                if metadata.get("sample_name") or metadata.get("sample_id") else None,
+            f"ID {metadata['sample_id']}" if metadata.get("sample_name") and metadata.get("sample_id") else None,
+        ] if v)
+        state.scan_change_review_required = bool(row.get("scientific_warnings"))
 
         revisions = [
             s for s in self._interpretation_scans if _measurement(s) == row.get("measurement_key")
@@ -433,7 +577,7 @@ class ScanInterpretationMixin:
         pairs = row.get("comparisons", [])
         state.scan_change_pairs = [
             {
-                "title": p["reference_run_id"]
+                "title": scan_label(self._scan_by_id(p["reference_run_id"]))
                 + " · "
                 + ", ".join(r.replace("_", " ") for r in p["roles"]),
                 "value": p["reference_run_id"],
@@ -441,7 +585,7 @@ class ScanInterpretationMixin:
             for p in pairs
         ]
         ids = [p["reference_run_id"] for p in pairs]
-        if state.scan_change_pair not in ids:
+        if changed_acquisition or state.scan_change_pair not in ids:
             state.scan_change_pair = ids[0] if ids else ""
         state.scan_change_notices = row.get("notices", [])
         state.scan_change_conditions = [
@@ -476,8 +620,11 @@ class ScanInterpretationMixin:
         row = getattr(self, "_selected_interpretation", {})
         pair = next((p for p in row.get("comparisons", []) if p["reference_run_id"] == value), {})
         self._selected_interpretation_pair = pair
-        findings = row.get("findings", [])
-        if pair and "previous" not in pair["roles"]:
+        findings = []
+        # Each visible observation must refer to the curves actually displayed.
+        # The report also holds history/pinned-reference findings, which must
+        # not be presented as measurements of the selected adjacent pair.
+        if pair:
             from .scan_interpretation import explain_comparison
 
             before = self._scan_by_id(value)
@@ -490,28 +637,58 @@ class ScanInterpretationMixin:
             )
         state.scan_change_details = findings
         state.scan_change_findings = findings[:3]
-        suffix = f" · {len(findings)-3} more in evidence" if len(findings) > 3 else ""
         state.scan_change_summary = (
-            f"{state.scan_change_run} versus {value} · {len(findings)} findings{suffix}"
+            f"{scan_label(after)} compared with {scan_label(before)}"
             if pair
             else (row.get("notices") or ["Waiting for another compatible measured curve"])[0]
         )
         regions = []
         for f in findings:
             for interval in f.get("regions", []):
-                if interval not in [r["interval"] for r in regions]:
+                if not any(r["interval"] == interval and r["code"] == f["code"] for r in regions):
                     regions.append(
                         {
-                            "title": f["title"] + f" · {interval[0]:.5g}–{interval[1]:.5g}",
+                            "title": FINDING_LABELS.get(f["code"], f["title"]) + f" · {interval[0]:.5g}–{interval[1]:.5g}",
                             "value": str(len(regions)),
                             "interval": interval,
+                            "code": f["code"],
                         }
                     )
+        if regions:
+            unit = self._scan_interpreter.pattern(after).packet["coordinate"]["unit"]
+            unit = {"us": "μs", "angstrom": "Å", "A": "Å"}.get(unit, unit)
+            for region in regions:
+                region["title"] += f" {unit}"
         self._scan_change_regions = regions
         state.scan_change_regions = [{"title": "Full measured coverage", "value": "full"}] + [
-            {k: v for k, v in r.items() if k != "interval"} for r in regions
+            {k: v for k, v in r.items() if k not in {"interval", "code"}} for r in regions
         ]
         state.scan_change_region = "full"
+        state.scan_change_finding = ""
+        state.scan_change_selected_evidence = {}
+        labels = phase_labels(before, after) if pair else {}
+
+        def readable(text):
+            for key in sorted(labels, key=len, reverse=True):
+                text = text.replace(key, labels[key])
+            return text
+
+        state.scan_change_items = [
+            {**f, "label": FINDING_LABELS.get(f["code"], f["title"]),
+             "summary": readable((f.get("evidence") or [f["title"]])[0]),
+             "evidence": [readable(t) for t in f.get("evidence", [])],
+             "region_count": len(f.get("regions", [])),
+             "group": "model" if f["code"] in MODEL_FINDINGS else "pattern"}
+            for f in findings
+        ]
+        for item in state.scan_change_items:
+            if item["code"] in {"new_features", "lost_features"}:
+                count = len(pair["features"][item["code"]])
+                side = "current" if item["code"] == "new_features" else "earlier"
+                item["summary"] = (
+                    f"{count} {side} local feature" + (" was" if count == 1 else "s were")
+                    + " not matched."
+                )
         state.scan_change_can_plot = pair.get("features", {}).get("status") == "compared"
         features = pair.get("features", {})
         state.scan_change_metrics = (
@@ -535,17 +712,23 @@ class ScanInterpretationMixin:
                     f"{d['quantity'].replace('_',' ')} {a['value']:.5g} → {b['value']:.5g} {d.get('unit','')} ({b.get('status','unknown')})"
                 )
         state.scan_change_condition_summary = " · ".join(labels[:3]) or (
-            "No qualified condition pair is available" if pair else ""
+            "Comparable sample conditions are unavailable · see Conditions" if pair else ""
         )
         model = pair.get("model_changes", {})
+        state.scan_change_model_rows = model_change_rows(
+            model, phase_labels(before, after) if pair else {},
+            InterpretationSettings.model_validate(state.scan_interpretation),
+        )
+        state.scan_change_model_notice = model.get("notice") or (
+            "Changes in the refined model; percentages are relative to the reference. Fractions use percentage points (pp). Significance and calibration still require review."
+        )
         if model.get("rwp_difference") is not None:
             state.scan_change_metrics.append(
                 f"Rwp change {model['rwp_difference']:+.5g} percentage points · same recorded recipe/domain; not a scientific acceptance score"
             )
         if model.get("notice"):
             state.scan_change_metrics.append(model["notice"])
-        if state.scan_change_open:
-            self._update_scan_change_plot()
+        self._update_scan_change_plot()
         state.flush()
 
     def _scan_by_id(self, run_id):
@@ -571,8 +754,21 @@ class ScanInterpretationMixin:
 
     def _update_scan_change_plot(self):
         state = self.server.state
-        if not state.scan_change_can_plot:
+        current = next((s for s in self._interpretation_scans if str(s.get("run_id")) == str(state.scan_change_run)), None)
+        state.scan_change_has_curve = False
+        if current is None:
             state.scan_change_figure = {"data": [], "layout": {}}
+            return
+        try:
+            after = self._scan_interpreter.pattern(current)
+        except (ValueError, TypeError, KeyError, OSError):
+            state.scan_change_figure = {"data": [], "layout": {}}
+            return
+        state.scan_change_has_curve = True
+        if not state.scan_change_can_plot:
+            state.scan_change_figure = plotly.Figure.to_data(observation_figure(
+                after, label=state.scan_change_run, show_fit=state.scan_change_fit,
+            ))
             return
         region = next(
             (
@@ -583,7 +779,6 @@ class ScanInterpretationMixin:
             None,
         )
         before = self._scan_interpreter.pattern(self._scan_by_id(state.scan_change_pair))
-        after = self._scan_interpreter.pattern(self._scan_by_id(state.scan_change_run))
         state.scan_change_figure = plotly.Figure.to_data(
             comparison_figure(
                 before,
@@ -602,9 +797,25 @@ class ScanInterpretationMixin:
         self.server.state.flush()
 
     def select_scan_change_region(self, value, **_):
-        self.server.state.scan_change_region = value
+        state = self.server.state
+        state.scan_change_region = value
+        code = next((r["code"] for r in self._scan_change_regions if r["value"] == value), "")
+        state.scan_change_finding = code
+        state.scan_change_selected_evidence = next(
+            (f for f in state.scan_change_items if f["code"] == code), {}
+        )
         self._update_scan_change_plot()
-        self.server.state.flush()
+        state.flush()
+
+    def select_scan_change_finding(self, code, **_):
+        region = next((r for r in self._scan_change_regions if r["code"] == code), None)
+        self.select_scan_change_region(region["value"] if region else "full")
+        state = self.server.state
+        state.scan_change_finding = code
+        state.scan_change_selected_evidence = next(
+            (f for f in state.scan_change_items if f["code"] == code), {}
+        )
+        state.flush()
 
     def toggle_scan_change_fit(self, value, **_):
         self.server.state.scan_change_fit = bool(value)

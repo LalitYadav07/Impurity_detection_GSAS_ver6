@@ -186,7 +186,9 @@ def test_powgen_experiment_dashboard_exposes_scientific_trends() -> None:
 
     for text in (
         "Open experiment dashboard",
-        "{{ live_beamline_label }} LIVE EXPERIMENT",
+        "{{ live_beamline_label }} · {{ powgen_ipts || 'Live experiment' }}",
+        "Compare scans",
+        "Experiment trends",
         "Refined phase fractions",
         "Refinement quality",
         "All reported phases across scans",

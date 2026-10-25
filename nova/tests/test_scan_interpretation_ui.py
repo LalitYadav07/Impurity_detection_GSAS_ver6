@@ -36,6 +36,68 @@ def test_changes_panel_is_compact_but_every_finding_has_accessible_evidence():
     assert application._interpretation_report == before
 
 
+def test_main_page_contains_curves_before_opening_the_expanded_inspector():
+    application = app()
+    state = application.server.state
+    assert not state.scan_change_open
+    assert state.scan_change_figure["data"]
+    before = copy.deepcopy(application._interpretation_report)
+    application.select_scan_change_finding(state.scan_change_items[0]["code"])
+    assert state.scan_change_figure["layout"]["xaxis"]["range"]
+    assert state.scan_change_selected_evidence["code"] == state.scan_change_items[0]["code"]
+    assert application._interpretation_report == before
+
+
+def test_first_scan_shows_its_fit_without_inventing_a_reference_or_difference():
+    application = app()
+    application._refresh_post_analysis([scan(1)])
+    state = application.server.state
+    assert state.scan_change_has_curve and not state.scan_change_can_plot
+    traces = state.scan_change_figure["data"]
+    assert [t["name"] for t in traces] == ["Current observed", "Current calculated"]
+    assert state.scan_change_figure["layout"]["meta"]["reference_run_id"] is None
+    application.toggle_scan_change_fit(False)
+    assert len(state.scan_change_figure["data"]) == 1
+    application._refresh_post_analysis([])
+    assert not state.scan_change_has_curve and not state.scan_change_figure["data"]
+
+
+def test_previous_pair_does_not_display_findings_about_the_pinned_reference():
+    application = app()
+    application._refresh_post_analysis([
+        scan(1), scan(2, pattern=packet(shift=0.04)),
+        scan(3, pattern=packet(shift=0.04)),
+    ])
+    state = application.server.state
+    row = application._interpretation_report["records"][-1]
+    assert "reference_difference" in {f["code"] for f in row["findings"]}
+    assert state.scan_change_pair == "NOM_2_BANK2"
+    assert "reference_difference" not in {f["code"] for f in state.scan_change_items}
+    assert {f["code"] for f in state.scan_change_items} == {"no_resolved_event"}
+    application.select_scan_change_pair("NOM_1_BANK2")
+    assert "peak_movement" in {f["code"] for f in state.scan_change_items}
+    assert state.scan_change_figure["layout"]["meta"]["reference_run_id"] == "NOM_1_BANK2"
+
+
+def test_readable_candidate_labels_preserve_distinct_identities_and_cell_differences():
+    from radar_pd_nova.scan_interpretation_ui import phase_labels, model_change_rows
+    from radar_pd_nova.scan_interpretation import InterpretationSettings
+    labels = phase_labels({"observables": {"phases": [
+        {"phase_id": "CIF1", "phase": "Fe"}, {"phase_id": "CIF2", "phase": "Fe"},
+    ]}})
+    assert labels["CIF1"] != labels["CIF2"]
+    changes = {"cell_changes": [
+        {"phase_id": "CIF1", "metric": k, "previous": 4.0, "current": v,
+         "relative_change": (v-4)/4} for k, v in [("a", 4.1), ("b", 4.1), ("c", 4.2)]
+    ]}
+    original = copy.deepcopy(changes)
+    rows = model_change_rows(changes, labels, InterpretationSettings())
+    assert len(rows) == 2
+    assert rows[0]["label"].endswith("a = b") and rows[0]["change"] == "+2.5%"
+    assert rows[1]["label"].endswith(" · c") and rows[1]["change"] == "+5%"
+    assert changes == original
+
+
 def test_follow_latest_preserves_operator_choice_of_older_scan():
     application = app()
     state = application.server.state
