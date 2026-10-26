@@ -22,6 +22,7 @@ import os
 import sys
 import math
 import json
+from gsas_cif_import import add_verified_phase
 
 logger = logging.getLogger(__name__)
 
@@ -1933,7 +1934,7 @@ def joint_refine_one_cycle(
     main_phase.HAPvalue('Scale', float(main_init), targethistlist=[hist])
 
     for pid, cif in pid_to_cif.items():
-        p = proj.add_phase(cif, phasename=str(pid), histograms=[hist])
+        p = add_verified_phase(proj, cif, phasename=str(pid), histograms=[hist])
         set_phase_cell_refine(p, refine=False)
         p.set_HAP_refinements({'Scale': True}, histograms=[hist])
         p.HAPvalue('Scale', float(cand_init), targethistlist=[hist])
@@ -2050,7 +2051,7 @@ def _validate_candidates_individually(
             hist_val, _ = get_hist_and_main_phase(proj_val, main_phase_name)
             
             # 1. Add phase
-            p_val = proj_val.add_phase(cif, phasename=str(pid), histograms=[hist_val])
+            p_val = add_verified_phase(proj_val, cif, phasename=str(pid), histograms=[hist_val])
             
             # 2. Setup Refinement: ONLY Scale and Background
             # Candidate Scale -> refine=True
@@ -2199,7 +2200,7 @@ def joint_refine_add_phases(
     for pid, cif in pid_to_cif_new.items():
         if pid in existing:
              continue
-        p = proj.add_phase(cif, phasename=str(pid), histograms=[hist])
+        p = add_verified_phase(proj, cif, phasename=str(pid), histograms=[hist])
         set_phase_cell_refine(p, refine=False)
         p.set_HAP_refinements({'Scale': True}, histograms=[hist])
         p.HAPvalue('Scale', float(hap_init), targethistlist=[hist])
@@ -3540,7 +3541,7 @@ def plot_gpx_fit_with_ticks(
                      '#ff7f00', '#ffff33', '#a65628', '#f781bf']
             if nph > 8:
                 import matplotlib.cm as cm
-                cmap = cm.get_cmap('tab20')
+                cmap = plt.get_cmap('tab20')
                 colors = [cmap(i/20) for i in range(nph)]
             
             # Create phase labels with formatting

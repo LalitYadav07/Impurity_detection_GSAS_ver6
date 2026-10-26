@@ -14,6 +14,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from .facility_metadata import parse_nexus_timestamp
+from .scan_conditions import qualified_metadata
 
 
 RECIPES = {
@@ -21,8 +22,8 @@ RECIPES = {
     "thermal_expansion": ("Thermal expansion / cell change", "a", "relative"),
     "distortion": ("Lattice shape / distortion", "c/a", "absolute"),
     "lattice_strain": ("Reference lattice strain", "a", "microstrain"),
-    "transition_hysteresis": ("Transition / hysteresis", "weight_percent", "absolute"),
-    "reaction_progress": ("Reaction progress", "weight_percent", "progress"),
+    "transition_hysteresis": ("Hysteresis curves", "weight_percent", "absolute"),
+    "reaction_progress": ("Normalized progress proxy", "weight_percent", "progress"),
     "operando": ("Operando correlation", "a", "relative"),
     "sample_composition": ("Sample / composition / preparation", "a", "absolute"),
     "broadening": ("Coherent-domain size / microstrain", "", "absolute"),
@@ -293,8 +294,9 @@ def _axis(scan, key, settings, origin):
         if not isinstance(metric, dict) or number(metric.get("value")) is None:
             return None
         if (
-            metric.get("status") in {"conflict", "invalid", "unknown"}
+            metric.get("status") in {"conflict", "invalid", "unknown", "needs_mapping", "unqualified_units"}
             or metric.get("qualified") is False
+            or (metric.get("requires_binding") and not metric.get("binding_verified"))
         ):
             return None
         value, unit = metric["value"], str(metric.get("unit") or "").strip()
@@ -324,6 +326,40 @@ def _axis(scan, key, settings, origin):
         "branch": mapped.branch if mapped is not None else None,
         "cycle": mapped.cycle if mapped is not None else None,
     }
+
+
+def _axis_varies_beyond_acquisition_ranges(scans, key, settings, origin):
+    """Resolve a sweep only when qualified acquisition intervals separate.
+
+    No temperature/noise threshold is fitted to an experiment. Recorded
+    within-scan ranges supply the resolution evidence when they are present;
+    an explicit reviewed mapping supplies its own values instead.
+    """
+    intervals, units = [], set()
+    for scan in scans:
+        axis = _axis(scan, key, settings, origin)
+        if axis is None:
+            continue
+        value = number(axis["value"])
+        if value is None:
+            continue
+        units.add(axis["unit"])
+        low = high = value
+        mapping = settings.axis_mappings.get(key, {}).get(_run_id(scan))
+        if mapping is None:
+            metric = (scan.get("metadata") or {}).get(key) or {}
+            minimum, maximum = number(metric.get("minimum")), number(metric.get("maximum"))
+            if minimum is not None and maximum is not None:
+                if key == "temperature" and str(metric.get("unit", "")).lower() in {"c", "°c", "degc", "celsius"}:
+                    minimum, maximum = minimum + 273.15, maximum + 273.15
+                if not minimum <= value <= maximum:
+                    continue
+                low, high = minimum, maximum
+        intervals.append((low, high))
+    if len(intervals) < 2 or len(units) != 1:
+        return False
+    low, high = max(a for a, _ in intervals), min(b for _, b in intervals)
+    return low > high and not math.isclose(low, high, rel_tol=1e-10, abs_tol=1e-12)
 
 
 def _d_spacing(values, hkl):
@@ -546,7 +582,10 @@ def calculate_views(
     settings = (
         PostAnalysisSettings.model_validate(settings) if isinstance(settings, dict) else settings
     )
-    scans = _ordered(scans)
+    scans = _ordered([
+        {**scan, "metadata": qualified_metadata(scan.get("metadata"))}
+        for scan in scans
+    ])
     starts = [
         t
         for s in scans
@@ -596,11 +635,18 @@ def calculate_views(
         needs_reference = representation in {"difference", "relative", "microstrain"}
         axis = settings.axis if view.axis == "shared" else view.axis
         if axis == "auto":
-            axis = (
-                "temperature"
-                if any(_axis(s, "temperature", settings, origin) for s in scans)
-                else "run_number"
-            )
+            varying = [key for key in ("temperature", "magnetic_field", "pressure", "voltage", "capacity")
+                       if _axis_varies_beyond_acquisition_ranges(scans, key, settings, origin)]
+            axis = varying[0] if len(varying) == 1 else "run_number"
+            if len(varying) > 1:
+                result["notices"].append(
+                    "Several recorded conditions vary (" + ", ".join(varying)
+                    + "); using scan order. Choose the intended horizontal axis explicitly."
+                )
+            elif not varying:
+                result["notices"].append(
+                    "No single recorded sweep is resolved beyond the within-scan ranges; using scan order."
+                )
         if view.kind == "sample_composition":
             axis = "sample_state"
         if view.kind == "reaction_progress" and view.time_zero is None:

@@ -134,6 +134,17 @@ def test_large_listing_filters_before_stat_and_does_not_truncate(tmp_path, monke
     assert Path(rows[-1]["path"]).name == "PG3_6000.gsa"
 
 
+def test_trial_discovery_does_not_publish_a_watch_checkpoint(monkeypatch):
+    service = FakeGalaxyService()
+    controller = PowgenWatchController(service,
+        PowgenExperimentSettings("IPTS-38000", "history-1", "config-hda", "1.5", initial_backfill_limit=1),
+        sample_index=SimpleNamespace(identity=lambda _: {}))
+    monkeypatch.setattr(controller, "_read_scan_metadata", lambda _: {})
+    rows = controller.discover([{"path": "PG3_1.gsa"}, {"path": "PG3_2.gsa"}], checkpoint=False)
+    assert [row.run_number for row in rows] == [2]
+    assert not service.uploaded and not service.snapshots
+
+
 def test_sample_selection_precedes_backfill_and_applies_to_new_scans(monkeypatch):
     service = FakeGalaxyService()
     settings = PowgenExperimentSettings("IPTS-38000", "history-1", "config-hda", "1.5",

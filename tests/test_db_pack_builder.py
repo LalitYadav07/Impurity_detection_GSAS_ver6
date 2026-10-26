@@ -1,4 +1,5 @@
 import json
+import re
 import sys
 import tempfile
 import unittest
@@ -25,6 +26,7 @@ from scripts.db_pack_builder import (
     _normalize_catalog_df,
     _build_base_duplicate_index,
     _find_matching_base_phase_ids,
+    _preserve_cif_space_group,
     infer_phase_display_name,
     build_augmented_db_pack,
     collect_phase_inputs,
@@ -72,6 +74,37 @@ class SimulationSettingsTests(unittest.TestCase):
 
 
 class DBPackBuilderTests(unittest.TestCase):
+    def test_small_distortion_retains_declared_group_in_catalog_and_screening(self):
+        from pymatgen.io.cif import CifWriter
+        structure = Structure.from_spacegroup(
+            "Pmmm", Lattice.orthorhombic(4.0, 4.012, 5.0),
+            ["Na", "Cl"], [[0, 0, 0], [.5, .5, .5]],
+        )
+        cif = str(CifWriter(structure, symprec=1e-5))
+        row = {"space_group": 123, "SG_symbol": "P4/mmm"}
+        _preserve_cif_space_group(row, cif)
+        self.assertEqual(row["space_group"], 47)
+        self.assertEqual(row["symmetry_provenance"]["analyzer_number"], 123)
+        self.assertIn("declared CIF", row["symmetry_provenance"]["source"])
+        without_number = "\n".join(line for line in cif.splitlines()
+                                   if not line.lower().startswith("_symmetry_int_tables_number"))
+        symbol_only = {"space_group": 123, "SG_symbol": "P4/mmm"}
+        _preserve_cif_space_group(symbol_only, re.sub(r"(?m)^(_\S+)", lambda m: m[1].lower(), without_number))
+        self.assertEqual(symbol_only["space_group"], 47)
+        with self.assertRaisesRegex(ValueError, "symbol and number disagree"):
+            _preserve_cif_space_group(dict(row), re.sub(r"(_symmetry_Int_Tables_number\s+)47\b", r"\g<1>123", cif))
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "distorted.cif"
+            source.write_text(cif)
+            result = build_mini_db_pack(
+                [source], Path(directory) / "pack", source_type="neutron",
+            )
+            import pandas as pd
+            catalog = pd.read_csv(result.layout.catalog_csv)
+            self.assertEqual(catalog.iloc[0]["space_group"], 47)
+            original = json.loads(result.layout.original_json.read_text())
+            self.assertEqual(next(iter(original.values()))["symmetry_provenance"]["declared_number"], 47)
+
     def test_phase_display_name_uses_formula_then_declared_name_then_filename(self):
         cif = "_chemical_name_common 'rock salt reference'\n"
 

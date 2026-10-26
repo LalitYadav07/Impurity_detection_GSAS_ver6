@@ -1,4 +1,8 @@
-"""Compact live-series interpretation with explicit, inspectable evidence."""
+"""Compatibility readers for archived scan-interpretation reports.
+
+The old standalone widgets are no longer mounted in the live application.
+Transition tracking reuses the measured-receipt reader and label helpers.
+"""
 
 from __future__ import annotations
 
@@ -168,7 +172,7 @@ class ScanInterpretationMixin:
             "scan_change_model_rows": [],
             "scan_change_model_notice": "",
             "scan_change_review_required": False,
-            "experiment_result_view": "comparison",
+            "experiment_result_view": "results",
         }.items():
             setattr(state, key, value)
 

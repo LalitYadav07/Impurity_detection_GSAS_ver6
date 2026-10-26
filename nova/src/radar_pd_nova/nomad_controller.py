@@ -153,7 +153,7 @@ class NomadWatchController(PowgenWatchController):
         try:return read_nomad_scan_metadata(self.settings.ipts,run.run_number)
         except (OSError,ValueError,TypeError):return {}
 
-    def discover(self, listing=None):
+    def discover(self, listing=None, *, checkpoint=True):
         rows = list(listing) if listing is not None else self._list_source_directory()
         # Inspect known paths even when the backfill floor excludes their run
         # numbers. Re-reduction must not silently relabel existing results.
@@ -182,9 +182,9 @@ class NomadWatchController(PowgenWatchController):
                 phase[run_id] = replace(old, scan_metadata={**old.scan_metadata,
                     'replacement_revision': revision, 'source_revision_warning': notice}, scientific_summary=summary)
                 changed = True
-        if changed:
+        if changed and checkpoint:
             self.persist_state()
-        return super().discover(rows)
+        return super().discover(rows, checkpoint=checkpoint)
 
     def _profile_path(self):
         if not self.settings.instrument_profile_dataset_id:

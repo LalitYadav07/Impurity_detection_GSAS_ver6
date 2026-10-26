@@ -548,7 +548,7 @@ class LegacyPipelineBridge:
             kept.extend(pid for pid in representatives if pid not in group_anchors)
 
         before, after = len(hist_scored), len(kept)
-        logger.info(f"Duplicate pruning (SG+elements, r>={corr_threshold:.2f}): {before} → {after} (dropped {before - after})")
+        logger.info(f"Duplicate pruning (SG+elements, r>={corr_threshold:.6g}): {before} → {after} (dropped {before - after})")
         for pid, base, r in dropped_log[:12]:
             n1, sg1 = self.db_loader.get_display_name_and_sg(pid)
             n2, sg2 = self.db_loader.get_display_name_and_sg(base)
@@ -716,10 +716,13 @@ class IntegratedCandidateScreener:
         else:
             hist_details_map = {str(k): v for k, v in (hist_details or {}).items()}
 
-        # 5) drop near-duplicates (SG+elements, r>=0.95 default)
+        # 5) drop near-duplicates using the resolved YAML threshold.
+        corr_threshold = float((hist_plot_cfg or {}).get("corr_threshold", 0.95))
+        if not np.isfinite(corr_threshold) or not 0.0 <= corr_threshold <= 1.0:
+            raise ValueError("corr_threshold must be finite and between 0 and 1")
         hist_scored = self.bridge.dedup_by_hist_and_elements(
             hist_scored,
-            corr_threshold=0.95,
+            corr_threshold=corr_threshold,
             anchor_ids=anchor_ids or [],
             xray_doublet_config=(hist_plot_cfg or {}).get("xray_doublet"),
         )
@@ -767,7 +770,15 @@ class IntegratedCandidateScreener:
 
 def write_dummy_nacl_cif(out_dir: str) -> str:
     """Create a tiny valid NaCl CIF on disk for Stage-0 bootstrapping."""
-    cif_content = """data_NaCl
+    from pymatgen.symmetry.groups import SpaceGroup
+
+    # Supply the complete declared group. An identity-only loop contradicts
+    # Fm-3m and is interpreted differently by crystallographic importers.
+    operators = "\n".join(
+        "  '" + op.as_xyz_str() + "'"
+        for op in SpaceGroup("Fm-3m").symmetry_ops
+    )
+    cif_content = f"""data_NaCl
 _audit_creation_method              'program-generated example'
 _chemical_name_common               'sodium chloride'
 _chemical_formula_sum               'Na Cl'
@@ -784,7 +795,7 @@ _space_group_IT_number              225
 
 loop_
 _symmetry_equiv_pos_as_xyz
-  'x, y, z'
+{operators}
 
 loop_
 _atom_site_label

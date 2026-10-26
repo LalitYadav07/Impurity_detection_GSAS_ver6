@@ -12,8 +12,23 @@ from radar_pd_nova.powgen_watch import WatchState
 from test_scan_interpretation import scan, packet
 
 
+class ArchivedComparisonHarness(RadarPdNovaApp):
+    """Exercise saved comparison/export compatibility, outside the live UI.
+
+    The live application now runs only the calibrated transition tracker.
+    These cases retain coverage for older observation reports and contracts.
+    """
+
+    def _refresh_post_analysis(self, scans=None, pending=None):
+        super()._refresh_post_analysis(scans, pending)
+        history = getattr(self, "_interpretation_all_watch_scans", None)
+        if not str(getattr(self, "_post_analysis_scope", "")).startswith("watch:") or history is None:
+            history = self._post_analysis_scans
+        self._refresh_scan_interpretation(history, getattr(self, "_post_analysis_pending", []))
+
+
 def app():
-    application = RadarPdNovaApp()
+    application = ArchivedComparisonHarness()
     application.server.state.sample_elements = "Fe"
     application._refresh_post_analysis([scan(1), scan(2, pattern=packet(shift=0.02))], pending=[])
     return application

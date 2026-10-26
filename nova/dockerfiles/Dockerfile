@@ -14,5 +14,8 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends hdf5-tools \
     && rm -rf /var/lib/apt/lists/*
 COPY src /src/src
-RUN python -m pip install --no-cache-dir --no-deps /src \
+# The pinned runtime uses Python 3.10 and does not contain SciPy. Keep the
+# measured-pattern engine reproducible without upgrading the NOVA stack.
+RUN python -m pip install --no-cache-dir 'scipy==1.15.3' \
+    && python -m pip install --no-cache-dir --no-deps /src \
     && python -m compileall -q /src/src/radar_pd_nova

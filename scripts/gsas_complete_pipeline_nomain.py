@@ -662,13 +662,28 @@ def _parse_cif_metadata(cif_path: Optional[str]) -> Tuple[Optional[str], Optiona
         # Some valid CIFs publish only the Hermann-Mauguin symbol.  Complete
         # whichever space-group field is missing so downstream summaries do
         # not lose the International Tables number.
-        if (not sg_sym or sg_num is None) and HAVE_PYMATGEN_MATCHER:
+        if sg_sym and sg_num is None:
+            # A supplied symbol describes the fitted model. A loose geometry
+            # search can instead return a nearby supergroup (e.g. Cmma ->
+            # P4/nmm) and create a contradictory "Cmma (129)" result label.
+            try:
+                from pymatgen.symmetry.groups import SpaceGroup
+                sg_num = int(SpaceGroup(sg_sym.replace(" ", "")).int_number)
+            except ValueError:
+                try:
+                    from GSASII import GSASIIspc
+                    resolved = GSASIIspc.SpaceGroupNumber(sg_sym)
+                    if resolved > 0:
+                        sg_num = int(resolved)
+                except ImportError:
+                    pass
+        if not sg_sym and HAVE_PYMATGEN_MATCHER:
             try:
                 structure = Structure.from_file(str(cif_path))  # type: ignore[union-attr]
                 analyzer = SpacegroupAnalyzer(  # type: ignore[misc]
                     structure,
                     symprec=1e-2,
-                    angle_tolerance=5.0,
+                    angle_tolerance=-1.0,
                 )
                 if not sg_sym:
                     sg_sym = str(analyzer.get_space_group_symbol())
@@ -899,14 +914,17 @@ class UnifiedPipeline:
         name_final = name_from_cif
         sg_final = sg_from_cif
 
-        # Priority 2: Use database if CIF metadata is missing or partial
-        if (not name_final or not sg_final) and self.db_loader:
+        # A catalog candidate keeps one scientific label whether it is selected
+        # as the main phase or as an additional phase in a later scan.
+        if self.db_loader:
             if main_phase_name in self._catalog_ids():
                 try:
                     n2, sg2 = self.db_loader.get_display_name_and_sg(main_phase_name)
-                    if not name_final:
+                    if n2 and n2 != main_phase_name:
                         name_final = n2
-                    if not sg_final or "(" not in sg_final: # If CIF provided symbol but not number, prefer DB's combined format
+                    declared = re.search(r"\((\d+)\)$", sg_final or "")
+                    catalog = re.search(r"\((\d+)\)$", str(sg2 or ""))
+                    if not declared or catalog and declared.group(1) == catalog.group(1):
                         sg_final = sg2
                 except Exception:
                     pass
@@ -944,7 +962,12 @@ class UnifiedPipeline:
 
             ref_sg: Optional[int] = None
             try:
-                ref_sg = int(SpacegroupAnalyzer(ref_structure, symprec=1e-2, angle_tolerance=5.0).get_space_group_number())  # type: ignore[misc]
+                _, declared_group = _parse_cif_metadata(main_cif)
+                match = re.search(r"\((\d+)\)$", declared_group or "")
+                if match:
+                    ref_sg = int(match.group(1))
+                else:
+                    ref_sg = int(SpacegroupAnalyzer(ref_structure, symprec=1e-2, angle_tolerance=-1.0).get_space_group_number())  # type: ignore[misc]
             except Exception:
                 ref_sg = None
 
@@ -2117,6 +2140,7 @@ class UnifiedPipeline:
             "plot": enable, "plot_top_k": plot_top_k, "plot_out_path_png": out_png,
             "plot_title": f"Histogram (ML) — {stage_tag}", "topN": selection_topN,
             "min_active_bins": min_active_bins, "min_sum_residual": min_sum_residual,
+            "corr_threshold": float((ds_cfg or {}).get("corr_threshold", self.top_cfg.get("corr_threshold", 0.95))),
         }
 
 

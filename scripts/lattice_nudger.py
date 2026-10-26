@@ -1299,6 +1299,7 @@ class LatticeNudger:
         self.random_seed = random_seed
         # Add structure caching to avoid repeated database loads
         self._structure_cache = {}
+        self._cif_source_cache = {}
 
     def _structure_for_pid(self, pid: str) -> Structure:
         if pid not in self._structure_cache:
@@ -1335,6 +1336,9 @@ class LatticeNudger:
         safe_pid = safe_pid[:80]
 
         self._structure_cache[safe_pid] = _load_cif_structure_relaxed(cif)
+        if not hasattr(self, "_cif_source_cache"):
+            self._cif_source_cache = {}
+        self._cif_source_cache[safe_pid] = str(cif)
         return self.optimize_one(
             safe_pid,
             Q_res,
@@ -1349,9 +1353,52 @@ class LatticeNudger:
         )
 
     def _write_nudged_cif(self, pid: str, structure: Structure, out_dir: str,
-                        symprec: float = 1e-3, angle_tolerance: float = 5.0) -> str:
+                        symprec: float = 1e-3, angle_tolerance: float = -1.0) -> str:
         os.makedirs(out_dir, exist_ok=True)
         path = os.path.join(out_dir, f"{pid}_nudged.cif")
+        # Nudging changes the lattice only. Re-running symmetry detection can
+        # average away a small distortion (including centered orthorhombic
+        # cells whose primitive angle is close to 90 degrees). Keep the source
+        # operators, setting, fractional sites and occupancies instead.
+        source = getattr(self, "_cif_source_cache", {}).get(pid)
+        if source is None and hasattr(getattr(self, "db", None), "ensure_cif_on_disk"):
+            source = self.db.ensure_cif_on_disk(pid, out_dir=os.path.join(out_dir, "source_cifs"))
+        if source is not None:
+            import CifFile
+            import hashlib
+            import json
+
+            if Path(source).resolve() == Path(path).resolve():
+                raise ValueError("Nudged output must not overwrite its source CIF")
+            source_sha256 = hashlib.sha256(Path(source).read_bytes()).hexdigest()
+            document = CifFile.ReadCif(str(source))
+            blocks = [document[key] for key in document.keys()
+                      if "_atom_site_fract_x" in document[key]]
+            if len(blocks) != 1:
+                raise ValueError("Lattice nudging requires exactly one structural CIF block")
+            block = blocks[0]
+            for name, value in zip(
+                ("a", "b", "c", "alpha", "beta", "gamma"),
+                structure.lattice.parameters,
+            ):
+                tag = "_cell_length_" + name if len(name) == 1 else "_cell_angle_" + name
+                block[tag] = f"{value:.12g}"
+            block["_cell_volume"] = f"{structure.lattice.volume:.12g}"
+            if self.radiation == "neutron":
+                for tag in ("_atom_site_type_symbol", "_atom_type_symbol"):
+                    if tag in block:
+                        block[tag] = [re.sub(r"^([A-Z][a-z]?)[0-9.+-]*$", r"\1", str(s))
+                                      for s in block[tag]]
+                if "_atom_type_oxidation_number" in block:
+                    block["_atom_type_oxidation_number"] = ["0"] * len(block["_atom_type_oxidation_number"])
+            Path(path).write_text(document.WriteOut(), encoding="utf-8")
+            _sanitize_cif_data_block(path, pid, suffix="nudged", maxlen=5)
+            Path(path + ".nudge.json").write_text(json.dumps({
+                "source_sha256": source_sha256,
+                "operation": "lattice only; source symmetry, fractional sites and occupancies retained",
+                "cell": list(structure.lattice.parameters),
+            }, indent=2) + "\n")
+            return path
         # Nuclear neutron scattering uses elements, not ionic X-ray form
         # factors. Fractional oxidation-state labels emitted by pymatgen can
         # otherwise be misread by GSAS-II as unknown atoms (falling back to H).
@@ -1543,7 +1590,7 @@ class LatticeNudger:
                     SpacegroupAnalyzer(
                         base_struct,
                         symprec=1e-2,
-                        angle_tolerance=5.0,
+                        angle_tolerance=-1.0,
                     ).get_space_group_number()
                 )
             except Exception:

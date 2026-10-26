@@ -54,6 +54,13 @@ def test_experiment_scan_summary_uses_best_refined_rapid_hypothesis() -> None:
     assert summary["elapsed_seconds"] == 123.4
     assert [row["phase"] for row in summary["phases"]] == ["YFeSi", "Ga"]
     assert summary["warning_count"] == 1
+    assert summary["final_rwp"] is None
+
+
+def test_experiment_summary_preserves_explicit_final_rwp_separately_from_candidate_metrics():
+    result=experiment_scan_summary({"status":"complete","analysis_mode":"full","final_rwp":12.5,
+        "hypotheses":[{"rwp":8,"status":"ok"}]})
+    assert result["final_rwp"]==12.5
 
 
 def test_refinement_plot_uses_explicit_limits_and_preserves_excluded_gaps():
@@ -273,6 +280,21 @@ def test_experiment_heatmap_keeps_low_temperature_trace_phases_visible() -> None
     assert figure.layout.xaxis.type == "linear"
 
 
+def test_phase_map_shortens_unique_descriptions_without_losing_models_or_hover() -> None:
+    names = ["ABO3 - long orthorhombic model description (SG Pnma (62))",
+             "ABO3 - alternative ordering A (SG P4/mmm (123))",
+             "ABO3 - alternative ordering B (SG P4/mmm (123))"]
+    figure = experiment_phase_heatmap_figure([
+        {"run_number": 1, "phases": [{"label": name, "weight_percent": weight}
+                                     for name, weight in zip(names, [70, 20, 10])]}
+    ])
+    ticks = dict(zip(figure.layout.yaxis.tickvals, figure.layout.yaxis.ticktext))
+    assert ticks[names[0]] == "ABO3 (SG Pnma (62))"
+    assert ticks[names[1]] == names[1] and ticks[names[2]] == names[2]
+    assert set(figure.data[0].y) == set(names)
+    assert all(any(name in text for text in figure.data[0].text) for name in names)
+
+
 def test_experiment_fit_diagnostics_uses_relative_baseline_and_flags_outlier() -> None:
     scans = [
         {"run_id": "PG3_1", "run_number": 1, "rwp": 10.0},
@@ -285,9 +307,45 @@ def test_experiment_fit_diagnostics_uses_relative_baseline_and_flags_outlier() -
     diagnostics = experiment_fit_diagnostics(scans)
     figure = experiment_fit_quality_figure(scans)
 
-    assert diagnostics["PG3_1"]["label"] == "Within experiment trend"
+    assert diagnostics["PG3_1"]["label"] == "No unusual Rwp increase"
     assert diagnostics["PG3_5"]["label"] == "Rwp outlier"
     assert len(figure.layout.shapes) == 1
+
+
+def test_interleaved_banks_share_one_chronological_axis_and_no_first_bank_median() -> None:
+    scans = [
+        {"run_number": run, "run_id": f"PG3_{run}", "bank": bank, "rwp": float(run),
+         "phases": [{"label": "Main phase", "weight_percent": 100.0}]}
+        for run, bank in [(11, 3), (10, 1), (13, 3), (12, 1)]
+    ]
+    for figure in (experiment_phase_fraction_figure(scans), experiment_fit_quality_figure(scans)):
+        assert figure.layout.xaxis.categoryorder == "array"
+        assert list(figure.layout.xaxis.categoryarray) == ["10", "11", "12", "13"]
+        assert {trace.name.rsplit("Bank ", 1)[-1] for trace in figure.data} == {"1", "3"}
+    quality = experiment_fit_quality_figure(scans)
+    assert not quality.layout.shapes
+    assert not quality.layout.annotations
+
+
+def test_composition_screen_does_not_create_a_fit_baseline_across_samples() -> None:
+    scans = [
+        {"run_id": f"PG3_{run}", "run_number": run, "bank": 2, "rwp": 5.0 + run,
+         "metadata": {"sample_id": str(1000 + run), "sample_name": f"Composition {run}"}}
+        for run in range(1, 10)
+    ]
+    diagnostics = experiment_fit_diagnostics(scans)
+    assert all(row["label"] == "Collecting baseline" for row in diagnostics.values())
+    assert not experiment_fit_quality_figure(scans).layout.shapes
+
+
+def test_fit_baseline_separates_recalibration_of_the_same_sample_and_bank() -> None:
+    scans = [
+        {"run_id": f"PG3_{run}", "run_number": run, "bank": 2, "rwp": 10.0 + run,
+         "metadata": {"sample_id": "sample-a", "powgen_setup": {"cycle": cycle}}}
+        for run, cycle in [(1, "old"), (2, "old"), (3, "old"), (4, "new"), (5, "new"), (6, "new")]
+    ]
+    assert all(row["label"] == "Collecting baseline" for row in experiment_fit_diagnostics(scans).values())
+    assert not experiment_fit_quality_figure(scans).layout.shapes
 
 
 def test_discovers_and_renders_component_results(tmp_path: Path) -> None:
@@ -943,6 +1001,12 @@ def test_gsas_plot_renders_ranked_strongest_bragg_ticks() -> None:
     assert "Relative strength=0.000" in strongest.text[0]
     assert figure.layout.title.text.endswith("Rwp 0.00%")
     assert figure.data[3].showlegend is False
+    long_name = "Fe - a long reference description that must not crowd out the fitted curve (SG Fm-3m (225))"
+    payload["phase_labels"] = {"phase_1": long_name}
+    readable = figure_for_payload(payload)
+    assert readable.layout.yaxis3.ticktext == ("Fe (SG 225)",)
+    assert readable.data[3].name == long_name
+    assert list(readable.data[3].x) == [12.0, 20.0, 28.0]
 
 
 def test_gsas_plot_hides_internal_custom_catalog_ids() -> None:

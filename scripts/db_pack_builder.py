@@ -208,6 +208,54 @@ def infer_phase_display_name(source_name: str, cif_content: str, formula: str) -
     return filename_label or "Unknown phase"
 
 
+def _preserve_cif_space_group(row: Dict[str, Any], cif_content: str) -> None:
+    """Keep a supplied structural model's declared symmetry in a user library.
+
+    A tolerance-based analyzer can recognize a nearby higher symmetry and erase
+    a real small distortion. Peak simulation still uses the original structure;
+    assigning its approximate supergroup would also allow screening to discard
+    it as a duplicate of the parent. Retain the analyzer result as provenance,
+    without changing coordinates, cell, operators or the built-in catalogs.
+    """
+    from pymatgen.io.cif import CifParser
+
+    blocks = [{str(k).lower(): v for k, v in b.items()}
+              for b in CifParser.from_str(cif_content).as_dict().values()
+              if any(str(k).lower() == "_atom_site_fract_x" for k in b)]
+    if len(blocks) != 1:
+        raise ValueError("A library phase must contain exactly one structural CIF block")
+    block = blocks[0]
+    symbol = next((str(block[t]).strip() for t in ("_space_group_name_h-m_alt", "_symmetry_space_group_name_h-m")
+                   if t in block and str(block[t]).strip() not in {"?", "."}), "")
+    raw = next((block[t] for t in ("_space_group_it_number", "_symmetry_int_tables_number")
+                if t in block and str(block[t]).strip() not in {"?", "."}), None)
+    symbol_number = None
+    if symbol:
+        from pymatgen.symmetry.groups import SpaceGroup
+        try:
+            symbol_number = SpaceGroup(symbol.replace(" ", "")).int_number
+        except ValueError:
+            if raw is None:
+                raise ValueError("Declared CIF symmetry symbol needs setting review")
+    if raw is None and symbol_number is None:
+        row["symmetry_provenance"] = {"source": "analyzer; no declared CIF number"}
+        return
+    number = int(str(raw).strip()) if raw is not None else int(symbol_number)
+    if not 1 <= number <= 230:
+        raise ValueError("Declared CIF space-group number must be between 1 and 230")
+    if symbol_number is not None and symbol_number != number:
+        raise ValueError("Declared CIF space-group symbol and number disagree")
+    if not symbol:
+        from pymatgen.symmetry.groups import SpaceGroup
+        symbol = SpaceGroup.from_int_number(number).symbol
+    row["symmetry_provenance"] = {
+        "source": "declared CIF; original model retained",
+        "declared_number": number, "declared_symbol": symbol,
+        "analyzer_number": int(row["space_group"]), "analyzer_symbol": row["SG_symbol"],
+    }
+    row.update(space_group=number, SG_symbol=symbol)
+
+
 def _pick_workers(n_items: int) -> int:
     if n_items <= 1:
         return 1
@@ -430,6 +478,12 @@ def _materialize_phase(
             msg = str(fail.get("error") or fail)
         return None, None, None, {"id": phase.phase_id, "source_name": phase.source_name, "error": msg}
 
+    try:
+        _preserve_cif_space_group(row, phase.cif_content)
+    except (ValueError, TypeError, KeyError) as exc:
+        return None, None, None, {"id": phase.phase_id, "source_name": phase.source_name,
+                                  "error": f"CIF symmetry review required: {exc}"}
+
     row["display_name"] = infer_phase_display_name(
         phase.source_name,
         phase.cif_content,
@@ -576,7 +630,11 @@ def _find_matching_base_phase_ids(
         ref_structure = Structure.from_file(str(phase.cif_path))  # type: ignore[union-attr]
         ref_elements = sorted({str(el) for el in ref_structure.composition.as_dict().keys()})
         ref_hi, ref_lo = build_mask(ref_elements)
-        ref_sg = int(SpacegroupAnalyzer(ref_structure, symprec=1e-2, angle_tolerance=5.0).get_space_group_number())  # type: ignore[misc]
+        analyzer = SpacegroupAnalyzer(ref_structure, symprec=1e-2, angle_tolerance=5.0)  # type: ignore[misc]
+        symmetry = {"space_group": int(analyzer.get_space_group_number()),
+                    "SG_symbol": analyzer.get_space_group_symbol()}
+        _preserve_cif_space_group(symmetry, phase.cif_content)
+        ref_sg = symmetry["space_group"]
     except Exception:
         return []
 
@@ -691,6 +749,7 @@ def _build_phase_batch(
                     "display_name": row["display_name"],
                     "space_group": int(row["space_group"]),
                     "SG_symbol": row["SG_symbol"],
+                    "symmetry_provenance": row.get("symmetry_provenance", {}),
                     "source_name": source_name,
                 }
                 phase_ids.append(phase_id)

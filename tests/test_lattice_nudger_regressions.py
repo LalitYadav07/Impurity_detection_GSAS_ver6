@@ -29,6 +29,36 @@ from scripts.lattice_nudger import (
 
 
 class Stage4WorkerPolicyTests(unittest.TestCase):
+    def test_nudged_cif_keeps_source_symmetry_sites_and_occupancies(self):
+        from types import SimpleNamespace
+        import CifFile
+        from pymatgen.io.cif import CifWriter
+        structure = Structure.from_spacegroup(
+            "Cmma", Lattice.orthorhombic(5.64, 5.61, 8.60),
+            ["Na", "Cl"], [[.123, .234, .345], [.333, .222, .111]],
+        )
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "source.cif"
+            source.write_text(str(CifWriter(structure, symprec=1e-5, angle_tolerance=-1)))
+            before_document = CifFile.ReadCif(str(source))
+            before = before_document[next(iter(before_document.keys()))]
+            nudger = LatticeNudger(SimpleNamespace(ensure_cif_on_disk=lambda *a, **kw: str(source)), radiation="neutron")
+            nudged = Structure(Lattice.orthorhombic(5.641, 5.612, 8.602),
+                                structure.species, structure.frac_coords)
+            path = nudger._write_nudged_cif("distorted", nudged, folder)
+            after_document = CifFile.ReadCif(path)
+            after = after_document[next(iter(after_document.keys()))]
+            operation_tag = next(t for t in ("_space_group_symop_operation_xyz", "_symmetry_equiv_pos_as_xyz")
+                                 if t in before)
+            for tag in ("_symmetry_Int_Tables_number", operation_tag,
+                        "_atom_site_fract_x", "_atom_site_fract_y", "_atom_site_fract_z",
+                        "_atom_site_occupancy"):
+                self.assertEqual(before[tag], after[tag], tag)
+            self.assertEqual(int(after["_symmetry_Int_Tables_number"]), 67)
+            self.assertAlmostEqual(float(after["_cell_length_a"]), 5.641)
+            self.assertNotEqual(after["_cell_length_a"], after["_cell_length_b"])
+            self.assertEqual(source.read_text(), str(CifWriter(structure, symprec=1e-5, angle_tolerance=-1)))
+
     def test_neutron_cif_export_preserves_elements_and_occupancies_without_ionic_labels(self):
         from pymatgen.io.cif import CifParser
         structure = Structure(Lattice.hexagonal(2.47, 14.13),

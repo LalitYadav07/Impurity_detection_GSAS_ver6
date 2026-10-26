@@ -46,7 +46,8 @@ def test_reads_bounded_powgen_nexus_conditions(tmp_path: Path) -> None:
 
     assert metadata["temperature"]["value"] == 300.0
     assert metadata["temperature"]["minimum"] == 299.0
-    assert metadata["magnetic_field"]["value"] == 2.0
+    assert "magnetic_field" not in metadata
+    assert metadata["magnetic_field_observation"]["value"] == 2.0
     assert metadata["wavelength"]["value"] == 1.5
     assert metadata["duration_seconds"] == 1800.0
     assert metadata["sample_formula"] == "YFeSiGa"

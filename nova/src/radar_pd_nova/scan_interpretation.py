@@ -450,7 +450,8 @@ def condition_scope(scan):
 
 
 def _conditions(scan, settings=None):
-    metadata = scan.get("metadata") or {}
+    from .scan_conditions import qualified_metadata
+    metadata = qualified_metadata(scan.get("metadata") or {})
     packet = metadata.get("conditions") or {}
     result = {}
     bindings = settings.condition_bindings.get(condition_scope(scan), {}) if settings else {}

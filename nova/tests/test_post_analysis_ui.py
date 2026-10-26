@@ -110,13 +110,15 @@ def test_focus_defaults_to_one_view_and_reference_controls_follow_the_metric():
     assert app.server.state.post_analysis_reference_needed is True
 
 
-def test_unimplemented_recipes_are_labeled_and_disabled_in_the_picker():
+def test_the_picker_offers_only_implemented_recipes_without_discarding_saved_ones():
     app = app_with_data()
     choices = {row["value"]: row for row in app.server.state.post_analysis_recipes}
     for key in ["broadening", "atomic_structure"]:
-        assert choices[key]["props"]["disabled"]
-        assert "not available yet" in choices[key]["title"]
+        assert key not in choices
     assert not choices["phase_evolution"].get("props", {}).get("disabled")
+    restored = PostAnalysisSettings(views=[ViewSettings(id="saved", kind="broadening")])
+    app._set_post_settings(restored)
+    assert app._post_settings() == restored
 
 
 def test_observation_table_preserves_categorical_preparation_states():
@@ -293,8 +295,10 @@ def test_rechecking_reusable_configuration_does_not_erase_post_analysis_choices(
     assert [v.kind for v in app._post_settings().views] == ["distortion"]
 
 
-def test_uploaded_single_pattern_without_facility_run_number_still_gets_post_analysis():
+def test_opening_an_uploaded_single_fit_preserves_the_experiment_history_instead_of_creating_one_point_trends():
     app = app_with_data()
+    before = copy.deepcopy(app._post_analysis_result)
+    history = copy.deepcopy(app._post_analysis_scans)
     packet = scan(1)["observables"]
     app.service = SimpleNamespace(
         result_payload=lambda _: {
@@ -312,10 +316,6 @@ def test_uploaded_single_pattern_without_facility_run_number_still_gets_post_ana
         ),
     )
     app._load_results(record)
-    assert all(view["status"] == "available" for view in app._post_analysis_result["views"])
-    assert all(
-        p["x"] == 1
-        for view in app._post_analysis_result["views"]
-        for series in view["series"]
-        for p in series["points"]
-    )
+    assert app._post_analysis_result == before
+    assert app._post_analysis_scans == history
+    assert app._post_analysis_scope == "single:job"

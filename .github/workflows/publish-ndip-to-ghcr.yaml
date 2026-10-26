@@ -71,6 +71,9 @@ jobs:
           from tempfile import TemporaryDirectory
           import json
           from GSASII import GSASIIscriptable
+          from gsas_cif_import import add_verified_phase, elemental_counts
+          from gsas_legacy_bridge import write_dummy_nacl_cif
+          import ndip_pattern_observation
           assert bootstrap_fraction_window({"len_tol_pct": 0.6}) == 0.006
           cell = [4.8, 4.8, 13., 90., 90., 120.]
           assert candidate_cell_rejection(cell, [5.7, 5.7, 15.5, 90., 90., 120.], .59, .60)
@@ -79,6 +82,10 @@ jobs:
           assert lattice_quality([]) == []
           with TemporaryDirectory() as folder:
               root = Path(folder)
+              bootstrap_cif = write_dummy_nacl_cif(str(root))
+              project = GSASIIscriptable.G2Project(newgpx=str(root / "bootstrap.gpx"))
+              phase = add_verified_phase(project, bootstrap_cif, phasename="bootstrap", histograms=[])
+              assert elemental_counts(phase.data["General"]["NoAtoms"]) == {"Na": 4.0, "Cl": 4.0}
               metadata = {"schema": "radar-pd-input-provenance/v1", "instrument": "NOM", "source_bank": 5, "warnings": [{"code": "unverified_nomad_profile", "message": "NOMAD scientific calibration acceptance is pending"}]}
               source = root / "bank.gsa"
               source.write_bytes(PREFIX + json.dumps(metadata).encode() + b"\nBANK 1 1 1 SLOG 1 2 .1 0 FXYE\n1 2 3\n")
@@ -95,7 +102,7 @@ jobs:
       - name: Check phase discovery regressions in the scientific runtime
         shell: bash
         run: |
-          docker run --rm --entrypoint python "${IMAGE_NAME}:ndip-${GITHUB_SHA}" -m unittest tests.test_lattice_nudger_regressions tests.test_refiner_regressions
+          docker run --rm --entrypoint python "${IMAGE_NAME}:ndip-${GITHUB_SHA}" -m unittest tests.test_lattice_nudger_regressions tests.test_refiner_regressions tests.test_db_pack_regressions
 
       - name: Push Docker schema v2 manifests
         shell: bash

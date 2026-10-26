@@ -16,6 +16,7 @@ import numpy as np
 import plotly.graph_objects as go
 from dateutil.tz import tzstr
 from plotly.subplots import make_subplots
+from .scan_conditions import qualified_metadata, condition_display
 
 
 _EASTERN_TIME = tzstr("EST5EDT,M3.2.0/2,M11.1.0/2")
@@ -93,8 +94,6 @@ def _phase_axis_label(label: Any) -> str:
     """Compact a scientific phase label for the dedicated Bragg-tick axis."""
 
     text = _canonical_phase_label(label or "Phase")
-    if re.search(r"\(SG\s+.+\)$", text, flags=re.IGNORECASE):
-        return text
     number_match = re.search(r"\((\d{1,3})\)\)?$", text)
     if not number_match:
         return text if len(text) <= 48 else text[:45].rstrip(" _-") + "..."
@@ -111,6 +110,20 @@ def _phase_axis_label(label: Any) -> str:
         compact = f"{formula} (SG {number})"
         return compact if len(compact) <= 48 else compact[:45].rstrip(" _-") + "..."
     return text if len(text) <= 48 else text[:45].rstrip(" _-") + "..."
+
+
+def _phase_map_tick_labels(labels: list[str]) -> list[str]:
+    """Leave room for the map while keeping ambiguous model names distinct."""
+    compact = []
+    for label in labels:
+        bank = re.search(r" · Bank [^·]+$", label)
+        suffix = bank.group(0) if bank else ""
+        phase, group = _split_phase_label(label[:bank.start()] if bank else label)
+        formula = phase.split(" - ", 1)[0]
+        candidate = f"{formula} (SG {group}){suffix}" if group and formula != phase else label
+        compact.append(candidate)
+    return [candidate if compact.count(candidate) == 1 else original
+            for candidate, original in zip(compact, labels)]
 
 
 def _eastern_iso_timestamp(value: Any) -> str | None:
@@ -1360,6 +1373,7 @@ def experiment_scan_summary(result: dict[str, Any]) -> dict[str, Any]:
         "analysis_mode": str(result.get("analysis_mode") or ""),
         "run_name": str(result.get("run_name") or ""),
         "rwp": round(best_rwp, 6) if best_rwp is not None else None,
+        "final_rwp": None if isinstance(result.get("final_rwp"),bool) else _as_float(result.get("final_rwp")),
         "elapsed_seconds": round(elapsed, 3) if elapsed is not None else None,
         "phases": phases,
         "lattice_parameters": [dict(row) for row in result.get("lattice_parameters", []) if isinstance(row, dict)],
@@ -1432,7 +1446,7 @@ def experiment_lattice_figure(scans: list[dict[str, Any]], *, parameter="a", x_k
 
 
 def _metadata_metric(scan: dict[str, Any], key: str) -> float | None:
-    metadata = scan.get("metadata") or {}
+    metadata = qualified_metadata(scan.get("metadata") or {})
     value = metadata.get(key) if isinstance(metadata, dict) else None
     if not isinstance(value, dict):
         return None
@@ -1451,7 +1465,7 @@ def _experiment_metric_unit(scans: list[dict[str, Any]], key: str) -> str:
     units = {
         str(metric.get("unit") or "").strip()
         for scan in scans
-        for metric in [((scan.get("metadata") or {}).get(key))]
+        for metric in [(qualified_metadata(scan.get("metadata") or {}).get(key))]
         if isinstance(metric, dict) and _as_float(metric.get("value")) is not None
         and str(metric.get("unit") or "").strip()
     }
@@ -1528,7 +1542,7 @@ def _experiment_axis(
 
 
 def _scan_condition_text(scan: dict[str, Any]) -> str:
-    metadata = scan.get("metadata") or {}
+    metadata = qualified_metadata(scan.get("metadata") or {})
     if not isinstance(metadata, dict):
         return ""
     conditions: list[str] = []
@@ -1540,11 +1554,7 @@ def _scan_condition_text(scan: dict[str, Any]) -> str:
         metric = metadata.get(key)
         if not isinstance(metric, dict) or _as_float(metric.get("value")) is None:
             continue
-        value = float(metric["value"])
-        unit = str(metric.get("unit") or "").strip()
-        conditions.append(
-            f"{label}: {value:g} {unit}" if unit else f"{label}: {value:g} [unit not reported]"
-        )
+        conditions.append(condition_display(metric, label))
     return " | ".join(conditions)
 
 
@@ -1568,6 +1578,10 @@ def experiment_phase_fraction_figure(
                 trace.name = f"{trace.name} · Bank {bank if bank is not None else 'unspecified'}"
                 trace.legendgroup = trace.name
                 combined.add_trace(trace)
+        ordered = sorted(scans, key=lambda row: int(row.get("run_number") or 0))
+        values, _, axis_type = _experiment_axis(ordered, x_key)
+        if axis_type == "category":
+            combined.update_xaxes(categoryorder="array", categoryarray=list(dict.fromkeys(values)))
         return combined
     figure = go.Figure()
     ordered = sorted(scans, key=lambda row: int(row.get("run_number") or 0))
@@ -1658,7 +1672,11 @@ def experiment_phase_fraction_figure(
         paper_bgcolor="#ffffff",
         plot_bgcolor="#ffffff",
     )
-    figure.update_xaxes(showgrid=False, linecolor="#cbd5e1", type=x_type)
+    figure.update_xaxes(
+        showgrid=False, linecolor="#cbd5e1", type=x_type,
+        categoryorder="array" if x_type == "category" else None,
+        categoryarray=list(dict.fromkeys(x_values)) if x_type == "category" else None,
+    )
     figure.update_yaxes(gridcolor="#e8eef0", linecolor="#cbd5e1", rangemode="tozero")
     return figure
 
@@ -1765,8 +1783,26 @@ def experiment_phase_heatmap_figure(
         autorange="reversed",
         categoryorder="array",
         categoryarray=labels,
+        tickmode="array",
+        tickvals=labels,
+        ticktext=_phase_map_tick_labels(labels),
     )
     return figure
+
+
+def _fit_series_key(scan: dict[str, Any]) -> tuple[str, str, str]:
+    """A relative fit baseline cannot pool different samples or input setups."""
+    metadata = scan.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+    setup = metadata.get("powgen_setup") or metadata.get("nomad_setup") or {}
+    if not isinstance(setup, dict):
+        setup = {}
+    fields = ("cycle", "mode", "wavelength", "frequency", "guide", "calibration_files",
+              "characterization_files", "grouping_files", "calibration", "source_family")
+    calibration = {key: setup[key] for key in fields if key in setup}
+    return (experiment_sample_identity(scan)["key"], str(scan.get("bank")),
+            json.dumps(calibration, sort_keys=True, default=str))
 
 
 def experiment_fit_diagnostics(scans: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -1777,11 +1813,13 @@ def experiment_fit_diagnostics(scans: list[dict[str, Any]]) -> dict[str, dict[st
     different instruments, samples, and acquisition conditions.
     """
 
-    banks = {row.get("bank") for row in scans}
-    if len(banks) > 1:
+    groups: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    for row in scans:
+        groups.setdefault(_fit_series_key(row), []).append(row)
+    if len(groups) > 1:
         result = {}
-        for bank in banks:
-            result.update(experiment_fit_diagnostics([row for row in scans if row.get("bank") == bank]))
+        for rows in groups.values():
+            result.update(experiment_fit_diagnostics(rows))
         return result
     usable = [row for row in scans if _as_float(row.get("rwp")) is not None]
     if not usable:
@@ -1801,7 +1839,9 @@ def experiment_fit_diagnostics(scans: list[dict[str, Any]]) -> dict[str, dict[st
         elif score >= 2.0:
             label, color = "Elevated Rwp", "#b4690e"
         else:
-            label, color = "Within experiment trend", "#14734f"
+            # This is a one-sided trend check, not model acceptance. A whole
+            # series can fit poorly while showing no unusual Rwp increase.
+            label, color = "No unusual Rwp increase", "#64748b"
         diagnostics[str(row.get("run_id") or row.get("run_number"))] = {
             "label": label,
             "color": color,
@@ -1825,10 +1865,18 @@ def experiment_fit_quality_figure(
             part = experiment_fit_quality_figure([r for r in scans if r.get("bank") == bank], x_key=x_key)
             if combined is None:
                 combined = go.Figure(layout=part.layout)
+                # A bank-specific median must not become an experiment-wide
+                # reference merely because that bank was rendered first.
+                combined.layout.shapes = []
+                combined.layout.annotations = []
             for trace in part.data:
                 trace.name = f"{trace.name} · Bank {bank if bank is not None else 'unspecified'}"
                 trace.showlegend = True
                 combined.add_trace(trace)
+        ordered = sorted(scans, key=lambda row: int(row.get("run_number") or 0))
+        values, _, axis_type = _experiment_axis(ordered, x_key)
+        if axis_type == "category":
+            combined.update_xaxes(categoryorder="array", categoryarray=list(dict.fromkeys(values)))
         return combined
     ordered = sorted(
         [row for row in scans if _as_float(row.get("rwp")) is not None],
@@ -1901,7 +1949,7 @@ def experiment_fit_quality_figure(
             ),
         )
     )
-    if ordered:
+    if ordered and len({_fit_series_key(row) for row in ordered}) == 1:
         median = float(np.median([float(row["rwp"]) for row in ordered]))
         figure.add_hline(
             y=median,
@@ -1920,7 +1968,11 @@ def experiment_fit_quality_figure(
         plot_bgcolor="#ffffff",
         showlegend=False,
     )
-    figure.update_xaxes(showgrid=False, linecolor="#cbd5e1", type=x_type)
+    figure.update_xaxes(
+        showgrid=False, linecolor="#cbd5e1", type=x_type,
+        categoryorder="array" if x_type == "category" else None,
+        categoryarray=list(dict.fromkeys(x for x in x_values if x is not None)) if x_type == "category" else None,
+    )
     figure.update_yaxes(gridcolor="#e8eef0", linecolor="#cbd5e1", rangemode="tozero")
     return figure
 

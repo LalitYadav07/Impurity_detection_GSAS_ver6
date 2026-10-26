@@ -39,6 +39,8 @@ RUN python -m py_compile \
         scripts/ndip_outputs.py \
         scripts/ndip_lattice.py \
         scripts/ndip_observables.py \
+        scripts/ndip_pattern_observation.py \
+        scripts/gsas_cif_import.py \
         scripts/ndip_runner.py
 
 ENV PATH=/home/radar/.local/bin:${PATH} \

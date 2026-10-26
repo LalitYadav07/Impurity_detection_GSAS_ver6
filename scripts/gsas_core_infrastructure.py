@@ -18,6 +18,7 @@ import numpy as np
 from typing import Optional, Tuple, Dict, List, Any
 from pathlib import Path
 import logging
+from gsas_cif_import import add_verified_phase
 
 logger = logging.getLogger(__name__)
 
@@ -523,8 +524,8 @@ class GSASProjectManager:
             
         try:
             histograms = [self.main_histogram] if (link_to_histogram and self.main_histogram) else []
-            self.main_phase = self.project.add_phase(
-                cif_file, phasename=phasename, histograms=histograms
+            self.main_phase = add_verified_phase(
+                self.project, cif_file, phasename=phasename, histograms=histograms
             )
             logger.info(f"Added phase '{phasename}' from {cif_file}")
             return True

@@ -21,26 +21,19 @@ from .post_analysis import (
 from .post_analysis_plot import view_figure, export_bundle
 from .uploads import NamedFileUpload
 from .scan_interpretation_ui import ScanInterpretationMixin
+from .transition_tracking_ui import TransitionTrackingMixin
 
 
-class PostAnalysisMixin(ScanInterpretationMixin):
+class PostAnalysisMixin(TransitionTrackingMixin, ScanInterpretationMixin):
     def _init_post_analysis(self):
         state = self.server.state
         state.post_analysis = PostAnalysisSettings().model_dump(mode="json")
         state.post_analysis_selected = [v["kind"] for v in state.post_analysis["views"]]
         state.post_analysis_recipes = [
-            (
-                {
-                    **option,
-                    "title": option["title"] + " — not available yet",
-                    "props": {"disabled": True},
-                }
-                if option["value"] in {"broadening", "atomic_structure"}
-                else option
-            )
-            for option in recipe_options()
+            option for option in recipe_options()
+            if option["value"] not in {"broadening", "atomic_structure"}
         ]
-        state.post_analysis_active = "phases"
+        state.post_analysis_active = "cells"
         state.post_analysis_view_options = []
         state.post_analysis_phase_options = []
         state.post_analysis_metric_options = []
@@ -60,6 +53,7 @@ class PostAnalysisMixin(ScanInterpretationMixin):
         state.post_analysis_active_points = 0
         state.post_analysis_observation_rows = []
         state.post_analysis_observation_search = ""
+        state.post_analysis_controls_panel = 0
         state.post_analysis_inspector_open = False
         state.post_analysis_inspector_title = ""
         state.post_analysis_inspector_view = ""
@@ -73,10 +67,11 @@ class PostAnalysisMixin(ScanInterpretationMixin):
         self._post_analysis_result = {"views": []}
         self._select_post_analysis_editor()
         self._init_scan_interpretation()
+        self._init_transition_tracking()
 
     def _post_analysis_setup(self):
         vuetify.VAutocomplete(
-            label="Post-analysis views",
+            label="Additional result plots",
             v_model=("post_analysis_selected",),
             items=("post_analysis_recipes",),
             multiple=True,
@@ -106,7 +101,7 @@ class PostAnalysisMixin(ScanInterpretationMixin):
 
     def _post_analysis_dashboard(self):
         with html.Section(classes="radar-result-card radar-post-analysis-card mb-4"):
-            html.H3("Selected post-analysis views")
+            html.H3("Additional result plots")
             with html.Div(classes="radar-post-toolbar"):
                 vuetify.VSelect(
                     label="View",
@@ -133,7 +128,8 @@ class PostAnalysisMixin(ScanInterpretationMixin):
                 classes="my-2",
             )
             with vuetify.VExpansionPanels(
-                v_if="!!post_analysis_active", variant="accordion", classes="my-2"
+                v_if="!!post_analysis_active", variant="accordion", classes="my-2",
+                v_model=("post_analysis_controls_panel",),
             ):
                 with vuetify.VExpansionPanel(title="Axis, phases and display"):
                     with vuetify.VExpansionPanelText():
@@ -274,6 +270,8 @@ class PostAnalysisMixin(ScanInterpretationMixin):
                 ):
                     figure = plotly.Figure(
                         display_mode_bar=True,
+                        responsive=True,
+                        style="height:100%;width:100%",
                         click=(
                             self.select_post_analysis_point,
                             "[{points: ($event.points || []).map(p => ({customdata: p.customdata}))}, postView.id]",
@@ -330,11 +328,11 @@ class PostAnalysisMixin(ScanInterpretationMixin):
                 v_if="!!post_analysis_active", variant="accordion", classes="my-2"
             ):
                 with vuetify.VExpansionPanel(
-                    title=("'View observations (' + post_analysis_observation_rows.length + ')'",)
+                    title=("'Data behind this plot (' + post_analysis_observation_rows.length + ')'",)
                 ):
                     with vuetify.VExpansionPanelText():
                         vuetify.VTextField(
-                            label="Search observations",
+                            label="Search table",
                             v_model=("post_analysis_observation_search",),
                             clearable=True,
                             density="compact",
@@ -532,7 +530,7 @@ class PostAnalysisMixin(ScanInterpretationMixin):
                         )
                     self._number_field(
                         v_if="post_analysis_editor.kind === 'transition_hysteresis'",
-                        label="Candidate crossing threshold",
+                        label="Curve crossing level (optional)",
                         v_model=("post_analysis_editor.threshold",),
                         density="compact",
                         variant="outlined",
@@ -807,7 +805,9 @@ class PostAnalysisMixin(ScanInterpretationMixin):
         interpretation_scans = getattr(self, "_interpretation_all_watch_scans", None)
         if not str(getattr(self, "_post_analysis_scope", "")).startswith("watch:") or interpretation_scans is None:
             interpretation_scans = self._post_analysis_scans
-        self._refresh_scan_interpretation(interpretation_scans, getattr(self, "_post_analysis_pending", []))
+        # The calibrated tracker replaces the former live heuristic comparison.
+        # Saved comparison readers remain available for old report replay.
+        self._refresh_transition_tracking(interpretation_scans, getattr(self, "_post_analysis_pending", []))
         settings = self._post_settings()
         result = calculate_views(
             self._post_analysis_scans, settings, pending=getattr(self, "_post_analysis_pending", [])
@@ -837,7 +837,7 @@ class PostAnalysisMixin(ScanInterpretationMixin):
                     for s in v["series"]
                     for p in s["points"]
                 ),
-                "figure": plotly.Figure.to_data(view_figure(v, by_id[v["id"]])),
+                "figure": self._post_inline_figure(v, by_id[v["id"]]),
                 "fits": [{**fit, "label": self._post_fit_label(v, fit)} for fit in v["fits"]],
                 "crossings": v["crossings"],
             }
@@ -894,6 +894,16 @@ class PostAnalysisMixin(ScanInterpretationMixin):
 
             for widget in self._post_analysis_widgets:
                 widget.update(go.Figure())
+
+    @staticmethod
+    def _post_inline_figure(result, view):
+        figure = view_figure(result, view)
+        if result.get("review_required"):
+            # The inline panel already has the review banner. Standalone
+            # figures and downloads retain their own warning in view_figure.
+            figure.layout.title = None
+            figure.layout.margin.t = 35
+        return plotly.Figure.to_data(figure)
 
     def import_post_analysis_mapping(self, **_):
         state = self.server.state

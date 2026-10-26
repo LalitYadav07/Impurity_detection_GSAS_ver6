@@ -8,9 +8,23 @@ import hashlib
 import io
 import json
 import math
+import re
 import zipfile
 
 from .post_analysis import ViewSettings
+
+
+def _legend_phase(value):
+    """Keep the formula and group visible; retain the full description in hover."""
+    text = str(value)
+    compact = re.match(r"^(.*?)\s+-\s+.+?(\s+\(SG\s+.+\))$", text)
+    return compact[1] + compact[2] if compact else text
+
+
+def _legend_branch(value):
+    # Acquisition segments stay separate traces. Their internal sequence
+    # numbers do not need separate legend entries for each reversal.
+    return re.sub(r"(increasing|decreasing|unclassified):\d+$", r"\1", value)
 
 
 def axis_title(view):
@@ -108,12 +122,12 @@ def view_figure(view, settings: ViewSettings):
                 )
                 for p in points
             ]
-            name = series["phase"]
+            name = _legend_phase(series["phase"])
             if len(samples) > 1:
                 name += f" · sample {series['sample']}"
             if len(all_branches) > 1:
-                name += f" · {branch}"
-            legend_key = (series["phase_key"], series["sample"], branch)
+                name += f" · {_legend_branch(branch)}"
+            legend_key = (series["phase_key"], series["sample"], _legend_branch(branch))
             figure.add_trace(
                 go.Scatter(
                     x=xs,

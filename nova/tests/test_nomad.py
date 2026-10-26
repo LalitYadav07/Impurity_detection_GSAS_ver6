@@ -259,6 +259,22 @@ class Galaxy:
     def recent_runs(self,**kw):return self.jobs
 
 
+def test_trial_discovery_stages_one_nomad_bank_without_checkpoint(source,supplied,monkeypatch):
+    monkeypatch.setattr(WatchDefinition,'source_directory',property(lambda self:str(source.parent)))
+    service=Galaxy(supplied.read_text())
+    settings=NomadExperimentSettings('IPTS-1','h','c',instrument_profile_dataset_id='original',
+        selected_banks=(5,),profile_bank=1,profile_acknowledged=True,initial_backfill_limit=1)
+    controller=NomadWatchController(service,settings)
+    controller._read_scan_metadata=lambda run:{}
+    runs=controller.discover(checkpoint=False)
+    assert [run.run_id for run in runs]==['NOM_42_BANK5']
+    assert not service.records and not service.jobs
+    record=controller.launch_submission(runs[0])
+    assert len(service.jobs)==1 and not service.records
+    assert record.provenance['nomad_bank']['source_bank']==5
+    assert record.provenance['nomad_bank']['profile_bank']==1
+
+
 def test_controller_submits_selected_bank_and_records_scientific_provenance(source,supplied,monkeypatch):
     monkeypatch.setattr(WatchDefinition,'source_directory',property(lambda self:str(source.parent)))
     service=Galaxy(supplied.read_text())

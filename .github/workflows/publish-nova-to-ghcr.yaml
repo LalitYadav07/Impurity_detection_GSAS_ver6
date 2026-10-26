@@ -24,6 +24,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Check cursor ownership and rendering order
+        run: node nova/tests/client_cursor.test.js
+
       - name: Set image metadata
         shell: bash
         run: |
@@ -63,6 +66,21 @@ jobs:
             -c 'from importlib.metadata import version; from radar_pd_nova.app import RadarPdNovaApp; from radar_pd_nova.live_beamlines import BEAMLINES; from radar_pd_nova.nomad_controller import NomadExperimentSettings; actual = version("radar-pd-nova"); assert actual == "'"${NOVA_VERSION}"'", actual; assert not BEAMLINES["NOM"].automatic_profiles; assert NomadExperimentSettings("IPTS-1", "h", "c", selected_banks=(5,), profile_bank=1).definition().instrument == "NOM"; print(actual, RadarPdNovaApp.__name__, "NOMAD adapter imports passed")'
           docker run --rm --entrypoint nginx \
             "${IMAGE_NAME}:nova-${NOVA_VERSION}" -t
+          docker run --rm --entrypoint python \
+            "${IMAGE_NAME}:nova-${NOVA_VERSION}" -c '
+          from importlib.resources import files
+          from radar_pd_nova.app import RadarPdNovaApp
+          from radar_pd_nova.transition_signals import BoundaryPolicy
+          from radar_pd_nova.transition_cursor_widget import TransitionCursor
+          import scipy
+          app = RadarPdNovaApp()
+          assert "radar-transition-cursor" in app.layout.html
+          assert "Reset zoom" in app.layout.html
+          assert files("radar_pd_nova").joinpath("web/transition_cursor.js").is_file()
+          assert scipy.__version__ == "1.15.3", scipy.__version__
+          assert BoundaryPolicy().split_separation_fwhm == .1
+          print("Packaged transition engine, cursor assets and interface imports passed")
+          '
 
       - name: Push immutable and release tags
         shell: bash

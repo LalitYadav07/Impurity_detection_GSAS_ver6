@@ -438,7 +438,7 @@ class PowgenWatchController:
     def source_directory(self) -> str:
         return self.definition.source_directory
 
-    def discover(self, listing: Iterable[str | Path | Mapping[str, Any]] | None = None) -> list[WatchedRun]:
+    def discover(self, listing: Iterable[str | Path | Mapping[str, Any]] | None = None, *, checkpoint: bool = True) -> list[WatchedRun]:
         rows = list(listing) if listing is not None else self._list_source_directory()
         # POWGEN autoreduction can expose auxiliary text products before the
         # canonical GSAS file. Waiting for .gsa prevents submitting a partial
@@ -448,9 +448,9 @@ class PowgenWatchController:
             for row in rows
             if str(row.get("path") or row.get("name") or row).lower().endswith(".gsa")
         ]
-        self._refresh_incomplete_discoveries(completed_rows)
+        self._refresh_incomplete_discoveries(completed_rows, checkpoint=checkpoint)
         if self.settings.instrument == "PG3":
-            self._flag_powgen_revisions(completed_rows)
+            self._flag_powgen_revisions(completed_rows, checkpoint=checkpoint)
         if not self.state.initial_backfill_complete:
             available = discover_from_listing(self.definition, completed_rows)
             if available:
@@ -475,7 +475,8 @@ class PowgenWatchController:
                 self._last_seen_run_number = self._startup_run_floor
             self.state.initial_backfill_complete = True
             self._primed = True
-            self.persist_state()
+            if checkpoint:
+                self.persist_state()
             return discovered
 
         discovered = discover_from_listing(
@@ -500,7 +501,7 @@ class PowgenWatchController:
             )
         return discovered
 
-    def _refresh_incomplete_discoveries(self, rows):
+    def _refresh_incomplete_discoveries(self, rows, *, checkpoint=True):
         """Replace an unsubmitted parse-error placeholder when writing finishes.
 
         A partial multi-bank file initially has no known bank labels. Keeping
@@ -526,10 +527,10 @@ class PowgenWatchController:
                     del self.state.discovered[key]
             self._attach_scan_metadata(self._remember_discoveries(expanded))
             changed = True
-        if changed:
+        if changed and checkpoint:
             self.persist_state()
 
-    def _flag_powgen_revisions(self, rows):
+    def _flag_powgen_revisions(self, rows, *, checkpoint=True):
         """Keep result provenance when a POWGEN reduction/receipt is replaced."""
         observed = {r.source_path: r for r in discover_from_listing(self.definition, rows)}
         changed = False
@@ -581,7 +582,7 @@ class PowgenWatchController:
                 phase[key] = replace(old, scan_metadata={**old.scan_metadata,
                     "replacement_revision": revision, "source_revision_warning": notice}, scientific_summary=summary)
                 changed = True
-        if changed:
+        if changed and checkpoint:
             self.persist_state()
 
     def _setup(self, run: WatchedRun):

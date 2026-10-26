@@ -23,12 +23,29 @@ import numpy as np
 from .facility_metadata import parse_nexus_timestamp, qualify_temperature
 
 SCHEMA = "radar-pd-conditions/v1"
-REGISTRY = "SNS-PG3-NOM-conditions/1"
+REGISTRY = "SNS-PG3-NOM-conditions/2"
 MAX_VALUES = 200_000
 MAX_TOTAL_VALUES = 500_000
 MAX_POINTS = 512
 _NUMBER = re.compile(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][-+]?\d+)?")
 _QUOTED = re.compile(r'"((?:[^"\\]|\\.)*)"')
+
+
+def condition_display(metric, label):
+    """Describe an acquisition summary without implying an equilibrium point."""
+    if not isinstance(metric, dict):
+        return ""
+    value = metric.get("value")
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        return ""
+    unit = str(metric.get("unit") or "[unit not reported]")
+    statistic = "time-weighted mean " if metric.get("statistic") == "time_weighted_step_hold" else ""
+    text = f"{label}: {statistic}{value:.6g} {unit}"
+    low, high = metric.get("minimum"), metric.get("maximum")
+    if (all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in (low, high))
+            and low <= high):
+        text += f"; recorded scan range {low:.6g}–{high:.6g} {unit}"
+    return text
 
 
 @dataclass(frozen=True)
@@ -48,7 +65,7 @@ def sources(instrument):
     if instrument == "PG3":
         result += [Source("temperature", "SampleTemp", family="selected_temperature")]
         result += [
-            Source("magnetic_field", name, family=family)
+            Source("magnetic_field", name, needs_binding=True, family=family)
             for name, family in [
                 ("BL11A:SE:MAG08:GetMGField", "MAG08"),
                 ("Mag08ActualField", "MAG08"),
@@ -269,6 +286,9 @@ def summarize_log(spec, value, time, window, *, title="", binding=None):
         "device_family": spec.family,
         "status": "unavailable",
         "notices": [],
+        "requires_binding": spec.needs_binding,
+        "binding_verified": bool(binding and binding.get("verified") is True
+                                 and binding.get("channel") == spec.channel),
     }
     if not value:
         return out
@@ -402,17 +422,56 @@ def read_conditions(path, instrument, *, window=None, bindings=None, backend=Non
     return json.loads(json.dumps(packet, allow_nan=False))
 
 
-def attach_conditions(metadata, path, instrument):
-    """Preserve legacy summaries, preferring a qualified exposure-weighted readback."""
-    packet = read_conditions(path, instrument)
-    metadata["conditions"] = packet
-    for channel in packet.get("channels", []):
-        if channel["role"] == "measured" and channel["status"] == "recorded":
-            metadata[channel["quantity"]] = {
+def qualified_metadata(metadata):
+    """Prevent a legacy scalar from bypassing an explicit device/unit conflict.
+
+    This also qualifies already-saved checkpoints. Historic summaries without
+    registry observations retain their existing contract. Rejected scalars
+    remain observations for review, rather than selected plotting quantities.
+    """
+    result = dict(metadata) if isinstance(metadata, dict) else {}
+    packet = result.get("conditions") or {}
+    if not isinstance(packet, dict):
+        return result
+    if packet.get("registry") == "SNS-PG3-NOM-conditions/1":
+        # Earlier receipts treated an isolated magnet channel as selected.
+        # Such channels are facility-wide logs, not a specimen selector. Keep
+        # the original receipt hash and expose an explicit policy projection.
+        packet = {**packet, "channels": [dict(c) for c in (packet.get("channels") or []) if isinstance(c, dict)]}
+        changed = False
+        for channel in packet["channels"]:
+            if (channel.get("quantity") == "magnetic_field" and channel.get("role") == "measured"
+                    and channel.get("status") == "recorded" and not channel.get("binding_verified")):
+                channel.update(status="needs_mapping", requires_binding=True,
+                               notices=[*channel.get("notices", []), "Verify that this device measured the specimen"])
+                changed = True
+        if changed:
+            packet["qualified_from_registry"] = packet["registry"]
+            packet["registry"] = REGISTRY
+            packet["source_metadata_sha256"] = packet.pop("metadata_sha256", None)
+            packet["metadata_sha256"] = sha256(json.dumps(packet, sort_keys=True, allow_nan=False).encode()).hexdigest()
+            result["conditions"] = packet
+    channels = [c for c in (packet.get("channels") or [])
+                if isinstance(c, dict) and c.get("role") == "measured"]
+    for quantity in {c.get("quantity") for c in channels if c.get("quantity")}:
+        matching = [c for c in channels if c.get("quantity") == quantity]
+        recorded = [c for c in matching if c.get("status") == "recorded"]
+        if recorded:
+            channel = recorded[0]
+            result[quantity] = {
                 **channel,
-                "quality": "changing" if channel["minimum"] != channel["maximum"] else "recorded",
+                "quality": "changing" if channel.get("minimum") != channel.get("maximum") else "recorded",
             }
-    return metadata
+        elif any(c.get("status") in {"needs_mapping", "conflict", "unqualified_units"} for c in matching):
+            previous = result.pop(quantity, None)
+            if previous is not None:
+                result.setdefault(quantity + "_observation", previous)
+    return result
+
+
+def attach_conditions(metadata, path, instrument):
+    """Prefer qualified readbacks; never resurrect a rejected legacy metric."""
+    return qualified_metadata({**metadata, "conditions": read_conditions(path, instrument)})
 
 
 @lru_cache(maxsize=128)

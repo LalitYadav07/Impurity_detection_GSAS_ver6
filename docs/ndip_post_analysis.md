@@ -53,6 +53,76 @@ A phase absent from one accepted model creates a gap. It is not automatically ze
 
 An unknown/fixed parameter can be included only through the explicitly exploratory model-values option. It cannot qualify an expansion coefficient. Older results without fit-state metadata do not silently become independent cell measurements; use a current Analyze result or inspect those older model values explicitly. A read-only Galaxy job to upgrade historical GPX extraction has not been added.
 
+## Online pattern indicators and boundary rules
+
+The Transition tracking tab consumes each completed reduction as it arrives,
+including before refinement finishes. No final list or future scan is needed.
+The user selects indicators and a required count: one indicator can be sufficient
+even if other indicators do not trigger. New/lost signal, resolved splitting,
+relative peak width, shape and relative intensity remain separate measurements.
+Unavailable selected indicators are not counted as negative evidence.
+
+The current-group reference is fixed until a measured change meeting the selected
+rule starts or returns to a group. This detects accumulated changes. Selecting the preceding
+scan instead explicitly requests adjacent comparisons. Symbol reuse compares
+with earlier group references; it does not infer a chemical phase identity.
+Horizontal heatmap lines follow that rule and cached evidence. The indicator
+history plots the triggered count with the selected required-count threshold;
+it does not present pattern labels as a numerical score. Missing indicator
+measurements show an availability bound. Filled condition intervals are omitted
+because they can be mistaken for identified phase regions.
+
+The heatmap and measured-pattern ribbon share a calibrated TOF/d/Q horizontal
+axis and zoom. A vertical scan cursor updates the ribbon and scan inspector.
+Rainbow (Turbo) is the default palette. Cursor/axis/palette/zoom changes only
+affect display copies and never rerun refinement or change native inference.
+Exact, checksum-verified physical/profile-bank mappings are required for TOF
+conversion, including the nonlinear and zero terms. This follows GSAS-II's
+[coordinate equation](https://github.com/AdvancedPhotonSource/GSAS-II/blob/main/GSASII/GSASIIlattice.py)
+and [legacy ICONS interpretation](https://github.com/AdvancedPhotonSource/GSAS-II/blob/main/GSASII/GSASIIfiles.py).
+Missing profiles leave calibrated axes unavailable instead of using nominal
+export DIFC. Intensity retains its original measurement units.
+
+Width changes assume fixed instrumental/sample broadening within the compatible
+bank and setup. Native-grid local profile fits give conditional FWHM/position
+measurements. Default width evidence requires 3% change, an error ratio of 3 and
+two supporting isolated regions; thresholds are editable. Unresolved broadening
+can trigger without two resolved daughter peaks. Crowding, failed fits or
+insufficient sampling can withhold width evidence. Disabling the fixed-broadening
+assumption makes the width indicator unavailable, not unchanged.
+
+The selected indicators, comparison baseline, sensitivity, assumption and policy
+hash are saved in the watch checkpoint and evidence JSON. User edits reclassify
+received data immediately without repeating RADAR-PD/GSAS-II. Ordinary arrivals
+append; late/corrected reductions cause an explicit replay in acquisition order.
+The standalone API supports `append(scan)` and `reclassify(policy)` with no
+completed-series input. Comparison and preparation caches are bounded.
+
+Final Rwp is available as a separate, opt-in model-dependent indicator. Only an
+explicit completed Full-analysis final-project Rwp is used. Matched project
+receipts and equivalent configuration/library/recipe/profile/fit domains are
+required; contributing fitted-point overlap must be at least 98%. The rule uses
+both an absolute change in percentage points and a relative change. Pending or
+incompatible fits are unavailable, not negative evidence. A late final result
+causes received-data reclassification only if Rwp is selected. Rwp is global and
+does not create a localized region.
+
+The optional changed-region overlay uses localizable measured-peak evidence
+from an explicitly selected previous, boundary-reference or first-scan pair.
+Boxes span adjacent compared rows, or mark only the two endpoints of a
+nonadjacent comparison. A local indicator filter, overlap merging, common
+masked-gap exclusion and a 16-region display cap keep the view readable.
+Native local fits also measure evolution of an existing doublet's separation:
+asymmetric single and two-component descriptions compete without phase/hkl
+knowledge. Recognized doublets below the change threshold optionally have dotted
+boxes, while solid boxes passed a local rule. Their separation measurements and
+conditional error ratios are inspectable. Neither box proves a phase transition.
+The reference and shown/total count are displayed; all evidence remains in the
+report. Overlay switches never change the boundary rule or raw intensity data.
+The acquisition cursor previews cached native ribbons and pair highlights in
+the browser, committing full scan details on release. Visible row indices stay
+stable during dragging while newly received scans continue through analysis.
+
 ## Scientific observations and uncertainty
 
 Analyze publishes `Scientific_observables.json` beside the lattice CSV and includes the same packet in the normalized result summary. It contains source GPX SHA-256, phase/basis identity, profile/recipe context, per-metric final refinement state and available cell covariance. NOVA consumes that packet; it does not unpickle arbitrary GPX uploads.

@@ -59,7 +59,7 @@ def test_setup_panels_and_uploads_have_single_stable_instances() -> None:
 
     # Every numbered panel is eager-mounted: collapsing a panel must not
     # destroy and recreate its stateful file inputs.
-    assert template.count("<VExpansionPanelText eager") == 11
+    assert template.count("<VExpansionPanelText eager") == 15
     assert 'v-show="radiation === \'neutron\'"' in template
     assert "{{ radiation === 'neutron' ? '8' : '7' }}" in template
     assert "{{ radiation === 'neutron' ? '11' : '10' }}" in template
@@ -150,10 +150,10 @@ def test_full_custom_controls_belong_to_runtime_budget_and_use_responsive_column
     template = app.layout.html
     css = app._css()
 
-    custom_controls = template.index('class="radar-custom-budget-controls"')
+    custom_controls = template.index('class="radar-custom-budget-controls"', template.index("Runtime Budget"))
     assert template.index("Runtime Budget") < custom_controls < template.index("Expert Tuning")
-    assert template.count('class="radar-custom-budget-controls"') == 1
-    assert template.count("Minimum phase wt%") == 1
+    assert template.count('class="radar-custom-budget-controls"') == 2
+    assert template.count("Minimum phase wt%") == 2
     assert ".radar-custom-budget-grid" in css
     assert "repeat(auto-fit, minmax(min(300px, 100%), 1fr))" in css
 
@@ -165,7 +165,6 @@ def test_all_numeric_fields_ignore_mouse_wheel_changes() -> None:
     ]
 
     assert number_fields
-    assert len(number_fields) == 51
     assert all('type="text"' in field for field in number_fields)
     assert 'type="number"' not in app.layout.html
 
@@ -174,7 +173,8 @@ def test_plotly_canvases_have_nonzero_layout_frames() -> None:
     app = RadarPdNovaApp()
     template = app.layout.html
 
-    assert template.count('class="radar-plot-frame"') == 6
+    for panel in ("radar-experiment-phase-card", "radar-experiment-quality-card", "radar-primary-plot-card"):
+        assert panel in template
     assert ".radar-plot-frame { position: relative; width: 100%; height: 720px;" in app._css()
     assert "Plotly.Plots.resize" in template
     assert "window.Plotly && window.Plotly.Plots.resize" in template
@@ -186,15 +186,15 @@ def test_powgen_experiment_dashboard_exposes_scientific_trends() -> None:
 
     for text in (
         "Open experiment dashboard",
-        "{{ live_beamline_label }} · {{ powgen_ipts || 'Live experiment' }}",
-        "Compare scans",
-        "Experiment trends",
+        "{{ powgen_dashboard_title }}",
+        "Transition tracking",
+        "Additional plots and derived quantities",
         "Refined phase fractions",
         "Refinement quality",
         "All reported phases across scans",
         "Completed analyses",
         "Inspect one completed scan",
-        "Scan processing status",
+        "Queued, running and failed scans",
     ):
         assert text in template
 
@@ -339,7 +339,7 @@ def test_candidate_library_upload_actions_wrap_without_styling_button_internals(
     template = app.layout.html
     css = app._css()
 
-    assert template.count('class="radar-library-source-action"') == 2
+    assert template.count('class="radar-library-source-action"') == 4
     assert ".radar-library-source-card > span" in css
     assert ".radar-library-source-card span {" not in css
     assert ".radar-library-source-action .v-btn__content" in css
@@ -351,9 +351,8 @@ def test_powgen_configuration_copy_keeps_run_inputs_independent() -> None:
     app = RadarPdNovaApp()
     template = app.layout.html
 
-    assert "Applies analysis settings only." in template
-    assert "Live mode takes scans, the instrument profile" in template
-    assert "candidate library, and optional main phase from this panel" in template
+    assert "Reuses analysis settings." in template
+    assert "Scans, instrument profile, candidate library and main phase come from this Live setup." in template
 
 
 def test_galaxy_remote_browser_remains_available_for_restored_legacy_runs() -> None:

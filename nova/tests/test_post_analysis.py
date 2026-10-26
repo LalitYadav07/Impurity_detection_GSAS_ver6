@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 import io
 import json
 import math
+import re
 import zipfile
 from pathlib import Path
 
@@ -436,6 +437,61 @@ def test_hysteresis_keeps_acquisition_order_and_candidate_brackets():
     assert [p["x"] for p in points] == temperatures
     assert [p["branch"] for p in points] == ["increasing:0"] * 4 + ["decreasing:1"] * 3
     assert [c["interval"] for c in result["crossings"]] == [[400, 500], [500, 400]]
+
+
+def test_repeated_sweep_segments_keep_distinct_traces_without_repeated_long_legends():
+    full_name = "PrVGe3 - Praseodymium vanadium germanide (1/1/3) (SG P6_3/mmc, 194)"
+    items = [scan(i + 1, temperature=t, phases=[{**cell(), "phase": full_name}])
+             for i, t in enumerate([100, 200, 150, 250, 180, 300])]
+    post = settings(axis="temperature", connect=True)
+    result = calculate_views(items, post)["views"][0]
+    figure = view_figure(result, post.views[0])
+    branches = {point["branch"] for point in result["series"][0]["points"]}
+    assert len(figure.data) == len(branches)
+    visible = [trace.name for trace in figure.data if trace.showlegend]
+    assert len(visible) == 2
+    assert all("PrVGe3 (SG P6_3/mmc, 194)" in name for name in visible)
+    assert all("Praseodymium" not in name and not re.search(r":\d+$", name) for name in visible)
+    assert all(row[10] == full_name for trace in figure.data for row in trace.customdata)
+    assert sum(len(trace.x) for trace in figure.data) == len(items)
+
+
+def test_controller_drift_inside_overlapping_scan_ranges_is_not_an_automatic_temperature_sweep():
+    items = [scan(i + 1, temperature=t) for i, t in enumerate([297.0004, 297.0008, 297.0005])]
+    for item in items:
+        item["metadata"]["temperature"].update(minimum=296.95, maximum=297.07)
+    original = copy.deepcopy(items)
+    result = view(items, axis="auto")
+    assert result["axis"] == "run_number"
+    assert items == original
+    # An explicit choice remains available for an intentionally fine sweep.
+    assert view(items, axis="temperature")["axis"] == "temperature"
+
+
+def test_a_qualified_field_sweep_at_constant_temperature_is_selected_and_two_varying_axes_are_not_guessed():
+    items = [scan(i + 1, temperature=10) for i in range(3)]
+    for i, item in enumerate(items):
+        item["metadata"]["magnetic_field"] = {"value": i, "unit": "T", "status": "recorded", "source": "verified sample magnet"}
+    assert view(items, axis="auto")["axis"] == "magnetic_field"
+    for i, item in enumerate(items):
+        item["metadata"]["temperature"]["value"] = 10 + i
+    result = view(items, axis="auto")
+    assert result["axis"] == "run_number"
+    assert any("Several recorded conditions vary" in notice for notice in result["notices"])
+
+
+def test_saved_unbound_device_channels_cannot_be_reintroduced_by_post_analysis_replay():
+    item = scan(1)
+    item["metadata"].update(
+        magnetic_field={"value": 0, "unit": "T", "source": "legacy scalar"},
+        conditions={"registry": "SNS-PG3-NOM-conditions/1", "channels": [
+            {"quantity": "magnetic_field", "role": "measured", "status": "recorded", "value": 0, "unit": "T"}
+        ]},
+    )
+    original = copy.deepcopy(item)
+    result = view([item], axis="magnetic_field")
+    assert all(point["x"] is None for series in result["series"] for point in series["points"])
+    assert item == original
 
 
 def test_expansion_fit_uses_raw_cells_and_retains_nonzero_covariance_uncertainty():

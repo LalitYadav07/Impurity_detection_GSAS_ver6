@@ -50,3 +50,30 @@ The Run Monitor should show:
 
 If a run fails, the app should preserve the run folder and show the failure message rather than disappearing.
 
+
+
+### Duplicate-candidate threshold and lattice nudging
+
+In **Full → Runtime Budget → Custom**, **Duplicate-candidate threshold** controls
+which candidates are merged after histogram screening. Candidates with the same
+elements and space group are merged when their coarse-profile Pearson correlation
+reaches the threshold. Higher values retain more similar candidates, including
+Li-occupancy alternatives; `1.0` can still merge perfectly correlated profiles.
+The default remains `0.95`. This is separate from automatic knee pruning.
+
+In a pipeline YAML, use `corr_threshold: 0.999`. A dataset-level value overrides
+the top-level value. Both automatic-main bootstrap and residual discovery use it.
+The versioned runner YAML exposes the same setting as `full.dedup_threshold`.
+The NOVA interface exports that versioned setting; the Streamlit interface exports
+`corr_threshold` directly. The GUI accepts four decimal places.
+
+For example, a pipeline YAML can request:
+
+```yaml
+corr_threshold: 0.999
+stage4:
+  len_tol_pct: 0.5
+```
+
+`len_tol_pct` bounds each length during lattice nudging only. Later GSAS-II cell
+refinement can move beyond that window.

@@ -28,6 +28,38 @@ def test_powgen_sample_selection_invalidates_preflight_and_is_exact():
     assert app._powgen_processing_ids() is None
 
 
+def test_live_results_keep_monitor_provenance_when_new_experiment_is_entered():
+    from radar_pd_nova.powgen_controller import PowgenExperimentSettings
+    app = RadarPdNovaApp.__new__(RadarPdNovaApp)
+    state = _State(powgen_ipts="32378", live_beamline="PG3", powgen_source_subfolder="shared/autoreduce",
+        history_datasets=[{"id":"old-config","name":"Silicon settings"},
+                          {"id":"old-library","name":"Silicon library"}],
+        powgen_scientific_rows=[{"run_number":64304}], powgen_monitoring=False)
+    app.server = SimpleNamespace(state=state)
+    app._powgen_controller = SimpleNamespace(settings=PowgenExperimentSettings(
+        ipts="IPTS-32378",history_id="history",configuration_dataset_id="old-config",
+        wavelength_angstrom="",database_dataset_id="old-library"))
+    app._sync_powgen_dashboard_provenance()
+    assert state.powgen_dashboard_title == "POWGEN · IPTS-32378"
+    assert not state.powgen_dashboard_scope_changed
+    state.powgen_ipts = "38845"
+    state.powgen_configuration_label = "Alloy settings"
+    state.powgen_database_label = "Alloy library"
+    app._powgen_ipts_changed()
+    assert state.powgen_dashboard_title == "POWGEN · IPTS-32378"
+    assert state.powgen_dashboard_configuration == "Silicon settings"
+    assert state.powgen_dashboard_library == "Silicon library"
+    assert state.powgen_dashboard_scope_changed
+    assert state.powgen_scientific_rows == [{"run_number":64304}]
+    state.powgen_ipts = "IPTS-32378"
+    state.powgen_source_subfolder = "shared/older-cycle"
+    app._powgen_processing_changed()
+    assert state.powgen_dashboard_scope_changed
+    state.powgen_source_subfolder = "shared/autoreduce"
+    app._powgen_processing_changed()
+    assert not state.powgen_dashboard_scope_changed
+
+
 def test_live_beamline_switch_clears_incompatible_inputs_and_results():
     app = RadarPdNovaApp()
     state = app.server.state
@@ -76,6 +108,7 @@ def test_stale_nomad_preflight_cannot_restore_notices_into_powgen(tmp_path,monke
     state.powgen_ipts = '1'
     app._powgen_ipts_changed()
     state.powgen_configuration_dataset_id = 'config'
+    state.live_configuration_source = 'history'
     state.powgen_instrument_path = str(profile)
     state.nomad_physical_bank = 5
     app.service = SimpleNamespace(load_configuration_dataset=lambda _: AnalysisConfig(radiation='neutron',instrument_mode='tof',sample_elements=['Si']))
@@ -136,6 +169,48 @@ def test_powgen_sample_discovery_populates_dropdown_and_unknown_count(monkeypatc
     assert state.powgen_sample_discovery_ipts == "IPTS-35915"
     assert "1 scans have no readable sample ID" in state.powgen_sample_message
     assert state.powgen_sample_loading is False
+
+
+def test_refresh_after_typing_an_ipts_survives_the_queued_change_callback(monkeypatch):
+    app = RadarPdNovaApp.__new__(RadarPdNovaApp)
+    state = _State(powgen_ipts="35915", powgen_monitoring=False, powgen_sample_loading=False)
+    app.server = SimpleNamespace(state=state)
+    app._powgen_form_ipts = "IPTS-1"
+    started, release = threading.Event(), threading.Event()
+
+    def discover(*args):
+        started.set()
+        assert release.wait(5)
+        return {"options": [{"value": "A", "title": "A — real sample"}], "scan_count": 1, "unidentified_count": 0}
+
+    monkeypatch.setattr("radar_pd_nova.app.discover_powgen_samples", discover)
+
+    async def check():
+        task = asyncio.create_task(app.refresh_powgen_samples())
+        assert await asyncio.to_thread(started.wait, 5)
+        app._powgen_ipts_changed()  # delayed input event after Refresh/blur
+        release.set()
+        await task
+        assert state.powgen_discovered_sample_options[0]["value"] == "A"
+        assert state.powgen_sample_discovery_ipts == "IPTS-35915"
+
+    asyncio.run(check())
+
+
+def test_sample_refresh_uses_the_visible_ipts_when_the_model_update_is_delayed(monkeypatch):
+    app = RadarPdNovaApp.__new__(RadarPdNovaApp)
+    state = _State(powgen_ipts="", powgen_monitoring=False, powgen_sample_loading=False)
+    app.server = SimpleNamespace(state=state)
+
+    def discover(ipts, index):
+        assert ipts == "IPTS-35915"
+        return {"options": [{"value": "A", "title": "A — real sample"}], "scan_count": 1, "unidentified_count": 0}
+
+    monkeypatch.setattr("radar_pd_nova.app.discover_powgen_samples", discover)
+    asyncio.run(app.refresh_powgen_samples("35915"))
+    assert state.powgen_ipts == "35915"
+    assert state.powgen_sample_discovery_ipts == "IPTS-35915"
+    assert state.powgen_discovered_sample_options[0]["value"] == "A"
 
 
 def test_selected_run_uid_accepts_vuetify_payload_shapes() -> None:
@@ -513,19 +588,20 @@ def test_history_refresh_keeps_reusable_configurations_visible_after_large_uploa
     }
     library = {
         "id": "library-id",
-        "name": "RADAR-PD portable custom library | Fe_Al.zip",
+        "name": "Fe_Al custom library.zip",
         "display_name": "Fe_Al custom library",
         "role": "candidate_library",
         "generated": False,
     }
+    portable_library = {**library, "id": "portable-library-id",
+                        "name": "RADAR-PD portable custom library | Fe_V.zip"}
 
     class _Service:
         def search_history_datasets(self, *, query: str, **_kwargs):
-            if query == "radar_pd_config":
-                return [configuration]
-            if query == "portable custom library":
-                return [library]
-            return newest if not query or query == ".cif" else []
+            if not query or query == ".cif":
+                return newest
+            return [item for item in [configuration, library, portable_library]
+                    if query.lower() in item["name"].lower()]
 
     state = _State(
         history_search="",
@@ -549,7 +625,7 @@ def test_history_refresh_keeps_reusable_configurations_visible_after_large_uploa
     app.refresh_history()
 
     assert [item["id"] for item in state.history_configuration_datasets] == ["config-id"]
-    assert [item["id"] for item in state.history_archive_datasets] == ["library-id"]
+    assert [item["id"] for item in state.history_archive_datasets] == ["library-id", "portable-library-id"]
     assert state.history_has_more is True
     assert state.flush_count == 1
 

@@ -12,6 +12,7 @@ from __future__ import annotations
 import itertools
 import hashlib
 import re
+import shlex
 import tempfile
 import zipfile
 from pathlib import Path
@@ -27,6 +28,72 @@ _MAX_ARCHIVE_BYTES = 500 * 1024 * 1024
 _MAX_ARCHIVE_CIFS = 5000
 _MAX_ARCHIVE_UNCOMPRESSED_BYTES = 2 * 1024 * 1024 * 1024
 _FORMULA_TOKEN = r"[A-Z][a-z]?(?:\d+(?:\.\d*)?|\.\d+)?"
+
+_ELEMENT_SYMBOLS = set("H He Li Be B C N O F Ne Na Mg Al Si P S Cl Ar K Ca Sc Ti V Cr Mn Fe Co Ni Cu Zn Ga Ge As Se Br Kr Rb Sr Y Zr Nb Mo Tc Ru Rh Pd Ag Cd In Sn Sb Te I Xe Cs Ba La Ce Pr Nd Pm Sm Eu Gd Tb Dy Ho Er Tm Yb Lu Hf Ta W Re Os Ir Pt Au Hg Tl Pb Bi Po At Rn Fr Ra Ac Th Pa U Np Pu Am Cm Bk Cf Es Fm Md No Lr Rf Db Sg Bh Hs Mt Ds Rg Cn Nh Fl Mc Lv Ts Og D T".split())
+
+
+def cif_element_suggestion(text: str) -> list[str]:
+    """Suggest CIF chemistry without guessing from filenames or sample titles.
+
+    Explicit atom-type loops and declared formulae are the evidence. This is a
+    setup aid; CIF interpretation and phase generation remain with GSAS-II.
+    Unreadable/unknown atom types make the loop unavailable rather than silently
+    producing an incomplete element filter.
+    """
+    found: set[str] = set()
+    for match in re.finditer(r"(?im)^\s*_chemical_formula_(?:sum|structural)\s+([^\r\n]+)", text):
+        try:
+            formula = shlex.split(match[1], comments=True)[0]
+        except (ValueError, IndexError):
+            continue
+        symbols = re.findall(r"[A-Z][a-z]?", formula)
+        remainder = re.sub(r"[A-Z][a-z]?", "", formula)
+        if symbols and all(s in _ELEMENT_SYMBOLS for s in symbols) and not re.search(r"[^\d\s.()+\-\[\],/]", remainder):
+            found.update(symbols)
+    lines = text.splitlines()
+    index = 0
+    while index < len(lines):
+        if lines[index].strip().lower() != "loop_":
+            index += 1
+            continue
+        index += 1
+        headers = []
+        while index < len(lines):
+            line = lines[index].strip()
+            if not line or line.startswith("#"):
+                index += 1
+                continue
+            if not line.startswith("_"):
+                break
+            headers.append(line.split()[0].lower())
+            index += 1
+        target = next((headers.index(h) for h in ("_atom_site_type_symbol", "_atom_type_symbol") if h in headers), None)
+        if target is None:
+            continue
+        values = []
+        while index < len(lines):
+            line = lines[index].strip()
+            if line.lower().startswith(("loop_", "data_", "stop_", "save_")) or line.startswith("_"):
+                break
+            index += 1
+            if not line or line.startswith("#"):
+                continue
+            try:
+                values.extend(shlex.split(line, comments=True))
+            except ValueError:
+                values = []
+                break
+        if not headers or not values or len(values) % len(headers):
+            continue
+        symbols = set()
+        for value in values[target::len(headers)]:
+            match = re.fullmatch(r"([A-Z][a-z]?)(?:\d*(?:[+\-])?)?", value)
+            if match is None or match[1] not in _ELEMENT_SYMBOLS:
+                symbols = set()
+                break
+            symbols.add(match[1])
+        found.update(symbols)
+    return sorted(found)
 
 
 def safe_client_filename(value: Any) -> str:
@@ -144,6 +211,7 @@ def inspect_cif_upload(contents: bytes, original_name: Any) -> dict[str, Any]:
         "display_name": display_name,
         "display_name_source": display_name_source,
         "space_group": _tag_value("_space_group_it_number", "_symmetry_int_tables_number"),
+        "elements": cif_element_suggestion(text),
     }
 
 
@@ -210,9 +278,11 @@ def build_cif_source_archive(source_paths: Iterable[str], library_name: str) -> 
     seen: set[str] = set()
     skipped: list[str] = []
     written = 0
+    elements: set[str] = set()
+    unknown_elements = 0
 
     def add_cif(output: zipfile.ZipFile, contents: bytes, original_name: str) -> None:
-        nonlocal written
+        nonlocal written, unknown_elements
         try:
             metadata = inspect_cif_upload(contents, original_name)
         except Exception as exc:
@@ -223,6 +293,9 @@ def build_cif_source_archive(source_paths: Iterable[str], library_name: str) -> 
             skipped.append(f"{metadata['name']}: duplicate structure file")
             return
         seen.add(digest)
+        elements.update(metadata["elements"])
+        if not metadata["elements"]:
+            unknown_elements += 1
         written += 1
         output.writestr(f"cifs/{written:05d}_{safe_client_filename(metadata['name'])}", contents)
 
@@ -252,7 +325,8 @@ def build_cif_source_archive(source_paths: Iterable[str], library_name: str) -> 
     if not written:
         target.unlink(missing_ok=True)
         raise ValueError("No usable CIF structures remained after validation")
-    return target, {"cif_count": written, "skipped_count": len(skipped), "failures": skipped}
+    return target, {"cif_count": written, "skipped_count": len(skipped), "failures": skipped,
+                    "elements": sorted(elements), "unknown_elements": unknown_elements}
 
 
 def display_filename(value: Any) -> str:

@@ -4,7 +4,7 @@ import h5py
 import numpy as np
 import pytest
 
-from radar_pd_nova.scan_conditions import Source, read_conditions, summarize_log
+from radar_pd_nova.scan_conditions import Source, read_conditions, summarize_log, qualified_metadata
 
 WINDOW = {"start": "2026-01-01T00:00:00Z", "end": "2026-01-01T00:01:40Z"}
 
@@ -95,11 +95,13 @@ def write_nexus(path):
 def test_h5py_named_reads_and_returned_receipts_are_independent(tmp_path):
     path = tmp_path / "raw.h5"
     write_nexus(path)
-    result = read_conditions(path, "PG3", backend="h5py")
+    result = read_conditions(path, "PG3", backend="h5py", bindings={
+        "magnetic_field": {"verified": True, "channel": "BL11A:SE:MAG08:GetMGField"}})
     assert result["status"] == "read"
     channels = {c["channel"]: c for c in result["channels"]}
     assert channels["BL11A:SE:MAG08:GetMGField"]["value"] == pytest.approx(0.35)
-    assert channels["Mag08ActualField"]["status"] == "duplicate_alias"
+    assert channels["Mag08ActualField"]["status"] == "needs_mapping"
+    assert channels["BL11A:SE:MAG08:GetMGField"]["binding_verified"]
     assert channels["BL11A:SE:MAG08:GetFieldSet"]["status"] == "requested"
     assert channels["BL11A:SE:SampleVolt"]["status"] == "unqualified_units"
     result["channels"].clear()
@@ -137,6 +139,64 @@ def test_conflicting_devices_never_choose_nonzero_or_larger_value(tmp_path):
     assert len(selected) == 1 and selected[0]["value"] == 0
 
 
+def test_legacy_zero_field_cannot_bypass_ambiguous_facility_devices(tmp_path):
+    from radar_pd_nova.powgen_metadata import read_powgen_scan_metadata
+    from radar_pd_nova.results import experiment_axis_options
+
+    path = tmp_path / "raw.h5"
+    write_nexus(path)
+    with h5py.File(path, "a") as handle:
+        prefix = "entry/DASlogs/BL11A:SE:SS:Field/"
+        value = handle.create_dataset(prefix + "value", data=[0.0])
+        value.attrs["units"] = "T"
+        time = handle.create_dataset(prefix + "time", data=[0.0])
+        time.attrs["units"] = "s"
+        time.attrs["start"] = WINDOW["start"]
+    metadata = read_powgen_scan_metadata("IPTS-123", 1, nexus_path=path)
+    assert "magnetic_field" not in metadata
+    assert metadata["magnetic_field_observation"]["value"] == 0.0
+    assert "magnetic_field" not in {row["value"] for row in experiment_axis_options([{"metadata": metadata}])}
+    assert any(c["status"] == "needs_mapping" for c in metadata["conditions"]["channels"])
+
+
+def test_saved_metadata_conflicts_are_qualified_without_mutating_original():
+    from radar_pd_nova.results import experiment_axis_options
+
+    old = {"magnetic_field": {"value": 0.0, "unit": "T"}, "conditions": {"channels": [
+        {"quantity": "magnetic_field", "role": "measured", "status": "needs_mapping", "value": 0.0},
+    ]}}
+    result = qualified_metadata(old)
+    assert "magnetic_field" not in result and old["magnetic_field"]["value"] == 0.0
+    assert "magnetic_field" not in {row["value"] for row in experiment_axis_options([{"metadata": old}])}
+
+
+def test_single_logged_magnet_still_requires_specimen_association(tmp_path):
+    path = tmp_path / "raw.h5"
+    write_nexus(path)
+    result = read_conditions(path, "PG3", backend="h5py")
+    measured = [c for c in result["channels"] if c["quantity"] == "magnetic_field" and c["role"] == "measured"]
+    assert measured and all(c["status"] == "needs_mapping" for c in measured)
+    assert all(c["requires_binding"] and not c["binding_verified"] for c in measured)
+
+
+def test_older_auto_selected_magnet_receipt_is_upgraded_for_review():
+    from radar_pd_nova.scan_interpretation import _conditions
+
+    channel = {"quantity": "magnetic_field", "channel": "BL11A:SE:MAG08:GetMGField",
+               "role": "measured", "status": "recorded", "value": 0.0, "unit": "T",
+               "statistic": "time_weighted_step_hold", "coverage_fraction": 1.0,
+               "minimum": 0.0, "maximum": 0.0}
+    old = {"magnetic_field": {"value": 0.0, "unit": "T"},
+           "conditions": {"registry": "SNS-PG3-NOM-conditions/1", "metadata_sha256": "original",
+                          "channels": [channel]}}
+    result = qualified_metadata(old)
+    assert "magnetic_field" not in result
+    assert result["conditions"]["source_metadata_sha256"] == "original"
+    assert result["conditions"]["channels"][0]["status"] == "needs_mapping"
+    assert old["conditions"]["channels"][0]["status"] == "recorded"
+    assert not _conditions({"metadata": old})
+
+
 def test_window_slice_and_trajectory_retains_extrema(tmp_path):
     path = tmp_path / "raw.h5"
     write_nexus(path)
@@ -155,3 +215,12 @@ def test_window_slice_and_trajectory_retains_extrema(tmp_path):
     )
     assert len(result["trajectory"]["seconds"]) <= 512
     assert max(result["trajectory"]["values"]) == 20
+def test_condition_display_distinguishes_scan_average_and_observed_range():
+    from radar_pd_nova.scan_conditions import condition_display
+    metric = {"value":96.83,"unit":"K","minimum":1.452,"maximum":280.026,
+              "statistic":"time_weighted_step_hold"}
+    text = condition_display(metric,"Temperature")
+    assert "time-weighted mean 96.83 K" in text
+    assert "recorded scan range 1.452–280.026 K" in text
+    assert condition_display({"value":float('nan')},"Temperature") == ""
+    assert "mean" not in condition_display({"value":100.,"unit":"K"},"Temperature")

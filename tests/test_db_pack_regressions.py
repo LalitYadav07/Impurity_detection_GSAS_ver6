@@ -3,6 +3,8 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
+from types import SimpleNamespace
 from pathlib import Path
 
 import yaml
@@ -44,6 +46,23 @@ def _make_structure() -> Structure:
 
 
 class DBPackLayoutTests(unittest.TestCase):
+    def test_candidate_label_is_stable_when_main_phase_role_changes(self):
+        pipeline = UnifiedPipeline.__new__(UnifiedPipeline)
+        pipeline.db_loader = SimpleNamespace(get_display_name_and_sg=lambda pid: ("Reference LT", "Cmma (67)"))
+        with patch.object(pipeline, "_catalog_ids", return_value={"candidate"}), patch(
+            "scripts.gsas_complete_pipeline_nomain._parse_cif_metadata",
+            return_value=("AsFeOPr", "C m m a (67)"),
+        ):
+            self.assertEqual(pipeline._main_phase_display_and_sg("candidate", "fit.cif"),
+                             ("Reference LT", "Cmma (67)"))
+
+    def test_cif_metadata_uses_declared_symbol_for_small_distortion(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "distorted.cif"
+            path.write_text("data_distorted\n_symmetry_space_group_name_H-M 'C m m a'\n")
+            _, group = _parse_cif_metadata(str(path))
+            self.assertEqual(group, "C m m a (67)")
+
     def test_cif_metadata_normalizes_explicit_unit_stoichiometry(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             cif_path = Path(tmpdir) / "ordered_heusler.cif"
