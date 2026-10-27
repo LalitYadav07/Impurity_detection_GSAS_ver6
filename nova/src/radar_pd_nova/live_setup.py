@@ -118,7 +118,7 @@ class LiveSetupMixin:
             source_main = str(state.powgen_main_cif_source or "none")
             payload.update(
                 radiation="neutron",
-                instrument_mode="tof",
+                instrument_mode=self._live_adapter().instrument_mode,
                 run_name=str(payload.get("run_name") or "").strip()
                 or f"{self._live_adapter().instrument}_{self._normalize_powgen_ipts(state.powgen_ipts)}",
                 main_cif_source={"computer": "upload", "galaxy": "galaxy"}.get(
@@ -132,9 +132,9 @@ class LiveSetupMixin:
             config = configuration_from_form(SimpleNamespace(**payload))
         else:
             raise ValueError("Choose how to configure the Live analysis")
-        if config.radiation.value != "neutron" or config.instrument_mode == "cw":
+        if config.radiation.value != "neutron" or config.instrument_mode not in {'auto', self._live_adapter().instrument_mode}:
             raise ValueError(
-                "Live mode requires a neutron configuration with automatic or time-of-flight instrument mode"
+                f"{self._live_adapter().name} requires neutron {self._live_adapter().instrument_mode} settings"
             )
         return config
 
@@ -321,14 +321,14 @@ class LiveSetupMixin:
         )
 
     def _apply_live_configuration(self, config):
-        if config.radiation.value != "neutron" or config.instrument_mode == "cw":
+        if config.radiation.value != "neutron" or config.instrument_mode not in {'auto', self._live_adapter().instrument_mode}:
             raise ValueError(
-                "Live mode requires a neutron time-of-flight configuration"
+                f"Choose neutron {self._live_adapter().instrument_mode} settings for {self._live_adapter().name}"
             )
         state = self.server.state
         for name, value in configuration_form_values(config).items():
             setattr(state, "live_" + name, deepcopy(value))
-        state.live_instrument_mode = "tof"
+        state.live_instrument_mode = self._live_adapter().instrument_mode
         state.live_configuration_source = "inline"
         state.live_post_analysis_selected = list(
             dict.fromkeys(v.kind for v in config.post_analysis.views)
@@ -541,6 +541,11 @@ class LiveSetupMixin:
                 "nomad_profile_acknowledged",
                 "nomad_allow_exploratory",
                 "live_test_bank",
+                "hb2a_normalization", "hb2a_profile_acknowledged",
+                "hb2a_temperature_channel", "hb2a_temperature_unit", "hb2a_condition_reviewed",
+                "hb2a_collimator_override", "hb2a_allow_stopped",
+                'hb2a_magnetic_field_channel','hb2a_magnetic_field_unit','hb2a_magnetic_field_reviewed',
+                'hb2a_pressure_channel','hb2a_pressure_unit','hb2a_pressure_reviewed',
             )
         }
         selected_samples = self._powgen_processing_ids()
@@ -600,15 +605,20 @@ class LiveSetupMixin:
             "new_only": 0,
             "all": None,
         }[values["powgen_backfill_mode"]]
-        extra = (
-            {}
-            if adapter.instrument == "PG3"
-            else {
+        extra = {}
+        if adapter.instrument == 'NOM':
+            extra = {
                 "profile_bank": int(values["nomad_profile_bank"] or 0),
                 "profile_acknowledged": bool(values["nomad_profile_acknowledged"]),
                 "allow_exploratory": bool(values["nomad_allow_exploratory"]),
             }
-        )
+        elif adapter.instrument == 'HB2A':
+            extra = {'normalization': values['hb2a_normalization'],
+                'collimator_override':str(values['hb2a_collimator_override'] or ''),
+                'allow_stopped':bool(values['hb2a_allow_stopped']),
+                'profile_acknowledged': bool(values['hb2a_profile_acknowledged']),
+                'condition_bindings_json':json.dumps(self._hb2a_condition_bindings(values),sort_keys=True),
+                'excluded_acquisitions':tuple(values['powgen_excluded_runs'] or [])}
         settings = adapter.settings(
             ipts=self._normalize_powgen_ipts(values["powgen_ipts"]),
             history_id=self.service.history_id,
@@ -624,7 +634,7 @@ class LiveSetupMixin:
             selected_banks=selected_banks,
             excluded_run_numbers=tuple(
                 int(n) for n in (values["powgen_excluded_runs"] or [])
-            ),
+            ) if adapter.instrument != 'HB2A' else (),
             include_background_runs=bool(values["powgen_include_background"]),
             include_ramp_runs=bool(values["powgen_include_ramps"]),
             subfolder=str(values["powgen_source_subfolder"] or adapter.default_folder),
@@ -632,6 +642,17 @@ class LiveSetupMixin:
         )
         state.live_saved_configuration_id = config_id
         return settings, config
+
+    def _hb2a_condition_bindings(self, values=None):
+        state = values if values is not None else self.server.state
+        get = state.get if isinstance(state, dict) else lambda key: getattr(state, key, None)
+        result={}
+        for quantity in ('temperature','magnetic_field','pressure'):
+            channel=str(get(f'hb2a_{quantity}_channel') or '').strip()
+            if channel:
+                result[quantity]={'channel':channel,'unit':str(get(f'hb2a_{quantity}_unit') or ''),
+                    'reviewed':bool(get('hb2a_condition_reviewed' if quantity=='temperature' else f'hb2a_{quantity}_reviewed'))}
+        return result
 
     async def test_live_scan(self, **_):
         state = self.server.state

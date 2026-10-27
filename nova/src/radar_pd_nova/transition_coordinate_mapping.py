@@ -1,7 +1,7 @@
 """Resolve display calibration through the same physical/profile bank mapping as analysis."""
 from pathlib import Path
 
-from .diffraction_coordinates import TofCalibration
+from .diffraction_coordinates import TofCalibration, CwCalibration
 
 
 def cached_record(scan,controller,records):
@@ -22,7 +22,7 @@ def mapped_calibration(scan,controller,records):
     bank=int(bank)
     record=cached_record(scan,controller,records)
     receipts=getattr(record,"provenance",{}) or {}
-    receipt=receipts.get("powgen_bank") or receipts.get("nomad_bank") or {}
+    receipt=receipts.get("powgen_bank") or receipts.get("nomad_bank") or receipts.get('hb2a_pattern') or {}
     profile=receipt.get("profile") or {}
     expected=profile.get("sha256") or receipt.get("profile_sha256")
     if receipt and int(receipt.get("source_bank",bank))!=bank:
@@ -45,6 +45,17 @@ def mapped_calibration(scan,controller,records):
         expected=profile.get("sha256") or receipt.get("profile_sha256")
         if receipt and int(receipt.get("source_bank",bank))!=bank:
             raise ValueError("Analysis receipt belongs to another physical bank")
+    if scan.get('instrument')=='HB2A':
+        path=getattr(controller,'_supplied_profile',None)
+        if path is not None and Path(path).is_file():
+            from .hb2a import Setup, validate_profile
+            setup=Setup(**(run.scan_metadata.get('hb2a_setup') or {}))
+            mapping=validate_profile(setup,path,acknowledged=settings.profile_acknowledged)
+            if expected and mapping['profile_sha256']!=expected:
+                raise ValueError('Selected CW profile differs from the analysis receipt')
+            return CwCalibration.from_profile(path,source_bank=bank,profile_bank=1,
+                expected_sha256=mapping['profile_sha256'])
+        raise ValueError('The selected CW profile is not available locally; retain native 2theta')
     if scan.get("instrument")=="PG3" and not getattr(settings,"instrument_profile_dataset_id",None):
         resolution,path=controller.resolve_profile(run)
         if resolution.source_bank!=bank or expected and resolution.sha256!=expected:

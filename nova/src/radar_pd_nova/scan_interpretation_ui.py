@@ -22,6 +22,12 @@ from .results import phase_fraction_rows
 
 def scan_label(scan):
     """Use acquisition labels in controls; preserve the exact ID in receipts."""
+    if scan.get('instrument')=='HB2A':
+        metadata=scan.get('metadata') or {}
+        experiment=scan.get('experiment_number') or metadata.get('experiment_number')
+        if experiment:
+            return f"Exp {experiment} · Scan {scan.get('run_number')}"
+        return str(scan.get('run_id',''))
     number = scan.get("run_number")
     bank = scan.get("bank")
     return (

@@ -10,6 +10,7 @@ from plotly.subplots import make_subplots
 
 COORDINATES = {
     "tof_us": "Time of flight (μs)",
+    'two_theta_deg': '2θ (degrees)',
     "d_angstrom": "d-spacing (Å)",
     "q_inv_angstrom": "Q (Å⁻¹)",
 }

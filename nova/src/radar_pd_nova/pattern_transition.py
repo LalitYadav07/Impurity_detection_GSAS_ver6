@@ -42,7 +42,7 @@ class PatternScope:
     specimen: str
     instrument: str
     bank: str
-    coordinate: Literal["tof_us", "d_angstrom", "q_inv_angstrom"]
+    coordinate: Literal["tof_us", "two_theta_deg", "d_angstrom", "q_inv_angstrom"]
     geometry: str
     reduction: str
     normalization: str
@@ -51,7 +51,7 @@ class PatternScope:
     def __post_init__(self):
         if any(not isinstance(v, str) or not v.strip() for v in asdict(self).values()):
             raise ValueError("Every compatibility field requires an explicit value")
-        if self.coordinate not in {"tof_us", "d_angstrom", "q_inv_angstrom"}:
+        if self.coordinate not in {"tof_us", "two_theta_deg", "d_angstrom", "q_inv_angstrom"}:
             raise ValueError("Unsupported or unspecified coordinate units")
 
 

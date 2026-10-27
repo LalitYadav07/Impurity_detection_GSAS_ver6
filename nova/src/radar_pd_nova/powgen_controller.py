@@ -1151,7 +1151,7 @@ class PowgenWatchController:
                 return self.state_dataset_ids[-1]
             payload = self.state.as_dict()
             payload["watch"] = {
-                "facility": "SNS",
+                "facility": self.definition.facility,
                 "instrument": self.settings.instrument,
                 "ipts": self.settings.ipts,
                 "source_directory": self.source_directory,

@@ -87,6 +87,7 @@ def packet_observation(scan):
         ("d_spacing", "angstrom"): "d_angstrom",
         ("d", "A"): "d_angstrom",
         ("q", "1/angstrom"): "q_inv_angstrom",
+        ('two_theta','deg'): 'two_theta_deg',
     }
     kind = units.get((coordinate.get("kind"), coordinate.get("unit")))
     geometry = context.get("profile_sha256")
@@ -132,6 +133,8 @@ def reduced_observation(scan):
     """Read an exact, complete FXYE bank; reject unsupported or changing files."""
     path = Path(scan["source_path"]).resolve()
     root = Path(scan["transition_source_root"]).resolve()
+    if scan.get('instrument') == 'HB2A':
+        return hb2a_observation(scan,path,root)
     if not path.is_relative_to(root) or path.suffix.lower() not in {".gsa", ".gss"}:
         raise ValueError("Reduced curve must remain inside the authorized watch folder")
     before = path.stat()
@@ -290,3 +293,34 @@ def load_observation(scan):
             # the raw-product basis without explicit provenance agreement.
             pass
     return packet_observation(scan)
+
+
+def hb2a_observation(scan,path,root):
+    """Preserve the native CW XYE bins and measured sigma, including masked gaps."""
+    from . import hb2a
+    metadata=scan.get('metadata') or {}
+    setup=metadata.get('hb2a_setup') or {}
+    if not path.is_relative_to(root) or path.suffix.lower() not in {'.dat','.xye'} or not setup:
+        raise ValueError('A confined, inspected HB-2A reduced XYE product is required')
+    if metadata.get('setup_error') or metadata.get('source_revision_warning'):
+        raise ValueError('HB-2A source is incomplete or revised')
+    raw,_=hb2a.bounded_bytes(path)
+    if sha256(raw).hexdigest()!=setup.get('source_sha256'):
+        raise ValueError('HB-2A pattern differs from its inspected input receipt')
+    values=np.loadtxt(io.BytesIO(raw))
+    if values.shape!=(setup.get('records'),3) or not np.all(np.isfinite(values)):
+        raise ValueError('HB-2A reduced pattern is malformed')
+    x,y,sigma=values.T
+    if np.any(np.diff(x)<=0) or np.any(sigma<0):
+        raise ValueError('HB-2A coordinate/uncertainty grid is invalid')
+    source=setup.get('metadata') or {}
+    geometry={'experiment':source.get('experiment_number'), 'ge':source.get('ge_reflection'),
+        'collimator':source.get('collimator'),'acquisition_schema':source.get('channel_schema_sha256')}
+    if any(v is None or v=='' for v in geometry.values()):
+        raise ValueError('HB-2A setup compatibility is unresolved')
+    scope=PatternScope(identity(scan),'HB2A','1','two_theta_deg',digest(geometry),
+        digest([geometry,setup['normalization'],'HB2A individual reduced XYE']),setup['normalization'],
+        'native_XYE_density_with_supplied_sigma')
+    pattern=ObservedPattern(scope,x,y,sigma,sigma>0,str(scan['run_id']))
+    return observation(pattern,{'source':'read-only reduced HB-2A XYE','sha256':setup['source_sha256']},
+        ['HB-2A profile acceptance and magnetic interpretation require scientific review.'])

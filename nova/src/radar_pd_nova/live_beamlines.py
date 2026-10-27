@@ -14,6 +14,8 @@ from .nomad_controller import (NomadExperimentSettings, NomadWatchController,
     discover_nomad_samples, preflight_nomad_experiment)
 from .nomad_metadata import NomadSampleIndex
 from .nomad import MODERN_FOLDER
+from .hb2a_controller import (Hb2aExperimentSettings, Hb2aWatchController,
+    Hb2aSampleIndex, discover_hb2a_samples, preflight_hb2a_experiment)
 
 
 @dataclass(frozen=True)
@@ -27,6 +29,8 @@ class BeamlineAdapter:
     discover_samples: Callable
     preflight: Callable
     automatic_profiles: bool
+    facility: str = 'SNS'
+    instrument_mode: str = 'tof'
 
 
 BEAMLINES = {
@@ -34,6 +38,9 @@ BEAMLINES = {
         PowgenExperimentSettings,PowgenWatchController,discover_powgen_samples,preflight_powgen_experiment,True),
     'NOM':BeamlineAdapter('NOM','NOMAD',MODERN_FOLDER,NomadSampleIndex,
         NomadExperimentSettings,NomadWatchController,discover_nomad_samples,preflight_nomad_experiment,False),
+    'HB2A':BeamlineAdapter('HB2A','HB-2A','shared/autoreduce',Hb2aSampleIndex,
+        Hb2aExperimentSettings,Hb2aWatchController,discover_hb2a_samples,preflight_hb2a_experiment,
+        False,facility='HFIR',instrument_mode='cw'),
 }
 
 

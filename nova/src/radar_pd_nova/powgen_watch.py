@@ -70,10 +70,10 @@ class WatchDefinition:
         facility = str(self.facility).strip().upper()
         instrument = str(self.instrument).strip().upper()
         ipts = str(self.ipts).strip().upper()
-        if facility != "SNS":
-            raise ValueError("POWGEN watches are limited to the SNS facility")
-        if instrument not in {"PG3", "NOM"}:
-            raise ValueError("Live watches support PG3 (POWGEN) and NOM (NOMAD)")
+        if (facility, instrument) not in {('SNS', 'PG3'), ('SNS', 'NOM'), ('SNS', 'SNAP'), ('HFIR', 'HB2A')}:
+            raise ValueError("Choose a registered facility/beamline pair: SNS PG3/NOM/SNAP or HFIR HB2A")
+        if instrument == 'HB2A' and self.subfolder != 'shared/autoreduce':
+            raise ValueError('HB-2A Live accepts individual products in shared/autoreduce only')
         if instrument == "NOM" and not nomad_subfolder(self.subfolder):
             raise ValueError("NOMAD live mode accepts individual normalized Bragg product folders only")
         if not _IPTS_RE.fullmatch(ipts):
@@ -105,7 +105,10 @@ class WatchDefinition:
 
     @property
     def source_directory(self) -> str:
-        return f"/SNS/{self.instrument}/{self.ipts}/{self.subfolder}"
+        if self.instrument == 'HB2A':
+            from .hb2a import proposal_root
+            return str(proposal_root(self.ipts) / self.subfolder)
+        return f"/{self.facility}/{self.instrument}/{self.ipts}/{self.subfolder}"
 
 
 @dataclass(frozen=True)
@@ -126,15 +129,23 @@ class WatchedRun:
     scientific_summary: Mapping[str, Any] = field(default_factory=dict)
     bank: int | None = None
     instrument: str = "PG3"
+    experiment_number: int | None = None
 
     def __post_init__(self) -> None:
-        if self.instrument not in {"PG3", "NOM"}:
+        if self.instrument not in {"PG3", "NOM", "SNAP", "HB2A"}:
             raise ValueError("Unsupported live-run instrument")
+        if self.instrument == 'HB2A' and (isinstance(self.experiment_number, bool) or
+                not isinstance(self.experiment_number, int) or self.experiment_number < 1):
+            raise ValueError('HB-2A run identity requires its SPICE experiment number')
+        if self.instrument != 'HB2A' and self.experiment_number is not None:
+            raise ValueError('SPICE experiment identity is specific to HB-2A')
         if self.bank is not None and (isinstance(self.bank, bool) or not isinstance(self.bank, int) or self.bank <= 0):
             raise ValueError("POWGEN bank must be a positive integer")
 
     @property
     def run_id(self) -> str:
+        if self.instrument == 'HB2A':
+            return f'HB2A_EXP{self.experiment_number}_SCAN{self.run_number:04d}'
         return f"{self.instrument}_{self.run_number}" + (f"_BANK{self.bank}" if self.bank is not None else "")
 
     @property
@@ -145,6 +156,8 @@ class WatchedRun:
 
     def as_dict(self) -> dict[str, Any]:
         payload = asdict(self)
+        if self.experiment_number is None:
+            payload.pop('experiment_number')
         payload["galaxy_result_ids"] = list(self.galaxy_result_ids)
         payload["scan_metadata"] = dict(self.scan_metadata)
         payload["scientific_summary"] = dict(self.scientific_summary)
@@ -158,6 +171,7 @@ class WatchedRun:
             fingerprint=str(value["fingerprint"]),
             bank=value.get("bank"),
             instrument=str(value.get("instrument") or "PG3"),
+            experiment_number=value.get('experiment_number'),
             discovered_utc=str(value.get("discovered_utc") or _utc_now()),
             galaxy_job_id=(str(value["galaxy_job_id"]) if value.get("galaxy_job_id") else None),
             galaxy_result_ids=tuple(str(item) for item in value.get("galaxy_result_ids", ())),
@@ -209,6 +223,7 @@ class WatchState:
     scan_interpretation: dict[str, Any] = field(default_factory=dict)
     interpretation_report: dict[str, Any] = field(default_factory=dict)
     transition_tracking: dict[str, Any] = field(default_factory=dict)
+    discovery_cursor: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.history_id = _nonempty(self.history_id, "history_id")
@@ -216,7 +231,7 @@ class WatchState:
             from .post_analysis import PostAnalysisSettings
 
             self.post_analysis = PostAnalysisSettings.model_validate(self.post_analysis).model_dump(mode="json")
-        if self.instrument not in {"PG3", "NOM"}:
+        if self.instrument not in {"PG3", "NOM", "SNAP", "HB2A"}:
             raise ValueError("Unsupported watch instrument")
         if self.scan_interpretation:
             from .scan_interpretation import InterpretationSettings
@@ -255,6 +270,7 @@ class WatchState:
             "scan_interpretation": self.scan_interpretation,
             "interpretation_report": self.interpretation_report,
             "transition_tracking": self.transition_tracking,
+            "discovery_cursor": self.discovery_cursor,
             "updated_utc": self.updated_utc,
         }
 
@@ -283,6 +299,7 @@ class WatchState:
             scan_interpretation=dict(value.get("scan_interpretation") or {}),
             interpretation_report=dict(value.get("interpretation_report") or {}),
             transition_tracking=dict(value.get("transition_tracking") or {}),
+            discovery_cursor=dict(value.get('discovery_cursor') or {}),
             updated_utc=str(value.get("updated_utc") or _utc_now()),
             schema=str(value["$schema"]),
         )
@@ -451,9 +468,15 @@ def _coerce_run_id(value: int | str | WatchedRun, instrument: str = "PG3") -> st
     if isinstance(value, WatchedRun):
         return value.run_id
     if isinstance(value, int):
+        if instrument == 'HB2A':
+            raise ValueError('Use the full HB2A experiment and scan identifier')
         return f"{instrument}_{value}"
     text = str(value).strip().upper()
-    return text if re.fullmatch(r"(?:PG3|NOM)_\d+(?:_BANK\d+)?", text) else f"{instrument}_{int(text)}"
+    if re.fullmatch(r'(?:PG3|NOM|SNAP)_\d+(?:_BANK\d+)?|HB2A_EXP\d+_SCAN\d+', text):
+        return text
+    if instrument == 'HB2A':
+        raise ValueError('Use the full HB2A experiment and scan identifier')
+    return f"{instrument}_{int(text)}"
 
 
 def _listing_path(entry: str | Path | Mapping[str, Any]) -> tuple[str, Mapping[str, Any]]:
@@ -523,6 +546,11 @@ def discover_from_listing(
         raise ValueError("minimum_run_number must be non-negative")
     if newest_limit is not None and newest_limit < 1:
         raise ValueError("newest_limit must be positive")
+    if definition.instrument == 'HB2A':
+        if minimum_run_number is not None:
+            raise ValueError('HB-2A scan numbers restart per experiment; use its streaming adapter')
+        from .hb2a import discover_listing
+        return discover_listing(definition, file_listing, state, newest_limit=newest_limit)
 
     by_run: dict[int, list[tuple[PowgenReducedFile, Mapping[str, Any]]]] = {}
     for entry in file_listing:

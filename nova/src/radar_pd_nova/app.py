@@ -203,6 +203,8 @@ def _powgen_bank_number(run: Any) -> int | None:
 
 
 def _powgen_scan_label(run: Any) -> str:
+    if getattr(run,'instrument',None)=='HB2A':
+        return f'Exp {run.experiment_number} · Scan {run.run_number}'
     bank = _powgen_bank_number(run)
     return f"{run.run_number} · Bank {bank}" if bank else str(run.run_number)
 
@@ -278,6 +280,9 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
         self.server.state.change("live_beamline")(self._live_beamline_changed)
         self.server.state.change("nomad_physical_bank")(self._powgen_processing_changed)
         self.server.state.change("nomad_profile_bank", "nomad_profile_acknowledged", "nomad_allow_exploratory")(self._powgen_processing_changed)
+        self.server.state.change('hb2a_normalization','hb2a_profile_acknowledged','hb2a_temperature_channel','hb2a_temperature_unit','hb2a_condition_reviewed','hb2a_collimator_override','hb2a_allow_stopped')(self._powgen_processing_changed)
+        self.server.state.change('hb2a_normalization')(self._hb2a_normalization_changed)
+        self.server.state.change('hb2a_magnetic_field_channel','hb2a_magnetic_field_unit','hb2a_magnetic_field_reviewed','hb2a_pressure_channel','hb2a_pressure_unit','hb2a_pressure_reviewed')(self._powgen_processing_changed)
         self.server.state.change("powgen_source_subfolder")(self._powgen_source_changed)
         self.server.state.change("powgen_processing_scope", "powgen_processing_sample_ids", "powgen_bank_scope", "powgen_processing_banks", "powgen_wavelength", "powgen_backfill_mode", "powgen_excluded_runs", "powgen_include_background", "powgen_include_ramps")(self._powgen_processing_changed)
         self.server.state.change("remote_source")(self._remote_source_changed)
@@ -571,6 +576,18 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
         state.nomad_profile_acknowledged = False
         state.nomad_allow_exploratory = False
         state.nomad_quality_notices = []
+        state.hb2a_normalization = 'time'
+        state.hb2a_profile_acknowledged = False
+        state.hb2a_temperature_channel = ''
+        state.hb2a_temperature_unit = 'K'
+        state.hb2a_condition_reviewed = False
+        state.hb2a_channel_options = []
+        state.hb2a_collimator_override = ''
+        state.hb2a_allow_stopped = False
+        for quantity,unit in [('magnetic_field','T'),('pressure','GPa')]:
+            setattr(state,f'hb2a_{quantity}_channel','')
+            setattr(state,f'hb2a_{quantity}_unit',unit)
+            setattr(state,f'hb2a_{quantity}_reviewed',False)
         state.powgen_ipts = ""
         state.powgen_backfill_mode = "latest_5"
         state.powgen_backfill_options = [
@@ -1236,7 +1253,7 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
                 )
                 vuetify.VAutocomplete(
                     v_show="powgen_processing_scope === 'selected'",
-                    label="Sample IDs and names", v_model=("powgen_processing_sample_ids",),
+                    label=("live_beamline === 'HB2A' ? 'Experiment-scoped sample labels' : 'Sample IDs and names'",), v_model=("powgen_processing_sample_ids",),
                     items=("powgen_discovered_sample_options",), item_title="title", item_value="value",
                     multiple=True, chips=True, closable_chips=True, clearable=True,
                     density="compact", variant="outlined",
@@ -1331,7 +1348,7 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
                         density="compact",
                         variant="outlined",
                         disabled=("powgen_monitoring || live_launch_busy",),
-                        hint=("live_beamline === 'NOM' ? 'Supply a GSAS-II .instprm matching the exported physical bank, calibration and sample environment. Detector calibration HDF5 files are not refinement profiles.' : 'Use the GSAS-II profile for the POWGEN experiment cycle; historical files may be under /SNS/PG3/run_cycle_<cycle>_CAL.'",),
+                        hint=("live_beamline === 'HB2A' ? 'Supply the neutron CW .instprm for this cycle, Ge reflection and collimation. An efficiency vcorr file does not contain the peak-shape calibration.' : live_beamline === 'NOM' ? 'Supply a GSAS-II .instprm matching the exported physical bank, calibration and sample environment. Detector calibration HDF5 files are not refinement profiles.' : 'Use the GSAS-II profile for the POWGEN experiment cycle; historical files may be under /SNS/PG3/run_cycle_<cycle>_CAL.'",),
                         persistent_hint=True,
                     )
                     with html.Fieldset(
@@ -1365,6 +1382,42 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
                     vuetify.VSwitch(label="Confirm the supplied profile and physical-bank mapping", v_model=("nomad_profile_acknowledged",), disabled=("powgen_monitoring || live_launch_busy",), density="compact")
                     vuetify.VSwitch(label="Allow unconfirmed sample corrections for exploratory analysis", v_model=("nomad_allow_exploratory",), disabled=("powgen_monitoring || live_launch_busy",), density="compact")
                     vuetify.VAlert(v_show="nomad_quality_notices.length > 0", text=("nomad_quality_notices.join('; ')",), type="warning", variant="tonal", density="compact")
+                with html.Div(v_show="live_beamline === 'HB2A'", classes="radar-soft-panel mb-2"):
+                    vuetify.VAlert(text='HB-2A uses constant-wavelength 2θ patterns from the combined detector bank. Experiment + scan identify an acquisition. Magnetic-only peaks are outside nuclear phase identification.',type='info',variant='tonal',density='compact')
+                    vuetify.VSelect(label='Reduced-product normalization',v_model=('hb2a_normalization',),
+                        items=([{'title':'Collection-time normalized','value':'time'}, {'title':'Monitor normalized','value':'monitor'},
+                            {'title':'Legacy export — normalization needs review','value':'legacy'}],),item_title='title',item_value='value',
+                        disabled=('powgen_monitoring || live_launch_busy',),density='compact',variant='outlined',
+                        hint='Refresh samples after changing this selection. Summed scan ranges and normalization variants are never combined.',persistent_hint=True)
+                    vuetify.VSwitch(label='I reviewed the profile and reduction corrections for this experiment, Ge reflection, collimation and sample environment',
+                        v_model=('hb2a_profile_acknowledged',),disabled=('powgen_monitoring || live_launch_busy',),density='compact')
+                    with html.Details():
+                        html.Summary('Acquisition exceptions')
+                        vuetify.VSelect(label='Collimation when measured colltrans is absent',v_model=('hb2a_collimator_override',),
+                            items=([{'title':'Require measured collimator metadata','value':''}, {'title':'Reviewed IN (op-21-12)','value':'IN'},
+                                {'title':'Reviewed OUT (op-op-12)','value':'OUT'}],),item_title='title',item_value='value',
+                            disabled=('powgen_monitoring || live_launch_busy',),density='compact',variant='outlined',
+                            hint='Some 2026 SPICE files omit colltrans. A choice cannot override contradictory measured values.',persistent_hint=True)
+                        vuetify.VSwitch(label='Allow stopped scans after reviewing measured angular coverage',v_model=('hb2a_allow_stopped',),
+                            disabled=('powgen_monitoring || live_launch_busy',),density='compact')
+                    with html.Details():
+                        html.Summary('Sample-temperature channel (optional)')
+                        vuetify.VAutocomplete(label='Measured SPICE temperature channel',v_model=('hb2a_temperature_channel',),
+                            items=('hb2a_channel_options',),clearable=True,disabled=('powgen_monitoring || live_launch_busy',),density='compact',variant='outlined',
+                            hint='Select the active sample sensor. Raw SPICE logs contain inactive channels and do not universally declare units.',persistent_hint=True)
+                        vuetify.VSelect(label='Recorded temperature unit',v_model=('hb2a_temperature_unit',),items=(['K','C'],),
+                            disabled=('powgen_monitoring || live_launch_busy',),density='compact',variant='outlined')
+                        vuetify.VSwitch(label='I reviewed this channel and its recorded units',v_model=('hb2a_condition_reviewed',),
+                            disabled=('powgen_monitoring || live_launch_busy',),density='compact')
+                    with html.Details():
+                        html.Summary('Magnetic field / pressure channels (optional)')
+                        for quantity,label,units in [('magnetic_field','Magnetic field',['T']),('pressure','Pressure',['GPa','bar'])]:
+                            vuetify.VAutocomplete(label=label+' measured SPICE channel',v_model=(f'hb2a_{quantity}_channel',),
+                                items=('hb2a_channel_options',),clearable=True,disabled=('powgen_monitoring || live_launch_busy',),density='compact',variant='outlined')
+                            vuetify.VSelect(label=label+' recorded unit',v_model=(f'hb2a_{quantity}_unit',),items=(units,),
+                                disabled=('powgen_monitoring || live_launch_busy',),density='compact',variant='outlined')
+                            vuetify.VSwitch(label='I reviewed the '+label.lower()+' channel and its recorded units',v_model=(f'hb2a_{quantity}_reviewed',),
+                                disabled=('powgen_monitoring || live_launch_busy',),density='compact')
             with self._setup_section(2, "Candidate structures", 1, "live_database_source === 'builtin' || (live_database_source === 'archive' && ((live_library_archive_source === 'galaxy' && !!powgen_database_dataset_id) || (live_library_archive_source === 'computer' && !!live_database_archive_path)))", key_prefix="live-setup"):
                 self._candidate_library_controls("live")
                 vuetify.VSelect(
@@ -1448,8 +1501,8 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
                 with html.Details(v_if="powgen_metadata_resolution.length", classes="radar-soft-panel mb-2"):
                     html.Summary("Sample identity checks and choices")
                     html.P("Resolved identities retain their recorded sources. Conflicting or unidentified runs remain visible; choosing All samples includes unidentified runs. Instrument profiles and diffraction banks are checked separately.", classes="radar-help-copy")
-                    with html.Div(v_for="row in powgen_metadata_resolution.slice(0, 100)", key="row.run_number", classes="radar-preflight-row"):
-                        html.Span("Run {{ row.run_number }} · {{ row.verification === 'catalog_preview' ? 'Catalog preview · ' : '' }}{{ row.status }} · {{ row.sample_id || 'No verified sample ID' }}")
+                    with html.Div(v_for="row in powgen_metadata_resolution.slice(0, 100)", key="row.run_id || row.run_number", classes="radar-preflight-row"):
+                        html.Span("{{ row.run_id || ('Run ' + row.run_number) }} · {{ row.verification === 'catalog_preview' ? 'Catalog preview · ' : '' }}{{ row.status }} · {{ row.sample_display || row.sample_id || 'No verified sample ID' }}")
                         html.Span("{{ (row.actions || []).map(a => a.message).join('; ') }}", classes="radar-help-copy")
                         html.Span("{{ (row.sources || []).map(s => s.kind + ': ' + s.value + (s.path ? ' (' + s.path + (s.line ? ':' + s.line : '') + ')' : '')).join('; ') }}", classes="radar-help-copy")
                     html.P("Showing the first 100 checks; narrow the sample selection to review a smaller group.", v_if="powgen_metadata_resolution.length > 100", classes="radar-help-copy")
@@ -1462,7 +1515,7 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
                     html.Div("READ-ONLY SOURCE", classes="radar-micro-label")
                     html.Code("{{ powgen_source_directory }}")
                     html.P(
-                        "The initial scan limit applies to the selected samples. Every later matching .gsa is monitored. Up to five analyses stay active. RADAR-PD does not write into the IPTS.",
+                        "The initial scan limit applies to the selected samples. Every later matching completed reduced pattern is monitored. Up to five analyses stay active. RADAR-PD does not write into the IPTS.",
                         classes="radar-help-copy mb-0",
                     )
                 vuetify.VAlert(
@@ -3890,6 +3943,7 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
                     {
                         "run_id": run_id,
                         "run_number": int(run.run_number),
+                        'experiment_number':getattr(run,'experiment_number',None),
                         "bank": _powgen_bank_number(run),
                         "scan_label": _powgen_scan_label(run),
                         "file": Path(run.source_path).name,
@@ -3899,7 +3953,7 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
                     }
                 )
         state = self.server.state
-        state.powgen_rows = sorted(rows, key=lambda item: item["run_number"], reverse=True)
+        state.powgen_rows = sorted(rows, key=lambda item: (item.get('experiment_number') or 0,item["run_number"]), reverse=True)
 
         scientific_rows: list[dict[str, Any]] = []
         for run_id, run in controller.state.completed.items():
@@ -3977,6 +4031,7 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
                 "run_id": run_id,
                 "record_uid": record.uid if record is not None else "",
                 "run_number": int(run.run_number),
+                'experiment_number':getattr(run,'experiment_number',None),
                 "bank": _powgen_bank_number(run),
                 "scan_label": _powgen_scan_label(run),
                 "rwp": rwp_value,
@@ -4026,7 +4081,7 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
             row["sample_key"] = sample_identity["key"]
             row["sample_label"] = sample_identity["label"]
             scientific_rows.append(row)
-        scientific_rows.sort(key=lambda item: item["run_number"], reverse=True)
+        scientific_rows.sort(key=lambda item: (item.get('experiment_number') or 0,item["run_number"]), reverse=True)
         complete_experiment_space_groups(scientific_rows)
         for row in scientific_rows:
             for phase in row["phases"]:
@@ -4172,7 +4227,7 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
         state.powgen_dashboard_notice = (
             f"Showing {len(scientific_rows)} of {len(all_scientific_rows)} completed scan summaries "
             f"from {controller.source_directory}. "
-            f"Conditions are read from each matching {self._live_adapter().instrument} NeXus file. Missing phase points mean that a phase "
+            f"Conditions are read from each matching {self._live_adapter().instrument} {'SPICE acquisition and reviewed channel mapping' if self._live_adapter().instrument=='HB2A' else 'NeXus file'}. Missing phase points mean that a phase "
             "was not reported for that scan, not a forced zero fraction."
             if scientific_rows
             else "Completed scans will populate this experiment view as their normalized Galaxy summaries become available."
@@ -4449,6 +4504,7 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
         self._active_live_beamline = adapter.instrument
         self._init_scan_interpretation()
         state.live_beamline_label = adapter.name
+        state.live_instrument_mode = adapter.instrument_mode
         self._powgen_sample_request = object()
         self._powgen_controller = None
         self._powgen_settings_signature = None
@@ -4457,7 +4513,7 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
         self._powgen_ipts_changed()
         state.powgen_source_subfolder = adapter.default_folder
         state.powgen_source_options = [{"title": "Individual Bragg reductions" if adapter.instrument == "NOM" else "Current autoreduce folder", "value": adapter.default_folder}]
-        state.powgen_source_directory = f"/SNS/{adapter.instrument}/<IPTS>/{adapter.default_folder}"
+        state.powgen_source_directory = f"/{adapter.facility}/{adapter.instrument}/<IPTS>/{adapter.default_folder}"
         state.powgen_bank_scope = "selected" if adapter.instrument == "NOM" else "all"
         state.powgen_processing_banks = []
         state.nomad_physical_bank = None
@@ -4474,9 +4530,17 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
         state.nomad_profile_acknowledged = False
         state.nomad_allow_exploratory = False
         state.nomad_quality_notices = []
-        state.powgen_instrument_label = "Automatic POWGEN cycle profile" if adapter.automatic_profiles else "Matching NOMAD profile required"
+        state.powgen_instrument_label = "Automatic POWGEN cycle profile" if adapter.automatic_profiles else f"Matching {adapter.name} profile required"
         state.powgen_message = ("Select an IPTS, source histogram, matching profile and Live analysis settings. NOMAD uses broadband neutron TOF."
-                                if adapter.instrument == "NOM" else "Select an IPTS and configure Live here. The wavelength is auto-detected unless you choose an override.")
+                                if adapter.instrument == "NOM" else 'Select an IPTS, experiment-scoped sample, normalization and matching CW profile.' if adapter.instrument == 'HB2A' else "Select an IPTS and configure Live here. The wavelength is auto-detected unless you choose an override.")
+        state.hb2a_profile_acknowledged = False
+        state.hb2a_temperature_channel = ''
+        state.hb2a_condition_reviewed = False
+        state.hb2a_collimator_override = ''
+        state.hb2a_allow_stopped = False
+        for quantity in ('magnetic_field','pressure'):
+            setattr(state,f'hb2a_{quantity}_channel','')
+            setattr(state,f'hb2a_{quantity}_reviewed',False)
         self._powgen_processing_changed()
 
     def _powgen_processing_changed(self, **_: Any) -> None:
@@ -4489,8 +4553,23 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
         state.powgen_preflight_message = "Check experiment and inputs after changing the scan, sample, wavelength or bank selection."
         state.flush()
 
+    def _hb2a_normalization_changed(self, **_):
+        if self._live_adapter().instrument != 'HB2A':
+            return
+        state=self.server.state
+        self._powgen_sample_request=object()
+        state.powgen_sample_loading=False
+        state.powgen_sample_discovery_ipts=''
+        state.powgen_discovered_sample_options=[]
+        state.powgen_processing_sample_ids=[]
+        state.powgen_run_options=[]
+        state.powgen_excluded_runs=[]
+        state.powgen_sample_message='Refresh sample labels for the selected normalization family.'
+
     def _powgen_processing_bank_ids(self) -> tuple[int, ...] | None:
         state = self.server.state
+        if self._live_adapter().instrument == 'HB2A':
+            return (1,)
         if self._live_adapter().instrument == "NOM":
             bank = getattr(state, "nomad_physical_bank", None)
             if isinstance(bank, bool) or bank not in range(1, 7):
@@ -4525,6 +4604,15 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
         state.powgen_metadata_resolution = []
         state.powgen_metadata_notices = []
         state.powgen_excluded_runs = []
+        state.hb2a_temperature_channel = ''
+        state.hb2a_condition_reviewed = False
+        state.hb2a_channel_options = []
+        state.hb2a_profile_acknowledged = False
+        state.hb2a_collimator_override = ''
+        state.hb2a_allow_stopped = False
+        for quantity in ('magnetic_field','pressure'):
+            setattr(state,f'hb2a_{quantity}_channel','')
+            setattr(state,f'hb2a_{quantity}_reviewed',False)
         state.powgen_sample_message = "Leave the IPTS field or refresh sample IDs to discover samples."
         self._powgen_processing_changed()
 
@@ -4624,12 +4712,17 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
                     loop.call_soon_threadsafe(update)
                 except RuntimeError:
                     pass  # A closed viewer must not break a read-only cache fill.
-            result = await asyncio.to_thread(discovery, *args, progress=publish_progress)
+            kwargs = {'normalization': str(state.hb2a_normalization)} if self._live_adapter().instrument == 'HB2A' else {}
+            if self._live_adapter().instrument in {'PG3', 'NOM'}:
+                kwargs['progress'] = publish_progress
+            result = await asyncio.to_thread(discovery, *args, **kwargs)
             if self._powgen_sample_request is not token:
                 return
             state.powgen_source_options = result.get("source_options") or getattr(state, "powgen_source_options", [])
             state.powgen_discovered_sample_options = result["options"]
             state.powgen_run_options = result.get("run_options", [])
+            if self._live_adapter().instrument == 'HB2A':
+                state.hb2a_channel_options = result.get('condition_channels', [])
             state.powgen_metadata_resolution = result.get('metadata_resolution', [])
             state.powgen_metadata_notices = result.get('metadata_notices', [])
             state.powgen_sample_discovery_ipts = ipts
@@ -4660,6 +4753,8 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
                   "powgen_database_dataset_id")
         fields += ("powgen_excluded_runs", "powgen_include_background", "powgen_include_ramps")
         fields += ("live_beamline", "nomad_physical_bank", "nomad_profile_bank", "nomad_profile_acknowledged", "nomad_allow_exploratory")
+        fields += ('hb2a_normalization','hb2a_profile_acknowledged','hb2a_temperature_channel','hb2a_temperature_unit','hb2a_condition_reviewed','hb2a_collimator_override','hb2a_allow_stopped')
+        fields += ('hb2a_magnetic_field_channel','hb2a_magnetic_field_unit','hb2a_magnetic_field_reviewed','hb2a_pressure_channel','hb2a_pressure_unit','hb2a_pressure_reviewed')
         state = self.server.state
         values = {key: getattr(state, key, None) for key in fields}
         for name in ("live_configuration_source", "live_database_source", "live_library_archive_source", "live_database_archive_path"):
@@ -4763,15 +4858,15 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
                 selected_sample_ids=self._powgen_processing_ids(),
                 sample_index=self._powgen_sample_index(ipts),
                 selected_banks=self._powgen_processing_bank_ids(),
-                excluded_run_numbers=tuple(int(n) for n in (getattr(state, "powgen_excluded_runs", []) or [])),
+                excluded_run_numbers=tuple(int(n) for n in (getattr(state, "powgen_excluded_runs", []) or [])) if self._live_adapter().instrument != 'HB2A' else (),
                 include_background_runs=bool(getattr(state, "powgen_include_background", False)),
                 include_ramp_runs=bool(getattr(state, "powgen_include_ramps", False)),
                 initial_backfill_limit=_POWGEN_BACKFILL_LIMITS[backfill_mode],
                 subfolder=str(getattr(state, "powgen_source_subfolder", "shared/autoreduce") or "shared/autoreduce"),
             )
-            if self._live_adapter().instrument == "NOM":
+            if self._live_adapter().instrument in {'NOM', 'HB2A'}:
                 if instrument_source == "automatic":
-                    raise ValueError("Supply a NOMAD profile; automatic calibration mappings are not yet validated")
+                    raise ValueError(f"Supply a matching {self._live_adapter().name} profile; automatic mappings are not yet validated")
                 profile_path = str(state.powgen_instrument_path or "")
                 if instrument_source == "galaxy":
                     profile_text = await asyncio.to_thread(self.service.load_text_document, instrument_id)
@@ -4780,10 +4875,19 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
                     materialized = Path(self._nomad_profile_directory.name) / "selected.instprm"
                     materialized.write_text(profile_text, encoding="utf-8")
                     profile_path = str(materialized)
-                preflight_arguments.update(profile_path=profile_path,
-                    profile_bank=int(state.nomad_profile_bank or 0),
-                    profile_acknowledged=bool(state.nomad_profile_acknowledged),
-                    allow_exploratory=bool(state.nomad_allow_exploratory))
+                if self._live_adapter().instrument == 'NOM':
+                    preflight_arguments.update(profile_path=profile_path,
+                        profile_bank=int(state.nomad_profile_bank or 0),
+                        profile_acknowledged=bool(state.nomad_profile_acknowledged),
+                        allow_exploratory=bool(state.nomad_allow_exploratory))
+                else:
+                    preflight_arguments.update(profile_path=profile_path,
+                        profile_acknowledged=bool(state.hb2a_profile_acknowledged),
+                        collimator_override=str(state.hb2a_collimator_override or ''),
+                        allow_stopped=bool(state.hb2a_allow_stopped),
+                        normalization=str(state.hb2a_normalization),
+                        condition_bindings=self._hb2a_condition_bindings(),
+                        excluded_acquisitions=tuple(state.powgen_excluded_runs or []))
                 result = await asyncio.to_thread(self._live_adapter().preflight, ipts, **preflight_arguments)
             else:
                 result = await asyncio.to_thread(preflight_powgen_experiment, ipts,

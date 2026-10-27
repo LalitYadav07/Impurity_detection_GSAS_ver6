@@ -1485,7 +1485,7 @@ class TransitionTrackingMixin:
         target=state.transition_map_coordinate
         scan=self._transition_scans[selected["run_id"]]
         calibration=(self._transition_calibration(scan)
-            if target!=pattern.scope.coordinate and "tof_us" in {target,pattern.scope.coordinate} else None)
+            if target!=pattern.scope.coordinate and {'tof_us','two_theta_deg'}.intersection({target,pattern.scope.coordinate}) else None)
         decision=self._transition_region_decision(selected,rows)
         other=decision.get("before")
         if other==selected["run_id"]:
@@ -1579,13 +1579,15 @@ class TransitionTrackingMixin:
                 calibration=self._transition_calibration(self._transition_scans[run_id])
                 item=first if run_id==first_id else patterns[ids.index(run_id)]
                 # Validate the entire visible domain, not just its center.
-                display_pattern(item,"d_angstrom" if native=="tof_us" else "tof_us",calibration)
+                check_target = 'd_angstrom' if native in {'tof_us','two_theta_deg'} else 'two_theta_deg' if item.scope.instrument=='HB2A' else 'tof_us'
+                display_pattern(item,check_target,calibration)
                 calibrations[run_id]=calibration
             except (OSError,ValueError,TypeError,KeyError,UnicodeError) as exc:
                 calibrations[run_id]=None
                 errors.append(str(exc))
-        available=(["tof_us","d_angstrom","q_inv_angstrom"] if not errors else
-            ["d_angstrom","q_inv_angstrom"] if native!="tof_us" else [native])
+        angular = native=='two_theta_deg' or patterns[0].scope.instrument=='HB2A'
+        available=([('two_theta_deg' if angular else 'tof_us'),'d_angstrom','q_inv_angstrom'] if not errors else
+            ['d_angstrom','q_inv_angstrom'] if native in {'d_angstrom','q_inv_angstrom'} else [native])
         state.transition_coordinate_options=[{"title":COORDINATES[k],"value":k} for k in available]
         if state.transition_map_coordinate not in available:
             state.transition_map_coordinate=native
@@ -1595,7 +1597,7 @@ class TransitionTrackingMixin:
                 for c in calibrations.values() if c is not None})
             state.transition_coordinate_notice="Calibration: "+"; ".join(labels[:3])+". Intensity keeps its original measurement scale."
         else:
-            state.transition_coordinate_notice=("Calibrated TOF conversion unavailable: "+errors[0]
+            state.transition_coordinate_notice=("Calibrated coordinate conversion unavailable: "+errors[0]
                 +". Available axes retain their measured coordinate calibration; no nominal geometry is substituted.")
         converted=[display_pattern(p,target,calibrations[k]) for p,k in zip(patterns,ids)]
         backgrounds=None
@@ -2058,7 +2060,7 @@ class TransitionTrackingMixin:
             if limits and value!=old:
                 try:
                     scan=self._transition_scans[state.transition_selected]
-                    calibration=self._transition_calibration(scan) if "tof_us" in {old,value} else None
+                    calibration=self._transition_calibration(scan) if {'tof_us','two_theta_deg'}.intersection({old,value}) else None
                     self._transition_map_ranges[(group,value)]=sorted(coordinate_values(limits,old,value,calibration).tolist())
                 except (OSError,ValueError,KeyError):
                     self._transition_map_ranges.pop((group,value),None)
