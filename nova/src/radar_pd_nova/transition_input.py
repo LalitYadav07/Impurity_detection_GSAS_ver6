@@ -197,10 +197,28 @@ def reduced_observation(scan):
     x, y, sigma = values.T
     if np.any(x <= 0) or np.any(np.diff(x) <= 0):
         raise ValueError("Reduced coordinates must be positive and increasing")
+    metadata = scan.get("metadata") or {}
+    setup = metadata.get("snap_setup") or metadata.get("nomad_setup") or metadata.get("powgen_setup") or {}
     multiplied = "with Y multiplied by the bin widths" in "\n".join(lines[:40])
+    is_snap = scan.get("instrument") == "SNAP"
+    # SNAPWrap SaveGSS explicitly uses MultiplyByBinWidth=True while replacing
+    # the standard Mantid header. Its validated reduction-record pointer is
+    # required before applying that known export convention.
+    snap_integrals = is_snap and (multiplied or bool(setup.get("record_path")))
+    if is_snap:
+        if setup.get("source_sha256") and sha256(raw).hexdigest() != setup["source_sha256"]:
+            raise ValueError("SNAP source differs from the checked reduction receipt")
+        if np.any(~np.isfinite(sigma) | (sigma < 0) | ((sigma > 0) & ~np.isfinite(y))):
+            raise ValueError("SNAP curve contains invalid positive-weight observations")
     notices = []
     semantics = "native_FXYE_unspecified"
-    if multiplied:
+    if snap_integrals:
+        # Match GSAS-II load_pwd_from_reader exactly: GSA x values are bin
+        # edges, final edge is dropped, widths undo the export integration.
+        widths = np.diff(x)
+        x, y, sigma = x[:-1]+widths/2, y[:-1]/widths, sigma[:-1]/widths
+        semantics = "GSAS-II_TOF_density_from_SNAPWrap_bin_integrals"
+    elif multiplied:
         if words[4] != "SLOG":
             raise ValueError("Bin-integrated data require a supported SLOG grid")
         steps = np.diff(x) / x[:-1]
@@ -231,6 +249,8 @@ def reduced_observation(scan):
         for k in ("cycle", "mode", "wavelength", "frequency", "guide", "environment")
     }
     geometry.update(calibration=calibration, headers=geometry_lines, bank=int(bank))
+    if is_snap:
+        geometry.update(state_id=setup.get("state_id"),use_lite_mode=setup.get("use_lite_mode"))
     if not calibration and not geometry_lines:
         raise ValueError("Reduced-bank calibration or export geometry is unavailable")
     if not calibration:
@@ -251,6 +271,9 @@ def reduced_observation(scan):
         "characterization": setup.get("characterization_files"),
         "setup": scan.get("comparison_setup_id"),
     }
+    if is_snap:
+        reduction.update({key: setup.get(key) for key in (
+            "state_id","use_lite_mode","grouping","product_variant","calibration","normalization","corrections")})
     normalization = (
         "pCharge" if "Normalised to pCharge" in prefix else "not_declared_in_product"
     )

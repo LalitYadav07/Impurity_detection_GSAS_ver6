@@ -59,8 +59,8 @@ def sample_identifier(value: Any) -> str:
 
 def context(instrument: str, ipts: str, run: int | None = None) -> tuple[str, str]:
     instrument, ipts = str(instrument).upper(), str(ipts).upper()
-    if instrument not in {"PG3", "NOM"} or not re.fullmatch(r"IPTS-[1-9]\d*", ipts):
-        raise ValueError("Choose NOMAD/POWGEN and a positive IPTS identifier")
+    if instrument not in {"PG3", "NOM", "SNAP"} or not re.fullmatch(r"IPTS-[1-9]\d*", ipts):
+        raise ValueError("Choose a supported neutron beamline and a positive IPTS identifier")
     if run is not None and (isinstance(run, bool) or int(run) != run or run < 1):
         raise ValueError("Run must be a positive integer")
     return instrument, ipts
@@ -156,6 +156,11 @@ def parse_scan_table(raw: bytes, *, source: str, instrument: str, ipts: str) -> 
         elif instrument == "NOM" and {"SCAN", "IPTS", "TITLE"}.issubset(header):
             table.schema = "nomad_los"
             run_key, proposal_key = "SCAN", "IPTS"
+        elif instrument == "SNAP" and {"RUN", "IPTS", "TITLE", "SAMPLE"}.issubset(header):
+            # SNAP run summaries contain useful names/titles but often no
+            # acquisition sample identifier or qualified pressure units.
+            table.schema = "snap_runsummary"
+            run_key, proposal_key = "RUN", "IPTS"
         else:
             return table
         for row in reader:
@@ -332,9 +337,10 @@ class ExperimentMetadataIndex:
                 return
             paths = []
             notices = []
-            if self.instrument == "PG3":
-                paths = [self.root / "shared/autoreduce" / f"PG3_{self.ipts}_runsummary.csv",
-                         self.root / "shared/autoreduce" / f"{self.ipts[5:]}_run-summary.csv"]
+            if self.instrument in {"PG3", "SNAP"}:
+                paths = [self.root / "shared/autoreduce" / f"{self.instrument}_{self.ipts}_runsummary.csv"]
+                if self.instrument == "PG3":
+                    paths.append(self.root / "shared/autoreduce" / f"{self.ipts[5:]}_run-summary.csv")
             else:
                 shared = self.root / "shared"
                 paths = [shared / "los.csv"]

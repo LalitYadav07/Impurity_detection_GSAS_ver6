@@ -1820,11 +1820,12 @@ def _fit_series_key(scan: dict[str, Any]) -> tuple[str, str, str]:
     metadata = scan.get("metadata") or {}
     if not isinstance(metadata, dict):
         metadata = {}
-    setup = metadata.get("powgen_setup") or metadata.get("nomad_setup") or {}
+    setup = metadata.get("snap_setup") or metadata.get("powgen_setup") or metadata.get("nomad_setup") or {}
     if not isinstance(setup, dict):
         setup = {}
     fields = ("cycle", "mode", "wavelength", "frequency", "guide", "calibration_files",
-              "characterization_files", "grouping_files", "calibration", "source_family")
+              "characterization_files", "grouping_files", "calibration", "source_family",
+              "state_id", "use_lite_mode", "grouping", "product_variant", "normalization", "corrections")
     calibration = {key: setup[key] for key in fields if key in setup}
     return (experiment_sample_identity(scan)["key"], str(scan.get("bank")),
             json.dumps(calibration, sort_keys=True, default=str))

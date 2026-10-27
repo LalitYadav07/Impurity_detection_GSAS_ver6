@@ -147,7 +147,7 @@ def read_powgen_sample_identity(ipts: str, run_number: int, *, nexus_path=None, 
     if values.get("/entry/experiment_identifier") and values["/entry/experiment_identifier"].upper() != str(ipts).upper():
         raise ValueError("NeXus proposal disagrees with the selected IPTS")
     stored_instrument = values.get('/entry/instrument/name', '').upper()
-    aliases = {'POWGEN':'PG3','PG3':'PG3','NOMAD':'NOM','NOM':'NOM'}
+    aliases = {'POWGEN':'PG3','PG3':'PG3','NOMAD':'NOM','NOM':'NOM','SNAP':'SNAP'}
     if stored_instrument in aliases and aliases[stored_instrument] != instrument:
         raise ValueError('NeXus instrument disagrees with the selected beamline')
     result = resolve_identity([{"value": observed, "field": field, "path": str(path), "kind": "nexus"}

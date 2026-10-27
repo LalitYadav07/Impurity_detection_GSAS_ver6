@@ -16,6 +16,10 @@ from .nomad_metadata import NomadSampleIndex
 from .nomad import MODERN_FOLDER
 from .hb2a_controller import (Hb2aExperimentSettings, Hb2aWatchController,
     Hb2aSampleIndex, discover_hb2a_samples, preflight_hb2a_experiment)
+from .snap import DEFAULT_FOLDER as SNAP_FOLDER
+from .snap_metadata import SnapSampleIndex
+from .snap_controller import (SnapExperimentSettings, SnapWatchController,
+    discover_snap_samples, preflight_snap_experiment)
 
 
 @dataclass(frozen=True)
@@ -41,6 +45,8 @@ BEAMLINES = {
     'HB2A':BeamlineAdapter('HB2A','HB-2A','shared/autoreduce',Hb2aSampleIndex,
         Hb2aExperimentSettings,Hb2aWatchController,discover_hb2a_samples,preflight_hb2a_experiment,
         False,facility='HFIR',instrument_mode='cw'),
+    'SNAP':BeamlineAdapter('SNAP','SNAP',SNAP_FOLDER,SnapSampleIndex,
+        SnapExperimentSettings,SnapWatchController,discover_snap_samples,preflight_snap_experiment,False),
 }
 
 

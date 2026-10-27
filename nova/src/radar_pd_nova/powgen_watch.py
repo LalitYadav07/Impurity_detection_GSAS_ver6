@@ -74,6 +74,9 @@ class WatchDefinition:
             raise ValueError("Choose a registered facility/beamline pair: SNS PG3/NOM/SNAP or HFIR HB2A")
         if instrument == 'HB2A' and self.subfolder != 'shared/autoreduce':
             raise ValueError('HB-2A Live accepts individual products in shared/autoreduce only')
+        if instrument == "SNAP":
+            from .snap import source_directory
+            source_directory(ipts, self.subfolder)
         if instrument == "NOM" and not nomad_subfolder(self.subfolder):
             raise ValueError("NOMAD live mode accepts individual normalized Bragg product folders only")
         if not _IPTS_RE.fullmatch(ipts):
@@ -559,7 +562,11 @@ def discover_from_listing(
         if candidate_path is None:
             continue
         try:
-            if definition.instrument == "NOM":
+            if definition.instrument == "SNAP":
+                from .snap import parse_filename
+                snap_name = parse_filename(candidate_path)
+                parsed = PowgenReducedFile(candidate_path, PurePosixPath(candidate_path).name, snap_name.run_number, None, ".gsa")
+            elif definition.instrument == "NOM":
                 number = nomad_run_number(PurePosixPath(candidate_path).name)
                 if number is None:
                     continue
@@ -580,7 +587,9 @@ def discover_from_listing(
         candidates = by_run[run_number]
         if definition.instrument == "NOM" and len(candidates) != 1:
             raise ValueError(f'Multiple NOMAD reductions for run {run_number} in one folder; choose an unambiguous source')
-        preferred = candidates[0][0] if definition.instrument == "NOM" else select_preferred_reduced_file([item.path for item, _ in candidates], run_number=run_number)
+        if definition.instrument == "SNAP" and len(candidates) != 1:
+            raise ValueError(f"Several SNAP exports match run {run_number}; choose one grouping/export variant")
+        preferred = candidates[0][0] if definition.instrument in {"NOM", "SNAP"} else select_preferred_reduced_file([item.path for item, _ in candidates], run_number=run_number)
         metadata = next(metadata for item, metadata in candidates if item.path == preferred.path)
         run = WatchedRun(
             run_number=run_number,

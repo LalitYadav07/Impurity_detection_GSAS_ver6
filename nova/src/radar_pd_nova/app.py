@@ -279,6 +279,7 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
         self.server.state.change("powgen_ipts")(self._powgen_ipts_changed)
         self.server.state.change("live_beamline")(self._live_beamline_changed)
         self.server.state.change("nomad_physical_bank")(self._powgen_processing_changed)
+        self.server.state.change("snap_product_family")(self._snap_product_changed)
         self.server.state.change("nomad_profile_bank", "nomad_profile_acknowledged", "nomad_allow_exploratory")(self._powgen_processing_changed)
         self.server.state.change('hb2a_normalization','hb2a_profile_acknowledged','hb2a_temperature_channel','hb2a_temperature_unit','hb2a_condition_reviewed','hb2a_collimator_override','hb2a_allow_stopped')(self._powgen_processing_changed)
         self.server.state.change('hb2a_normalization')(self._hb2a_normalization_changed)
@@ -570,6 +571,8 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
         state.powgen_monitoring = False
         state.live_beamline = "PG3"
         state.nomad_physical_bank = None
+        state.snap_product_family = ""
+        state.snap_product_family_options = []
         state.live_beamline_label = "POWGEN"
         state.live_beamline_options = [{"title": adapter.name, "value": key} for key,adapter in BEAMLINES.items()]
         state.nomad_profile_bank = 1
@@ -1234,7 +1237,7 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
                     label="Reduction data folder", v_model=("powgen_source_subfolder",),
                     items=("powgen_source_options",), item_title="title", item_value="value",
                     density="compact", variant="outlined", disabled=("powgen_monitoring || powgen_sample_loading",),
-                    hint=("live_beamline === 'HB2A' ? 'Use individual reduced patterns from this IPTS. Summed scan ranges stay separate.' : 'Refresh sample IDs to find archived cycle folders. Choose one folder to avoid mixing reprocessed copies of a run.'",),
+                    hint=("live_beamline === 'HB2A' ? 'Use individual reduced patterns from this IPTS. Summed scan ranges stay separate.' : live_beamline === 'PG3' ? 'Refresh sample IDs to find archived cycle folders. Choose one folder to avoid mixing reprocessed copies of a run.' : 'Refresh sample IDs to find individual Bragg export folders. Choose one reduction folder before selecting samples.'",),
                     persistent_hint=True,
                 )
                 vuetify.VSelect(v_show="live_beamline === 'HB2A'",label='Reduced-product normalization',v_model=('hb2a_normalization',),
@@ -1312,11 +1315,19 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
                     persistent_hint=True,
                 )
                 vuetify.VSelect(
-                    v_show="live_beamline === 'NOM'", label="Source bank / focused histogram to analyze",
+                    v_show="live_beamline === 'NOM' || live_beamline === 'SNAP'", label="Source bank / focused histogram to analyze",
                     v_model=("nomad_physical_bank",), items=("powgen_bank_options",),
                     item_title="title", item_value="value", density="compact", variant="outlined",
                     disabled=("powgen_monitoring || live_launch_busy",),
                     hint="Analyze one source histogram per watch. Bank numbers depend on the reduction: focused Bank 1 is not necessarily detector bank 1. Verify the matching profile and its Bank label.",
+                    persistent_hint=True,
+                )
+                vuetify.VSelect(
+                    v_show="live_beamline === 'SNAP'", label="SNAP grouping / export variant",
+                    v_model=("snap_product_family",), items=("snap_product_family_options",),
+                    item_title="title", item_value="value", density="compact", variant="outlined",
+                    disabled=("powgen_monitoring || live_launch_busy",),
+                    hint="Refresh after choosing a folder. Different masks, tags and re-reductions stay separate; a newer filename is not silently substituted.",
                     persistent_hint=True,
                 )
                 vuetify.VSelect(
@@ -1333,7 +1344,7 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
                     persistent_hint=True,
                 )
                 with html.Div(
-                    v_show="live_beamline === 'NOM' || !!powgen_profile_error || powgen_instrument_source !== 'automatic'",
+                    v_show="live_beamline !== 'PG3' || !!powgen_profile_error || powgen_instrument_source !== 'automatic'",
                     classes="radar-soft-panel mb-2",
                 ):
                     vuetify.VAlert(
@@ -1353,7 +1364,7 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
                         density="compact",
                         variant="outlined",
                         disabled=("powgen_monitoring || live_launch_busy",),
-                        hint=("live_beamline === 'HB2A' ? 'Supply the neutron CW .instprm for this cycle, Ge reflection and collimation. An efficiency vcorr file does not contain the peak-shape calibration.' : live_beamline === 'NOM' ? 'Supply a GSAS-II .instprm matching the exported physical bank, calibration and sample environment. Detector calibration HDF5 files are not refinement profiles.' : 'Use the GSAS-II profile for the POWGEN experiment cycle; historical files may be under /SNS/PG3/run_cycle_<cycle>_CAL.'",),
+                        hint=("live_beamline === 'HB2A' ? 'Supply the neutron CW .instprm for this cycle, Ge reflection and collimation. An efficiency vcorr file does not contain the peak-shape calibration.' : live_beamline !== 'PG3' ? 'Supply a reviewed GSAS-II .instprm matching the exported histogram, state/grouping and calibration. Detector calibration HDF5 files and generated dummy profiles are not accepted peak-shape calibrations.' : 'Use the GSAS-II profile for the POWGEN experiment cycle; historical files may be under /SNS/PG3/run_cycle_<cycle>_CAL.'",),
                         persistent_hint=True,
                     )
                     with html.Fieldset(
@@ -1381,8 +1392,8 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
                         clearable=True,
                         no_data_text="No GSAS-II instrument profiles are in this Galaxy History",
                     )
-                with html.Div(v_show="live_beamline === 'NOM'", classes="radar-soft-panel mb-2"):
-                    vuetify.VAlert(text="NOMAD Bragg analysis uses broadband TOF. Supplied profiles require scientific review; automatic NOMAD profile mappings are not yet validated.", type="info", variant="tonal", density="compact")
+                with html.Div(v_show="live_beamline === 'NOM' || live_beamline === 'SNAP'", classes="radar-soft-panel mb-2"):
+                    vuetify.VAlert(text=("live_beamline === 'SNAP' ? 'SNAP Bragg analysis uses broadband TOF. SNAPRed generated profiles can be approximate; state, focusing group and calibration must match.' : 'NOMAD Bragg analysis uses broadband TOF. Supplied profiles require scientific review; automatic NOMAD profile mappings are not yet validated.'",), type="info", variant="tonal", density="compact")
                     vuetify.VTextField(label="Bank label in profile", v_model=("nomad_profile_bank",), type="text", inputmode="numeric", disabled=("powgen_monitoring || live_launch_busy",), density="compact", variant="outlined", hint="Enter the Bank: value from the selected .instprm block, not its position in the file.", persistent_hint=True)
                     vuetify.VSwitch(label="Confirm the supplied profile and physical-bank mapping", v_model=("nomad_profile_acknowledged",), disabled=("powgen_monitoring || live_launch_busy",), density="compact")
                     vuetify.VSwitch(label="Allow unconfirmed sample corrections for exploratory analysis", v_model=("nomad_allow_exploratory",), disabled=("powgen_monitoring || live_launch_busy",), density="compact")
@@ -4515,12 +4526,12 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
         self._powgen_form_ipts = None
         self._powgen_ipts_changed()
         state.powgen_source_subfolder = adapter.default_folder
-        state.powgen_source_options = [{"title": "Individual Bragg reductions" if adapter.instrument == "NOM" else "Current autoreduce folder", "value": adapter.default_folder}]
+        state.powgen_source_options = [{"title": "Individual Bragg reductions" if adapter.instrument != "PG3" else "Current autoreduce folder", "value": adapter.default_folder}]
         state.powgen_source_directory = f"/{adapter.facility}/{adapter.instrument}/<IPTS>/{adapter.default_folder}"
-        state.powgen_bank_scope = "selected" if adapter.instrument == "NOM" else "all"
+        state.powgen_bank_scope = "selected" if adapter.instrument in {"NOM", "SNAP"} else "all"
         state.powgen_processing_banks = []
         state.nomad_physical_bank = None
-        state.powgen_bank_options = [{"title": f"Bank {n}", "value": n} for n in range(1,7)] if adapter.instrument == "NOM" else []
+        state.powgen_bank_options = [{"title": f"Histogram {n}", "value": n} for n in range(1,7 if adapter.instrument == "NOM" else 19)] if adapter.instrument != "PG3" else []
         state.powgen_wavelength = ""
         state.powgen_instrument_source_options = [
             *([{"title":"Use the official cycle profile automatically","value":"automatic"}] if adapter.automatic_profiles else []),
@@ -4534,8 +4545,8 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
         state.nomad_allow_exploratory = False
         state.nomad_quality_notices = []
         state.powgen_instrument_label = "Automatic POWGEN cycle profile" if adapter.automatic_profiles else f"Matching {adapter.name} profile required"
-        state.powgen_message = ("Select an IPTS, source histogram, matching profile and Live analysis settings. NOMAD uses broadband neutron TOF."
-                                if adapter.instrument == "NOM" else 'Select an IPTS, experiment-scoped sample, normalization and matching CW profile.' if adapter.instrument == 'HB2A' else "Select an IPTS and configure Live here. The wavelength is auto-detected unless you choose an override.")
+        state.powgen_message = ("Select an IPTS, reduction folder/export variant, source histogram and reviewed matching profile. Configure the Live analysis here."
+                                if adapter.instrument in {"NOM", "SNAP"} else 'Select an IPTS, experiment-scoped sample, normalization and matching CW profile.' if adapter.instrument == 'HB2A' else "Select an IPTS and configure Live here. The wavelength is auto-detected unless you choose an override.")
         state.hb2a_profile_acknowledged = False
         state.hb2a_temperature_channel = ''
         state.hb2a_condition_reviewed = False
@@ -4569,14 +4580,30 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
         state.powgen_excluded_runs=[]
         state.powgen_sample_message='Refresh sample labels for the selected normalization family.'
 
+    def _snap_product_changed(self, **_: Any) -> None:
+        state = self.server.state
+        family = str(getattr(state, "snap_product_family", "") or "")
+        if family == getattr(self, "_snap_selected_family", ""):
+            return
+        self._snap_selected_family = family
+        self._powgen_sample_request = object()
+        state.powgen_sample_discovery_ipts = ""
+        state.powgen_discovered_sample_options = []
+        state.powgen_processing_sample_ids = []
+        state.powgen_run_options = []
+        state.powgen_excluded_runs = []
+        state.powgen_sample_message = "Refresh sample IDs for the selected SNAP export variant."
+        self._powgen_processing_changed()
+
     def _powgen_processing_bank_ids(self) -> tuple[int, ...] | None:
         state = self.server.state
         if self._live_adapter().instrument == 'HB2A':
             return (1,)
-        if self._live_adapter().instrument == "NOM":
+        if self._live_adapter().instrument in {"NOM", "SNAP"}:
             bank = getattr(state, "nomad_physical_bank", None)
-            if isinstance(bank, bool) or bank not in range(1, 7):
-                raise ValueError("Choose exactly one NOMAD source histogram for this watch")
+            allowed = range(1, 7) if self._live_adapter().instrument == "NOM" else [int(v["value"]) for v in (state.powgen_bank_options or [])]
+            if isinstance(bank, bool) or bank not in allowed:
+                raise ValueError("Choose exactly one source histogram for this watch")
             return (int(bank),)
         if str(getattr(state, "powgen_bank_scope", "all") or "all") == "all":
             return None
@@ -4595,9 +4622,13 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
             return
         self._powgen_form_ipts = ipts
         adapter = self._live_adapter()
+        if adapter.instrument == "SNAP":
+            self._snap_selected_family = ""
+            state.snap_product_family = ""
+            state.snap_product_family_options = []
         state.powgen_source_subfolder = adapter.default_folder
-        state.powgen_source_directory = f"/SNS/{adapter.instrument}/{ipts or '<IPTS>'}/{adapter.default_folder}"
-        state.powgen_source_options = [{"title": "Individual Bragg reductions" if adapter.instrument == "NOM" else "Current autoreduce folder", "value": adapter.default_folder}]
+        state.powgen_source_directory = f"/{adapter.facility}/{adapter.instrument}/{ipts or '<IPTS>'}/{adapter.default_folder}"
+        state.powgen_source_options = [{"title": "Individual Bragg reductions" if adapter.instrument != "PG3" else "Current autoreduce folder", "value": adapter.default_folder}]
         self._powgen_sample_request = object()  # Discard a previous IPTS's in-flight discovery.
         state.powgen_sample_loading = False
         state.powgen_sample_discovery_ipts = ""
@@ -4630,6 +4661,10 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
         if folder == getattr(self, "_powgen_form_source", "shared/autoreduce"):
             return
         self._powgen_form_source = folder
+        if self._live_adapter().instrument == "SNAP":
+            self._snap_selected_family = ""
+            state.snap_product_family = ""
+            state.snap_product_family_options = []
         self._powgen_sample_request = object()
         state.powgen_sample_loading = False
         state.powgen_sample_discovery_ipts = ""
@@ -4637,7 +4672,7 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
         state.powgen_processing_sample_ids = []
         state.powgen_run_options = []
         state.powgen_excluded_runs = []
-        state.powgen_bank_options = [{"title": f"Bank {n}", "value": n} for n in range(1,7)] if self._live_adapter().instrument == "NOM" else []
+        state.powgen_bank_options = [{"title": f"Histogram {n}", "value": n} for n in range(1,7 if self._live_adapter().instrument == "NOM" else 19)] if self._live_adapter().instrument != "PG3" else []
         state.powgen_processing_banks = []
         state.nomad_physical_bank = None
         state.powgen_sample_message = "Refresh sample IDs for this reduction folder."
@@ -4702,7 +4737,7 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
             state.flush()
             folder = str(getattr(state, "powgen_source_subfolder", "shared/autoreduce") or "shared/autoreduce")
             args = (ipts, self._powgen_sample_index(ipts))
-            if folder != "shared/autoreduce" or self._live_adapter().instrument == "NOM":
+            if folder != "shared/autoreduce" or self._live_adapter().instrument != "PG3":
                 args += (folder,)
             discovery = discover_powgen_samples if self._live_adapter().instrument == "PG3" else self._live_adapter().discover_samples
             loop=asyncio.get_running_loop()
@@ -4718,10 +4753,16 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
             kwargs = {'normalization': str(state.hb2a_normalization)} if self._live_adapter().instrument == 'HB2A' else {}
             if self._live_adapter().instrument in {'PG3', 'NOM'}:
                 kwargs['progress'] = publish_progress
+            if self._live_adapter().instrument == 'SNAP':
+                kwargs['product_family'] = str(state.snap_product_family or '')
             result = await asyncio.to_thread(discovery, *args, **kwargs)
             if self._powgen_sample_request is not token:
                 return
             state.powgen_source_options = result.get("source_options") or getattr(state, "powgen_source_options", [])
+            if self._live_adapter().instrument == "SNAP":
+                state.snap_product_family_options = result.get("product_family_options", [])
+                self._snap_selected_family = result.get("product_family", "")
+                state.snap_product_family = self._snap_selected_family
             state.powgen_discovered_sample_options = result["options"]
             state.powgen_run_options = result.get("run_options", [])
             if self._live_adapter().instrument == 'HB2A':
@@ -4756,7 +4797,7 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
                   "powgen_main_cif_source", "powgen_main_cif_path", "powgen_main_cif_dataset_id",
                   "powgen_database_dataset_id")
         fields += ("powgen_excluded_runs", "powgen_include_background", "powgen_include_ramps")
-        fields += ("live_beamline", "nomad_physical_bank", "nomad_profile_bank", "nomad_profile_acknowledged", "nomad_allow_exploratory")
+        fields += ("live_beamline", "nomad_physical_bank", "nomad_profile_bank", "nomad_profile_acknowledged", "nomad_allow_exploratory", "snap_product_family")
         fields += ('hb2a_normalization','hb2a_profile_acknowledged','hb2a_temperature_channel','hb2a_temperature_unit','hb2a_condition_reviewed','hb2a_collimator_override','hb2a_allow_stopped')
         fields += ('hb2a_magnetic_field_channel','hb2a_magnetic_field_unit','hb2a_magnetic_field_reviewed','hb2a_pressure_channel','hb2a_pressure_unit','hb2a_pressure_reviewed')
         state = self.server.state
@@ -4868,7 +4909,7 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
                 initial_backfill_limit=_POWGEN_BACKFILL_LIMITS[backfill_mode],
                 subfolder=str(getattr(state, "powgen_source_subfolder", "shared/autoreduce") or "shared/autoreduce"),
             )
-            if self._live_adapter().instrument in {'NOM', 'HB2A'}:
+            if self._live_adapter().instrument in {'NOM', 'SNAP', 'HB2A'}:
                 if instrument_source == "automatic":
                     raise ValueError(f"Supply a matching {self._live_adapter().name} profile; automatic mappings are not yet validated")
                 profile_path = str(state.powgen_instrument_path or "")
@@ -4879,7 +4920,7 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
                     materialized = Path(self._nomad_profile_directory.name) / "selected.instprm"
                     materialized.write_text(profile_text, encoding="utf-8")
                     profile_path = str(materialized)
-                if self._live_adapter().instrument == 'NOM':
+                if self._live_adapter().instrument in {'NOM', 'SNAP'}:
                     preflight_arguments.update(profile_path=profile_path,
                         profile_bank=int(state.nomad_profile_bank or 0),
                         profile_acknowledged=bool(state.nomad_profile_acknowledged),
@@ -4892,6 +4933,8 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
                         normalization=str(state.hb2a_normalization),
                         condition_bindings=self._hb2a_condition_bindings(),
                         excluded_acquisitions=tuple(state.powgen_excluded_runs or []))
+                if self._live_adapter().instrument == "SNAP":
+                    preflight_arguments["product_family"] = str(getattr(state, "snap_product_family", "") or "")
                 result = await asyncio.to_thread(self._live_adapter().preflight, ipts, **preflight_arguments)
             else:
                 result = await asyncio.to_thread(preflight_powgen_experiment, ipts,
@@ -4903,7 +4946,7 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
                 state.powgen_preflight_message = "Inputs changed during the experiment check. Check the current selection again."
                 state.flush()
                 return False
-            state.nomad_quality_notices = result.get("quality_notices", []) if self._live_adapter().instrument == "NOM" else []
+            state.nomad_quality_notices = result.get("quality_notices", []) if self._live_adapter().instrument != "PG3" else []
             state.powgen_metadata_resolution = result.get('metadata_resolution', [])
             state.powgen_metadata_notices = result.get('metadata_notices', [])
             details = {b["bank"]: b for b in result.get("bank_details", [])}
@@ -4981,7 +5024,7 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
                 {
                     "label": "Wavelength",
                     "value": (
-                        ("Broadband neutron TOF; no monochromatic wavelength selection" if self._live_adapter().instrument == "NOM" else f"{result.get('selected_wavelength')} A - {result.get('wavelength_source')}")
+                        ("Broadband neutron TOF; no monochromatic wavelength selection" if self._live_adapter().instrument != "PG3" else f"{result.get('selected_wavelength')} A - {result.get('wavelength_source')}")
                     ),
                 },
                 {

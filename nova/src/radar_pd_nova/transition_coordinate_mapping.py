@@ -22,7 +22,8 @@ def mapped_calibration(scan,controller,records):
     bank=int(bank)
     record=cached_record(scan,controller,records)
     receipts=getattr(record,"provenance",{}) or {}
-    receipt=receipts.get("powgen_bank") or receipts.get("nomad_bank") or receipts.get('hb2a_pattern') or {}
+    receipt=(receipts.get("powgen_bank") or receipts.get("nomad_bank")
+        or receipts.get("snap_bank") or receipts.get('hb2a_pattern') or {})
     profile=receipt.get("profile") or {}
     expected=profile.get("sha256") or receipt.get("profile_sha256")
     if receipt and int(receipt.get("source_bank",bank))!=bank:
@@ -62,19 +63,22 @@ def mapped_calibration(scan,controller,records):
             raise ValueError("Resolved profile disagrees with the analysis bank/profile receipt")
         return TofCalibration.from_profile(path,source_bank=bank,profile_bank=resolution.profile_bank,
             expected_sha256=resolution.sha256)
-    if scan.get("instrument")=="NOM":
+    if scan.get("instrument") in {"NOM", "SNAP"}:
         # _supplied_profile is the already selected/downloaded local profile.
         # Moving a display control must not initiate a new remote transfer.
         path=getattr(controller,"_supplied_profile",None)
         if path is not None and Path(path).is_file():
-            from .nomad import validate_profile
             saved_bank=receipt.get("profile_bank") or profile.get("profile_bank")
             if saved_bank is not None and int(saved_bank)!=settings.profile_bank:
-                raise ValueError("Supplied NOMAD profile Bank label differs from this analysis receipt")
+                raise ValueError("Supplied profile Bank label differs from this analysis receipt")
+            if scan.get("instrument") == "SNAP":
+                from .snap import validate_profile
+            else:
+                from .nomad import validate_profile
             _,mapping=validate_profile(controller._setup(run),bank,path,settings.profile_bank,
                 acknowledged=settings.profile_acknowledged)
             if expected and mapping["profile_sha256"]!=expected:
-                raise ValueError("Supplied NOMAD profile differs from this analysis receipt")
+                raise ValueError("Supplied profile differs from this analysis receipt")
             return TofCalibration.from_profile(path,source_bank=bank,profile_bank=settings.profile_bank,
                 expected_sha256=mapping["profile_sha256"])
         if getattr(controller,"display_profile_error",None):

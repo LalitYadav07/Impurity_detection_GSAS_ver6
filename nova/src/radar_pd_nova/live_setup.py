@@ -540,6 +540,7 @@ class LiveSetupMixin:
                 "nomad_profile_bank",
                 "nomad_profile_acknowledged",
                 "nomad_allow_exploratory",
+                "snap_product_family",
                 "live_test_bank",
                 "hb2a_normalization", "hb2a_profile_acknowledged",
                 "hb2a_temperature_channel", "hb2a_temperature_unit", "hb2a_condition_reviewed",
@@ -619,6 +620,8 @@ class LiveSetupMixin:
                 'profile_acknowledged': bool(values['hb2a_profile_acknowledged']),
                 'condition_bindings_json':json.dumps(self._hb2a_condition_bindings(values),sort_keys=True),
                 'excluded_acquisitions':tuple(values['powgen_excluded_runs'] or [])}
+        if adapter.instrument == "SNAP":
+            extra["product_family"] = str(values["snap_product_family"] or "")
         settings = adapter.settings(
             ipts=self._normalize_powgen_ipts(values["powgen_ipts"]),
             history_id=self.service.history_id,

@@ -24,6 +24,7 @@ from .facility_metadata import parse_nexus_timestamp, qualify_temperature
 
 SCHEMA = "radar-pd-conditions/v1"
 REGISTRY = "SNS-PG3-NOM-conditions/2"
+SNAP_REGISTRY = "SNS-SNAP-conditions/1"
 MAX_VALUES = 200_000
 MAX_TOTAL_VALUES = 500_000
 MAX_POINTS = 512
@@ -58,8 +59,14 @@ class Source:
 
 
 def sources(instrument):
+    if instrument == "SNAP":
+        # These are facility-wide channels, not proof of the device connected
+        # to a specimen. Hydraulic/load pressure is not automatically the
+        # sample pressure inside a DAC. Explicit reviewed binding is required.
+        return [Source("temperature", name, needs_binding=True, family=name) for name in (
+            "LakeshoreSampleTemp", "Lakeshore2SampleTemp", "Cryo100SampleTemp", "BL3:SE:CFurnace:Temp")]
     if instrument not in {"PG3", "NOM"}:
-        raise ValueError("Condition registry supports POWGEN and NOMAD")
+        raise ValueError("Condition registry supports registered neutron beamlines")
     p = "BL11A" if instrument == "PG3" else "BL1B"
     result = [Source("temperature", f"{p}:SE:SampleTemp", family="selected_temperature")]
     if instrument == "PG3":
@@ -404,7 +411,7 @@ def read_conditions(path, instrument, *, window=None, bindings=None, backend=Non
     except OSError as exc:
         return {
             "$schema": SCHEMA,
-            "registry": REGISTRY,
+            "registry": SNAP_REGISTRY if instrument == "SNAP" else REGISTRY,
             "status": "unavailable",
             "channels": [],
             "notices": [str(exc)],
@@ -484,7 +491,7 @@ def _cached_read(path, size, mtime, instrument, window_json, bindings_json, back
     keys = list(dict.fromkeys(keys))
     packet = {
         "$schema": SCHEMA,
-        "registry": REGISTRY,
+        "registry": SNAP_REGISTRY if instrument == "SNAP" else REGISTRY,
         "source_path": path,
         "source_stat": {"bytes": size, "mtime_ns": mtime},
         "channels": [],

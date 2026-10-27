@@ -71,7 +71,8 @@ def parse_sample_catalog(rows, instrument: str, ipts: str) -> dict[int, dict[str
         if not isinstance(stored_instrument, dict):
             continue
         name = str(stored_instrument.get("name") or "").upper()
-        if name and name not in ({"PG3", "POWGEN", "POWGEN3"} if instrument == "PG3" else {"NOM", "NOMAD"}):
+        aliases = {"PG3": {"PG3", "POWGEN", "POWGEN3"}, "NOM": {"NOM", "NOMAD"}, "SNAP": {"SNAP"}}
+        if name and name not in aliases[instrument]:
             continue
         sample = entry.get("sample") or {}
         if not isinstance(sample, dict):
@@ -88,6 +89,8 @@ def parse_sample_catalog(rows, instrument: str, ipts: str) -> dict[int, dict[str
                                 for v in _values(log.get("value")))
         except (ValueError, AttributeError):
             continue  # This run needs the bounded source-file reader instead.
+        if instrument == "SNAP":
+            evidence = [e for e in evidence if str(e.get("value")) not in {"4294967295", "18446744073709551615"}]
         grouped.setdefault(run, []).append({"evidence": evidence,
             "sample_name": sample.get("name") if isinstance(sample.get("name"), str) else "",
             "run_title": entry.get("title") if isinstance(entry.get("title"), str) else ""})
