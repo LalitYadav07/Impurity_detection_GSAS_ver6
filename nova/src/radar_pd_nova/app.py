@@ -1234,11 +1234,16 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
                     label="Reduction data folder", v_model=("powgen_source_subfolder",),
                     items=("powgen_source_options",), item_title="title", item_value="value",
                     density="compact", variant="outlined", disabled=("powgen_monitoring || powgen_sample_loading",),
-                    hint="Refresh sample IDs to find archived cycle folders. Choose one folder to avoid mixing reprocessed copies of a run.",
+                    hint=("live_beamline === 'HB2A' ? 'Use individual reduced patterns from this IPTS. Summed scan ranges stay separate.' : 'Refresh sample IDs to find archived cycle folders. Choose one folder to avoid mixing reprocessed copies of a run.'",),
                     persistent_hint=True,
                 )
+                vuetify.VSelect(v_show="live_beamline === 'HB2A'",label='Reduced-product normalization',v_model=('hb2a_normalization',),
+                    items=([{'title':'Collection-time normalized','value':'time'}, {'title':'Monitor normalized','value':'monitor'},
+                        {'title':'Legacy export — normalization needs review','value':'legacy'}],),item_title='title',item_value='value',
+                    disabled=('powgen_monitoring || live_launch_busy',),density='compact',variant='outlined',
+                    hint='Choose the product family before refreshing sample labels. Variants and summed scans are not combined.',persistent_hint=True)
                 vuetify.VBtn(
-                    "Refresh sample IDs",
+                    "{{ live_beamline === 'HB2A' ? 'Refresh sample labels' : 'Refresh sample IDs' }}",
                     click=(self.request_powgen_sample_refresh, "[powgen_ipts]"),
                     loading=("powgen_sample_loading",),
                     disabled=("powgen_monitoring || powgen_sample_loading || !powgen_ipts",),
@@ -1259,7 +1264,7 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
                     density="compact", variant="outlined",
                     disabled=("powgen_monitoring || powgen_sample_loading",),
                     no_data_text="No sample IDs found. Refresh sample IDs after entering the IPTS.",
-                    hint="Only matching samples are processed, including later scans. Scans without a readable ID require All samples.",
+                    hint=("live_beamline === 'HB2A' ? 'Labels are scoped to their SPICE experiment. Review titles when names are reused for different specimens.' : 'Only matching samples are processed, including later scans. Scans without a readable ID require All samples.'",),
                     persistent_hint=True,
                 )
                 vuetify.VSelect(
@@ -1384,11 +1389,6 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
                     vuetify.VAlert(v_show="nomad_quality_notices.length > 0", text=("nomad_quality_notices.join('; ')",), type="warning", variant="tonal", density="compact")
                 with html.Div(v_show="live_beamline === 'HB2A'", classes="radar-soft-panel mb-2"):
                     vuetify.VAlert(text='HB-2A uses constant-wavelength 2θ patterns from the combined detector bank. Experiment + scan identify an acquisition. Magnetic-only peaks are outside nuclear phase identification.',type='info',variant='tonal',density='compact')
-                    vuetify.VSelect(label='Reduced-product normalization',v_model=('hb2a_normalization',),
-                        items=([{'title':'Collection-time normalized','value':'time'}, {'title':'Monitor normalized','value':'monitor'},
-                            {'title':'Legacy export — normalization needs review','value':'legacy'}],),item_title='title',item_value='value',
-                        disabled=('powgen_monitoring || live_launch_busy',),density='compact',variant='outlined',
-                        hint='Refresh samples after changing this selection. Summed scan ranges and normalization variants are never combined.',persistent_hint=True)
                     vuetify.VSwitch(label='I reviewed the profile and reduction corrections for this experiment, Ge reflection, collimation and sample environment',
                         v_model=('hb2a_profile_acknowledged',),disabled=('powgen_monitoring || live_launch_busy',),density='compact')
                     with html.Details():
@@ -4504,6 +4504,9 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
         self._active_live_beamline = adapter.instrument
         self._init_scan_interpretation()
         state.live_beamline_label = adapter.name
+        state.powgen_processing_options = [
+            {'title':'All sample labels' if adapter.instrument=='HB2A' else 'All samples','value':'all'},
+            {'title':'Only selected sample labels' if adapter.instrument=='HB2A' else 'Only selected sample IDs','value':'selected'}]
         state.live_instrument_mode = adapter.instrument_mode
         self._powgen_sample_request = object()
         self._powgen_controller = None
@@ -4728,7 +4731,8 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
             state.powgen_sample_discovery_ipts = ipts
             unknown = int(result["unidentified_count"])
             state.powgen_sample_message = (
-                f"Found {len(result['options'])} sample IDs across {result['scan_count']} completed scans. "
+                (f"Found {len(result['options'])} experiment-scoped sample labels across {result['scan_count']} reduced acquisitions. "
+                    if self._live_adapter().instrument=='HB2A' else f"Found {len(result['options'])} sample IDs across {result['scan_count']} completed scans. ")
                 + (f"{unknown} scans have no readable sample ID; All samples includes them." if unknown else "")
                 + (" Sample list uses catalog metadata; selected runs are verified from source files before analysis."
                    if result.get("catalog_preview_count") else "")

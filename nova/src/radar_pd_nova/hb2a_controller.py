@@ -43,7 +43,8 @@ class Hb2aSampleIndex:
                 group = groups.setdefault(key, {'name':metadata['sample_name'], 'experiment':run.experiment_number, 'count':0})
                 group['count'] += 1
         for key, group in sorted(groups.items()):
-            options.append({'value':key, 'title':f"Experiment {group['experiment']} — {group['name']} ({group['count']} scans)", 'scan_count':group['count']})
+            unit='scan' if group['count']==1 else 'scans'
+            options.append({'value':key, 'title':f"Experiment {group['experiment']} — {group['name']} ({group['count']} {unit})", 'scan_count':group['count']})
         return {'options':options, 'scan_count':len(runs),
             'unidentified_count':sum(not m.get('sample_id') for m in identities),
             'run_options':[{'value':r.run_id, 'sample_id':m.get('sample_id',''),
