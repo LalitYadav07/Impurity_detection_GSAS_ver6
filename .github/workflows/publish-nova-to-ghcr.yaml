@@ -85,6 +85,17 @@ jobs:
           assert BoundaryPolicy().split_separation_fwhm == .1
           print("Packaged transition engine, cursor assets and interface imports passed")
           '
+          docker run --rm --entrypoint python \
+            "${IMAGE_NAME}:nova-${NOVA_VERSION}" -c '
+          import json
+          from radar_pd_nova.uploads import browser_named_file_js
+          print(json.dumps([
+              {"handler":browser_named_file_js("decode_named"),"decode":"decode_named"},
+              {"handler":browser_named_file_js("decode_cif",start_trigger="start_upload",source_type="CIF file"),"decode":"decode_cif","start":"start_upload","kind":"CIF file"},
+              {"handler":browser_named_file_js("decode_zip",start_trigger="start_upload",source_type="ZIP archive"),"decode":"decode_zip","start":"start_upload","kind":"ZIP archive"},
+          ]))
+          ' > "${RUNNER_TEMP}/nova-upload-handlers.json"
+          node nova/tests/client_upload.test.js "${RUNNER_TEMP}/nova-upload-handlers.json"
 
       - name: Push immutable and release tags
         shell: bash

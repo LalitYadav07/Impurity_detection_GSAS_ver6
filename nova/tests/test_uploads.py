@@ -177,6 +177,7 @@ def test_file_upload_handler_uses_supported_trame_file_event() -> None:
     assert "Array.isArray(value)" in handler
     assert "file.arrayBuffer()" in handler
     assert "trigger('decode_source', [contents, file.name])" in handler
+    assert handler.startswith('($event) => {')
     assert "$event.target.files" not in handler
 
 
@@ -190,3 +191,29 @@ def test_library_uploads_use_the_same_supported_file_event_as_named_uploads() ->
     assert "update_modelValue=decode_archive_js" in text
     assert "multiple=True" not in text
     assert "reader.readAsDataURL" not in text
+
+
+def test_mounted_uploads_use_the_event_bridge_instead_of_the_previous_bound_file():
+    """Testing the unused helper alone missed broken real upload controls."""
+    from html.parser import HTMLParser
+    from radar_pd_nova.app import RadarPdNovaApp
+
+    class Inputs(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.handlers = {}
+
+        def handle_starttag(self, tag, attrs):
+            if tag.lower() == 'vfileinput':
+                row = dict(attrs)
+                self.handlers[row['v-model']] = row.get('@update:modelvalue', '')
+
+    inputs = Inputs()
+    inputs.feed(RadarPdNovaApp().layout.html)
+    assert len(inputs.handlers) >= 10
+    for model, handler in inputs.handlers.items():
+        assert 'const value=$event' in handler, model
+        assert 'Array.isArray(value)' in handler, model
+        assert f'{model}.arrayBuffer' not in handler, model
+    assert 'radar_cif_library_upload_browser_file' in inputs.handlers
+    assert 'radar_cif_library_upload_browser_archive' in inputs.handlers

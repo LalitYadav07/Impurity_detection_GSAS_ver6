@@ -336,14 +336,25 @@ def display_filename(value: Any) -> str:
     return text.rsplit("/", 1)[-1] if text else ""
 
 
-def browser_named_file_js(trigger_name: str) -> str:
+def browser_named_file_js(
+    trigger_name: str, *, start_trigger: str | None = None, source_type: str = ""
+) -> str:
     """Return the Trame-supported bridge for one browser ``File`` object."""
 
+    # Event expressions are embedded in a double-quoted Vue attribute. Keep
+    # the label a single-quoted JS literal as well as preserving its contents.
+    kind = source_type.replace('\\', '\\\\').replace("'", "\\'").replace('"', '\\x22').replace('\n', '\\n').replace('\r', '\\r')
+    started = (
+        f"trigger('{start_trigger}', [file.name, '{kind}']); "
+        if start_trigger else ""
+    )
     return (
-        "(() => { const value=$event; const selected=Array.isArray(value) ? value : (value ? [value] : []); "
-        "const file=selected[0]; if (!file) return; file.arrayBuffer().then((contents) => {"
-        f" trigger('{trigger_name}', [contents, file.name]);"
-        "}); })()"
+        "($event) => { const value=$event; const selected=Array.isArray(value) ? value : (value ? [value] : []); "
+        "const file=selected[0]; if (!file) return; "
+        + started
+        + "return file.arrayBuffer().then((contents) => {"
+        f" return trigger('{trigger_name}', [contents, file.name]);"
+        "}); }"
     )
 
 
@@ -413,12 +424,9 @@ class NamedFileUpload:
             setattr(state, self.display_model, display_filename(value))
 
         accepted = ",".join(self.extensions)
-        file_expr = self.client_model
-        decode_js = (
-            f"{file_expr} && {file_expr}.arrayBuffer().then((contents) => {{"
-            f" trigger('{self.decode_trigger}', [contents, {file_expr}.name]);"
-            "})"
-        )
+        # Vuetify may emit File or File[]. The event is authoritative: its
+        # v-model can still hold the previous selection when this runs.
+        decode_js = browser_named_file_js(self.decode_trigger)
         empty_label = "Optional" if optional else "No file selected"
 
         # Trame treats ``key`` as a JavaScript expression. Quote constant keys
@@ -621,19 +629,11 @@ class NamedMultiCifUpload:
             setattr(state, self.upload_message_model, "")
             state.flush()
 
-        decode_js = (
-            f"{self.client_model} && ("
-            f"trigger('{self.upload_start_trigger}', [{self.client_model}.name, 'CIF file']), "
-            f"{self.client_model}.arrayBuffer().then((contents) => {{"
-            f"trigger('{self.decode_trigger}', [contents, {self.client_model}.name]);"
-            "}))"
+        decode_js = browser_named_file_js(
+            self.decode_trigger, start_trigger=self.upload_start_trigger, source_type="CIF file"
         )
-        decode_archive_js = (
-            f"{self.archive_client_model} && ("
-            f"trigger('{self.upload_start_trigger}', [{self.archive_client_model}.name, 'ZIP archive']), "
-            f"{self.archive_client_model}.arrayBuffer().then((contents) => {{"
-            f"trigger('{self.decode_archive_trigger}', [contents, {self.archive_client_model}.name]);"
-            "}))"
+        decode_archive_js = browser_named_file_js(
+            self.decode_archive_trigger, start_trigger=self.upload_start_trigger, source_type="ZIP archive"
         )
         with html.Div(classes="radar-multi-upload", key=repr(key)):
             vuetify.VFileInput(
