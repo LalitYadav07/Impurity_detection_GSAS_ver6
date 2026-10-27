@@ -434,7 +434,8 @@ def test_recovered_monitor_downloads_plot_collection_from_durable_id(tmp_path: P
         "outputs": {"summary": {"id": "summary-id"}},
         "output_collections": {"plots": {"src": "hdca", "id": "plots-id"}},
     }
-    service._recover_tool = lambda uid: (_ for _ in ()).throw(RuntimeError("no live tool"))  # type: ignore[method-assign]
+    legacy_calls = []
+    service._recover_tool = lambda uid: legacy_calls.append(uid)  # type: ignore[method-assign]
 
     def download_dataset(dataset_id: str, target: Path) -> None:
         assert dataset_id == "summary-id"
@@ -479,6 +480,7 @@ def test_recovered_monitor_downloads_plot_collection_from_durable_id(tmp_path: P
     )
 
     collected = service.collect_results(record)
+    assert not legacy_calls, 'Durable outputs must not open or persist a legacy Tool datastore'
     assert collected.result_status is ResultStatus.READY, collected.message
     payload = service.result_payload(collected)
     view = build_result_view(payload["summary"], collected.local_output_dir, submitted_mode="rapid")

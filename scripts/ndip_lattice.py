@@ -98,8 +98,12 @@ def lattice_from_records(records, *, source: str, labels=None):
 
 def extract_lattice(path: Path, records, *, source: str, labels=None):
     rows, rwp = lattice_from_records(records, source=source, labels=labels)
-    # GSAS-II performs the symmetry-dependent covariance propagation. Do not
-    # manufacture ESDs from independent lengths or report missing ones as zero.
+    # Use the complete covariance and the symmetry-constrained transformation,
+    # including correlations. The current GSAS-II getCellEsd implementation
+    # transposes its cell/reciprocal-metric derivative in the length-error
+    # contraction; it disagrees with analytic propagation for hexagonal cells.
+    # Preserve that API result as a diagnostic, rather than using it to discard
+    # an independently validated covariance or publishing inconsistent errors.
     gsas_root = os.environ.get("RADAR_PD_GSASII_ROOT") or str(
         Path(__file__).resolve().parents[1] / "GSAS-II"
     )
@@ -131,30 +135,38 @@ def extract_lattice(path: Path, records, *, source: str, labels=None):
                 for v in variables
             ):
                 continue
-            values, errors = phase.get_cell_and_esd()
+            errors = None
+            try:
+                _, errors = phase.get_cell_and_esd()
+                row["gsas_api_cell_esds"] = {
+                    key: float(errors[gsas_key])
+                    for key, gsas_key in zip(CELL_KEYS, GSAS_KEYS)
+                    if math.isfinite(float(errors[gsas_key]))
+                }
+            except (KeyError, ValueError, TypeError, RuntimeError, AttributeError):
+                row["gsas_esd_comparison"] = "unavailable"
             if not covariance.get("freshCOV", False):
                 row["uncertainty_status"] = "covariance_not_current"
                 continue
-            for key, gsas_key in zip(CELL_KEYS, GSAS_KEYS):
-                error = float(errors[gsas_key])
-                row[key + "_esd"] = error if math.isfinite(error) and error > 0 else None
-            # Do not publish competing uncertainty conventions as if they were
-            # interchangeable. Some GSAS-II versions disagree for non-cubic
-            # cells; preserve API ESDs and withhold derived covariance for review.
             matrix = row.get("cell_covariance")
-            if matrix is not None and any(
-                not math.isclose(
-                    math.sqrt(max(0, matrix[i][i])),
-                    float(errors[gsas_key]),
-                    rel_tol=1e-3,
-                    abs_tol=2e-7,
-                )
-                for i, gsas_key in enumerate(GSAS_KEYS)
-            ):
-                row["cell_covariance"] = None
-                row["covariance_status"] = "gsas_esd_mismatch"
-            elif matrix is not None:
-                row["covariance_status"] = "checked_against_gsas_esds"
+            if matrix is None:
+                row["uncertainty_status"] = "covariance_unqualified"
+                continue
+            for i, key in enumerate(CELL_KEYS):
+                error = math.sqrt(max(0.0, matrix[i][i]))
+                row[key + "_esd"] = error if error > 0 else None
+            if errors is not None and all(k in errors for k in GSAS_KEYS):
+                row["gsas_esd_comparison"] = "different" if any(
+                    not math.isclose(
+                        math.sqrt(max(0, matrix[i][i])),
+                        float(errors[gsas_key]),
+                        rel_tol=1e-3,
+                        abs_tol=2e-7,
+                    )
+                    for i, gsas_key in enumerate(GSAS_KEYS)
+                ) else "agrees"
+            row["covariance_status"] = "symmetry_jacobian"
+            row["uncertainty_method"] = "J C J^T from final GSAS-II reciprocal-cell covariance"
             row["uncertainty_status"] = (
                 "estimated"
                 if any(row[k + "_esd"] is not None for k in CELL_KEYS)
@@ -183,7 +195,11 @@ def cell_fit_information(phase, covariance):
     names = [str(name) for name in covariance.get("varyList", [])]
     direct = [name for name in names if name in {prefix + f"A{i}" for i in range(6)}]
     states = {key: "unknown" for key in CELL_KEYS}
-    output = {"metric_states": states, "covariance_fresh": fresh, "cell_covariance": None}
+    output = {"metric_states": states, "covariance_fresh": fresh,
+              "cell_covariance": None, "covariance_status": "unavailable"}
+    if len(set(names)) != len(names) or len(covariance.get('variables', [])) != len(names):
+        output['covariance_status'] = 'invalid_covariance'
+        return output
     if not direct:
         # A flagged but absent cell may be constraint-derived or from an older
         # refinement. Neither case can be certified from stored flags alone.
@@ -191,6 +207,21 @@ def cell_fit_information(phase, covariance):
         output["metric_states"] = {key: state for key in CELL_KEYS}
         return output
     sg = phase.data["General"]["SGData"]
+    independent = {
+        "-1": (0, 1, 2, 3, 4, 5), "mmm": (0, 1, 2),
+        "4/m": (0, 2), "4/mmm": (0, 2),
+        "3": (0, 2), "3m1": (0, 2), "31m": (0, 2),
+        "6/m": (0, 2), "6/mmm": (0, 2),
+        "3R": (0, 3), "3mR": (0, 3), "m3": (0,), "m3m": (0,),
+    }.get(sg["SGLaue"])
+    if sg["SGLaue"] == "2/m":
+        independent = (0, 1, 2, {"a": 5, "b": 4, "c": 3}[sg["SGUniq"]])
+    expected = {prefix + f"A{i}" for i in independent or ()}
+    if set(direct) != expected:
+        # Missing symmetry-independent variables can have external constraints
+        # or frozen parameters. Their dependence is not encoded by cellFill.
+        output["covariance_status"] = "cell_constraints_unqualified"
+        return output
     base = lattice.cell2A(phase.data["General"]["Cell"][1:7])
     parameters = {prefix + f"A{i}": float(value) for i, value in enumerate(base)}
     parameters.update(
@@ -213,6 +244,8 @@ def cell_fit_information(phase, covariance):
         minus[name] -= step
         jacobian[:, j] = (evaluate(plus) - evaluate(minus)) / (2 * step)
     for i, key in enumerate(CELL_KEYS):
+        if not np.any(np.abs(jacobian[i]) > 1e-7):
+            jacobian[i] = 0.0
         states[key] = (
             ("refined" if fresh else "stale") if np.any(np.abs(jacobian[i]) > 1e-7) else "fixed"
         )
@@ -224,7 +257,17 @@ def cell_fit_information(phase, covariance):
     if array.shape != (len(names), len(names)) or not np.isfinite(array).all():
         return output
     indices = [names.index(name) for name in direct]
-    propagated = jacobian @ array[np.ix_(indices, indices)] @ jacobian.T
+    selected = array[np.ix_(indices, indices)]
+    scale = max(float(np.max(np.abs(selected))), np.finfo(float).tiny)
+    if not np.allclose(selected, selected.T, rtol=1e-9, atol=scale*1e-12):
+        output["covariance_status"] = "invalid_covariance"
+        return output
+    selected = (selected + selected.T) / 2
+    if np.linalg.eigvalsh(selected).min() < -scale * 1e-9:
+        output["covariance_status"] = "invalid_covariance"
+        return output
+    propagated = jacobian @ selected @ jacobian.T
+    propagated = (propagated + propagated.T) / 2
     if np.isfinite(propagated).all():
         output["cell_covariance"] = propagated.tolist()
     return output
@@ -259,4 +302,7 @@ def lattice_quality(rows):
                     "message": f"{row['phase']}: GSAS-II API cell ESDs disagree with symmetry-Jacobian propagation; derived covariance is withheld pending review",
                 }
             )
+        elif row.get("uncertainty_status") in {"covariance_unqualified", "covariance_not_current"}:
+            issues.append({"code": "cell_covariance_review",
+                "message": f"{row['phase']}: final cell uncertainty is not qualified ({row.get('covariance_status')}); covariance is withheld"})
     return issues

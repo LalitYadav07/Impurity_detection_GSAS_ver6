@@ -434,6 +434,8 @@ class PostAnalysisMixin(TransitionTrackingMixin, ScanInterpretationMixin):
                 ):
                     figure = plotly.Figure(
                         display_mode_bar=True,
+                        responsive=True,
+                        style="height:100%;width:100%",
                         click=(
                             self.select_post_analysis_point,
                             "[{points: ($event.points || []).map(p => ({customdata: p.customdata}))}, post_analysis_inspector_view]",
@@ -455,7 +457,7 @@ class PostAnalysisMixin(TransitionTrackingMixin, ScanInterpretationMixin):
                     vuetify.VBtn(
                         "Open scan result",
                         v_if="post_analysis_point_can_open",
-                        click=self.open_post_analysis_scan,
+                        click=self.open_post_analysis_scan_async,
                         variant="outlined",
                     )
                     vuetify.VBtn(
@@ -1089,7 +1091,7 @@ class PostAnalysisMixin(TransitionTrackingMixin, ScanInterpretationMixin):
             setting = next(v for v in self._post_settings().views if v.id == view_id)
             figure = view_figure(view, setting)
             title = view["title"]
-        figure.update_layout(height=max(680, int(figure.layout.height or 0)))
+        figure.update_layout(height=None, autosize=True)
         state.post_analysis_inspector_title = title
         state.post_analysis_inspector_kind = kind
         state.post_analysis_inspector_view = view_id
@@ -1183,6 +1185,13 @@ class PostAnalysisMixin(TransitionTrackingMixin, ScanInterpretationMixin):
             self.server.state.post_analysis_inspector_open = False
             self.select_powgen_scan(self._post_analysis_point_run_id)
             self.open_powgen_selected_run()
+
+    async def open_post_analysis_scan_async(self, **_):
+        if str(getattr(self, "_post_analysis_scope", "")).startswith("watch:"):
+            self.server.state.post_analysis_point_open = False
+            self.server.state.post_analysis_inspector_open = False
+            self.select_powgen_scan(self._post_analysis_point_run_id)
+            await self.open_powgen_selected_run_async()
 
     def relayout_post_analysis(self, view_id, event, **_):
         """Persist visible ranges; link x zoom only for compatible physical axes."""

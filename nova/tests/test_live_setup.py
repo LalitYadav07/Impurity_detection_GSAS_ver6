@@ -378,13 +378,15 @@ def test_completed_scan_is_visible_while_another_upload_is_still_waiting(live):
     class Controller:
         source_directory = "/read-only/experiment"
         refresh_errors = {}
+        settings = SimpleNamespace(max_active_jobs=5)
 
         def __init__(self):
             self.state = SimpleNamespace(submitted={}, completed={}, discovered={r.run_id: r for r in runs}, failed={})
 
         def discover(self): pass
         def reconcile_recent_runs(self): return 0
-        def due_submissions(self): return list(self.state.discovered.values())
+        def due_submissions(self, *, reserved_run_ids=None):
+            return [r for r in self.state.discovered.values() if r.run_id not in (reserved_run_ids or ())]
 
         def launch_submission(self, run):
             if run.n == 1:

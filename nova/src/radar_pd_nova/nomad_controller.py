@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from . import nomad
+from .acquisition import acquisition_context
 from .models import InputSelection, InputSource
 from .nomad_metadata import NomadSampleIndex, read_nomad_scan_metadata
 from .powgen_controller import PowgenExperimentSettings, PowgenWatchController
@@ -217,7 +218,8 @@ class NomadWatchController(PowgenWatchController):
                 raise ValueError('NOMAD detector calibration, environment, bank geometry or supplied profile changed; check a new watch')
             self._manual_setup_signature=contract
         return nomad.stage_bank(Path(run.source_path),setup,bank,profile,self.settings.profile_bank,
-            Path(self._staging.name)/run.fingerprint/run.run_id,acknowledged=self.settings.profile_acknowledged)
+            Path(self._staging.name)/run.fingerprint/run.run_id,acknowledged=self.settings.profile_acknowledged,
+            acquisition=acquisition_context(run.scan_metadata,instrument='NOM',run_number=run.run_number,source=run.source_path))
 
     def launch_submission(self,run):
         plan=build_submission_plan(self.definition,run,self.state)

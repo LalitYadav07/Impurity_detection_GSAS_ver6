@@ -289,6 +289,24 @@ def _rewrite_gpx_phase_names(path: Path, labels: Mapping[str, str]) -> bool:
     return True
 
 
+def _rewrite_gpx_acquisition(path, acquisition):
+    try:
+        from .ndip_acquisition import annotate_gpx_records
+    except ImportError:
+        from ndip_acquisition import annotate_gpx_records
+    records = _read_gpx_records(path)
+    receipt = annotate_gpx_records(records, acquisition)
+    temporary = path.with_name(f'.{path.name}.acquisition.tmp')
+    try:
+        with temporary.open('wb') as handle:
+            for record in records:
+                pickle.dump(record, handle, protocol=1)
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return receipt
+
+
 def _iter_artifacts(run_dir: Path) -> Iterable[Path]:
     for path in sorted(run_dir.rglob("*")):
         if not path.is_file():
@@ -365,6 +383,7 @@ def _copy_collections(
     portal: Path,
     *,
     gpx_phase_labels: Mapping[str, str] | None = None,
+    acquisition_metadata=None,
 ) -> dict[str, list[dict[str, Any]]]:
     records: dict[str, list[dict[str, Any]]] = {name: [] for name in COLLECTION_RULES}
     destinations: set[Path] = set()
@@ -392,7 +411,15 @@ def _copy_collections(
                 _rewrite_gpx_phase_names(destination, gpx_phase_labels)
             except Exception as exc:
                 print(f"[WARN] Could not apply scientific phase names to {destination.name}: {exc}")
+        acquisition_receipt = None
+        if collection == 'gpx' and acquisition_metadata is not None:
+            try:
+                acquisition_receipt = _rewrite_gpx_acquisition(destination, acquisition_metadata)
+            except Exception as exc:
+                acquisition_receipt = {'status':'failed', 'temperature_written':False, 'message':str(exc)}
         record = file_record(destination, role=collection.rstrip("s"), root=portal)
+        if acquisition_receipt is not None:
+            record['acquisition_handoff'] = acquisition_receipt
         record["source_path"] = source.relative_to(run_dir).as_posix()
         records[collection].append(record)
     return records
@@ -817,6 +844,9 @@ def collect_outputs(
         except Exception as exc:
             print(f"[WARN] Could not inspect GPX phase names in {source.name}: {exc}")
     catalog = Path(phase_catalog_csv).resolve() if phase_catalog_csv else None
+    input_provenance_path = _find_suffix(run_root, "input_provenance.json")
+    input_provenance = read_json(input_provenance_path) if input_provenance_path else {}
+    acquisition = input_provenance.get('acquisition') if isinstance(input_provenance, dict) else None
     try:
         gpx_phase_labels = _catalog_phase_labels(catalog, gpx_phase_ids)
     except Exception as exc:
@@ -827,6 +857,7 @@ def collect_outputs(
         run_root,
         portal,
         gpx_phase_labels=gpx_phase_labels,
+        acquisition_metadata=acquisition,
     )
     published_gpx_paths = {
         str(item.get("source_path"))
@@ -842,6 +873,8 @@ def collect_outputs(
         if output_record:
             project["collection_path"] = output_record.get("path")
             project["collection_name"] = output_record.get("name")
+            if output_record.get('acquisition_handoff') is not None:
+                project['acquisition_handoff'] = output_record['acquisition_handoff']
     atomic_write_json(portal / "gpx_index.json", gpx_index)
     summary, hypotheses, phases, hypothesis_stage = _summary_sources(run_root, mode)
     lattice, final_rwp, scientific_warnings = [], None, []
@@ -868,10 +901,14 @@ def collect_outputs(
         collection_records["tables"].append(file_record(lattice_path, role="table", root=portal))
     manifest_path = _find_suffix(run_root, "run_manifest.json")
     manifest = read_json(manifest_path) if manifest_path else {}
-    input_provenance_path = _find_suffix(run_root, "input_provenance.json")
-    input_provenance = read_json(input_provenance_path) if input_provenance_path else {}
     if isinstance(input_provenance, dict):
         scientific_warnings.extend(input_provenance.get("warnings") or [])
+    handoff_issues = sorted({item['acquisition_handoff']['status']
+        for item in collection_records.get('gpx', [])
+        if item.get('acquisition_handoff', {}).get('status') not in {None, 'applied', 'recorded_context_only'}})
+    if handoff_issues:
+        scientific_warnings.append({'code':'acquisition_handoff_review',
+            'message':'GPX acquisition metadata requires review: ' + ', '.join(handoff_issues)})
     observables = {}
     if final_gpx is not None and lattice:
         try:
@@ -912,6 +949,7 @@ def collect_outputs(
         "lattice_parameters": lattice,
         "observables": observables,
         "pattern_observation": pattern_observation,
+        "acquisition": acquisition or {},
         "final_rwp": final_rwp,
         "scientific_status": "needs_review" if scientific_warnings else "not_assessed" if not lattice else "checks_passed",
         "hypotheses": hypotheses,

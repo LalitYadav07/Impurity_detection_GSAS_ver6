@@ -28,7 +28,7 @@ def isolated_reduced_metadata(monkeypatch):
             "2026-2_11A_CAL", "HR", (10, 1))
     monkeypatch.setattr(powgen_controller, "inspect_reduced_setup", inspect)
     monkeypatch.setattr(PowgenWatchController, "_setup", lambda self, run: inspect(run.source_path))
-    monkeypatch.setattr(powgen_controller, "stage_bank", lambda source, setup, bank, profile, dest: (source, profile.path))
+    monkeypatch.setattr(powgen_controller, "stage_bank", lambda source, setup, bank, profile, dest, **kwargs: (source, profile.path))
 
 
 class FakeGalaxyService:
@@ -589,6 +589,10 @@ def test_controller_caps_concurrent_backfill_submissions() -> None:
     controller.state.mark_submitted(runs[0], "job-a")
 
     assert [run.run_number for run in controller.due_submissions()] == [63761, 63762]
+    assert [run.run_number for run in controller.due_submissions(
+        reserved_run_ids={runs[1].run_id}
+    )] == [63762]
+    assert controller.due_submissions(reserved_run_ids={runs[1].run_id, runs[2].run_id}) == []
 
 
 def test_launch_and_acknowledge_keep_checkpoint_transition_explicit() -> None:

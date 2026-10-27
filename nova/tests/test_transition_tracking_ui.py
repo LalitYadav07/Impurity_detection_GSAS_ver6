@@ -374,7 +374,40 @@ def test_changing_curve_overlay_keeps_boundary_evidence_tied_to_its_reference():
     assert app.server.state.transition_rule_summary == summary
     assert "Curve overlay compared with" in app.server.state.transition_pattern_evidence[0]
     assert str(app._transition_scans[record["previous"]]["run_number"]) in app.server.state.transition_pattern_evidence[0]
-    assert "Boundary evidence" in app.layout.html and "Selected curve comparison" in app.layout.html
+    assert "Boundary rule evidence" in app.layout.html and "Curve overlay evidence" in app.layout.html
+    if record['previous'] != decision['before']:
+        assert 'Changing the overlay does not change boundary assignments' in app.server.state.transition_comparison_notice
+
+
+def test_progress_from_an_old_watch_or_superseded_request_never_replaces_current_loading_status():
+    app = application()
+    state = app.server.state
+    state.transition_loading = True
+    generation = app._transition_generation
+    app._transition_request = ('current', [], generation, None, None)
+    app._transition_load_progress('current', generation, 8, 141, 'PG3_50713')
+    assert state.transition_loaded_count == 8 and state.transition_load_total == 141
+    assert '8 of 141' in state.transition_loading_message and 'PG3_50713' in state.transition_loading_message
+    message = state.transition_loading_message
+    app._transition_load_progress('old', generation, 140, 141, 'old')
+    app._transition_load_progress('current', generation-1, 100, 141, 'other watch')
+    assert state.transition_loading_message == message
+    state.transition_loading = False
+    app._transition_load_progress('current', generation, 141, 141, 'late callback')
+    assert state.transition_loading_message == message
+
+
+def test_series_selector_identifies_the_calibration_and_measured_acquisition_dates():
+    app = RadarPdNovaApp()
+    rows = scans()
+    for row in rows:
+        row.setdefault('metadata', {}).update(start_time='2021-08-04T17:00:00-04:00',
+            sample_name='Calibration specimen', powgen_setup={'cycle':'2021_2_11A_CAL'})
+    rows[-1]['metadata']['start_time'] = '2021-08-05T17:00:00-04:00'
+    app._refresh_transition_tracking(rows)
+    titles = [r['title'] for r in app.server.state.transition_series_options]
+    assert titles and all('2021_2_11A_CAL' in title and '2021-08-04' in title for title in titles)
+    assert any('to 2021-08-05' in title for title in titles)
 
 
 def test_inline_fit_reuses_bragg_rows_only_when_the_published_curve_matches(tmp_path):

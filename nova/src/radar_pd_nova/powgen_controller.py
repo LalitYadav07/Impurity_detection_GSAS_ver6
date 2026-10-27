@@ -36,6 +36,7 @@ from .powgen_watch import (
 from .powgen_metadata import read_powgen_scan_metadata
 from .powgen_samples import PowgenSampleIndex, include_run, run_role, identity_readiness, select_runs
 from .results import experiment_scan_summary
+from .acquisition import acquisition_context, stage_manual_acquisition
 
 
 @dataclass(frozen=True)
@@ -729,12 +730,14 @@ class PowgenWatchController:
             progress=0,
         )
 
-    def due_submissions(self) -> list[WatchedRun]:
+    def due_submissions(self, *, reserved_run_ids: set[str] | None = None) -> list[WatchedRun]:
         """Return ready runs without exceeding the active Galaxy-job cap."""
 
-        available = max(0, self.settings.max_active_jobs - len(self.state.submitted))
+        reserved = set(reserved_run_ids or ())
+        available = max(0, self.settings.max_active_jobs - len(self.state.submitted) - len(reserved))
         ready = [run for run in self.state.retryable_runs()
-                 if not run.scan_metadata.get("setup_error")
+                 if run.run_id not in reserved
+                 and not run.scan_metadata.get("setup_error")
                  and not run.scan_metadata.get("source_revision_warning")]
         return ready[:available]
 
@@ -825,6 +828,8 @@ class PowgenWatchController:
         config = config.model_copy(update={"run_name": self._run_name(run)})
         setup = self._setup(run)
         data_path = run.source_path
+        acquisition = acquisition_context(run.scan_metadata, instrument='PG3', run_number=run.run_number,
+            source=run.source_path, script_sha256=setup.reduction_script_sha256)
         bank_provenance = {"resolver": RESOLVER_VERSION, "source_path": run.source_path,
                            "source_signature": setup.source_signature,
                            "source_bank": run.bank or run.scan_metadata.get("source_bank") or setup.banks[0].bank}
@@ -838,10 +843,20 @@ class PowgenWatchController:
                 self._manual_setup_signature = signature
             profile_dataset_id = self.settings.instrument_profile_dataset_id
             bank_provenance["manual_profile_dataset_id"] = profile_dataset_id
+            if acquisition is not None:
+                destination = Path(self._staging.name) / run.fingerprint / run.run_id / Path(run.source_path).name
+                original_hash = sha256(Path(run.source_path).read_bytes()).hexdigest()
+                data_path = str(stage_manual_acquisition(run.source_path, destination, acquisition,
+                    {'schema':'radar-pd-input-provenance/v1', 'instrument':'PG3',
+                     'source_bank':bank_provenance['source_bank'], 'source_sha256':original_hash,
+                     'warnings':[]}))
+                bank_provenance.update(source_sha256=original_hash,
+                    data_sha256=sha256(Path(data_path).read_bytes()).hexdigest())
         else:
             resolution, _ = self.resolve_profile(run)
             destination = Path(self._staging.name) / run.fingerprint / run.run_id
-            data, profile_path = stage_bank(Path(run.source_path), setup, resolution.source_bank, resolution, destination)
+            data, profile_path = stage_bank(Path(run.source_path), setup, resolution.source_bank, resolution, destination,
+                acquisition=acquisition)
             data_path = str(data)
             profile_dataset_id = self._profile_dataset_id(profile_path)
             bank_provenance["profile"] = resolution.as_dict()

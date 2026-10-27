@@ -7,6 +7,9 @@ from __future__ import annotations
 import asyncio
 from dataclasses import asdict, replace
 import json
+import inspect
+import time
+import re
 from pathlib import Path
 import numpy as np
 
@@ -96,6 +99,10 @@ class TransitionTrackingMixin:
             "transition_context": "",
             "transition_error": "",
             "transition_loading": False,
+            "transition_loading_message": '',
+            "transition_loaded_count": 0,
+            "transition_load_total": 0,
+            "transition_comparison_notice": '',
             "transition_history_notice": "",
             "transition_scale": "asinh",
             "transition_contrast": 50,
@@ -200,6 +207,8 @@ class TransitionTrackingMixin:
             vuetify.VProgressLinear(
                 v_if="transition_loading", indeterminate=True, color="#15543c", height=3
             )
+            html.P("{{ transition_loading_message }}", v_if="transition_loading", classes="radar-section-help",
+                raw_attrs=['role="status"', 'aria-live="polite"'])
             vuetify.VAlert(
                 v_if="!!transition_error",
                 text=("transition_error",),
@@ -457,10 +466,12 @@ class TransitionTrackingMixin:
                         "Open full scan result",
                         variant="outlined",
                         size="small",
-                        disabled=("!transition_can_open",),
-                        click=self.open_transition_scan,
+                        disabled=("!transition_can_open || selected_run_loading",),
+                        click=self.open_transition_scan_async,
                     )
             html.P("{{ transition_condition_summary }}", v_if="transition_condition_summary", classes="radar-section-help")
+            html.P("{{ transition_comparison_notice }}", v_if="transition_comparison_notice && transition_mode === 'observed'",
+                classes="radar-section-help")
             with html.Div(classes="radar-scan-evidence-grid"):
                 with html.Div(classes="radar-scan-curve"):
                     with vuetify.VBtnToggle(
@@ -480,7 +491,7 @@ class TransitionTrackingMixin:
                     with html.Div(classes="radar-transition-plot-controls"):
                         vuetify.VSelect(
                             v_show="transition_mode === 'observed'",
-                            label="Compare with",
+                            label="Curve overlay reference",
                             v_model=("transition_comparison",),
                             items=("transition_comparison_options",),
                             density="compact",
@@ -522,7 +533,7 @@ class TransitionTrackingMixin:
                         classes="radar-section-help",
                     )
                 with html.Aside(classes="radar-scan-evidence"):
-                    html.H4("Boundary evidence")
+                    html.H4("Boundary rule evidence")
                     html.P("{{ transition_rule_summary }}",classes="radar-section-help")
                     vuetify.VDataTable(items=("transition_signal_rows",),
                         headers=([{"title":"Indicator","key":"indicator"},{"title":"Result","key":"result"},
@@ -530,7 +541,7 @@ class TransitionTrackingMixin:
                         density="compact",items_per_page=-1,hide_default_footer=True)
                     html.P("{{ transition_rwp_notice }}",v_if="transition_rwp_notice",classes="radar-section-help")
                     with html.Div(v_if="transition_mode === 'observed'", classes="mt-3"):
-                        html.H4("Selected curve comparison")
+                        html.H4("Curve overlay evidence")
                         with html.Ul():
                             html.Li(
                                 "{{ finding }}",
@@ -781,9 +792,13 @@ class TransitionTrackingMixin:
         if loop is not None:
             if self._transition_task is None:
                 self.server.state.transition_loading = True
+                self.server.state.transition_loaded_count = 0
+                self.server.state.transition_load_total = len(sources)
+                self.server.state.transition_loading_message = f'Loading measured patterns: 0 of {len(sources)}. Existing refinements are reused.'
                 self._transition_task = loop.create_task(
                     self._run_transition_tracking()
                 )
+                self.server.state.flush()
             return
         try:
             report = self._transition_engine.evaluate_with_policy(sources, policy)
@@ -796,7 +811,16 @@ class TransitionTrackingMixin:
             while True:
                 signature, sources, generation, engine, policy = self._transition_request
                 try:
-                    report = await asyncio.to_thread(engine.evaluate_with_policy, sources, policy)
+                    loop = asyncio.get_running_loop()
+                    last_update = [0.0]
+                    def progress(done, total, scan):
+                        now = time.monotonic()
+                        if done == total or now - last_update[0] >= .25:
+                            last_update[0] = now
+                            loop.call_soon_threadsafe(self._transition_load_progress,
+                                signature, generation, done, total, scan)
+                    kwargs = {'progress':progress} if 'progress' in inspect.signature(engine.evaluate_with_policy).parameters else {}
+                    report = await asyncio.to_thread(engine.evaluate_with_policy, sources, policy, **kwargs)
                 except (ValueError, TypeError, OSError) as exc:
                     if self._transition_request[0] != signature:
                         continue
@@ -815,7 +839,18 @@ class TransitionTrackingMixin:
         finally:
             self._transition_task = None
             self.server.state.transition_loading = False
+            self.server.state.transition_loading_message = ''
             self.server.state.flush()
+
+    def _transition_load_progress(self, signature, generation, done, total, scan):
+        if (not self.server.state.transition_loading or generation != self._transition_generation
+                or self._transition_request[0] != signature):
+            return
+        state = self.server.state
+        state.transition_loaded_count = done
+        state.transition_load_total = total
+        state.transition_loading_message = f'Loading measured patterns: {done} of {total} · run {scan}. Existing refinements are reused.'
+        state.flush()
 
     def _apply_transition_tracking(self, report, scans, signature):
         state = self.server.state
@@ -848,6 +883,17 @@ class TransitionTrackingMixin:
             first = self._transition_scans[group["run_ids"][0]]
             meta = first.get("metadata") or {}
             title = f"{meta.get('sample_name') or meta.get('sample_id')} · {scope['instrument']} bank {scope['bank']}"
+            setup = meta.get('powgen_setup') or meta.get('nomad_setup') or {}
+            calibration = setup.get('cycle') or setup.get('calibration')
+            if isinstance(calibration, str) and calibration:
+                title += ' · ' + Path(calibration).name[:64]
+            start = str(meta.get('start_time') or '')[:10]
+            end_meta = self._transition_scans[group['run_ids'][-1]].get('metadata') or {}
+            end = str(end_meta.get('start_time') or '')[:10]
+            if re.fullmatch(r'\d{4}-\d{2}-\d{2}', start):
+                title += ' · ' + start
+                if end != start and re.fullmatch(r'\d{4}-\d{2}-\d{2}', end):
+                    title += ' to ' + end
             source = next(
                 (
                     r.get("source", {}).get("source")
@@ -862,7 +908,7 @@ class TransitionTrackingMixin:
                 if o["title"].startswith(title)
             ]
             if duplicates:
-                title += f" · reduction {len(duplicates) + 1}"
+                title += f" · setup {group['id'][:8]}"
             if source == "published measured histogram":
                 title += " · saved histogram"
             series_options.append(
@@ -998,6 +1044,7 @@ class TransitionTrackingMixin:
                 empty_figure("Select a comparable acquisition")
             )
             state.transition_pattern_evidence = []
+            state.transition_comparison_notice = ''
             state.transition_model_rows = []
             state.transition_rwp = "—"
             state.transition_model_notice = (
@@ -1219,6 +1266,10 @@ class TransitionTrackingMixin:
             if state.transition_comparison not in available:
                 state.transition_comparison = available[0] if available else "previous"
             compare_id = comparison_ids.get(state.transition_comparison)
+            state.transition_comparison_notice = (
+                'Curve overlay: ' + scan_label(self._transition_scans[compare_id])
+                + '. Boundary rule: ' + baseline_label + '. Changing the overlay does not change boundary assignments.'
+                if compare_id and baseline_id and compare_id != baseline_id else '')
             before = (
                 self._transition_engine.load(self._transition_scans[compare_id])
                 if compare_id
@@ -1868,6 +1919,11 @@ class TransitionTrackingMixin:
             )
             self.open_powgen_selected_run()
 
+    async def open_transition_scan_async(self, **_):
+        if self.server.state.transition_can_open:
+            self.server.state.powgen_selected_run_id = self.server.state.transition_selected
+            await self.open_powgen_selected_run_async()
+
     def download_transition_report(self, **_):
         """Export the evidence index, without credential-bearing run objects."""
         payload = {
@@ -2222,12 +2278,12 @@ class TransitionTrackingMixin:
             if state.transition_dialog_kind == "map"
             else state.transition_profile
         )
-        figure["layout"] = {**figure.get("layout", {}), "height": 800, "autosize": True}
+        figure["layout"] = {**figure.get("layout", {}), "height": None, "autosize": True}
         if state.transition_dialog_kind == "map" and figure.get("data"):
             figure["data"] = [dict(t) for t in figure["data"]]
             figure["data"][0]["colorbar"] = {
                 **figure["data"][0].get("colorbar", {}),
-                "y": -58 / (800 - 145),
+                "yref": "container", "y": .015, "yanchor": "bottom",
             }
         state.transition_dialog_figure = figure
 

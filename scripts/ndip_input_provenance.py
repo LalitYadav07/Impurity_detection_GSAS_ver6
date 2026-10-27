@@ -24,5 +24,11 @@ def read_input_provenance(path):
             warnings=payload.get('warnings')
             if not isinstance(warnings,list) or len(warnings)>16 or any(not isinstance(w,dict) or not isinstance(w.get('message'),str) or len(w['message'])>1000 for w in warnings):
                 raise ValueError('Invalid scientific input notices')
+            if 'acquisition' in payload:
+                try:
+                    from .ndip_acquisition import validate_acquisition
+                except ImportError:
+                    from ndip_acquisition import validate_acquisition
+                payload['acquisition'] = validate_acquisition(payload['acquisition'])
             return payload
     return {}

@@ -260,7 +260,7 @@ def validate_profile(setup, bank, path, profile_bank, *, acknowledged=False):
         'nominal_geometry_notice':('Calibrated profile DIFC differs from nominal export geometry by more than 0.5%; verify the calibration and physical-bank mapping' if difference>.005 else '')}
 
 
-def stage_bank(source, setup, bank, profile_path, profile_bank, destination, *, acknowledged=False):
+def stage_bank(source, setup, bank, profile_path, profile_bank, destination, *, acknowledged=False, acquisition=None):
     source=Path(source);sidecar=Path(setup.sidecar_path)
     def unchanged():
         if signature(source)!=setup.source_signature or (signature(sidecar) if sidecar.is_file() else None)!=setup.sidecar_signature:
@@ -303,6 +303,7 @@ def stage_bank(source, setup, bank, profile_path, profile_bank, destination, *, 
         'warnings':[{'code':'unverified_nomad_profile','message':'NOMAD profile supplied by user; scientific calibration acceptance is pending'},
                     *geometry_notices,
                     *[{'code':'nomad_reduction_quality','message':message} for message in setup.warnings]]}
+    if acquisition is not None:input_provenance['acquisition']=acquisition
     marker=('# RADAR-PD input provenance: '+json.dumps(input_provenance,separators=(',',':'))+'\n').encode('ascii')
     if len(marker)>8192:raise ValueError('NOMAD observation provenance exceeds its supported header size')
     header.insert(1,marker)

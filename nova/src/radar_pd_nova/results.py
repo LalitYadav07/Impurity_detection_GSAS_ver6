@@ -2247,7 +2247,7 @@ def build_result_view(
         {"label": "Status", "value": status},
         {"label": "Best Rwp", "value": f"{best_rwp:.3f}%" if best_rwp is not None else "-"},
         {"label": "Reported phases", "value": str(len(phase_rows)) if phase_rows else "-"},
-        {"label": "Total time", "value": f"{elapsed:.1f} s" if elapsed is not None else "-"},
+        {"label": "Analysis time", "value": f"{elapsed:.1f} s" if elapsed is not None else "-"},
         {"label": "Result stage", "value": _humanize(result_stage)},
     ]
     primary_path = plots[primary_index].path if primary_index is not None else ""

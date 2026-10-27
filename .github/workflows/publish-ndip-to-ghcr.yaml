@@ -102,7 +102,7 @@ jobs:
       - name: Check phase discovery regressions in the scientific runtime
         shell: bash
         run: |
-          docker run --rm --entrypoint python "${IMAGE_NAME}:ndip-${GITHUB_SHA}" -m unittest tests.test_lattice_nudger_regressions tests.test_refiner_regressions tests.test_db_pack_regressions
+          docker run --rm --entrypoint python "${IMAGE_NAME}:ndip-${GITHUB_SHA}" -m unittest tests.test_lattice_nudger_regressions tests.test_refiner_regressions tests.test_db_pack_regressions tests.test_ndip_lattice_covariance_native
 
       - name: Push Docker schema v2 manifests
         shell: bash

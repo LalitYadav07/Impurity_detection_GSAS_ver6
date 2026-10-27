@@ -44,6 +44,52 @@ flowchart LR
 
 ## Components
 
+### Live admission and result recovery
+
+Live monitoring reserves a slot for each pending submission as well as each
+acknowledged active Galaxy job, up to the configured active-job limit. Two
+submission lanes handle staging/uploads. Freed slots are refilled without
+waiting for the slowest upload in an earlier batch. Accepted job IDs are
+checkpointed at least once per active-job window. Stopping monitoring drains
+uploads already running and records their acknowledgements; queued uploads
+do not start, and a second watch cannot start during that drain.
+
+Opening a completed scan downloads its published results outside the UI event
+loop. Durable REST output IDs take precedence over legacy tool recovery.
+Transition-history recovery reports progress without rerunning refinements.
+Curve-overlay references and the references used by the boundary rule are
+labeled separately; changing the overlay does not change boundary assignments.
+
+### Acquisition metadata in GPX handoffs
+
+Staged powder provenance may carry a bounded `radar-pd-acquisition/v1` context.
+It contains dated acquisition intervals and qualified measured readbacks, not
+complete log trajectories. Requested values, incomplete coverage and unbound
+devices cannot become GSAS-II sample parameters.
+
+A matching, hashed, single-file unfiltered POWGEN reduction recipe qualifies
+the parent-run interval. Explicit reduced-product intervals can also qualify.
+Unverified, split or filtered intervals remain context requiring review. This
+is especially relevant to NOMAD products; a parent-run log alone does not
+establish their reduced-product interval.
+
+For a single-histogram published GPX copy, a qualified temperature in kelvin
+replaces GSAS-II's default sample temperature. Its acquisition context and
+source are retained in the GPX and publication index. Other quantities remain
+recorded context until their GSAS-II units and histogram mapping are defined.
+The fitted project and numerical refinement results are unchanged.
+
+### Final cell uncertainties
+
+Cell covariance is propagated from the final GSAS-II reciprocal-cell covariance
+through its symmetry constraints as `J C J^T`, including correlations. The
+legacy GSAS-II cell-ESD API result is retained as a comparison diagnostic.
+Independent analytic derivatives and Monte Carlo validation cover the Bravais
+lattice classes and alternate monoclinic/rhombohedral settings. Stale, invalid
+or externally constrained covariance that cannot be qualified is withheld.
+These are conditional fit uncertainties; calibration and model uncertainty
+are separate.
+
 ### Identity and facility authorization
 
 UCAMS authentication belongs to NDIP, not to the RADAR-PD container. The user

@@ -318,7 +318,7 @@ def single_bank_profile(profile: BankProfile) -> str:
 
 
 def stage_bank(source: Path, setup: ReducedSetup, bank: int, profile: BankProfile,
-               destination: Path) -> tuple[Path, Path]:
+               destination: Path, *, acquisition=None) -> tuple[Path, Path]:
     """Stage one FXYE bank and its profile; preserve numeric data byte-for-byte.
 
     The current Analyze contract consumes one histogram. BANK labels alone are
@@ -395,6 +395,8 @@ def stage_bank(source: Path, setup: ReducedSetup, bank: int, profile: BankProfil
             "characterization_files": setup.characterization_files, "grouping_files": setup.grouping_files},
         "profile_sha256": profile.sha256, "warnings": [],
     }
+    if acquisition is not None:
+        observation_provenance['acquisition'] = acquisition
     marker = ("# RADAR-PD input provenance: " + json.dumps(observation_provenance, separators=(",", ":")) + "\n").encode("ascii")
     if len(marker) > 8192:
         raise PowgenResolutionError("POWGEN observation provenance exceeds its supported header size")

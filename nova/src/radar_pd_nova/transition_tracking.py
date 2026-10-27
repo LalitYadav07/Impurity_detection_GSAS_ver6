@@ -240,9 +240,9 @@ class TransitionTrackingEngine:
                 self._online_keys = []
 
     @synchronized
-    def evaluate_with_policy(self, scans, policy):
+    def evaluate_with_policy(self, scans, policy, *, progress=None):
         self.set_policy(policy)
-        return self.evaluate(scans)
+        return self.evaluate(scans, progress=progress)
 
     def append(self, scan):
         """Accept a single acquisition; callers need not supply a completed series."""
@@ -292,7 +292,7 @@ class TransitionTrackingEngine:
                 "pattern_sha256": None, "boundary": False})
 
     @synchronized
-    def _evaluate_online(self, scans):
+    def _evaluate_online(self, scans, *, progress=None):
         from .transition_stream import SignalStream
         sources = sorted(scans, key=acquisition_key)
         # Fit updates affect classification only when the user explicitly
@@ -318,6 +318,8 @@ class TransitionTrackingEngine:
                 self._online.records.append({"run_id": str(scan.get("run_id")), "state_id": None,
                     "style_index": None, "event": "unassigned", "reason": str(exc), "group": None,
                     "pattern_sha256": None, "boundary": False})
+            if progress is not None:
+                progress(len(self._online.records), len(sources), str(scan.get('run_number') or scan.get('run_id')))
         self._online_keys = keys
         self._online_sources = list(sources)
         report = self._online.report()
@@ -428,13 +430,13 @@ class TransitionTrackingEngine:
             "after": after.observation.observation_id,
         }
 
-    def evaluate(self, scans):
+    def evaluate(self, scans, *, progress=None):
         if len(scans) > 5000:
             raise ValueError(
                 "Tracking supports 5000 acquisitions per watch; select a narrower watch"
             )
         if self.policy is not None:
-            return self._evaluate_online(scans)
+            return self._evaluate_online(scans, progress=progress)
         sources = sorted(scans, key=acquisition_key)
         records, groups = {}, OrderedDict()
         by_id = {}

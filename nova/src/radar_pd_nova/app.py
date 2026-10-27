@@ -434,6 +434,8 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
         state.selected_run_message = ""
         state.selected_run_console = ""
         state.selected_run_loading = False
+        state.selected_result_load_error = ''
+        state.selected_result_load_message = ''
         state.selected_run_elapsed = "-"
         state.monitor_stages = []
         state.summary_cards = []
@@ -2205,6 +2207,11 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
 
     def _workspace_page(self) -> None:
         with html.Div(classes="radar-workspace-inner"):
+            vuetify.VAlert(v_if="selected_run_loading", text=("selected_result_load_message",),
+                type="info", variant="tonal", density="compact", classes="mb-2")
+            vuetify.VProgressLinear(v_if="selected_run_loading", indeterminate=True, height=3, color="#15543c")
+            vuetify.VAlert(v_if="!!selected_result_load_error", text=("selected_result_load_error",),
+                type="error", variant="tonal", density="compact", classes="mb-2")
             with html.Div(v_if="!selected_run_uid && workspace_view !== 'experiment'", classes="radar-workspace-empty"):
                 html.Div("RADAR-PD SCIENTIFIC AI WORKSPACE", classes="radar-kicker")
                 html.H1("Phase detection for powder diffraction")
@@ -2468,12 +2475,12 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
                         headers=([{"title": "Phase", "key": "phase"}, {"title": "Cell parameters", "key": "cell_display"}],))
                 vuetify.VBtn(
                     "Open full scan result",
-                    click=self.open_powgen_selected_run,
+                    click=self.open_powgen_selected_run_async,
                     prepend_icon="mdi-open-in-new",
                     variant="outlined",
                     size="small",
                     classes="mt-3",
-                    disabled=("!powgen_selected_run_id",),
+                    disabled=("!powgen_selected_run_id || selected_run_loading",),
                 )
         with html.Div(v_if="!powgen_scientific_rows.length", classes="radar-result-not-ready"):
             vuetify.VAlert(
@@ -4337,6 +4344,56 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
         self._select_record(record)
         self._open_record_results(record)
 
+    async def open_powgen_selected_run_async(self, **_: Any) -> None:
+        """Keep the UI responsive while a completed result is fetched from Galaxy."""
+        state = self.server.state
+        run_id = str(state.powgen_selected_run_id or '')
+        controller = self._powgen_controller
+        record = controller.records.get(run_id) if controller is not None else None
+        if record is None:
+            state.selected_result_load_error = 'This scan is not available in the current monitor.'
+            state.flush()
+            return
+        if self._opening_run_uid is not None:
+            return
+        self._opening_run_uid = record.uid
+        state.selected_run_loading = True
+        state.selected_result_load_error = ''
+        state.selected_result_load_message = f'Opening {record.name}: checking its published result…'
+        state.flush()
+        try:
+            if record.status != RunStatus.OK or not record.output_dataset_ids:
+                record = await asyncio.to_thread(self.service.refresh, record)
+                controller.records[run_id] = record
+            if record.status != RunStatus.OK:
+                raise RuntimeError(f'Galaxy reports {record.status.value}; the completed result is not available yet')
+            self.records[record.uid] = record
+            self._select_record(record)
+            self._reset_result_state()
+            state.workspace_view = 'results'
+            state.selected_result_load_message = f'Opening {record.name}: downloading fit plots and saved projects…'
+            state.flush()
+            if not record.output_dir:
+                record = await asyncio.to_thread(self.service.collect_results, record)
+                record = await asyncio.to_thread(self._publish_results_if_requested, record)
+            if not record.output_dir:
+                raise RuntimeError(record.message or 'Galaxy result collection is not ready; try opening this scan again')
+            self.records[record.uid] = record
+            controller.records[run_id] = record
+            self._select_record(record)
+            self._sync_runs()
+            self._load_results(record)
+            state.active_page = 'results'
+            state.workspace_view = 'results'
+            state.setup_collapsed = True
+        except Exception as exc:
+            state.selected_result_load_error = f'Could not open {record.name}: {exc}'
+            state.workspace_view = 'experiment'
+        finally:
+            state.selected_run_loading = False
+            self._opening_run_uid = None
+            state.flush()
+
     def show_powgen_dashboard(self, **_: Any) -> None:
         self.server.state.workspace_view = "experiment"
         self.server.state.setup_collapsed = True
@@ -4740,8 +4797,8 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
                 "No existing scans; each new scan will be processed when it appears."
                 if selected_scan_count == 0
                 else (
-                    f"{selected_scan_count} scan(s); first dashboard result typically 1-3 min. "
-                    "Bulk backfills finish in batches of five."
+                    f"{selected_scan_count} scan(s), up to five active analyses. "
+                    "Results appear as jobs finish; Galaxy queue and file staging add to analysis time."
                 )
             )
             state.powgen_preflight_details = [
@@ -4965,9 +5022,14 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
         state = self.server.state
         state.powgen_monitoring = False
         task = self._powgen_monitor_task
-        self._powgen_monitor_task = None
         if task is not None and not task.done():
-            task.cancel()
+            if getattr(self, '_powgen_submissions_in_flight', 0):
+                # An upload already running in a thread cannot be cancelled.
+                # Drain its acknowledgement before allowing another watch.
+                state.live_launch_busy = True
+            else:
+                self._powgen_monitor_task = None
+                task.cancel()
         self._powgen_wake_event.set()
         state.powgen_next_check = "Stopped"
         state.powgen_message = (
@@ -5058,6 +5120,8 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
                             # concurrency boundary.
                             await asyncio.sleep(min(position, 4) * 0.75)
                             async with submission_lanes:
+                                if not state.powgen_monitoring:
+                                    return run, None, None
                                 record = await asyncio.to_thread(controller.launch_submission, run)
                             return run, record, None
                         except Exception as exc:
@@ -5067,6 +5131,9 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
                         asyncio.create_task(launch(position, run))
                         for position, run in enumerate(due_runs)
                     ]
+                    reserved = {run.run_id for run in due_runs}
+                    acknowledged_since_checkpoint = 0
+                    self._powgen_submissions_in_flight = len(pending)
                     while pending:
                         # A cancelled asyncio task cannot stop work already
                         # running in ``to_thread``. Always acknowledge this
@@ -5079,6 +5146,8 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
                                 if launch_error is not None:
                                     raise launch_error
                                 if launched is None:
+                                    if not state.powgen_monitoring:
+                                        continue
                                     raise RuntimeError(f"Galaxy did not return a record for {run.run_id}")
                                 record = await asyncio.to_thread(
                                     controller.acknowledge_submission,
@@ -5088,6 +5157,7 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
                                 )
                                 self.records[record.uid] = record
                                 self._sync_runs()
+                                acknowledged_since_checkpoint += 1
                             except Exception as exc:
                                 warnings.append(f"{run.run_id} submission failed and will be retried: {exc}")
                                 if run.run_id in controller.state.discovered:
@@ -5102,9 +5172,28 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
                                         warnings.append(f"{run.run_id} retry checkpoint also failed: {persist_exc}")
                                 else:
                                     warnings.append(f"{run.run_id} submission status uncertain: {exc}")
+                            finally:
+                                reserved.discard(run.run_id)
                         # A later multipart upload must not hide an earlier
                         # scan's completed result until the whole batch ends.
                         await self._refresh_powgen_jobs(controller, warnings)
+                        # Fill freed slots without waiting for the slowest
+                        # upload in the original batch. Pending uploads reserve
+                        # capacity just like acknowledged active Galaxy jobs.
+                        if state.powgen_monitoring:
+                            refill = controller.due_submissions(reserved_run_ids=reserved)
+                            for position, run in enumerate(refill):
+                                reserved.add(run.run_id)
+                                pending.add(asyncio.create_task(launch(position, run)))
+                        self._powgen_submissions_in_flight = len(pending)
+                        # A rolling backfill can last hours. Keep acknowledged
+                        # job IDs durable at least once per active-job window.
+                        if acknowledged_since_checkpoint >= controller.settings.max_active_jobs or (done and not pending):
+                            try:
+                                await asyncio.to_thread(controller.persist_state)
+                                acknowledged_since_checkpoint = 0
+                            except Exception as exc:
+                                warnings.append(f"Acknowledged jobs will be checkpointed again: {_powgen_submission_error_summary(exc)}")
                         self._sync_powgen_rows()
                         state.flush()
 
@@ -5127,12 +5216,16 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
                     "failed": len(controller.state.failed),
                 }
                 state.powgen_message = (
-                    f"Monitoring {controller.source_directory}: "
+                    f"{'Monitoring' if state.powgen_monitoring else 'Stopped'} {controller.source_directory}: "
                     f"{counts['discovered']} awaiting submission, {counts['submitted']} active, "
                     f"{counts['completed']} completed, {counts['failed']} failed."
                 )
                 if warnings:
-                    state.powgen_message += " " + " ".join(warnings) + ". Monitoring remains active."
+                    state.powgen_message += " " + " ".join(warnings) + "."
+                if not state.powgen_monitoring:
+                    state.powgen_next_check = "Stopped"
+                    state.flush()
+                    break
                 delay = max(5, int(state.powgen_poll_seconds or 15))
                 state.powgen_next_check = (
                     _format_eastern_time(
@@ -5149,8 +5242,10 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
         except asyncio.CancelledError:
             pass
         finally:
+            self._powgen_submissions_in_flight = 0
             if controller is self._powgen_controller:
                 state.powgen_monitoring = False
+                state.live_launch_busy = False
                 if self._powgen_monitor_task is asyncio.current_task():
                     self._powgen_monitor_task = None
                 state.flush()
@@ -5598,6 +5693,8 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
     def _run_selection_changed(self, run_selection: Any = None, **__: Any) -> None:
         uid = selected_run_uid(run_selection)
         if not uid or uid not in self.records:
+            return
+        if self._opening_run_uid == uid:
             return
         record = self.records[uid]
         self._select_record(record)
@@ -7368,10 +7465,11 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
           .radar-scan-heading .v-btn { min-width: 0; padding: 0 6px; }
           .radar-experiment-result-tabs .v-tab { min-width: 0; }
         }
-        .radar-inspector-card { height: 100vh; overflow: auto; }
+        .radar-inspector-card { height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
         .radar-inspector-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 16px; position: sticky; top: 0; z-index: 2; background: white; }
-        .radar-inspector-frame { width: 100%; min-height: 680px; overflow: auto; }
-        .radar-inspector-frame > div { min-width: 0; width: 100%; }
+        .radar-inspector-toolbar, .radar-inspector-card > .radar-section-help { flex: 0 0 auto; }
+        .radar-inspector-frame { width: 100%; flex: 1 1 0; min-height: 0; overflow: auto; }
+        .radar-inspector-frame > div { min-width: 0; width: 100%; height: 100%; }
         .radar-inspector-fit > div { min-width: 650px; }
         .radar-observation-details { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 330px), 1fr)); column-gap: 20px; }
         .radar-observation-details > div { padding: 8px 0; border-bottom: 1px solid #dce5df; }

@@ -2273,8 +2273,12 @@ class GalaxyService:
 
             outputs = None
             try:
-                tool = self._recover_tool(job_id)
-                outputs = tool.get_results()
+                # Modern jobs expose durable REST associations. Reconstructing
+                # a nova-galaxy Tool opens/persists a datastore and cannot add
+                # value for these jobs; keep that I/O for legacy jobs only.
+                if not (record.output_dataset_ids.get('summary') or record.output_dataset_ids.get('results_archive')):
+                    tool = self._recover_tool(job_id)
+                    outputs = tool.get_results()
             except Exception:
                 # Recovered sessions should use durable dataset IDs. The Tool
                 # object is retained only as a fallback for older Galaxy jobs.

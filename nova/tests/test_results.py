@@ -963,7 +963,7 @@ def test_full_result_falls_back_to_manifest_timing_and_presents_known_main_phase
 
     assert view.phases[0]["phase"] == "Known main phase"
     assert view.phases[1]["phase"] == "Al"
-    assert view.metrics[4] == {"label": "Total time", "value": "22.2 s"}
+    assert view.metrics[4] == {"label": "Analysis time", "value": "22.2 s"}
     assert view.metrics[5] == {"label": "Result stage", "value": "Final refinement"}
 
 
