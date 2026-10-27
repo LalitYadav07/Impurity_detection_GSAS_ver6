@@ -111,10 +111,13 @@ jobs:
           import json
           from types import SimpleNamespace
           from radar_pd_nova.hb2a_profiles import ROOT, resolve_profile
+          from radar_pd_nova.hb2a import _date
           from radar_pd_nova.live_beamlines import BEAMLINES
           from radar_pd_nova.snap_conditions import validate_bindings_json
           from radar_pd_nova.snap_controller import SnapExperimentSettings
           catalog = json.loads((ROOT / "catalog.json").read_text())
+          assert _date("6/15/2024", "1:00:00 PM").isoformat() == "2024-06-15T13:00:00-04:00"
+          assert _date("11/19/2025", "1:00:00 PM").isoformat() == "2025-11-19T13:00:00-05:00"
           assert len(catalog["profiles"]) == 52
           for entry in catalog["profiles"]:
               raw = (ROOT / entry["filename"]).read_bytes()

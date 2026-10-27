@@ -11,7 +11,7 @@ ENV PIXI_ENVIRONMENT_NAME=production \
 WORKDIR /src
 COPY pyproject.toml README.md /src/
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends hdf5-tools \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends hdf5-tools tzdata \
     && rm -rf /var/lib/apt/lists/*
 COPY src /src/src
 # The pinned runtime uses Python 3.10 and does not contain SciPy. Keep the
