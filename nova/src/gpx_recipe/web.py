@@ -18,8 +18,9 @@ import uuid
 from .compiler import approve, compile_script
 from .contracts import validate_plan, plan_hash, stage_table
 from .execution import write_json
-from .jobs import RecipeQueue
+from .jobs import RecipeQueue, scientific_environment
 from .planner import make_plan
+from .providers import PROVIDERS, configure_provider, provider_info
 
 
 class Session:
@@ -28,6 +29,7 @@ class Session:
         self.sources = [str(Path(p).resolve()) for p in args.gpx]
         self.python, self.gsasii_root = args.python, args.gsasii_root
         self.fixture = args.fixture_plan
+        self.planner_info = provider_info()
         self.lock = threading.RLock(); self.worker = ThreadPoolExecutor(max_workers=1)
         self.queue = RecipeQueue(self.root / "jobs", python=args.python, gsasii_root=args.gsasii_root)
         self.state = {"status": "ready", "message": "Inspecting the starting GPX", "plan": None, "preview": None, "approval": None, "origin": None, "revisions": []}
@@ -36,7 +38,8 @@ class Session:
         previous_session = json.loads((self.root / "session.json").read_text()) if (self.root / "session.json").exists() else None
         self.native("inspect", self.sources[0], str(context_path))
         self.context = json.loads(context_path.read_text())
-        self.state["message"] = "Describe a recipe, or load the explicitly labeled execution test fixture."
+        self.state["message"] = ("Describe a recipe, or load the explicitly labeled execution test fixture."
+                                 if self.fixture else "Describe the refinement recipe to plan and review.")
         if previous_session and previous_session.get("plan"):
             try:
                 validate_plan(previous_session["plan"], self.context)
@@ -50,10 +53,7 @@ class Session:
         self.save()
 
     def native(self, *args):
-        env = os.environ.copy(); env.pop("SAMBANOVA_API_KEY", None)
-        env["PYTHONDONTWRITEBYTECODE"] = "1"
-        if self.gsasii_root: env["GSASII_ROOT"] = self.gsasii_root
-        env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1])
+        env = scientific_environment(self.gsasii_root)
         command = [self.python, "-m", "gpx_recipe.cli", *args]
         log = self.root / ("native-" + uuid.uuid4().hex[:10] + ".log")
         with log.open("w") as handle:
@@ -70,6 +70,8 @@ class Session:
         data["context"] = self.context
         data["sources"] = [Path(p).name for p in self.sources]
         data["fixture_available"] = bool(self.fixture)
+        data["planner"] = self.planner_info
+        data["deployment_planner"] = provider_info("sambanova")
         data["jobs"] = list(json.loads(self.queue.manifest.read_text()).values())
         if data.get("plan"):
             data["table"] = stage_table(data["plan"], self.context)
@@ -87,7 +89,8 @@ class Session:
                 # A failed revision must never leave the previous recipe
                 # executable while the user expects their edit to be active.
                 self.state.update(preview=None, approval=None)
-            self.state.update(status="busy", message={"plan": "Waiting for ORNL SambaNova 120B…", "preview": "Checking effective parameters in GSAS-II…", "approve": "Recording approval and compiling the script…", "run": "Executing the approved recipe on the supplied scans…", "fixture": "Loading a deterministic execution test fixture…"}[action])
+            planner = getattr(self, "planner_info", provider_info())
+            self.state.update(status="busy", message={"plan": "Waiting for " + planner["label"] + "…", "preview": "Checking effective parameters in GSAS-II…", "approve": "Recording approval and compiling the script…", "run": "Executing the approved recipe on the supplied scans…", "fixture": "Loading a deterministic execution test fixture…"}[action])
             self.save()
         def work():
             try:
@@ -100,7 +103,8 @@ class Session:
                     else:
                         response = make_plan(body.get("request", ""), self.context, previous=plan)
                         write_json(self.root / ("planning-" + uuid.uuid4().hex[:10] + ".json"), response)
-                        proposed, origin = response["plan"], "SambaNova gpt-oss-120b"
+                        proposed = response["plan"]
+                        origin = response["calls"][0]["label"] + " · reasoning " + response["calls"][0]["reasoning_effort"]
                     with self.lock:
                         self.state["revisions"].append({"plan_sha256": plan_hash(proposed), "origin": origin, "plan": proposed})
                         self.state.update(plan=proposed, preview=None, approval=None, origin=origin,
@@ -140,7 +144,10 @@ def main():
     parser.add_argument("--gsasii-root")
     parser.add_argument("--fixture-plan", help="Optional, explicitly labeled deterministic test fixture")
     parser.add_argument("--port", type=int, default=8891)
+    parser.add_argument("--provider", choices=PROVIDERS)
+    parser.add_argument("--key-file", help="Owner-only Illumine development credential outside the repository")
     args = parser.parse_args()
+    configure_provider(args.provider, args.key_file)
     session = Session(args)
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args): pass

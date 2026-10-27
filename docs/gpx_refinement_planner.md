@@ -17,9 +17,12 @@ the existing RADAR-PD interface.
   `studio-provenance.json`. The Studio repository is not a runtime dependency.
 - `knowledge.json`: a distilled vocabulary, actual API forms, flag-reset and
   constraint rules, examples, and explicit version-one limitations.
-- `planner.py`: the fixed ORNL SambaNova `gpt-oss-120b` endpoint, one planning
-  request plus at most one JSON/contract repair. Network/provider errors do not
-  trigger model substitution or execution. Revisions include the previous plan.
+- `planner.py` / `providers.py`: one planning request plus at most one
+  JSON/contract repair. Development explicitly selects Illumine `gpt-6-luna`
+  with reasoning `none`; the default NDIP target remains SambaNova
+  `gpt-oss-120b`. Network/provider errors never trigger model substitution or
+  execution. Revisions include the previous plan. Per-atom capability summaries
+  expose symmetry-fixed positions and supported ADP flags before the full context.
 - `contracts.py`: validated complete active sets, resolved phase/atom targets,
   background edits, occupancy relations, and free/newly-fixed tables.
 - `execution.py`: clears ordinary refinement flags before each stage, preserves
@@ -100,13 +103,22 @@ worker needs the existing NumPy/GSAS-II runtime; the planner's HTTPS client uses
 the standard library. The context/contract modules use NumPy through the shared
 extractor, which is already present in NOVA and the batch image.
 
-The planner accepts `SAMBANOVA_API_KEY` only from its backend environment. Its
-fixed endpoint is `https://sambanova.cades.ornl.gov/v1`; it refuses redirects or
-another host. No key belongs in a plan, GPX, notebook, repository, browser request
-or job receipt. The local validation harness may load the already configured
-Studio provider through its existing configuration helper in memory. Production
-must use NDIP-managed backend secret injection; it must not depend on Studio,
-Mac Keychain, a laptop tunnel or laptop paths.
+The default planner accepts `SAMBANOVA_API_KEY` from its backend environment;
+its endpoint is restricted to `https://sambanova.cades.ornl.gov/v1`. Explicit
+`--provider illumine-luna` selects the Illumine Responses API at
+`https://openai-eus-illumine.openai.azure.com/openai/v1`, using only
+`AZURE_ILLUMINE_API_KEY`, reasoning `none` and `store:false`. Both clients refuse
+redirects and other resources. HTTP 429 reports safe provider retry guidance;
+requests are not retried automatically. Never copy a key between these resources.
+
+For local development only, `--key-file /outside/repository/private-key-file`
+can read an existing small owner-only Illumine key file into backend memory. It
+rejects symlinks and public permissions. No key belongs in a plan, GPX, notebook,
+repository, browser request or job receipt. Scientific subprocesses receive an
+allowlisted environment without either model credential. Production must use
+NDIP-managed backend secret injection. No Studio import, client, service,
+configuration helper or Python environment is required. Studio supplies only
+the vendored knowledge/extractor provenance recorded above.
 
 ## Local interface
 
@@ -124,6 +136,27 @@ while the external model is unavailable. It is not evidence of one-shot model
 accuracy. The server binds loopback and is a local harness. Integrate its service
 operations into the authenticated NOVA backend, not a public standalone HTTP
 server. Neither core calculations nor workers require the local web harness.
+
+For Studio-independent local development, the existing RADAR-PD Linux/amd64
+image can provide the scientific interpreter:
+
+```sh
+export RADAR_GPX_DOCKER_IMAGE=radar-pd-ndip:validated-runtime-fix
+export RADAR_GPX_DOCKER_WORKDIR=/absolute/validation/root
+PYTHONPATH=scripts python -m gpx_recipe.web \
+  --provider illumine-luna --key-file /outside/repository/private-key-file \
+  --gpx "$RADAR_GPX_DOCKER_WORKDIR/starting.gpx" \
+  --workdir "$RADAR_GPX_DOCKER_WORKDIR/review" \
+  --python "$PWD/scripts/recipe_docker_python.py" --port 8891
+```
+
+The Docker shim uses an explicitly present image (`--pull never`), runs with the
+host user's numeric UID/GID and mounts only shared code plus the chosen validation
+directory. The model key is not passed to Docker. This is a local test adapter;
+the NDIP worker runs directly in its published scientific image. At deployment,
+select `--provider sambanova` (or `RADAR_GPX_PLANNER_PROVIDER=sambanova`) and inject
+only the SambaNova credential. Revalidate planning with OSS 120B before release;
+Luna success does not establish OSS planning accuracy.
 
 ## NDIP deployment boundary
 
@@ -164,3 +197,14 @@ and minimal completion requests timed out, including the existing Studio client.
 The displayed local recipe is explicitly an execution fixture. These results
 validate execution mechanics and portability, not model planning accuracy or
 general scientific correctness of arbitrary user recipes.
+
+Subsequent development uses Illumine Luna with reasoning disabled. Initial and
+revised real POWGEN recipes were each produced in one call with zero reported
+reasoning tokens, independently checked against the requested parameter sets,
+and executed on two real scans through the browser harness using the RADAR-PD
+container. The UI identifies Luna development and OSS deployment separately.
+One synthetic symmetry-fixed request was rejected by the validator, prompting
+the explicit capability summary; additional model testing can be delayed by
+provider rate limits. No additional real NOMAD context was sent to Luna for the
+optional edge-case campaign. Exact results, limitations and any follow-up checks
+are in `audit/2026-10-27/gpx-refinement-planner/luna-development`.

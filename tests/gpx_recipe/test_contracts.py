@@ -108,6 +108,12 @@ def test_no_silent_context_truncation(context):
         build_payload("request", context)
 
 
+def test_payload_exposes_symmetry_and_adp_capabilities(context):
+    caps = build_payload("refine an atom", context)["target_capabilities"][0]["atoms"]
+    assert caps[0]["label"] == "O1" and caps[0]["allowed_flags"] == "FXU"
+    assert caps[1]["label"] == "Mg1" and caps[1]["allowed_flags"] == "FU"
+
+
 def test_first_stage_shows_preexisting_cell_becoming_fixed(context, plan):
     context["phases"][0]["cell_refined"] = True
     assert "cell:p0" in stage_table(plan, context)[0]["newly_fixed"]

@@ -20,6 +20,18 @@ def file_hash(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def scientific_environment(gsasii_root=None):
+    """The scientific worker never inherits any model credential."""
+    allowed = {"PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "SYSTEMROOT", "WINDIR",
+               "RADAR_GPX_DOCKER_WORKDIR", "RADAR_GPX_DOCKER_IMAGE"}
+    env = {k: v for k, v in os.environ.items() if k in allowed}
+    env.update(PYTHONPATH=str(Path(__file__).resolve().parents[1]), PYTHONDONTWRITEBYTECODE="1", MPLBACKEND="Agg",
+               OPENBLAS_NUM_THREADS="1", OMP_NUM_THREADS="1")
+    if gsasii_root:
+        env["GSASII_ROOT"] = str(gsasii_root)
+    return env
+
+
 class RecipeQueue:
     def __init__(self, root, *, python, gsasii_root=None, timeout=300):
         self.root = Path(root).resolve()
@@ -75,11 +87,7 @@ class RecipeQueue:
         attempt = self.root / job["id"] / ("attempt-" + str(job["attempts"]) + "-" + uuid.uuid4().hex[:8])
         attempt.mkdir()
         output = attempt / "polished.gpx"
-        env = {k: v for k, v in os.environ.items() if k in {"PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "SYSTEMROOT", "WINDIR"}}
-        env.update(PYTHONPATH=str(Path(__file__).resolve().parents[1]), PYTHONDONTWRITEBYTECODE="1", MPLBACKEND="Agg",
-                   OPENBLAS_NUM_THREADS="1", OMP_NUM_THREADS="1")
-        if self.gsasii_root:
-            env["GSASII_ROOT"] = str(self.gsasii_root)
+        env = scientific_environment(self.gsasii_root)
         command = [self.python, job["script"], "--source-gpx", job["source"], "--output-gpx", str(output)]
         job["command"] = command
         try:

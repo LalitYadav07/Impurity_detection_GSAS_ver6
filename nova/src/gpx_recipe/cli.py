@@ -8,6 +8,7 @@ from gpx_recipe.snapshot import snapshot
 from gpx_recipe.planner import make_plan, build_payload
 from gpx_recipe.compiler import approve, compile_script
 from gpx_recipe.execution import run_plan, write_json
+from gpx_recipe.providers import PROVIDERS, configure_provider
 
 
 def load(path):
@@ -20,6 +21,9 @@ def main():
     p = commands.add_parser("inspect"); p.add_argument("gpx"); p.add_argument("output")
     for name in ("context", "plan"):
         p = commands.add_parser(name); p.add_argument("snapshot"); p.add_argument("request_file"); p.add_argument("output"); p.add_argument("--previous")
+        if name == "plan":
+            p.add_argument("--provider", choices=PROVIDERS)
+            p.add_argument("--key-file", help="Owner-only Illumine development credential outside the repository")
     p = commands.add_parser("preview"); p.add_argument("gpx"); p.add_argument("plan"); p.add_argument("output_gpx")
     p = commands.add_parser("approve"); p.add_argument("snapshot"); p.add_argument("plan"); p.add_argument("preview"); p.add_argument("output"); p.add_argument("--approver", required=True)
     p = commands.add_parser("compile"); p.add_argument("plan"); p.add_argument("approval"); p.add_argument("output_script")
@@ -34,6 +38,7 @@ def main():
         if args.action == "context":
             result = build_payload(request, context, previous)
         else:
+            configure_provider(args.provider, args.key_file)
             result = make_plan(request, context, previous=previous)
         write_json(args.output, result)
         if args.action == "plan": write_json(Path(args.output).with_suffix(".plan.json"), result["plan"])
