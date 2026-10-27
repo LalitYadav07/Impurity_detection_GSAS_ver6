@@ -115,7 +115,7 @@ class PowgenSampleIndex:
             result.append(run)
         return result
 
-    def inventory(self, runs: Iterable[WatchedRun], *, catalog: bool = False) -> dict[str, Any]:
+    def inventory(self, runs: Iterable[WatchedRun], *, catalog: bool = False, progress=None) -> dict[str, Any]:
         runs = list(runs)
         self.metadata_index.refresh(force=True)
         catalog_rows, catalog_notice = {}, ""
@@ -135,8 +135,12 @@ class PowgenSampleIndex:
             return metadata
         # Limit concurrent facility reads. Read scalar identity fields only;
         # full scan conditions are collected later for runs actually processed.
+        identities=[]
         with ThreadPoolExecutor(max_workers=4) as pool:
-            identities = list(pool.map(read_identity if catalog else self.identity, runs))
+            for count, identity in enumerate(pool.map(read_identity if catalog else self.identity, runs),1):
+                identities.append(identity)
+                if progress is not None and (count==1 or count%25==0 or count==len(runs)):
+                    progress(count,len(runs))
         if catalog:
             created = time.monotonic()
             self._preview_cache = {r.run_number: ((r.fingerprint, self.metadata_index.revision,

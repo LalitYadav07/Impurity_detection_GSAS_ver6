@@ -148,10 +148,11 @@ def bounded_directory_listing(directory: str | Path) -> list[dict[str, Any]]:
 
 
 def discover_powgen_samples(ipts: str, sample_index: PowgenSampleIndex,
-                            subfolder: str = "shared/autoreduce") -> dict[str, Any]:
+                            subfolder: str = "shared/autoreduce", *, progress=None) -> dict[str, Any]:
     definition = PowgenExperimentSettings(ipts, "samples", "samples", "", subfolder=subfolder).definition()
     runs = discover_from_listing(definition, bounded_directory_listing(definition.source_directory))
-    inventory = sample_index.inventory(runs, catalog=True)
+    kwargs={"progress":progress} if progress is not None else {}
+    inventory = sample_index.inventory(runs, catalog=True, **kwargs)
     options = [{"title": "Current autoreduce folder", "value": "shared/autoreduce"}]
     # Historical cycle folders are explicit choices, never recursively scanned
     # or merged with current reductions that may contain reprocessed copies.

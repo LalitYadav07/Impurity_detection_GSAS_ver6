@@ -21,6 +21,27 @@ starting a fresh session.
 
 ## Supported workflow
 
+### Individual IDL Bragg products
+
+Live also exposes immediate `GSAS` folders under named `autoNOM*`, `autoMTS*`
+and `manuNOM*` reduction families. Select one family explicitly. Individual
+`NOM<run>tof.gsa` products must pass the same complete SLOG/FXYE, run identity,
+bank geometry and selected-bank numeric checks as `NOM_<run>.gsa`. Other
+historical formats still require a supported conversion. Summed, unnormalized
+and PDF products are excluded; duplicate aliases for one run in a folder are
+rejected rather than silently selected.
+
+The original source hash and all selected numeric records/uncertainties are
+retained. IDL provenance is labeled separately. Missing reduction receipts,
+calibration records or correction details remain explicit scientific-review
+notices and still require acknowledgement; an IDL folder name does not
+validate a supplied profile. No automatic NOMAD calibration is inferred.
+
+Sample discovery reports source-file progress. NOMAD initial preflight now
+applies the selected backfill limit before expensive full scientific checks,
+while independently verifying each selected sample identity. An unavailable
+folder offers the available choices instead of implying an empty experiment.
+
 Choose **Live → NOMAD**, enter an IPTS, then refresh sample IDs. The archive
 instrument code is `NOM`; the interface calls it NOMAD. Select all samples or
 specific sample IDs and names. The initial-scan limit applies after sample
@@ -29,7 +50,8 @@ filtering; later matching reductions use the same selection.
 The default source is the immediate folder
 `/SNS/NOM/<IPTS>/shared/autoreduce/multi_banks/GSAS`. Only individual
 `NOM_<run>.gsa` files trigger analysis. The legacy `shared/autoreduce` folder
-is a separate selection when present. The adapter never recursively combines
+is a separate selection when present. The IDL choices above use their own
+individual `NOM<run>tof.gsa` filenames. The adapter never recursively combines
 these folders, summed products, `GSAS_unnorm`, XYE, S(Q), PDF or raw events.
 
 Select exactly one source bank or focused histogram per watch and provide a matching GSAS-II
@@ -178,8 +200,8 @@ visible through the DGX on 2026-10-23. This is inventory/scan-table validation,
 not scientific acceptance of every run. Direct replay additionally checked
 224 raw identity cases, 208 reduced products and 24 condition summaries.
 Private evidence and the per-IPTS decision report are kept in the local
-workspace audit directory, outside this source repository. Existing IDL
-`NOM<run>tof.gsa` families still require an explicit conversion/adapter;
+workspace audit directory, outside this source repository. Historical IDL
+formats outside the explicit individual SLOG/FXYE layout still require conversion;
 automatic NOMAD profile selection remains unqualified. All-IPTS raw-event
 reduction, all-run raw metadata inspection, fits and NDIP browser acceptance
 have not been performed.

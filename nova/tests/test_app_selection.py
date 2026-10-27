@@ -136,7 +136,7 @@ def test_powgen_sample_discovery_discards_old_ipts_and_preserves_same_ipts_selec
     app.server = SimpleNamespace(state=state)
     app._powgen_form_ipts = "IPTS-35915"
     started, release = threading.Event(), threading.Event()
-    def discover(ipts, index):
+    def discover(ipts, index, **kwargs):
         started.set()
         assert release.wait(5)
         return {"options":[{"value":"A","title":"A — Copper (1 scans)"}],"scan_count":1,"unidentified_count":0}
@@ -162,13 +162,41 @@ def test_powgen_sample_discovery_populates_dropdown_and_unknown_count(monkeypatc
     app = RadarPdNovaApp.__new__(RadarPdNovaApp)
     state = _State(powgen_ipts="35915", powgen_monitoring=False, powgen_sample_loading=False)
     app.server = SimpleNamespace(state=state)
-    monkeypatch.setattr("radar_pd_nova.app.discover_powgen_samples", lambda *args: {
+    monkeypatch.setattr("radar_pd_nova.app.discover_powgen_samples", lambda *args, **kwargs: {
         "options":[{"value":"123","title":"123 — Copper (2 scans)"}],"scan_count":3,"unidentified_count":1})
     asyncio.run(app.refresh_powgen_samples())
     assert state.powgen_discovered_sample_options[0]["value"] == "123"
     assert state.powgen_sample_discovery_ipts == "IPTS-35915"
     assert "1 scans have no readable sample ID" in state.powgen_sample_message
     assert state.powgen_sample_loading is False
+
+
+def test_sample_discovery_progress_updates_ui_and_ignores_a_previous_experiment(monkeypatch):
+    app=RadarPdNovaApp()
+    state=app.server.state
+    state.powgen_ipts='1'
+    entered,release=threading.Event(),threading.Event()
+    def discover(ipts,index,*,progress):
+        progress(1,100)
+        entered.set()
+        assert release.wait(5)
+        progress(100,100)
+        return {'options':[],'scan_count':100,'unidentified_count':100}
+    monkeypatch.setattr('radar_pd_nova.app.discover_powgen_samples',discover)
+    async def check():
+        task=asyncio.create_task(app.refresh_powgen_samples())
+        try:
+            assert await asyncio.to_thread(entered.wait,2)
+            await asyncio.sleep(0)
+            assert '1 of 100' in state.powgen_sample_message
+            state.powgen_ipts='2'
+            app._powgen_ipts_changed()
+        finally:
+            release.set()
+            await task
+        assert '100 of 100' not in state.powgen_sample_message
+        assert state.powgen_discovered_sample_options==[]
+    asyncio.run(check())
 
 
 def test_refresh_after_typing_an_ipts_survives_the_queued_change_callback(monkeypatch):
@@ -178,7 +206,7 @@ def test_refresh_after_typing_an_ipts_survives_the_queued_change_callback(monkey
     app._powgen_form_ipts = "IPTS-1"
     started, release = threading.Event(), threading.Event()
 
-    def discover(*args):
+    def discover(*args, **kwargs):
         started.set()
         assert release.wait(5)
         return {"options": [{"value": "A", "title": "A — real sample"}], "scan_count": 1, "unidentified_count": 0}
@@ -202,7 +230,7 @@ def test_sample_refresh_uses_the_visible_ipts_when_the_model_update_is_delayed(m
     state = _State(powgen_ipts="", powgen_monitoring=False, powgen_sample_loading=False)
     app.server = SimpleNamespace(state=state)
 
-    def discover(ipts, index):
+    def discover(ipts, index, **kwargs):
         assert ipts == "IPTS-35915"
         return {"options": [{"value": "A", "title": "A — real sample"}], "scan_count": 1, "unidentified_count": 0}
 

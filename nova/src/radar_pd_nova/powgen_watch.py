@@ -18,6 +18,7 @@ import re
 from typing import Any, Iterable, Mapping, Sequence
 
 from .powgen import PowgenReducedFile, select_preferred_reduced_file
+from .nomad import is_source_subfolder as nomad_subfolder, run_number_from_filename as nomad_run_number
 
 
 WATCH_STATE_SCHEMA = "radar-pd-powgen-watch-state/v1"
@@ -73,7 +74,7 @@ class WatchDefinition:
             raise ValueError("POWGEN watches are limited to the SNS facility")
         if instrument not in {"PG3", "NOM"}:
             raise ValueError("Live watches support PG3 (POWGEN) and NOM (NOMAD)")
-        if instrument == "NOM" and self.subfolder not in {"shared/autoreduce", "shared/autoreduce/multi_banks/GSAS"}:
+        if instrument == "NOM" and not nomad_subfolder(self.subfolder):
             raise ValueError("NOMAD live mode accepts individual normalized Bragg product folders only")
         if not _IPTS_RE.fullmatch(ipts):
             raise ValueError("POWGEN watch IPTS must have the form IPTS-<number>")
@@ -531,10 +532,10 @@ def discover_from_listing(
             continue
         try:
             if definition.instrument == "NOM":
-                match = re.fullmatch(r"NOM_(\d+)\.gsa", PurePosixPath(candidate_path).name, re.I)
-                if match is None:
+                number = nomad_run_number(PurePosixPath(candidate_path).name)
+                if number is None:
                     continue
-                parsed = PowgenReducedFile(candidate_path, PurePosixPath(candidate_path).name, int(match[1]), None, ".gsa")
+                parsed = PowgenReducedFile(candidate_path, PurePosixPath(candidate_path).name, number, None, ".gsa")
             else:
                 parsed = select_preferred_reduced_file([candidate_path])
         except ValueError:
@@ -549,6 +550,8 @@ def discover_from_listing(
         run_numbers = run_numbers[-newest_limit:]
     for run_number in run_numbers:
         candidates = by_run[run_number]
+        if definition.instrument == "NOM" and len(candidates) != 1:
+            raise ValueError(f'Multiple NOMAD reductions for run {run_number} in one folder; choose an unambiguous source')
         preferred = candidates[0][0] if definition.instrument == "NOM" else select_preferred_reduced_file([item.path for item, _ in candidates], run_number=run_number)
         metadata = next(metadata for item, metadata in candidates if item.path == preferred.path)
         run = WatchedRun(

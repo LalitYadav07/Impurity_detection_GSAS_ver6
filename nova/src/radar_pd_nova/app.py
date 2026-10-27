@@ -4582,7 +4582,17 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
             if folder != "shared/autoreduce" or self._live_adapter().instrument == "NOM":
                 args += (folder,)
             discovery = discover_powgen_samples if self._live_adapter().instrument == "PG3" else self._live_adapter().discover_samples
-            result = await asyncio.to_thread(discovery, *args)
+            loop=asyncio.get_running_loop()
+            def publish_progress(done,total):
+                def update():
+                    if self._powgen_sample_request is token:
+                        state.powgen_sample_message=f"Reading sample identities: {done:,} of {total:,} completed scans…"
+                        state.flush()
+                try:
+                    loop.call_soon_threadsafe(update)
+                except RuntimeError:
+                    pass  # A closed viewer must not break a read-only cache fill.
+            result = await asyncio.to_thread(discovery, *args, progress=publish_progress)
             if self._powgen_sample_request is not token:
                 return
             state.powgen_source_options = result.get("source_options") or getattr(state, "powgen_source_options", [])
@@ -4598,6 +4608,8 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
                 + (" Sample list uses catalog metadata; selected runs are verified from source files before analysis."
                    if result.get("catalog_preview_count") else "")
             )
+            if result.get('source_unavailable'):
+                state.powgen_sample_message='The selected reduction folder is unavailable. Choose one of the available reduction families, then refresh sample IDs.'
         except Exception as exc:
             if self._powgen_sample_request is token:
                 state.powgen_sample_message = f"Sample discovery failed: {exc}. You can still check All samples."

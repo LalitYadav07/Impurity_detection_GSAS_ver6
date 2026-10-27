@@ -1,5 +1,4 @@
 """NOMAD adapter sharing the established live job/retry/checkpoint lifecycle."""
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from hashlib import sha256
 import json
@@ -10,7 +9,7 @@ from .acquisition import acquisition_context
 from .models import InputSelection, InputSource
 from .nomad_metadata import NomadSampleIndex, read_nomad_scan_metadata
 from .powgen_controller import PowgenExperimentSettings, PowgenWatchController
-from .powgen_samples import include_run, identity_readiness
+from .powgen_samples import identity_readiness, select_runs
 from .powgen_watch import WatchDefinition, discover_from_listing, build_submission_plan
 
 
@@ -42,12 +41,14 @@ class NomadExperimentSettings(PowgenExperimentSettings):
                             'profile_acknowledged':self.profile_acknowledged,'allow_exploratory':self.allow_exploratory},sort_keys=True)})
 
 
-def discover_nomad_samples(ipts, sample_index, subfolder=nomad.MODERN_FOLDER):
+def discover_nomad_samples(ipts, sample_index, subfolder=nomad.MODERN_FOLDER, *, progress=None):
     definition=WatchDefinition(ipts,subfolder,'samples','samples','profile-required',instrument='NOM')
     options=nomad.source_options(ipts)
     root=Path(definition.source_directory)
     runs=discover_from_listing(definition,nomad.directory_listing(root)) if root.is_dir() else []
-    result=sample_index.inventory(runs);result['source_options']=options
+    kwargs={'progress':progress} if progress is not None else {}
+    result=sample_index.inventory(runs,**kwargs) if root.is_dir() else dict(options=[],run_options=[],scan_count=0,unidentified_count=0,source_unavailable=True)
+    result['source_options']=options
     return result
 
 
@@ -58,14 +59,11 @@ def preflight_nomad_experiment(ipts, *, selected_sample_ids=None, selected_banks
     definition=WatchDefinition(ipts,subfolder,'preflight','preflight','profile-required',instrument='NOM')
     runs=discover_from_listing(definition,nomad.directory_listing(definition.source_directory))
     total=len(runs);index=sample_index or NomadSampleIndex(ipts)
-    if selected_sample_ids is not None:
-        with ThreadPoolExecutor(max_workers=4) as pool:identities=list(pool.map(index.identity,runs))
-        runs=[r for r,m in zip(runs,identities) if m.get('sample_id') in selected_sample_ids]
-    before=len(runs)
-    runs=[r for r in runs if include_run(r,excluded_run_numbers=excluded_run_numbers,
-          include_background_runs=include_background_runs,include_ramp_runs=include_ramp_runs)]
-    excluded=before-len(runs)
-    if initial_backfill_limit is not None:runs=runs[-max(1,initial_backfill_limit):]
+    stats={}
+    runs=select_runs(runs,index,selected_sample_ids,limit=initial_backfill_limit,
+        excluded_run_numbers=excluded_run_numbers,include_background_runs=include_background_runs,
+        include_ramp_runs=include_ramp_runs,selection_stats=stats)
+    excluded=stats.get('excluded_count',0)
     errors=[];setups=[];available=set();notices=[];mapping=[];bank_quality={}
     for run in runs:
         try:
