@@ -895,7 +895,11 @@ def collect_outputs(
         lattice_path = portal / "tables" / "Final_lattice_parameters.csv"
         lattice_path.parent.mkdir(parents=True, exist_ok=True)
         with lattice_path.open("w", encoding="utf-8", newline="") as handle:
-            writer = csv.DictWriter(handle, fieldnames=list(lattice[0]))
+            # Fixed/unavailable cells and covariance-backed cells carry
+            # different optional metadata. Preserve their union regardless of
+            # which phase was selected first; never discard uncertainty fields.
+            fields = list(dict.fromkeys(key for row in lattice for key in row))
+            writer = csv.DictWriter(handle, fieldnames=fields)
             writer.writeheader()
             writer.writerows(lattice)
         collection_records["tables"].append(file_record(lattice_path, role="table", root=portal))
