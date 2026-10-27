@@ -113,6 +113,19 @@ def test_readable_candidate_labels_preserve_distinct_identities_and_cell_differe
     assert changes == original
 
 
+def test_candidate_labels_use_actual_project_symmetry_without_changing_scientific_values():
+    from radar_pd_nova.scan_interpretation_ui import phase_labels
+    row = {"observables": {"phases": [
+        {"phase_id": "stage", "phase": "Li0.2C6 (SG P-6m2, 187)",
+         "space_group": "P 3", "source_gpx": "final.gpx", "weight_percent": 4.5},
+        {"phase_id": "lic18", "phase": "Li0.4444C8 (SG P6_3/mmc, 194)",
+         "space_group": "P 63 m c", "source_gpx": "final.gpx", "weight_percent": 6.5},
+    ]}}
+    original = copy.deepcopy(row)
+    assert phase_labels(row) == {"stage": "Li0.2C6 (SG P3)", "lic18": "Li0.4444C8 (SG P63mc)"}
+    assert row == original
+
+
 def test_follow_latest_preserves_operator_choice_of_older_scan():
     application = app()
     state = application.server.state

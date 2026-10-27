@@ -17,6 +17,7 @@ from trame.widgets import html, plotly, vuetify3 as vuetify
 
 from .scan_interpretation import InterpretationSettings, ScanInterpreter, digest
 from .scan_interpretation_plot import comparison_figure, observation_figure
+from .results import phase_fraction_rows
 
 
 def scan_label(scan):
@@ -34,9 +35,14 @@ def phase_labels(*scans):
     """Readable labels never merge distinct candidate identities."""
     names = {}
     for scan in scans:
-        for phase in (scan.get("observables") or {}).get("phases", []):
+        phases = [phase for phase in (scan.get("observables") or {}).get("phases", [])
+                  if isinstance(phase, dict)]
+        normalized = phase_fraction_rows({"phases": phases, "lattice_parameters": phases})
+        for phase, label in zip(phases, normalized):
             key = str(phase.get("phase_id", ""))
-            names[key] = str(phase.get("phase") or key)
+            group = label["space_group"]
+            names[key] = (f"{label['phase']} (SG {group})" if group != "-"
+                          else str(phase.get("phase") or key))
     duplicates = {name for name in names.values() if list(names.values()).count(name) > 1}
     return {
         key: f"{name} · {key}" if name in duplicates else name

@@ -216,8 +216,9 @@ observations and downloads. Unimplemented broadening/site-order choices are not
 offered. An individual fit does not need a duplicate experiment-trend panel or
 one-point trend setup. Opening its page preserves the live experiment history.
 The experiment stays visible while a full result downloads. Phase-fraction
-labels prefer an unambiguous final GPX model symmetry over an older catalog
-label; this changes presentation, not fitted fractions or model parameters.
+labels, including the transition refinement table, prefer an unambiguous final
+GPX model symmetry over an older catalog label; this changes presentation, not
+fitted fractions or model parameters.
 
 The measured-peak detector sees measured coordinates, intensities, errors, masks
 and explicit specimen/bank/reduction provenance. It allows independent local

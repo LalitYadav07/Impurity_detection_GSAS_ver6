@@ -538,6 +538,20 @@ def test_completed_refinement_rows_reach_a_client_that_already_received_pending_
     assert browser["transition_model_rows"][0]["phase"]
 
 
+def test_transition_refinement_uses_actual_symmetry_instead_of_catalog_annotation():
+    app = application()
+    row = copy.deepcopy(scans()[-1])
+    row["pattern"]["source_gpx_sha256"] = row["observables"]["source_gpx_sha256"]
+    phase = row["observables"]["phases"][0]
+    phase.update(phase="Li0.2C6 (SG P-6m2, 187)", space_group="P 3", source_gpx="final.gpx")
+    original = copy.deepcopy(row)
+    app._transition_refinement(row)
+    labels = [item["phase"] for item in app.server.state.transition_model_rows]
+    assert "Li0.2C6 (SG P3)" in labels
+    assert all("P-6m2" not in label for label in labels)
+    assert row == original
+
+
 def test_switching_experiment_clears_previous_patterns_before_background_work_finishes():
     app = application()
     assert app.server.state.transition_timeline
