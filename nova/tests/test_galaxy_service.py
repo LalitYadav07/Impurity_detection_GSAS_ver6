@@ -57,6 +57,24 @@ def test_portable_yaml_configuration_remains_supported(monkeypatch, tmp_path):
     assert service.load_json_document("yaml") == {"measurement": {"radiation": "neutron"}}
 
 
+def test_configuration_scoped_recovery_does_not_load_unrelated_configs(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    service = GalaxyService("https://galaxy.example", "key", "history", output_root=tmp_path)
+    summaries = [{"id": "unrelated"}, {"id": "matching"}]
+    response = SimpleNamespace(json=lambda: summaries, raise_for_status=lambda: None)
+    monkeypatch.setattr("radar_pd_nova.galaxy_service.requests.get", lambda *a, **kw: response)
+    jobs = {name: {"id": name, "state": "ok", "params": {"run_name": name},
+        "inputs": {"reproducibility|configuration_override|config_file": {"id": cfg}}}
+        for name, cfg in (("unrelated", "other-cfg"), ("matching", "wanted-cfg"))}
+    service._job_details = lambda uid, fallback=None: jobs[uid]
+    loaded = []
+    service._config_from_job = lambda job, parameters, outputs: loaded.append(job["id"])
+    records = service.recent_runs(limit=250, configuration_dataset_id="wanted-cfg")
+    assert [r.uid for r in records] == ["matching"]
+    assert loaded == ["matching"]
+    assert records[0].input_dataset_ids["configuration"] == "wanted-cfg"
+
+
 def test_galaxy_status_normalization() -> None:
     assert normalize_status("queued") is RunStatus.QUEUED
     assert normalize_status("running") is RunStatus.RUNNING

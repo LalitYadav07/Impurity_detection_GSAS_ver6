@@ -5023,6 +5023,8 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
                     warnings.append(f"Source check failed: {_powgen_submission_error_summary(exc)}")
 
                 try:
+                    state.powgen_message = "Recovering any previously accepted Galaxy jobs for this configuration..."
+                    state.flush()
                     recovered = await asyncio.to_thread(controller.reconcile_recent_runs)
                     if recovered:
                         warnings.append(f"recovered {recovered} acknowledged Galaxy job(s) from recent History")

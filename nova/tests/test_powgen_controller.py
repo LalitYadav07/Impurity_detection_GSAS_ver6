@@ -147,6 +147,21 @@ def test_checkpoint_index_never_replaces_payload_validation():
     assert not PowgenWatchController(service, settings).restore_latest_state()
 
 
+def test_job_reconciliation_supplies_configuration_scope_when_transport_supports_it(monkeypatch):
+    seen = []
+    class ScopedService(FakeGalaxyService):
+        def recent_runs(self, *, limit, configuration_dataset_id=None):
+            seen.append((limit, configuration_dataset_id))
+            return []
+    service = ScopedService()
+    controller = PowgenWatchController(service,
+        PowgenExperimentSettings("IPTS-38000", service.history_id, "config-hda", "1.5"))
+    monkeypatch.setattr(controller, "_read_scan_metadata", lambda _: {})
+    controller.discover([{"path": "PG3_63765.gsa"}])
+    assert controller.reconcile_recent_runs() == 0
+    assert seen == [(50, "config-hda")]
+
+
 def test_monitor_scientific_summary_resolves_direct_curve_output_without_tables():
     service = FakeGalaxyService()
     descriptor = {"name": "Pattern_observation.json", "sha256": "a" * 64, "source_gpx_sha256": "b" * 64}

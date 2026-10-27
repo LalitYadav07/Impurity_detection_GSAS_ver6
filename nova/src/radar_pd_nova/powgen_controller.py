@@ -17,6 +17,7 @@ import json
 import threading
 import time
 import tempfile
+import inspect
 from hashlib import sha256
 from typing import Any, Iterable, Mapping
 
@@ -958,7 +959,13 @@ class PowgenWatchController:
             self._recent_runs_reconciled = True
             return 0
 
-        recovered = self.service.recent_runs(limit=max(50, min(250, len(active) * 4)))
+        recovery_options = {"limit": max(50, min(250, len(active) * 4))}
+        # Local transports from older simulator versions may implement the
+        # original unfiltered method. Production can avoid hydrating unrelated
+        # configurations while retaining the full identity checks below.
+        if "configuration_dataset_id" in inspect.signature(self.service.recent_runs).parameters:
+            recovery_options["configuration_dataset_id"] = self.settings.configuration_dataset_id
+        recovered = self.service.recent_runs(**recovery_options)
         candidates: dict[str, RunRecord] = {}
         runs_by_name = {self._run_name(run).upper(): run_id for run_id, run in active.items()}
         for record in recovered:

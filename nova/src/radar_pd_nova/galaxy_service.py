@@ -2115,7 +2115,7 @@ class GalaxyService:
     def cancel(self, uid: str) -> None:
         self._recover_tool(uid).stop()
 
-    def recent_runs(self, *, limit: int = 50) -> list[RunRecord]:
+    def recent_runs(self, *, limit: int = 50, configuration_dataset_id: str | None = None) -> list[RunRecord]:
         """Recover RADAR-PD Analyze jobs directly from the active Galaxy history."""
 
         response = requests.get(
@@ -2134,10 +2134,15 @@ class GalaxyService:
                 job = self._job_details(uid, summary)
             except Exception:
                 job = dict(summary)
+            public_input_ids = self._public_input_dataset_ids(job)
+            if configuration_dataset_id and public_input_ids.get("configuration") != configuration_dataset_id:
+                # A large shared History may contain hundreds of other runs.
+                # Reject their immutable input identity before fetching and
+                # rebuilding their configuration, outputs and result records.
+                continue
             state = normalize_status(job.get("state"))
             parameters = self._job_parameters(job)
             output_ids = self._job_output_ids(job)
-            public_input_ids = self._public_input_dataset_ids(job)
             config = self._config_from_job(job, parameters, output_ids)
             inputs = self._inputs_from_parameters(parameters, public_input_ids)
             parameter_name = _text(_parameter_value(parameters, "reproducibility.run_name", "run_name"))
