@@ -51,7 +51,7 @@ def locked_limits(pattern, background=None):
     measured = (
         pattern.intensity if background is None else pattern.intensity - background
     )
-    values = measured[pattern.valid]
+    values = measured[pattern.valid & np.isfinite(measured)]
     if not len(values):
         raise ValueError("A color reference needs valid measured intensities")
     low, high = float(min(0, np.min(values))), float(np.quantile(values, 0.999))
@@ -110,6 +110,7 @@ def binned_intensity(pattern, boundaries, background=None):
     measured = (
         pattern.intensity if background is None else pattern.intensity - background
     )
+    valid &= np.isfinite(measured)
     np.maximum.at(output, indices[valid], measured[valid])
     output[~np.isfinite(output)] = np.nan
     return output
@@ -119,7 +120,7 @@ def ribbon_trace(pattern,background,limits,scale,contrast,label):
     raw=pattern.intensity if background is None else pattern.intensity-background
     values=np.where(pattern.valid,transform(raw,limits,scale=scale,contrast=contrast),np.nan)
     return {"type":"scatter","x":pattern.x.tolist(),"y":[float(v) if np.isfinite(v) else None for v in values],
-        "customdata":raw.tolist(),"mode":"lines","name":label,"line":{"color":"#133d76","width":1.1},
+        "customdata":[float(v) if np.isfinite(v) else None for v in raw],"mode":"lines","name":label,"line":{"color":"#133d76","width":1.1},
         "connectgaps":False,"showlegend":False,
         "hovertemplate":label+"<br>%{x:.6g}<br>Intensity %{customdata:.6g}<extra></extra>"}
 

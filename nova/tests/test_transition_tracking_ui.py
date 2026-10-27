@@ -556,6 +556,34 @@ def test_background_display_and_empty_scope_cannot_change_scientific_history_or_
     assert not state.transition_model_rows and not state.transition_peer_labels
 
 
+def test_short_valid_segments_without_baseline_keep_display_and_inference_separate():
+    from radar_pd_nova.transition_tracking import TransitionTrackingEngine
+    row = scans()[0]
+    valid = np.asarray(row["pattern"]["valid"], dtype=bool)
+    valid[90:100] = False
+    valid[110:120] = False  # Ten valid samples between gaps cannot estimate a baseline.
+    row["pattern"]["valid"] = valid.tolist()
+    row["pattern"]["fit_valid"] = valid.tolist()
+    app = RadarPdNovaApp()
+    app._transition_engine = TransitionTrackingEngine()
+    app._transition_scans = {row["run_id"]: row}
+    app._transition_calibration = lambda _: None
+    item = app._transition_engine.load(row)
+    original = item.pattern
+    before = original.intensity.copy(), original.valid.copy()
+    baseline = app._transition_engine.prepare(item).baseline
+    assert np.any(original.valid & ~np.isfinite(baseline))
+    app.server.state.transition_background = True
+    converted, backgrounds, _ = app._transition_map_display_data([original], [row["run_id"]], original, row["run_id"])
+    assert np.any(~np.isfinite(backgrounds[0]))
+    np.testing.assert_array_equal(converted[0].intensity, before[0])
+    np.testing.assert_array_equal(converted[0].valid, before[1])
+    app.server.state.transition_background = False
+    raw, backgrounds, _ = app._transition_map_display_data([original], [row["run_id"]], original, row["run_id"])
+    assert backgrounds is None
+    np.testing.assert_array_equal(raw[0].valid, before[1])
+
+
 def test_a_discovered_bank_appears_before_refinement_and_survives_an_analysis_failure(
     tmp_path,
 ):

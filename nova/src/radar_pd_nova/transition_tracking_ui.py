@@ -1528,7 +1528,11 @@ class TransitionTrackingMixin:
             backgrounds=[]
             for p,k in zip(patterns,ids):
                 baseline=self._transition_engine.prepare(self._transition_engine.load(self._transition_scans[k])).baseline
-                backgrounds.append(display_pattern(replace(p,intensity=baseline),target,calibrations[k]).intensity)
+                # Short isolated valid stretches have no robust local baseline.
+                # Preserve those gaps in this display-only copy; the original
+                # measured validity and statistical evidence remain unchanged.
+                baseline_pattern = replace(p, intensity=baseline, valid=p.valid & np.isfinite(baseline))
+                backgrounds.append(display_pattern(baseline_pattern,target,calibrations[k]).intensity)
         reference=display_pattern(first,target,calibrations[first_id]) if first is not None else None
         return converted,backgrounds,reference
 

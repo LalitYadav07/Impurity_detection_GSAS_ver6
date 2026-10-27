@@ -44,6 +44,22 @@ def test_ribbon_shares_heatmap_zoom_and_uses_the_same_background_and_scale():
     assert fig.layout.meta["palette"]=="Turbo"
 
 
+def test_missing_local_baseline_does_not_poison_color_limits_or_neighboring_peak_bins():
+    from radar_pd_nova.transition_tracking_plot import binned_intensity, ribbon_trace
+    p = observed()
+    baseline = np.full(len(p.x), 15.0)
+    baseline[100:105] = np.nan
+    limits = locked_limits(p, background=baseline)
+    assert all(np.isfinite(limits[k]) for k in ("low", "high", "soft"))
+    boundaries = np.array([p.x[99], p.x[106], p.x[110]])
+    binned = binned_intensity(p, boundaries, background=baseline)
+    expected = p.intensity[99:106] - baseline[99:106]
+    assert binned[0] == np.max(expected[np.isfinite(expected)])
+    trace = ribbon_trace(p, baseline, limits, "asinh", 50, "test")
+    assert trace["y"][100:105] == [None] * 5
+    assert trace["customdata"][100:105] == [None] * 5
+
+
 def test_adding_rows_keeps_the_same_native_display_bins_colors_and_color_limits():
     a, b = observed(ident="a"), observed(gain=8, ident="b")
     limits = locked_limits(a)
