@@ -376,7 +376,7 @@ def validate_profile(setup, path, *, acknowledged=False):
         'parameters': numeric}
 
 
-def stage_pattern(source, setup, profile_path, destination, *, acknowledged=False):
+def stage_pattern(source, setup, profile_path, destination, *, acknowledged=False, facility_profile_mapping=None):
     receipt = validate_profile(setup, profile_path, acknowledged=acknowledged)
     data, sig = bounded_bytes(source)
     if sha256(data).hexdigest() != setup.source_sha256 or sig != setup.source_signature:
@@ -384,7 +384,9 @@ def stage_pattern(source, setup, profile_path, destination, *, acknowledged=Fals
     current = bounded_bytes(setup.metadata['spice_path'])[0]
     if sha256(current).hexdigest() != setup.metadata['spice_sha256']:
         raise ValueError('SPICE metadata changed after discovery; check a new watch')
-    warnings = [{'code':'hb2a_profile_requires_review', 'message':'HB-2A profile supplied by user; independent calibration acceptance is pending.'}]
+    warnings = [{'code':'hb2a_profile_requires_review', 'message':(
+        'HB-2A published cycle profile matched exactly; suitability of sample/environment corrections requires review.'
+        if facility_profile_mapping else 'HB-2A profile supplied by user; independent calibration acceptance is pending.')}]
     warnings.extend({'code':'hb2a_acquisition_review','message':notice} for notice in setup.metadata['metadata_notices']
         if 'Collimation supplied' in notice or 'Stopped acquisition' in notice)
     if setup.normalization == 'legacy':
@@ -402,6 +404,10 @@ def stage_pattern(source, setup, profile_path, destination, *, acknowledged=Fals
             'experiment_number':setup.experiment, 'ge_reflection':metadata['ge_reflection'],
             'collimator':metadata['collimator'], 'normalization':setup.normalization,
             'acquisition_schema':metadata['channel_schema_sha256']}, 'warnings':warnings}
+    if facility_profile_mapping:
+        if facility_profile_mapping['sha256'] != receipt['profile_sha256']:
+            raise ValueError('Published calibration receipt does not match the staged HB-2A profile')
+        input_provenance['facility_profile_mapping'] = facility_profile_mapping
     marker = ('# RADAR-PD input provenance: '+json.dumps(input_provenance,separators=(',',':'))+'\n').encode('ascii')
     if len(marker)>8192:
         raise ValueError('HB-2A provenance marker exceeds supported bound')

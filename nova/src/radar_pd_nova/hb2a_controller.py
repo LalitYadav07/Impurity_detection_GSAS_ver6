@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from . import hb2a
+from . import hb2a_profiles
 from .facility_metadata import title_role
 from .models import InputSelection, InputSource
 from .powgen_controller import PowgenExperimentSettings, PowgenWatchController
@@ -98,7 +99,7 @@ class Hb2aExperimentSettings(PowgenExperimentSettings):
     def definition(self, instrument_profile_ref=None):
         return WatchDefinition(self.ipts, self.subfolder, self.history_id,
             configuration_ref=self.configuration_dataset_id,
-            instrument_profile_ref=instrument_profile_ref or self.instrument_profile_dataset_id or 'hb2a-profile-required',
+            instrument_profile_ref=instrument_profile_ref or self.instrument_profile_dataset_id or ('hb2a-catalog:'+hb2a_profiles.catalog_digest()),
             instrument='HB2A', facility='HFIR', main_cif_ref=self.main_cif_dataset_id,
             config_refs={'candidate_library':self.database_dataset_id or 'builtin', 'hb2a_normalization':self.normalization,
                 'hb2a_conditions':self.condition_bindings_json,
@@ -156,15 +157,18 @@ def preflight_hb2a_experiment(ipts, *, selected_sample_ids=None, selected_banks=
     runs = _selected(all_runs,settings,index)
     if initial_backfill_limit is not None:
         runs = runs[-max(1,initial_backfill_limit):]
-    errors, setups, profiles = [], [], []
+    errors, setups, profiles, matched_paths, registry_mappings = [], [], [], [], []
     for run in runs:
         try:
             setup=hb2a.inspect_reduced_setup(run.source_path,ipts=ipts,condition_bindings=condition_bindings,
                 collimator_override=collimator_override,allow_stopped=allow_stopped)
             setups.append(setup)
-            if not profile_path:
-                raise ValueError('Supply one cycle/Ge/collimator-matched GSAS-II .instprm; an efficiency vcorr file is not a profile')
-            profiles.append(hb2a.validate_profile(setup, profile_path, acknowledged=profile_acknowledged))
+            selected_profile = profile_path
+            if not selected_profile:
+                selected_profile, mapping = hb2a_profiles.resolve_profile(setup)
+                registry_mappings.append(mapping)
+            matched_paths.append(Path(selected_profile))
+            profiles.append(hb2a.validate_profile(setup, selected_profile, acknowledged=profile_acknowledged))
         except (OSError, ValueError, UnicodeError) as exc:
             errors.append(f'{run.run_id}: {exc}')
     # A manually supplied profile cannot migrate between distinct experiments
@@ -172,6 +176,8 @@ def preflight_hb2a_experiment(ipts, *, selected_sample_ids=None, selected_banks=
     contracts = {(s.experiment,s.metadata['ge_reflection'],s.metadata['collimator'],s.metadata['channel_schema_sha256']) for s in setups}
     if len(contracts)>1:
         errors.append('The selection spans SPICE experiments or instrumental settings; select an experiment-scoped sample and verify its profile separately')
+    if len({str(p) for p in matched_paths}) > 1:
+        errors.append('Selected runs map to different cycle profiles; review each calibration as a separate Live session')
     if not runs:
         errors.append(f'No individual {normalization}-normalization reduced patterns match this sample selection')
     latest = setups[-1].metadata if setups else {}
@@ -181,14 +187,17 @@ def preflight_hb2a_experiment(ipts, *, selected_sample_ids=None, selected_banks=
         'latest_file':Path(runs[-1].source_path).name if runs else '', 'latest_start_time':latest.get('start_time',''),
         'sample_display':latest.get('sample_name',''),
         'temperature_display':f"{latest['temperature']['value']:.5g} K" if latest.get('temperature') else 'Choose a reviewed measured-channel/unit binding',
-        'selected_wavelength':profiles[-1]['wavelength_angstrom'] if profiles else '',
+        'selected_wavelength':(profiles[-1]['wavelength_angstrom'] if profiles else
+            registry_mappings[-1]['profile_parameters']['Lam'] if registry_mappings else ''),
         'detected_wavelength':latest.get('nominal_wavelength_angstrom',''),
         'wavelength_source':'Calibrated CW profile; measured m1/Ge reflection is a sanity check',
-        'profile_filename':Path(profile_path).name if profile_path else '',
-        'profile_source':'User-reviewed cycle, Ge reflection, collimation and sample-environment mapping',
+        'profile_filename':matched_paths[-1].name if matched_paths else '',
+        'profile_source':('Official facility calibration; exact dated Ge/collimation mapping' if registry_mappings else
+            'User-reviewed cycle, Ge reflection, collimation and sample-environment mapping'),
+        'profile_mappings':registry_mappings,
         'profile_error':'; '.join(errors[:5]), 'metadata_notices':latest.get('metadata_notices',[]),
         'quality_notices':['Nuclear phase identification does not explain magnetic-only peaks or solve magnetic order.',
-            'Automatic HB-2A peak-profile calibration is not qualified; user review is required.'],
+            'Published profiles cover only their explicit dates and configurations; sample/environment corrections still require review.'],
         'metadata_resolution':index.inventory(runs)['metadata_resolution'],
         'message':'; '.join(errors[:5]) if errors else f'Ready for reviewed CW analysis: {len(runs)} individual patterns, one combined detector bank.'}
 
@@ -218,7 +227,8 @@ class Hb2aWatchController(PowgenWatchController):
         return restored
 
     def _catalog_digest(self):
-        return sha256(hb2a.VERSION.encode()).hexdigest()
+        content = hb2a.VERSION + (hb2a_profiles.catalog_digest() if not self.settings.instrument_profile_dataset_id else '')
+        return sha256(content.encode()).hexdigest()
 
     def _watch_extension(self):
         return {'hb2a_normalization':self.settings.normalization,
@@ -294,9 +304,21 @@ class Hb2aWatchController(PowgenWatchController):
             self.persist_state()
         return result
 
-    def _profile_path(self):
+    def _profile_path(self,setup=None):
         if not self.settings.instrument_profile_dataset_id:
-            raise ValueError('HB-2A requires a reviewed GSAS-II CW profile')
+            if setup is None:
+                runs = [*self.state.completed.values(),*self.state.submitted.values(),*self.state.discovered.values()]
+                saved = next((r.scan_metadata.get(self.setup_metadata_key) for r in runs
+                    if r.scan_metadata.get(self.setup_metadata_key)),None)
+                if saved is None:
+                    raise ValueError('No saved HB-2A acquisition is available to recover the automatic profile')
+                try:
+                    setup = hb2a.Setup(**saved)
+                except TypeError as exc:
+                    raise ValueError('Saved HB-2A acquisition setup cannot recover its automatic profile') from exc
+            path, _ = hb2a_profiles.resolve_profile(setup)
+            self._supplied_profile = path
+            return path
         with self._profile_upload_lock:
             if self._supplied_profile is None:
                 text=self.service.load_text_document(self.settings.instrument_profile_dataset_id)
@@ -311,15 +333,17 @@ class Hb2aWatchController(PowgenWatchController):
         original=run.scan_metadata.get(self.setup_metadata_key) or {}
         if original.get('source_sha256')!=setup.source_sha256 or original.get('metadata',{}).get('spice_sha256')!=setup.metadata['spice_sha256']:
             raise ValueError('HB-2A input changed after discovery; check a new watch')
-        profile=self._profile_path()
+        profile=self._profile_path(setup)
         contract=(setup.experiment,setup.metadata['ge_reflection'],setup.metadata['collimator'],
             setup.normalization,sha256(profile.read_bytes()).hexdigest(),setup.metadata['channel_schema_sha256'])
         with self._manual_setup_lock:
             if self._manual_setup_signature is not None and self._manual_setup_signature!=contract:
                 raise ValueError('Experiment, Ge reflection, collimation or normalization changed; verify a new profile mapping')
             self._manual_setup_signature=contract
+        mapping = hb2a_profiles.resolve_profile(setup)[1] if not self.settings.instrument_profile_dataset_id else None
         return hb2a.stage_pattern(run.source_path,setup,profile,
-            Path(self._staging.name)/run.fingerprint/run.run_id,acknowledged=self.settings.profile_acknowledged)
+            Path(self._staging.name)/run.fingerprint/run.run_id,acknowledged=self.settings.profile_acknowledged,
+            facility_profile_mapping=mapping)
 
     def _run_name(self,run):
         setup=run.scan_metadata.get(self.setup_metadata_key) or {}

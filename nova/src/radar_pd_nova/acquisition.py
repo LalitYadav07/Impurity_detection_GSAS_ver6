@@ -65,6 +65,9 @@ def acquisition_context(metadata, *, instrument, run_number, source, script_sha2
         return None
     window_verified = conditions.get('window_scope') == 'explicit_product_window'
     basis = 'explicit reduced-product interval' if window_verified else 'parent-run log; reduced-product interval unverified'
+    if instrument == 'SNAP' and conditions.get('window_scope') == 'reviewed_full_parent_run':
+        window_verified = True
+        basis = conditions['product_window_basis']
     if instrument == 'PG3' and _full_powgen_run(source, metadata, script_sha256):
         window_verified = True
         basis = 'one matching NeXus file in hashed SNSPowderReduction script; no time/split selection'

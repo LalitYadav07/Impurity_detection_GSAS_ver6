@@ -11,6 +11,8 @@ from .powgen_samples import identity_readiness
 from .facility_metadata import title_role
 from .powgen_watch import WatchDefinition, discover_from_listing, build_submission_plan
 from .snap_metadata import SnapSampleIndex, read_snap_scan_metadata
+from .snap_conditions import validate_bindings_json, binding_scope, condition_options
+from .acquisition import acquisition_context
 
 
 @dataclass(frozen=True)
@@ -22,9 +24,11 @@ class SnapExperimentSettings(PowgenExperimentSettings):
     profile_bank: int | None = None
     profile_acknowledged: bool = False
     allow_exploratory: bool = False
+    condition_bindings_json: str = '{}'
 
     def __post_init__(self):
         super().__post_init__()
+        validate_bindings_json(self.condition_bindings_json)
         snap.source_directory(self.ipts,self.subfolder)
         if self.instrument != 'SNAP' or self.wavelength_angstrom:
             raise ValueError('SNAP is broadband neutron TOF; no monochromatic wavelength override applies')
@@ -50,6 +54,7 @@ class SnapExperimentSettings(PowgenExperimentSettings):
             instrument_profile_ref=instrument_profile_ref or self.instrument_profile_dataset_id or 'snap-profile-required',
             instrument='SNAP',main_cif_ref=self.main_cif_dataset_id,
             config_refs={'candidate_library':self.database_dataset_id or 'builtin',
+                         **({'snap_conditions':self.condition_bindings_json} if json.loads(self.condition_bindings_json) else {}),
                          'snap_contract':json.dumps({'family':self.product_family,'banks':self.selected_banks,
                             'profile_bank':self.profile_bank,'acknowledged':self.profile_acknowledged,
                             'exploratory':self.allow_exploratory},sort_keys=True)})
@@ -104,7 +109,9 @@ def _select_runs(runs, index, selected_ids, *, limit=None, excluded_run_numbers=
 def preflight_snap_experiment(ipts, *, selected_sample_ids=None, selected_banks=None,
         sample_index=None,subfolder=snap.DEFAULT_FOLDER,initial_backfill_limit=None,
         profile_path=None,profile_bank=None,profile_acknowledged=False,allow_exploratory=False,
-        product_family='',excluded_run_numbers=(),include_background_runs=False,include_ramp_runs=False):
+        product_family='',excluded_run_numbers=(),include_background_runs=False,include_ramp_runs=False,
+        condition_bindings=None):
+    condition_bindings = validate_bindings_json(json.dumps(condition_bindings or {},sort_keys=True))
     rows,families,family = _listing(ipts,subfolder,product_family)
     definition = WatchDefinition(ipts,subfolder,'preflight','preflight','profile-required',instrument='SNAP')
     all_runs = discover_from_listing(definition,rows)
@@ -119,6 +126,11 @@ def preflight_snap_experiment(ipts, *, selected_sample_ids=None, selected_banks=
             setups.append(setup);notices.extend(setup.warnings)
             for bank in setup.banks:
                 available.setdefault(bank.bank,bank)
+            if condition_bindings:
+                conditions = read_snap_scan_metadata(ipts,run.run_number,condition_bindings=condition_bindings)
+                if any(not conditions.get(quantity,{}).get('binding_verified') or
+                       conditions.get(quantity,{}).get('status') != 'recorded' for quantity in condition_bindings):
+                    raise ValueError('Selected specimen sensor is not qualified for this acquisition; review the sensor, units and sample selection')
             if selected_banks is None or len(selected_banks) != 1:
                 raise ValueError('Choose one SNAP source histogram; banks/focusing groups are analyzed separately')
             if not profile_path or profile_bank is None:
@@ -135,7 +147,7 @@ def preflight_snap_experiment(ipts, *, selected_sample_ids=None, selected_banks=
     if not runs:
         errors.append('No unique individual GSAS exports match the selected folder, export variant and sample; raw/reduced NeXus alone cannot trigger a fit')
     latest = runs[-1] if runs else None
-    metadata = read_snap_scan_metadata(ipts,latest.run_number) if latest else {}
+    metadata = read_snap_scan_metadata(ipts,latest.run_number,condition_bindings=condition_bindings) if latest else {}
     notices.insert(0,'SNAP profiles and quantitative fractions require scientific review; an adjacent generated .instprm is not automatically calibrated')
     return {'ready':not errors,'source_directory':definition.source_directory,'scan_count':len(runs),
         'total_scan_count':len(all_runs),'analysis_count':len(mappings),'available_banks':sorted(available),
@@ -146,7 +158,9 @@ def preflight_snap_experiment(ipts, *, selected_sample_ids=None, selected_banks=
         'first_run':runs[0].run_id if runs else '', 'latest_run':latest.run_id if latest else '',
         'latest_file':Path(latest.source_path).name if latest else '',
         'latest_start_time':metadata.get('start_time',''),'sample_display':f"{metadata.get('sample_id','')} | {metadata.get('sample_name','')}",
-        'temperature_display':'Select a verified specimen temperature sensor or import a reviewed axis mapping',
+        'temperature_display':(f"{metadata['temperature']['value']:.5g} K" if metadata.get('temperature') else
+            'Select a verified specimen temperature sensor or import a reviewed axis mapping'),
+        'condition_options':condition_options(metadata),'condition_scope':binding_scope(metadata) if latest else {},
         'selected_wavelength':'Broadband TOF','detected_wavelength':'','wavelength_source':'SNAP: no monochromatic wavelength selection',
         'profile_filename':Path(profile_path).name if profile_path else '',
         'profile_source':'Explicit SNAP state/group/profile mapping; calibration acceptance pending',
@@ -184,7 +198,8 @@ class SnapWatchController(PowgenWatchController):
 
     def _watch_extension(self):
         return {'snap_product_family':self.settings.product_family,'snap_profile_bank':self.settings.profile_bank,
-                'snap_profile_acknowledged':self.settings.profile_acknowledged,'snap_allow_exploratory':self.settings.allow_exploratory}
+                'snap_profile_acknowledged':self.settings.profile_acknowledged,'snap_allow_exploratory':self.settings.allow_exploratory,
+                **({'snap_condition_bindings':self.settings.condition_bindings_json} if json.loads(self.settings.condition_bindings_json) else {})}
 
     def _list_source_directory(self):
         return snap.directory_listing(self.source_directory,family=self.settings.product_family)
@@ -209,7 +224,9 @@ class SnapWatchController(PowgenWatchController):
 
     def _read_scan_metadata(self,run):
         try:
-            return {**read_snap_scan_metadata(self.settings.ipts,run.run_number),'source_family':'SNAP individual GSAS/SLOG'}
+            return {**read_snap_scan_metadata(self.settings.ipts,run.run_number,
+                condition_bindings=json.loads(self.settings.condition_bindings_json)),
+                'source_family':'SNAP individual GSAS/SLOG'}
         except (OSError,ValueError,TypeError) as exc:
             return {'source_family':'SNAP individual GSAS/SLOG','available':False,
                     'metadata_notices':[f'SNAP acquisition metadata needs review: {exc}']}
@@ -262,6 +279,13 @@ class SnapWatchController(PowgenWatchController):
         return self._supplied_profile
 
     def _prepare_run(self,run):
+        if json.loads(self.settings.condition_bindings_json):
+            current = self._read_scan_metadata(run)
+            recorded = run.scan_metadata.get('conditions') or {}
+            if (current.get('conditions') or {}).get('metadata_sha256') != recorded.get('metadata_sha256'):
+                raise ValueError('SNAP specimen-condition metadata changed after discovery; check a new watch')
+            if not current.get('temperature',{}).get('binding_verified'):
+                raise ValueError('SNAP specimen sensor no longer matches this acquisition; review a new condition mapping')
         setup = self._setup(run)
         discovered = run.scan_metadata.get(self.setup_metadata_key) or {}
         if (run.scan_metadata.get('source_revision_warning') or discovered.get('source_sha256') != setup.source_sha256
@@ -280,7 +304,9 @@ class SnapWatchController(PowgenWatchController):
         if run.scan_metadata.get('run_title'):
             setup=replace(setup,title=run.scan_metadata['run_title'])
         return snap.stage_bank(run.source_path,setup,bank,profile,self.settings.profile_bank,
-            Path(self._staging.name)/run.fingerprint/run.run_id,acknowledged=self.settings.profile_acknowledged)
+            Path(self._staging.name)/run.fingerprint/run.run_id,acknowledged=self.settings.profile_acknowledged,
+            acquisition=acquisition_context(run.scan_metadata,instrument='SNAP',run_number=run.run_number,source=run.source_path),
+            condition_bindings=json.loads(self.settings.condition_bindings_json))
 
     def launch_submission(self,run):
         if build_submission_plan(self.definition,run,self.state) is None:
@@ -306,6 +332,8 @@ class SnapWatchController(PowgenWatchController):
         if not record.galaxy_job_id:
             raise RuntimeError(f'Galaxy did not acknowledge {run.run_id}')
         receipt['staged_profile_dataset_id'] = profile_id
+        receipt['condition_bindings'] = json.loads(self.settings.condition_bindings_json)
+        receipt['conditions'] = run.scan_metadata.get('conditions',{})
         record.provenance[self.bank_provenance_key] = receipt
         return record
 

@@ -1,0 +1,14 @@
+#GSAS-II instrument parameter file; do not add/delete items!
+Type:PNC
+Bank:1.0
+Lam:1.11863
+Zero:0.0
+Polariz.:0.0
+Azimuth:0.0
+U:526.29877
+V:-372.76715
+W:206.74541
+X:0.00000
+Y:10.85770
+Z:0.00000
+SH/L:0.08800

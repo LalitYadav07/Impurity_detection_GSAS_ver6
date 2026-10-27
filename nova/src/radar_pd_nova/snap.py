@@ -423,7 +423,8 @@ def validate_profile(setup, bank, path, profile_bank, *, acknowledged=False):
         'corrections':setup.corrections}
 
 
-def stage_bank(source, setup, bank, profile_path, profile_bank, destination, *, acknowledged=False):
+def stage_bank(source, setup, bank, profile_path, profile_bank, destination, *, acknowledged=False,
+        acquisition=None,condition_bindings=None):
     source, profile_path = Path(source), Path(profile_path)
     def unchanged():
         if signature(source) != setup.source_signature:
@@ -463,6 +464,10 @@ def stage_bank(source, setup, bank, profile_path, profile_bank, destination, *, 
         'masked_bin_policy':'source_error_zero; retain coordinate grid and zero fit weights',
         'masked_bins':selected.masked_bins,
         'warnings':[{'code':'snap_input_review','message':message} for message in notices]}
+    if acquisition is not None:
+        provenance['acquisition'] = acquisition
+    if condition_bindings:
+        provenance['condition_bindings'] = condition_bindings
     marker = '# RADAR-PD input provenance: '+json.dumps(provenance,separators=(',',':'),ensure_ascii=True)+'\n'
     if len(marker.encode()) > 8192:
         raise ValueError('SNAP provenance exceeds its bounded portable header')
@@ -483,5 +488,8 @@ def stage_bank(source, setup, bank, profile_path, profile_bank, destination, *, 
         warnings=notices,setup=setup.as_dict())
     receipt['profile'] = {'path':str(profile),'profile_bank':1,'source_bank':bank,
                           'sha256':receipt['staged_profile_sha256']}
+    if acquisition is not None:
+        receipt['acquisition'] = acquisition
+    receipt['condition_bindings'] = condition_bindings or {}
     (out/'bank-provenance.json').write_text(json.dumps(receipt,indent=2)+'\n')
     return data,profile,receipt

@@ -6,6 +6,12 @@ It is not an NDIP release, and it does not certify automatic GSAS-II profile
 selection. Real SNAP calibration-standard checks show why profile acceptance
 must remain a separate scientific decision.
 
+NOVA 0.4.23 adds saved, reviewed specimen-temperature sensor/unit selection and
+full-acquisition interval review. The binding is checked for each acquisition
+and carried into staged data, saved watches and published GPX provenance.
+See [profile selection and acceptance](beamline_profile_selection.md). Automatic
+SNAP profile selection remains disabled.
+
 The combined review preserves current POWGEN/NOMAD support and HB-2A's distinct
 CW/HFIR path. Restored completed SNAP watches load the original supplied
 profile once, verify its original Bank label and hash, and distinguish that

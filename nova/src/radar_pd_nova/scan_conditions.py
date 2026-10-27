@@ -304,6 +304,15 @@ def summarize_log(spec, value, time, window, *, title="", binding=None):
     source_unit = value.get("attrs", {}).get("units", value.get("attrs", {}).get("unit", ""))
     out["source_unit"] = source_unit
     conversion = _unit(spec.quantity, source_unit)
+    if out['binding_verified'] and binding.get('unit'):
+        reviewed = _unit(spec.quantity, binding['unit'])
+        if not reviewed or (conversion and reviewed != conversion):
+            return {**out, 'status': 'unqualified_units', 'binding_verified': False,
+                    'notices': ['Reviewed units conflict with the units recorded by this sensor']}
+        if not str(source_unit).strip():
+            conversion = reviewed
+            out['unit_provenance'] = 'reviewed mapping; source units absent'
+        out['reviewed_binding'] = dict(binding)
     raw = np.asarray(value.get("values") or [], dtype=float)
     if not conversion or not len(raw):
         return {
@@ -476,9 +485,10 @@ def qualified_metadata(metadata):
     return result
 
 
-def attach_conditions(metadata, path, instrument):
+def attach_conditions(metadata, path, instrument, *, window=None, bindings=None):
     """Prefer qualified readbacks; never resurrect a rejected legacy metric."""
-    return qualified_metadata({**metadata, "conditions": read_conditions(path, instrument)})
+    return qualified_metadata({**metadata, "conditions": read_conditions(
+        path, instrument, window=window, bindings=bindings)})
 
 
 @lru_cache(maxsize=128)
@@ -512,6 +522,17 @@ def _cached_read(path, size, mtime, instrument, window_json, bindings_json, back
             else "parent_run; verify reduction does not select a narrower time interval"
         )
         bindings = json.loads(bindings_json)
+        schema = []
+        for spec in specs:
+            value = data.get(f'/entry/DASlogs/{spec.channel}/value')
+            if value is not None:
+                attrs = value.get('attrs') or {}
+                schema.append((spec.quantity, spec.channel, attrs.get('units', attrs.get('unit', ''))))
+        packet['channel_schema_sha256'] = sha256(json.dumps(schema, sort_keys=True).encode()).hexdigest()
+        for quantity, binding in list(bindings.items()):
+            if binding.get('schema_sha256') and binding['schema_sha256'] != packet['channel_schema_sha256']:
+                bindings[quantity] = {**binding, 'verified': False}
+                packet['notices'].append('SNAP sensor channels or units changed; review a new specimen mapping')
         title = (data.get("/entry/title") or {}).get("text", "")
         for spec in specs:
             prefix = f"/entry/DASlogs/{spec.channel}/"

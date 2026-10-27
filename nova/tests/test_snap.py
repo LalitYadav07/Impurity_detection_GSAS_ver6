@@ -8,6 +8,7 @@ import pytest
 
 from radar_pd_nova import snap
 from radar_pd_nova.snap_controller import SnapExperimentSettings, SnapWatchController
+from radar_pd_nova.snap_controller import preflight_snap_experiment
 from radar_pd_nova.snap_metadata import read_snap_scan_metadata
 from radar_pd_nova.powgen_watch import WatchDefinition, WatchState, WatchedRun, discover_from_listing, LIVE_STATE_SCHEMA
 from test_powgen_controller import FakeGalaxyService
@@ -201,6 +202,26 @@ def test_unsigned_unset_id_and_unselected_temperature_never_become_axes(tmp_path
     assert metadata['sample_id']=='' and metadata['identity_status']=='unidentified'
     assert 'temperature' not in metadata and 'pressure' not in metadata
     assert metadata['conditions']['channels'][0]['status']=='needs_mapping'
+
+
+def test_bad_condition_selection_keeps_available_histograms_for_correction(source,supplied,monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setattr(snap,'source_directory',lambda *a,**k:source.parent)
+    monkeypatch.setattr(WatchDefinition,'source_directory',property(lambda self:str(source.parent)))
+    metadata={'sample_id':'recorded','conditions':{'channels':[{'channel':'LakeshoreSampleTemp',
+        'quantity':'temperature','role':'measured','status':'invalid','source_unit':'K','minimum':0.,'maximum':0.}]}}
+    monkeypatch.setattr('radar_pd_nova.snap_controller.read_snap_scan_metadata',lambda *a,**k:metadata)
+    bindings={'temperature':{'channel':'LakeshoreSampleTemp','unit':'K','verified':True,
+        'product_window_reviewed':True,
+        'scope_sha256':'a'*64,'schema_sha256':'b'*64}}
+    result=preflight_snap_experiment('IPTS-1',selected_banks=(2,),
+        sample_index=SimpleNamespace(identity=lambda run:{'sample_id':'recorded'}),
+        product_family=snap.parse_filename(source).family,profile_path=supplied,profile_bank=7,
+        profile_acknowledged=True,allow_exploratory=True,condition_bindings=bindings)
+    assert not result['ready'] and result['available_banks']==[2]
+    assert result['bank_details'][0]['bank']==2
+    assert 'specimen sensor is not qualified' in result['message']
+    assert result['condition_options'][0]['value']=='LakeshoreSampleTemp'
 
 
 def test_snap_raw_comparison_matches_gsas_bin_centers_and_preserves_masks(source,supplied,tmp_path):

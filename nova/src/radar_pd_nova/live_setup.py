@@ -541,6 +541,8 @@ class LiveSetupMixin:
                 "nomad_profile_acknowledged",
                 "nomad_allow_exploratory",
                 "snap_product_family",
+                'snap_temperature_channel','snap_temperature_unit','snap_temperature_reviewed','snap_condition_scope_json',
+                'snap_condition_window_reviewed',
                 "live_test_bank",
                 "hb2a_normalization", "hb2a_profile_acknowledged",
                 "hb2a_temperature_channel", "hb2a_temperature_unit", "hb2a_condition_reviewed",
@@ -622,6 +624,7 @@ class LiveSetupMixin:
                 'excluded_acquisitions':tuple(values['powgen_excluded_runs'] or [])}
         if adapter.instrument == "SNAP":
             extra["product_family"] = str(values["snap_product_family"] or "")
+            extra['condition_bindings_json'] = json.dumps(self._snap_condition_bindings(values),sort_keys=True)
         settings = adapter.settings(
             ipts=self._normalize_powgen_ipts(values["powgen_ipts"]),
             history_id=self.service.history_id,
@@ -656,6 +659,20 @@ class LiveSetupMixin:
                 result[quantity]={'channel':channel,'unit':str(get(f'hb2a_{quantity}_unit') or ''),
                     'reviewed':bool(get('hb2a_condition_reviewed' if quantity=='temperature' else f'hb2a_{quantity}_reviewed'))}
         return result
+
+    def _snap_condition_bindings(self, values=None):
+        state = values if values is not None else self.server.state
+        get = state.get if isinstance(state,dict) else lambda key:getattr(state,key,None)
+        channel = str(get('snap_temperature_channel') or '').strip()
+        if not channel:
+            return {}
+        scope = json.loads(get('snap_condition_scope_json') or '{}')
+        binding = {'temperature':{'channel':channel,'unit':str(get('snap_temperature_unit') or ''),
+            'verified':get('snap_temperature_reviewed') is True,
+            'product_window_reviewed':get('snap_condition_window_reviewed') is True,
+            'scope_sha256':scope.get('scope_sha256',''),'schema_sha256':scope.get('schema_sha256','')}}
+        from .snap_conditions import validate_bindings_json
+        return validate_bindings_json(json.dumps(binding,sort_keys=True))
 
     async def test_live_scan(self, **_):
         state = self.server.state

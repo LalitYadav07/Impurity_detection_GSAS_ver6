@@ -1,6 +1,7 @@
 """Live form/immutable scientific-scope contracts for the SNAP adapter."""
 import asyncio
 from dataclasses import replace
+import json
 
 from radar_pd_nova.live_beamlines import BEAMLINES
 from radar_pd_nova.snap import parse_filename
@@ -42,3 +43,50 @@ def test_snap_export_variant_change_invalidates_sample_selection_and_preflight(l
     state.snap_product_family='["all","reRed"]';live._snap_product_changed()
     assert not state.powgen_processing_sample_ids and not state.powgen_preflight_ready
     assert 'Refresh sample IDs' in state.powgen_sample_message
+
+
+def test_snap_reviewed_sensor_survives_live_check_and_launch(live,tmp_path,monkeypatch):
+    state=live.server.state;state.live_beamline='SNAP';state.flush()
+    live._live_beamline_changed()
+    state.powgen_ipts='38203';state.flush()
+    live._powgen_ipts_changed()
+    state.powgen_processing_scope='all'
+    path=tmp_path/'profile.instprm';path.write_text('# test profile\n')
+    state.powgen_instrument_path=str(path);state.live_sample_elements='Si'
+    state.nomad_physical_bank=1;state.nomad_profile_bank=1
+    state.snap_product_family='["all",""]';state.flush()
+    live._snap_condition_context_changed()
+    scope={'scope_sha256':'a'*64,'schema_sha256':'b'*64}
+    captured=[]
+    def preflight(*args,**kwargs):
+        captured.append(kwargs)
+        return {'ready':True,'source_directory':'/SNS/SNAP/IPTS-38203/shared/SNAPRed/export/gsa/all',
+            'scan_count':1,'available_banks':[1],'condition_scope':scope,
+            'condition_options':[{'title':'LakeshoreSampleTemp · K','value':'LakeshoreSampleTemp'}]}
+    monkeypatch.setitem(BEAMLINES,'SNAP',replace(BEAMLINES['SNAP'],preflight=preflight,controller=TrialController))
+    assert asyncio.run(live.check_powgen_experiment()),state.error_message
+    # Canonicalizing 38203 to IPTS-38203 must not erase the just-read choices.
+    assert state.snap_condition_options and json.loads(state.snap_condition_scope_json)==scope
+    state.snap_temperature_channel='LakeshoreSampleTemp';live._snap_condition_choice_changed();state.flush()
+    state.snap_temperature_reviewed=True;state.snap_condition_window_reviewed=True;state.flush()
+    settings,config=asyncio.run(live._prepare_live_settings())
+    assert captured[-1]['condition_bindings']['temperature']['verified'] is True
+    assert json.loads(settings.condition_bindings_json)==captured[-1]['condition_bindings']
+    assert captured[-1]['condition_bindings']['temperature']['product_window_reviewed']
+    assert config.instrument_mode=='tof'
+    state.snap_temperature_unit='C';live._snap_condition_choice_changed();live._powgen_processing_changed();state.flush()
+    assert not state.snap_temperature_reviewed and not state.powgen_preflight_ready
+
+
+def test_snap_specimen_change_discards_reviewed_sensor_selection(live):
+    state=live.server.state;state.live_beamline='SNAP';state.flush()
+    live._live_beamline_changed()
+    state.powgen_ipts='38203';state.flush()
+    live._powgen_ipts_changed();live._snap_condition_context_changed()
+    state.snap_condition_options=[{'value':'LakeshoreSampleTemp'}]
+    state.snap_condition_scope_json=json.dumps({'scope_sha256':'a'*64,'schema_sha256':'b'*64})
+    state.snap_temperature_channel='LakeshoreSampleTemp';state.flush()
+    state.snap_temperature_reviewed=True;state.flush()
+    state.powgen_processing_sample_ids=['another-specimen'];live._snap_condition_context_changed();state.flush()
+    assert not state.snap_temperature_channel and not state.snap_temperature_reviewed
+    assert not state.snap_condition_options and state.snap_condition_scope_json=='{}'

@@ -1,5 +1,7 @@
 """SNAP run identities and qualified, bounded sample-environment observations."""
 from pathlib import Path
+from hashlib import sha256
+import json
 
 from .facility_metadata import ExperimentMetadataIndex, resolve_nexus_path, resolve_identity, title_role
 from .powgen_metadata import read_powgen_sample_identity, _text_value, _first_snapshot, _numeric_log, _duration_seconds
@@ -54,9 +56,9 @@ class SnapSampleIndex(PowgenSampleIndex):
         return result
 
 
-def read_snap_scan_metadata(ipts, run, *, nexus_path=None):
+def read_snap_scan_metadata(ipts, run, *, nexus_path=None, condition_bindings=None):
     path = Path(nexus_path) if nexus_path else snap_nexus_path(ipts,run)
-    result = {'schema_version':1,'instrument':'SNAP','nexus_path':str(path),'available':path.is_file()}
+    result = {'schema_version':2,'instrument':'SNAP','ipts':ipts,'nexus_path':str(path),'available':path.is_file()}
     if not result['available']:
         return result
     result.update(read_snap_sample_identity(ipts,run,nexus_path=path))
@@ -74,4 +76,22 @@ def read_snap_scan_metadata(ipts, run, *, nexus_path=None):
         if value:
             geometry[name] = value
     result['instrument_geometry_observations'] = geometry
-    return attach_conditions(result,path,'SNAP')
+    result = attach_conditions(result,path,'SNAP')
+    if condition_bindings:
+        from .snap_conditions import binding_scope
+        scope = binding_scope(result)
+        checked = {}
+        for quantity, binding in condition_bindings.items():
+            valid = (bool(result.get('sample_id')) and binding.get('scope_sha256') == scope['scope_sha256']
+                and binding.get('product_window_reviewed') is True)
+            checked[quantity] = {**binding, 'verified': binding.get('verified') is True and valid}
+            if not valid:
+                result['metadata_notices'].append('Specimen identity is unavailable or the specimen, environment selector or sensor schema changed; review a new SNAP condition mapping')
+        result = attach_conditions(result,path,'SNAP',bindings=checked)
+        if all(b.get('verified') is True for b in checked.values()):
+            packet = result['conditions']
+            packet['source_metadata_sha256'] = packet.pop('metadata_sha256')
+            packet.update(window_scope='reviewed_full_parent_run',
+                product_window_basis='User-reviewed individual GSAS export covers the complete named NeXus acquisition; not a time slice')
+            packet['metadata_sha256'] = sha256(json.dumps(packet,sort_keys=True,allow_nan=False).encode()).hexdigest()
+    return result

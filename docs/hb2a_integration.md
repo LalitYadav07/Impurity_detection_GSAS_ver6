@@ -1,8 +1,12 @@
 # HB-2A Live integration
 
-Status: development preview in NOVA 0.4.22, integrated from
-`codex/hb2a-live-integration`. It has not been deployed on NDIP. Import equivalence and a native
+Status: development preview in NOVA 0.4.23. It has not been deployed on NDIP. Import equivalence and a native
 refinement smoke test do not establish quantitative scientific acceptance.
+
+NOVA 0.4.23 adds exact, checksum-verified selection from 52 facility-published
+profiles across 11 explicitly dated cycles. Missing dates/configurations still
+require a supplied profile. See [profile selection and acceptance](beamline_profile_selection.md)
+for current coverage, review requirements and SNAP condition handling.
 
 The combined HB-2A/SNAP review preserved the current POWGEN/NOMAD discovery
 and saved-profile recovery paths. Completed HB-2A watches restore their supplied
@@ -80,21 +84,21 @@ explicit reviewed IN/OUT choice. A choice cannot override contradictory
 measured values. Changes in experiment, Ge, collimation, normalization or
 acquisition-channel schema stop reuse of one manually supplied profile.
 
-The user must currently supply a modern, single-bank neutron CW `.instprm`
+An explicitly supplied profile must be a modern, single-bank neutron CW `.instprm`
 with `Type:PNC`, `Bank:1`, finite wavelength/zero/profile terms, a wavelength
 consistent with the measured Ge setting, and positive Gaussian variance over
 the measured range. These are wrong-mode/setup sanity checks, **not calibration
 acceptance**. The user reviews cycle, collimation, sample environment and
 reduction corrections; resulting summaries retain `needs_review` notices.
 
-A versioned, checksum-pinned registry is appropriate when exact profiles and
-their valid cycles/configurations have been independently established. The
-official ORNL page publishes cycle-, Ge- and collimator-specific bundles;
-its current download links returned HTTP 403 during this investigation. The
-existing `scripts/download_ornl_gsasii_instprm.py` can collect public assets
-when available, but a downloaded file or matching filename alone is not a
-scientifically accepted mapping. Do not download arbitrary profiles at job
-runtime or extrapolate a latest profile into older/later cycles. One legacy
+The packaged registry now matches exact published date intervals, Ge reflections
+and collimation against unchanged, checksum-pinned facility profiles. The new
+official facility website downloads were accessible on 2026-10-27; the initial
+0.4.22 investigation encountered HTTP 403 at the older links. Native imports
+and actual-range variance checks passed for all 52 included profiles. This
+establishes published calibration identity and software compatibility, not
+independent standard acceptance for every sample. No asset is downloaded at
+job runtime and no latest profile is extrapolated into older/later cycles. One legacy
 archive file also had inconsistent Ge wording versus its wavelength, another
 reason not to select by filename alone. Detector-efficiency `vcorr` files and
 detector exclusions are reduction inputs, not Rietveld peak-shape profiles.

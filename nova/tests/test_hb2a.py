@@ -264,6 +264,26 @@ def test_negative_data_never_silently_enter_a_clipping_cw_importer(archive):
     with pytest.raises(ValueError,match='would clip'):hb2a.inspect_reduced_setup(data,ipts='IPTS-1')
 
 
+def test_published_auto_profile_stages_exact_bytes_and_restores_without_upload_choice(archive,profile):
+    from radar_pd_nova import hb2a_profiles
+    data,_=add(archive,date='6/15/2024',m1=9.45,coll=0)
+    service=Service(profile)
+    automatic=replace(settings(),instrument_profile_dataset_id=None)
+    controller=Hb2aWatchController(service,automatic)
+    run=controller.discover()[0]
+    staged,selected,receipt=controller._prepare_run(run)
+    expected,mapping=hb2a_profiles.resolve_profile(controller._setup(run))
+    assert selected.read_bytes()==expected.read_bytes()
+    assert receipt['facility_profile_mapping']['sha256']==mapping['sha256']
+    provenance=json.loads(staged.read_text().splitlines()[0].split(': ',1)[1])
+    assert provenance['facility_profile_mapping']['cycle']==507
+    assert controller._profile_path().read_bytes()==expected.read_bytes()
+    restored=Hb2aWatchController(service,automatic)
+    assert restored.restore_latest_state()
+    assert restored._supplied_profile.read_bytes()==expected.read_bytes()
+    assert not restored.display_profile_error
+
+
 def test_single_manual_profile_does_not_cross_experiments_and_full_ids_exclude(archive,profile):
     add(archive,exp=1000);add(archive,exp=1001)
     args=dict(profile_path=profile,profile_acknowledged=True)
