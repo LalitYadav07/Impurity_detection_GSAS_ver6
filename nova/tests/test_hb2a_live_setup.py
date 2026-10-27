@@ -63,3 +63,23 @@ def test_normalization_change_invalidates_inflight_sample_scope(live):
 def test_hb2a_acquisition_labels_do_not_collapse_equal_scan_numbers():
     assert scan_label({'instrument':'HB2A','run_number':1,'metadata':{'experiment_number':1000}})=='Exp 1000 · Scan 1'
     assert scan_label({'instrument':'HB2A','run_number':1,'metadata':{'experiment_number':1001}})=='Exp 1001 · Scan 1'
+
+
+def test_switching_four_beamlines_keeps_facility_and_geometry_distinct(live):
+    state=live.server.state
+    labels={row['value']:row['title'] for row in state.live_beamline_options}
+    assert labels['HB2A']=='HB-2A (preview)' and labels['SNAP']=='SNAP (preview)'
+    assert labels['PG3']=='POWGEN' and labels['NOM']=='NOMAD'
+    for instrument,facility,mode in [('HB2A','HFIR','cw'),('SNAP','SNS','tof'),
+                                     ('NOM','SNS','tof'),('PG3','SNS','tof'),('HB2A','HFIR','cw')]:
+        state.live_beamline=instrument;live._live_beamline_changed();state.flush()
+        state.powgen_ipts='1';live._powgen_ipts_changed();state.flush()
+        live._powgen_source_changed();state.flush()
+        assert state.powgen_source_directory.startswith(f'/{facility}/{instrument}/IPTS-1/')
+        assert live._live_configuration().instrument_mode==mode
+        if instrument=='HB2A':
+            assert live._powgen_processing_bank_ids()==(1,)
+            assert not state.powgen_bank_options
+            assert state.powgen_dashboard_wavelength=='Calibrated CW profile'
+        elif instrument in {'NOM','SNAP'}:
+            assert state.powgen_dashboard_wavelength=='Broadband neutron TOF'

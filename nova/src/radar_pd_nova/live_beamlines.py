@@ -35,6 +35,7 @@ class BeamlineAdapter:
     automatic_profiles: bool
     facility: str = 'SNS'
     instrument_mode: str = 'tof'
+    preview: bool = False
 
 
 BEAMLINES = {
@@ -44,9 +45,9 @@ BEAMLINES = {
         NomadExperimentSettings,NomadWatchController,discover_nomad_samples,preflight_nomad_experiment,False),
     'HB2A':BeamlineAdapter('HB2A','HB-2A','shared/autoreduce',Hb2aSampleIndex,
         Hb2aExperimentSettings,Hb2aWatchController,discover_hb2a_samples,preflight_hb2a_experiment,
-        False,facility='HFIR',instrument_mode='cw'),
+        False,facility='HFIR',instrument_mode='cw',preview=True),
     'SNAP':BeamlineAdapter('SNAP','SNAP',SNAP_FOLDER,SnapSampleIndex,
-        SnapExperimentSettings,SnapWatchController,discover_snap_samples,preflight_snap_experiment,False),
+        SnapExperimentSettings,SnapWatchController,discover_snap_samples,preflight_snap_experiment,False,preview=True),
 }
 
 

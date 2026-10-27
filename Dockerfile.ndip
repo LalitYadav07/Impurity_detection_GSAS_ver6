@@ -19,6 +19,8 @@ RUN python -m py_compile \
         scripts/ndip_observables.py \
         scripts/ndip_pattern_observation.py \
         scripts/gsas_cif_import.py \
+        scripts/gsas_signed_fxye.py \
+        scripts/gsas_core_infrastructure.py \
         scripts/ndip_runner.py
 
 ENV PYTHONPATH=/opt/radar-pd/scripts:/opt/radar-pd/GSAS-II

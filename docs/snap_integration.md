@@ -1,9 +1,20 @@
 # SNAP Live integration (local development)
 
-This branch adds SNAP to the existing Live interface and shared watch lifecycle.
+NOVA 0.4.22 adds SNAP as an explicitly labelled development preview in the
+existing Live interface and shared watch lifecycle.
 It is not an NDIP release, and it does not certify automatic GSAS-II profile
 selection. Real SNAP calibration-standard checks show why profile acceptance
 must remain a separate scientific decision.
+
+The combined review preserves current POWGEN/NOMAD support and HB-2A's distinct
+CW/HFIR path. Restored completed SNAP watches load the original supplied
+profile once, verify its original Bank label and hash, and distinguish that
+receipt from the staged Bank-1 copy. Missing profiles leave completed results
+readable and report the unavailable coordinate conversion. The combined NOVA
+suite passed 912 tests; 43 adapter/import checks and a native GSAS-II signed-bin
+comparison also passed. The real SNAP pipeline smoke reproduced Rwp 17.0844%
+and retained `needs_review` in the frozen runtime. These are software checks,
+not independent calibration acceptance.
 
 ## Select the actual reduction
 

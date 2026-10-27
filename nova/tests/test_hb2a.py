@@ -100,6 +100,36 @@ class Service:
             history_id='history',name=config.run_name,mode=config.mode,inputs=inputs,status=RunStatus.QUEUED)
 
 
+@pytest.mark.parametrize('missing_profile',[False,True])
+def test_completed_cw_watch_recovers_profile_and_keeps_receipt_checks(archive,profile,missing_profile):
+    from radar_pd_nova.transition_coordinate_mapping import mapped_calibration
+    add(archive)
+    service=Service(profile);first=Hb2aWatchController(service,settings())
+    run=first.discover()[0];first.submit(run)
+    first.state.mark_completed(run.run_id,['final-gpx'],galaxy_job_id='job-1');first.persist_state()
+    first._staging.cleanup()
+    reads=[];original=service.load_text_document
+    def load(identifier):
+        reads.append(identifier)
+        if missing_profile:raise OSError('Saved CW profile temporarily unavailable')
+        return original(identifier)
+    service.load_text_document=load
+    restored=Hb2aWatchController(service,settings());assert restored.restore_latest_state()
+    assert len(restored.state.completed)==1 and not restored.state.submitted
+    scan={'run_id':run.run_id,'bank':1,'instrument':'HB2A'}
+    if missing_profile:
+        with pytest.raises(ValueError,match='temporarily unavailable'):mapped_calibration(scan,restored,{})
+    else:
+        calibration=mapped_calibration(scan,restored,{})
+        assert isinstance(calibration,CwCalibration) and calibration.wavelength==2.4063
+        completed=restored.state.completed[run.run_id]
+        receipt=dict(completed.scan_metadata['hb2a_pattern_provenance']);receipt['profile_sha256']='0'*64
+        restored.state.completed[run.run_id]=replace(completed,
+            scan_metadata={**completed.scan_metadata,'hb2a_pattern_provenance':receipt})
+        with pytest.raises(ValueError,match='analysis receipt'):mapped_calibration(scan,restored,{})
+    assert reads==['profile'] and len(service.snapshots)==1
+
+
 def test_facility_mode_and_experiment_scan_identity_round_trip(archive):
     add(archive,exp=1000,scan=1);add(archive,exp=1001,scan=1)
     s=settings();d=s.definition();runs=discover_from_listing(d,hb2a.directory_listing(d.source_directory))

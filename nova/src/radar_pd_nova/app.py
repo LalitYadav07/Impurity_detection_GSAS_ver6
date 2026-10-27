@@ -574,7 +574,8 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
         state.snap_product_family = ""
         state.snap_product_family_options = []
         state.live_beamline_label = "POWGEN"
-        state.live_beamline_options = [{"title": adapter.name, "value": key} for key,adapter in BEAMLINES.items()]
+        state.live_beamline_options = [{"title": adapter.name + (" (preview)" if adapter.preview else ""),
+            "value": key} for key,adapter in BEAMLINES.items()]
         state.nomad_profile_bank = 1
         state.nomad_profile_acknowledged = False
         state.nomad_allow_exploratory = False
@@ -1219,6 +1220,11 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
             density="compact", variant="outlined",
             hint="Stop monitoring before changing the beamline. Each beamline uses its own reduced products and calibration rules.",
             persistent_hint=True,
+        )
+        vuetify.VAlert(
+            v_show="workflow_mode === 'powgen' && (live_beamline === 'HB2A' || live_beamline === 'SNAP')",
+            text="Preview support: supply a reviewed instrument profile. Quantitative calibration and end-to-end NDIP validation remain pending.",
+            type="info", variant="tonal", density="compact", classes="mb-3",
         )
         with vuetify.VExpansionPanels(v_model=("live_setup_panels",), multiple=True, variant="accordion", v_show="workflow_mode === 'powgen'", classes="radar-setup-panels mb-3"):
             with self._setup_section(1, "Experiment", 0, "!!powgen_ipts", key_prefix="live-setup"):
@@ -3831,7 +3837,8 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
             state.powgen_dashboard_title = f"{beamline_adapter(draft_instrument).name} · {draft_ipts or 'Live experiment'}"
             state.powgen_dashboard_configuration = "No monitor started"
             state.powgen_dashboard_library = "No monitor started"
-            state.powgen_dashboard_wavelength = "Broadband neutron TOF" if draft_instrument == "NOM" else "Automatic per run"
+            state.powgen_dashboard_wavelength = ("Broadband neutron TOF" if draft_instrument in {"NOM", "SNAP"}
+                else "Calibrated CW profile" if draft_instrument == "HB2A" else "Automatic per run")
             state.powgen_dashboard_scope_changed = False
             return
         settings = controller.settings
@@ -3842,7 +3849,8 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
             getattr(settings, "configuration_dataset_id", ""), "Saved monitor configuration")
         database_id = getattr(settings, "database_dataset_id", "")
         state.powgen_dashboard_library = self._dataset_display_label(database_id, "Custom monitor library") if database_id else "Built-in MP/COD catalog"
-        state.powgen_dashboard_wavelength = ("Broadband neutron TOF" if instrument == "NOM" else
+        state.powgen_dashboard_wavelength = ("Broadband neutron TOF" if instrument in {"NOM", "SNAP"} else
+            "Calibrated CW profile" if instrument == "HB2A" else
             str(getattr(settings, "wavelength_angstrom", "") or "Automatic per run"))
         state.powgen_dashboard_scope_changed = bool(ipts and (
             draft_ipts != ipts or draft_instrument != instrument or
@@ -4531,7 +4539,7 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
         state.powgen_bank_scope = "selected" if adapter.instrument in {"NOM", "SNAP"} else "all"
         state.powgen_processing_banks = []
         state.nomad_physical_bank = None
-        state.powgen_bank_options = [{"title": f"Histogram {n}", "value": n} for n in range(1,7 if adapter.instrument == "NOM" else 19)] if adapter.instrument != "PG3" else []
+        state.powgen_bank_options = [{"title": f"Histogram {n}", "value": n} for n in range(1,7 if adapter.instrument == "NOM" else 19)] if adapter.instrument in {"NOM", "SNAP"} else []
         state.powgen_wavelength = ""
         state.powgen_instrument_source_options = [
             *([{"title":"Use the official cycle profile automatically","value":"automatic"}] if adapter.automatic_profiles else []),
@@ -4657,7 +4665,8 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
             ipts = self._normalize_powgen_ipts(state.powgen_ipts)
         except ValueError:
             ipts = "<IPTS>"
-        state.powgen_source_directory = f"/SNS/{self._live_adapter().instrument}/{ipts}/{folder}"
+        adapter = self._live_adapter()
+        state.powgen_source_directory = f"/{adapter.facility}/{adapter.instrument}/{ipts}/{folder}"
         if folder == getattr(self, "_powgen_form_source", "shared/autoreduce"):
             return
         self._powgen_form_source = folder
@@ -4672,7 +4681,7 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
         state.powgen_processing_sample_ids = []
         state.powgen_run_options = []
         state.powgen_excluded_runs = []
-        state.powgen_bank_options = [{"title": f"Histogram {n}", "value": n} for n in range(1,7 if self._live_adapter().instrument == "NOM" else 19)] if self._live_adapter().instrument != "PG3" else []
+        state.powgen_bank_options = [{"title": f"Histogram {n}", "value": n} for n in range(1,7 if self._live_adapter().instrument == "NOM" else 19)] if self._live_adapter().instrument in {"NOM", "SNAP"} else []
         state.powgen_processing_banks = []
         state.nomad_physical_bank = None
         state.powgen_sample_message = "Refresh sample IDs for this reduction folder."
@@ -5024,7 +5033,7 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
                 {
                     "label": "Wavelength",
                     "value": (
-                        ("Broadband neutron TOF; no monochromatic wavelength selection" if self._live_adapter().instrument != "PG3" else f"{result.get('selected_wavelength')} A - {result.get('wavelength_source')}")
+                        ("Broadband neutron TOF; no monochromatic wavelength selection" if self._live_adapter().instrument in {"NOM", "SNAP"} else f"{result.get('selected_wavelength')} A - {result.get('wavelength_source')}")
                     ),
                 },
                 {

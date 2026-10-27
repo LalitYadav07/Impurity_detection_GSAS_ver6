@@ -235,8 +235,6 @@ def reduced_observation(scan):
         semantics = "density_from_SLOG_bin_integrals"
     valid = np.isfinite(y) & np.isfinite(sigma) & (sigma > 0)
     valid[:2] = valid[-2:] = False
-    metadata = scan.get("metadata") or {}
-    setup = metadata.get("nomad_setup") or metadata.get("powgen_setup") or {}
     comparison_setup = _comparison_reduction_setup(scan["instrument"], setup)
     geometry_lines = [
         line.strip()

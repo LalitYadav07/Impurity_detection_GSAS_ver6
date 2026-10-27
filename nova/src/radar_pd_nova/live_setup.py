@@ -607,7 +607,7 @@ class LiveSetupMixin:
             "all": None,
         }[values["powgen_backfill_mode"]]
         extra = {}
-        if adapter.instrument == 'NOM':
+        if adapter.instrument in {'NOM', 'SNAP'}:
             extra = {
                 "profile_bank": int(values["nomad_profile_bank"] or 0),
                 "profile_acknowledged": bool(values["nomad_profile_acknowledged"]),

@@ -41,7 +41,8 @@ def mapped_calibration(scan,controller,records):
         raise ValueError("The mapped instrument profile is not available locally")
     if not receipt:
         metadata=getattr(run,"scan_metadata",{}) or {}
-        receipt=metadata.get("nomad_bank_provenance") or metadata.get("powgen_bank_provenance") or {}
+        receipt=(metadata.get("nomad_bank_provenance") or metadata.get("powgen_bank_provenance")
+            or metadata.get("snap_bank_provenance") or metadata.get("hb2a_pattern_provenance") or {})
         profile=receipt.get("profile") or {}
         expected=profile.get("sha256") or receipt.get("profile_sha256")
         if receipt and int(receipt.get("source_bank",bank))!=bank:
@@ -56,6 +57,8 @@ def mapped_calibration(scan,controller,records):
                 raise ValueError('Selected CW profile differs from the analysis receipt')
             return CwCalibration.from_profile(path,source_bank=bank,profile_bank=1,
                 expected_sha256=mapping['profile_sha256'])
+        if getattr(controller,'display_profile_error',None):
+            raise ValueError(controller.display_profile_error)
         raise ValueError('The selected CW profile is not available locally; retain native 2theta')
     if scan.get("instrument")=="PG3" and not getattr(settings,"instrument_profile_dataset_id",None):
         resolution,path=controller.resolve_profile(run)
@@ -77,7 +80,10 @@ def mapped_calibration(scan,controller,records):
                 from .nomad import validate_profile
             _,mapping=validate_profile(controller._setup(run),bank,path,settings.profile_bank,
                 acknowledged=settings.profile_acknowledged)
-            if expected and mapping["profile_sha256"]!=expected:
+            # SNAP's nested profile receipt describes the staged Bank-1 copy;
+            # this file is the original supplied profile with its original label.
+            original_expected=receipt.get('profile_sha256') or expected
+            if original_expected and mapping["profile_sha256"]!=original_expected:
                 raise ValueError("Supplied profile differs from this analysis receipt")
             return TofCalibration.from_profile(path,source_bank=bank,profile_bank=settings.profile_bank,
                 expected_sha256=mapping["profile_sha256"])

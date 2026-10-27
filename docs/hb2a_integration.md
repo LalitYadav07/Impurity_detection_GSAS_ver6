@@ -1,8 +1,14 @@
 # HB-2A Live integration
 
-Status: local development prototype on `codex/hb2a-live-integration`, based on
-NOVA 0.4.12. It has not been deployed on NDIP. Import equivalence and a native
+Status: development preview in NOVA 0.4.22, integrated from
+`codex/hb2a-live-integration`. It has not been deployed on NDIP. Import equivalence and a native
 refinement smoke test do not establish quantitative scientific acceptance.
+
+The combined HB-2A/SNAP review preserved the current POWGEN/NOMAD discovery
+and saved-profile recovery paths. Completed HB-2A watches restore their supplied
+CW profile once; display controls verify its saved checksum and retain native
+2theta if that profile is unavailable. The beamline selector explicitly labels
+this support as a preview.
 
 ## Supported local path
 
@@ -161,6 +167,12 @@ the interactive pod has the authorized read-only `/HFIR/HB2A` mount. Local DGX
 readability does not establish NOVA/NDIP mount or proposal ACLs. Then repeat
 real browser, monitor-receipt, GPX/GSAS-II handoff and export tests after the
 normal immutable-image deployment process.
+
+The 27 October combined review passed 912 NOVA tests and 43 adapter/import
+checks. A full offline RADAR-PD run on the repository Mn3GeN example, using its
+two candidate CIFs, completed in 14.4 seconds with Rwp 16.69% and retained
+`needs_review`. This closes the software pipeline check for that example;
+it does not replace the missing quantitative acceptance on the new IPTS cohort.
 
 Primary sources:
 

@@ -205,6 +205,17 @@ class Hb2aWatchController(PowgenWatchController):
     def __init__(self,service,settings,*,sample_index=None):
         super().__init__(service,settings,sample_index=sample_index or Hb2aSampleIndex(settings.ipts))
         self._supplied_profile=None
+        self.display_profile_error=''
+
+    def restore_latest_state(self):
+        restored=super().restore_latest_state()
+        if restored:
+            try:
+                self._profile_path()
+                self.display_profile_error=''
+            except (OSError,ValueError,RuntimeError) as exc:
+                self.display_profile_error=f'Saved HB-2A profile unavailable: {exc}'
+        return restored
 
     def _catalog_digest(self):
         return sha256(hb2a.VERSION.encode()).hexdigest()

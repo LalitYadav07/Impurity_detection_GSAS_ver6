@@ -46,6 +46,14 @@ profile; it remains exploratory pending calibration-standard acceptance.
 See [NOMAD integration](../docs/nomad_integration.md) for supported layouts,
 bank mapping, correction notices and release requirements.
 
+HB-2A and SNAP are explicitly labelled previews. HB-2A supports individual
+constant-wavelength reductions under HFIR; SNAP supports separately reviewed
+TOF export families and histogram/profile mappings. Both require supplied,
+reviewed calibration profiles and retain scientific-review notices. Their
+NDIP end-to-end and quantitative calibration acceptance is pending; see
+[HB-2A integration](../docs/hb2a_integration.md) and
+[SNAP integration](../docs/snap_integration.md).
+
 Live setup is self-contained; preparing inputs in Single pattern is optional.
 Sample discovery runs as a background UI task, so selecting/uploading a library,
 profile or configuration does not wait behind a large facility inventory.
