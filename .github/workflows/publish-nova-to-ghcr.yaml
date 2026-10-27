@@ -102,6 +102,39 @@ jobs:
           ' > "${RUNNER_TEMP}/nova-upload-handlers.json"
           node nova/tests/client_upload.test.js "${RUNNER_TEMP}/nova-upload-handlers.json"
 
+      - name: Verify packaged beamline profiles and condition contract
+        shell: bash
+        run: |
+          docker run --rm --entrypoint python \
+            "${IMAGE_NAME}:nova-${NOVA_VERSION}" -c '
+          import hashlib
+          import json
+          from types import SimpleNamespace
+          from radar_pd_nova.hb2a_profiles import ROOT, resolve_profile
+          from radar_pd_nova.live_beamlines import BEAMLINES
+          from radar_pd_nova.snap_conditions import validate_bindings_json
+          from radar_pd_nova.snap_controller import SnapExperimentSettings
+          catalog = json.loads((ROOT / "catalog.json").read_text())
+          assert len(catalog["profiles"]) == 52
+          for entry in catalog["profiles"]:
+              raw = (ROOT / entry["filename"]).read_bytes()
+              assert hashlib.sha256(raw).hexdigest() == entry["sha256"], entry["filename"]
+              metadata = {"start_time": entry["start_date"] + "T12:00:00-04:00",
+                          "end_time": entry["end_date"] + "T13:00:00-04:00",
+                          "ge_reflection": entry["ge_reflection"], "collimator": entry["collimator"],
+                          "nominal_wavelength_angstrom": {113: 2.41, 115: 1.54, 117: 1.12}[entry["ge_reflection"]]}
+              path, mapping = resolve_profile(SimpleNamespace(metadata=metadata, two_theta_min=5., two_theta_max=155.))
+              assert path.name == entry["filename"] and mapping["sha256"] == entry["sha256"]
+          assert BEAMLINES["HB2A"].automatic_profiles and not BEAMLINES["SNAP"].automatic_profiles
+          binding = {"temperature": {"channel": "LakeshoreSampleTemp", "unit": "K", "verified": True,
+                     "product_window_reviewed": True, "scope_sha256": "a" * 64, "schema_sha256": "b" * 64}}
+          assert validate_bindings_json(json.dumps(binding)) == binding
+          settings = SnapExperimentSettings("IPTS-1", "h", "c", selected_banks=(1,),
+                     product_family=json.dumps(["all", ""]), condition_bindings_json=json.dumps(binding, sort_keys=True))
+          assert json.loads(settings.definition().config_refs["snap_conditions"]) == binding
+          print("52 packaged HB-2A profiles and immutable SNAP condition contract passed")
+          '
+
       - name: Push immutable and release tags
         shell: bash
         run: |
