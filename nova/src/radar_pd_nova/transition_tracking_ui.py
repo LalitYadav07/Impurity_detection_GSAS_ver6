@@ -295,7 +295,7 @@ class TransitionTrackingMixin:
                         v_if="transition_policy.selected.includes('rwp')",classes="radar-section-help")
             with html.Ol(
                 classes="radar-transition-timeline",
-                aria_label="Select a scan by its recurring pattern symbol",
+                raw_attrs=['aria-label="Select a scan by its recurring pattern symbol"'],
             ):
                 with html.Li(v_for="item in transition_timeline", key="item.run_id"):
                     with html.Button(
@@ -303,8 +303,7 @@ class TransitionTrackingMixin:
                         classes=(
                             "'radar-transition-marker ' + (item.selected ? 'is-selected' : item.related ? 'is-related' : '')",
                         ),
-                        aria_label=("item.aria",),
-                        aria_pressed=("item.selected",),
+                        raw_attrs=[':aria-label="item.aria"', ':aria-pressed="item.selected"'],
                         click=(self.select_transition_scan, "[item.run_id]"),
                     ):
                         vuetify.VIcon(
@@ -1456,7 +1455,18 @@ class TransitionTrackingMixin:
 
     def _transition_cursor_key(self,ids,labels,limits):
         state=self.server.state
-        return digest([self._transition_generation,self._transition_signature,ids,labels,limits,
+        # Completed refinements add cells, fractions and fit receipts to an
+        # existing raw acquisition. Those do not change its measured map or
+        # local preview. Reuse the native ribbons unless their evidence or
+        # selected-rule boundaries changed (including late Rwp decisions).
+        evidence = [
+            [row.get(key) for key in ("run_id", "pattern_sha256", "state_id",
+                "boundary", "boundary_after", "representative")]
+            + [(row.get(key) or {}).get("before") for key in
+                ("previous_comparison", "anchor_comparison", "boundary_comparison")]
+            for row in self._series_rows()
+        ]
+        return digest([self._transition_generation,evidence,ids,labels,limits,
             state.transition_scale,state.transition_contrast,state.transition_background,
             state.transition_map_coordinate,state.transition_coordinate_notice,state.transition_palette,
             state.transition_policy,state.transition_region_overlay,state.transition_region_signals,

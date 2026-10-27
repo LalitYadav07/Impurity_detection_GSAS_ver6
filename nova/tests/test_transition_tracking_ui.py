@@ -238,6 +238,45 @@ def test_local_preview_frames_are_reused_and_full_details_commit_only_on_release
     assert app._transition_report==report
     assert "transition_preview" in state.trame__client_only
     assert "radar-transition-cursor" in app.layout.html and "@Commit" in app.layout.html
+    assert ':aria-label="item.aria"' in app.layout.html
+    assert ':aria-pressed="item.selected"' in app.layout.html
+
+
+def test_completed_model_context_reuses_measured_map_and_preview_frames(monkeypatch):
+    app = application()
+    state = app.server.state
+    frames = state.transition_cursor_frames
+    epoch = state.transition_cursor_epoch
+    import radar_pd_nova.transition_tracking_ui as ui
+    def unexpected_rebuild(*args, **kwargs):
+        raise AssertionError("A fitted cell update must not retransmit unchanged native ribbons")
+    monkeypatch.setattr(ui, "heatmap_figure", unexpected_rebuild)
+    monkeypatch.setattr(ui, "cursor_frames", unexpected_rebuild)
+    updated = scans()
+    for row in updated:
+        row["final_rwp"] = 4.2
+        row["rwp"] = 4.2
+        row["analysis_status"] = "completed"
+    app._refresh_transition_tracking(updated)
+    assert state.transition_cursor_epoch == epoch
+    assert state.transition_cursor_frames is frames
+    assert state.transition_rwp == "4.2%"
+
+
+def test_late_rwp_boundary_decision_invalidates_preview_frames():
+    from test_refinement_indicator import fitted
+    app = RadarPdNovaApp()
+    rows = [fitted(1, 8), fitted(2, 8.1)]
+    app._refresh_transition_tracking(rows)
+    app.update_transition_policy("selected", ["rwp"])
+    epoch = app.server.state.transition_cursor_epoch
+    frames = app.server.state.transition_cursor_frames
+    changed = copy.deepcopy(rows)
+    changed[1]["final_rwp"] = 12
+    app._refresh_transition_tracking(changed)
+    assert app.server.state.transition_cursor_epoch != epoch
+    assert app.server.state.transition_cursor_frames is not frames
+    assert any(row.get("boundary") for row in app._transition_report["records"])
 
 
 def test_old_cursor_epoch_cannot_select_a_row_from_a_different_map():
