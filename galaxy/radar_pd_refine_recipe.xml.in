@@ -1,0 +1,30 @@
+<tool id="neutrons_radar_pd_refine_recipe_prototype" name="RADAR-PD Utility: Apply Approved Refinement Recipe" version="0.1.0" profile="22.05">
+    <description>continue a trusted preliminary GPX using an approved staged recipe</description>
+    <requirements><container type="docker">@IMMUTABLE_BATCH_IMAGE@</container></requirements>
+    <command detect_errors="exit_code"><![CDATA[
+        set -euo pipefail &&
+        python /opt/radar-pd/scripts/ndip_recipe.py run '$source_gpx' '$recipe' '$approval' polished.gpx > '$console_output' 2>&1 &&
+        cp polished.gpx '$polished_project' &&
+        cp polished.execution.json '$execution_receipt'
+    ]]></command>
+    <inputs>
+        <param name="source_gpx" type="data" format="binary" label="Trusted preliminary RADAR-PD GPX"/>
+        <param name="recipe" type="data" format="json" label="Approved refinement plan"/>
+        <param name="approval" type="data" format="json" label="Exact-plan approval receipt"/>
+    </inputs>
+    <outputs>
+        <data name="polished_project" format="binary" label="RADAR-PD further-refined GPX"/>
+        <data name="execution_receipt" format="json" label="RADAR-PD stage execution and scientific review"/>
+        <data name="console_output" format="txt" label="RADAR-PD further-refinement log"/>
+        <collection name="stage_projects" type="list" label="RADAR-PD refinement-stage GPXs">
+            <discover_datasets pattern="polished_(?P&lt;designation>.+)\.gpx" ext="binary" directory="." visible="true"/>
+        </collection>
+    </outputs>
+    <help><![CDATA[
+This worker requires an immutable batch image containing the gpx_recipe package.
+It loads a trusted native GPX, verifies the approved plan/model binding, and runs
+the explicit stages. It performs no LLM calls and needs no model credential.
+Execution completion does not establish scientific acceptance. Inspect the receipt,
+refined values, covariance, residuals and intermediate projects. Source GPX unchanged.
+    ]]></help>
+</tool>
