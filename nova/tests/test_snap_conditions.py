@@ -1,5 +1,6 @@
 """Real NeXus-shaped condition logs at the Live and saved-watch boundary."""
 from dataclasses import replace
+from datetime import datetime,timedelta
 import json
 
 import h5py
@@ -12,20 +13,22 @@ from radar_pd_nova.scan_conditions import read_conditions
 from radar_pd_nova.powgen_watch import WatchedRun, build_submission_plan
 
 
-def nexus(path, *, unit='K', specimen=123, selector='Lakeshore', values=(300.,310.), times=(0.,5.)):
+def nexus(path, *, unit='K', specimen=123, selector='Lakeshore', values=(300.,310.), times=(0.,5.),
+        run=42,start='2026-01-01T00:00:00Z'):
+    end=(datetime.fromisoformat(start.replace('Z','+00:00'))+timedelta(seconds=100)).isoformat()
     with h5py.File(path,'w') as h:
-        for name,value in [('entry/run_number',b'42'),('entry/experiment_identifier',b'IPTS-1'),
+        for name,value in [('entry/run_number',str(run).encode()),('entry/experiment_identifier',b'IPTS-1'),
                 ('entry/instrument/name',b'SNAP'),('entry/sample/name',b'test specimen'),
                 ('entry/sample/identifier',specimen),('entry/DASlogs/SampleId/value',specimen),
                 ('entry/DASlogs/BL3:SE:IM:SelectSampleEnv/value_strings',selector.encode()),
-                ('entry/title',b'temperature sweep'),('entry/start_time',b'2026-01-01T00:00:00Z'),
-                ('entry/end_time',b'2026-01-01T00:01:40Z')]:
+                ('entry/title',b'temperature sweep'),('entry/start_time',start.encode()),
+                ('entry/end_time',end.encode())]:
             h.create_dataset(name,data=[value])
         for name,v in [('LakeshoreSampleTemp',values),('Lakeshore2SampleTemp',[0.,0.])]:
             p='entry/DASlogs/'+name+'/'
             d=h.create_dataset(p+'value',data=v)
             if unit:d.attrs['units']=unit
-            t=h.create_dataset(p+'time',data=times);t.attrs.update(units='s',start='2026-01-01T00:00:00Z')
+            t=h.create_dataset(p+'time',data=times);t.attrs.update(units='s',start=start)
         # No test/read is allowed to depend on loading events.
         h.create_dataset('entry/bank1_events/event_id',shape=(10000000,),dtype='i8')
     return path
@@ -156,7 +159,8 @@ def test_controller_freezes_sensor_receipt_restores_and_rejects_changed_source(t
     path=nexus(tmp_path/'SNAP42.h5');binding=reviewed(path)
     source=write_source(tmp_path/'SNAP42_bank_test.gsa')
     monkeypatch.setattr(WatchDefinition,'source_directory',property(lambda self:str(source.parent)))
-    monkeypatch.setattr('radar_pd_nova.snap_metadata.snap_nexus_path',lambda *a:path)
+    paths={42:path}
+    monkeypatch.setattr('radar_pd_nova.snap_metadata.snap_nexus_path',lambda ipts,run:paths[run])
     settings=SnapExperimentSettings('IPTS-1','h','c',instrument_profile_dataset_id='original',
         selected_banks=(2,),subfolder='shared/SNAPRed/export/gsa/bank',
         product_family=snap.parse_filename(source).family,profile_bank=7,
@@ -172,6 +176,14 @@ def test_controller_freezes_sensor_receipt_restores_and_rejects_changed_source(t
     restored=SnapWatchController(service,settings,sample_index=index)
     assert restored.restore_latest_state() and not restored.discover() and len(service.jobs)==1
     assert not SnapWatchController(service,replace(settings,condition_bindings_json='{}'),sample_index=index).restore_latest_state()
+    paths[43]=nexus(tmp_path/'SNAP43.h5',run=43,start='2026-01-01T00:02:00Z',values=(100.,110.))
+    write_source(tmp_path/'SNAP43_bank_test.gsa',run=43)
+    arrivals=restored.discover()
+    assert len(arrivals)==1 and arrivals[0].run_number==43
+    next_record=restored.submit(arrivals[0])
+    assert next_record.provenance['snap_bank']['acquisition']['channels'][0]['value']==pytest.approx(109.5)
+    assert next_record.provenance['snap_bank']['condition_bindings']==binding
+    assert not restored.discover() and len(service.jobs)==2
     with h5py.File(path,'a') as h:h['entry/DASlogs/LakeshoreSampleTemp/value'][:]=[100.,110.]
     with pytest.raises(ValueError,match='changed after discovery'):
         first._prepare_run(run)
