@@ -89,6 +89,8 @@ class Session:
                 # A failed revision must never leave the previous recipe
                 # executable while the user expects their edit to be active.
                 self.state.update(preview=None, approval=None)
+            if action == "plan":
+                self.state["last_request"] = body.get("request", "")
             planner = getattr(self, "planner_info", provider_info())
             self.state.update(status="busy", message={"plan": "Waiting for " + planner["label"] + "…", "preview": "Checking effective parameters in GSAS-II…", "approve": "Recording approval and compiling the script…", "run": "Executing the approved recipe on the supplied scans…", "fixture": "Loading a deterministic execution test fixture…"}[action])
             self.save()
@@ -106,7 +108,8 @@ class Session:
                         proposed = response["plan"]
                         origin = response["calls"][0]["label"] + " · reasoning " + response["calls"][0]["reasoning_effort"]
                     with self.lock:
-                        self.state["revisions"].append({"plan_sha256": plan_hash(proposed), "origin": origin, "plan": proposed})
+                        self.state["revisions"].append({"plan_sha256": plan_hash(proposed), "origin": origin, "plan": proposed,
+                                                        "user_request": body.get("request", "") if action == "plan" else proposed["request"]})
                         self.state.update(plan=proposed, preview=None, approval=None, origin=origin,
                                           message="Plan ready for review. Check its assumptions and effective-parameter preflight.")
                 elif action == "preview":

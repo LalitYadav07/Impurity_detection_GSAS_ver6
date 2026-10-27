@@ -23,8 +23,10 @@ the existing RADAR-PD interface.
   `gpt-oss-120b`. Network/provider errors never trigger model substitution or
   execution. Revisions include the previous plan. Per-atom capability summaries
   expose symmetry-fixed positions and supported ADP flags before the full context.
-- `contracts.py`: validated complete active sets, resolved phase/atom targets,
-  background edits, occupancy relations, and free/newly-fixed tables.
+- `contracts.py` / `schema.py`: validated complete active sets, resolved phase/atom
+  targets, a closed provider-neutral JSON schema, and free/newly-fixed tables.
+- `advanced.py`: calibrated fit ranges/exclusions, explicit occupancy/Uiso bounds,
+  scale normalization, linear occupancy relations and phase-specific texture.
 - `execution.py`: clears ordinary refinement flags before each stage, preserves
   original constraints/restraints and data, performs native preflight, records
   effective and actual independent variables, and branches stage GPXs.
@@ -39,12 +41,33 @@ the existing RADAR-PD interface.
 ## Supported scientific scope
 
 Version one accepts ordinary nuclear powder projects. A stage can release the
-polynomial background, linked phase scales, cells and explicitly selected atom
+polynomial background, linked phase scales, global histogram scale, cells,
+March-Dollase or spherical-harmonic preferred orientation, and selected atom
 positions (`X`), isotropic displacement parameters (`U`) and occupancies (`F`).
 Background functions/counts and retention/removal of existing support points
-are explicit. New constraints are explained linear occupancy sums using exact
-observed variable identities. Occupancy bounds are 0–1; released Uiso is bounded
-below by zero. Existing project constraints/restraints are preserved.
+are explicit. New constraints are explained linear occupancy equations using
+exact observed variable identities, including weighted coefficients and coupled
+equations. Occupancy bounds lie within 0–1; held co-occupants reduce a shared
+site's available capacity. Released Uiso is bounded below by zero. Explicit bounds
+that permit overfilling are rejected rather than silently tightened. Existing
+project constraints/restraints and tighter existing bounds are preserved.
+
+A requested normalized multiphase refinement rescales starting HAP phase scales
+to sum to one and compensates the global histogram scale so starting calculated
+intensities are preserved. It then constrains the HAP scale sum while releasing
+global scale and the linked phase scales. A single phase is held at one, with
+only global scale released. This is a parameterization convention: raw phase
+scales are not weight percentages. The alternative convention of fixed global
+scale and free phase scales remains supported. A fixed weight-percent constraint
+while atomic occupancies change is nonlinear and is not implemented.
+
+Fit limits and excluded intervals accept explicit native, TOF, d, Q or two-theta
+units where the histogram permits them. Conversion uses the installed GSAS-II
+calibration functions, including higher-order TOF coefficients and zero offset.
+Ranges outside measured coverage and ambiguous units are rejected. Exclusions
+must explicitly add, replace or clear intervals. Texture is optional and local
+to a selected phase/histogram: nonzero hkl for March-Dollase, or a supported even
+spherical-harmonics order from the actual phase symmetry.
 
 Magnetic/modulated and mixed single-crystal projects, rigid-body operations,
 instrument calibration changes, anisotropic ADP release, new phases/atoms,
@@ -58,13 +81,22 @@ scientific acceptance. Jobs require review of values, convergence, covariance,
 correlations, constraints and residuals. A native error, missing fresh covariance,
 unexpected vary list or variable frozen at a bound stops execution. The original
 GPX is immutable; intermediate and failed-attempt artifacts remain available.
+The vary audit resolves generated constraint variables through their actual
+native inverse equations; a variable family or `::constr` prefix is insufficient
+authority. Every refinement must produce fresh covariance, with no unexpected
+atom/phase/histogram variables. A new occupancy equation that leaves exactly
+one released term and holds its peers fixed is rejected because it removes that
+term's refinement freedom.
 
 ## Model context and approval
 
 A GPX is a native binary/pickle project, not JSON. Only the backend scientific
 runtime loads it. Supply trusted pipeline-produced GPXs, not arbitrary files to
 the HTTP process. Context is normalized supported-model state, not a lossless
-export of every possible GSAS-II tree extension. Payloads above 350 kB are
+export of every possible GSAS-II tree extension. Repetitive parameter records
+are encoded as lossless column/row tables; no values are removed. Qualified
+phase/atom capability summaries distinguish identical labels in different phases.
+Payloads above 350 kB are
 rejected, not silently truncated. Coordinates/cells and scan values are retained
 in context but excluded from the compatibility signature, so an approved recipe
 can run on later compatible scans. Phase/atom topology, labels, site symmetry,
@@ -110,6 +142,12 @@ its endpoint is restricted to `https://sambanova.cades.ornl.gov/v1`. Explicit
 `AZURE_ILLUMINE_API_KEY`, reasoning `none` and `store:false`. Both clients refuse
 redirects and other resources. HTTP 429 reports safe provider retry guidance;
 requests are not retried automatically. Never copy a key between these resources.
+Luna uses strict JSON-schema output. Its initial output allowance is 2048 tokens;
+one incomplete response can receive a bounded repair with a doubled allowance
+(maximum 8192). Total inference remains at most two calls per revision. Explicit
+stage counts are checked so joint stages cannot silently become sequential ones.
+Clarifications receive at most one capability recheck; a network timeout remains
+a provider failure, not evidence that the scientific request is unsupported.
 
 For local development only, `--key-file /outside/repository/private-key-file`
 can read an existing small owner-only Illumine key file into backend memory. It
@@ -205,6 +243,54 @@ and executed on two real scans through the browser harness using the RADAR-PD
 container. The UI identifies Luna development and OSS deployment separately.
 One synthetic symmetry-fixed request was rejected by the validator, prompting
 the explicit capability summary; additional model testing can be delayed by
-provider rate limits. No additional real NOMAD context was sent to Luna for the
-optional edge-case campaign. Exact results, limitations and any follow-up checks
+provider rate limits. Exact results, limitations and follow-up checks
 are in `audit/2026-10-27/gpx-refinement-planner/luna-development`.
+
+The subsequent user-authorized campaign is in
+`audit/2026-10-27/gpx-recipe-benchmark`. It has 100 explicit natural-language
+courses on 11 copied real GPXs, with independently specified expected operations.
+There are 87 executable requests and 13 requests requiring clarification or
+rejection. The latter include three original bounds that would overfill mixed
+sites; their original requests and rejected recipes remain available. Categories
+cover occupancies, Uiso, positions plus Uiso, phase-specific sequences, scales,
+limits/exclusions, real mixed sites, texture and negative requests. These are
+controlled operation tests, not an exhaustive evaluation of arbitrary language.
+
+`benchmarks/gpx_recipes/catalog.py` generates the cases from private local
+contexts. `run_campaign.py` uses immutable code snapshots and preserves every
+attempt. A model plan must match the independent operation oracle before it
+can execute. `native_worker.py` runs the compiled wrapper in the RADAR-PD
+Linux/amd64 image and checks actual flags, vary lists, fixed values, bounds,
+data/calibration preservation, occupancy equations and scale normalization.
+The independent oracle belongs only to the benchmark; it is never supplied to
+the model and is not a substitute for user review in production.
+
+`report.py` produces a filterable per-case report and links to exact requests,
+model replies, execution receipts and GPXs. `figures.py` renders representative
+native fits with residuals and Bragg ticks. Input seals and original source
+hashes distinguish real files from constructed tests. Scientific stops, model
+intent errors, provider failures and successful mechanics are separate outcomes.
+Read the generated report for final counts rather than treating an earlier
+attempt as the final implementation. Follow-up regressions have their own
+receipts and do not erase the complete campaign's failures.
+
+Site-capacity inference currently recognizes exact co-located coordinates with
+matching multiplicity, not all symmetry-equivalent or split-site descriptions.
+Mass fractions and their uncertainty need scientific review when occupancies
+or structural models change. A correct executed recipe does not validate the
+starting phase identities, extinction/absorption models or the resulting structure.
+
+The completed full Luna run on 2026-10-27 recorded 69 verified executions,
+16 stops at parameter bounds, 12 correct clarifications/rejections, two intent
+errors blocked by the independent oracle, and one HTTPS timeout during repair.
+The independent native reference run recorded 70 verified executions and 17
+bound stops across the 87 executable requests. Neither recorded a runtime defect.
+After improvements to constraint validation and phase-qualified capability
+checks, a separate 17-case targeted regression recorded 11 verified executions,
+two scientific stops and four correct blocks, including all three outstanding
+full-run cases. This is not a second complete 100-case pass. All 139 successful
+saved reference/model GPXs passed 355 additional fixed-cell/background and
+inverse-calibration checks. The 11 original GPXs and all 23 sealed campaign
+inputs were unchanged. The latest focused unit suite has 56 passing tests.
+The built NOVA wheel contains the new modules/assets and no GPX inputs; all
+100 contexts fit the payload guard (largest 313709 bytes).

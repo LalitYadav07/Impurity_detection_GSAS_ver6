@@ -8,7 +8,7 @@ from . import SCHEMA
 from .snapshot import digest
 
 BACKGROUNDS = ["chebyschev-1", "chebyschev", "cosine", "Q^2 power series", "Q^-2 power series", "lin interpolate", "inv interpolate", "log interpolate"]
-KINDS = {"background", "phase_scale", "cell", "atom"}
+KINDS = {"background", "phase_scale", "histogram_scale", "preferred_orientation", "cell", "atom"}
 
 
 def exact_keys(value, allowed, required=()):
@@ -32,8 +32,10 @@ def validate_plan(plan, context):
     phases = {p["key"]: p for p in context["phases"]}
     hists = {h["key"]: h for h in context["histograms"]}
     stage_ids = set()
+    normalized = set(context.get("normalized_histograms", []))
     for stage in plan["stages"]:
-        exact_keys(stage, {"id", "title", "cycles", "free", "background", "constraints"}, {"id", "title", "cycles", "free", "constraints"})
+        from .advanced import STAGE_FIELDS, validate_stage
+        exact_keys(stage, {"id", "title", "cycles", "free", "background", "constraints"} | STAGE_FIELDS, {"id", "title", "cycles", "free", "constraints"})
         if not isinstance(stage["id"], str) or not re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_-]{0,40}", stage["id"]) or stage["id"] in stage_ids:
             raise ValueError("Stage IDs must be unique safe identifiers")
         stage_ids.add(stage["id"])
@@ -46,7 +48,8 @@ def validate_plan(plan, context):
         seen = set()
         for target in stage["free"]:
             kind = target.get("kind") if isinstance(target, dict) else None
-            fields = {"background": {"kind", "histogram"}, "phase_scale": {"kind", "phase", "histogram"},
+            fields = {"background": {"kind", "histogram"}, "histogram_scale": {"kind", "histogram"},
+                      "preferred_orientation": {"kind", "phase", "histogram"}, "phase_scale": {"kind", "phase", "histogram"},
                       "cell": {"kind", "phase"}, "atom": {"kind", "phase", "atom", "flags"}}
             if kind not in KINDS:
                 raise ValueError("Unsupported active parameter family: " + str(kind))
@@ -56,7 +59,7 @@ def validate_plan(plan, context):
             phase = phases.get(target.get("phase"))
             if "phase" in target and phase is None:
                 raise ValueError("Unknown phase " + str(target["phase"]))
-            if kind == "phase_scale" and hists[target["histogram"]]["name"] not in phase["histograms"]:
+            if kind in {"phase_scale", "preferred_orientation"} and hists[target["histogram"]]["name"] not in phase["histograms"]:
                 raise ValueError("Phase is not active in the selected histogram")
             if kind == "atom":
                 matches = [a for a in phase["atoms"] if a["label"] == target["atom"]]
@@ -103,6 +106,11 @@ def validate_plan(plan, context):
                 if identity in identities:
                     raise ValueError("Duplicate occupancy relation term")
                 identities.add(identity)
+            active_occupancies = {(t["phase"], t["atom"]) for t in stage["free"]
+                                  if t["kind"] == "atom" and "F" in t["flags"]}
+            if len(identities & active_occupancies) == 1:
+                raise ValueError("A new occupancy equation with exactly one released occupant and all other terms held fixed removes that occupant's refinement freedom. Do not invent a site-total equation; preserve the user's requested fixed/free choices or ask for clarification.")
+        validate_stage(stage, context, normalized)
     return copy.deepcopy(plan)
 
 
@@ -122,6 +130,8 @@ def stage_table(plan, context=None):
         for h in context["histograms"]:
             if h.get("background", {}).get("refine"):
                 previous.update(target_labels({"kind": "background", "histogram": h["key"]}))
+            if h.get("sample_parameters", {}).get("Scale", [0, False])[1]:
+                previous.update(target_labels({"kind": "histogram_scale", "histogram": h["key"]}))
         for p in context["phases"]:
             if p.get("cell_refined"):
                 previous.update(target_labels({"kind": "cell", "phase": p["key"]}))
@@ -138,6 +148,7 @@ def stage_table(plan, context=None):
         rows.append({"id": stage["id"], "title": stage["title"], "free": sorted(current),
                      "newly_free": sorted(current - previous), "newly_fixed": sorted(previous - current),
                      "fixed_policy": "Every other ordinary refinement parameter is fixed; original constraints/restraints remain.",
-                     "cycles": stage["cycles"], "background": stage.get("background"), "new_constraints": stage["constraints"]})
+                     "cycles": stage["cycles"], "background": stage.get("background"), "new_constraints": stage["constraints"],
+                     "edits": {k: stage[k] for k in ("fit_ranges", "exclusions", "bounds", "phase_normalization", "texture") if stage.get(k)}})
         previous = current
     return rows

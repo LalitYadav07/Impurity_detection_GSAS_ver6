@@ -8,6 +8,7 @@ import os
 import sys
 
 from .studio_state import extract_gsasii_refinement_state
+from .advanced import occupancy_groups
 
 
 def digest(value):
@@ -64,7 +65,7 @@ def snapshot(path):
             refs = [p for p in parameters if p["phase_id"] == int(phase.id) and p["atom_id"] == atom_index]
             site_symmetry = symmetry.SytSym(atom.coordinates, general["SGData"])[0]
             coordinate_terms = symmetry.GetCSxinel(site_symmetry)[0]
-            atoms.append({"label": atom.label, "element": atom.element, "type": atom.type,
+            atoms.append({"label": atom.label, "native_id": atom_index, "element": atom.element, "type": atom.type,
                           "coordinates": list(atom.coordinates), "occupancy": atom.occupancy,
                           "adp_type": atom.adp_flag, "adp": atom.ADP,
                           "multiplicity": atom.mult, "refinement_flags": atom.refinement_flags.strip(),
@@ -75,7 +76,13 @@ def snapshot(path):
         labels = [a["label"] for a in atoms]
         if len(labels) != len(set(labels)):
             raise ValueError("Duplicate atom labels require explicit project cleanup before planning")
-        phases.append({"key": f"p{index}", "name": phase.name, "space_group": general["SGData"]["SpGrp"],
+        laue = general["SGData"]["SGLaue"]
+        lat = importlib.import_module((G2.__package__ + "." if G2.__package__ else "") + "GSASIIlattice")
+        phases.append({"key": f"p{index}", "native_id": int(phase.id), "name": phase.name, "space_group": general["SGData"]["SpGrp"],
+                       "global_texture": json_safe(general.get("SH Texture", {})),
+                       "laue": laue, "mass": general.get("Mass"),
+                       "occupancy_groups": occupancy_groups(atoms),
+                       "texture_orders": [order for order in (2, 4, 6, 8) if lat.GenSHCoeffT(laue, "0", order, False)],
                        "cell": phase.get_cell(), "cell_refined": bool(general["Cell"][0]), "atoms": atoms,
                        "phase_scales": [{"histogram": histogram_keys[name], "value": hap["Scale"][0], "refine": bool(hap["Scale"][1])}
                                         for name, hap in phase.data["Histograms"].items() if name in histogram_keys and hap.get("Use", True)],
@@ -86,7 +93,7 @@ def snapshot(path):
         bg = hist.data["Background"]
         inst = hist.InstrumentParameters
         instrument = {k: json_safe(v[1] if isinstance(v, (list, tuple)) and len(v) > 1 else v) for k, v in inst.items()}
-        histograms.append({"key": f"h{index}", "name": hist.name, "instrument": instrument,
+        histograms.append({"key": f"h{index}", "native_id": int(hist.id), "name": hist.name, "instrument": instrument,
                            "limits": json_safe(hist.data["Limits"]), "point_count": len(hist.getdata("X")),
                            "background": {"function": bg[0][0], "coefficients": int(bg[0][2]), "values": bg[0][3:],
                                           "refine": bool(bg[0][1]), "fixed_point_count": len(bg[1].get("FixedPoints", []))},

@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 
 import pytest
+from test_contracts import context, plan
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 from gpx_recipe import providers
@@ -33,7 +34,8 @@ def test_luna_uses_none_and_only_its_resource_credential(monkeypatch):
     class Opener:
         def open(self, request, timeout):
             calls.append((request, timeout))
-            return io.BytesIO(json.dumps(response()).encode())
+            handle = io.BytesIO(json.dumps(response()).encode()); handle.headers = {}
+            return handle
     monkeypatch.setattr(providers.urllib.request, "build_opener", lambda *a: Opener())
     raw, meta = providers.IllumineLuna().complete([{"role": "user", "content": "JSON recipe"}])
     req, timeout = calls[0]; body = json.loads(req.data)
@@ -106,3 +108,20 @@ def test_rate_limit_has_safe_retry_guidance_and_never_retries(monkeypatch):
     assert raised.value.http_status == 429 and raised.value.retry_after_seconds == 2.5
     assert "private provider content" not in str(raised.value)
     assert len(calls) == 1
+
+
+def test_incomplete_plan_can_use_one_larger_bounded_repair(monkeypatch,context,plan):
+    from gpx_recipe.planner import make_plan
+    monkeypatch.setenv('AZURE_ILLUMINE_API_KEY','test-key')
+    monkeypatch.delenv('RADAR_GPX_LUNA_MAX_OUTPUT_TOKENS',raising=False)
+    caps=[]
+    def post(endpoint,headers,body,label):
+        caps.append(body['max_output_tokens'])
+        if len(caps)==1:
+            data=response('{"schema":');data.update(status='incomplete',incomplete_details={'reason':'max_output_tokens'});return data
+        return response(json.dumps(plan))
+    monkeypatch.setattr(providers,'_post',post)
+    result=make_plan('Refine the selected atom',context,client=providers.IllumineLuna())
+    assert caps==[2048,4096] and len(result['calls'])==2
+    assert result['calls'][0]['finish_reason']=='length'
+    assert result['status']=='ready_for_preflight'

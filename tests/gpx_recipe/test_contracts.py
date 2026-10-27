@@ -123,7 +123,7 @@ def test_unanswerable_request_does_not_force_invented_stages(context, plan):
     plan["stages"] = []
     plan["unsupported"] = ["Magnetic refinement is not implemented in version 1"]
     validate_plan(plan, context)
-    response = make_plan("refine magnetic moments", context, client=FakeClient([json.dumps(plan)]))
+    response = make_plan("refine magnetic moments", context, client=FakeClient([json.dumps(plan), json.dumps(plan)]))
     assert response["status"] == "needs_input"
     with pytest.raises(ValueError, match="Resolve"):
         approve(plan, context, {}, approver="user")
@@ -139,3 +139,32 @@ def test_token_limit_is_not_accepted_even_if_json_parses(context, plan):
     with pytest.raises(ValueError, match="complete text plan"):
         make_plan("full recipe", context, client=client)
     assert client.calls == 2
+
+
+def test_false_unsupported_claim_gets_one_capability_check(context,plan):
+    refusal=copy.deepcopy(plan);refusal.update(stages=[],unsupported=['O1 positions are not supported'])
+    client=FakeClient([json.dumps(refusal),json.dumps(plan)])
+    result=make_plan('Refine O1 positions',context,client=client)
+    assert len(client.calls)==2 and result['status']=='ready_for_preflight'
+
+
+def test_joint_numbered_stage_cannot_be_silently_split(context,plan):
+    joint=copy.deepcopy(plan);joint['stages']=joint['stages'][:1];joint['stages'][0]['free'][0]['flags']='XU'
+    client=FakeClient([json.dumps(plan),json.dumps(joint)])
+    result=make_plan('In one stage refine O1 positions and Uiso together.',context,client=client)
+    assert len(client.calls)==2 and len(result['plan']['stages'])==1
+    assert 'explicitly specified 1 stage' in client.calls[1][-1]['content']
+
+
+def test_constraint_cannot_remove_only_requested_occupancy_freedom(context, plan):
+    plan['stages'] = plan['stages'][:1]
+    plan['stages'][0]['free'][0]['flags'] = 'F'
+    good = copy.deepcopy(plan)
+    plan['stages'][0]['constraints'] = [{
+        'kind': 'occupancy_sum', 'reason': 'Invented site total', 'total': 1,
+        'terms': [{'phase': 'p0', 'atom': label, 'coefficient': 1} for label in ['O1', 'Mg1']]}]
+    with pytest.raises(ValueError, match='exactly one released'):
+        validate_plan(plan, context)
+    client = FakeClient([json.dumps(plan), json.dumps(good)])
+    result = make_plan('Refine only O1 occupancy; keep all other atoms fixed.', context, client=client)
+    assert len(client.calls) == 2 and result['plan']['stages'][0]['constraints'] == []

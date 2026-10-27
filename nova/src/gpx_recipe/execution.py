@@ -3,10 +3,12 @@ import hashlib
 import json
 from pathlib import Path
 import time
+import importlib
 
 from .contracts import validate_plan, plan_hash, stage_table
 from .snapshot import snapshot, gsas, json_safe
 from .studio_state import extract_gsasii_refinement_state
+from . import advanced
 
 
 def write_json(path, value):
@@ -29,6 +31,10 @@ def freeze(project):
     for phase in project.phases():
         phase.clear_refinements({"Cell": True})
         phase.set_refinements({"Atoms": {"all": ""}})
+        texture = phase.data["General"].get("SH Texture", {})
+        if texture.get("SH Coeff"): texture["SH Coeff"][0] = False
+        for key in ("Sample omega", "Sample chi", "Sample phi"):
+            if key in texture and len(texture[key]) > 1: texture[key][1] = False
         phase.clear_HAP_refinements({**{k: True for k in ("Scale", "Pref.Ori.", "Size", "Mustrain", "HStrain", "Extinction")},
                                      "Babinet": ["BabA", "BabU"]})
         if phase.data.get("Pawley ref") or any(h.get("LeBail") for h in phase.data["Histograms"].values()):
@@ -54,8 +60,20 @@ def configure(project, stage, context, added_constraints):
         kind = target["kind"]
         if kind == "background":
             hists[target["histogram"]].set_refinements({"Background": True})
+        elif kind == "histogram_scale":
+            hist = hists[target["histogram"]]
+            hist.set_refinements({"Sample Parameters": ["Scale"]})
+            variable = f":{hist.id}:Scale"
+            lo = project.get_Controls("parmMin", variable=variable)
+            project.set_Controls("parmMin", max(0.0, lo) if lo is not None else 0.0, variable=variable)
+        elif kind == "preferred_orientation":
+            phases[target["phase"]].set_HAP_refinements({"Pref.Ori.": True}, histograms=[hists[target["histogram"]].name])
         elif kind == "phase_scale":
-            phases[target["phase"]].set_HAP_refinements({"Scale": True}, histograms=[hists[target["histogram"]].name])
+            phase, hist = phases[target["phase"]], hists[target["histogram"]]
+            phase.set_HAP_refinements({"Scale": True}, histograms=[hist.name])
+            variable = f"{phase.id}:{hist.id}:Scale"
+            lo = project.get_Controls("parmMin", variable=variable)
+            project.set_Controls("parmMin", max(0.0, lo) if lo is not None else 0.0, variable=variable)
         elif kind == "cell":
             phases[target["phase"]].set_refinements({"Cell": True})
         elif kind == "atom":
@@ -66,10 +84,14 @@ def configure(project, stage, context, added_constraints):
             # atom IDs when establishing physical occupancy/ADP bounds.
             for row in atom_record["variables"]:
                 if ("F" in target["flags"] and row["group"] == "occupancy"):
-                    project.set_Controls("parmMin", 0.0, variable=row["name"])
-                    project.set_Controls("parmMax", 1.0, variable=row["name"])
+                    lo = project.get_Controls("parmMin", variable=row["name"])
+                    hi = project.get_Controls("parmMax", variable=row["name"])
+                    project.set_Controls("parmMin", max(0.0, lo) if lo is not None else 0.0, variable=row["name"])
+                    capacity = advanced.site_capacity(context, target["phase"], target["atom"], phase, stage["free"])
+                    project.set_Controls("parmMax", min(capacity, hi) if hi is not None else capacity, variable=row["name"])
                 if "U" in target["flags"] and row["group"] == "atomic_displacement":
-                    project.set_Controls("parmMin", 0.0, variable=row["name"])
+                    lo = project.get_Controls("parmMin", variable=row["name"])
+                    project.set_Controls("parmMin", max(0.0, lo) if lo is not None else 0.0, variable=row["name"])
     for constraint in stage["constraints"]:
         identity = json.dumps(constraint, sort_keys=True)
         if identity in added_constraints:
@@ -81,11 +103,31 @@ def configure(project, stage, context, added_constraints):
             if len(names_for_atom) != 1:
                 raise ValueError("Could not resolve a unique observed occupancy variable")
             names.append(names_for_atom[0]); multipliers.append(term["coefficient"])
-        project.add_EqnConstr(constraint["total"], names, multlist=multipliers, override=False)
+        if not advanced.has_equation(project, names, multipliers, constraint["total"]):
+            project.add_EqnConstr(constraint["total"], names, multlist=multipliers, override=False)
         added_constraints.add(identity)
+    advanced.configure(project, stage, context, phases, hists, added_constraints)
     project.set_Controls("cycles", stage["cycles"])
     # Preserve the original constraints, restraints, fit range and calibrated
     # profile. Every stage rebuilds its ordinary free set from zero.
+
+
+def parameter_matches_target(row, target, context):
+    group = row["group"]
+    phase = next((p for p in context["phases"] if p["key"] == target.get("phase")), None)
+    hist = next((h for h in context["histograms"] if h["key"] == target.get("histogram")), None)
+    kind = target["kind"]
+    if kind in {"background", "histogram_scale"}:
+        return hist is not None and row["histogram_id"] == hist["native_id"] and row["phase_id"] is None and group == ("background" if kind == "background" else "histogram_scale")
+    if phase is None or row["phase_id"] != phase["native_id"]: return False
+    if kind == "cell": return group == "lattice" and row["histogram_id"] is None
+    if kind in {"phase_scale", "preferred_orientation"}:
+        return hist is not None and row["histogram_id"] == hist["native_id"] and group == ("phase_fraction" if kind == "phase_scale" else "preferred_orientation")
+    if kind == "atom":
+        atom = next(a for a in phase["atoms"] if a["label"] == target["atom"])
+        flags = {"atomic_coordinates": "X", "atomic_displacement": "U", "occupancy": "F"}
+        return row["atom_id"] == atom["native_id"] and flags.get(group, "!") in target["flags"]
+    return False
 
 
 def check_preflight(state, stage, context):
@@ -95,8 +137,15 @@ def check_preflight(state, stage, context):
     if not space["effective_vary"]:
         raise ValueError("The requested stage has no effective independent refinement variables")
     # A rigid-body or custom variable must not bypass our closed active set.
-    allowed = {"background", "phase_fraction", "lattice", "atomic_coordinates", "atomic_displacement", "occupancy"}
-    unexpected = [p["name"] for p in space["parameters"] if p["effective_now"] and p["group"] not in allowed]
+    allowed = {"background", "phase_fraction", "histogram_scale", "preferred_orientation", "lattice", "atomic_coordinates", "atomic_displacement", "occupancy"}
+    permitted = lambda row: row["configured_now"] and any(parameter_matches_target(row, target, context) for target in stage["free"])
+    unexpected = [p["name"] for p in space["parameters"] if p["effective_now"] and not permitted(p)]
+    resolved = {}
+    if unexpected:
+        G2 = gsas()
+        maps = importlib.import_module((G2.__package__ + "." if G2.__package__ else "") + "GSASIImapvars")
+        resolved = resolve_constraint_provenance(space, unexpected, maps.GetDependentVars(), maps.getInvConstraintEq, allowed, permitted)
+        unexpected = [name for name in unexpected if name not in resolved]
     if unexpected:
         raise ValueError("Unexpected active parameters outside the approved vocabulary: " + str(unexpected))
     for target in stage["free"]:
@@ -110,6 +159,42 @@ def check_preflight(state, stage, context):
             matching = [p for p in space["parameters"] if p["name"] in names and p["configured_now"]]
             if not matching:
                 raise ValueError(f"{target['phase']}:{target['atom']} has no symmetry-independent {flag} variables")
+            if not any(p["effective_now"] for p in matching):
+                G2 = gsas()
+                maps = importlib.import_module((G2.__package__ + "." if G2.__package__ else "") + "GSASIImapvars")
+                dependent = {str(v) for v in maps.GetDependentVars()}
+                influence = False
+                for p in matching:
+                    variable = p.get("refinement_variable", p["name"])
+                    if variable not in dependent: continue
+                    variables, multipliers = maps.getInvConstraintEq(variable, space["effective_vary"])
+                    if any(str(v) in space["effective_vary"] and abs(float(c)) > 1e-12 for v, c in zip(variables, multipliers)):
+                        influence = True
+                if not influence:
+                    raise ValueError(f"{target['phase']}:{target['atom']} {flag} is fully constrained with no independent refinement influence")
+    return resolved
+
+
+def resolve_constraint_provenance(space, unknown, dependent, inverse, allowed, permitted=None):
+    """Admit generated independent variables only through approved native variables."""
+    records = {}
+    for row in space["parameters"]:
+        records[row["name"]] = row
+        records[row.get("refinement_variable", row["name"])] = row
+    result = {}
+    for name in unknown:
+        origins = []
+        if not name.startswith("::constr"): continue
+        for variable in dependent:
+            variable = variable.varname() if hasattr(variable, "varname") else str(variable)
+            variables, multipliers = inverse(variable, space["effective_vary"])
+            if any(str(v) == name and abs(float(c)) > 1e-12 for v, c in zip(variables, multipliers)):
+                row = records.get(variable)
+                if row is None or not row["configured_now"] or row["group"] not in allowed or (permitted is not None and not permitted(row)):
+                    origins = []; break
+                origins.append({"variable": variable, "group": row["group"]})
+        if origins: result[name] = origins
+    return result
 
 
 def run_plan(source, output, plan, *, approved=None, preview=False):
@@ -138,14 +223,19 @@ def run_plan(source, output, plan, *, approved=None, preview=False):
         for stage, display in zip(plan["stages"], stage_table(plan, context)):
             started = time.monotonic()
             configure(project, stage, context, added_constraints)
+            configured = advanced.audit(project, context)
             project.save()
             state = extract_gsasii_refinement_state(output, project, G2, max_correlations=10)
-            check_preflight(state, stage, context)
+            constraint_resolution = check_preflight(state, stage, context)
             row = {**display, "status": "preflight_passed", "effective_vary": state["parameter_space"]["effective_vary"],
-                   "constraint_warning": state["constraints"].get("warning", "")}
+                   "constraint_warning": state["constraints"].get("warning", ""), "constraint_parameter_provenance": constraint_resolution, "configured_state": configured}
             result["stages"].append(row)
             write_json(result_path, result)
             if not preview:
+                # The input GPX can already contain a fresh covariance. Require
+                # this particular refinement call to replace it explicitly.
+                project.data.setdefault("Covariance", {}).setdefault("data", {})["freshCOV"] = False
+                project.save()
                 project.do_refinements([{}])
                 project.save()
                 after = extract_gsasii_refinement_state(output, project, G2, max_correlations=10)
@@ -156,6 +246,8 @@ def run_plan(source, output, plan, *, approved=None, preview=False):
                            actual_vary=after["parameter_space"]["last_vary"], covariance={k: v for k, v in after["covariance"].items() if k not in {"matrix", "correlation_matrix"}},
                            metric_rows=[p for p in after["parameter_space"]["parameters"] if p["group"] in {"lattice", "atomic_coordinates", "atomic_displacement", "occupancy"}],
                            frozen_variables=after["parameter_space"]["frozen_variables"])
+                row["final_state"] = advanced.audit(project, context)
+                advanced.check_site_totals(project, context)
                 if set(row["actual_vary"]) != set(row["effective_vary"]):
                     row["status"] = "needs_review"
                     raise ValueError("Actual independent vary list differs from the approved stage preflight")
