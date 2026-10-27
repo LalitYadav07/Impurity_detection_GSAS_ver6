@@ -33,7 +33,7 @@ from .powgen_watch import (
     discover_from_listing,
 )
 from .powgen_metadata import read_powgen_scan_metadata
-from .powgen_samples import PowgenSampleIndex, include_run, run_role, identity_readiness
+from .powgen_samples import PowgenSampleIndex, include_run, run_role, identity_readiness, select_runs
 from .results import experiment_scan_summary
 
 
@@ -149,7 +149,7 @@ def discover_powgen_samples(ipts: str, sample_index: PowgenSampleIndex,
                             subfolder: str = "shared/autoreduce") -> dict[str, Any]:
     definition = PowgenExperimentSettings(ipts, "samples", "samples", "", subfolder=subfolder).definition()
     runs = discover_from_listing(definition, bounded_directory_listing(definition.source_directory))
-    inventory = sample_index.inventory(runs)
+    inventory = sample_index.inventory(runs, catalog=True)
     options = [{"title": "Current autoreduce folder", "value": "shared/autoreduce"}]
     # Historical cycle folders are explicit choices, never recursively scanned
     # or merged with current reductions that may contain reprocessed copies.
@@ -185,23 +185,21 @@ def preflight_powgen_experiment(
     definition = settings.definition()
     runs = discover_from_listing(definition, bounded_directory_listing(definition.source_directory))
     total = len(runs)
-    if selected_sample_ids is not None:
-        index = sample_index or PowgenSampleIndex(definition.ipts)
-        with ThreadPoolExecutor(max_workers=4) as pool:
-            identities = list(pool.map(index.identity, runs))
-        runs = [run for run, identity in zip(runs, identities) if identity.get("sample_id") in selected_sample_ids]
-    selected_count = len(runs)
-    runs = [run for run in runs if include_run(run, excluded_run_numbers=excluded_run_numbers,
-            include_background_runs=include_background_runs, include_ramp_runs=include_ramp_runs)]
-    excluded_count = selected_count - len(runs)
-    if initial_backfill_limit is not None:
-        # New-only monitoring still checks the latest matching setup as a
-        # startup preview. Every arriving run is checked again at submission.
-        runs = runs[-max(1, initial_backfill_limit):]
+    index = sample_index or PowgenSampleIndex(definition.ipts)
+    selection_stats = {}
+    runs = select_runs(runs, index, selected_sample_ids, limit=initial_backfill_limit,
+        excluded_run_numbers=excluded_run_numbers, include_background_runs=include_background_runs,
+        include_ramp_runs=include_ramp_runs, selection_stats=selection_stats)
+    excluded_count = selection_stats.get("excluded_count", 0)
     if not runs:
+        review = selection_stats.get("identity_review") or {}
         return {"ready": False, "source_directory": definition.source_directory,
                 "scan_count": 0, "total_scan_count": total,
-                "message": "No completed reductions match this experiment/sample selection."}
+                "metadata_resolution": [{"run_number": n, "status": "needs_review", "sample_id": "",
+                    "actions": [{"message": reason}]} for n, reason in review.items()],
+                "metadata_notices": (["Candidate runs were excluded because their source identities need review."] if review else []),
+                "message": ("No completed reductions have a verified matching sample identity; review the recorded sources."
+                            if review else "No completed reductions match this experiment/sample selection.")}
     override = str(instrument_profile_name or "").strip()
     errors, setups, profiles, available_banks = [], [], [], set()
     def inspect(run):
@@ -242,7 +240,7 @@ def preflight_powgen_experiment(
         errors.append("None of the selected banks occurs in the selected scans")
     latest = runs[-1]
     metadata = read_powgen_scan_metadata(definition.ipts, latest.run_number)
-    identity_rows = identity_readiness(sample_index or PowgenSampleIndex(definition.ipts), runs)
+    identity_rows = identity_readiness(index, runs)
     wave_values = sorted({v.wavelength for v in setups})
     wave = f"{wave_values[0]:g}" if len(wave_values) == 1 else ""
     names = sorted({p.profile_filename for p in profiles})
@@ -266,7 +264,10 @@ def preflight_powgen_experiment(
         "profile_source": "User-supplied GSAS-II profile" if override else "Verified reduction cycle, mode, frequency, wavelength and bank",
         "profile_error": profile_error,
         "metadata_resolution": identity_rows,
-        "metadata_notices": metadata.get('metadata_notices', []),
+        "metadata_notices": [*metadata.get('metadata_notices', []), *(
+            [f"{len(selection_stats['identity_review'])} candidate run(s) were not selected because source identity needs review: "
+             + ", ".join(str(n) for n in list(selection_stats['identity_review'])[:10])]
+            if selection_stats.get('identity_review') else [])],
         "message": (f"Ready: {len(runs)} scans, {analysis_count} separate bank analyses. Every arriving scan is checked again."
                     if not errors else f"Instrument setup needs attention: {profile_error}"),
     }
@@ -456,11 +457,10 @@ class PowgenWatchController:
             if available:
                 self._startup_run_floor = max(run.run_number for run in available)
             limit = self.settings.initial_backfill_limit
-            discovered = self._matching_samples(available)
             if limit == 0:
                 discovered = []
-            elif limit is not None:
-                discovered = discovered[-limit:]
+            else:
+                discovered = self._matching_samples(available, limit=limit)
             discovered = self._remember_discoveries(self._expand_banks(discovered))
             discovered = self._attach_scan_metadata(discovered)
             known_runs = [
@@ -617,17 +617,11 @@ class PowgenWatchController:
                 expanded.append(replace(run, scan_metadata={**run.scan_metadata, "setup_error": str(exc)}))
         return expanded
 
-    def _matching_samples(self, runs: list[WatchedRun]) -> list[WatchedRun]:
-        runs = [run for run in runs if include_run(run,
+    def _matching_samples(self, runs: list[WatchedRun], *, limit=None) -> list[WatchedRun]:
+        return select_runs(runs, self.sample_index, self.settings.selected_sample_ids, limit=limit,
             excluded_run_numbers=self.settings.excluded_run_numbers,
             include_background_runs=self.settings.include_background_runs,
-            include_ramp_runs=self.settings.include_ramp_runs)]
-        if self.settings.selected_sample_ids is None:
-            return runs
-        selected = set(self.settings.selected_sample_ids)
-        with ThreadPoolExecutor(max_workers=4) as pool:
-            identities = list(pool.map(self.sample_index.identity, runs))
-        return [run for run, metadata in zip(runs, identities) if metadata.get("sample_id") in selected]
+            include_ramp_runs=self.settings.include_ramp_runs)
 
     def _remember_discoveries(self, runs: list[WatchedRun]) -> list[WatchedRun]:
         new = [run for run in runs if not self.state.contains(run)]

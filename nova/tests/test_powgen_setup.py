@@ -234,7 +234,7 @@ def test_archived_folder_choices_are_bounded_and_not_merged(monkeypatch):
     monkeypatch.setattr(module,'bounded_directory_listing',lambda p: paths.append(p) or [])
     monkeypatch.setattr(module,'_scandir',lambda _:Listing())
     monkeypatch.setattr(Path,'is_dir',lambda _:True)
-    index=SimpleNamespace(inventory=lambda _: {'options':[],'scan_count':0,'unidentified_count':0})
+    index=SimpleNamespace(inventory=lambda _, **kwargs: {'options':[],'scan_count':0,'unidentified_count':0})
     result=discover_powgen_samples('IPTS-2767',index,'shared/autoreduce/2017-B')
     assert paths==['/SNS/PG3/IPTS-2767/shared/autoreduce/2017-B']
     assert {x['value'] for x in result['source_options']}=={'shared/autoreduce','shared/autoreduce/2016','shared/autoreduce/2017-B','shared/autoreduce/2019_B'}

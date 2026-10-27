@@ -391,7 +391,7 @@ class ExperimentMetadataIndex:
     def xml_path(self, run: int) -> Path:
         return self.root / "0" / str(run) / "preNeXus" / f"{self.instrument}_{run}_runinfo.xml"
 
-    def enrich(self, run: int, raw_identity: dict[str, Any]) -> dict[str, Any]:
+    def enrich(self, run: int, raw_identity: dict[str, Any], *, include_xml: bool = True) -> dict[str, Any]:
         self.refresh()
         evidence = list(raw_identity.get("identity_sources") or [])
         if not evidence and raw_identity.get("sample_id"):
@@ -400,6 +400,8 @@ class ExperimentMetadataIndex:
         notices = list(raw_identity.get("metadata_notices") or [])
         path = self.xml_path(run)
         try:
+            if not include_xml:
+                raise FileNotFoundError(path)
             xml = read_runinfo(path, self.instrument, run)
             evidence.append({"value": xml["sample_id"], "kind": xml["kind"], "path": xml["path"],
                              "sha256": xml["sha256"], "field": "sample_id"})

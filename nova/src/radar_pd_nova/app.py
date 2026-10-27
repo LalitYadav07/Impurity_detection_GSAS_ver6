@@ -1447,7 +1447,7 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
                     html.Summary("Sample identity checks and choices")
                     html.P("Resolved identities retain their recorded sources. Conflicting or unidentified runs remain visible; choosing All samples includes unidentified runs. Instrument profiles and diffraction banks are checked separately.", classes="radar-help-copy")
                     with html.Div(v_for="row in powgen_metadata_resolution.slice(0, 100)", key="row.run_number", classes="radar-preflight-row"):
-                        html.Span("Run {{ row.run_number }} · {{ row.status }} · {{ row.sample_id || 'No verified sample ID' }}")
+                        html.Span("Run {{ row.run_number }} · {{ row.verification === 'catalog_preview' ? 'Catalog preview · ' : '' }}{{ row.status }} · {{ row.sample_id || 'No verified sample ID' }}")
                         html.Span("{{ (row.actions || []).map(a => a.message).join('; ') }}", classes="radar-help-copy")
                         html.Span("{{ (row.sources || []).map(s => s.kind + ': ' + s.value + (s.path ? ' (' + s.path + (s.line ? ':' + s.line : '') + ')' : '')).join('; ') }}", classes="radar-help-copy")
                     html.P("Showing the first 100 checks; narrow the sample selection to review a smaller group.", v_if="powgen_metadata_resolution.length > 100", classes="radar-help-copy")
@@ -4538,6 +4538,8 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
             state.powgen_sample_message = (
                 f"Found {len(result['options'])} sample IDs across {result['scan_count']} completed scans. "
                 + (f"{unknown} scans have no readable sample ID; All samples includes them." if unknown else "")
+                + (" Sample list uses catalog metadata; selected runs are verified from source files before analysis."
+                   if result.get("catalog_preview_count") else "")
             )
         except Exception as exc:
             if self._powgen_sample_request is token:

@@ -82,10 +82,15 @@ its matching watch checkpoint.
 The monitor handles large `shared/autoreduce` folders by considering only
 canonical `PG3_<run>.gsa` files, without a 5,000-entry cutoff or recursive
 searches. After entering an IPTS, leave the field or click **Refresh sample IDs**
-to populate sample IDs, all reported names, and completed-scan counts from
-the corresponding NeXus files, per-run run-info XML and validated scan tables.
-Only bounded sample identity fields are read for this
-list; detector events are never loaded.
+to populate sample IDs, reported names, and completed-scan counts. Public ONCat
+metadata and validated scan tables provide a bulk browsing index, cached for
+five minutes. Catalog previews do not enter the verified identity cache. Runs
+missing from the catalog fall back to bounded NeXus/run-info reads; detector
+events are never loaded. Catalog access sends no user credential.
+
+The selected runs are independently checked against their source files before
+analysis. A finite initial scan limit stops after that many eligible scans;
+unselected samples and older scans do not require deep metadata inspection.
 
 Choose **All samples** or select one or more **Sample IDs and names**. The initial
 scan limit (including **All existing scans**) applies after this selection;
