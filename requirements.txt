@@ -1,4 +1,4 @@
-GSAS-II @ git+https://github.com/AdvancedPhotonSource/GSAS-II.git
+GSAS-II @ git+https://github.com/AdvancedPhotonSource/GSAS-II.git@b97e05bfa41eea5bfcc265ed2eb28482c0afaca6
 streamlit
 pandas
 pyyaml

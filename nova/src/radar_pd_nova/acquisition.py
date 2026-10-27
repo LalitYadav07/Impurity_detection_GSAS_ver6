@@ -9,10 +9,10 @@ import ast
 import hashlib
 import json
 import math
-from datetime import datetime
 from pathlib import Path
 
 from .scan_conditions import qualified_metadata
+from .facility_metadata import parse_nexus_timestamp
 
 PREFIX = b"# RADAR-PD input provenance: "
 SCHEMA = "radar-pd-acquisition/v1"
@@ -58,7 +58,7 @@ def acquisition_context(metadata, *, instrument, run_number, source, script_sha2
         return None
     window = conditions.get('acquisition_window') or {}
     try:
-        start, end = (datetime.fromisoformat(window[k].replace('Z', '+00:00')) for k in ('start', 'end'))
+        start, end = (parse_nexus_timestamp(window[k]) for k in ('start', 'end'))
         if start.tzinfo is None or end.tzinfo is None or end <= start:
             return None
     except (KeyError, TypeError, ValueError, AttributeError):

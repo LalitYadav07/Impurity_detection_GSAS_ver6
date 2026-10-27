@@ -72,7 +72,11 @@ jobs:
           from radar_pd_nova.app import RadarPdNovaApp
           from radar_pd_nova.transition_signals import BoundaryPolicy
           from radar_pd_nova.transition_cursor_widget import TransitionCursor
+          from radar_pd_nova.acquisition import acquisition_context
           import scipy
+          window = {"start":"2021-08-04T17:41:12.377953667-04:00","end":"2021-08-04T17:45:38.752968667-04:00"}
+          context = acquisition_context({"conditions":{"$schema":"radar-pd-conditions/v1","acquisition_window":window,"channels":[]}}, instrument="PG3", run_number=1, source="/no-facility-file")
+          assert context is not None and context["acquisition_window"] == window
           app = RadarPdNovaApp()
           assert "radar-transition-cursor" in app.layout.html
           assert "Reset zoom" in app.layout.html

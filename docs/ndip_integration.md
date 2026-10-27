@@ -90,6 +90,19 @@ or externally constrained covariance that cannot be qualified is withheld.
 These are conditional fit uncertainties; calibration and model uncertainty
 are separate.
 
+### Reproducible scientific runtime and fraction readout
+
+The batch Dockerfile inherits the previously validated numerical runtime by
+immutable image digest. GSAS-II is also pinned by commit in requirements;
+source-only updates must not silently upgrade it. Refresh that runtime only
+with an explicit dependency review and real-pattern comparisons. Release
+builds record the application source SHA in `RADAR_PD_GIT_COMMIT`.
+
+The phase-fraction reader supports quoted and unquoted phase/histogram labels
+in GSAS-II listings. An unreadable candidate fraction must produce an explicit
+extraction error; it cannot be interpreted as zero weight and silently drop a
+successfully refined candidate.
+
 ### Identity and facility authorization
 
 UCAMS authentication belongs to NDIP, not to the RADAR-PD container. The user

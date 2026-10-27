@@ -29,6 +29,16 @@ def test_verified_whole_run_compacts_the_actual_readback_without_trajectories(tm
     assert len(json.dumps(packet)) < 1600
 
 
+def test_facility_nanosecond_timestamps_remain_valid_in_the_pinned_python310_runtime(tmp_path):
+    m=metadata()
+    window={'start':'2021-08-04T17:41:12.377953667-04:00','end':'2021-08-04T17:45:38.752968667-04:00'}
+    m['conditions']['acquisition_window']=window
+    m['conditions']['channels'][0]['acquisition_window']=window
+    packet=acquisition_context(m,instrument='PG3',run_number=50713,source=tmp_path/'source.gsa')
+    assert packet is not None and packet['channels'][0]['value']==322.5178
+    assert packet['acquisition_window']==window  # Never rewrite the recorded precision.
+
+
 def test_filtered_dynamic_or_nonexecuted_reductions_never_qualify_parent_temperature(tmp_path):
     m=metadata();source=tmp_path/'PG3_50713.gsa';script=source.with_suffix('.py')
     for text in [

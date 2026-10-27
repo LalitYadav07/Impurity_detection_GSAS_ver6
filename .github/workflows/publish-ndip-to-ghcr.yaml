@@ -48,6 +48,8 @@ jobs:
         with:
           context: .
           file: Dockerfile.ndip
+          build-args: |
+            RADAR_PD_BUILD_SHA=${{ github.sha }}
           platforms: linux/amd64
           provenance: false
           sbom: false
@@ -70,6 +72,9 @@ jobs:
           from pathlib import Path
           from tempfile import TemporaryDirectory
           import json
+          import importlib.metadata
+          runtime = json.loads(importlib.metadata.distribution("GSAS-II").read_text("direct_url.json"))
+          assert runtime["vcs_info"]["commit_id"] == "b97e05bfa41eea5bfcc265ed2eb28482c0afaca6", runtime
           from GSASII import GSASIIscriptable
           from gsas_cif_import import add_verified_phase, elemental_counts
           from gsas_legacy_bridge import write_dummy_nacl_cif

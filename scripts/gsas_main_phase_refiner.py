@@ -1448,11 +1448,15 @@ def parse_gsas_lst(lst_path: Path, target_hist: str):
     fallback_only: Dict[str, Dict[str, float]] = {}
     lines = Path(lst_path).read_text(errors="ignore").splitlines()
     i, n = 0, len(lines)
+    def label(value):
+        # Recent GSAS-II listings quote names; older versions leave them bare.
+        text = value.strip()
+        return text[1:-1] if len(text) >= 2 and text[0] == text[-1] and text[0] in {'"', "'"} else text
     while i < n:
         m = phase_hdr_re.match(lines[i])
         if m:
-            phase = m.group('phase').strip()
-            histname = m.group('hist').strip()
+            phase = label(m.group('phase'))
+            histname = label(m.group('hist'))
             if histname == target_hist:
                 fallback_pf = None
                 for j in range(i + 1, min(i + 30, n)):
@@ -1477,6 +1481,24 @@ def parse_gsas_lst(lst_path: Path, target_hist: str):
     if not out and len(fallback_only) == 1:
         return fallback_only
     return out
+
+
+def require_phase_fractions(parsed, names, *, listing):
+    """Missing/unreadable fractions are an extraction error, never zero phase."""
+    missing = []
+    for name in names:
+        row = parsed.get(name)
+        try:
+            valid = isinstance(row, dict) and all(
+                math.isfinite(float(row[key])) for key in ('phase_fraction_pct', 'weight_fraction_pct')
+            )
+        except (KeyError, TypeError, ValueError):
+            valid = False
+        if not valid:
+            missing.append(name)
+    if missing:
+        raise RuntimeError(f"Could not read refined phase fractions for {', '.join(sorted(missing))} from {listing}; no zero fractions were inferred")
+    return parsed
 
 
 # ---- Pearson helpers ----
@@ -1964,6 +1986,7 @@ def joint_refine_one_cycle(
     lst_path = Path(out_gpx).with_suffix(".lst")
     parsed = parse_gsas_lst(lst_path, hist.name) if lst_path.exists() else {}
     wanted_names = {main_phase.name, *map(str, pid_to_cif.keys())}
+    require_phase_fractions(parsed, wanted_names, listing=lst_path)
     results: Dict[str, Dict[str, float]] = {}
     for name in wanted_names:
         vals = parsed.get(name)
@@ -2285,6 +2308,7 @@ def joint_refine_add_phases(
         
         # We need results for ALL phases in the project
         proj = G2sc.G2Project(gpxfile=out_gpx) # reload to be sure
+        require_phase_fractions(parsed, [p.name for p in proj.phases()], listing=lst_path)
         for p in proj.phases():
             nm = p.name
             vals = parsed.get(nm)

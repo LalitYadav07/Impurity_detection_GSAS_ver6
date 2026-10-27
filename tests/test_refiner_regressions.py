@@ -153,6 +153,26 @@ class RefineStageCellTests(unittest.TestCase):
 
 
 class ParseLstFallbackTests(unittest.TestCase):
+    def test_quoted_and_unquoted_multi_phase_labels_report_the_same_fitted_weights(self):
+        for quote in ('', '"', "'"):
+            with self.subTest(quote=quote), tempfile.TemporaryDirectory() as td:
+                lst=Path(td)/'fractions.lst'
+                lst.write_text('\n'.join(
+                    f' Phase: {quote}{phase}{quote} in histogram: {quote}PWDR test{quote}\n'
+                    f' Phase fraction : {scale}, sig .01 Weight fraction : {weight}, sig .001\n'
+                    for phase,scale,weight in [('first phase',.98,.33768),('second phase',.51,.66232)]))
+                parsed=parse_gsas_lst(lst,'PWDR test')
+                refiner_mod.require_phase_fractions(parsed,{'first phase','second phase'},listing=lst)
+                self.assertAlmostEqual(parsed['first phase']['weight_fraction_pct'],33.768)
+                self.assertAlmostEqual(parsed['second phase']['weight_fraction_pct'],66.232)
+
+    def test_missing_or_nonfinite_extraction_is_never_mistaken_for_zero_phase(self):
+        valid={'phase_fraction_pct':0.0,'weight_fraction_pct':0.0}
+        refiner_mod.require_phase_fractions({'phase':valid},['phase'],listing='test.lst')
+        for parsed in ({},{'phase':{}},{'phase':{**valid,'weight_fraction_pct':float('nan')}}):
+            with self.subTest(parsed=parsed), self.assertRaisesRegex(RuntimeError,'no zero fractions were inferred'):
+                refiner_mod.require_phase_fractions(parsed,['phase'],listing='test.lst')
+
     def test_parse_gsas_lst_single_phase_fraction_fallback(self):
         with tempfile.TemporaryDirectory() as td:
             lst = Path(td) / "single.lst"
