@@ -122,6 +122,45 @@ def evaluate(*scans, **kwargs):
     return ScanInterpreter().evaluate(scans, **kwargs)
 
 
+def test_powgen_readback_jitter_keeps_qualified_series_and_original_provenance():
+    from radar_pd_nova.scan_interpretation import _group
+    from radar_pd_nova.transition_input import packet_observation
+    setup = {"cycle": "2022-1_11A_CAL", "mode": "HR", "frequency": 60,
+             "wavelength": 0.8, "calibration_files": ["calibration.h5"],
+             "characterization_files": ["PG3_HighRes.txt"], "grouping_files": []}
+    groups, transition_scopes = [], []
+    for n, guide in enumerate([-54.004, -54.003, -54.007]):
+        row = scan(n + 1, instrument="PG3")
+        row["pattern"]["context"]["reduction_setup"] = {**setup, "guide": guide}
+        groups.append(_group(row, Pattern.parse(row["pattern"])))
+        transition_scopes.append(packet_observation(row).pattern.scope)
+        assert row["pattern"]["context"]["reduction_setup"]["guide"] == guide
+    assert len(set(groups)) == 1
+    assert len(set(transition_scopes)) == 1
+    for change in [{"cycle": "2021_2_11A_CAL"}, {"mode": "HI", "guide": 54.0},
+                   {"calibration_files": ["different.h5"]}, {"grouping_files": ["custom.xml"]}]:
+        changed = copy.deepcopy(row)
+        changed["pattern"]["context"]["reduction_setup"].update(change)
+        assert _group(changed, Pattern.parse(changed["pattern"])) != groups[0]
+        assert packet_observation(changed).pattern.scope != transition_scopes[0]
+    contradicted = copy.deepcopy(row)
+    contradicted["pattern"]["context"]["reduction_setup"]["guide"] = 54
+    with pytest.raises(ValueError, match="optical mode"):
+        _group(contradicted, Pattern.parse(contradicted["pattern"]))
+
+
+@pytest.mark.parametrize("instrument,mode", [("NOM", "HR"), ("PG3", "")])
+def test_unqualified_or_other_beamline_readback_does_not_get_canonicalized(instrument, mode):
+    from radar_pd_nova.scan_interpretation import _group
+    first = scan(1, instrument=instrument)
+    first["pattern"]["context"]["reduction_setup"] = {
+        "cycle": "2022", "mode": mode, "calibration_files": ["cal.h5"],
+        "characterization_files": ["char.txt"], "guide": -54.004}
+    second = copy.deepcopy(first)
+    second["pattern"]["context"]["reduction_setup"]["guide"] = -54.003
+    assert _group(first, Pattern.parse(first["pattern"])) != _group(second, Pattern.parse(second["pattern"]))
+
+
 def compare(a, b):
     return compare_patterns(Pattern.parse(a), Pattern.parse(b), InterpretationSettings())
 

@@ -490,6 +490,36 @@ def _conditions(scan, settings=None):
     return result
 
 
+def _comparison_reduction_setup(instrument, setup):
+    """Use POWGEN's qualified optical mode rather than its motor readback.
+
+    The resolver establishes HR/HI from the characterization receipt, checks
+    guide/mode consistency, and qualifies the cycle/bank/profile. A continuous
+    guide readback is still retained verbatim in the pattern provenance; it
+    must not turn readback jitter into a different categorical series. All
+    calibration, characterization, grouping and other setup fields remain in
+    the comparison identity. Unqualified and other-beamline setups are exact.
+    """
+    if not isinstance(setup, dict) or instrument != "PG3":
+        return setup
+    if (setup.get("mode") not in {"HR", "HI"} or not setup.get("cycle")
+            or len(setup.get("calibration_files") or []) != 1
+            or not setup.get("characterization_files")):
+        return setup
+    guide = setup.get("guide")
+    if guide is not None:
+        try:
+            value = float(guide)
+        except (TypeError, ValueError):
+            return setup
+        if not np.isfinite(value):
+            return setup
+        if ((setup["mode"] == "HR" and value > 20)
+                or (setup["mode"] == "HI" and value < -20)):
+            raise ValueError("Guide readback conflicts with the qualified POWGEN optical mode")
+    return {key: value for key, value in setup.items() if key != "guide"}
+
+
 def _group(scan, pattern):
     metadata = scan.get("metadata") or {}
     context = pattern.packet.get("context") or {}
@@ -536,7 +566,8 @@ def _group(scan, pattern):
         pattern.packet.get("coordinate"),
         context.get("calibration"),
         context.get("normalization"),
-        context.get("reduction_setup"),
+        _comparison_reduction_setup(
+            scan.get("instrument") or context.get("instrument"), context.get("reduction_setup")),
         scan.get("comparison_setup_id"),
         metadata.get("sample_role"),
     ]

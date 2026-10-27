@@ -17,7 +17,7 @@ from pathlib import Path
 import numpy as np
 
 from .pattern_transition import MAX_POINTS, ObservedPattern, PatternScope
-from .scan_interpretation import Pattern, load_pattern
+from .scan_interpretation import Pattern, load_pattern, _comparison_reduction_setup
 
 
 def digest(value):
@@ -107,7 +107,7 @@ def packet_observation(scan):
             [
                 family,
                 context.get("calibration"),
-                context.get("reduction_setup"),
+                _comparison_reduction_setup(scan["instrument"], context.get("reduction_setup")),
                 scan.get("comparison_setup_id"),
             ]
         ),
@@ -216,6 +216,7 @@ def reduced_observation(scan):
     valid[:2] = valid[-2:] = False
     metadata = scan.get("metadata") or {}
     setup = metadata.get("nomad_setup") or metadata.get("powgen_setup") or {}
+    comparison_setup = _comparison_reduction_setup(scan["instrument"], setup)
     geometry_lines = [
         line.strip()
         for line in lines[max(0, start - 5) : start]
@@ -223,7 +224,7 @@ def reduced_observation(scan):
     ]
     calibration = setup.get("calibration") or setup.get("calibration_files")
     geometry = {
-        k: setup.get(k)
+        k: comparison_setup.get(k)
         for k in ("cycle", "mode", "wavelength", "frequency", "guide", "environment")
     }
     geometry.update(calibration=calibration, headers=geometry_lines, bank=int(bank))

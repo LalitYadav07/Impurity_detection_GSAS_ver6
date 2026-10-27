@@ -37,6 +37,26 @@ def test_progress_stage_inference() -> None:
     assert stage_from_console("", RunStatus.OK) == ("Results ready", 100)
 
 
+def test_json_checkpoint_uses_fast_parser_without_yaml(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    payload = {"watch": {"configuration_dataset_id": "cfg"},
+               "completed": {str(n): {"temperature": 300 + n / 10} for n in range(1500)}}
+    response = SimpleNamespace(text=json.dumps(payload), raise_for_status=lambda: None)
+    monkeypatch.setattr("radar_pd_nova.galaxy_service.requests.get", lambda *a, **kw: response)
+    monkeypatch.setattr("radar_pd_nova.galaxy_service.yaml.safe_load",
+                        lambda *_: (_ for _ in ()).throw(AssertionError("JSON was parsed as YAML")))
+    service = GalaxyService("https://galaxy.example", "key", "history", output_root=tmp_path)
+    assert service.load_json_document("checkpoint") == payload
+
+
+def test_portable_yaml_configuration_remains_supported(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    response = SimpleNamespace(text="measurement:\n  radiation: neutron\n", raise_for_status=lambda: None)
+    monkeypatch.setattr("radar_pd_nova.galaxy_service.requests.get", lambda *a, **kw: response)
+    service = GalaxyService("https://galaxy.example", "key", "history", output_root=tmp_path)
+    assert service.load_json_document("yaml") == {"measurement": {"radiation": "neutron"}}
+
+
 def test_galaxy_status_normalization() -> None:
     assert normalize_status("queued") is RunStatus.QUEUED
     assert normalize_status("running") is RunStatus.RUNNING

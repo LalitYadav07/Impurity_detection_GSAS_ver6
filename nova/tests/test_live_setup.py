@@ -340,6 +340,107 @@ def test_two_start_clicks_cannot_create_two_monitors(live):
     assert len(live.service.saved) == 1 and len(TrialController.instances) == 1
 
 
+def test_checkpoint_restoration_does_not_block_the_ui_event_loop(live, monkeypatch):
+    started, release = threading.Event(), threading.Event()
+    threads = []
+
+    def restore(_):
+        threads.append(threading.get_ident())
+        started.set()
+        assert release.wait(3), "UI could not release the restoration worker"
+        return False
+
+    monkeypatch.setattr(TrialController, "restore_latest_state", restore)
+
+    async def run():
+        event_loop_thread = threading.get_ident()
+        task = asyncio.create_task(live.start_powgen_monitoring())
+        try:
+            assert await asyncio.to_thread(started.wait, 3)
+            assert "previous watch" in live.server.state.powgen_message
+            assert threads != [event_loop_thread]
+            assert live.server.state.live_launch_busy
+        finally:
+            release.set()
+        await task
+        await asyncio.sleep(0)
+        assert live.server.state.powgen_monitoring
+
+    asyncio.run(run())
+
+
+def test_completed_scan_is_visible_while_another_upload_is_still_waiting(live):
+    second_started, release_second = threading.Event(), threading.Event()
+    first_visible, checkpoint_started = threading.Event(), threading.Event()
+    state = live.server.state
+    runs = [SimpleNamespace(run_id=f"scan-{n}", n=n) for n in (1, 2)]
+
+    class Controller:
+        source_directory = "/read-only/experiment"
+        refresh_errors = {}
+
+        def __init__(self):
+            self.state = SimpleNamespace(submitted={}, completed={}, discovered={r.run_id: r for r in runs}, failed={})
+
+        def discover(self): pass
+        def reconcile_recent_runs(self): return 0
+        def due_submissions(self): return list(self.state.discovered.values())
+
+        def launch_submission(self, run):
+            if run.n == 1:
+                assert second_started.wait(4)
+            else:
+                second_started.set()
+                assert release_second.wait(4)
+            return RunRecord(uid=run.run_id, name=run.run_id, mode="full", history_id="local-history", galaxy_job_id=run.run_id)
+
+        def acknowledge_submission(self, run, record, *, persist):
+            assert not persist
+            self.state.submitted[run.run_id] = run
+            del self.state.discovered[run.run_id]
+            return record
+
+        def refresh(self, *, checkpoint):
+            assert not checkpoint
+            records = {}
+            for identifier, run in list(self.state.submitted.items()):
+                self.state.completed[identifier] = self.state.submitted.pop(identifier)
+                records[identifier] = RunRecord(uid=identifier, name=identifier, mode="full", history_id="local-history", status=RunStatus.OK)
+            return records
+
+        def persist_state(self):
+            checkpoint_started.set()
+
+    controller = Controller()
+    live._powgen_controller = controller
+
+    def sync():
+        if "scan-1" in controller.state.completed and live.records.get("scan-1", None):
+            first_visible.set()
+
+    live._sync_powgen_rows = sync
+
+    async def run():
+        state.powgen_monitoring = True
+        task = asyncio.create_task(RadarPdNovaApp._powgen_monitor_loop(live))
+        try:
+            assert await asyncio.to_thread(first_visible.wait, 4)
+            assert second_started.is_set() and not release_second.is_set()
+            assert not checkpoint_started.is_set()
+            assert live.records["scan-1"].status == RunStatus.OK
+        finally:
+            release_second.set()
+        try:
+            assert await asyncio.to_thread(checkpoint_started.wait, 4)
+            assert set(controller.state.completed) == {"scan-1", "scan-2"}
+        finally:
+            state.powgen_monitoring = False
+            live._powgen_wake_event.set()
+            await asyncio.wait_for(task, 3)
+
+    asyncio.run(run())
+
+
 def test_existing_configuration_can_be_reused_or_copied_without_changing_single(live):
     state = live.server.state
     original = AnalysisConfig(

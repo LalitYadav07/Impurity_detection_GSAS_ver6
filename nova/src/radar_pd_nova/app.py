@@ -4830,6 +4830,7 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
         if state.powgen_monitoring or getattr(state, "live_launch_busy", False):
             return
         state.live_launch_busy = True
+        state.powgen_message = "Preparing the Live analysis and checking the selected inputs..."
         state.flush()
         try:
             prepared = await self._prepare_live_settings()
@@ -4843,7 +4844,9 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
             if self._powgen_controller is None or self._powgen_settings_signature != signature:
                 controller_class = PowgenWatchController if adapter.instrument == "PG3" else adapter.controller
                 self._powgen_controller = controller_class(self.service, settings, sample_index=self._powgen_sample_index(ipts))
-                restored = self._powgen_controller.restore_latest_state()
+                state.powgen_message = "Inputs saved. Checking for a previous watch with the same settings..."
+                state.flush()
+                restored = await asyncio.to_thread(self._powgen_controller.restore_latest_state)
                 if restored and self._powgen_controller.state.post_analysis:
                     self._set_post_settings(
                         PostAnalysisSettings.model_validate(self._powgen_controller.state.post_analysis)
@@ -4984,6 +4987,22 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
         self._powgen_wake_event.set()
         state.flush()
 
+    async def _refresh_powgen_jobs(self, controller, warnings) -> None:
+        """Publish job progress before any slow recovery-checkpoint upload."""
+        if not controller.state.submitted:
+            return
+        try:
+            refreshed = await asyncio.to_thread(controller.refresh, checkpoint=False)
+            for record in refreshed.values():
+                self.records[record.uid] = record
+            self._sync_runs()
+            if controller.refresh_errors:
+                warnings.append(f"{len(controller.refresh_errors)} Galaxy status update(s) will be retried")
+        except Exception as exc:
+            warnings.append(f"Galaxy status refresh failed: {_powgen_submission_error_summary(exc)}")
+        self._sync_powgen_rows()
+        self.server.state.flush()
+
     async def _powgen_monitor_loop(self) -> None:
         """Discover, submit, and refresh POWGEN scans while NOVA stays open."""
 
@@ -4996,6 +5015,8 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
             while state.powgen_monitoring and controller is self._powgen_controller:
                 state.powgen_last_checked = _format_eastern_time(datetime.now(timezone.utc))
                 warnings: list[str] = []
+                state.powgen_message = "Checking completed reduced files and scan metadata..."
+                state.flush()
                 try:
                     await asyncio.to_thread(controller.discover)
                 except Exception as exc:
@@ -5016,23 +5037,12 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
 
                 # Refresh first so jobs that finished since the last poll free
                 # their worker slots before this cycle chooses more scans.
-                if controller.state.submitted:
-                    try:
-                        refreshed = await asyncio.to_thread(controller.refresh)
-                        for record in refreshed.values():
-                            self.records[record.uid] = record
-                        self._sync_runs()
-                        if controller.refresh_errors:
-                            warnings.append(
-                                f"{len(controller.refresh_errors)} Galaxy status update(s) will be retried"
-                            )
-                    except Exception as exc:
-                        warnings.append(
-                            f"Galaxy status refresh failed: {_powgen_submission_error_summary(exc)}"
-                        )
+                await self._refresh_powgen_jobs(controller, warnings)
 
                 due_runs = controller.due_submissions()
                 if due_runs and state.powgen_monitoring:
+                    state.powgen_message = f"Preparing and submitting {len(due_runs)} selected bank analyses..."
+                    state.flush()
                     submission_lanes = asyncio.Semaphore(_POWGEN_SUBMISSION_CONCURRENCY)
 
                     async def launch(
@@ -5055,51 +5065,57 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
                         asyncio.create_task(launch(position, run))
                         for position, run in enumerate(due_runs)
                     ]
-                    for future in asyncio.as_completed(pending):
+                    while pending:
                         # A cancelled asyncio task cannot stop work already
                         # running in ``to_thread``. Always acknowledge this
                         # batch so every Galaxy job remains recoverable; the
                         # monitoring flag prevents the next batch from starting.
-                        run, launched, launch_error = await future
-                        try:
-                            if launch_error is not None:
-                                raise launch_error
-                            if launched is None:
-                                raise RuntimeError(f"Galaxy did not return a record for {run.run_id}")
-                            record = await asyncio.to_thread(
-                                controller.acknowledge_submission,
-                                run,
-                                launched,
-                                persist=False,
-                            )
-                            self.records[record.uid] = record
-                            self._sync_runs()
-                        except Exception as exc:
-                            warnings.append(f"{run.run_id} submission failed and will be retried: {exc}")
-                            if run.run_id in controller.state.discovered:
-                                try:
-                                    await asyncio.to_thread(
-                                        controller.defer_submission,
-                                        run,
-                                        str(exc),
-                                        persist=False,
-                                    )
-                                except Exception as persist_exc:
-                                    warnings.append(
-                                        f"{run.run_id} retry checkpoint also failed: {persist_exc}"
-                                    )
-                            else:
-                                warnings.append(f"{run.run_id} submission status uncertain: {exc}")
+                        done, pending = await asyncio.wait(pending, timeout=5, return_when=asyncio.FIRST_COMPLETED)
+                        for future in done:
+                            run, launched, launch_error = future.result()
+                            try:
+                                if launch_error is not None:
+                                    raise launch_error
+                                if launched is None:
+                                    raise RuntimeError(f"Galaxy did not return a record for {run.run_id}")
+                                record = await asyncio.to_thread(
+                                    controller.acknowledge_submission,
+                                    run,
+                                    launched,
+                                    persist=False,
+                                )
+                                self.records[record.uid] = record
+                                self._sync_runs()
+                            except Exception as exc:
+                                warnings.append(f"{run.run_id} submission failed and will be retried: {exc}")
+                                if run.run_id in controller.state.discovered:
+                                    try:
+                                        await asyncio.to_thread(
+                                            controller.defer_submission,
+                                            run,
+                                            str(exc),
+                                            persist=False,
+                                        )
+                                    except Exception as persist_exc:
+                                        warnings.append(f"{run.run_id} retry checkpoint also failed: {persist_exc}")
+                                else:
+                                    warnings.append(f"{run.run_id} submission status uncertain: {exc}")
+                        # A later multipart upload must not hide an earlier
+                        # scan's completed result until the whole batch ends.
+                        await self._refresh_powgen_jobs(controller, warnings)
                         self._sync_powgen_rows()
                         state.flush()
 
-                    try:
-                        await asyncio.to_thread(controller.persist_state)
-                    except Exception as exc:
-                        warnings.append(
-                            "The batch ran, but its recovery checkpoint will be retried: "
-                            f"{_powgen_submission_error_summary(exc)}"
-                        )
+                self._sync_powgen_rows()
+                state.powgen_message = "Scan and job results updated. Saving the recovery checkpoint..."
+                state.flush()
+                try:
+                    await asyncio.to_thread(controller.persist_state)
+                except Exception as exc:
+                    warnings.append(
+                        "The batch ran, but its recovery checkpoint will be retried: "
+                        f"{_powgen_submission_error_summary(exc)}"
+                    )
 
                 self._sync_powgen_rows()
                 counts = {

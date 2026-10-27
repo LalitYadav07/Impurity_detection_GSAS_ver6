@@ -296,6 +296,50 @@ class PowgenWatchController:
     def _watch_extension(self):
         return {}
 
+    def _checkpoint_key(self) -> str:
+        """Index compatible settings before downloading a History checkpoint.
+
+        This is a search hint, not a replacement for validating the stored
+        watch and source/job identities during restoration.
+        """
+        identity = {
+            "history": self.settings.history_id,
+            "instrument": self.settings.instrument,
+            "source": self.source_directory,
+            "references": dict(self.definition.config_refs),
+            "resolver": self.resolver_version,
+            "catalog": self._catalog_digest(),
+            "wavelength": self.settings.wavelength_angstrom,
+            "initial_backfill_limit": self.settings.initial_backfill_limit,
+            "selected_sample_ids": self.settings.selected_sample_ids,
+            "selected_banks": self.settings.selected_banks,
+            "excluded_run_numbers": self.settings.excluded_run_numbers,
+            "include_background_runs": self.settings.include_background_runs,
+            "include_ramp_runs": self.settings.include_ramp_runs,
+            **self._watch_extension(),
+        }
+        return sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()[:32]
+
+    def _checkpoint_candidates(self):
+        label = f"{self.beamline_label} watch state {self.settings.ipts}"
+        marker = f"[watch:{self._checkpoint_key()}]"
+        seen = set()
+        # Prefer the matching settings index. The second query preserves
+        # recovery of pre-index checkpoints without re-reading keyed states
+        # belonging to another library/configuration/sample selection.
+        for query in (f"{label} {marker}", label):
+            for row in self.service.search_history_datasets(
+                query=query, limit=25, include_generated=True,
+            ):
+                dataset_id = str(row.get("id") or "")
+                if not dataset_id or dataset_id in seen:
+                    continue
+                seen.add(dataset_id)
+                stored_marker = re.search(r"\[watch:[0-9a-f]{32}\]", str(row.get("name") or ""))
+                if stored_marker and stored_marker[0] != marker:
+                    continue
+                yield row
+
     def _run_name(self, run):
         return f"{self.settings.ipts}_{run.run_id}"
 
@@ -340,15 +384,9 @@ class PowgenWatchController:
         of recent History jobs.
         """
 
-        query = f"{self.beamline_label} watch state {self.settings.ipts}"
-        datasets = self.service.search_history_datasets(
-            query=query,
-            limit=25,
-            include_generated=True,
-        )
         restored_dataset_id = ""
         restored: WatchState | None = None
-        for row in datasets:
+        for row in self._checkpoint_candidates():
             dataset_id = str(row.get("id") or "")
             if not dataset_id:
                 continue
@@ -358,6 +396,8 @@ class PowgenWatchController:
                 if not isinstance(watch, Mapping) and self.settings.selected_sample_ids is not None:
                     continue
                 if isinstance(watch, Mapping):
+                    if watch.get("checkpoint_key") and watch["checkpoint_key"] != self._checkpoint_key():
+                        continue
                     if watch.get("instrument", "PG3") != self.settings.instrument:
                         continue
                     if any(watch.get(key) != value for key,value in self._watch_extension().items()):
@@ -985,7 +1025,8 @@ class PowgenWatchController:
 
         return self.acknowledge_submission(run, self.launch_submission(run))
 
-    def refresh(self) -> dict[str, RunRecord]:
+    def refresh(self, *, checkpoint: bool = True) -> dict[str, RunRecord]:
+        """Refresh results, optionally allowing the UI to publish before upload."""
         state_changed = False
         self.refresh_errors = {}
         for run_id, run in list(self.state.submitted.items()):
@@ -1052,7 +1093,7 @@ class PowgenWatchController:
                     state_changed = True
             except Exception as exc:
                 self.refresh_errors.setdefault(run_id, f"Scientific summary pending: {exc}")
-        if state_changed:
+        if state_changed and checkpoint:
             self.persist_state()
         return dict(self.records)
 
@@ -1065,6 +1106,11 @@ class PowgenWatchController:
         payload = self.service.load_json_document(dataset_id)
         summary = experiment_scan_summary(payload)
         receipt = summary.get("pattern_observation") or {}
+        # Monitor jobs publish the small curve directly, even when the full
+        # tables collection is intentionally omitted. Older full jobs still
+        # resolve through their original tables collection.
+        if receipt.get("sha256") and record.output_dataset_ids.get("pattern_observation"):
+            receipt = {**receipt, "dataset_id": record.output_dataset_ids["pattern_observation"]}
         if receipt.get("sha256") and hasattr(self.service, "cache_pattern_observation"):
             try:
                 summary["pattern_observation"] = self.service.cache_pattern_observation(
@@ -1100,6 +1146,7 @@ class PowgenWatchController:
                 "resolver": self.resolver_version,
                 "catalog_sha256": self._catalog_digest(),
                 "manual_setup_signature": self._manual_setup_signature,
+                "checkpoint_key": self._checkpoint_key(),
                 **self._watch_extension(),
             }
             last_error: Exception | None = None
@@ -1108,7 +1155,7 @@ class PowgenWatchController:
                     dataset_id = self.service.upload_json_document(
                         payload,
                         name=f"{self.settings.ipts}_{self.beamline_label.lower()}_watch_state.json",
-                        label=f"{self.beamline_label} watch state {self.settings.ipts}",
+                        label=f"{self.beamline_label} watch state {self.settings.ipts} [watch:{self._checkpoint_key()}]",
                     )
                     self.state_dataset_ids.append(dataset_id)
                     self._last_persisted_state = serialized

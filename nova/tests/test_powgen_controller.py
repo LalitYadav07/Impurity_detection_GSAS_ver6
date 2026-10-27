@@ -106,6 +106,83 @@ class FakeGalaxyService:
         raise AssertionError("POWGEN status refresh must not download the result archive")
 
 
+def test_checkpoint_search_skips_other_settings_before_downloading():
+    from dataclasses import replace
+    service = FakeGalaxyService()
+    settings = PowgenExperimentSettings("IPTS-2767", service.history_id, "config-hda", "1.5")
+    original = PowgenWatchController(service, settings)
+    original.persist_state()
+    payload, _, label = service.uploaded[-1]
+    other = PowgenWatchController(service, replace(settings, database_dataset_id="other-library"))
+    other.persist_state()
+    other_payload, _, other_label = service.uploaded[-1]
+    rows = [{"id": f"other-{n}", "name": other_label, "payload": other_payload} for n in range(30)]
+    rows.append({"id": "matching", "name": label, "payload": payload})
+    queries, loaded = [], []
+
+    def search(*, query, limit, **_):
+        queries.append(query)
+        return [row for row in rows if query in row["name"]][:limit]
+
+    def load(identifier):
+        loaded.append(identifier)
+        return next(row["payload"] for row in rows if row["id"] == identifier)
+
+    service.search_history_datasets, service.load_json_document = search, load
+    restored = PowgenWatchController(service, settings)
+    assert restored.restore_latest_state()
+    assert loaded == ["matching"] and len(queries) == 1
+    assert restored._checkpoint_key() != other._checkpoint_key()
+
+
+def test_checkpoint_index_never_replaces_payload_validation():
+    from copy import deepcopy
+    service = FakeGalaxyService()
+    settings = PowgenExperimentSettings("IPTS-2767", service.history_id, "config-hda", "1.5")
+    first = PowgenWatchController(service, settings)
+    first.persist_state()
+    payload = deepcopy(service.uploaded[-1][0])
+    payload["watch"]["configuration_dataset_id"] = "different-config"
+    service.history_documents = [{"id": "wrong", "name": service.uploaded[-1][2], "payload": payload}]
+    assert not PowgenWatchController(service, settings).restore_latest_state()
+
+
+def test_monitor_scientific_summary_resolves_direct_curve_output_without_tables():
+    service = FakeGalaxyService()
+    descriptor = {"name": "Pattern_observation.json", "sha256": "a" * 64, "source_gpx_sha256": "b" * 64}
+    service.json_documents["summary"] = {"status": "complete", "pattern_observation": descriptor}
+    seen = []
+
+    def cache(receipt, *, collection_id=None):
+        seen.append((receipt, collection_id))
+        return {**receipt, "local_path": "/owned-cache/curve.json"}
+
+    service.cache_pattern_observation = cache
+    controller = PowgenWatchController(service,
+        PowgenExperimentSettings("IPTS-2767", service.history_id, "config-hda", "1.5"))
+    record = RunRecord(uid="job", name="run", mode=AnalysisMode.FULL, history_id=service.history_id,
+                       output_dataset_ids={"summary": "summary", "pattern_observation": "curve-hda"})
+    summary = controller._scientific_summary(record)
+    assert seen == [({**descriptor, "dataset_id": "curve-hda"}, None)]
+    assert summary["pattern_observation"]["dataset_id"] == "curve-hda"
+
+
+def test_refresh_can_publish_completed_result_before_checkpoint_upload(monkeypatch):
+    service = FakeGalaxyService()
+    controller = PowgenWatchController(service,
+        PowgenExperimentSettings("IPTS-38000", service.history_id, "config-hda", "1.5"))
+    monkeypatch.setattr(controller, "_read_scan_metadata", lambda _: {})
+    run = controller.discover([{"path": "PG3_63765.gsa"}])[0]
+    controller.submit(run)
+    before = len(service.uploaded)
+    refreshed = controller.refresh(checkpoint=False)
+    assert run.run_id in controller.state.completed
+    assert refreshed[run.run_id].status == RunStatus.OK
+    assert len(service.uploaded) == before
+    controller.persist_state()
+    assert len(service.uploaded) == before + 1
+
+
 def test_bounded_listing_is_nonrecursive_and_ignores_directories(tmp_path: Path) -> None:
     (tmp_path / "PG3_63764.gsa").write_text("data", encoding="ascii")
     (tmp_path / "nested").mkdir()
@@ -246,7 +323,7 @@ def test_controller_submits_existing_analyze_contract_and_persists_state() -> No
     assert snapshot.output_profile == "monitor"
     assert snapshot.prepared_dataset_ids == {"configuration": "config-hda"}
     assert snapshot.inputs.publish_results_to_ipts is False
-    assert service.uploaded[-1][2] == "POWGEN watch state IPTS-38000"
+    assert service.uploaded[-1][2].startswith("POWGEN watch state IPTS-38000 [watch:")
     assert "PG3_63764" in service.uploaded[-1][0]["submitted"]
     assert service.uploaded[-1][0]["watch"]["source_directory"].endswith("shared/autoreduce")
 
@@ -302,7 +379,7 @@ def test_controller_reuses_selected_history_profile_without_packaged_resolution(
     assert record.inputs.instrument_dataset_id == "legacy-profile-hda"
     assert controller.definition.instrument_profile_ref == "legacy-profile-hda"
     assert not [item for item in service.uploaded if item[2] == "POWGEN instrument profile"]
-    checkpoint = next(item[0] for item in service.uploaded if item[2] == "POWGEN watch state IPTS-12000")
+    checkpoint = next(item[0] for item in service.uploaded if item[2].startswith("POWGEN watch state IPTS-12000 [watch:"))
     assert checkpoint["watch"]["instrument_profile_dataset_id"] == "legacy-profile-hda"
 
 
@@ -523,7 +600,7 @@ def test_launch_and_acknowledge_keep_checkpoint_transition_explicit() -> None:
 
     assert run.run_id not in controller.state.discovered
     assert controller.state.submitted[run.run_id].galaxy_job_id == "galaxy-job-1"
-    assert service.uploaded[-1][2] == "POWGEN watch state IPTS-38000"
+    assert service.uploaded[-1][2].startswith("POWGEN watch state IPTS-38000 [watch:")
 
 
 def test_legacy_checkpoint_triggers_missing_initial_backfill() -> None:
@@ -926,4 +1003,4 @@ def test_checkpoint_upload_retries_transient_galaxy_failure() -> None:
     )
 
     assert service.upload_attempts == 3
-    assert service.uploaded[-1][2] == "POWGEN watch state IPTS-38000"
+    assert service.uploaded[-1][2].startswith("POWGEN watch state IPTS-38000 [watch:")

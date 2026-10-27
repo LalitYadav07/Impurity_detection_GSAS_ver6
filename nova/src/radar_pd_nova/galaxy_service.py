@@ -983,7 +983,13 @@ class GalaxyService:
             timeout=30,
         )
         response.raise_for_status()
-        payload = yaml.safe_load(response.text)
+        # Watch checkpoints and scientific summaries are JSON. PyYAML's
+        # object-by-object parser is disproportionately expensive for large
+        # histories; retain YAML support for portable analysis configurations.
+        try:
+            payload = json.loads(response.text)
+        except json.JSONDecodeError:
+            payload = yaml.safe_load(response.text)
         return payload if isinstance(payload, dict) else None
 
     def _download_dataset(self, dataset_id: str, destination: Path) -> None:

@@ -52,6 +52,23 @@ def test_declared_slog_bin_integrals_are_converted_with_the_calibrated_reader_co
     assert np.any(item.pattern.intensity < 0)
 
 
+def test_powgen_raw_reader_groups_qualified_mode_despite_motor_readback_jitter(tmp_path):
+    from copy import deepcopy
+    scan, _, _ = product(tmp_path)
+    scan["instrument"] = "PG3"
+    scan["metadata"]["powgen_setup"] = {
+        "cycle": "2022-1_11A_CAL", "mode": "HR", "wavelength": 0.8, "frequency": 60,
+        "calibration_files": ["cal.h5"], "characterization_files": ["HighRes.txt"],
+        "grouping_files": [], "guide": -54.004}
+    second = deepcopy(scan)
+    second["metadata"]["powgen_setup"]["guide"] = -54.007
+    first_scope = reduced_observation(scan).pattern.scope
+    assert reduced_observation(second).pattern.scope == first_scope
+    assert second["metadata"]["powgen_setup"]["guide"] == -54.007
+    second["metadata"]["powgen_setup"]["characterization_files"] = ["different_HighRes.txt"]
+    assert reduced_observation(second).pattern.scope != first_scope
+
+
 def test_multibank_product_requires_an_explicit_bank(tmp_path):
     scan, _, _ = product(tmp_path, banks=(1, 2))
     with pytest.raises(ValueError, match="explicit physical bank"):

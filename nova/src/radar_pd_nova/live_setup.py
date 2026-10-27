@@ -555,6 +555,8 @@ class LiveSetupMixin:
             raise RuntimeError(
                 "The active Galaxy History is not available to this NOVA session"
             )
+        state.powgen_message = "Inputs verified. Saving the reproducible Live configuration..."
+        state.flush()
         config_id = await self._save_live_configuration(config)
         main_id = (
             str(values["powgen_main_cif_dataset_id"] or "") or None
@@ -562,6 +564,8 @@ class LiveSetupMixin:
             else None
         )
         if values["powgen_main_cif_source"] == "computer":
+            state.powgen_message = "Saving the selected main-phase CIF to Galaxy..."
+            state.flush()
             main_id = await self._upload_live_asset(
                 values["powgen_main_cif_path"], f"{adapter.name} main phase CIF"
             )
@@ -571,11 +575,15 @@ class LiveSetupMixin:
             else None
         )
         if values["powgen_instrument_source"] == "computer":
+            state.powgen_message = "Saving the selected instrument profile to Galaxy..."
+            state.flush()
             profile_id = await self._upload_live_asset(
                 values["powgen_instrument_path"], f"{adapter.name} instrument profile"
             )
         library_id = library["dataset_id"]
         if library["path"]:
+            state.powgen_message = "Saving the selected candidate library to Galaxy..."
+            state.flush()
             library_id = await self._upload_live_asset(
                 library["path"], "Live candidate library"
             )
