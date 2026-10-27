@@ -97,6 +97,24 @@ def test_append_is_causal_and_recurrence_reuses_a_symbol_when_width_returns():
     assert r[4]["event"] == "returned" and r[4]["boundary"]
 
 
+def test_adjacent_rule_recognizes_active_reference_after_gradual_width_drift():
+    policy = BoundaryPolicy(selected=("width",), comparison="previous")
+    widths = [.0025, .00255, .0026, .00265, .0027, .00275, .0028, .0025]
+    rows = [source(observed(ident=f"width-{i}", width=width, noise=.003, seed=4), i+1)
+        for i,width in enumerate(widths)]
+    tracker = engine(policy)
+    previous = []
+    for n,row in enumerate(rows,1):
+        report = tracker.append(row)
+        assert report["records"][:-1] == previous
+        assert report["records"] == engine(policy).evaluate(rows[:n])["records"]
+        previous = list(report["records"])
+    assert not any(r["boundary"] for r in previous[:-1])
+    assert previous[-1]["boundary"] and previous[-1]["event"] == "returned"
+    assert previous[-1]["state_id"] == previous[0]["state_id"]
+    assert previous[-1]["anchor_comparison"]["status"] == "no_resolved_change"
+
+
 def test_switching_rule_replays_existing_measurements_without_new_data():
     tracker = engine(BoundaryPolicy(selected=("width",)))
     rows = [source(observed(ident="a"),1),source(observed(ident="b",new=[(2700,30,.0025),(6000,30,.0025)]),2)]

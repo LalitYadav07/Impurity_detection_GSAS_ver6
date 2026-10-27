@@ -74,6 +74,26 @@ def test_online_rwp_recurrence_uses_only_preceding_completed_results():
         previous=copy.deepcopy(report["records"])
     assert previous[2]["event"]=="returned"
     assert previous[2]["state_id"]==previous[0]["state_id"]
+    assert previous[1]["state_id"]!=previous[0]["state_id"]
+
+
+def test_return_to_active_groups_original_reference_after_subthreshold_drift():
+    # Under the adjacent-scan rule, each small change keeps the same group.
+    # A large jump back can cross the adjacent threshold while matching that
+    # group's original observation exactly. It must reuse the existing symbol.
+    policy = BoundaryPolicy(selected=("rwp",), comparison="previous")
+    tracker = TransitionTrackingEngine(policy=policy)
+    rows = [fitted(i+1, value) for i,value in enumerate((8,8.4,8.8,9.2,9.6,10,8))]
+    previous = []
+    for row in rows:
+        report = tracker.append(row)
+        assert report["records"][:-1] == previous
+        previous = copy.deepcopy(report["records"])
+    assert all(r["state_id"] == previous[0]["state_id"] for r in previous)
+    assert previous[-1]["event"] == "returned"
+    assert previous[-1]["boundary"]
+    assert previous[-1]["previous_comparison"]["status"] == "transition_evidence"
+    assert previous[-1]["anchor_comparison"]["status"] == "no_resolved_change"
 
 
 def test_new_arrivals_and_rule_edits_reuse_qualified_old_final_fit_receipts(monkeypatch):

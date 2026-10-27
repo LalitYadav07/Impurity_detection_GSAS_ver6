@@ -50,8 +50,12 @@ class SignalStream:
             elif decision["status"] == "transition_evidence":
                 row["boundary"] = True
                 row["boundary_after"] = row["previous"]
-                matches = [s for s in series["states"] if s is not active
-                           and self.engine.compare_evidence(s["reference"], prepared)["status"] == "no_resolved_change"]
+                # Adjacent comparisons can accumulate small changes within a
+                # group. A jump back may differ from the preceding scan but
+                # match the active group's original reference. Include it in
+                # recurrence searches as well as all other earlier groups.
+                matches = [s for s in series["states"]
+                           if self.engine.compare_evidence(s["reference"], prepared)["status"] == "no_resolved_change"]
                 if len(matches) == 1:
                     chosen, event = matches[0], "returned"
                 elif len(matches) > 1:
@@ -69,7 +73,10 @@ class SignalStream:
                 row["reason"] = "state_memory_capacity_reached"
                 series["previous"] = prepared
                 return row
-            state_id = digest([group, item.fingerprint, self.policy.fingerprint])
+            # Rwp can distinguish model states of identical measured curves.
+            # The originating acquisition makes those states distinct without
+            # depending on future scans or the size of the received sequence.
+            state_id = digest([group, item.fingerprint, str(scan["run_id"]), self.policy.fingerprint])
             chosen = {"id": state_id, "reference": prepared, "style": len(series["states"])}
             series["states"].append(chosen)
             self.points += len(prepared.observation.x)
@@ -84,7 +91,7 @@ class SignalStream:
         return row
 
     def report(self):
-        return {"schema": "radar-pd-online-boundaries/v1", "records": list(self.records),
+        return {"schema": "radar-pd-online-boundaries/v2", "records": list(self.records),
             "groups": [{"id": k, "scope": v["scope"], "run_ids": list(v["run_ids"])} for k, v in self.series.items()],
             "styles": dict(self.engine.styles), "boundary_policy": asdict(self.policy),
             "policy_sha256": self.policy.fingerprint, "physical_transition_confirmed": False,
