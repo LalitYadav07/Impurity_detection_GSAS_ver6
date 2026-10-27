@@ -38,6 +38,13 @@ def mapped_calibration(scan,controller,records):
             break
     if controller is None or run is None:
         raise ValueError("The mapped instrument profile is not available locally")
+    if not receipt:
+        metadata=getattr(run,"scan_metadata",{}) or {}
+        receipt=metadata.get("nomad_bank_provenance") or metadata.get("powgen_bank_provenance") or {}
+        profile=receipt.get("profile") or {}
+        expected=profile.get("sha256") or receipt.get("profile_sha256")
+        if receipt and int(receipt.get("source_bank",bank))!=bank:
+            raise ValueError("Analysis receipt belongs to another physical bank")
     if scan.get("instrument")=="PG3" and not getattr(settings,"instrument_profile_dataset_id",None):
         resolution,path=controller.resolve_profile(run)
         if resolution.source_bank!=bank or expected and resolution.sha256!=expected:
@@ -50,10 +57,15 @@ def mapped_calibration(scan,controller,records):
         path=getattr(controller,"_supplied_profile",None)
         if path is not None and Path(path).is_file():
             from .nomad import validate_profile
+            saved_bank=receipt.get("profile_bank") or profile.get("profile_bank")
+            if saved_bank is not None and int(saved_bank)!=settings.profile_bank:
+                raise ValueError("Supplied NOMAD profile Bank label differs from this analysis receipt")
             _,mapping=validate_profile(controller._setup(run),bank,path,settings.profile_bank,
                 acknowledged=settings.profile_acknowledged)
             if expected and mapping["profile_sha256"]!=expected:
                 raise ValueError("Supplied NOMAD profile differs from this analysis receipt")
             return TofCalibration.from_profile(path,source_bank=bank,profile_bank=settings.profile_bank,
                 expected_sha256=mapping["profile_sha256"])
+        if getattr(controller,"display_profile_error",None):
+            raise ValueError(controller.display_profile_error)
     raise ValueError("A locally available, explicitly mapped neutron TOF profile is required")

@@ -219,6 +219,9 @@ The experiment stays visible while a full result downloads. Phase-fraction
 labels, including the transition refinement table, prefer an unambiguous final
 GPX model symmetry over an older catalog label; this changes presentation, not
 fitted fractions or model parameters.
+Restoring a completed NOMAD watch also loads its saved instrument profile once.
+The d-spacing/Q display rechecks the original bank labels and profile checksum;
+if the profile cannot be fetched, completed results remain readable in TOF.
 
 The measured-peak detector sees measured coordinates, intensities, errors, masks
 and explicit specimen/bank/reduction provenance. It allows independent local

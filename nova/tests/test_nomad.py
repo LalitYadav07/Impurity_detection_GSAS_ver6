@@ -403,6 +403,54 @@ def test_checkpoint_recovery_preserves_mapping_and_calibration_guard(source,supp
         restored._prepare_run(run)
 
 
+def test_completed_watch_recovers_its_display_profile_without_resubmitting(source,supplied,monkeypatch):
+    from radar_pd_nova.transition_coordinate_mapping import mapped_calibration
+    monkeypatch.setattr(WatchDefinition,'source_directory',property(lambda self:str(source.parent)))
+    service=Galaxy(supplied.read_text())
+    settings=NomadExperimentSettings('IPTS-1','h','c',instrument_profile_dataset_id='original',
+        selected_banks=(5,),profile_bank=1,profile_acknowledged=True)
+    first=NomadWatchController(service,settings);first._read_scan_metadata=lambda run:{}
+    run=first.discover()[0];first.submit(run)
+    first.state.mark_completed(run.run_id,['final-gpx'],galaxy_job_id='job');first.persist_state()
+    calls=[];original=service.load_text_document
+    service.load_text_document=lambda identifier:(calls.append(identifier),original(identifier))[1]
+    restored=NomadWatchController(service,settings);restored._read_scan_metadata=lambda run:{}
+    assert restored.restore_latest_state()
+    calibration=mapped_calibration({'run_id':run.run_id,'bank':5,'instrument':'NOM'},restored,{})
+    assert calibration.difc==9910.54 and calibration.profile_bank==1 and calibration.source_bank==5
+    assert calls==['original'] and len(service.snapshots)==1
+    assert len(restored.state.completed)==1 and not restored.state.submitted
+    completed=restored.state.completed[run.run_id]
+    for field,value,message in [('source_bank',4,'physical bank'),
+                                ('profile_bank',2,'Bank label'),
+                                ('profile_sha256','0'*64,'analysis receipt')]:
+        receipt=dict(completed.scan_metadata['nomad_bank_provenance'])
+        receipt[field]=value
+        restored.state.completed[run.run_id]=replace(completed,
+            scan_metadata={**completed.scan_metadata,'nomad_bank_provenance':receipt})
+        with pytest.raises(ValueError,match=message):
+            mapped_calibration({'run_id':run.run_id,'bank':5,'instrument':'NOM'},restored,{})
+    restored.state.completed[run.run_id]=completed
+
+
+def test_saved_nomad_profile_unavailable_keeps_completed_results_readable(source,supplied,monkeypatch):
+    from radar_pd_nova.transition_coordinate_mapping import mapped_calibration
+    monkeypatch.setattr(WatchDefinition,'source_directory',property(lambda self:str(source.parent)))
+    service=Galaxy(supplied.read_text())
+    settings=NomadExperimentSettings('IPTS-1','h','c',instrument_profile_dataset_id='original',
+        selected_banks=(5,),profile_bank=1,profile_acknowledged=True)
+    first=NomadWatchController(service,settings);first._read_scan_metadata=lambda run:{}
+    run=first.discover()[0];first.submit(run)
+    first.state.mark_completed(run.run_id,['final-gpx'],galaxy_job_id='job');first.persist_state()
+    def unavailable(identifier):raise OSError('Saved profile temporarily unavailable')
+    service.load_text_document=unavailable
+    restored=NomadWatchController(service,settings);restored._read_scan_metadata=lambda run:{}
+    assert restored.restore_latest_state() and len(restored.state.completed)==1
+    with pytest.raises(ValueError,match='temporarily unavailable'):
+        mapped_calibration({'run_id':run.run_id,'bank':5,'instrument':'NOM'},restored,{})
+    assert len(service.snapshots)==1
+
+
 @pytest.mark.parametrize('which',['data','sidecar'])
 def test_replaced_reductions_are_flagged_below_backfill_floor(source,supplied,monkeypatch,which):
     monkeypatch.setattr(WatchDefinition,'source_directory',property(lambda self:str(source.parent)))
