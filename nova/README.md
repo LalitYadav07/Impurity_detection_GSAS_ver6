@@ -47,6 +47,8 @@ See [NOMAD integration](../docs/nomad_integration.md) for supported layouts,
 bank mapping, correction notices and release requirements.
 
 Live setup is self-contained; preparing inputs in Single pattern is optional.
+Sample discovery runs as a background UI task, so selecting/uploading a library,
+profile or configuration does not wait behind a large facility inventory.
 Its four sections are **Experiment**, **Candidate structures**, **Analysis
 settings**, and **Review and start**. Select the built-in catalog, build a
 mini/augmented library from CIFs or CIF ZIPs, or choose/upload a previously
@@ -213,6 +215,9 @@ and correlation calculations retain their references, filters, uncertainties,
 observations and downloads. Unimplemented broadening/site-order choices are not
 offered. An individual fit does not need a duplicate experiment-trend panel or
 one-point trend setup. Opening its page preserves the live experiment history.
+The experiment stays visible while a full result downloads. Phase-fraction
+labels prefer an unambiguous final GPX model symmetry over an older catalog
+label; this changes presentation, not fitted fractions or model parameters.
 
 The measured-peak detector sees measured coordinates, intensities, errors, masks
 and explicit specimen/bank/reduction provenance. It allows independent local
@@ -238,6 +243,9 @@ selected-indicator count against a dashed required-count line, with an explicit
 no-comparison row and unavailable-indicator bounds. It is not a continuous
 similarity probability. Pattern symbols retain their categorical identity in the
 timeline. The ambiguous filled boundary intervals have been removed.
+Timezone-qualified acquisition starts also provide an elapsed-time axis and row
+annotations. Boundary lines can be hidden independently of the selected rule
+when many candidates obscure weak features in the diffraction map.
 
 The diffraction map defaults to a high-contrast Turbo rainbow palette (Cividis
 remains selectable). A vertical scan cursor selects a measured-pattern ribbon

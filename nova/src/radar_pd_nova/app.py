@@ -1211,7 +1211,7 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
                     disabled=("powgen_monitoring || live_launch_busy",),
                     hint=("'Enter the IPTS that owns the ' + live_beamline_label + ' experiment.'",),
                     persistent_hint=True,
-                    blur=(self.refresh_powgen_samples, "[powgen_ipts]"),
+                    blur=(self.request_powgen_sample_refresh, "[powgen_ipts]"),
                 )
                 vuetify.VSelect(
                     label="Reduction data folder", v_model=("powgen_source_subfolder",),
@@ -1222,7 +1222,7 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
                 )
                 vuetify.VBtn(
                     "Refresh sample IDs",
-                    click=(self.refresh_powgen_samples, "[powgen_ipts]"),
+                    click=(self.request_powgen_sample_refresh, "[powgen_ipts]"),
                     loading=("powgen_sample_loading",),
                     disabled=("powgen_monitoring || powgen_sample_loading || !powgen_ipts",),
                     prepend_icon="mdi-refresh", variant="outlined", block=True, classes="mb-2",
@@ -2475,7 +2475,7 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
                         headers=([{"title": "Phase", "key": "phase"}, {"title": "Cell parameters", "key": "cell_display"}],))
                 vuetify.VBtn(
                     "Open full scan result",
-                    click=self.open_powgen_selected_run_async,
+                    click=self.request_open_powgen_selected_run,
                     prepend_icon="mdi-open-in-new",
                     variant="outlined",
                     size="small",
@@ -3767,7 +3767,7 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
             state.powgen_dashboard_title = f"{beamline_adapter(draft_instrument).name} · {draft_ipts or 'Live experiment'}"
             state.powgen_dashboard_configuration = "No monitor started"
             state.powgen_dashboard_library = "No monitor started"
-            state.powgen_dashboard_wavelength = "Automatic per run"
+            state.powgen_dashboard_wavelength = "Broadband neutron TOF" if draft_instrument == "NOM" else "Automatic per run"
             state.powgen_dashboard_scope_changed = False
             return
         settings = controller.settings
@@ -3778,7 +3778,8 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
             getattr(settings, "configuration_dataset_id", ""), "Saved monitor configuration")
         database_id = getattr(settings, "database_dataset_id", "")
         state.powgen_dashboard_library = self._dataset_display_label(database_id, "Custom monitor library") if database_id else "Built-in MP/COD catalog"
-        state.powgen_dashboard_wavelength = str(getattr(settings, "wavelength_angstrom", "") or "Automatic per run")
+        state.powgen_dashboard_wavelength = ("Broadband neutron TOF" if instrument == "NOM" else
+            str(getattr(settings, "wavelength_angstrom", "") or "Automatic per run"))
         state.powgen_dashboard_scope_changed = bool(ipts and (
             draft_ipts != ipts or draft_instrument != instrument or
             (getattr(state, "powgen_source_subfolder", None) or "shared/autoreduce") != getattr(settings, "subfolder", "shared/autoreduce")))
@@ -3884,7 +3885,7 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
                                 "next submission check."
                             )
                     else:
-                        detail = "Discovered in the read-only autoreduce folder; preparing submission."
+                        detail = "Discovered in the selected read-only reduction folder; preparing submission."
                 rows.append(
                     {
                         "run_id": run_id,
@@ -3907,7 +3908,7 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
             if not summary:
                 continue
             projected_phases: list[dict[str, Any]] = []
-            for phase in phase_fraction_rows({"phases": summary.get("phases") or []}):
+            for phase in phase_fraction_rows(summary):
                 phase_name = str(phase.get("phase") or "Unknown")
                 space_group = str(phase.get("space_group") or "-")
                 weight = float(phase.get("weight_percent") or 0.0)
@@ -4344,6 +4345,14 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
         self._select_record(record)
         self._open_record_results(record)
 
+    def request_open_powgen_selected_run(self, **_: Any) -> None:
+        """Return the browser RPC before the result archive is downloaded."""
+        if not hasattr(self, "_result_open_tasks"):
+            self._result_open_tasks = set()
+        task = asyncio.create_task(self.open_powgen_selected_run_async())
+        self._result_open_tasks.add(task)
+        task.add_done_callback(self._result_open_tasks.discard)
+
     async def open_powgen_selected_run_async(self, **_: Any) -> None:
         """Keep the UI responsive while a completed result is fetched from Galaxy."""
         state = self.server.state
@@ -4370,7 +4379,10 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
             self.records[record.uid] = record
             self._select_record(record)
             self._reset_result_state()
-            state.workspace_view = 'results'
+            # Keep the completed-scan dashboard visible until collection has
+            # finished. An empty result template otherwise falsely says that
+            # fractions, fits and saved projects were never published.
+            state.workspace_view = 'experiment'
             state.selected_result_load_message = f'Opening {record.name}: downloading fit plots and saved projects…'
             state.flush()
             if not record.output_dir:
@@ -4502,6 +4514,7 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
         self._powgen_form_ipts = ipts
         adapter = self._live_adapter()
         state.powgen_source_subfolder = adapter.default_folder
+        state.powgen_source_directory = f"/SNS/{adapter.instrument}/{ipts or '<IPTS>'}/{adapter.default_folder}"
         state.powgen_source_options = [{"title": "Individual Bragg reductions" if adapter.instrument == "NOM" else "Current autoreduce folder", "value": adapter.default_folder}]
         self._powgen_sample_request = object()  # Discard a previous IPTS's in-flight discovery.
         state.powgen_sample_loading = False
@@ -4518,10 +4531,16 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
     def _powgen_source_changed(self, **_: Any) -> None:
         state = self.server.state
         folder = str(getattr(state, "powgen_source_subfolder", "shared/autoreduce") or "shared/autoreduce")
+        try:
+            ipts = self._normalize_powgen_ipts(state.powgen_ipts)
+        except ValueError:
+            ipts = "<IPTS>"
+        state.powgen_source_directory = f"/SNS/{self._live_adapter().instrument}/{ipts}/{folder}"
         if folder == getattr(self, "_powgen_form_source", "shared/autoreduce"):
             return
         self._powgen_form_source = folder
         self._powgen_sample_request = object()
+        state.powgen_sample_loading = False
         state.powgen_sample_discovery_ipts = ""
         state.powgen_discovered_sample_options = []
         state.powgen_processing_sample_ids = []
@@ -4553,6 +4572,19 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
         if not selected:
             raise ValueError("Select at least one sample ID, or choose All samples")
         return selected
+
+    def request_powgen_sample_refresh(self, current_ipts: Any = None, **_: Any) -> None:
+        """Release the UI RPC while the bounded facility reader fills its cache.
+
+        Awaiting the full inventory inside an event RPC serializes later file
+        uploads on the same wslink client, even though the read is off-thread.
+        Keep the async worker available for direct callers and tests.
+        """
+        if not hasattr(self, "_powgen_sample_tasks"):
+            self._powgen_sample_tasks = set()
+        task = asyncio.create_task(self.refresh_powgen_samples(current_ipts))
+        self._powgen_sample_tasks.add(task)
+        task.add_done_callback(self._powgen_sample_tasks.discard)
 
     async def refresh_powgen_samples(self, current_ipts: Any = None, **_: Any) -> None:
         """Discover identities off-thread; stale IPTS responses never update the form."""

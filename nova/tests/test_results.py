@@ -821,6 +821,42 @@ def test_phase_fraction_normalization() -> None:
     ]
 
 
+def test_fraction_labels_use_final_gpx_symmetry_by_id_without_changing_values():
+    import copy
+    payload={"phases":[
+        {"phase_id":"model-a","compound_name":"BaTiO3","space_group":"Pm-3m (221)","weight_fraction_pct":"35.125000"},
+        {"phase_id":"model-b","compound_name":"BaTiO3","space_group":"Pm-3m (221)","weight_fraction_pct":"64.875000"}],
+        "lattice_parameters":[
+            {"phase_id":"model-a","phase":"BaTiO3 (SG Pm-3m, 221)","space_group":"P 4 m m","source_gpx":"final.gpx"},
+            {"phase_id":"model-b","phase":"BaTiO3 (SG Pm-3m, 221)","space_group":"P m -3 m","source_gpx":"final.gpx"}]}
+    before=copy.deepcopy(payload)
+    rows=phase_fraction_rows(payload)
+    assert [r['space_group'] for r in rows]==['P4mm','Pm-3m (221)']
+    assert [r['weight_percent'] for r in rows]==['35.125000','64.875000']
+    assert payload==before
+
+
+def test_archived_compact_summary_repairs_only_a_unique_final_model_match():
+    model={"phase_id":"a","phase":"BaTiO3 (SG Pm-3m, 221)","space_group":"P 4 m m","source_gpx":"final.gpx"}
+    payload={"phases":[{"phase":"BaTiO3","space_group":"Pm-3m (221)","weight_percent":100}],
+        "lattice_parameters":[model]}
+    assert phase_fraction_rows(payload)[0]['space_group']=='P4mm'
+    payload['lattice_parameters'].append({**model,'phase_id':'b','space_group':'P m -3 m'})
+    assert phase_fraction_rows(payload)[0]['space_group']=='Pm-3m (221)'
+    payload['phases'][0]['phase_id']='unmatched-id'
+    payload['lattice_parameters']=[model]
+    assert phase_fraction_rows(payload)[0]['space_group']=='Pm-3m (221)'
+
+
+def test_final_symmetry_number_is_retained_only_for_a_matching_symbol():
+    payload={"phases":[{"phase_id":"a","phase":"C","space_group":"P6_3/mmc (194)","weight_percent":100}],
+        "lattice_parameters":[{"phase_id":"a","phase":"C","space_group":"P 63/m m c","source_gpx":"final.gpx"}]}
+    assert phase_fraction_rows(payload)[0]['space_group']=='P6_3/mmc (194)'
+    payload['lattice_parameters'][0]['source_gpx']=''
+    payload['lattice_parameters'][0]['space_group']='P 1'
+    assert phase_fraction_rows(payload)[0]['space_group']=='P6_3/mmc (194)'
+
+
 def test_phase_fraction_normalization_compacts_formula_and_space_group_not_names() -> None:
     rows = phase_fraction_rows(
         {

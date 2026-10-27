@@ -76,6 +76,40 @@ def test_boundary_diagram_click_and_axis_only_change_inspection():
     assert app._transition_report == before
 
 
+def test_elapsed_acquisition_axis_and_annotations_do_not_change_detection():
+    app=application()
+    before=copy.deepcopy(app._transition_report)
+    state=app.server.state
+    assert 'elapsed_time' in [o['value'] for o in state.transition_diagram_axes]
+    app.update_transition_diagram_axis('elapsed_time')
+    values=[trace['x'][0] for trace in state.transition_boundary_map['data']]
+    np.testing.assert_allclose(values,np.arange(len(values)))
+    app.update_transition_display('annotation','elapsed_time')
+    assert 'min' in state.transition_cursor_label
+    assert 'Elapsed acquisition time (min)'==state.transition_boundary_map['layout']['xaxis']['title']['text']
+    assert app._transition_report==before
+
+
+def test_unqualified_acquisition_times_do_not_create_an_elapsed_axis():
+    rows=scans()
+    for row in rows:row['metadata']['start_time']='2026-01-01T01:00:00'
+    app=RadarPdNovaApp();app._refresh_transition_tracking(rows)
+    assert 'elapsed_time' not in [o['value'] for o in app.server.state.transition_diagram_axes]
+
+
+def test_hiding_boundary_lines_preserves_evidence_and_cursor_preview():
+    app=application();state=app.server.state
+    before=copy.deepcopy(app._transition_report)
+    assert any(s['type']=='line' for s in state.transition_map['layout'].get('shapes',[]))
+    app.update_transition_display('show_boundaries',False)
+    assert not any(s['type']=='line' for s in state.transition_map['layout'].get('shapes',[]))
+    app.slide_transition_map(1)
+    assert not any(s['type']=='line' for s in state.transition_map['layout'].get('shapes',[]))
+    app.update_transition_display('show_boundaries',True)
+    assert any(s['type']=='line' for s in state.transition_map['layout'].get('shapes',[]))
+    assert app._transition_report==before
+
+
 def test_invalid_rule_edit_preserves_the_last_valid_rule():
     app = application()
     app.update_transition_policy("selected",["width"])

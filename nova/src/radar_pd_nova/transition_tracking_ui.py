@@ -19,7 +19,7 @@ from trame.widgets import vuetify3 as vuetify
 from .post_analysis import number
 from .results import discover_plot_payloads, read_plot_payload, figure_for_payload, read_json
 from .scan_conditions import condition_display
-from .scan_interpretation import InterpretationSettings, _conditions, condition_scope
+from .scan_interpretation import InterpretationSettings, _conditions, condition_scope, _time
 from .scan_interpretation_ui import phase_labels, scan_label
 from .transition_input import digest
 from .transition_tracking import TransitionTrackingEngine, acquisition_key, checkpoint
@@ -107,6 +107,7 @@ class TransitionTrackingMixin:
             "transition_scale": "asinh",
             "transition_contrast": 50,
             "transition_background": True,
+            "transition_show_boundaries": True,
             "transition_window": 30,
             "transition_window_options": [30, 60, 100],
             "transition_scale_options": [
@@ -434,6 +435,11 @@ class TransitionTrackingMixin:
                         "['background',$event]",
                     ),
                 )
+                vuetify.VCheckbox(
+                    label="Show boundary candidates on the map",
+                    v_model=("transition_show_boundaries",), density="compact", hide_details=True,
+                    update_modelValue=(self.update_transition_display, "['show_boundaries',$event]"),
+                )
                 vuetify.VBtn(
                     "Rescale colors to visible scans",
                     variant="text",
@@ -450,7 +456,7 @@ class TransitionTrackingMixin:
                 click=(self.select_transition_heatmap,"[$event]"),
                 relayout=(self.relayout_transition_map,"[$event]"),reset=self.reset_transition_map_zoom,
                 preview="transition_preview = $event")
-            html.P("{{ transition_preview.active ? transition_preview.label : transition_cursor_label }} · White dashed lines: boundary candidates. Green pointer: selected scan. Outlined boxes span the compared scan pair. Move the cursor to preview a scan; release to load its full details. The ribbon follows the map's horizontal zoom and intensity treatment.",classes="radar-section-help")
+            html.P("{{ transition_preview.active ? transition_preview.label : transition_cursor_label }} · {{ transition_show_boundaries ? 'White dashed lines: boundary candidates.' : 'Boundary lines hidden; the selected rule is unchanged.' }} Green pointer: selected scan. Outlined boxes span the compared scan pair. Move the cursor to preview a scan; release to load its full details. The ribbon follows the map's horizontal zoom and intensity treatment.",classes="radar-section-help")
             html.P("{{ transition_map_notice }}", classes="radar-section-help")
             with html.Div(classes="radar-transition-inspector-heading"):
                 html.H3("{{ transition_summary }}")
@@ -467,7 +473,7 @@ class TransitionTrackingMixin:
                         variant="outlined",
                         size="small",
                         disabled=("!transition_can_open || selected_run_loading",),
-                        click=self.open_transition_scan_async,
+                        click=self.request_open_transition_scan,
                     )
             html.P("{{ transition_condition_summary }}", v_if="transition_condition_summary", classes="radar-section-help")
             html.P("{{ transition_comparison_notice }}", v_if="transition_comparison_notice && transition_mode === 'observed'",
@@ -1117,6 +1123,10 @@ class TransitionTrackingMixin:
         state.transition_annotation_options = [
             {"title": "Run number only", "value": "none"}
         ] + [{"title": k.replace("_", " ").title(), "value": k} for k in all_conditions]
+        times = [_time(self._transition_scans[r["run_id"]]) for r in rows]
+        origin = min((t for t in times if t is not None), default=None)
+        if origin is not None:
+            state.transition_annotation_options += [{"title":"Elapsed acquisition time (min)", "value":"elapsed_time"}]
         if state.transition_annotation not in [
             o["value"] for o in state.transition_annotation_options
         ]:
@@ -1160,7 +1170,11 @@ class TransitionTrackingMixin:
             channel = conditions.get(state.transition_annotation, {})
             row_scan = self._transition_scans[r["run_id"]]
             label = str(row_scan.get("run_number") or r["run_id"][-22:])
-            if channel.get("status") == "recorded" and isinstance(
+            if state.transition_annotation == "elapsed_time":
+                start = _time(row_scan)
+                if start is not None and origin is not None:
+                    label += f" · {(start-origin)/60:.4g} min"
+            elif channel.get("status") == "recorded" and isinstance(
                 channel.get("value"), (float, int)
             ):
                 label += f" · {channel['value']:.4g} {channel.get('unit', '')}"
@@ -1412,7 +1426,7 @@ class TransitionTrackingMixin:
                     selected=state.transition_selected,
                     region=display_range,
                     grid_reference=display_first,
-                    boundaries=window,
+                    boundaries=window if state.transition_show_boundaries else (),
                     backgrounds=display_backgrounds,
                     palette=state.transition_palette,
                     ribbon=display_patterns[cursor] if display_patterns else None,
@@ -1518,7 +1532,7 @@ class TransitionTrackingMixin:
             for row in self._series_rows()
         ]
         return digest([self._transition_generation,evidence,ids,labels,limits,
-            state.transition_scale,state.transition_contrast,state.transition_background,
+            state.transition_scale,state.transition_contrast,state.transition_background,state.transition_show_boundaries,
             state.transition_map_coordinate,state.transition_coordinate_notice,state.transition_palette,
             state.transition_policy,state.transition_region_overlay,state.transition_region_signals,
             state.transition_region_reference,state.transition_show_split_features,
@@ -1629,17 +1643,24 @@ class TransitionTrackingMixin:
 
     def _render_boundary_map(self, rows, conditions):
         state = self.server.state
+        times = [_time(self._transition_scans[r["run_id"]]) for r in rows]
+        origin = min((t for t in times if t is not None), default=None)
         state.transition_diagram_axes = [{"title":"Run number","value":"run_number"}] + [
             {"title":key.replace("_"," ").title()+f" ({value.get('unit','')})", "value":key}
             for key,value in conditions.items() if isinstance(value.get("value"),(int,float))]
+        if origin is not None:
+            state.transition_diagram_axes += [{"title":"Elapsed acquisition time (min)", "value":"elapsed_time"}]
         if state.transition_diagram_axis not in [v["value"] for v in state.transition_diagram_axes]:
             state.transition_diagram_axis = "run_number"
         axis = state.transition_diagram_axis
         values = []
         settings = InterpretationSettings.model_validate(state.scan_interpretation)
-        for row in rows:
+        for row, start in zip(rows, times):
             scan = self._transition_scans[row["run_id"]]
-            value = scan.get("run_number") if axis == "run_number" else _conditions(scan,settings).get(axis,{})
+            if axis == "elapsed_time":
+                value = (start-origin)/60 if start is not None and origin is not None else None
+            else:
+                value = scan.get("run_number") if axis == "run_number" else _conditions(scan,settings).get(axis,{})
             if isinstance(value,dict):
                 value = value.get("value") if value.get("status") == "recorded" else None
             values.append(number(value))
@@ -1924,6 +1945,11 @@ class TransitionTrackingMixin:
             self.server.state.powgen_selected_run_id = self.server.state.transition_selected
             await self.open_powgen_selected_run_async()
 
+    def request_open_transition_scan(self, **_):
+        if self.server.state.transition_can_open:
+            self.server.state.powgen_selected_run_id = self.server.state.transition_selected
+            self.request_open_powgen_selected_run()
+
     def download_transition_report(self, **_):
         """Export the evidence index, without credential-bearing run objects."""
         payload = {
@@ -2050,9 +2076,9 @@ class TransitionTrackingMixin:
             v["value"] for v in self.server.state.transition_annotation_options
         ]:
             return
-        if field == "background" and not isinstance(value, bool):
+        if field in {"background", "show_boundaries"} and not isinstance(value, bool):
             return
-        if field not in {*options, "contrast", "region", "annotation", "background"}:
+        if field not in {*options, "contrast", "region", "annotation", "background", "show_boundaries"}:
             return
         setattr(self.server.state, "transition_" + field, value)
         self._render_transition_tracking()

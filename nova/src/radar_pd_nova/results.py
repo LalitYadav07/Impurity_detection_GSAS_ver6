@@ -996,6 +996,22 @@ def _finish_figure(
 def phase_fraction_rows(summary: dict[str, Any]) -> list[dict[str, Any]]:
     """Normalize phase fractions from full or rapid result summaries."""
 
+    # Older libraries can carry a catalog symmetry different from the CIF
+    # actually imported into GSAS-II. Prefer the final model's explicit SG,
+    # joining by candidate ID. Archived compact summaries lack IDs; only a
+    # unique formula-to-model match may repair their display labels.
+    model_ids: dict[str, list[dict[str, Any]]] = {}
+    model_names: dict[str, list[dict[str, Any]]] = {}
+    for model in summary.get("lattice_parameters") or []:
+        if not isinstance(model, dict) or not model.get("source_gpx") or not model.get("space_group"):
+            continue
+        identifier = str(model.get("phase_id") or "").strip()
+        if identifier:
+            model_ids.setdefault(identifier, []).append(model)
+        name, _ = _split_phase_label(str(model.get("phase") or ""))
+        if name:
+            model_names.setdefault(name, []).append(model)
+
     candidates: Iterable[Any] = []
     for key in ("phase_fractions", "weighted_fractions", "phases"):
         value = summary.get(key)
@@ -1025,6 +1041,15 @@ def phase_fraction_rows(summary: dict[str, Any]) -> list[dict[str, Any]]:
             phase_label = "Known main phase"
         phase, label_space_group = _split_phase_label(phase_label)
         space_group = _first_value(item, "space_group", "sg")
+        identifier = str(item.get("phase_id") or "").strip()
+        matches = model_ids.get(identifier, []) if identifier else model_names.get(phase, [])
+        if len(matches) == 1:
+            actual = _canonical_space_group(matches[0]["space_group"])
+            catalog = _canonical_space_group(space_group if space_group is not None else label_space_group)
+            def symbol(value):
+                return re.sub(r"[\s_]", "", re.sub(r"\s*\(\d{1,3}\)$", "", value))
+            if symbol(actual) != symbol(catalog):
+                space_group = actual
         weight = _first_value(
             item,
             "weight_percent",
@@ -1538,7 +1563,7 @@ def _experiment_axis(
             "linear",
         )
     # Use categorical strings so Plotly never abbreviates 63714 as 63.714k.
-    return ([str(scan.get("run_number") or "-") for scan in scans], "POWGEN scan", "category")
+    return ([str(scan.get("run_number") or "-") for scan in scans], "Scan number", "category")
 
 
 def _scan_condition_text(scan: dict[str, Any]) -> str:

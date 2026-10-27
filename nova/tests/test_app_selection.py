@@ -60,6 +60,17 @@ def test_live_results_keep_monitor_provenance_when_new_experiment_is_entered():
     assert not state.powgen_dashboard_scope_changed
 
 
+def test_nomad_source_and_wavelength_labels_follow_the_selected_reduction_family():
+    app=RadarPdNovaApp();state=app.server.state
+    state.live_beamline='NOM';app._live_beamline_changed()
+    state.powgen_ipts='21886';app._powgen_ipts_changed()
+    state.powgen_source_subfolder='shared/autoNOM_example/GSAS'
+    app._powgen_source_changed()
+    assert state.powgen_source_directory=='/SNS/NOM/IPTS-21886/shared/autoNOM_example/GSAS'
+    app._sync_powgen_dashboard_provenance()
+    assert state.powgen_dashboard_wavelength=='Broadband neutron TOF'
+
+
 def test_live_beamline_switch_clears_incompatible_inputs_and_results():
     app = RadarPdNovaApp()
     state = app.server.state
@@ -169,6 +180,28 @@ def test_powgen_sample_discovery_populates_dropdown_and_unknown_count(monkeypatc
     assert state.powgen_sample_discovery_ipts == "IPTS-35915"
     assert "1 scans have no readable sample ID" in state.powgen_sample_message
     assert state.powgen_sample_loading is False
+
+
+def test_ui_inventory_request_returns_before_discovery_and_keeps_uploads_available(monkeypatch):
+    app=RadarPdNovaApp();state=app.server.state;state.powgen_ipts='1'
+    entered,release=threading.Event(),threading.Event()
+    def discover(*args,**kwargs):
+        entered.set();assert release.wait(5)
+        return {'options':[],'scan_count':1,'unidentified_count':1}
+    monkeypatch.setattr('radar_pd_nova.app.discover_powgen_samples',discover)
+    async def check():
+        assert app.request_powgen_sample_refresh('1') is None
+        assert await asyncio.to_thread(entered.wait,2)
+        try:
+            assert state.powgen_sample_loading
+            assert app._powgen_sample_tasks
+            state.notice='Another UI action completed while discovery was running'
+            assert 'Another UI action' in state.notice
+        finally:
+            tasks=list(app._powgen_sample_tasks);release.set();await asyncio.gather(*tasks)
+        await asyncio.sleep(0)
+        assert not app._powgen_sample_tasks and not state.powgen_sample_loading
+    asyncio.run(check())
 
 
 def test_sample_discovery_progress_updates_ui_and_ignores_a_previous_experiment(monkeypatch):
