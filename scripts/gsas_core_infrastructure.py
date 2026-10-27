@@ -182,6 +182,9 @@ class GSASProjectManager:
                     logger.info("Rejected reader %s for %s: %s", fmt, data_file, reader_err)
                     continue
 
+                from gsas_signed_fxye import restore_snap_signed_observations
+                restore_snap_signed_observations(reader, read_data_file)
+
                 try:
                     histname, new_names, pwdrdata = G2sc.load_pwd_from_reader(
                         reader, instprm_file, existingnames=existing_names
