@@ -5,7 +5,7 @@
         <organization url="https://www.ornl.gov/" name="ORNL"/>
     </creator>
     <requirements>
-        <container type="docker" shell="/bin/bash">ghcr.io/lalityadav07/impurity_detection_gsas_ver6:nova-e697274e890228af2e056bd0f4ab19dc8a39acd2</container>
+        <container type="docker" shell="/bin/bash">ghcr.io/lalityadav07/impurity_detection_gsas_ver6:nova-dac049913cd33f3111615e2b72ddd3bbf3d419dd</container>
     </requirements>
     <entry_points>
         <entry_point name="RADAR-PD Interactive" label="app_entry" requires_domain="False" requires_path_in_url="True">
