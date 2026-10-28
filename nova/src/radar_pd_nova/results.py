@@ -1470,12 +1470,23 @@ def experiment_lattice_figure(scans: list[dict[str, Any]], *, parameter="a", x_k
     return figure
 
 
+def _display_metric_record(scan: dict[str, Any], key: str):
+    """Use explicitly reviewed display mappings, retaining raw metadata."""
+    override = (scan.get("axis_overrides") or {}).get(key)
+    if isinstance(override, dict) and override.get("reviewed_mapping") is True:
+        return override
+    return qualified_metadata(scan.get("metadata") or {}).get(key)
+
+
 def _metadata_metric(scan: dict[str, Any], key: str) -> float | None:
-    metadata = qualified_metadata(scan.get("metadata") or {})
-    value = metadata.get(key) if isinstance(metadata, dict) else None
+    value = _display_metric_record(scan, key)
     if not isinstance(value, dict):
         return None
-    return _as_float(value.get("value"))
+    number = _as_float(value.get("value"))
+    if key == "temperature" and number is not None:
+        if str(value.get("unit") or "").strip().lower() in {"c", "°c", "degc", "celsius"}:
+            number += 273.15
+    return number
 
 
 _EXPERIMENT_METRIC_TITLES = {
@@ -1488,9 +1499,11 @@ _EXPERIMENT_METRIC_TITLES = {
 
 def _experiment_metric_unit(scans: list[dict[str, Any]], key: str) -> str:
     units = {
-        str(metric.get("unit") or "").strip()
+        ("K" if key == "temperature" and str(metric.get("unit") or "").strip().lower()
+            in {"k", "kelvin", "c", "°c", "degc", "celsius"}
+            else str(metric.get("unit") or "").strip())
         for scan in scans
-        for metric in [(qualified_metadata(scan.get("metadata") or {}).get(key))]
+        for metric in [_display_metric_record(scan, key)]
         if isinstance(metric, dict) and _as_float(metric.get("value")) is not None
         and str(metric.get("unit") or "").strip()
     }
@@ -1557,8 +1570,19 @@ def _experiment_axis(
             "date",
         )
     if x_key in _EXPERIMENT_METRIC_TITLES:
+        values = [_metadata_metric(scan, x_key) for scan in scans]
+        unit = _experiment_metric_unit(scans, x_key)
+        # Missing units may be displayed explicitly for an entirely legacy
+        # unitless series, but must never masquerade as the qualified units
+        # of neighboring observations. Incompatible reported units cannot
+        # share one numeric axis either.
+        if unit == "mixed units":
+            values = [None] * len(scans)
+        elif unit:
+            values = [value if str((_display_metric_record(scan, x_key) or {}).get("unit") or "").strip()
+                else None for scan, value in zip(scans, values)]
         return (
-            [_metadata_metric(scan, x_key) for scan in scans],
+            values,
             _experiment_metric_title(scans, x_key),
             "linear",
         )
@@ -1576,7 +1600,7 @@ def _scan_condition_text(scan: dict[str, Any]) -> str:
         ("Field", "magnetic_field"),
         ("Wavelength", "wavelength"),
     ):
-        metric = metadata.get(key)
+        metric = _display_metric_record(scan, key)
         if not isinstance(metric, dict) or _as_float(metric.get("value")) is None:
             continue
         conditions.append(condition_display(metric, label))
@@ -1820,13 +1844,29 @@ def _fit_series_key(scan: dict[str, Any]) -> tuple[str, str, str]:
     metadata = scan.get("metadata") or {}
     if not isinstance(metadata, dict):
         metadata = {}
-    setup = metadata.get("snap_setup") or metadata.get("powgen_setup") or metadata.get("nomad_setup") or {}
+    setup = metadata.get("snap_setup") or metadata.get("powgen_setup") or metadata.get("nomad_setup") or metadata.get("hb2a_setup") or {}
     if not isinstance(setup, dict):
         setup = {}
     fields = ("cycle", "mode", "wavelength", "frequency", "guide", "calibration_files",
               "characterization_files", "grouping_files", "calibration", "source_family",
               "state_id", "use_lite_mode", "grouping", "product_variant", "normalization", "corrections")
     calibration = {key: setup[key] for key in fields if key in setup}
+    packet = scan.get("observables") or {}
+    context = (packet.get("context") or {}) if isinstance(packet, dict) else {}
+    if not isinstance(context, dict):
+        context = {}
+    calibration["final_model_context"] = {
+        key: context.get(key) for key in (
+            "profile_sha256", "profile_id", "recipe_key", "configuration_sha256", "reduction_key"
+        )
+    }
+    calibration["acquisition_context"] = {
+        "instrument": context.get("instrument") or scan.get("instrument"),
+        "ipts": context.get("ipts") or scan.get("ipts"),
+        "analysis_mode": scan.get("analysis_mode"),
+        "configuration_id": scan.get("configuration_id"),
+        "candidate_library_id": scan.get("candidate_library_id"),
+    }
     return (experiment_sample_identity(scan)["key"], str(scan.get("bank")),
             json.dumps(calibration, sort_keys=True, default=str))
 

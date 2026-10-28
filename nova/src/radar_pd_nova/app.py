@@ -4002,6 +4002,8 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
         state.powgen_rows = sorted(rows, key=lambda item: (item.get('experiment_number') or 0,item["run_number"]), reverse=True)
 
         scientific_rows: list[dict[str, Any]] = []
+        raw_post = getattr(state, "post_analysis", None) or {}
+        mapped_settings = PostAnalysisSettings.model_validate(raw_post) if raw_post.get("axis_mappings") else None
         for run_id, run in controller.state.completed.items():
             record = controller.records.get(run_id)
             summary = dict(run.scientific_summary or {})
@@ -4031,9 +4033,23 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
             rwp = summary.get("rwp")
             rwp_value = float(rwp) if rwp is not None else None
             metadata = qualified_metadata(run.scan_metadata or {})
+            axis_overrides = {}
+            if mapped_settings is not None:
+                from .post_analysis import _axis
+                source_scan = {"run_id": run_id, "run_number": run.run_number, "metadata": metadata}
+                for axis, mappings in mapped_settings.axis_mappings.items():
+                    key = str(metadata.get("sample_id") or "") if axis == "sample_state" else run_id
+                    mapped = mappings.get(key)
+                    if mapped is None or not mapped.verified:
+                        continue
+                    resolved = _axis(source_scan, axis, mapped_settings, None)
+                    if resolved is not None:
+                        axis_overrides[axis] = {**resolved, "source_unit": mapped.unit,
+                            "source": "Reviewed run mapping: " + mapped.source}
+            display_metadata = {**metadata, **axis_overrides}
 
             def metric_display(key: str, fallback_unit: str, *, digits: int = 3) -> str:
-                metric = metadata.get(key)
+                metric = display_metadata.get(key)
                 if not isinstance(metric, dict) or metric.get("value") is None:
                     return ""
                 value = float(metric["value"])
@@ -4043,7 +4059,7 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
             temperature_display = metric_display("temperature", "", digits=6)
             field_display = metric_display("magnetic_field", "", digits=4)
             wavelength_display = metric_display("wavelength", "", digits=5)
-            temperature_metric = metadata.get("temperature")
+            temperature_metric = display_metadata.get("temperature")
             temperature_provenance = ""
             if isinstance(temperature_metric, dict):
                 source = str(temperature_metric.get("source") or "").strip()
@@ -4094,6 +4110,7 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
                 "elapsed_display": elapsed_display,
                 "analysis_mode": str(summary.get("analysis_mode") or "-").title(),
                 "metadata": metadata,
+                "axis_overrides": axis_overrides,
                 "conditions_display": " | ".join(conditions) or "Metadata unavailable",
                 "temperature_display": temperature_display or "-",
                 "temperature_provenance": temperature_provenance,
@@ -4278,6 +4295,8 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
             if scientific_rows
             else "Completed scans will populate this experiment view as their normalized Galaxy summaries become available."
         )
+        if any(row.get("axis_overrides") for row in scientific_rows):
+            state.powgen_dashboard_notice += " Explicit reviewed run mappings take precedence in the displayed conditions and axes. Original acquisition metadata is retained."
         self._interpretation_all_watch_scans = all_scientific_rows
         self._update_powgen_dashboard_figures(scientific_rows)
 
@@ -4365,7 +4384,13 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
         self.server.state.powgen_x_axis = selected if selected in valid else "run_number"
         if hasattr(self, "_post_analysis_scans"):
             settings = self._post_settings()
-            settings.axis = self.server.state.powgen_x_axis
+            # Main charts also support wavelength and proton charge. Those
+            # do not yet have a registered post-analysis axis contract.
+            # Preserve the independent selection instead of serializing an
+            # invalid enum that breaks the next dashboard refresh/recovery.
+            from .post_analysis import AXES
+            if self.server.state.powgen_x_axis in AXES:
+                settings.axis = self.server.state.powgen_x_axis
             self.server.state.post_analysis = settings.model_dump(mode="json")
         self._update_powgen_dashboard_figures(list(self.server.state.powgen_scientific_rows or []))
         self.server.state.flush()

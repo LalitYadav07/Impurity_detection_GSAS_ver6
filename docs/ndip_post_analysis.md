@@ -111,6 +111,20 @@ voltage,NOM_123_BANK5,,4.10,V,reviewed acquisition-window mean,measured,true
 
 These are illustrative identifiers. Use exact scan IDs from the dashboard. `sample_state` keys use the sample ID; other mapped axes use the run ID. Allowed kinds are `measured`, `nominal_composition`, `preparation_history` and `user_supplied`. Review each value and set `verified=true`. Conflicting duplicate mappings reject the complete import. **Clear imported mappings** allows explicit replacement; metadata remains the fallback when a mapping is cleared.
 
+Reviewed run mappings also update the main experiment plots, displayed scan
+conditions, lattice-series download and Transition tracking coordinates. Import
+and clear actions refresh those views immediately. Their provenance explicitly
+identifies the reviewed mapping; original acquisition metadata, fitted cells,
+phase fractions and GPX files are retained. A reviewed display mapping does not
+become an independently recorded sensor measurement or change pattern-group
+assignments. Known Celsius/Kelvin values share a Kelvin axis in the main plots;
+unitless values cannot inherit a neighboring scan's units. Derived views can
+display Kelvin or Celsius, including physically consistent linked zoom ranges.
+
+The main chart also offers wavelength and proton charge. Selecting either keeps
+the independent derived-view axis unchanged, rather than saving an unsupported
+axis into the post-analysis configuration.
+
 Optional `branch` and `cycle` columns retain reviewed process labels, for example `charge` and `3`. They keep different cycles separate even when their voltage ranges overlap. Explicit acquisition metadata can also supply branch, cycle and process-stage labels. No physical cycle number is inferred solely from a voltage reversal.
 
 ## References, missing values and grouping

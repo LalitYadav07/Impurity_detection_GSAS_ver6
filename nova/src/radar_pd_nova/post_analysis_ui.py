@@ -19,7 +19,7 @@ from .post_analysis import (
     recipe_options,
     _phase_rows,
 )
-from .post_analysis_plot import view_figure, export_bundle
+from .post_analysis_plot import view_figure, export_bundle, display_x
 from .uploads import NamedFileUpload
 from .scan_interpretation_ui import ScanInterpretationMixin
 from .transition_tracking_ui import TransitionTrackingMixin
@@ -1088,7 +1088,7 @@ class PostAnalysisMixin(TransitionTrackingMixin, ScanInterpretationMixin):
                 view["reference_curve_reviewed"] = False
             self._set_post_settings(PostAnalysisSettings.model_validate(payload))
             state.post_analysis_error = ""
-            self._refresh_post_analysis()
+            self._refresh_reviewed_axis_views()
         except (ValueError, OSError) as exc:
             state.post_analysis_error = str(exc)
         state.flush()
@@ -1109,8 +1109,16 @@ class PostAnalysisMixin(TransitionTrackingMixin, ScanInterpretationMixin):
         for view in settings.views:
             view.reference_curve_reviewed = False
         self._set_post_settings(settings)
-        self._refresh_post_analysis()
+        self._refresh_reviewed_axis_views()
         self.server.state.flush()
+
+    def _refresh_reviewed_axis_views(self):
+        controller = getattr(self, "_powgen_controller", None)
+        if controller is not None and str(getattr(self, "_post_analysis_scope", "")).startswith("watch:"):
+            controller.state.post_analysis = self._post_settings().model_dump(mode="json")
+            self._sync_powgen_rows()
+        else:
+            self._refresh_post_analysis()
 
     def reset_post_analysis_reference(self, **_):
         settings = self._post_settings()
@@ -1180,13 +1188,10 @@ class PostAnalysisMixin(TransitionTrackingMixin, ScanInterpretationMixin):
                     status = "Hidden by branch filter · " + status
                 if point.get("scientific_status") == "needs_review":
                     status = "Review required · " + status
-                x = point.get("x")
-                if x is not None and view.get("axis") == "start_time":
-                    from datetime import datetime, timezone
-
-                    x = datetime.fromtimestamp(x, timezone.utc).isoformat()
-                else:
-                    x = value(x, point.get("axis_unit", ""))
+                x = display_x(view, point.get("x"))
+                unit = ("°C" if view.get("temperature_display_unit") == "C" else "K") if view.get("axis") == "temperature" else point.get("axis_unit", "")
+                if view.get("axis") != "start_time":
+                    x = value(x, unit)
                 rows.append(
                     {
                         "scan": point["run_id"],
@@ -1277,11 +1282,8 @@ class PostAnalysisMixin(TransitionTrackingMixin, ScanInterpretationMixin):
             )
             from .post_analysis import metric_unit
 
-            horizontal = point.get("x")
-            if horizontal is not None and view.get("axis") == "start_time":
-                from datetime import datetime, timezone
-
-                horizontal = datetime.fromtimestamp(horizontal, timezone.utc).isoformat()
+            horizontal = display_x(view, point.get("x"))
+            unit = ("°C" if view.get("temperature_display_unit") == "C" else "K") if view.get("axis") == "temperature" else point.get("axis_unit")
             variance = point.get("variance")
             details = [
                 ("Scan", run_id),
@@ -1304,7 +1306,7 @@ class PostAnalysisMixin(TransitionTrackingMixin, ScanInterpretationMixin):
                 ("Logged temperature (K)", point.get("logged_temperature_K")),
                 ("Inferred temperature (K)", point.get("inferred_temperature_K")),
                 ("Horizontal coordinate", horizontal),
-                ("Axis unit", point.get("axis_unit")),
+                ("Axis unit", unit),
                 ("Axis source", point.get("axis_source")),
                 ("Refinement state", point.get("state")),
                 ("Scientific status", point.get("scientific_status")),
@@ -1386,7 +1388,16 @@ class PostAnalysisMixin(TransitionTrackingMixin, ScanInterpretationMixin):
                         if other["id"] != view_id and signature(
                             results.get(other["id"], {})
                         ) == signature(source):
-                            other[field] = value
+                            linked = value
+                            target = results.get(other["id"], {})
+                            if value is not None and source.get("axis") == "temperature":
+                                source_offset = 273.15 if source.get("temperature_display_unit") == "C" else 0.
+                                target_offset = 273.15 if target.get("temperature_display_unit") == "C" else 0.
+                                try:
+                                    linked = [float(x) + source_offset - target_offset for x in value]
+                                except (TypeError, ValueError):
+                                    continue
+                            other[field] = linked
         if changed:
             try:
                 self._set_post_settings(PostAnalysisSettings.model_validate(payload))

@@ -19,7 +19,7 @@ from trame.widgets import vuetify3 as vuetify
 from .post_analysis import number
 from .results import discover_plot_payloads, read_plot_payload, figure_for_payload, read_json
 from .scan_conditions import condition_display
-from .scan_interpretation import InterpretationSettings, _conditions, condition_scope, _time
+from .scan_interpretation import InterpretationSettings, _conditions as _recorded_conditions, condition_scope, _time
 from .scan_interpretation_ui import phase_labels, scan_label
 from .transition_input import digest
 from .transition_tracking import TransitionTrackingEngine, acquisition_key, checkpoint
@@ -38,6 +38,18 @@ from .transition_tracking_plot import (
     profile_figure,
     boundary_figure,
 )
+
+
+def _conditions(scan, settings=None):
+    """Display reviewed run mappings without changing recorded inference inputs."""
+    result = _recorded_conditions(scan, settings)
+    for quantity, mapped in (scan.get("axis_overrides") or {}).items():
+        if (quantity in {"temperature", "magnetic_field", "voltage", "pressure", "gas_flow"}
+                and isinstance(mapped, dict) and mapped.get("reviewed_mapping") is True
+                and number(mapped.get("value")) is not None and mapped.get("unit") and mapped.get("source")):
+            result[quantity] = {**mapped, "quantity": quantity, "status": "reviewed_mapping",
+                "role": mapped.get("kind", "user_supplied")}
+    return result
 
 EVENTS = {
     "initial": "Initial pattern",
@@ -1118,7 +1130,7 @@ class TransitionTrackingMixin:
             for k, v in _conditions(
                 self._transition_scans[r["run_id"]], settings
             ).items():
-                if v.get("status") == "recorded":
+                if v.get("status") in {"recorded", "reviewed_mapping"}:
                     all_conditions[k] = v
         state.transition_annotation_options = [
             {"title": "Run number only", "value": "none"}
@@ -1174,7 +1186,7 @@ class TransitionTrackingMixin:
                 start = _time(row_scan)
                 if start is not None and origin is not None:
                     label += f" · {(start-origin)/60:.4g} min"
-            elif channel.get("status") == "recorded" and isinstance(
+            elif channel.get("status") in {"recorded", "reviewed_mapping"} and isinstance(
                 channel.get("value"), (float, int)
             ):
                 label += f" · {channel['value']:.4g} {channel.get('unit', '')}"
@@ -1664,7 +1676,7 @@ class TransitionTrackingMixin:
             else:
                 value = scan.get("run_number") if axis == "run_number" else _conditions(scan,settings).get(axis,{})
             if isinstance(value,dict):
-                value = value.get("value") if value.get("status") == "recorded" else None
+                value = value.get("value") if value.get("status") in {"recorded", "reviewed_mapping"} else None
             values.append(number(value))
         title = next(v["title"] for v in state.transition_diagram_axes if v["value"]==axis)
         state.transition_boundary_map = plotly.Figure.to_data(boundary_figure(rows,values,title))
@@ -1853,6 +1865,9 @@ class TransitionTrackingMixin:
             for k, v in conditions.items()
         ]
         state.transition_condition_summary = condition_display(conditions.get("temperature"), "Sample temperature during this acquisition")
+        temperature = conditions.get("temperature") or {}
+        if temperature.get("status") == "reviewed_mapping":
+            state.transition_condition_summary += " · " + str(temperature.get("source") or "Reviewed run mapping")
         controller = getattr(self, "_powgen_controller", None)
         state.transition_can_open = bool(
             controller is not None
