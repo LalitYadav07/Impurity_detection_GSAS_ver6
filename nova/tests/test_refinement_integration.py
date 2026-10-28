@@ -141,3 +141,137 @@ def test_local_runtime_captures_immutable_original_and_holds_changed_input(tmp_p
     with pytest.raises(ValueError,match='changed'):rt.resolve(s)
     view=tmp_path/'view.json';view.write_text('{}');result={'files':{'view.json':file_sha(view)}};verify_result_files(tmp_path,result);view.write_text('{"tampered":true}')
     with pytest.raises(ValueError,match='changed'):verify_result_files(tmp_path,result)
+
+
+def test_late_watch_metadata_enriches_same_source_identity_without_second_enrollment(tmp_path):
+    pub=tmp_path/'gpx/final.gpx';pub.parent.mkdir();pub.write_bytes(b'published')
+    p=dict(collection_path='gpx/final.gpx',collection_name='final.gpx',sha256='original',status='accepted',stage='main_phase_anchor')
+    record=SimpleNamespace(uid='job',name='run',local_output_dir=tmp_path,output_dataset_ids={},inputs=SimpleNamespace(instrument='PG3',ipts='IPTS-3',run_number=123,bank=2))
+    first=source_from_record(record,dict(summary={'gpx_projects':[p]}),None,'history')
+    later=source_from_record(record,dict(summary={'gpx_projects':[p]}),dict(run_id='PG3_123_BANK2',metadata={'sample_id':'007','sample_name':'Oxide'}),'history')
+    assert first['id']==later['id'] and first['scan_key']==later['scan_key']
+    w,rt=create(tmp_path/'workspace');w.observe([first]);stamp=w.state['sources'][first['id']]['observed_utc'];w.observe([later])
+    restored=RefinementWorkspace(w.root,history_id='history',runtime=rt)
+    assert len(restored.state['sources'])==1
+    assert restored.state['sources'][first['id']]['sample_key']=='id:007'
+    assert restored.state['sources'][first['id']]['observed_utc']==stamp
+
+
+def test_approval_holds_representative_changed_after_preflight(tmp_path):
+    w,rt=create(tmp_path);w.observe([source('1')]);d=w.prepare('exp','1','background')
+    w.observe([source('1',checksum='changed')]);s=RefinementScope('exp');_,token=w.selection(s)
+    with pytest.raises(ValueError,match='representative GPX changed'):w.approve('exp',d['generation'],s,existing=True,future=False,selection_token=token,approver='test')
+    assert not w.state['recipes']
+
+
+def test_future_arrivals_out_of_order_and_repeat_restoration_do_not_repeat_work(tmp_path):
+    w,rt=create(tmp_path);w.observe([source('10')]);r=approved(w,RefinementScope('exp'),future=True);w.start(r['id'],r['selection_token'])
+    w.observe([source('13'),source('11'),source('12')])
+    while w.run_next():pass
+    restored=RefinementWorkspace(w.root,history_id='history',runtime=rt)
+    restored.observe([source('12'),source('13'),source('11')]);assert restored.run_next() is None
+    assert len(restored.state['jobs'])==4 and all(j['attempts']==1 for j in restored.state['jobs'].values())
+    assert len([c for c in rt.calls if c[0]=='preview'])==1
+
+
+def test_a_recipe_revision_disarms_older_future_enrollment_but_keeps_old_outputs(tmp_path):
+    w,rt=create(tmp_path);w.observe([source('1')]);r=approved(w,RefinementScope('exp'),future=True);w.start(r['id'],r['selection_token']);w.run_next()
+    w.prepare('exp','1','revised background');w.observe([source('2')])
+    assert not w.state['recipes'][r['id']]['armed']
+    assert len(w.state['jobs'])==1 and next(iter(w.state['jobs'].values()))['status']=='completed'
+
+
+def test_queued_copy_cannot_change_when_current_catalog_revision_changes(tmp_path):
+    w,rt=create(tmp_path);w.observe([source('1')]);r=approved(w,RefinementScope('exp'));jobs=w.start(r['id'],r['selection_token'])
+    w.observe([source('1',checksum='replacement')]);w.run_next()
+    assert rt.calls[-1][1]=='1'
+    assert w.state['jobs'][jobs[0]['id']]['source']['source_sha256']=='1hash'
+    assert w.state['sources']['1']['source_sha256']=='replacement'
+
+
+def test_remote_job_recovers_existing_dispatch_instead_of_creating_new_attempt_identity(tmp_path):
+    w,rt=create(tmp_path);w.observe([source('1')]);r=approved(w,RefinementScope('exp'));job=w.start(r['id'],r['selection_token'])[0]
+    w.state['jobs'][job['id']].update(status='running',attempts=1,remote_action={'uid':'existing-Galaxy-job'});w.save()
+    restored=RefinementWorkspace(w.root,history_id='history',runtime=rt);assert restored.state['jobs'][job['id']]['status']=='recovering'
+    restored.run_next();assert rt.calls[-1][2]['resume']=={'uid':'existing-Galaxy-job'}
+    assert rt.calls[-1][2]['dispatch_key']==job['id']
+
+
+def test_result_archive_cannot_reference_files_outside_its_workspace(tmp_path):
+    secret=tmp_path/'outside.json';secret.write_text('{}');directory=tmp_path/'job';directory.mkdir()
+    with pytest.raises(ValueError,match='changed or is missing'):verify_result_files(directory,{'files':{'../outside.json':file_sha(secret)}})
+
+
+def test_partial_native_failure_exposes_only_completed_checkpoint_never_final(tmp_path,monkeypatch):
+    from gpx_recipe import worker,compiler
+    source=tmp_path/'source.gpx';source.write_bytes(b'original')
+    directory=tmp_path/'worker'
+    def compile_partial(plan,approval,target):
+        code="""from pathlib import Path
+import json
+p=Path(__file__).resolve().parent if '__file__' in globals() else Path(__import__('sys').argv[0]).parent
+(p/'polished.gpx').write_bytes(b'partial failed stage')
+(p/'polished_first.gpx').write_bytes(b'completed stage')
+(p/'polished.execution.json').write_text(json.dumps({'stages':[{'id':'first','title':'Completed','status':'completed'},{'id':'second','title':'Failed','status':'failed'}]}))
+raise ValueError('Scientific bound stop')
+"""
+        target.write_text(code);return code
+    def export(source,target):target.write_text('{}');return {}
+    monkeypatch.setattr(compiler,'compile_script',compile_partial);monkeypatch.setattr(worker,'write_project_view',export)
+    result=worker.work('run',source,directory,plan={'stages':[]},approval={})
+    assert result['status']=='needs_review'
+    assert [s['id'] for s in result['stages']]==['first']
+    assert not result.get('final_gpx') and not (directory/'verified_final.gpx').exists()
+    assert (directory/'verified_first.gpx').read_bytes()==b'completed stage'
+    assert not any('stopped' in name for name in result['files'])
+    assert source.read_bytes()==b'original'
+
+
+def test_integrated_ui_has_one_workspace_and_reuses_existing_scientific_tabs():
+    from radar_pd_nova.app import RadarPdNovaApp
+    app=RadarPdNovaApp();template=app.layout.html
+    assert template.count('<section class="rf-workspace"')==1
+    assert 'Transition tracking' in template and 'Refinement' in template
+    assert "'rf-scan ' +" in template and ':class=""rf-scan' not in template
+    assert 'AZURE_ILLUMINE_API_KEY' not in template and 'REFINEMENT_KEY_FILE' not in template
+    assert app.server.state.rf_future is False
+
+
+def test_remote_published_metadata_can_list_a_source_without_downloading_its_full_archive(tmp_path):
+    checksum='a'*64
+    record=SimpleNamespace(uid='Galaxy-job',name='Run 12',local_output_dir=None,output_dataset_ids={'gpx_projects':'collection'},inputs=SimpleNamespace(instrument='PG3',ipts='IPTS-1',run_number=12,bank=2))
+    payload=dict(gpx_index={'projects':[dict(stage='main_phase_anchor',status='accepted',sha256='b'*64,published_sha256=checksum,collection_path='gpx/final.gpx',collection_name='final.gpx')]})
+    s=source_from_record(record,payload,None,'history',root_override=tmp_path)
+    assert s['source_path'] is None and s['source_sha256']==checksum and s['collection_id']=='collection'
+    assert not list(tmp_path.iterdir())
+
+
+def test_galaxy_claim_is_backed_up_before_any_native_submission(tmp_path):
+    w,rt=create(tmp_path);w.observe([source('1')]);r=approved(w,RefinementScope('exp'));w.start(r['id'],r['selection_token']);rt.kind='galaxy'
+    snapshots=[]
+    rt.save_workspace=lambda state:snapshots.append(state)
+    original=rt.call
+    def call(action,source,directory,**kwargs):
+        assert snapshots and next(iter(snapshots[-1]['jobs'].values()))['status']=='running'
+        kwargs['on_submitted']({'uid':'acknowledged-job'})
+        assert next(iter(snapshots[-1]['jobs'].values()))['remote_action']=={'uid':'acknowledged-job'}
+        return original(action,source,directory,**kwargs)
+    rt.call=call
+    assert w.run_next()['status']=='completed'
+    assert len(snapshots)==2
+
+
+def test_failed_galaxy_recovery_backup_prevents_submission(tmp_path):
+    w,rt=create(tmp_path);w.observe([source('1')]);r=approved(w,RefinementScope('exp'));w.start(r['id'],r['selection_token']);rt.kind='galaxy'
+    def fail(state):raise RuntimeError('History backup unavailable')
+    rt.save_workspace=fail
+    assert w.run_next()['status']=='failed'
+    assert not [c for c in rt.calls if c[0]=='run']
+
+
+def test_saved_recipe_can_be_preflighted_for_another_compatible_source_without_model_call(tmp_path):
+    w,rt=create(tmp_path);w.observe([source('1'),source('2')]);r=approved(w,RefinementScope('exp'))
+    w._planner=lambda *a,**k:pytest.fail('Reusing a saved recipe must not call a model')
+    d=w.prepare('exp','2',r['plan']['request'],reuse_recipe=r['id'])
+    assert d['status']=='ready' and d['planning_calls']==0 and d['source_id']=='2'
+    assert rt.calls[-1][0]=='preview'

@@ -524,6 +524,13 @@ def test_published_gpx_uses_unique_scientific_phase_names(tmp_path: Path) -> Non
 
     published = next((portal / "gpx").glob("*.gpx"))
     published_records = _read_gpx_records(published)
+    import hashlib
+    index = json.loads((portal / "gpx_index.json").read_text())
+    entry = next(p for p in index["projects"] if p["collection_name"] == published.name)
+    assert entry["sha256"] == hashlib.sha256(source.read_bytes()).hexdigest()
+    assert entry["published_sha256"] == hashlib.sha256(published.read_bytes()).hexdigest()
+    assert entry["published_size_bytes"] == published.stat().st_size
+    assert entry["sha256"] != entry["published_sha256"]
     phase_record = next(record for record in published_records if record[0][0] == "Phases")
     names = [item[0] for item in phase_record[1:]]
     assert names == ["AlFe2V (SG Fm-3m, 225)", "AlFe2V (SG Fm-3m, 225) [2]"]

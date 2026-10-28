@@ -20,6 +20,9 @@
           "name": {"type": "string"},
           "path": {"type": "string"},
           "collection_path": {"type": "string"},
+          "collection_name": {"type": "string"},
+          "published_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "published_size_bytes": {"type": "integer", "minimum": 0},
           "source_path": {"type": "string"},
           "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
         }

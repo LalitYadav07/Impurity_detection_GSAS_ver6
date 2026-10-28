@@ -522,7 +522,7 @@ def test_selecting_active_run_keeps_run_monitor_visible() -> None:
     assert state.selected_run_progress == 42
     assert state.workspace_view == "monitor"
     assert state.setup_collapsed is True
-    assert [item["value"] for item in state.workspace_options] == ["monitor", "results", "plots", "files"]
+    assert [item["value"] for item in state.workspace_options] == ["monitor", "results", "plots", "files", "refinement"]
     assert opened == []
 
 

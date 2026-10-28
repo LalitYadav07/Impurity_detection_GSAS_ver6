@@ -14,6 +14,16 @@ from .snapshot import snapshot
 from .artifacts import write_project_view
 
 
+def trend_view(view):
+    """Small persistent trend data; raw curves remain in the artifact bundle."""
+    histograms=[]
+    for h in view['histograms']:
+        domain={key:h[key] for key in ['x','fitted','limits','exclusions']}
+        checksum=hashlib.sha256(json.dumps(domain,sort_keys=True,allow_nan=False).encode()).hexdigest()
+        histograms.append(dict(key=h.get('key'),name=h['name'],rwp=h.get('rwp'),fit_domain_sha256=checksum))
+    return dict(histograms=histograms,parameters=view.get('parameters',[]))
+
+
 def work(action, source, directory, *, plan=None, approval=None, expected_source_sha256=None):
     directory=Path(directory).resolve(); directory.mkdir(parents=True,exist_ok=True)
     source=Path(source).resolve(); before=hashlib.sha256(source.read_bytes()).hexdigest()
@@ -59,6 +69,7 @@ def work(action, source, directory, *, plan=None, approval=None, expected_source
             response.update(status='completed',execution='polished.execution.json',baseline_view='baseline.view.json',
                 final_view='final.view.json',final_gpx='verified_final.gpx',stages=stages,
                 output_sha256=hashlib.sha256((directory/'verified_final.gpx').read_bytes()).hexdigest())
+            response['trend_views']=dict(baseline=trend_view(json.loads((directory/'baseline.view.json').read_text())),final=trend_view(final_view))
         else:raise ValueError('Unknown refinement worker action')
     except Exception as exc:
         response.update(status='needs_review' if isinstance(exc,ValueError) and action=='run' else 'failed',
@@ -87,6 +98,9 @@ def work(action, source, directory, *, plan=None, approval=None, expected_source
         except Exception:pass
     if hashlib.sha256(source.read_bytes()).hexdigest()!=before:
         response.update(status='failed',error='The original RADAR-PD GPX changed during processing')
+        for path in directory.glob('verified_*.gpx'):path.replace(path.with_name('untrusted_'+path.name))
+        response['stages']=[]
+        for key in ['final_gpx','final_view','output_sha256','baseline_view','trend_views']:response.pop(key,None)
     response['files']={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in directory.iterdir()
         if p.is_file() and (p.suffix in {'.json','.py'} or p.name.startswith('verified_')) and p.name!='response.json'}
     write_json(directory/'response.json',response)

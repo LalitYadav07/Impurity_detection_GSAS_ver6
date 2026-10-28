@@ -1,9 +1,118 @@
-# GPX refinement planner prototype
+# Reviewed GPX refinement in NOVA
 
-This branch provides a separate, optional continuation of trusted RADAR-PD
-powder GPX projects. It has not been deployed to NDIP or wired into the NOVA
-Live page. The local interface is a review/test harness, not a replacement for
-the existing RADAR-PD interface.
+The local integration branch adds **Refinement** beside **Results** and
+**Transition tracking** in the NOVA experiment workspace, and exposes the same
+workspace from an individual run. Original RADAR-PD results remain the baseline.
+This implementation has not been pushed or deployed to NDIP. The older standalone
+planner remains a development harness.
+
+The integration is based on NOVA 0.4.24 (`616917b`). The recipe engine is independent
+of Diffraction Studio at runtime. Illumine Luna with reasoning `none` is the
+selected provider for this integration, including a future initial deployment.
+OSS 120B remains an explicitly configured alternative; no fallback is automatic.
+
+## User workflow
+
+1. Open Refinement and select an experiment. Published GPXs from recovered results
+   and current scans share the same source catalog. Only small result metadata is
+   needed to list remote projects; full result archives are not downloaded merely
+   to fill the choices when direct summary/index outputs are available.
+2. Choose all run results, specific samples, or specific scans; optionally restrict
+   banks. Existing scans and future matching results are separate choices. Future
+   enrollment runs while this NOVA session is active; submitted Galaxy jobs are
+   independent of the browser.
+3. Choose a representative GPX. **Inspect starting model** shows actual phase/atom
+   labels, ADP types and positional freedoms without a model request. Describe the
+   complete staged recipe, then generate or revise it.
+4. Review named free parameters, parameters held since the previous stage,
+   explicit edits, assumptions and questions. Native preflight checks the actual
+   GSAS-II parameter releases before approval is offered.
+5. Approval captures the exact selected GPX revisions. Legacy projects without a
+   published checksum are materialized only for the selected scope. If arrivals or
+   known project revisions change during capture, review the updated scope and
+   approve again; no new model call is needed.
+   Saved recipes can also be loaded and natively preflighted on a compatible
+   representative GPX without a model request, then approved for a new scope.
+6. Start the queue. Existing results are frozen at approval. Future matches reuse
+   the approved plan without a per-scan model call. A different phase, atom,
+   constraint, background or calibration model stops for recipe review.
+7. Results provides a scan queue and **Fit / Trends / Parameters** views. Compare
+   original and polished fits or individual stages, including observed points,
+   residuals and per-phase Bragg ticks. Coordinate conversion uses the GPX's
+   actual GSAS-II calibration. Trends separate samples, banks and recipes and use
+   eligible measured metadata axes; they never substitute a GPX default temperature.
+   Cell lengths/volume support relative change, and atomic fractional-coordinate
+   differences wrap across the unit cell. Download verified GPXs, the compiled
+   script and receipts. Galaxy results can open the exact final GPX in the hosted
+   GSAS-II tool.
+
+Editing a request or scope stops older future enrollment and invalidates the
+displayed approval. Queued jobs retain their original approved recipe and source.
+Pause holds queued work and disarms enrollment; an active scientific job finishes.
+Resume only resumes queued work. Start is required to rearm an approved future
+policy. Interrupted local jobs require explicit retry; acknowledged Galaxy jobs
+are recovered by job ID rather than resubmitted.
+
+## Integration components and provenance
+
+- `radar_pd_nova/refinement_sources.py` maps the model hash in the scientific
+  result to one exact published index entry and Galaxy collection element. The
+  published GPX can differ from the internal file because publication adds phase
+  names and acquisition metadata. New indexes retain the internal `sha256` and
+  add `published_sha256` and `published_size_bytes`; old indexes remain supported.
+  Source identity stays stable when watch metadata arrives after the archive.
+- `refinement_workspace.py` stores recipe revisions, immutable backlog snapshots,
+  scope approvals, future enrollment and job receipts. Job identity combines
+  experiment, physical acquisition/bank, actual GPX hash and plan hash. Distinct
+  acquisitions are not collapsed because their bytes happen to match.
+- `refinement_runtime.py` selects an isolated local scientific executable or
+  Galaxy utility transport. Galaxy recovery checkpoints are serialized and the
+  claimed dispatch is backed up before submission. An acknowledged dispatch is
+  reused, and an ambiguous submission is held instead of blindly retried.
+  Compressed recovery datasets bypass Galaxy's 1 MB text-preview limit; decoded
+  workspaces have a 128 MB recovery bound. Compact parameter/Rwp trend summaries
+  survive recovery without fetching every raw-curve/GPX archive. Histogram
+  matching uses stable model keys rather than scan-specific filenames.
+- `gpx_recipe/worker.py` executes the deterministic compiled wrapper, verifies
+  original-file preservation and emits checksum-bound plot data and completed
+  stage projects. A scientific stop can expose verified earlier stages; a stopped
+  partial GPX is never published as a final result.
+- `gpx_recipe/artifacts.py` extracts native fit arrays, calibration, Bragg positions,
+  cell/atom values and conditional uncertainties from disposable copies. Values
+  held after refinement retain their last refined stage. Symmetry-fixed atomic
+  coordinates are distinguished from actual fitted variables. Crystalline weight
+  fractions use native derived GSAS-II records, never raw HAP percentages; GSAS-II
+  may omit the redundant fraction for a single modeled phase.
+- `refinement_controller.py`, `refinement_ui.py` and `refinement_plots.py` integrate
+  the workspace without importing or loading GSAS-II inside NOVA.
+
+One active coordinator per history is the supported deployment arrangement.
+Concurrent independent NOVA pods are not a distributed exactly-once queue. Galaxy
+job/catalog recovery, secret mounting, outbound Luna access and actual NDIP
+interactive lifecycles still need an NDIP smoke test before a release is claimed.
+
+## Runtime configuration and later deployment
+
+`RADAR_GPX_PLANNER_PROVIDER=illumine-luna` selects Luna. Supply the key only in the
+backend environment as `AZURE_ILLUMINE_API_KEY`, or through an owner-only file
+referenced by `RADAR_PD_REFINEMENT_KEY_FILE`. No key enters browser state, recipes,
+scripts, GPXs, Galaxy tool inputs or images. Native scientific workers strip model
+credentials from their environment.
+
+`RADAR_PD_REFINEMENT_ROOT` selects the receipt/cache directory; each Galaxy history
+has a separate workspace. `RADAR_PD_REFINEMENT_PYTHON` selects the local GSAS-II
+Python executable or the Docker shim for laptop validation. When this is absent,
+a configured Galaxy session uses `neutrons_radar_pd_refine_recipe_prototype`.
+The utility XML template is `galaxy/radar_pd_refine_recipe.xml.in`; it runs
+`scripts/ndip_refinement.py` in the batch image and publishes the result ZIP and
+verified GPX collection. It needs a successful immutable batch image pin and local
+Galaxy-tool registration preparation before deployment. The template's image
+placeholder is deliberate and is not a deployable image reference.
+
+Both NOVA and batch images must contain the same recipe engine. The NOVA wheel
+packages `radar_pd_nova` and `gpx_recipe`; the batch source bridge imports that same
+implementation. The NDIP image workflow already watches `nova/src/gpx_recipe/**`.
+No deployment repository, image pin or branch push is performed by local tests.
 
 ## Components
 
@@ -19,8 +128,8 @@ the existing RADAR-PD interface.
   constraint rules, examples, and explicit version-one limitations.
 - `planner.py` / `providers.py`: one planning request plus at most one
   JSON/contract repair. Development explicitly selects Illumine `gpt-6-luna`
-  with reasoning `none`; the default NDIP target remains SambaNova
-  `gpt-oss-120b`. Network/provider errors never trigger model substitution or
+  with reasoning `none`; SambaNova `gpt-oss-120b` is an alternative selected by
+  configuration. Network/provider errors never trigger model substitution or
   execution. Revisions include the previous plan. Per-atom capability summaries
   expose symmetry-fixed positions and supported ADP flags before the full context.
 - `contracts.py` / `schema.py`: validated complete active sets, resolved phase/atom

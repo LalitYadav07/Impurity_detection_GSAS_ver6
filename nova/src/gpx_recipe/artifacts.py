@@ -30,6 +30,7 @@ def project_view(path):
         G = gsas(); project = G.G2Project(gpxfile=str(local)); project.index_ids()
         native=extract_gsasii_refinement_state(local,project,G,max_correlations=0)
         parameters=native["parameter_space"]["parameters"]
+        histogram_keys={h['name']:h['key'] for h in context['histograms']}
         histograms = []
         for h in project.histograms():
             data = h.data['data'][1]
@@ -54,8 +55,8 @@ def project_view(path):
                 keep=np.isfinite(refs[:,4])&(refs[:,4]>0)&np.isfinite(refs[:,5])
                 ticks.append(dict(phase=name,d=refs[keep,4].tolist(),native=refs[keep,5].tolist()))
             instrument_type = str(h.InstrumentParameters.get('Type', [''])[0])
-            histograms.append(dict(name=h.name, coordinate='tof' if 'T' in instrument_type else 'two_theta',
-                x=x.tolist(), d=[float(v) if np.isfinite(v) and v > 0 else None for v in d],
+            histograms.append(dict(key=histogram_keys[h.name],name=h.name, coordinate='tof' if 'T' in instrument_type else 'two_theta',
+                x=_finite_array(data[0]), d=[float(v) if np.isfinite(v) and v > 0 else None for v in d],
                 observed=_finite_array(data[1]), calculated=_finite_array(data[3]),
                 background=_finite_array(data[4]) if len(data) > 4 else [],
                 valid=valid.tolist(), fitted=fitted.tolist(), limits=[lo, hi], exclusions=exclusions,
@@ -81,8 +82,12 @@ def project_view(path):
                     family={'x':'Ax','y':'Ay','z':'Az','occupancy':'Afrac','Uiso':'AUiso'}[name]
                     native_row=next((r for r in parameters if r.get('phase_id')==int(p.id) and r.get('atom_id')==atom_index and r.get('family')==family),{})
                     flag={'x':'X','y':'X','z':'X','occupancy':'F','Uiso':'U'}[name]
-                    sigma=native_row.get('sigma') if flag in a.refinement_flags else None
-                    metrics.append(dict(key='atom|'+p.name+'|'+a.label+'|'+name,phase=p.name,atom=a.label,kind='atom',parameter=name,label=p.name+' · '+a.label+' '+name,unit='Å²' if name=='Uiso' else '',value=value,sigma=float(sigma) if sigma is not None and np.isfinite(sigma) else None,status='refined' if flag in a.refinement_flags else 'fixed'))
+                    released=flag in a.refinement_flags
+                    native_status=native_row.get('status','fixed')
+                    fitted=native_status in {'refined_independent','refined_dependent'} or (native_status=='derived' and native_row.get('sigma') is not None)
+                    sigma=native_row.get('sigma') if released and fitted else None
+                    status='fixed' if not released else 'refined' if fitted else 'configured' if native_status.startswith('configured') else 'fixed_by_model'
+                    metrics.append(dict(key='atom|'+p.name+'|'+a.label+'|'+name,phase=p.name,atom=a.label,kind='atom',parameter=name,label=p.name+' · '+a.label+' '+name,unit='Å²' if name=='Uiso' else '',value=value,sigma=float(sigma) if sigma is not None and np.isfinite(sigma) else None,status=status,native_status=native_status))
             phases.append(dict(key=record['key'], name=p.name, space_group=record['space_group'],
                 cell=[float(x) for x in p.data['General']['Cell'][1:]], hap_scales=hap,
                 atoms=[dict(label=a.label, element=a.element, coordinates=list(map(float,a.coordinates)),
@@ -96,7 +101,7 @@ def project_view(path):
             if total>0 and all(float(r['current_value'])>=0 for r in rows):
                 for row in rows:
                     p=next((p for p in project.phases() if int(p.id)==row.get('phase_id')),None)
-                    if p:metrics.append(dict(key='weight|'+p.name+'|'+hist.name,phase=p.name,kind='weight',parameter='weight_percent',histogram=hist.name,label=p.name+' · modeled crystalline weight',unit='%',value=100*float(row['current_value'])/total,sigma=None,status='derived'))
+                    if p:metrics.append(dict(key='weight|'+p.name+'|'+histogram_keys[hist.name],phase=p.name,kind='weight',parameter='weight_percent',histogram=hist.name,histogram_key=histogram_keys[hist.name],label=p.name+' · modeled crystalline weight',unit='%',value=100*float(row['current_value'])/total,sigma=None,status='derived'))
         result = dict(schema='radar-polish-view/v1', source_sha256=before, histograms=histograms, phases=phases,parameters=metrics)
     if hashlib.sha256(path.read_bytes()).hexdigest() != before:
         raise ValueError('Plot extraction changed the original project')

@@ -74,25 +74,45 @@ def _group(job):
     source=job['source'];return (source['sample_key'],str(source.get('bank','')),job['recipe_id'])
 
 
+def same_fit_domain(a,b):
+    if a.get('fit_domain_sha256') and b.get('fit_domain_sha256'):return a['fit_domain_sha256']==b['fit_domain_sha256']
+    return all(a.get(k)==b.get(k) for k in ['fitted','limits','exclusions'])
+
+
+def histogram_map(view):
+    return {h.get('key') or f'h{i}':h for i,h in enumerate(sorted(view['histograms'],key=lambda h:h['name']))}
+
+
 def trend_figure(rows,*,metric='rwp',x_key='run_number',display='absolute'):
     """Rows contain source metadata and native baseline/final views, never guessed conditions."""
     if not rows:return empty_figure('Completed refinements will populate this trend')
-    figure=go.Figure();groups={}
+    figure=go.Figure();groups={};changed_domain=False
     for row in sorted(rows,key=lambda r:(r['source'].get('run_number') or 0,r['id'])):groups.setdefault(_group(row),[]).append(row)
-    title='Rwp (%)' if metric=='rwp' else ''
+    title='Rwp (%)' if metric=='rwp' else 'Modeled crystalline weight (%)' if metric=='phase_fractions' else ''
     for index,group in enumerate(groups.values()):
         scans=[dict(run_number=j['source'].get('run_number'),metadata=j['source'].get('metadata') or {}) for j in group]
         x,x_title,x_type=_experiment_axis(scans,x_key)
         label=group[0]['source']['sample_label']+(f" · bank {group[0]['source']['bank']}" if group[0]['source'].get('bank') else '')
+        if group[0].get('recipe_label'):label+=' · '+group[0]['recipe_label']
         color=COLORS[index%len(COLORS)]
         if metric=='rwp':
             # A multi-histogram project is plotted one histogram per trace.
-            histograms=[h['name'] for h in group[0]['final']['histograms']]
-            for hname in histograms:
+            histograms=histogram_map(group[0]['final'])
+            for hkey in histograms:
+                for row in group:
+                    before=histogram_map(row['baseline']).get(hkey)
+                    after=histogram_map(row['final']).get(hkey)
+                    if before and after and not same_fit_domain(before,after):changed_domain=True
                 for source_key,line,marker in [('baseline','dash','circle-open'),('final','solid','circle')]:
-                    values=[next((h.get('rwp') for h in row[source_key]['histograms'] if h['name']==hname),None) for row in group]
-                    suffix=' · '+hname if len(histograms)>1 else ''
+                    values=[histogram_map(row[source_key]).get(hkey,{}).get('rwp') for row in group]
+                    suffix=' · histogram '+str(list(histograms).index(hkey)+1) if len(histograms)>1 else ''
                     figure.add_trace(go.Scatter(x=x,y=values,mode='lines+markers',name=label+suffix+(' · original' if source_key=='baseline' else ' · polished'),line=dict(color=color,dash=line,width=1.3),marker=dict(symbol=marker,size=6),customdata=[j['id'] for j in group],connectgaps=False))
+            continue
+        if metric=='phase_fractions':
+            phases={p['key']:p['phase'] for row in group for p in row['final'].get('parameters',[]) if p['kind']=='weight'}
+            for phase_index,(key,phase) in enumerate(phases.items()):
+                values=[next((p['value'] for p in row['final'].get('parameters',[]) if p['key']==key),None) for row in group]
+                figure.add_trace(go.Scatter(x=x,y=values,mode='lines+markers',name=phase.split(' - ')[0]+' · '+label,line=dict(color=COLORS[(index+phase_index)%len(COLORS)],width=1.3),customdata=[j['id'] for j in group],connectgaps=False))
             continue
         values=[];errors=[];statuses=[];unit='';parameter=None
         for row in group:
@@ -117,4 +137,5 @@ def trend_figure(rows,*,metric='rwp',x_key='run_number',display='absolute'):
     figure.update_layout(template='plotly_white',height=430,margin=dict(l=75,r=25,t=55,b=60),legend=dict(orientation='h',y=1.18),
         xaxis=dict(title=x_title if groups else 'Scan number',type=x_type if groups else 'linear'),yaxis=dict(title=title),
         uirevision='refinement-trend/'+metric+'/'+x_key+'/'+display)
+    if changed_domain:figure.add_annotation(text='Some Rwp pairs use different fit limits or exclusions and are not directly comparable.',xref='paper',yref='paper',x=0,y=1.03,xanchor='left',showarrow=False,font=dict(size=11,color='#9a601b'))
     return figure

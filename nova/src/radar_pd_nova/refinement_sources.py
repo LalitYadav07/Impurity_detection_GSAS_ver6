@@ -126,12 +126,12 @@ def published_project_path(root: Path, project: dict) -> Path | None:
 
 
 def source_from_record(record, payload: dict, scan: dict | None, history: str,
-                       *, sha_cache: dict | None = None) -> dict:
+                       *, sha_cache: dict | None = None, root_override: Path | None = None) -> dict:
     scan = scan or {}
     result = payload.get('summary') or {}
     index = payload.get('gpx_index') or {}
     project = select_published_project(result, index)
-    root = record.local_output_dir
+    root = root_override or record.local_output_dir
     if root is None:
         raise ValueError('RADAR-PD result files are not downloaded yet')
     path = published_project_path(root, project)
@@ -150,6 +150,7 @@ def source_from_record(record, payload: dict, scan: dict | None, history: str,
     collection = str(record.output_dataset_ids.get('gpx_projects') or '')
     if path is None and not collection:
         raise ValueError('The indexed published GPX is unavailable locally and has no Galaxy collection')
+    if checksum is None:checksum=project.get('published_sha256')
     selection=getattr(record,'inputs',None)
     acquisition=result.get('acquisition') or {}
     metadata=dict(acquisition.get('metadata') or {})
@@ -161,16 +162,21 @@ def source_from_record(record, payload: dict, scan: dict | None, history: str,
     sample_id = str(metadata.get('sample_id') or '').strip()
     sample_name = str(metadata.get('sample_name') or '').strip()
     sample_key = str((scan.get('sample_key') if scan.get('sample_key')!='unassigned' else None) or (('id:' + sample_id) if sample_id else 'scan:' + record.uid))
-    run_id = str(scan.get('run_id') or record.uid)
+    run_number=scan.get('run_number')
+    run_id = str(scan.get('run_id') or (f'{instrument}_{run_number}' if run_number else record.uid))
     bank = str(scan.get('bank') or metadata.get('source_bank') or metadata.get('bank') or '')
-    scan_key = digest([exp, run_id, bank])[:24]
+    scan_key = digest([exp,scan.get('experiment_number'),run_number or record.uid,bank])[:24]
     publication = str(project.get('collection_name') or Path(str(project.get('collection_path') or project.get('path') or '')).name)
-    uid = digest([history, record.uid, scan_key, project.get('sha256'), project.get('published_sha256'), publication])[:24]
+    # Watch metadata can arrive after the archive. It must not create a second
+    # source identity or enroll the same published result a second time.
+    uid = digest([history, record.uid, project.get('sha256'), project.get('published_sha256'), publication])[:24]
+    scan_label=str(scan.get('scan_label') or record.name)
+    if bank and 'bank' not in scan_label.lower():scan_label+=' · bank '+bank
     return dict(id=uid, experiment=exp, experiment_label=(f'{instrument} · {ipts}' if ipts else record.name),
                 scan_key=scan_key, record_uid=record.uid, run_id=run_id,
                 run_number=scan.get('run_number'), bank=bank, sample_key=sample_key,
                 sample_label=str(scan.get('sample_label') or ' · '.join(x for x in [sample_id, sample_name] if x) or 'Unassigned sample'),
-                scan_label=str(scan.get('scan_label') or record.name), metadata=metadata,
+                scan_label=scan_label, metadata=metadata,
                 source_path=str(path) if path else None, source_sha256=checksum,
                 internal_source_sha256=project.get('sha256'), collection_id=collection,
                 collection_name=publication, published_sha256=project.get('published_sha256'),

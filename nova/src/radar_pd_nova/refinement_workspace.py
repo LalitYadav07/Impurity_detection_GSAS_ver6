@@ -26,7 +26,8 @@ class RefinementWorkspace:
     def __init__(self,root,*,history_id,runtime,planner=None):
         self.root=Path(root).resolve();self.root.mkdir(parents=True,exist_ok=True)
         self.manifest=self.root/'workspace.json';self.runtime=runtime;self.history_id=str(history_id)
-        self._planner=planner;self.lock=threading.RLock();self._inflight=False
+        self._planner=planner;self.lock=threading.RLock();self._checkpoint_lock=threading.Lock();self._inflight=False
+        self._inspection_locks={}
         if self.manifest.exists():
             self.state=json.loads(self.manifest.read_text())
             if self.state.get('schema')!='radar-refinement-workspace/v1' or self.state.get('history_id')!=self.history_id:
@@ -56,15 +57,21 @@ class RefinementWorkspace:
         return True
 
     def checkpoint(self):
-        with self.lock:document=copy.deepcopy(self.state)
-        # Provider configuration/credentials are not part of the manifest.
-        return self.runtime.save_workspace(document)
+        # Capture after acquiring the upload lock: an older pending upload
+        # cannot overwrite the recovery order of a newer scientific receipt.
+        with self._checkpoint_lock:
+            with self.lock:document=copy.deepcopy(self.state)
+            return self.runtime.save_workspace(document)
 
     def observe(self,sources):
         with self.lock:
             changed=False
             for value in sources:
                 source=copy.deepcopy(value);old=self.state['sources'].get(source['id'])
+                for key,prior in list(self.state['sources'].items()):
+                    if key!=source['id'] and prior.get('record_uid')==source.get('record_uid') and prior.get('collection_name')==source.get('collection_name') and source.get('record_uid'):
+                        self.state.setdefault('superseded_sources',{})[key]=self.state['sources'].pop(key)
+                        changed=True
                 if old and old.get('source_sha256')==source.get('source_sha256'):
                     source['observed_utc']=old['observed_utc']
                 else:source['observed_utc']=utc();changed=True
@@ -94,6 +101,10 @@ class RefinementWorkspace:
         return snapshot,digest(snapshot)
 
     def inspect(self,source_id):
+        with self.lock:inspection_lock=self._inspection_locks.setdefault(source_id,threading.Lock())
+        with inspection_lock:return self._inspect_source(source_id)
+
+    def _inspect_source(self,source_id):
         with self.lock:
             source=copy.deepcopy(self.state['sources'][source_id])
             if source.get('context') and source.get('source_sha256')==source['context']['source']['sha256']:
@@ -113,7 +124,7 @@ class RefinementWorkspace:
             material['observed_utc']=current['observed_utc'];self.state['sources'][source_id]=material;self.save()
         return copy.deepcopy(material)
 
-    def prepare(self,experiment,source_id,request,*,previous=None):
+    def prepare(self,experiment,source_id,request,*,previous=None,reuse_recipe=None):
         if not request.strip():raise ValueError('Describe the refinement stages first')
         generation=uuid.uuid4().hex
         with self.lock:
@@ -129,7 +140,14 @@ class RefinementWorkspace:
         try:
             source=self.inspect(source_id);context=source['context']
             if previous and previous.get('model_signature')!=context['model_signature']:previous=None
-            if self._planner:planning=self._planner(request,context,previous=previous)
+            if reuse_recipe:
+                from gpx_recipe.contracts import validate_plan
+                with self.lock:saved=copy.deepcopy(self.state['recipes'][reuse_recipe])
+                if saved['experiment']!=experiment:raise ValueError('Choose a saved recipe from this experiment')
+                plan=validate_plan(saved['plan'],context)
+                if request!=plan['request']:raise ValueError('A changed request needs a revised plan')
+                planning=dict(plan=plan,calls=[],origin='Saved recipe '+str(saved['version']))
+            elif self._planner:planning=self._planner(request,context,previous=previous)
             else:
                 configure_provider(os.getenv('RADAR_GPX_PLANNER_PROVIDER','illumine-luna'),os.getenv('RADAR_PD_REFINEMENT_KEY_FILE') or None)
                 planning=make_plan(request,context,previous=previous,client=make_client())
@@ -241,9 +259,13 @@ class RefinementWorkspace:
             directory=self.root/'jobs'/job['id']/('attempt-'+str(job['attempts']));job['directory']=str(directory);self.save()
         def submitted(action):
             with self.lock:job['remote_action']=action;self.save()
+            if self.runtime.kind=='galaxy':self.checkpoint()
         try:
+            # Persist the claimed stable dispatch before contacting Galaxy.
+            # A restored interrupted claim searches/reuses that dispatch.
+            if self.runtime.kind=='galaxy':self.checkpoint()
             result=self.runtime.call('run',source,directory,plan=recipe['plan'],approval=recipe['approval'],
-                dispatch_key=job['id'],on_submitted=submitted,resume=job.get('remote_action'))
+                dispatch_key=job['id'],on_submitted=submitted,resume=job.get('remote_action'),recover=job['attempts']>1)
             with self.lock:
                 status=result['status']
                 if status=='needs_review' and 'match' in result.get('error','').lower() and 'model' in result.get('error','').lower():status='needs_recipe'

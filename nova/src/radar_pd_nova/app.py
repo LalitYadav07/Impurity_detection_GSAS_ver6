@@ -30,6 +30,8 @@ from .setup_ui import SetupEditorMixin
 from .live_setup import LiveSetupMixin
 from .library_setup import LibraryDraft
 from .post_analysis_ui import PostAnalysisMixin
+from .refinement_controller import RefinementMixin
+from .refinement_ui import refinement_dashboard
 from .post_analysis import PostAnalysisSettings
 from .facility import FacilityBrowser, FacilityPathError, WatchRecipe
 from .galaxy_service import (
@@ -238,7 +240,7 @@ def _powgen_retry_time(value: Any) -> datetime | None:
     return retry_at.astimezone(timezone.utc)
 
 
-class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, ThemedApp):
+class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, RefinementMixin, ThemedApp):
     """Interactive orchestration and results workspace backed by Galaxy."""
 
     def __init__(self) -> None:
@@ -405,6 +407,7 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
         state.rapid_show_family_variants = True
         state.rapid_final_polish_enabled = False
         self._init_post_analysis()
+        self._init_refinement()
         state.history_datasets = []
         state.history_search = ""
         state.history_offset = 0
@@ -2309,7 +2312,7 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
             vuetify.VProgressLinear(v_if="selected_run_loading", indeterminate=True, height=3, color="#15543c")
             vuetify.VAlert(v_if="!!selected_result_load_error", text=("selected_result_load_error",),
                 type="error", variant="tonal", density="compact", classes="mb-2")
-            with html.Div(v_if="!selected_run_uid && workspace_view !== 'experiment'", classes="radar-workspace-empty"):
+            with html.Div(v_if="!selected_run_uid && !['experiment','refinement'].includes(workspace_view)", classes="radar-workspace-empty"):
                 html.Div("RADAR-PD SCIENTIFIC AI WORKSPACE", classes="radar-kicker")
                 html.H1("Phase detection for powder diffraction")
                 html.P(
@@ -2373,6 +2376,8 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
                 with html.Div(v_show="workspace_view === 'files'", classes="radar-workspace-view"):
                     self._file_browser_view()
                 self._activity_panel()
+            with html.Div(v_show="workspace_view === 'refinement' || (workspace_view === 'experiment' && experiment_result_view === 'refinement')"):
+                refinement_dashboard(self)
         self._post_analysis_inspection_dialogs()
         self._transition_tracking_dialog()
 
@@ -2413,7 +2418,7 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
                             html.Div("{{ metric.value }}", classes="radar-metric-value")
                             html.Div("{{ metric.detail }}", classes="radar-run-list-meta")
         with vuetify.VTabs(v_model=("experiment_result_view",), color="#15543c", classes="radar-experiment-result-tabs"):
-            for title, value in (("Results", "results"), ("Transition tracking", "transitions")):
+            for title, value in (("Results", "results"), ("Transition tracking", "transitions"), ("Refinement", "refinement")):
                 vuetify.VTab(
                     title, value=value,
                     click="$nextTick(() => window.setTimeout(() => window.document.querySelectorAll('.js-plotly-plot').forEach(el => el.getBoundingClientRect().width > 0 && el.getBoundingClientRect().height > 0 && window.Plotly && window.Plotly.Plots.resize(el)), 80))",
@@ -2422,7 +2427,7 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
             self._experiment_results_dashboard()
         with html.Div(v_if="workspace_view === 'experiment' && experiment_result_view === 'transitions'"):
             self._transition_tracking_dashboard()
-        with html.Section(v_if="powgen_rows.some(row => row.status !== 'Completed')", classes="radar-result-card radar-experiment-queue-card"):
+        with html.Section(v_if="experiment_result_view !== 'refinement' && powgen_rows.some(row => row.status !== 'Completed')", classes="radar-result-card radar-experiment-queue-card"):
             with html.Div(classes="radar-card-heading"):
                 with html.Div():
                     html.Div("LIVE QUEUE", classes="radar-micro-label")
@@ -4158,6 +4163,7 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
                 for phase in row["phases"][:3]
             ) or "No refined phase fractions"
         state.powgen_all_scientific_rows = scientific_rows
+        self._refinement_maybe_refresh()
         sample_labels = {
             str(row["sample_key"]): str(row["sample_label"])
             for row in scientific_rows
@@ -6025,6 +6031,7 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
                     "icon": "mdi-chart-timeline-variant",
                 }
             )
+        options.append({"title": "Refinement", "value": "refinement", "icon": "mdi-playlist-edit"})
         state.workspace_options = options
         if getattr(state, "workspace_view", "monitor") not in {item["value"] for item in options}:
             state.workspace_view = "monitor"
@@ -6597,6 +6604,7 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Themed
         state = self.server.state
         self._reset_result_state()
         payload = self.service.result_payload(record)
+        self._refinement_maybe_refresh()
         result_document = payload.get("summary") or {}
         self._post_analysis_scope = "single:" + record.uid
         if record.config is not None:

@@ -11,6 +11,7 @@ from typing import Callable
 
 from gpx_recipe.jobs import scientific_environment
 from gpx_recipe.process import run_scientific
+from gpx_recipe.execution import write_json
 from .refinement_sources import file_sha
 
 REFINEMENT_TOOL_ID = 'neutrons_radar_pd_refine_recipe_prototype'
@@ -50,14 +51,15 @@ class LocalRefinementRuntime:
         if target.exists():
             if file_sha(target)!=checksum:raise ValueError('An immutable source copy was modified')
         else:
-            temporary=target.with_suffix('.partial');shutil.copy2(path,temporary)
+            import uuid
+            temporary=target.with_name(target.name+'.'+uuid.uuid4().hex+'.partial');shutil.copy2(path,temporary)
             if file_sha(temporary)!=checksum:raise ValueError('Source GPX changed while it was being captured')
             temporary.replace(target)
         source.update(source_path=str(target),source_sha256=checksum)
         return source
 
     def call(self, action, source, directory, *, plan=None, approval=None, dispatch_key='',
-             on_submitted=None, resume=None):
+             on_submitted=None, resume=None, recover=False):
         source=self.resolve(source);directory=Path(directory).resolve();directory.mkdir(parents=True,exist_ok=True)
         command=[self.python,'-m','gpx_recipe.worker',action,source['source_path'],str(directory)]
         for name,value in [('plan',plan),('approval',approval)]:
@@ -110,7 +112,7 @@ class GalaxyRefinementRuntime(LocalRefinementRuntime):
         if len(matches)!=1:raise ValueError('The published GPX does not map to one exact Galaxy collection element')
         return matches[0]['id']
 
-    def call(self,action,source,directory,*,plan=None,approval=None,dispatch_key='',on_submitted=None,resume=None):
+    def call(self,action,source,directory,*,plan=None,approval=None,dispatch_key='',on_submitted=None,resume=None,recover=False):
         from .models import UtilityActionRecord,RunStatus
         from .galaxy_service import _extract_results_archive
         source=self.resolve(source);directory=Path(directory);directory.mkdir(parents=True,exist_ok=True)
@@ -119,17 +121,31 @@ class GalaxyRefinementRuntime(LocalRefinementRuntime):
         else:
             # A unique dispatch key survives lost HTTP acknowledgements/restarts.
             # Never blindly retry an ambiguous submission.
-            existing=self.find_dispatch(dispatch_key) if dispatch_key else None
+            import re
+            if not re.fullmatch(r'[a-f0-9]{24}',dispatch_key):raise ValueError('A stable refinement dispatch key is required')
+            ledger=self.root/'dispatches';ledger.mkdir(exist_ok=True)
+            acknowledged=ledger/(dispatch_key+'.json');pending=ledger/(dispatch_key+'.pending')
+            if acknowledged.exists():
+                existing=UtilityActionRecord.model_validate(json.loads(acknowledged.read_text()))
+            else:
+                existing=self.find_dispatch(dispatch_key) if recover or pending.exists() else None
+            if existing is None and pending.exists():
+                raise RuntimeUnavailable('This dispatch has an unacknowledged submission. No matching Galaxy job is visible yet; refresh or inspect Galaxy before retrying. No duplicate was submitted.')
             if existing:job=existing
             else:
                 request=dict(plan=plan,approval=approval,expected_source_sha256=source['source_sha256'],dispatch_key=dispatch_key)
                 request_id=self.service.upload_json_document(request,name='refinement-request.json',label='RADAR-PD refinement request '+dispatch_key)
+                try:
+                    with pending.open('x') as handle:handle.write(action+'\n')
+                except FileExistsError:
+                    raise RuntimeUnavailable('Another worker already claimed this dispatch; recover its existing Galaxy job')
                 try:
                     job=self.service.submit_utility(tool_id=REFINEMENT_TOOL_ID,name='RADAR-PD refinement '+dispatch_key,
                         associated_run_uid=source.get('record_uid'),inputs={'action':action,'dispatch_key':dispatch_key,
                         'source_gpx':{'dataset_id':self.dataset_id(source)},'request':{'dataset_id':request_id}})
                 except Exception as exc:
                     raise RuntimeUnavailable('Galaxy did not acknowledge this refinement submission. Its dispatch key is retained; recover the existing job before retrying.') from exc
+            write_json(acknowledged,job.model_dump(mode='json'))
             if on_submitted:on_submitted(job.model_dump(mode='json'))
         started=time.monotonic()
         while job.status not in {RunStatus.OK,RunStatus.ERROR}:
@@ -167,19 +183,36 @@ class GalaxyRefinementRuntime(LocalRefinementRuntime):
             if str(_parameter_value(details.get('params') or details.get('parameters') or {},'dispatch_key') or '')==key:
                 matches.append(details)
         if len(matches)>1:raise RuntimeUnavailable('Several Galaxy jobs share this dispatch key; review them before retrying')
-        if not matches:return None
+        if not matches:
+            if len(jobs)>=1000:raise RuntimeUnavailable('Galaxy returned a truncated job history; verify the previous dispatch before retrying')
+            return None
         row=matches[0]
         return UtilityActionRecord(uid='refinement-'+key,tool_id=REFINEMENT_TOOL_ID,name='Recovered refinement '+key,
             galaxy_job_id=str(row['id']),status=normalize_status(row.get('state')),outputs=self.service._job_output_ids(row))
 
     def save_workspace(self,manifest):
-        return self.service.upload_json_document(manifest,name='refinement-workspace.json',label=WORKSPACE_LABEL)
+        import gzip,uuid
+        path=self.root/('workspace-'+uuid.uuid4().hex+'.json.gz')
+        with gzip.open(path,'wt',encoding='utf-8') as handle:json.dump(manifest,handle,allow_nan=False,separators=(',',':'))
+        try:return self.service.upload_document(path,label=WORKSPACE_LABEL)
+        finally:path.unlink(missing_ok=True)
 
     def recover_workspace(self):
         rows=self.service.search_history_datasets(query=WORKSPACE_LABEL,limit=5,include_generated=True)
         for row in rows:
             if row.get('state')!='ok':continue
-            document=self.service.load_json_document(row['id'])
+            # A real six-scan workspace already exceeds the generic service's
+            # 1 MB text preview limit. Restore the owned dataset directly.
+            import gzip,uuid
+            path=self.root/('recovery-'+uuid.uuid4().hex)
+            self.service._download_dataset(row['id'],path)
+            try:
+                with path.open('rb') as handle:compressed=handle.read(2)==b'\x1f\x8b'
+                opener=gzip.open if compressed else open
+                with opener(path,'rb') as handle:payload=handle.read(128*1024*1024+1)
+                if len(payload)>128*1024*1024:raise RuntimeUnavailable('The saved workspace exceeds the 128 MB recovery bound; preserve it for an explicit scoped restore')
+                document=json.loads(payload)
+            finally:path.unlink(missing_ok=True)
             if document.get('schema')=='radar-refinement-workspace/v1' and document.get('history_id')==self.service.history_id:
                 return document
         return None
