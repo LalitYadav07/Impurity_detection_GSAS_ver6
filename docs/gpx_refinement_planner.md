@@ -2,7 +2,7 @@
 
 The integration adds **Refinement** beside the existing result views in NOVA and
 exposes the same workspace from an individual run. The older standalone planner
-remains a development harness. NOVA 0.4.27 and the Reviewed Refinement utility
+remains a development harness. NOVA 0.4.28 and the Reviewed Refinement utility
 0.2.0 are deployed to NDIP-test; production has not been updated.
 
 The integration began on NOVA 0.4.24 (`616917b`). The recipe engine is independent
@@ -86,19 +86,26 @@ are recovered by job ID rather than resubmitted.
   the workspace without importing or loading GSAS-II inside NOVA.
 
 One active coordinator per history is the supported deployment arrangement.
-Concurrent independent NOVA pods are not a distributed exactly-once queue. The
-NDIP-test smoke test covered a fresh interactive session, published-GPX discovery,
-and a successful starting-model inspection in the Galaxy worker. An unauthenticated
-HTTP request from the NOVA container reached the Illumine endpoint; managed model
-credentials, authenticated recipe generation, and scientific approval/execution
-remain to be validated on NDIP-test.
+Concurrent independent NOVA pods are not a distributed exactly-once queue. On
+2026-10-28, an NDIP-test session using a saved personal Illumine credential
+generated an authenticated Luna recipe, passed native preflight, and completed
+both reviewed scientific stages on a saved POWGEN Al2O3/MgO GPX. Galaxy published
+the stage and final GPXs, and their checksums matched the result bundle. This is
+one end-to-end case, not a claim that every recipe or data set is validated.
 
 ## Runtime configuration
 
-`RADAR_GPX_PLANNER_PROVIDER=illumine-luna` selects Luna. Supply the key only in the
-backend environment as `AZURE_ILLUMINE_API_KEY`, or through an owner-only file
-referenced by `RADAR_PD_REFINEMENT_KEY_FILE`. No key enters browser state, recipes,
-scripts, GPXs, Galaxy tool inputs or images. Native scientific workers strip model
+`RADAR_GPX_PLANNER_PROVIDER=illumine-luna` selects Luna. On NDIP-test, the NOVA
+Galaxy tool declares an optional ORNL Illumine credential group. The user saves
+their personal key in Galaxy's credential vault, and Galaxy injects the selected
+group's key into the NOVA backend as `AZURE_ILLUMINE_API_KEY`. The ordinary tool
+form selected the user's saved group automatically in the 2026-10-28 test.
+Programmatic `/api/tools` launches must include the selected
+`credentials_context`; the vault's current group alone did not attach a key to
+an API-submitted job. Local development may instead provide the key in the
+backend environment or through an owner-only file referenced by
+`RADAR_PD_REFINEMENT_KEY_FILE`. No key enters browser state, recipes, scripts,
+GPXs, Galaxy tool inputs or images. Native scientific workers strip model
 credentials from their environment.
 
 `RADAR_PD_REFINEMENT_ROOT` selects the receipt/cache directory; each Galaxy history
@@ -263,9 +270,9 @@ For local development only, `--key-file /outside/repository/private-key-file`
 can read an existing small owner-only Illumine key file into backend memory. It
 rejects symlinks and public permissions. No key belongs in a plan, GPX, notebook,
 repository, browser request or job receipt. Scientific subprocesses receive an
-allowlisted environment without either model credential. Production must use
-NDIP-managed backend secret injection. No Studio import, client, service,
-configuration helper or Python environment is required. Studio supplies only
+allowlisted environment without either model credential. NDIP uses its Galaxy
+credential vault for per-user backend secret injection. No Studio import, client,
+service, configuration helper or Python environment is required. Studio supplies only
 the vendored knowledge/extractor provenance recorded above.
 
 ## Local interface
@@ -314,16 +321,17 @@ bridge. Both image workflows include the shared core in their path rules. The co
 `gpx_recipe` from the batch image's existing `/opt/radar-pd/scripts` PYTHONPATH.
 See `galaxy/radar_pd_refine_recipe.xml.in` for the source worker contract. The live
 NDIP-test registration is `galaxy-tools/tools/neutrons/powder_diffraction/radar_pd_refine_recipe.xml`,
-pinned to `ndip-dac049913cd33f3111615e2b72ddd3bbf3d419dd`. NOVA 0.4.27 is
-pinned to `nova-148bc828388984539097c8f8508ad2e7e09a2bed`. These pins and
+pinned to `ndip-dac049913cd33f3111615e2b72ddd3bbf3d419dd`. NOVA 0.4.28 is
+pinned to `nova-750309da265d3feb21bc7a9227b15d3a14af7c39`. These pins and
 both prototype deployment jobs were verified on 2026-10-28. The live UI
-successfully inspected a saved Al2O3/MgO GPX from run 43124. The endpoint probe
-returned HTTP 404 to an unauthenticated HEAD request, showing DNS, TLS, and HTTP
-reachability from NOVA without testing model authorization. The temporary probe
-was removed from the deployed XML.
+successfully inspected and refined a saved Al2O3/MgO GPX from run 43124.
+The reviewed two-stage plan refined existing phase scales and background first,
+then those parameters plus both unit cells. The Galaxy worker completed both
+stages and published checksum-matched stage and final GPXs. Rwp changed from
+about 3.381% to 3.380%; this tiny improvement is an execution check rather
+than evidence of a better scientific model.
 
-Authenticated model calls and an approved multi-stage scientific refinement on
-NDIP-test still need validation. Pass a stable run/bank/revision or HDA ID as
+Pass a stable run/bank/revision or HDA ID as
 `scan_id`; local paths are only a local fallback. Keep preliminary RADAR-PD
 results visible while these optional continuation jobs run. New incompatible
 phases/models require review, not positional phase-index guesses.
