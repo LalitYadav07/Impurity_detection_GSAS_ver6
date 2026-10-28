@@ -42,6 +42,7 @@ def test_fresh_dispatch_and_acknowledged_recovery_submit_exactly_once_without_cr
   assert response['status']=='inspected'
  assert len(s.submissions)==1 and len(s.requests)==1 and len(actions)==2
  assert s.submissions[0]['inputs']['source_gpx']=={'dataset_id':'original-data'}
+ assert s.submissions[0]['inputs']['recipe_request']=={'dataset_id':'request-data'}
  assert 'SENTINEL' not in json.dumps(s.requests+s.submissions)
 
 
@@ -70,7 +71,7 @@ def test_utility_wrapper_has_no_model_or_secret_inputs_and_publishes_only_verifi
  import xml.etree.ElementTree as ET
  p=Path(__file__).resolve().parents[2]/'galaxy/radar_pd_refine_recipe.xml.in';root=ET.parse(p).getroot()
  inputs={e.attrib['name'] for e in root.findall('inputs/param')}
- assert inputs=={'action','source_gpx','request','dispatch_key'}
+ assert inputs=={'action','source_gpx','recipe_request','dispatch_key'}
  collection=root.find('outputs/collection');assert 'verified_' in ET.tostring(collection,encoding='unicode')
  assert '@IMMUTABLE_BATCH_IMAGE@' in p.read_text()
 

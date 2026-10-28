@@ -4,14 +4,14 @@
     <command detect_errors="exit_code"><![CDATA[
         touch '$result_bundle' '$console_output' &&
         trap "chmod a+r '$result_bundle' '$console_output' >/dev/null 2>&1 || true" EXIT &&
-        python /opt/radar-pd/scripts/ndip_refinement.py '$action' '$source_gpx' '$request' worker '$result_bundle' > '$console_output' 2>&1
+        python /opt/radar-pd/scripts/ndip_refinement.py '$action' '$source_gpx' '$recipe_request' worker '$result_bundle' > '$console_output' 2>&1
     ]]></command>
     <inputs>
         <param name="action" type="select" label="Reviewed refinement operation">
             <option value="inspect">Inspect project</option><option value="preview">Native preflight</option><option value="run">Run approved recipe</option>
         </param>
         <param name="source_gpx" type="data" format="binary" label="Published RADAR-PD GPX"/>
-        <param name="request" type="data" format="json" label="Recipe, approval and source checksum"/>
+        <param name="recipe_request" type="data" format="json" label="Recipe, approval and source checksum"/>
         <param name="dispatch_key" type="text" label="NOVA dispatch identity">
             <validator type="regex" message="Use the NOVA-generated dispatch key">^[a-f0-9]{24}$</validator>
         </param>

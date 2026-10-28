@@ -142,7 +142,7 @@ class GalaxyRefinementRuntime(LocalRefinementRuntime):
                 try:
                     job=self.service.submit_utility(tool_id=REFINEMENT_TOOL_ID,name='RADAR-PD refinement '+dispatch_key,
                         associated_run_uid=source.get('record_uid'),inputs={'action':action,'dispatch_key':dispatch_key,
-                        'source_gpx':{'dataset_id':self.dataset_id(source)},'request':{'dataset_id':request_id}})
+                        'source_gpx':{'dataset_id':self.dataset_id(source)},'recipe_request':{'dataset_id':request_id}})
                 except Exception as exc:
                     raise RuntimeUnavailable('Galaxy did not acknowledge this refinement submission. Its dispatch key is retained; recover the existing job before retrying.') from exc
             write_json(acknowledged,job.model_dump(mode='json'))
