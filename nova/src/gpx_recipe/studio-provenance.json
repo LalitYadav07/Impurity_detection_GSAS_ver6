@@ -1,0 +1,16 @@
+{
+  "source_project": "Diffraction Studio / science-agent-workbench",
+  "source_revision": "51ef2edbe9a97e9a830ad5d8728ba4b506d48923",
+  "license": "MIT",
+  "files": {
+    "science_workbench/gsasii_refinement_state.py": "28f0b3a29764b54309fd325eafd1141fe6ebdcdaa3ecbe67557bab1e9176e317",
+    "science_workbench/gsasii_actions.py": "21b75ed69d5f83e5b81140f6d284d8ea32d4a019508e677f6d01257e356c86c8",
+    "science_workbench/domain_packs/diffraction/knowledge/gsasii_api_reference.md": "0c668642e59dfe4163403cbed484854f397a596c84fa220b7cd9c978ae795492",
+    "science_workbench/domain_packs/diffraction/knowledge/gsasii_constraints_occupancy.md": "67239a8b02ccd6bfa665d639ef9f15c1142594ec8d4d279e9b3f17c2ea63a269"
+  },
+  "adaptation": "Read-only state reconstruction vendored; operation vocabulary and flag-reset semantics distilled into standalone NDIP components. No runtime dependency on Studio.",
+  "adaptation_notes": [
+    "2026-10-28: current configured native names take precedence over historical covariance shift aliases, so a prior D11/A0 mapping cannot hide a newly enabled direct cell parameter. Original upstream source hashes above record the reference, not the modified vendored file.",
+    "2026-10-28: physical atomic coordinates Ax/Ay/Az bind to exact currently configured dAx/dAy/dAz before the first coordinate refinement, even when no preceding newAtomDict exists. Same-atom/current-config checks prevent historical aliases or other atoms from deciding active flags."
+  ]
+}

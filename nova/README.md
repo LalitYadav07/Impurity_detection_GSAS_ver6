@@ -153,6 +153,85 @@ Select scientific views before running and adjust their axes, phases, references
 
 ## Local checks
 
+### Further refinement from a preliminary GPX
+
+The standalone `gpx_recipe` package plans and executes optional refinement
+recipes after RADAR-PD has produced a preliminary GPX. The local review harness
+is separate from the main NOVA interface. `scripts/ndip_recipe.py` provides the
+scientific worker entry point; it does not require the Studio application or a
+model client in the scientific environment.
+
+The planner sends an array-free project snapshot, the user's request, tested
+operation definitions and, for a revision, the actual preceding proposal to
+Illumine Luna with reasoning `none`. It uses at most two model replies per
+revision. Long complete active sets receive a bounded output allowance up to
+16,384 tokens. Source constraints, bounds, exact atom labels, histogram links
+and model definitions remain explicit. Explicit project fingerprints are bound
+in Luna’s output grammar. Recognized complete free lists and leading cycle
+limits are checked without rewriting the model’s scientific choices. A deterministically recognized request
+that releases only part of a preserved Uiso equality group receives an
+actionable clarification without a model request.
+
+Each stage defines its complete free set. Supported operations include
+polynomial backgrounds, phase and histogram scales, cells, selected isotropic
+atom X/U/F flags, explicit occupancy equations and Uiso equalities, calibrated
+fit ranges/exclusions, atom bounds and HAP preferred orientation. Phase-global
+texture coefficients and sample-angle values are preserved and held; they are
+not substituted with HAP texture. Existing anisotropic atoms can retain their
+Uij model while eligible coordinates are refined, but anisotropic ADP release,
+magnetic/modulated models and sequential/Pawley/Le Bail execution are outside
+this worker's operation vocabulary.
+
+The user reviews the free/fixed table, runs native parameter preflight, and
+approves that exact plan. The generated script is a trusted wrapper containing
+validated JSON, rather than executable model-generated Python. Compatible
+incoming GPXs can reuse the recipe; changes to source constraints, bounds,
+mixed-site membership, instrument calibration or model definitions require a
+new inspection and approval. Mutable refined values can differ between scans.
+
+Execution checks fresh covariance, actual independent variables, fixed-value
+preservation, physical bounds, declared relations and numerical scale
+normalization. The audit also reconstructs dependent solver values before
+GSAS-II's save-time clipping; a clipped negative phase scale must not look like
+a successful normalized fit. Unrelated frozen history remains recorded, while
+newly frozen or explicitly requested frozen variables stop the recipe. Each
+completed stage has a separate GPX checkpoint and a before/after parameter
+ledger with native descriptions and conditional uncertainties. Source GPXs,
+observations and instrument calibration remain unchanged. Native NumPy scalar
+values are included in the change ledger; missing released or fixed numeric
+values stop an incomplete audit. A project with no active phase–histogram links
+is rejected without inventing scientific links. Runtime metadata distinguishes
+the executing GSAS-II API version from the source GPX save version.
+
+Configure the selected model credential in the backend environment, outside
+the repository. The scientific subprocess receives no model credentials. Provider selection
+remains explicit, with no automatic fallback. Plan approval controls scientific
+execution, rather than granting permission to transmit data on each request.
+Automated benchmark approvals are labeled as test approvals and do not assert
+scientific acceptance of a structural model.
+
+From the repository root, run the focused software checks with:
+
+```bash
+python -m pytest tests/gpx_recipe -q
+```
+
+The benchmark tools under `benchmarks/gpx_recipes` keep immutable source/input
+snapshots, compare model plans with independent recipe oracles, execute the
+compiled scripts in GSAS-II, and independently reload saved GPXs. Scientific
+stops and provider/intent errors remain distinct from verified executions.
+A service access error halts further benchmark model requests; provider
+unavailability never triggers an automatic model substitution.
+
+GPX sample-condition fields may be defaults. They do not establish measured
+acquisition temperature or pressure without an authoritative run-log mapping.
+For continuous arrivals, publish complete GPXs with an atomic rename from a
+temporary filename. Stamp stability only debounces events; native inspection
+still validates each incoming project. Incompatible arrivals keep their
+preexecution rejection reason, and explicit retries preserve attempt history.
+
+### NOVA checks
+
 ```bash
 python -m pytest nova/tests -q
 ```

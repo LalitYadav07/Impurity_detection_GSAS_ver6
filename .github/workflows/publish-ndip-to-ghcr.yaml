@@ -8,6 +8,7 @@ on:
       - Dockerfile.ndip
       - requirements.txt
       - scripts/**
+      - nova/src/gpx_recipe/**
       - schemas/**
       - ML_components/**
       - ML_ranker/**
