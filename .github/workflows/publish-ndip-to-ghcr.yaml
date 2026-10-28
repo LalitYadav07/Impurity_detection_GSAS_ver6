@@ -70,6 +70,7 @@ jobs:
           from ndip_lattice import lattice_quality
           from ndip_input_provenance import read_input_provenance, PREFIX
           from ndip_outputs import collect_outputs
+          from gpx_recipe.worker import work as refinement_work
           from pathlib import Path
           from tempfile import TemporaryDirectory
           import json
@@ -102,7 +103,7 @@ jobs:
               assert result["scientific_status"] == "needs_review"
               assert result["provenance"]["input"]["source_bank"] == 5
               assert "NOMAD scientific calibration acceptance is pending" in (root / "portal/report.html").read_text()
-          print("Scientific contract checks passed")
+          print("Scientific and refinement contract checks passed", refinement_work.__name__)
           '
 
       - name: Check phase discovery regressions in the scientific runtime
