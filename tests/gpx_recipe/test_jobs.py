@@ -54,3 +54,19 @@ def test_arrival_waits_for_stable_complete_file(tmp_path):
     (tmp_path / "earlier.gpx").write_bytes(b"late arrival")
     assert arrivals.poll(tmp_path) == [path]
     assert len(arrivals.poll(tmp_path)) == 2
+
+
+def test_rejected_incoming_model_preserves_reason_and_retry_clears_stale_error(tmp_path,monkeypatch):
+    from types import SimpleNamespace
+    from gpx_recipe.jobs import file_hash
+    source=tmp_path/'scan.gpx';source.write_bytes(b'trusted fake input');p,a=recipe();q=RecipeQueue(tmp_path/'queue',python=sys.executable);job=q.enqueue(source,p,a)
+    def rejected(command,**kw):
+        out=Path(command[-1]);out.with_suffix('.failure.json').write_text(json.dumps({'plan_sha256':plan_hash(p),'error_type':'ValueError','error':'Plan does not match the inspected GPX model'}));return SimpleNamespace(returncode=1)
+    monkeypatch.setattr('gpx_recipe.jobs.run_scientific',rejected)
+    failed=q.run_next(job['id']);assert failed['status']=='failed' and 'Plan does not match' in failed['error']
+    assert 'executed source' not in failed['error'] and failed['worker_error_type']=='ValueError'
+    q.retry(job['id']);assert 'error' not in job and job['attempt_history'][0]['status']=='failed'
+    def successful(command,**kw):
+        out=Path(command[-1]);out.write_bytes(b'audited fake GPX');out.with_suffix('.execution.json').write_text(json.dumps({'source_sha256':file_hash(source),'status':'completed_needs_scientific_review'}));return SimpleNamespace(returncode=0)
+    monkeypatch.setattr('gpx_recipe.jobs.run_scientific',successful)
+    complete=q.run_next(job['id']);assert complete['status']=='completed' and complete['attempts']==2 and 'error' not in complete

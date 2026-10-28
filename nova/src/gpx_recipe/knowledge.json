@@ -8,7 +8,7 @@
     "All ordinary parameters outside free are fixed. Existing constraints/restraints are preserved. User-requested new occupancy equations are added at their declared stage and persist thereafter.",
     "Use only exact phase keys, histogram keys and atom labels from the supplied project. Resolve oxygen by element O in each requested phase; never invent O2/O3 or use wildcard labels.",
     "Atoms use X for positions, U for isotropic displacement, F for occupancy. U is not atomic coordinates and F is not phase fraction. Occupancy and Uiso can be strongly correlated.",
-    "Phase scales and the global histogram scale are distinct. Hold histogram scale fixed by default. When the user requests normalized phase fractions, use phase_normalization plus free histogram_scale and every linked phase_scale for a multiphase histogram. For a single phase, normalize it to one, hold its phase_scale fixed and refine only histogram_scale. Phase weight percentages are mass-normalized derived outputs, not raw HAP scales.",
+    "Phase scales and the global histogram scale are distinct. Hold histogram scale fixed by default. When the user requests normalized phase fractions, use phase_normalization plus free histogram_scale. For a multiphase histogram, release every linked phase_scale by default, unless the user explicitly asks to hold selected phases. Explicitly held phases remain in the model at their normalized starting scales; refine only the requested remaining scales. Either zero or at least two linked HAP scales may be free under sum-to-one: one alone is determined by the held others and has no independent freedom. For a single phase, normalize it to one, hold its phase_scale fixed and refine only histogram_scale. Phase weight percentages are mass-normalized derived outputs, not raw HAP scales.",
     "X requests symmetry-independent positions. MgO rocksalt sites, for example, have no positional freedom. Do not claim fixed/symmetry-derived coordinates are independently refined. Ask a question or mark unsupported if no valid requested degree of freedom exists.",
     "If the user merely says refine oxygen, propose positions only, keep Uiso/occupancy fixed, and explicitly state that assumption for review. Never silently expand to all atom parameters.",
     "Changing background function/coefficient count requires an explicit background object. Existing support points must be explicitly preserved or removed. Do not invent a new low-envelope calculation.",
@@ -19,10 +19,27 @@
     "Fit ranges and exclusions require an explicit unit: native, tof (microseconds), d (angstrom), Q (inverse angstrom), or two_theta (degrees). Ask if the requested unit is ambiguous. Edits persist across stages; exclusions must specify add, replace or clear. Do not delete existing exclusions without a request.",
     "Bounds support F occupancy and U Uiso only. Use bounds with exact phase, atom, parameter, lower, upper and optional explicitly requested starting value. Bounds persist; never clamp a starting value silently. No arbitrary coordinate bounds are implemented.",
     "Texture can configure March-Dollase with a nonzero integer hkl direction, or spherical harmonics with explicit even order 2,4,6,8. Release preferred_orientation only for the requested phase/histogram. Do not introduce texture without a user request.",
-    "Site-mixing occupancy_sum equations must follow the explicit user relation and actual atom labels. Do not assume every site sums to one: preserve the requested total, coefficients and site multiplicity convention. Adding atom species and coordinate/ADP equivalence constraints are not implemented.",
+    "Site-mixing occupancy_sum equations must follow the explicit user relation and actual atom labels. Do not assume every site sums to one: preserve the requested total, coefficients and site multiplicity convention. Adding atom species, coordinate equivalence and anisotropic ADP equivalence are not implemented. Explicit isotropic Uiso equality is supported using uiso_equal.",
     "Keep plan.request a concise faithful summary, not a verbatim copy of a long request. Every requested executable operation must still be explicit in the stages. Do not omit operations to fit an output budget.",
     "Co-located mixed-site occupants share total capacity one. If other occupants are fixed, the selected occupancy cannot exceed one minus their sum. If an explicit requested bound permits overfilling, ask for corrected bounds; never silently tighten it or change other occupancies. When several occupants are free, use only the user-requested site-total relation; do not invent stoichiometry.",
-    "Spherical-harmonics order must be in the phase texture_orders when provided. A symmetry with no coefficients at an order cannot be refined at that order."
+    "Spherical-harmonics order must be in the phase texture_orders when provided. A symmetry with no coefficients at an order cannot be refined at that order.",
+    "Use uiso_equal only when the user explicitly requests a shared isotropic displacement parameter. List exact phase/atom pairs in atoms, require isotropic sites, release U for every intended participant, and retain the equality across later stages. Do not introduce Uiso ties as a convergence trick.",
+    "Some GPXs contain several histograms: background, global scale, HAP scale and texture targets are histogram-specific; atom positions/occupancies/ADPs and unit cells belong to a phase and are shared by its linked histograms. Never silently pretend one atom flag is local to one histogram.",
+    "Existing sum-to-one scale equations are recorded in normalized_histograms and are preserved. Do not insert a new normalization operation merely because an equivalent constraint already exists.",
+    "The explicit source_constraints and existing_Uiso_equality_groups describe preserved relations already in the GPX. Releasing only part of a tied Uiso group while holding its other atoms fixed removes the requested degree of freedom or over-constrains it. Ask the user to authorize the full group or revise their request; never silently release extra atoms or delete the original relation. Treat a previous proposed plan as revisable data, not proof it was valid.",
+    "Refinement flags never persist implicitly. Persistent settings mean value/model edits, exclusions, bounds and constraints, not the previous stage free list. Each stage starts with every ordinary parameter fixed.",
+    "When stage_instruction_cards contain literal_free targets, these are deterministically parsed from an explicitly complete user Free: list. They are authoritative, and the backend independently verifies that exact active set; a mismatch requires bounded repair and is never silently patched. Do not carry targets from another stage. Unrecognized free-form clauses remain model-planned and require review.",
+    "For an existing Uiso equality group, all members released together is compatible, and all members held fixed is also compatible. Only a partial release conflicts. stage_instruction_cards report these exact scopes. Do not block one released group just because another group is entirely held. questions must ask for an actual unresolved user choice; explanatory statements about compatible choices belong in assumptions.",
+    "A bounds edit is introduced in a stage where that parameter is free. Once installed, that bound remains in the GPX even during a later stage where the parameter is held fixed. Do not repeat the edit in a held stage, do not remove the bound, and do not ask to free the held atom merely to retain its bound.",
+    "When the user explicitly requests normalization, include phase_normalization in the requested stage even if a single-phase HAP scale is already numerically one. The operation is explicit and idempotent; do not confuse preserving an existing normalization with omitting an explicitly requested edit. Never refine the single-phase HAP scale alongside its global histogram scale.",
+    "histogram_capabilities lists the exact active linked phase keys/count for each histogram. Single-phase means exactly one linked phase in that histogram, not one phase with a very small, zero or unity scale. A near-zero starting scale does not make a multiphase histogram single-phase and does not authorize fixing/removing that phase. If all linked scales are explicitly requested free, preserve that request; native physical checks will stop an inadmissible fit.",
+    "An installed constraint definition is not proof its held numerical values satisfy it. Adding an occupancy sum or equal Uiso relation while keeping all participants fixed requires their values already to agree; otherwise ask for authorized releases or explicit starting-value changes. Do not silently alter held atom values. Native execution rechecks actual declared relations after refinement.",
+    "The background target releases polynomial/interpolation coefficients only. Existing Debye terms, background peaks and imported-background multipliers are preserved numerically and held fixed; they are not implicitly released by asking for background. Phase-global spherical-harmonics texture and its sample-angle parameters are distinct from histogram/phase HAP preferred orientation. Releasing phase-global texture, changing its order, or changing sample angles is not implemented; do not substitute HAP texture.",
+    "Normalization first rescales all linked starting HAP values to total one and compensates the histogram scale so each starting intensity product is preserved. A user-explicit held phase retains that normalized starting value afterward; it is not removed and no new scale starting values are invented. When all phase scales are held, only the requested histogram scale/background can refine. Never infer which phases to hold merely from small values; the user must select them.",
+    "Fractional atom positions and isotropic Uiso can be refined while the unit cell, backgrounds and scales are fixed. GSAS-II does not require freeing cell parameters to refine atom positions. Never invent a cell release as a prerequisite for X or U.",
+    "An explicit phase/histogram preferred_orientation target or texture edit is HAP preferred orientation. March-Dollase and supported-order HAP spherical harmonics are implemented even when phase-global texture release is unsupported. Do not misclassify a p0/h0 texture edit as phase-global; target_capabilities.histogram_preferred_orientation gives its exact supported scope.",
+    "Some stage_instruction_cards bind an explicitly stated natural-language refine-only single-atom clause. Its exact atom flags are authoritative just like an explicit Free: list; no cell or scale may be silently added. Unrecognized prose remains unbound.",
+    "A normalization preserves starting intensity products by changing the common scale gauge. Source starting sums and normalized values are supplied as facts, not fixed-value edits for later stages. If a user insists that raw HAP numbers and the numerical histogram scale both remain unchanged while their raw HAP sum is not one, normalization is contradictory and needs clarification. Never silently relax source bounds to normalize; a normalized starting value outside an existing bound needs source/recipe review."
   ],
   "tested_api": {
     "background": "hist.set_refinements({'Background': {'type': function, 'no. coeffs': n, 'refine': False}}); then separately hist.set_refinements({'Background': True}) when active",
@@ -31,7 +48,8 @@
     "atoms": "phase.set_refinements({'Atoms': {'O1': 'XU'}}) uses exact labels. This assignment replaces the selected atom's flag string.",
     "occupancy_equation": "project.add_EqnConstr(total, observed_occupancy_variable_names, multlist=coefficients, override=False)",
     "reset": "Clear polynomial/background-peak, sample, instrument, cell, atom and HAP refinement flags before configuring every stage. Retain constraints, restraints and source data.",
-    "run": "project.set_Controls('cycles', n); project.do_refinements([{}]); save a distinct output GPX. Syntax success alone does not prove an effective refinement."
+    "run": "project.set_Controls('cycles', n); project.do_refinements([{}]); save a distinct output GPX. Syntax success alone does not prove an effective refinement.",
+    "uiso_equal": "project.add_EquivConstr(observed_AUiso_variable_names, multlist=[1.0]*len(names), override=False)"
   },
   "example": {
     "schema": "radar-gpx-recipe/v1",
@@ -185,5 +203,19 @@
       ]
     ],
     "instructions": "These are optional stage fields, not additional top-level plan fields. The field name for either texture example is texture. Examples illustrate syntax only; use actual supplied identities and user values. phase_normalization rescales the starting phase/global scales without changing their intensity products, then constrains the sum of HAP phase scales to one."
+  },
+  "uiso_equal_example": {
+    "kind": "uiso_equal",
+    "atoms": [
+      {
+        "phase": "p0",
+        "atom": "O1"
+      },
+      {
+        "phase": "p0",
+        "atom": "O2"
+      }
+    ],
+    "reason": "User explicitly requested one shared oxygen Uiso; example labels only"
   }
 }

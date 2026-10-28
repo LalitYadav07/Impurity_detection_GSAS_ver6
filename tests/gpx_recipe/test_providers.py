@@ -18,8 +18,8 @@ def response(text='{"stages": []}'):
                        {"type": "message", "content": [{"type": "output_text", "text": text}]}]}
 
 
-def test_ndip_default_does_not_change_when_luna_key_exists(monkeypatch):
-    monkeypatch.delenv("RADAR_GPX_PLANNER_PROVIDER", raising=False)
+def test_explicit_sambanova_selection_does_not_change_when_luna_key_exists(monkeypatch):
+    monkeypatch.setenv("RADAR_GPX_PLANNER_PROVIDER", "sambanova")
     monkeypatch.setenv("AZURE_ILLUMINE_API_KEY", "only-luna-key")
     assert providers.provider_info()["model"] == "gpt-oss-120b"
     with pytest.raises(ValueError, match="SAMBANOVA_API_KEY"):
@@ -125,3 +125,45 @@ def test_incomplete_plan_can_use_one_larger_bounded_repair(monkeypatch,context,p
     assert caps==[2048,4096] and len(result['calls'])==2
     assert result['calls'][0]['finish_reason']=='length'
     assert result['status']=='ready_for_preflight'
+
+
+def test_luna_is_the_selected_default_with_no_automatic_fallback(monkeypatch):
+    monkeypatch.delenv("RADAR_GPX_PLANNER_PROVIDER",raising=False)
+    assert providers.provider_info()["provider"]=="illumine-luna"
+    assert providers.provider_info()["reasoning_effort"]=="none"
+    assert providers.provider_info("sambanova")["purpose"]=="Optional alternative"
+
+
+def test_transport_timeout_has_safe_diagnostics_without_private_exception_text(monkeypatch):
+    class Opener:
+        def open(self,request,timeout):raise providers.urllib.error.URLError(TimeoutError('private transport details'))
+    monkeypatch.setattr(providers.urllib.request,'build_opener',lambda *a:Opener())
+    with pytest.raises(providers.ProviderUnavailable) as raised:providers._post('https://example.invalid',{}, {},'test')
+    assert raised.value.cause=='timeout' and raised.value.elapsed_seconds>=0
+    assert 'private transport details' not in str(raised.value)
+
+
+def test_luna_grammar_binds_exact_current_project_without_rewriting_model_targets(monkeypatch,context,plan):
+    from gpx_recipe.planner import make_plan, build_payload
+    monkeypatch.setenv('AZURE_ILLUMINE_API_KEY','test-key')
+    bodies=[]
+    def post(endpoint,headers,body,label):
+        bodies.append(body)
+        return response(json.dumps(plan))
+    monkeypatch.setattr(providers,'_post',post)
+    client=providers.IllumineLuna()
+    result=make_plan('Refine the selected atoms',context,client=client)
+    signature=bodies[0]['text']['format']['schema']['properties']['model_signature']
+    assert signature=={'type':'string','enum':[context['model_signature']]}
+    assert result['plan']==plan
+    assert build_payload('Refine the selected atoms',context)['response_schema']['properties']['model_signature']==signature
+    changed=dict(context,model_signature='different-project')
+    client.prepare_contract(changed['model_signature'])
+    client.complete([])
+    assert bodies[-1]['text']['format']['schema']['properties']['model_signature']['enum']==['different-project']
+
+
+def test_provider_error_diagnostic_never_exposes_prose_or_unrecognized_codes():
+    assert providers.safe_service_code(io.BytesIO(b'{"error":{"code":"PermissionDenied","message":"private prompt"}}'))=='permissiondenied'
+    assert providers.safe_service_code(io.BytesIO(b'{"error":{"code":"private-secret-as-code","message":"private prompt"}}')) is None
+    assert providers.safe_service_code(io.BytesIO(b'private non-json error')) is None

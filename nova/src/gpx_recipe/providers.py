@@ -1,8 +1,9 @@
-"""Explicit provider selection; development Luna never silently replaces NDIP OSS."""
+"""Explicit provider selection; Luna is selected with no automatic fallback."""
 import json
 import os
 from pathlib import Path
 import stat
+import time
 import re
 import urllib.error
 import urllib.request
@@ -10,14 +11,14 @@ from urllib.parse import urlsplit
 
 PROVIDERS = {
     "sambanova": {"provider": "sambanova", "label": "OSS 120B", "model": "gpt-oss-120b",
-                  "reasoning_effort": "high", "purpose": "NDIP deployment target", "output_format": "validated_json_text"},
+                  "reasoning_effort": "high", "purpose": "Optional alternative", "output_format": "validated_json_text"},
     "illumine-luna": {"provider": "illumine-luna", "label": "Illumine Luna", "model": "gpt-6-luna",
-                      "reasoning_effort": "none", "purpose": "Development", "output_format": "json_schema"},
+                      "reasoning_effort": "none", "purpose": "Selected planner", "output_format": "json_schema"},
 }
 
 
 def provider_info(name=None):
-    name = name or os.environ.get("RADAR_GPX_PLANNER_PROVIDER", "sambanova")
+    name = name or os.environ.get("RADAR_GPX_PLANNER_PROVIDER", "illumine-luna")
     if name not in PROVIDERS:
         raise ValueError("Choose sambanova or illumine-luna; no automatic provider fallback")
     return dict(PROVIDERS[name])
@@ -52,19 +53,34 @@ def _endpoint(value, host, path):
 
 
 class ProviderRequestError(RuntimeError):
-    def __init__(self, label, status, retry_after=None):
+    def __init__(self, label, status, retry_after=None, *, error_code=None):
         self.http_status, self.retry_after_seconds = status, retry_after
+        self.error_code = error_code
         wait = f" Retry after {retry_after:g} seconds." if retry_after is not None else ""
         message = f"{label} is rate limited (HTTP 429)." + wait if status == 429 else f"{label} returned HTTP {status}."
+        if error_code:message += ' Service code: ' + error_code + '.'
         super().__init__(message + " Response content withheld; no automatic retry or provider substitution.")
+
+
+def safe_service_code(error):
+    """Expose only known protocol codes, never provider prose or echoed input."""
+    known={'permissiondenied','forbidden','unauthorized','invalid_api_key','deploymentnotfound','insufficient_quota',
+           'content_filter','responsibleaipolicyviolation','requestdisallowedbypolicy','badrequest','invalidrequest',
+           'internalservererror','toomanyrequests','invalidauthenticationtoken','subscriptiondisabled','quotaexceeded'}
+    try:
+        value=json.loads(error.read(32768)).get('error',{}).get('code')
+        return value.lower() if isinstance(value,str) and value.lower() in known else None
+    except (ValueError,AttributeError,TypeError,OSError):return None
 
 
 class ProviderUnavailable(RuntimeError):
     """Transport failure is distinct from an invalid scientific model reply."""
+    def __init__(self,message,*,cause='transport',elapsed_seconds=None):
+        super().__init__(message);self.cause=cause;self.elapsed_seconds=elapsed_seconds
 
 
 RATE_HEADERS = ("retry-after", "retry-after-ms", "x-ratelimit-limit-tokens", "x-ratelimit-remaining-tokens",
-                "x-ratelimit-remaining-requests", "x-ratelimit-reset-tokens", "x-ratelimit-reset-requests")
+                "x-ratelimit-remaining-requests", "x-ratelimit-reset-tokens", "x-ratelimit-reset-requests", "apim-request-id", "x-request-id")
 
 
 def duration(value):
@@ -81,8 +97,10 @@ def _post(endpoint, headers, body, label):
         def redirect_request(self, req, fp, code, msg, response_headers, newurl):
             return None
     request = urllib.request.Request(endpoint, data=json.dumps(body, allow_nan=False).encode(), headers=headers)
+    started=time.monotonic()
     try:
-        with urllib.request.build_opener(NoRedirect()).open(request, timeout=180) as response:
+        timeout=300 if body.get('max_output_tokens',0)>8192 else 180
+        with urllib.request.build_opener(NoRedirect()).open(request, timeout=timeout) as response:
             data = json.load(response)
             data["_radar_rate_limits"] = {k: response.headers[k] for k in RATE_HEADERS if response.headers.get(k)}
             return data
@@ -102,10 +120,12 @@ def _post(endpoint, headers, body, label):
                 retry = None
         except (ValueError, TypeError):
             retry = None
+        error_code=safe_service_code(exc)
         exc.close()
-        raise ProviderRequestError(label, status, retry) from None
-    except (TimeoutError, urllib.error.URLError):
-        raise ProviderUnavailable(f"{label} inference could not complete the backend HTTPS request; no plan was accepted or executed") from None
+        raise ProviderRequestError(label, status, retry, error_code=error_code) from None
+    except (TimeoutError, urllib.error.URLError) as exc:
+        cause='timeout' if isinstance(exc,TimeoutError) or isinstance(getattr(exc,'reason',None),TimeoutError) else 'connection'
+        raise ProviderUnavailable(f"{label} inference could not complete the backend HTTPS request ({cause}); no plan was accepted or executed",cause=cause,elapsed_seconds=time.monotonic()-started) from None
 
 
 class SambaNova:
@@ -134,19 +154,27 @@ class IllumineLuna:
     def __init__(self):
         self.info = provider_info("illumine-luna")
         self.model = self.info["model"]
+        self.model_signature = None
         self.endpoint = _endpoint(os.environ.get("AZURE_ILLUMINE_BASE_URL", "https://openai-eus-illumine.openai.azure.com/openai/v1"), "openai-eus-illumine.openai.azure.com", "/openai/v1")
         self.max_output_tokens = int(os.environ.get("RADAR_GPX_LUNA_MAX_OUTPUT_TOKENS", "2048"))
-        if not 1024 <= self.max_output_tokens <= 8192:
-            raise ValueError("The Luna output allowance must be 1024–8192 tokens")
+        if not 1024 <= self.max_output_tokens <= 16384:
+            raise ValueError("The Luna output allowance must be 1024–16384 tokens")
         self.key = os.environ.get("AZURE_ILLUMINE_API_KEY", "")
         if not self.key:
             raise ValueError("AZURE_ILLUMINE_API_KEY must be supplied to the backend environment")
+
+    def prepare_output(self, allowance):
+        self.max_output_tokens=max(self.max_output_tokens,min(16384,int(allowance)))
+
+    def prepare_contract(self, model_signature):
+        """Bind a mechanical project identifier in the provider's output grammar."""
+        self.model_signature = model_signature
 
     def complete(self, messages):
         from .schema import response_schema
         body = {"model": self.model, "input": messages, "reasoning": {"effort": "none"},
                 "store": False, "max_output_tokens": self.max_output_tokens,
-                "text": {"format": {"type": "json_schema", "name": "radar_gpx_recipe", "strict": True, "schema": response_schema()}}}
+                "text": {"format": {"type": "json_schema", "name": "radar_gpx_recipe", "strict": True, "schema": response_schema(self.model_signature)}}}
         data = _post(self.endpoint + "/responses", {"Content-Type": "application/json", "api-key": self.key}, body, "Illumine Luna")
         if data.get("model") != self.model:
             raise ValueError("Illumine returned a different model identity; no plan was accepted")
@@ -161,7 +189,7 @@ class IllumineLuna:
                     content.append(part.get("text", ""))
         if data.get("status") == "incomplete" and data.get("incomplete_details", {}).get("reason") == "max_output_tokens":
             used_budget = self.max_output_tokens
-            self.max_output_tokens = min(8192, self.max_output_tokens * 2)
+            self.max_output_tokens = min(16384, self.max_output_tokens * 2)
             raise IncompleteResponse("".join(content), {**self.info, "usage": data.get("usage"), "rate_limits": data.get("_radar_rate_limits"), "finish_reason": "length", "output_allowance": used_budget})
         if data.get("status") != "completed":
             raise ValueError("Illumine Luna did not complete a full response; no plan was accepted")

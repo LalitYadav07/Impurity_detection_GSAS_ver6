@@ -14,6 +14,7 @@ import uuid
 from .compiler import compile_script
 from .contracts import plan_hash
 from .execution import write_json
+from .process import run_scientific
 
 
 def file_hash(path):
@@ -92,9 +93,16 @@ class RecipeQueue:
         job["command"] = command
         try:
             with (attempt / "stdout.log").open("w") as stdout, (attempt / "stderr.log").open("w") as stderr:
-                process = subprocess.run(command, cwd=attempt, env=env, stdout=stdout, stderr=stderr, timeout=self.timeout)
+                process = run_scientific(command, cwd=attempt, env=env, stdout=stdout, stderr=stderr, timeout=self.timeout)
             receipt_path = output.with_suffix(".execution.json")
             receipt = json.loads(receipt_path.read_text()) if receipt_path.exists() else {}
+            if not receipt:
+                failure_path=output.with_suffix('.failure.json')
+                failure=json.loads(failure_path.read_text()) if failure_path.exists() else {}
+                if failure.get('plan_sha256')==job['plan_sha256'] and failure.get('error'):
+                    job['worker_error_type']=failure.get('error_type')
+                    raise ValueError('Incoming GPX was not processed: '+str(failure['error']))
+                raise ValueError('Scientific worker stopped before producing an execution receipt; inspect this attempt’s stderr.log')
             if receipt.get("source_sha256") != job["source_sha256"]:
                 raise ValueError("The executed source does not match the queued immutable GPX")
             if process.returncode or receipt.get("status") != "completed_needs_scientific_review":
@@ -112,12 +120,19 @@ class RecipeQueue:
         job = self.jobs[uid]
         if job["status"] not in {"failed", "interrupted"}:
             raise ValueError("Only failed/interrupted jobs can be retried")
+        job.setdefault('attempt_history',[]).append({k:job[k] for k in ['status','attempts','error','error_type','worker_error_type','attempt_directory','finished_utc'] if k in job})
+        for key in ['error','error_type','worker_error_type']:job.pop(key,None)
         job.update(status="queued")
         self._save()
 
 
 class StableArrivals:
-    """Only complete, unchanged GPX arrivals qualify, including out-of-order scans."""
+    """Debounce unchanged arrivals, including out-of-order scans.
+
+    Producers must write temporary names and atomically publish complete .gpx
+    files. Two equal file stamps alone cannot prove an in-place write is done;
+    native inspection still validates each project before refinement.
+    """
     def __init__(self):
         self.seen = {}
 

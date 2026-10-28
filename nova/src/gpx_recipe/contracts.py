@@ -33,6 +33,7 @@ def validate_plan(plan, context):
     hists = {h["key"]: h for h in context["histograms"]}
     stage_ids = set()
     normalized = set(context.get("normalized_histograms", []))
+    uiso_groups = copy.deepcopy(context.get('uiso_equivalence_groups',[]))
     for stage in plan["stages"]:
         from .advanced import STAGE_FIELDS, validate_stage
         exact_keys(stage, {"id", "title", "cycles", "free", "background", "constraints"} | STAGE_FIELDS, {"id", "title", "cycles", "free", "constraints"})
@@ -59,6 +60,8 @@ def validate_plan(plan, context):
             phase = phases.get(target.get("phase"))
             if "phase" in target and phase is None:
                 raise ValueError("Unknown phase " + str(target["phase"]))
+            if kind in {"cell","atom"} and not phase['histograms']:
+                raise ValueError("The requested phase has no active powder-histogram links. Review its source setup; the worker will not infer links or enable excluded phases.")
             if kind in {"phase_scale", "preferred_orientation"} and hists[target["histogram"]]["name"] not in phase["histograms"]:
                 raise ValueError("Phase is not active in the selected histogram")
             if kind == "atom":
@@ -87,7 +90,30 @@ def validate_plan(plan, context):
                 raise ValueError("Choose preserve/remove explicitly for existing background support points")
         if not isinstance(stage["constraints"], list) or len(stage["constraints"]) > 30:
             raise ValueError("Constraint list is required")
+        from .identity import validate_joint_uiso_release
+        validate_joint_uiso_release(stage,uiso_groups)
         for constraint in stage["constraints"]:
+            if isinstance(constraint,dict) and constraint.get('kind')=='uiso_equal':
+                exact_keys(constraint, {'kind','atoms','reason'}, {'kind','atoms','reason'})
+                if not isinstance(constraint['reason'],str) or not constraint['reason'].strip():
+                    raise ValueError('Explain each user-requested Uiso equality')
+                if not isinstance(constraint['atoms'],list) or not 2<=len(constraint['atoms'])<=100:
+                    raise ValueError('A Uiso equality needs 2–100 explicit existing atoms')
+                selected=set()
+                for target in constraint['atoms']:
+                    exact_keys(target,{'phase','atom'},{'phase','atom'})
+                    p=phases.get(target['phase']);a=next((a for a in p['atoms'] if a['label']==target['atom']),None) if p else None
+                    if a is None or a['adp_type']!='I':
+                        raise ValueError('Uiso equalities require exact isotropic atom targets; anisotropic ADPs are not converted')
+                    ident=(target['phase'],target['atom'])
+                    if ident in selected:raise ValueError('Duplicate Uiso equality target')
+                    selected.add(ident)
+                active={(t['phase'],t['atom']) for t in stage['free'] if t['kind']=='atom' and 'U' in t['flags']}
+                if len(selected & active)==1:
+                    raise ValueError('A Uiso equality with only one released atom removes its refinement freedom; preserve requested fixed/free choices or clarify')
+                uiso_groups.append(copy.deepcopy(constraint['atoms']))
+                validate_joint_uiso_release(stage,uiso_groups)
+                continue
             exact_keys(constraint, {"kind", "terms", "total", "reason"}, {"kind", "terms", "total", "reason"})
             if constraint["kind"] != "occupancy_sum" or not isinstance(constraint["reason"], str) or not constraint["reason"].strip():
                 raise ValueError("Version 1 new constraints require an explained occupancy_sum")
@@ -133,6 +159,11 @@ def stage_table(plan, context=None):
             if h.get("sample_parameters", {}).get("Scale", [0, False])[1]:
                 previous.update(target_labels({"kind": "histogram_scale", "histogram": h["key"]}))
         for p in context["phases"]:
+            texture=p.get('global_texture',{})
+            if texture.get('SH Coeff',[False])[0]:previous.add('global_texture:'+p['key'])
+            if any(texture.get(k,[False])[0] for k in ['Sample omega','Sample chi','Sample phi']):previous.add('texture_angles:'+p['key'])
+            for key,record in p.get('histogram_phase_models',{}).items():
+                if record.get('Pref.Ori.',[None,None,False])[2]:previous.update(target_labels({'kind':'preferred_orientation','phase':p['key'],'histogram':key}))
             if p.get("cell_refined"):
                 previous.update(target_labels({"kind": "cell", "phase": p["key"]}))
             for scale in p.get("phase_scales", []):

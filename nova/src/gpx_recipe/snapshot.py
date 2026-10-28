@@ -8,7 +8,8 @@ import os
 import sys
 
 from .studio_state import extract_gsasii_refinement_state
-from .advanced import occupancy_groups
+from .advanced import occupancy_groups, _scale_sum_exists
+from .identity import model_topology,bound_binding,explicit_constraints, constraint_binding, uiso_groups
 
 
 def digest(value):
@@ -43,12 +44,35 @@ def gsas():
         return importlib.import_module("GSASIIscriptable")
 
 
+def runtime_info(G2, project):
+    """The executing API version is distinct from a project's last save label."""
+    try:
+        module=importlib.import_module((G2.__package__+'.' if G2.__package__ else '')+'GSASIIpath')
+        version=str(module.GetVersionNumber())
+    except (ImportError,AttributeError,TypeError,ValueError):version='unknown'
+    return {'module':G2.__name__,'version':version,
+            'source_saved_using':str(project.data.get('Controls',{}).get('data',{}).get('LastSavedUsing','unknown'))}
+
+
 def snapshot(path):
     path = Path(path).resolve()
     G2 = gsas()
     project = G2.G2Project(gpxfile=str(path))
+    if project.data.get("Controls", {}).get("data", {}).get("Seq Data"):
+        raise ValueError("Sequential-refinement controls are active. This worker executes joint powder stages; review an explicitly converted joint or per-scan GPX before using it. Sequential execution is not implemented.")
     if any(str(name).startswith("HKLF ") for name in project.data):
         raise ValueError("Mixed single-crystal/powder projects require a separate recipe implementation")
+    if not project.histograms() or not project.phases():
+        raise ValueError("A Rietveld recipe needs powder histograms and at least one structural phase. A single-peak or phase-free project cannot be refined with this worker.")
+    histogram_names={h.name for h in project.histograms()}
+    if not any(name in histogram_names and hap.get('Use',True)
+               for phase in project.phases() for name,hap in phase.data.get('Histograms',{}).items()):
+        raise ValueError("No structural phase is actively linked to a powder histogram. Review the phase–histogram setup in GSAS-II; the recipe worker will not invent links or enable excluded phases.")
+    # Unsupported model families are rejected before parameter reconstruction.
+    for phase in project.phases():
+        general=phase.data['General']
+        if general.get('Type','nuclear')!='nuclear' or general.get('Modulated'):
+            raise ValueError("Version 1 accepts ordinary nuclear phases; magnetic/modulated recipes need a separate implementation")
     symmetry = importlib.import_module((G2.__package__ + "." if G2.__package__ else "") + "GSASIIspc")
     state = extract_gsasii_refinement_state(path, project, G2, max_correlations=8)
     if state["extraction"]["status"] != "complete":
@@ -58,6 +82,8 @@ def snapshot(path):
     phases = []
     for index, phase in enumerate(sorted(project.phases(), key=lambda p: p.name)):
         general = phase.data["General"]
+        if phase.data.get("Pawley ref") or any(h.get("LeBail") for h in phase.data["Histograms"].values()):
+            raise ValueError("Le Bail/Pawley intensity models require a dedicated recipe implementation; their intensities cannot be silently frozen or treated as ordinary Rietveld parameters")
         if general.get("Type", "nuclear") != "nuclear" or general.get("Modulated"):
             raise ValueError("Version 1 accepts ordinary nuclear phases; magnetic/modulated recipes need a separate implementation")
         atoms = []
@@ -87,7 +113,7 @@ def snapshot(path):
                        "phase_scales": [{"histogram": histogram_keys[name], "value": hap["Scale"][0], "refine": bool(hap["Scale"][1])}
                                         for name, hap in phase.data["Histograms"].items() if name in histogram_keys and hap.get("Use", True)],
                        "histogram_phase_models": {histogram_keys[name]: json_safe(hap) for name, hap in phase.data["Histograms"].items() if name in histogram_keys},
-                       "histograms": sorted(name for name, hap in phase.data["Histograms"].items() if hap.get("Use", True))})
+                       "histograms": sorted(name for name, hap in phase.data["Histograms"].items() if name in histogram_keys and hap.get("Use", True))})
     histograms = []
     for index, hist in enumerate(sorted(project.histograms(), key=lambda h: h.name)):
         bg = hist.data["Background"]
@@ -98,19 +124,38 @@ def snapshot(path):
                            "background": {"function": bg[0][0], "coefficients": int(bg[0][2]), "values": bg[0][3:],
                                           "refine": bool(bg[0][1]), "fixed_point_count": len(bg[1].get("FixedPoints", []))},
                            "rwp": hist.get_wR(), "sample_parameters": json_safe(hist.SampleParameters)})
+        histograms[-1]['sample_parameter_provenance']='GSAS-II project/model fields, which may contain defaults. These are not independently verified acquisition logs; do not infer measured temperature, pressure or other scan conditions from them without an authoritative run-log mapping.'
     if not histograms or not phases:
         raise ValueError("The project needs powder histograms and at least one nuclear phase")
+    normalized_histograms = []
+    source_constraints = explicit_constraints(project,json_safe)
+    shared_uiso_groups = uiso_groups(source_constraints,phases,histograms)
+    for h in histograms:
+        linked = [p for p in phases if h["name"] in p["histograms"]]
+        if len(linked) > 1:
+            names = [f"{p['native_id']}:{h['native_id']}:Scale" for p in linked]
+            try:
+                if _scale_sum_exists(project, names): normalized_histograms.append(h["key"])
+            except ValueError:
+                pass  # A different existing equation is not sum-to-one normalization.
     # Labels and atom topology bind recipes independently of mutable phase IDs,
     # cell values, atom coordinates, fitted scales and scan-specific filenames.
     # Histogram names map by stable h-key; instrument/calibration must match.
     binding = {"phases": [{"key": p["key"], "name": p["name"], "space_group": p["space_group"],
                             "atoms": [{k: a[k] for k in ("label", "element", "adp_type", "multiplicity", "site_symmetry")} for a in p["atoms"]]} for p in phases],
+               "source_constraints": constraint_binding(source_constraints,phases,histograms),
+               "source_bounds": bound_binding(project.data.get("Controls",{}).get("data",{}),phases,histograms,json_safe),
+               "occupancy_groups": {p["key"]:p["occupancy_groups"] for p in phases},
+               "model_topology": {p["key"]:model_topology(p) for p in phases},
+               "source_restraints": json_safe(project.data.get("Restraints",{}).get("data",{})),
+               "phase_histogram_links": {p['key']:[h['key'] for h in histograms if h['name'] in p['histograms']] for p in phases},
                "histograms": [{"key": h["key"], "instrument": h["instrument"],
                                "background": {k: h["background"][k] for k in ("function", "coefficients")}} for h in histograms]}
     covariance = {k: v for k, v in state["covariance"].items() if k not in {"matrix", "correlation_matrix"}}
     result = {"schema": "radar-gpx-context/v1", "source": {"name": path.name, "sha256": state["source"]["sha256"]},
-              "model_signature": digest(binding), "binding": binding,
-              "runtime": {"module": G2.__name__, "version": str(project.data.get("Controls", {}).get("data", {}).get("LastSavedUsing", "unknown"))},
+              "model_signature": digest(binding), "binding": binding, "normalized_histograms": normalized_histograms,
+              "source_constraints": source_constraints, "uiso_equivalence_groups": shared_uiso_groups,
+              "runtime": runtime_info(G2,project),
               "histograms": histograms, "phases": phases, "constraints": state["constraints"],
               "restraints": json_safe(project.data.get("Restraints", {}).get("data", {})),
               "parameter_space": {k: v for k, v in state["parameter_space"].items() if k != "parameters"},

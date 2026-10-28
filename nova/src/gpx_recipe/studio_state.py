@@ -1,4 +1,5 @@
-# Adapted unchanged from Diffraction Studio (MIT); see studio-provenance.json.
+# Adapted from Diffraction Studio (MIT), with documented parameter-identity fixes.
+# See studio-provenance.json and STUDIO-LICENSE; no Studio runtime is required.
 from __future__ import annotations
 
 import copy
@@ -373,6 +374,24 @@ def summarize_shift_over_sigma(covariance_data: dict[str, Any] | None) -> dict[s
     }
 
 
+def current_refinement_variable(name, historical_aliases, configured_now):
+    """A past sequential shift alias cannot mask a newly enabled direct variable.
+
+    GPX covariance newCellDict/newAtomDict describe the preceding fit. Current
+    native configured names take precedence when inspecting a new recipe stage.
+    """
+    if name in configured_now:return name
+    # Before the first coordinate refinement, there is no newAtomDict history.
+    # The native API refines dAx/dAy/dAz while storing physical Ax/Ay/Az. Bind
+    # only an exact currently configured same-atom shift; never infer a hold or
+    # a different atom from a historical covariance entry.
+    fields=name.split(':')
+    if len(fields)==4 and fields[2] in {'Ax','Ay','Az'}:
+        shifted=':'.join([*fields[:2],'d'+fields[2],fields[3]])
+        if shifted in configured_now:return shifted
+    return historical_aliases.get(name,name)
+
+
 def _reconstruct_parameter_space(
     gpx_path: Path,
     gpx: Any,
@@ -563,7 +582,7 @@ def _reconstruct_parameter_space(
 
     rows: list[dict[str, Any]] = []
     for name, current_value in parameter_values.items():
-        refinement_variable = actual_source_variables.get(name, name)
+        refinement_variable = current_refinement_variable(name,actual_source_variables,configured_now_set)
         phase_id, histogram_id, family, atom_id = _split_variable(name)
         source_group = parameter_sources.get(name, "unknown")
         configured_now = refinement_variable in configured_now_set

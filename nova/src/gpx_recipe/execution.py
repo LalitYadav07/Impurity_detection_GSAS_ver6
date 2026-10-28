@@ -9,6 +9,7 @@ from .contracts import validate_plan, plan_hash, stage_table
 from .snapshot import snapshot, gsas, json_safe
 from .studio_state import extract_gsasii_refinement_state
 from . import advanced
+from .effects import parameter_changes, require_fixed_values_unchanged,require_native_covariance,constraint_bound_audit,require_constraint_bounds,blocking_frozen_variables
 
 
 def write_json(path, value):
@@ -21,20 +22,28 @@ def write_json(path, value):
 def freeze(project):
     """Studio's tested reset: no accidental cumulative ordinary flags."""
     for hist in project.histograms():
-        hist.clear_refinements({"Background": True})
+        hist.clear_refinements({"Background": {"peaks": True}})
+        # In this native API, Background=True clears only the polynomial flag.
+        # Explicitly freeze independent Debye and imported-pattern terms too;
+        # keep every numerical value and FixedPoints support point unchanged.
+        background_terms=hist.data['Background'][1]
+        for term in background_terms.get('debyeTerms',[]):
+            for index in range(1,len(term),2):term[index]=False
+        imported=background_terms.get('background PWDR')
+        if isinstance(imported,list) and len(imported)>2:imported[2]=False
         for category, data, flag in (("Sample Parameters", hist.SampleParameters, 1),
                                      ("Instrument Parameters", hist.InstrumentParameters, 2)):
             keys = [k for k, v in data.items() if isinstance(v, (list, tuple)) and len(v) > flag and isinstance(v[flag], bool)]
             if keys:
                 hist.clear_refinements({category: keys})
-        # clear_refinements(Background) clears polynomial, Debye and peak flags.
+        # All independent background submodels are held unless explicitly supported and requested.
     for phase in project.phases():
         phase.clear_refinements({"Cell": True})
         phase.set_refinements({"Atoms": {"all": ""}})
         texture = phase.data["General"].get("SH Texture", {})
         if texture.get("SH Coeff"): texture["SH Coeff"][0] = False
         for key in ("Sample omega", "Sample chi", "Sample phi"):
-            if key in texture and len(texture[key]) > 1: texture[key][1] = False
+            if key in texture and len(texture[key]) > 1: texture[key][0] = False
         phase.clear_HAP_refinements({**{k: True for k in ("Scale", "Pref.Ori.", "Size", "Mustrain", "HStrain", "Extinction")},
                                      "Babinet": ["BabA", "BabU"]})
         if phase.data.get("Pawley ref") or any(h.get("LeBail") for h in phase.data["Histograms"].values()):
@@ -96,6 +105,16 @@ def configure(project, stage, context, added_constraints):
         identity = json.dumps(constraint, sort_keys=True)
         if identity in added_constraints:
             continue
+        if constraint['kind']=='uiso_equal':
+            names=[]
+            for term in constraint['atoms']:
+                atom=next(a for p in context['phases'] if p['key']==term['phase'] for a in p['atoms'] if a['label']==term['atom'])
+                variables=[v['name'] for v in atom['variables'] if v['group']=='atomic_displacement']
+                if len(variables)!=1:raise ValueError('Could not resolve a unique isotropic ADP variable')
+                names.append(variables[0])
+            if not advanced.has_equality(project,names):project.add_EquivConstr(names,multlist=[1.0]*len(names),override=False)
+            added_constraints.add(identity)
+            continue
         names, multipliers = [], []
         for term in constraint["terms"]:
             atom = next(a for p in context["phases"] if p["key"] == term["phase"] for a in p["atoms"] if a["label"] == term["atom"])
@@ -118,7 +137,11 @@ def parameter_matches_target(row, target, context):
     hist = next((h for h in context["histograms"] if h["key"] == target.get("histogram")), None)
     kind = target["kind"]
     if kind in {"background", "histogram_scale"}:
-        return hist is not None and row["histogram_id"] == hist["native_id"] and row["phase_id"] is None and group == ("background" if kind == "background" else "histogram_scale")
+        scope=hist is not None and row["histogram_id"] == hist["native_id"] and row["phase_id"] is None
+        if kind=='background':
+            family=row.get('family',row['name'].split(':')[2] if len(row['name'].split(':'))>2 else '')
+            return scope and group=='background' and family.startswith('Back;')
+        return scope and group=='histogram_scale'
     if phase is None or row["phase_id"] != phase["native_id"]: return False
     if kind == "cell": return group == "lattice" and row["histogram_id"] is None
     if kind in {"phase_scale", "preferred_orientation"}:
@@ -134,12 +157,20 @@ def check_preflight(state, stage, context):
     if state["extraction"]["status"] != "complete" or state["constraints"].get("error") or state["constraints"].get("multiplier_error"):
         raise ValueError("GSAS-II constraint/parameter preflight failed: " + str(state["constraints"]))
     space = state["parameter_space"]
+    blocked=set(space.get('frozen_variables',[])) & (set(space.get('configured_vary',[]))|set(space.get('effective_vary',[])))
+    if blocked:
+        raise ValueError('Requested variables are already frozen by preserved source bounds/history: '+str(sorted(blocked))+'. Review an explicit reset in the source project; this recipe never silently clears holds.')
     if not space["effective_vary"]:
         raise ValueError("The requested stage has no effective independent refinement variables")
     # A rigid-body or custom variable must not bypass our closed active set.
     allowed = {"background", "phase_fraction", "histogram_scale", "preferred_orientation", "lattice", "atomic_coordinates", "atomic_displacement", "occupancy"}
     permitted = lambda row: row["configured_now"] and any(parameter_matches_target(row, target, context) for target in stage["free"])
-    unexpected = [p["name"] for p in space["parameters"] if p["effective_now"] and not permitted(p)]
+    permitted_names={name for p in space['parameters'] if permitted(p)
+                     for name in (p['name'],p.get('refinement_variable',p['name']))}
+    # Generated constraint coordinates need not have a row in parmDict. Check
+    # the complete independent vary list, not just rows visible in that table.
+    unexpected=sorted({str(name) for name in space['effective_vary'] if str(name) not in permitted_names} |
+                      {p['name'] for p in space['parameters'] if p['effective_now'] and not permitted(p)})
     resolved = {}
     if unexpected:
         G2 = gsas()
@@ -148,6 +179,26 @@ def check_preflight(state, stage, context):
         unexpected = [name for name in unexpected if name not in resolved]
     if unexpected:
         raise ValueError("Unexpected active parameters outside the approved vocabulary: " + str(unexpected))
+    for target in stage["free"]:
+        if target["kind"] == "atom":
+            continue  # Each requested atom flag is checked separately below.
+        matching = [p for p in space["parameters"] if p["configured_now"] and parameter_matches_target(p, target, context)]
+        if not matching:
+            raise ValueError("A requested target has no configured native parameters: " + str(target))
+        if not any(p["effective_now"] for p in matching):
+            G2 = gsas()
+            maps = importlib.import_module((G2.__package__ + "." if G2.__package__ else "") + "GSASIImapvars")
+            dependent = {str(v) for v in maps.GetDependentVars()}
+            influence = False
+            for p in matching:
+                variable = p.get("refinement_variable", p["name"])
+                if variable not in dependent:
+                    continue
+                variables, multipliers = maps.getInvConstraintEq(variable, space["effective_vary"])
+                if any(str(v) in space["effective_vary"] and abs(float(c)) > 1e-12 for v,c in zip(variables,multipliers)):
+                    influence = True
+            if not influence:
+                raise ValueError("A requested target is fully constrained with no independent refinement influence: " + str(target))
     for target in stage["free"]:
         if target["kind"] != "atom":
             continue
@@ -184,7 +235,6 @@ def resolve_constraint_provenance(space, unknown, dependent, inverse, allowed, p
     result = {}
     for name in unknown:
         origins = []
-        if not name.startswith("::constr"): continue
         for variable in dependent:
             variable = variable.varname() if hasattr(variable, "varname") else str(variable)
             variables, multipliers = inverse(variable, space["effective_vary"])
@@ -219,10 +269,16 @@ def run_plan(source, output, plan, *, approved=None, preview=False):
               "source_sha256": initial_hash, "model_signature": context["model_signature"], "status": "running", "stages": []}
     result_path = output.with_suffix(".execution.json")
     added_constraints = set()
+    declared_relations = {}
+    normalized_histograms = set(context.get("normalized_histograms",[]))
     try:
         for stage, display in zip(plan["stages"], stage_table(plan, context)):
             started = time.monotonic()
+            introduced=[c for c in stage['constraints'] if advanced.relation_key(c) not in declared_relations]
             configure(project, stage, context, added_constraints)
+            normalized_histograms.update(stage.get("phase_normalization",[]))
+            advanced.check_requested_relations(project,context,introduced,free=stage['free'])
+            for constraint in introduced:declared_relations[advanced.relation_key(constraint)]=constraint
             configured = advanced.audit(project, context)
             project.save()
             state = extract_gsasii_refinement_state(output, project, G2, max_correlations=10)
@@ -237,23 +293,39 @@ def run_plan(source, output, plan, *, approved=None, preview=False):
                 project.data.setdefault("Covariance", {}).setdefault("data", {})["freshCOV"] = False
                 project.save()
                 project.do_refinements([{}])
+                row["status"] = "refined_needs_review"
+                cov_native=project.data.get("Covariance",{}).get("data",{})
+                if not cov_native.get("freshCOV"):raise ValueError("Stage did not produce fresh refinement covariance")
+                native_maps=importlib.import_module((G2.__package__+"." if G2.__package__ else "")+"GSASIImapvars")
+                # Capture while the actual last solver's map is still active;
+                # the read-only extractor reconstructs its own maps afterward.
+                native_bounds=constraint_bound_audit(state,cov_native,native_maps.Dict2Map)
                 project.save()
                 after = extract_gsasii_refinement_state(output, project, G2, max_correlations=10)
                 cov = project.data.get("Covariance", {}).get("data", {})
                 if not cov.get("freshCOV"):
                     raise ValueError("Stage did not produce fresh refinement covariance")
-                row.update(status="completed", rwp={h.name: h.get_wR() for h in project.histograms()},
+                row.update(status="refined_needs_review", rwp={h.name: h.get_wR() for h in project.histograms()},
                            actual_vary=after["parameter_space"]["last_vary"], covariance={k: v for k, v in after["covariance"].items() if k not in {"matrix", "correlation_matrix"}},
                            metric_rows=[p for p in after["parameter_space"]["parameters"] if p["group"] in {"lattice", "atomic_coordinates", "atomic_displacement", "occupancy"}],
                            frozen_variables=after["parameter_space"]["frozen_variables"])
+                row["constraint_bound_audit"] = native_bounds
+                row["blocking_frozen_variables"] = blocking_frozen_variables(state,after)
                 row["final_state"] = advanced.audit(project, context)
+                row["parameter_changes"] = parameter_changes(state, after)
+                require_fixed_values_unchanged(row["parameter_changes"])
+                require_native_covariance(cov,len(row['actual_vary']),row['covariance'])
+                require_constraint_bounds(native_bounds)
                 advanced.check_site_totals(project, context)
+                row["normalization_checks"] = advanced.check_normalization(project,context,normalized_histograms)
+                advanced.check_requested_relations(project,context,list(declared_relations.values()))
                 if set(row["actual_vary"]) != set(row["effective_vary"]):
                     row["status"] = "needs_review"
                     raise ValueError("Actual independent vary list differs from the approved stage preflight")
-                if row["frozen_variables"]:
+                if row["blocking_frozen_variables"]:
                     row["status"] = "needs_review"
                     raise ValueError("GSAS-II froze a variable at its bound; remaining stages were not executed")
+                row["status"] = "completed"
                 checkpoint = output.with_name(output.stem + "_" + stage["id"] + ".gpx")
                 project.save(str(checkpoint))
                 project.save(str(output))
@@ -264,6 +336,8 @@ def run_plan(source, output, plan, *, approved=None, preview=False):
             for p in project.phases()]
         result["output_gpx_sha256"] = hashlib.sha256(output.read_bytes()).hexdigest()
     except Exception as exc:
+        if result["stages"]:
+            result["stages"][-1].setdefault("elapsed_seconds",time.monotonic()-started)
         result.update(status="failed", error_type=type(exc).__name__, error=str(exc))
         write_json(result_path, result)
         raise

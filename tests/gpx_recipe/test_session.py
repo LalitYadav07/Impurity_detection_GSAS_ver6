@@ -49,3 +49,14 @@ def test_restart_restores_saved_plan_without_repeating_work(tmp_path, monkeypatc
         assert not session.queue.jobs
     finally:
         session.worker.shutdown()
+
+
+def test_deterministic_constraint_clarification_does_not_require_a_fake_model_call(tmp_path,monkeypatch,context,plan):
+    session=object.__new__(Session);session.root,session.context=tmp_path,context
+    session.lock,session.worker=threading.RLock(),DeferredWorker()
+    session.state={'status':'ready','plan':None,'approval':None,'preview':None,'revisions':[],'origin':None}
+    clarification=copy.deepcopy(plan);clarification.update(stages=[],questions=['Authorize the full existing Uiso group?'])
+    monkeypatch.setattr('gpx_recipe.web.make_plan',lambda *a,**k:{'plan':clarification,'calls':[],'origin':'Deterministic source-constraint check'})
+    session.schedule('plan',{'request':'Refine a held equality participant'});session.worker.work()
+    assert session.state['status']=='ready' and session.state['origin']=='Deterministic source-constraint check'
+    assert session.state['approval'] is None and session.state['plan']['questions']

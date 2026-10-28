@@ -124,3 +124,33 @@ def test_explicit_stage_layout_and_optional_nulls_are_preserved():
     assert clean['stages'][0]['bounds']==[{'lower':0.0}]
     assert clean['stages'][0]['texture']==[{'order':4}]
     assert value['stages'][0]['bounds'][0]['value'] is None
+
+
+def test_normalized_subset_keeps_explicitly_held_phases_and_needs_real_freedom(context,plan):
+    original=copy.deepcopy(context['phases'][0]);context['phases']=[{**copy.deepcopy(original),'key':f'p{i}','name':f'phase {i}'} for i in range(3)]
+    stage=dict(id='s1',title='Selected fractions',cycles=4,free=[dict(kind='histogram_scale',histogram='h0')]+[dict(kind='phase_scale',phase=p,histogram='h0') for p in ['p0','p1']],constraints=[],phase_normalization=['h0']);plan['stages']=[stage]
+    validate_plan(plan,context) # p2 is deliberately held at its normalized start.
+    stage['free']=stage['free'][:2]
+    with pytest.raises(ValueError,match='fully determined by sum-to-one'):validate_plan(plan,context)
+    stage['free']=stage['free'][:1];validate_plan(plan,context) # All fractions held; only global scale refines.
+
+
+def test_later_single_fraction_release_is_also_blocked_by_persistent_normalization(context,plan):
+    original=copy.deepcopy(context['phases'][0]);context['phases']=[{**copy.deepcopy(original),'key':f'p{i}','name':f'phase {i}'} for i in range(2)]
+    stage=dict(id='s1',title='Normalize all',cycles=4,free=[dict(kind='histogram_scale',histogram='h0')]+[dict(kind='phase_scale',phase=p,histogram='h0') for p in ['p0','p1']],constraints=[],phase_normalization=['h0'])
+    later=dict(id='s2',title='Only p0 fraction',cycles=4,free=[dict(kind='phase_scale',phase='p0',histogram='h0')],constraints=[]);plan['stages']=[stage,later]
+    with pytest.raises(ValueError,match='fully determined by sum-to-one'):validate_plan(plan,context)
+
+
+def test_normalization_keeps_tighter_source_scale_bounds():
+    from gpx_recipe.advanced import configure
+    hist=SimpleNamespace(name='h',id=0,SampleParameters={'Scale':[2.,True]})
+    phases={f'p{i}':SimpleNamespace(id=i,data={'Histograms':{'h':{'Use':True,'Scale':[value,False]}}}) for i,value in enumerate([3.,1.])}
+    controls={('parmMin','0:0:Scale'):.6,('parmMax','0:0:Scale'):.9}
+    project=SimpleNamespace(data={'Constraints':{'data':{}}},get_Controls=lambda key,variable:controls.get((key,variable)),set_Controls=lambda key,value,variable:controls.__setitem__((key,variable),value),add_EqnConstr=lambda *a,**k:None)
+    stage={'free':[{'kind':'histogram_scale','histogram':'h0'}],'phase_normalization':['h0']}
+    configure(project,stage,{},phases,{'h0':hist},set())
+    assert controls[('parmMin','0:0:Scale')]==.6 and controls[('parmMax','0:0:Scale')]==.9
+    assert phases['p0'].data['Histograms']['h']['Scale']==[.75,False] and hist.SampleParameters['Scale'][0]==8.
+    controls[('parmMin','0:0:Scale')]=.8
+    with pytest.raises(ValueError,match='preserved source bounds'):configure(project,stage,{},phases,{'h0':hist},set())

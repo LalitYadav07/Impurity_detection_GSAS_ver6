@@ -8,5 +8,9 @@
     "science_workbench/domain_packs/diffraction/knowledge/gsasii_api_reference.md": "0c668642e59dfe4163403cbed484854f397a596c84fa220b7cd9c978ae795492",
     "science_workbench/domain_packs/diffraction/knowledge/gsasii_constraints_occupancy.md": "67239a8b02ccd6bfa665d639ef9f15c1142594ec8d4d279e9b3f17c2ea63a269"
   },
-  "adaptation": "Read-only state reconstruction vendored; operation vocabulary and flag-reset semantics distilled into standalone NDIP components. No runtime dependency on Studio."
+  "adaptation": "Read-only state reconstruction vendored; operation vocabulary and flag-reset semantics distilled into standalone NDIP components. No runtime dependency on Studio.",
+  "adaptation_notes": [
+    "2026-10-28: current configured native names take precedence over historical covariance shift aliases, so a prior D11/A0 mapping cannot hide a newly enabled direct cell parameter. Original upstream source hashes above record the reference, not the modified vendored file.",
+    "2026-10-28: physical atomic coordinates Ax/Ay/Az bind to exact currently configured dAx/dAy/dAz before the first coordinate refinement, even when no preceding newAtomDict exists. Same-atom/current-config checks prevent historical aliases or other atoms from deciding active flags."
+  ]
 }

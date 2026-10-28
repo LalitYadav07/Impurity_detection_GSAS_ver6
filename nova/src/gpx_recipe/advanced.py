@@ -99,8 +99,10 @@ def validate_stage(stage, context, normalized):
         global_free = any(t["kind"] == "histogram_scale" and t["histogram"] == hist for t in free)
         if global_free and linked and scales == linked and hist not in normalized:
             raise ValueError("Histogram scale plus all phase scales requires explicit sum-to-one phase normalization")
-        if hist in values and (not global_free or (len(linked) > 1 and scales != linked) or (len(linked) == 1 and scales)):
-            raise ValueError("Normalization requires histogram scale and every linked phase scale; a single phase is fixed to one")
+        if hist in values and (not global_free or (len(linked)==1 and scales)):
+            raise ValueError("Normalization requires the global histogram scale free; a single phase HAP scale is fixed to one")
+        if hist in normalized and len(linked)>1 and len(scales)==1:
+            raise ValueError("Only one requested free phase scale is fully determined by sum-to-one with the other phase scales held. Hold it too and refine the histogram scale, or explicitly release at least two phase scales; never silently free extra phases.")
     for edit in stage.get("texture", []):
         exact_keys(edit, {"phase", "histogram", "model", "direction", "order", "value"}, {"phase", "histogram", "model"})
         if edit["phase"] not in phases or edit["histogram"] not in hists or hists[edit["histogram"]]["name"] not in phases[edit["phase"]]["histograms"]:
@@ -151,7 +153,7 @@ def _scale_sum_exists(project, names):
             try:
                 variables = [str(v.varname()) if hasattr(v, "varname") else str(v) for _, v in terms]
                 if set(variables) == set(names):
-                    if len(variables) != len(names) or float(item[-3]) != 1 or any(float(c) != 1 for c, _ in terms):
+                    if len(variables) != len(names) or not has_equation(project, names, [1.0]*len(names), 1.0):
                         raise ValueError("An existing phase-scale equation conflicts with normalization")
                     return True
             except (TypeError, AttributeError): continue
@@ -174,6 +176,27 @@ def has_equation(project, names, coefficients, total):
     return False
 
 
+def has_equality(project,names):
+    """Recognize equal-coefficient equivalence chains, preserving existing constraints."""
+    neighbours={}
+    for rows in project.data.get('Constraints',{}).get('data',{}).values():
+        if not isinstance(rows,list):continue
+        for row in rows:
+            if not isinstance(row,list) or len(row)<5 or row[-1]!='e':continue
+            try:
+                terms=[(float(c),v.varname() if hasattr(v,'varname') else str(v)) for c,v in row[:-3]]
+                if not terms or not terms[0][0] or any(not math.isclose(c,terms[0][0],rel_tol=1e-12,abs_tol=1e-12) for c,v in terms):continue
+                first=terms[0][1]
+                for _,v in terms[1:]:neighbours.setdefault(first,set()).add(v);neighbours.setdefault(v,set()).add(first)
+            except (ValueError,TypeError):continue
+    pending=[names[0]];seen=set()
+    while pending:
+        name=pending.pop()
+        if name in seen:continue
+        seen.add(name);pending.extend(neighbours.get(name,set())-seen)
+    return set(names)<=seen
+
+
 def configure(project, stage, context, phases, hists, added):
     for edit in stage.get("fit_ranges", []):
         hist = hists[edit["histogram"]]
@@ -191,10 +214,22 @@ def configure(project, stage, context, phases, hists, added):
             raise ValueError("Normalize only finite nonnegative phase scales with positive total")
         existing = _scale_sum_exists(project, names) if len(names) > 1 else True
         for phase in active:
-            phase.data["Histograms"][hist.name]["Scale"][0] /= total
-            project.set_Controls("parmMin", 0.0, variable=f"{phase.id}:{hist.id}:Scale")
-            project.set_Controls("parmMax", 1.0, variable=f"{phase.id}:{hist.id}:Scale")
+            variable=f"{phase.id}:{hist.id}:Scale"
+            lo=project.get_Controls("parmMin",variable=variable)
+            hi=project.get_Controls("parmMax",variable=variable)
+            lo=max(0.0,float(lo)) if lo is not None else 0.0
+            hi=min(1.0,float(hi)) if hi is not None else 1.0
+            value=float(phase.data["Histograms"][hist.name]["Scale"][0])/total
+            if not lo<=value<=hi:
+                raise ValueError("Normalized starting phase scale is outside its preserved source bounds; review the bounds or starting project rather than silently relaxing or clamping them")
+            phase.data["Histograms"][hist.name]["Scale"][0]=value
+            project.set_Controls("parmMin",lo,variable=variable)
+            project.set_Controls("parmMax",hi,variable=variable)
         hist.SampleParameters["Scale"][0] *= total
+        variable=f":{hist.id}:Scale";value=hist.SampleParameters["Scale"][0]
+        lo=project.get_Controls("parmMin",variable=variable);hi=project.get_Controls("parmMax",variable=variable)
+        if lo is not None and value<lo or hi is not None and value>hi:
+            raise ValueError("Compensated histogram starting scale is outside its preserved source bounds; review the normalization recipe")
         if len(names) == 1:
             active[0].data["Histograms"][hist.name]["Scale"][1] = False
         elif not existing:
@@ -220,6 +255,8 @@ def configure(project, stage, context, phases, hists, added):
             project.set_Controls("parmMin", max(1e-6, lo) if lo is not None else 1e-6, variable=variable)
     for edit in stage.get("bounds", []):
         phase = phases[edit["phase"]]; atom = phase.atom(edit["atom"])
+        if edit["parameter"] == "F" and edit["upper"] > site_capacity(context, edit["phase"], edit["atom"], phase, stage["free"]) + 1e-7:
+            raise ValueError("Requested occupancy bounds overfill the current mixed site after preceding stages; review the recipe rather than silently changing the bounds")
         record = next(a for p in context["phases"] if p["key"] == edit["phase"] for a in p["atoms"] if a["label"] == edit["atom"])
         group = "occupancy" if edit["parameter"] == "F" else "atomic_displacement"
         names = [v["name"] for v in record["variables"] if v["group"] == group]
@@ -254,3 +291,45 @@ def audit(project, context):
                                    "coordinates": list(a.coordinates), "adp": a.ADP} for a in phase.atoms()],
                         "hap": {h: {"scale": d["Scale"], "texture": d["Pref.Ori."]} for h, d in phase.data["Histograms"].items()}}
                        for p in context["phases"] for phase in [project.phase(p["name"])]]})
+
+
+def relation_key(constraint):
+    """Scientific identity excludes prose and term ordering."""
+    import json
+    if constraint['kind']=='uiso_equal':
+        return json.dumps({'kind':'uiso_equal','atoms':sorted(constraint['atoms'],key=lambda t:(t['phase'],t['atom']))},sort_keys=True)
+    terms=sorted(constraint['terms'],key=lambda t:(t['phase'],t['atom']));factor=float(terms[0]['coefficient'])
+    return json.dumps({'kind':'occupancy_sum','terms':[{**t,'coefficient':float(t['coefficient'])/factor} for t in terms],'total':float(constraint['total'])/factor},sort_keys=True)
+
+
+def check_requested_relations(project,context,constraints,*,free=None):
+    """Preserving a definition is not proof that held or refined values obey it.
+
+    With free supplied, check only newly introduced wholly held relations. A
+    preview cannot predict values after an earlier, unexecuted refinement.
+    Without free, verify every declared relation in the actual saved state.
+    """
+    phases={p['key']:project.phase(p['name']) for p in context['phases']}
+    for constraint in constraints:
+        field='U' if constraint['kind']=='uiso_equal' else 'F'
+        targets=constraint['atoms'] if field=='U' else constraint['terms']
+        if free is not None and any(t['kind']=='atom' and field in t['flags'] and any((t['phase'],t['atom'])==(a['phase'],a['atom']) for a in targets) for t in free):continue
+        if field=='U':
+            values=[float(phases[t['phase']].atom(t['atom']).ADP) for t in targets]
+            valid=max(values)-min(values)<=1e-9
+        else:
+            value=sum(float(t['coefficient'])*float(phases[t['phase']].atom(t['atom']).occupancy) for t in targets)
+            valid=math.isclose(value,float(constraint['total']),rel_tol=1e-7,abs_tol=1e-7)
+        if not valid:
+            raise ValueError('Requested '+constraint['kind']+' relation is not satisfied by '+('held values; authorize appropriate refinement freedoms or explicit starting values' if free is not None else 'the actual refined values; later stages were not executed'))
+
+
+def check_normalization(project,context,normalized):
+    rows=[]
+    for key in sorted(normalized):
+        name=next(h['name'] for h in context['histograms'] if h['key']==key)
+        values=[float(p.data['Histograms'][name]['Scale'][0]) for p in project.phases() if name in p.data['Histograms'] and p.data['Histograms'][name].get('Use',True)]
+        total=sum(values);rows.append({'histogram':key,'phase_scale_sum':total,'phase_count':len(values)})
+        if not values or not math.isfinite(total) or not math.isclose(total,1.,rel_tol=0,abs_tol=1e-7):
+            raise ValueError('Phase-scale normalization drifted in '+key+': sum='+str(total)+'; saved values do not satisfy the requested sum-to-one equation')
+    return rows

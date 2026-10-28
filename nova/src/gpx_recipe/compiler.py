@@ -28,7 +28,9 @@ Requires the pinned GSAS-II runtime and the shipped gpx_recipe package.
 """
 import argparse
 import json
-from gpx_recipe.execution import run_plan
+from pathlib import Path
+from gpx_recipe.execution import run_plan, write_json
+from gpx_recipe.contracts import plan_hash
 
 PLAN = json.loads(PLAN_LITERAL)
 APPROVAL = json.loads(APPROVAL_LITERAL)
@@ -37,7 +39,19 @@ if __name__ == "__main__":
     parser.add_argument("--source-gpx", required=True)
     parser.add_argument("--output-gpx", required=True)
     args = parser.parse_args()
-    result = run_plan(args.source_gpx, args.output_gpx, PLAN, approved=APPROVAL)
+    try:
+        result = run_plan(args.source_gpx, args.output_gpx, PLAN, approved=APPROVAL)
+    except Exception as exc:
+        # Source/model validation can reject an arrival before an execution
+        # receipt exists. Preserve that reason without claiming it executed.
+        failure = Path(args.output_gpx).with_suffix(".failure.json")
+        if failure.parent.is_dir() and not failure.exists():
+            try:
+                write_json(failure, {"schema": "radar-gpx-failure/v1", "plan_sha256": plan_hash(PLAN),
+                                     "error_type": type(exc).__name__, "error": str(exc)})
+            except OSError:
+                pass  # Preserve the primary rejection if artifact storage fails.
+        raise
     print(json.dumps({"status": result["status"], "stages": len(result["stages"])}))
 '''
     prefix, rest = text.split("PLAN_LITERAL", 1)

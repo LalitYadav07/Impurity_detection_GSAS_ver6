@@ -1,7 +1,8 @@
 """Small local review harness; the planner and worker are NDIP-portable modules.
 
-No Studio import, credential file reader or GSAS-II unpickling occurs in the
-HTTP process. Native inspection/preflight/refinement runs in a child runtime.
+The HTTP process loads its explicitly configured provider credential at startup;
+it does not import Studio or unpickle GPXs. Native inspection/preflight/refinement
+runs in a credential-free child runtime.
 """
 import argparse
 from concurrent.futures import ThreadPoolExecutor
@@ -19,6 +20,7 @@ from .compiler import approve, compile_script
 from .contracts import validate_plan, plan_hash, stage_table
 from .execution import write_json
 from .jobs import RecipeQueue, scientific_environment
+from .process import run_scientific
 from .planner import make_plan
 from .providers import PROVIDERS, configure_provider, provider_info
 
@@ -57,7 +59,7 @@ class Session:
         command = [self.python, "-m", "gpx_recipe.cli", *args]
         log = self.root / ("native-" + uuid.uuid4().hex[:10] + ".log")
         with log.open("w") as handle:
-            result = subprocess.run(command, env=env, stdout=handle, stderr=subprocess.STDOUT, timeout=180)
+            result = run_scientific(command, env=env, stdout=handle, stderr=subprocess.STDOUT, timeout=180)
         if result.returncode:
             raise ValueError("Native GSAS-II operation failed. " + log.read_text()[-2500:])
 
@@ -71,7 +73,7 @@ class Session:
         data["sources"] = [Path(p).name for p in self.sources]
         data["fixture_available"] = bool(self.fixture)
         data["planner"] = self.planner_info
-        data["deployment_planner"] = provider_info("sambanova")
+        data["deployment_planner"] = provider_info("illumine-luna")
         data["jobs"] = list(json.loads(self.queue.manifest.read_text()).values())
         if data.get("plan"):
             data["table"] = stage_table(data["plan"], self.context)
@@ -106,7 +108,8 @@ class Session:
                         response = make_plan(body.get("request", ""), self.context, previous=plan)
                         write_json(self.root / ("planning-" + uuid.uuid4().hex[:10] + ".json"), response)
                         proposed = response["plan"]
-                        origin = response["calls"][0]["label"] + " · reasoning " + response["calls"][0]["reasoning_effort"]
+                        origin = (response["calls"][0]["label"] + " · reasoning " + response["calls"][0]["reasoning_effort"]
+                                  if response["calls"] else response.get("origin", "Deterministic requirement check"))
                     with self.lock:
                         self.state["revisions"].append({"plan_sha256": plan_hash(proposed), "origin": origin, "plan": proposed,
                                                         "user_request": body.get("request", "") if action == "plan" else proposed["request"]})

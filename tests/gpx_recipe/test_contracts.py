@@ -168,3 +168,59 @@ def test_constraint_cannot_remove_only_requested_occupancy_freedom(context, plan
     client = FakeClient([json.dumps(plan), json.dumps(good)])
     result = make_plan('Refine only O1 occupancy; keep all other atoms fixed.', context, client=client)
     assert len(client.calls) == 2 and result['plan']['stages'][0]['constraints'] == []
+
+
+def test_initial_shared_texture_flags_are_visible_as_newly_fixed(context,plan):
+    context['phases'][0]['global_texture']={'SH Coeff':[True,{'C(4,0,1)':.4}],'Sample omega':[True,17.]}
+    fixed=stage_table(plan,context)[0]['newly_fixed']
+    assert 'global_texture:p0' in fixed and 'texture_angles:p0' in fixed
+
+
+def test_existing_normalization_lone_requested_fraction_is_a_concrete_zero_call_question(context):
+    context['phases'].append(dict(context['phases'][0],key='p1',name='other phase'))
+    context['normalized_histograms']=['h0']
+    class NoCall:
+        def complete(self,messages):raise AssertionError('Known source constraint needs no model inference')
+    response=make_plan('Use exactly one stage. Each Free list is complete; everything unlisted stays fixed.\nStage 1: Free: global histogram scale h0; HAP phase scale p0 h0.',context,client=NoCall())
+    assert response['status']=='needs_input' and response['calls']==[]
+    assert response['plan']['stages']==[] and 'at least two phase scales' in response['plan']['questions'][0]
+
+
+def test_existing_normalization_does_not_block_a_real_two_scale_degree_of_freedom(context):
+    context['phases'].append(dict(context['phases'][0],key='p1',name='other phase'))
+    context['normalized_histograms']=['h0']
+    proposal=dict(schema='radar-gpx-recipe/v1',model_signature=context['model_signature'],request='Two phases',assumptions=[],questions=[],unsupported=[],stages=[dict(id='one',title='Relative scales',cycles=4,free=[dict(kind='histogram_scale',histogram='h0'),dict(kind='phase_scale',phase='p0',histogram='h0'),dict(kind='phase_scale',phase='p1',histogram='h0')],constraints=[])])
+    client=FakeClient([json.dumps(proposal)])
+    result=make_plan('Use exactly one stage. Each Free list is complete; everything unlisted stays fixed.\nStage 1: Free: global histogram scale h0; HAP phase scale p0 h0; HAP phase scale p1 h0.',context,client=client)
+    assert result['status']=='ready_for_preflight' and len(result['calls'])==1
+    assert result['plan']['stages'][0].get('phase_normalization',[])==[]
+
+
+@pytest.mark.parametrize('target',[dict(kind='cell',phase='p0'),dict(kind='atom',phase='p0',atom='O1',flags='U')])
+def test_inactive_phase_cannot_claim_refinable_cells_or_atoms(context,plan,target):
+    context['phases'][0]['histograms']=[]
+    plan['stages']=plan['stages'][:1];plan['stages'][0]['free']=[target]
+    with pytest.raises(ValueError,match='no active powder-histogram links'):validate_plan(plan,context)
+
+
+def test_snapshot_rejects_unlinked_source_before_parameter_reconstruction(tmp_path,monkeypatch):
+    from types import SimpleNamespace
+    from gpx_recipe import snapshot as module
+    source=tmp_path/'unlinked.gpx';source.write_bytes(b'fake trusted native loader')
+    phase=SimpleNamespace(data={'General':{'Type':'nuclear'},'Histograms':{}})
+    project=SimpleNamespace(data={},histograms=lambda:[SimpleNamespace(name='PWDR measured')],phases=lambda:[phase])
+    monkeypatch.setattr(module,'gsas',lambda:SimpleNamespace(G2Project=lambda **kw:project))
+    with pytest.raises(ValueError,match='No structural phase is actively linked'):module.snapshot(source)
+    phase.data['Histograms']={'PWDR measured':{'Use':False}}
+    with pytest.raises(ValueError,match='No structural phase is actively linked'):module.snapshot(source)
+
+
+def test_compiled_wrapper_records_preexecution_rejection_without_modifying_source(context,plan,tmp_path,monkeypatch):
+    import sys
+    from gpx_recipe import execution
+    source=tmp_path/'incoming.gpx';source.write_bytes(b'trusted source unchanged');out=tmp_path/'out.gpx';code=compile_script(plan,{'approved_plan_sha256':plan_hash(plan)},tmp_path/'run.py')
+    def rejected(*a,**kw):raise ValueError('Plan does not match the inspected GPX model')
+    monkeypatch.setattr(execution,'run_plan',rejected);monkeypatch.setattr(sys,'argv',['run.py','--source-gpx',str(source),'--output-gpx',str(out)])
+    with pytest.raises(ValueError,match='does not match'):exec(compile(code,'run.py','exec'),{'__name__':'__main__'})
+    failure=json.loads(out.with_suffix('.failure.json').read_text());assert failure['plan_sha256']==plan_hash(plan) and failure['error_type']=='ValueError'
+    assert not out.exists() and source.read_bytes()==b'trusted source unchanged'
