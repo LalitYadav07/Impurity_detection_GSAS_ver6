@@ -2,6 +2,8 @@
     <description>inspect, preflight or apply an approved recipe to one published GPX</description>
     <requirements><container type="docker">@IMMUTABLE_BATCH_IMAGE@</container></requirements>
     <command detect_errors="exit_code"><![CDATA[
+        touch '$result_bundle' '$console_output' &&
+        trap "chmod a+r '$result_bundle' '$console_output' >/dev/null 2>&1 || true" EXIT &&
         python /opt/radar-pd/scripts/ndip_refinement.py '$action' '$source_gpx' '$request' worker '$result_bundle' > '$console_output' 2>&1
     ]]></command>
     <inputs>
