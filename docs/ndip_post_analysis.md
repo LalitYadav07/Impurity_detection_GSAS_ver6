@@ -6,7 +6,77 @@ NOVA 0.4.3 adds saved scientific views for single results and live POWGEN/NOMAD 
 
 Before starting, choose **Post-analysis views** in the setup form. The defaults retain phase evolution and absolute cell trends. Save the reusable configuration to preserve this selection. Live-monitor selections and subsequently pinned references are also stored in the watch checkpoint; **Save view settings** saves changes immediately, including after monitoring stops.
 
-The dashboard shows every selected view. Choose **Edit this view** to change its metric, axis, representation, visible phases, reference, acquisition branch, uncertainties or connection lines. **Duplicate view** allows, for example, absolute cell values and relative cell changes side by side. **Remove this view** removes only that instance; removing a recipe from the setup dropdown removes all its instances.
+The dashboard focuses on one selected view. Open **Axis, phases and display** to change its metric, axis, representation, visible phases, reference, acquisition branch, uncertainties or connection lines. **Duplicate view** preserves a separate set of choices, for example absolute cell values and fractional expansion. **Remove this view** removes only that instance; removing a recipe from the setup dropdown removes all its instances.
+
+## Expansion and lattice thermometry
+
+In **Thermal expansion / cell change**, choose **Lattice signals (optional)** to
+plot explicit phase/direction pairs together, for example MgO a, corundum a and
+corundum c. This avoids assuming every cell is cubic, or that equal numerical
+cell edges represent independent parameters. Lengths and volumes can share a
+normalized scale; their absolute values require separate views.
+
+The representations include absolute values, differences, relative change in
+percent, **fractional expansion in per mille** `1000 × (L/L₀ − 1)`, and the
+**normalized lattice signal** `L/L₀`. Choose an explicit reference scan or retain
+the existing first-eligible-acquisition pin. Points retain acquisition order and
+separate compatible banks, samples, profiles and branches. The horizontal axis
+can be switched between run number, temperature and other eligible metadata;
+Kelvin/Celsius changes display coordinates only.
+
+**Ratio of two lattice signals** uses an explicit numerator and denominator
+from the same final model and histogram. A two-phase ratio can cancel a common
+multiplicative lattice scale, but does not remove phase-specific strain,
+composition or reaction effects. Values are available from older summaries;
+ratio error bars require the joint cross-phase covariance. A missing phase is a
+gap, not a zero or a silently substituted phase.
+
+Open **Reference comparison / lattice thermometry (optional)** to import a CSV:
+
+```csv
+temperature_K,value,unit,source
+300,4.0000,angstrom,Reviewed material-specific reference
+400,4.0040,angstrom,Reviewed material-specific reference
+500,4.0082,angstrom,Reviewed material-specific reference
+```
+
+The numbers above are illustrative, not a material calibration. Accepted units
+are `angstrom`, `angstrom^3`, and `dimensionless` for a lattice ratio. Supply
+3–2000 rows with strictly increasing `temperature_K` (or `temperature_C`),
+positive values, one unit and explicit provenance. Curves use shape-preserving
+cubic interpolation of log(value), with no extrapolation. The configuration
+and export preserve the complete table and source-file SHA-256.
+
+Choose one phase and cell metric, or an explicit two-signal ratio; an explicit
+baseline scan is required. Review the curve's material/composition, pressure,
+phase range and the assumption that the baseline logged temperature is correct.
+No reference is assigned automatically from a formula or phase name. Changing
+the phase, ratio, sample, bank, baseline, curve or imported axis mapping clears
+the review acknowledgement.
+
+Available comparisons are expansion with a reference overlay, excess expansion
+above the reference, inferred sample temperature, and inferred minus logged
+temperature. Inference solves `F(T)/F(T₀) = L/L₀`; ambiguous inversions,
+unsupported ranges and locally insensitive inversions are withheld. A recorded
+or explicitly reviewed mapped temperature supplies the logged condition. The
+baseline's zero offset is an anchor identity, not a temperature validation.
+
+Error bars show **conditional standard uncertainties (1σ)**. Normalized values
+propagate current and baseline lattice variance; a two-signal ratio uses their
+joint covariance, including cross-phase correlation. The baseline normalizes
+to exactly zero (or one); its physical uncertainty is not zero. Points sharing
+a baseline are correlated, so these bars are not independent observations.
+Temperature inference propagates through the curve derivative; optional
+baseline temperature standard uncertainty and explicitly supplied logged
+temperature uncertainty are included. An axis-mapping CSV can add a
+`standard_uncertainty` column in the same units as its value.
+
+Unknown instrument/calibration, reference-model, composition and other
+systematic uncertainties are excluded, rather than estimated from Rwp or
+invented. Older outputs without joint covariance show ratio values without
+invented error bars. **Show recorded temperature span on x** displays the
+acquisition minimum–maximum separately; that range is not a standard
+uncertainty, and is not borrowed from a different imported mapping or sensor.
 
 Presentation changes recalculate existing observations. They do not submit new refinements. Clicking a live-series point selects its scan in the existing scan inspector. Plotly supports zoom, pan and figure download; numeric x zoom is linked between views with the same axis units and meanings. Visible ranges are retained for replay/export. Resetting the Plotly axes restores automatic ranges.
 
@@ -40,6 +110,20 @@ voltage,NOM_123_BANK5,,4.10,V,reviewed acquisition-window mean,measured,true
 ```
 
 These are illustrative identifiers. Use exact scan IDs from the dashboard. `sample_state` keys use the sample ID; other mapped axes use the run ID. Allowed kinds are `measured`, `nominal_composition`, `preparation_history` and `user_supplied`. Review each value and set `verified=true`. Conflicting duplicate mappings reject the complete import. **Clear imported mappings** allows explicit replacement; metadata remains the fallback when a mapping is cleared.
+
+Reviewed run mappings also update the main experiment plots, displayed scan
+conditions, lattice-series download and Transition tracking coordinates. Import
+and clear actions refresh those views immediately. Their provenance explicitly
+identifies the reviewed mapping; original acquisition metadata, fitted cells,
+phase fractions and GPX files are retained. A reviewed display mapping does not
+become an independently recorded sensor measurement or change pattern-group
+assignments. Known Celsius/Kelvin values share a Kelvin axis in the main plots;
+unitless values cannot inherit a neighboring scan's units. Derived views can
+display Kelvin or Celsius, including physically consistent linked zoom ranges.
+
+The main chart also offers wavelength and proton charge. Selecting either keeps
+the independent derived-view axis unchanged, rather than saving an unsupported
+axis into the post-analysis configuration.
 
 Optional `branch` and `cycle` columns retain reviewed process labels, for example `charge` and `3`. They keep different cycles separate even when their voltage ranges overlap. Explicit acquisition metadata can also supply branch, cycle and process-stage labels. No physical cycle number is inferred solely from a voltage reversal.
 

@@ -36,14 +36,39 @@ def axis_title(view):
         "elapsed_time": "Elapsed time",
         "sample_state": "Verified composition / preparation state",
     }.get(axis, axis.replace("_", " ").capitalize())
+    if axis == "temperature":
+        unit = "°C" if view.get("temperature_display_unit") == "C" else "K"
     return name + (f" ({unit})" if unit else "")
+
+
+def display_x(view, value):
+    if value is None:
+        return None
+    if view.get("axis") == "temperature" and view.get("temperature_display_unit") == "C":
+        return value - 273.15
+    if view.get("axis") == "start_time":
+        return datetime.fromtimestamp(value, timezone.utc).isoformat()
+    if view.get("axis") == "run_number":
+        return str(value)
+    return value
 
 
 def y_title(view):
     metric = view.get("metric", "")
     rep = view.get("representation", "")
+    output = view.get("reference_output")
+    if output == "temperature":
+        return "Inferred sample temperature (K)"
+    if output == "temperature_offset":
+        return "Inferred − logged temperature (K)"
+    prefix = "Excess over reference · " if output == "residual" else ""
+    signal = "Lattice" if metric == "multiple" else "Lattice ratio" if metric == "phase_ratio" else metric
     if rep == "relative":
-        return f"Relative {metric} change (%)"
+        return prefix + f"Relative {signal} change (%)"
+    if rep == "permille":
+        return prefix + f"{signal} expansion · 1000(L/L₀ − 1) (‰)"
+    if rep == "normalized":
+        return prefix + f"Normalized {signal} · L/L₀"
     if rep == "microstrain":
         return f"Reference {metric} change (µε)"
     if rep == "progress":
@@ -60,10 +85,12 @@ def y_title(view):
         else (
             "°"
             if metric in {"alpha", "beta", "gamma"}
-            else "Å" if metric in {"a", "b", "c", "d_hkl"} else ""
+            else "Å" if metric in {"a", "b", "c", "d_hkl"} or metric == "multiple" and view.get("value_unit") == "angstrom" else ""
         )
     )
-    return ("Δ" if rep == "difference" else "") + metric + (f" ({unit})" if unit else "")
+    if metric == "multiple" and view.get("value_unit") == "angstrom^3":
+        unit = "Å³"
+    return ("Δ" if rep == "difference" else "") + signal + (f" ({unit})" if unit else "")
 
 
 def view_figure(view, settings: ViewSettings):
@@ -110,24 +137,16 @@ def view_figure(view, settings: ViewSettings):
             ]
             if not points:
                 continue
-            xs = [
-                (
-                    datetime.fromtimestamp(p["x"], timezone.utc).isoformat()
-                    if view.get("axis") == "start_time" and p["x"] is not None
-                    else (
-                        str(p["x"])
-                        if view.get("axis") == "run_number" and p["x"] is not None
-                        else p["x"]
-                    )
-                )
-                for p in points
-            ]
+            xs = [display_x(view, p["x"]) for p in points]
             name = _legend_phase(series["phase"])
+            metric = series.get("metric", view.get("metric"))
+            if view.get("metric") == "multiple":
+                name += f" · {metric}"
             if len(samples) > 1:
                 name += f" · sample {series['sample']}"
             if len(all_branches) > 1:
                 name += f" · {_legend_branch(branch)}"
-            legend_key = (series["phase_key"], series["sample"], _legend_branch(branch))
+            legend_key = (series["phase_key"], metric, series["sample"], _legend_branch(branch))
             figure.add_trace(
                 go.Scatter(
                     x=xs,
@@ -135,7 +154,7 @@ def view_figure(view, settings: ViewSettings):
                     mode="lines+markers" if settings.connect else "markers",
                     connectgaps=False,
                     name=name,
-                    legendgroup=series["phase_key"],
+                    legendgroup=series["phase_key"] + ":" + str(metric),
                     showlegend=legend_key not in legend_keys,
                     line={
                         "color": color,
@@ -150,7 +169,7 @@ def view_figure(view, settings: ViewSettings):
                         "symbol": (
                             "diamond"
                             if "decreas" in branch.lower() or "cool" in branch.lower()
-                            else "circle"
+                            else {"a": "circle", "b": "square", "c": "triangle-up", "volume": "diamond"}.get(metric, "circle")
                         ),
                     },
                     error_y={
@@ -160,6 +179,21 @@ def view_figure(view, settings: ViewSettings):
                             for p in points
                         ],
                         "visible": settings.show_uncertainty,
+                    },
+                    error_x={
+                        "type": "data", "symmetric": False,
+                        "array": [
+                            max(0., p["axis_maximum"] - p["x"])
+                            if p.get("axis_maximum") is not None and p.get("x") is not None else None
+                            for p in points
+                        ],
+                        "arrayminus": [
+                            max(0., p["x"] - p["axis_minimum"])
+                            if p.get("axis_minimum") is not None and p.get("x") is not None else None
+                            for p in points
+                        ],
+                        "visible": settings.show_temperature_span and view.get("axis") == "temperature",
+                        "color": "#82918a", "thickness": 1,
                     },
                     customdata=[
                         [
@@ -174,15 +208,33 @@ def view_figure(view, settings: ViewSettings):
                             series["sample"],
                             branch,
                             series["phase"],
+                            metric,
+                            math.sqrt(p["variance"]) if p.get("variance") is not None else "unavailable",
+                            p.get("uncertainty_note") or "Conditional refinement standard uncertainty (1σ)",
                         ]
                         for p in points
                     ],
-                    hovertemplate="%{customdata[10]}<br>%{customdata[0]} · bank %{customdata[7]} · sample %{customdata[8]}<br>x=%{x}<br>value=%{y:.7g}<br>%{customdata[2]}<br>reference: %{customdata[3]}<br>%{customdata[1]}<extra>%{fullData.name}</extra>",
+                    hovertemplate="%{customdata[10]} · %{customdata[11]}<br>%{customdata[0]} · bank %{customdata[7]} · sample %{customdata[8]}<br>x=%{x}<br>value=%{y:.7g}<br>conditional 1σ: %{customdata[12]}<br>%{customdata[2]}<br>reference: %{customdata[3]}<br>%{customdata[1]}<br>%{customdata[13]}<extra>%{fullData.name}</extra>",
                 ),
                 row=banks.index(series.get("bank")) + 1,
                 col=1,
             )
             legend_keys.add(legend_key)
+        for reference in view.get("reference_traces", []):
+            if reference["series"] != series["key"]:
+                continue
+            for branch in dict.fromkeys(p["branch"] for p in reference["points"]):
+                points = [p for p in reference["points"] if p["branch"] == branch]
+                curve = view.get("reference_curve", {})
+                figure.add_trace(go.Scatter(
+                    x=[display_x(view, p["x"]) for p in points],
+                    y=[p["value"] for p in points],
+                    name="Reference · " + _legend_phase(series["phase"]),
+                    legendgroup="reference:" + series["key"],
+                    showlegend=branch == reference["points"][0]["branch"],
+                    mode="lines", line={"color": color, "dash": "dot"},
+                    hovertemplate="Reference curve<br>%{x}<br>%{y:.7g}<extra>" + curve.get("label", "Reviewed reference") + "</extra>",
+                ), row=banks.index(series.get("bank"))+1, col=1)
     figure.update_layout(
         template="plotly_white",
         height=max(460, len(banks) * 300 + 180),
@@ -191,7 +243,7 @@ def view_figure(view, settings: ViewSettings):
         legend=go.layout.Legend(
             orientation="h", y=-0.18, yanchor="top", maxheight=120, skip_invalid=True
         ),
-        uirevision=f"{view['id']}:{view.get('axis')}:{view.get('metric')}:{view.get('representation')}",
+        uirevision=f"{view['id']}:{view.get('axis')}:{view.get('metric')}:{view.get('representation')}:{view.get('temperature_display_unit')}:{view.get('reference_output')}",
     )
     if view.get("review_required"):
         figure.update_layout(
@@ -223,8 +275,8 @@ def view_figure(view, settings: ViewSettings):
         if view.get("axis") not in {"run_number", "sample_state", "start_time"}:
             lo, hi = sorted(crossing["interval"])
             figure.add_vrect(
-                x0=lo,
-                x1=hi,
+                x0=display_x(view, lo),
+                x1=display_x(view, hi),
                 fillcolor="rgba(120,120,120,0.1)",
                 line_width=0,
                 annotation_text="Candidate crossing interval",
@@ -280,6 +332,12 @@ def export_bundle(result, settings, scans):
                 "display_hidden",
                 "reason",
                 "source_gpx_sha256",
+                "conditional_standard_uncertainty",
+                "uncertainty_note",
+                "axis_minimum", "axis_maximum",
+                "display_x", "display_axis_unit",
+                "reference_curve_id", "reference_value",
+                "inferred_temperature_K", "logged_temperature_K", "reference_sensitivity_per_K",
             ]
             writer = csv.DictWriter(table, fieldnames=fields, extrasaction="ignore")
             writer.writeheader()
@@ -292,12 +350,15 @@ def export_bundle(result, settings, scans):
                             **{
                                 key: view.get(key)
                                 for key in [
-                                    "metric",
                                     "representation",
                                     "value_unit",
                                     "axis",
                                 ]
                             },
+                            "metric": point.get("metric", series.get("metric", view.get("metric"))),
+                            "conditional_standard_uncertainty": math.sqrt(point["variance"]) if point.get("variance") is not None else None,
+                            "display_x": display_x(view, point.get("x")),
+                            "display_axis_unit": "C" if view.get("axis") == "temperature" and view.get("temperature_display_unit") == "C" else point.get("axis_unit"),
                         }
                     )
             archive.writestr(stem + ".csv", table.getvalue())

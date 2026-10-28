@@ -17,8 +17,9 @@ from .post_analysis import (
     AXES,
     calculate_views,
     recipe_options,
+    _phase_rows,
 )
-from .post_analysis_plot import view_figure, export_bundle
+from .post_analysis_plot import view_figure, export_bundle, display_x
 from .uploads import NamedFileUpload
 from .scan_interpretation_ui import ScanInterpretationMixin
 from .transition_tracking_ui import TransitionTrackingMixin
@@ -45,12 +46,16 @@ class PostAnalysisMixin(TransitionTrackingMixin, ScanInterpretationMixin):
         state.post_analysis_fit_rows = []
         state.post_analysis_panels = []
         state.post_analysis_mapping_path = ""
+        state.post_analysis_curve_path = ""
+        state.post_analysis_curve_options = []
+        state.post_analysis_signal_options = []
         state.post_analysis_error = ""
         state.post_analysis_show_all = False
         state.post_analysis_bank_options = []
         state.post_analysis_sample_options = []
         state.post_analysis_reference_needed = False
         state.post_analysis_active_points = 0
+        state.post_analysis_temperature_axis = False
         state.post_analysis_observation_rows = []
         state.post_analysis_observation_search = ""
         state.post_analysis_controls_panel = 0
@@ -152,7 +157,8 @@ class PostAnalysisMixin(TransitionTrackingMixin, ScanInterpretationMixin):
                                     for a in AXES
                                 ],
                             )
-                            self._post_control("Metric", "metric", "post_analysis_metric_options")
+                            self._post_control("Metric", "metric", "post_analysis_metric_options",
+                                v_if="!post_analysis_editor.lattice_series?.length")
                             self._post_control(
                                 "Representation",
                                 "representation",
@@ -165,7 +171,16 @@ class PostAnalysisMixin(TransitionTrackingMixin, ScanInterpretationMixin):
                                 multiple=True,
                                 chips=True,
                                 clearable=True,
+                                v_if="post_analysis_editor.metric !== 'phase_ratio' && !post_analysis_editor.lattice_series?.length",
                             )
+                            self._post_control(
+                                "Lattice signals (optional)", "lattice_series", "post_analysis_signal_options",
+                                multiple=True, chips=True, clearable=True,
+                                v_if="post_analysis_editor.kind === 'thermal_expansion' && post_analysis_editor.metric !== 'phase_ratio' && !post_analysis_editor.reference_curve_id",
+                            )
+                            for field, label in [("ratio_numerator", "Ratio numerator"), ("ratio_denominator", "Ratio denominator")]:
+                                self._post_control(label, field, "post_analysis_signal_options", clearable=True,
+                                    v_if="post_analysis_editor.metric === 'phase_ratio'")
                             self._post_control(
                                 "Banks shown",
                                 "banks",
@@ -205,6 +220,9 @@ class PostAnalysisMixin(TransitionTrackingMixin, ScanInterpretationMixin):
                                 "post_analysis_branch_options",
                                 v_if="post_analysis_branch_options.length > 2",
                             )
+                            self._post_control("Temperature display", "temperature_display_unit",
+                                [{"title": "Kelvin (K)", "value": "K"}, {"title": "Celsius (°C)", "value": "C"}],
+                                v_if="post_analysis_temperature_axis")
                         html.P(
                             "Empty phase, bank or sample filters show all. Hiding a phase does not renormalize its fraction.",
                             classes="radar-section-help",
@@ -221,7 +239,7 @@ class PostAnalysisMixin(TransitionTrackingMixin, ScanInterpretationMixin):
                                 ),
                             )
                             vuetify.VCheckbox(
-                                label="Show available uncertainties",
+                                label="Show conditional 1σ error bars",
                                 v_model=("post_analysis_editor.show_uncertainty",),
                                 density="compact",
                                 hide_details=True,
@@ -230,6 +248,16 @@ class PostAnalysisMixin(TransitionTrackingMixin, ScanInterpretationMixin):
                                     "['show_uncertainty', $event]",
                                 ),
                             )
+                            vuetify.VCheckbox(
+                                label="Show recorded temperature span on x (range, not 1σ)",
+                                v_if="post_analysis_temperature_axis",
+                                v_model=("post_analysis_editor.show_temperature_span",),
+                                density="compact", hide_details=True,
+                                update_modelValue=(self.update_post_analysis_setting, "['show_temperature_span', $event]"),
+                            )
+                        html.P("For several phases or cell directions, choose explicit lattice signals. Relative scales allow their changes to be compared. Error bars exclude calibration and model systematics; normalized points share a baseline.",
+                            v_if="post_analysis_editor.kind === 'thermal_expansion'", classes="radar-section-help")
+            self._post_reference_controls()
             with html.Div(
                 v_for="postView in post_analysis_panels.filter(v => post_analysis_show_all || v.id === post_analysis_active)",
                 key="postView.id",
@@ -466,6 +494,34 @@ class PostAnalysisMixin(TransitionTrackingMixin, ScanInterpretationMixin):
                         variant="text",
                     )
 
+    def _post_reference_controls(self):
+        with vuetify.VExpansionPanels(variant="accordion", classes="my-2",
+                v_if="post_analysis_editor.kind === 'thermal_expansion' && !post_analysis_editor.lattice_series?.length && ['a','b','c','volume','phase_ratio'].includes(post_analysis_editor.metric)"):
+            with vuetify.VExpansionPanel(title="Reference comparison / lattice thermometry (optional)"):
+                with vuetify.VExpansionPanelText():
+                    html.P("Supply a reviewed expansion curve for this material and measurement condition. CSV columns: temperature_K (or temperature_C), value, unit, source. Units: angstrom, angstrom^3 or dimensionless for a ratio. Use at least three strictly increasing temperatures. The curve is interpolated without extrapolation.", classes="radar-section-help")
+                    NamedFileUpload("post_analysis_curve_path", label="Reference curve CSV",
+                        help_text="Include provenance in the source column. No reference is inferred from the phase name.",
+                        extensions=[".csv"], key="post-analysis-reference-curve")
+                    vuetify.VBtn("Import reference curve", click=self.import_post_analysis_curve, variant="outlined", size="small", classes="my-2")
+                    with html.Div(classes="radar-post-controls"):
+                        self._post_control("Reference curve", "reference_curve_id", "post_analysis_curve_options")
+                        self._post_control("Comparison", "reference_output", [
+                            {"title": "Expansion with reference overlay", "value": "overlay"},
+                            {"title": "Excess expansion over reference", "value": "residual"},
+                            {"title": "Inferred sample temperature (K)", "value": "temperature"},
+                            {"title": "Inferred − logged temperature (K)", "value": "temperature_offset"},
+                        ])
+                        vuetify.VTextField(label="Baseline temperature standard uncertainty (K, optional)",
+                            type="text", inputmode="decimal", variant="outlined", density="compact",
+                            v_model=("post_analysis_editor.baseline_temperature_esd",),
+                            update_modelValue=(self.update_post_analysis_setting, "['baseline_temperature_esd', $event]"))
+                    vuetify.VCheckbox(
+                        label="I reviewed material/composition, pressure and phase range, and assume the explicit baseline temperature is correct",
+                        v_model=("post_analysis_editor.reference_curve_reviewed",), density="compact",
+                        update_modelValue=(self.update_post_analysis_setting, "['reference_curve_reviewed', $event]"))
+                    html.P("Choose an explicit Reference scan above. Thermometry assumes the reference curve describes this specimen; strain, reaction or composition changes can invalidate it. Ambiguous inversions are withheld. Bars propagate available fit and supplied temperature uncertainty, and exclude unknown reference/model systematics.", classes="radar-section-help")
+
     def _post_analysis_advanced_controls(self):
         with vuetify.VExpansionPanels(variant="accordion", classes="my-2"):
             with vuetify.VExpansionPanel(title="Scientific definitions and additional inputs"):
@@ -604,20 +660,40 @@ class PostAnalysisMixin(TransitionTrackingMixin, ScanInterpretationMixin):
             state.post_analysis_active = settings.views[0].id if settings.views else ""
         self._select_post_analysis_editor()
 
+    def _post_view_title(self, view):
+        if view.kind != "thermal_expansion":
+            return RECIPES[view.kind][0]
+        if view.lattice_series:
+            return f"Lattice expansion · {len(view.lattice_series)} signals"
+        if view.metric == "phase_ratio":
+            signal = "two-signal ratio"
+        else:
+            phases = {str(r.get("phase_key")): str(r.get("phase") or "").split(" - ")[0]
+                for scan in getattr(self, "_post_analysis_scans", []) for r in _phase_rows(scan)[0]}
+            name = phases.get(view.phases[0], "Lattice") if len(view.phases) == 1 else "Lattice"
+            signal = name + " " + (view.metric or "a")
+        if view.reference_curve_id:
+            prefix = {"overlay": "Expansion + reference", "residual": "Excess expansion",
+                "temperature": "Inferred temperature", "temperature_offset": "Inferred − logged temperature"}[view.reference_output]
+            return prefix + " · " + signal
+        return RECIPES[view.kind][0] if not view.metric else "Cell change · " + signal
+
     def _select_post_analysis_editor(self):
         state = self.server.state
         settings = self._post_settings()
         view = next((v for v in settings.views if v.id == state.post_analysis_active), None)
-        totals = Counter(v.kind for v in settings.views)
+        totals = Counter(self._post_view_title(v) for v in settings.views)
         seen = Counter()
         state.post_analysis_view_options = []
         for item in settings.views:
-            seen[item.kind] += 1
-            title = RECIPES[item.kind][0]
-            if totals[item.kind] > 1:
-                title += f" ({seen[item.kind]})"
+            title = self._post_view_title(item)
+            seen[title] += 1
+            if totals[title] > 1:
+                title += f" ({seen[title]})"
             state.post_analysis_view_options.append({"title": title, "value": item.id})
         state.post_analysis_editor = view.model_dump(mode="json") if view else {}
+        if view:
+            state.post_analysis_editor = {**state.post_analysis_editor, "reference_curve_id": view.reference_curve_id or ""}
         if view and not view.metric:
             state.post_analysis_editor = {
                 **state.post_analysis_editor,
@@ -632,7 +708,7 @@ class PostAnalysisMixin(TransitionTrackingMixin, ScanInterpretationMixin):
                 ["c/a", "b/a", "orthorhombicity"]
                 if kind == "distortion"
                 else (
-                    ["a", "b", "c", "alpha", "beta", "gamma", "volume"]
+                    ["a", "b", "c", "alpha", "beta", "gamma", "volume", "phase_ratio"]
                     if kind == "thermal_expansion"
                     else (
                         ["a", "b", "c", "volume", "d_hkl"]
@@ -647,6 +723,8 @@ class PostAnalysisMixin(TransitionTrackingMixin, ScanInterpretationMixin):
             reps = ["auto", "progress"]
         if kind == "lattice_strain":
             reps += ["microstrain"]
+        if kind == "thermal_expansion":
+            reps += ["permille", "normalized"]
         state.post_analysis_representation_options = reps
         labels = {
             "weight_percent": "Phase fraction",
@@ -659,6 +737,7 @@ class PostAnalysisMixin(TransitionTrackingMixin, ScanInterpretationMixin):
             "gamma": "Cell angle γ",
             "d_hkl": "d(hkl) spacing",
             "orthorhombicity": "Orthorhombicity",
+            "phase_ratio": "Ratio of two lattice signals",
         }
         state.post_analysis_metric_options = [
             {"title": labels.get(metric, metric), "value": metric}
@@ -671,6 +750,8 @@ class PostAnalysisMixin(TransitionTrackingMixin, ScanInterpretationMixin):
                     "absolute": "Absolute value",
                     "difference": "Change from reference",
                     "relative": "Relative change (%)",
+                    "permille": "Fractional expansion (‰) · 1000(L/L₀ − 1)",
+                    "normalized": "Normalized lattice signal · L/L₀",
                     "microstrain": "Reference strain (µε)",
                     "progress": "Defined progress proxy",
                 }[rep],
@@ -685,7 +766,11 @@ class PostAnalysisMixin(TransitionTrackingMixin, ScanInterpretationMixin):
             "difference",
             "relative",
             "microstrain",
+            "permille", "normalized",
         }
+        state.post_analysis_curve_options = [{"title": "None", "value": ""}, *[
+            {"title": c.label, "value": c.id} for c in settings.reference_curves.values()
+        ]]
 
     def update_post_analysis_selection(self, selected=None, **_):
         state = self.server.state
@@ -747,7 +832,7 @@ class PostAnalysisMixin(TransitionTrackingMixin, ScanInterpretationMixin):
             current = next(v for v in settings.views if v.id == state.post_analysis_active)
             if field not in ViewSettings.model_fields or field in {"id", "kind"}:
                 raise ValueError("Unsupported setting")
-            if value is None and field in {"phases", "samples", "banks", "excluded_runs"}:
+            if value is None and field in {"phases", "samples", "banks", "excluded_runs", "lattice_series"}:
                 value = []
             if value == "" and field in {
                 "reference_run",
@@ -757,9 +842,30 @@ class PostAnalysisMixin(TransitionTrackingMixin, ScanInterpretationMixin):
                 "threshold",
                 "fit_min",
                 "fit_max",
+                "reference_curve_id", "ratio_numerator", "ratio_denominator", "baseline_temperature_esd",
             }:
                 value = None
-            changed = ViewSettings.model_validate({**current.model_dump(), field: value})
+            change = {**current.model_dump(), field: value}
+            if field in {"metric", "phases", "samples", "banks", "reference_run", "reference_curve_id", "ratio_numerator", "ratio_denominator"}:
+                change["reference_curve_reviewed"] = False
+            if field == "metric":
+                change.update(lattice_series=[], x_range=None, y_range=None)
+                if value == "phase_ratio":
+                    change.update(phases=[], fit_expansion=False)
+                if value not in {"a", "b", "c", "volume", "phase_ratio"}:
+                    change["reference_curve_id"] = None
+            if field == "lattice_series" and value:
+                change.update(reference_curve_id=None, reference_curve_reviewed=False, x_range=None, y_range=None)
+            if field == "reference_curve_id" and value:
+                change.update(lattice_series=[])
+                if current.representation not in {"relative", "permille", "normalized"}:
+                    change["representation"] = "permille"
+            if field == "representation" and value not in {"relative", "permille", "normalized"}:
+                change.update(reference_curve_id=None, reference_curve_reviewed=False)
+            if field in {"axis", "temperature_display_unit", "representation", "reference_output",
+                    "reference_curve_id", "reference_run", "ratio_numerator", "ratio_denominator"}:
+                change.update(x_range=None, y_range=None)
+            changed = ViewSettings.model_validate(change)
             payload = settings.model_dump()
             payload["views"] = [
                 changed.model_dump() if v.id == current.id else v.model_dump()
@@ -829,7 +935,7 @@ class PostAnalysisMixin(TransitionTrackingMixin, ScanInterpretationMixin):
         state.post_analysis_panels = [
             {
                 "id": v["id"],
-                "title": v["title"],
+                "title": self._post_view_title(by_id[v["id"]]),
                 "status": v["status"].replace("_", " "),
                 "review_required": bool(v.get("review_required")),
                 "empty_reason": self._post_empty_reason(v),
@@ -846,6 +952,7 @@ class PostAnalysisMixin(TransitionTrackingMixin, ScanInterpretationMixin):
             for v in result["views"]
         ]
         selected = next((v for v in result["views"] if v["id"] == state.post_analysis_active), None)
+        state.post_analysis_temperature_axis = (selected or {}).get("axis") == "temperature"
         self._select_post_analysis_editor()
         state.post_analysis_status = (
             selected["status"].replace("_", " ").capitalize()
@@ -869,9 +976,14 @@ class PostAnalysisMixin(TransitionTrackingMixin, ScanInterpretationMixin):
                 if (s.get("metadata") or {}).get("sample_id")
             }
         )
-        phases = {s["phase_key"]: s["phase"] for v in result["views"] for s in v["series"]}
+        phases = {str(row.get("phase_key") or row.get("phase_id") or row.get("phase")): str(row.get("phase") or row.get("phase_key"))
+            for scan in self._post_analysis_scans for row in _phase_rows(scan)[0]}
         state.post_analysis_phase_options = [
             {"title": name, "value": key} for key, name in phases.items()
+        ]
+        state.post_analysis_signal_options = [
+            {"title": f"{name.split(' - ')[0]} · {metric}", "value": {"phase_key": key, "metric": metric}}
+            for key, name in phases.items() for metric in ["a", "b", "c", "volume"]
         ]
         state.post_analysis_reference_options = [
             str(s.get("run_id") or s.get("run_name") or s.get("run_number"))
@@ -906,6 +1018,25 @@ class PostAnalysisMixin(TransitionTrackingMixin, ScanInterpretationMixin):
             figure.layout.title = None
             figure.layout.margin.t = 35
         return plotly.Figure.to_data(figure)
+
+    def import_post_analysis_curve(self, **_):
+        from .thermal_reference import load_reference_csv
+
+        state = self.server.state
+        try:
+            curve = load_reference_csv(state.post_analysis_curve_path or "")
+            payload = self._post_settings().model_dump()
+            payload["reference_curves"][curve.id] = curve.model_dump()
+            for view in payload["views"]:
+                if view["id"] == state.post_analysis_active:
+                    view.update(reference_curve_id=curve.id, reference_curve_reviewed=False,
+                        lattice_series=[], representation="permille", x_range=None, y_range=None)
+            self._set_post_settings(PostAnalysisSettings.model_validate(payload))
+            state.post_analysis_error = ""
+            self._refresh_post_analysis()
+        except (ValueError, OSError, UnicodeError) as exc:
+            state.post_analysis_error = str(exc)
+        state.flush()
 
     def import_post_analysis_mapping(self, **_):
         state = self.server.state
@@ -945,6 +1076,7 @@ class PostAnalysisMixin(TransitionTrackingMixin, ScanInterpretationMixin):
                         "verified": True,
                         "branch": str(row.get("branch") or "").strip() or None,
                         "cycle": str(row.get("cycle") or "").strip() or None,
+                        "standard_uncertainty": float(row["standard_uncertainty"]) if str(row.get("standard_uncertainty") or "").strip() else None,
                     }
                     if key in mapping.get(axis, {}) and mapping[axis][key] != entry:
                         raise ValueError(
@@ -952,9 +1084,11 @@ class PostAnalysisMixin(TransitionTrackingMixin, ScanInterpretationMixin):
                         )
                     mapping.setdefault(axis, {})[key] = entry
             payload["axis_mappings"] = mapping
+            for view in payload["views"]:
+                view["reference_curve_reviewed"] = False
             self._set_post_settings(PostAnalysisSettings.model_validate(payload))
             state.post_analysis_error = ""
-            self._refresh_post_analysis()
+            self._refresh_reviewed_axis_views()
         except (ValueError, OSError) as exc:
             state.post_analysis_error = str(exc)
         state.flush()
@@ -972,9 +1106,19 @@ class PostAnalysisMixin(TransitionTrackingMixin, ScanInterpretationMixin):
     def clear_post_analysis_mapping(self, **_):
         settings = self._post_settings()
         settings.axis_mappings = {}
+        for view in settings.views:
+            view.reference_curve_reviewed = False
         self._set_post_settings(settings)
-        self._refresh_post_analysis()
+        self._refresh_reviewed_axis_views()
         self.server.state.flush()
+
+    def _refresh_reviewed_axis_views(self):
+        controller = getattr(self, "_powgen_controller", None)
+        if controller is not None and str(getattr(self, "_post_analysis_scope", "")).startswith("watch:"):
+            controller.state.post_analysis = self._post_settings().model_dump(mode="json")
+            self._sync_powgen_rows()
+        else:
+            self._refresh_post_analysis()
 
     def reset_post_analysis_reference(self, **_):
         settings = self._post_settings()
@@ -988,6 +1132,7 @@ class PostAnalysisMixin(TransitionTrackingMixin, ScanInterpretationMixin):
         for view in payload["views"]:
             if view["id"] == active:
                 view["reference_run"] = None
+                view["reference_curve_reviewed"] = False
         self._set_post_settings(PostAnalysisSettings.model_validate(payload))
         self._refresh_post_analysis()
         self.server.state.flush()
@@ -1018,7 +1163,8 @@ class PostAnalysisMixin(TransitionTrackingMixin, ScanInterpretationMixin):
         )
         if series is None:
             return str(fit["branch"])
-        return f"{series['phase']} · bank {series['bank']} · sample {series['sample']} · {fit['branch']}"
+        metric = " · " + series["metric"] if series.get("metric") else ""
+        return f"{series['phase']}{metric} · bank {series['bank']} · sample {series['sample']} · {fit['branch']}"
 
     @staticmethod
     def _post_observations(view):
@@ -1042,17 +1188,14 @@ class PostAnalysisMixin(TransitionTrackingMixin, ScanInterpretationMixin):
                     status = "Hidden by branch filter · " + status
                 if point.get("scientific_status") == "needs_review":
                     status = "Review required · " + status
-                x = point.get("x")
-                if x is not None and view.get("axis") == "start_time":
-                    from datetime import datetime, timezone
-
-                    x = datetime.fromtimestamp(x, timezone.utc).isoformat()
-                else:
-                    x = value(x, point.get("axis_unit", ""))
+                x = display_x(view, point.get("x"))
+                unit = ("°C" if view.get("temperature_display_unit") == "C" else "K") if view.get("axis") == "temperature" else point.get("axis_unit", "")
+                if view.get("axis") != "start_time":
+                    x = value(x, unit)
                 rows.append(
                     {
                         "scan": point["run_id"],
-                        "phase": series["phase"],
+                        "phase": series["phase"] + (f" · {point.get('metric')}" if view.get("metric") == "multiple" else ""),
                         "bank": series["bank"],
                         "x": x,
                         "value": value(point.get("value"), view.get("value_unit", "")),
@@ -1107,6 +1250,7 @@ class PostAnalysisMixin(TransitionTrackingMixin, ScanInterpretationMixin):
                 return
             run_id = str(data[0])
             phase_key = str(data[6]) if len(data) > 6 else None
+            metric = str(data[11]) if len(data) > 11 else None
             view = next(
                 (
                     v
@@ -1120,6 +1264,7 @@ class PostAnalysisMixin(TransitionTrackingMixin, ScanInterpretationMixin):
                 for s in (view or {}).get("series", [])
                 for p in s["points"]
                 if p["run_id"] == run_id and (phase_key is None or s["phase_key"] == phase_key)
+                and (metric is None or p.get("metric", (view or {}).get("metric")) == metric)
             ]
             if not matches:
                 return
@@ -1137,11 +1282,8 @@ class PostAnalysisMixin(TransitionTrackingMixin, ScanInterpretationMixin):
             )
             from .post_analysis import metric_unit
 
-            horizontal = point.get("x")
-            if horizontal is not None and view.get("axis") == "start_time":
-                from datetime import datetime, timezone
-
-                horizontal = datetime.fromtimestamp(horizontal, timezone.utc).isoformat()
+            horizontal = display_x(view, point.get("x"))
+            unit = ("°C" if view.get("temperature_display_unit") == "C" else "K") if view.get("axis") == "temperature" else point.get("axis_unit")
             variance = point.get("variance")
             details = [
                 ("Scan", run_id),
@@ -1149,18 +1291,22 @@ class PostAnalysisMixin(TransitionTrackingMixin, ScanInterpretationMixin):
                 ("Model phase ID", phase.get("phase_id")),
                 ("Sample", series["sample"]),
                 ("Source bank", series["bank"]),
-                ("Metric", view.get("metric")),
+                ("Metric", point.get("metric", view.get("metric"))),
                 ("Value", point.get("value")),
                 ("Value unit", view.get("value_unit")),
                 ("Raw model value", point.get("raw_value")),
-                ("Raw model unit", metric_unit(view.get("metric"), "absolute")),
+                ("Raw model unit", metric_unit(point.get("metric", view.get("metric")), "absolute")),
                 (
                     "Conditional standard uncertainty",
                     math.sqrt(variance) if variance is not None and variance >= 0 else None,
                 ),
                 ("Reference scan", point.get("reference_run")),
+                ("Reference curve", (view.get("reference_curve") or {}).get("source")),
+                ("Uncertainty scope", point.get("uncertainty_note")),
+                ("Logged temperature (K)", point.get("logged_temperature_K")),
+                ("Inferred temperature (K)", point.get("inferred_temperature_K")),
                 ("Horizontal coordinate", horizontal),
-                ("Axis unit", point.get("axis_unit")),
+                ("Axis unit", unit),
                 ("Axis source", point.get("axis_source")),
                 ("Refinement state", point.get("state")),
                 ("Scientific status", point.get("scientific_status")),
@@ -1242,7 +1388,16 @@ class PostAnalysisMixin(TransitionTrackingMixin, ScanInterpretationMixin):
                         if other["id"] != view_id and signature(
                             results.get(other["id"], {})
                         ) == signature(source):
-                            other[field] = value
+                            linked = value
+                            target = results.get(other["id"], {})
+                            if value is not None and source.get("axis") == "temperature":
+                                source_offset = 273.15 if source.get("temperature_display_unit") == "C" else 0.
+                                target_offset = 273.15 if target.get("temperature_display_unit") == "C" else 0.
+                                try:
+                                    linked = [float(x) + source_offset - target_offset for x in value]
+                                except (TypeError, ValueError):
+                                    continue
+                            other[field] = linked
         if changed:
             try:
                 self._set_post_settings(PostAnalysisSettings.model_validate(payload))

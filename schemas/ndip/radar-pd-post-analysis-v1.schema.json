@@ -62,6 +62,19 @@
           ],
           "default": null,
           "title": "Cycle"
+        },
+        "standard_uncertainty": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Standard Uncertainty"
         }
       },
       "required": [
@@ -71,6 +84,95 @@
         "kind"
       ],
       "title": "AxisMapping",
+      "type": "object"
+    },
+    "LatticeSignal": {
+      "additionalProperties": false,
+      "properties": {
+        "phase_key": {
+          "maxLength": 300,
+          "minLength": 1,
+          "title": "Phase Key",
+          "type": "string"
+        },
+        "metric": {
+          "default": "a",
+          "enum": [
+            "a",
+            "b",
+            "c",
+            "volume"
+          ],
+          "title": "Metric",
+          "type": "string"
+        }
+      },
+      "required": [
+        "phase_key"
+      ],
+      "title": "LatticeSignal",
+      "type": "object"
+    },
+    "ReferenceCurve": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+          "title": "Id",
+          "type": "string"
+        },
+        "label": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        },
+        "source": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Source",
+          "type": "string"
+        },
+        "unit": {
+          "title": "Unit",
+          "type": "string"
+        },
+        "temperatures": {
+          "items": {
+            "type": "number"
+          },
+          "maxItems": 2000,
+          "minItems": 3,
+          "title": "Temperatures",
+          "type": "array"
+        },
+        "values": {
+          "items": {
+            "type": "number"
+          },
+          "maxItems": 2000,
+          "minItems": 3,
+          "title": "Values",
+          "type": "array"
+        },
+        "source_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "source",
+        "unit",
+        "temperatures",
+        "values",
+        "source_sha256"
+      ],
+      "title": "ReferenceCurve",
       "type": "object"
     },
     "ViewSettings": {
@@ -111,6 +213,8 @@
             "absolute",
             "difference",
             "relative",
+            "permille",
+            "normalized",
             "microstrain",
             "progress"
           ],
@@ -357,6 +461,91 @@
           "minimum": 0,
           "title": "Max Temperature Span",
           "type": "number"
+        },
+        "lattice_series": {
+          "items": {
+            "$ref": "#/$defs/LatticeSignal"
+          },
+          "maxItems": 12,
+          "title": "Lattice Series",
+          "type": "array"
+        },
+        "ratio_numerator": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LatticeSignal"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "ratio_denominator": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LatticeSignal"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "reference_curve_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reference Curve Id"
+        },
+        "reference_curve_reviewed": {
+          "default": false,
+          "title": "Reference Curve Reviewed",
+          "type": "boolean"
+        },
+        "reference_output": {
+          "default": "overlay",
+          "enum": [
+            "overlay",
+            "residual",
+            "temperature",
+            "temperature_offset"
+          ],
+          "title": "Reference Output",
+          "type": "string"
+        },
+        "baseline_temperature_esd": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Baseline Temperature Esd"
+        },
+        "temperature_display_unit": {
+          "default": "K",
+          "enum": [
+            "K",
+            "C"
+          ],
+          "title": "Temperature Display Unit",
+          "type": "string"
+        },
+        "show_temperature_span": {
+          "default": false,
+          "title": "Show Temperature Span",
+          "type": "boolean"
         }
       },
       "required": [
@@ -422,6 +611,14 @@
         "type": "integer"
       },
       "title": "Phase Colors",
+      "type": "object"
+    },
+    "reference_curves": {
+      "additionalProperties": {
+        "$ref": "#/$defs/ReferenceCurve"
+      },
+      "maxProperties": 8,
+      "title": "Reference Curves",
       "type": "object"
     }
   },

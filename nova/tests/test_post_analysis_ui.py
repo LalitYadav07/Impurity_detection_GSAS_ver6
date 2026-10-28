@@ -21,6 +21,60 @@ def app_with_data():
     return app
 
 
+def test_multisignal_controls_and_clicks_retain_the_selected_cell_direction():
+    app = app_with_data()
+    app.update_post_analysis_setting("representation", "permille")
+    app.update_post_analysis_setting("lattice_series", [
+        {"phase_key": "phase-a", "metric": "a"}, {"phase_key": "phase-a", "metric": "c"}])
+    assert not app.server.state.post_analysis_error
+    selected = next(v for v in app._post_analysis_result["views"] if v["id"] == "cells")
+    figure = app._post_inline_figure(selected, app._post_settings().views[1])
+    assert len(figure["data"]) == 2
+    data = figure["data"][1]["customdata"][1]
+    app.select_post_analysis_point({"points": [{"customdata": data}]}, "cells")
+    details = {r["label"]: r["value"] for r in app.server.state.post_analysis_point_details}
+    assert details["Metric"] == "c"
+    assert details["Raw model value"] == "6.0"
+    assert len(app.server.state.post_analysis_signal_options) == 4
+
+
+def test_reference_import_requires_baseline_review_and_invalidates_review_on_change(tmp_path):
+    app = app_with_data()
+    path = tmp_path / "curve.csv"
+    path.write_text("temperature_K,value,unit,source\n200,3.9,angstrom,Test source\n300,4,angstrom,Test source\n400,4.1,angstrom,Test source\n")
+    app.server.state.post_analysis_curve_path = str(path)
+    app.import_post_analysis_curve()
+    assert not app.server.state.post_analysis_error
+    current = app._post_settings().views[1]
+    assert current.reference_curve_id
+    assert current.representation == "permille"
+    assert not current.reference_curve_reviewed
+    app.update_post_analysis_setting("phases", ["phase-a"])
+    app.update_post_analysis_setting("reference_run", "NOM_1_BANK1")
+    app.update_post_analysis_setting("reference_curve_reviewed", True)
+    assert app._post_settings().views[1].reference_curve_reviewed
+    app.update_post_analysis_setting("reference_run", "NOM_2_BANK1")
+    assert not app._post_settings().views[1].reference_curve_reviewed
+    app.update_post_analysis_setting("reference_curve_reviewed", True)
+    app.update_post_analysis_setting("representation", "absolute")
+    assert app._post_settings().views[1].reference_curve_id is None
+    assert not app._post_settings().views[1].reference_curve_reviewed
+
+
+def test_ratio_selection_can_be_configured_incrementally_and_keeps_real_phase_choices():
+    app = app_with_data()
+    app.update_post_analysis_setting("fit_expansion", True)
+    app.update_post_analysis_setting("metric", "phase_ratio")
+    assert not app.server.state.post_analysis_error
+    assert not app._post_settings().views[1].fit_expansion
+    app.update_post_analysis_setting("ratio_numerator", {"phase_key": "phase-a", "metric": "c"})
+    app.update_post_analysis_setting("ratio_denominator", {"phase_key": "phase-a", "metric": "a"})
+    assert not app.server.state.post_analysis_error
+    assert app.server.state.post_analysis_phase_options == [{"title": "phase-a", "value": "phase-a"}]
+    app.update_post_analysis_setting("temperature_display_unit", "C")
+    assert app._post_settings().views[1].temperature_display_unit == "C"
+
+
 def test_selecting_no_views_removes_all_panels_and_survives_config_round_trip():
     app = app_with_data()
     app.update_post_analysis_selection([])
