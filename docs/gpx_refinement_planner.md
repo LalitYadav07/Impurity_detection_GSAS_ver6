@@ -2,7 +2,7 @@
 
 The integration adds **Refinement** beside the existing result views in NOVA and
 exposes the same workspace from an individual run. The older standalone planner
-remains a development harness. NOVA 0.4.28 and the Reviewed Refinement utility
+remains a development harness. NOVA 0.4.29 and the Reviewed Refinement utility
 0.2.0 are deployed to NDIP-test; production has not been updated.
 
 The integration began on NOVA 0.4.24 (`616917b`). The recipe engine is independent
@@ -25,7 +25,14 @@ OSS 120B remains an explicitly configured alternative; no fallback is automatic.
    complete staged recipe, then generate or revise it.
 4. Review named free parameters, parameters held since the previous stage,
    explicit edits, assumptions and questions. Native preflight checks the actual
-   GSAS-II parameter releases before approval is offered.
+   GSAS-II parameter releases before approval is offered. The recipe review shows
+   the provider-reported input, cached input, cache-write and output token counts
+   for all planning attempts, including a bounded repair. Luna cost uses the
+   [public Standard list rates](https://developers.openai.com/api/docs/models/gpt-6-luna)
+   checked on 2026-10-28: $0.10 per million ordinary
+   input tokens, $0.01 cached input, $0.125 cache writes and $0.50 output. The
+   display labels this as an estimate because ORNL Azure billing may differ.
+   Missing usage is shown as unavailable, never as a zero-cost call.
 5. Approval captures the exact selected GPX revisions. Legacy projects without a
    published checksum are materialized only for the selected scope. If arrivals or
    known project revisions change during capture, review the updated scope and
@@ -92,14 +99,24 @@ generated an authenticated Luna recipe, passed native preflight, and completed
 both reviewed scientific stages on a saved POWGEN Al2O3/MgO GPX. Galaxy published
 the stage and final GPXs, and their checksums matched the result bundle. This is
 one end-to-end case, not a claim that every recipe or data set is validated.
+In a fresh NOVA 0.4.29 session launched through the ordinary Galaxy form, the
+same saved GPX and completed refinement were visible. Revising the recipe made
+an authenticated Luna call and passed native preflight. The review showed
+23,435 input tokens (0 cached, 23,432 cache writes), 362 output tokens, 23,797
+total tokens and an approximate $0.003110 Standard list-rate cost. The earlier
+scientific result was inspected; no new worker job was submitted for this
+usage-display release.
 
 ## Runtime configuration
 
 `RADAR_GPX_PLANNER_PROVIDER=illumine-luna` selects Luna. On NDIP-test, the NOVA
 Galaxy tool declares an optional ORNL Illumine credential group. The user saves
 their personal key in Galaxy's credential vault, and Galaxy injects the selected
-group's key into the NOVA backend as `AZURE_ILLUMINE_API_KEY`. The ordinary tool
-form selected the user's saved group automatically in the 2026-10-28 test.
+group's key into the NOVA backend as `AZURE_ILLUMINE_API_KEY`. Galaxy scopes the
+credential selection to the tool version: the 0.4.28 selection did not appear
+on the new 0.4.29 form. The same personal key was bound to a 0.4.29 group and
+selected in the user's vault; the ordinary form then selected it automatically.
+Check this version-specific group after every NOVA tool-version update.
 Programmatic `/api/tools` launches must include the selected
 `credentials_context`; the vault's current group alone did not attach a key to
 an API-submitted job. Local development may instead provide the key in the
@@ -321,10 +338,11 @@ bridge. Both image workflows include the shared core in their path rules. The co
 `gpx_recipe` from the batch image's existing `/opt/radar-pd/scripts` PYTHONPATH.
 See `galaxy/radar_pd_refine_recipe.xml.in` for the source worker contract. The live
 NDIP-test registration is `galaxy-tools/tools/neutrons/powder_diffraction/radar_pd_refine_recipe.xml`,
-pinned to `ndip-dac049913cd33f3111615e2b72ddd3bbf3d419dd`. NOVA 0.4.28 is
-pinned to `nova-750309da265d3feb21bc7a9227b15d3a14af7c39`. These pins and
-both prototype deployment jobs were verified on 2026-10-28. The live UI
-successfully inspected and refined a saved Al2O3/MgO GPX from run 43124.
+pinned to `ndip-dac049913cd33f3111615e2b72ddd3bbf3d419dd`. NOVA 0.4.29 is
+pinned to `nova-f7a0b4f0a29dfde6444667e83bad065a6d8090c1`. These pins and
+both prototype deployment jobs were verified on 2026-10-28. The earlier
+NOVA 0.4.28 live UI successfully inspected and refined a saved Al2O3/MgO GPX
+from run 43124.
 The reviewed two-stage plan refined existing phase scales and background first,
 then those parameters plus both unit cells. The Galaxy worker completed both
 stages and published checksum-matched stage and final GPXs. Rwp changed from
