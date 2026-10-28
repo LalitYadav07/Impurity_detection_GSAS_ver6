@@ -172,6 +172,7 @@ def extract_lattice(path: Path, records, *, source: str, labels=None):
                 if any(row[k + "_esd"] is not None for k in CELL_KEYS)
                 else "not_estimated"
             )
+        add_cross_phase_covariance(rows,covariance)
         if project.histograms():
             value = project.histograms()[0].get_wR()
             if value is not None and math.isfinite(float(value)):
@@ -250,6 +251,7 @@ def cell_fit_information(phase, covariance):
             ("refined" if fresh else "stale") if np.any(np.abs(jacobian[i]) > 1e-7) else "fixed"
         )
     output["cell_jacobian"] = jacobian.tolist()
+    output['cell_variable_names'] = direct
     matrix = covariance.get("covMatrix")
     if not fresh or matrix is None:
         return output
@@ -271,6 +273,42 @@ def cell_fit_information(phase, covariance):
     if np.isfinite(propagated).all():
         output["cell_covariance"] = propagated.tolist()
     return output
+
+
+def add_cross_phase_covariance(rows,covariance):
+    """Retain only qualified pair blocks from one final joint covariance.
+
+    Two individual phase ESDs cannot reconstruct their cross correlation.
+    Old results without this optional block remain values without ratio ESDs.
+    """
+    import numpy as np
+    for row in rows:row['cross_phase_cell_covariance']={}
+    if not covariance.get('freshCOV'):return
+    names=[str(n) for n in covariance.get('varyList',[])]
+    if len(set(names))!=len(names):return
+    try:matrix=np.asarray(covariance.get('covMatrix'),dtype=float)
+    except (TypeError,ValueError):return
+    if matrix.shape!=(len(names),len(names)) or not np.isfinite(matrix).all():return
+    keys=[r.get('phase_key') for r in rows]
+    qualified=[r for r in rows if r.get('covariance_status')=='symmetry_jacobian'
+        and r.get('covariance_fresh') and r.get('phase_key') and keys.count(r['phase_key'])==1]
+    for i,a in enumerate(qualified):
+        for b in qualified[i+1:]:
+            av,bv=a.get('cell_variable_names') or [],b.get('cell_variable_names') or []
+            if not av or not bv or any(v not in names for v in [*av,*bv]):continue
+            try:ja,jb=np.asarray(a.get('cell_jacobian'),dtype=float),np.asarray(b.get('cell_jacobian'),dtype=float)
+            except (TypeError,ValueError):continue
+            if ja.shape!=(7,len(av)) or jb.shape!=(7,len(bv)):continue
+            if not np.isfinite(ja).all() or not np.isfinite(jb).all():continue
+            ai,bi=[names.index(n) for n in av],[names.index(n) for n in bv]
+            union=list(dict.fromkeys([*ai,*bi]));joint=matrix[np.ix_(union,union)]
+            scale=max(float(np.max(np.abs(joint))),np.finfo(float).tiny)
+            if not np.allclose(joint,joint.T,rtol=1e-9,atol=scale*1e-12):continue
+            if np.linalg.eigvalsh((joint+joint.T)/2).min()<-scale*1e-9:continue
+            cross=ja@((matrix[np.ix_(ai,bi)]+matrix[np.ix_(bi,ai)].T)/2)@jb.T
+            if not np.isfinite(cross).all():continue
+            a['cross_phase_cell_covariance'][b['phase_key']]=cross.tolist()
+            b['cross_phase_cell_covariance'][a['phase_key']]=cross.T.tolist()
 
 
 def lattice_quality(rows):

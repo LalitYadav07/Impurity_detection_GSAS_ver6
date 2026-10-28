@@ -15,6 +15,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from .facility_metadata import parse_nexus_timestamp
 from .scan_conditions import qualified_metadata
+from .thermal_reference import ReferenceCurve
 
 
 RECIPES = {
@@ -57,13 +58,19 @@ AXES = (
 )
 
 
+class LatticeSignal(BaseModel):
+    model_config=ConfigDict(extra='forbid',allow_inf_nan=False)
+    phase_key: str = Field(min_length=1,max_length=300)
+    metric: Literal['a','b','c','volume'] = 'a'
+
+
 class ViewSettings(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
     id: str = Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
     kind: Kind
     metric: str = ""
     representation: Literal[
-        "auto", "absolute", "difference", "relative", "microstrain", "progress"
+        "auto", "absolute", "difference", "relative", "permille", "normalized", "microstrain", "progress"
     ] = "auto"
     axis: Literal[
         "shared",
@@ -98,6 +105,15 @@ class ViewSettings(BaseModel):
     fit_min: float | None = None
     fit_max: float | None = None
     max_temperature_span: float = Field(default=2.0, ge=0)
+    lattice_series: list[LatticeSignal] = Field(default_factory=list,max_length=12)
+    ratio_numerator: LatticeSignal | None = None
+    ratio_denominator: LatticeSignal | None = None
+    reference_curve_id: str | None = None
+    reference_curve_reviewed: bool = False
+    reference_output: Literal['overlay','residual','temperature','temperature_offset'] = 'overlay'
+    baseline_temperature_esd: float | None = Field(default=None,ge=0)
+    temperature_display_unit: Literal['K','C'] = 'K'
+    show_temperature_span: bool = False
 
     @model_validator(mode="after")
     def validate_definition(self):
@@ -109,11 +125,12 @@ class ViewSettings(BaseModel):
             "b/a",
             "orthorhombicity",
             "d_hkl",
+            "phase_ratio",
         }:
             raise ValueError("Unsupported post-analysis metric")
         if self.kind == "phase_evolution" and metric != "weight_percent":
             raise ValueError("Phase evolution requires weight_percent")
-        if self.kind == "thermal_expansion" and metric not in CELL_KEYS:
+        if self.kind == "thermal_expansion" and metric not in {*CELL_KEYS,'phase_ratio'}:
             raise ValueError("Cell change requires a lattice parameter or volume")
         if self.kind == "distortion" and metric not in {"c/a", "b/a", "orthorhombicity"}:
             raise ValueError("Select an explicit lattice distortion definition")
@@ -128,6 +145,25 @@ class ViewSettings(BaseModel):
             raise ValueError("Reaction progress requires explicit progress normalization")
         if representation == "microstrain" and self.kind != "lattice_strain":
             raise ValueError("Microstrain representation requires the reference-lattice recipe")
+        if metric=='phase_ratio' and self.kind!='thermal_expansion':
+            raise ValueError('Two-phase lattice ratios belong to the cell-change view')
+        if self.lattice_series:
+            if self.kind!='thermal_expansion' or self.reference_curve_id or metric=='phase_ratio':
+                raise ValueError('Choose multiple cell signals, or one signal/pair for a reference comparison')
+            keys=[(s.phase_key,s.metric) for s in self.lattice_series]
+            if len(set(keys))!=len(keys):raise ValueError('Choose each lattice signal once')
+            if representation in {'absolute','difference'} and len({s.metric=='volume' for s in self.lattice_series})>1:
+                raise ValueError('Lengths and volumes need a normalized scale or separate views')
+        if self.reference_curve_id:
+            if self.kind!='thermal_expansion' or metric not in {'a','b','c','volume','phase_ratio'}:
+                raise ValueError('Reference comparisons require a lattice length, volume or phase ratio')
+            if representation not in {'relative','permille','normalized'}:
+                raise ValueError('Reference comparisons require a normalized representation')
+        if self.ratio_numerator and self.ratio_denominator:
+            if self.ratio_numerator==self.ratio_denominator:
+                raise ValueError('Choose distinct lattice signals for the ratio')
+            if (self.ratio_numerator.metric=='volume')!=(self.ratio_denominator.metric=='volume'):
+                raise ValueError('A lattice ratio requires matching dimensions: two lengths or two volumes')
         if self.progress_start is not None and self.progress_end == self.progress_start:
             raise ValueError("Progress endpoints must be different")
         if self.fit_min is not None and self.fit_max is not None and self.fit_min >= self.fit_max:
@@ -154,6 +190,7 @@ class AxisMapping(BaseModel):
     verified: bool = False
     branch: str | None = None
     cycle: str | None = None
+    standard_uncertainty: float | None = Field(default=None,ge=0)
 
 
 class PostAnalysisSettings(BaseModel):
@@ -182,6 +219,7 @@ class PostAnalysisSettings(BaseModel):
     axis_mappings: dict[str, dict[str, AxisMapping]] = Field(default_factory=dict)
     references: dict[str, str] = Field(default_factory=dict)
     phase_colors: dict[str, int] = Field(default_factory=dict)
+    reference_curves: dict[str,ReferenceCurve] = Field(default_factory=dict,max_length=8)
 
     @model_validator(mode="after")
     def unique_views(self):
@@ -202,6 +240,8 @@ class PostAnalysisSettings(BaseModel):
             raise ValueError("Unsupported mapped axis")
         if any(index < 0 or index >= 10 for index in self.phase_colors.values()):
             raise ValueError("Phase color indices must be between 0 and 9")
+        if any(key!=curve.id for key,curve in self.reference_curves.items()):
+            raise ValueError('Reference-curve keys must match their immutable IDs')
         return self
 
 
@@ -222,10 +262,13 @@ def number(value):
 def metric_unit(metric, representation):
     if representation == "relative":
         return "%"
+    if representation=='permille':return '‰'
+    if representation=='normalized':return 'dimensionless'
     if representation == "microstrain":
         return "microstrain"
     if representation == "progress":
         return "dimensionless progress proxy"
+    if metric=='phase_ratio':return 'dimensionless'
     if metric == "weight_percent":
         return "modeled-crystalline wt%" if representation == "absolute" else "percentage points"
     if metric == "volume":
@@ -262,10 +305,12 @@ def _axis(scan, key, settings, origin):
     metadata = scan.get("metadata") or {}
     mapping_key = _sample(scan) if key == "sample_state" else _run_id(scan)
     mapped = settings.axis_mappings.get(key, {}).get(mapping_key)
+    extra={}
     if mapped is not None:
         if not mapped.verified:
             return None
         value, unit, source, kind = mapped.value, mapped.unit, mapped.source, mapped.kind
+        if mapped.standard_uncertainty is not None:extra['standard_uncertainty']=mapped.standard_uncertainty
     elif key == "run_number":
         return {
             "value": scan.get("run_number"),
@@ -303,12 +348,19 @@ def _axis(scan, key, settings, origin):
         source, kind = str(metric.get("source") or "acquisition metadata"), str(
             metric.get("kind") or "measured"
         )
+        sigma=number(metric.get('standard_uncertainty'))
+        if sigma is not None and sigma>=0:extra['standard_uncertainty']=sigma
+        lo,hi=number(metric.get('minimum')),number(metric.get('maximum'))
+        if lo is not None and hi is not None and lo<=number(value)<=hi:
+            extra.update(minimum=lo,maximum=hi)
     if key == "temperature":
         value = number(value)
         if value is None:
             return None
         if unit.lower() in {"c", "°c", "degc", "celsius"}:
             value += 273.15
+            for field in ('minimum','maximum'):
+                if field in extra:extra[field]+=273.15
         elif unit.lower() not in {"k", "kelvin"}:
             return None
         if value <= 0:
@@ -319,12 +371,14 @@ def _axis(scan, key, settings, origin):
         if value is None or not unit:
             return None
     return {
+        **extra,
         "value": value,
         "unit": unit,
         "source": source,
         "kind": kind,
         "branch": mapped.branch if mapped is not None else None,
         "cycle": mapped.cycle if mapped is not None else None,
+        "reviewed_mapping": bool(mapped is not None and mapped.verified),
     }
 
 
@@ -390,6 +444,8 @@ def _d_spacing(values, hkl):
 
 def _metric(row, metric, hkl, include_fixed):
     """Return value/variance/state. Missing covariance is never diagonalized."""
+    if metric=='phase_ratio':
+        return row.get('ratio_value'),row.get('ratio_variance'),row.get('ratio_state','absent')
     if metric == "weight_percent":
         state = row.get("fraction_state", "unknown")
         value = number(row.get(metric))
@@ -519,6 +575,49 @@ def _phase_rows(scan):
     )
 
 
+def _view_phase_rows(scan,view,metric):
+    rows,context,packet=_phase_rows(scan)
+    if metric!='phase_ratio':return rows,context,packet
+    a,b=view.ratio_numerator,view.ratio_denominator
+    if not a or not b:return [],context,packet
+    def selected(key):
+        matches=[r for r in rows if str(r.get('phase_key') or r.get('phase_id') or r.get('phase'))==key]
+        return matches[0] if len(matches)==1 else None
+    left,right=selected(a.phase_key),selected(b.phase_key)
+    key=_hash([a.model_dump(),b.model_dump()])
+    label=f'{a.metric} [{a.phase_key[:10]}] / {b.metric} [{b.phase_key[:10]}]'
+    value,variance,state=None,None,'absent'
+    note='Both selected lattice signals must occur in the same final model and source histogram'
+    if left and right:
+        label=f'{a.metric} [{str(left.get("phase") or a.phase_key).split(" - ")[0]}] / {b.metric} [{str(right.get("phase") or b.phase_key).split(" - ")[0]}]'
+        x,vx,sx=_metric(left,a.metric,view.hkl,False)
+        y,vy,sy=_metric(right,b.metric,view.hkl,False)
+        if x is not None and y is not None and x>0 and y>0 and sx in {'refined','constraint-derived'} and sy in {'refined','constraint-derived'}:
+            value=x/y;state='constraint-derived';i,j=CELL_KEYS.index(a.metric),CELL_KEYS.index(b.metric)
+            cross=(left.get('cell_covariance') if a.phase_key==b.phase_key else
+                (left.get('cross_phase_cell_covariance') or {}).get(b.phase_key))
+            cov=number(cross[i][j]) if isinstance(cross,list) and len(cross)==7 and all(isinstance(r,list) and len(r)==7 for r in cross) else None
+            if cov is not None and vx is not None and vy is not None and abs(cov)<=math.sqrt(vx*vy)*(1+1e-7)+1e-25:
+                candidate=vx/y**2+x*x*vy/y**4-2*x*cov/y**3
+                if candidate>=-1e-18:
+                    variance=max(0.,candidate)
+                    note='Joint cell covariance from the same final refinement, including cross-phase correlation'
+            if variance is None:note='Cross-signal covariance unavailable or unqualified; ratio values are shown without invented error bars'
+            jacobian=left.get('cell_jacobian') if a.phase_key==b.phase_key else None
+            if isinstance(jacobian,list) and len(jacobian)==7 and jacobian[i] and len(jacobian[i])==len(jacobian[j]):
+                responses=[(number(u),number(v)) for u,v in zip(jacobian[i],jacobian[j])]
+                if all(u is not None and v is not None for u,v in responses):
+                    terms=[(u/y,x*v/y**2) for u,v in responses]
+                    if max(abs(u-v) for u,v in terms)<max(1.,max(abs(u)+abs(v) for u,v in terms))*1e-8:
+                        value,variance,state=None,None,'symmetry-constrained'
+                        note='Selected ratio is fixed by the cell symmetry; it is not an independently refined change'
+    row={'phase_key':key,'phase_id':key,'phase':label,'basis_key':[
+            a.model_dump(), (left or {}).get('basis_key'),
+            b.model_dump(), (right or {}).get('basis_key')],
+         'ratio_value':value,'ratio_variance':variance,'ratio_state':state,'uncertainty_note':note}
+    return [row],context,packet
+
+
 def _group(scan, row, context):
     sample = _sample(scan) or "unassigned:" + _run_id(scan)
     return [
@@ -618,6 +717,10 @@ def calculate_views(
             "crossings": [],
         }
         output.append(result)
+        if view.lattice_series:
+            combined,references,colors=_multi_lattice_view(scans,settings,view,references,colors,pending)
+            output[-1]=combined
+            continue
         if view.kind in {"broadening", "atomic_structure"}:
             result.update(
                 status="needs_recipe",
@@ -632,7 +735,16 @@ def calculate_views(
             continue
         metric = view.metric or definition[1]
         representation = definition[2] if view.representation == "auto" else view.representation
-        needs_reference = representation in {"difference", "relative", "microstrain"}
+        needs_reference = representation in {"difference", "relative", "permille", "normalized", "microstrain"}
+        if metric=='phase_ratio' and (not view.ratio_numerator or not view.ratio_denominator):
+            result.update(status='needs_input',notices=['Choose a numerator and denominator lattice signal'])
+            continue
+        if view.reference_curve_id and (not view.reference_curve_reviewed or not view.reference_run or view.reference_curve_id not in settings.reference_curves):
+            result.update(status='needs_input',notices=['Choose an explicit baseline scan and reference curve, then review the material/pressure range and baseline temperature assumption'])
+            continue
+        if view.reference_curve_id and metric!='phase_ratio' and len(view.phases)!=1:
+            result.update(status='needs_input',notices=['Choose exactly one phase for the reviewed reference curve, or define an explicit two-signal ratio'])
+            continue
         axis = settings.axis if view.axis == "shared" else view.axis
         if axis == "auto":
             varying = [key for key in ("temperature", "magnetic_field", "pressure", "voltage", "capacity")
@@ -688,6 +800,7 @@ def calculate_views(
             representation=representation,
             axis=axis,
             value_unit=metric_unit(metric, representation),
+            temperature_display_unit=view.temperature_display_unit,
         )
         review_scans = [
             s
@@ -710,13 +823,15 @@ def calculate_views(
                 continue
             if view.banks and scan.get("bank") not in view.banks:
                 continue
-            rows, context, packet = _phase_rows(scan)
+            rows, context, packet = _view_phase_rows(scan,view,metric)
             cohort_group = _group(scan, {}, context)
             cohort_group[4:6] = []
             cohorts.setdefault(_hash(cohort_group), []).append(scan)
             for row in rows:
                 identity = str(row.get("phase_key") or row.get("phase_id") or row.get("phase"))
-                if view.phases and identity not in view.phases:
+                if identity not in colors:
+                    colors[identity]=next((i for i in range(10) if i not in colors.values()),len(colors)%10)
+                if metric!='phase_ratio' and view.phases and identity not in view.phases:
                     continue
                 group = _group(scan, row, context)
                 group_key = _hash(group)
@@ -753,6 +868,8 @@ def calculate_views(
                     "covariance_status": row.get("covariance_status"),
                     "excluded": run in view.excluded_runs,
                     "temperature": _axis(scan, "temperature", settings, origin),
+                    'metric':metric,'uncertainty_note':row.get('uncertainty_note',''),
+                    'axis_minimum':x.get('minimum') if x else None,'axis_maximum':x.get('maximum') if x else None,
                     "temperature_span": (scan.get("metadata") or {}).get("temperature") or {},
                     "acquisition_start": (scan.get("metadata") or {}).get("start_time"),
                     "acquisition_end": (scan.get("metadata") or {}).get("end_time"),
@@ -825,6 +942,8 @@ def calculate_views(
             needs_reference = representation in {
                 "difference",
                 "relative",
+                'permille',
+                'normalized',
                 "microstrain",
             }
             if needs_reference and not reference_id:
@@ -925,7 +1044,7 @@ def calculate_views(
                             )
                         elif point["run_id"] == reference_id:
                             point.update(
-                                value=0.0,
+                                value=1.0 if representation=='normalized' else 0.0,
                                 variance=0.0,
                                 uncertainty_note="self-reference identity; physical uncertainty is not zero",
                             )
@@ -935,9 +1054,9 @@ def calculate_views(
                                 variance=(va + vb if va is not None and vb is not None else None),
                             )
                         else:
-                            factor = 1e6 if representation == "microstrain" else 100
+                            factor={'microstrain':1e6,'relative':100.,'permille':1000.,'normalized':1.}[representation]
                             point.update(
-                                value=factor * (raw / base - 1),
+                                value=(raw/base if representation=='normalized' else factor*(raw/base-1)),
                                 variance=(
                                     factor**2 * (va / base**2 + raw**2 * vb / base**4)
                                     if va is not None and vb is not None
@@ -1001,6 +1120,12 @@ def calculate_views(
                                 "threshold": view.threshold,
                             }
                         )
+        if view.reference_curve_id:
+            from .thermal_reference import apply_reference
+            apply_reference(result,view,settings.reference_curves[view.reference_curve_id])
+        if metric=='phase_ratio':
+            result['notices'].extend(dict.fromkeys(p.get('uncertainty_note','') for s in result['series'] for p in s['points'] if p.get('uncertainty_note')))
+            result['notices'].append('A ratio cancels only a common multiplicative lattice scale; it does not remove phase-specific strain, composition or reference-model effects')
         result["notices"].extend(
             f"{count} point(s): {reason}." for reason, count in skipped.items()
         )
@@ -1058,6 +1183,30 @@ def calculate_views(
         },
         "source_run_ids": [_run_id(s) for s in scans],
     }
+
+
+def _multi_lattice_view(scans,settings,view,references,colors,pending):
+    """Reuse qualified single-signal recipes without merging their identities."""
+    parts=[]
+    for signal in view.lattice_series:
+        child=ViewSettings.model_validate({**view.model_dump(),'lattice_series':[],
+            'metric':signal.metric,'phases':[signal.phase_key]})
+        state=settings.model_copy(update={'views':[child],'references':references,'phase_colors':colors})
+        calculated=calculate_views(scans,state,pending=pending)
+        references=calculated['references'];colors=calculated['phase_colors']
+        part=calculated['views'][0];mapping={s['key']:s['key']+':'+signal.metric for s in part['series']}
+        for s in part['series']:
+            s.update(key=mapping[s['key']],metric=signal.metric)
+            for p in s['points']:p['metric']=signal.metric
+        for row in [*part['fits'],*part['crossings']]:row['series']=mapping[row['series']]
+        parts.append(part)
+    result={**parts[0],'metric':'multiple','metrics':list(dict.fromkeys(s.metric for s in view.lattice_series)),
+        'series':[s for p in parts for s in p['series']],
+        'fits':[f for p in parts for f in p['fits']],'crossings':[f for p in parts for f in p['crossings']],
+        'notices':list(dict.fromkeys(n for p in parts for n in p['notices'])),
+        'review_required':any(p.get('review_required') for p in parts)}
+    result['status']='available' if any(p['status']=='available' for p in parts) else parts[0]['status']
+    return result,references,colors
 
 
 def _expansion_fit(result, series, view, axis):
