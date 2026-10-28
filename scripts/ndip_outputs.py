@@ -873,6 +873,8 @@ def collect_outputs(
         if output_record:
             project["collection_path"] = output_record.get("path")
             project["collection_name"] = output_record.get("name")
+            project["published_sha256"] = output_record.get("sha256")
+            project["published_size_bytes"] = output_record.get("size_bytes")
             if output_record.get('acquisition_handoff') is not None:
                 project['acquisition_handoff'] = output_record['acquisition_handoff']
     atomic_write_json(portal / "gpx_index.json", gpx_index)

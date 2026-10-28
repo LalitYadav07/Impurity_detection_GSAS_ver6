@@ -1,30 +1,31 @@
-<tool id="neutrons_radar_pd_refine_recipe_prototype" name="RADAR-PD Utility: Apply Approved Refinement Recipe" version="0.1.0" profile="22.05">
-    <description>continue a trusted preliminary GPX using an approved staged recipe</description>
+<tool id="neutrons_radar_pd_refine_recipe_prototype" name="RADAR-PD Utility: Reviewed Refinement" version="0.2.0" profile="22.05">
+    <description>inspect, preflight or apply an approved recipe to one published GPX</description>
     <requirements><container type="docker">@IMMUTABLE_BATCH_IMAGE@</container></requirements>
     <command detect_errors="exit_code"><![CDATA[
-        set -euo pipefail &&
-        python /opt/radar-pd/scripts/ndip_recipe.py run '$source_gpx' '$recipe' '$approval' polished.gpx > '$console_output' 2>&1 &&
-        cp polished.gpx '$polished_project' &&
-        cp polished.execution.json '$execution_receipt'
+        python /opt/radar-pd/scripts/ndip_refinement.py '$action' '$source_gpx' '$request' worker '$result_bundle' > '$console_output' 2>&1
     ]]></command>
     <inputs>
-        <param name="source_gpx" type="data" format="binary" label="Trusted preliminary RADAR-PD GPX"/>
-        <param name="recipe" type="data" format="json" label="Approved refinement plan"/>
-        <param name="approval" type="data" format="json" label="Exact-plan approval receipt"/>
+        <param name="action" type="select" label="Reviewed refinement operation">
+            <option value="inspect">Inspect project</option><option value="preview">Native preflight</option><option value="run">Run approved recipe</option>
+        </param>
+        <param name="source_gpx" type="data" format="binary" label="Published RADAR-PD GPX"/>
+        <param name="request" type="data" format="json" label="Recipe, approval and source checksum"/>
+        <param name="dispatch_key" type="text" label="NOVA dispatch identity">
+            <validator type="regex" message="Use the NOVA-generated dispatch key">^[a-f0-9]{24}$</validator>
+        </param>
     </inputs>
     <outputs>
-        <data name="polished_project" format="binary" label="RADAR-PD further-refined GPX"/>
-        <data name="execution_receipt" format="json" label="RADAR-PD stage execution and scientific review"/>
-        <data name="console_output" format="txt" label="RADAR-PD further-refinement log"/>
-        <collection name="stage_projects" type="list" label="RADAR-PD refinement-stage GPXs">
-            <discover_datasets pattern="polished_(?P&lt;designation>.+)\.gpx" ext="binary" directory="." visible="true"/>
+        <data name="result_bundle" format="zip" label="RADAR-PD refinement result bundle"/>
+        <data name="console_output" format="txt" label="RADAR-PD refinement console"/>
+        <collection name="stage_projects" type="list" label="Verified refinement-stage GPXs">
+            <discover_datasets pattern="verified_(?P&lt;designation&gt;.+)\.gpx" ext="binary" directory="worker" visible="true"/>
         </collection>
     </outputs>
     <help><![CDATA[
-This worker requires an immutable batch image containing the gpx_recipe package.
-It loads a trusted native GPX, verifies the approved plan/model binding, and runs
-the explicit stages. It performs no LLM calls and needs no model credential.
-Execution completion does not establish scientific acceptance. Inspect the receipt,
-refined values, covariance, residuals and intermediate projects. Source GPX unchanged.
+This local deployment template requires the successfully built immutable batch image.
+No LLM key is accepted by this tool. NOVA plans and approves a recipe before submission.
+The JSON result distinguishes completed, stopped and rejected projects. Only GPXs from
+completed, checked stages appear in the project collection. The original project is
+unchanged. Review scientific values, residuals and uncertainties before accepting a fit.
     ]]></help>
 </tool>
