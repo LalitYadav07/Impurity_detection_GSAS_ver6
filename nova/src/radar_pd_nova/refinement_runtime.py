@@ -109,6 +109,10 @@ class GalaxyRefinementRuntime(LocalRefinementRuntime):
         if collection not in self._collections:self._collections[collection]=self.service.collection_elements(collection)
         name=source.get('collection_name')
         matches=[r for r in self._collections[collection] if r['name']==name]
+        if not matches and isinstance(name,str) and name.lower().endswith('.gpx'):
+            # Older RADAR-PD indexes include the filename suffix, while Galaxy's
+            # collection element identifier omits it. Only accept one such match.
+            matches=[r for r in self._collections[collection] if r['name']==name[:-4]]
         if len(matches)!=1:raise ValueError('The published GPX does not map to one exact Galaxy collection element')
         return matches[0]['id']
 

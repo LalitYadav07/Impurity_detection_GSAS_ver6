@@ -67,6 +67,16 @@ def test_exact_collection_element_is_required_even_when_only_one_wrong_dataset_e
  with pytest.raises(ValueError,match='one exact'):rt.dataset_id(dict(collection_id='collection',collection_name='wanted.gpx'))
 
 
+def test_legacy_gpx_filename_matches_one_suffixless_collection_element(tmp_path):
+ rt,s,source=runtime(tmp_path)
+ s.collection_elements=lambda key:[dict(id='wanted',name='03_Final_accepted_joint_cell_model'),dict(id='other',name='other')]
+ assert rt.dataset_id(dict(collection_id='collection',collection_name='03_Final_accepted_joint_cell_model.gpx'))=='wanted'
+ rt._collections.clear()
+ s.collection_elements=lambda key:[dict(id='first',name='03_Final_accepted_joint_cell_model'),dict(id='second',name='03_Final_accepted_joint_cell_model')]
+ with pytest.raises(ValueError,match='one exact'):
+  rt.dataset_id(dict(collection_id='collection',collection_name='03_Final_accepted_joint_cell_model.gpx'))
+
+
 def test_utility_wrapper_has_no_model_or_secret_inputs_and_publishes_only_verified_projects():
  import xml.etree.ElementTree as ET
  p=Path(__file__).resolve().parents[2]/'galaxy/radar_pd_refine_recipe.xml.in';root=ET.parse(p).getroot()
