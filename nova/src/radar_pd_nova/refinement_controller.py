@@ -9,6 +9,7 @@ from pathlib import Path
 import tempfile
 
 from gpx_recipe.contracts import stage_table
+from gpx_recipe.usage import usage_labels
 from .refinement_plots import empty_figure, fit_figure, trend_figure
 from .refinement_runtime import configured_runtime, verify_result_files
 from .refinement_sources import RefinementScope, digest, source_from_record
@@ -55,7 +56,7 @@ class RefinementMixin:
         s=self.server.state
         values=dict(rf_mode='recipe',rf_busy=False,rf_loading=False,rf_message='',rf_error='',rf_transport='',rf_provider='Illumine Luna · lowest reasoning',
             rf_experiment='',rf_experiments=[],rf_source='',rf_sources=[],rf_source_details=[],rf_context_atoms=[],rf_context_search='',rf_scope='all',rf_samples=[],rf_sample_options=[],rf_scans=[],rf_scan_options=[],rf_banks=[],rf_bank_options=[],
-            rf_existing=True,rf_future=False,rf_scope_summary='No published GPXs available',rf_scope_token='',rf_request='',rf_draft_status='',rf_cards=[],rf_questions=[],rf_assumptions=[],rf_plan_calls='',rf_plan_ready=False,
+            rf_existing=True,rf_future=False,rf_scope_summary='No published GPXs available',rf_scope_token='',rf_request='',rf_draft_status='',rf_cards=[],rf_questions=[],rf_assumptions=[],rf_plan_calls='',rf_model_tokens='',rf_model_cost='',rf_model_has_luna_price=False,rf_plan_ready=False,
             rf_approved=False,rf_recipe_id='',rf_recipe_summary='',rf_active_summary='',rf_saved_recipe='',rf_recipe_versions=[],rf_recipe_filter='all',rf_metrics=[],rf_source_warnings=[],rf_future_armed=False,
             rf_jobs=[],rf_job_search='',rf_job_status='all',rf_selected_job='',rf_selected_title='',rf_selected_message='',rf_has_output=False,
             rf_result_tab='fit',rf_stage='final',rf_stages=[],rf_histogram='',rf_histograms=[],rf_axis='d',rf_display='compare',rf_fit=figure_json(empty_figure()),rf_fit_notice='',rf_rwp_summary='',rf_zoom=0,
@@ -262,6 +263,8 @@ class RefinementMixin:
             s.rf_questions=(draft.get('plan') or {}).get('questions',[])+(draft.get('plan') or {}).get('unsupported',[])
             s.rf_assumptions=(draft.get('plan') or {}).get('assumptions',[])
             s.rf_plan_calls=f"{draft.get('planning_calls',0)} model call(s) · native preflight passed" if draft.get('preview') else ''
+            s.rf_model_tokens,s.rf_model_cost=usage_labels(draft.get('model_usage'))
+            s.rf_model_has_luna_price=bool((draft.get('model_usage') or {}).get('price_basis'))
             if draft.get('error'):s.rf_error=draft['error']
             recipes=[r for r in w.state['recipes'].values() if r['experiment']==s.rf_experiment]
             s.rf_recipe_versions=[dict(title=f"Recipe {r['version']} · {r['plan']['request'][:65]}",value=r['id']) for r in recipes]

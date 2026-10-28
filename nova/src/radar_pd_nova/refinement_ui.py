@@ -103,6 +103,14 @@ def refinement_dashboard(app):
                     with html.Ul(classes='rf-notice'):html.Li('{{ item }}',v_for='item in rf_assumptions',key='item')
                 html.P('Each stage declares its complete free parameter set. Other ordinary refinement flags are held; original constraints and restraints remain.',v_if='rf_cards.length',classes='rf-notice mt-4')
                 html.P('{{ rf_plan_calls }}',v_if='!!rf_plan_calls',classes='rf-notice')
+                with html.Div(v_if='!!rf_model_tokens',classes='rf-source mt-3'):
+                    html.Div('Model usage',classes='rf-subtitle')
+                    html.P('{{ rf_model_tokens }}',classes='rf-notice')
+                    html.P('{{ rf_model_cost }}',v_if='!!rf_model_cost',classes='rf-notice')
+                    with html.Details(v_if='rf_model_has_luna_price',classes='rf-notice'):
+                        html.Summary('Estimate basis',style='cursor:pointer')
+                        html.P('Public GPT-6 Luna Standard rates on 2026-10-28: $0.10 per million ordinary input tokens, $0.01 cached input, $0.125 cache writes, and $0.50 output. Requests above 272,000 input tokens use the published long-context multipliers. This is not an ORNL Azure billing record.')
+                        html.A('Published Luna rates',href='https://developers.openai.com/api/docs/models/gpt-6-luna',target='_blank',rel='noopener noreferrer')
                 v.VAlert(v_if='rf_approved',text=('rf_recipe_summary',),type='success',variant='tonal',density='compact',classes='mt-3')
                 with html.Div(classes='rf-actions'):
                     v.VBtn('Approve recipe and scope',click=(app.approve_refinement_recipe,'[rf_scope_token]'),disabled=('!rf_plan_ready || rf_busy || rf_approved',),variant='outlined',color='#15543c',prepend_icon='mdi-check-decagram-outline')

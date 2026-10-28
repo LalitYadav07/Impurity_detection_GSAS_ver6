@@ -68,6 +68,35 @@ def test_exact_sample_and_bank_scope_and_existing_backlog_are_snapshotted(tmp_pa
     assert w.state['sources']['1']['source_sha256']=='1hash'
 
 
+def test_model_usage_survives_review_and_workspace_recovery(tmp_path):
+    w,rt=create(tmp_path);w.observe([source('1')])
+    call=dict(label='Illumine Luna',provider='illumine-luna',model='gpt-6-luna',
+              usage=dict(input_tokens=2000,input_tokens_details=dict(cache_write_tokens=1500,cached_tokens=100),
+                         output_tokens=300,total_tokens=2300))
+    w._planner=lambda request,ctx,previous=None:dict(plan=plan(ctx),calls=[call])
+    draft=w.prepare('exp','1','background')
+    assert draft['model_usage']['total_tokens']==2300
+    assert draft['model_usage']['estimated_usd'] is not None
+    restored=RefinementWorkspace(tmp_path,history_id='history',runtime=rt)
+    assert restored.state['drafts']['exp']['model_usage']==draft['model_usage']
+
+
+def test_failed_plan_retains_reported_token_usage(tmp_path):
+    w,_=create(tmp_path);w.observe([source('1')])
+    call=dict(provider='illumine-luna',model='gpt-6-luna',
+              usage=dict(input_tokens=700,output_tokens=100,total_tokens=800))
+    def failed(request,ctx,previous=None):
+        error=ValueError('The model plan did not pass validation')
+        error.planning_calls=[call]
+        raise error
+    w._planner=failed
+    with pytest.raises(ValueError,match='did not pass'):
+        w.prepare('exp','1','background')
+    draft=w.state['drafts']['exp']
+    assert draft['status']=='error' and draft['planning_calls']==1
+    assert draft['model_usage']['total_tokens']==800
+
+
 def test_future_only_enrolls_new_matching_arrivals_not_existing_or_other_experiments(tmp_path):
     w,rt=create(tmp_path);w.observe([source('1')]);scope=RefinementScope('exp','samples',samples=('id:0012',),banks=('2',));r=approved(w,scope,future=True,existing=False)
     assert not w.start(r['id'],r['selection_token'])
