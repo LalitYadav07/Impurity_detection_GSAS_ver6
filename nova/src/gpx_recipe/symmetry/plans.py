@@ -21,6 +21,15 @@ def build_plan(context,catalog,root,settings):
         sites=settings['sites'];validate_sites(parent['atoms'],sites)
         if not settings['directions']:raise ValueError('Select at least one finite moment direction')
         seeds=[dict(id=axis,axis=axis,magnitude=min(2.,settings['maximum_moment'])) for axis in settings['directions']]
+        if settings.get('relative_sign_starts'):
+            if len(sites)>5:raise ValueError('Exhaustive parent-site relative signs are bounded to five selected sites')
+            seeds=[]
+            # Reversal of every moment is powder-equivalent. Fix the first
+            # parent site's sign and enumerate relative parent-site signs.
+            for axis in settings['directions']:
+                for index,tail in enumerate(itertools.product([-1,1],repeat=len(sites)-1)):
+                    signs=dict(zip([site['label'] for site in sites],(1,*tail)))
+                    seeds.append(dict(id=axis+'-signs-'+str(index+1),axis=axis,magnitude=min(2.,settings['maximum_moment']),site_signs=signs))
     elif kind=='structural':
         amplitude=float(settings['start_mode'])
         if not 0<amplitude<=settings['maximum_mode']:raise ValueError('A nonzero mode start must be within its declared bound')

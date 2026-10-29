@@ -345,6 +345,7 @@ def run(source_gpx,ctx,protocol,candidate_record,seed):
                 moment[index] = seed_amplitude * float(allowed_coefficients[index]) / seed_coefficient
         if not any((abs(moment[component_index[axis]]) >= 1e-08 for axis in refined)):
             raise ValueError('A refined magnetic component would start at zero')
+        moment *= seed.get('site_signs',{}).get(parent_label,1)
         atom[cx + 4:cx + 7] = list(moment)
         for axis in {'x', 'y', 'z'} - refined:
             hold_specs.append((component_var[axis], atom[-1]))

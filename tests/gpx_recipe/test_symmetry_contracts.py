@@ -74,6 +74,12 @@ def test_float_or_multik_input_is_not_rounded_or_simplified(tmp_path):
     with pytest.raises(ValueError):validate_protocol(p)
 
 
+@pytest.mark.parametrize('signs',[{'Mn1':0},{'Mn1':True},{'Mn1':1.0},{'absent':1}])
+def test_invalid_or_unselected_parent_site_signs_fail_before_execution(tmp_path,signs):
+    p=make_protocol(tmp_path/'input');p['seeds'][0]['site_signs']=signs
+    with pytest.raises(ValueError):validate_protocol(p)
+
+
 def test_candidate_specific_starts_do_not_create_cross_candidate_trials(tmp_path):
     from gpx_recipe.symmetry.contracts import iter_trials
     p=make_protocol(tmp_path/'input');p['candidates'].append(dict(p['candidates'][0],id='mag:second'))

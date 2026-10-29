@@ -122,3 +122,78 @@ def test_distinct_acquisitions_with_identical_gpx_bytes_remain_distinct(setup):
     assert set(first).isdisjoint(second)
     assert c.enroll(a,root/'inputs',approved_hash=digest(a))==first
     assert len(c.trials())==6
+
+
+def test_unchanged_terminal_polls_use_file_versions_without_rewriting_events(setup,monkeypatch):
+    import gpx_recipe.symmetry.campaign as module
+    root,p,c,t=setup;ids=c.enroll(p,root/'inputs',approved_hash=digest(p));finish(c,t,ids[0])
+    original=module.verify_receipt;calls=[]
+    def verify(*args,**kwargs):calls.append(1);return original(*args,**kwargs)
+    monkeypatch.setattr(module,'verify_receipt',verify)
+    c.tick(t);assert len(calls)==1
+    with c.connect() as db:events=db.execute('SELECT COUNT(*) FROM events WHERE trial=? AND state="terminal"',(ids[0],)).fetchone()[0]
+    c.tick(t);c.tick(t)
+    assert len(calls)==1
+    with c.connect() as db:assert db.execute('SELECT COUNT(*) FROM events WHERE trial=? AND state="terminal"',(ids[0],)).fetchone()[0]==events
+    # A new dispatcher always starts with a full cryptographic audit.
+    Campaign(c.root).tick(t);assert len(calls)==2
+
+
+def test_changed_bytes_are_detected_even_when_size_and_mtime_are_restored(setup):
+    import os
+    root,p,c,t=setup;ids=c.enroll(p,root/'inputs',approved_hash=digest(p));finish(c,t,ids[0]);c.tick(t)
+    artifact=c.root/'trials'/ids[0]/'results/checkpoint.gpx';st=artifact.stat()
+    artifact.write_bytes(b'X'*st.st_size);os.utime(artifact,ns=(st.st_atime_ns,st.st_mtime_ns))
+    c.tick(t)
+    assert c.trials()[0]['state']=='needs_recovery'
+    assert 'artifact changed' in c.trials()[0]['error']
+
+
+def test_terminal_cache_never_accepts_modified_inputs_or_job_identity(setup):
+    root,p,c,t=setup;ids=c.enroll(p,root/'inputs',approved_hash=digest(p));finish(c,t,ids[0]);c.tick(t)
+    source=c.root/'trials'/ids[0]/'source.gpx';source.write_bytes(b'other source')
+    c.tick(t)
+    assert c.trials()[0]['state']=='needs_recovery' and 'sealed input changed' in c.trials()[0]['error']
+
+
+def test_terminal_cache_periodically_rehashes_even_unchanged_files(setup,monkeypatch):
+    import gpx_recipe.symmetry.campaign as module
+    root,p,c,t=setup;ids=c.enroll(p,root/'inputs',approved_hash=digest(p));finish(c,t,ids[0])
+    clock=[0.];monkeypatch.setattr(module.time,'monotonic',lambda:clock[0])
+    original=module.verify_receipt;calls=[]
+    def verify(*args,**kwargs):calls.append(1);return original(*args,**kwargs)
+    monkeypatch.setattr(module,'verify_receipt',verify)
+    c.tick(t);clock[0]=301.;c.tick(t)
+    assert len(calls)==2
+
+
+def test_sealed_continuation_uses_original_verified_workers_after_dispatcher_changes(tmp_path):
+    from gpx_recipe.symmetry.compiler import package_signature
+    p=make_protocol(tmp_path/'inputs');p['implementation_sha256']=package_signature()
+    c=Campaign(tmp_path/'campaign');ids=c.enroll(p,tmp_path/'inputs',approved_hash=digest(p))
+    assert c.verify_sealed_continuation()==ids
+    # Strict new-code continuation remains disallowed; explicit sealed-version
+    # continuation validates the old bytes rather than silently upgrading them.
+    with pytest.raises(ValueError,match='older scientific'):c.verify_continuation('d'*64)
+    root=c.trial_directory(c.trials()[0])/'runtime/gpx_recipe'
+    (root/'symmetry/native_magnetic.py').write_text('changed scientific code')
+    with pytest.raises(ValueError,match='scientific package changed'):c.verify_sealed_continuation()
+
+
+def test_sealed_continuation_rejects_modified_entrypoint_and_source(tmp_path):
+    from gpx_recipe.symmetry.compiler import package_signature
+    p=make_protocol(tmp_path/'inputs');p['implementation_sha256']=package_signature()
+    c=Campaign(tmp_path/'campaign');ids=c.enroll(p,tmp_path/'inputs',approved_hash=digest(p))
+    root=c.trial_directory(c.trials()[0]);entry=root/'worker.py';old=entry.read_text()
+    entry.write_text(old+'\nprint("injected")\n')
+    with pytest.raises(ValueError,match='entry point'):c.verify_sealed_continuation()
+    entry.write_text(old);(root/'source.gpx').write_bytes(b'changed source')
+    with pytest.raises(ValueError,match='sealed input changed'):c.verify_sealed_continuation()
+
+
+def test_sealed_continuation_checks_the_actual_imported_native_adapter(tmp_path):
+    from gpx_recipe.symmetry.compiler import package_signature
+    p=make_protocol(tmp_path/'inputs');p['implementation_sha256']=package_signature()
+    c=Campaign(tmp_path/'campaign');c.enroll(p,tmp_path/'inputs',approved_hash=digest(p))
+    root=c.trial_directory(c.trials()[0]);(root/'runtime/scripts/gsas_magnetic_preflight.py').write_text('changed adapter')
+    with pytest.raises(ValueError,match='native adapter'):c.verify_sealed_continuation()

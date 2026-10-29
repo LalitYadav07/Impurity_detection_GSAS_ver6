@@ -77,7 +77,12 @@ def validate_candidate(value):
 def seed(value):
     defaults=dict(axis='x',magnitude=1.,parent_direction=None,mode_values={})
     if isinstance(value,dict) and 'candidate_ids' in value:defaults['candidate_ids']=None
+    if isinstance(value,dict) and 'site_signs' in value:defaults['site_signs']=None
     s=fields(value,['id'],defaults)
+    if 'site_signs' in s:
+        if not isinstance(s['site_signs'],dict) or not s['site_signs']:raise ValueError('Parent-site signs need an explicit nonempty mapping')
+        s['site_signs']={text(k,maximum=100):number(v,-1,1,integer=True) for k,v in s['site_signs'].items()}
+        if any(v not in (-1,1) for v in s['site_signs'].values()):raise ValueError('Parent-site signs must be +1 or -1')
     if 'candidate_ids' in s:
         ids=s['candidate_ids']
         if not isinstance(ids,list) or not ids or len(ids)!=len(set(ids)):raise ValueError('A scoped start needs unique candidate IDs')
@@ -134,9 +139,11 @@ def validate_protocol(value):
         if any(not c['magnetic_space_group'] or c['child'] or c['modes'] for c in p['candidates']):raise ValueError('Magnetic candidates require native MSG records')
         if any(p['policy'][k] for k in ['refine_cell','refine_background','refine_histogram_scale']):raise ValueError('Magnetic screening holds the nuclear/nuisance state fixed')
         if any(s['mode_values'] or s['magnitude']>p['policy']['maximum_moment'] for s in p['seeds']):raise ValueError('Invalid magnetic start or moment ceiling')
+        if any(set(s.get('site_signs',{}))-{site['label'] for site in sites} for s in p['seeds']):raise ValueError('A start gives a sign to an unselected magnetic site')
         for form in {s['form_factor'] for s in sites}:
             if len({s['lande_g'] for s in sites if s['form_factor']==form})!=1:raise ValueError('Native Lande g is shared by each form-factor species')
     else:
+        if any(s.get('site_signs') for s in p['seeds']):raise ValueError('Parent-site moment signs are magnetic-only')
         if sites or any(c['magnetic_space_group'] or not c['child'] or not c['modes'] for c in p['candidates']):raise ValueError('Structural candidates need authoritative displacement-mode CIFs')
         if any(abs(v)>p['policy']['maximum_mode'] for s in p['seeds'] for v in s['mode_values'].values()):raise ValueError('A displacement-mode start exceeds its bound')
     return p

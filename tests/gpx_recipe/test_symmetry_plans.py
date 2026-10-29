@@ -54,3 +54,14 @@ def test_identical_project_bytes_from_different_acquisitions_do_not_collapse(tmp
     second=build_plan(context,catalog,tmp_path,dict(settings,acquisition_id='run-2-bank-2'))
     assert first['source']==second['source']
     assert digest(first)!=digest(second)
+
+
+def test_relative_parent_site_signs_include_antiparallel_starts(tmp_path):
+    catalog,context,settings=inputs(tmp_path)
+    context['phases'][0]['atoms'].append(dict(label='Mn2',type='Mn',occupancy=.5))
+    settings['sites'].append(dict(label='Mn2',form_factor='Mn',lande_g=2.))
+    p=build_plan(context,catalog,tmp_path,dict(settings,relative_sign_starts=True,directions=['x','y','z']))
+    assert len(p['seeds'])==6
+    assert {tuple(s['site_signs'].values()) for s in p['seeds']}=={(1,-1),(1,1)}
+    assert all(s['site_signs']['Mn1']==1 for s in p['seeds'])
+    assert len(list(iter_trials(p)))==6

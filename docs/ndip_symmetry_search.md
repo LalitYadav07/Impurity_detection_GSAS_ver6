@@ -1,7 +1,9 @@
 # Structural and commensurate magnetic model searches
 
-Status: isolated development, 2026-10-28. This is not enabled in NOVA, the
-refinement planner, or NDIP. The deployment checkout is separate.
+Status: local NOVA development, 2026-10-29. Model exploration is integrated
+inside the local Refinement workspace. It is not deployed to NDIP; the
+deployment checkout is separate. Historical validation sections below retain
+the scope and limitations of their recorded checkpoints.
 
 ## What the new capability should answer
 
@@ -24,8 +26,9 @@ from R4+ and M3+, rather than from a single irrep.
 The 2026-10-28 native validation extends the original import-only feasibility
 check. Evidence lives in `audit/2026-10-28/symmetry-native-validation/` in the
 surrounding workspace; `report.html` and `validation-summary.json` summarize it.
-The experimental compiler/runner remains outside the application. No search is
-enabled in NOVA or deployed to NDIP.
+At that checkpoint the experimental compiler/runner remained outside the
+application. The later local NOVA integration is described below; no search
+has been deployed to NDIP by this branch.
 
 | Check | Result | Scientific limit |
 | --- | --- | --- |
@@ -313,16 +316,16 @@ the deployed package and native jobs have no runtime dependency on that project.
 
 | Capability | Current behavior | Required user choice or remaining limit |
 | --- | --- | --- |
-| Source integration | Captures the exact completed RADAR-PD GPX and its checksum; the UI never unpickles it | Select the parent and histogram/bank; a revised GPX invalidates approval |
+| Source integration | Captures the exact completed RADAR-PD GPX or verified recipe stage/final checkpoint and its checksum; the UI never unpickles it | Select the parent and histogram/bank; a revised GPX invalidates approval; derived outputs never recursively enroll as new RADAR-PD inputs |
 | Magnetic discovery | Standalone Bilbao client caches BNS IDs, complete embeddings, origins and exact rational k | Explicit parent-basis k, magnetic sites/ionic form factors, finite moment directions and fit criterion |
-| Magnetic execution | Fixed nuclear/nuisance state; verified material/cell/atom linkage; moment-only native refinement | Single-k, collinear branches only; Cartesian starts do not exhaust continuous orientations or relative orbit signs |
+| Magnetic execution | Fixed nuclear/nuisance state; verified material/cell/atom linkage; moment-only native refinement; finite relative signs between selected parent sites | Single-k, collinear branches only; child-axis starts do not exhaust continuous orientations or independent symmetry-split orbit signs |
 | Magnetic representation | Independently compares all rotations, translations and time reversals to the BNS database | Grey groups are incompatible; unverified alternate settings are unsupported, never guessed |
 | Reflection coverage | New UI plans explicitly use the full calibrated fitted d range by default; an explicit cutoff is optional | Historical sealed protocols preserve their original 1 Å default and are not silently reinterpreted |
 | Structural discovery | Standalone ISODISTORT adapter retains the full OPD discovery record and constructs one highest-symmetry OPD per irrep in the first tier | Other OPDs remain deferred; the current UI does not yet construct arbitrary later tiers |
 | Structural execution | Native displacement-mode import; zero-mode forward-equivalence check; selected modes with exhaustive signed starts; optional declared cell/background/global-scale refinement | At most six selected modes per child within the total finite-start budget; no unverified tensor/restraint transfer |
-| Durable execution | SQLite ledger; sealed trials; Continue approved queue after reopening; process recovery, cancellation and deadlines | Late verified receipts resolve without resubmission. Changed implementation or ambiguous transport requires review; Galaxy seed bundles/destination adapter remain to be built |
+| Durable execution | SQLite ledger; sealed trials; continue original sealed queue after reopening; process recovery, cancellation and deadlines | A dispatcher fix can continue unchanged, fully rehashed bundled workers; scientific scripts are never silently substituted. Ambiguous transport requires review; Galaxy seed bundles/destination adapter remain to be built |
 | Streaming | Trial dispatch and partial results work without waiting for every start; acquisition IDs prevent identical GPX bytes from collapsing different scans | This UI starts one representative scan. Bulk/future-scan enrollment and reviewed continuation templates remain incomplete |
-| Results | Grouped models, finite-fit overview, exact scan filtering, pins, calibrated axes, Bragg ticks, parameter values and verified downloads | Model-by-condition matrix and consistent-gauge mode/moment trends are still pending |
+| Results | Selected-experiment scope, per-hypothesis scan/condition/bank coverage, grouped models, finite-fit overview, pins, calibrated axes, log intensity, Bragg ticks, conditional moment uncertainties, nuclear-baseline Rwp comparison and verified downloads | Numerical qualification does not establish ordering. Model-by-condition matrix and consistent-gauge mode/moment trends are still pending |
 
 The native runtime gate includes the full GSAS-II/numerical/compiled-module
 fingerprint and the independent BNS database/parser. The tested Linux 5843
@@ -375,6 +378,60 @@ Galaxy destination pilot must be completed before release acceptance.
 The packaged native mode-matching helper and tables retain their GSAS-II source
 license and provenance. This product includes software produced by UChicago
 Argonne, LLC under Contract No. DE-AC02-06CH11357 with the Department of Energy.
+
+## Actual-project setup and continuation checks — 2026-10-29
+
+The setup-time magnetic planner accepts a compact native project snapshot,
+the user's explicit parent-basis k, selected sites and ionic form factors,
+per-ion Landé g, finite starts, bounds and an experiment-specific fit criterion.
+It returns the closed `radar-symmetry-intent/v1` schema, never Python or invented
+subgroup names. One call and at most one bounded JSON repair are permitted per
+setup revision. Missing or unsupported choices block the complete plan.
+Discovery, compilation, execution and result comparison remain host-owned and
+make no model calls. Structural setup still uses the deterministic controls;
+this new language interface is limited to collinear magnetic searches.
+
+Planning precedes subgroup discovery. The host's future discovery work is not
+an unsupported request merely because its catalog does not yet exist. Native
+source, parent, histogram, atom labels and the declared choices are validated
+again before compilation. An edited source/request/setting invalidates approval.
+Integer k components are preserved in centered conventional bases.
+
+Mixed-ion searches require site-specific g values. The UI accepts either a
+single g or explicit `atom=value; atom=value` entries, rejects missing/duplicate
+site mappings and prevents conflicting g values for one native ionic species.
+Optional relative initial signs enumerate the distinct selected parent sites,
+with global reversal factored out. The bounded budget does not exhaust every
+independent child orbit, canting angle or multiple-k combination.
+
+Completed recipe outputs are explicit new starting choices. Their receipt and
+artifact hashes are rechecked, original Galaxy dataset/collection references
+and cached native contexts are removed, and the chosen bytes receive a fresh
+native inspection. The original project, recipe checkpoint and provenance are
+preserved. Selecting another source during an asynchronous inspection cannot
+apply the old source's context to the new selection. Experiment/scope changes
+during evidence loading schedule a fresh read; old results remain hidden while
+loading instead of appearing under the new experiment.
+
+Large actual-project portfolios exposed repeated terminal rehashes and ledger
+events on every polling pass. The dispatcher now caches file identity, path,
+size, mtime, ctime and mode after a successful full verification. A change,
+restart or periodic audit triggers full hashing again; changed receipts remain
+anchored to the original collected receipt. An explicit sealed continuation
+rehashes every pending worker package, adapter, entry point, source and catalog.
+This permits a separately improved dispatcher to continue the exact approved
+scientific code, without changing its package or native runtime identity.
+
+The actual-project audit keeps private inputs, payloads, native outputs and
+experimental results in the surrounding audit workspace, outside this source
+repository. A replayed recipe checkpoint followed by a native magnetic control
+verifies the handoff separately from the complete original-source portfolios.
+The installed-wheel positive control runs offline with only its sealed job
+directory mounted. These engineering checks do not replace independent known-
+solution experimental acceptance, improve a poor nuclear parent automatically,
+or establish magnetic order from a small nonzero moment estimate. Conditional
+moment uncertainties and the Rwp change from the fresh nuclear baseline are
+shown explicitly in the model evidence.
 
 ## Next implementation plan and acceptance gates
 

@@ -311,7 +311,7 @@ class RefinementMixin:
         s.rf_source=draft.get('source_id','');s.rf_request=draft.get('request','')
         s.rf_scope=scope.get('mode','all');s.rf_samples=list(scope.get('samples',[]));s.rf_scans=list(scope.get('scans',[]));s.rf_banks=list(scope.get('banks',[]))
         s.rf_existing=recipe.get('existing',True);s.rf_future=recipe.get('future',False);s.rf_selected_job='';s.rf_recipe_filter='all'
-        if w and any(j['source']['experiment']==s.rf_experiment for j in w.state['jobs'].values()):s.rf_mode='results'
+        if s.rf_mode!='models' and w and any(j['source']['experiment']==s.rf_experiment for j in w.state['jobs'].values()):s.rf_mode='results'
         self._refinement_sync()
 
     def _refinement_scope(self):

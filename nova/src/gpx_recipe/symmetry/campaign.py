@@ -13,7 +13,7 @@ import shutil
 import sqlite3
 import time
 
-from .compiler import compile_bundle, confined, file_sha, verify_inputs
+from .compiler import compile_bundle, confined, file_sha, verify_inputs,assets
 from .contracts import digest, trial_id, validate_protocol,iter_trials
 from ..symmetry_results import TERMINAL, summarize_portfolio
 
@@ -40,6 +40,7 @@ def verify_receipt(directory, expected):
 class Campaign:
     def __init__(self,root):
         self.root=Path(root).resolve();self.root.mkdir(parents=True,exist_ok=True)
+        self._terminal_checks={}
         self.database=self.root/'campaign.sqlite'
         with self.connect() as db:
             db.executescript('''
@@ -122,12 +123,34 @@ class Campaign:
                 (state,json.dumps(handle) if handle else None,json.dumps(receipt) if receipt else None,error,time.time(),uid))
             self.event(db,uid,state,error)
 
+    @staticmethod
+    def _artifact_stamps(directory,paths):
+        stamps=[]
+        for relative in paths:
+            path=confined(directory,relative);st=path.stat()
+            # ctime catches in-place edits even when mtime is restored. Inode,
+            # real path and device also detect replacement/symlink changes.
+            stamps.append((relative,str(path),st.st_dev,st.st_ino,st.st_size,st.st_mtime_ns,st.st_ctime_ns,st.st_mode))
+        return tuple(stamps)
+
     def collect(self,row):
         try:
-            receipt=verify_receipt(self.trial_directory(row),dict(id=row['id'],protocol_sha256=row['protocol']))
+            directory=self.trial_directory(row);cached=self._terminal_checks.get(row['id'])
+            if row['state']=='terminal' and cached and cached['anchor']==row.get('receipt') and time.monotonic()-cached['verified_at']<300:
+                if self._artifact_stamps(directory,cached['paths'])==cached['stamps']:return
+            original=json.loads((directory/'result.json').read_text())
+            job=json.loads((directory/'job.json').read_text());protocol=validate_protocol(job['protocol'])
+            paths=sorted(set(['result.json','job.json']+[asset['path'] for asset in assets(protocol)]+list(original.get('files',{}))))
+            before=self._artifact_stamps(directory,paths)
+            receipt=verify_receipt(directory,dict(id=row['id'],protocol_sha256=row['protocol']))
+            after=self._artifact_stamps(directory,paths)
+            if before!=after or digest(original)!=digest(receipt):raise ValueError('An artifact changed during terminal verification')
             if row.get('receipt') and digest(json.loads(row['receipt']))!=digest(receipt):raise ValueError('A terminal receipt changed after collection')
-            self.set_state(row['id'],'terminal',receipt=receipt)
-        except Exception as exc:self.set_state(row['id'],'needs_recovery',error=str(exc))
+            if row['state']!='terminal':self.set_state(row['id'],'terminal',receipt=receipt)
+            self._terminal_checks[row['id']]=dict(anchor=json.dumps(receipt),paths=paths,stamps=after,verified_at=time.monotonic())
+        except Exception as exc:
+            self._terminal_checks.pop(row['id'],None)
+            self.set_state(row['id'],'needs_recovery',error=str(exc))
 
     def tick(self,transport,*,slots=1):
         """One nonblocking scheduler pass. Persist intent BEFORE submitting.
@@ -177,6 +200,39 @@ class Campaign:
         if all(r['state']=='needs_recovery' and not (self.trial_directory(r)/'result.json').is_file() for r in pending):
             raise ValueError('These trials need explicit transport recovery; no duplicate job was submitted')
         return [r['id'] for r in pending]
+
+    def verify_sealed_continuation(self):
+        """Resume the original bundled worker, never substitute current code.
+
+        A dispatcher can be fixed/upgraded independently of the scientific
+        scripts already approved. Every pending bundle must still match its
+        full original package hash and the known v1 trusted entry point.
+        The native worker also rechecks its pinned GSAS-II runtime at launch.
+        """
+        pending=[r for r in self.trials() if r['state'] not in {'terminal','cancelled'}]
+        if not pending:raise ValueError('This campaign has no pending trials to continue')
+        if all(r['state']=='needs_recovery' and not (self.trial_directory(r)/'result.json').is_file() for r in pending):
+            raise ValueError('These trials need explicit transport recovery; no duplicate job was submitted')
+        entrypoint='from pathlib import Path\nimport sys\nroot=Path(__file__).resolve().parent\nsys.path[:0]=[str(root/"runtime"),str(root/"runtime/scripts")]\nfrom gpx_recipe.symmetry.worker import main\nif __name__ == "__main__":\n    main(root)\n'
+        for row in pending:
+            directory=self.trial_directory(row)
+            job=json.loads(confined(directory,'job.json').read_text());protocol=validate_protocol(job['protocol'])
+            if job.get('schema')!='radar-symmetry-job/v1' or digest(protocol)!=row['protocol'] or job.get('protocol_sha256')!=row['protocol'] or job.get('id')!=row['id'] or trial_id(protocol,job['candidate_id'],job['seed_id'])!=row['id']:
+                raise ValueError('A sealed job identity changed; no replacement was submitted')
+            if job.get('package_sha256')!=protocol['implementation_sha256']:
+                raise ValueError('A sealed scientific implementation differs from its approved protocol')
+            root=confined(directory,'runtime/gpx_recipe')
+            files={str(p.relative_to(root)):file_sha(confined(root,str(p.relative_to(root))))
+                   for p in sorted(root.rglob('*')) if p.is_file() and p.suffix in {'.py','.json'}}
+            if digest(files)!=protocol['implementation_sha256']:
+                raise ValueError('The original sealed scientific package changed')
+            for name in ['gsas_magnetic_preflight.py','gsas_isodistort_import.py','gsas_cif_import.py']:
+                if file_sha(confined(directory,'runtime/scripts/'+name))!=files.get('symmetry/adapters/'+name):
+                    raise ValueError('A sealed native adapter differs from its approved package')
+            if confined(directory,'worker.py').read_text()!=entrypoint:
+                raise ValueError('Unknown or modified sealed worker entry point')
+            verify_inputs(protocol,directory)
+        return [row['id'] for row in pending]
 
     def cancel(self,uid,transport):
         with self.exclusive():
