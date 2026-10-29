@@ -19,6 +19,10 @@ import numpy as np
 from gsas_cif_import import _gsas_operations, _operator_sets
 
 
+class NativeRepresentationError(ValueError):
+    """A native construction needs a verified basis/site transfer, not a fit."""
+
+
 def integer_supercell_translations(basis_rows, *, maximum_index=128):
     """Exact coset representatives of Z^3 / T.T Z^3 for an integer supercell.
 
@@ -228,7 +232,7 @@ approved protocol, not an inference performed by this function.
     for atom, code in zip(child['Atoms'], codes):
         match = re.match(r'^(\d+):', str(code))
         if not match or not 0 <= int(match[1]) < len(labels):
-            raise ValueError('GSAS-II returned an unresolvable parent-to-child atom map')
+            raise NativeRepresentationError('GSAS-II returned an unresolvable parent-to-child atom map')
         parent_label = labels[int(match[1])]
         if parent_label not in sites:
             continue
@@ -247,7 +251,7 @@ approved protocol, not an inference performed by this function.
         atom = parent['Atoms'][labels.index(site)]
         multiplicity = G2spc.SytSym(atom[cx:cx+3],general['SGData'])[1]
         if not np.isclose(represented[site],multiplicity*abs(determinant),rtol=0,atol=1e-6):
-            raise ValueError('Native transformation did not preserve selected-site atomic density; a coset-complete construction is required')
+            raise NativeRepresentationError('Native transformation did not preserve selected-site atomic density; a coset-complete construction is required')
     missing = sorted(set(sites) - {row['parent_site'] for row in rows})
     compatible = bool(rows) and not missing and (all(row['compatible'] for row in rows) if site_policy == 'all' else any(row['compatible'] for row in rows))
     return child, dict(schema='radar-magnetic-site-preflight/v1', candidate_id=candidate['candidate_id'],

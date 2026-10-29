@@ -1,0 +1,9 @@
+{
+  "license": "../STUDIO-LICENSE",
+  "source": "Audited magnetic script adapted from Diffraction Studio structural_transition_scripts.py",
+  "audited_kernel_sha256": "4fe4d2fce8241e4c2facec63097e33cf1f0cf5f0f3a2ef8860f328e785f3d5c5",
+  "reference_runtime_dependency": false,
+  "ported": "2026-10-28",
+  "parser_reference": "MIT-licensed pdf/external_symmetry.py",
+  "parser_source_sha256": "f1ef296f129d22ffa6e40be0f33cab0d760b15e72b663c2b56ce0109cbb0b472"
+}

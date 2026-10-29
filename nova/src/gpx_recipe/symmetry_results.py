@@ -9,7 +9,8 @@ from __future__ import annotations
 import math
 
 TERMINAL = {'valid', 'physical_rejection', 'site_incompatible', 'optimization_unresolved',
-            'technical_failure', 'deferred'}
+            'technical_failure', 'deferred', 'inadequate_fit', 'integrity_failure',
+            'runtime_incompatible', 'unsupported', 'effect_mismatch', 'timed_out'}
 
 
 def summarize_portfolio(expected_trial_ids, results, *, fit_band_percent):
@@ -37,7 +38,7 @@ def summarize_portfolio(expected_trial_ids, results, *, fit_band_percent):
             raise ValueError('An unverified native output cannot be a qualified fit')
         by_id[uid] = row
     missing = [uid for uid in expected if uid not in by_id]
-    incomplete = [r['id'] for r in by_id.values() if r['status'] in {'technical_failure', 'deferred'}]
+    incomplete = [r['id'] for r in by_id.values() if r['status'] in {'technical_failure', 'deferred','integrity_failure','runtime_incompatible','unsupported','effect_mismatch','timed_out'}]
     valid = sorted((r for r in by_id.values() if r['status'] == 'valid'), key=lambda r:r['rwp'])
     best = valid[0]['rwp'] if valid else None
     competitive = [r['id'] for r in valid if r['rwp'] <= best+fit_band_percent] if valid else []

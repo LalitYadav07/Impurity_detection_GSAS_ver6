@@ -1,5 +1,6 @@
 """A single integrated refinement workspace; credentials never enter UI state."""
 from trame.widgets import client, html, plotly, vuetify3 as v
+from .symmetry_ui import model_exploration
 
 
 def select(label,field,items,**kwargs):
@@ -36,24 +37,26 @@ def refinement_dashboard(app):
                 html.H2('Refinement')
                 html.P('Review a recipe once. Apply it to selected RADAR-PD projects as scans become available.')
             with html.Div(classes='rf-actions',style='margin-top:0'):
-                v.VChip('{{ rf_provider }}',variant='tonal',color='#15543c',size='small')
+                v.VChip('{{ rf_provider }}',v_if="rf_mode !== 'models'",variant='tonal',color='#15543c',size='small')
                 v.VBtn('Refresh projects',click=app.refresh_refinement_sources,loading=('rf_loading',),variant='text',prepend_icon='mdi-refresh',size='small')
         v.VProgressLinear(v_if='rf_loading || rf_busy',indeterminate=True,color='#287654',height=3,classes='mb-4')
-        v.VAlert(v_if='!!rf_error',text=('rf_error',),type='error',variant='tonal',density='compact',classes='mb-3',closable=True)
+        v.VAlert(v_if="rf_mode !== 'models' && !!rf_error",text=('rf_error',),type='error',variant='tonal',density='compact',classes='mb-3',closable=True)
         with html.Div(classes='rf-toolbar'):
             select('Experiment','rf_experiment','rf_experiments')
             with v.VBtnToggle(v_model=('rf_mode',),mandatory=True,color='#15543c',variant='outlined',divided=True):
                 v.VBtn('Recipe',value='recipe',prepend_icon='mdi-playlist-edit')
                 v.VBtn('Results',value='results',prepend_icon='mdi-chart-line')
-        with html.Div(classes='rf-stats'):
+                v.VBtn('Model exploration',value='models',prepend_icon='mdi-molecule')
+        model_exploration(app)
+        with html.Div(v_show="rf_mode !== 'models'",classes='rf-stats'):
             with html.Div(v_for='metric in rf_metrics',key='metric.label',classes='rf-stat'):
                 html.Strong('{{ metric.value }}');html.Span('{{ metric.label }}')
             html.Span('{{ rf_transport }}',classes='rf-muted')
             v.VChip('Future matching scans enrolled',v_if='rf_future_armed',color='#157347',size='small',variant='tonal',prepend_icon='mdi-access-point')
-        with html.Div(v_if='rf_jobs.length',classes='mb-4'):
+        with html.Div(v_if="rf_mode !== 'models' && rf_jobs.length",classes='mb-4'):
             html.P('{{ rf_progress_text }}',classes='rf-notice')
             v.VProgressLinear(model_value=('rf_progress_percent',),height=6,color='#157347',rounded=True)
-        with html.Div(v_if='!rf_experiments.length && !rf_loading',classes='rf-empty'):
+        with html.Div(v_if="rf_mode !== 'models' && !rf_experiments.length && !rf_loading",classes='rf-empty'):
             html.H3('Start with a completed RADAR-PD fit')
             html.P('Published GPX projects from this history will appear here, including scans recovered from an earlier session.')
         with html.Div(v_show="rf_mode === 'recipe' && rf_experiments.length",classes='rf-grid'):

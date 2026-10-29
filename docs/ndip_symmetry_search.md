@@ -270,22 +270,26 @@ Ingress workflow.
 
 ## Portfolio presentation
 
-An offline prototype at `symmetry-native-validation/review/index.html` uses the
-actual 60 qualified magnetic curves from the complete pinned Linux 5843 rerun. It groups these into eight display-pattern
-groups, preserving all individual model names. It is not wired into NOVA.
-Its JavaScript syntax and pure grouping were checked offline. Browser visual
-inspection was blocked by the local-file URL policy and has not been completed.
+The historical standalone prototype has been superseded by the actual NOVA
+implementation in `radar_pd_nova/symmetry_{controller,ui,workspace,plots}.py`.
+Model exploration is a subview of the existing Refinement workspace, beside
+Recipe and Results. It adds no top-level application tab. Browser acceptance
+uses this integrated application; the blocked historical local file was not
+reopened or served through a different route.
 
-Place exploration inside the existing Refinement view. The default overview
-shows scope/coverage, a residual-versus-complexity plot and grouped model rows.
-Show competitive models first; make every rejected/deferred reason available
-in diagnostics. Do not insert a hundred fit panels into the page.
+The current overview shows complete trial coverage, residual versus independent
+variable count, and calculated-pattern groups. Every model/start and terminal
+reason remains inspectable, including failed and unresolved competitors. Only
+profiles from the same acquisition and observed fit domain can share a display
+group; matching curves do not establish a unique magnetic space group.
 
-Selecting a group loads one fit with observed points, parent and child curves,
-residuals and phase Bragg ticks. Let the user pin up to two other models across
-groups for linked zoom/axis comparison; preserve equivalent alternatives in an
-expandable list. Load small metrics before full curve arrays. Provide native
-GPX, exact protocol, audit and CSV downloads.
+Selecting a group loads one observed/calculated/difference plot with phase Bragg
+ticks. Native, d and Q coordinates use the source GPX calibration. Up to two
+pinned alternative calculations share the same axes and zoom. Pins survive
+refresh; explicit trial selection survives pending-to-terminal regrouping.
+Until the user selects a trial, the view follows the best available finite fit.
+GPX and trial-receipt downloads recheck the sealed artifact hashes. The receipt
+contains parameter-effect audits, runtime identity and the native disposition.
 
 When extending to several scans, use a model-by-condition evidence matrix and
 mode/moment trends on verified experimental axes. Clicking a cell opens its
@@ -298,6 +302,61 @@ same powder solution. Compare invariant magnitudes when that ambiguity remains,
 and retain explicit branch labels instead of drawing a false sign-change event.
 Anisotropic ADPs, strain and other tensor-valued parent state require their own
 verified transformation controls; the current Uiso controls do not certify them.
+
+## Local implementation checkpoint — 2026-10-29
+
+This is a development checkpoint on `codex/ndip-symmetry-exploration`, based on
+NOVA 0.4.32. It is not an NDIP release or a claim that the acceptance plan below
+is complete. The source and Galaxy deployment branches have not been pushed by
+this work. Diffraction Studio supplied audited knowledge/MIT source references;
+the deployed package and native jobs have no runtime dependency on that project.
+
+| Capability | Current behavior | Required user choice or remaining limit |
+| --- | --- | --- |
+| Source integration | Captures the exact completed RADAR-PD GPX and its checksum; the UI never unpickles it | Select the parent and histogram/bank; a revised GPX invalidates approval |
+| Magnetic discovery | Standalone Bilbao client caches BNS IDs, complete embeddings, origins and exact rational k | Explicit parent-basis k, magnetic sites/ionic form factors, finite moment directions and fit criterion |
+| Magnetic execution | Fixed nuclear/nuisance state; verified material/cell/atom linkage; moment-only native refinement | Single-k, collinear branches only; Cartesian starts do not exhaust continuous orientations or relative orbit signs |
+| Magnetic representation | Independently compares all rotations, translations and time reversals to the BNS database | Grey groups are incompatible; unverified alternate settings are unsupported, never guessed |
+| Reflection coverage | New UI plans explicitly use the full calibrated fitted d range by default; an explicit cutoff is optional | Historical sealed protocols preserve their original 1 Å default and are not silently reinterpreted |
+| Structural discovery | Standalone ISODISTORT adapter retains the full OPD discovery record and constructs one highest-symmetry OPD per irrep in the first tier | Other OPDs remain deferred; the current UI does not yet construct arbitrary later tiers |
+| Structural execution | Native displacement-mode import; zero-mode forward-equivalence check; selected modes with exhaustive signed starts; optional declared cell/background/global-scale refinement | At most six selected modes per child within the total finite-start budget; no unverified tensor/restraint transfer |
+| Durable execution | SQLite ledger; sealed trials; process restart/recovery, lost-acknowledgment handling, cancellation and deadlines | Local native transport is implemented; Galaxy seed bundles/destination adapter remain to be built |
+| Streaming | Trial dispatch and partial results work without waiting for every start; acquisition IDs prevent identical GPX bytes from collapsing different scans | This UI starts one representative scan. Bulk/future-scan enrollment and reviewed continuation templates remain incomplete |
+| Results | Grouped models, finite-fit overview, exact scan filtering, pins, calibrated axes, Bragg ticks, parameter values and verified downloads | Model-by-condition matrix and consistent-gauge mode/moment trends are still pending |
+
+The native runtime gate includes the full GSAS-II/numerical/compiled-module
+fingerprint and the independent BNS database/parser. The tested Linux 5843
+fingerprint is `8f99b251923f6086767dcc6f61fed257a1f815b479e1970a5ffc546b9ae69564`.
+A matching version label alone is insufficient. The older Mac 5841 magnetic
+projection failure remains a regression control, not an allowed executor.
+
+Local acceptance evidence is in the sibling audit directory
+`symmetry-integration-pilot/`. It includes compiled relocatable jobs, native
+GPXs/audits, the durable ledgers, browser screenshots and `browser-validation.json`.
+The combined NOVA/refinement regression suite passed 1,314 tests with two skips;
+the subsequent streaming-view change passed its focused UI checks. A browser
+workflow captured the actual source, discovered 70 OPDs, constructed five first
+tier children, reviewed and ran all 22 signed starts, inspected results and
+downloaded byte-identical GPX/receipt artifacts. Its best synthetic-control fit
+had Rwp 9.433110% and recovered normalized mode magnitudes 0.100188 and 0.299610 Å
+against injected values 0.1 and 0.3 Å. The simultaneous sign reversal is a powder
+domain ambiguity. This is a synthetic control, not an independent experiment.
+
+Eight final native controls passed their predeclared dispositions, including
+positive magnetic fits, forbidden sites, a grey group, an alternate-setting
+refusal, a centered parent with k=(1,0,0), and structural recovery. The GPX
+audits check what actually varied and recompute the final calculated profile;
+an executable script or decreasing cached Rwp alone is not success.
+
+Independent experimental acceptance remains incomplete: four experimental
+series have been exercised, not twelve. Cr2WO6 and Ba/Co fixed-nuclear screens
+remain scientifically inadequate; the reference-compatible Cr2WO6 joint-polish
+development control converged but did not meet the reference moment check.
+Pr/Sr manganite has adequate fixed-nuclear alternatives, without a unique
+structure assignment. The full current-code portfolios are retained separately
+from earlier replays. No held-out score or general automatic structure-solution
+claim is made. These unresolved cases, the continuation/matrix work and the
+Galaxy destination pilot must be completed before release acceptance.
 
 ## Next implementation plan and acceptance gates
 
