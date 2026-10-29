@@ -112,6 +112,35 @@ def published_refinement_source(service, workspace, record, scan, sha_cache):
     return source_from_record(record,payload,scan,workspace.history_id,sha_cache=sha_cache,root_override=root)
 
 
+def recover_completed_refinement_records(service, controller):
+    """Hydrate restored completed jobs without collecting their large archives."""
+    warnings=[]
+    for run_id,run in controller.state.completed.items():
+        record=controller.records.get(run_id)
+        if record is None and run.galaxy_job_id:
+            record=controller._minimal_record(run)
+        if record is None:
+            continue
+        has_publication=record.output_dataset_ids.get('summary') and record.output_dataset_ids.get('gpx_projects')
+        if str(getattr(record.status,'value',record.status)).lower()=='ok' and has_publication:
+            continue
+        try:
+            controller.records[run_id]=service.refresh(record)
+        except Exception as exc:
+            warnings.append(dict(scan=record.name,reason=f'Could not refresh saved Galaxy result: {exc}'))
+    return warnings
+
+
+def refinement_experiment_options(workspace):
+    """Keep older completed recipes accessible after source metadata improves."""
+    labels={v['experiment']:v['experiment_label'] for v in workspace.state['sources'].values()}
+    for job in workspace.state['jobs'].values():
+        source=job['source'];experiment=source['experiment']
+        if experiment not in labels:
+            labels[experiment]='Earlier refinement results · '+str(source.get('experiment_label') or source.get('scan_label') or experiment)
+    return labels
+
+
 def recipe_cards(plan, context):
     phases={p['key']:p['name'] for p in context['phases']}
     histograms={h['key']:h['name'] for h in context['histograms']}
@@ -204,8 +233,9 @@ class RefinementMixin:
         try:
             workspace=await asyncio.to_thread(self._refinement_store)
             s.rf_transport='Local scientific worker' if workspace.runtime.kind=='local' else 'Galaxy scientific jobs'
-            records=dict(self.records)
             controller=getattr(self,'_powgen_controller',None)
+            recovery_warnings=await asyncio.to_thread(recover_completed_refinement_records,self.service,controller) if controller else []
+            records=dict(self.records)
             if controller:records.update({r.uid:r for r in controller.records.values()})
             rows={r.get('record_uid'):r for r in (s.powgen_all_scientific_rows or [])}
             def catalog():
@@ -217,6 +247,7 @@ class RefinementMixin:
                     except Exception as exc:warnings.append(dict(scan=record.name,reason=str(exc)))
                 return sources,warnings
             sources,warnings=await asyncio.to_thread(catalog)
+            warnings=recovery_warnings+warnings
             await asyncio.to_thread(workspace.observe,sources)
             # Legacy publications need a checksum captured from actual bytes.
             # Download only newly enrolled future matches here; backlog choices
@@ -229,7 +260,7 @@ class RefinementMixin:
                         workspace.observe([material])
                     except Exception as exc:warnings.append(dict(scan=source['scan_label'],reason=str(exc)))
             s.rf_source_warnings=warnings
-            experiments={v['experiment']:v['experiment_label'] for v in workspace.state['sources'].values()}
+            experiments=refinement_experiment_options(workspace)
             s.rf_experiments=[dict(title=v,value=k) for k,v in sorted(experiments.items(),key=lambda x:x[1])]
             if s.rf_experiment not in experiments:
                 selected=next((v['experiment'] for v in sources if v['record_uid']==s.selected_run_uid),None)

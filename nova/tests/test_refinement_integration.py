@@ -9,7 +9,8 @@ import pytest
 
 from radar_pd_nova.refinement_sources import (RefinementScope, source_from_record,select_published_project,published_project_path,file_sha)
 from radar_pd_nova.refinement_controller import (published_refinement_source,refinement_rwp_summary,
-    refinement_status_message,refinement_output_provenance,selected_refinement_dataset)
+    refinement_status_message,refinement_output_provenance,selected_refinement_dataset,
+    recover_completed_refinement_records,refinement_experiment_options)
 from radar_pd_nova.refinement_workspace import RefinementWorkspace
 from radar_pd_nova.refinement_runtime import LocalRefinementRuntime,verify_result_files
 
@@ -219,6 +220,31 @@ def test_recovered_live_ages_scans_share_experiment_sample_and_bank_from_publica
         dict(sample_key='unassigned',sample_label='Unassigned sample',axis_overrides={'temperature':{'value':300,'unit':'C','reviewed_mapping':True}}),'history')
     assert placeholder['sample_label']=='21213 · MgO+Al2O3 temperature calibration'
     assert placeholder['axis_overrides']['temperature']['value']==300
+
+
+def test_refinement_recovers_completed_live_job_outputs_after_viewer_restart():
+    queued=SimpleNamespace(uid='job-43124',name='IPTS-2767_PG3_43124',status=SimpleNamespace(value='queued'),output_dataset_ids={})
+    complete=copy.deepcopy(queued)
+    complete.status=SimpleNamespace(value='ok')
+    complete.output_dataset_ids={'summary':'small-summary','gpx_projects':'published-projects'}
+    calls=[]
+    service=SimpleNamespace(refresh=lambda record: calls.append(record.uid) or complete)
+    run=SimpleNamespace(galaxy_job_id='job-43124')
+    controller=SimpleNamespace(state=SimpleNamespace(completed={'PG3_43124':run}),records={'PG3_43124':queued})
+    assert recover_completed_refinement_records(service,controller)==[]
+    assert controller.records['PG3_43124'] is complete
+    assert calls==['job-43124']
+    assert recover_completed_refinement_records(service,controller)==[]
+    assert calls==['job-43124']
+
+
+def test_recovered_publications_keep_older_refinement_results_browsable(tmp_path):
+    w,_=create(tmp_path)
+    w.observe([dict(source('43124',exp='PG3-IPTS-2767'),experiment_label='PG3 · IPTS-2767')])
+    w.state['jobs']['old']=dict(source=dict(source('43124',exp='old-single-run'),experiment_label='IPTS-2767_PG3_43124'))
+    labels=refinement_experiment_options(w)
+    assert labels['PG3-IPTS-2767']=='PG3 · IPTS-2767'
+    assert labels['old-single-run']=='Earlier refinement results · IPTS-2767_PG3_43124'
 
 
 def test_refinement_catalog_reads_only_summary_until_source_gpx_is_selected(tmp_path):
