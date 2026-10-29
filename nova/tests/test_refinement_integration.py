@@ -247,6 +247,33 @@ def test_recovered_publications_keep_older_refinement_results_browsable(tmp_path
     assert labels['old-single-run']=='Earlier refinement results · IPTS-2767_PG3_43124'
 
 
+def test_live_watch_publication_replaces_earlier_test_job_in_recipe_scope(tmp_path):
+    w,_=create(tmp_path)
+    manual=dict(source('test43106',exp='ages'),live_watch=False)
+    watched=dict(source('watch43106',exp='ages'),live_watch=True)
+    w.observe([manual,watched])
+    assert len(w.state['sources'])==2  # Both publications retain provenance.
+    assert [row['id'] for row in w.sources('ages')]==['watch43106']
+    scope=RefinementScope('ages')
+    snapshot,_=w.selection(scope)
+    assert [row['id'] for row in snapshot['baseline']]==['watch43106']
+
+
+def test_summary_refresh_retains_inspected_atom_context_for_immutable_collection(tmp_path):
+    w,_=create(tmp_path)
+    summary=dict(source('43124'),source_sha256=None,source_path=None,collection_id='collection-43124',
+                 collection_name='accepted.gpx',internal_source_sha256='internal-hash')
+    w.observe([summary])
+    material=dict(summary,source_sha256='actual-published-hash',context=context(dict(source_sha256='actual-published-hash')))
+    w.observe([material])
+    _,approved_token=w.selection(RefinementScope('exp'))
+    w.observe([summary])
+    restored=w.state['sources'][summary['id']]
+    assert restored['source_sha256']=='actual-published-hash'
+    assert restored['context']['phases'][0]['name']=='oxide'
+    assert w.selection(RefinementScope('exp'))[1]==approved_token
+
+
 def test_refinement_catalog_reads_only_summary_until_source_gpx_is_selected(tmp_path):
     project=dict(collection_name='final.gpx',sha256='model',status='accepted',stage='final_refinement')
     summary=dict(gpx_projects=[project],acquisition=dict(instrument='PG3',run_number=43124,sample_id='21213'),

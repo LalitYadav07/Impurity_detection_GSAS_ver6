@@ -35,9 +35,12 @@ ATOMIC_REFINEMENT_EXAMPLE = (
     'site per stage for: [enter phase and atom labels]. Bound each Uiso to '
     '0–0.05 Å². Hold occupancies, instrument/profile, sample parameters and '
     'texture fixed throughout. Every stage must list its complete free set. '
-    'If an atom, displacement model, measured range or requested bound is '
-    'ambiguous, ask for review. Stop on unphysical values; do not silently '
-    'clip, drop a phase or claim the full-range Rwp is comparable to the original.'
+    'Do not request symmetry-fixed positions or release several Uiso sites at '
+    'once. If an atom, displacement model, measured range or requested bound is '
+    'ambiguous, ask for review. Stop on unphysical values or a bound hit; '
+    'report weakly constrained parameters and strong correlations for review. '
+    'Do not silently clip, drop a phase or claim the full-range Rwp is '
+    'comparable to the original.'
 )
 
 
@@ -237,13 +240,16 @@ class RefinementMixin:
             recovery_warnings=await asyncio.to_thread(recover_completed_refinement_records,self.service,controller) if controller else []
             records=dict(self.records)
             if controller:records.update({r.uid:r for r in controller.records.values()})
+            watched_uids={r.uid for run_id,r in controller.records.items() if run_id in controller.state.completed} if controller else set()
             rows={r.get('record_uid'):r for r in (s.powgen_all_scientific_rows or [])}
             def catalog():
                 sources=[];warnings=[]
                 for record in records.values():
                     if str(getattr(record.status,'value',record.status)).lower()!='ok':continue
                     try:
-                        sources.append(published_refinement_source(self.service,workspace,record,rows.get(record.uid),self._refinement_sha_cache))
+                        source=published_refinement_source(self.service,workspace,record,rows.get(record.uid),self._refinement_sha_cache)
+                        source['live_watch']=record.uid in watched_uids
+                        sources.append(source)
                     except Exception as exc:warnings.append(dict(scan=record.name,reason=str(exc)))
                 return sources,warnings
             sources,warnings=await asyncio.to_thread(catalog)
