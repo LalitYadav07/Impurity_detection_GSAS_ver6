@@ -126,3 +126,45 @@ def test_end_session_uses_existing_exit_path_after_checkpointing():
     assert workspace.paused == ["PG3:2767"] and workspace.checkpoints == 1
     assert events == ["return-to-galaxy", "exit-container"]
     assert app.server.state.nova_kill_jobs_on_exit is False
+
+
+def test_end_session_waits_for_the_monitor_final_checkpoint():
+    app=RadarPdNovaApp();events=[]
+    app._leave_session_page=lambda:events.append('leave')
+    async def exit_callback(): events.append('exit')
+    app.exit_callback=exit_callback
+    async def run():
+        release=asyncio.Event()
+        async def monitor():
+            await release.wait();events.append('saved')
+        task=app._powgen_monitor_task=asyncio.create_task(monitor())
+        app.server.state.powgen_monitoring=True
+        closing=asyncio.create_task(app.end_session())
+        await asyncio.sleep(0)
+        assert not closing.done() and not task.cancelled() and events==[]
+        release.set();await closing
+        assert events==['saved','leave','exit']
+    asyncio.run(run())
+
+
+def test_failed_monitor_checkpoint_keeps_the_session_open():
+    app=RadarPdNovaApp();events=[]
+    app._powgen_checkpoint_error=RuntimeError('checkpoint upload unavailable')
+    app._leave_session_page=lambda:events.append('leave')
+    async def exit_callback(): events.append('exit')
+    app.exit_callback=exit_callback
+    asyncio.run(app.end_session())
+    assert events==[]
+    assert 'recovery state could not be saved' in app.server.state.workspace_notice
+
+
+def test_close_retries_a_previously_failed_checkpoint_before_releasing_container():
+    app=RadarPdNovaApp();events=[]
+    app._powgen_checkpoint_error=RuntimeError('transient failure')
+    app._powgen_controller=SimpleNamespace(persist_state=lambda:events.append('saved'))
+    app._leave_session_page=lambda:events.append('leave')
+    async def exit_callback(): events.append('exit')
+    app.exit_callback=exit_callback
+    asyncio.run(app.end_session())
+    assert events==['saved','leave','exit']
+    assert app._powgen_checkpoint_error is None
