@@ -67,7 +67,7 @@ def package(source: Path, destination: Path) -> None:
     content = re.sub(r'<a href="(inputs/[^"<>]+)"', r'<a download href="\1"', content)
     (destination / "inputs").mkdir(exist_ok=True)
     for name in INPUTS:
-        raw = (source / "inputs" / name).read_bytes()
+        raw = (source / "inputs" / name).read_text(encoding="utf-8").encode("utf-8")
         (destination / "inputs" / name).write_bytes(raw)
         files["inputs/" + name] = hashlib.sha256(raw).hexdigest()
     (destination / "index.html").write_text(content, encoding="utf-8")
