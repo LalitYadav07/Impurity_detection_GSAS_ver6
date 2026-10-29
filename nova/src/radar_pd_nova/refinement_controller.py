@@ -424,10 +424,19 @@ class RefinementMixin:
             s.flush()
         finally:self._refinement_internal=False;w.lock.release()
 
-    def generate_refinement_recipe(self,**_):
+    def generate_refinement_recipe(self, submission_payload=None, **_):
         s=self.server.state
         if s.rf_busy:return
-        experiment,source,request=s.rf_experiment,s.rf_source,s.rf_request
+        payload = submission_payload or {}
+        experiment,source,request=(payload.get('experiment',s.rf_experiment),
+            payload.get('source',s.rf_source),payload.get('request',s.rf_request))
+        if not all(isinstance(v,str) for v in (experiment,source,request)):
+            s.rf_error='Choose a representative GPX and describe the refinement';return
+        if experiment!=s.rf_experiment or source!=s.rf_source:
+            s.rf_error='The selected project changed. Review the source and generate again.';return
+        # Capture the exact visible text with the click. A pending text-field
+        # update must never cause the server to plan the previous request.
+        s.rf_request=request
         if not source or not request.strip():s.rf_error='Choose a representative GPX and describe the refinement';return
         self._refinement_hold_enrollment()
         s.rf_busy=True;s.rf_error='';s.rf_message='Inspecting the project, planning with Luna and checking native parameter releases…';s.flush()

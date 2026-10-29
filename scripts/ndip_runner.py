@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tarfile
 import traceback
+import time
 import zipfile
 from pathlib import Path
 from typing import Any, Iterable
@@ -41,6 +42,7 @@ from ndip_contracts import (  # noqa: E402
 )
 from ndip_outputs import collect_outputs  # noqa: E402
 from ndip_input_provenance import read_input_provenance  # noqa: E402
+from ndip_runtime import runtime_limits, process_usage, usage_delta  # noqa: E402
 
 
 PLACEHOLDER_DATA = "RADAR_PD_NDIP_WILL_REWRITE_DATA"
@@ -704,6 +706,8 @@ def _finalize_successful_stages(state: Mapping[str, Any], mode: str) -> dict[str
 
 
 def command_analyze(args: argparse.Namespace) -> int:
+    adapter_started = time.monotonic()
+    usage_before = process_usage()
     data = Path(args.data).resolve()
     main_cif = Path(args.main_cif).resolve() if args.main_cif else None
     if not data.is_file():
@@ -827,6 +831,11 @@ def command_analyze(args: argparse.Namespace) -> int:
         print("Dry run command:", " ".join(command))
         return 0
 
+    preparation_seconds = time.monotonic()-adapter_started
+    runtime = dict(schema='radar-pd-runtime/v1', started_utc=utc_now(), limits=runtime_limits(),
+                   timing_seconds={'adapter_preparation':preparation_seconds})
+    print('[NDIP RUNTIME] '+json.dumps(runtime), flush=True)
+    pipeline_started = time.monotonic()
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
     env["PYTHONIOENCODING"] = "utf-8"
@@ -869,6 +878,9 @@ def command_analyze(args: argparse.Namespace) -> int:
         state = update_state(state, status="failed", stage="analysis", stage_status="failed", error=str(exc))
         atomic_write_json(state_path, state)
 
+    runtime['timing_seconds']['scientific_subprocess'] = time.monotonic()-pipeline_started
+    runtime['usage'] = usage_delta(usage_before)
+    runtime['limits'] = runtime_limits()
     pipeline_run_dir = run_dir
     nested = run_dir / run_name
     if nested.exists() and any(nested.iterdir()):
@@ -878,6 +890,8 @@ def command_analyze(args: argparse.Namespace) -> int:
         atomic_write_json(pipeline_run_dir / "input_provenance.json", input_provenance)
     if return_code:
         errors.append({"stage": "analysis", "message": f"Pipeline exited with code {return_code}"})
+    atomic_write_json(pipeline_run_dir/'Technical'/'Logs'/'runtime_resources.json', runtime)
+    collection_started = time.monotonic()
     collect_outputs(
         pipeline_run_dir,
         portal,
@@ -889,6 +903,10 @@ def command_analyze(args: argparse.Namespace) -> int:
         errors=errors,
         phase_catalog_csv=db_root / "catalog_deduplicated.csv",
     )
+    runtime['timing_seconds']['output_collection'] = time.monotonic()-collection_started
+    runtime['timing_seconds']['adapter_total'] = time.monotonic()-adapter_started
+    runtime['usage'] = usage_delta(usage_before)
+    print('[NDIP RUNTIME FINAL] '+json.dumps(runtime), flush=True)
     final_status = "failed" if return_code else "complete"
     if not return_code:
         state = _finalize_successful_stages(state, mode)

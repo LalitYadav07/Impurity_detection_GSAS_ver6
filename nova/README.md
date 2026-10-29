@@ -146,6 +146,12 @@ checkpoints are stored as Galaxy datasets and restored after a NOVA restart, so
 Galaxy-acknowledged jobs are not submitted twice. The IPTS is always read-only;
 results and provenance remain in Galaxy History.
 
+Live saves detached recovery snapshots through one background writer. While a
+checkpoint uploads, newer snapshots coalesce and analysis admission/result
+refresh continue. Stopping drains the latest snapshot. Failed uploads remain
+visible and are retried; acknowledged jobs can also be reconciled from History.
+The limits remain five active analyses and two protected submission lanes.
+
 This panel is appropriate for a supervised beamline session. A permanent,
 unattended trigger must use **NDIP Ingress -> saved Galaxy workflow -> RADAR-PD
 Analyze**. That production trigger can reuse the same profile registry and
@@ -218,6 +224,22 @@ remains explicit, with no automatic fallback. Plan approval controls scientific
 execution, rather than granting permission to transmit data on each request.
 Automated benchmark approvals are labeled as test approvals and do not assert
 scientific acceptance of a structural model.
+
+On NDIP, select the **ORNL Illumine** credential group in the Galaxy tool form
+before starting NOVA. Galaxy binds this selection to the exact tool version;
+verify it again after an upgrade. A running session does not acquire a key
+added later. API launches must explicitly send `credentials_context` with vault
+references; saving a group alone does not inject it. The headless helper does
+this without reading or serializing the Illumine secret:
+
+```bash
+python -m radar_pd_nova.launch --history HISTORY_ID --version 0.4.37 --with-illumine
+```
+
+The helper reads the Galaxy API key from `GALAXY_API_KEY` or the existing Mac
+Keychain entry. Missing credentials fail before a scientific inspection job is
+submitted. Recipe buttons capture the exact visible request when clicked, so a
+pending text-field update cannot plan the previous text.
 
 From the repository root, run the focused software checks with:
 

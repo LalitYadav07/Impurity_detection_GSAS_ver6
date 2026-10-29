@@ -158,6 +158,12 @@ class RefinementWorkspace:
             self.save()
         planning=None
         try:
+            client=None
+            if not reuse_recipe and not self._planner:
+                # Fail before dispatching an inspection job when this session
+                # was launched without the selected Galaxy credential context.
+                configure_provider(os.getenv('RADAR_GPX_PLANNER_PROVIDER','illumine-luna'),os.getenv('RADAR_PD_REFINEMENT_KEY_FILE') or None)
+                client=make_client()
             source=self.inspect(source_id);context=source['context']
             if previous and previous.get('model_signature')!=context['model_signature']:previous=None
             if reuse_recipe:
@@ -169,8 +175,7 @@ class RefinementWorkspace:
                 planning=dict(plan=plan,calls=[],origin='Saved recipe '+str(saved['version']))
             elif self._planner:planning=self._planner(request,context,previous=previous)
             else:
-                configure_provider(os.getenv('RADAR_GPX_PLANNER_PROVIDER','illumine-luna'),os.getenv('RADAR_PD_REFINEMENT_KEY_FILE') or None)
-                planning=make_plan(request,context,previous=previous,client=make_client())
+                planning=make_plan(request,context,previous=previous,client=client)
             planning=dict(planning)
             planning['usage_summary']=summarize_calls(planning.get('calls',[]))
             plan=planning['plan'];directory=self.root/'drafts'/generation;directory.mkdir(parents=True,exist_ok=True)

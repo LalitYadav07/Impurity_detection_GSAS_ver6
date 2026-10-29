@@ -437,6 +437,39 @@ def test_integrated_ui_has_one_workspace_and_reuses_existing_scientific_tabs():
     assert app.server.state.rf_future is False
 
 
+def test_plan_click_uses_visible_request_when_text_update_is_still_pending():
+    class State(SimpleNamespace):
+        def flush(self): pass
+    calls=[];tasks=[]
+    class App(RefinementMixin):
+        def _refinement_hold_enrollment(self): pass
+        def _refinement_sync(self): self.server.state.rf_busy=False
+        def _refinement_checkpoint(self): pass
+        def _refinement_schedule(self, coroutine, name): tasks.append(asyncio.create_task(coroutine))
+    app=App()
+    app.server=SimpleNamespace(state=State(rf_busy=False,rf_experiment='exp',rf_source='source',rf_request='previous text'))
+    app._refinement_workspace=SimpleNamespace(prepare=lambda *args:calls.append(args))
+    async def run():
+        app.generate_refinement_recipe(dict(experiment='exp',source='source',request='visible edited text'))
+        await asyncio.gather(*tasks)
+    asyncio.run(run())
+    assert calls==[('exp','source','visible edited text')]
+    assert app.server.state.rf_request=='visible edited text'
+    app.generate_refinement_recipe(dict(experiment='another',source='source',request='stale selection'))
+    assert 'selected project changed' in app.server.state.rf_error
+
+
+def test_missing_credential_fails_before_a_native_inspection_job(tmp_path,monkeypatch):
+    from gpx_recipe import providers
+    w,rt=create(tmp_path);w._planner=None;w.observe([source('1')])
+    monkeypatch.delenv('AZURE_ILLUMINE_API_KEY',raising=False)
+    monkeypatch.delenv('RADAR_PD_REFINEMENT_KEY_FILE',raising=False)
+    monkeypatch.setenv('RADAR_GPX_PLANNER_PROVIDER','illumine-luna')
+    with pytest.raises(ValueError,match='session started without an Illumine credential'):
+        w.prepare('exp','1','background')
+    assert rt.calls==[]
+
+
 def test_remote_published_metadata_can_list_a_source_without_downloading_its_full_archive(tmp_path):
     checksum='a'*64
     record=SimpleNamespace(uid='Galaxy-job',name='Run 12',local_output_dir=None,output_dataset_ids={'gpx_projects':'collection'},inputs=SimpleNamespace(instrument='PG3',ipts='IPTS-1',run_number=12,bank=2))

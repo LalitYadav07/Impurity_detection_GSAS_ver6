@@ -426,6 +426,7 @@ class RunRecord(BaseModel):
     idempotency_token: str | None = None
     prepared_dataset_ids: dict[str, str] = Field(default_factory=dict)
     provenance: dict[str, Any] = Field(default_factory=dict)
+    timings_seconds: dict[str, float] = Field(default_factory=dict)
     cancel_requested: bool = False
     cache_manifest: CacheManifest | None = None
     recovery_diagnostics: list[str] = Field(default_factory=list)
