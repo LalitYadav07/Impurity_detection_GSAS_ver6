@@ -68,7 +68,7 @@ def test_configuration_scoped_recovery_does_not_load_unrelated_configs(monkeypat
         for name, cfg in (("unrelated", "other-cfg"), ("matching", "wanted-cfg"))}
     service._job_details = lambda uid, fallback=None: jobs[uid]
     loaded = []
-    service._config_from_job = lambda job, parameters, outputs: loaded.append(job["id"])
+    service._config_from_job = lambda job, parameters, outputs, **kwargs: loaded.append(job["id"])
     records = service.recent_runs(limit=250, configuration_dataset_id="wanted-cfg")
     assert [r.uid for r in records] == ["matching"]
     assert loaded == ["matching"]
@@ -246,7 +246,8 @@ def test_job_output_ids_recovers_all_collections_from_history(monkeypatch, tmp_p
         "diagnostics": "diagnostics-collection",
     }
     assert requested[1][0] == "https://galaxy.example/api/histories/history/contents"
-    assert "q" not in requested[1][1]["params"]
+    assert requested[1][1]["params"]["q"] == "history_content_type-eq"
+    assert requested[1][1]["params"]["qv"] == "dataset_collection"
     assert len(requested) == 2
 
 
@@ -714,7 +715,8 @@ def test_submit_persists_configuration_and_resolved_input_selection(tmp_path: Pa
 
     service = GalaxyService("https://example.invalid", "key", "history", output_root=tmp_path)
     service._store = fake_store  # type: ignore[method-assign]
-    service._upload_dataset = lambda path, store, label: FakeDataset(f"uploaded-{label}")  # type: ignore[method-assign]
+    service._submit_analysis = lambda store, params: ("submitted-job", object())
+    service._upload_dataset = lambda path, store, label, **kwargs: FakeDataset(f"uploaded-{label}")  # type: ignore[method-assign]
     service._dataset_for_input = (  # type: ignore[method-assign]
         lambda *, path, dataset_id, store, label: FakeDataset(dataset_id or f"uploaded-{label}")
     )
@@ -812,7 +814,8 @@ def test_submit_waits_for_async_galaxy_job_identifier(tmp_path: Path, monkeypatc
 
     service = GalaxyService("https://example.invalid", "key", "history", output_root=tmp_path)
     service._store = fake_store  # type: ignore[method-assign]
-    service._upload_dataset = lambda path, store, label: FakeDataset(f"uploaded-{label}")  # type: ignore[method-assign]
+    service._submit_analysis = lambda store, params: ("delayed-job", object())
+    service._upload_dataset = lambda path, store, label, **kwargs: FakeDataset(f"uploaded-{label}")  # type: ignore[method-assign]
     service._dataset_for_input = (  # type: ignore[method-assign]
         lambda *, path, dataset_id, store, label: FakeDataset(dataset_id or f"uploaded-{label}")
     )
@@ -885,7 +888,14 @@ def test_submit_retries_after_transient_galaxy_submission_failure(tmp_path: Path
 
     service = GalaxyService("https://example.invalid", "key", "history", output_root=tmp_path)
     service._store = fake_store  # type: ignore[method-assign]
-    service._upload_dataset = lambda path, store, label: FakeDataset(f"uploaded-{label}")  # type: ignore[method-assign]
+    attempts = []
+    def submit_analysis(store, params):
+        attempts.append(True)
+        if len(attempts) == 1:
+            raise RuntimeError("Unexpected HTTP status code: 400")
+        return "recovered-after-retry", object()
+    service._submit_analysis = submit_analysis
+    service._upload_dataset = lambda path, store, label, **kwargs: FakeDataset(f"uploaded-{label}")  # type: ignore[method-assign]
     service._dataset_for_input = (  # type: ignore[method-assign]
         lambda *, path, dataset_id, store, label: FakeDataset(dataset_id or f"uploaded-{label}")
     )
@@ -896,7 +906,7 @@ def test_submit_retries_after_transient_galaxy_submission_failure(tmp_path: Path
     )
 
     assert record.galaxy_job_id == "recovered-after-retry"
-    assert len(tool_instances) == 2, "expected exactly one retry after the transient failure"
+    assert len(attempts) == 2, "expected exactly one retry after the transient failure"
 
 
 def test_upload_dataset_targets_store_history_id(tmp_path: Path, monkeypatch: Any) -> None:

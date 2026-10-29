@@ -19,6 +19,21 @@ asset and download through nginx at both root and NDIP-style session paths.
 
 ## Facility experiment integration
 
+Live uploads scientific inputs as Galaxy dependencies and acknowledges the
+analysis as soon as Galaxy creates its job. Galaxy waits for pending inputs;
+NOVA can prepare the next scan without occupying an upload lane during that
+wait. The limits remain five active analyses and two submission lanes. A failed
+or cancelled input is reported separately from an ordinary manually paused job.
+Recovery checkpoints and reusable configurations still wait for durable storage.
+
+Instrument profiles can be reused from the current History only after their
+actual bytes match the selected profile and the dataset is ready and undeleted.
+Status polling retains the submitted settings; recovered provisional settings
+remain retryable until the configuration can be read. Result transfers share
+four download slots per session and recover collections by producing job ID.
+These changes affect orchestration and transfer; the scientific batch image,
+search settings and refinement tolerances are unchanged.
+
 The Data Collection panel provides a single working-folder browser for mounted
 SNS and HFIR experiment data. The user chooses the facility, instrument, and
 IPTS, then navigates one directory level at a time. Directory listings are lazy:

@@ -342,6 +342,7 @@ class GalaxyService:
         self._submission_cancel_events: dict[str, threading.Event] = {}
         self._active_submission_tokens: set[str] = set()
         self._lock = threading.RLock()
+        self._result_download_slots = threading.BoundedSemaphore(4)
 
     def validate_connection(self) -> None:
         if not self.galaxy_url or not self.galaxy_key or not self.history_id:
@@ -387,7 +388,7 @@ class GalaxyService:
         return dataset
 
     @staticmethod
-    def _upload_dataset(path: str, store: Any, label: str) -> Any:
+    def _upload_dataset(path: str, store: Any, label: str, *, wait_ready: bool = True) -> Any:
         from nova.galaxy import Dataset
 
         source = Path(path)
@@ -408,10 +409,11 @@ class GalaxyService:
         dataset = Dataset(name=dataset_name, force_upload=False)
         dataset.id = str(outputs[0]["id"])
         dataset.store = store
-        galaxy_instance.datasets.wait_for_dataset(dataset.id)
+        if wait_ready:
+            galaxy_instance.datasets.wait_for_dataset(dataset.id)
         return dataset
 
-    def upload_document(self, path: str | Path, *, label: str) -> str:
+    def upload_document(self, path: str | Path, *, label: str, wait_ready: bool = True) -> str:
         """Upload one provenance document into the active Galaxy history.
 
         This is intentionally a small public wrapper around the same upload
@@ -420,10 +422,41 @@ class GalaxyService:
         """
 
         with self._store() as store:
-            dataset = self._upload_dataset(str(path), store, label)
+            dataset = self._upload_dataset(str(path), store, label, wait_ready=wait_ready)
             return str(dataset.id)
 
-    def upload_json_document(self, payload: dict[str, Any], *, name: str, label: str) -> str:
+    def stage_instrument_profile(self, path: str | Path, *, label: str) -> str:
+        """Reuse an exact, ready History profile or queue it as an input.
+
+        The marker only narrows the search. Compare actual bytes before reuse;
+        an edited, failed, deleted, or still-processing HDA is not a cache hit.
+        Checkpoints never use this path: their upload must finish durably.
+        """
+        content = Path(path).read_bytes()
+        if len(content) > 1024 * 1024:
+            raise ValueError("Instrument profile exceeds the supported metadata size")
+        checksum = hashlib.sha256(content).hexdigest()
+        marker = f"[input-sha256:{checksum}]"
+        try:
+            candidates = self.search_history_datasets(query=marker, limit=10, include_generated=True)
+        except Exception:
+            candidates = []  # History search is an optimization, never a requirement.
+        for row in candidates:
+            if row.get("state") != "ok" or not row.get("id"):
+                continue
+            try:
+                metadata = self._dataset_metadata(str(row["id"]))
+                if metadata.get("deleted") or metadata.get("purged") or metadata.get("state") != "ok":
+                    continue
+                text = self.load_text_document(str(row["id"]), max_bytes=1024 * 1024)
+                if text.encode("utf-8") == content:
+                    return str(row["id"])
+            except Exception:
+                continue
+        return self.upload_document(path, label=f"{label} {marker}", wait_ready=False)
+
+    def upload_json_document(self, payload: dict[str, Any], *, name: str, label: str,
+                             wait_ready: bool = True) -> str:
         """Serialize and upload a JSON provenance document via owned staging."""
 
         safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(name)).strip(".-") or "document.json"
@@ -435,7 +468,9 @@ class GalaxyService:
         path = staging / unique_name
         try:
             path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-            return self.upload_document(path, label=label)
+            if wait_ready:
+                return self.upload_document(path, label=label)
+            return self.upload_document(path, label=label, wait_ready=False)
         finally:
             path.unlink(missing_ok=True)
 
@@ -745,7 +780,7 @@ class GalaxyService:
             )
         return sorted(entries, key=lambda item: (item["kind"] != "directory", item["title"].lower()))
 
-    def _import_remote_dataset(self, uri: str, label: str) -> str:
+    def _import_remote_dataset(self, uri: str, label: str, *, wait_ready: bool = True) -> str:
         """Import an authorized Galaxy file-source URI into this History."""
 
         if not uri.startswith("gxfiles://"):
@@ -779,6 +814,8 @@ class GalaxyService:
         if not outputs or not outputs[0].get("id"):
             raise RuntimeError(f"Galaxy did not return a dataset after importing {label}")
         dataset_id = str(outputs[0]["id"])
+        if not wait_ready:
+            return dataset_id
         deadline = time.monotonic() + 600
         while time.monotonic() < deadline:
             status_response = requests.get(
@@ -878,6 +915,8 @@ class GalaxyService:
                     "limit": requested,
                     "offset": offset,
                     "order": "update_time-dsc",
+                    "q": "history_content_type-eq",
+                    "qv": "dataset_collection",
                 },
                 timeout=30,
             )
@@ -1008,6 +1047,27 @@ class GalaxyService:
             for chunk in response.iter_content(chunk_size=1024 * 1024):
                 if chunk:
                     handle.write(chunk)
+
+    def _prefetch_results(self, items: dict[str, tuple[str, Path]], *, collections: bool = False) -> dict[str, Exception | None]:
+        """Bound independent REST transfers across collectors in this session."""
+        if not items:
+            return {}
+        def download(identifier: str, destination: Path) -> None:
+            with self._result_download_slots:
+                if collections:
+                    self._download_collection(identifier, destination)
+                else:
+                    self._download_dataset(identifier, destination)
+        outcomes: dict[str, Exception | None] = {}
+        with ThreadPoolExecutor(max_workers=min(4, len(items)), thread_name_prefix="radar-results") as pool:
+            futures = {pool.submit(download, *item): name for name, item in items.items()}
+            for future in as_completed(futures):
+                try:
+                    future.result()
+                    outcomes[futures[future]] = None
+                except Exception as exc:
+                    outcomes[futures[future]] = exc
+        return outcomes
 
     def _download_collection(self, collection_id: str, destination: Path) -> None:
         """Download a durable Galaxy collection without a live Tool object."""
@@ -1215,9 +1275,11 @@ class GalaxyService:
         job: dict[str, Any],
         parameters: Any,
         output_ids: dict[str, str],
+        *,
+        provenance: dict[str, Any] | None = None,
     ) -> AnalysisConfig | None:
         dataset_ids = [output_ids.get("resolved_config")]
-        dataset_ids.append(_dataset_id(_parameter_value(parameters,
+        dataset_ids.append(self._public_input_dataset_ids(job).get("configuration") or _dataset_id(_parameter_value(parameters,
             "reproducibility.configuration_override.config_file", "configuration.config_file", "config_file")))
         for dataset_id in dataset_ids:
             if not dataset_id:
@@ -1228,6 +1290,8 @@ class GalaxyService:
                     config = config_from_contract(payload)
                     run_name = _text(_parameter_value(parameters, "reproducibility.run_name", "run_name"))
                     config.run_name = run_name or self._job_metric(job, "run_name") or ""
+                    if provenance is not None:
+                        provenance["configuration_dataset_id"] = dataset_id
                     return config
             except Exception:
                 continue
@@ -1258,6 +1322,9 @@ class GalaxyService:
         self,
         parameters: Any,
         public_dataset_ids: dict[str, str] | None = None,
+        *,
+        recover_delivery: bool = True,
+        provenance: dict[str, Any] | None = None,
     ) -> InputSelection | None:
         dataset_ids = self._input_dataset_ids(parameters)
         dataset_ids.update(public_dataset_ids or {})
@@ -1288,11 +1355,13 @@ class GalaxyService:
             "database_dataset_id": dataset_ids.get("database_archive"),
         }
         config_dataset_id = dataset_ids.get("configuration")
-        if config_dataset_id:
+        if config_dataset_id and recover_delivery:
             try:
                 contract = self._dataset_document(config_dataset_id)
                 if contract:
                     kwargs.update(delivery_from_contract(contract))
+                    if provenance is not None:
+                        provenance["delivery_dataset_id"] = config_dataset_id
             except Exception:
                 # Scientific run recovery must remain available even if an old
                 # configuration dataset cannot be read.
@@ -1445,11 +1514,14 @@ class GalaxyService:
         # short-lived connection, allowing independent files to proceed in
         # parallel without sharing a Bioblend client or Datastore.
         with self._store() as store:
-            dataset = self._upload_dataset(path, store, label)
+            # Galaxy schedules the analysis after these HDA dependencies are
+            # ready. Waiting here holds a Live submission lane unnecessarily.
+            # Provenance/checkpoint uploads retain the durable default above.
+            dataset = self._upload_dataset(path, store, label, wait_ready=False)
             return key, str(dataset.id)
 
     def _import_one(self, key: str, uri: str, label: str) -> tuple[str, str]:
-        return key, self._import_remote_dataset(uri, label)
+        return key, self._import_remote_dataset(uri, label, wait_ready=False)
 
     def _prepare_datasets(
         self,
@@ -1549,7 +1621,10 @@ class GalaxyService:
         params.add_input(name="chemistry|environment_elements", value=", ".join(config.environment_elements))
         params.add_input(name="analysis|strategy|analysis_mode", value=config.mode.value)
         params.add_input(name="reproducibility|configuration_override|config_kind", value="existing")
-        config_ds = self._existing_dataset(prepared["configuration"], store, "configuration")
+        # Native HDA references let Galaxy enforce pending-input dependencies.
+        # nova-galaxy Dataset wrappers wait for readiness a second time during
+        # Tool.submit, even when force_upload=False.
+        config_ds = {"src": "hda", "id": prepared["configuration"]}
         params.add_input(name="reproducibility|configuration_override|config_file", value=config_ds)
 
         if inputs.source in {
@@ -1561,7 +1636,7 @@ class GalaxyService:
             params.add_input(name="data_inputs|input_source|source_kind", value="history")
             if "data" not in prepared:
                 raise ValueError("A diffraction pattern is required")
-            data = self._existing_dataset(prepared["data"], store, "diffraction data")
+            data = {"src": "hda", "id": prepared["data"]}
             inputs.data_dataset_id = prepared["data"]
             params.add_input(name="data_inputs|input_source|diffraction_pattern", value=data)
             if inputs.use_builtin_cuka:
@@ -1569,7 +1644,7 @@ class GalaxyService:
             else:
                 if "instrument" not in prepared:
                     raise ValueError("An instrument profile is required")
-                instrument = self._existing_dataset(prepared["instrument"], store, "instrument profile")
+                instrument = {"src": "hda", "id": prepared["instrument"]}
                 inputs.instrument_dataset_id = prepared["instrument"]
                 params.add_input(name="data_inputs|input_source|instrument_source|kind", value="uploaded")
                 params.add_input(name="data_inputs|input_source|instrument_source|instrument_file", value=instrument)
@@ -1578,7 +1653,7 @@ class GalaxyService:
             if inputs.source == InputSource.IPTS_EVENT:
                 if "event_file" not in prepared:
                     raise ValueError("A NeXus event file is required")
-                event = self._existing_dataset(prepared["event_file"], store, "NeXus event file")
+                event = {"src": "hda", "id": prepared["event_file"]}
                 inputs.event_dataset_id = prepared["event_file"]
                 params.add_input(name="data_inputs|input_source|event_file", value=event)
                 params.add_input(name="data_inputs|input_source|bank", value=inputs.bank)
@@ -1589,11 +1664,11 @@ class GalaxyService:
                 params.add_input(name="data_inputs|input_source|bank", value=inputs.bank)
 
         if "main_cif" in prepared:
-            main_cif = self._existing_dataset(prepared["main_cif"], store, "main phase CIF")
+            main_cif = {"src": "hda", "id": prepared["main_cif"]}
             inputs.main_cif_dataset_id = prepared["main_cif"]
             params.add_input(name="data_inputs|main_cif", value=main_cif)
         if "database_archive" in prepared:
-            database = self._existing_dataset(prepared["database_archive"], store, "candidate library")
+            database = {"src": "hda", "id": prepared["database_archive"]}
             inputs.database_dataset_id = prepared["database_archive"]
             params.add_input(name="library|database|database_kind", value="custom")
             params.add_input(name="library|database|database_archive", value=database)
@@ -1846,10 +1921,13 @@ class GalaxyService:
             return action
         job = self._job_details(action.galaxy_job_id)
         action.status = normalize_status(job.get("state"))
+        dependency_error = self._failed_input_message(job) if str(job.get("state")) == "paused" else ""
+        if dependency_error:
+            action.status = RunStatus.ERROR
         action.outputs.update(self._job_output_ids(job))
         stderr = str(job.get("stderr") or job.get("tool_stderr") or job.get("job_stderr") or "")
         if action.status == RunStatus.ERROR:
-            action.message = stderr[-2000:] or "Galaxy reported a utility-tool error"
+            action.message = dependency_error or stderr[-2000:] or "Galaxy reported a utility-tool error"
         if action.tool_id in _INTERACTIVE_TOOL_IDS and action.status in {RunStatus.RUNNING, RunStatus.OK}:
             try:
                 response = requests.get(
@@ -1972,6 +2050,31 @@ class GalaxyService:
                 return uid
         return None
 
+    def _submit_analysis(self, store: Any, params: Any) -> tuple[str, Any]:
+        """Acknowledge the job once; Live/REST owns subsequent status polling.
+
+        Tool.run(wait=False) starts another long-lived polling thread. It also
+        relinks/waits on Dataset wrappers. All inputs here are already native
+        HDA references, so use the public tool endpoint and retain a recovery
+        handle without starting that second monitor.
+        """
+        from nova.galaxy import Tool
+
+        response = requests.post(
+            f"{self.galaxy_url}/api/tools", headers=self._headers,
+            json={"tool_id": ANALYZE_TOOL_ID, "history_id": self.history_id, "inputs": params.inputs},
+            timeout=SUBMISSION_ACK_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        jobs = payload.get("jobs") or []
+        if not jobs or not jobs[0].get("id"):
+            raise RuntimeError("Galaxy accepted the request but did not return a job identifier")
+        uid = str(jobs[0]["id"])
+        tool = Tool(id=ANALYZE_TOOL_ID)
+        tool.assign_id(uid, store)
+        return uid, tool
+
     def _submit_with_retry(
         self,
         store: Any,
@@ -1983,23 +2086,17 @@ class GalaxyService:
     ) -> tuple[str, Any]:
         """Start the Analyze tool run, retrying on transient Galaxy submission failures.
 
-        Galaxy submissions can fail before creating a job because of a
-        transient transport or service error. A failed attempt never creates
-        a Galaxy job, so retrying is safe and does not risk duplicate
-        submissions. Deterministic input failures still surface after the
-        bounded retry count.
+        Check for an accepted job after a lost acknowledgement before
+        retrying, retaining the exact run and configuration identity across
+        attempts. Transient service failures use a bounded retry count.
         """
 
         from nova.galaxy import Tool
 
         last_error: Exception | None = None
         for attempt in range(1, attempts + 1):
-            tool = Tool(id=ANALYZE_TOOL_ID)
             try:
-                tool.run(store, params, wait=False)
-                uid = self._wait_for_submission(tool)
-                if not uid:
-                    raise RuntimeError("Galaxy accepted the request but did not return a job identifier")
+                uid, tool = self._submit_analysis(store, params)
             except Exception as exc:
                 last_error = exc
                 try:
@@ -2058,6 +2155,17 @@ class GalaxyService:
                 self._tools[uid] = tool
             return tool
 
+    def _failed_input_message(self, job: dict[str, Any]) -> str:
+        """Explain a paused job only when one input has actually failed."""
+        for name, identifier in self._named_output_ids(job.get("inputs")).items():
+            try:
+                metadata = self._dataset_metadata(identifier)
+            except Exception:
+                continue
+            if metadata.get("deleted") or metadata.get("purged") or metadata.get("state") in {"error", "discarded", "failed"}:
+                return f"Galaxy could not prepare the {name.rsplit('|', 1)[-1]} input ({metadata.get('state') or 'deleted'}). Review the input in History before retrying."
+        return ""
+
     def refresh(self, record: RunRecord) -> RunRecord:
         # Galaxy's REST job record is authoritative for both recovered and
         # newly submitted runs. Some nova-galaxy releases leave their cached
@@ -2073,19 +2181,58 @@ class GalaxyService:
         parameters = self._job_parameters(job)
         output_ids = self._job_output_ids(job)
         public_input_ids = self._public_input_dataset_ids(job)
+        dependency_error = ""
+        paused = str(job.get("state") or "").lower() == "paused"
+        if paused:
+            # Galaxy pauses dependents of a failed/cancelled upload instead of
+            # changing their state to error. Surface that failure and release
+            # the Live slot; a manually paused job remains queued/recoverable.
+            dependency_error = self._failed_input_message(job)
+            if dependency_error:
+                status = RunStatus.ERROR
         record.output_dataset_ids.update(output_ids)
         record.input_dataset_ids.update(self._input_dataset_ids(parameters))
         record.input_dataset_ids.update(public_input_ids)
-        recovered_config = self._config_from_job(job, parameters, output_ids)
+        recovered_config = None
+        known_config = record.config is not None and (
+            record.idempotency_token or record.provenance.get("configuration_dataset_id"))
+        if not known_config:
+            recovered_config = self._config_from_job(job, parameters, output_ids, provenance=record.provenance)
+        elif status == RunStatus.OK:
+            # Keep the immutable submitted/recovered configuration while a job
+            # runs. Output HDAs already exist then, but are not readable yet.
+            # Inspect a completed resolved configuration once; failed downloads
+            # remain retryable and never replace the known settings with defaults.
+            resolved_id = output_ids.get("resolved_config")
+            if resolved_id and record.provenance.get("resolved_configuration_checked") != resolved_id:
+                try:
+                    payload = self._dataset_document(resolved_id)
+                    if payload and payload.get("$schema") == "radar-pd-config/v1":
+                        recovered_config = config_from_contract(payload)
+                        recovered_config.run_name = record.config.run_name
+                    record.provenance["resolved_configuration_checked"] = resolved_id
+                except Exception:
+                    pass
         if recovered_config is not None:
             record.config = recovered_config
             record.mode = recovered_config.mode
             if recovered_config.run_name:
                 record.name = recovered_config.run_name
-        recovered_inputs = self._inputs_from_parameters(parameters, public_input_ids)
+        recover_delivery = record.inputs is None or not (
+            record.idempotency_token or record.provenance.get("delivery_dataset_id"))
+        recovered_inputs = self._inputs_from_parameters(parameters, public_input_ids,
+            recover_delivery=recover_delivery, provenance=record.provenance)
         if recovered_inputs is not None:
+            if recover_delivery and record.inputs is not None and record.provenance.get("delivery_dataset_id"):
+                # A recovered input may initially have used defaults while its
+                # configuration was still processing. Adopt its durable delivery
+                # settings once, without changing a submitted click-time snapshot.
+                record.inputs = recovered_inputs
             record.inputs = self._merge_recovered_inputs(record.inputs, recovered_inputs)
         stage, progress = stage_from_console(stdout, status)
+        if paused and not dependency_error:
+            stage = "Galaxy job paused"
+            record.message = "Galaxy paused this job. Review or resume it in History."
         record.status = status
         record.analysis_status = status
         record.stage = stage
@@ -2093,7 +2240,7 @@ class GalaxyService:
         record.console_tail = stdout[-12000:]
         record.updated_utc = datetime.now(timezone.utc).isoformat()
         if status == RunStatus.ERROR:
-            record.message = (stderr or stdout or "Galaxy reported an error")[-4000:]
+            record.message = (dependency_error or stderr or stdout or "Galaxy reported an error")[-4000:]
         return record
 
     @staticmethod
@@ -2149,8 +2296,9 @@ class GalaxyService:
             state = normalize_status(job.get("state"))
             parameters = self._job_parameters(job)
             output_ids = self._job_output_ids(job)
-            config = self._config_from_job(job, parameters, output_ids)
-            inputs = self._inputs_from_parameters(parameters, public_input_ids)
+            provenance: dict[str, Any] = {}
+            config = self._config_from_job(job, parameters, output_ids, provenance=provenance)
+            inputs = self._inputs_from_parameters(parameters, public_input_ids, provenance=provenance)
             parameter_name = _text(_parameter_value(parameters, "reproducibility.run_name", "run_name"))
             run_name = config.run_name if config is not None and config.run_name else parameter_name
             run_name = run_name or self._job_metric(job, "run_name")
@@ -2192,6 +2340,7 @@ class GalaxyService:
                     output_dataset_ids=output_ids,
                     config=config,
                     inputs=inputs,
+                    provenance=provenance,
                 )
             )
         return records
@@ -2298,18 +2447,7 @@ class GalaxyService:
             failures: list[str] = []
             archive_path: Path | None = None
             archive_extracted = False
-            for name in (
-                "report",
-                "summary",
-                "state",
-                "resolved_config",
-                "input_manifest",
-                "gpx_index",
-                "results_archive",
-                "input_resolution_metadata",
-                "console_output",
-            ):
-                suffix = {
+            suffixes = {
                     "report": ".html",
                     "summary": ".json",
                     "state": ".json",
@@ -2319,7 +2457,12 @@ class GalaxyService:
                     "results_archive": ".zip",
                     "input_resolution_metadata": ".json",
                     "console_output": ".txt",
-                }[name]
+                }
+            prefetched = self._prefetch_results({
+                name: (record.output_dataset_ids[name], staging / f"{name}{suffix}")
+                for name, suffix in suffixes.items() if record.output_dataset_ids.get(name)
+            })
+            for name, suffix in suffixes.items():
                 target = staging / f"{name}{suffix}"
                 dataset_id = record.output_dataset_ids.get(name)
                 dataset = None
@@ -2330,7 +2473,8 @@ class GalaxyService:
                         continue
                 try:
                     if dataset_id:
-                        self._download_dataset(dataset_id, target)
+                        if prefetched.get(name) is not None:
+                            raise prefetched[name]
                         output_ids[name] = dataset_id
                     elif dataset is not None:
                         dataset.download(str(target))
@@ -2362,6 +2506,10 @@ class GalaxyService:
                 if archive_extracted
                 else ("plots", "tables", "phases", "gpx_projects", "diagnostics")
             )
+            prefetched_collections = self._prefetch_results({
+                name: (record.output_dataset_ids[name], staging / name)
+                for name in collection_names if record.output_dataset_ids.get(name)
+            }, collections=True)
             for name in collection_names:
                 collection_id = record.output_dataset_ids.get(name)
                 collection = None
@@ -2375,7 +2523,8 @@ class GalaxyService:
                 target = staging / name
                 try:
                     if collection_id:
-                        self._download_collection(collection_id, target)
+                        if prefetched_collections.get(name) is not None:
+                            raise prefetched_collections[name]
                     else:
                         _download_collection_archive(collection, target)
                 except Exception as exc:

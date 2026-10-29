@@ -805,7 +805,8 @@ class PowgenWatchController:
             cached = self._profile_dataset_ids.get(key)
             if cached:
                 return cached
-            dataset_id = self.service.upload_document(profile_path, label=f"{self.beamline_label} instrument profile")
+            stage = getattr(self.service, "stage_instrument_profile", self.service.upload_document)
+            dataset_id = stage(profile_path, label=f"{self.beamline_label} instrument profile")
             self._profile_dataset_ids[key] = dataset_id
             return dataset_id
 

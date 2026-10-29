@@ -136,6 +136,7 @@ def test_acknowledgement_recovery_prevents_second_tool_run(tmp_path: Path, monke
     monkeypatch.setitem(sys.modules, "nova.galaxy", galaxy)
     service = GalaxyService("https://example.invalid", "key", "history", output_root=tmp_path)
     service._find_acknowledged_job = lambda run_name, config_id: "existing-job"  # type: ignore[method-assign]
+    service._submit_analysis = lambda *args: (_ for _ in ()).throw(TimeoutError("lost acknowledgement"))
 
     uid, recovered = service._submit_with_retry(
         object(),
@@ -146,7 +147,7 @@ def test_acknowledgement_recovery_prevents_second_tool_run(tmp_path: Path, monke
 
     assert uid == "existing-job"
     assert recovered.assigned == "existing-job"
-    assert len(instances) == 2  # failed client Tool + recovered assigned Tool, no second run attempt
+    assert len(instances) == 1  # only the recovered handle; no second submission
 
 
 def test_analysis_and_result_states_are_independent() -> None:

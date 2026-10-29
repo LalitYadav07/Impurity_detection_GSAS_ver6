@@ -138,7 +138,10 @@ class GalaxyRefinementRuntime(LocalRefinementRuntime):
             if existing:job=existing
             else:
                 request=dict(plan=plan,approval=approval,expected_source_sha256=source['source_sha256'],dispatch_key=dispatch_key)
-                request_id=self.service.upload_json_document(request,name='refinement-request.json',label='RADAR-PD refinement request '+dispatch_key)
+                # Galaxy owns this request HDA as an explicit job dependency.
+                # Keep durable workspace claims/checkpoints separate: only the
+                # disposable request input can still be processing at dispatch.
+                request_id=self.service.upload_json_document(request,name='refinement-request.json',label='RADAR-PD refinement request '+dispatch_key,wait_ready=False)
                 try:
                     with pending.open('x') as handle:handle.write(action+'\n')
                 except FileExistsError:
