@@ -299,6 +299,113 @@ and retain explicit branch labels instead of drawing a false sign-change event.
 Anisotropic ADPs, strain and other tensor-valued parent state require their own
 verified transformation controls; the current Uiso controls do not certify them.
 
+## Next implementation plan and acceptance gates
+
+Plan recorded 2026-10-28. The user has authorized browser visual inspection.
+The current local-file URL restriction is a tool limitation, not missing user
+permission. Visual acceptance will target the actual integrated local NOVA web
+application over its supported HTTP interface. Serving the blocked standalone
+file through a different route is not part of this plan.
+
+### 1. Record the integration baseline and freeze the first supported scope
+
+Inspect the current application/deployment revisions and the existing
+Refinement source/worker contract before merging this isolated work. Preserve
+the tested runtime identity and all original RADAR-PD source GPX revisions.
+
+The first supported scope is single-k nuclear displacement-mode exploration
+and collinear commensurate magnetic exploration with explicit parent, k basis,
+magnetic sites, form factors and amount/domain assumptions. Secondary modes,
+OPD tiers and seed sets must be declared. Unsupported tensor transformations,
+coupled/multi-k or noncollinear branches remain visible as unsupported/deferred.
+Do not silently substitute a simpler physical problem.
+
+Gate: a capability matrix says what can run, what needs a user choice, and what
+cannot yet run. Nuclear/magnetic amount linkage, normalization, frame and gauge
+are part of the protocol rather than incidental script defaults.
+
+### 2. Package the standalone discovery, compiler and native worker
+
+Replace development-time reference-template extraction and Mac-specific paths
+with RADAR-PD-owned, versioned adapters and worker templates. Cache ISODISTORT
+and Bilbao discoveries with exact settings, candidate identities, mode tables,
+transformations, origins and hashes. Package the required runtime helpers and
+license notices. Keep credentials external to repositories and images.
+
+Define the job-local input/output schema, source-revision checks, preflight,
+parameter stages, finite signed starts, bounds, budget and fixed recovery rules.
+Execute in the pinned Linux image without a reference-project runtime or LLM
+calls. Audit final native parameter states and normalized absolute modes/moments.
+
+Gate: the known controls replay after moving the job directory, with network
+disabled, unchanged source GPXs, complete trial coverage and matching audited
+outputs. A changed setting/runtime/input stops with an explicit receipt.
+
+### 3. Build an independent experimental acceptance corpus
+
+Target 12 independent experiment series, split into eight development cases
+and four held-out cases before adjusting acceptance rules. Record independent
+series separately from scans, candidates and repeated seeds. Include actual
+experimental TOF data relevant to POWGEN/NOMAD, alongside public known-solution
+controls. Identify each expected outcome from a documented reference solution;
+proposal intent alone is insufficient ground truth. Report unavailable or
+unresolved cases explicitly instead of filling the experimental count with
+synthetic data.
+
+Cover metric/peak-splitting changes, finite-k superlattice distortion, k=0
+magnetism on existing reflections, nonzero-k magnetic supercells, several
+magnetic sites/partial ordering, alternate settings/origins, and weak/null
+signals. Include nuisance controls and challenging out-of-scope models so the
+executor's refusal/unresolved behavior is tested as well as successful fits.
+
+Gate: freeze per-case expected outcomes and tolerances before holdout scoring.
+The reference-compatible model must survive discovery and remain competitive;
+refined values must meet declared physical/reference checks. Equivalent models,
+failed lower-residual starts and incomplete coverage must remain visible.
+No universal Rwp cutoff or guaranteed unique space-group assignment is assumed.
+
+### 4. Implement and exercise the campaign dispatcher
+
+Introduce durable prepare/submit/poll/collect/audit states and stable dispatch
+keys. Bundle a candidate's finite starts for one source scan/bank into a Galaxy
+job, using independent native processes. Start with representative scans, then
+continue an explicitly reviewed small model portfolio over selected existing
+and future compatible runs.
+
+Gate: local end-to-end replay proves restart, duplicate-arrival prevention,
+lost-acknowledgment recovery, cancellation, bounded retries and source-revision
+handling. One failed branch must not block unrelated work or disappear from
+coverage. Completed-prefix behavior must work before the full series exists.
+
+### 5. Integrate the portfolio view and inspect it as a user
+
+Place Model exploration inside Refinement. Connect live job receipts and native
+artifacts to grouped models, residual-versus-complexity overview, expandable
+ambiguities and diagnostic reasons. Add the model-by-condition matrix and
+normalized mode/moment trends on eligible measured axes. Inspected curves use
+observed/calculated/difference traces and phase Bragg ticks, with linked zoom,
+axis switching and up to two pinned alternatives.
+
+Gate: visually inspect the actual local application in the browser at desktop
+and narrow widths, using real completed and partial campaigns. Test 50+ models,
+empty/failed/missing results, slow jobs, new arrivals, group selection, pins,
+zoom/reset, downloads and navigation back to the original scan. Measure actual
+interaction latency; syntax checks and pure grouping timing are not UI tests.
+
+### 6. Measure an NDIP-test pilot and issue the readiness report
+
+Verify the configured Galaxy destination, quotas and available slots/memory.
+Measure one, two and four simultaneous small bundles within those limits,
+including queue/startup time, memory and unrelated-user impact. Exercise the
+same recovery and incoming-scan cases in NDIP-test before expanding enrollment.
+
+Gate: report automatic, user-choice, unsupported and unresolved outcomes for
+each independent experimental series, parameter-effect audits, holdout results,
+resource measurements, visual findings and remaining failures. Local science
+acceptance, local application acceptance and NDIP acceptance are separate
+milestones. Passing this pilot supports the declared first-release scope;
+additional physics requires additional acceptance cases.
+
 ## Primary references
 
 - [ISODISTORT help](https://iso.byu.edu/isodistorthelp.php)
