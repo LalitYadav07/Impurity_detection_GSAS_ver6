@@ -1,0 +1,12 @@
+Prepare one diagnostic refinement recipe for the existing Al2O3/MgO phases and sole PWDR histogram in this published GPX. The reviewed execution scope is sample 21213, source bank 2, including compatible existing and future GPXs in this Live series. Do not add, remove or substitute phases.
+
+Fit the full measured time-of-flight interval of the inspected histogram at every stage, retaining existing invalid/masked bins and exclusions. The expected measured interval is 11301.910281086 to 281733.72027842654 microseconds; verify it against the inspected context and ask for review if it differs. State the full-range fit-limit edit in every stage. Use exactly four sequential stages, at most six cycles each, and list the COMPLETE free set at every stage.
+
+Stage 1: refine the existing background coefficients and both existing phase scales; hold cells and atomic parameters fixed.
+Stage 2: keep stage-1 terms free and add both unit cells.
+Stage 3: keep stage-2 terms free and add only symmetry-allowed fractional positions of Al1 and O1 in Al2O3. Do not request symmetry-fixed MgO coordinates.
+Stage 4: keep stage-3 terms free and add isotropic Uiso for Al1 in Al2O3 ONLY, bounded to 0 through 0.05 square angstrom. Keep all other Uiso sites and all occupancies fixed.
+
+Throughout, hold instrument calibration and profile, sample parameters and texture fixed. Preserve the existing background function, coefficient count, support points, constraints and restraints. Add no new normalization or exclusion. If a requested release or bound is unsupported, ask for review. Stop on a physical bound violation.
+
+Report conditional uncertainties and strong correlations. Treat weakly constrained Uiso as a result needing scientific review. The original restricted-range Rwp and the full-range Rwp are not directly comparable. Each incoming GPX must match the reviewed phase/atom model and measured interval before this recipe runs.

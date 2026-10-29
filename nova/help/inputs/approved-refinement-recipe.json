@@ -1,0 +1,210 @@
+{
+  "schema": "radar-gpx-recipe/v1",
+  "model_signature": "47b9e21abbf334b6b79a1a315926cf195ab0be7481b7c622a570b6e4fc17388f",
+  "request": "Prepare the requested four-stage diagnostic refinement for the existing Al2O3/MgO model over the verified full TOF interval, carrying forward each complete active set. Preserve model setup and existing relations; bound Al1 Uiso in Al2O3 to 0\u20130.05 \u00c5\u00b2 in stage 4. Require model and interval verification for every incoming GPX and review conditional uncertainties and strong correlations.",
+  "assumptions": [
+    "The inspected histogram h0 is the requested PWDR histogram; its context limits exactly match the expected full measured interval, 11301.910281086\u2013281733.72027842654 microseconds.",
+    "Conditional uncertainties and correlations are reported from the refinement results; no claim of scientific acceptance is implied by this recipe.",
+    "The requested execution-scope identifiers are validation metadata and do not authorize changes to the phase or histogram model."
+  ],
+  "questions": [],
+  "unsupported": [],
+  "stages": [
+    {
+      "id": "stage1",
+      "title": "Background and both phase scales",
+      "cycles": 6,
+      "free": [
+        {
+          "kind": "background",
+          "histogram": "h0"
+        },
+        {
+          "kind": "phase_scale",
+          "phase": "p0",
+          "histogram": "h0"
+        },
+        {
+          "kind": "phase_scale",
+          "phase": "p1",
+          "histogram": "h0"
+        }
+      ],
+      "constraints": [],
+      "background": null,
+      "phase_normalization": [],
+      "fit_ranges": [
+        {
+          "histogram": "h0",
+          "unit": "tof",
+          "lower": 11301.910281086,
+          "upper": 281733.72027842654
+        }
+      ],
+      "exclusions": [],
+      "bounds": [],
+      "texture": []
+    },
+    {
+      "id": "stage2",
+      "title": "Add both unit cells",
+      "cycles": 6,
+      "free": [
+        {
+          "kind": "background",
+          "histogram": "h0"
+        },
+        {
+          "kind": "phase_scale",
+          "phase": "p0",
+          "histogram": "h0"
+        },
+        {
+          "kind": "phase_scale",
+          "phase": "p1",
+          "histogram": "h0"
+        },
+        {
+          "kind": "cell",
+          "phase": "p0"
+        },
+        {
+          "kind": "cell",
+          "phase": "p1"
+        }
+      ],
+      "constraints": [],
+      "background": null,
+      "phase_normalization": [],
+      "fit_ranges": [
+        {
+          "histogram": "h0",
+          "unit": "tof",
+          "lower": 11301.910281086,
+          "upper": 281733.72027842654
+        }
+      ],
+      "exclusions": [],
+      "bounds": [],
+      "texture": []
+    },
+    {
+      "id": "stage3",
+      "title": "Add Al2O3 Al1 and O1 positions",
+      "cycles": 6,
+      "free": [
+        {
+          "kind": "background",
+          "histogram": "h0"
+        },
+        {
+          "kind": "phase_scale",
+          "phase": "p0",
+          "histogram": "h0"
+        },
+        {
+          "kind": "phase_scale",
+          "phase": "p1",
+          "histogram": "h0"
+        },
+        {
+          "kind": "cell",
+          "phase": "p0"
+        },
+        {
+          "kind": "cell",
+          "phase": "p1"
+        },
+        {
+          "kind": "atom",
+          "phase": "p0",
+          "atom": "Al1",
+          "flags": "X"
+        },
+        {
+          "kind": "atom",
+          "phase": "p0",
+          "atom": "O1",
+          "flags": "X"
+        }
+      ],
+      "constraints": [],
+      "background": null,
+      "phase_normalization": [],
+      "fit_ranges": [
+        {
+          "histogram": "h0",
+          "unit": "tof",
+          "lower": 11301.910281086,
+          "upper": 281733.72027842654
+        }
+      ],
+      "exclusions": [],
+      "bounds": [],
+      "texture": []
+    },
+    {
+      "id": "stage4",
+      "title": "Add bounded Al1 isotropic Uiso",
+      "cycles": 6,
+      "free": [
+        {
+          "kind": "background",
+          "histogram": "h0"
+        },
+        {
+          "kind": "phase_scale",
+          "phase": "p0",
+          "histogram": "h0"
+        },
+        {
+          "kind": "phase_scale",
+          "phase": "p1",
+          "histogram": "h0"
+        },
+        {
+          "kind": "cell",
+          "phase": "p0"
+        },
+        {
+          "kind": "cell",
+          "phase": "p1"
+        },
+        {
+          "kind": "atom",
+          "phase": "p0",
+          "atom": "Al1",
+          "flags": "XU"
+        },
+        {
+          "kind": "atom",
+          "phase": "p0",
+          "atom": "O1",
+          "flags": "X"
+        }
+      ],
+      "constraints": [],
+      "background": null,
+      "phase_normalization": [],
+      "fit_ranges": [
+        {
+          "histogram": "h0",
+          "unit": "tof",
+          "lower": 11301.910281086,
+          "upper": 281733.72027842654
+        }
+      ],
+      "exclusions": [],
+      "bounds": [
+        {
+          "phase": "p0",
+          "atom": "Al1",
+          "parameter": "U",
+          "lower": 0,
+          "upper": 0.05
+        }
+      ],
+      "texture": []
+    }
+  ]
+}

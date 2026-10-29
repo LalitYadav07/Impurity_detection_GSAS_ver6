@@ -8,6 +8,15 @@ recovers jobs from the user's Galaxy history, and renders completed artifacts.
 The Full and Rapid paths share one setup form and one Galaxy submission
 contract. Scientific work remains inside the versioned RADAR-PD batch image.
 
+The **User guide** header button opens the bundled screenshot walkthrough in a
+new tab. The guide is served below the current session path, so opening it does
+not navigate away from the analysis or require a separate documentation server.
+Screenshots record version 0.4.34; the guide includes the example configuration,
+temperature mapping and refinement recipe. Licensed ICSD CIF exports are not
+redistributed. Maintain the reviewed bundle in `help/`; `tools/package_user_guide.py`
+prepares a visual-guide export and `tests/verify_user_guide.py` checks every
+asset and download through nginx at both root and NDIP-style session paths.
+
 ## Facility experiment integration
 
 The Data Collection panel provides a single working-folder browser for mounted

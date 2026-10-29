@@ -827,6 +827,17 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Refine
                 size="small",
             )
             vuetify.VBtn(
+                "User guide",
+                id="radar-user-guide",
+                href="./user-guide/index.html",
+                target="_blank",
+                rel="noopener noreferrer",
+                prepend_icon="mdi-book-open-page-variant-outline",
+                title="Open the screenshot guide in a new tab",
+                variant="text",
+                size="small",
+            )
+            vuetify.VBtn(
                 "Clear workspace",
                 v_if="run_rows.length || rf_experiments.length || rf_jobs.length || !!powgen_ipts || !!selected_run_uid",
                 prepend_icon="mdi-broom",

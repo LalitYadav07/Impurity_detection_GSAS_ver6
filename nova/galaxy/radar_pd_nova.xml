@@ -1,4 +1,4 @@
-<tool id="neutrons_radar_pd_interactive_prototype" tool_type="interactive" name="RADAR-PD Interactive" version="0.4.34" profile="22.01">
+<tool id="neutrons_radar_pd_interactive_prototype" tool_type="interactive" name="RADAR-PD Interactive" version="0.4.35" profile="22.01">
     <description>configure, run, monitor, recover, and inspect Full or Rapid RADAR-PD analyses</description>
     <creator>
         <person name="Lalit Yadav"/>
@@ -38,6 +38,8 @@
 RADAR-PD Interactive provides one shared setup experience for Full RADAR-PD and Rapid Hypothesis Mode. It can upload local files, reuse datasets in the current Galaxy history, resolve SNS IPTS inputs, submit the existing batch Analyze tool, show progress, recover earlier runs, render interactive results, and expose reproducible artifacts.
 
 Recovered runs can reopen their published GPX checkpoints directly in the hosted GSAS-II desktop.
+
+Use the User guide button in the application header to open the screenshot walkthrough and example configuration downloads in a separate tab.
 
 For optional reviewed refinement recipes, add your personal ORNL Illumine key to the ORNL Illumine credential group in NDIP. Galaxy injects the selected credential into your NOVA session; regular RADAR-PD analysis does not require it.
 

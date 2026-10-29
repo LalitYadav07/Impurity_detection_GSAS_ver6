@@ -102,6 +102,15 @@ jobs:
           ' > "${RUNNER_TEMP}/nova-upload-handlers.json"
           node nova/tests/client_upload.test.js "${RUNNER_TEMP}/nova-upload-handlers.json"
 
+      - name: Verify packaged User guide and NDIP session routes
+        shell: bash
+        run: |
+          docker run --rm --entrypoint python \
+            -v "$PWD/nova/tests/verify_user_guide.py:/tmp/verify_user_guide.py:ro" \
+            -v "$PWD/nova/dockerfiles/nginx.conf.template:/tmp/guide-nginx.conf.template:ro" \
+            "${IMAGE_NAME}:nova-${NOVA_VERSION}" \
+            /tmp/verify_user_guide.py --nginx-template /tmp/guide-nginx.conf.template
+
       - name: Verify packaged beamline profiles and condition contract
         shell: bash
         run: |

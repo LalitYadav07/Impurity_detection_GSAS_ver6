@@ -14,6 +14,8 @@ RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends hdf5-tools tzdata \
     && rm -rf /var/lib/apt/lists/*
 COPY src /src/src
+# Serve the versioned guide through the same path-prefixed NDIP endpoint as NOVA.
+COPY help /app/www-content/user-guide/
 # The pinned runtime uses Python 3.10 and does not contain SciPy. Keep the
 # measured-pattern engine reproducible without upgrading the NOVA stack.
 RUN python -m pip install --no-cache-dir 'scipy==1.15.3' \

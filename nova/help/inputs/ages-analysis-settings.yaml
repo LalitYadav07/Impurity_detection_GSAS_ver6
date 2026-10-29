@@ -1,0 +1,252 @@
+$schema: radar-pd-config/v1
+created_utc: '2026-10-22T19:50:07.826543+00:00'
+analysis:
+  mode: full
+  radiation: neutron
+  instrument_mode: auto
+chemistry:
+  sample_elements:
+  - Al
+  - O
+  - Mg
+  environment_elements: []
+pattern:
+  limits:
+  - 12377.54
+  - 90421.2
+  exclude_regions: []
+  reference_phase_exclusions:
+    enabled: false
+    presets: []
+    window_mode: auto
+    fwhm_factor: 6.0
+    fractional_d_tolerance: 0.003
+    include_cu_kbeta: false
+background:
+  mode: function
+  type: chebyschev-1
+  terms: 36
+main_phase:
+  prenudge: false
+  shadow_filter: false
+  cleanup:
+    enabled: false
+    refine_u_iso: false
+    refine_positions: false
+magnetic_precheck:
+  enabled: false
+  q_max: 4.0
+  denominators:
+  - 2
+  - 3
+  - 4
+light_calibration:
+  enabled: false
+full:
+  profile: custom
+  max_passes: 1
+  min_phase_percent: 1.0
+  top_n_ml: 12
+  nudge_candidates: 3
+  cell_length_tolerance_pct: 2.0
+  cell_angle_tolerance_deg: 1.5
+  nudge_samples: 800
+  nudge_representatives: 10
+  compare_candidates: 1
+  compare_cycles: 8
+  rwp_improvement_threshold: 0.12
+  dedup_threshold: 0.95
+  score_q_max: 8.0
+  pearson_cell_min_r: 0.5
+  lattice_tiebreak_score_tol: 0.0005
+  candidate_pruning: true
+  knee_min_points_hist: 5
+  knee_min_relative_span: 0.03
+  knee_keep_if_no_knee: 1
+  knee_keep_at_most: 3
+  excluded_space_groups:
+  - 1
+  - 2
+  final_joint_cell_cycles: 12
+rapid:
+  phases_per_hypothesis: 3
+  stage_output_limit: 10
+  gsas_validation_limit: 5
+  parallel_workers: 4
+  show_family_variants: true
+  final_polish_enabled: false
+post_analysis:
+  axis: temperature
+  views:
+  - id: fractions
+    kind: phase_evolution
+  - id: cell-a
+    kind: thermal_expansion
+    metric: a
+    representation: absolute
+    connect: false
+  - id: cell-c
+    kind: thermal_expansion
+    metric: c
+    representation: absolute
+    connect: false
+  - id: relative-cell-a
+    kind: thermal_expansion
+    metric: a
+    representation: relative
+    connect: false
+  axis_mappings:
+    temperature:
+      PG3_43106:
+        value: 114.0
+        unit: C
+        source: Collaborator reviewed campaign catalog, e4d336691ca56fa4150a688d276af530bdcbdfdc,
+          reports/radar-pd/2019-02-14-ages/temperature-source.csv; raw facility K
+          label conflicts with campaign C units
+        kind: user_supplied
+        verified: true
+        branch: heating
+      PG3_43107:
+        value: 153.0
+        unit: C
+        source: Collaborator reviewed campaign catalog, e4d336691ca56fa4150a688d276af530bdcbdfdc,
+          reports/radar-pd/2019-02-14-ages/temperature-source.csv; raw facility K
+          label conflicts with campaign C units
+        kind: user_supplied
+        verified: true
+        branch: heating
+      PG3_43108:
+        value: 199.0
+        unit: C
+        source: Collaborator reviewed campaign catalog, e4d336691ca56fa4150a688d276af530bdcbdfdc,
+          reports/radar-pd/2019-02-14-ages/temperature-source.csv; raw facility K
+          label conflicts with campaign C units
+        kind: user_supplied
+        verified: true
+        branch: heating
+      PG3_43109:
+        value: 249.0
+        unit: C
+        source: Collaborator reviewed campaign catalog, e4d336691ca56fa4150a688d276af530bdcbdfdc,
+          reports/radar-pd/2019-02-14-ages/temperature-source.csv; raw facility K
+          label conflicts with campaign C units
+        kind: user_supplied
+        verified: true
+        branch: heating
+      PG3_43110:
+        value: 300.0
+        unit: C
+        source: Collaborator reviewed campaign catalog, e4d336691ca56fa4150a688d276af530bdcbdfdc,
+          reports/radar-pd/2019-02-14-ages/temperature-source.csv; raw facility K
+          label conflicts with campaign C units
+        kind: user_supplied
+        verified: true
+        branch: heating
+      PG3_43111:
+        value: 349.0
+        unit: C
+        source: Collaborator reviewed campaign catalog, e4d336691ca56fa4150a688d276af530bdcbdfdc,
+          reports/radar-pd/2019-02-14-ages/temperature-source.csv; raw facility K
+          label conflicts with campaign C units
+        kind: user_supplied
+        verified: true
+        branch: heating
+      PG3_43112:
+        value: 398.0
+        unit: C
+        source: Collaborator reviewed campaign catalog, e4d336691ca56fa4150a688d276af530bdcbdfdc,
+          reports/radar-pd/2019-02-14-ages/temperature-source.csv; raw facility K
+          label conflicts with campaign C units
+        kind: user_supplied
+        verified: true
+        branch: heating
+      PG3_43113:
+        value: 449.0
+        unit: C
+        source: Collaborator reviewed campaign catalog, e4d336691ca56fa4150a688d276af530bdcbdfdc,
+          reports/radar-pd/2019-02-14-ages/temperature-source.csv; raw facility K
+          label conflicts with campaign C units
+        kind: user_supplied
+        verified: true
+        branch: heating
+      PG3_43114:
+        value: 498.0
+        unit: C
+        source: Collaborator reviewed campaign catalog, e4d336691ca56fa4150a688d276af530bdcbdfdc,
+          reports/radar-pd/2019-02-14-ages/temperature-source.csv; raw facility K
+          label conflicts with campaign C units
+        kind: user_supplied
+        verified: true
+        branch: heating
+      PG3_43115:
+        value: 548.0
+        unit: C
+        source: Collaborator reviewed campaign catalog, e4d336691ca56fa4150a688d276af530bdcbdfdc,
+          reports/radar-pd/2019-02-14-ages/temperature-source.csv; raw facility K
+          label conflicts with campaign C units
+        kind: user_supplied
+        verified: true
+        branch: heating
+      PG3_43116:
+        value: 598.0
+        unit: C
+        source: Collaborator reviewed campaign catalog, e4d336691ca56fa4150a688d276af530bdcbdfdc,
+          reports/radar-pd/2019-02-14-ages/temperature-source.csv; raw facility K
+          label conflicts with campaign C units
+        kind: user_supplied
+        verified: true
+        branch: heating
+      PG3_43117:
+        value: 648.0
+        unit: C
+        source: Collaborator reviewed campaign catalog, e4d336691ca56fa4150a688d276af530bdcbdfdc,
+          reports/radar-pd/2019-02-14-ages/temperature-source.csv; raw facility K
+          label conflicts with campaign C units
+        kind: user_supplied
+        verified: true
+        branch: heating
+      PG3_43118:
+        value: 698.0
+        unit: C
+        source: Collaborator reviewed campaign catalog, e4d336691ca56fa4150a688d276af530bdcbdfdc,
+          reports/radar-pd/2019-02-14-ages/temperature-source.csv; raw facility K
+          label conflicts with campaign C units
+        kind: user_supplied
+        verified: true
+        branch: heating
+      PG3_43119:
+        value: 748.0
+        unit: C
+        source: Collaborator reviewed campaign catalog, e4d336691ca56fa4150a688d276af530bdcbdfdc,
+          reports/radar-pd/2019-02-14-ages/temperature-source.csv; raw facility K
+          label conflicts with campaign C units
+        kind: user_supplied
+        verified: true
+        branch: heating
+      PG3_43120:
+        value: 798.0
+        unit: C
+        source: Collaborator reviewed campaign catalog, e4d336691ca56fa4150a688d276af530bdcbdfdc,
+          reports/radar-pd/2019-02-14-ages/temperature-source.csv; raw facility K
+          label conflicts with campaign C units
+        kind: user_supplied
+        verified: true
+        branch: heating
+      PG3_43121:
+        value: 848.0
+        unit: C
+        source: Collaborator reviewed campaign catalog, e4d336691ca56fa4150a688d276af530bdcbdfdc,
+          reports/radar-pd/2019-02-14-ages/temperature-source.csv; raw facility K
+          label conflicts with campaign C units
+        kind: user_supplied
+        verified: true
+        branch: heating
+      PG3_43124:
+        value: 47.3
+        unit: C
+        source: Collaborator reviewed campaign catalog, e4d336691ca56fa4150a688d276af530bdcbdfdc,
+          reports/radar-pd/2019-02-14-ages/temperature-source.csv; raw facility K
+          label conflicts with campaign C units
+        kind: user_supplied
+        verified: true
+        branch: return
