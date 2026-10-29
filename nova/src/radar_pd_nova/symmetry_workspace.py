@@ -56,6 +56,14 @@ def choose_group(groups,selected,*,explicit=False):
     return groups[0]['id']
 
 
+def disposition_reason(row):
+    if row.get('reason'):return row['reason']
+    if row['status']=='optimization_unresolved':return 'Native convergence or rank checks did not qualify this checkpoint.'
+    if row['status']=='physical_rejection':return 'The refined model violates the declared physical bounds.'
+    if row['status']=='valid':return 'Native parameter/data audits and the declared fit criterion passed.'
+    return 'Native parameter/data audits retained.' if row['has_view'] else 'Awaiting an independently audited native result.'
+
+
 def group_models(rows,*,relative_tolerance=1e-6):
     """Only group equivalent calculated profiles on identical observed fit domains.
 
@@ -86,6 +94,7 @@ def campaign_rows(root):
     rows=[]
     for trial in campaign.trials():
         row=read_trial(campaign.trial_directory(trial),metadata[trial['protocol']])
+        row['execution_state']=trial['state']
         if trial.get('receipt'):
             try:
                 actual=json.loads((campaign.trial_directory(trial)/'result.json').read_text())

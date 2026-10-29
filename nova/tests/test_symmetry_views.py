@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 import numpy as np
 
-from radar_pd_nova.symmetry_workspace import group_models,choose_group
+from radar_pd_nova.symmetry_workspace import group_models,choose_group,disposition_reason
 from radar_pd_nova.symmetry_plots import coordinate,fit
 
 
@@ -43,6 +43,13 @@ def test_streaming_default_opens_first_fit_and_explicit_trial_survives_regroupin
     assert choose_group(groups,'waiting',explicit=True)=='pending'
     assert choose_group(groups,'fit-2',explicit=True)=='fit-1'
     assert choose_group([], 'waiting')==''
+
+
+def test_an_audited_checkpoint_is_not_described_as_a_qualified_optimization():
+    reason=disposition_reason(dict(status='optimization_unresolved',has_view=True))
+    assert 'did not qualify' in reason
+    assert 'Awaiting' in disposition_reason(dict(status='running',has_view=False))
+    assert disposition_reason(dict(status='unsupported',reason='Different BNS setting',has_view=False))=='Different BNS setting'
 
 
 def test_excluded_regions_are_gaps_in_the_calculated_and_difference_lines(tmp_path):

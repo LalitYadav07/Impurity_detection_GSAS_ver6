@@ -20,6 +20,7 @@ def model_exploration(app):
         with html.Div(classes='rf-toolbar'):
             select('Model campaign','sx_campaign','sx_campaigns')
             v.VBtn('Refresh evidence',click=app.refresh_symmetry,loading=('sx_busy',),variant='text',prepend_icon='mdi-refresh')
+            v.VBtn('Continue approved queue',click=app.continue_symmetry_campaign,disabled=('!sx_resumable || sx_busy',),variant='text',prepend_icon='mdi-play')
             v.VBtn('Prepare exploration',click='sx_setup = !sx_setup',variant='outlined',prepend_icon='mdi-molecule')
         v.VAlert(v_if='!!sx_error',text=('sx_error',),type='error',variant='tonal',density='compact',classes='mb-3')
         v.VProgressLinear(v_if='sx_busy',indeterminate=True,color='#267653',height=3,classes='mb-3')
@@ -96,7 +97,7 @@ def model_exploration(app):
                 v.VDataTable(v_if='sx_parameters.length',items=('sx_parameters',),headers=("[{title:'Phase',key:'phase'},{title:'Moment / normalized mode',key:'parameter'},{title:'Value',key:'value'},{title:'Unit',key:'unit'}]",),items_per_page=6,density='compact')
                 with html.Div(classes='rf-actions'):
                     v.VBtn('Download native GPX',click=(app.download_symmetry_artifact,"['gpx']"),disabled=('!sx_has_gpx',),variant='outlined',size='small',prepend_icon='mdi-download')
-                    v.VBtn('Download trial receipt',click=(app.download_symmetry_artifact,"['receipt']"),disabled=('!sx_selected',),variant='text',size='small')
+                    v.VBtn('Download trial receipt',click=(app.download_symmetry_artifact,"['receipt']"),disabled=('!sx_has_receipt',),variant='text',size='small')
                 with html.Details(classes='mt-3'):
                     html.Summary('Trial control')
                     v.VBtn('Cancel selected active trial',click=app.cancel_symmetry_selected,variant='text',size='small',classes='mt-2')

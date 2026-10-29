@@ -25,7 +25,7 @@ from gpx_recipe.symmetry.chemistry import validate_sites
 from gpx_recipe.symmetry.isodistort_discovery import discover_structural
 from gpx_recipe.symmetry.plans import build_plan
 from gpx_recipe.symmetry.contracts import iter_trials
-from .symmetry_workspace import campaign_rows,group_models,view_for,choose_group
+from .symmetry_workspace import campaign_rows,group_models,view_for,choose_group,disposition_reason
 from . import symmetry_plots as plots
 
 
@@ -37,7 +37,7 @@ class SymmetryMixin:
             sx_overview=plots.empty('Open a campaign to inspect its coverage'),sx_fit=plots.empty('Select an audited checkpoint'),sx_axis='d',sx_reset=0,sx_pins=[],sx_pin_options=[],sx_parameters=[],sx_details=[],
             sx_parent='',sx_parents=[],sx_histogram='',sx_histograms=[],sx_k='0, 0, 0',sx_sites=[],sx_site_options=[],sx_form_factors='',sx_lande=2.,sx_directions=['x','y','z'],sx_adequate=None,sx_max_moment=6.,sx_cycles=20,sx_slots=2,
             sx_kind='magnetic',sx_mag_d_min=0.,sx_max_mode=.5,sx_start_mode=.1,sx_candidate_options=[],sx_candidates=[],sx_mode_options=[],sx_modes=[],sx_discovered=False,sx_discovery_scope='',
-            sx_plan_ready=False,sx_approved=False,sx_plan_summary='',sx_plan_candidates=[],sx_setup=False,sx_has_context=False,sx_has_gpx=False)
+            sx_plan_ready=False,sx_approved=False,sx_plan_summary='',sx_plan_candidates=[],sx_setup=False,sx_has_context=False,sx_has_gpx=False,sx_has_receipt=False,sx_resumable=False)
         for key,value in defaults.items():setattr(s,key,value)
         s.change('rf_mode')(self._symmetry_mode_changed)
         s.change('sx_campaign')(self._symmetry_campaign_changed)
@@ -95,6 +95,7 @@ class SymmetryMixin:
                 root=next(p.parent for p in roots if p.parent.name==s.sx_campaign)
                 rows,summaries=await asyncio.to_thread(campaign_rows,root)
                 self._symmetry_all_rows=rows
+                s.sx_resumable=any(r['execution_state'] not in {'terminal','cancelled'} for r in rows)
                 counts=Counter(r['status'] for r in rows)
                 s.sx_progress=f'{sum(v["received_count"] for v in summaries)} / {sum(v["declared_count"] for v in summaries)} terminal receipts · '+', '.join(f'{n} {k.replace("_"," ")}' for k,n in sorted(counts.items()))
                 s.sx_message='Qualified structures remain hypotheses. Matching calculated curves do not establish a unique space group.'
@@ -146,8 +147,9 @@ class SymmetryMixin:
             s.sx_overview=plots.overview(self._symmetry_rows,s.sx_selected)
             s.sx_fit=plots.fit(row,pins,axis=s.sx_axis,reset=s.sx_reset)
             s.sx_details=[];s.sx_parameters=[];s.sx_has_gpx=bool(row and row.get('has_gpx') and row['has_view'])
+            s.sx_has_receipt=bool(row and row.get('receipt_sha256'))
             if row:
-                reason=row.get('reason') or ('Native effects and input checks retained' if row['has_view'] else 'Awaiting an independently audited native result')
+                reason=disposition_reason(row)
                 s.sx_details=[dict(label='Status',value=row['status'].replace('_',' ')),dict(label='Reason',value=reason),
                     dict(label='Candidate',value=row['name']+(' · BNS '+row['bns'] if row['bns'] else '')),dict(label='Embedding',value=json.dumps(row['embedding'])),dict(label='Start',value=row['seed']),
                     dict(label='Worker',value='GSAS-II '+row.get('native_version','pending')+' · implementation '+row['worker_revision'][:12])]
@@ -275,14 +277,31 @@ class SymmetryMixin:
                 source=d['source'];metadata=dict(scan=source['scan_label'],sample=source['sample_label'],bank=source.get('bank'),series=source['experiment'])
                 await asyncio.to_thread(c.enroll,d['protocol'],d['root'],approved_hash=self._symmetry_approved,metadata=metadata)
                 s.sx_campaign=c.root.name;s.sx_setup=False
-                while True:
-                    trials=await asyncio.to_thread(c.tick,transport,slots=int(s.sx_slots))
-                    self.refresh_symmetry()
-                    if all(r['state'] in {'terminal','cancelled','needs_recovery'} for r in trials):break
-                    await asyncio.sleep(3)
+                await self._drive_symmetry_campaign(c,transport)
             except Exception as exc:s.sx_error=str(exc)
             finally:s.flush()
         self._symmetry_task=self._refinement_schedule(run(),'radar-symmetry-campaign')
+
+    async def _drive_symmetry_campaign(self,campaign,transport):
+        while True:
+            trials=await asyncio.to_thread(campaign.tick,transport,slots=int(self.server.state.sx_slots))
+            self.refresh_symmetry()
+            if all(r['state'] in {'terminal','cancelled','needs_recovery'} for r in trials):break
+            await asyncio.sleep(3)
+
+    def continue_symmetry_campaign(self):
+        if self._symmetry_task and not self._symmetry_task.done():return
+        async def resume():
+            s=self.server.state;s.sx_error=''
+            try:
+                root=(self._symmetry_root()/s.sx_campaign).resolve()
+                if root.parent!=self._symmetry_root() or not (root/'campaign.sqlite').is_file():raise ValueError('Select an existing campaign')
+                campaign=Campaign(root)
+                await asyncio.to_thread(campaign.verify_continuation,package_signature())
+                await self._drive_symmetry_campaign(campaign,self._symmetry_transport())
+            except Exception as exc:s.sx_error=str(exc)
+            finally:s.flush()
+        self._symmetry_task=self._refinement_schedule(resume(),'radar-symmetry-continue')
 
     def cancel_symmetry_selected(self):
         async def cancel():

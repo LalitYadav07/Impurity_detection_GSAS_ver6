@@ -118,7 +118,7 @@ class Campaign:
 
     def set_state(self,uid,state,*,handle=None,receipt=None,error=None):
         with self.connect() as db:
-            db.execute('UPDATE trials SET state=?,handle=COALESCE(?,handle),receipt=?,error=?,updated=? WHERE id=?',
+            db.execute('UPDATE trials SET state=?,handle=COALESCE(?,handle),receipt=COALESCE(?,receipt),error=?,updated=? WHERE id=?',
                 (state,json.dumps(handle) if handle else None,json.dumps(receipt) if receipt else None,error,time.time(),uid))
             self.event(db,uid,state,error)
 
@@ -141,8 +141,9 @@ class Campaign:
                 directory=self.trial_directory(row)
                 if row['state']=='terminal':
                     self.collect(row);continue
-                if row['state'] in {'cancelled','needs_recovery'}:continue
+                if row['state']=='cancelled':continue
                 if (directory/'result.json').is_file():self.collect(row);continue
+                if row['state']=='needs_recovery':continue
                 if row['state'] in {'submitting','running','cancelling'}:
                     try:
                         state=transport.recover(row['id'],directory) if row['state']=='submitting' else transport.poll(json.loads(row['handle']),directory)
@@ -163,6 +164,19 @@ class Campaign:
                     # Leave intent durable: next pass recovers by dispatch key.
                     with self.connect() as db:self.event(db,row['id'],'submission_acknowledgment_missing',str(exc))
         return self.trials()
+
+    def verify_continuation(self,implementation_sha256):
+        """Resume sealed work, without silently upgrading its implementation."""
+        pending=[r for r in self.trials() if r['state'] not in {'terminal','cancelled'}]
+        if not pending:raise ValueError('This campaign has no pending trials to continue')
+        keys={r['protocol'] for r in pending}
+        with self.connect() as db:
+            protocols=[json.loads(r['body']) for r in db.execute('SELECT hash,body FROM protocols') if r['hash'] in keys]
+        if any(p['implementation_sha256']!=implementation_sha256 for p in protocols):
+            raise ValueError('Pending trials use an older scientific implementation; review a new plan instead of silently upgrading them')
+        if all(r['state']=='needs_recovery' and not (self.trial_directory(r)/'result.json').is_file() for r in pending):
+            raise ValueError('These trials need explicit transport recovery; no duplicate job was submitted')
+        return [r['id'] for r in pending]
 
     def cancel(self,uid,transport):
         with self.exclusive():

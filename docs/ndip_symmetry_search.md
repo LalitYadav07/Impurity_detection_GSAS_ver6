@@ -306,7 +306,7 @@ verified transformation controls; the current Uiso controls do not certify them.
 ## Local implementation checkpoint — 2026-10-29
 
 This is a development checkpoint on `codex/ndip-symmetry-exploration`, based on
-NOVA 0.4.32. It is not an NDIP release or a claim that the acceptance plan below
+NOVA 0.4.34 after merging the current source branch. It is not an NDIP release or a claim that the acceptance plan below
 is complete. The source and Galaxy deployment branches have not been pushed by
 this work. Diffraction Studio supplied audited knowledge/MIT source references;
 the deployed package and native jobs have no runtime dependency on that project.
@@ -320,7 +320,7 @@ the deployed package and native jobs have no runtime dependency on that project.
 | Reflection coverage | New UI plans explicitly use the full calibrated fitted d range by default; an explicit cutoff is optional | Historical sealed protocols preserve their original 1 Å default and are not silently reinterpreted |
 | Structural discovery | Standalone ISODISTORT adapter retains the full OPD discovery record and constructs one highest-symmetry OPD per irrep in the first tier | Other OPDs remain deferred; the current UI does not yet construct arbitrary later tiers |
 | Structural execution | Native displacement-mode import; zero-mode forward-equivalence check; selected modes with exhaustive signed starts; optional declared cell/background/global-scale refinement | At most six selected modes per child within the total finite-start budget; no unverified tensor/restraint transfer |
-| Durable execution | SQLite ledger; sealed trials; process restart/recovery, lost-acknowledgment handling, cancellation and deadlines | Local native transport is implemented; Galaxy seed bundles/destination adapter remain to be built |
+| Durable execution | SQLite ledger; sealed trials; Continue approved queue after reopening; process recovery, cancellation and deadlines | Late verified receipts resolve without resubmission. Changed implementation or ambiguous transport requires review; Galaxy seed bundles/destination adapter remain to be built |
 | Streaming | Trial dispatch and partial results work without waiting for every start; acquisition IDs prevent identical GPX bytes from collapsing different scans | This UI starts one representative scan. Bulk/future-scan enrollment and reviewed continuation templates remain incomplete |
 | Results | Grouped models, finite-fit overview, exact scan filtering, pins, calibrated axes, Bragg ticks, parameter values and verified downloads | Model-by-condition matrix and consistent-gauge mode/moment trends are still pending |
 
@@ -333,7 +333,7 @@ projection failure remains a regression control, not an allowed executor.
 Local acceptance evidence is in the sibling audit directory
 `symmetry-integration-pilot/`. It includes compiled relocatable jobs, native
 GPXs/audits, the durable ledgers, browser screenshots and `browser-validation.json`.
-The combined NOVA/refinement regression suite passed 1,314 tests with two skips;
+The merged NOVA/refinement regression suite passed 1,324 tests with two skips;
 the subsequent streaming-view change passed its focused UI checks. A browser
 workflow captured the actual source, discovered 70 OPDs, constructed five first
 tier children, reviewed and ran all 22 signed starts, inspected results and
@@ -347,6 +347,19 @@ positive magnetic fits, forbidden sites, a grey group, an alternate-setting
 refusal, a centered parent with k=(1,0,0), and structural recovery. The GPX
 audits check what actually varied and recompute the final calculated profile;
 an executable script or decreasing cached Rwp alone is not success.
+
+The same eight controls were prepared as a sealed queue and continued through
+the browser after a fresh application process started with no in-memory draft.
+All eight completed with exactly eight submission intents. Regression checks
+cover late receipt collection and repeated restart after receipt tampering;
+the original collected receipt remains the integrity anchor. A subsequent
+campaign/interface/refinement integration gate covers these lifecycle changes.
+
+The complete current-kernel replay sealed all 732 declared starts across
+Cr2WO6 (369), Ba/Co (162) and Pr/Sr manganite (201), without technical failures
+or hidden branches. These starts are three experiments, not 732 experimental
+validation cases. The later lifecycle-only package revision leaves the native
+scientific kernels unchanged and is covered by the repeated eight controls.
 
 Independent experimental acceptance remains incomplete: four experimental
 series have been exercised, not twelve. Cr2WO6 and Ba/Co fixed-nuclear screens

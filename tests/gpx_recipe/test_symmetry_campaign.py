@@ -90,6 +90,29 @@ def test_result_json_cannot_change_the_score_after_collection(setup):
     root,p,c,t=setup;ids=c.enroll(p,root/'inputs',approved_hash=digest(p));finish(c,t,ids[0]);c.tick(t)
     path=c.root/'trials'/ids[0]/'result.json';d=json.loads(path.read_text());d['rwp']=.01;path.write_text(json.dumps(d))
     c.tick(t);assert c.trials()[0]['state']=='needs_recovery';assert 'receipt changed' in c.trials()[0]['error']
+    for _ in range(2):
+        c=Campaign(root/'campaign');c.tick(t)
+        row=c.trials()[0]
+        assert row['state']=='needs_recovery'
+        assert json.loads(row['receipt'])['rwp']==8.
+        assert 'receipt changed' in row['error']
+
+
+def test_a_late_verified_receipt_resolves_unknown_transport_without_resubmission(setup):
+    root,p,c,t=setup;ids=c.enroll(p,root/'inputs',approved_hash=digest(p));t.lose_ack=True;c.tick(t)
+    t.jobs[ids[0]]=dict(state='unknown',reason='Remote lookup unavailable');c.tick(t)
+    assert c.trials()[0]['state']=='needs_recovery'
+    finish(c,t,ids[0]);c=Campaign(root/'campaign');c.tick(t)
+    assert c.trials()[0]['state']=='terminal'
+    assert t.submissions.count(ids[0])==1
+
+
+def test_queue_continuation_uses_the_original_sealed_protocol(setup):
+    root,p,c,t=setup;ids=c.enroll(p,root/'inputs',approved_hash=digest(p))
+    assert c.verify_continuation('c'*64)==ids
+    with pytest.raises(ValueError,match='older scientific implementation'):c.verify_continuation('d'*64)
+    c.tick(t);finish(c,t,ids[0]);c.tick(t)
+    assert c.verify_continuation('c'*64)==ids[1:]
 
 
 def test_distinct_acquisitions_with_identical_gpx_bytes_remain_distinct(setup):
