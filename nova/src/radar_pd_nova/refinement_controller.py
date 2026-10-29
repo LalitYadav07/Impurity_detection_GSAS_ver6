@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -54,7 +55,11 @@ def refinement_rwp_summary(notice):
 
 
 def refinement_status_message(result, baseline):
-    message=str(result.get('error') or 'Verified output ready for scientific review')
+    completed=len(result.get('stages') or [])
+    ready=(f"{completed} verified stage{'s' if completed!=1 else ''} completed. Final GPX ready for scientific review."
+           if result.get('status')=='completed' and result.get('final_gpx')
+           else 'Verified output ready for scientific review')
+    message=str(result.get('error') or ready)
     if result.get('status')!='needs_review' or 'violated physical/requested bounds' not in message:
         return message
     matches=re.findall(r"\('(\d+)::AUiso:(\d+)',\s*([-+\d.eE]+)\)",message)
@@ -66,9 +71,23 @@ def refinement_status_message(result, baseline):
             phase=phases[int(phase_index)];atom=phase['atoms'][int(atom_index)]
             labels.append(f"{phase['name']} · {atom['label']} Uiso = {float(value):.5g} Å²")
         except (IndexError,KeyError,TypeError,ValueError):return message
-    completed=len(result.get('stages') or [])
     return (f"Stage {completed+1} stopped: {'; '.join(labels)} fell outside the requested physical bounds. "
             f"{completed} earlier verified stage{'s' if completed!=1 else ''} remain available; no final GPX was accepted.")
+
+
+def refinement_parameter_warnings(view):
+    """Describe conditional precision without accepting or rejecting a model."""
+    warnings=[]
+    for p in view.get('parameters') or []:
+        if p.get('parameter')!='Uiso' or not str(p.get('status','')).startswith('refined'):
+            continue
+        label=p.get('label') or f"{p.get('phase','')} · {p.get('atom','')} Uiso"
+        value,sigma=p.get('value'),p.get('sigma')
+        if not isinstance(sigma,(int,float)) or not math.isfinite(sigma) or sigma<=0:
+            warnings.append(f'{label}: no usable conditional uncertainty was reported; review this parameter before interpreting it.')
+        elif isinstance(value,(int,float)) and math.isfinite(value) and abs(value)<2*sigma:
+            warnings.append(f'{label} = {value:.5g} ± {sigma:.3g} Å² (conditional 1σ). Its magnitude is less than twice its uncertainty; it is weakly constrained.')
+    return warnings
 
 
 def selected_refinement_dataset(result, stage):
@@ -193,7 +212,7 @@ class RefinementMixin:
             rf_existing=True,rf_future=False,rf_scope_summary='No published GPXs available',rf_scope_token='',rf_request='',rf_draft_status='',rf_cards=[],rf_questions=[],rf_assumptions=[],rf_plan_calls='',rf_model_tokens='',rf_model_cost='',rf_model_has_luna_price=False,rf_plan_ready=False,
             rf_approved=False,rf_recipe_id='',rf_recipe_summary='',rf_active_summary='',rf_saved_recipe='',rf_recipe_versions=[],rf_recipe_filter='all',rf_metrics=[],rf_source_warnings=[],rf_future_armed=False,
             rf_jobs=[],rf_job_search='',rf_job_status='all',rf_progress_text='No refinements started',rf_progress_percent=0,rf_selected_job='',rf_selected_title='',rf_selected_message='',rf_has_output=False,rf_output_provenance='',
-            rf_result_tab='fit',rf_stage='final',rf_stages=[],rf_histogram='',rf_histograms=[],rf_axis='d',rf_display='compare',rf_fit=figure_json(empty_figure()),rf_fit_notice='',rf_rwp_summary='',rf_zoom=0,
+            rf_result_tab='fit',rf_stage='final',rf_stages=[],rf_histogram='',rf_histograms=[],rf_axis='d',rf_display='compare',rf_fit=figure_json(empty_figure()),rf_fit_notice='',rf_rwp_summary='',rf_parameter_warnings=[],rf_zoom=0,
             rf_trend=figure_json(empty_figure('Completed refinements will populate this trend')),rf_trend_notice='',rf_trend_metric='rwp',rf_trend_metrics=[dict(title='Rwp · original and polished',value='rwp')],rf_trend_axis='run_number',rf_trend_axes=[dict(title='Scan number',value='run_number')],rf_trend_display='absolute',
             rf_parameters=[],rf_parameter_search='',rf_downloads=[],rf_download='',rf_can_open_gsas=False,rf_open_gsas_label='Open selected verified GPX in GSAS-II',rf_queue_running=False,rf_follow=True,rf_expanded=False)
 
@@ -494,7 +513,7 @@ class RefinementMixin:
                 job=await task
                 if job is None:break
                 self._refinement_sync();self._refinement_checkpoint()
-                if job['source']['experiment']==s.rf_experiment and (s.rf_follow or not s.rf_selected_job):
+                if job['source']['experiment']==s.rf_experiment and (s.rf_follow or not s.rf_selected_job or s.rf_selected_job==job['id']):
                     await self._select_refinement_job(job['id'])
         except Exception as exc:s.rf_error=str(exc)
         finally:s.rf_queue_running=False;s.flush()
@@ -541,13 +560,13 @@ class RefinementMixin:
         job=w.state['jobs'].get(uid)
         if not job or job['source']['experiment']!=s.rf_experiment:return
         s.rf_selected_job=uid;s.rf_selected_title=job['source']['scan_label']+f" · {job['source']['sample_label']}"
-        s.rf_selected_message=job['message'];s.rf_error='';s.rf_stage='final';s.rf_has_output=False;s.rf_output_provenance=''
+        s.rf_selected_message=job['message'];s.rf_error='';s.rf_stage='final';s.rf_has_output=False;s.rf_output_provenance='';s.rf_parameter_warnings=[]
         result=job.get('result') or {};s.rf_can_open_gsas=False;s.rf_open_gsas_label='Open selected verified GPX in GSAS-II'
         if result and not Path(result.get('directory','')).is_dir() and job.get('remote_action'):
             try:await asyncio.to_thread(w.recover_job_artifacts,uid);result=job['result']
             except Exception as exc:s.rf_error=str(exc)
         stages=result.get('stages') or []
-        s.rf_stages=([dict(title='Final polished result',value='final')] if result.get('final_view') else [])+[dict(title=f"{i+1}. {v['title']}",value=v['id']) for i,v in enumerate(stages)]
+        s.rf_stages=([dict(title='Final refined result',value='final')] if result.get('final_view') else [])+[dict(title=f"{i+1}. {v['title']}",value=v['id']) for i,v in enumerate(stages)]
         baseline=None
         if s.rf_stages:
             s.rf_has_output=True
@@ -560,7 +579,7 @@ class RefinementMixin:
         stage_labels={v['gpx']:f"Stage {i+1} GPX · {v['title']}" for i,v in enumerate(stages)}
         s.rf_downloads=[dict(title=('Final refined GPX' if name==result.get('final_gpx') else stage_labels.get(name,name)),value=name) for name in sorted(result.get('files',{})) if name.endswith('.gpx') or name in ['refine.py','polished.execution.json','plan.json','approval.json']]
         s.rf_download=(result.get('final_gpx') or (stages[-1]['gpx'] if stages else (s.rf_downloads[0]['value'] if s.rf_downloads else '')))
-        if result:s.rf_selected_message=refinement_status_message(result,baseline) if result.get('error') else job['message']
+        if result:s.rf_selected_message=refinement_status_message(result,baseline)
         self._refinement_plot_changed();self._refinement_trend_changed();s.flush()
 
     def _refinement_plot_changed(self,**_):
@@ -575,6 +594,7 @@ class RefinementMixin:
             fig,notice=fit_figure(baseline,view,histogram=s.rf_histogram,axis=s.rf_axis,display=s.rf_display,reset=s.rf_zoom)
             s.rf_fit=figure_json(fig);s.rf_fit_notice=notice.get('notice','')
             s.rf_rwp_summary=refinement_rwp_summary(notice)
+            s.rf_parameter_warnings=refinement_parameter_warnings(view)
             s.rf_output_provenance=refinement_output_provenance(result,s.rf_stage)
             s.rf_can_open_gsas=bool(selected_refinement_dataset(result,s.rf_stage))
             s.rf_open_gsas_label=('Open final refined GPX in GSAS-II' if s.rf_stage=='final' else 'Open selected verified stage in GSAS-II')

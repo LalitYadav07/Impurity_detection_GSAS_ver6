@@ -27,7 +27,7 @@ def refinement_dashboard(app):
         .rf-result-title{display:flex;align-items:start;justify-content:space-between;gap:12px}.rf-result-title h3{margin:0 0 6px}.rf-plot{height:620px;width:100%}.rf-trend{height:450px;width:100%}
         .rf-empty{padding:54px 25px;text-align:center;border:1px dashed #c7d8cb;border-radius:8px;color:#667e6d;line-height:1.8}
         .rf-workspace .v-btn{letter-spacing:.3px}.rf-notice{font-size:12px;color:#62766a;line-height:1.6;margin:8px 0}.rf-tabs{margin:15px 0;border-bottom:1px solid #dce6df}
-        .rf-overlay{position:fixed;inset:18px;z-index:2400;background:white;padding:22px;box-shadow:0 0 0 25px #102e2988;border-radius:10px;overflow:auto}
+        .rf-overlay{position:fixed;inset:80px 18px 28px;z-index:2400;background:white;padding:22px;box-shadow:0 0 0 25px #102e2988;border-radius:10px;overflow:auto}
         @media(max-width:1100px){.rf-grid{grid-template-columns:1fr}.rf-results{grid-template-columns:240px minmax(0,1fr)}.rf-card{padding:17px}}
         @media(max-width:760px){.rf-results{grid-template-columns:1fr}.rf-list{max-height:220px}.rf-heading h2{font-size:23px}.rf-toolbar{gap:16px}}
         ''')
@@ -151,6 +151,7 @@ def refinement_dashboard(app):
                             select('Show fits','rf_display',"[{title:'Original and selected',value:'compare'},{title:'Selected refinement',value:'polished'},{title:'Original RADAR-PD',value:'original'}]")
                             v.VBtn('Reset zoom',click='rf_zoom += 1',variant='text',size='small');v.VBtn('Expand',click='rf_expanded = true',variant='text',size='small',prepend_icon='mdi-arrow-expand')
                         html.P('{{ rf_rwp_summary }}',style='font-size:14px;font-weight:600')
+                        v.VAlert(v_for='warning in rf_parameter_warnings',key='warning',text=('warning',),type='warning',variant='tonal',density='compact',classes='mb-3')
                         with html.Div(classes='rf-plot'):
                             fig=plotly.Figure(display_mode_bar=True,responsive=True,style='height:100%;width:100%');fig.data=('rf_fit.data',);fig.layout=('rf_fit.layout',)
                         html.P('{{ rf_fit_notice }}',classes='rf-notice')
@@ -179,5 +180,5 @@ def refinement_dashboard(app):
             v.VDataTable(items=('rf_source_warnings',),headers=("[{title:'Scan',key:'scan'},{title:'Reason',key:'reason'}]",),items_per_page=5,density='compact')
         with html.Div(v_if='rf_expanded',classes='rf-overlay'):
             v.VBtn('Close expanded plot',click='rf_expanded = false',variant='text',prepend_icon='mdi-arrow-collapse')
-            with html.Div(style='height:calc(100vh - 145px)'):
+            with html.Div(style='height:calc(100vh - 220px)'):
                 fig=plotly.Figure(display_mode_bar=True,responsive=True,style='height:100%;width:100%');fig.data=('rf_fit.data',);fig.layout=('rf_fit.layout',)
