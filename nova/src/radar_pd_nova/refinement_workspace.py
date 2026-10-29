@@ -73,6 +73,15 @@ class RefinementWorkspace:
                     if key!=source['id'] and prior.get('record_uid')==source.get('record_uid') and prior.get('collection_name')==source.get('collection_name') and source.get('record_uid'):
                         self.state.setdefault('superseded_sources',{})[key]=self.state['sources'].pop(key)
                         changed=True
+                # Some older Galaxy publications omit the *published* checksum.
+                # Inspecting the immutable collection captures it from bytes;
+                # a later summary-only catalog refresh must not erase that
+                # verified checksum and the atom table derived from it.
+                if (old and not source.get('source_sha256') and old.get('source_sha256')
+                        and source.get('collection_id') and source.get('collection_id')==old.get('collection_id')
+                        and source.get('collection_name')==old.get('collection_name')
+                        and source.get('internal_source_sha256')==old.get('internal_source_sha256')):
+                    source['source_sha256']=old['source_sha256']
                 if old and old.get('source_sha256')==source.get('source_sha256'):
                     source['observed_utc']=old['observed_utc']
                 else:source['observed_utc']=utc();changed=True
@@ -91,12 +100,21 @@ class RefinementWorkspace:
 
     def sources(self,experiment):
         with self.lock:
-            return sorted([copy.deepcopy(s) for s in self.state['sources'].values() if s['experiment']==experiment],
+            return sorted([copy.deepcopy(s) for s in self._available_sources() if s['experiment']==experiment],
                           key=lambda s:(str(s.get('sample_label') or ''),s.get('run_number') or 0,str(s.get('bank') or ''),s['scan_key']))
+
+    def _available_sources(self):
+        """Prefer the monitored publication when an earlier test job used the same scan/bank."""
+        values=list(self.state['sources'].values())
+        def identity(source):
+            run=source.get('run_number')
+            return (source['experiment'],str(run),str(source.get('bank') or '')) if run is not None else None
+        monitored={identity(source) for source in values if source.get('live_watch') and identity(source) is not None}
+        return [source for source in values if source.get('live_watch') or identity(source) not in monitored]
 
     def selection(self,scope,*,existing=True,future=False):
         with self.lock:
-            sources=[copy.deepcopy(s) for s in self.state['sources'].values() if scope.matches(s)]
+            sources=[copy.deepcopy(s) for s in self._available_sources() if scope.matches(s)]
         snapshot=dict(scope=scope.to_dict(),existing=bool(existing),future=bool(future),
             baseline=[dict(id=s['id'],sha256=s.get('source_sha256')) for s in sorted(sources,key=lambda s:s['id'])])
         return snapshot,digest(snapshot)
@@ -224,7 +242,7 @@ class RefinementWorkspace:
 
     def _enroll_future(self,recipe):
         scope=RefinementScope(**recipe['scope'])
-        for source in self.state['sources'].values():
+        for source in self._available_sources():
             if scope.matches(source) and source.get('observed_utc','')>recipe['approved_utc']:
                 self._enqueue(recipe,source)
 

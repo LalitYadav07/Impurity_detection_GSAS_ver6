@@ -1,5 +1,6 @@
 """Intent/scope/lifecycle contracts independent of the GPX scientific engine."""
 import copy
+import asyncio
 import hashlib
 import json
 from pathlib import Path
@@ -10,7 +11,8 @@ import pytest
 from radar_pd_nova.refinement_sources import (RefinementScope, source_from_record,select_published_project,published_project_path,file_sha)
 from radar_pd_nova.refinement_controller import (published_refinement_source,refinement_rwp_summary,
     refinement_status_message,refinement_output_provenance,selected_refinement_dataset,
-    recover_completed_refinement_records,refinement_experiment_options)
+    recover_completed_refinement_records,refinement_experiment_options,RefinementMixin,
+    refinement_parameter_warnings)
 from radar_pd_nova.refinement_workspace import RefinementWorkspace
 from radar_pd_nova.refinement_runtime import LocalRefinementRuntime,verify_result_files
 
@@ -247,6 +249,33 @@ def test_recovered_publications_keep_older_refinement_results_browsable(tmp_path
     assert labels['old-single-run']=='Earlier refinement results · IPTS-2767_PG3_43124'
 
 
+def test_live_watch_publication_replaces_earlier_test_job_in_recipe_scope(tmp_path):
+    w,_=create(tmp_path)
+    manual=dict(source('test43106',exp='ages'),live_watch=False)
+    watched=dict(source('watch43106',exp='ages'),live_watch=True)
+    w.observe([manual,watched])
+    assert len(w.state['sources'])==2  # Both publications retain provenance.
+    assert [row['id'] for row in w.sources('ages')]==['watch43106']
+    scope=RefinementScope('ages')
+    snapshot,_=w.selection(scope)
+    assert [row['id'] for row in snapshot['baseline']]==['watch43106']
+
+
+def test_summary_refresh_retains_inspected_atom_context_for_immutable_collection(tmp_path):
+    w,_=create(tmp_path)
+    summary=dict(source('43124'),source_sha256=None,source_path=None,collection_id='collection-43124',
+                 collection_name='accepted.gpx',internal_source_sha256='internal-hash')
+    w.observe([summary])
+    material=dict(summary,source_sha256='actual-published-hash',context=context(dict(source_sha256='actual-published-hash')))
+    w.observe([material])
+    _,approved_token=w.selection(RefinementScope('exp'))
+    w.observe([summary])
+    restored=w.state['sources'][summary['id']]
+    assert restored['source_sha256']=='actual-published-hash'
+    assert restored['context']['phases'][0]['name']=='oxide'
+    assert w.selection(RefinementScope('exp'))[1]==approved_token
+
+
 def test_refinement_catalog_reads_only_summary_until_source_gpx_is_selected(tmp_path):
     project=dict(collection_name='final.gpx',sha256='model',status='accepted',stage='final_refinement')
     summary=dict(gpx_projects=[project],acquisition=dict(instrument='PG3',run_number=43124,sample_id='21213'),
@@ -286,6 +315,46 @@ def test_rwp_summary_does_not_imply_improvement_when_fit_range_changes():
     changed={**comparable,'polished_rwp':8.202,'rwp_comparable':False}
     label=refinement_rwp_summary(changed)
     assert 'different fit range' in label and '→' not in label
+
+
+def test_completed_refinement_reports_verified_stage_count_and_final_gpx():
+    message=refinement_status_message(dict(status='completed',final_gpx='final.gpx',stages=[{}, {}, {}, {}]),None)
+    assert '4 verified stages completed' in message
+    assert 'Final GPX ready for scientific review' in message
+
+
+@pytest.mark.parametrize('selected,follow,experiment,expected',[
+    ('current',False,'exp',['current']),
+    ('earlier',False,'exp',[]),
+    ('earlier',True,'exp',['current']),
+    ('',False,'exp',['current']),
+    ('current',True,'other',[]),
+])
+def test_running_scan_details_refresh_on_completion_without_following_other_scans(selected,follow,experiment,expected):
+    class State(SimpleNamespace):
+        def flush(self):pass
+    completed=dict(id='current',source=dict(experiment='exp'),status='completed')
+    queue=iter([completed,None]);seen=[]
+    class App(RefinementMixin):
+        def _refinement_sync(self):pass
+        def _refinement_checkpoint(self):pass
+        async def _select_refinement_job(self,uid):seen.append(uid)
+    app=App();app._refinement_workspace=SimpleNamespace(run_next=lambda:next(queue))
+    app.server=SimpleNamespace(state=State(rf_experiment=experiment,rf_follow=follow,rf_selected_job=selected,rf_error=''))
+    asyncio.run(app._refinement_pump())
+    assert seen==expected
+    assert not app.server.state.rf_queue_running and not app.server.state.rf_error
+
+
+def test_weak_uiso_warning_uses_actual_conditional_uncertainty_only():
+    atom=dict(parameter='Uiso',label='Al2O3 · Al1 Uiso',value=.00340981,sigma=.00286251,status='refined')
+    warnings=refinement_parameter_warnings(dict(parameters=[atom]))
+    assert len(warnings)==1 and 'conditional 1σ' in warnings[0] and 'weakly constrained' in warnings[0]
+    assert not refinement_parameter_warnings(dict(parameters=[{**atom,'value':.02}]))
+    assert not refinement_parameter_warnings(dict(parameters=[{**atom,'status':'fixed'}]))
+    assert not refinement_parameter_warnings(dict(parameters=[{**atom,'parameter':'z'}]))
+    for sigma in [None,0,float('nan')]:
+        assert 'no usable conditional uncertainty' in refinement_parameter_warnings(dict(parameters=[{**atom,'sigma':sigma}]))[0]
 
 
 def test_approval_holds_representative_changed_after_preflight(tmp_path):

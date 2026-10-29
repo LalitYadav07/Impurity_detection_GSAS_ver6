@@ -28,7 +28,7 @@ def refinement_dashboard(app):
         .rf-result-title{display:flex;align-items:start;justify-content:space-between;gap:12px}.rf-result-title h3{margin:0 0 6px}.rf-plot{height:620px;width:100%}.rf-trend{height:450px;width:100%}
         .rf-empty{padding:54px 25px;text-align:center;border:1px dashed #c7d8cb;border-radius:8px;color:#667e6d;line-height:1.8}
         .rf-workspace .v-btn{letter-spacing:.3px}.rf-notice{font-size:12px;color:#62766a;line-height:1.6;margin:8px 0}.rf-tabs{margin:15px 0;border-bottom:1px solid #dce6df}
-        .rf-overlay{position:fixed;inset:18px;z-index:2400;background:white;padding:22px;box-shadow:0 0 0 25px #102e2988;border-radius:10px;overflow:auto}
+        .rf-overlay{position:fixed;inset:80px 18px 28px;z-index:2400;background:white;padding:22px;box-shadow:0 0 0 25px #102e2988;border-radius:10px;overflow:auto}
         @media(max-width:1100px){.rf-grid{grid-template-columns:1fr}.rf-results{grid-template-columns:240px minmax(0,1fr)}.rf-card{padding:17px}}
         @media(max-width:760px){.rf-results{grid-template-columns:1fr}.rf-list{max-height:220px}.rf-heading h2{font-size:23px}.rf-toolbar{gap:16px}}
         ''')
@@ -82,7 +82,7 @@ def refinement_dashboard(app):
                     html.Summary('Phases and atom labels ({{ rf_context_atoms.length }} sites)',style='cursor:pointer;font-size:13px')
                     v.VTextField(label='Find phase or atom',v_model=('rf_context_search',),density='compact',variant='outlined',hide_details=True,classes='my-3')
                     v.VDataTable(items=('rf_context_atoms',),search=('rf_context_search',),headers=("[{title:'Phase',key:'phase'},{title:'Atom',key:'atom'},{title:'Element',key:'element'},{title:'ADP',key:'adp'},{title:'Position freedoms',key:'position_dof'}]",),items_per_page=5,density='compact')
-                v.VTextarea(label='Refinement request',v_model=('rf_request',),placeholder='First refine background and phase scales. Then refine the cell and O1/O2 positions. Hold occupancy and displacement parameters fixed.',rows=7,auto_grow=True,variant='outlined',hide_details=True,classes='mt-4',update_modelValue=app.refinement_policy_edited)
+                v.VTextarea(label='Refinement request',v_model=('rf_request',),placeholder='Name the phases and exact atom labels. Refine background and scales, then cells and only symmetry-allowed positions. Keep occupancies fixed; release one Uiso site at a time if needed.',rows=7,auto_grow=True,variant='outlined',hide_details=True,classes='mt-4',update_modelValue=app.refinement_policy_edited)
                 v.VBtn('Load staged atom + Uiso example',click=app.load_atomic_refinement_example,variant='text',size='small',prepend_icon='mdi-text-box-outline',classes='mt-2')
                 html.P('Specify stages, phase names, atoms, constraints and anything that must remain fixed. Revisions replace approval and pause future enrollment.',classes='rf-notice')
                 v.VBtn("{{ rf_cards.length ? 'Revise recipe' : 'Generate recipe' }}",click=app.generate_refinement_recipe,disabled=('rf_busy || !rf_source || !rf_request.trim()',),loading=('rf_busy',),color='#15543c',variant='flat',block=True,prepend_icon='mdi-auto-fix',classes='mt-4')
@@ -154,6 +154,7 @@ def refinement_dashboard(app):
                             select('Show fits','rf_display',"[{title:'Original and selected',value:'compare'},{title:'Selected refinement',value:'polished'},{title:'Original RADAR-PD',value:'original'}]")
                             v.VBtn('Reset zoom',click='rf_zoom += 1',variant='text',size='small');v.VBtn('Expand',click='rf_expanded = true',variant='text',size='small',prepend_icon='mdi-arrow-expand')
                         html.P('{{ rf_rwp_summary }}',style='font-size:14px;font-weight:600')
+                        v.VAlert(v_for='warning in rf_parameter_warnings',key='warning',text=('warning',),type='warning',variant='tonal',density='compact',classes='mb-3')
                         with html.Div(classes='rf-plot'):
                             fig=plotly.Figure(display_mode_bar=True,responsive=True,style='height:100%;width:100%');fig.data=('rf_fit.data',);fig.layout=('rf_fit.layout',)
                         html.P('{{ rf_fit_notice }}',classes='rf-notice')
@@ -182,5 +183,5 @@ def refinement_dashboard(app):
             v.VDataTable(items=('rf_source_warnings',),headers=("[{title:'Scan',key:'scan'},{title:'Reason',key:'reason'}]",),items_per_page=5,density='compact')
         with html.Div(v_if='rf_expanded',classes='rf-overlay'):
             v.VBtn('Close expanded plot',click='rf_expanded = false',variant='text',prepend_icon='mdi-arrow-collapse')
-            with html.Div(style='height:calc(100vh - 145px)'):
+            with html.Div(style='height:calc(100vh - 220px)'):
                 fig=plotly.Figure(display_mode_bar=True,responsive=True,style='height:100%;width:100%');fig.data=('rf_fit.data',);fig.layout=('rf_fit.layout',)
