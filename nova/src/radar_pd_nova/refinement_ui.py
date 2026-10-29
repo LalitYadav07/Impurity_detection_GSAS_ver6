@@ -80,6 +80,7 @@ def refinement_dashboard(app):
                     v.VTextField(label='Find phase or atom',v_model=('rf_context_search',),density='compact',variant='outlined',hide_details=True,classes='my-3')
                     v.VDataTable(items=('rf_context_atoms',),search=('rf_context_search',),headers=("[{title:'Phase',key:'phase'},{title:'Atom',key:'atom'},{title:'Element',key:'element'},{title:'ADP',key:'adp'},{title:'Position freedoms',key:'position_dof'}]",),items_per_page=5,density='compact')
                 v.VTextarea(label='Refinement request',v_model=('rf_request',),placeholder='First refine background and phase scales. Then refine the cell and O1/O2 positions. Hold occupancy and displacement parameters fixed.',rows=7,auto_grow=True,variant='outlined',hide_details=True,classes='mt-4',update_modelValue=app.refinement_policy_edited)
+                v.VBtn('Load staged atom + Uiso example',click=app.load_atomic_refinement_example,variant='text',size='small',prepend_icon='mdi-text-box-outline',classes='mt-2')
                 html.P('Specify stages, phase names, atoms, constraints and anything that must remain fixed. Revisions replace approval and pause future enrollment.',classes='rf-notice')
                 v.VBtn("{{ rf_cards.length ? 'Revise recipe' : 'Generate recipe' }}",click=app.generate_refinement_recipe,disabled=('rf_busy || !rf_source || !rf_request.trim()',),loading=('rf_busy',),color='#15543c',variant='flat',block=True,prepend_icon='mdi-auto-fix',classes='mt-4')
             with html.Div(classes='rf-card'):
@@ -171,7 +172,7 @@ def refinement_dashboard(app):
                 with html.Div(v_if='rf_downloads.length',classes='rf-toolbar',style='border-top:1px solid #e0e9e2;padding-top:18px'):
                     select('Verified output','rf_download','rf_downloads')
                     v.VBtn('Download',click=app.download_refinement_artifact,variant='outlined',size='small',prepend_icon='mdi-download')
-                    v.VBtn('Open polished GPX in GSAS-II',v_if='rf_can_open_gsas',click=app.open_refinement_in_gsasii,variant='outlined',size='small')
+                    v.VBtn('{{ rf_open_gsas_label }}',v_if='rf_can_open_gsas',click=app.open_refinement_in_gsasii,variant='outlined',size='small')
                 html.P('{{ rf_output_provenance }}',v_if='!!rf_output_provenance',classes='rf-notice')
         with html.Details(v_if='rf_source_warnings.length',classes='mt-5'):
             html.Summary('Projects needing attention ({{ rf_source_warnings.length }})',style='cursor:pointer;color:#8b6028;font-size:13px')

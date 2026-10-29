@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass, field
 import hashlib
 import json
 from pathlib import Path
+import re
 from typing import Any
 
 
@@ -153,16 +154,32 @@ def source_from_record(record, payload: dict, scan: dict | None, history: str,
     if checksum is None:checksum=project.get('published_sha256')
     selection=getattr(record,'inputs',None)
     acquisition=result.get('acquisition') or {}
+    provenance_input=(result.get('provenance') or {}).get('input') or {}
     metadata=dict(acquisition.get('metadata') or {})
+    # The published acquisition contract stores these fields directly. Older
+    # history records often have no live-watch row or recoverable input contract.
+    for key in ('instrument','run_number','sample_id','sample_name'):
+        if acquisition.get(key) is not None:metadata.setdefault(key,acquisition[key])
+    for key in ('source_bank','instrument'):
+        if provenance_input.get(key) is not None:metadata.setdefault(key,provenance_input[key])
     metadata.update(scan.get('metadata') or {})
     scan={**dict(run_number=getattr(selection,'run_number',None),bank=getattr(selection,'bank',''),instrument=getattr(selection,'instrument',''),ipts=getattr(selection,'ipts','')),**scan}
     instrument = str(scan.get('instrument') or metadata.get('instrument') or '')
     ipts = str(scan.get('ipts') or metadata.get('ipts') or '')
+    run_number=scan.get('run_number') or metadata.get('run_number')
+    if not ipts:
+        # A recovered Live job can have a Galaxy data input and no saved
+        # ndip_delivery block. Accept only the unambiguous run-name contract.
+        match=re.fullmatch(r'(IPTS-\d+)_([A-Za-z][A-Za-z0-9]*)_(\d+)',str(record.name))
+        if match and instrument.upper()==match.group(2).upper() and str(run_number or '')==match.group(3):
+            ipts=match.group(1)
     exp = experiment_key(history, instrument, ipts, record_uid=record.uid)
     sample_id = str(metadata.get('sample_id') or '').strip()
     sample_name = str(metadata.get('sample_name') or '').strip()
     sample_key = str((scan.get('sample_key') if scan.get('sample_key')!='unassigned' else None) or (('id:' + sample_id) if sample_id else 'scan:' + record.uid))
-    run_number=scan.get('run_number')
+    scan_sample_label = str(scan.get('sample_label') or '').strip()
+    if scan_sample_label.lower() in {'unassigned sample', 'sample not identified'}:
+        scan_sample_label = ''
     run_id = str(scan.get('run_id') or (f'{instrument}_{run_number}' if run_number else record.uid))
     bank = str(scan.get('bank') or metadata.get('source_bank') or metadata.get('bank') or '')
     scan_key = digest([exp,scan.get('experiment_number'),run_number or record.uid,bank])[:24]
@@ -174,9 +191,9 @@ def source_from_record(record, payload: dict, scan: dict | None, history: str,
     if bank and 'bank' not in scan_label.lower():scan_label+=' · bank '+bank
     return dict(id=uid, experiment=exp, experiment_label=(f'{instrument} · {ipts}' if ipts else record.name),
                 scan_key=scan_key, record_uid=record.uid, run_id=run_id,
-                run_number=scan.get('run_number'), bank=bank, sample_key=sample_key,
-                sample_label=str(scan.get('sample_label') or ' · '.join(x for x in [sample_id, sample_name] if x) or 'Unassigned sample'),
-                scan_label=scan_label, metadata=metadata,
+                run_number=run_number, bank=bank, sample_key=sample_key,
+                sample_label=scan_sample_label or ' · '.join(x for x in [sample_id, sample_name] if x) or 'Unassigned sample',
+                scan_label=scan_label, metadata=metadata, axis_overrides=scan.get('axis_overrides') or {},
                 source_path=str(path) if path else None, source_sha256=checksum,
                 internal_source_sha256=project.get('sha256'), collection_id=collection,
                 collection_name=publication, published_sha256=project.get('published_sha256'),

@@ -6,6 +6,7 @@ import copy
 import json
 import os
 from pathlib import Path
+import re
 import tempfile
 
 from gpx_recipe.contracts import stage_table
@@ -19,6 +20,96 @@ from .results import experiment_axis_options
 
 def figure_json(figure):
     return json.loads(figure.to_json())
+
+
+ATOMIC_REFINEMENT_EXAMPLE = (
+    'Use only the phases and histograms already in this GPX. Keep their published '
+    'starting model and preserve existing constraints, restraints, background '
+    'function, coefficient count and support points. Fit the full measured range '
+    'of each histogram, retaining its existing invalid/masked bins and exclusions; '
+    'show the changed fit limits in the plan. Use at most six cycles per stage. '
+    'Stage 1: refine the existing background and phase scales. Stage 2: keep '
+    'those terms free and refine the unit cells. Stage 3: keep those terms free '
+    'and refine only symmetry-allowed independent atomic positions for these '
+    'sites: [enter phase and atom labels]. Then add isotropic Uiso one named '
+    'site per stage for: [enter phase and atom labels]. Bound each Uiso to '
+    '0–0.05 Å². Hold occupancies, instrument/profile, sample parameters and '
+    'texture fixed throughout. Every stage must list its complete free set. '
+    'If an atom, displacement model, measured range or requested bound is '
+    'ambiguous, ask for review. Stop on unphysical values; do not silently '
+    'clip, drop a phase or claim the full-range Rwp is comparable to the original.'
+)
+
+
+def refinement_rwp_summary(notice):
+    def number(value):return f'{value:.3f}%' if value is not None else '—'
+    original=number(notice.get('original_rwp'))
+    selected=number(notice.get('polished_rwp'))
+    if notice.get('rwp_comparable'):
+        return f'Original Rwp {original} → selected {selected}'
+    return f'Original Rwp {original} (original fit range) · selected {selected} (different fit range; compare the curves, not these scores)'
+
+
+def refinement_status_message(result, baseline):
+    message=str(result.get('error') or 'Verified output ready for scientific review')
+    if result.get('status')!='needs_review' or 'violated physical/requested bounds' not in message:
+        return message
+    matches=re.findall(r"\('(\d+)::AUiso:(\d+)',\s*([-+\d.eE]+)\)",message)
+    phases=(baseline or {}).get('phases') or []
+    if not matches:return message
+    labels=[]
+    for phase_index,atom_index,value in matches:
+        try:
+            phase=phases[int(phase_index)];atom=phase['atoms'][int(atom_index)]
+            labels.append(f"{phase['name']} · {atom['label']} Uiso = {float(value):.5g} Å²")
+        except (IndexError,KeyError,TypeError,ValueError):return message
+    completed=len(result.get('stages') or [])
+    return (f"Stage {completed+1} stopped: {'; '.join(labels)} fell outside the requested physical bounds. "
+            f"{completed} earlier verified stage{'s' if completed!=1 else ''} remain available; no final GPX was accepted.")
+
+
+def selected_refinement_dataset(result, stage):
+    if stage=='final':return result.get('final_dataset_id')
+    return (result.get('stage_dataset_ids') or {}).get(stage)
+
+
+def refinement_output_provenance(result, stage):
+    if stage=='final' and result.get('final_gpx'):
+        location=(f"Galaxy History → Verified refinement-stage GPXs → final (dataset {result['final_dataset_id']})"
+                  if result.get('final_dataset_id') else 'Download below')
+        return f'Final refined GPX: {location}. The starting RADAR-PD GPX is unchanged.'
+    stages=result.get('stages') or []
+    selected=next((v for v in stages if v['id']==stage),None)
+    if not selected:return ''
+    dataset=selected_refinement_dataset(result,stage)
+    location=(f'Galaxy History → Verified refinement-stage GPXs → {stage} (dataset {dataset})'
+              if dataset else 'Download below')
+    return (f'Verified intermediate GPX: {location}. This is stage {stages.index(selected)+1} of the recipe; '
+            'no final GPX was accepted.' if not result.get('final_gpx') else
+            f'Verified intermediate GPX: {location}. The final refined GPX is also available in Galaxy History.')
+
+
+def published_refinement_source(service, workspace, record, scan, sha_cache):
+    root=record.local_output_dir
+    has_index=root and any(p.is_file() for p in [root/'gpx_index.json',root/'ndip/gpx_index.json'])
+    if not has_index and record.output_dataset_ids.get('summary') and record.output_dataset_ids.get('gpx_projects'):
+        # Modern Live publications carry their project index in the summary.
+        # Keep the initial catalog small; resolve a GPX only when selected.
+        root=workspace.root/'catalog'/digest([record.uid,record.output_dataset_ids])[:24];root.mkdir(parents=True,exist_ok=True)
+        for name in ['summary','gpx_index']:
+            dataset=record.output_dataset_ids.get(name);target=root/(name+'.json')
+            if dataset and not target.exists():
+                temporary=target.with_suffix('.partial')
+                service._download_dataset(dataset,temporary)
+                json.loads(temporary.read_text());temporary.replace(target)
+    elif not has_index and record.output_dataset_ids:
+        record=service.collect_results(record);root=record.local_output_dir
+    if root is None:raise ValueError('RADAR-PD result files are not available yet')
+    payload={}
+    for name in ['summary','gpx_index']:
+        p=next((p for p in [root/(name+'.json'),root/'ndip'/(name+'.json')] if p.is_file()),None)
+        if p:payload[name]=json.loads(p.read_text())
+    return source_from_record(record,payload,scan,workspace.history_id,sha_cache=sha_cache,root_override=root)
 
 
 def recipe_cards(plan, context):
@@ -72,7 +163,7 @@ class RefinementMixin:
             rf_jobs=[],rf_job_search='',rf_job_status='all',rf_progress_text='No refinements started',rf_progress_percent=0,rf_selected_job='',rf_selected_title='',rf_selected_message='',rf_has_output=False,rf_output_provenance='',
             rf_result_tab='fit',rf_stage='final',rf_stages=[],rf_histogram='',rf_histograms=[],rf_axis='d',rf_display='compare',rf_fit=figure_json(empty_figure()),rf_fit_notice='',rf_rwp_summary='',rf_zoom=0,
             rf_trend=figure_json(empty_figure('Completed refinements will populate this trend')),rf_trend_notice='',rf_trend_metric='rwp',rf_trend_metrics=[dict(title='Rwp · original and polished',value='rwp')],rf_trend_axis='run_number',rf_trend_axes=[dict(title='Scan number',value='run_number')],rf_trend_display='absolute',
-            rf_parameters=[],rf_parameter_search='',rf_downloads=[],rf_download='',rf_can_open_gsas=False,rf_queue_running=False,rf_follow=True,rf_expanded=False)
+            rf_parameters=[],rf_parameter_search='',rf_downloads=[],rf_download='',rf_can_open_gsas=False,rf_open_gsas_label='Open selected verified GPX in GSAS-II',rf_queue_running=False,rf_follow=True,rf_expanded=False)
 
     def _refinement_schedule(self,coroutine,name):
         try:loop=asyncio.get_running_loop()
@@ -122,24 +213,7 @@ class RefinementMixin:
                 for record in records.values():
                     if str(getattr(record.status,'value',record.status)).lower()!='ok':continue
                     try:
-                        root=record.local_output_dir
-                        has_index=root and any(p.is_file() for p in [root/'gpx_index.json',root/'ndip/gpx_index.json'])
-                        if not has_index and record.output_dataset_ids.get('gpx_index') and record.output_dataset_ids.get('gpx_projects'):
-                            # Read small public-result metadata; never fetch every
-                            # plots/archive collection merely to list GPX choices.
-                            root=workspace.root/'catalog'/digest([record.uid,record.output_dataset_ids])[:24];root.mkdir(parents=True,exist_ok=True)
-                            for name in ['summary','gpx_index']:
-                                dataset=record.output_dataset_ids.get(name);target=root/(name+'.json')
-                                if dataset and not target.exists():
-                                    temporary=target.with_suffix('.partial');self.service._download_dataset(dataset,temporary)
-                                    json.loads(temporary.read_text());temporary.replace(target)
-                        elif not has_index and record.output_dataset_ids:self.service.collect_results(record);root=record.local_output_dir
-                        if root is None:continue
-                        payload={}
-                        for name in ['summary','gpx_index']:
-                            p=next((p for p in [root/(name+'.json'),root/'ndip'/(name+'.json')] if p.is_file()),None)
-                            if p:payload[name]=json.loads(p.read_text())
-                        sources.append(source_from_record(record,payload,rows.get(record.uid),workspace.history_id,sha_cache=self._refinement_sha_cache,root_override=root))
+                        sources.append(published_refinement_source(self.service,workspace,record,rows.get(record.uid),self._refinement_sha_cache))
                     except Exception as exc:warnings.append(dict(scan=record.name,reason=str(exc)))
                 return sources,warnings
             sources,warnings=await asyncio.to_thread(catalog)
@@ -194,6 +268,12 @@ class RefinementMixin:
 
     def refinement_policy_edited(self,*_,**__):
         self._refinement_hold_enrollment();self._refinement_sync_approval()
+
+    def load_atomic_refinement_example(self,**_):
+        self._refinement_hold_enrollment()
+        self.server.state.rf_request=ATOMIC_REFINEMENT_EXAMPLE
+        self.server.state.rf_message='Example loaded. Replace both bracketed atom lists with exact names from Inspect starting model before generating.'
+        self._refinement_sync_approval();self.server.state.flush()
 
     def _refinement_hold_enrollment(self):
         w=self._refinement_workspace
@@ -279,8 +359,10 @@ class RefinementMixin:
             version={r['id']:r['version'] for r in recipes}
             s.rf_jobs=[dict(id=j['id'],scan=j['source']['scan_label'],sample=j['source']['sample_label'],bank=j['source'].get('bank'),status=j['status'],message=j['message'],recipe=', '.join(str(version.get(rid,'?')) for rid in j['recipes']),recipe_id=j['recipe_id'],recipe_ids=j['recipes'],has_output=bool((j.get('result') or {}).get('final_view') or (j.get('result') or {}).get('stages'))) for j in jobs]
             completed=sum(j['status']=='completed' for j in jobs)
-            s.rf_progress_text=(f'{completed} of {len(jobs)} refinements completed' if jobs else 'No refinements started')
-            s.rf_progress_percent=round(100*completed/len(jobs)) if jobs else 0
+            attention=sum(j['status'] in {'failed','interrupted','needs_review','needs_recipe'} for j in jobs)
+            processed=completed+attention
+            s.rf_progress_text=(f'{processed} of {len(jobs)} processed · {completed} completed · {attention} need attention' if jobs else 'No refinements started')
+            s.rf_progress_percent=round(100*processed/len(jobs)) if jobs else 0
             s.rf_metrics=[dict(label='Published GPXs',value=len(sources)),dict(label='In progress',value=sum(j['status'] in {'queued','running','recovering'} for j in jobs)),dict(label='Completed',value=sum(j['status']=='completed' for j in jobs)),dict(label='Needs attention',value=sum(j['status'] in {'failed','interrupted','needs_review','needs_recipe'} for j in jobs))]
             self._refinement_sync_approval()
             s.flush()
@@ -423,12 +505,13 @@ class RefinementMixin:
         if not job or job['source']['experiment']!=s.rf_experiment:return
         s.rf_selected_job=uid;s.rf_selected_title=job['source']['scan_label']+f" · {job['source']['sample_label']}"
         s.rf_selected_message=job['message'];s.rf_error='';s.rf_stage='final';s.rf_has_output=False;s.rf_output_provenance=''
-        result=job.get('result') or {};s.rf_can_open_gsas=bool(result.get('final_dataset_id') and job['status']=='completed')
+        result=job.get('result') or {};s.rf_can_open_gsas=False;s.rf_open_gsas_label='Open selected verified GPX in GSAS-II'
         if result and not Path(result.get('directory','')).is_dir() and job.get('remote_action'):
             try:await asyncio.to_thread(w.recover_job_artifacts,uid);result=job['result']
             except Exception as exc:s.rf_error=str(exc)
         stages=result.get('stages') or []
         s.rf_stages=([dict(title='Final polished result',value='final')] if result.get('final_view') else [])+[dict(title=f"{i+1}. {v['title']}",value=v['id']) for i,v in enumerate(stages)]
+        baseline=None
         if s.rf_stages:
             s.rf_has_output=True
             if not result.get('final_view'):s.rf_stage=s.rf_stages[-1]['value']
@@ -439,12 +522,8 @@ class RefinementMixin:
             except Exception as exc:s.rf_error=str(exc);s.rf_has_output=False
         stage_labels={v['gpx']:f"Stage {i+1} GPX · {v['title']}" for i,v in enumerate(stages)}
         s.rf_downloads=[dict(title=('Final refined GPX' if name==result.get('final_gpx') else stage_labels.get(name,name)),value=name) for name in sorted(result.get('files',{})) if name.endswith('.gpx') or name in ['refine.py','polished.execution.json','plan.json','approval.json']]
-        s.rf_download=(result.get('final_gpx') or (s.rf_downloads[0]['value'] if s.rf_downloads else ''))
-        if result.get('final_dataset_id'):
-            s.rf_output_provenance=("Final refined GPX: Galaxy History → Verified refinement-stage GPXs → final "
-                f"(dataset {result['final_dataset_id']}). The starting RADAR-PD GPX is unchanged.")
-        elif result.get('final_gpx'):
-            s.rf_output_provenance='Final refined GPX is available from Download below. The starting RADAR-PD GPX is unchanged.'
+        s.rf_download=(result.get('final_gpx') or (stages[-1]['gpx'] if stages else (s.rf_downloads[0]['value'] if s.rf_downloads else '')))
+        if result:s.rf_selected_message=refinement_status_message(result,baseline) if result.get('error') else job['message']
         self._refinement_plot_changed();self._refinement_trend_changed();s.flush()
 
     def _refinement_plot_changed(self,**_):
@@ -458,8 +537,10 @@ class RefinementMixin:
             baseline=self._read_refinement_view(job,result['baseline_view']);view=self._read_refinement_view(job,name)
             fig,notice=fit_figure(baseline,view,histogram=s.rf_histogram,axis=s.rf_axis,display=s.rf_display,reset=s.rf_zoom)
             s.rf_fit=figure_json(fig);s.rf_fit_notice=notice.get('notice','')
-            def number(v):return f'{v:.3f}%' if v is not None else '—'
-            s.rf_rwp_summary='Original Rwp '+number(notice.get('original_rwp'))+' → selected '+number(notice.get('polished_rwp'))
+            s.rf_rwp_summary=refinement_rwp_summary(notice)
+            s.rf_output_provenance=refinement_output_provenance(result,s.rf_stage)
+            s.rf_can_open_gsas=bool(selected_refinement_dataset(result,s.rf_stage))
+            s.rf_open_gsas_label=('Open final refined GPX in GSAS-II' if s.rf_stage=='final' else 'Open selected verified stage in GSAS-II')
             labels={'refined':'Refined','refined_in_prior_stage':'Refined earlier; held now','fixed':'Held','fixed_by_model':'Fixed by model','derived':'Derived','configured':'Released; not estimated','unknown':'Not estimated'}
             s.rf_parameters=[dict(**p,value_display=f"{p['value']:.8g}",sigma_display=f"{p['sigma']:.3g}" if p.get('sigma') is not None else '—',status_display=labels.get(p['status'],p['status'].replace('_',' ')),stage=p.get('refined_stage') or s.rf_stage) for p in view.get('parameters',[])]
         except Exception as exc:s.rf_error=str(exc);s.rf_fit=figure_json(empty_figure('The verified fit view is unavailable'))
@@ -488,7 +569,7 @@ class RefinementMixin:
                     if p['kind']=='weight':options['phase_fractions']='Modeled crystalline phase fractions'
                     options[p['key']]=p['label']+(f" ({p['unit']})" if p.get('unit') else '')
             s.rf_trend_metrics=[dict(title=v,value=k) for k,v in options.items()]
-            s.rf_trend_axes=experiment_axis_options([dict(run_number=r['source'].get('run_number'),metadata=r['source']['metadata']) for r in rows])
+            s.rf_trend_axes=experiment_axis_options([dict(run_number=r['source'].get('run_number'),metadata=r['source']['metadata'],axis_overrides=r['source'].get('axis_overrides') or {}) for r in rows])
             if s.rf_trend_metric not in options:s.rf_trend_metric='rwp'
             if s.rf_trend_metric in {'rwp','phase_fractions'}:s.rf_trend_display='absolute'
             if s.rf_trend_axis not in {v['value'] for v in s.rf_trend_axes}:s.rf_trend_axis='run_number'
@@ -506,7 +587,9 @@ class RefinementMixin:
 
     def open_refinement_in_gsasii(self,**_):
         s=self.server.state;job=self._refinement_workspace.state['jobs'].get(s.rf_selected_job)
-        if not job or job['status']!='completed' or not job['result'].get('final_dataset_id'):return
+        if not job or not job.get('result'):return
+        dataset=selected_refinement_dataset(job['result'],s.rf_stage)
+        if not dataset:return
         from .galaxy_service import GSASII_INTERACTIVE_TOOL_ID
-        self._schedule_utility(self._submit_utility_action(tool_id=GSASII_INTERACTIVE_TOOL_ID,name='Polished refinement: '+job['source']['scan_label'],
-            inputs={'project_source|source_kind':'single','project_source|gpx_project':{'dataset_id':job['result']['final_dataset_id']}},associated_run_uid=job['source']['record_uid']),'radar-polished-gsasii')
+        self._schedule_utility(self._submit_utility_action(tool_id=GSASII_INTERACTIVE_TOOL_ID,name='Verified refinement '+s.rf_stage+': '+job['source']['scan_label'],
+            inputs={'project_source|source_kind':'single','project_source|gpx_project':{'dataset_id':dataset}},associated_run_uid=job['source']['record_uid']),'radar-polished-gsasii')

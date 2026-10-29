@@ -166,7 +166,10 @@ class GalaxyRefinementRuntime(LocalRefinementRuntime):
         result['directory']=str(directory);result['galaxy_job_id']=job.galaxy_job_id
         collection=job.outputs.get('stage_projects')
         if collection:
-            final=[x for x in self.service.collection_elements(collection) if x['name']=='final']
+            elements=self.service.collection_elements(collection)
+            stages={v['id'] for v in result.get('stages') or []}
+            result['stage_dataset_ids']={x['name']:x['id'] for x in elements if x['name'] in stages}
+            final=[x for x in elements if x['name']=='final']
             if len(final)==1:result['final_dataset_id']=final[0]['id']
         return result
 

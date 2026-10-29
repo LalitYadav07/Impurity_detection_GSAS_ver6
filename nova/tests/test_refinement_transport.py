@@ -77,6 +77,20 @@ def test_legacy_gpx_filename_matches_one_suffixless_collection_element(tmp_path)
   rt.dataset_id(dict(collection_id='collection',collection_name='03_Final_accepted_joint_cell_model.gpx'))
 
 
+def test_galaxy_stage_collection_maps_each_verified_intermediate_gpx(tmp_path):
+ rt,s,source=runtime(tmp_path)
+ response={'schema':'radar-refinement-worker/v1','status':'needs_review','source_sha256':source['source_sha256'],
+           'files':{},'stages':[{'id':'stage-1','gpx':'verified_stage-1.gpx'}]}
+ with zipfile.ZipFile(s.archive,'w') as z:z.writestr('response.json',json.dumps(response))
+ s.job=lambda:UtilityActionRecord(uid='utility',tool_id='neutrons_radar_pd_refine_recipe_prototype',name='native',
+     galaxy_job_id='Galaxy-job',status=RunStatus.OK,outputs={'result_bundle':'bundle','stage_projects':'stages'})
+ s.collection_elements=lambda key:[dict(id='intermediate-data',name='stage-1')]
+ result=rt.call('run',source,tmp_path/'stage-result',dispatch_key='d'*24)
+ assert result['status']=='needs_review'
+ assert result['stage_dataset_ids']=={'stage-1':'intermediate-data'}
+ assert 'final_dataset_id' not in result
+
+
 def test_utility_wrapper_has_no_model_or_secret_inputs_and_publishes_only_verified_projects():
  import xml.etree.ElementTree as ET
  p=Path(__file__).resolve().parents[2]/'galaxy/radar_pd_refine_recipe.xml.in';root=ET.parse(p).getroot()

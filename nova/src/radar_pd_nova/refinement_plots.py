@@ -90,7 +90,8 @@ def trend_figure(rows,*,metric='rwp',x_key='run_number',display='absolute'):
     for row in sorted(rows,key=lambda r:(r['source'].get('run_number') or 0,r['id'])):groups.setdefault(_group(row),[]).append(row)
     title='Rwp (%)' if metric=='rwp' else 'Modeled crystalline weight (%)' if metric=='phase_fractions' else ''
     for index,group in enumerate(groups.values()):
-        scans=[dict(run_number=j['source'].get('run_number'),metadata=j['source'].get('metadata') or {}) for j in group]
+        scans=[dict(run_number=j['source'].get('run_number'),metadata=j['source'].get('metadata') or {},
+                    axis_overrides=j['source'].get('axis_overrides') or {}) for j in group]
         x,x_title,x_type=_experiment_axis(scans,x_key)
         label=group[0]['source']['sample_label']+(f" · bank {group[0]['source']['bank']}" if group[0]['source'].get('bank') else '')
         if group[0].get('recipe_label'):label+=' · '+group[0]['recipe_label']

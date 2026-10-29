@@ -295,7 +295,8 @@ class RefinementWorkspace:
         directory=self.root/'jobs'/job_id/('recovered-'+uuid.uuid4().hex[:8])
         result=self.runtime.call('run',job['source'],directory,plan=recipe['plan'],approval=recipe['approval'],
             dispatch_key=job_id,resume=job['remote_action'])
-        if result['status']!='completed':raise ValueError(result.get('error') or 'The saved Galaxy result is not a completed refinement')
+        if result['status'] not in {'completed','needs_review'}:
+            raise ValueError(result.get('error') or 'The saved Galaxy result has no recoverable refinement stages')
         with self.lock:
             current=self.state['jobs'][job_id];current.update(result=result,directory=str(directory))
             current['artifact_recoveries']=current.get('artifact_recoveries',0)+1;self.save()
