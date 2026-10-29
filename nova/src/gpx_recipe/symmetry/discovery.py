@@ -43,19 +43,20 @@ def magnetic_catalog(output,parent,k,*,request=None):
         provenance=dict(service='Bilbao kSUBGROUPSMAG_GSAS',output_sha256=hashlib.sha256(output.encode()).hexdigest(),request=request))
 
 
-def discover_magnetic(parent,k,*,api_key,whole_star=False,post=None):
+def discover_magnetic(parent,k,*,api_key,whole_star=False,post=None,timeout_seconds=90):
     """Credential supplied by deployment configuration, never serialized.
 
     Cached output can be handed to magnetic_catalog instead. Native refinement
     workers consume that immutable catalog and do not call external services.
     """
     if not api_key or not api_key.strip():raise ValueError('Configure the Bilbao service credential outside the repository')
+    if not isinstance(timeout_seconds,(int,float)) or not 0<timeout_seconds<=90:raise ValueError('Invalid discovery timeout')
     if post is None:
         import requests
         post=requests.post
     payload=magnetic_request(parent,k,whole_star=whole_star)
     try:
-        response=post(BCS_ENDPOINT,json=payload,headers={'Authorization':'Bearer '+api_key},timeout=90,allow_redirects=False)
+        response=post(BCS_ENDPOINT,json=payload,headers={'Authorization':'Bearer '+api_key},timeout=timeout_seconds,allow_redirects=False)
         if response.status_code!=200:raise ValueError('Bilbao service returned HTTP '+str(response.status_code))
         if len(response.content)>20*1024*1024:raise ValueError('Bilbao response size budget exceeded')
         envelope=response.json();output=envelope['result']['output']

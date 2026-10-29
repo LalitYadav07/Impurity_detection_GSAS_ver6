@@ -27,7 +27,7 @@ def model_exploration(app):
         v.VProgressLinear(v_if='sx_busy',indeterminate=True,color='#267653',height=3,classes='mb-3')
         with html.Div(v_if='sx_setup',classes='rf-card sx-setup'):
             html.H3('Explore models from a completed GPX')
-            html.P('Choose a single commensurate k vector. Review displacement-mode or collinear magnetic hypotheses before native refinement.',classes='rf-notice')
+            html.P('Enter a commensurate k vector, or use the magnetic k survey below. Review hypotheses before native refinement.',classes='rf-notice')
             with html.Div(classes='rf-toolbar'):
                 select('Starting GPX · original or recipe checkpoint','sx_start_source','sx_start_sources')
                 v.VBtn('Inspect exact parent',click=app.inspect_symmetry_source,disabled=('!sx_start_source || sx_busy',),variant='outlined')
@@ -42,7 +42,9 @@ def model_exploration(app):
                 select('Exploration','sx_kind',"[{title:'Collinear magnetic models',value:'magnetic'},{title:'Structural displacement modes',value:'structural'}]")
                 select('Nuclear parent','sx_parent','sx_parents')
                 select('Histogram / bank','sx_histogram','sx_histograms')
-                v.VTextField(label='k in this parent basis · rational components',v_model=('sx_k',),placeholder='0, 0, 1/2',density='compact',variant='outlined',hide_details=True)
+                with html.Div():
+                    v.VTextField(label='k in this parent basis · rational components',v_model=('sx_k',),placeholder='0, 0, 1/2',density='compact',variant='outlined',hide_details=True)
+                    v.VBtn('Find candidate k-vectors',v_if="sx_kind === 'magnetic'",click=app.find_candidate_k,disabled=('sx_busy || !sx_sites.length',),variant='text',size='small',classes='mt-1',prepend_icon='mdi-magnify')
                 select('Magnetic parent sites','sx_sites','sx_site_options',v_if="sx_kind === 'magnetic'",multiple=True,chips=True)
                 v.VTextField(v_if="sx_kind === 'magnetic'",label='Ionic form factors · atom=ion; atom=ion',v_model=('sx_form_factors',),placeholder='Cr1=Cr+3',density='compact',variant='outlined',hide_details=True)
                 v.VTextField(v_if="sx_kind === 'magnetic'",label='Landé g · number or atom=value; atom=value',v_model=('sx_lande',),type='text',density='compact',variant='outlined',hide_details=True)
@@ -54,6 +56,31 @@ def model_exploration(app):
                 v.VTextField(v_if="sx_kind === 'structural'",label='Maximum normalized mode (Å)',v_model=('sx_max_mode',),type='text',inputmode='decimal',density='compact',variant='outlined',hide_details=True)
                 v.VTextField(v_if="sx_kind === 'structural'",label='Signed mode start · ± amplitude (Å)',v_model=('sx_start_mode',),type='text',inputmode='decimal',density='compact',variant='outlined',hide_details=True)
                 v.VTextField(label='Cycles per start',v_model=('sx_cycles',),type='text',inputmode='numeric',density='compact',variant='outlined',hide_details=True)
+            with html.Details(v_if="sx_has_context && sx_kind === 'magnetic'",classes='mt-3'):
+                html.Summary('K-survey scope and time budget')
+                html.P('Select magnetic sites and ionic form factors first. The survey tests rational high-symmetry k points and a finite sample of supported collinear templates. Other commensurate vectors or structures can remain untested.',classes='rf-notice')
+                with html.Div(classes='sx-settings'):
+                    select('Survey budget · seconds','sx_k_budget','[30,60,120,300]')
+                    select('Native templates per k','sx_k_limit','[3,6,12,24,48]')
+                    select('K-survey native workers','sx_k_workers','[1,2,4]')
+                html.P('The time budget stops new work; cleanup of a running native process can add a few seconds. Catalogs are reused; profiles are bound to the exact GPX revision and settings.',classes='rf-notice')
+            html.P('{{ sx_k_message }}',v_if='!!sx_k_message',classes='rf-notice mt-3')
+            v.VBtn('Stop k survey',v_if='sx_k_busy',click=app.cancel_k_search,variant='outlined',size='small')
+            with html.Div(v_if='sx_k_has_result',classes='mt-3'):
+                html.H4('Candidate propagation vectors')
+                v.VDataTable(items=('sx_k_rows',),headers=("[{title:'k · parent basis',key:'k'},{title:'Screening score',key:'score'},{title:'Profiles sampled',key:'sampled'},{title:'Catalog embeddings',key:'catalog'},{title:'Coverage',key:'status'}]",),items_per_page=8,density='compact')
+                with html.Details(v_if='sx_k_notes.length',classes='mt-3'):
+                    html.Summary('Survey coverage details')
+                    html.P('{{ note }}',v_for='note in sx_k_notes',classes='rf-notice')
+                with html.Div(classes='rf-toolbar mt-3'):
+                    select('Inspect k family','sx_k_selected','sx_k_choices')
+                    select('Pattern coordinate','sx_k_axis',"[{title:'Q (Å⁻¹)',value:'q'},{title:'d (Å)',value:'d'},{title:'Native coordinate',value:'native'}]")
+                    v.VBtn('Reset zoom',click=app.reset_k_search_zoom,variant='text',size='small')
+                    v.VBtn('Use selected k',click=app.use_candidate_k,disabled=('sx_busy || !sx_k_selected',),variant='outlined',color='#15543c')
+                with html.Div(style='height:440px;width:100%;min-width:0'):
+                    fig=plotly.Figure(display_mode_bar=True,responsive=True,display_logo=False,scroll_zoom=True,style='height:100%;width:100%');fig.data=('sx_k_plot.data',);fig.layout=('sx_k_plot.layout',)
+                html.P('{{ sx_k_detail }}',classes='rf-notice')
+                html.P('Screening overlay: the nuclear model is fixed and only one magnetic intensity amplitude is fitted. No Rietveld refinement runs in this survey. A leading k, a tie or a missing template does not establish magnetic order. Use a candidate to review a full refinement plan.',classes='rf-notice')
             html.P("{{ sx_kind === 'structural' ? 'Discovery sends the selected parent structure, without pattern arrays, to ISODISTORT. The first tier constructs one highest-symmetry OPD per discovered irrep; other OPDs remain deferred.' : 'Discovery sends parent symmetry operations and k to Bilbao. Refinement consumes the cached catalog offline.' }}",v_if='sx_has_context',classes='rf-notice')
             v.VBtn('Discover finite candidates',v_if='sx_has_context',click=app.discover_symmetry_candidates,disabled=('sx_busy',),variant='outlined',color='#15543c')
             with html.Div(v_if='sx_discovered',classes='mt-4'):

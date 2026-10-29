@@ -6,6 +6,15 @@ See ../STUDIO-LICENSE and symmetry/provenance.json.
 """
 
 def run(source_gpx,ctx,protocol,candidate_record,seed):
+    return _run(source_gpx,ctx,protocol,candidate_record,seed,forward_only=False)
+
+
+def simulate(source_gpx,ctx,protocol,candidate_record,seed):
+    """The same audited phase construction, with no refinement call."""
+    return _run(source_gpx,ctx,protocol,candidate_record,seed,forward_only=True)
+
+
+def _run(source_gpx,ctx,protocol,candidate_record,seed,*,forward_only):
     from pathlib import Path
     import copy,hashlib,math,re
     import numpy as np
@@ -529,6 +538,27 @@ def run(source_gpx,ctx,protocol,candidate_record,seed):
     controls['min dM/M'] = minimum_relative_chi2_change
     gpx.save(str(output_gpx))
     gpx.index_ids()
+    if forward_only:
+        from .k_native import audit_simulation
+        from .k_periodicity import audit_structure
+        audit=audit_simulation(source_gpx,output_gpx,protocol,candidate_record)
+        ctx.save_json('simulation-audit.json',audit)
+        if not audit['passed']:raise TrialDisposition('effect_mismatch','The forward-only magnetic construction changed a fixed input')
+        try:periodicity=audit_structure(old_phase,new_phase,candidate_record,protocol['k'])
+        except ValueError as exc:periodicity=dict(passed=False,reason=str(exc))
+        ctx.save_json('propagation-periodicity-audit.json',periodicity)
+        if not periodicity['passed']:raise TrialDisposition('k_periodicity_mismatch',periodicity['reason'])
+        histogram=gpx.histogram(protocol['histogram'])
+        baseline=baseline_target_profiles[protocol['histogram']]['arrays'][3]
+        total=np.asarray(_G2strMain.DoNoFit(str(output_gpx),protocol['histogram']),dtype=float)
+        difference=total-np.asarray(baseline,dtype=float)
+        tolerance=1e-8*max(1.,float(np.max(np.abs(total))))
+        if not np.isfinite(difference).all() or np.min(difference)<-tolerance:
+            raise TrialDisposition('effect_mismatch','The magnetic-only forward profile contains an unexpected negative/nonfinite contribution')
+        target=ctx.run_dir/'magnetic-profile.npz'
+        np.savez_compressed(target,intensity=np.maximum(difference,0.))
+        return dict(status='simulated',profile=target.name,gpx=output_gpx.name,
+                    audit=audit,periodicity=periodicity,no_refinement=True,initial_maximum_moment=audit['maximum_moment'],magnetic_atoms=len(new_phase['Atoms']))
     gpx.do_refinements([{}])
     gpx.save(str(output_gpx))
     magnetic = gpx.phase(magnetic_name)

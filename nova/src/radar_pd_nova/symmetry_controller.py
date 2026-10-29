@@ -29,9 +29,10 @@ from gpx_recipe.symmetry.contracts import iter_trials
 from .symmetry_workspace import campaign_rows,group_models,view_for,choose_group,disposition_reason,coverage_rows,scope_rows,parameter_rows
 from . import symmetry_plots as plots
 from .symmetry_sources import start_choices,resolve_start
+from .k_search_controller import KSearchMixin
 
 
-class SymmetryMixin:
+class SymmetryMixin(KSearchMixin):
     def _init_symmetry(self):
         self._symmetry_rows=[];self._symmetry_all_rows=[];self._symmetry_groups=[];self._symmetry_draft=None;self._symmetry_approved='';self._symmetry_task=None;self._symmetry_loading=False;self._symmetry_refresh_pending=False;self._symmetry_explicit_selection=False;self._symmetry_display_identity=None;self._symmetry_loading_identity=None
         s=self.server.state
@@ -51,6 +52,7 @@ class SymmetryMixin:
         s.change('sx_kind','sx_parent','sx_histogram','sx_k','sx_sites','sx_form_factors','sx_lande','sx_directions','sx_adequate','sx_max_moment','sx_mag_d_min','sx_max_mode','sx_start_mode','sx_cycles','sx_request','sx_sign_starts','rf_source','sx_start_source')(self._symmetry_unapprove)
         s.change('sx_parent')(self._symmetry_parent_changed)
         s.change('sx_start_source')(self._symmetry_start_changed)
+        self._init_k_search()
 
     def _symmetry_root(self):
         root=Path(os.environ.get('RADAR_PD_SYMMETRY_ROOT') or (Path(getattr(self.service,'output_root',tempfile.gettempdir()))/'symmetry'))
@@ -73,11 +75,13 @@ class SymmetryMixin:
     def _symmetry_parent_changed(self,**_):
         d=self._symmetry_draft;s=self.server.state
         if d:s.sx_site_options=[dict(title=a['label']+' ('+a['type']+')',value=a['label']) for p in d['context']['phases'] if p['name']==s.sx_parent for a in p['atoms']]
-        if not getattr(self,'_symmetry_applying_intent',False):s.sx_sites=[]
+        if not getattr(self,'_symmetry_applying_intent',False):
+            s.sx_sites=[];s.sx_form_factors='';s.sx_lande=2.
 
     def _symmetry_start_changed(self,**_):
         self._symmetry_draft=None
         s=self.server.state;s.sx_has_context=False;s.sx_discovered=False;s.sx_planning_summary='';s.sx_planning_notes=[]
+        s.sx_sites=[];s.sx_form_factors='';s.sx_lande=2.
 
     def _symmetry_native(self,action,payload,root):
         transport=self._symmetry_transport();uid=uuid.uuid4().hex;request=root/(uid+'-request.json');output=root/(uid+'-response.json')

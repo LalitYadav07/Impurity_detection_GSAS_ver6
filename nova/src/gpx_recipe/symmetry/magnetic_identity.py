@@ -1,6 +1,7 @@
 """Independent BNS operator checks before trusting a native MSG construction."""
 from __future__ import annotations
 import numpy as np
+from functools import lru_cache
 
 
 class GreyGroup(ValueError):pass
@@ -43,16 +44,22 @@ def verify_collinear_structure(phase):
     require_collinear_line([r for r,_ in S.AllOps(general['SGData'])[2]],a,cell[:3],directions[0])
 
 
-def authoritative_operations(candidate):
+@lru_cache(maxsize=2048)
+def _authoritative_operations(identifier):
     from pymatgen.symmetry.maggroups import MagneticSpaceGroup
-    identifier=[int(v) for v in candidate['bns_number'].split('.')] if candidate.get('bns_number') else candidate['magnetic_space_group'].replace(' ','')
+    identifier=list(identifier) if isinstance(identifier,tuple) else identifier
     try:
         group=MagneticSpaceGroup(identifier)
-        operations={operation_key(op.rotation_matrix,op.translation_vector,op.time_reversal) for op in group.symmetry_ops}
+        operations=frozenset(operation_key(op.rotation_matrix,op.translation_vector,op.time_reversal) for op in group.symmetry_ops)
     except Exception as exc:raise UnverifiedMagneticSetting('The declared magnetic group could not be verified against the BNS database') from exc
     if operation_key(np.eye(3),[0,0,0],-1) in operations:
         raise GreyGroup('A grey magnetic group contains pure time reversal and forbids a nonzero static ordered dipole at every site')
     return operations
+
+
+def authoritative_operations(candidate):
+    identifier=tuple(int(v) for v in candidate['bns_number'].split('.')) if candidate.get('bns_number') else candidate['magnetic_space_group'].replace(' ','')
+    return _authoritative_operations(identifier)
 
 
 def verify_native_operators(candidate,sgdata,*,authority=None):
