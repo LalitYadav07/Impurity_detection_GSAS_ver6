@@ -44,6 +44,16 @@ def test_missing_acquisition_temperature_is_not_replaced_by_gpx_default_or_run_n
     assert list(fig.data[0].x)==[None,None]
 
 
+def test_reviewed_temperature_mapping_overrides_conflicting_raw_unit_without_changing_raw_metadata():
+    records=rows()
+    records[0]['source']['metadata']['temperature']={'value':114,'unit':'K','status':'recorded'}
+    records[0]['source']['axis_overrides']={'temperature':{'value':114,'unit':'C','reviewed_mapping':True}}
+    records[1]['source']['axis_overrides']={'temperature':{'value':153,'unit':'C','reviewed_mapping':True}}
+    fig=trend_figure(records,metric='cell|oxide|c',x_key='temperature')
+    assert list(fig.data[0].x)==pytest.approx([387.15,426.15])
+    assert records[0]['source']['metadata']['temperature']['unit']=='K'
+
+
 def test_relative_occupancy_is_not_mislabeled_as_cell_expansion():
     records=rows()
     for row in records:row['final']['parameters'][0].update(key='atom|oxide|O1|occupancy',kind='atom',parameter='occupancy')

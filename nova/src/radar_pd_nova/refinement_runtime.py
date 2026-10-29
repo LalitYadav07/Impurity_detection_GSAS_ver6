@@ -109,6 +109,10 @@ class GalaxyRefinementRuntime(LocalRefinementRuntime):
         if collection not in self._collections:self._collections[collection]=self.service.collection_elements(collection)
         name=source.get('collection_name')
         matches=[r for r in self._collections[collection] if r['name']==name]
+        if not matches and isinstance(name,str) and name.lower().endswith('.gpx'):
+            # Older RADAR-PD indexes include the filename suffix, while Galaxy's
+            # collection element identifier omits it. Only accept one such match.
+            matches=[r for r in self._collections[collection] if r['name']==name[:-4]]
         if len(matches)!=1:raise ValueError('The published GPX does not map to one exact Galaxy collection element')
         return matches[0]['id']
 
@@ -142,7 +146,7 @@ class GalaxyRefinementRuntime(LocalRefinementRuntime):
                 try:
                     job=self.service.submit_utility(tool_id=REFINEMENT_TOOL_ID,name='RADAR-PD refinement '+dispatch_key,
                         associated_run_uid=source.get('record_uid'),inputs={'action':action,'dispatch_key':dispatch_key,
-                        'source_gpx':{'dataset_id':self.dataset_id(source)},'request':{'dataset_id':request_id}})
+                        'source_gpx':{'dataset_id':self.dataset_id(source)},'recipe_request':{'dataset_id':request_id}})
                 except Exception as exc:
                     raise RuntimeUnavailable('Galaxy did not acknowledge this refinement submission. Its dispatch key is retained; recover the existing job before retrying.') from exc
             write_json(acknowledged,job.model_dump(mode='json'))
@@ -162,7 +166,10 @@ class GalaxyRefinementRuntime(LocalRefinementRuntime):
         result['directory']=str(directory);result['galaxy_job_id']=job.galaxy_job_id
         collection=job.outputs.get('stage_projects')
         if collection:
-            final=[x for x in self.service.collection_elements(collection) if x['name']=='final']
+            elements=self.service.collection_elements(collection)
+            stages={v['id'] for v in result.get('stages') or []}
+            result['stage_dataset_ids']={x['name']:x['id'] for x in elements if x['name'] in stages}
+            final=[x for x in elements if x['name']=='final']
             if len(final)==1:result['final_dataset_id']=final[0]['id']
         return result
 

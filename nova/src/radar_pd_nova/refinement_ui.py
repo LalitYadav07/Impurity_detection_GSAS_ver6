@@ -50,6 +50,9 @@ def refinement_dashboard(app):
                 html.Strong('{{ metric.value }}');html.Span('{{ metric.label }}')
             html.Span('{{ rf_transport }}',classes='rf-muted')
             v.VChip('Future matching scans enrolled',v_if='rf_future_armed',color='#157347',size='small',variant='tonal',prepend_icon='mdi-access-point')
+        with html.Div(v_if='rf_jobs.length',classes='mb-4'):
+            html.P('{{ rf_progress_text }}',classes='rf-notice')
+            v.VProgressLinear(model_value=('rf_progress_percent',),height=6,color='#157347',rounded=True)
         with html.Div(v_if='!rf_experiments.length && !rf_loading',classes='rf-empty'):
             html.H3('Start with a completed RADAR-PD fit')
             html.P('Published GPX projects from this history will appear here, including scans recovered from an earlier session.')
@@ -77,6 +80,7 @@ def refinement_dashboard(app):
                     v.VTextField(label='Find phase or atom',v_model=('rf_context_search',),density='compact',variant='outlined',hide_details=True,classes='my-3')
                     v.VDataTable(items=('rf_context_atoms',),search=('rf_context_search',),headers=("[{title:'Phase',key:'phase'},{title:'Atom',key:'atom'},{title:'Element',key:'element'},{title:'ADP',key:'adp'},{title:'Position freedoms',key:'position_dof'}]",),items_per_page=5,density='compact')
                 v.VTextarea(label='Refinement request',v_model=('rf_request',),placeholder='First refine background and phase scales. Then refine the cell and O1/O2 positions. Hold occupancy and displacement parameters fixed.',rows=7,auto_grow=True,variant='outlined',hide_details=True,classes='mt-4',update_modelValue=app.refinement_policy_edited)
+                v.VBtn('Load staged atom + Uiso example',click=app.load_atomic_refinement_example,variant='text',size='small',prepend_icon='mdi-text-box-outline',classes='mt-2')
                 html.P('Specify stages, phase names, atoms, constraints and anything that must remain fixed. Revisions replace approval and pause future enrollment.',classes='rf-notice')
                 v.VBtn("{{ rf_cards.length ? 'Revise recipe' : 'Generate recipe' }}",click=app.generate_refinement_recipe,disabled=('rf_busy || !rf_source || !rf_request.trim()',),loading=('rf_busy',),color='#15543c',variant='flat',block=True,prepend_icon='mdi-auto-fix',classes='mt-4')
             with html.Div(classes='rf-card'):
@@ -103,6 +107,14 @@ def refinement_dashboard(app):
                     with html.Ul(classes='rf-notice'):html.Li('{{ item }}',v_for='item in rf_assumptions',key='item')
                 html.P('Each stage declares its complete free parameter set. Other ordinary refinement flags are held; original constraints and restraints remain.',v_if='rf_cards.length',classes='rf-notice mt-4')
                 html.P('{{ rf_plan_calls }}',v_if='!!rf_plan_calls',classes='rf-notice')
+                with html.Div(v_if='!!rf_model_tokens',classes='rf-source mt-3'):
+                    html.Div('Model usage',classes='rf-subtitle')
+                    html.P('{{ rf_model_tokens }}',classes='rf-notice')
+                    html.P('{{ rf_model_cost }}',v_if='!!rf_model_cost',classes='rf-notice')
+                    with html.Details(v_if='rf_model_has_luna_price',classes='rf-notice'):
+                        html.Summary('Estimate basis',style='cursor:pointer')
+                        html.P('Public GPT-6 Luna Standard rates on 2026-10-28: $0.10 per million ordinary input tokens, $0.01 cached input, $0.125 cache writes, and $0.50 output. Requests above 272,000 input tokens use the published long-context multipliers. This is not an ORNL Azure billing record.')
+                        html.A('Published Luna rates',href='https://developers.openai.com/api/docs/models/gpt-6-luna',target='_blank',rel='noopener noreferrer')
                 v.VAlert(v_if='rf_approved',text=('rf_recipe_summary',),type='success',variant='tonal',density='compact',classes='mt-3')
                 with html.Div(classes='rf-actions'):
                     v.VBtn('Approve recipe and scope',click=(app.approve_refinement_recipe,'[rf_scope_token]'),disabled=('!rf_plan_ready || rf_busy || rf_approved',),variant='outlined',color='#15543c',prepend_icon='mdi-check-decagram-outline')
@@ -160,7 +172,8 @@ def refinement_dashboard(app):
                 with html.Div(v_if='rf_downloads.length',classes='rf-toolbar',style='border-top:1px solid #e0e9e2;padding-top:18px'):
                     select('Verified output','rf_download','rf_downloads')
                     v.VBtn('Download',click=app.download_refinement_artifact,variant='outlined',size='small',prepend_icon='mdi-download')
-                    v.VBtn('Open polished GPX in GSAS-II',v_if='rf_can_open_gsas',click=app.open_refinement_in_gsasii,variant='outlined',size='small')
+                    v.VBtn('{{ rf_open_gsas_label }}',v_if='rf_can_open_gsas',click=app.open_refinement_in_gsasii,variant='outlined',size='small')
+                html.P('{{ rf_output_provenance }}',v_if='!!rf_output_provenance',classes='rf-notice')
         with html.Details(v_if='rf_source_warnings.length',classes='mt-5'):
             html.Summary('Projects needing attention ({{ rf_source_warnings.length }})',style='cursor:pointer;color:#8b6028;font-size:13px')
             v.VDataTable(items=('rf_source_warnings',),headers=("[{title:'Scan',key:'scan'},{title:'Reason',key:'reason'}]",),items_per_page=5,density='compact')

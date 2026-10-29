@@ -56,7 +56,23 @@ def test_incomplete_wrong_model_or_refusal_never_becomes_a_plan(monkeypatch, cha
     if change == "refusal": data["output"][1]["content"] = [{"type": "refusal"}]
     if change == "empty": data["output"] = []
     monkeypatch.setattr(providers, "_post", lambda *a: data)
-    with pytest.raises(ValueError): providers.IllumineLuna().complete([])
+    with pytest.raises(providers.ProviderResultError) as raised:
+        providers.IllumineLuna().complete([])
+    assert raised.value.metadata['usage']['output_tokens'] == 20
+    assert 'NEVER_LOG_THIS' not in json.dumps(raised.value.metadata)
+
+
+def test_rejected_response_usage_is_counted_without_accepting_a_plan(monkeypatch, context):
+    from gpx_recipe.planner import make_plan
+    monkeypatch.setenv('AZURE_ILLUMINE_API_KEY','test-key')
+    data=response();data['output'][1]['content']=[{'type':'refusal'}]
+    data['usage']={'input_tokens':900,'output_tokens':30,'total_tokens':930}
+    monkeypatch.setattr(providers,'_post',lambda *a:data)
+    with pytest.raises(providers.ProviderResultError) as raised:
+        make_plan('Refine the selected atom',context,client=providers.IllumineLuna())
+    assert len(raised.value.planning_calls)==1
+    assert raised.value.planning_calls[0]['usage']['total_tokens']==930
+    assert raised.value.planning_calls[0]['response']==''
 
 
 def test_provider_credentials_cannot_be_redirected_to_another_resource(monkeypatch):

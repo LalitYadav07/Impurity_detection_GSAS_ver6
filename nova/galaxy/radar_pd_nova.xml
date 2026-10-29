@@ -1,11 +1,18 @@
-<tool id="neutrons_radar_pd_interactive_prototype" tool_type="interactive" name="RADAR-PD Interactive" version="0.4.25" profile="22.01">
+<tool id="neutrons_radar_pd_interactive_prototype" tool_type="interactive" name="RADAR-PD Interactive" version="0.4.32" profile="22.01">
     <description>configure, run, monitor, recover, and inspect Full or Rapid RADAR-PD analyses</description>
     <creator>
         <person name="Lalit Yadav"/>
         <organization url="https://www.ornl.gov/" name="ORNL"/>
     </creator>
     <requirements>
-        <container type="docker" shell="/bin/bash">ghcr.io/lalityadav07/impurity_detection_gsas_ver6:nova-dac049913cd33f3111615e2b72ddd3bbf3d419dd</container>
+        <container type="docker" shell="/bin/bash">ghcr.io/lalityadav07/impurity_detection_gsas_ver6:nova-9a9377a4e1f568e8397df23bb41b05b27b231614</container>
+        <credentials name="ornl_illumine" version="1.0" label="ORNL Illumine"
+                     description="Personal Illumine key for optional reviewed refinement recipes"
+                     optional="true">
+            <secret name="api_key" inject_as_env="AZURE_ILLUMINE_API_KEY"
+                    optional="false" label="Illumine API key"
+                    description="Stored in your NDIP Galaxy credential vault and used only by your NOVA session for recipe requests."/>
+        </credentials>
     </requirements>
     <entry_points>
         <entry_point name="RADAR-PD Interactive" label="app_entry" requires_domain="False" requires_path_in_url="True">
@@ -31,6 +38,8 @@
 RADAR-PD Interactive provides one shared setup experience for Full RADAR-PD and Rapid Hypothesis Mode. It can upload local files, reuse datasets in the current Galaxy history, resolve SNS IPTS inputs, submit the existing batch Analyze tool, show progress, recover earlier runs, render interactive results, and expose reproducible artifacts.
 
 Recovered runs can reopen their published GPX checkpoints directly in the hosted GSAS-II desktop.
+
+For optional reviewed refinement recipes, add your personal ORNL Illumine key to the ORNL Illumine credential group in NDIP. Galaxy injects the selected credential into your NOVA session; regular RADAR-PD analysis does not require it.
 
 The scientific calculation runs as a normal Galaxy job. Closing this interactive session does not cancel that job or remove its history outputs.
     ]]></help>

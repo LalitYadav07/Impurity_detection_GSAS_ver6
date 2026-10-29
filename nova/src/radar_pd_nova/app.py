@@ -12,6 +12,7 @@ import re
 import tempfile
 import uuid
 from dataclasses import asdict
+from copy import deepcopy
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -28,7 +29,7 @@ from .configuration import config_from_contract, load_configuration
 from .setup_forms import configuration_from_form, configuration_form_values, CONFIG_FORM_FIELDS
 from .setup_ui import SetupEditorMixin
 from .live_setup import LiveSetupMixin
-from .library_setup import LibraryDraft
+from .library_setup import LIBRARY_FIELDS, LibraryDraft
 from .post_analysis_ui import PostAnalysisMixin
 from .refinement_controller import RefinementMixin
 from .refinement_ui import refinement_dashboard
@@ -270,6 +271,7 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Refine
         self._published_checkpoint_ids: dict[tuple[str, str], str] = {}
         self._dataset_label_cache: dict[str, str] = {}
         self._auto_opened_uids: set[str] = set()
+        self._run_visibility_cutoff: datetime | None = None
         self._initialize_state()
         self.server.state.change("run_selection")(self._run_selection_changed)
         self.server.state.change(*_SUBMISSION_FIELDS[:-2])(self._submission_form_changed)
@@ -321,6 +323,11 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Refine
         state.run_search = ""
         state.history_panels = []
         state.cancel_dialog = False
+        state.clear_workspace_dialog = False
+        state.end_session_dialog = False
+        state.workspace_notice = ""
+        state.workspace_notice_kind = "success"
+        state.previous_runs_hidden = False
         state.connection_status = "Checking NDIP connection"
         state.connection_ok = False
         state.busy = False
@@ -734,11 +741,34 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Refine
             {"title": "Choose archive from Galaxy History", "value": "galaxy"},
         ]
         self._init_live_setup()
+        self._single_reset_values = {
+            field: deepcopy(getattr(state, field)) for field in CONFIG_FORM_FIELDS
+        }
+        self._live_reset_values = {
+            field: deepcopy(getattr(state, field)) for field in (
+                *("live_" + name for name in CONFIG_FORM_FIELDS),
+                *("live_" + name for name in LIBRARY_FIELDS),
+                "live_configuration_source", "live_post_analysis_selected",
+            ) if hasattr(state, field)
+        }
 
     def create_ui(self) -> None:
         self.set_theme("CompactTheme")
         with super().create_ui() as layout:
             layout.toolbar_title.set_text("RADAR-PD Interactive")
+            # The pinned NOVA theme adds a generic EXIT button last. Replace it
+            # with a session-specific action that explains the Galaxy job boundary.
+            layout.actions.children.pop()
+            with layout.actions:
+                vuetify.VBtn(
+                    "End session",
+                    id="radar-end-session",
+                    prepend_icon="mdi-logout",
+                    color="white",
+                    classes="mr-4 bg-secondary",
+                    click=self.request_end_session,
+                )
+            self._leave_session_page = client.JSEval(exec="window.location.replace('/');").exec
             # Vue deliberately ignores <style> elements embedded in a component
             # template. Client.Style registers the sheet in the document head,
             # which keeps the two-pane layout intact after reactive updates.
@@ -796,6 +826,211 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Refine
                 variant="flat",
                 size="small",
             )
+            vuetify.VBtn(
+                "Clear workspace",
+                v_if="run_rows.length || rf_experiments.length || rf_jobs.length || !!powgen_ipts || !!selected_run_uid",
+                prepend_icon="mdi-broom",
+                variant="text",
+                size="small",
+                click=self.request_clear_workspace,
+            )
+            with vuetify.VDialog(v_model="clear_workspace_dialog", max_width=560, persistent=True):
+                with vuetify.VCard():
+                    vuetify.VCardTitle("Clear this workspace")
+                    vuetify.VCardText(
+                        "Stop Live monitoring and queued/future refinement work, release loaded run and plot data, and reset the IPTS setup. Already-submitted Galaxy jobs continue. Saved results and refinement receipts remain in History and can be reopened."
+                    )
+                    with vuetify.VCardActions():
+                        vuetify.VSpacer()
+                        vuetify.VBtn("Keep working", click="clear_workspace_dialog = false", variant="text")
+                        vuetify.VBtn("Clear workspace", click=self.clear_workspace, color="primary")
+            with vuetify.VDialog(v_model="end_session_dialog", max_width=560, persistent=True):
+                with vuetify.VCard():
+                    vuetify.VCardTitle("End RADAR-PD session")
+                    vuetify.VCardText(
+                        "Release this interactive container and return to Galaxy. Live monitoring and queued/future refinement work stop. Already-submitted Galaxy jobs continue and their results remain in History."
+                    )
+                    with vuetify.VCardActions():
+                        vuetify.VSpacer()
+                        vuetify.VBtn("Keep working", click="end_session_dialog = false", variant="text")
+                        vuetify.VBtn("End session", click=self.end_session, color="primary")
+
+    def request_clear_workspace(self, **_: Any) -> None:
+        self.server.state.clear_workspace_dialog = True
+        self.server.state.flush()
+
+    def request_end_session(self, **_: Any) -> None:
+        self.server.state.end_session_dialog = True
+        self.server.state.flush()
+
+    def _session_action_blocker(self) -> str:
+        state = self.server.state
+        if (state.busy or state.live_launch_busy or self._pending_submission_tokens
+                or getattr(self, "_powgen_submissions_in_flight", 0)):
+            return "Wait for the current Galaxy submission to be acknowledged, then try again."
+        if (state.rf_busy or state.rf_loading or state.rf_queue_running or state.selected_run_loading
+                or getattr(self, "_refinement_approving", False)):
+            return "Wait for the current recipe, result load, or refinement dispatch to finish, then try again."
+        return ""
+
+    async def _stop_session_enrollment(self) -> None:
+        if self.server.state.powgen_monitoring:
+            self.stop_powgen_monitoring()
+        workspace = getattr(self, "_refinement_workspace", None)
+        if workspace is not None:
+            pending_experiments = {
+                recipe["experiment"] for recipe in workspace.state["recipes"].values()
+                if recipe.get("armed")
+            }
+            pending_experiments.update(
+                job["source"]["experiment"] for job in workspace.state["jobs"].values()
+                if job.get("status") == "queued"
+            )
+            for experiment in pending_experiments:
+                workspace.pause(experiment)
+            # Persist completed receipts as well as any disarmed future recipe.
+            # A cleared or closed container cannot rely on its local manifest.
+            await asyncio.to_thread(workspace.checkpoint)
+            checkpoint_task = self._refinement_checkpoint_task
+            if checkpoint_task is not None and not checkpoint_task.done():
+                await checkpoint_task
+
+    async def end_session(self, **_: Any) -> None:
+        state = self.server.state
+        blocker = self._session_action_blocker()
+        if blocker:
+            state.end_session_dialog = False
+            state.workspace_notice = blocker
+            state.workspace_notice_kind = "warning"
+            state.flush()
+            return
+        try:
+            await self._stop_session_enrollment()
+        except Exception as exc:
+            state.end_session_dialog = False
+            state.workspace_notice = f"The session is still open because its recovery state could not be saved: {exc}"
+            state.workspace_notice_kind = "warning"
+            state.flush()
+            return
+        state.nova_kill_jobs_on_exit = False
+        state.end_session_dialog = False
+        state.flush()
+        self._leave_session_page()
+        await asyncio.sleep(0.1)
+        await self.exit_callback()
+
+    async def clear_workspace(self, **_: Any) -> None:
+        """Release this session's run and plot memory while retaining Galaxy outputs."""
+
+        state = self.server.state
+        blocker = self._session_action_blocker()
+        if blocker:
+            state.clear_workspace_dialog = False
+            state.workspace_notice = blocker
+            state.workspace_notice_kind = "warning"
+            state.flush()
+            return
+        try:
+            await self._stop_session_enrollment()
+        except Exception as exc:
+            state.clear_workspace_dialog = False
+            state.workspace_notice = f"The workspace was not cleared because recovery state could not be saved: {exc}"
+            state.workspace_notice_kind = "warning"
+            state.flush()
+            return
+
+        for task in tuple(self._monitor_tasks | self._utility_tasks):
+            if not task.done():
+                task.cancel()
+        self._monitor_tasks.clear()
+        self._utility_tasks.clear()
+        self._monitored_uids.clear()
+        self.records.clear()
+        self.utility_actions.clear()
+        self._auto_opened_uids.clear()
+        self._published_checkpoint_ids.clear()
+        self._dataset_label_cache.clear()
+        self._powgen_sample_indexes.clear()
+        self._run_visibility_cutoff = datetime.now(timezone.utc)
+
+        state.workspace_view = "monitor"
+        state.setup_collapsed = False
+        state.run_rows = []
+        state.run_selection = []
+        state.run_search = ""
+        state.history_panels = []
+        state.comparison_run_uids = []
+        state.previous_runs_hidden = True
+        for name, value in {
+            "selected_run_uid": "", "selected_run_name": "No run selected",
+            "selected_run_status": "-", "selected_analysis_status": "-",
+            "selected_result_status": "-", "selected_publication_status": "-",
+            "selected_publication_target": "", "selected_publication_job_id": "",
+            "selected_publish_message": "", "selected_galaxy_job_id": "Pending",
+            "selected_run_stage": "-", "selected_run_progress": 0,
+            "selected_run_message": "", "selected_run_console": "",
+            "selected_run_loading": False, "selected_result_load_error": "",
+            "selected_result_load_message": "", "selected_run_elapsed": "-",
+            "monitor_stages": [], "run_provenance_rows": [],
+            "viewed_run_mode": "", "viewed_run_name": "",
+            "viewed_configuration": "", "last_log": "",
+            "result_explorer_available": False, "gsasii_launch_url": "",
+            "gsasii_session_status": "", "gsasii_status_message": "",
+        }.items():
+            setattr(state, name, value)
+        self._reset_result_state()
+        self._post_analysis_scans = []
+        self._post_analysis_result = {"views": []}
+        state.post_analysis_panels = []
+        state.post_analysis_observation_rows = []
+        state.post_analysis_status = "Waiting for completed scans"
+        self._init_transition_tracking()
+        for task in tuple(self._refinement_tasks):
+            if not task.done():
+                task.cancel()
+        if self._refinement_tasks:
+            await asyncio.gather(*self._refinement_tasks, return_exceptions=True)
+        self._refinement_tasks.clear()
+        self._refinement_workspace = None
+        self._refinement_refresh_task = None
+        self._refinement_queue_task = None
+        self._refinement_checkpoint_task = None
+        self._refinement_checkpoint_dirty = False
+        self._refinement_selection_token = ""
+        self._refinement_view_cache.clear()
+        self._refinement_sha_cache.clear()
+        for name, value in self._refinement_state_defaults().items():
+            setattr(state, name, deepcopy(value))
+
+        # A new IPTS must not inherit the previous profile, CIF library, sample
+        # chemistry, or experiment-scoped configuration by accident.
+        state.powgen_ipts = ""
+        self._active_live_beamline = None
+        self._live_beamline_changed()
+        for name, value in self._single_reset_values.items():
+            setattr(state, name, deepcopy(value))
+        for name, value in self._live_reset_values.items():
+            setattr(state, name, deepcopy(value))
+        state.live_saved_configuration_id = ""
+        self._live_uploaded_assets.clear()
+        self._live_saved_configurations.clear()
+        self._library_action_contexts.clear()
+        for name in ("data_path", "instrument_path", "main_cif_path", "database_archive_path",
+                     "config_import_path", "sample_elements", "environment_elements", "run_name",
+                     "history_data_id", "history_instrument_id", "history_main_cif_id",
+                     "history_database_id", "history_configuration_id", "facility_ipts"):
+            setattr(state, name, "")
+        state.database_source = "builtin"
+        state.main_cif_source = "none"
+        state.error_message = ""
+        state.notice = ""
+        state.clear_workspace_dialog = False
+        state.workspace_notice = (
+            "Workspace cleared. Galaxy jobs, saved results and refinement receipts remain in History. "
+            "Enter another IPTS or show earlier recent runs when needed."
+        )
+        state.workspace_notice_kind = "success"
+        state.flush()
 
     def _facility_picker(
         self,
@@ -1193,7 +1428,10 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Refine
                             html.Div("{{ run.name }}", classes="radar-run-list-name")
                             html.Div("{{ run.mode }} / {{ run.status }} · {{ run.created_display }} · job {{ run.job_short }}", classes="radar-run-list-meta")
                             html.Div("{{ run.stage }}", classes="radar-run-list-stage")
-                        html.Div("No RADAR-PD runs are in this Galaxy history.", v_if="!run_rows.length", classes="radar-empty-compact")
+                        html.Div("This workspace is clear. Saved runs remain in Galaxy History.",
+                                 v_if="!run_rows.length && previous_runs_hidden", classes="radar-empty-compact")
+                        html.Div("No RADAR-PD runs are in this Galaxy history.",
+                                 v_if="!run_rows.length && !previous_runs_hidden", classes="radar-empty-compact")
                     vuetify.VBtn(
                         "Refresh from Galaxy",
                         click=self._recover_runs,
@@ -1202,6 +1440,15 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Refine
                         size="small",
                         block=True,
                         classes="mt-2",
+                    )
+                    vuetify.VBtn(
+                        "Show earlier recent runs",
+                        v_if="previous_runs_hidden",
+                        click=self.restore_earlier_runs,
+                        prepend_icon="mdi-history",
+                        variant="text",
+                        size="small",
+                        block=True,
                     )
                     vuetify.VSelect(
                         label="Compare completed runs",
@@ -2307,6 +2554,8 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Refine
 
     def _workspace_page(self) -> None:
         with html.Div(classes="radar-workspace-inner"):
+            vuetify.VAlert(v_if="!!workspace_notice", text=("workspace_notice",),
+                type=("workspace_notice_kind",), variant="tonal", density="compact", classes="mb-2")
             vuetify.VAlert(v_if="selected_run_loading", text=("selected_result_load_message",),
                 type="info", variant="tonal", density="compact", classes="mb-2")
             vuetify.VProgressLinear(v_if="selected_run_loading", indeterminate=True, height=3, color="#15543c")
@@ -5775,6 +6024,11 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Refine
             rows.append(row)
         self.server.state.run_rows = rows
 
+    def restore_earlier_runs(self, **_: Any) -> None:
+        self._run_visibility_cutoff = None
+        self.server.state.previous_runs_hidden = False
+        self._recover_runs()
+
     def _recover_runs(self, **_: Any) -> None:
         state = self.server.state
         try:
@@ -5783,6 +6037,8 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Refine
             state.connection_status = "Connected to NDIP"
             self.refresh_history()
             for recovered in self.service.recent_runs():
+                if self._run_visibility_cutoff and recovered.created_utc < self._run_visibility_cutoff:
+                    continue
                 current = self.records.get(recovered.uid) or next(
                     (
                         candidate

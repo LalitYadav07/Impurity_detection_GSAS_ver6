@@ -8,6 +8,9 @@ from types import SimpleNamespace
 import pytest
 
 from radar_pd_nova.refinement_sources import (RefinementScope, source_from_record,select_published_project,published_project_path,file_sha)
+from radar_pd_nova.refinement_controller import (published_refinement_source,refinement_rwp_summary,
+    refinement_status_message,refinement_output_provenance,selected_refinement_dataset,
+    recover_completed_refinement_records,refinement_experiment_options)
 from radar_pd_nova.refinement_workspace import RefinementWorkspace
 from radar_pd_nova.refinement_runtime import LocalRefinementRuntime,verify_result_files
 
@@ -68,6 +71,35 @@ def test_exact_sample_and_bank_scope_and_existing_backlog_are_snapshotted(tmp_pa
     assert w.state['sources']['1']['source_sha256']=='1hash'
 
 
+def test_model_usage_survives_review_and_workspace_recovery(tmp_path):
+    w,rt=create(tmp_path);w.observe([source('1')])
+    call=dict(label='Illumine Luna',provider='illumine-luna',model='gpt-6-luna',
+              usage=dict(input_tokens=2000,input_tokens_details=dict(cache_write_tokens=1500,cached_tokens=100),
+                         output_tokens=300,total_tokens=2300))
+    w._planner=lambda request,ctx,previous=None:dict(plan=plan(ctx),calls=[call])
+    draft=w.prepare('exp','1','background')
+    assert draft['model_usage']['total_tokens']==2300
+    assert draft['model_usage']['estimated_usd'] is not None
+    restored=RefinementWorkspace(tmp_path,history_id='history',runtime=rt)
+    assert restored.state['drafts']['exp']['model_usage']==draft['model_usage']
+
+
+def test_failed_plan_retains_reported_token_usage(tmp_path):
+    w,_=create(tmp_path);w.observe([source('1')])
+    call=dict(provider='illumine-luna',model='gpt-6-luna',
+              usage=dict(input_tokens=700,output_tokens=100,total_tokens=800))
+    def failed(request,ctx,previous=None):
+        error=ValueError('The model plan did not pass validation')
+        error.planning_calls=[call]
+        raise error
+    w._planner=failed
+    with pytest.raises(ValueError,match='did not pass'):
+        w.prepare('exp','1','background')
+    draft=w.state['drafts']['exp']
+    assert draft['status']=='error' and draft['planning_calls']==1
+    assert draft['model_usage']['total_tokens']==800
+
+
 def test_future_only_enrolls_new_matching_arrivals_not_existing_or_other_experiments(tmp_path):
     w,rt=create(tmp_path);w.observe([source('1')]);scope=RefinementScope('exp','samples',samples=('id:0012',),banks=('2',));r=approved(w,scope,future=True,existing=False)
     assert not w.start(r['id'],r['selection_token'])
@@ -114,6 +146,16 @@ def test_changed_models_need_a_recipe_review_not_an_automatic_llm_call(tmp_path)
     assert len([c for c in rt.calls if c[0]=='run'])==1
 
 
+def test_saved_needs_review_result_can_recover_verified_intermediate_stages(tmp_path):
+    w,rt=create(tmp_path);w.observe([source('1')]);recipe=approved(w,RefinementScope('exp'))
+    job=w.start(recipe['id'],recipe['selection_token'])[0]
+    w.state['jobs'][job['id']]['remote_action']={'galaxy_job_id':'existing'}
+    rt.response_status='needs_review'
+    recovered=w.recover_job_artifacts(job['id'])
+    assert recovered['status']=='needs_review'
+    assert w.state['jobs'][job['id']]['artifact_recoveries']==1
+
+
 def test_published_source_prefers_explicit_publication_and_hashes_its_actual_bytes(tmp_path):
     raw=tmp_path/'Technical/model.gpx';raw.parent.mkdir();raw.write_bytes(b'internal')
     pub=tmp_path/'gpx/02_Main.gpx';pub.parent.mkdir();pub.write_bytes(b'enriched publication')
@@ -155,6 +197,95 @@ def test_late_watch_metadata_enriches_same_source_identity_without_second_enroll
     assert len(restored.state['sources'])==1
     assert restored.state['sources'][first['id']]['sample_key']=='id:007'
     assert restored.state['sources'][first['id']]['observed_utc']==stamp
+
+
+def test_recovered_live_ages_scans_share_experiment_sample_and_bank_from_publications(tmp_path):
+    project=dict(collection_name='final.gpx',sha256='model',status='accepted',stage='final_refinement')
+    def recovered(run):
+        record=SimpleNamespace(uid=str(run),name=f'IPTS-2767_PG3_{run}',local_output_dir=tmp_path,
+                               output_dataset_ids={'gpx_projects':f'collection-{run}'},inputs=None)
+        summary=dict(gpx_projects=[project],acquisition=dict(instrument='PG3',run_number=run,sample_id='21213',
+                    sample_name='MgO+Al2O3 temperature calibration'),provenance={'input':{'source_bank':2}})
+        return source_from_record(record,{'summary':summary},None,'history')
+    cold,warm=recovered(43106),recovered(43124)
+    assert cold['experiment']==warm['experiment']
+    assert cold['experiment_label']=='PG3 · IPTS-2767'
+    assert cold['sample_key']==warm['sample_key']=='id:21213'
+    assert cold['bank']==warm['bank']=='2'
+    assert cold['run_number']==43106 and warm['run_number']==43124
+    assert cold['source_path'] is None and cold['collection_id']=='collection-43106'
+    placeholder=source_from_record(SimpleNamespace(uid='placeholder',name='IPTS-2767_PG3_43124',local_output_dir=tmp_path,
+        output_dataset_ids={'gpx_projects':'collection'},inputs=None),
+        {'summary':dict(gpx_projects=[project],acquisition=dict(instrument='PG3',run_number=43124,sample_id='21213',sample_name='MgO+Al2O3 temperature calibration'))},
+        dict(sample_key='unassigned',sample_label='Unassigned sample',axis_overrides={'temperature':{'value':300,'unit':'C','reviewed_mapping':True}}),'history')
+    assert placeholder['sample_label']=='21213 · MgO+Al2O3 temperature calibration'
+    assert placeholder['axis_overrides']['temperature']['value']==300
+
+
+def test_refinement_recovers_completed_live_job_outputs_after_viewer_restart():
+    queued=SimpleNamespace(uid='job-43124',name='IPTS-2767_PG3_43124',status=SimpleNamespace(value='queued'),output_dataset_ids={})
+    complete=copy.deepcopy(queued)
+    complete.status=SimpleNamespace(value='ok')
+    complete.output_dataset_ids={'summary':'small-summary','gpx_projects':'published-projects'}
+    calls=[]
+    service=SimpleNamespace(refresh=lambda record: calls.append(record.uid) or complete)
+    run=SimpleNamespace(galaxy_job_id='job-43124')
+    controller=SimpleNamespace(state=SimpleNamespace(completed={'PG3_43124':run}),records={'PG3_43124':queued})
+    assert recover_completed_refinement_records(service,controller)==[]
+    assert controller.records['PG3_43124'] is complete
+    assert calls==['job-43124']
+    assert recover_completed_refinement_records(service,controller)==[]
+    assert calls==['job-43124']
+
+
+def test_recovered_publications_keep_older_refinement_results_browsable(tmp_path):
+    w,_=create(tmp_path)
+    w.observe([dict(source('43124',exp='PG3-IPTS-2767'),experiment_label='PG3 · IPTS-2767')])
+    w.state['jobs']['old']=dict(source=dict(source('43124',exp='old-single-run'),experiment_label='IPTS-2767_PG3_43124'))
+    labels=refinement_experiment_options(w)
+    assert labels['PG3-IPTS-2767']=='PG3 · IPTS-2767'
+    assert labels['old-single-run']=='Earlier refinement results · IPTS-2767_PG3_43124'
+
+
+def test_refinement_catalog_reads_only_summary_until_source_gpx_is_selected(tmp_path):
+    project=dict(collection_name='final.gpx',sha256='model',status='accepted',stage='final_refinement')
+    summary=dict(gpx_projects=[project],acquisition=dict(instrument='PG3',run_number=43124,sample_id='21213'),
+                 provenance={'input':{'source_bank':2}})
+    class Service:
+        def __init__(self):self.downloaded=[]
+        def _download_dataset(self,dataset,target):
+            self.downloaded.append(dataset);target.write_text(json.dumps(summary))
+        def collect_results(self,record):raise AssertionError('Full result collection is too costly for a catalog')
+    service=Service();workspace=SimpleNamespace(root=tmp_path,history_id='history')
+    record=SimpleNamespace(uid='job',name='IPTS-2767_PG3_43124',local_output_dir=None,
+                           output_dataset_ids={'summary':'summary-dataset','gpx_projects':'gpx-collection'},inputs=None)
+    first=published_refinement_source(service,workspace,record,None,{})
+    second=published_refinement_source(service,workspace,record,None,{})
+    assert first['sample_key']=='id:21213' and first['experiment_label']=='PG3 · IPTS-2767'
+    assert first['id']==second['id'] and service.downloaded==['summary-dataset']
+
+
+def test_needs_review_explains_unphysical_uiso_and_keeps_last_verified_stage_visible():
+    baseline={'phases':[{'name':'Al2O3','atoms':[{'label':'Al1'},{'label':'O1'}]}]}
+    result={'status':'needs_review','error':("Native dependent parameters violated physical/requested bounds before save-time clipping: "
+            "[('0::AUiso:1', -0.002485644520797271)]. Later stages were not executed"),
+            'stages':[{'id':f'stage-{i}','gpx':f'verified_stage-{i}.gpx'} for i in range(1,4)],
+            'stage_dataset_ids':{'stage-3':'saved-stage-three'}}
+    message=refinement_status_message(result,baseline)
+    assert 'Al2O3 · O1 Uiso = -0.0024856 Å²' in message
+    assert '3 earlier verified stages' in message and 'no final GPX' in message
+    assert '0::AUiso:1' not in message
+    assert selected_refinement_dataset(result,'stage-3')=='saved-stage-three'
+    assert 'dataset saved-stage-three' in refinement_output_provenance(result,'stage-3')
+    assert selected_refinement_dataset(result,'final') is None
+
+
+def test_rwp_summary_does_not_imply_improvement_when_fit_range_changes():
+    comparable={'original_rwp':3.381,'polished_rwp':3.202,'rwp_comparable':True}
+    assert '→' in refinement_rwp_summary(comparable)
+    changed={**comparable,'polished_rwp':8.202,'rwp_comparable':False}
+    label=refinement_rwp_summary(changed)
+    assert 'different fit range' in label and '→' not in label
 
 
 def test_approval_holds_representative_changed_after_preflight(tmp_path):

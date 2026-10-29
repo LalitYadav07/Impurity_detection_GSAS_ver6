@@ -87,6 +87,20 @@ def test_package_and_galaxy_tool_versions_match() -> None:
     assert version_match.group(1) == tool_version
 
 
+def test_illumine_key_is_an_optional_per_user_galaxy_credential() -> None:
+    root = ET.parse(NOVA_ROOT / "galaxy" / "radar_pd_nova.xml").getroot()
+    credential = root.find("./requirements/credentials[@name='ornl_illumine']")
+    assert credential is not None
+    assert credential.get("version") == "1.0"
+    assert credential.get("optional") == "true"
+    secret = credential.find("./secret[@name='api_key']")
+    assert secret is not None
+    assert secret.get("inject_as_env") == "AZURE_ILLUMINE_API_KEY"
+    assert secret.get("optional") == "false"
+    assert root.find("./environment_variables/environment_variable[@name='AZURE_ILLUMINE_API_KEY']") is None
+    assert "AZURE_ILLUMINE_API_KEY" not in root.findtext("command", default="")
+
+
 def test_release_workflow_builds_and_smoke_tests_versioned_image() -> None:
     workflow = _read("../.github/workflows/publish-nova-to-ghcr.yaml")
 

@@ -1,14 +1,13 @@
 # Reviewed GPX refinement in NOVA
 
-The local integration branch adds **Refinement** beside **Results** and
-**Transition tracking** in the NOVA experiment workspace, and exposes the same
-workspace from an individual run. Original RADAR-PD results remain the baseline.
-This implementation has not been pushed or deployed to NDIP. The older standalone
-planner remains a development harness.
+The integration adds **Refinement** beside the existing result views in NOVA and
+exposes the same workspace from an individual run. The older standalone planner
+remains a development harness. NOVA 0.4.29 and the Reviewed Refinement utility
+0.2.0 are deployed to NDIP-test; production has not been updated.
 
-The integration is based on NOVA 0.4.24 (`616917b`). The recipe engine is independent
+The integration began on NOVA 0.4.24 (`616917b`). The recipe engine is independent
 of Diffraction Studio at runtime. Illumine Luna with reasoning `none` is the
-selected provider for this integration, including a future initial deployment.
+selected provider for this integration.
 OSS 120B remains an explicitly configured alternative; no fallback is automatic.
 
 ## User workflow
@@ -26,7 +25,14 @@ OSS 120B remains an explicitly configured alternative; no fallback is automatic.
    complete staged recipe, then generate or revise it.
 4. Review named free parameters, parameters held since the previous stage,
    explicit edits, assumptions and questions. Native preflight checks the actual
-   GSAS-II parameter releases before approval is offered.
+   GSAS-II parameter releases before approval is offered. The recipe review shows
+   the provider-reported input, cached input, cache-write and output token counts
+   for all planning attempts, including a bounded repair. Luna cost uses the
+   [public Standard list rates](https://developers.openai.com/api/docs/models/gpt-6-luna)
+   checked on 2026-10-28: $0.10 per million ordinary
+   input tokens, $0.01 cached input, $0.125 cache writes and $0.50 output. The
+   display labels this as an estimate because ORNL Azure billing may differ.
+   Missing usage is shown as unavailable, never as a zero-cost call.
 5. Approval captures the exact selected GPX revisions. Legacy projects without a
    published checksum are materialized only for the selected scope. If arrivals or
    known project revisions change during capture, review the updated scope and
@@ -87,16 +93,36 @@ are recovered by job ID rather than resubmitted.
   the workspace without importing or loading GSAS-II inside NOVA.
 
 One active coordinator per history is the supported deployment arrangement.
-Concurrent independent NOVA pods are not a distributed exactly-once queue. Galaxy
-job/catalog recovery, secret mounting, outbound Luna access and actual NDIP
-interactive lifecycles still need an NDIP smoke test before a release is claimed.
+Concurrent independent NOVA pods are not a distributed exactly-once queue. On
+2026-10-28, an NDIP-test session using a saved personal Illumine credential
+generated an authenticated Luna recipe, passed native preflight, and completed
+both reviewed scientific stages on a saved POWGEN Al2O3/MgO GPX. Galaxy published
+the stage and final GPXs, and their checksums matched the result bundle. This is
+one end-to-end case, not a claim that every recipe or data set is validated.
+In a fresh NOVA 0.4.29 session launched through the ordinary Galaxy form, the
+same saved GPX and completed refinement were visible. Revising the recipe made
+an authenticated Luna call and passed native preflight. The review showed
+23,435 input tokens (0 cached, 23,432 cache writes), 362 output tokens, 23,797
+total tokens and an approximate $0.003110 Standard list-rate cost. The earlier
+scientific result was inspected; no new worker job was submitted for this
+usage-display release.
 
-## Runtime configuration and later deployment
+## Runtime configuration
 
-`RADAR_GPX_PLANNER_PROVIDER=illumine-luna` selects Luna. Supply the key only in the
-backend environment as `AZURE_ILLUMINE_API_KEY`, or through an owner-only file
-referenced by `RADAR_PD_REFINEMENT_KEY_FILE`. No key enters browser state, recipes,
-scripts, GPXs, Galaxy tool inputs or images. Native scientific workers strip model
+`RADAR_GPX_PLANNER_PROVIDER=illumine-luna` selects Luna. On NDIP-test, the NOVA
+Galaxy tool declares an optional ORNL Illumine credential group. The user saves
+their personal key in Galaxy's credential vault, and Galaxy injects the selected
+group's key into the NOVA backend as `AZURE_ILLUMINE_API_KEY`. Galaxy scopes the
+credential selection to the tool version: the 0.4.28 selection did not appear
+on the new 0.4.29 form. The same personal key was bound to a 0.4.29 group and
+selected in the user's vault; the ordinary form then selected it automatically.
+Check this version-specific group after every NOVA tool-version update.
+Programmatic `/api/tools` launches must include the selected
+`credentials_context`; the vault's current group alone did not attach a key to
+an API-submitted job. Local development may instead provide the key in the
+backend environment or through an owner-only file referenced by
+`RADAR_PD_REFINEMENT_KEY_FILE`. No key enters browser state, recipes, scripts,
+GPXs, Galaxy tool inputs or images. Native scientific workers strip model
 credentials from their environment.
 
 `RADAR_PD_REFINEMENT_ROOT` selects the receipt/cache directory; each Galaxy history
@@ -105,14 +131,13 @@ Python executable or the Docker shim for laptop validation. When this is absent,
 a configured Galaxy session uses `neutrons_radar_pd_refine_recipe_prototype`.
 The utility XML template is `galaxy/radar_pd_refine_recipe.xml.in`; it runs
 `scripts/ndip_refinement.py` in the batch image and publishes the result ZIP and
-verified GPX collection. It needs a successful immutable batch image pin and local
-Galaxy-tool registration preparation before deployment. The template's image
-placeholder is deliberate and is not a deployable image reference.
+verified GPX collection. The template's image placeholder is deliberate; the
+deployed `galaxy-tools` XML has the tested immutable batch image pin.
 
 Both NOVA and batch images must contain the same recipe engine. The NOVA wheel
 packages `radar_pd_nova` and `gpx_recipe`; the batch source bridge imports that same
 implementation. The NDIP image workflow already watches `nova/src/gpx_recipe/**`.
-No deployment repository, image pin or branch push is performed by local tests.
+Local tests do not update deployed tools or image pins.
 
 ## Components
 
@@ -262,9 +287,9 @@ For local development only, `--key-file /outside/repository/private-key-file`
 can read an existing small owner-only Illumine key file into backend memory. It
 rejects symlinks and public permissions. No key belongs in a plan, GPX, notebook,
 repository, browser request or job receipt. Scientific subprocesses receive an
-allowlisted environment without either model credential. Production must use
-NDIP-managed backend secret injection. No Studio import, client, service,
-configuration helper or Python environment is required. Studio supplies only
+allowlisted environment without either model credential. NDIP uses its Galaxy
+credential vault for per-user backend secret injection. No Studio import, client,
+service, configuration helper or Python environment is required. Studio supplies only
 the vendored knowledge/extractor provenance recorded above.
 
 ## Local interface
@@ -300,9 +325,9 @@ PYTHONPATH=scripts python -m gpx_recipe.web \
 The Docker shim uses an explicitly present image (`--pull never`), runs with the
 host user's numeric UID/GID and mounts only shared code plus the chosen validation
 directory. The model key is not passed to Docker. This is a local test adapter;
-the NDIP worker runs directly in its published scientific image. At deployment,
-select `--provider sambanova` (or `RADAR_GPX_PLANNER_PROVIDER=sambanova`) and inject
-only the SambaNova credential. Revalidate planning with OSS 120B before release;
+the NDIP worker runs directly in its published scientific image. For optional
+local OSS 120B testing, select `--provider sambanova` (or
+`RADAR_GPX_PLANNER_PROVIDER=sambanova`) and use its credential outside the repository.
 Luna success does not establish OSS planning accuracy.
 
 ## NDIP deployment boundary
@@ -311,17 +336,23 @@ The shared core is under `nova/src/gpx_recipe` and ships in the NOVA wheel.
 The batch image copies the same source and uses a thin `scripts/gpx_recipe`
 bridge. Both image workflows include the shared core in their path rules. The compiled wrapper imports
 `gpx_recipe` from the batch image's existing `/opt/radar-pd/scripts` PYTHONPATH.
-See `galaxy/radar_pd_refine_recipe.xml.in` for the worker contract; replace its
-immutable image pin only after publication/testing. It is a template, not a live
-Galaxy registration. The prototype does not push any repository or deploy tools.
+See `galaxy/radar_pd_refine_recipe.xml.in` for the source worker contract. The live
+NDIP-test registration is `galaxy-tools/tools/neutrons/powder_diffraction/radar_pd_refine_recipe.xml`,
+pinned to `ndip-dac049913cd33f3111615e2b72ddd3bbf3d419dd`. NOVA 0.4.29 is
+pinned to `nova-f7a0b4f0a29dfde6444667e83bad065a6d8090c1`. These pins and
+both prototype deployment jobs were verified on 2026-10-28. The earlier
+NOVA 0.4.28 live UI successfully inspected and refined a saved Al2O3/MgO GPX
+from run 43124.
+The reviewed two-stage plan refined existing phase scales and background first,
+then those parameters plus both unit cells. The Galaxy worker completed both
+stages and published checksum-matched stage and final GPXs. Rwp changed from
+about 3.381% to 3.380%; this tiny improvement is an execution check rather
+than evidence of a better scientific model.
 
-Production wiring still needs: authenticated NOVA plan/revision/approval actions,
-secure model configuration, Galaxy
-worker registration with a tested immutable image, and dispatch of accepted final
-GPX datasets as they arrive. Pass a stable run/bank/revision or HDA ID as `scan_id`;
-local paths are only a local fallback. Keep preliminary RADAR-PD results visible
-while these optional continuation jobs run. New incompatible phases/models
-require review, not positional phase-index guesses.
+Pass a stable run/bank/revision or HDA ID as
+`scan_id`; local paths are only a local fallback. Keep preliminary RADAR-PD
+results visible while these optional continuation jobs run. New incompatible
+phases/models require review, not positional phase-index guesses.
 
 ## Validation scope
 

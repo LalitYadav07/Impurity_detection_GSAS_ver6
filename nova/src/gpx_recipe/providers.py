@@ -79,6 +79,13 @@ class ProviderUnavailable(RuntimeError):
         super().__init__(message);self.cause=cause;self.elapsed_seconds=elapsed_seconds
 
 
+class ProviderResultError(ValueError):
+    """A billable provider response that cannot become a scientific plan."""
+    def __init__(self, message, metadata):
+        super().__init__(message)
+        self.metadata = metadata
+
+
 RATE_HEADERS = ("retry-after", "retry-after-ms", "x-ratelimit-limit-tokens", "x-ratelimit-remaining-tokens",
                 "x-ratelimit-remaining-requests", "x-ratelimit-reset-tokens", "x-ratelimit-reset-requests", "apim-request-id", "x-request-id")
 
@@ -176,26 +183,28 @@ class IllumineLuna:
                 "store": False, "max_output_tokens": self.max_output_tokens,
                 "text": {"format": {"type": "json_schema", "name": "radar_gpx_recipe", "strict": True, "schema": response_schema(self.model_signature)}}}
         data = _post(self.endpoint + "/responses", {"Content-Type": "application/json", "api-key": self.key}, body, "Illumine Luna")
+        metadata = {**self.info, "model": data.get("model"), "usage": data.get("usage"),
+                    "output_allowance": self.max_output_tokens, "rate_limits": data.get("_radar_rate_limits")}
         if data.get("model") != self.model:
-            raise ValueError("Illumine returned a different model identity; no plan was accepted")
+            raise ProviderResultError("Illumine returned a different model identity; no plan was accepted", metadata)
         content = []
         for item in data.get("output", []):
             if item.get("type") != "message":
                 continue  # Never persist hidden reasoning or encrypted provider state.
             for part in item.get("content", []):
                 if part.get("type") == "refusal":
-                    raise ValueError("Illumine Luna refused the request; no plan was accepted")
+                    raise ProviderResultError("Illumine Luna refused the request; no plan was accepted", metadata)
                 if part.get("type") == "output_text":
                     content.append(part.get("text", ""))
         if data.get("status") == "incomplete" and data.get("incomplete_details", {}).get("reason") == "max_output_tokens":
             used_budget = self.max_output_tokens
             self.max_output_tokens = min(16384, self.max_output_tokens * 2)
-            raise IncompleteResponse("".join(content), {**self.info, "usage": data.get("usage"), "rate_limits": data.get("_radar_rate_limits"), "finish_reason": "length", "output_allowance": used_budget})
+            raise IncompleteResponse("".join(content), {**metadata, "finish_reason": "length", "output_allowance": used_budget})
         if data.get("status") != "completed":
-            raise ValueError("Illumine Luna did not complete a full response; no plan was accepted")
+            raise ProviderResultError("Illumine Luna did not complete a full response; no plan was accepted", metadata)
         if not content or not all(isinstance(text, str) for text in content):
-            raise ValueError("Illumine Luna returned no text plan")
-        return "".join(content), {**self.info, "usage": data.get("usage"), "output_allowance": self.max_output_tokens, "rate_limits": data.get("_radar_rate_limits"), "finish_reason": "stop"}
+            raise ProviderResultError("Illumine Luna returned no text plan", metadata)
+        return "".join(content), {**metadata, "finish_reason": "stop"}
 
 
 def make_client():

@@ -14,6 +14,7 @@ from gpx_recipe.contracts import plan_hash, stage_table
 from gpx_recipe.execution import write_json
 from gpx_recipe.planner import make_plan
 from gpx_recipe.providers import configure_provider, provider_info, make_client
+from gpx_recipe.usage import summarize_calls
 from .refinement_runtime import RuntimeUnavailable
 from .refinement_sources import RefinementScope, digest
 
@@ -137,6 +138,7 @@ class RefinementWorkspace:
             for recipe in self.state['recipes'].values():
                 if recipe['experiment']==experiment:recipe['armed']=False
             self.save()
+        planning=None
         try:
             source=self.inspect(source_id);context=source['context']
             if previous and previous.get('model_signature')!=context['model_signature']:previous=None
@@ -151,6 +153,8 @@ class RefinementWorkspace:
             else:
                 configure_provider(os.getenv('RADAR_GPX_PLANNER_PROVIDER','illumine-luna'),os.getenv('RADAR_PD_REFINEMENT_KEY_FILE') or None)
                 planning=make_plan(request,context,previous=previous,client=make_client())
+            planning=dict(planning)
+            planning['usage_summary']=summarize_calls(planning.get('calls',[]))
             plan=planning['plan'];directory=self.root/'drafts'/generation;directory.mkdir(parents=True,exist_ok=True)
             write_json(directory/'planning.json',planning)
             preview=None
@@ -164,12 +168,18 @@ class RefinementWorkspace:
                 if draft['generation']!=generation:return None
                 draft.update(status='needs_input' if plan['questions'] or plan['unsupported'] else 'ready',plan=plan,
                     context=context,source=source,preview=preview,directory=str(directory),planning_calls=len(planning.get('calls',[])),
+                    model_usage=planning['usage_summary'],
                     origin=(planning['calls'][0]['label'] if planning.get('calls') else planning.get('origin','Deterministic clarification')))
                 self.save();return copy.deepcopy(draft)
         except Exception as exc:
             with self.lock:
                 draft=self.state['drafts'].get(experiment)
-                if draft and draft['generation']==generation:draft.update(status='error',error=str(exc),preview=None);self.save()
+                if draft and draft['generation']==generation:
+                    calls=planning.get('calls',[]) if planning is not None else getattr(exc,'planning_calls',None)
+                    draft.update(status='error',error=str(exc),preview=None)
+                    if calls is not None:
+                        draft.update(planning_calls=len(calls),model_usage=summarize_calls(calls))
+                    self.save()
             raise
 
     def discard_draft(self,experiment):
@@ -285,7 +295,8 @@ class RefinementWorkspace:
         directory=self.root/'jobs'/job_id/('recovered-'+uuid.uuid4().hex[:8])
         result=self.runtime.call('run',job['source'],directory,plan=recipe['plan'],approval=recipe['approval'],
             dispatch_key=job_id,resume=job['remote_action'])
-        if result['status']!='completed':raise ValueError(result.get('error') or 'The saved Galaxy result is not a completed refinement')
+        if result['status'] not in {'completed','needs_review'}:
+            raise ValueError(result.get('error') or 'The saved Galaxy result has no recoverable refinement stages')
         with self.lock:
             current=self.state['jobs'][job_id];current.update(result=result,directory=str(directory))
             current['artifact_recoveries']=current.get('artifact_recoveries',0)+1;self.save()
