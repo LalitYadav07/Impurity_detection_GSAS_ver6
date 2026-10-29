@@ -32,6 +32,7 @@ from .live_setup import LiveSetupMixin
 from .library_setup import LIBRARY_FIELDS, LibraryDraft
 from .post_analysis_ui import PostAnalysisMixin
 from .refinement_controller import RefinementMixin
+from .symmetry_controller import SymmetryMixin
 from .refinement_ui import refinement_dashboard
 from .post_analysis import PostAnalysisSettings
 from .facility import FacilityBrowser, FacilityPathError, WatchRecipe
@@ -241,7 +242,7 @@ def _powgen_retry_time(value: Any) -> datetime | None:
     return retry_at.astimezone(timezone.utc)
 
 
-class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, RefinementMixin, ThemedApp):
+class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, RefinementMixin, SymmetryMixin, ThemedApp):
     """Interactive orchestration and results workspace backed by Galaxy."""
 
     def __init__(self) -> None:
@@ -415,6 +416,7 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Refine
         state.rapid_final_polish_enabled = False
         self._init_post_analysis()
         self._init_refinement()
+        self._init_symmetry()
         state.history_datasets = []
         state.history_search = ""
         state.history_offset = 0

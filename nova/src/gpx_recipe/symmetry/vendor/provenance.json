@@ -1,0 +1,10 @@
+{
+  "source": "GSAS-II k_vec_solve, native revision 5841",
+  "modified": false,
+  "license": "GSAS-II-LICENSE",
+  "files": {
+    "k_vec_solve.py": "ca971ced8122f1339e1f0ac15d2811293279c4786f333e342764c3fc5162a8f7",
+    "sgtables.json": "3d1bfe5bc5200e54b9829bdc0890be3961448a5989c6b07424b437bd32a258b2"
+  },
+  "acknowledgment": "This product includes software produced by UChicago Argonne, LLC under Contract No. DE-AC02-06CH11357 with the Department of Energy."
+}
