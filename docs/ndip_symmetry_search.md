@@ -353,7 +353,8 @@ the browser after a fresh application process started with no in-memory draft.
 All eight completed with exactly eight submission intents. Regression checks
 cover late receipt collection and repeated restart after receipt tampering;
 the original collected receipt remains the integrity anchor. A subsequent
-campaign/interface/refinement integration gate covers these lifecycle changes.
+campaign/interface/refinement integration gate passed 135 tests for these
+lifecycle changes. The final result-control UI check passed 22 tests.
 
 The complete current-kernel replay sealed all 732 declared starts across
 Cr2WO6 (369), Ba/Co (162) and Pr/Sr manganite (201), without technical failures
@@ -370,6 +371,10 @@ structure assignment. The full current-code portfolios are retained separately
 from earlier replays. No held-out score or general automatic structure-solution
 claim is made. These unresolved cases, the continuation/matrix work and the
 Galaxy destination pilot must be completed before release acceptance.
+
+The packaged native mode-matching helper and tables retain their GSAS-II source
+license and provenance. This product includes software produced by UChicago
+Argonne, LLC under Contract No. DE-AC02-06CH11357 with the Department of Energy.
 
 ## Next implementation plan and acceptance gates
 
