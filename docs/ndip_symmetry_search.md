@@ -21,33 +21,73 @@ from R4+ and M3+, rather than from a single irrep.
 
 ## Evidence gathered in this branch
 
-| Check | Result | Limit |
+The 2026-10-28 native validation extends the original import-only feasibility
+check. Evidence lives in `audit/2026-10-28/symmetry-native-validation/` in the
+surrounding workspace; `report.html` and `validation-summary.json` summarize it.
+The experimental compiler/runner remains outside the application. No search is
+enabled in NOVA or deployed to NDIP.
+
+| Check | Result | Scientific limit |
 | --- | --- | --- |
-| Live ISODISTORT Method 2, public SrTiO3 parent, k=(1/2,1/2,1/2) | Five irreps, 22 OPDs cataloged; five representative children constructed | Seventeen other OPDs deferred; no exhaustive search |
-| Native import into the pinned RADAR-PD Linux GSAS-II 5843 image | All five children imported with verified native displacement-mode labels, variables and normalization | Import test, not fitting or model-selection validation |
-| Name-only CIF adapter negative controls | Incompatible operators and a verified origin-equivalent but differently situated model both rejected | No general origin/basis transformation of mode tables implemented |
-| Bilbao authenticated API, public Pnma #62, k=(0,0,0) | 51 magnetic subgroup records parsed, retaining basis and origin | Group discovery only; no moments, magnetic GPX, or refinement tested |
+| LaMnO3 public neutron tutorial, 51 k=0 subgroups × three child-axis starts | 153 terminal records: 33 site/orientation rejections, 60 qualified numerical fits, 60 rejected fits; 85 s at four native workers; full corrected Linux rerun 182.5 s including per-seed container startup | One controlled engineering parent derived from a polished public project, not 153 independent experiments or blind discovery; axis starts do not exhaust canting/coupling hypotheses |
+| Independent reopening of native magnetic outputs | 120 GPXs, 1,200 checks of actual varying parameters, data/weights, masks, fixed nuclear fields and declared material links | Numerical/parameter correctness does not establish a unique magnetic structure |
+| Pnma ↔ Pbnm physical-direction control | Corrected scripts reproduce Rwp 6.2985% and Mn moment 3.654 μB in both settings, on native host and pinned Linux runtime; another physical direction fits worse | No general conversion of arbitrary imported mode tables or all setting conventions |
+| Site compatibility: 51 Pnma k=0 and 38 hexagonal Ba/Co k=(0,0,1/2) candidates | 178 checks for explicit `all`/`any` policies on each runtime, plus wrong-setting/missing-site negatives; synthetic anti-inversion control distinguishes partial ordering | Nonzero-k candidates have site preflight, not a completed experimental magnetic search |
+| SrTiO3 X-point nuclear modes | 70 OPDs cataloged, 24/24 expanded-tier and 5/5 balanced-tier children native-normalized; balanced tier fitted with 18 signed starts on noiseless and Poisson-noisy synthetic data | Five fitted children, not all 70 OPDs or a general structural validation corpus; public truth was known before the noise-control test |
+| Actual structural outputs | 36 native GPXs reopened; seven data/parameter/mode checks each; noisy X1+ solution gives normalized modes 0.1004 and −0.2988 Å for synthetic 0.100 and −0.300 Å | Noisy engineering fixture is not a blind experimental holdout |
+| Zero-amplitude structural control | All five children reproduce the parent calculated profile to relative error below 1.2e-15 after exact metric transfer and volume-aware amount linkage | Rounded service-CIF cells initially spoiled the two Cmcm comparisons; do not use rounded cells as the parent control |
+| Noiseless optimization control | Two near-exact fits abort at the numerical floor; portfolio reducer reports `optimization_unresolved` instead of selecting a worse stable minimum | A correct-looking low residual is not accepted by weakening convergence checks |
+| Magnetic nonorthogonal/supercell forward control | Physical moment norms and exact lattice cosets verified; calculated representation invariance passes at 2.2e-14 relative error in pinned Linux GSAS-II 5843 | Host 5841 fails this same test at 9.9%; runtime identity and forward controls are required |
 
-The focused host checks passed 17 tests with one native-runtime skip; the
-separate Docker audit exercised all five imports and both setting controls.
-The imported mode-coordinate matrices were verified to be invertible. The
-R3+ child illustrates another branching issue: it contains both a primary R3+
-displacement mode and a secondary R1+ displacement mode. A child-CIF choice
-does not by itself specify which modes should be freed at each stage.
+The magnetic parent is intentionally well conditioned: nuclear parameters come
+from a public polished tutorial GPX and are fixed. This isolates magnetic
+setup effects. Five distinct magnetic candidates produce numerically identical
+best powder curves. Preserve the portfolio, not a unique MSG claim.
 
-The first unadapted native import failed for the full cubic H-M symbol. The
-new `scripts/gsas_isodistort_import.py` changes only the H-M scalar, after
-complete operator-set equality in the existing setting. It reparses and checks
-that every non-name CIF value is unchanged and records hashes and the imported
-mode inventory. It refuses an origin/basis change, magnetic modes, occupancy
-modes and rotational modes. Strain metadata is retained but not compiled.
-Original service CIFs are never overwritten. No runtime Studio import is added.
+A first structural fit used an R-point catalog against an X-point synthetic
+pattern. The mismatch was discovered during this investigation, not a planned
+blind negative. Its failed/worse fits are retained. Both corrected X-point
+protocols use the same finite signed-start policy; no LLM intervenes in any fit.
 
-Local evidence is under `audit/2026-10-28/symmetry-exploration/` in the surrounding
-development workspace. In particular: `live-isodistort/manifest.json`,
-`native-import-v2/report.json`, and `bilbao-k0-parsed.json`. The live service
-checks used public crystallographic fixtures, not private experiment structures.
-No assumption about NDIP pod network access follows from these laptop checks.
+Focused checks cover exact rational k conversion, coupled allowed moment
+components, magnetic metric/handedness, integer supercell cosets, complete
+setting fingerprints and conservative incomplete/failed-fit ranking. They are
+supplemented by the native GPX audits rather than used as substitutes for them.
+
+## Corrections found by native testing
+
+- The reference parent-to-child moment conversion used the wrong matrix
+  transpose for a nontrivial Pbnm transformation. `gsas_magnetic_preflight.py`
+  implements the passive axial-vector conversion for GSAS-II unit-axis
+  components, verifies physical magnitude and tests handedness explicitly.
+- Euclidean component length is wrong for nonorthogonal native moments. Use
+  the direct unit-axis metric; `[1,1,0]` in a 120-degree hexagonal cell has
+  magnitude 1 μB, not sqrt(2) μB.
+- Bounding translations by the largest basis-matrix entry can omit atoms from
+  rotated supercells. The new integer-coset utility covers exactly abs(det T)
+  lattice classes. Native site preflight rejects lost selected-site density;
+  the executor must use a verified complete constructor, not silently proceed.
+- A saved GPX can retain a stale calculated curve after its magnetic phase is
+  removed. Recalculate the nuclear baseline before deriving residual windows.
+- A failed lower-residual start must remain visible. `symmetry_results.py`
+  separates numerical uncertainty, hard physical rejection, technical failure
+  and deferred coverage; qualified outputs require actual input/effect audits.
+- Native covariance `nv-*` values are not a safe substitute for absolute
+  normalized ISODISTORT amplitudes. Recompute from final atom coordinates,
+  native mode matrices/offsets and normalization. The structural audit does so.
+- Service-CIF rounding is distinct from a change of setting. Preserve the raw
+  CIF and transfer the exact parent metric through the recorded basis for the
+  zero-mode control; do not edit mode tables to conceal a mismatch.
+- The pinned Linux 5843 runtime already corrects the magnetic projection found
+  wrong in host 5841. No GSAS-II installation was patched. Record module hashes
+  and require the forward control in the actual image; a version string alone
+  is not sufficient proof for another build.
+
+The existing name-only CIF adapter still refuses origin/basis conversion of
+mode tables, magnetic/occupancy/rotational mode imports and unsupported strain
+compilation. Original service CIFs are never overwritten. Studio supplies
+scientific reference/template knowledge at development time, not a worker or
+application runtime dependency.
 
 ## Runtime boundary: setup once, execute without an LLM
 
@@ -175,21 +215,89 @@ Diffraction Studio is source/knowledge reference, not a deployment dependency:
 | `structural_transition_scripts.py` | Parent export, magnetic transforms, constrained material linkage | Separate versioned deterministic compiler and executor |
 | `structural_transition_service.py` | Convergence/frozen/bounded checks, finite recovery, evidence-equivalent ranking | Pure receipt validation and fixed selection policy |
 
-Acceptance progresses from the completed import feasibility check to:
+Remaining acceptance work includes independent experimental structural and
+nonzero-k magnetic refinements, mixed-ion form factors, coupled irreps/k arms,
+noncollinear/canted models, impurities/coexistence, multiple banks and weak or
+null signals. Freeze acceptance rules before a holdout corpus. Test interruption,
+job-acknowledgement loss, catalog corruption, source changes and incremental
+arrivals in the eventual integrated dispatcher. These results do not establish
+general structure-identification accuracy.
 
-- Real native mode refinements with actual varying-parameter and GPX checks;
-  parent equivalence, both signs, mode normalization and seed coverage audited.
-- Blind structural benchmarks: Gamma-only distortion, single-k tilt, coupled
-  irreps, near-parent null data, impurity/coexistence, wrong k, other settings,
-  metric-only splitting and weak signals. Lock thresholds before holdout data.
-- Magnetic benchmarks: k=0 and nonzero commensurate order, multiple magnetic
-  sites, AFM/ferrimagnetic/canted alternatives, forbidden sites, and a nuclear
-  control with no magnetic signal. Verify links and refined moment components.
-- Corrupt catalog, interrupted external service, missing mode, source changes,
-  budget exhaustion, no-network execution and incremental-scan replay.
+## NDIP execution and resource plan
 
-No general structural/magnetic model-selection reliability claim is justified
-by the five imports or 51 subgroup records above.
+The inspected continuation path is serial: `RefinementWorkspace._inflight`
+allows one `run_next`, and the Galaxy runtime waits for that job to complete.
+Submitting many candidates through that loop will not create parallel search.
+Keep the deployed continuation path intact and add a campaign dispatcher with
+separate prepare, submit, poll, collect and audit operations.
+
+Use Galaxy's configured job destinations or dataset-collection mapping. Do not
+run the exploration inside the NOVA interactive process or assume the Galaxy
+Kubernetes deployment supplies scientific-job resources. A reasonable unit is
+one candidate on one representative scan/bank with a small approved seed bundle;
+each native seed runs in an independent process. Respect `GALAXY_SLOTS`, memory
+and administrator/user/destination concurrency limits. Keep BLAS at one thread
+unless the declared allocation supports more. The actual NDIP destination
+capacity and quota still require verification.
+
+Measured on the same 12 small public magnetic trials with warmed caches:
+
+| Native workers | Wall time | Speedup |
+| ---: | ---: | ---: |
+| 1 | 21.79 s | 1.00× |
+| 2 | 12.73 s | 1.71× |
+| 4 | 7.08 s | 3.08× |
+
+Peak per-worker RSS was approximately 215 MiB. These are laptop measurements,
+not NDIP throughput promises or sizing for large/multibank GPXs. Bundle seeds
+to avoid paying container/queue startup for every tiny fit. Cache candidate
+catalogs and child CIFs once; refinement workers need no external network.
+
+Persist a dispatch key containing protocol, source revision, bank, candidate
+and seed-bundle identities before submission. Recover ambiguous acknowledgments
+instead of blindly resubmitting. Keep deferred, failed, timed-out and canceled
+branches in coverage. A worker cannot broaden the protocol, change the source,
+fix its own path mapping, or invoke an LLM. Stage inputs below a job-local
+working directory; absolute Mac audit paths used by the development harness
+are not a deployable Galaxy command contract.
+
+Start with two or three informative representative scans and a balanced irrep
+or MSG tier. After review, continue a small approved portfolio on chosen existing
+runs and future compatible scans. Avoid the cost of every candidate on every
+incoming scan. Submitted jobs can survive the interactive page closing; future
+scan enrollment still requires an active monitor or an independently configured
+Ingress workflow.
+
+## Portfolio presentation
+
+An offline prototype at `symmetry-native-validation/review/index.html` uses the
+actual 60 qualified magnetic curves from the complete pinned Linux 5843 rerun. It groups these into eight display-pattern
+groups, preserving all individual model names. It is not wired into NOVA.
+Its JavaScript syntax and pure grouping were checked offline. Browser visual
+inspection was blocked by the local-file URL policy and has not been completed.
+
+Place exploration inside the existing Refinement view. The default overview
+shows scope/coverage, a residual-versus-complexity plot and grouped model rows.
+Show competitive models first; make every rejected/deferred reason available
+in diagnostics. Do not insert a hundred fit panels into the page.
+
+Selecting a group loads one fit with observed points, parent and child curves,
+residuals and phase Bragg ticks. Let the user pin up to two other models across
+groups for linked zoom/axis comparison; preserve equivalent alternatives in an
+expandable list. Load small metrics before full curve arrays. Provide native
+GPX, exact protocol, audit and CSV downloads.
+
+When extending to several scans, use a model-by-condition evidence matrix and
+mode/moment trends on verified experimental axes. Clicking a cell opens its
+fit. Keep acquisition order, sample, bank and missing/failed coverage visible;
+never merge incompatible banks or infer a proven phase diagram from Rwp rank.
+
+Mode trends need a consistent parent, normalization, origin and domain gauge.
+Opposite global mode signs or reversal of all magnetic moments can describe the
+same powder solution. Compare invariant magnitudes when that ambiguity remains,
+and retain explicit branch labels instead of drawing a false sign-change event.
+Anisotropic ADPs, strain and other tensor-valued parent state require their own
+verified transformation controls; the current Uiso controls do not certify them.
 
 ## Primary references
 
@@ -197,3 +305,5 @@ by the five imports or 51 subgroup records above.
 - [ISODISTORT examples](https://iso.byu.edu/isodistortexample.php)
 - [Bilbao k-SUBGROUPSMAG help](https://cryst.ehu.eus/cryst/help/k_Subgroupsmag1_help.html)
 - [GSAS-II magnetic-structure workflow paper](https://journals.iucr.org/b/issues/2024/05/00/cam5001/cam5001.pdf)
+- [Galaxy job resources and concurrency](https://docs.galaxyproject.org/en/latest/admin/jobs.html)
+- [Galaxy collection mapping semantics](https://docs.galaxyproject.org/en/release_25.0/dev/collection_semantics.html)
