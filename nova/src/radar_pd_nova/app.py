@@ -826,17 +826,18 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Refine
                 variant="flat",
                 size="small",
             )
-            vuetify.VBtn(
-                "User guide",
+            # Use a native anchor: Vuetify's VBtn drops target/rel in the pinned
+            # runtime, which would navigate away and disconnect the workspace.
+            with html.A(
                 id="radar-user-guide",
                 href="./user-guide/index.html",
                 target="_blank",
                 rel="noopener noreferrer",
-                prepend_icon="mdi-book-open-page-variant-outline",
                 title="Open the screenshot guide in a new tab",
-                variant="text",
-                size="small",
-            )
+                classes="radar-guide-link",
+            ):
+                vuetify.VIcon("mdi-book-open-page-variant-outline", size="small")
+                html.Span("User guide")
             vuetify.VBtn(
                 "Clear workspace",
                 v_if="run_rows.length || rf_experiments.length || rf_jobs.length || !!powgen_ipts || !!selected_run_uid",
@@ -7774,6 +7775,9 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Refine
         .radar-product-name { color: var(--radar-brand-900); font-size: 16px; font-weight: 800; line-height: 1.2; }
         .radar-product-subtitle { color: var(--radar-muted); font-size: 12px; margin-top: 2px; }
         .radar-run-chip { max-width: 310px; }
+        .radar-guide-link { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 4px; color: var(--radar-brand-700); font-size: 12px; font-weight: 600; text-decoration: none; white-space: nowrap; }
+        .radar-guide-link:hover { background: #edf5ef; }
+        .radar-guide-link:focus-visible { outline: 2px solid var(--radar-brand-700); outline-offset: 2px; }
         .radar-run-chip .v-chip__content { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .radar-layout { display: grid; grid-template-columns: 360px minmax(0, 1fr); min-height: calc(100vh - 122px); }
         .radar-layout.is-collapsed { grid-template-columns: minmax(0, 1fr); }

@@ -23,9 +23,12 @@ class References(HTMLParser):
         super().__init__()
         self.ids = set()
         self.refs = set()
+        self.guide_link = None
 
     def handle_starttag(self, tag, attrs):
         attributes = dict(attrs)
+        if attributes.get("id") == "radar-user-guide":
+            self.guide_link = (tag, attributes)
         if attributes.get("id"):
             self.ids.add(attributes["id"])
         for attr in ("src", "href"):
@@ -35,7 +38,7 @@ class References(HTMLParser):
 
 def verify(root: Path, nginx_template: Path):
     manifest = json.loads((root / "manifest.json").read_text())
-    assert manifest["application_version"] == "0.4.35"
+    assert manifest["application_version"] == "0.4.36"
     assert manifest["screenshots"] == len(list((root / "assets").iterdir()))
     for name, digest in manifest["files"].items():
         assert hashlib.sha256((root / name).read_bytes()).hexdigest() == digest, name
@@ -56,10 +59,14 @@ def verify(root: Path, nginx_template: Path):
     from radar_pd_nova.app import RadarPdNovaApp
     app = RadarPdNovaApp()
     layout = app.layout.html
-    assert 'id="radar-user-guide"' in layout
-    assert 'href="./user-guide/index.html"' in layout
-    assert 'target="_blank"' in layout
-    assert 'rel="noopener noreferrer"' in layout
+    interface = References()
+    interface.feed(layout)
+    assert interface.guide_link is not None
+    tag, attrs = interface.guide_link
+    assert tag == "a", "Use a native anchor; the pinned VBtn drops target/rel at runtime"
+    assert attrs["href"] == "./user-guide/index.html"
+    assert attrs["target"] == "_blank"
+    assert attrs["rel"] == "noopener noreferrer"
 
     base = Path("/tmp/radar-pd-nginx")
     base.mkdir(exist_ok=True)

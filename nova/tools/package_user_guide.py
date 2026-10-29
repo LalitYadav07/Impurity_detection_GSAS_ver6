@@ -48,7 +48,7 @@ def package(source: Path, destination: Path) -> None:
     content = content.replace("Two-CIF input ZIP</a>", "Prepare the two-CIF input</a>")
     content = content.replace(
         "NOVA 0.4.34 · 29 October 2026",
-        "NOVA 0.4.35 · Screenshots: 0.4.34 · 29 October 2026",
+        "NOVA 0.4.36 · Screenshots: 0.4.34 · 29 October 2026",
     )
     content = content.replace(
         "Keep this HTML file with its inputs folder, or extract the complete guide bundle before opening it. Screenshots are embedded in the page and work offline.",
@@ -73,7 +73,7 @@ def package(source: Path, destination: Path) -> None:
     (destination / "index.html").write_text(content, encoding="utf-8")
     files["index.html"] = hashlib.sha256(content.encode()).hexdigest()
     manifest = {
-        "schema": "radar-pd-user-guide/v1", "application_version": "0.4.35",
+        "schema": "radar-pd-user-guide/v1", "application_version": "0.4.36",
         "screenshot_version": "0.4.34", "screenshots": len(files) - len(INPUTS) - 1,
         "files": dict(sorted(files.items())),
         "inputs": list(INPUTS), "licensed_cif_files_redistributed": False,

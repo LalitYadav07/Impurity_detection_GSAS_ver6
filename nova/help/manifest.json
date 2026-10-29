@@ -1,6 +1,6 @@
 {
   "schema": "radar-pd-user-guide/v1",
-  "application_version": "0.4.35",
+  "application_version": "0.4.36",
   "screenshot_version": "0.4.34",
   "screenshots": 52,
   "files": {
@@ -56,7 +56,7 @@
     "assets/fd2dbb4afe01d19cb485.jpg": "fd2dbb4afe01d19cb48518d6c30a192c45c3c2af8560638d27a791b548d2c1f1",
     "assets/fe125ef98e627cd6c801.jpg": "fe125ef98e627cd6c801d7ee43c340537394df5b483555ba70b11d9fc8e476cf",
     "assets/ff2125e34a54ca4330be.jpg": "ff2125e34a54ca4330be10216af2b81c44e4bc4ed2ed09fe7ef801d7bc53795d",
-    "index.html": "6cc44ebf86913dac5f160e75b59e33b1832c38cf3ae68ab7110f6697e322a023",
+    "index.html": "d89775bada9e594edac9c4e51b6d9c819d3ee68829a772347089ec7e3b8d2f09",
     "inputs/ages-analysis-settings.yaml": "fbbff1d875b7b38f963c7edfe55ef019bdc01acc5e649c2918b3ae8e428656fc",
     "inputs/approved-refinement-recipe.json": "4e8e9d6365a47df527566ad20caaa4eb3a53b87e6d34bd7360ff0aeca94855fd",
     "inputs/llm-refinement-request.txt": "8bb6e275e5e675c32442279b246b1eaf38632fd6689b07133ce2c06139291283",
