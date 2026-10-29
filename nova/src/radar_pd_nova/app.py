@@ -34,6 +34,7 @@ from .post_analysis_ui import PostAnalysisMixin
 from .refinement_controller import RefinementMixin
 from .symmetry_controller import SymmetryMixin
 from .refinement_ui import refinement_dashboard
+from .checkpoints import CoalescedCheckpoint
 from .post_analysis import PostAnalysisSettings
 from .facility import FacilityBrowser, FacilityPathError, WatchRecipe
 from .galaxy_service import (
@@ -888,8 +889,19 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Refine
         return ""
 
     async def _stop_session_enrollment(self) -> None:
+        monitor_task = self._powgen_monitor_task
         if self.server.state.powgen_monitoring:
             self.stop_powgen_monitoring()
+        if monitor_task is not None and not monitor_task.done():
+            # Background uploads own detached snapshots, but the final state
+            # must reach History before this container or workspace is removed.
+            await monitor_task
+        if getattr(self, '_powgen_checkpoint_error', None):
+            controller = self._powgen_controller
+            if controller is None:
+                raise self._powgen_checkpoint_error
+            await asyncio.to_thread(controller.persist_state)
+            self._powgen_checkpoint_error = None
         workspace = getattr(self, "_refinement_workspace", None)
         if workspace is not None:
             pending_experiments = {
@@ -5588,13 +5600,9 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Refine
         state.powgen_monitoring = False
         task = self._powgen_monitor_task
         if task is not None and not task.done():
-            if getattr(self, '_powgen_submissions_in_flight', 0):
-                # An upload already running in a thread cannot be cancelled.
-                # Drain its acknowledgement before allowing another watch.
-                state.live_launch_busy = True
-            else:
-                self._powgen_monitor_task = None
-                task.cancel()
+            # to_thread cannot cancel a running discovery/upload. Let the loop
+            # finish that operation, acknowledge jobs and drain its checkpoint.
+            state.live_launch_busy = True
         self._powgen_wake_event.set()
         state.powgen_next_check = "Stopped"
         state.powgen_message = (
@@ -5638,6 +5646,8 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Refine
         if controller is None:
             state.powgen_monitoring = False
             return
+        checkpoints = CoalescedCheckpoint(controller.capture_checkpoint, controller.persist_state)
+        self._powgen_checkpoint_error = None
         try:
             while state.powgen_monitoring and controller is self._powgen_controller:
                 state.powgen_last_checked = _format_eastern_time(datetime.now(timezone.utc))
@@ -5645,14 +5655,14 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Refine
                 state.powgen_message = "Checking completed reduced files and scan metadata..."
                 state.flush()
                 try:
-                    await asyncio.to_thread(controller.discover)
+                    await asyncio.to_thread(controller.discover, checkpoint=False)
                 except Exception as exc:
                     warnings.append(f"Source check failed: {_powgen_submission_error_summary(exc)}")
 
                 try:
                     state.powgen_message = "Recovering any previously accepted Galaxy jobs for this configuration..."
                     state.flush()
-                    recovered = await asyncio.to_thread(controller.reconcile_recent_runs)
+                    recovered = await asyncio.to_thread(controller.reconcile_recent_runs, checkpoint=False)
                     if recovered:
                         warnings.append(f"recovered {recovered} acknowledged Galaxy job(s) from recent History")
                 except Exception as exc:
@@ -5662,6 +5672,7 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Refine
                     )
 
                 self._sync_powgen_rows()
+                checkpoints.offer()
                 state.flush()
 
                 # Refresh first so jobs that finished since the last poll free
@@ -5751,11 +5762,11 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Refine
                                 reserved.add(run.run_id)
                                 pending.add(asyncio.create_task(launch(position, run)))
                         self._powgen_submissions_in_flight = len(pending)
-                        # A rolling backfill can last hours. Keep acknowledged
-                        # job IDs durable at least once per active-job window.
+                        # A rolling backfill can last hours. Offer the newest
+                        # job IDs at least once per active-job window.
                         if acknowledged_since_checkpoint >= controller.settings.max_active_jobs or (done and not pending):
                             try:
-                                await asyncio.to_thread(controller.persist_state)
+                                checkpoints.offer()
                                 acknowledged_since_checkpoint = 0
                             except Exception as exc:
                                 warnings.append(f"Acknowledged jobs will be checkpointed again: {_powgen_submission_error_summary(exc)}")
@@ -5763,10 +5774,12 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Refine
                         state.flush()
 
                 self._sync_powgen_rows()
-                state.powgen_message = "Scan and job results updated. Saving the recovery checkpoint..."
+                state.powgen_message = "Scan and job results updated. Recovery checkpoint saving in the background..."
                 state.flush()
                 try:
-                    await asyncio.to_thread(controller.persist_state)
+                    checkpoints.offer()
+                    if checkpoints.error:
+                        warnings.append("Recovery checkpoint will be retried: " + _powgen_submission_error_summary(checkpoints.error))
                 except Exception as exc:
                     warnings.append(
                         "The batch ran, but its recovery checkpoint will be retried: "
@@ -5807,6 +5820,15 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Refine
         except asyncio.CancelledError:
             pass
         finally:
+            state.powgen_message = "Monitoring stopped. Finishing the latest recovery checkpoint..."
+            state.flush()
+            try:
+                await checkpoints.drain()
+            except Exception as exc:
+                self._powgen_checkpoint_error = exc
+                state.powgen_message = "Monitoring stopped; Galaxy jobs remain in History. Recovery checkpoint needs retry: " + _powgen_submission_error_summary(exc)
+            else:
+                state.powgen_message = "Monitoring stopped. The latest recovery checkpoint is saved in Galaxy History."
             self._powgen_submissions_in_flight = 0
             if controller is self._powgen_controller:
                 state.powgen_monitoring = False

@@ -106,6 +106,26 @@ class FakeGalaxyService:
         raise AssertionError("POWGEN status refresh must not download the result archive")
 
 
+def test_background_checkpoint_is_detached_and_stale_snapshots_are_ignored(monkeypatch):
+    service = FakeGalaxyService()
+    controller = PowgenWatchController(service,
+        PowgenExperimentSettings('IPTS-2767',service.history_id,'config-hda','1.5'))
+    controller.state.discovery_cursor={'selected':['cell']}
+    old=controller.capture_checkpoint()
+    controller.state.discovery_cursor['selected'].append('fractions')
+    current=controller.capture_checkpoint()
+    controller.persist_state(old)
+    assert service.uploaded[-1][0]['discovery_cursor']=={'selected':['cell']}
+    controller.persist_state(current)
+    count=len(service.uploaded)
+    controller.persist_state(old)
+    assert len(service.uploaded)==count
+    restored=PowgenWatchController(service,controller.settings)
+    service.history_documents=[dict(id='latest',payload=service.uploaded[-1][0])]
+    assert restored.restore_latest_state()
+    assert restored.state.discovery_cursor=={'selected':['cell','fractions']}
+
+
 def test_checkpoint_search_skips_other_settings_before_downloading():
     from dataclasses import replace
     service = FakeGalaxyService()

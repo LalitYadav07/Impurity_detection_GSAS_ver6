@@ -40,6 +40,13 @@ from .acquisition import acquisition_context, stage_manual_acquisition
 
 
 @dataclass(frozen=True)
+class WatchCheckpoint:
+    generation: int
+    state_json: str
+    payload_json: str
+
+
+@dataclass(frozen=True)
 class PowgenExperimentSettings:
     """User-controlled settings for one read-only POWGEN experiment watch."""
 
@@ -369,6 +376,9 @@ class PowgenWatchController:
         self._profile_dataset_ids: dict[str, str] = {}
         self._profile_upload_lock = threading.Lock()
         self._persist_lock = threading.Lock()
+        self._checkpoint_lock = threading.Lock()
+        self._checkpoint_generation = 0
+        self._persisted_checkpoint_generation = 0
         self._staging = tempfile.TemporaryDirectory(prefix="radar-powgen-banks-")
         self._setup_cache: dict[tuple, Any] = {}
         self._manual_setup_signature = None
@@ -905,7 +915,9 @@ class PowgenWatchController:
             current = self.state.discovered[run.run_id]
             self.state.discovered[run.run_id] = replace(current, scan_metadata={
                 **current.scan_metadata, self.bank_provenance_key + "_provenance": record.provenance[self.bank_provenance_key]})
-        self.state.mark_submitted(run, record.galaxy_job_id)
+        submitted = self.state.mark_submitted(run, record.galaxy_job_id)
+        if record.timings_seconds:
+            submitted.scan_metadata['orchestration_seconds'] = dict(record.timings_seconds)
         self.records[run.run_id] = record
         if persist:
             self.persist_state()
@@ -960,7 +972,7 @@ class PowgenWatchController:
             or candidate_instrument == self.settings.instrument_profile_dataset_id
         )
 
-    def reconcile_recent_runs(self) -> int:
+    def reconcile_recent_runs(self, *, checkpoint: bool = True) -> int:
         """Recover jobs that Galaxy accepted after a checkpoint write was lost.
 
         Galaxy jobs and their outputs are authoritative. The immutable watch
@@ -1039,7 +1051,7 @@ class PowgenWatchController:
                 recovered_count += 1
 
         self._recent_runs_reconciled = True
-        if state_changed:
+        if state_changed and checkpoint:
             self.persist_state()
         return recovered_count
 
@@ -1142,14 +1154,11 @@ class PowgenWatchController:
                 summary["pattern_observation"] = {**receipt, "collection_id":record.output_dataset_ids.get("tables"), "notice": str(exc)}
         return summary
 
-    def persist_state(self) -> str:
-        """Write an immutable watch-state checkpoint to Galaxy History."""
-
-        with self._persist_lock:
+    def capture_checkpoint(self) -> WatchCheckpoint:
+        """Detach the current state before an asynchronous upload starts."""
+        with self._checkpoint_lock:
             serialized = self.state.to_json()
-            if serialized == self._last_persisted_state and self.state_dataset_ids:
-                return self.state_dataset_ids[-1]
-            payload = self.state.as_dict()
+            payload = json.loads(serialized)
             payload["watch"] = {
                 "facility": self.definition.facility,
                 "instrument": self.settings.instrument,
@@ -1172,6 +1181,20 @@ class PowgenWatchController:
                 "checkpoint_key": self._checkpoint_key(),
                 **self._watch_extension(),
             }
+            self._checkpoint_generation += 1
+            return WatchCheckpoint(self._checkpoint_generation, serialized, json.dumps(payload))
+
+    def persist_state(self, snapshot: WatchCheckpoint | None = None) -> str:
+        """Write one detached checkpoint; stale writers cannot replace newer state."""
+        snapshot = snapshot or self.capture_checkpoint()
+        with self._persist_lock:
+            if self.state_dataset_ids and (
+                snapshot.generation <= self._persisted_checkpoint_generation
+                or snapshot.state_json == self._last_persisted_state
+            ):
+                self._persisted_checkpoint_generation = max(self._persisted_checkpoint_generation, snapshot.generation)
+                return self.state_dataset_ids[-1]
+            payload = json.loads(snapshot.payload_json)
             last_error: Exception | None = None
             for attempt in range(3):
                 try:
@@ -1181,7 +1204,8 @@ class PowgenWatchController:
                         label=f"{self.beamline_label} watch state {self.settings.ipts} [watch:{self._checkpoint_key()}]",
                     )
                     self.state_dataset_ids.append(dataset_id)
-                    self._last_persisted_state = serialized
+                    self._last_persisted_state = snapshot.state_json
+                    self._persisted_checkpoint_generation = snapshot.generation
                     return dataset_id
                 except Exception as exc:
                     last_error = exc

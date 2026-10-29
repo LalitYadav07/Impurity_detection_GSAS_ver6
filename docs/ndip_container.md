@@ -49,6 +49,16 @@ collect         normalize an existing run directory
 
 The image writes Galaxy-ready collections under the selected output directory: `plots/`, `tables/`, `phases/`, `gpx/`, and `diagnostics/`. It also writes `summary.json`, `state.json`, `gpx_index.json`, `report.html`, and `results.zip`.
 
+Analyze prints `[NDIP RUNTIME]` and `[NDIP RUNTIME FINAL]` JSON receipts and
+publishes the pre-collection receipt in `summary.json` under `runtime`.
+They separate adapter preparation, scientific subprocess and output collection,
+and report numeric scheduler slots, CPU affinity and visible cgroup limits.
+CPU usage includes waited children; per-process peak RSS is labeled separately
+from cgroup peak memory. No credentials or arbitrary environment variables are
+included. These are observed runtime limits, not a promise of NDIP cluster
+capacity or scheduling quotas. Scientific stage timings remain in the existing
+benchmark report.
+
 ## Continuous IPTS processing
 
 The preferred NDIP-native route is **Ingress -> saved RADAR-PD workflow ->

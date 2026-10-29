@@ -372,6 +372,7 @@ def test_checkpoint_restoration_does_not_block_the_ui_event_loop(live, monkeypat
 def test_completed_scan_is_visible_while_another_upload_is_still_waiting(live):
     second_started, release_second = threading.Event(), threading.Event()
     first_visible, checkpoint_started = threading.Event(), threading.Event()
+    final_checkpoint = threading.Event()
     state = live.server.state
     runs = [SimpleNamespace(run_id=f"scan-{n}", n=n) for n in (1, 2)]
 
@@ -383,8 +384,10 @@ def test_completed_scan_is_visible_while_another_upload_is_still_waiting(live):
         def __init__(self):
             self.state = SimpleNamespace(submitted={}, completed={}, discovered={r.run_id: r for r in runs}, failed={})
 
-        def discover(self): pass
-        def reconcile_recent_runs(self): return 0
+        def discover(self, *, checkpoint): assert not checkpoint
+        def reconcile_recent_runs(self, *, checkpoint):
+            assert not checkpoint
+            return 0
         def due_submissions(self, *, reserved_run_ids=None):
             return [r for r in self.state.discovered.values() if r.run_id not in (reserved_run_ids or ())]
 
@@ -410,8 +413,11 @@ def test_completed_scan_is_visible_while_another_upload_is_still_waiting(live):
                 records[identifier] = RunRecord(uid=identifier, name=identifier, mode="full", history_id="local-history", status=RunStatus.OK)
             return records
 
-        def persist_state(self):
+        def capture_checkpoint(self): return len(self.state.completed)
+
+        def persist_state(self, snapshot):
             checkpoint_started.set()
+            if snapshot == 2: final_checkpoint.set()
 
     controller = Controller()
     live._powgen_controller = controller
@@ -428,12 +434,12 @@ def test_completed_scan_is_visible_while_another_upload_is_still_waiting(live):
         try:
             assert await asyncio.to_thread(first_visible.wait, 4)
             assert second_started.is_set() and not release_second.is_set()
-            assert not checkpoint_started.is_set()
+            assert checkpoint_started.is_set()
             assert live.records["scan-1"].status == RunStatus.OK
         finally:
             release_second.set()
         try:
-            assert await asyncio.to_thread(checkpoint_started.wait, 4)
+            assert await asyncio.to_thread(final_checkpoint.wait, 4)
             assert set(controller.state.completed) == {"scan-1", "scan-2"}
         finally:
             state.powgen_monitoring = False

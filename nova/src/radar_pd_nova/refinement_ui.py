@@ -85,7 +85,7 @@ def refinement_dashboard(app):
                 v.VTextarea(label='Refinement request',v_model=('rf_request',),placeholder='Name the phases and exact atom labels. Refine background and scales, then cells and only symmetry-allowed positions. Keep occupancies fixed; release one Uiso site at a time if needed.',rows=7,auto_grow=True,variant='outlined',hide_details=True,classes='mt-4',update_modelValue=app.refinement_policy_edited)
                 v.VBtn('Load staged atom + Uiso example',click=app.load_atomic_refinement_example,variant='text',size='small',prepend_icon='mdi-text-box-outline',classes='mt-2')
                 html.P('Specify stages, phase names, atoms, constraints and anything that must remain fixed. Revisions replace approval and pause future enrollment.',classes='rf-notice')
-                v.VBtn("{{ rf_cards.length ? 'Revise recipe' : 'Generate recipe' }}",click=app.generate_refinement_recipe,disabled=('rf_busy || !rf_source || !rf_request.trim()',),loading=('rf_busy',),color='#15543c',variant='flat',block=True,prepend_icon='mdi-auto-fix',classes='mt-4')
+                v.VBtn("{{ rf_cards.length ? 'Revise recipe' : 'Generate recipe' }}",click=(app.generate_refinement_recipe,'[{experiment: rf_experiment, source: rf_source, request: rf_request}]'),disabled=('rf_busy || !rf_source || !rf_request.trim()',),loading=('rf_busy',),color='#15543c',variant='flat',block=True,prepend_icon='mdi-auto-fix',classes='mt-4')
             with html.Div(classes='rf-card'):
                 html.Div('3 · Review and approve',classes='rf-subtitle');html.H3('Refinement stages')
                 with html.Div(v_if='rf_recipe_versions.length',classes='rf-toolbar'):

@@ -956,6 +956,7 @@ def collect_outputs(
         "observables": observables,
         "pattern_observation": pattern_observation,
         "acquisition": acquisition or {},
+        "runtime": read_json(run_root/'Technical'/'Logs'/'runtime_resources.json') if (run_root/'Technical'/'Logs'/'runtime_resources.json').is_file() else {},
         "final_rwp": final_rwp,
         "scientific_status": "needs_review" if scientific_warnings else "not_assessed" if not lattice else "checks_passed",
         "hypotheses": hypotheses,

@@ -1629,6 +1629,7 @@ class GalaxyService:
         record.status = RunStatus.UPLOADING
         record.analysis_status = RunStatus.UPLOADING
         record.message = ""
+        submission_started = time.monotonic()
         self._emit_submission_progress(record, SubmissionPhase.VALIDATING, "Validating", 0, 1, callback)
         try:
             if inputs.use_builtin_cuka and (config.radiation.value != "xray" or config.instrument_mode == "tof"):
@@ -1640,7 +1641,9 @@ class GalaxyService:
                 work_dir / "radar_pd_config.yaml",
                 inputs=snapshot.inputs,
             )
+            preparation_started = time.monotonic()
             prepared = self._prepare_datasets(snapshot, record, config_path, callback)
+            record.timings_seconds['input_preparation'] = time.monotonic()-preparation_started
             if cancel_event.is_set() or record.cancel_requested:
                 record.status = RunStatus.CANCELLED
                 record.analysis_status = RunStatus.CANCELLED
@@ -1651,6 +1654,7 @@ class GalaxyService:
             self._emit_submission_progress(
                 record, SubmissionPhase.WAITING_FOR_GALAXY, "Waiting for Galaxy", len(prepared), len(prepared), callback
             )
+            acknowledgement_started = time.monotonic()
             with self._store() as store:
                 params, submitted_inputs = self._prepared_parameters(store, snapshot, prepared)
                 uid, tool = self._submit_with_retry(
@@ -1662,6 +1666,8 @@ class GalaxyService:
             with self._lock:
                 self._tools[uid] = tool
             record.galaxy_job_id = uid
+            record.timings_seconds['job_acknowledgement'] = time.monotonic()-acknowledgement_started
+            record.timings_seconds['submission_total'] = time.monotonic()-submission_started
             record.status = RunStatus.QUEUED
             record.analysis_status = RunStatus.QUEUED
             record.stage = "Waiting for compute"

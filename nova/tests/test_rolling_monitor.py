@@ -26,8 +26,10 @@ class Controller:
         self.max_reserved_and_active = 0
         self.lock = threading.Lock()
 
-    def discover(self): pass
-    def reconcile_recent_runs(self): return 0
+    def discover(self, *, checkpoint): assert not checkpoint
+    def reconcile_recent_runs(self, *, checkpoint):
+        assert not checkpoint
+        return 0
 
     def due_submissions(self, *, reserved_run_ids=None):
         reserved = set(reserved_run_ids or ())
@@ -64,9 +66,13 @@ class Controller:
             result[identifier] = RunRecord(uid=identifier, name=identifier, mode='full', history_id='local', status=RunStatus.OK)
         return result
 
-    def persist_state(self):
-        self.checkpoints.append(len(self.state.completed))
-        self.checkpointed.set()
+    def capture_checkpoint(self):
+        return len(self.state.completed)
+
+    def persist_state(self, snapshot):
+        self.checkpoints.append(snapshot)
+        if snapshot >= 5:
+            self.checkpointed.set()
 
 
 def app_with_controller(controller):
@@ -90,7 +96,7 @@ def test_slow_upload_does_not_block_slot_refill_or_durable_checkpoints():
             assert not controller.release.is_set()
             assert await asyncio.to_thread(controller.checkpointed.wait, 5)
             assert 'scan-2' not in controller.state.completed
-            assert controller.checkpoints[0] == 5
+            assert max(controller.checkpoints) >= 5
         finally:
             app.stop_powgen_monitoring()
             controller.release.set()
@@ -126,4 +132,33 @@ def test_stop_drains_in_flight_acknowledgements_but_never_starts_waiting_uploads
         assert not app.server.state.live_launch_busy
         assert app._powgen_monitor_task is None
 
+    asyncio.run(run())
+
+
+def test_slow_checkpoint_upload_does_not_hold_analysis_admission():
+    class SlowCheckpoint(Controller):
+        def __init__(self):
+            super().__init__(count=8,blocked=())
+            self.checkpoint_entered=threading.Event()
+            self.checkpoint_release=threading.Event()
+        def persist_state(self,snapshot):
+            if not self.checkpoints:
+                self.checkpoint_entered.set()
+                assert self.checkpoint_release.wait(10)
+            super().persist_state(snapshot)
+    controller=SlowCheckpoint();app=app_with_controller(controller)
+    async def run():
+        task=asyncio.create_task(app._powgen_monitor_loop());app._powgen_monitor_task=task
+        try:
+            assert await asyncio.to_thread(controller.checkpoint_entered.wait,2)
+            assert await asyncio.to_thread(controller.sixth_entered.wait,7)
+            assert not controller.checkpoint_release.is_set()
+        finally:
+            app.stop_powgen_monitoring();controller.checkpoint_release.set()
+            await asyncio.wait_for(task,7)
+        assert controller.checkpoints[-1]==len(controller.state.completed)
+        # Refill may start scan 6 before staggered scans 2-5. Stop must retain
+        # every actually started job, without starting those waiting uploads.
+        assert 'scan-6' in controller.state.completed
+        assert set(controller.state.completed)=={f'scan-{n}' for n in controller.launched}
     asyncio.run(run())
