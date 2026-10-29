@@ -81,7 +81,22 @@ def read_powgen_sample_identity(ipts: str, run_number: int, *, nexus_path=None, 
             encoding='utf-8', errors='replace', timeout=20, check=False,
         )
         if header.returncode and not re.search(r'\bDATASET\s+"', header.stdout):
-            raise OSError('Cannot read raw HDF5 identity metadata')
+            # A valid older NeXus file can have none of these optional identity
+            # aliases. h5dump then returns an error even though the file and its
+            # scan conditions are readable. Probe the root independently before
+            # deciding that the raw HDF5 itself is damaged.
+            inspector = shutil.which("h5ls")
+            if inspector:
+                probe = subprocess.run(
+                    [inspector, str(path)], capture_output=True, text=True,
+                    encoding="utf-8", errors="replace", timeout=20, check=False,
+                )
+                if probe.returncode:
+                    raise OSError('Cannot read raw HDF5 identity metadata')
+            else:
+                with path.open("rb") as stream:
+                    if stream.read(8) != b"\x89HDF\r\n\x1a\n":
+                        raise OSError('Cannot read raw HDF5 identity metadata')
         for dimensions in re.findall(r'DATASPACE\s+SIMPLE\s*\{\s*\(([^)]*)\)', header.stdout):
             sizes = [int(n) for n in re.findall(r'\d+', dimensions)]
             if math.prod(sizes)>1000:

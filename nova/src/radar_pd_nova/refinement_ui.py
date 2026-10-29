@@ -50,6 +50,9 @@ def refinement_dashboard(app):
                 html.Strong('{{ metric.value }}');html.Span('{{ metric.label }}')
             html.Span('{{ rf_transport }}',classes='rf-muted')
             v.VChip('Future matching scans enrolled',v_if='rf_future_armed',color='#157347',size='small',variant='tonal',prepend_icon='mdi-access-point')
+        with html.Div(v_if='rf_jobs.length',classes='mb-4'):
+            html.P('{{ rf_progress_text }}',classes='rf-notice')
+            v.VProgressLinear(model_value=('rf_progress_percent',),height=6,color='#157347',rounded=True)
         with html.Div(v_if='!rf_experiments.length && !rf_loading',classes='rf-empty'):
             html.H3('Start with a completed RADAR-PD fit')
             html.P('Published GPX projects from this history will appear here, including scans recovered from an earlier session.')
@@ -169,6 +172,7 @@ def refinement_dashboard(app):
                     select('Verified output','rf_download','rf_downloads')
                     v.VBtn('Download',click=app.download_refinement_artifact,variant='outlined',size='small',prepend_icon='mdi-download')
                     v.VBtn('Open polished GPX in GSAS-II',v_if='rf_can_open_gsas',click=app.open_refinement_in_gsasii,variant='outlined',size='small')
+                html.P('{{ rf_output_provenance }}',v_if='!!rf_output_provenance',classes='rf-notice')
         with html.Details(v_if='rf_source_warnings.length',classes='mt-5'):
             html.Summary('Projects needing attention ({{ rf_source_warnings.length }})',style='cursor:pointer;color:#8b6028;font-size:13px')
             v.VDataTable(items=('rf_source_warnings',),headers=("[{title:'Scan',key:'scan'},{title:'Reason',key:'reason'}]",),items_per_page=5,density='compact')

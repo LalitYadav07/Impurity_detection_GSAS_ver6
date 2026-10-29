@@ -54,15 +54,7 @@ class RefinementMixin:
         self._refinement_approving=False
         self._refinement_inspecting=False
         s=self.server.state
-        values=dict(rf_mode='recipe',rf_busy=False,rf_loading=False,rf_message='',rf_error='',rf_transport='',rf_provider='Illumine Luna · lowest reasoning',
-            rf_experiment='',rf_experiments=[],rf_source='',rf_sources=[],rf_source_details=[],rf_context_atoms=[],rf_context_search='',rf_scope='all',rf_samples=[],rf_sample_options=[],rf_scans=[],rf_scan_options=[],rf_banks=[],rf_bank_options=[],
-            rf_existing=True,rf_future=False,rf_scope_summary='No published GPXs available',rf_scope_token='',rf_request='',rf_draft_status='',rf_cards=[],rf_questions=[],rf_assumptions=[],rf_plan_calls='',rf_model_tokens='',rf_model_cost='',rf_model_has_luna_price=False,rf_plan_ready=False,
-            rf_approved=False,rf_recipe_id='',rf_recipe_summary='',rf_active_summary='',rf_saved_recipe='',rf_recipe_versions=[],rf_recipe_filter='all',rf_metrics=[],rf_source_warnings=[],rf_future_armed=False,
-            rf_jobs=[],rf_job_search='',rf_job_status='all',rf_selected_job='',rf_selected_title='',rf_selected_message='',rf_has_output=False,
-            rf_result_tab='fit',rf_stage='final',rf_stages=[],rf_histogram='',rf_histograms=[],rf_axis='d',rf_display='compare',rf_fit=figure_json(empty_figure()),rf_fit_notice='',rf_rwp_summary='',rf_zoom=0,
-            rf_trend=figure_json(empty_figure('Completed refinements will populate this trend')),rf_trend_notice='',rf_trend_metric='rwp',rf_trend_metrics=[dict(title='Rwp · original and polished',value='rwp')],rf_trend_axis='run_number',rf_trend_axes=[dict(title='Scan number',value='run_number')],rf_trend_display='absolute',
-            rf_parameters=[],rf_parameter_search='',rf_downloads=[],rf_download='',rf_can_open_gsas=False,rf_queue_running=False,rf_follow=True,rf_expanded=False)
-        for key,value in values.items():setattr(s,key,value)
+        for key,value in self._refinement_state_defaults().items():setattr(s,key,value)
         self.server.state.change('experiment_result_view','workspace_view')(self._refinement_view_changed)
         self.server.state.change('rf_experiment')(self._refinement_experiment_changed)
         self.server.state.change('rf_scope','rf_samples','rf_scans','rf_banks','rf_existing','rf_future')(self._refinement_scope_changed)
@@ -70,6 +62,17 @@ class RefinementMixin:
         self.server.state.change('rf_request')(self._refinement_request_changed)
         self.server.state.change('rf_stage','rf_histogram','rf_axis','rf_display','rf_zoom')(self._refinement_plot_changed)
         self.server.state.change('rf_trend_metric','rf_trend_axis','rf_trend_display','rf_recipe_filter')(self._refinement_trend_changed)
+
+    @staticmethod
+    def _refinement_state_defaults():
+        return dict(rf_mode='recipe',rf_busy=False,rf_loading=False,rf_message='',rf_error='',rf_transport='',rf_provider='Illumine Luna · lowest reasoning',
+            rf_experiment='',rf_experiments=[],rf_source='',rf_sources=[],rf_source_details=[],rf_context_atoms=[],rf_context_search='',rf_scope='all',rf_samples=[],rf_sample_options=[],rf_scans=[],rf_scan_options=[],rf_banks=[],rf_bank_options=[],
+            rf_existing=True,rf_future=False,rf_scope_summary='No published GPXs available',rf_scope_token='',rf_request='',rf_draft_status='',rf_cards=[],rf_questions=[],rf_assumptions=[],rf_plan_calls='',rf_model_tokens='',rf_model_cost='',rf_model_has_luna_price=False,rf_plan_ready=False,
+            rf_approved=False,rf_recipe_id='',rf_recipe_summary='',rf_active_summary='',rf_saved_recipe='',rf_recipe_versions=[],rf_recipe_filter='all',rf_metrics=[],rf_source_warnings=[],rf_future_armed=False,
+            rf_jobs=[],rf_job_search='',rf_job_status='all',rf_progress_text='No refinements started',rf_progress_percent=0,rf_selected_job='',rf_selected_title='',rf_selected_message='',rf_has_output=False,rf_output_provenance='',
+            rf_result_tab='fit',rf_stage='final',rf_stages=[],rf_histogram='',rf_histograms=[],rf_axis='d',rf_display='compare',rf_fit=figure_json(empty_figure()),rf_fit_notice='',rf_rwp_summary='',rf_zoom=0,
+            rf_trend=figure_json(empty_figure('Completed refinements will populate this trend')),rf_trend_notice='',rf_trend_metric='rwp',rf_trend_metrics=[dict(title='Rwp · original and polished',value='rwp')],rf_trend_axis='run_number',rf_trend_axes=[dict(title='Scan number',value='run_number')],rf_trend_display='absolute',
+            rf_parameters=[],rf_parameter_search='',rf_downloads=[],rf_download='',rf_can_open_gsas=False,rf_queue_running=False,rf_follow=True,rf_expanded=False)
 
     def _refinement_schedule(self,coroutine,name):
         try:loop=asyncio.get_running_loop()
@@ -275,6 +278,9 @@ class RefinementMixin:
             jobs.sort(key=lambda j:(j['source'].get('run_number') or 0,j['queued_utc']),reverse=True)
             version={r['id']:r['version'] for r in recipes}
             s.rf_jobs=[dict(id=j['id'],scan=j['source']['scan_label'],sample=j['source']['sample_label'],bank=j['source'].get('bank'),status=j['status'],message=j['message'],recipe=', '.join(str(version.get(rid,'?')) for rid in j['recipes']),recipe_id=j['recipe_id'],recipe_ids=j['recipes'],has_output=bool((j.get('result') or {}).get('final_view') or (j.get('result') or {}).get('stages'))) for j in jobs]
+            completed=sum(j['status']=='completed' for j in jobs)
+            s.rf_progress_text=(f'{completed} of {len(jobs)} refinements completed' if jobs else 'No refinements started')
+            s.rf_progress_percent=round(100*completed/len(jobs)) if jobs else 0
             s.rf_metrics=[dict(label='Published GPXs',value=len(sources)),dict(label='In progress',value=sum(j['status'] in {'queued','running','recovering'} for j in jobs)),dict(label='Completed',value=sum(j['status']=='completed' for j in jobs)),dict(label='Needs attention',value=sum(j['status'] in {'failed','interrupted','needs_review','needs_recipe'} for j in jobs))]
             self._refinement_sync_approval()
             s.flush()
@@ -416,7 +422,7 @@ class RefinementMixin:
         job=w.state['jobs'].get(uid)
         if not job or job['source']['experiment']!=s.rf_experiment:return
         s.rf_selected_job=uid;s.rf_selected_title=job['source']['scan_label']+f" · {job['source']['sample_label']}"
-        s.rf_selected_message=job['message'];s.rf_error='';s.rf_stage='final';s.rf_has_output=False
+        s.rf_selected_message=job['message'];s.rf_error='';s.rf_stage='final';s.rf_has_output=False;s.rf_output_provenance=''
         result=job.get('result') or {};s.rf_can_open_gsas=bool(result.get('final_dataset_id') and job['status']=='completed')
         if result and not Path(result.get('directory','')).is_dir() and job.get('remote_action'):
             try:await asyncio.to_thread(w.recover_job_artifacts,uid);result=job['result']
@@ -431,8 +437,14 @@ class RefinementMixin:
                 s.rf_histograms=[dict(title=h['name'],value=h['name']) for h in baseline['histograms']]
                 s.rf_histogram=s.rf_histograms[0]['value']
             except Exception as exc:s.rf_error=str(exc);s.rf_has_output=False
-        s.rf_downloads=[dict(title=name,value=name) for name in sorted(result.get('files',{})) if name.endswith('.gpx') or name in ['refine.py','polished.execution.json','plan.json','approval.json']]
+        stage_labels={v['gpx']:f"Stage {i+1} GPX · {v['title']}" for i,v in enumerate(stages)}
+        s.rf_downloads=[dict(title=('Final refined GPX' if name==result.get('final_gpx') else stage_labels.get(name,name)),value=name) for name in sorted(result.get('files',{})) if name.endswith('.gpx') or name in ['refine.py','polished.execution.json','plan.json','approval.json']]
         s.rf_download=(result.get('final_gpx') or (s.rf_downloads[0]['value'] if s.rf_downloads else ''))
+        if result.get('final_dataset_id'):
+            s.rf_output_provenance=("Final refined GPX: Galaxy History → Verified refinement-stage GPXs → final "
+                f"(dataset {result['final_dataset_id']}). The starting RADAR-PD GPX is unchanged.")
+        elif result.get('final_gpx'):
+            s.rf_output_provenance='Final refined GPX is available from Download below. The starting RADAR-PD GPX is unchanged.'
         self._refinement_plot_changed();self._refinement_trend_changed();s.flush()
 
     def _refinement_plot_changed(self,**_):
