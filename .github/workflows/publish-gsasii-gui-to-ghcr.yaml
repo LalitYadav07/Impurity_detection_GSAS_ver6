@@ -128,12 +128,24 @@ jobs:
           grep --quiet 'noVNC' /tmp/gsasii-vnc.html
           curl --silent --show-error --dump-header /tmp/gsasii-redirect.headers --output /dev/null \
             http://127.0.0.1:18080/gsasii
-          grep --quiet 'path=gsasii/websockify' /tmp/gsasii-redirect.headers
+          grep --quiet 'path=/gsasii/websockify' /tmp/gsasii-redirect.headers
           python - <<'PY'
           import socket
+          from email import message_from_string
+          from pathlib import Path
+          from urllib.parse import parse_qs, urljoin, urlsplit
+
+          headers = Path('/tmp/gsasii-redirect.headers').read_text().split('\n', 1)[1]
+          location = message_from_string(headers)['Location']
+          path = parse_qs(urlsplit(location).query)['path'][0]
+          # Exercise the path emitted to noVNC's empty-Host, relative-URL mode.
+          # A manually hardcoded upgrade path missed this regression before.
+          websocket = urlsplit(urljoin('http://127.0.0.1:18080/gsasii/vnc.html', path))
+          assert websocket.netloc == '127.0.0.1:18080'
+          assert websocket.path == '/gsasii/websockify', websocket.path
 
           request = (
-              "GET /gsasii/websockify HTTP/1.1\r\n"
+              f"GET {websocket.path} HTTP/1.1\r\n"
               "Host: 127.0.0.1:18080\r\n"
               "Upgrade: websocket\r\n"
               "Connection: Upgrade\r\n"
