@@ -422,7 +422,7 @@ class GalaxyChunkTransport:
             self.runtime.service.refresh_utility(job);chunk['job']=job.model_dump(mode='json');self.save()
             intent=chunk.get('staging_retirement')
             prior=sum(bool(c.get('staging_retirement')) for c in self.state['chunks'].values())
-            if intent or (job.status==RunStatus.ERROR and prior<2):
+            if not chunk.get('cancel_requested') and (intent or (job.status==RunStatus.ERROR and prior<2)):
                 proof=self.runtime.failed_request_proof(job,dispatch,retiring=bool(intent))
                 if proof is not None:
                     if intent and intent!=proof:raise RuntimeUnavailable('The saved staging retirement belongs to different inputs')

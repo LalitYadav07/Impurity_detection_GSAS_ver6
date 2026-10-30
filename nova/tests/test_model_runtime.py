@@ -176,6 +176,15 @@ def test_execution_proof_is_rechecked_after_the_saved_retirement_intent(remote,t
     assert not cancel
 
 
+@pytest.mark.parametrize('saved_intent',[False,True])
+def test_user_cancellation_wins_over_automatic_staging_recovery(remote,tmp_path,monkeypatch,saved_intent):
+    runtime,t,job,details,metadata,cancel,key=paused_request(remote,tmp_path,monkeypatch)
+    if saved_intent:t.state['chunks'][key]['staging_retirement']=runtime.failed_request_proof(job,key)
+    t.state['chunks'][key]['cancel_requested']=True
+    assert t.poll(dict(dispatch_key=key,key='trial'),tmp_path)['state']=='cancelled'
+    assert not cancel and not t.state['chunks'][key].get('not_dispatched')
+
+
 @pytest.mark.parametrize('limit,occupancies,expected_calls',[(1,[1,0],2),(2,[1],1),(2,[2,1],2)])
 def test_history_capacity_respects_the_reviewed_batch_limit(tmp_path,monkeypatch,limit,occupancies,expected_calls):
     runtime=GalaxyModelRuntime(tmp_path/'bounded',Service(tmp_path),poll_seconds=.001,max_active_jobs=limit)
