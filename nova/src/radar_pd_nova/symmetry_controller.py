@@ -27,7 +27,7 @@ from gpx_recipe.usage import summarize_calls,usage_labels
 from gpx_recipe.symmetry.isodistort_discovery import discover_structural
 from gpx_recipe.symmetry.plans import build_plan
 from gpx_recipe.symmetry.contracts import iter_trials
-from .symmetry_workspace import campaign_rows,group_models,view_for,choose_group,disposition_reason,coverage_rows,scope_rows,parameter_rows,moment_precision_note,campaign_can_resume,display_status
+from .symmetry_workspace import campaign_rows,group_models,view_for,choose_group,choose_member,disposition_reason,coverage_rows,scope_rows,parameter_rows,moment_precision_note,campaign_can_resume,display_status
 from . import symmetry_plots as plots
 from .symmetry_sources import start_choices,resolve_start
 from .k_search_controller import KSearchMixin
@@ -282,7 +282,7 @@ class SymmetryMixin(KSearchMixin):
         s=self.server.state;group=next((g for g in self._symmetry_groups if g['id']==s.sx_group),None)
         members=group['members'] if group else []
         s.sx_members=[dict(title=r['name']+' · '+r['candidate'][-6:]+' · '+r['seed']+' · '+display_status(r['status']),value=r['id']) for r in members]
-        if s.sx_selected not in {r['id'] for r in members}:s.sx_selected=members[0]['id'] if members else ''
+        s.sx_selected=choose_member(members,s.sx_selected,explicit=self._symmetry_explicit_selection)
         self._symmetry_plot_changed()
 
     def _symmetry_plot_changed(self,**_):
@@ -604,7 +604,9 @@ class SymmetryMixin(KSearchMixin):
         if self._symmetry_task and not self._symmetry_task.done():return
         self._model_stopping=False
         async def resume():
-            s=self.server.state;s.sx_error=''
+            s=self.server.state;s.sx_error='';s.sx_busy=True
+            s.sx_message='Recovering accepted Galaxy jobs and verifying saved results before dispatching any new starts.'
+            s.flush()
             try:
                 root=(self._symmetry_root()/s.sx_campaign).resolve()
                 if root.parent!=self._symmetry_root() or not (root/'campaign.sqlite').is_file():raise ValueError('Select an existing campaign')
@@ -624,7 +626,7 @@ class SymmetryMixin(KSearchMixin):
                 if isinstance(transport,GalaxyChunkTransport):transport.resume()
                 await self._drive_symmetry_campaign(campaign,transport)
             except Exception as exc:s.sx_error=str(exc)
-            finally:s.flush()
+            finally:s.sx_busy=False;s.flush()
         self._symmetry_task=self._refinement_schedule(resume(),'radar-symmetry-continue')
 
     def cancel_symmetry_selected(self):

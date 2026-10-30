@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 import numpy as np
 
-from radar_pd_nova.symmetry_workspace import group_models,choose_group,disposition_reason,coverage_rows,scope_rows,parameter_rows,moment_precision_note
+from radar_pd_nova.symmetry_workspace import group_models,choose_group,choose_member,disposition_reason,coverage_rows,scope_rows,parameter_rows,moment_precision_note
 from radar_pd_nova.symmetry_plots import coordinate,fit
 
 
@@ -69,6 +69,58 @@ def test_streaming_default_opens_first_fit_and_explicit_trial_survives_regroupin
     assert choose_group(groups,'waiting',explicit=True)=='pending'
     assert choose_group(groups,'fit-2',explicit=True)=='fit-1'
     assert choose_group([], 'waiting')==''
+
+
+def test_lowest_residual_rejection_does_not_displace_a_qualified_default(tmp_path):
+    rejected=row(tmp_path,'rejected',status='physical_rejection',rwp=4.,offset=2.)
+    unresolved=row(tmp_path,'unresolved',status='optimization_unresolved',rwp=4.9)
+    qualified=row(tmp_path,'qualified',status='valid',rwp=5.)
+    groups=group_models([rejected,unresolved,qualified])
+    assert len(groups)==2 and groups[0]['representative']['id']=='rejected'
+    selected=choose_group(groups,'rejected')
+    group=next(g for g in groups if g['id']==selected)
+    # Equivalent curves retain both dispositions; select the qualified member.
+    assert {r['id'] for r in group['members']}=={'qualified','unresolved'}
+    assert choose_member(group['members'],'unresolved')=='qualified'
+    assert choose_group(groups,'rejected',explicit=True)=='rejected'
+    assert choose_member(group['members'],'unresolved',explicit=True)=='unresolved'
+
+
+def test_large_unchanged_portfolio_reuses_receipts_beyond_the_old_512_limit(tmp_path,monkeypatch):
+    import radar_pd_nova.symmetry_workspace as module
+    module.clear_evidence_cache()
+    for name in ['job.json','result.json']:(tmp_path/name).write_text('{}')
+    receipts=[tmp_path/str(index) for index in range(600)]
+    for directory in receipts:
+        directory.mkdir()
+        for name in ['job.json','result.json']:(directory/name).write_text('{}')
+    calls=[]
+    monkeypatch.setattr(module,'assets',lambda protocol:[])
+    monkeypatch.setattr(module,'verify_receipt',lambda *args:(calls.append(1) or {}))
+    job=dict(id='trial',protocol_sha256='p',protocol={})
+    for _ in range(2):
+        for directory in receipts:module.checked_receipt(directory,job)
+    assert len(calls)==600
+    (receipts[0]/'result.json').write_text('{"changed":true}')
+    module.checked_receipt(receipts[0],job)
+    assert len(calls)==601
+    module.clear_evidence_cache()
+
+
+def test_comparison_cache_survives_full_view_eviction_and_rechecks_changed_domain(tmp_path,monkeypatch):
+    import os
+    import radar_pd_nova.symmetry_workspace as module
+    module.clear_evidence_cache()
+    rows=[row(tmp_path,'view-'+str(index)) for index in range(20)]
+    original=module.cached_view;calls=[]
+    def load(*args):calls.append(args[0]);return original(*args)
+    monkeypatch.setattr(module,'cached_view',load)
+    assert len(group_models(rows))==1
+    assert len(group_models(rows))==1 and len(calls)==20
+    target=Path(rows[-1]['view_path']);stat=target.stat()
+    view=json.loads(target.read_text());view['weights'][1]=2.;target.write_text(json.dumps(view))
+    os.utime(target,ns=(stat.st_atime_ns,stat.st_mtime_ns))
+    assert len(group_models(rows))==2 and len(calls)==21
 
 
 def test_an_audited_checkpoint_is_not_described_as_a_qualified_optimization():

@@ -83,3 +83,21 @@ def test_resource_budget_updates_dispatch_limits_without_changing_scientific_app
     assert app._symmetry_approved=='sealed-science'
     state.sx_parallel_jobs=16;app._symmetry_resource_changed()
     assert 'one or two' in state.sx_error and runtime.max_active_jobs==2
+
+
+def test_continue_reports_recovery_before_waiting_for_remote_results(tmp_path,monkeypatch):
+    import radar_pd_nova.symmetry_controller as controller
+    root=tmp_path/'campaign';root.mkdir();(root/'campaign.sqlite').touch()
+    flushes=[]
+    state=SimpleNamespace(sx_campaign='campaign',sx_busy=False,sx_error='',sx_message='',
+        flush=lambda:flushes.append((state.sx_busy,state.sx_message)))
+    app=SymmetryMixin();app.server=SimpleNamespace(state=state);app._symmetry_task=None
+    app._symmetry_root=lambda:tmp_path;app._symmetry_transport=lambda campaign:object()
+    def recover(transport):
+        assert state.sx_busy and flushes
+        assert 'before dispatching' in state.sx_message
+        raise RuntimeError('Remote result temporarily unavailable')
+    monkeypatch.setattr(controller,'Campaign',lambda *args,**kwargs:SimpleNamespace(recover=recover))
+    app._refinement_schedule=lambda coroutine,name:asyncio.run(coroutine)
+    app.continue_symmetry_campaign()
+    assert not state.sx_busy and state.sx_error=='Remote result temporarily unavailable'

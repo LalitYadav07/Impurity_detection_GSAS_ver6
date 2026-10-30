@@ -19,7 +19,8 @@ _evidence_lock=threading.RLock()
 
 
 def clear_evidence_cache():
-    with _evidence_lock:_verified_receipts.clear();cached_view.cache_clear()
+    with _evidence_lock:
+        _verified_receipts.clear();cached_view.cache_clear();comparison_profile.cache_clear()
 
 
 def checked_receipt(directory,job,expected_receipt=None):
@@ -48,7 +49,11 @@ def _checked_receipt(directory,job,expected_receipt):
     if before!=after:raise ValueError('Evidence changed during verification')
     _verified_receipts[key]=dict(expected=expected_receipt,at=time.monotonic(),paths=paths,stamps=after,result=result)
     _verified_receipts.move_to_end(key)
-    while len(_verified_receipts)>512:_verified_receipts.popitem(last=False)
+    # Common canted campaigns contain 600--840 starts per acquisition and
+    # several acquisitions. A 512-entry LRU thrashes on every ordered refresh.
+    # Keep this bounded; changed artifact stamps and the 5-minute TTL still
+    # force the same full cryptographic verification.
+    while len(_verified_receipts)>4096:_verified_receipts.popitem(last=False)
     return result
 
 
@@ -92,8 +97,25 @@ def view_for(row):
     path=Path(row['view_path']);stat=path.stat();return cached_view(str(path),stat.st_mtime_ns,stat.st_size,stat.st_ctime_ns)
 
 
+@lru_cache(maxsize=1024)
+def comparison_profile(path,mtime_ns,size,ctime_ns):
+    """Cache compact display comparisons, separately from large full views.
+
+    This is reached only after receipt verification. The complete observed
+    domain participates in the identity; calculated curves never merge scans
+    or GPX revisions merely because their residuals happen to agree.
+    """
+    view=cached_view(path,mtime_ns,size,ctime_ns)
+    mask=np.asarray(view['fitted'],dtype=bool)
+    observed=np.asarray(view['observed'],dtype=float)[mask]
+    calculated=np.asarray(view['calculated'],dtype=float)[mask]
+    calculated.setflags(write=False)
+    return (digest([view['x'],view['observed'],view['weights'],view['fitted']]),
+            calculated,max(float(np.max(np.abs(observed))),1e-12))
+
+
 def choose_group(groups,selected,*,explicit=False):
-    """Follow the first available fit until a user chooses a particular trial.
+    """Prefer a qualified fit until a user chooses a particular trial.
 
     A trial can move from a pending group to its final pattern group. Preserve
     that explicit selection by trial identity rather than the old group ID.
@@ -102,7 +124,15 @@ def choose_group(groups,selected,*,explicit=False):
     if explicit:
         for group in groups:
             if any(row['id']==selected for row in group['members']):return group['id']
+    for group in groups:
+        if any(row.get('has_view') and row.get('status')=='valid' for row in group['members']):return group['id']
     return groups[0]['id']
+
+
+def choose_member(members,selected,*,explicit=False):
+    if explicit and any(row['id']==selected for row in members):return selected
+    qualified=next((row for row in members if row.get('has_view') and row.get('status')=='valid'),None)
+    return (qualified or (members[0] if members else {})).get('id','')
 
 
 def disposition_reason(row):
@@ -194,9 +224,9 @@ def group_models(rows,*,relative_tolerance=1e-6):
             if key not in no_curve:
                 no_curve[key]=dict(id=row['id'],members=[],representative=row);groups.append(no_curve[key])
             no_curve[key]['members'].append(row);continue
-        view=view_for(row);mask=np.asarray(view['fitted'],dtype=bool);calc=np.asarray(view['calculated'],dtype=float)[mask]
-        key=digest([row['source'],row.get('source_sha256'),view['x'],view['observed'],view['weights'],view['fitted']]);chosen=None
-        scale=max(float(np.max(np.abs(np.asarray(view['observed'],dtype=float)[mask]))),1e-12)
+        path=Path(row['view_path']);stat=path.stat()
+        domain,calc,scale=comparison_profile(str(path),stat.st_mtime_ns,stat.st_size,stat.st_ctime_ns)
+        key=(row['source'],row.get('source_sha256'),domain);chosen=None
         for previous,profile in partitions.get(key,[]):
             if len(profile)==len(calc) and np.max(np.abs(profile-calc))<=relative_tolerance*scale:chosen=previous;break
         if chosen is None:

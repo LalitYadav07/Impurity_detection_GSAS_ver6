@@ -38,6 +38,7 @@ def model_exploration(app):
             html.P('Each batch contains many independent starts. Galaxy controls admission and CPU/RAM allocation; an unreported allocation permits one native worker per job. The batch limit includes model preparation jobs in this History. Lowering the limit lets accepted jobs finish before submitting more.',classes='rf-notice')
         v.VProgressLinear(v_if='sx_busy',indeterminate=True,color='#267653',height=3,classes='mb-3')
         html.P('{{ sx_message }}',classes='rf-notice',raw_attrs=['aria-live="polite"'])
+        html.P('The initial selection prefers a qualified fit when available. All failed, unresolved and physically rejected trials remain inspectable.',v_if='sx_groups.length',classes='rf-notice')
         with html.Div(v_if='sx_setup || !sx_campaign',classes='rf-card sx-setup'):
             html.H3('Explore models from a completed GPX')
             html.P('Enter a commensurate k vector, or use the magnetic k survey below. Review hypotheses before native refinement.',classes='rf-notice')
