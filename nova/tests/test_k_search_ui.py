@@ -49,6 +49,16 @@ def test_k_handoff_defaults_to_translation_and_site_compatible_embeddings(tmp_pa
     assert len(app.server.state.sx_candidate_options)==2  # full discovery remains inspectable
 
 
+def test_canted_search_does_not_drop_models_that_only_lack_a_collinear_survey_start(tmp_path):
+    app,result=app_and_result(tmp_path);app.server.state.sx_moment_model='symmetry_allowed'
+    result['catalogs']['0,0,1/2']['candidates'].append(dict(id='mag:canted',magnetic_space_group='P1',irrep=None))
+    result['families'][0]['compatible_candidate_ids']=['mag:one']
+    app.use_candidate_k()
+    assert app.server.state.sx_candidates==['mag:one','mag:canted']
+    assert 'All catalog embeddings remain selected' in app.server.state.sx_discovery_scope
+    assert not app.server.state.sx_approved
+
+
 def test_unfinished_compatibility_inventory_cannot_be_claimed_verified(tmp_path):
     app,result=app_and_result(tmp_path);result['families'][0].pop('compatible_candidate_ids')
     app.use_candidate_k()

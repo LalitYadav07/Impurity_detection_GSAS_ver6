@@ -123,8 +123,10 @@ class KSearchMixin:
             d.update(catalog=catalog,discovery_identity=(s.sx_kind,s.sx_parent,s.sx_k,s.sx_start_source))
             s.sx_candidate_options=[dict(title=(c['magnetic_space_group'] or c['irrep'])+' · '+c['id'][-6:],value=c['id']) for c in catalog['candidates']]
             compatible=set(family['compatible_candidate_ids'])
-            s.sx_candidates=[c['id'] for c in catalog['candidates'] if c['id'] in compatible];s.sx_mode_options=[];s.sx_modes=[]
-            s.sx_discovery_scope=f'{len(catalog["candidates"])} magnetic embeddings in the cached catalog; {len(s.sx_candidates)} support the selected sites, directions and k translations. The k survey sampled only a subset.'
+            canted=getattr(s,'sx_moment_model','collinear')=='symmetry_allowed'
+            s.sx_candidates=[c['id'] for c in catalog['candidates'] if canted or c['id'] in compatible];s.sx_mode_options=[];s.sx_modes=[]
+            s.sx_discovery_scope=f'{len(catalog["candidates"])} magnetic embeddings in the cached catalog; {len(compatible)} support the sampled collinear sites, directions and k translations. The k survey sampled only a subset.'
+            if canted:s.sx_discovery_scope+=' All catalog embeddings remain selected for the canted search; its site symmetry and propagation translations are checked per trial.'
             s.sx_discovered=True;s.sx_plan_ready=False;s.sx_approved=False
             s.sx_k_message='Selected k and its complete subgroup catalog are ready. Review candidates and build the finite refinement plan.'
         except Exception as exc:s.sx_error=str(exc)
