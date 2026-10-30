@@ -32,6 +32,7 @@ from .live_setup import LiveSetupMixin
 from .library_setup import LIBRARY_FIELDS, LibraryDraft
 from .post_analysis_ui import PostAnalysisMixin
 from .refinement_controller import RefinementMixin
+from .symmetry_controller import SymmetryMixin
 from .refinement_ui import refinement_dashboard
 from .checkpoints import CoalescedCheckpoint
 from .post_analysis import PostAnalysisSettings
@@ -242,7 +243,7 @@ def _powgen_retry_time(value: Any) -> datetime | None:
     return retry_at.astimezone(timezone.utc)
 
 
-class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, RefinementMixin, ThemedApp):
+class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, RefinementMixin, SymmetryMixin, ThemedApp):
     """Interactive orchestration and results workspace backed by Galaxy."""
 
     def __init__(self) -> None:
@@ -416,6 +417,7 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Refine
         state.rapid_final_polish_enabled = False
         self._init_post_analysis()
         self._init_refinement()
+        self._init_symmetry()
         state.history_datasets = []
         state.history_search = ""
         state.history_offset = 0
@@ -1722,7 +1724,7 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Refine
                         html.Summary('Sample-temperature channel (optional)')
                         vuetify.VAutocomplete(label='Measured SPICE temperature channel',v_model=('hb2a_temperature_channel',),
                             items=('hb2a_channel_options',),clearable=True,disabled=('powgen_monitoring || live_launch_busy',),density='compact',variant='outlined',
-                            hint='Select the active sample sensor. Raw SPICE logs contain inactive channels and do not universally declare units.',persistent_hint=True)
+                            hint='For a He-3 cryostat, the paired option selects the low/high thermometer per scan after your review. Ambiguous ranges retain the scan without a temperature axis. Other environments need an explicit channel and units.',persistent_hint=True)
                         vuetify.VSelect(label='Recorded temperature unit',v_model=('hb2a_temperature_unit',),items=(['K','C'],),
                             disabled=('powgen_monitoring || live_launch_busy',),density='compact',variant='outlined')
                         vuetify.VSwitch(label='I reviewed this channel and its recorded units',v_model=('hb2a_condition_reviewed',),
@@ -5137,6 +5139,11 @@ class RadarPdNovaApp(LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, Refine
             state.powgen_run_options = result.get("run_options", [])
             if self._live_adapter().instrument == 'HB2A':
                 state.hb2a_channel_options = result.get('condition_channels', [])
+                from .hb2a_temperature import HE3_AUTOMATIC_CHANNEL
+                if not state.hb2a_temperature_channel and HE3_AUTOMATIC_CHANNEL in state.hb2a_channel_options:
+                    state.hb2a_temperature_channel=HE3_AUTOMATIC_CHANNEL
+                    state.hb2a_temperature_unit='K'
+                    state.hb2a_condition_reviewed=False
             state.powgen_metadata_resolution = result.get('metadata_resolution', [])
             state.powgen_metadata_notices = result.get('metadata_notices', [])
             state.powgen_sample_discovery_ipts = ipts

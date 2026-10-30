@@ -1,0 +1,10 @@
+# Preserve the validated GSAS-II/native/BNS stack used by reviewed refinement.
+FROM ghcr.io/lalityadav07/impurity_detection_gsas_ver6@sha256:ece507037db561bb2738e8d002fa3c0aa4eb50192e776967ee908137717d3687
+USER root
+COPY nova/src/gpx_recipe /opt/radar-symmetry/gpx_recipe
+COPY scripts/ndip_symmetry.py /opt/radar-symmetry/ndip_symmetry.py
+ENV PYTHONPATH=/opt/radar-symmetry:/opt/radar-pd/scripts:/opt/radar-pd/GSAS-II
+# Only the pure-Python point generator is added. Never resolve/upgrade the
+# installed numerical dependencies as a side effect of a symmetry release.
+RUN python -m pip install --no-cache-dir --no-deps 'seekpath==2.2.1' \
+    && python -c "from gpx_recipe.symmetry.worker import runtime_identity,require_runtime; r=runtime_identity(); require_runtime(r,r['magnetic_function_sha256'])"

@@ -28,6 +28,7 @@ def main():
                "-e", "OPENBLAS_NUM_THREADS=1", "-e", "OMP_NUM_THREADS=1",
                "-v", f"{root / 'scripts'}:/opt/radar-pd/scripts:ro",
                "-v", f"{root / 'nova/src/gpx_recipe'}:/opt/radar-pd/nova/src/gpx_recipe:ro",
+               "-v", f"{root / 'nova/src/gpx_recipe'}:/opt/radar-symmetry/gpx_recipe:ro",
                "-v", f"{work}:{work}:rw", image, *sys.argv[1:]]
     def stop(signum,frame):
         try:subprocess.run(['docker','stop','--time','5',name],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=10)

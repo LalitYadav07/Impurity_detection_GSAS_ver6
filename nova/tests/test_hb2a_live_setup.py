@@ -3,7 +3,7 @@ from dataclasses import replace
 import json
 
 from test_live_setup import live
-from test_hb2a import archive,profile,add
+from test_hb2a import archive,profile,add,_he3_spice
 from radar_pd_nova.hb2a_controller import Hb2aSampleIndex
 from radar_pd_nova.scan_interpretation_ui import scan_label
 
@@ -47,6 +47,20 @@ def test_changing_ipts_clears_all_reviewed_bindings_and_profile_ack(live):
     assert not state.hb2a_profile_acknowledged and not state.hb2a_collimator_override
     assert not state.hb2a_temperature_channel and not state.hb2a_magnetic_field_channel and not state.hb2a_pressure_channel
     assert not state.hb2a_allow_stopped
+
+
+def test_he3_discovery_suggests_reviewed_pair_without_overwriting_manual_sensor(live,archive):
+    from radar_pd_nova.hb2a_temperature import HE3_AUTOMATIC_CHANNEL
+    _,raw=add(archive);raw.write_text(_he3_spice(.28,1.2005))
+    state=live.server.state;state.live_beamline='HB2A';state.flush()
+    live._live_beamline_changed();state.powgen_ipts='1';live._powgen_ipts_changed();state.flush()
+    live._powgen_sample_index=lambda _:Hb2aSampleIndex('IPTS-1')
+    asyncio.run(live.refresh_powgen_samples('1'))
+    assert state.hb2a_temperature_channel==HE3_AUTOMATIC_CHANNEL
+    assert state.hb2a_temperature_unit=='K' and not state.hb2a_condition_reviewed
+    state.hb2a_temperature_channel='he3potl_temp';state.hb2a_condition_reviewed=True;state.flush()
+    asyncio.run(live.refresh_powgen_samples('1'))
+    assert state.hb2a_temperature_channel=='he3potl_temp' and state.hb2a_condition_reviewed
 
 
 def test_normalization_change_invalidates_inflight_sample_scope(live):

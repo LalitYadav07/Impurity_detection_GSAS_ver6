@@ -179,9 +179,15 @@ class IllumineLuna:
 
     def complete(self, messages):
         from .schema import response_schema
+        return self.complete_structured(messages, response_schema(self.model_signature), "radar_gpx_recipe")
+
+    def complete_structured(self, messages, schema, name):
+        """Use the same fixed provider and response checks for a typed setup plan."""
+        if not re.fullmatch(r'[A-Za-z][A-Za-z0-9_]{0,63}', name):
+            raise ValueError('Invalid structured response name')
         body = {"model": self.model, "input": messages, "reasoning": {"effort": "none"},
                 "store": False, "max_output_tokens": self.max_output_tokens,
-                "text": {"format": {"type": "json_schema", "name": "radar_gpx_recipe", "strict": True, "schema": response_schema(self.model_signature)}}}
+                "text": {"format": {"type": "json_schema", "name": name, "strict": True, "schema": schema}}}
         data = _post(self.endpoint + "/responses", {"Content-Type": "application/json", "api-key": self.key}, body, "Illumine Luna")
         metadata = {**self.info, "model": data.get("model"), "usage": data.get("usage"),
                     "output_allowance": self.max_output_tokens, "rate_limits": data.get("_radar_rate_limits")}

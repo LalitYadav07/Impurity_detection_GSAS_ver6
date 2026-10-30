@@ -46,6 +46,10 @@ class Hb2aSampleIndex:
         for key, group in sorted(groups.items()):
             unit='scan' if group['count']==1 else 'scans'
             options.append({'value':key, 'title':f"Experiment {group['experiment']} — {group['name']} ({group['count']} {unit})", 'scan_count':group['count']})
+        from .hb2a_temperature import HE3_AUTOMATIC_CHANNEL, HE3_CHANNELS
+        condition_channels=sorted(channels)
+        if any(all(name in m.get('available_channels',[]) for name in HE3_CHANNELS) for m in identities):
+            condition_channels.insert(0,HE3_AUTOMATIC_CHANNEL)
         return {'options':options, 'scan_count':len(runs),
             'unidentified_count':sum(not m.get('sample_id') for m in identities),
             'run_options':[{'value':r.run_id, 'sample_id':m.get('sample_id',''),
@@ -59,7 +63,7 @@ class Hb2aSampleIndex:
                 'sample_display':m.get('sample_name',''),
                 'sources':m.get('identity_sources',[]), 'actions':([{'message':m['identity_warning']}] if m.get('identity_warning') else [])}
                 for r,m in zip(runs,identities)],
-            'condition_channels':sorted(channels)}
+            'condition_channels':condition_channels}
 
 
 @dataclass(frozen=True)

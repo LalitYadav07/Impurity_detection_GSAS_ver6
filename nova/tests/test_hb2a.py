@@ -238,6 +238,73 @@ def test_conditions_require_measured_channel_units_and_review(archive):
         hb2a.inspect_reduced_setup(data,ipts='IPTS-1',condition_bindings={'temperature':{'channel':'monitor','unit':'K','reviewed':True}})
 
 
+def _he3_spice(low, high):
+    lines=[];index=0
+    for line in spice().splitlines():
+        if line.startswith('#'):
+            if 'Pt.' in line:line=line.replace('sample_temp','he3potl_temp he3poth_temp temp')
+        elif line.strip():
+            fields=line.split();fields[6:7]=[str(low[index] if isinstance(low,list) else low),
+                str(high[index] if isinstance(high,list) else high),'0.0001']
+            line=' '.join(fields);index+=1
+        lines.append(line)
+    return '\n'.join(lines)+'\n'
+
+
+@pytest.mark.parametrize('low,high,selected,expected',[
+    (.28,1.2005,'he3potl_temp',.28),(.7,1.2005,'he3potl_temp',.7),
+    (97.6,100.,'he3poth_temp',100.),(3.95,4.,'he3poth_temp',4.),
+])
+def test_reviewed_he3_pair_uses_active_range_not_nominal_setpoint(archive,low,high,selected,expected):
+    from radar_pd_nova.hb2a_temperature import HE3_AUTOMATIC_CHANNEL
+    data,raw=add(archive);raw.write_text(_he3_spice(low,high))
+    binding={'temperature':{'channel':HE3_AUTOMATIC_CHANNEL,'unit':'K','reviewed':True}}
+    metadata=hb2a.inspect_reduced_setup(data,ipts='IPTS-1',condition_bindings=binding).metadata
+    assert metadata['temperature']['value']==pytest.approx(expected)
+    assert metadata['temperature']['channel']==selected
+    assert metadata['temperature_sensor_resolution']['sensors']['he3poth_temp']['value']==pytest.approx(high)
+    assert metadata['conditions']['channels'][0]['sensor_resolution']['policy']=='HB2A-paired-He3-thermometers/1'
+
+
+@pytest.mark.parametrize('low,high',[(40.,100.),(.3,2.),(0.,1.2005),([.8]*16+[2.]*16,[1.2005]*16+[2.]*16)])
+def test_ambiguous_he3_ranges_keep_acquisition_without_invented_temperature(archive,profile,tmp_path,low,high):
+    from radar_pd_nova.hb2a_temperature import HE3_AUTOMATIC_CHANNEL
+    data,raw=add(archive);raw.write_text(_he3_spice(low,high))
+    binding={'temperature':{'channel':HE3_AUTOMATIC_CHANNEL,'unit':'K','reviewed':True}}
+    setup=hb2a.inspect_reduced_setup(data,ipts='IPTS-1',condition_bindings=binding)
+    assert 'temperature' not in setup.metadata
+    assert setup.metadata['temperature_sensor_resolution']['status']=='unresolved'
+    staged,_,receipt=hb2a.stage_pattern(data,setup,profile,tmp_path/'staged',acknowledged=True)
+    assert '# temperature =' not in staged.read_text()
+    assert any(w['code']=='hb2a_temperature_unresolved' for w in receipt['warnings'])
+
+
+def test_he3_manual_override_review_and_setpoint_guard(archive):
+    from radar_pd_nova.hb2a_temperature import HE3_AUTOMATIC_CHANNEL
+    data,raw=add(archive);raw.write_text(_he3_spice(.28,1.2005))
+    binding={'temperature':{'channel':'he3poth_temp','unit':'K','reviewed':True}}
+    assert hb2a.inspect_reduced_setup(data,ipts='IPTS-1',condition_bindings=binding).metadata['temperature']['value']==pytest.approx(1.2005)
+    binding['temperature']['channel']='temp'
+    with pytest.raises(ValueError,match='setpoint'):hb2a.inspect_reduced_setup(data,ipts='IPTS-1',condition_bindings=binding)
+    binding['temperature'].update(channel=HE3_AUTOMATIC_CHANNEL,reviewed=False)
+    with pytest.raises(ValueError,match='Review'):hb2a.inspect_reduced_setup(data,ipts='IPTS-1',condition_bindings=binding)
+    binding['temperature'].update(unit='C',reviewed=True)
+    with pytest.raises(ValueError,match='Kelvin'):hb2a.inspect_reduced_setup(data,ipts='IPTS-1',condition_bindings=binding)
+
+
+def test_he3_inventory_and_staging_record_actual_selected_thermometer(archive,profile,tmp_path):
+    from radar_pd_nova.hb2a_temperature import HE3_AUTOMATIC_CHANNEL
+    data,raw=add(archive);raw.write_text(_he3_spice(.28,1.2005))
+    inventory=discover_hb2a_samples('IPTS-1',Hb2aSampleIndex('IPTS-1'))
+    assert inventory['condition_channels'][0]==HE3_AUTOMATIC_CHANNEL
+    binding={'temperature':{'channel':HE3_AUTOMATIC_CHANNEL,'unit':'K','reviewed':True}}
+    setup=hb2a.inspect_reduced_setup(data,ipts='IPTS-1',condition_bindings=binding)
+    staged,_,receipt=hb2a.stage_pattern(data,setup,profile,tmp_path/'out',acknowledged=True)
+    assert '# temperature = 0.28\n' in staged.read_text()
+    assert receipt['setup']['metadata']['temperature']['channel']=='he3potl_temp'
+    assert receipt['setup']['metadata']['temperature']['value']==pytest.approx(.28)
+
+
 def test_profile_review_type_wavelength_duplicates_and_physical_range(archive,profile):
     data,_=add(archive);setup=hb2a.inspect_reduced_setup(data,ipts='IPTS-1')
     with pytest.raises(ValueError,match='Confirm'):hb2a.validate_profile(setup,profile)

@@ -54,6 +54,16 @@ def create(tmp_path):
     return w,runtime
 
 
+@pytest.mark.parametrize('mode,expected',[('models','models'),('recipe','results'),('results','results')])
+def test_changing_experiment_does_not_leave_model_exploration_for_an_existing_recipe_job(mode,expected):
+    state=SimpleNamespace(rf_experiment='new-experiment',rf_mode=mode)
+    app=RefinementMixin();app.server=SimpleNamespace(state=state);app._refinement_internal=False
+    app._refinement_workspace=SimpleNamespace(state=dict(drafts={},recipes={},jobs={'finished':dict(source=dict(experiment='new-experiment'))}))
+    synced=[];app._refinement_sync=lambda:synced.append(True)
+    app._refinement_experiment_changed()
+    assert state.rf_mode==expected and synced==[True]
+
+
 def approved(w,scope,*,future=False,existing=True):
     base=next(s for s in w.sources(scope.experiment) if scope.matches(s))
     draft=w.prepare(scope.experiment,base['id'],'background only')
