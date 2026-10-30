@@ -135,6 +135,17 @@ def choose_member(members,selected,*,explicit=False):
     return (qualified or (members[0] if members else {})).get('id','')
 
 
+def display_groups(groups):
+    """Keep qualified choices visible without discarding other dispositions."""
+    displayed=[]
+    for group in groups:
+        qualified=[row for row in group['members'] if row.get('has_view') and row.get('status')=='valid']
+        representative=min(qualified,key=lambda row:(row['rwp'] is None,row['rwp'] or 0,row['id'])) if qualified else group['representative']
+        displayed.append(dict(group,representative=representative))
+    return sorted(displayed,key=lambda group:(group['representative'].get('status')!='valid',
+        group['representative'].get('rwp') is None,group['representative'].get('rwp') or 0,group['id']))
+
+
 def disposition_reason(row):
     if row.get('reason'):return row['reason']
     if row['status']=='optimization_unresolved':return 'Native convergence or rank checks did not qualify this checkpoint.'

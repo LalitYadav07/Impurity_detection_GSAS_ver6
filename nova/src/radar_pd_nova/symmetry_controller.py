@@ -27,7 +27,7 @@ from gpx_recipe.usage import summarize_calls,usage_labels
 from gpx_recipe.symmetry.isodistort_discovery import discover_structural
 from gpx_recipe.symmetry.plans import build_plan
 from gpx_recipe.symmetry.contracts import iter_trials
-from .symmetry_workspace import campaign_rows,group_models,view_for,choose_group,choose_member,disposition_reason,coverage_rows,scope_rows,parameter_rows,moment_precision_note,campaign_can_resume,display_status
+from .symmetry_workspace import campaign_rows,group_models,display_groups,view_for,choose_group,choose_member,disposition_reason,coverage_rows,scope_rows,parameter_rows,moment_precision_note,campaign_can_resume,display_status
 from . import symmetry_plots as plots
 from .symmetry_sources import start_choices,resolve_start
 from .k_search_controller import KSearchMixin
@@ -255,7 +255,7 @@ class SymmetryMixin(KSearchMixin):
 
     def _symmetry_source_data(self,source):
         rows=[r for r in self._symmetry_all_rows if r['source']==source]
-        self._symmetry_rows=rows;self._symmetry_groups=group_models(rows)
+        self._symmetry_rows=rows;self._symmetry_groups=display_groups(group_models(rows))
 
     def _symmetry_publish_source(self):
         s=self.server.state;groups=self._symmetry_groups;rows=self._symmetry_rows

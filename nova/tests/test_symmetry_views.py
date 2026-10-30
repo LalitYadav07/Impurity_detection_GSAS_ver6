@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 import numpy as np
 
-from radar_pd_nova.symmetry_workspace import group_models,choose_group,choose_member,disposition_reason,coverage_rows,scope_rows,parameter_rows,moment_precision_note
+from radar_pd_nova.symmetry_workspace import group_models,display_groups,choose_group,choose_member,disposition_reason,coverage_rows,scope_rows,parameter_rows,moment_precision_note
 from radar_pd_nova.symmetry_plots import coordinate,fit
 
 
@@ -84,6 +84,12 @@ def test_lowest_residual_rejection_does_not_displace_a_qualified_default(tmp_pat
     assert choose_member(group['members'],'unresolved')=='qualified'
     assert choose_group(groups,'rejected',explicit=True)=='rejected'
     assert choose_member(group['members'],'unresolved',explicit=True)=='unresolved'
+    display=display_groups(groups)
+    assert display[0]['representative']['id']=='qualified'
+    assert display[1]['representative']['id']=='rejected'
+    assert {member['id'] for g in display for member in g['members']}=={'qualified','unresolved','rejected'}
+    # Presentation does not rewrite the canonical calculated-profile groups.
+    assert groups[0]['representative']['id']=='rejected'
 
 
 def test_large_unchanged_portfolio_reuses_receipts_beyond_the_old_512_limit(tmp_path,monkeypatch):
