@@ -6,15 +6,26 @@ as incoming RADAR-PD sources, preventing recursive recipe enrollment.
 from __future__ import annotations
 
 from pathlib import Path
+from math import isfinite
 
 from .refinement_runtime import verify_result_files
 from .refinement_sources import digest, file_sha
+from .scan_conditions import qualified_metadata
+
+
+def _scan_title(source):
+    title=source['scan_label']
+    condition=qualified_metadata(source.get('metadata') or {}).get('temperature') or {}
+    value=condition.get('value')
+    if isinstance(value,(int,float)) and not isinstance(value,bool) and isfinite(value) and condition.get('unit'):
+        title+=f" · {value:.4g} {condition['unit']}"
+    return title
 
 
 def start_choices(workspace, experiment):
     entries=[]
     for source in workspace.sources(experiment):
-        entries.append(dict(id=source['id'],title='RADAR-PD · '+source['scan_label'],source=source))
+        entries.append(dict(id=source['id'],title='RADAR-PD · '+_scan_title(source),source=source))
     for job_id,job in workspace.state.get('jobs',{}).items():
         result=job.get('result') or {};source=job.get('source') or {}
         if job.get('status')!='completed' or result.get('status')!='completed' or source.get('experiment')!=experiment:
@@ -25,7 +36,7 @@ def start_choices(workspace, experiment):
         for stage,label,name in checkpoints:
             if not name or name not in result.get('files',{}) or Path(name).suffix.lower()!='.gpx':continue
             identifier='recipe:'+digest([job_id,stage,name,result['files'][name]])[:24]
-            entries.append(dict(id=identifier,title='Recipe output · '+source['scan_label']+' · '+label,
+            entries.append(dict(id=identifier,title='Recipe output · '+_scan_title(source)+' · '+label,
                                 job_id=job_id,stage=stage,name=name))
     return entries
 

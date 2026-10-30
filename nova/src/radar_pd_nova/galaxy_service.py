@@ -122,6 +122,19 @@ def _galaxy_upload_file_type(dataset_name: str) -> str:
     }.get(Path(dataset_name).suffix.lower(), "auto")
 
 
+def _unregistered_gpx_datatype(error: Any) -> bool:
+    """Recognize a definitive pre-dispatch rejection, never an uncertain upload."""
+    if getattr(error, "status_code", None) != 400:
+        return False
+    body = getattr(error, "body", None)
+    try:
+        problem = json.loads(body) if isinstance(body, (bytes, str)) else body
+    except (ValueError, TypeError):
+        return False
+    return bool(isinstance(problem, dict) and problem.get("err_code") == 400008
+                and problem.get("err_msg") == "Requested extension 'gpx' unknown, cannot upload dataset.")
+
+
 def _extract_results_archive(archive: Path, destination: Path) -> None:
     """Extract a RADAR-PD archive without allowing paths outside destination."""
 
@@ -390,18 +403,26 @@ class GalaxyService:
     @staticmethod
     def _upload_dataset(path: str, store: Any, label: str, *, wait_ready: bool = True) -> Any:
         from nova.galaxy import Dataset
+        from bioblend import ConnectionError as GalaxyUploadError
 
         source = Path(path)
         if not source.is_file():
             raise FileNotFoundError(f"{label} does not exist: {source}")
         dataset_name = _upload_filename(source, label)
         galaxy_instance = store.nova_connection.galaxy_instance
-        upload_result = galaxy_instance.tools.upload_file(
-            path=str(source),
-            history_id=store.history_id,
-            file_name=dataset_name,
-            file_type=_galaxy_upload_file_type(dataset_name),
-        )
+        arguments = dict(path=str(source), history_id=store.history_id,
+                         file_name=dataset_name, file_type=_galaxy_upload_file_type(dataset_name))
+        try:
+            upload_result = galaxy_instance.tools.upload_file(**arguments)
+        except GalaxyUploadError as exc:
+            if arguments["file_type"] != "gpx" or not _unregistered_gpx_datatype(exc):
+                raise
+            # Some NDIP configurations expose GPX tool inputs as binary without
+            # registering the gpx upload datatype. The explicit 400008 rejection
+            # creates no HDA; retry only this case with its accepted binary type.
+            # Preserve the .gpx filename and bytes. Never retry a timeout or auth
+            # failure, where an upload could already have been acknowledged.
+            upload_result = galaxy_instance.tools.upload_file(**{**arguments, "file_type": "binary"})
         outputs = upload_result.get("outputs", []) if isinstance(upload_result, dict) else []
         if not outputs or not outputs[0].get("id"):
             raise RuntimeError(f"Galaxy did not return a dataset identifier after uploading {label}")

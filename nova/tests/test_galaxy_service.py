@@ -10,6 +10,7 @@ from typing import Any, Iterator
 
 import yaml
 import numpy as np
+import pytest
 
 from radar_pd_nova.galaxy_service import (
     GalaxyService,
@@ -1648,3 +1649,49 @@ def test_json_checkpoint_upload_uses_unique_staging_and_cleans_up(tmp_path: Path
     assert '"revision": 1' in captured[0][1]
     assert '"revision": 2' in captured[1][1]
     assert list((tmp_path / "provenance").iterdir()) == []
+
+
+def _gpx_upload_store(monkeypatch, tools):
+    from types import SimpleNamespace
+    class Dataset:
+        def __init__(self, **kwargs):self.name=kwargs['name']
+    galaxy=ModuleType('nova.galaxy');galaxy.Dataset=Dataset
+    monkeypatch.setitem(sys.modules,'nova.galaxy',galaxy)
+    waited=[]
+    instance=SimpleNamespace(tools=tools,datasets=SimpleNamespace(wait_for_dataset=waited.append))
+    return SimpleNamespace(history_id='owned-history',nova_connection=SimpleNamespace(galaxy_instance=instance)),waited
+
+
+def test_gpx_upload_falls_back_only_after_a_definitive_unknown_datatype_rejection(tmp_path,monkeypatch):
+    from bioblend import ConnectionError
+    source=tmp_path/'refined.gpx';source.write_bytes(b'original project bytes')
+    calls=[]
+    class Tools:
+        def upload_file(self,**kwargs):
+            calls.append(kwargs)
+            if len(calls)==1:
+                raise ConnectionError('Unknown type',status_code=400,body=json.dumps({'err_code':400008,'err_msg':"Requested extension 'gpx' unknown, cannot upload dataset."}))
+            return {'outputs':[{'id':'saved-project'}]}
+    store,waited=_gpx_upload_store(monkeypatch,Tools())
+    result=GalaxyService._upload_dataset(str(source),store,'magnetic checkpoint')
+    assert result.id=='saved-project' and waited==['saved-project']
+    assert [c['file_type'] for c in calls]==['gpx','binary']
+    assert calls[0]['file_name']==calls[1]['file_name'] and calls[1]['file_name'].endswith('.gpx')
+    assert calls[0]['history_id']==calls[1]['history_id']=='owned-history'
+    assert source.read_bytes()==b'original project bytes'
+
+
+@pytest.mark.parametrize('status,body',[(401,{'err_code':400008}),(403,{'err_code':400008}),
+    (500,{'err_code':400008}), (400,{'err_code':400001}),
+    (400,{'err_code':400008,'err_msg':"Requested extension 'zip' unknown, cannot upload dataset."}),
+    (400,'not json')])
+def test_other_gpx_upload_failures_do_not_trigger_an_ambiguous_retry(tmp_path,monkeypatch,status,body):
+    from bioblend import ConnectionError
+    source=tmp_path/'refined.gpx';source.write_bytes(b'project')
+    calls=[]
+    class Tools:
+        def upload_file(self,**kwargs):
+            calls.append(kwargs);raise ConnectionError('Upload failed',status_code=status,body=json.dumps(body) if isinstance(body,dict) else body)
+    store,waited=_gpx_upload_store(monkeypatch,Tools())
+    with pytest.raises(ConnectionError):GalaxyService._upload_dataset(str(source),store,'magnetic checkpoint')
+    assert len(calls)==1 and not waited

@@ -294,7 +294,7 @@ class LiveAssistantMixin(LiveAssistantUi):
                 config = await self._assistant_configuration()
                 self._assistant_validate_chemistry(config)
                 state.live_assistant_summary = self._configuration_summary_rows(config)
-                self._assistant_confirm(step, f"{config.mode.value.title()} analysis; {config.background_terms} background terms; native TOF fit region.")
+                self._assistant_confirm(step, f"{config.mode.value.title()} analysis; {config.background_terms} background terms; fit limits use the input pattern's units.")
                 self._assistant_step("review")
             else:
                 missing = next((s for s in STEPS[:-1] if s not in self._live_conversation.confirmed), None)

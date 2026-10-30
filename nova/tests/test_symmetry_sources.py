@@ -160,3 +160,13 @@ def test_experiment_change_during_refresh_reloads_instead_of_publishing_stale_re
         assert published==[('IPTS-2','IPTS-2')]
     assert state.sx_results_current
     assert not app._symmetry_loading and not app._symmetry_refresh_pending
+
+
+def test_model_choices_show_qualified_measured_temperature_without_changing_source_identity(tmp_path):
+    w=workspace(tmp_path);source=w.state['sources']['raw']
+    source['metadata']={'conditions':{'channels':[{'quantity':'temperature','value':.27992,'unit':'K','role':'measured','status':'recorded','channel':'He3'}]}}
+    before=copy.deepcopy(source);entries=start_choices(w,'IPTS-1')
+    assert entries[0]['title'].endswith('0.2799 K') and entries[0]['id']=='raw'
+    assert w.state['sources']['raw']==before
+    source['metadata']['conditions']['channels'][0]['role']='setpoint'
+    assert not start_choices(w,'IPTS-1')[0]['title'].endswith('0.2799 K')

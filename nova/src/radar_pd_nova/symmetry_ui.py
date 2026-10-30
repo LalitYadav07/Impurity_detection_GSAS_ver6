@@ -78,7 +78,7 @@ def model_exploration(app):
                 with html.Div(classes='sx-settings'):
                     select('Survey budget · seconds','sx_k_budget','[30,60,120,300]')
                     select('Native templates per k','sx_k_limit','[3,6,12,24,48]')
-                    select('K-survey native workers','sx_k_workers','[1,2,4]')
+                    select('K-survey requested workers','sx_k_workers','[1,2,4]')
                 html.P('The time budget stops new work; cleanup of a running native process can add a few seconds. Catalogs are reused; profiles are bound to the exact GPX revision and settings.',classes='rf-notice')
             html.P('{{ sx_k_message }}',v_if='!!sx_k_message',classes='rf-notice mt-3')
             v.VBtn('Stop k survey',v_if='sx_k_busy',click=app.cancel_k_search,variant='outlined',size='small')
