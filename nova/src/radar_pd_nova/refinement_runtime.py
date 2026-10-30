@@ -101,7 +101,15 @@ class GalaxyRefinementRuntime(LocalRefinementRuntime):
             dataset=self.dataset_id(source)
             target=self.root/'downloads'/(dataset+'.gpx');target.parent.mkdir(exist_ok=True)
             if not target.exists():
-                temporary=target.with_suffix('.partial');self.service._download_dataset(dataset,temporary);temporary.replace(target)
+                import uuid
+                temporary=target.with_name(target.name+'.'+uuid.uuid4().hex+'.partial')
+                try:
+                    self.service._download_dataset(dataset,temporary)
+                    if source.get('source_sha256') and file_sha(temporary)!=source['source_sha256']:
+                        raise ValueError('The downloaded GPX differs from its reviewed publication')
+                    temporary.replace(target)
+                finally:
+                    temporary.unlink(missing_ok=True)
             source['source_path']=str(target)
         return super().resolve(source)
 

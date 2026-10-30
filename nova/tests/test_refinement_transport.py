@@ -46,6 +46,35 @@ def test_fresh_dispatch_and_acknowledged_recovery_submit_exactly_once_without_cr
  assert 'SENTINEL' not in json.dumps(s.requests+s.submissions)
 
 
+def test_parallel_recipe_and_model_inspections_capture_one_exact_gpx_without_tempfile_collision(tmp_path):
+ from concurrent.futures import ThreadPoolExecutor
+ import threading
+ rt,s,source=runtime(tmp_path);source=dict(source,source_path=None)
+ barrier=threading.Barrier(2);body=s.source.read_bytes();destinations=[]
+ def download(uid,target):
+  destinations.append(target)
+  with target.open('wb') as f:
+   f.write(body[:8]);f.flush();barrier.wait(timeout=5);f.write(body[8:])
+ s._download_dataset=download
+ with ThreadPoolExecutor(max_workers=2) as pool:
+  results=list(pool.map(rt.resolve,[source,source]))
+ assert len(set(destinations))==2
+ assert {r['source_sha256'] for r in results}=={source['source_sha256']}
+ assert all(Path(r['source_path']).read_bytes()==body for r in results)
+ assert not list((rt.root/'downloads').glob('*.partial'))
+
+
+@pytest.mark.parametrize('failure',['transfer','checksum'])
+def test_failed_gpx_capture_never_publishes_or_leaves_a_partial_file(tmp_path,failure):
+ rt,s,source=runtime(tmp_path);source=dict(source,source_path=None)
+ def download(uid,target):
+  target.write_bytes(b'incomplete or changed remote bytes')
+  if failure=='transfer':raise TimeoutError('interrupted transfer')
+ s._download_dataset=download
+ with pytest.raises(TimeoutError if failure=='transfer' else ValueError):rt.resolve(source)
+ assert not list((rt.root/'downloads').iterdir())
+
+
 def test_lost_acknowledgement_is_held_then_recovered_without_second_submission(tmp_path,monkeypatch):
  rt,s,source=runtime(tmp_path);s.error=True
  with pytest.raises(RuntimeUnavailable,match='did not acknowledge'):rt.call('inspect',source,tmp_path/'first',dispatch_key='b'*24)

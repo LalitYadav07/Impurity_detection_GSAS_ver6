@@ -72,6 +72,10 @@ class LiveAssistantUi:
                 html.H2("{{ live_assistant_prompt }}")
                 vuetify.VAlert(v_show="!!live_assistant_error", text=("live_assistant_error",),
                                role="alert", type="warning", variant="tonal", density="compact", classes="mb-3")
+                with html.Div(v_if="live_assistant_busy", raw_attrs=['role="status"', 'aria-live="polite"']):
+                    vuetify.VProgressLinear(indeterminate=True, color="#15543c", height=3, classes="mb-2")
+                    html.P("{{ powgen_sample_loading ? powgen_sample_message : 'Checking the selected experiment inputs and configuration…' }}",
+                           classes="radar-help-copy")
                 with html.Fieldset(disabled=(LOCK,), classes="radar-plain-fieldset"):
                     self._assistant_experiment_card()
                     self._assistant_selection_card()

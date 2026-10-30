@@ -215,6 +215,14 @@ def _powgen_scan_label(run: Any) -> str:
     return f"{run.run_number} · Bank {bank}" if bank else str(run.run_number)
 
 
+def _powgen_queue_sort_key(row: dict[str, Any]) -> tuple:
+    """Keep active work visible even when a large historical backlog is newer."""
+    priority={"Running":0,"Queued":1,"Submitted":1,"Failed":2,
+              "Waiting to retry":3,"Retry queued":3,"Waiting for slot":3,
+              "Waiting for complete data":4,"Input changed":4,"Discovered":5,"Completed":6}
+    return (priority.get(row['status'],4),-(row.get('experiment_number') or 0),-row['run_number'])
+
+
 def _powgen_submission_error_summary(value: Any) -> str:
     """Return a concise, non-HTML explanation for a watcher submission error."""
 
@@ -4241,7 +4249,7 @@ class RadarPdNovaApp(LiveAssistantMixin, LiveSetupMixin, SetupEditorMixin, PostA
                     }
                 )
         state = self.server.state
-        state.powgen_rows = sorted(rows, key=lambda item: (item.get('experiment_number') or 0,item["run_number"]), reverse=True)
+        state.powgen_rows = sorted(rows, key=_powgen_queue_sort_key)
 
         scientific_rows: list[dict[str, Any]] = []
         raw_post = getattr(state, "post_analysis", None) or {}

@@ -15,6 +15,16 @@ from test_post_analysis import scan
 from test_post_analysis_ui import app_with_data
 
 
+def test_queue_keeps_oldest_running_work_visible_ahead_of_twenty_newer_discovered_scans():
+    from radar_pd_nova.app import _powgen_queue_sort_key
+    rows=[dict(status='Discovered',run_number=i) for i in range(101,121)]
+    rows.extend([dict(status='Running',run_number=1),dict(status='Queued',run_number=2),
+                 dict(status='Failed',run_number=3),dict(status='Completed',run_number=121)])
+    first_page=sorted(rows,key=_powgen_queue_sort_key)[:10]
+    assert [r['status'] for r in first_page[:3]]==['Running','Queued','Failed']
+    assert [r['run_number'] for r in first_page[3:]]==list(range(120,113,-1))
+
+
 def test_reviewed_run_mapping_reaches_main_charts_without_rewriting_acquisition_metadata():
     from types import SimpleNamespace
     app=app_with_data()
