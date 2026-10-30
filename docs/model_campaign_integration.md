@@ -56,7 +56,8 @@ visible CPU count. Initial memory guidance reserves 512 MiB plus 1 GiB per
 worker; larger supercells can need a larger resource class and must be measured.
 The actual allocation is recorded in the result and displayed in the workspace.
 
-One model job is active per History. A small pilot interleaves models before
+The default permits one active model batch per History, with an explicit option
+for two. The same limit includes native preparation jobs. A small pilot interleaves models before
 later chunk sizes adapt to measured duration and GPX size. Acquisitions receive
 round-robin dispatch. A soft chunk deadline stops new starts; every unstarted
 trial remains pending. Trial deadlines, failures and incomplete scientific
@@ -112,6 +113,17 @@ Rwp is independently recalculated using the native GSAS-II convention. Excluded
 residuals are omitted, while their observed intensity remains in GSAS-II's
 normalization. A separate fit-points-only metric is retained with its own label;
 it must not be compared as if it were the native displayed Rwp.
+
+Inside a selected fit, **Compare fit quality and search repeatability** shows
+one row per exact candidate embedding in that source protocol. It retains the
+terminal and qualified start counts, independent variable count, qualified Rwp
+range and lowest unresolved checkpoint. Equal BNS numbers can still identify
+different embeddings. Results from another scan, GPX revision or fit protocol
+are excluded from this table. Counts across initial configurations describe
+optimizer behavior; they are not independent measurements or a confidence in
+the proposed structure. The table does not relabel receipts, choose a physical
+winner or hide unresolved competition. Compare complexity and conditional
+uncertainties alongside fit quality and evidence across temperature.
 
 The setup planner may return an unknown k only as a preparation for a native
 survey. No executable protocol accepts an unknown vector. After reviewing and

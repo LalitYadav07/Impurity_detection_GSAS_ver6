@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 import numpy as np
 
-from radar_pd_nova.symmetry_workspace import group_models,display_groups,choose_group,choose_member,disposition_reason,coverage_rows,scope_rows,parameter_rows,moment_precision_note
+from radar_pd_nova.symmetry_workspace import group_models,display_groups,choose_group,choose_member,disposition_reason,coverage_rows,scope_rows,parameter_rows,moment_precision_note,embedding_evidence
 from radar_pd_nova.symmetry_plots import coordinate,fit
 
 
@@ -203,6 +203,64 @@ def test_precision_screen_keeps_strong_and_unavailable_estimates_distinct():
     assert 'unavailable' in moment_precision_note(dict(kind='magnetic',refined_moments=[dict(label='Tb1',moment=[.2,0,0],
         component_esd={'mx':None,'my':None,'mz':None},magnitude=.2,magnitude_esd=None)]))
     assert moment_precision_note(dict(kind='structural'))==''
+
+
+def evidence_row(uid,**updates):
+    row=dict(id=uid,protocol='reviewed-protocol',source='scan-1',source_sha256='gpx-a',
+        candidate='embedding-a',name='Magnetic group',bns='18.19',status='valid',
+        has_view=True,rwp=8.,nvars=12,execution_state='terminal')
+    row.update(updates);return row
+
+
+def test_embedding_comparison_separates_start_counts_from_native_dispositions():
+    a=evidence_row('a',rwp=7.7)
+    rows=[a,evidence_row('b',rwp=7.9),evidence_row('unresolved',status='optimization_unresolved',rwp=7.6),
+          evidence_row('rejected',status='physical_rejection',rwp=7.5),
+          evidence_row('pending',execution_state='prepared',status='prepared',has_view=False,rwp=None)]
+    before=json.loads(json.dumps(rows))
+    table,note=embedding_evidence(rows,a)
+    assert len(table)==1 and table[0]['coverage']=='4 / 5' and table[0]['qualified']==2
+    assert table[0]['best_rwp']==7.7 and table[0]['parameters']==12
+    assert table[0]['rwp_range']=='7.70000–7.90000%' and table[0]['unresolved_rwp']==7.6
+    assert '4 / 5 starts terminal; 2 qualified' in note
+    assert 'unresolved checkpoint 7.60000%' in note
+    assert rows==before  # Comparison must not promote or discard native results.
+
+
+def test_embedding_comparison_keeps_bns_embeddings_scans_revisions_and_protocols_separate():
+    a=evidence_row('a')
+    b=evidence_row('b',candidate='embedding-b',rwp=7.8,nvars=15)
+    others=[evidence_row('other-scan',source='scan-2',rwp=1.),
+            evidence_row('new-gpx',source_sha256='gpx-b',rwp=2.),
+            evidence_row('other-recipe',protocol='other-protocol',rwp=3.)]
+    table,note=embedding_evidence([a,b,*others],a)
+    assert [r['id'] for r in table]==['embedding-b','embedding-a']
+    assert [r['selected'] for r in table]==['','Current']
+    assert all(r['coverage']=='1 / 1' for r in table)
+    assert all('BNS 18.19' in r['model'] for r in table)
+    assert '1 / 1 starts terminal; 1 qualified' in note
+
+
+def test_embedding_comparison_handles_unfinished_unverified_and_nonfinite_results():
+    pending=evidence_row('pending',status='prepared',has_view=False,rwp=None,nvars=None,execution_state='prepared')
+    invalid=evidence_row('invalid',has_view=False,rwp=0.)
+    nonfinite=evidence_row('nan',rwp=float('nan'))
+    table,note=embedding_evidence([pending,invalid,nonfinite],pending)
+    assert table[0]['qualified']==0 and table[0]['parameters'] is None
+    assert table[0]['best_rwp'] is None and table[0]['rwp_range']=='—'
+    assert table[0]['unresolved_rwp'] is None
+    assert 'Qualified Rwp range' not in note
+    assert embedding_evidence([pending],None)==([], '')
+    assert embedding_evidence([pending],dict(pending,protocol=''))==([], '')
+
+
+def test_embedding_comparison_residuals_and_parameter_counts_keep_numeric_sort_values():
+    a=evidence_row('a',rwp=12.,nvars=15)
+    b=evidence_row('b',candidate='embedding-b',rwp=2.,nvars=9)
+    table,_=embedding_evidence([a,b],a)
+    assert [r['best_rwp'] for r in table]==[2.,12.]
+    assert all(isinstance(r['best_rwp'],(int,float)) for r in table)
+    assert all(isinstance(r['parameters'],int) for r in table)
 
 
 def test_experiment_scope_filters_before_reading_foreign_result_files(tmp_path,monkeypatch):

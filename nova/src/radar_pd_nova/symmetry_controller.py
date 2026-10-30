@@ -27,7 +27,7 @@ from gpx_recipe.usage import summarize_calls,usage_labels
 from gpx_recipe.symmetry.isodistort_discovery import discover_structural
 from gpx_recipe.symmetry.plans import build_plan
 from gpx_recipe.symmetry.contracts import iter_trials
-from .symmetry_workspace import campaign_rows,group_models,display_groups,view_for,choose_group,choose_member,disposition_reason,coverage_rows,scope_rows,parameter_rows,moment_precision_note,campaign_can_resume,display_status
+from .symmetry_workspace import campaign_rows,group_models,display_groups,view_for,choose_group,choose_member,disposition_reason,coverage_rows,scope_rows,parameter_rows,moment_precision_note,campaign_can_resume,display_status,embedding_evidence
 from . import symmetry_plots as plots
 from .symmetry_sources import start_choices,resolve_start
 from .k_search_controller import KSearchMixin
@@ -49,7 +49,7 @@ class SymmetryMixin(KSearchMixin):
         self._symmetry_rows=[];self._symmetry_all_rows=[];self._symmetry_groups=[];self._symmetry_draft=None;self._symmetry_approved='';self._symmetry_task=None;self._symmetry_loading=False;self._symmetry_refresh_pending=False;self._symmetry_explicit_selection=False;self._symmetry_display_identity=None;self._symmetry_loading_identity=None
         s=self.server.state
         defaults=dict(sx_campaign='',sx_campaigns=[],sx_source='',sx_source_options=[],sx_busy=False,sx_error='',sx_message='',sx_progress='',sx_groups=[],sx_group='',sx_members=[],sx_selected='',sx_search='',sx_status='all',
-            sx_overview=plots.empty('Open a campaign to inspect its coverage'),sx_fit=plots.empty('Select an audited checkpoint'),sx_axis='d',sx_reset=0,sx_pins=[],sx_pin_options=[],sx_parameters=[],sx_details=[],sx_moment_note='',sx_gsas_model='',sx_intensity_scale='linear',
+            sx_overview=plots.empty('Open a campaign to inspect its coverage'),sx_fit=plots.empty('Select an audited checkpoint'),sx_axis='d',sx_reset=0,sx_pins=[],sx_pin_options=[],sx_parameters=[],sx_details=[],sx_moment_note='',sx_embedding_evidence=[],sx_embedding_summary='',sx_gsas_model='',sx_intensity_scale='linear',
             sx_parent='',sx_parents=[],sx_histogram='',sx_histograms=[],sx_k='',sx_sites=[],sx_site_options=[],sx_form_factors='',sx_lande='',sx_directions=['x','y','z'],sx_adequate=None,sx_max_moment='',sx_cycles=20,sx_slots=2,sx_moment_model='collinear',sx_refine_scale=False,sx_refine_background=False,
             sx_kind='magnetic',sx_mag_d_min=0.,sx_max_mode=.5,sx_start_mode=.1,sx_candidate_options=[],sx_candidates=[],sx_mode_options=[],sx_modes=[],sx_discovered=False,sx_discovery_scope='',
             sx_plan_ready=False,sx_approved=False,sx_plan_summary='',sx_plan_candidates=[],sx_setup=False,sx_has_context=False,sx_has_gpx=False,sx_has_receipt=False,sx_resumable=False,
@@ -293,6 +293,7 @@ class SymmetryMixin(KSearchMixin):
             s.sx_overview=plots.overview(self._symmetry_rows,s.sx_selected)
             s.sx_fit=plots.fit(row,pins,axis=s.sx_axis,reset=s.sx_reset,intensity_scale=s.sx_intensity_scale)
             s.sx_details=[];s.sx_parameters=[];s.sx_moment_note='';s.sx_has_gpx=bool(row and row.get('has_gpx') and row['has_view'])
+            s.sx_embedding_evidence,s.sx_embedding_summary=embedding_evidence(self._symmetry_rows,row)
             s.sx_has_receipt=bool(row and row.get('receipt_sha256'))
             if row:
                 reason=disposition_reason(row)

@@ -159,6 +159,43 @@ def display_status(status):
             'submitting':'submission pending'}.get(status,status.replace('_',' '))
 
 
+def embedding_evidence(rows,selected):
+    """Compare exact model embeddings within one approved source protocol.
+
+    Preserve all native dispositions. Start counts describe optimization and
+    coverage, never independent measurements or a structure probability.
+    """
+    if not selected:return [],''
+    keys=('protocol','source','source_sha256')
+    if not all(selected.get(key) for key in keys):return [],''
+    same_source=[row for row in rows if all(row.get(key)==selected.get(key) for key in keys)]
+    partitions={}
+    for row in same_source:partitions.setdefault(row['candidate'],[]).append(row)
+    table=[];summary=''
+    for candidate,members in partitions.items():
+        qualified=[row for row in members if row.get('status')=='valid' and row.get('has_view') and
+                   isinstance(row.get('rwp'),(int,float)) and np.isfinite(row['rwp']) and row['rwp']>=0]
+        unresolved=[row['rwp'] for row in members if row.get('status')=='optimization_unresolved' and
+                    row.get('has_view') and isinstance(row.get('rwp'),(int,float)) and np.isfinite(row['rwp']) and row['rwp']>=0]
+        terminal=sum(row.get('execution_state')=='terminal' for row in members)
+        best=min(qualified,key=lambda row:row['rwp']) if qualified else None
+        low,high=(min(row['rwp'] for row in qualified),max(row['rwp'] for row in qualified)) if qualified else (None,None)
+        label=members[0]['name']+(' · BNS '+members[0]['bns'] if members[0].get('bns') else '')+' · '+candidate[-6:]
+        table.append(dict(id=candidate,model=label,coverage=f'{terminal} / {len(members)}',
+            qualified=len(qualified),parameters=best.get('nvars') if best else None,
+            best_rwp=round(low,5) if best else None,
+            rwp_range=f'{low:.5f}–{high:.5f}%' if best else '—',
+            unresolved_rwp=round(min(unresolved),5) if unresolved else None,
+            selected='Current' if candidate==selected['candidate'] else '',_sort=(best is None,low if best else float('inf'),candidate)))
+        if candidate==selected['candidate']:
+            summary=f'{terminal} / {len(members)} starts terminal; {len(qualified)} qualified for this exact embedding.'
+            if best:summary+=f' Qualified Rwp range {low:.5f}–{high:.5f}%.'
+            if unresolved:summary+=f' Lowest unresolved checkpoint {min(unresolved):.5f}%.'
+    table.sort(key=lambda row:row['_sort'])
+    for row in table:row.pop('_sort')
+    return table,summary
+
+
 def campaign_can_resume(summaries,enrollments,*,following=False):
     """A queued acquisition is recoverable even before its first trial exists."""
     return (any(s['pending_count'] for s in summaries) or following or
