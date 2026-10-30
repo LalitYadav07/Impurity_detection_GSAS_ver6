@@ -180,3 +180,13 @@ def test_a_late_native_evidence_read_failure_clears_all_verified_artifact_flags(
     assert value['status']=='integrity_failure' and value['rwp'] is None
     assert not value['has_view'] and not value['has_gpx']
     assert not {'receipt_sha256','view_path','gpx_relative'} & set(value)
+
+
+def test_canted_components_show_native_uncertainties_without_inventing_a_norm_error():
+    view=dict(phases=[dict(name='Er magnetic',moments=[dict(label='Er1_m1',magnitude=6.5,components=[1.7,1.3,6.1])])])
+    row=dict(refined_moments=[dict(label='Er1_m1',magnitude_esd=None,component_esd={'mx':.3,'my':.4,'mz':.1})])
+    values=parameter_rows(row,view)
+    assert values[0]['value']==6.5 and values[0]['uncertainty']=='—'
+    assert [v['parameter'] for v in values[1:]]==['Er1_m1 · mx','Er1_m1 · my','Er1_m1 · mz']
+    assert [v['value'] for v in values[1:]]==[1.7,1.3,6.1]
+    assert [v['uncertainty'] for v in values[1:]]==[.3,.4,.1]

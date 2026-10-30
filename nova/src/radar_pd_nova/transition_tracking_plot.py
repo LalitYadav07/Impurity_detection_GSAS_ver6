@@ -373,6 +373,7 @@ def boundary_figure(records, values, axis_title):
 def profile_figure(
     current,
     *,
+    current_label="Selected observed",
     comparison=None,
     comparison_label="Earlier observation",
     pair=None,
@@ -426,7 +427,7 @@ def profile_figure(
             np.exp((pair or {}).get("metrics", {}).get("gain_intercept_log", 0))
         )
         for name, p, color, multiplier in (
-            ("Selected observed", current, "#087b44", 1),
+            (current_label, current, "#087b44", 1),
             (comparison_label, comparison, "#89948e", gain),
         ):
             if p is None:

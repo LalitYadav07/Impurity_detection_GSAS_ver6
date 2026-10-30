@@ -2,7 +2,7 @@
 
 The model chooses neither subgroup catalogs nor executable Python. Native GPX
 identities and any explicit reviewed choices remain authoritative. A request
-outside the moment-only, single-k scope must be returned as a blocked plan.
+outside the declared moment/background/common-scale, single-k scope is blocked.
 """
 from __future__ import annotations
 
@@ -14,11 +14,11 @@ import time
 
 from ..providers import make_client
 from .chemistry import validate_sites
-from .contracts import digest, fields, number, text
+from .contracts import digest, fields, number, text, choices
 
 
 SETTING_FIELDS = ['kind', 'parent', 'histogram', 'k', 'sites', 'directions',
-                  'maximum_moment', 'magnetic_d_min', 'cycles', 'adequate_rwp', 'relative_sign_starts']
+                  'maximum_moment', 'magnetic_d_min', 'cycles', 'adequate_rwp', 'relative_sign_starts', 'moment_model', 'refine_histogram_scale', 'refine_background']
 
 
 def response_schema(context):
@@ -30,7 +30,10 @@ def response_schema(context):
         return dict(type='array', items=item)
     site = obj(dict(label=strings(), form_factor=strings(), lande_g=dict(type='number')))
     settings = obj(dict(kind=strings(['magnetic']), parent=strings(), histogram=strings(),
-                        k=array(strings()), sites=array(site), directions=array(strings(['x', 'y', 'z'])),
+                        k={'anyOf':[array(strings()),{'type':'null'}]}, sites=array(site), directions=array(strings(['x', 'y', 'z'])),
+                        moment_model=strings(['collinear','symmetry_allowed']),
+                        refine_histogram_scale=dict(type='boolean'),
+                        refine_background=dict(type='boolean'),
                         maximum_moment=dict(type='number'), magnetic_d_min=dict(type='number'),
                         cycles=dict(type='integer'), adequate_rwp=dict(type='number'), relative_sign_starts=dict(type='boolean')))
     return obj(dict(schema=strings(['radar-symmetry-intent/v1']), source_sha256=strings([context['sha256']]),
@@ -49,15 +52,17 @@ def payload(request, context, declared=None):
                 rules=[
                     'One nuclear parent phase and one linked neutron powder histogram per search.',
                     'Single exact rational k in the actual parent basis; never reduce integer components modulo one.',
-                    'The user supplies k, magnetic sites/ions, fit criterion and bounds. Ask a question if absent or ambiguous; do not invent oxidation states or propagation vectors.',
+                    'The user supplies magnetic sites/ions, fit criterion and bounds. Ask if absent or ambiguous; do not invent oxidation states or propagation vectors. If k is unknown and the user requests a data-based k survey, return settings.k=null, questions=[] and unsupported=[] when other inputs are clear. The host only prepares the reviewed site/ion settings; no subgroup search or refinement may execute until a measured k-survey candidate or explicit rational k is reviewed.',
                     'Use exact atom labels, phase and histogram names from this GPX. Site labels are scoped to the selected phase.',
-                    'Only collinear child-axis x/y/z starts are implemented; the nuclear model, background, scale, calibration, occupancy, positions and Uiso stay fixed.',
+                    'moment_model=collinear uses child-axis x/y/z starts and requires a collinear full structure. moment_model=symmetry_allowed refines every site-symmetry-allowed moment component, permitting commensurate canted structures. Its parent-axis-dominated starts include relative component signs. Neither is an exhaustive continuous-orientation search. Nuclear geometry, calibration, occupancy, positions, Uiso and relative phase amounts stay fixed.',
+                    'refine_histogram_scale=true is supported only when the user explicitly requests a shared/common/global nuclear-and-magnetic intensity scale. It refines one positive histogram scale for both contributions, never independent nuclear/magnetic phase amounts. A cold nuclear-only scale can otherwise absorb magnetic scattering and bias moment estimates. Default false when unrequested; a request to keep all scale factors fixed means false.',
+                    'refine_background=true is supported only when the user explicitly requests refinement of the existing background coefficients. The basis, coefficient count, extra peaks and Debye terms stay fixed. The same scope applies to every candidate. Default false when unrequested or when the user requests a fixed background.',
                     'relative_sign_starts=true enumerates opposite/parallel initial signs between distinct selected parent sites; symmetry-split child orbits and continuous orientations are not an exhaustive search.',
                     'The host discovers and evaluates every returned subgroup in the declared catalog, with explicit incompatible/unsupported dispositions. Never name, invent, rank, select or delete subgroups yourself.',
                     'This is a setup plan BEFORE discovery. A subgroup catalog is not needed to return valid settings. Requests to discover all candidates and preserve later failures are supported host operations, not unsupported requests. Do not put pending host work in questions or unsupported.',
                     'magnetic_d_min=0 means all calibrated fitted d spacings; preserve an explicit cutoff.',
                     'Landé g belongs to each ionic form factor: e.g. Cr+3 and Fe+3 usually 2, Pr+3 0.8 when explicitly requested.',
-                    'No multi-k, incommensurate, noncollinear, joint nuclear polish or automatic retries. If requested, return concrete unsupported entries and settings=null.',
+                    'No multi-k, incommensurate, arbitrary cross-component constraints, nuclear-cell/position/occupancy/Uiso refinement or automatic retries. If requested, return concrete unsupported entries and settings=null. The optional existing background and common scale are supported as described above. The host provides the native k survey; never claim that data-based k screening is unavailable.',
                     'If questions or unsupported is nonempty, settings must be null. Never execute a prefix.',
                     'Declared choices are binding; they may not be replaced by a more conventional value.'
                 ])
@@ -77,9 +82,12 @@ def validate_intent(value, context, *, request, declared=None):
         if p['settings'] is not None:
             raise ValueError('Unresolved setup requests cannot retain executable settings')
         return p
-    s = fields(p['settings'], SETTING_FIELDS)
+    s = fields(p['settings'], [k for k in SETTING_FIELDS if k not in {'moment_model','refine_histogram_scale','refine_background'}], {'moment_model':'collinear','refine_histogram_scale':False,'refine_background':False})
+    s['moment_model']=choices(s['moment_model'],['collinear','symmetry_allowed'])
+    if type(s['refine_histogram_scale']) is not bool:raise ValueError('The shared histogram scale needs an explicit boolean')
+    if type(s['refine_background']) is not bool:raise ValueError('The existing background choice needs an explicit boolean')
     if s['kind'] != 'magnetic':
-        raise ValueError('This setup planner supports collinear magnetic searches')
+        raise ValueError('This setup planner supports commensurate magnetic searches')
     parents = [phase for phase in context['phases'] if phase['name'] == s['parent'] and phase['type'] == 'nuclear']
     if len(parents) != 1:
         raise ValueError('Choose one exact nuclear parent from this GPX')
@@ -89,12 +97,12 @@ def validate_intent(value, context, *, request, declared=None):
         raise ValueError('The selected parent is not linked to this exact histogram')
     if not str(histograms[0]['instrument']['Type'][0]).startswith('PN'):
         raise ValueError('Magnetic exploration requires neutron powder data')
-    if not isinstance(s['k'], list) or len(s['k']) != 3 or any(not isinstance(x, str) for x in s['k']):
+    if s['k'] is not None and (not isinstance(s['k'], list) or len(s['k']) != 3 or any(not isinstance(x, str) for x in s['k'])):
         raise ValueError('Supply one exact rational three-component k vector')
-    if any(not re.fullmatch(r'[+-]?\d+(?:/[1-9]\d*)?', x.strip()) for x in s['k']):
+    if s['k'] is not None and any(not re.fullmatch(r'[+-]?\d+(?:/[1-9]\d*)?', x.strip()) for x in s['k']):
         raise ValueError('Use exact rational k components, not rounded decimal guesses')
-    s['k'] = [str(Fraction(x)) for x in s['k']]
-    if any(Fraction(x).denominator > 96 for x in s['k']):
+    s['k'] = [str(Fraction(x)) for x in s['k']] if s['k'] is not None else None
+    if s['k'] is not None and any(Fraction(x).denominator > 96 for x in s['k']):
         raise ValueError('The declared k exceeds the commensurate denominator budget')
     if not isinstance(s['sites'], list) or not 1 <= len(s['sites']) <= 32:
         raise ValueError('Select explicit magnetic sites and ionic form factors')
@@ -123,7 +131,7 @@ def validate_intent(value, context, *, request, declared=None):
         if key not in SETTING_FIELDS:
             raise ValueError('Unknown declared setup field: ' + key)
         actual = s[key]
-        if key == 'k':
+        if key == 'k' and expected is not None:
             expected = [str(Fraction(x)) for x in expected]
         if key == 'sites':
             actual = sorted(actual, key=lambda site: site['label'])
@@ -164,7 +172,7 @@ def make_intent(request, context, *, declared=None, client=None, max_calls=2):
             return dict(schema='radar-symmetry-planning-result/v1', intent=plan, calls=calls,
                         payload_sha256=digest(data), intent_sha256=digest(plan),
                         payload_bytes=len(json.dumps(data).encode()),
-                        status='needs_input' if plan['settings'] is None else 'ready_for_discovery')
+                        status='needs_input' if plan['settings'] is None else 'ready_for_k_survey' if plan['settings']['k'] is None else 'ready_for_discovery')
         except (ValueError, KeyError, TypeError, ZeroDivisionError) as exc:
             if attempt + 1 == max_calls:
                 error = ValueError('Magnetic setup failed bounded validation: ' + str(exc))

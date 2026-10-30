@@ -1545,10 +1545,10 @@ class RadarPdNovaApp(LiveAssistantMixin, LiveSetupMixin, SetupEditorMixin, PostA
                     persistent_hint=True,
                 )
                 vuetify.VSelect(v_show="live_beamline === 'HB2A'",label='Reduced-product normalization',v_model=('hb2a_normalization',),
-                    items=([{'title':'Collection-time normalized','value':'time'}, {'title':'Monitor normalized','value':'monitor'},
+                    items=([{'title':'Time · norm_time.dat','value':'time'}, {'title':'Monitor · autoreduced.dat','value':'monitor'},
                         {'title':'Legacy export — normalization needs review','value':'legacy'}],),item_title='title',item_value='value',
                     disabled=('powgen_monitoring || live_launch_busy',),density='compact',variant='outlined',
-                    hint='Choose the product family before refreshing sample labels. Variants and summed scans are not combined.',persistent_hint=True)
+                    hint='Monitor normalization corrects by the measured beam monitor; time normalization uses counting time. Match the product used in your reference analysis and review monitor reliability. Variants and summed scans are not combined.',persistent_hint=True)
                 vuetify.VBtn(
                     "{{ live_beamline === 'HB2A' ? 'Refresh sample labels' : 'Refresh sample IDs' }}",
                     click=(self.request_powgen_sample_refresh, "[powgen_ipts]"),
@@ -2546,7 +2546,10 @@ class RadarPdNovaApp(LiveAssistantMixin, LiveSetupMixin, SetupEditorMixin, PostA
             vuetify.VProgressLinear(v_if="selected_run_loading", indeterminate=True, height=3, color="#15543c")
             vuetify.VAlert(v_if="!!selected_result_load_error", text=("selected_result_load_error",),
                 type="error", variant="tonal", density="compact", classes="mb-2")
-            with html.Div(v_if="!selected_run_uid && !['experiment','refinement'].includes(workspace_view)", classes="radar-workspace-empty"):
+            vuetify.VAlert(v_if="live_launch_busy", title="Preparing Live analysis",
+                text=("live_test_message || powgen_message",), type="info", variant="tonal", classes="mb-2")
+            vuetify.VProgressLinear(v_if="live_launch_busy", indeterminate=True, height=3, color="#15543c")
+            with html.Div(v_if="!live_launch_busy && !selected_run_uid && !['experiment','refinement'].includes(workspace_view)", classes="radar-workspace-empty"):
                 html.Div("RADAR-PD SCIENTIFIC AI WORKSPACE", classes="radar-kicker")
                 html.H1("Phase detection for powder diffraction")
                 html.P(
@@ -5428,6 +5431,7 @@ class RadarPdNovaApp(LiveAssistantMixin, LiveSetupMixin, SetupEditorMixin, PostA
         if state.powgen_monitoring or getattr(state, "live_launch_busy", False):
             return
         state.live_launch_busy = True
+        state.live_test_message = ""
         state.powgen_message = "Preparing the Live analysis and checking the selected inputs..."
         state.flush()
         try:

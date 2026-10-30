@@ -129,6 +129,12 @@ def parameter_rows(row,view):
                              value=round(value.get('magnitude',value.get('value')),6),
                              uncertainty=round(uncertainty,6) if isinstance(uncertainty,(int,float)) else '—',
                              unit='µB' if magnetic else 'Å'))
+            if magnetic and 'components' in value:
+                component_errors=estimates.get(value['label'],{}).get('component_esd') or {}
+                for axis,component in zip(('mx','my','mz'),value['components']):
+                    error=component_errors.get(axis)
+                    rows.append(dict(phase=phase['name'],parameter=value['label']+' · '+axis,
+                        value=round(component,6),uncertainty=round(error,6) if isinstance(error,(int,float)) else '—',unit='µB'))
     return rows
 
 

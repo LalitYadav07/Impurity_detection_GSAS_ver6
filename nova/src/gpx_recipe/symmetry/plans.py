@@ -41,9 +41,23 @@ def build_plan(context,catalog,root,settings):
             for number,signs in enumerate(itertools.product([-1,1],repeat=len(chosen))):
                 seeds.append(dict(id=f'child-{index+1}-signs-{number+1}',candidate_ids=[candidate['id']],mode_values=dict(zip(chosen,[amplitude*s for s in signs]))))
     else:raise ValueError('Unknown exploration kind')
+    if kind=='magnetic' and settings.get('moment_model')=='symmetry_allowed':
+        starts=[]
+        for seed in seeds:
+            other=[axis for axis in 'xyz' if axis!=seed['axis']]
+            for index,signs in enumerate(itertools.product([-1,1],repeat=2)):
+                direction={seed['axis']:1.,**{axis:.5*sign for axis,sign in zip(other,signs)}}
+                for level,fraction in enumerate([.25,.75]):
+                    starts.append(dict(seed,id=seed['id']+'-cant-'+str(index+1)+'-amp-'+str(level+1),
+                        magnitude=settings['maximum_moment']*fraction,parent_direction=[direction[a] for a in 'xyz']))
+        seeds=starts
     policy=dict(cycles=settings['cycles'],timeout_seconds=120,maximum_trials=2000,maximum_cell_multiplier=8,maximum_moment=settings['maximum_moment'],fit_band_percent=.25,maximum_mode=settings['maximum_mode'],adequate_rwp_percent=settings['adequate_rwp'],
         refine_cell=kind=='structural',refine_background=kind=='structural',refine_histogram_scale=kind=='structural')
     if kind=='magnetic' and 'magnetic_d_min' in settings:policy['magnetic_d_min']=settings['magnetic_d_min']
+    if kind=='magnetic' and 'moment_model' in settings:policy['moment_model']=settings['moment_model']
+    if kind=='magnetic':
+        policy['refine_histogram_scale']=settings.get('refine_histogram_scale',False)
+        policy['refine_background']=settings.get('refine_background',False)
     protocol=dict(kind=kind,source=dict(path='source.gpx',sha256=file_sha(root/'source.gpx')),parent_phase=parent['name'],histogram=settings['histogram'],parent_setting_sha256=parent['setting_sha256'],magnetic_function_sha256=context['runtime']['magnetic_function_sha256'],implementation_sha256=package_signature(),catalog=dict(path='catalog.json',sha256=file_sha(root/'catalog.json')),k=settings['k'],candidates=candidates,seeds=seeds,sites=sites,policy=policy)
     if settings.get('acquisition_id'):protocol['acquisition_id']=settings['acquisition_id']
     return validate_protocol(protocol)

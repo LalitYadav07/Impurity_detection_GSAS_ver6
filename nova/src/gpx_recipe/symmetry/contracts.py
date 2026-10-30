@@ -98,8 +98,10 @@ def seed(value):
 
 def policy(value):
     defaults=dict(site_policy='all',refine_cell=False,refine_background=False,refine_histogram_scale=False,maximum_cell_relative_change=.02,maximum_angle_change_degrees=3.)
+    if isinstance(value,dict) and 'moment_model' in value:defaults['moment_model']='collinear'
     if isinstance(value,dict) and 'magnetic_d_min' in value:defaults['magnetic_d_min']=None
     p=fields(value,['cycles','timeout_seconds','maximum_trials','maximum_cell_multiplier','maximum_moment','fit_band_percent','maximum_mode','adequate_rwp_percent'],defaults)
+    if 'moment_model' in p:p['moment_model']=choices(p['moment_model'],['collinear','symmetry_allowed'])
     if 'magnetic_d_min' in p:p['magnetic_d_min']=number(p['magnetic_d_min'],0,10)
     for k,lo,hi in [('cycles',1,100),('timeout_seconds',1,3600),('maximum_trials',1,2000),('maximum_cell_multiplier',1,64)]:p[k]=number(p[k],lo,hi,integer=True)
     for k,hi in [('maximum_moment',20),('maximum_mode',2),('adequate_rwp_percent',100),('maximum_cell_relative_change',.1),('maximum_angle_change_degrees',10)]:p[k]=number(p[k],0,hi,positive=True)
@@ -125,9 +127,10 @@ def validate_protocol(value):
     if not isinstance(p['candidates'],list) or not 1<=len(p['candidates'])<=500:raise ValueError('Invalid finite candidate set')
     # Structural seeds are candidate-specific: 50 children with two signs
     # require 100 seed records, rather than a shared magnetic start grid.
-    seed_limit=2000 if p['kind']=='structural' else 64
+    normalized_policy=policy(p['policy'])
+    seed_limit=2000 if p['kind']=='structural' or normalized_policy.get('moment_model')=='symmetry_allowed' else 64
     if not isinstance(p['seeds'],list) or not 1<=len(p['seeds'])<=seed_limit:raise ValueError('Invalid finite start set')
-    p['candidates']=[validate_candidate(c) for c in p['candidates']];p['seeds']=[seed(s) for s in p['seeds']];p['policy']=policy(p['policy'])
+    p['candidates']=[validate_candidate(c) for c in p['candidates']];p['seeds']=[seed(s) for s in p['seeds']];p['policy']=normalized_policy
     if len({c['id'] for c in p['candidates']})!=len(p['candidates']) or len({s['id'] for s in p['seeds']})!=len(p['seeds']):raise ValueError('Candidate and seed IDs must be unique')
     candidate_ids={c['id'] for c in p['candidates']}
     if any(set(s.get('candidate_ids',candidate_ids))-candidate_ids for s in p['seeds']):raise ValueError('A start references an undiscovered candidate')
@@ -142,7 +145,7 @@ def validate_protocol(value):
     if p['kind']=='magnetic':
         if not sites or len({s['label'] for s in sites})!=len(sites):raise ValueError('Select unique magnetic sites and form factors')
         if any(not c['magnetic_space_group'] or c['child'] or c['modes'] for c in p['candidates']):raise ValueError('Magnetic candidates require native MSG records')
-        if any(p['policy'][k] for k in ['refine_cell','refine_background','refine_histogram_scale']):raise ValueError('Magnetic screening holds the nuclear/nuisance state fixed')
+        if p['policy']['refine_cell']:raise ValueError('Magnetic screening holds nuclear geometry fixed; only an explicitly declared common histogram scale and existing background coefficients may vary')
         if any(s['mode_values'] or s['magnitude']>p['policy']['maximum_moment'] for s in p['seeds']):raise ValueError('Invalid magnetic start or moment ceiling')
         if any(set(s.get('site_signs',{}))-{site['label'] for site in sites} for s in p['seeds']):raise ValueError('A start gives a sign to an unselected magnetic site')
         for form in {s['form_factor'] for s in sites}:

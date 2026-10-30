@@ -97,11 +97,12 @@ class LiveAssistantUi:
                                    density="compact", variant="outlined", disabled=(LOCK,))
             self._assistant_select("Reduced-data folder", "powgen_source_subfolder", "powgen_source_options")
             self._assistant_select('Reduced-product normalization', 'hb2a_normalization',
-                "[{title:'Collection time',value:'time'},{title:'Monitor',value:'monitor'},{title:'Legacy export; review normalization',value:'legacy'}]",
+                "[{title:'Time · norm_time.dat',value:'time'},{title:'Monitor · autoreduced.dat',value:'monitor'},{title:'Legacy export; review normalization',value:'legacy'}]",
                 v_show="live_beamline === 'HB2A'")
             self._assistant_select('Grouping / export variant', 'snap_product_family', 'snap_product_family_options',
                 v_show="live_beamline === 'SNAP'")
             html.P("I read reduced-file and sample metadata from the selected experiment folder. Choose one reduction version; archived copies are kept separate.", classes="radar-help-copy")
+            html.P('Monitor normalization uses the measured beam monitor; time normalization uses counting time. Match your reference analysis and review monitor reliability.',v_if="live_beamline === 'HB2A'",classes='radar-help-copy')
             self._assistant_next("experiment", "Find samples and banks")
 
     def _assistant_selection_card(self):

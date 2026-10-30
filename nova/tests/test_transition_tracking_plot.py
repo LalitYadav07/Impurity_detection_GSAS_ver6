@@ -140,3 +140,11 @@ def test_display_cell_count_is_bounded_for_a_long_experiment():
     )
     assert stats["display_cells"] <= 51200
     assert len(fig.layout.yaxis.tickvals) < 40
+
+
+def test_expanded_observed_overlay_retains_both_scan_and_temperature_labels():
+    from radar_pd_nova.transition_tracking_plot import profile_figure
+    a=observed()
+    figure=profile_figure(a,current_label="Scan 8 · 3.107 K",comparison=a,comparison_label="Scan 5 · 0.2822 K")
+    assert [trace.name for trace in figure.data]==["Scan 8 · 3.107 K","Scan 5 · 0.2822 K"]
+    np.testing.assert_allclose(figure.data[0].y,a.intensity)

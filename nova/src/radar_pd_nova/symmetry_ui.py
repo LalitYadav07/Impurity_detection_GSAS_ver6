@@ -25,13 +25,13 @@ def model_exploration(app):
             v.VBtn('Refresh evidence',click=app.refresh_symmetry,loading=('sx_busy',),variant='text',prepend_icon='mdi-refresh')
             v.VBtn('Continue saved campaign',click=app.continue_symmetry_campaign,disabled=('!sx_resumable || sx_busy || sx_campaign_running',),variant='text',prepend_icon='mdi-play')
             v.VBtn('Pause campaign',click=app.pause_model_campaign,disabled=('!sx_campaign_running',),variant='text',prepend_icon='mdi-pause')
-            v.VBtn('Prepare exploration',click='sx_setup = !sx_setup',variant='outlined',prepend_icon='mdi-molecule')
+            v.VBtn('New model search',v_if='!!sx_campaign',click='sx_setup = !sx_setup',variant='outlined',prepend_icon='mdi-molecule')
         v.VAlert(v_if='!!sx_error',text=('sx_error',),type='error',variant='tonal',density='compact',classes='mb-3')
         html.P('{{ sx_backend }}',classes='rf-notice')
         html.P('{{ sx_queue_notice }}',v_if='!!sx_queue_notice',classes='rf-notice')
         html.P('Pause or end any other viewer for this campaign before continuing here.',v_if='sx_resumable && !sx_campaign_running',classes='rf-notice')
         v.VProgressLinear(v_if='sx_busy',indeterminate=True,color='#267653',height=3,classes='mb-3')
-        with html.Div(v_if='sx_setup',classes='rf-card sx-setup'):
+        with html.Div(v_if='sx_setup || !sx_campaign',classes='rf-card sx-setup'):
             html.H3('Explore models from a completed GPX')
             html.P('Enter a commensurate k vector, or use the magnetic k survey below. Review hypotheses before native refinement.',classes='rf-notice')
             with html.Div(classes='rf-toolbar'):
@@ -39,13 +39,16 @@ def model_exploration(app):
                 v.VBtn('Inspect exact parent',click=app.inspect_symmetry_source,disabled=('!sx_start_source || sx_busy',),variant='outlined')
             with html.Details(v_if='sx_has_context',classes='mt-3'):
                 html.Summary('Describe a magnetic model search')
-                html.P('Supply k in the parent basis, magnetic sites and ions, and refinement limits. Review the draft below before discovering and approving the finite search.',classes='rf-notice')
+                html.P('Describe magnetic sites, ions and physical bounds. If k is unknown, request a data-based k survey; review its candidates before discovery. State whether moments may cant and whether to refine a shared nuclear/magnetic intensity scale.',classes='rf-notice')
                 v.VTextarea(label='Magnetic refinement request',v_model=('sx_request',),rows=3,auto_grow=True,variant='outlined',hide_details=True,classes='mt-3')
                 v.VBtn('Draft search settings',click=app.plan_symmetry_request,disabled=('sx_busy || !sx_request',),variant='outlined',classes='mt-3')
                 html.P('{{ sx_planning_summary }}',v_if='!!sx_planning_summary',classes='rf-notice')
+                html.P('{{ sx_planning_usage }}',v_if='!!sx_planning_usage',classes='rf-notice')
+                html.P('{{ sx_planning_cost }}',v_if='!!sx_planning_cost',classes='rf-notice')
                 html.P('{{ note }}',v_for='note in sx_planning_notes',classes='rf-notice')
             with html.Div(v_if='sx_has_context',classes='sx-settings'):
-                select('Exploration','sx_kind',"[{title:'Collinear magnetic models',value:'magnetic'},{title:'Structural displacement modes',value:'structural'}]")
+                select('Exploration','sx_kind',"[{title:'Magnetic models',value:'magnetic'},{title:'Structural displacement modes',value:'structural'}]")
+                select('Moment model','sx_moment_model',"[{title:'Collinear moments',value:'collinear'},{title:'Symmetry-allowed components · can cant',value:'symmetry_allowed'}]",v_if="sx_kind === 'magnetic'")
                 select('Nuclear parent','sx_parent','sx_parents')
                 select('Histogram / bank','sx_histogram','sx_histograms')
                 with html.Div():
@@ -54,8 +57,13 @@ def model_exploration(app):
                 select('Magnetic parent sites','sx_sites','sx_site_options',v_if="sx_kind === 'magnetic'",multiple=True,chips=True)
                 v.VTextField(v_if="sx_kind === 'magnetic'",label='Ionic form factors · atom=ion; atom=ion',v_model=('sx_form_factors',),placeholder='Cr1=Cr+3',density='compact',variant='outlined',hide_details=True)
                 v.VTextField(v_if="sx_kind === 'magnetic'",label='Landé g · number or atom=value; atom=value',v_model=('sx_lande',),type='text',density='compact',variant='outlined',hide_details=True)
-                select('Finite child-axis starts','sx_directions',"[{title:'x',value:'x'},{title:'y',value:'y'},{title:'z',value:'z'}]",v_if="sx_kind === 'magnetic'",multiple=True,chips=True)
+                select(("sx_moment_model === 'symmetry_allowed' ? 'Dominant parent-axis starts' : 'Finite child-axis starts'",),'sx_directions',"[{title:'x',value:'x'},{title:'y',value:'y'},{title:'z',value:'z'}]",v_if="sx_kind === 'magnetic'",multiple=True,chips=True)
+                html.P('Each selected axis uses four relative-component sign combinations and moment starts at 25% and 75% of your ceiling. Only site-symmetry-allowed components vary. This finite set does not exhaust continuous orientations or signs between split child orbits.',v_if="sx_kind === 'magnetic' && sx_moment_model === 'symmetry_allowed'",classes='rf-notice')
                 v.VCheckbox(v_if="sx_kind === 'magnetic'",label='Test relative initial signs between selected parent sites',v_model=('sx_sign_starts',),density='compact',hide_details=True)
+                with html.Div(v_if="sx_kind === 'magnetic'"):
+                    v.VCheckbox(label='Refine shared nuclear/magnetic intensity scale',v_model=('sx_refine_scale',),density='compact',hide_details=True)
+                    v.VCheckbox(label='Refine existing background coefficients',v_model=('sx_refine_background',),density='compact',hide_details=True)
+                    html.P('Consider these when the starting nuclear-only fit absorbed magnetic intensity. One common scale keeps phase amounts linked; the background basis and coefficient count stay fixed. The same scope applies to every candidate.',classes='rf-notice')
                 v.VTextField(label='Experiment-specific adequate Rwp (%)',v_model=('sx_adequate',),type='text',inputmode='decimal',density='compact',variant='outlined',hide_details=True)
                 v.VTextField(v_if="sx_kind === 'magnetic'",label='Maximum moment (µB)',v_model=('sx_max_moment',),type='text',inputmode='decimal',density='compact',variant='outlined',hide_details=True)
                 v.VTextField(v_if="sx_kind === 'magnetic'",label='Magnetic d cutoff (Å) · 0 uses the full fit range',v_model=('sx_mag_d_min',),type='text',inputmode='decimal',density='compact',variant='outlined',hide_details=True)
@@ -90,9 +98,11 @@ def model_exploration(app):
                 html.P('{{ sx_k_detail }}',classes='rf-notice')
                 html.P('Screening overlay: the nuclear model is fixed and only one magnetic intensity amplitude is fitted. No Rietveld refinement runs in this survey. A leading k, a tie or a missing template does not establish magnetic order. Use a candidate to review a full refinement plan.',classes='rf-notice')
             html.P("{{ sx_kind === 'structural' ? 'Discovery sends the selected parent structure, without pattern arrays, to ISODISTORT. The selected OPD scope and construction budget are explicit; deferred or failed models remain visible. A budget smaller than the selected tier requires a narrower scope.' : 'Discovery sends parent symmetry operations and k to Bilbao. Refinement consumes the cached catalog offline.' }}",v_if='sx_has_context',classes='rf-notice')
-            v.VBtn('Discover finite candidates',v_if='sx_has_context',click=app.discover_symmetry_candidates,disabled=('sx_busy',),variant='outlined',color='#15543c')
+            html.P('Review and use a k-survey candidate, or enter an exact rational k, before discovering models.',v_if="sx_has_context && !sx_k.trim()",classes='rf-notice')
+            v.VBtn('Discover finite candidates',v_if='sx_has_context',click=app.discover_symmetry_candidates,disabled=('sx_busy || !sx_k.trim()',),variant='outlined',color='#15543c')
             with html.Div(v_if='sx_discovered',classes='mt-4'):
                 html.P('{{ sx_discovery_scope }}',classes='rf-notice')
+                v.VBtn('Include all catalog embeddings',click='sx_candidates = sx_candidate_options.map(c => c.value)',variant='text',size='small')
                 v.VAutocomplete(label='Constructed models to explore',v_model=('sx_candidates',),items=('sx_candidate_options',),multiple=True,chips=True,closable_chips=True,density='compact',variant='outlined',hide_details=True,classes='sx-choices',update_modelValue=app._symmetry_unapprove)
                 with html.Details(v_if="sx_kind === 'structural'",classes='mt-3'):
                     html.Summary('Select native displacement modes')
@@ -151,7 +161,7 @@ def model_exploration(app):
                     with html.P(v_for='item in sx_details',key='item.label'):
                         html.B('{{ item.label }}: ');html.Span('{{ item.value }}')
                 v.VDataTable(v_if='sx_parameters.length',items=('sx_parameters',),headers=("[{title:'Phase',key:'phase'},{title:'Moment / normalized mode',key:'parameter'},{title:'Value',key:'value'},{title:'Conditional s.u.',key:'uncertainty'},{title:'Unit',key:'unit'}]",),items_per_page=6,density='compact')
-                html.P('Uncertainties are conditional on this model and its fixed nuclear parameters. A nonzero moment estimate or a numerically qualified fit does not establish ordering.',v_if='sx_parameters.length',classes='rf-notice')
+                html.P('The first row for each magnetic atom is its magnitude; mx, my and mz use the candidate crystallographic basis shown in the embedding. Uncertainties are conditional on this model and its fixed nuclear parameters. A dash means fixed, dependent or unavailable; a magnitude uncertainty is not inferred from component errors without their covariance. A nonzero moment or qualified fit does not establish ordering.',v_if='sx_parameters.length',classes='rf-notice')
                 with html.Div(classes='rf-actions'):
                     v.VBtn('Download native GPX',click=(app.download_symmetry_artifact,"['gpx']"),disabled=('!sx_has_gpx',),variant='outlined',size='small',prepend_icon='mdi-download')
                     v.VBtn('Download trial receipt',click=(app.download_symmetry_artifact,"['receipt']"),disabled=('!sx_has_receipt',),variant='text',size='small')

@@ -80,11 +80,46 @@ at most six modes per child and 2,000 starts per acquisition. Fifty children wit
 two starts each are supported; the old global 64-seed restriction no longer
 incorrectly rejects candidate-specific structural starts.
 
-Magnetic exploration supports the reviewed single-k, bounded collinear model
-family and finite axis/relative-sign starts. The k survey tests a bounded set of
-commensurate high-symmetry vectors and fits an intensity amplitude; it is not a
-full refinement or a proof of magnetic order. General incommensurate,
-noncollinear, multi-k, occupancy or tensor-ADP searches are outside this executor.
+Magnetic exploration supports reviewed single-k collinear models and
+site-symmetry-allowed moment components, including commensurate canting. The
+moment model is part of the approved protocol. The latter uses four component
+sign combinations for each selected dominant parent axis, at 25% and 75% of
+the declared moment ceiling. These are finite starts, not an exhaustive
+continuous-orientation search. Operators, final site-symmetry subspaces,
+observation arrays, Al/reference masks and fixed nuclear/nuisance parameters
+are independently checked. Legacy sealed protocols keep their collinear
+policy. Landé g and the moment ceiling require explicit review.
+
+An optional, explicitly reviewed **common histogram intensity scale** may vary
+with the magnetic moments. A low-temperature nuclear-only fit can absorb
+unmodelled magnetic intensity into its scale; freezing that value can bias a
+later magnetic search. This option applies identically to all candidates and
+keeps nuclear/magnetic phase amounts linked. Nuclear geometry, calibration,
+occupancies, displacement parameters and broadening remain fixed.
+It is off for legacy protocols and unrequested LLM plans. The independent audit
+allows exactly the selected histogram scale and requires a positive result.
+It never releases separate nuclear and magnetic phase scales.
+
+The existing background coefficients may also vary when explicitly reviewed.
+The basis, coefficient count, added peak terms and Debye terms remain unchanged;
+the worker and independent audit permit only the existing selected histogram's
+polynomial coefficients. All candidates use the same declared scope. It is off
+for legacy protocols and unrequested plans. A nuclear-only background can absorb
+unmodelled magnetic scattering, so a fixed-background screen is not a final joint
+refinement. The model-complexity view includes these additional free parameters.
+
+Rwp is independently recalculated using the native GSAS-II convention. Excluded
+residuals are omitted, while their observed intensity remains in GSAS-II's
+normalization. A separate fit-points-only metric is retained with its own label;
+it must not be compared as if it were the native displayed Rwp.
+
+The setup planner may return an unknown k only as a preparation for a native
+survey. No executable protocol accepts an unknown vector. After reviewing and
+using a survey candidate, the user discovers and approves a finite catalog.
+The survey tests bounded commensurate high-symmetry vectors and fits an
+intensity amplitude; it is not a full refinement or proof of magnetic order.
+Incommensurate, multi-k, arbitrary cross-component constraints, occupancy and
+tensor-ADP searches are outside this executor.
 
 A qualified fit requires checked inputs, the pinned native stack, independent
 parameter/observation audits and the user-declared fit criterion. Lower Rwp
@@ -95,18 +130,19 @@ hosted-desktop compatibility validation before release.
 
 ## Release procedure
 
-The source branch is a local integration candidate, not the deployed release.
+NOVA 0.5.0 and the dedicated worker were deployed to NDIP-test on 2026-10-30.
+Further source changes remain local until their image builds, Galaxy pins and
+fresh-session validation complete.
 `publish-models-to-ghcr.yaml` builds a separate `models-<full SHA>` Linux image
 from the pinned native base and gates publication on runtime, adapter and
 protocol checks. Build and validate this image before changing Galaxy XML.
 
-The Galaxy integration branch contains an inactive XML template and renderer.
+The Galaxy repository retains a template and renderer for the active worker.
 Render it with the successful full-SHA image or registry digest, run the Galaxy
-contract checks, then deploy the generated definition through the normal
-prototype process. The template is outside `tools/`, so an unfinished worker
-cannot accidentally enter the live catalog. Publish NOVA separately and pin its
-successful image only after both worker availability and end-to-end NDIP tests.
-No deployment, running viewer or registry pin is changed by local integration.
+contract checks, then deploy through the normal prototype process. Publish and
+pin both NOVA and its matching worker when the scientific package changes;
+their exact implementation signatures must agree. Existing running viewers keep
+their previous image and need a fresh session to receive the update.
 
 ## NDIP credentials
 

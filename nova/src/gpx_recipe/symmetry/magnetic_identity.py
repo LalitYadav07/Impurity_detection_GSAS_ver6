@@ -44,6 +44,20 @@ def verify_collinear_structure(phase):
     require_collinear_line([r for r,_ in S.AllOps(general['SGData'])[2]],a,cell[:3],directions[0])
 
 
+def verify_symmetry_moments(phase):
+    """Reconstruct each final moment in its site-symmetry invariant subspace."""
+    from GSASII import GSASIIspc as S
+    from gsas_magnetic_preflight import moment_basis,direction_in_basis
+    general=phase['General'];cx,ct,_,_=general['AtomPtrs'];sg=general['SGData']
+    for atom in phase['Atoms']:
+        vector=np.asarray(atom[cx+4:cx+7],dtype=float)
+        if not np.isfinite(vector).all():raise UnverifiedMagneticSetting('A final magnetic moment is nonfinite')
+        _,_,_,duplicates=S.SytSym(atom[cx:cx+3],sg)
+        indices,coefficients=S.GetCSpqinel(sg['SpnFlp'],duplicates)
+        if np.linalg.norm(vector)>1e-10 and not direction_in_basis(moment_basis(indices,coefficients),vector):
+            raise UnverifiedMagneticSetting('Final moment violates the exact candidate site symmetry: '+str(atom[ct-1]))
+
+
 @lru_cache(maxsize=2048)
 def _authoritative_operations(identifier):
     from pymatgen.symmetry.maggroups import MagneticSpaceGroup

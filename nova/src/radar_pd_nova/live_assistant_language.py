@@ -38,6 +38,7 @@ class ReplyContext:
     shown_samples: tuple[SampleOption, ...] = ()
     banks: tuple[int, ...] = ()
     focus: str = ""
+    reference_presets: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -473,6 +474,25 @@ def _chemistry(text: str, context: ReplyContext) -> ParsedReply | None:
     return _patch(values, description, suggest=suggest)
 
 
+def _reference_masks(body: str, context: ReplyContext) -> ParsedReply | None:
+    """Require an explicit peak-exclusion request, separate from can chemistry."""
+    if body in {"clear reference masks", "clear container masks"}:
+        return _patch({"live_reference_masks_enabled": False, "live_reference_mask_presets": []},
+                      "Cleared reference-peak masks")
+    match = re.fullmatch(
+        r"(?:ignore|exclude|mask)\s+(?:the\s+)?(al|aluminium|aluminum|cu|copper|v|vanadium)"
+        r"(?:\s+(?:can|container|reference))?\s+(?:peaks|reflections)", body)
+    if match is None:
+        if re.match(r"(?:ignore|exclude|mask)\b", body):
+            return _clarify("Name one supported reference explicitly, for example 'exclude Al can peaks'. Available presets are aluminium (fcc), copper (fcc) and vanadium (bcc). Review other exclusion regions in the fit settings.")
+        return None
+    preset = {"al": "Al_fcc", "aluminium": "Al_fcc", "aluminum": "Al_fcc",
+              "cu": "Cu_fcc", "copper": "Cu_fcc", "v": "V_bcc", "vanadium": "V_bcc"}[match[1]]
+    presets = list(dict.fromkeys((*context.reference_presets, preset)))
+    return _patch({"live_reference_masks_enabled": True, "live_reference_mask_presets": presets},
+                  "Enabled " + preset + " reference-peak exclusions; positions use the instrument profile and widths use the current mask settings. Inspect the masks for overlaps with sample peaks")
+
+
 def interpret_reply(text: str, context: ReplyContext | None = None) -> ParsedReply:
     context = context or ReplyContext()
     text = str(text or "").strip()
@@ -489,6 +509,9 @@ def interpret_reply(text: str, context: ReplyContext | None = None) -> ParsedRep
     navigation = {"back": "back", "go back": "back", "previous": "back", "previous question": "back", "undo": "undo", "undo that": "undo", "undo last change": "undo", "continue": "continue", "next": "continue", "next question": "continue", "move on": "continue", "keep current settings": "continue", "keep my settings": "continue", "keep the current settings": "continue"}
     if body in navigation:
         return ParsedReply(navigation[body])
+    masks = _reference_masks(body, context)
+    if masks:
+        return masks
     if body in {"yes", "no", "ok", "okay", "yep", "yeah", "correct", "confirm", "cancel", "never mind", "nevermind"}:
         return _clarify("There is no pending yes/no question. Choose a setup option or say what you want to change.")
     if body in {"i don't know", "i do not know", "not sure", "unsure", "skip"}:

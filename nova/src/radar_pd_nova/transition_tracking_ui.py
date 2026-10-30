@@ -51,6 +51,16 @@ def _conditions(scan, settings=None):
                 "role": mapped.get("kind", "user_supplied")}
     return result
 
+
+def curve_label(scan):
+    """Keep scan identity and its measured temperature in expanded overlays."""
+    label=scan_label(scan)
+    temperature=_conditions(scan).get('temperature') or {}
+    value=number(temperature.get('value'))
+    if value is not None and temperature.get('unit'):
+        label+=f" · {value:.4g} {temperature['unit']}"
+    return label
+
 EVENTS = {
     "initial": "Initial pattern",
     "new": "New pattern detected",
@@ -648,7 +658,7 @@ class TransitionTrackingMixin:
             with vuetify.VCard(classes="radar-inspector-card"):
                 with html.Div(classes="radar-inspector-toolbar"):
                     html.H3(
-                        "{{ transition_dialog_kind === 'map' ? 'Diffraction evolution' : 'Pattern inspector' }}"
+                        "{{ transition_dialog_kind === 'map' ? 'Diffraction evolution' : 'Pattern inspector · ' + transition_summary }}"
                     )
                     vuetify.VBtn("Reset zoom",v_if="transition_dialog_kind === 'map'",variant="text",
                         click=self.reset_transition_map_zoom)
@@ -1345,8 +1355,9 @@ class TransitionTrackingMixin:
             state.transition_profile = plotly.Figure.to_data(
                 profile_figure(
                     current.pattern,
+                    current_label=curve_label(scan),
                     comparison=before.pattern if before else None,
-                    comparison_label=scan_label(self._transition_scans[compare_id])
+                    comparison_label=curve_label(self._transition_scans[compare_id])
                     if compare_id
                     else "Earlier pattern",
                     pair=pair,

@@ -62,7 +62,7 @@ def test_new_parent_or_checkpoint_does_not_keep_another_atoms_ion_mapping(tmp_pa
     app._symmetry_draft['context']['phases'][0]['atoms']=[]
     getattr(app,handler)()
     state=app.server.state
-    assert state.sx_sites==[] and state.sx_form_factors=='' and state.sx_lande==2.
+    assert state.sx_sites==[] and state.sx_form_factors=='' and state.sx_lande==''
 
 
 @pytest.mark.parametrize('field,value',[('sx_start_source','another'),('sx_parent','another'),('sx_histogram','another'),('rf_experiment','another'),('sx_form_factors','Mn1=Fe')])
@@ -108,6 +108,11 @@ def test_actual_app_exposes_survey_inside_existing_model_view():
     assert 'Candidate propagation vectors' in html and 'No Rietveld refinement runs in this survey' in html
     assert 'radar-user-guide' in html
     assert app.server.state.sx_k_budget==60 and app.server.state.sx_k_limit==6
+    assert app.server.state.sx_k=='' and app.server.state.sx_lande=='' and app.server.state.sx_max_moment==''
+    assert app.server.state.sx_refine_scale is False
+    assert app.server.state.sx_refine_background is False
+    assert 'Refine shared nuclear/magnetic intensity scale' in html
+    assert 'Refine existing background coefficients' in html
 
 
 def test_incomplete_survey_explains_global_and_per_family_failures():

@@ -1,4 +1,4 @@
-"""Audited, deterministic moment-only kernel; adapted from MIT-licensed Studio.
+"""Audited moment kernel with reviewed nuisance scope; adapted from MIT Studio.
 
 The reference project is a development knowledge source only. This module has
 no reference-project imports, services, paths, or dynamically generated code.
@@ -40,10 +40,11 @@ def _run(source_gpx,ctx,protocol,candidate_record,seed,*,forward_only):
     initial_moment_direction = seed['parent_direction']
     if initial_moment_direction is not None:
         initial_moment_direction = seed['parent_direction']
-    refine_components = set('xyz') if seed['parent_direction'] else {seed['axis']}
-    fixed_moment_direction = seed['parent_direction']
-    if fixed_moment_direction is not None:
-        fixed_moment_direction = seed['parent_direction']
+    symmetry_allowed = protocol['policy'].get('moment_model','collinear') == 'symmetry_allowed'
+    refine_components = set('xyz') if symmetry_allowed or seed['parent_direction'] else {seed['axis']}
+    fixed_moment_direction = None if symmetry_allowed else seed['parent_direction']
+    ctx.save_json('moment-model.json',dict(model='symmetry_allowed' if symmetry_allowed else 'collinear',
+        seed_axis=seed['axis'],nuclear_geometry_fixed=True,common_histogram_scale_refined=protocol['policy']['refine_histogram_scale'],continuous_orientation_search_exhaustive=False))
     moment_site_coupling = 'independent'
     cycles = protocol['policy']['cycles']
     minimum_relative_chi2_change = float(1e-08)
@@ -206,13 +207,25 @@ def _run(source_gpx,ctx,protocol,candidate_record,seed,*,forward_only):
             if isinstance(extinction, list) and len(extinction) > 1 and isinstance(extinction[1], bool):
                 extinction[1] = False
 
+    # A cold nuclear-only scale can absorb magnetic intensity. A reviewed
+    # common histogram scale changes both contributions together; magnetic and
+    # nuclear phase amounts remain linked. Never release an independent phase
+    # scale, or apply the choice to an unselected histogram.
+    if protocol['policy']['refine_histogram_scale']:
+        for name in selected_histograms:
+            available_histograms[name].data['Sample Parameters']['Scale'][1] = True
+    if protocol['policy']['refine_background']:
+        for name in selected_histograms:
+            available_histograms[name].data['Background'][0][1] = True
+
     from gsas_magnetic_preflight import preflight_magnetic_sites,NativeRepresentationError
     wanted_direction=np.eye(3)['xyz'.index(seed['axis'])] if seed['parent_direction'] is None else transform_native_moment(seed['parent_direction'],nuclear.data['General']['Cell'][1:7],candidate['transformation_matrix'])
     from .magnetic_identity import require_collinear_line
     _cell=G2lat.TransformCell(nuclear.data['General']['Cell'][1:7],candidate['transformation_matrix'])
-    try:require_collinear_line([m for m,_ in G2spc.AllOps(definition['SGData'])[2]],G2lat.cell2AB(_cell[:6])[0],_cell[:3],wanted_direction)
-    except UnverifiedMagneticSetting as exc:raise TrialDisposition('unsupported',str(exc))
-    try:_,site_report=preflight_magnetic_sites(nuclear.data,candidate,magnetic_sites=[s['label'] for s in protocol['sites']],site_policy=protocol['policy']['site_policy'],expected_parent_setting=protocol['parent_setting_sha256'],maximum_cell_multiplier=protocol['policy']['maximum_cell_multiplier'],fixed_direction_child=wanted_direction)
+    if not symmetry_allowed:
+        try:require_collinear_line([m for m,_ in G2spc.AllOps(definition['SGData'])[2]],G2lat.cell2AB(_cell[:6])[0],_cell[:3],wanted_direction)
+        except UnverifiedMagneticSetting as exc:raise TrialDisposition('unsupported',str(exc))
+    try:_,site_report=preflight_magnetic_sites(nuclear.data,candidate,magnetic_sites=[s['label'] for s in protocol['sites']],site_policy=protocol['policy']['site_policy'],expected_parent_setting=protocol['parent_setting_sha256'],maximum_cell_multiplier=protocol['policy']['maximum_cell_multiplier'],fixed_direction_child=None if symmetry_allowed else wanted_direction)
     except NativeRepresentationError as exc:raise TrialDisposition('unsupported',str(exc))
     ctx.save_json('preflight.json',site_report)
     if not site_report['compatible']:
@@ -308,7 +321,7 @@ def _run(source_gpx,ctx,protocol,candidate_record,seed,*,forward_only):
         atom[ct + 1] = 'M'
         site_symmetry, _multiplicity, _operation, duplicate_direction = G2spc.SytSym(atom[cx:cx + 3], general['SGData'])
         allowed_ids, allowed_coefficients = G2spc.GetCSpqinel(general['SGData']['SpnFlp'], duplicate_direction)
-        if not direction_in_basis(moment_basis(allowed_ids,allowed_coefficients),wanted_direction):
+        if not symmetry_allowed and not direction_in_basis(moment_basis(allowed_ids,allowed_coefficients),wanted_direction):
             omitted_magnetic_sites.append(dict(label=atom[ct-1],element=element,reason='Declared collinear direction is incompatible with coupled site components'))
             continue
         allowed = {axis for axis, index in component_index.items() if index < len(allowed_ids) and bool(allowed_ids[index])}
@@ -345,6 +358,11 @@ def _run(source_gpx,ctx,protocol,candidate_record,seed,*,forward_only):
             if abs(seed_coefficient) < 1e-12:
                 raise ValueError('GSAS-II returned a zero magnetic-basis coefficient')
             seed_amplitude = float(initial_moment[seed_index])
+            if symmetry_allowed and abs(seed_amplitude)<1e-8:
+                # A zero moment component has zero intensity derivative. Seed
+                # every independent allowed basis, without releasing forbidden
+                # components or imposing a direction on the final structure.
+                seed_amplitude = float(seed['magnitude'])*.02
             if candidate_seed_moment_direction is not None:
                 direction_coefficient = float(candidate_seed_moment_direction[seed_index])
                 if abs(direction_coefficient) < 1e-08:
@@ -576,7 +594,10 @@ def _run(source_gpx,ctx,protocol,candidate_record,seed,*,forward_only):
         refined_parameter_sigmas[variable_name] = sigma if sigma is not None and math.isfinite(sigma) and (sigma >= 0.0) else None
     refined_moment_variables = [value for value in vary_list if '::AM' in value]
     refined_magnetic_mode_variables = [value for value in vary_list if mode_constraints and value.startswith('::constr')]
-    unexpected_refined_variables = [value for value in vary_list if '::AM' not in value and value not in refined_magnetic_mode_variables]
+    allowed_scale_variables = {f':{available_histograms[name].id}:Scale' for name in selected_histograms} if protocol['policy']['refine_histogram_scale'] else set()
+    allowed_background_variables = {f':{available_histograms[name].id}:Back;{i}'
+        for name in selected_histograms for i in range(available_histograms[name].data['Background'][0][2])} if protocol['policy']['refine_background'] else set()
+    unexpected_refined_variables = [value for value in vary_list if '::AM' not in value and value not in refined_magnetic_mode_variables and value not in allowed_scale_variables and value not in allowed_background_variables]
     if not refined_moment_variables and (not refined_magnetic_mode_variables):
         raise TrialDisposition('optimization_unresolved','Native refinement retained no independently varied magnetic moment; the attempted GPX is retained without a qualified fit')
     final_moments = []
@@ -672,6 +693,13 @@ def _run(source_gpx,ctx,protocol,candidate_record,seed,*,forward_only):
     if not rwp_values:
         raise RuntimeError('Magnetic refinement produced no finite weighted-profile R factor')
     receipt = {'schema_version': 'structural-transition-magnetic-refinement-receipt-v1', 'candidate': candidate, 'nuclear_phase_name': nuclear.name, 'magnetic_phase_name': magnetic_name, 'histogram_names': selected_histograms, 'magnetic_elements': sorted(magnetic_elements), 'moment_initialization': moment_audit, 'fixed_moment_direction': list(fixed_moment_direction) if fixed_moment_direction is not None else None, 'fixed_moment_direction_basis': 'parent_crystallographic', 'initial_moment_direction': list(initial_moment_direction) if initial_moment_direction is not None else None, 'initial_moment_direction_in_candidate_basis': list(candidate_seed_moment_direction) if candidate_seed_moment_direction is not None else None, 'fixed_moment_direction_in_candidate_basis': list(candidate_fixed_moment_direction) if candidate_fixed_moment_direction is not None else None, 'moment_site_coupling': moment_site_coupling, 'magnetic_mode_constraint_count': len(mode_constraints), 'omitted_magnetic_sites': omitted_magnetic_sites, 'refined_moments': final_moments, 'maximum_moment_magnitude': maximum_moment_magnitude, 'physicality_violations': physicality_violations, 'refined_moment_variables': refined_moment_variables, 'refined_magnetic_mode_variables': refined_magnetic_mode_variables, 'refined_parameter_sigmas': refined_parameter_sigmas, 'unexpected_refined_variables': unexpected_refined_variables, 'transferred_histogram_lattice_state': transferred_hstrain, 'screening_parameter_contract': {'refined_family': 'magnetic_moments_only', 'fixed_families': ['background', 'instrument', 'sample', 'nuclear_cell', 'nuclear_atomic_coordinates', 'nuclear_atomic_displacements', 'phase_scale', 'profile_broadening']}, 'minimum_relative_chi2_change': minimum_relative_chi2_change, 'refinement_rvals': rvals, 'baseline_residuals': baseline_residuals, 'final_residuals': final_residuals, 'target_peak_audit': target_peak_audit, 'phase_constraint_count': len(constraints['Phase']), 'hap_constraint_count': len(constraints['HAP']), 'atom_constraint_warning': atom_constraint_warning, 'magnetic_space_group': str(magnetic.data['General']['SGData'].get('MagSpGrp') or ''), 'candidate_only': True}
+    receipt['screening_parameter_contract'] = dict(
+        refined_families=['magnetic_moments']+(['common_histogram_scale'] if allowed_scale_variables else [])+(['existing_background_coefficients'] if allowed_background_variables else []),
+        moment_model=protocol['policy'].get('moment_model','collinear'),
+        common_histogram_scale_refined=bool(allowed_scale_variables),
+        existing_background_coefficients_refined=bool(allowed_background_variables),
+        fixed_families=([] if allowed_background_variables else ['background'])+['background_basis_and_peak_terms','instrument','sample_except_declared_common_scale','nuclear_cell',
+                        'nuclear_atomic_coordinates','nuclear_atomic_displacements','relative_phase_amounts','profile_broadening'])
     ctx.register_file(source_path=output_gpx, relative_path='magnetic-refinement.gpx', artifact_type='magnetic_refinement_gpx', title=f'Magnetic refinement checkpoint: {magnetic_name}')
     listing = output_gpx.with_suffix('.lst')
     if listing.is_file():
@@ -688,4 +716,9 @@ def _run(source_gpx,ctx,protocol,candidate_record,seed,*,forward_only):
     status='physical_rejection' if physicality_violations else 'optimization_unresolved' if not rvals.get('converged') or rvals.get('Aborted') or rvals.get('SVD0',0) else 'valid'
     if unexpected_refined_variables:
         raise TrialDisposition('technical_failure','Unexpected parameters varied: '+str(unexpected_refined_variables))
-    return dict(status=status,gpx=output_gpx.name,rwp=min(rwp_values),nvars=int(rvals.get('Nvars',len(vary_list))),moments=final_moments,native_receipt='magnetic-refinement-receipt.json')
+    reason=''
+    if physicality_violations:
+        reason='; '.join(f"{v['label']}: {v['magnitude']:.6g} µB exceeds the reviewed {maximum_moment_magnitude:g} µB ceiling" if math.isfinite(v['magnitude']) else v['label']+': nonfinite moment' for v in physicality_violations)+'. The bound was not relaxed; review the model and calibration.'
+    elif status=='optimization_unresolved':
+        reason=f"Native optimization did not qualify: converged={bool(rvals.get('converged'))}, aborted={bool(rvals.get('Aborted'))}, rank deficiencies={rvals.get('SVD0',0)}. The attempted fit is retained for inspection."
+    return dict(status=status,reason=reason,gpx=output_gpx.name,rwp=min(rwp_values),nvars=int(rvals.get('Nvars',len(vary_list))),moments=final_moments,native_receipt='magnetic-refinement-receipt.json')

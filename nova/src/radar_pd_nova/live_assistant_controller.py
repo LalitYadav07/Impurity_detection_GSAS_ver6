@@ -467,6 +467,7 @@ class LiveAssistantMixin(LiveAssistantUi):
             shown_samples=self._assistant_shown_samples,
             banks=tuple(int(b["value"]) for b in state.powgen_bank_options),
             focus=state.live_assistant_focus,
+            reference_presets=tuple(state.live_reference_mask_presets or []),
         )
 
     def _assistant_language_signature(self):

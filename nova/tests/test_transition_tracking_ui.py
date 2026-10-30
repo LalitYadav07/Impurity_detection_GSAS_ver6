@@ -941,3 +941,14 @@ def test_tracking_report_exports_evidence_without_run_secrets_or_large_curve_arr
     assert b"do-not-export" not in raw and b"private_service_key" not in raw
     assert all("x" not in r and "intensity" not in r for r in report["records"])
     assert app._transition_report == before
+
+
+def test_overlay_labels_use_recorded_scan_temperature_without_changing_acquisition_identity():
+    from radar_pd_nova.transition_tracking_ui import curve_label
+    value=scan(8,temperature=3.10681)
+    value.update(instrument="HB2A",experiment_number=870)
+    before=copy.deepcopy(value)
+    assert curve_label(value)=="Exp 870 · Scan 8 · 3.107 K"
+    assert value==before
+    value['metadata']['conditions']={}
+    assert curve_label(value)=="Exp 870 · Scan 8"

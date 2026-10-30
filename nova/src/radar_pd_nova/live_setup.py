@@ -199,7 +199,7 @@ class LiveSetupMixin:
             classes="radar-plain-fieldset",
         ):
             html.P(
-                "Neutron time-of-flight analysis. These settings belong to Live and are saved automatically when an analysis starts.",
+                "{{ live_beamline === 'HB2A' ? 'Neutron constant-wavelength analysis; fit limits are in degrees 2θ.' : 'Neutron time-of-flight analysis; fit limits are in microseconds.' }} These Live settings are saved automatically when an analysis starts.",
                 classes="radar-help-copy",
             )
             vuetify.VTextField(

@@ -31,6 +31,24 @@ def test_integer_nonzero_k_and_per_site_ionic_g_are_not_replaced(source, intent)
     assert p['settings']['sites'][1]['lande_g']==.8
 
 
+def test_unknown_k_prepares_reviewable_sites_but_never_invents_a_propagation_vector(source,intent):
+    intent['settings'].update(k=None,moment_model='symmetry_allowed')
+    result=validate_intent(intent,source,request='Find k from the data; allow canted moments')
+    assert result['settings']['k'] is None
+    assert result['settings']['moment_model']=='symmetry_allowed'
+    assert result['settings']['sites']==intent['settings']['sites']
+    with pytest.raises(ValueError,match='declared k'):
+        validate_intent(intent,source,request='Keep my reviewed k',declared={'k':['0','0','0']})
+
+
+def test_an_invalid_geometry_or_changed_declared_geometry_is_rejected(source,intent):
+    intent['settings']['moment_model']='arbitrary_python'
+    with pytest.raises(ValueError):validate_intent(intent,source,request='request')
+    intent['settings']['moment_model']='symmetry_allowed'
+    with pytest.raises(ValueError,match='declared moment_model'):
+        validate_intent(intent,source,request='request',declared={'moment_model':'collinear'})
+
+
 @pytest.mark.parametrize('field,value',[
     ('parent','Another parent'),('histogram','Another bank'),('k',[1.,0.,1.]),
     ('k',['0.33333','0','0']),('k',[['0','0','0'],['1','0','1']]),
@@ -83,7 +101,10 @@ def test_single_setup_call_produces_settings_without_subgroups_or_python(source,
     c=Client([intent]);r=make_intent('Use k=(1,0,1), Fe1=Fe+2, g=2.',source,client=c)
     assert r['status']=='ready_for_discovery' and len(r['calls'])==1
     assert c.calls[0][2]=='radar_symmetry_intent'
-    assert set(r['intent']['settings'])==set(intent['settings'])
+    assert set(r['intent']['settings'])==set(intent['settings'])|{'moment_model','refine_histogram_scale','refine_background'}
+    assert r['intent']['settings']['moment_model']=='collinear'
+    assert r['intent']['settings']['refine_histogram_scale'] is False
+    assert r['intent']['settings']['refine_background'] is False
     assert 'runtime' not in payload('test',source)['project']
 
 
@@ -115,3 +136,23 @@ def test_multispecies_site_fields_keep_individual_lande_values():
     assert sites_from_inputs(['Fe1'],'Fe1=Fe+3',2)[0]['lande_g']==2
     for forms,g in [('Fe1=Fe+2;Fe1=Fe+3',2),('Fe1=Fe+2;Pr1=Pr+3',2),('Fe1=Fe+2','nan'),('Fe1=Fe+2',True)]:
         with pytest.raises(ValueError):sites_from_inputs(['Fe1'],forms,g)
+
+
+def test_common_scale_requires_a_boolean_and_preserves_reviewed_choices(source,intent):
+    intent['settings']['refine_histogram_scale']=True
+    result=validate_intent(intent,source,request='Refine a shared nuclear and magnetic scale',declared={'refine_histogram_scale':True})
+    assert result['settings']['refine_histogram_scale'] is True
+    with pytest.raises(ValueError,match='declared refine_histogram_scale'):
+        validate_intent(intent,source,request='Keep all scales fixed',declared={'refine_histogram_scale':False})
+    intent['settings']['refine_histogram_scale']='yes'
+    with pytest.raises(ValueError):validate_intent(intent,source,request='request')
+
+
+def test_existing_background_choice_cannot_override_a_reviewed_fixed_background(source,intent):
+    intent['settings']['refine_background']=True
+    result=validate_intent(intent,source,request='Refine the existing background coefficients',declared={'refine_background':True})
+    assert result['settings']['refine_background'] is True
+    with pytest.raises(ValueError,match='declared refine_background'):
+        validate_intent(intent,source,request='Keep background fixed',declared={'refine_background':False})
+    intent['settings']['refine_background']='true'
+    with pytest.raises(ValueError):validate_intent(intent,source,request='request')

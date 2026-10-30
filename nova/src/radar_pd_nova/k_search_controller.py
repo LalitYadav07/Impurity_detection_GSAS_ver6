@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import queue
 import threading
+import time
 import uuid
 
 from gpx_recipe.symmetry.k_search import KSearch,NativeRunner,SearchStopped
@@ -55,7 +56,7 @@ class KSearchMixin:
     def find_candidate_k(self):
         if self._k_task and not self._k_task.done():return
         async def run():
-            s=self.server.state;identity=None;cancel=threading.Event();self._k_cancel=cancel
+            s=self.server.state;identity=None;cancel=threading.Event();self._k_cancel=cancel;wall_started=time.monotonic()
             s.sx_k_busy=True;s.sx_busy=True;s.sx_error='';s.sx_k_has_result=False;s.sx_k_message='Preparing the k survey';s.flush()
             try:
                 d=self._symmetry_draft
@@ -81,7 +82,10 @@ class KSearchMixin:
                     if identity!=self._k_identity():cancel.set()
                     latest=None
                     while not mailbox.empty():latest=mailbox.get_nowait()
-                    if latest and identity==self._k_identity():s.sx_k_message=latest['message'];s.flush()
+                    if latest and identity==self._k_identity():
+                        s.sx_k_message=latest['message']
+                        if remote and latest.get('stage')=='simulate':s.sx_k_message+=' · requested pool; Galaxy allocation can reduce this'
+                        s.flush()
                     await asyncio.sleep(.15)
                 result=await work
                 if cancel.is_set() or identity!=self._k_identity():return
@@ -93,7 +97,10 @@ class KSearchMixin:
                 s.sx_k_notes=coverage_notes(result)
                 s.sx_k_selected=s.sx_k_choices[0]['value'] if s.sx_k_choices else ''
                 summary={'shortlist':'Candidate shortlist','ambiguous':'Several k families remain competitive','no_support':'No supported magnetic template in this sample','incomplete':'Partial survey; increase the budget to check remaining families'}[result['status']]
-                s.sx_k_message=f'{summary} · {result["elapsed_seconds"]:.1f} s · {sum(f["simulated"] for f in result["families"])} native profiles. Scores are not probabilities.'
+                wall_seconds=time.monotonic()-wall_started
+                timing=f'{wall_seconds:.1f} s total'
+                if remote:timing+=f' · {result["elapsed_seconds"]:.1f} s budgeted work; remainder includes staging and queueing'
+                s.sx_k_message=f'{summary} · {timing} · {sum(f["simulated"] for f in result["families"])} native profiles. Scores are not probabilities.'
                 s.sx_k_has_result=True;self._k_plot_changed()
             except Exception as exc:
                 if cancel.is_set():s.sx_k_message='K survey stopped; no refinement plan was changed.'
