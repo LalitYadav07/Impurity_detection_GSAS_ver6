@@ -16,7 +16,7 @@ import re
 from zoneinfo import ZoneInfo
 
 ARCHIVE_ROOT = Path('/HFIR/HB2A')
-VERSION = 'hb2a-cw/1'
+VERSION = 'hb2a-cw/2'
 FOLDER = 'shared/autoreduce'
 MAX_BYTES = 4 * 1024 * 1024
 NORMALIZATIONS = ('time', 'monitor', 'legacy')
@@ -246,10 +246,22 @@ def read_spice(path, *, ipts, experiment, scan, condition_bindings=None,
             *(['Collimation supplied by reviewed user mapping because colltrans is absent.'] if not coll and collimator else []),
             *(['Stopped acquisition: review its measured angular coverage.'] if stopped else [])]}
     conditions = {}
+    from .hb2a_temperature import HE3_AUTOMATIC_CHANNEL, HE3_CHANNELS, resolve_he3_temperature
     for quantity, binding in (condition_bindings or {}).items():
         if quantity not in {'temperature', 'magnetic_field', 'pressure', 'voltage'}:
             raise ValueError('Choose a supported sample-condition quantity')
         channel, unit = binding.get('channel'), binding.get('unit')
+        sensor_resolution = None
+        if channel == HE3_AUTOMATIC_CHANNEL:
+            if quantity != 'temperature' or unit != 'K' or not binding.get('reviewed'):
+                raise ValueError('Review the paired He-3 thermometer mapping and its Kelvin units before use')
+            channel,sensor_resolution=resolve_he3_temperature(channels,times)
+            result['temperature_sensor_resolution']=sensor_resolution
+            if channel is None:
+                result['metadata_notices'].append(sensor_resolution['reason'])
+                continue
+        if quantity == 'temperature' and channel == 'temp' and all(name in channels for name in HE3_CHANNELS):
+            raise ValueError('In the paired He-3 acquisition family, temp is a requested setpoint; choose the measured He-3 thermometers')
         if channel in {'Pt.','time','monitor','detector','detector_2','2theta','m1','marc','mtrans','colltrans','coll','pgfilter'} or str(channel).startswith('anode'):
             raise ValueError(f'{quantity}: counts, acquisition timing and diffraction motors are not sample-environment readbacks')
         if str(channel).lower().endswith(('_sp','_setpoint')) or channel in {'field','mag_i','working_field','ult_sp','furnace_setpoint'}:
@@ -268,6 +280,8 @@ def read_spice(path, *, ipts, experiment, scan, condition_bindings=None,
             'quantity':quantity,'status':'recorded','role':'measured','binding_verified':True,
             'reviewed_binding': True,'sampled_points':len(values),
             'approximation':'Counting-time weighting of measured point samples; no between-point interpolation'}
+        if sensor_resolution:
+            observation['sensor_resolution']=sensor_resolution
         if quantity == 'temperature' and observation['minimum'] <= 0:
             raise ValueError('Selected temperature channel gives nonphysical Kelvin values')
         result[quantity] = observation
@@ -389,6 +403,8 @@ def stage_pattern(source, setup, profile_path, destination, *, acknowledged=Fals
         if facility_profile_mapping else 'HB-2A profile supplied by user; independent calibration acceptance is pending.')}]
     warnings.extend({'code':'hb2a_acquisition_review','message':notice} for notice in setup.metadata['metadata_notices']
         if 'Collimation supplied' in notice or 'Stopped acquisition' in notice)
+    if setup.metadata.get('temperature_sensor_resolution',{}).get('status') == 'unresolved':
+        warnings.append({'code':'hb2a_temperature_unresolved','message':setup.metadata['temperature_sensor_resolution']['reason']})
     if setup.normalization == 'legacy':
         warnings.append({'code':'hb2a_legacy_normalization', 'message':'Legacy reduction normalization is unqualified; do not compare absolute intensities across products.'})
     if setup.masked_points:

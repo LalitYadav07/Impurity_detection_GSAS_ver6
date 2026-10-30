@@ -114,6 +114,24 @@ kelvin and pressure to pascals. Exposure-weighted point means, ranges, channel,
 recorded units and source hashes are retained. This is point-sample weighting,
 not reconstruction of unrecorded continuous environment history.
 
+When a SPICE acquisition contains both `he3potl_temp` and `he3poth_temp`,
+the form offers **He-3 paired thermometers (automatic range)**. The user
+reviews this acquisition-family mapping and Kelvin units once; each new scan
+then resolves its actual channel independently. The low-range sensor is used
+below 1.2 K while the high-range sensor is stable on its approximately 1.2 K
+floor. Above 1.25 K the high-range sensor is used only when both sensors agree
+point by point within max(0.2 K, 5%). Range crossings, missing/nonpositive
+readings and conflicting sensors leave temperature unresolved, retain a visible
+warning, and keep diffraction processing available. They do not substitute the
+scan title or a setpoint. Explicit reviewed channel selections take priority.
+These thresholds describe the reviewed paired He-3 family; they do not identify
+the active sensor of an arbitrary cryostat or establish sample/bath equilibrium.
+In this acquisition family `temp` is a requested setpoint and is rejected as a
+measured thermometer. The chosen channel, both sensor ranges, selection policy
+and exposure-weighted value remain in the condition/staging provenance. The
+numeric diffraction records are unchanged, and the GPX receives the qualified
+temperature header instead of the generic importer default.
+
 The original Results and Transition tracking tabs are retained. The measured
 curve path supports native 2theta; calibrated d and Q display uses the exact
 selected, checksum-verified CW profile and its zero correction:
