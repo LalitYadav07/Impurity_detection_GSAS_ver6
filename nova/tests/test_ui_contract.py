@@ -339,7 +339,7 @@ def test_candidate_library_upload_actions_wrap_without_styling_button_internals(
     template = app.layout.html
     css = app._css()
 
-    assert template.count('class="radar-library-source-action"') == 4
+    assert template.count('class="radar-library-source-action"') == 6
     assert ".radar-library-source-card > span" in css
     assert ".radar-library-source-card span {" not in css
     assert ".radar-library-source-action .v-btn__content" in css

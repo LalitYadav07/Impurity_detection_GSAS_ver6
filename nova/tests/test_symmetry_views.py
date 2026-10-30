@@ -6,6 +6,25 @@ from radar_pd_nova.symmetry_workspace import group_models,choose_group,dispositi
 from radar_pd_nova.symmetry_plots import coordinate,fit
 
 
+def test_cached_evidence_rehashes_changed_bytes_even_if_mtime_is_restored(tmp_path,monkeypatch):
+    import os
+    import radar_pd_nova.symmetry_workspace as module
+    module.clear_evidence_cache()
+    p=dict(source=dict(path='source.gpx'),catalog=dict(path='catalog.json'),candidates=[])
+    for name in ['source.gpx','catalog.json','job.json']:(tmp_path/name).write_text('data')
+    receipt=dict(id='trial',protocol_sha256='p',files={'fit.gpx':'hash'})
+    (tmp_path/'result.json').write_text(json.dumps(receipt));(tmp_path/'fit.gpx').write_text('AAAA')
+    job=dict(id='trial',protocol_sha256='p',schema='radar-symmetry-job/v1',protocol=p)
+    calls=[]
+    def verify(*args,**kwargs):calls.append(1);return receipt
+    monkeypatch.setattr(module,'verify_receipt',verify)
+    module.checked_receipt(tmp_path,job);module.checked_receipt(tmp_path,job)
+    assert len(calls)==1
+    target=tmp_path/'fit.gpx';st=target.stat();target.write_text('BBBB');os.utime(target,ns=(st.st_atime_ns,st.st_mtime_ns))
+    module.checked_receipt(tmp_path,job);assert len(calls)==2
+    module.clear_evidence_cache();module.checked_receipt(tmp_path,job);assert len(calls)==3
+
+
 def row(root,name,*,source='scan1',offset=0.,status='valid',rwp=5.):
     path=root/(name+'.json')
     path.write_text(json.dumps(dict(x=[10.,20.,30.],d=[3.,2.,1.],coordinate='two_theta',observed=[20.,100.,50.],calculated=[20.,100.+offset,50.],background=[1.,1.,1.],weights=[1.,1.,1.],fitted=[True]*3,limits=[10.,30.],ticks=[dict(phase='nuclear',native=[20.],d=[2.])],phases=[])))

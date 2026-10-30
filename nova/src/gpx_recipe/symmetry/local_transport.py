@@ -33,7 +33,7 @@ class LocalTransport:
     @staticmethod
     def alive(handle):
         try:
-            result=subprocess.run(['ps','-p',str(int(handle['pid'])),'-o','args='],capture_output=True,text=True,timeout=3)
+            result=subprocess.run(['ps','-ww','-p',str(int(handle['pid'])),'-o','args='],capture_output=True,text=True,timeout=3)
             return result.returncode==0 and handle['token'] in result.stdout and 'gpx_recipe.symmetry.launch' in result.stdout
         except (OSError,subprocess.SubprocessError,KeyError,ValueError):return False
 

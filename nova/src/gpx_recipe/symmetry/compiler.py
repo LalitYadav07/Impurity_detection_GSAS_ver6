@@ -5,8 +5,9 @@ import hashlib
 import json
 from pathlib import Path
 import shutil
+import uuid
 
-from .contracts import validate_candidate, digest, trial_id, validate_protocol
+from .contracts import validate_candidate, digest, trial_id, validate_protocol, iter_trials
 
 
 def file_sha(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
@@ -20,6 +21,82 @@ def confined(root,relative,*,exists=True):
 
 def assets(protocol):
     return [protocol['source'],protocol['catalog']]+[c['child'] for c in protocol['candidates'] if c['child']]
+
+
+SHARED_ENTRYPOINT = 'from pathlib import Path\nimport sys\nimport gpx_recipe\nsys.path.insert(0,str(Path(gpx_recipe.__file__).parent/"symmetry/adapters"))\nfrom gpx_recipe.symmetry.worker import main\nif __name__ == "__main__":\n    main(Path(__file__).resolve().parent)\n'
+
+
+def require_adapters():
+    """Installed workers must import the same adapters bound by package_signature."""
+    import importlib.util
+    import sys
+    for name in ['gsas_magnetic_preflight','gsas_isodistort_import','gsas_cif_import']:
+        origin=getattr(sys.modules.get(name),'__file__',None)
+        if origin is None:
+            spec=importlib.util.find_spec(name);origin=spec.origin if spec else None
+        if not origin or file_sha(origin)!=file_sha(Path(__file__).parent/'adapters'/(name+'.py')):
+            raise ValueError('The native adapter differs from the pinned package: '+name)
+
+
+def job_inputs(directory, job):
+    """Resolve only the fixed, confined shared-input layout; no client paths."""
+    directory = Path(directory).resolve()
+    if job.get('schema') == 'radar-symmetry-job/v1':
+        return directory
+    if job.get('schema') != 'radar-symmetry-job/v2' or directory.name != job['id'] or directory.parent.name not in {'trials','preparing'}:
+        raise ValueError('Invalid shared trial layout')
+    if job['protocol_sha256'] != digest(validate_protocol(job['protocol'])):
+        raise ValueError('Shared inputs differ from the approved protocol')
+    return confined(directory.parent.parent, 'inputs/' + job['protocol_sha256'])
+
+
+def prepare_shared_inputs(protocol, input_root, campaign_root):
+    protocol = validate_protocol(protocol)
+    sha = digest(protocol)
+    target = Path(campaign_root).resolve() / 'inputs' / sha
+    if target.exists():
+        if digest(json.loads((target/'protocol.json').read_text())) != sha:
+            raise ValueError('A shared protocol changed')
+        verify_inputs(protocol, target)
+        return target
+    verify_inputs(protocol, input_root)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    staging = target.with_name(sha + '.' + uuid.uuid4().hex + '.partial')
+    staging.mkdir()
+    try:
+        for asset in assets(protocol):
+            source = confined(input_root, asset['path'])
+            destination = confined(staging, asset['path'], exists=False)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, destination)
+        (staging/'protocol.json').write_text(json.dumps(protocol, indent=2, allow_nan=False)+'\n')
+        verify_inputs(protocol, staging)
+        staging.replace(target)
+    finally:
+        if staging.exists():shutil.rmtree(staging)
+    return target
+
+
+def compile_shared_job(protocol, destination, *, candidate_id, seed_id, approved_hash):
+    """Thin immutable manifest; inputs staged once and code pinned in the image.
+
+    Enrollment validates/captures common inputs once; every native trial still
+    independently rehashes them before and after its scientific calculation.
+    """
+    if digest(protocol) != approved_hash:
+        raise ValueError('Approval does not bind this protocol')
+    if not any(c['id'] == candidate_id and s['id'] == seed_id for c,s in iter_trials(protocol)):
+        raise ValueError('Trial is outside the approved finite portfolio')
+    destination = Path(destination)
+    if destination.exists() and any(destination.iterdir()):
+        raise ValueError('Use a fresh trial directory')
+    destination.mkdir(parents=True, exist_ok=True)
+    job = dict(schema='radar-symmetry-job/v2', protocol=protocol, protocol_sha256=approved_hash,
+        candidate_id=candidate_id, seed_id=seed_id, id=trial_id(protocol, candidate_id, seed_id),
+        package_sha256=protocol['implementation_sha256'])
+    (destination/'job.json').write_text(json.dumps(job, separators=(',',':'), allow_nan=False)+'\n')
+    (destination/'worker.py').write_text(SHARED_ENTRYPOINT)
+    return job
 
 
 def canonical_candidate(value):

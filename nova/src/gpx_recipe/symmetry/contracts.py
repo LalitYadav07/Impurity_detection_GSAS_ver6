@@ -111,8 +111,10 @@ def policy(value):
 def validate_protocol(value):
     defaults=dict(schema='radar-symmetry-protocol/v1',sites=[])
     if isinstance(value,dict) and 'acquisition_id' in value:defaults['acquisition_id']=None
+    if isinstance(value,dict) and 'template_sha256' in value:defaults['template_sha256']=None
     p=fields(value,['kind','source','parent_phase','histogram','parent_setting_sha256','magnetic_function_sha256','implementation_sha256','catalog','k','candidates','seeds','policy'],defaults)
     if 'acquisition_id' in p:p['acquisition_id']=text(p['acquisition_id'],maximum=300)
+    if 'template_sha256' in p:p['template_sha256']=text(p['template_sha256'],pattern=r'[a-f0-9]{64}')
     choices(p['schema'],['radar-symmetry-protocol/v1']);choices(p['kind'],['magnetic','structural'])
     for name in ['source','catalog']:p[name]=asset(p[name])
     for name in ['parent_phase','histogram']:p[name]=text(p[name])
@@ -121,7 +123,10 @@ def validate_protocol(value):
     if any(Fraction(v).denominator>96 for v in p['k']):raise ValueError('Commensurate denominator budget exceeded')
     p['k']=[str(Fraction(v)) for v in p['k']]
     if not isinstance(p['candidates'],list) or not 1<=len(p['candidates'])<=500:raise ValueError('Invalid finite candidate set')
-    if not isinstance(p['seeds'],list) or not 1<=len(p['seeds'])<=64:raise ValueError('Invalid finite start set')
+    # Structural seeds are candidate-specific: 50 children with two signs
+    # require 100 seed records, rather than a shared magnetic start grid.
+    seed_limit=2000 if p['kind']=='structural' else 64
+    if not isinstance(p['seeds'],list) or not 1<=len(p['seeds'])<=seed_limit:raise ValueError('Invalid finite start set')
     p['candidates']=[validate_candidate(c) for c in p['candidates']];p['seeds']=[seed(s) for s in p['seeds']];p['policy']=policy(p['policy'])
     if len({c['id'] for c in p['candidates']})!=len(p['candidates']) or len({s['id'] for s in p['seeds']})!=len(p['seeds']):raise ValueError('Candidate and seed IDs must be unique')
     candidate_ids={c['id'] for c in p['candidates']}

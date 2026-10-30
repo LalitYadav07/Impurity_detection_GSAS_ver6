@@ -384,7 +384,7 @@ class SetupEditorMixin:
             disabled=(locked,) if locked else False,
         )
 
-    def _candidate_library_controls(self, context="single"):
+    def _candidate_library_controls(self, context="single", instance=""):
         """Render the same builder with independent uploads and selections."""
         prefix = "live_" if context == "live" else ""
 
@@ -404,6 +404,8 @@ class SetupEditorMixin:
         scope = key("database_source")
         archive_source = key("library_archive_source")
         upload_key = "live" if prefix else "radar"
+        if instance:
+            upload_key += "-" + instance
         vuetify.VSelect(
             label="Which candidate library should RADAR-PD search?",
             v_model=value("database_source"),

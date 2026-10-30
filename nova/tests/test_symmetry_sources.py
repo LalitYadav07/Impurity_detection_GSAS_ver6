@@ -92,6 +92,7 @@ def test_native_inspection_cannot_apply_a_previous_source_to_a_new_selection(tmp
     state=State(rf_experiment='IPTS-1',sx_start_source='raw',sx_has_context=False)
     app=controller.SymmetryMixin()
     app.server=SimpleNamespace(state=state)
+    app._model_preparations={};app._model_remote=lambda:None
     app._refinement_store=lambda:w
     app._symmetry_root=lambda:tmp_path/'symmetry'
     app._symmetry_transport=lambda:SimpleNamespace(command=[sys.executable],environment={})
@@ -123,6 +124,7 @@ def test_experiment_change_during_refresh_reloads_instead_of_publishing_stale_re
     state=State(rf_experiment='IPTS-1',sx_result_scope='experiment',sx_start_source='',rf_source='',
                 sx_campaign='campaign',sx_source='')
     app=controller.SymmetryMixin();app.server=SimpleNamespace(state=state)
+    app._model_remote=lambda:None
     app._symmetry_loading=False;app._symmetry_refresh_pending=False
     app._symmetry_display_identity=('campaign','IPTS-1','experiment')
     app._refinement_store=lambda:None;app._symmetry_root=lambda:tmp_path

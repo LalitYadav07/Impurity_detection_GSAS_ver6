@@ -3,7 +3,8 @@ FROM ghcr.io/lalityadav07/impurity_detection_gsas_ver6@sha256:ece507037db561bb27
 USER root
 COPY nova/src/gpx_recipe /opt/radar-symmetry/gpx_recipe
 COPY scripts/ndip_symmetry.py /opt/radar-symmetry/ndip_symmetry.py
-ENV PYTHONPATH=/opt/radar-symmetry:/opt/radar-pd/scripts:/opt/radar-pd/GSAS-II
+COPY scripts/ndip_model_campaign.py /opt/radar-symmetry/ndip_model_campaign.py
+ENV PYTHONPATH=/opt/radar-symmetry:/opt/radar-symmetry/gpx_recipe/symmetry/adapters:/opt/radar-pd/scripts:/opt/radar-pd/GSAS-II
 # Only the pure-Python point generator is added. Never resolve/upgrade the
 # installed numerical dependencies as a side effect of a symmetry release.
 RUN python -m pip install --no-cache-dir --no-deps 'seekpath==2.2.1' \

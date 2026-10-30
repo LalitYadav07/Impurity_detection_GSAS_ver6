@@ -19,7 +19,7 @@ def until(predicate,seconds=6):
 def prepare(root,timeout=30):
     root.mkdir();key='a'*24
     (root/'job.json').write_text(json.dumps(dict(id=key,protocol_sha256='b'*64,protocol=dict(policy=dict(timeout_seconds=timeout)))))
-    (root/'worker.py').write_text("import json,os,time\nfrom pathlib import Path\nPath('child.json').write_text(json.dumps(dict(pid=os.getpid(),secret=os.getenv('TEST_MODEL_TOKEN'))))\ntime.sleep(30)\n")
+    (root/'worker.py').write_text("import json,os,time\nfrom pathlib import Path\nPath('child.partial').write_text(json.dumps(dict(pid=os.getpid(),secret=os.getenv('TEST_MODEL_TOKEN'))));Path('child.partial').replace('child.json')\ntime.sleep(30)\n")
     return key
 
 

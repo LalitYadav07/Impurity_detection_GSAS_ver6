@@ -7,13 +7,15 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import fcntl
+import hashlib
 import json
 from pathlib import Path
 import shutil
 import sqlite3
 import time
 
-from .compiler import compile_bundle, confined, file_sha, verify_inputs,assets
+from .compiler import (compile_bundle, confined, file_sha, verify_inputs,assets,
+    job_inputs,prepare_shared_inputs,compile_shared_job,package_signature,SHARED_ENTRYPOINT)
 from .contracts import digest, trial_id, validate_protocol,iter_trials
 from ..symmetry_results import TERMINAL, summarize_portfolio
 
@@ -28,7 +30,7 @@ def verify_receipt(directory, expected):
     protocol=validate_protocol(job['protocol'])
     if digest(protocol)!=expected['protocol_sha256'] or trial_id(protocol,job['candidate_id'],job['seed_id'])!=expected['id']:
         raise ValueError('Terminal job identity changed')
-    verify_inputs(protocol,directory)
+    verify_inputs(protocol,job_inputs(directory,job))
     for relative,sha in result.get('files',{}).items():
         if file_sha(confined(directory,relative))!=sha:raise ValueError('A terminal artifact changed: '+relative)
     if result['status']=='valid':
@@ -38,8 +40,9 @@ def verify_receipt(directory, expected):
 
 
 class Campaign:
-    def __init__(self,root):
+    def __init__(self,root,*,shared_inputs=False):
         self.root=Path(root).resolve();self.root.mkdir(parents=True,exist_ok=True)
+        self.shared_inputs=shared_inputs
         self._terminal_checks={}
         self.database=self.root/'campaign.sqlite'
         with self.connect() as db:
@@ -48,12 +51,63 @@ class Campaign:
             CREATE TABLE IF NOT EXISTS protocols(hash TEXT PRIMARY KEY,body TEXT NOT NULL,source TEXT NOT NULL,metadata TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS trials(id TEXT PRIMARY KEY,protocol TEXT NOT NULL,candidate TEXT NOT NULL,seed TEXT NOT NULL,state TEXT NOT NULL,handle TEXT,receipt TEXT,error TEXT,updated REAL NOT NULL);
             CREATE TABLE IF NOT EXISTS events(sequence INTEGER PRIMARY KEY AUTOINCREMENT,trial TEXT,state TEXT,detail TEXT,at REAL);
+            CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,body TEXT NOT NULL);
             ''')
             if 'directory' not in {row[1] for row in db.execute('PRAGMA table_info(trials)')}:db.execute('ALTER TABLE trials ADD COLUMN directory TEXT')
 
     def connect(self):
         db=sqlite3.connect(self.database,timeout=30);db.row_factory=sqlite3.Row
         return db
+
+    def setting(self,key,default=None):
+        with self.connect() as db:row=db.execute('SELECT body FROM settings WHERE key=?',(key,)).fetchone()
+        return json.loads(row['body']) if row else default
+
+    def set_setting(self,key,value):
+        with self.connect() as db:db.execute('INSERT OR REPLACE INTO settings VALUES(?,?)',(key,json.dumps(value,allow_nan=False)))
+
+    def snapshot(self):
+        """Portable ledger; large scientific inputs/outputs have separate HDA refs."""
+        with self.connect() as db:
+            protocols=[dict(r) for r in db.execute('SELECT * FROM protocols')]
+            trials=[{k:v for k,v in dict(r).items() if k not in {'directory','updated'}} for r in db.execute('SELECT * FROM trials ORDER BY rowid')]
+            settings={r['key']:json.loads(r['body']) for r in db.execute('SELECT * FROM settings')}
+        return dict(schema='radar-model-ledger/v1',protocols=protocols,trials=trials,settings=settings)
+
+    def restore(self,snapshot,input_roots):
+        if snapshot.get('schema')!='radar-model-ledger/v1' or self.trials():
+            raise ValueError('Restore a valid model ledger into an empty campaign')
+        # Validate the entire finite ledger before writing any trial. A malformed
+        # checkpoint must not leave a partially restored, runnable campaign.
+        expected={};protocol_hashes=set()
+        for row in snapshot['protocols']:
+            protocol=validate_protocol(json.loads(row['body']))
+            if digest(protocol)!=row['hash'] or row['hash'] in protocol_hashes:raise ValueError('Saved protocol identity changed')
+            protocol_hashes.add(row['hash'])
+            verify_inputs(protocol,input_roots[row['hash']])
+            if set(json.loads(row['metadata']))-{'scan','sample','bank','condition','condition_unit','series'}:raise ValueError('Unknown source provenance fields')
+            for c,s in iter_trials(protocol):expected[trial_id(protocol,c['id'],s['id'])]=(row['hash'],c['id'],s['id'])
+        seen=set()
+        for row in snapshot['trials']:
+            if row['id'] in seen or expected.get(row['id'])!=tuple(row[k] for k in ['protocol','candidate','seed']):raise ValueError('Saved model trial differs from its approved plan')
+            if row['state'] not in {'prepared','submitting','running','cancelling','terminal','cancelled','needs_recovery'}:raise ValueError('Unknown saved trial state')
+            for field in ['handle','receipt']:
+                if row.get(field) and not isinstance(json.loads(row[field]),dict):raise ValueError('Malformed saved trial receipt or handle')
+            seen.add(row['id'])
+        if seen!=set(expected):raise ValueError('Saved model checkpoint omits declared starts')
+        for row in snapshot['protocols']:
+            protocol=validate_protocol(json.loads(row['body']))
+            self.enroll(protocol,input_roots[row['hash']],approved_hash=row['hash'],metadata=json.loads(row['metadata']),_restoring=True)
+        current={r['id']:r for r in self.trials()}
+        for row in snapshot['trials']:
+            old=current.get(row['id'])
+            if not old or any(old[k]!=row[k] for k in ['protocol','candidate','seed']):
+                raise ValueError('Saved model trial differs from its approved plan')
+            state=row['state']
+            if state=='terminal':state='running' if row.get('handle') else 'needs_recovery'
+            self.set_state(row['id'],state,handle=json.loads(row['handle']) if row.get('handle') else None,
+                receipt=json.loads(row['receipt']) if row.get('receipt') else None,error=row.get('error'))
+        for key,value in snapshot.get('settings',{}).items():self.set_setting(key,value)
 
     @contextmanager
     def exclusive(self):
@@ -67,10 +121,12 @@ class Campaign:
     def event(db,uid,state,detail=None):
         db.execute('INSERT INTO events(trial,state,detail,at) VALUES(?,?,?,?)',(uid,state,detail,time.time()))
 
-    def enroll(self,protocol,input_root,*,approved_hash,metadata=None):
+    def enroll(self,protocol,input_root,*,approved_hash,metadata=None,_restoring=False):
         """A source revision is a new protocol; identical incoming scans deduplicate."""
         protocol=validate_protocol(protocol);sha=digest(protocol)
         if sha!=approved_hash:raise ValueError('Approval does not bind this complete protocol/source revision')
+        from . import compiler
+        if not _restoring and protocol['implementation_sha256']!=compiler.package_signature():raise ValueError('The approved implementation changed')
         verify_inputs(protocol,input_root)
         metadata=metadata or {}
         # Only scientific provenance belongs in this ledger, never transport keys.
@@ -78,19 +134,30 @@ class Campaign:
         with self.exclusive(),self.connect() as db:
             existing=db.execute('SELECT body FROM protocols WHERE hash=?',(sha,)).fetchone()
             if existing:return [r['id'] for r in db.execute('SELECT id FROM trials WHERE protocol=? ORDER BY rowid',(sha,))]
+            if self.shared_inputs:prepare_shared_inputs(protocol,input_root,self.root)
             rows=[]
-            for candidate,seed in iter_trials(protocol):
+            trials=list(iter_trials(protocol))
+            if self.shared_inputs:
+                # Spread a first chunk over different models, retaining every
+                # declared seed and its stable scientific identity.
+                by_candidate={c['id']:[] for c in protocol['candidates']}
+                for c,s in trials:by_candidate[c['id']].append((c,s))
+                trials=[rows[i] for i in range(max(map(len,by_candidate.values()))) for rows in by_candidate.values() if i<len(rows)]
+            for candidate,seed in trials:
                     uid=trial_id(protocol,candidate['id'],seed['id']);destination=self.root/'trials'/uid
                     if destination.exists():
                         # A crash after atomic preparation but before ledger commit
                         # is recoverable only if the already sealed job is identical.
                         job=json.loads((destination/'job.json').read_text())
                         if job['id']!=uid or job['protocol_sha256']!=sha:raise ValueError('Conflicting prepared job identity')
-                        verify_inputs(protocol,destination)
+                        verify_inputs(protocol,job_inputs(destination,job))
                     else:
                         staging=self.root/'preparing'/uid
                         if staging.exists():shutil.rmtree(staging)
-                        compile_bundle(protocol,input_root,staging,candidate_id=candidate['id'],seed_id=seed['id'],approved_hash=sha)
+                        if self.shared_inputs:
+                            compile_shared_job(protocol,staging,candidate_id=candidate['id'],seed_id=seed['id'],approved_hash=sha)
+                        else:
+                            compile_bundle(protocol,input_root,staging,candidate_id=candidate['id'],seed_id=seed['id'],approved_hash=sha)
                         destination.parent.mkdir(exist_ok=True);staging.replace(destination)
                     rows.append((uid,sha,candidate['id'],seed['id'],'prepared',time.time()))
             db.execute('INSERT INTO protocols VALUES(?,?,?,?)',(sha,json.dumps(protocol),protocol['source']['sha256'],json.dumps(metadata)))
@@ -127,7 +194,8 @@ class Campaign:
     def _artifact_stamps(directory,paths):
         stamps=[]
         for relative in paths:
-            path=confined(directory,relative);st=path.stat()
+            root,relative = relative if isinstance(relative,tuple) else (directory,relative)
+            path=confined(root,relative);st=path.stat()
             # ctime catches in-place edits even when mtime is restored. Inode,
             # real path and device also detect replacement/symlink changes.
             stamps.append((relative,str(path),st.st_dev,st.st_ino,st.st_size,st.st_mtime_ns,st.st_ctime_ns,st.st_mode))
@@ -140,7 +208,8 @@ class Campaign:
                 if self._artifact_stamps(directory,cached['paths'])==cached['stamps']:return
             original=json.loads((directory/'result.json').read_text())
             job=json.loads((directory/'job.json').read_text());protocol=validate_protocol(job['protocol'])
-            paths=sorted(set(['result.json','job.json']+[asset['path'] for asset in assets(protocol)]+list(original.get('files',{}))))
+            paths=[(str(directory),p) for p in sorted(set(['result.json','job.json']+list(original.get('files',{}))))]
+            paths += [(str(job_inputs(directory,job)),asset['path']) for asset in assets(protocol)]
             before=self._artifact_stamps(directory,paths)
             receipt=verify_receipt(directory,dict(id=row['id'],protocol_sha256=row['protocol']))
             after=self._artifact_stamps(directory,paths)
@@ -174,10 +243,36 @@ class Campaign:
                         if status=='running':self.set_state(row['id'],'cancelling' if row['state']=='cancelling' else 'running',handle=state['handle'])
                         elif status=='finished':self.collect(row)
                         elif status=='cancelled':self.set_state(row['id'],'cancelled')
+                        elif status=='not_started' and hasattr(transport,'submit_many'):self.set_state(row['id'],'prepared')
                         elif status=='absent' and row['state']=='submitting':self.set_state(row['id'],'prepared')
                         else:self.set_state(row['id'],'needs_recovery',error=state.get('reason','Transport state is ambiguous'))
                     except Exception as exc:self.set_state(row['id'],'needs_recovery',error=str(exc))
-            rows=self.trials();available=slots-sum(r['state'] in {'running','submitting','cancelling'} for r in rows)
+            rows=self.trials()
+            if self.setting('paused',False):return rows
+            if hasattr(transport,'submit_many'):
+                active={json.loads(r['handle']).get('dispatch_key',r['id']) if r.get('handle') else r['id']
+                    for r in rows if r['state'] in {'running','submitting','cancelling'}}
+                if len(active)<transport.max_active_jobs:
+                    prepared=[r for r in rows if r['state']=='prepared']
+                    if prepared:
+                        protocols=list(dict.fromkeys(r['protocol'] for r in prepared))
+                        last=self.setting('last_dispatched_protocol')
+                        if last in protocols:
+                            index=(protocols.index(last)+1)%len(protocols)
+                            protocols=protocols[index:]+protocols[:index]
+                        selected=protocols[0]
+                        prepared=[r for r in prepared if r['protocol']==selected]
+                        size=transport.chunk_size_for(prepared[0]['protocol']) if hasattr(transport,'chunk_size_for') else transport.chunk_size
+                        group=[r for r in prepared if r['protocol']==prepared[0]['protocol']][:size]
+                        for row in group:self.set_state(row['id'],'submitting')
+                        try:
+                            handles=transport.submit_many([(r['id'],self.trial_directory(r)) for r in group],workers=slots)
+                            for row in group:self.set_state(row['id'],'running',handle=handles[row['id']])
+                            self.set_setting('last_dispatched_protocol',selected)
+                        except Exception as exc:
+                            with self.connect() as db:self.event(db,group[0]['id'],'submission_acknowledgment_missing',str(exc))
+                return self.trials()
+            available=slots-sum(r['state'] in {'running','submitting','cancelling'} for r in rows)
             for row in [r for r in rows if r['state']=='prepared'][:max(0,available)]:
                 self.set_state(row['id'],'submitting')
                 try:
@@ -186,6 +281,20 @@ class Campaign:
                 except Exception as exc:
                     # Leave intent durable: next pass recovers by dispatch key.
                     with self.connect() as db:self.event(db,row['id'],'submission_acknowledgment_missing',str(exc))
+        return self.trials()
+
+    def recover(self,transport):
+        """Recover existing submissions/results without dispatching new starts."""
+        with self.exclusive():
+            for row in self.trials():
+                directory=self.trial_directory(row)
+                if (directory/'result.json').is_file():self.collect(row);continue
+                if row['state'] not in {'running','submitting','cancelling','needs_recovery'}:continue
+                state=transport.recover(row['id'],directory)
+                if state['state']=='finished':self.collect(row)
+                elif state['state']=='running':self.set_state(row['id'],'running',handle=state['handle'])
+                elif state['state']=='cancelled':self.set_state(row['id'],'cancelled')
+                elif state['state'] in {'absent','not_started'}:self.set_state(row['id'],'prepared')
         return self.trials()
 
     def verify_continuation(self,implementation_sha256):
@@ -217,10 +326,17 @@ class Campaign:
         for row in pending:
             directory=self.trial_directory(row)
             job=json.loads(confined(directory,'job.json').read_text());protocol=validate_protocol(job['protocol'])
-            if job.get('schema')!='radar-symmetry-job/v1' or digest(protocol)!=row['protocol'] or job.get('protocol_sha256')!=row['protocol'] or job.get('id')!=row['id'] or trial_id(protocol,job['candidate_id'],job['seed_id'])!=row['id']:
+            if job.get('schema') not in {'radar-symmetry-job/v1','radar-symmetry-job/v2'} or digest(protocol)!=row['protocol'] or job.get('protocol_sha256')!=row['protocol'] or job.get('id')!=row['id'] or trial_id(protocol,job['candidate_id'],job['seed_id'])!=row['id']:
                 raise ValueError('A sealed job identity changed; no replacement was submitted')
             if job.get('package_sha256')!=protocol['implementation_sha256']:
                 raise ValueError('A sealed scientific implementation differs from its approved protocol')
+            if job['schema']=='radar-symmetry-job/v2':
+                if file_sha(directory/'worker.py')!=hashlib.sha256(SHARED_ENTRYPOINT.encode()).hexdigest():
+                    raise ValueError('A shared trial entry point changed')
+                verify_inputs(protocol,job_inputs(directory,job))
+                if package_signature()!=protocol['implementation_sha256']:
+                    raise ValueError('The shared campaign requires its original pinned worker implementation')
+                continue
             root=confined(directory,'runtime/gpx_recipe')
             files={str(p.relative_to(root)):file_sha(confined(root,str(p.relative_to(root))))
                    for p in sorted(root.rglob('*')) if p.is_file() and p.suffix in {'.py','.json'}}

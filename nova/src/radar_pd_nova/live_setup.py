@@ -727,3 +727,58 @@ class LiveSetupMixin:
         finally:
             state.live_launch_busy = False
             state.flush()
+
+    def _live_beamline_review_controls(self):
+        """Share calibration and condition controls with guided Live setup."""
+        with html.Div(v_show="live_beamline === 'NOM' || live_beamline === 'SNAP'", classes="radar-soft-panel mb-2"):
+            vuetify.VAlert(text=("live_beamline === 'SNAP' ? 'SNAP Bragg analysis uses broadband TOF. SNAPRed generated profiles can be approximate; state, focusing group and calibration must match.' : 'NOMAD Bragg analysis uses broadband TOF. Supplied profiles require scientific review; automatic NOMAD profile mappings are not yet validated.'",), type="info", variant="tonal", density="compact")
+            vuetify.VTextField(label="Bank label in profile", v_model=("nomad_profile_bank",), type="text", inputmode="numeric", disabled=("powgen_monitoring || live_launch_busy || live_assistant_busy",), density="compact", variant="outlined", hint="Enter the Bank: value from the selected .instprm block, not its position in the file.", persistent_hint=True)
+            vuetify.VSwitch(label="Confirm the supplied profile and physical-bank mapping", v_model=("nomad_profile_acknowledged",), disabled=("powgen_monitoring || live_launch_busy || live_assistant_busy",), density="compact")
+            vuetify.VSwitch(label="Allow unconfirmed sample corrections for exploratory analysis", v_model=("nomad_allow_exploratory",), disabled=("powgen_monitoring || live_launch_busy || live_assistant_busy",), density="compact")
+            vuetify.VAlert(v_show="nomad_quality_notices.length > 0", text=("nomad_quality_notices.join('; ')",), type="warning", variant="tonal", density="compact")
+            with html.Details(v_show="live_beamline === 'SNAP'"):
+                html.Summary('Specimen temperature (optional)')
+                html.P('Check experiment and inputs to load the recorded sensors. Select the sensor connected to this specimen and review its recorded units. This choice is saved with the Live session.', classes='text-body-2')
+                vuetify.VSelect(label='Recorded specimen sensor',v_model=('snap_temperature_channel',),
+                    items=('snap_condition_options',),item_title='title',item_value='value',clearable=True,
+                    disabled=('powgen_monitoring || live_launch_busy || live_assistant_busy',),density='compact',variant='outlined')
+                vuetify.VSelect(label='Units recorded by this sensor',v_model=('snap_temperature_unit',),items=(['K','C'],),
+                    disabled=('powgen_monitoring || live_launch_busy || live_assistant_busy',),density='compact',variant='outlined',
+                    hint='A reviewed unit can fill an absent unit; it cannot override conflicting NeXus units.',persistent_hint=True)
+                vuetify.VSwitch(label='I verified this sensor measures the specimen and checked its units',
+                    v_model=('snap_temperature_reviewed',),disabled=('powgen_monitoring || live_launch_busy || live_assistant_busy',),density='compact')
+                vuetify.VSwitch(label='I verified these exports cover the full acquisition, not a time slice',
+                    v_model=('snap_condition_window_reviewed',),disabled=('powgen_monitoring || live_launch_busy || live_assistant_busy',),density='compact',
+                    hint='Time-filtered exports need a reviewed interval/axis mapping; parent-run temperature is insufficient.',persistent_hint=True)
+                html.P('DAC pressure requires a reviewed sample-pressure mapping. Pump or load pressure is not substituted.',classes='text-body-2')
+        with html.Div(v_show="live_beamline === 'HB2A'", classes="radar-soft-panel mb-2"):
+            vuetify.VAlert(text='HB-2A uses constant-wavelength 2θ patterns from the combined detector bank. Experiment + scan identify an acquisition. Magnetic-only peaks are outside nuclear phase identification.',type='info',variant='tonal',density='compact')
+            vuetify.VSwitch(label='I reviewed the profile and reduction corrections for this experiment, Ge reflection, collimation and sample environment',
+                v_model=('hb2a_profile_acknowledged',),disabled=('powgen_monitoring || live_launch_busy || live_assistant_busy',),density='compact')
+            with html.Details():
+                html.Summary('Acquisition exceptions')
+                vuetify.VSelect(label='Collimation when measured colltrans is absent',v_model=('hb2a_collimator_override',),
+                    items=([{'title':'Require measured collimator metadata','value':''}, {'title':'Reviewed IN (op-21-12)','value':'IN'},
+                        {'title':'Reviewed OUT (op-op-12)','value':'OUT'}],),item_title='title',item_value='value',
+                    disabled=('powgen_monitoring || live_launch_busy || live_assistant_busy',),density='compact',variant='outlined',
+                    hint='Some 2026 SPICE files omit colltrans. A choice cannot override contradictory measured values.',persistent_hint=True)
+                vuetify.VSwitch(label='Allow stopped scans after reviewing measured angular coverage',v_model=('hb2a_allow_stopped',),
+                    disabled=('powgen_monitoring || live_launch_busy || live_assistant_busy',),density='compact')
+            with html.Details():
+                html.Summary('Sample-temperature channel (optional)')
+                vuetify.VAutocomplete(label='Measured SPICE temperature channel',v_model=('hb2a_temperature_channel',),
+                    items=('hb2a_channel_options',),clearable=True,disabled=('powgen_monitoring || live_launch_busy || live_assistant_busy',),density='compact',variant='outlined',
+                    hint='For a He-3 cryostat, the paired option selects the low/high thermometer per scan after your review. Ambiguous ranges retain the scan without a temperature axis. Other environments need an explicit channel and units.',persistent_hint=True)
+                vuetify.VSelect(label='Recorded temperature unit',v_model=('hb2a_temperature_unit',),items=(['K','C'],),
+                    disabled=('powgen_monitoring || live_launch_busy || live_assistant_busy',),density='compact',variant='outlined')
+                vuetify.VSwitch(label='I reviewed this channel and its recorded units',v_model=('hb2a_condition_reviewed',),
+                    disabled=('powgen_monitoring || live_launch_busy || live_assistant_busy',),density='compact')
+            with html.Details():
+                html.Summary('Magnetic field / pressure channels (optional)')
+                for quantity,label,units in [('magnetic_field','Magnetic field',['T']),('pressure','Pressure',['GPa','bar'])]:
+                    vuetify.VAutocomplete(label=label+' measured SPICE channel',v_model=(f'hb2a_{quantity}_channel',),
+                        items=('hb2a_channel_options',),clearable=True,disabled=('powgen_monitoring || live_launch_busy || live_assistant_busy',),density='compact',variant='outlined')
+                    vuetify.VSelect(label=label+' recorded unit',v_model=(f'hb2a_{quantity}_unit',),items=(units,),
+                        disabled=('powgen_monitoring || live_launch_busy || live_assistant_busy',),density='compact',variant='outlined')
+                    vuetify.VSwitch(label='I reviewed the '+label.lower()+' channel and its recorded units',v_model=(f'hb2a_{quantity}_reviewed',),
+                        disabled=('powgen_monitoring || live_launch_busy || live_assistant_busy',),density='compact')

@@ -19,5 +19,6 @@ COPY help /app/www-content/user-guide/
 # The pinned runtime uses Python 3.10 and does not contain SciPy. Keep the
 # measured-pattern engine reproducible without upgrading the NOVA stack.
 RUN python -m pip install --no-cache-dir 'scipy==1.15.3' \
+    && python -m pip install --no-cache-dir --no-deps 'RapidFuzz==3.14.3' \
     && python -m pip install --no-cache-dir --no-deps /src \
     && python -m compileall -q /src/src/radar_pd_nova

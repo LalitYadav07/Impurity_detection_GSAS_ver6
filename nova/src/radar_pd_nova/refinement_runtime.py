@@ -85,6 +85,9 @@ class LocalRefinementRuntime:
 
 class GalaxyRefinementRuntime(LocalRefinementRuntime):
     kind='galaxy'
+    tool_id=REFINEMENT_TOOL_ID
+    workspace_label=WORKSPACE_LABEL
+    workspace_schema='radar-refinement-workspace/v1'
 
     def __init__(self, root, service, *, timeout=7200,poll_seconds=3):
         self.root=Path(root).resolve();self.root.mkdir(parents=True,exist_ok=True)
@@ -183,12 +186,12 @@ class GalaxyRefinementRuntime(LocalRefinementRuntime):
         from .galaxy_service import _parameter_value, normalize_status
         from .models import UtilityActionRecord
         response=requests.get(self.service.galaxy_url+'/api/jobs',headers=self.service._headers,
-            params={'history_id':self.service.history_id,'tool_id':REFINEMENT_TOOL_ID,'limit':1000},timeout=30)
+            params={'history_id':self.service.history_id,'tool_id':self.tool_id,'limit':1000},timeout=30)
         response.raise_for_status();jobs=response.json()
         if not isinstance(jobs,list):raise RuntimeUnavailable('Could not verify existing refinement submissions')
         matches=[]
         for row in jobs:
-            if row.get('tool_id')!=REFINEMENT_TOOL_ID:continue
+            if row.get('tool_id')!=self.tool_id:continue
             details=self.service._job_details(str(row['id']))
             if str(_parameter_value(details.get('params') or details.get('parameters') or {},'dispatch_key') or '')==key:
                 matches.append(details)
@@ -197,18 +200,18 @@ class GalaxyRefinementRuntime(LocalRefinementRuntime):
             if len(jobs)>=1000:raise RuntimeUnavailable('Galaxy returned a truncated job history; verify the previous dispatch before retrying')
             return None
         row=matches[0]
-        return UtilityActionRecord(uid='refinement-'+key,tool_id=REFINEMENT_TOOL_ID,name='Recovered refinement '+key,
+        return UtilityActionRecord(uid='refinement-'+key,tool_id=self.tool_id,name='Recovered refinement '+key,
             galaxy_job_id=str(row['id']),status=normalize_status(row.get('state')),outputs=self.service._job_output_ids(row))
 
     def save_workspace(self,manifest):
         import gzip,uuid
         path=self.root/('workspace-'+uuid.uuid4().hex+'.json.gz')
         with gzip.open(path,'wt',encoding='utf-8') as handle:json.dump(manifest,handle,allow_nan=False,separators=(',',':'))
-        try:return self.service.upload_document(path,label=WORKSPACE_LABEL)
+        try:return self.service.upload_document(path,label=self.workspace_label)
         finally:path.unlink(missing_ok=True)
 
     def recover_workspace(self):
-        rows=self.service.search_history_datasets(query=WORKSPACE_LABEL,limit=5,include_generated=True)
+        rows=self.service.search_history_datasets(query=self.workspace_label,limit=5,include_generated=True)
         for row in rows:
             if row.get('state')!='ok':continue
             # A real six-scan workspace already exceeds the generic service's
@@ -223,7 +226,7 @@ class GalaxyRefinementRuntime(LocalRefinementRuntime):
                 if len(payload)>128*1024*1024:raise RuntimeUnavailable('The saved workspace exceeds the 128 MB recovery bound; preserve it for an explicit scoped restore')
                 document=json.loads(payload)
             finally:path.unlink(missing_ok=True)
-            if document.get('schema')=='radar-refinement-workspace/v1' and document.get('history_id')==self.service.history_id:
+            if document.get('schema')==self.workspace_schema and document.get('history_id')==self.service.history_id:
                 return document
         return None
 

@@ -2,14 +2,54 @@
 from __future__ import annotations
 
 import json
+import time
+import threading
+from collections import OrderedDict
 from pathlib import Path
 from functools import lru_cache
 
 import numpy as np
 
 from gpx_recipe.symmetry.campaign import Campaign,verify_receipt
-from gpx_recipe.symmetry.compiler import confined
+from gpx_recipe.symmetry.compiler import confined,assets,job_inputs
 from gpx_recipe.symmetry.contracts import digest
+
+_verified_receipts=OrderedDict()
+_evidence_lock=threading.RLock()
+
+
+def clear_evidence_cache():
+    with _evidence_lock:_verified_receipts.clear();cached_view.cache_clear()
+
+
+def checked_receipt(directory,job,expected_receipt=None):
+    """Rehash changed evidence immediately; bound unchanged hash reuse to 5 min.
+
+    Polling hundreds of completed starts must not reread every common GPX and
+    output on each UI refresh. Inode/ctime/mtime/size changes invalidate reuse.
+    A new viewer always starts with a full cryptographic verification.
+    """
+    with _evidence_lock:return _checked_receipt(directory,job,expected_receipt)
+
+
+def _checked_receipt(directory,job,expected_receipt):
+    key=str(directory);cached=_verified_receipts.get(key)
+    if cached and cached['expected']==expected_receipt and time.monotonic()-cached['at']<300:
+        if Campaign._artifact_stamps(directory,cached['paths'])==cached['stamps']:
+            _verified_receipts.move_to_end(key);return cached['result']
+    raw=json.loads((directory/'result.json').read_text())
+    if expected_receipt and digest(raw)!=digest(json.loads(expected_receipt)):raise ValueError('A terminal receipt changed after collection')
+    paths=[(directory,p) for p in set(['job.json','result.json',*raw.get('files',{})])]
+    paths.extend((job_inputs(directory,job),a['path']) for a in assets(job['protocol']))
+    before=Campaign._artifact_stamps(directory,paths)
+    result=verify_receipt(directory,dict(id=job['id'],protocol_sha256=job['protocol_sha256']))
+    if expected_receipt and digest(result)!=digest(json.loads(expected_receipt)):raise ValueError('A terminal receipt changed after collection')
+    after=Campaign._artifact_stamps(directory,paths)
+    if before!=after:raise ValueError('Evidence changed during verification')
+    _verified_receipts[key]=dict(expected=expected_receipt,at=time.monotonic(),paths=paths,stamps=after,result=result)
+    _verified_receipts.move_to_end(key)
+    while len(_verified_receipts)>512:_verified_receipts.popitem(last=False)
+    return result
 
 
 def read_trial(directory,metadata=None,*,expected_receipt=None):
@@ -21,9 +61,7 @@ def read_trial(directory,metadata=None,*,expected_receipt=None):
         metadata=metadata or {},parent=p['parent_phase'],histogram=p['histogram'],k=p['k'],worker_revision=job.get('package_sha256',''),status='pending',rwp=None,nvars=None,reason='',has_view=False,has_gpx=False)
     if (directory/'result.json').is_file():
         try:
-            result=verify_receipt(directory,dict(id=row['id'],protocol_sha256=row['protocol']))
-            if expected_receipt and digest(result)!=digest(json.loads(expected_receipt)):
-                raise ValueError('A terminal receipt changed after collection')
+            result=checked_receipt(directory,job,expected_receipt)
             row.update({k:result.get(k) for k in ['status','rwp','nvars','reason']})
             row['refined_moments']=result.get('moments',[])
             row['receipt_sha256']=digest(result);row['native_version']=result.get('runtime',{}).get('version','unknown')
@@ -46,12 +84,12 @@ def read_trial(directory,metadata=None,*,expected_receipt=None):
 
 
 @lru_cache(maxsize=16)
-def cached_view(path,mtime_ns,size):
+def cached_view(path,mtime_ns,size,ctime_ns=None):
     return json.loads(Path(path).read_text())
 
 
 def view_for(row):
-    path=Path(row['view_path']);stat=path.stat();return cached_view(str(path),stat.st_mtime_ns,stat.st_size)
+    path=Path(row['view_path']);stat=path.stat();return cached_view(str(path),stat.st_mtime_ns,stat.st_size,stat.st_ctime_ns)
 
 
 def choose_group(groups,selected,*,explicit=False):

@@ -1,0 +1,70 @@
+name: Publish model campaign worker to GitHub Container Registry
+
+on:
+  push:
+    branches: [birthright-container]
+    paths:
+      - Dockerfile.symmetry
+      - nova/src/gpx_recipe/**
+      - scripts/ndip_model_campaign.py
+      - scripts/ndip_symmetry.py
+      - .github/workflows/publish-models-to-ghcr.yaml
+  workflow_dispatch: {}
+
+concurrency:
+  group: publish-models-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-verify-publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Image name
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}:models-${GITHUB_SHA}" >> "$GITHUB_ENV"
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.symmetry
+          platforms: linux/amd64
+          load: true
+          push: false
+          provenance: false
+          sbom: false
+          tags: ${{ env.IMAGE }}
+          cache-from: type=gha,scope=model-worker
+          cache-to: type=gha,scope=model-worker,mode=max
+      - name: Verify native stack, adapter identity and credential isolation
+        run: |
+          docker run --rm --entrypoint python "$IMAGE" -c '
+          from gpx_recipe.symmetry.compiler import require_adapters,package_signature
+          from gpx_recipe.symmetry.worker import runtime_identity,require_runtime
+          from gpx_recipe.symmetry.resources import allocation
+          from gpx_recipe.jobs import scientific_environment
+          import os
+          require_adapters()
+          r=runtime_identity(); require_runtime(r,r["magnetic_function_sha256"])
+          assert allocation(4,environ={})["workers"]==1
+          os.environ["GALAXY_API_KEY"]="must-not-transfer"
+          os.environ["AZURE_ILLUMINE_API_KEY"]="must-not-transfer"
+          assert not any("KEY" in k or "TOKEN" in k for k in scientific_environment())
+          print("Verified worker implementation",package_signature())'
+          docker run --rm --entrypoint python "$IMAGE" /opt/radar-symmetry/ndip_model_campaign.py --help
+      - name: Verify resource, protocol and runtime gates
+        run: |
+          docker run --rm --entrypoint sh -v "$PWD:/validation:ro" "$IMAGE" -c '
+          python -m pip install --quiet pytest &&
+          PYTHONPATH=/opt/radar-symmetry:/validation/tests/gpx_recipe python -m pytest -q -o cache_dir=/tmp/pytest-cache \
+            /validation/tests/gpx_recipe/test_model_campaign_worker.py \
+            /validation/tests/gpx_recipe/test_symmetry_runtime.py'
+      - name: Publish verified immutable image
+        run: docker push "$IMAGE"

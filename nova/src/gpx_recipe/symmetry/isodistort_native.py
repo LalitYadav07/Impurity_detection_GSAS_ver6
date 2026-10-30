@@ -51,11 +51,39 @@ def modes(child,temporary):
     return dict(modes=[name.name for name in iso['G2ModeList']],normalized_modes=iso['IsoModeList'],normalization=iso['NormList'],import_receipt=receipt)
 
 
+def modes_many(children,workers,root):
+    """Batch preparation, retaining a fresh GSAS-II process for each child."""
+    from concurrent.futures import ThreadPoolExecutor
+    import subprocess
+    from ..execution import write_json
+    from ..jobs import scientific_environment
+    from ..process import run_scientific
+    from .resources import allocation
+    if not isinstance(children,list) or not 1<=len(children)<=32 or len(set(children))!=len(children):raise ValueError('Batch one to 32 unique structural children')
+    root=Path(root);root.mkdir(parents=True,exist_ok=True)
+    def one(item):
+        index,child=item;directory=root/str(index);directory.mkdir()
+        request=directory/'request.json';output=directory/'inventory.json'
+        write_json(request,dict(child=child,temporary=str(directory/'child.gpx')))
+        try:
+            with (directory/'native.log').open('w') as log:
+                environment=scientific_environment()
+                environment['PYTHONPATH']+=':'+str(Path(__file__).parent/'adapters')
+                result=run_scientific([sys.executable,'-m','gpx_recipe.symmetry.isodistort_native','modes',str(request),str(output)],
+                    timeout=60,cwd=directory,env=environment,stdout=log,stderr=subprocess.STDOUT)
+            if result.returncode or not output.is_file():raise RuntimeError('Native child inventory failed; inspect its log')
+            return dict(child=child,inventory=json.loads(output.read_text()))
+        except Exception as exc:return dict(child=child,error=type(exc).__name__+': '+str(exc))
+    with ThreadPoolExecutor(max_workers=allocation(workers)['workers']) as pool:items=list(pool.map(one,enumerate(children)))
+    return dict(items=items)
+
+
 if __name__=='__main__':
     from ..execution import write_json
     request=json.loads(Path(sys.argv[2]).read_text())
     if sys.argv[1]=='match':result=match_k(request['cif'],request['k'],request['options'])
     elif sys.argv[1]=='modes':result=modes(request['child'],request['temporary'])
+    elif sys.argv[1]=='modes-many':result=modes_many(request['children'],request['workers'],Path(sys.argv[3]).parent/'mode-inventories')
     elif sys.argv[1]=='export':
         from ..snapshot import gsas
         project=gsas().G2Project(gpxfile=request['source']);project.phase(request['phase']).export_CIF(request['destination']);result=dict(path=request['destination'])

@@ -32,7 +32,7 @@ def choose_tier(candidates,policy,maximum):
     return chosen
 
 
-def discover_structural(parent_cif,parent,k,directory,*,matcher,inventory,opd_policy='highest-symmetry-per-irrep',maximum=16,client=None):
+def discover_structural(parent_cif,parent,k,directory,*,matcher,inventory,opd_policy='highest-symmetry-per-irrep',maximum=16,client=None,inventory_many=None):
     """matcher(cif,k,options) and inventory(path) run in the native subprocess.
 
     This is preparation only. A worker later verifies parent-orbit mapping and
@@ -49,13 +49,28 @@ def discover_structural(parent_cif,parent,k,directory,*,matcher,inventory,opd_po
     raw_hashes={}
     for step,text in raw['raw_responses'].items():
         path=root/'raw'/('response-'+hashlib.sha256(step.encode()).hexdigest()[:16]+'.txt');path.parent.mkdir(exist_ok=True);path.write_text(text);raw_hashes[step]=file_sha(path)
-    candidates=[]
+    candidates=[];constructed=[]
     for row in chosen:
         entry=next(r for r in coverage if r['id']==row['candidate_id'])
         try:
             generated=client.method2_generate(raw['session_state'],row['candidate_id'])
             path=root/'children'/(row['candidate_id'].replace(':','-')+'.cif');path.parent.mkdir(exist_ok=True);path.write_text(generated['cif'])
-            native=inventory(path);(path.with_suffix('.native.json')).write_text(json.dumps(native,indent=2)+'\n')
+            constructed.append((row,path,entry))
+        except Exception as exc:entry.update(state='construction_failed',reason=type(exc).__name__+': '+str(exc))
+    inventories={}
+    if inventory_many and constructed:
+        try:
+            rows=inventory_many([path for _,path,_ in constructed])
+            inventories={str(row['child']):row for row in rows}
+            if len(inventories)!=len(rows) or set(inventories)!={str(path) for _,path,_ in constructed}:raise ValueError('Native inventory coverage differs from the constructed children')
+        except Exception as exc:
+            inventories={str(path):dict(error=type(exc).__name__+': '+str(exc)) for _,path,_ in constructed}
+    for row,path,entry in constructed:
+        try:
+            item=inventories.get(str(path))
+            if item and item.get('error'):raise ValueError(item['error'])
+            native=item['inventory'] if item else inventory(path)
+            (path.with_suffix('.native.json')).write_text(json.dumps(native,indent=2)+'\n')
             # All available modes are retained; choosing primary/secondary
             # modes and their finite starts belongs to the reviewed protocol.
             candidate=validate_candidate(dict(id=row['candidate_id'],irrep=row['irrep_label'],transformation_matrix=row['catalog_basis'],origin_shift=row['catalog_origin'],child=dict(path=str(path.relative_to(root)),sha256=file_sha(path)),modes=native['modes']))

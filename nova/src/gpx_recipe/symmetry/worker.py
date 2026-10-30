@@ -14,7 +14,7 @@ import traceback
 from ..snapshot import gsas,json_safe
 from ..execution import write_json
 from .contracts import digest,trial_id,validate_protocol
-from .compiler import confined,file_sha,package_signature,verify_inputs
+from .compiler import confined,file_sha,package_signature,verify_inputs,job_inputs,require_adapters
 from .runtime import native_stack,VALIDATED_STACKS
 
 
@@ -32,7 +32,8 @@ def require_runtime(runtime,declared):
 
 
 class Artifacts:
-    def __init__(self,directory):self.run_dir=Path(directory).resolve();self.metrics={};self.files=[]
+    def __init__(self,directory,*,input_root=None):
+        self.run_dir=Path(directory).resolve();self.input_root=Path(input_root or self.run_dir.parent).resolve();self.metrics={};self.files=[]
     def register_file(self,*,source_path,relative_path,**metadata):
         path=Path(source_path).resolve()
         if not path.is_relative_to(self.run_dir):raise ValueError('Artifact escaped the trial directory')
@@ -54,20 +55,22 @@ def execute(directory):
     if target.exists():raise ValueError('A completed trial cannot be silently rerun')
     output=directory/'results';output.mkdir(exist_ok=False)
     response=dict(schema='radar-symmetry-trial/v1',status='technical_failure',llm_calls=0)
-    protocol=None
+    protocol=None;input_root=directory
     try:
         job=json.loads((directory/'job.json').read_text());protocol=validate_protocol(job['protocol'])
         response.update(id=job['id'],protocol_sha256=digest(protocol),candidate_id=job['candidate_id'],seed_id=job['seed_id'])
-        if job['schema']!='radar-symmetry-job/v1' or job['protocol_sha256']!=digest(protocol) or job['id']!=trial_id(protocol,job['candidate_id'],job['seed_id']):
+        if job['schema'] not in {'radar-symmetry-job/v1','radar-symmetry-job/v2'} or job['protocol_sha256']!=digest(protocol) or job['id']!=trial_id(protocol,job['candidate_id'],job['seed_id']):
             raise TrialDisposition('integrity_failure','Job identity or approved protocol changed')
         if job['package_sha256']!=protocol['implementation_sha256'] or job['package_sha256']!=package_signature():raise TrialDisposition('integrity_failure','The approved scientific implementation changed')
-        verify_inputs(protocol,directory)
+        input_root=job_inputs(directory,job)
+        verify_inputs(protocol,input_root)
+        if job['schema']=='radar-symmetry-job/v2':require_adapters()
         runtime=runtime_identity();response['runtime']=runtime
         require_runtime(runtime,protocol['magnetic_function_sha256'])
         candidate=next(c for c in protocol['candidates'] if c['id']==job['candidate_id'])
         seed=next(s for s in protocol['seeds'] if s['id']==job['seed_id'])
         if 'candidate_ids' in seed and candidate['id'] not in seed['candidate_ids']:raise TrialDisposition('integrity_failure','Start is outside this candidate’s approved finite set')
-        source=confined(directory,protocol['source']['path']);ctx=Artifacts(output)
+        source=confined(input_root,protocol['source']['path']);ctx=Artifacts(output,input_root=input_root)
         if protocol['kind']=='magnetic':
             from .native_magnetic import run
         else:
@@ -91,7 +94,7 @@ def execute(directory):
         (output/'failure.log').write_text(traceback.format_exc())
     finally:
         if protocol is not None:
-            try:verify_inputs(protocol,directory)
+            try:verify_inputs(protocol,input_root)
             except Exception as exc:response.update(status='integrity_failure',reason=str(exc),inputs_verified=False)
         usage=resource.getrusage(resource.RUSAGE_SELF)
         response['resources']=dict(wall_seconds=time.monotonic()-started,cpu_seconds=usage.ru_utime+usage.ru_stime,

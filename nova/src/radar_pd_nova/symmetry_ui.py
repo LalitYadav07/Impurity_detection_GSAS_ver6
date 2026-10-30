@@ -7,6 +7,8 @@ def select(label,field,items,**kwargs):
 
 
 def model_exploration(app):
+    from .symmetry_controller import MODEL_FIELDS
+    form='[{' + ','.join(name+':'+name for name in (*MODEL_FIELDS,'sx_start_source','rf_experiment','sx_plan_token')) + '}]'
     with html.Div(v_show="rf_mode === 'models'"):
         client.Style('''
         .sx-layout{display:grid;grid-template-columns:290px minmax(0,1fr);gap:18px;align-items:start}
@@ -21,9 +23,13 @@ def model_exploration(app):
             select('Model campaign','sx_campaign','sx_campaigns')
             select('Results to show','sx_result_scope',"[{title:'Selected experiment',value:'experiment'},{title:'Whole campaign',value:'campaign'}]")
             v.VBtn('Refresh evidence',click=app.refresh_symmetry,loading=('sx_busy',),variant='text',prepend_icon='mdi-refresh')
-            v.VBtn('Continue original sealed queue',click=app.continue_symmetry_campaign,disabled=('!sx_resumable || sx_busy',),variant='text',prepend_icon='mdi-play')
+            v.VBtn('Continue saved campaign',click=app.continue_symmetry_campaign,disabled=('!sx_resumable || sx_busy || sx_campaign_running',),variant='text',prepend_icon='mdi-play')
+            v.VBtn('Pause campaign',click=app.pause_model_campaign,disabled=('!sx_campaign_running',),variant='text',prepend_icon='mdi-pause')
             v.VBtn('Prepare exploration',click='sx_setup = !sx_setup',variant='outlined',prepend_icon='mdi-molecule')
         v.VAlert(v_if='!!sx_error',text=('sx_error',),type='error',variant='tonal',density='compact',classes='mb-3')
+        html.P('{{ sx_backend }}',classes='rf-notice')
+        html.P('{{ sx_queue_notice }}',v_if='!!sx_queue_notice',classes='rf-notice')
+        html.P('Pause or end any other viewer for this campaign before continuing here.',v_if='sx_resumable && !sx_campaign_running',classes='rf-notice')
         v.VProgressLinear(v_if='sx_busy',indeterminate=True,color='#267653',height=3,classes='mb-3')
         with html.Div(v_if='sx_setup',classes='rf-card sx-setup'):
             html.H3('Explore models from a completed GPX')
@@ -55,6 +61,8 @@ def model_exploration(app):
                 v.VTextField(v_if="sx_kind === 'magnetic'",label='Magnetic d cutoff (Å) · 0 uses the full fit range',v_model=('sx_mag_d_min',),type='text',inputmode='decimal',density='compact',variant='outlined',hide_details=True)
                 v.VTextField(v_if="sx_kind === 'structural'",label='Maximum normalized mode (Å)',v_model=('sx_max_mode',),type='text',inputmode='decimal',density='compact',variant='outlined',hide_details=True)
                 v.VTextField(v_if="sx_kind === 'structural'",label='Signed mode start · ± amplitude (Å)',v_model=('sx_start_mode',),type='text',inputmode='decimal',density='compact',variant='outlined',hide_details=True)
+                select('Structural candidate scope','sx_opd_policy',"[{title:'Highest symmetry per irrep',value:'highest-symmetry-per-irrep'},{title:'All discovered OPDs',value:'all'}]",v_if="sx_kind === 'structural'")
+                select('Maximum children to construct','sx_construct_limit','[16,50,100,250,500]',v_if="sx_kind === 'structural'")
                 v.VTextField(label='Cycles per start',v_model=('sx_cycles',),type='text',inputmode='numeric',density='compact',variant='outlined',hide_details=True)
             with html.Details(v_if="sx_has_context && sx_kind === 'magnetic'",classes='mt-3'):
                 html.Summary('K-survey scope and time budget')
@@ -81,7 +89,7 @@ def model_exploration(app):
                     fig=plotly.Figure(display_mode_bar=True,responsive=True,display_logo=False,scroll_zoom=True,style='height:100%;width:100%');fig.data=('sx_k_plot.data',);fig.layout=('sx_k_plot.layout',)
                 html.P('{{ sx_k_detail }}',classes='rf-notice')
                 html.P('Screening overlay: the nuclear model is fixed and only one magnetic intensity amplitude is fitted. No Rietveld refinement runs in this survey. A leading k, a tie or a missing template does not establish magnetic order. Use a candidate to review a full refinement plan.',classes='rf-notice')
-            html.P("{{ sx_kind === 'structural' ? 'Discovery sends the selected parent structure, without pattern arrays, to ISODISTORT. The first tier constructs one highest-symmetry OPD per discovered irrep; other OPDs remain deferred.' : 'Discovery sends parent symmetry operations and k to Bilbao. Refinement consumes the cached catalog offline.' }}",v_if='sx_has_context',classes='rf-notice')
+            html.P("{{ sx_kind === 'structural' ? 'Discovery sends the selected parent structure, without pattern arrays, to ISODISTORT. The selected OPD scope and construction budget are explicit; deferred or failed models remain visible. A budget smaller than the selected tier requires a narrower scope.' : 'Discovery sends parent symmetry operations and k to Bilbao. Refinement consumes the cached catalog offline.' }}",v_if='sx_has_context',classes='rf-notice')
             v.VBtn('Discover finite candidates',v_if='sx_has_context',click=app.discover_symmetry_candidates,disabled=('sx_busy',),variant='outlined',color='#15543c')
             with html.Div(v_if='sx_discovered',classes='mt-4'):
                 html.P('{{ sx_discovery_scope }}',classes='rf-notice')
@@ -89,19 +97,28 @@ def model_exploration(app):
                 with html.Details(v_if="sx_kind === 'structural'",classes='mt-3'):
                     html.Summary('Select native displacement modes')
                     v.VAutocomplete(label='Modes · every selected mode gets both start signs',v_model=('sx_modes',),items=('sx_mode_options',),multiple=True,chips=True,closable_chips=True,density='compact',variant='outlined',hide_details=True,classes='mt-3 sx-choices',update_modelValue=app._symmetry_unapprove)
-                v.VBtn('Build finite plan',click=app.build_symmetry_plan,disabled=('sx_busy || !sx_candidates.length || !sx_adequate',),variant='outlined',color='#15543c',classes='mt-3')
+                with html.Div(classes='rf-toolbar mt-3'):
+                    select('Acquisitions to enroll','sx_existing',"[{title:'Selected scan only',value:'selected'},{title:'Published scans for this sample and bank',value:'sample'}]")
+                    app._number_field(label='Maximum acquisitions',v_model=('sx_max_scans',),min=1,max=2000,density='compact',variant='outlined')
+                v.VCheckbox(label='Follow new matching GPXs while this session is open',v_model=('sx_follow_new',),density='compact')
+                html.P('Every new acquisition is checked against the reviewed parent, sample, bank and recipe. Incompatible inputs wait for review.',classes='rf-notice')
+                v.VBtn('Build finite plan',click=(app.build_symmetry_plan,form),disabled=('sx_busy || sx_campaign_running || !sx_candidates.length || !sx_adequate',),variant='outlined',color='#15543c',classes='mt-3')
             with html.Div(v_if='sx_plan_ready',classes='mt-4'):
                 html.P('{{ sx_plan_summary }}',classes='rf-notice')
                 with html.Details():
                     html.Summary('Review every embedding ({{ sx_plan_candidates.length }})')
                     v.VDataTable(items=('sx_plan_candidates',),headers=("[{title:'Model',key:'name'},{title:'BNS',key:'bns'},{title:'Basis',key:'basis'},{title:'Origin',key:'origin'},{title:'Free modes',key:'modes'}]",),items_per_page=8,density='compact')
                 with html.Div(classes='rf-actions'):
-                    v.VBtn('Approve finite plan',click=app.approve_symmetry,disabled=('sx_approved',),variant='outlined',color='#15543c')
-                    select('Concurrent native workers','sx_slots',"[1,2,4]",style='max-width:220px')
-                    v.VBtn('Start approved campaign',click=app.start_symmetry_campaign,disabled=('!sx_approved || sx_busy',),variant='flat',color='#15543c')
-                html.P('No model calls run during refinement. Each start has its own process, deadline and terminal record. This first interface starts one representative scan; enrollment of later scans still requires review.',classes='rf-notice')
+                    v.VBtn('Approve finite plan',click=(app.approve_symmetry,form),disabled=('sx_approved || sx_campaign_running',),variant='outlined',color='#15543c')
+                    select('Requested native workers','sx_slots',"[1,2,4]",style='max-width:220px')
+                    v.VBtn('Start approved campaign',click=(app.start_symmetry_campaign,form),disabled=('!sx_approved || sx_busy || sx_campaign_running',),variant='flat',color='#15543c')
+                html.P('Each start uses a fresh native process. Galaxy jobs share immutable inputs and batch independent starts within allocated CPU/RAM. Missing allocation information limits the pool to one worker. Model calls run only during setup.',classes='rf-notice')
+                html.P('Structural fit comparisons require a matched parent/nuisance refinement. A lower Rwp alone does not establish a transition.',v_if="sx_kind === 'structural'",classes='rf-notice')
         html.P('{{ sx_message }}',classes='rf-notice')
         html.Div('{{ sx_progress }}',v_if='sx_results_current && !!sx_progress',classes='sx-status')
+        with html.Details(v_if='sx_enrollments.length',classes='rf-card mb-4'):
+            html.Summary('Acquisition queue ({{ sx_enrollments.length }}) · {{ sx_following ? "following new scans" : "captured scans" }}')
+            v.VDataTable(items=('sx_enrollments',),headers=("[{title:'Scan',key:'scan'},{title:'Bank',key:'bank'},{title:'State',key:'status'},{title:'Review needed',key:'reason'}]",),items_per_page=8,density='compact')
         with html.Details(v_if='sx_results_current && sx_coverage.length > 1',classes='rf-card mb-4'):
             html.Summary('Scans and search coverage ({{ sx_coverage.length }} hypotheses)')
             v.VDataTable(items=('sx_coverage',),headers=("[{title:'Scan',key:'scan'},{title:'Condition',key:'condition'},{title:'Bank',key:'bank'},{title:'Magnetic sites',key:'sites'},{title:'Terminal starts',key:'coverage'},{title:'Qualified starts',key:'qualified'},{title:'Best qualified Rwp',key:'best_qualified'},{title:'Best audited Rwp',key:'best_audited'},{title:'Status',key:'status'}]",),items_per_page=8,density='compact',classes='mt-3')
@@ -140,7 +157,8 @@ def model_exploration(app):
                     v.VBtn('Download trial receipt',click=(app.download_symmetry_artifact,"['receipt']"),disabled=('!sx_has_receipt',),variant='text',size='small')
                 with html.Details(classes='mt-3'):
                     html.Summary('Trial control')
-                    v.VBtn('Cancel selected active trial',click=app.cancel_symmetry_selected,variant='text',size='small',classes='mt-2')
+                    v.VBtn('Stop job containing selected trial',click=app.cancel_symmetry_selected,variant='text',size='small',classes='mt-2')
+                    html.P('{{ sx_cancel_notice }}',classes='rf-notice')
                 html.H3('Fit quality and model complexity',classes='mt-4')
                 with html.Div(classes='sx-overview'):
                     fig=plotly.Figure(display_mode_bar=True,responsive=True,display_logo=False,style='height:100%;width:100%',click=(app.symmetry_overview_click,'[$event]'));fig.data=('sx_overview.data',);fig.layout=('sx_overview.layout',)

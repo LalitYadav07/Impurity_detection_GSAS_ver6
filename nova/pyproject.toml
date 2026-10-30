@@ -12,13 +12,14 @@ dependencies = [
   "requests>=2.32,<3",
   "numpy>=1.26,<3",
   "scipy>=1.11,<2",
+  "RapidFuzz>=3.14.3,<4",
   "trame-datagrid>=0.2.2,<1",
   "trame-plotly>=3.1,<4",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=8,<9", "h5py>=3.10,<4", "jsonschema>=4,<5"]
-k-discovery = ["seekpath==2.2.1", "spglib==2.8.0"]
+k-discovery = ["seekpath==2.2.1", "spglib==2.7.0; python_version < '3.11'", "spglib==2.8.0; python_version >= '3.11'"]
 
 [build-system]
 requires = ["hatchling"]

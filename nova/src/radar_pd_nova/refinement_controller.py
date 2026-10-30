@@ -231,7 +231,7 @@ class RefinementMixin:
 
     def _refinement_maybe_refresh(self):
         workspace=getattr(self,'_refinement_workspace',None)
-        if self._refinement_visible() or (workspace and any(r.get('armed') for r in workspace.state['recipes'].values())):
+        if self._refinement_visible() or (workspace and any(r.get('armed') for r in workspace.state['recipes'].values())) or getattr(self,'_model_following',lambda:False)():
             self.refresh_refinement_sources()
 
     def _refinement_store(self):

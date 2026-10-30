@@ -60,7 +60,7 @@ def run(source_gpx,ctx,protocol,candidate,seed):
     if det>protocol['policy']['maximum_cell_multiplier']:raise TrialDisposition('unsupported','Candidate exceeds the declared cell-expansion budget')
     effective=L.CellDijCorr(old['General']['Cell'][1:7],old['General']['SGData'],old['Histograms'],h.name)
     child_cell=list(L.TransformCell(effective,trans))
-    authoritative=confined(ctx.run_dir.parent,candidate['child']['path'])
+    authoritative=confined(ctx.input_root,candidate['child']['path'])
     native_cif,import_receipt=prepare_isodistort_cif(authoritative,ctx.run_dir/'cif-import')
     ctx.save_json('cif-import.json',import_receipt)
     old_name=parent.name;p.data['Phases'].pop(old_name)

@@ -30,10 +30,21 @@ from .symmetry_workspace import campaign_rows,group_models,view_for,choose_group
 from . import symmetry_plots as plots
 from .symmetry_sources import start_choices,resolve_start
 from .k_search_controller import KSearchMixin
+from .model_runtime import GalaxyModelRuntime,GalaxyChunkTransport
+from .model_campaigns import choices as model_choices,origin as model_origin,queue_sources,enroll_source,restore_history
+from gpx_recipe.symmetry.compiler import prepare_shared_inputs
+from gpx_recipe.symmetry.templates import make_template,trial_count
+
+MODEL_FIELDS=('sx_kind','sx_parent','sx_histogram','sx_k','sx_sites','sx_form_factors','sx_lande',
+    'sx_directions','sx_adequate','sx_max_moment','sx_mag_d_min','sx_max_mode','sx_start_mode','sx_cycles',
+    'sx_sign_starts','sx_candidates','sx_modes','sx_existing','sx_follow_new','sx_max_scans','sx_request',
+    'sx_opd_policy','sx_construct_limit')
 
 
 class SymmetryMixin(KSearchMixin):
     def _init_symmetry(self):
+        self._model_runtime_cache=None;self._models_restored=False;self._model_following_active=False;self._model_stopping=False
+        self._model_active_campaigns={};self._model_preparations={};self._model_enrollment_task=None;self._model_tick_task=None
         self._symmetry_rows=[];self._symmetry_all_rows=[];self._symmetry_groups=[];self._symmetry_draft=None;self._symmetry_approved='';self._symmetry_task=None;self._symmetry_loading=False;self._symmetry_refresh_pending=False;self._symmetry_explicit_selection=False;self._symmetry_display_identity=None;self._symmetry_loading_identity=None
         s=self.server.state
         defaults=dict(sx_campaign='',sx_campaigns=[],sx_source='',sx_source_options=[],sx_busy=False,sx_error='',sx_message='',sx_progress='',sx_groups=[],sx_group='',sx_members=[],sx_selected='',sx_search='',sx_status='all',
@@ -43,6 +54,11 @@ class SymmetryMixin(KSearchMixin):
             sx_plan_ready=False,sx_approved=False,sx_plan_summary='',sx_plan_candidates=[],sx_setup=False,sx_has_context=False,sx_has_gpx=False,sx_has_receipt=False,sx_resumable=False,
             sx_request='',sx_planning_summary='',sx_planning_notes=[],sx_sign_starts=True,sx_coverage=[],sx_group_limit=12,sx_result_scope='experiment',sx_start_source='',sx_start_sources=[],sx_results_current=False)
         for key,value in defaults.items():setattr(s,key,value)
+        extra=dict(sx_existing='selected',sx_follow_new=False,sx_max_scans=200,sx_enrollments=[],sx_following=False,sx_campaign_running=False,
+            sx_queue_notice='',sx_backend='',sx_plan_token='',sx_cancel_notice='Cancelling a Galaxy chunk stops all starts in that job.',
+            sx_opd_policy='highest-symmetry-per-irrep',sx_construct_limit=100)
+        for key,value in extra.items():setattr(s,key,value)
+        self._symmetry_defaults={**defaults,**extra}
         s.change('rf_mode')(self._symmetry_mode_changed)
         s.change('rf_experiment','sx_result_scope')(self._symmetry_mode_changed)
         s.change('sx_campaign')(self._symmetry_campaign_changed)
@@ -51,16 +67,30 @@ class SymmetryMixin(KSearchMixin):
         s.change('sx_selected','sx_axis','sx_pins','sx_reset','sx_intensity_scale')(self._symmetry_plot_changed)
         s.change('sx_kind','sx_parent','sx_histogram','sx_k','sx_sites','sx_form_factors','sx_lande','sx_directions','sx_adequate','sx_max_moment','sx_mag_d_min','sx_max_mode','sx_start_mode','sx_cycles','sx_request','sx_sign_starts','rf_source','sx_start_source')(self._symmetry_unapprove)
         s.change('sx_parent')(self._symmetry_parent_changed)
+        s.change('sx_existing','sx_follow_new','sx_max_scans')(self._symmetry_unapprove)
+        s.change('sx_opd_policy','sx_construct_limit')(self._symmetry_unapprove)
         s.change('sx_start_source')(self._symmetry_start_changed)
         self._init_k_search()
 
     def _symmetry_root(self):
         root=Path(os.environ.get('RADAR_PD_SYMMETRY_ROOT') or (Path(getattr(self.service,'output_root',tempfile.gettempdir()))/'symmetry'))
+        root=root/digest([str(getattr(self.service,'history_id',None) or 'local')])[:16]
         root.mkdir(parents=True,exist_ok=True);return root.resolve()
 
-    def _symmetry_transport(self):
+    def _model_remote(self):
+        if os.environ.get('RADAR_PD_SYMMETRY_PYTHON','').strip():return None
+        from .galaxy_service import GalaxyService
+        if not isinstance(self.service,GalaxyService):return None
+        if not (self.service.galaxy_url and self.service.galaxy_key and self.service.history_id):return None
+        if self._model_runtime_cache is None:self._model_runtime_cache=GalaxyModelRuntime(self._symmetry_root()/'runtime',self.service)
+        return self._model_runtime_cache
+
+    def _symmetry_transport(self,campaign=None):
         python=os.environ.get('RADAR_PD_SYMMETRY_PYTHON','')
-        if not python:raise ValueError('The symmetry worker destination is not configured. Ordinary refinement remains available.')
+        if not python:
+            remote=self._model_remote()
+            if remote and campaign:return GalaxyChunkTransport(remote,campaign)
+            raise ValueError('Configure a local model worker or the Galaxy model-campaign tool before starting exploration.')
         environment={}
         for name in ['GSASII_ROOT','RADAR_GPX_DOCKER_IMAGE']:
             if os.environ.get(name):environment[name]=os.environ[name]
@@ -71,6 +101,9 @@ class SymmetryMixin(KSearchMixin):
 
     def _symmetry_unapprove(self,**_):
         self._symmetry_approved='';self.server.state.sx_approved=False;self.server.state.sx_plan_ready=False
+        d=getattr(self,'_symmetry_draft',None)
+        if d and d.get('discovery_identity') and d['discovery_identity']!=self._discovery_identity():
+            s=self.server.state;s.sx_discovered=False;s.sx_candidates=[];s.sx_candidate_options=[];s.sx_modes=[];s.sx_mode_options=[]
 
     def _symmetry_parent_changed(self,**_):
         d=self._symmetry_draft;s=self.server.state
@@ -79,17 +112,53 @@ class SymmetryMixin(KSearchMixin):
             s.sx_sites=[];s.sx_form_factors='';s.sx_lande=2.
 
     def _symmetry_start_changed(self,**_):
+        if self._symmetry_draft:
+            event=getattr(self,'_model_preparations',{}).get(str(self._symmetry_draft['root']))
+            if event:event.set()
         self._symmetry_draft=None
         s=self.server.state;s.sx_has_context=False;s.sx_discovered=False;s.sx_planning_summary='';s.sx_planning_notes=[]
         s.sx_sites=[];s.sx_form_factors='';s.sx_lande=2.
 
     def _symmetry_native(self,action,payload,root):
+        import threading
+        event=self._model_preparations.setdefault(str(root),threading.Event())
+        if event.is_set():raise ValueError('This model preparation was cancelled')
+        remote=self._model_remote()
+        if remote:
+            if not self._symmetry_draft:raise ValueError('Inspect the source before native discovery')
+            result,_=remote.native(action,payload,root,source=self._symmetry_draft['source'],cancel=event)
+            return result
         transport=self._symmetry_transport();uid=uuid.uuid4().hex;request=root/(uid+'-request.json');output=root/(uid+'-response.json')
         request.write_text(json.dumps(payload)+'\n');env={**scientific_environment(),**transport.environment,'RADAR_GPX_DOCKER_WORKDIR':str(root)}
         with (root/(uid+'-native.log')).open('w') as log:
-            result=run_scientific(transport.command+['-m','gpx_recipe.symmetry.isodistort_native',action,str(request),str(output)],timeout=120,env=env,stdout=log,stderr=subprocess.STDOUT)
+            result=run_scientific(transport.command+['-m','gpx_recipe.symmetry.isodistort_native',action,str(request),str(output)],timeout=120,cancel_event=event,env=env,stdout=log,stderr=subprocess.STDOUT)
         if result.returncode or not output.is_file():raise ValueError('Native preparation failed; retained log '+uid+'-native.log')
         return json.loads(output.read_text())
+
+    def _inspect_model_input(self,source,root):
+        import threading
+        root=Path(root);root.mkdir(parents=True,exist_ok=True)
+        target=root/'source.gpx'
+        if not target.exists():shutil.copyfile(source['source_path'],target)
+        if file_sha(target)!=source['source_sha256']:raise ValueError('Model source changed while being captured')
+        event=self._model_preparations.setdefault(str(root),threading.Event())
+        if event.is_set():raise ValueError('Model inspection cancelled')
+        remote=self._model_remote()
+        if remote:
+            context,_=remote.native('inspect',dict(source=str(target)),root,source=source,cancel=event)
+        else:
+            transport=self._symmetry_transport()
+            env={**scientific_environment(),**transport.environment,'RADAR_GPX_DOCKER_WORKDIR':str(root)}
+            with (root/'inspect.log').open('w') as log:
+                result=run_scientific(transport.command+['-m','gpx_recipe.symmetry.inspect',str(target),str(root/'context.json')],
+                    timeout=120,cancel_event=event,env=env,stdout=log,stderr=subprocess.STDOUT)
+            if result.returncode:raise ValueError('Native inspection stopped; inspect its captured log')
+            context=json.loads((root/'context.json').read_text())
+        require_runtime(context['runtime'],context['runtime']['magnetic_function_sha256'])
+        if context['sha256']!=source['source_sha256']:raise ValueError('The source GPX revision changed during native inspection')
+        return context
+
+    def _model_following(self):return getattr(self,'_model_following_active',False)
 
     def _symmetry_campaign_changed(self,**_):
         if not self._symmetry_loading:
@@ -107,6 +176,11 @@ class SymmetryMixin(KSearchMixin):
             s.sx_results_current=getattr(self,'_symmetry_display_identity',None)==self._symmetry_loading_identity
             s.flush()
             try:
+                remote=self._model_remote()
+                s.sx_backend='Galaxy jobs · allocated CPU/RAM' if remote else 'Configured local scientific worker'
+                if remote and not self._models_restored:
+                    await asyncio.to_thread(restore_history,self._symmetry_root(),remote)
+                    self._models_restored=True
                 choices=start_choices(self._refinement_store(),s.rf_experiment)
                 s.sx_start_sources=[dict(title=entry['title'],value=entry['id']) for entry in choices]
                 if s.sx_start_source not in {entry['id'] for entry in choices}:
@@ -117,6 +191,15 @@ class SymmetryMixin(KSearchMixin):
                 if not s.sx_campaign:
                     s.sx_message='Select a completed RADAR-PD GPX above, then prepare model exploration.';return
                 root=next(p.parent for p in roots if p.parent.name==s.sx_campaign)
+                campaign=Campaign(root)
+                allocated=campaign.setting('allocation')
+                if allocated:s.sx_backend+=f" · last chunk: {allocated['workers']} native workers · {allocated.get('memory_mb') or 'unreported'} MiB memory"
+                template=campaign.setting('template') or {}
+                visible=s.sx_result_scope!='experiment' or template.get('scope',{}).get('experiment')==s.rf_experiment
+                s.sx_enrollments=list(campaign.setting('enrollments',{}).values()) if visible else []
+                s.sx_following=bool(campaign.setting('following',False)) and not campaign.setting('paused',False)
+                s.sx_queue_notice=campaign.setting('budget_message','')
+                if campaign.setting('paused',False):s.sx_queue_notice='Campaign paused. Submitted Galaxy jobs continue independently; Continue recovers them before new starts.'
                 identity=(s.sx_campaign,s.rf_experiment,s.sx_result_scope)
                 self._symmetry_loading_identity=identity
                 rows,summaries=await asyncio.to_thread(campaign_rows,root,experiment=identity[1] if identity[2]=='experiment' else None)
@@ -125,7 +208,7 @@ class SymmetryMixin(KSearchMixin):
                 rows=scope_rows(rows,s.rf_experiment,s.sx_result_scope)
                 self._symmetry_all_rows=rows
                 s.sx_coverage=coverage_rows(rows)
-                s.sx_resumable=any(summary['pending_count'] for summary in summaries)
+                s.sx_resumable=any(summary['pending_count'] for summary in summaries) or bool(template and campaign.setting('following',False))
                 counts=Counter(r['status'] for r in rows)
                 current=sum(r['execution_state']=='terminal' for r in rows)
                 s.sx_progress=f'{current} / {len(rows)} terminal receipts in this view · '+', '.join(f'{n} {k.replace("_"," ")}' for k,n in sorted(counts.items()))
@@ -232,19 +315,12 @@ class SymmetryMixin(KSearchMixin):
         async def inspect():
             s=self.server.state;s.sx_busy=True;s.sx_error='';s.sx_has_context=False;s.flush()
             try:
-                transport=self._symmetry_transport();w=self._refinement_store()
+                w=self._refinement_store()
                 identity=(s.rf_experiment,s.sx_start_source)
                 source=await asyncio.to_thread(resolve_start,w,s.rf_experiment,s.sx_start_source)
                 captured=await asyncio.to_thread(w.runtime.resolve,source)
                 root=self._symmetry_root()/'drafts'/uuid.uuid4().hex;root.mkdir(parents=True)
-                shutil.copyfile(captured['source_path'],root/'source.gpx')
-                env={**scientific_environment(),**transport.environment,'RADAR_GPX_DOCKER_WORKDIR':str(root)}
-                def call():
-                    with (root/'inspect.log').open('w') as log:
-                        return run_scientific(transport.command+['-m','gpx_recipe.symmetry.inspect',str(root/'source.gpx'),str(root/'context.json')],timeout=120,env=env,stdout=log,stderr=subprocess.STDOUT)
-                completed=await asyncio.to_thread(call)
-                if completed.returncode or not (root/'context.json').exists():raise ValueError('Native inspection failed; the captured log is available for review')
-                context=json.loads((root/'context.json').read_text());require_runtime(context['runtime'],context['runtime']['magnetic_function_sha256'])
+                context=await asyncio.to_thread(self._inspect_model_input,captured,root)
                 if identity!=(s.rf_experiment,s.sx_start_source):raise ValueError('The starting checkpoint changed during inspection; inspect the current selection')
                 if context['sha256']!=captured['source_sha256']:raise ValueError('The captured GPX revision changed during native inspection')
                 self._symmetry_draft=dict(root=root,context=context,source=source,source_id=identity[1],experiment=identity[0])
@@ -295,18 +371,25 @@ class SymmetryMixin(KSearchMixin):
                 d=self._symmetry_draft
                 if not d or d['source_id']!=s.sx_start_source:raise ValueError('Inspect the selected source GPX first')
                 parent=next(p for p in d['context']['phases'] if p['name']==s.sx_parent);k=[str(Fraction(v.strip())) for v in s.sx_k.split(',')]
-                identity=(s.sx_kind,s.sx_parent,s.sx_k,s.sx_start_source);root=d['root']
+                identity=self._discovery_identity();root=d['root']
                 if s.sx_kind=='magnetic':catalog=await asyncio.to_thread(discover_magnetic,parent,k,api_key=os.environ.get('BCS_API_KEY',''))
                 else:
                     parent_cif=root/'parent.cif'
                     await asyncio.to_thread(self._symmetry_native,'export',dict(source=str(root/'source.gpx'),phase=s.sx_parent,destination=str(parent_cif)),root)
                     discovery=root/('isodistort-'+uuid.uuid4().hex)
+                    def inventory_many(children):
+                        rows=[]
+                        for offset in range(0,len(children),32):
+                            rows.extend(self._symmetry_native('modes-many',dict(children=[str(p) for p in children[offset:offset+32]],workers=int(s.sx_slots)),root)['items'])
+                        return rows
                     def prepare():
                         return discover_structural(parent_cif,parent,k,discovery,matcher=lambda cif,vector,options:self._symmetry_native('match',dict(cif=cif,k=vector,options=options),root),
-                            inventory=lambda child:self._symmetry_native('modes',dict(child=str(child),temporary=str(root/(child.stem+'.gpx'))),root))
+                            inventory=lambda child:self._symmetry_native('modes',dict(child=str(child),temporary=str(root/(child.stem+'.gpx'))),root),
+                            opd_policy=s.sx_opd_policy,maximum=int(s.sx_construct_limit),
+                            inventory_many=inventory_many if self._model_remote() else None)
                     catalog=await asyncio.to_thread(prepare)
                     for candidate in catalog['candidates']:candidate['child']['path']=str((discovery/candidate['child']['path']).relative_to(root))
-                if identity!=(s.sx_kind,s.sx_parent,s.sx_k,s.sx_start_source):raise ValueError('Inputs changed during discovery; discover again for the current parent and k')
+                if identity!=self._discovery_identity():raise ValueError('Inputs changed during discovery; discover again for the current parent and k')
                 if d.get('planning'):
                     catalog.setdefault('provenance',{})['setup_planning_sha256']=digest(d['planning'])
                 (root/'catalog.json').write_text(json.dumps(catalog,indent=2)+'\n');d.update(catalog=catalog,discovery_identity=identity)
@@ -320,44 +403,85 @@ class SymmetryMixin(KSearchMixin):
             finally:s.sx_busy=False;s.flush()
         self._refinement_schedule(discover(),'radar-symmetry-discovery')
 
-    def build_symmetry_plan(self):
+    def _discovery_identity(self):
+        s=self.server.state
+        identity=(s.sx_kind,s.sx_parent,s.sx_k,s.sx_start_source)
+        return identity+(s.sx_opd_policy,int(s.sx_construct_limit)) if s.sx_kind=='structural' else identity
+
+    def _model_form(self,payload=None):
+        s=self.server.state
+        if isinstance(payload,dict):
+            if set(payload)-set(MODEL_FIELDS)-{'sx_start_source','rf_experiment','sx_plan_token'}:raise ValueError('Unexpected model setup fields')
+            if payload.get('sx_start_source',s.sx_start_source)!=s.sx_start_source or payload.get('rf_experiment',s.rf_experiment)!=s.rf_experiment:
+                raise ValueError('The model source changed while the form was captured')
+            for name in MODEL_FIELDS:
+                if name in payload and name in {'sx_follow_new','sx_sign_starts'} and type(payload[name]) is not bool:raise ValueError('Model switches must be true or false')
+                if name in payload:setattr(s,name,payload[name])
+            s.flush()
+        return digest({name:getattr(s,name) for name in MODEL_FIELDS})
+
+    def build_symmetry_plan(self,payload=None):
         s=self.server.state;s.sx_error=''
         try:
+            form=self._model_form(payload)
             d=self._symmetry_draft
-            if not d or d.get('discovery_identity')!=(s.sx_kind,s.sx_parent,s.sx_k,s.sx_start_source):raise ValueError('Discover candidates for the current parent and k first')
+            if not d or d.get('discovery_identity')!=self._discovery_identity():raise ValueError('Discover candidates for the current parent and k first')
             if not s.sx_adequate or float(s.sx_adequate)<=0:raise ValueError('Enter an experiment-specific adequate Rwp (%) before building the plan')
             sites=[]
             if s.sx_kind=='magnetic':
                 sites=sites_from_inputs(s.sx_sites,s.sx_form_factors,s.sx_lande)
             settings=dict(acquisition_id=d['source_id'],kind=s.sx_kind,parent=s.sx_parent,histogram=s.sx_histogram,k=[str(Fraction(v.strip())) for v in s.sx_k.split(',')],candidates=list(s.sx_candidates),modes=list(s.sx_modes),sites=sites,directions=list(s.sx_directions),adequate_rwp=float(s.sx_adequate),maximum_moment=float(s.sx_max_moment),magnetic_d_min=float(s.sx_mag_d_min),maximum_mode=float(s.sx_max_mode),start_mode=float(s.sx_start_mode),cycles=int(s.sx_cycles),relative_sign_starts=s.sx_sign_starts)
             p=build_plan(d['context'],d['catalog'],d['root'],settings);verify_inputs(p,d['root']);d.update(protocol=p,settings=settings)
+            w=self._refinement_store()
+            template=make_template(p,d['context'],d['source'],model_choices(w,s.rf_experiment),
+                origin=model_origin(d['source'],w),existing=s.sx_existing,future=bool(s.sx_follow_new),maximum_scans=int(s.sx_max_scans))
+            d.update(template=template,form_signature=form);s.sx_plan_token=digest(template)
+            d['scope_sources']={v['id']:v for v,_ in model_choices(w,s.rf_experiment)}
             s.sx_plan_candidates=[dict(name=c['magnetic_space_group'] or c['irrep'],bns=c['bns_number'] or '—',basis=str(c['transformation_matrix']),origin=str(c['origin_shift']),modes=', '.join(c['modes']) or 'Selected collinear moments') for c in p['candidates']]
             free='Selected modes, cell, background and global scale' if s.sx_kind=='structural' else 'Selected collinear moments; nuclear model and nuisance parameters fixed'
             if s.sx_kind=='magnetic':free+=('; all fitted d spacings' if settings['magnetic_d_min']==0 else f"; magnetic d ≥ {settings['magnetic_d_min']} Å")
             s.sx_plan_summary=f"{len(p['candidates'])} embeddings · {sum(1 for _ in iter_trials(p))} finite trials. {free}. Instrument, occupancy and displacement parameters fixed. Adequacy: Rwp ≤ {s.sx_adequate}%."
+            s.sx_plan_summary+=f" {len(template['existing_ids'])} existing acquisitions · {trial_count(template)} starts per acquisition · maximum {template['maximum_scans']} acquisitions. Following new scans: {'on' if template['future'] else 'off'}."
             s.sx_plan_ready=True;s.sx_approved=False
         except Exception as exc:s.sx_error=str(exc)
 
-    def approve_symmetry(self):
+    def approve_symmetry(self,payload=None):
         d=self._symmetry_draft;s=self.server.state
         if not d or not s.sx_plan_ready:return
-        self._symmetry_approved=digest(d['protocol']);s.sx_approved=True
+        try:
+            if isinstance(payload,dict) and payload.get('sx_plan_token')!=digest(d['template']):raise ValueError('Review the plan currently shown before approving')
+            if self._model_form(payload)!=d.get('form_signature'):raise ValueError('Model settings changed; build and review the current plan again')
+            self._symmetry_approved=digest(d['template']);s.sx_approved=True
+        except Exception as exc:s.sx_error=str(exc);self._symmetry_unapprove()
 
-    def start_symmetry_campaign(self):
+    def start_symmetry_campaign(self,payload=None):
         if self._symmetry_task and not self._symmetry_task.done():return
+        self._model_stopping=False
         async def run():
             s=self.server.state;s.sx_error=''
             try:
                 d=self._symmetry_draft
-                if not d or not s.sx_plan_ready or not s.sx_approved or self._symmetry_approved!=digest(d['protocol']):raise ValueError('Approve the current finite plan first')
+                if isinstance(payload,dict) and d and payload.get('sx_plan_token')!=digest(d['template']):raise ValueError('The visible plan changed before Start')
+                if not d or not s.sx_plan_ready or not s.sx_approved or self._symmetry_approved!=digest(d['template']) or self._model_form(payload)!=d.get('form_signature'):raise ValueError('Approve the current finite plan first')
                 if d['source_id']!=s.sx_start_source:raise ValueError('The source changed after approval')
                 current=await asyncio.to_thread(resolve_start,self._refinement_store(),s.rf_experiment,s.sx_start_source)
                 current=await asyncio.to_thread(self._refinement_store().runtime.resolve,current)
                 if d['source_id']!=s.sx_start_source or d.get('experiment',s.rf_experiment)!=s.rf_experiment:raise ValueError('The source selection changed while its revision was checked')
                 if current.get('source_sha256') and current['source_sha256']!=d['protocol']['source']['sha256']:raise ValueError('The published GPX revision changed after approval; inspect it again')
-                c=Campaign(self._symmetry_root()/('campaign-'+self._symmetry_approved[:12]));transport=self._symmetry_transport()
-                source=d['source'];metadata=dict(scan=source['scan_label'],sample=source['sample_label'],bank=source.get('bank'),series=source['experiment'])
-                await asyncio.to_thread(c.enroll,d['protocol'],d['root'],approved_hash=self._symmetry_approved,metadata=metadata)
+                c=Campaign(self._symmetry_root()/('campaign-'+self._symmetry_approved[:12]),shared_inputs=True)
+                if c.trials():raise ValueError('This campaign already exists. Use Continue to recover its work.')
+                ref=await asyncio.to_thread(prepare_shared_inputs,d['protocol'],d['root'],c.root)
+                if self._model_stopping:raise ValueError('Session stopped before the model campaign could start')
+                c.set_setting('template',d['template']);c.set_setting('reference_input_root',str(ref))
+                c.set_setting('following',d['template']['future']);c.set_setting('paused',False)
+                c.set_setting('enrollments',{key:dict(id=key,status='queued',
+                    scan=d['scope_sources'][key]['scan_label'],sample=d['scope_sources'][key]['sample_label'],
+                    bank=d['scope_sources'][key].get('bank')) for key in d['template']['existing_ids']})
+                transport=self._symmetry_transport(c)
+                if isinstance(transport,GalaxyChunkTransport):
+                    transport.state['inputs'][digest(d['protocol'])]=await asyncio.to_thread(transport.runtime.packet,ref,['protocol.json']+[a['path'] for a in __import__('gpx_recipe.symmetry.compiler',fromlist=['assets']).assets(d['protocol'])])
+                    transport.save()
+                await asyncio.to_thread(queue_sources,c,self._refinement_store())
                 s.sx_campaign=c.root.name;s.sx_setup=False
                 await self._drive_symmetry_campaign(c,transport)
             except Exception as exc:s.sx_error=str(exc)
@@ -365,22 +489,64 @@ class SymmetryMixin(KSearchMixin):
         self._symmetry_task=self._refinement_schedule(run(),'radar-symmetry-campaign')
 
     async def _drive_symmetry_campaign(self,campaign,transport):
-        while True:
-            trials=await asyncio.to_thread(campaign.tick,transport,slots=int(self.server.state.sx_slots))
-            self.refresh_symmetry()
-            if all(r['state'] in {'terminal','cancelled','needs_recovery'} for r in trials):break
-            await asyncio.sleep(3)
+        self._model_active_campaigns[campaign.root.name]=(campaign,transport)
+        self.server.state.sx_campaign_running=True
+        try:
+            while True:
+                if self._model_stopping:
+                    campaign.set_setting('paused',True)
+                    if isinstance(transport,GalaxyChunkTransport):transport.pause()
+                following=bool(campaign.setting('following',False)) and not campaign.setting('paused',False)
+                self._model_following_active=following
+                if campaign.setting('template'):
+                    entries=await asyncio.to_thread(queue_sources,campaign,self._refinement_store())
+                    active=any(r['state'] in {'running','submitting','cancelling'} for r in campaign.trials())
+                    if not active and not campaign.setting('paused',False):
+                        pending=next((r for r in entries.values() if r['status'] in {'queued','preparing'}),None)
+                        if pending:
+                            self.server.state.sx_queue_notice='Inspecting '+pending['scan']+' for compatibility with the reviewed model template'
+                            self.server.state.flush()
+                            self._model_enrollment_task=asyncio.create_task(asyncio.to_thread(enroll_source,campaign,self._refinement_store(),pending['id'],
+                                self._inspect_model_input,transport=transport if isinstance(transport,GalaxyChunkTransport) else None))
+                            await asyncio.shield(self._model_enrollment_task)
+                self._model_tick_task=asyncio.create_task(asyncio.to_thread(campaign.tick,transport,slots=int(self.server.state.sx_slots)))
+                trials=await asyncio.shield(self._model_tick_task)
+                if isinstance(transport,GalaxyChunkTransport):await asyncio.to_thread(transport.checkpoint)
+                self.refresh_symmetry()
+                queued=any(r['status'] in {'queued','preparing'} for r in campaign.setting('enrollments',{}).values())
+                pending=any(r['state'] not in {'terminal','cancelled','needs_recovery'} for r in trials)
+                active=any(r['state'] in {'running','submitting','cancelling'} for r in trials)
+                if campaign.setting('paused',False):break
+                if not pending and not queued and not following:break
+                await asyncio.sleep(3)
+        finally:
+            self._model_following_active=False
+            self.server.state.sx_campaign_running=False
+            self._model_active_campaigns.pop(campaign.root.name,None)
 
     def continue_symmetry_campaign(self):
         if self._symmetry_task and not self._symmetry_task.done():return
+        self._model_stopping=False
         async def resume():
             s=self.server.state;s.sx_error=''
             try:
                 root=(self._symmetry_root()/s.sx_campaign).resolve()
                 if root.parent!=self._symmetry_root() or not (root/'campaign.sqlite').is_file():raise ValueError('Select an existing campaign')
-                campaign=Campaign(root)
-                await asyncio.to_thread(campaign.verify_sealed_continuation)
-                await self._drive_symmetry_campaign(campaign,self._symmetry_transport())
+                campaign=Campaign(root,shared_inputs=True)
+                transport=self._symmetry_transport(campaign)
+                await asyncio.to_thread(campaign.recover,transport)
+                pending=any(r['state'] not in {'terminal','cancelled'} for r in campaign.trials())
+                if pending:await asyncio.to_thread(campaign.verify_sealed_continuation)
+                template=campaign.setting('template')
+                if template and template['protocol']['implementation_sha256']!=package_signature():
+                    raise ValueError('Use the original worker release to continue this template, or review a new campaign. Saved results remain viewable.')
+                campaign.set_setting('paused',False)
+                for key in list(self._model_preparations):
+                    if Path(key).is_relative_to(campaign.root):self._model_preparations.pop(key)
+                remote=self._model_remote()
+                if remote:remote.allow_preparations(campaign.root)
+                if isinstance(transport,GalaxyChunkTransport):transport.resume()
+                await self._drive_symmetry_campaign(campaign,transport)
             except Exception as exc:s.sx_error=str(exc)
             finally:s.flush()
         self._symmetry_task=self._refinement_schedule(resume(),'radar-symmetry-continue')
@@ -389,6 +555,49 @@ class SymmetryMixin(KSearchMixin):
         async def cancel():
             try:
                 s=self.server.state;c=Campaign(self._symmetry_root()/s.sx_campaign)
-                await asyncio.to_thread(c.cancel,s.sx_selected,self._symmetry_transport());self.refresh_symmetry()
+                await asyncio.to_thread(c.cancel,s.sx_selected,self._symmetry_transport(c));self.refresh_symmetry()
             except Exception as exc:self.server.state.sx_error=str(exc)
         self._refinement_schedule(cancel(),'radar-symmetry-cancel')
+
+    def pause_model_campaign(self):
+        async def pause():
+            s=self.server.state
+            for campaign,transport in list(self._model_active_campaigns.values()):
+                campaign.set_setting('paused',True)
+                if isinstance(transport,GalaxyChunkTransport):transport.pause()
+                if isinstance(transport,GalaxyChunkTransport):await asyncio.to_thread(transport.checkpoint,force=True)
+            self.refresh_symmetry()
+        self._refinement_schedule(pause(),'radar-model-pause')
+
+    async def _pause_model_campaigns(self):
+        """Stop new dispatch, preserve Galaxy jobs and await captured enrollment."""
+        self._model_stopping=True
+        for event in self._model_preparations.values():event.set()
+        if self._k_cancel:self._k_cancel.set()
+        remote=self._model_remote()
+        if remote:remote.stop_preparations()
+        active=list(self._model_active_campaigns.values())
+        for campaign,transport in active:
+            campaign.set_setting('paused',True)
+            if isinstance(transport,GalaxyChunkTransport):transport.pause()
+        if self._model_enrollment_task and not self._model_enrollment_task.done():await asyncio.shield(self._model_enrollment_task)
+        if self._model_tick_task and not self._model_tick_task.done():await asyncio.shield(self._model_tick_task)
+        for campaign,transport in active:
+            if isinstance(transport,GalaxyChunkTransport):await asyncio.to_thread(transport.checkpoint,force=True)
+            else:
+                for row in campaign.trials():
+                    if row['state'] in {'running','submitting','cancelling'}:await asyncio.to_thread(campaign.cancel,row['id'],transport)
+        if self._symmetry_task and not self._symmetry_task.done() and self._symmetry_task is not asyncio.current_task():
+            await asyncio.shield(self._symmetry_task)
+        self._model_following_active=False
+
+    def _reset_model_view(self):
+        from copy import deepcopy
+        for name,value in self._symmetry_defaults.items():setattr(self.server.state,name,deepcopy(value))
+        self._symmetry_rows=[];self._symmetry_all_rows=[];self._symmetry_groups=[];self._symmetry_draft=None;self._symmetry_approved=''
+        self._model_runtime_cache=None;self._models_restored=False;self._model_active_campaigns={}
+        self._k_result=None;self._k_result_identity=None
+        s=self.server.state;s.sx_k_rows=[];s.sx_k_choices=[];s.sx_k_notes=[];s.sx_k_has_result=False;s.sx_k_busy=False
+        s.sx_k_plot=plots.empty('Run a k survey to compare magnetic templates')
+        from .symmetry_workspace import clear_evidence_cache
+        clear_evidence_cache()

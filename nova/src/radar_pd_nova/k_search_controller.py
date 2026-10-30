@@ -65,10 +65,13 @@ class KSearchMixin:
                 source=await asyncio.to_thread(resolve_start,self._refinement_store(),s.rf_experiment,s.sx_start_source)
                 source=await asyncio.to_thread(self._refinement_store().runtime.resolve,source)
                 if source['source_sha256']!=d['context']['sha256']:raise ValueError('The published GPX changed; inspect the current revision')
-                transport=self._symmetry_transport()
-                native=NativeRunner(transport.command,environment=transport.environment,cancel_event=cancel)
+                remote=self._model_remote()
+                if remote:native=remote.k_runner(source,cancel)
+                else:
+                    transport=self._symmetry_transport()
+                    native=NativeRunner(transport.command,environment=transport.environment,cancel_event=cancel)
                 def discover(parent,k,**kwargs):return discover_magnetic(parent,k,api_key=os.environ.get('BCS_API_KEY',''),**kwargs)
-                search=KSearch(self._symmetry_root()/'k-cache',native,discover)
+                search=KSearch(self._symmetry_root()/'k-cache',native,discover,**({'clock':native.clock} if remote else {}))
                 mailbox=queue.Queue();root=self._symmetry_root()/'k-surveys'/uuid.uuid4().hex
                 work=asyncio.create_task(asyncio.to_thread(search.run,source,root,parent=s.sx_parent,histogram=s.sx_histogram,
                     sites=sites,directions=list(s.sx_directions),maximum_moment=float(s.sx_max_moment),magnetic_d_min=float(s.sx_mag_d_min),
