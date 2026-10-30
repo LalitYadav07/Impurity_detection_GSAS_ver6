@@ -170,9 +170,12 @@ def source_from_record(record, payload: dict, scan: dict | None, history: str,
     if not ipts:
         # A recovered Live job can have a Galaxy data input and no saved
         # ndip_delivery block. Accept only the unambiguous run-name contract.
-        match=re.fullmatch(r'(IPTS-\d+)_([A-Za-z][A-Za-z0-9]*)_(\d+)',str(record.name))
-        if match and instrument.upper()==match.group(2).upper() and str(run_number or '')==match.group(3):
+        match=re.fullmatch(r'(IPTS-\d+)_([A-Za-z][A-Za-z0-9]*)_(\d+)(?:_BANK(\d+)(?:_[a-f0-9]{8,64})?)?',str(record.name))
+        known_bank=scan.get('bank') or metadata.get('source_bank') or metadata.get('bank')
+        bank_agrees=match and (not match.group(4) or not known_bank or str(known_bank)==match.group(4))
+        if match and bank_agrees and instrument.upper()==match.group(2).upper() and str(run_number or '')==match.group(3):
             ipts=match.group(1)
+            if match.group(4):metadata.setdefault('source_bank',int(match.group(4)))
     exp = experiment_key(history, instrument, ipts, record_uid=record.uid)
     sample_id = str(metadata.get('sample_id') or '').strip()
     sample_name = str(metadata.get('sample_name') or '').strip()

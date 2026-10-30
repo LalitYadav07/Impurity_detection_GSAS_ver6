@@ -263,6 +263,22 @@ def test_recovered_live_ages_scans_share_experiment_sample_and_bank_from_publica
     assert placeholder['axis_overrides']['temperature']['value']==300
 
 
+def test_recovered_banked_run_names_rejoin_the_verified_ipts_without_mixing_conflicts(tmp_path):
+    project=dict(collection_name='final.gpx',sha256='model',status='accepted',stage='final_refinement')
+    def recovered(run,*,instrument='NOM',bank=2,metadata_run=None,suffix=''):
+        record=SimpleNamespace(uid=str(run),name=f'IPTS-34537_NOM_{run}_BANK2_f7539ed36c037c34'+suffix,
+            local_output_dir=tmp_path,output_dataset_ids={'gpx_projects':'collection-'+str(run)},inputs=None)
+        summary=dict(gpx_projects=[project],acquisition=dict(instrument=instrument,run_number=metadata_run or run,
+            sample_id='77003',sample_name='Iron oxide'),provenance={'input':{'source_bank':bank}})
+        return source_from_record(record,{'summary':summary},None,'history')
+    first,second=recovered(220653),recovered(220654)
+    assert first['experiment']==second['experiment']
+    assert first['experiment_label']=='NOM · IPTS-34537' and first['bank']=='2'
+    for conflicting in [recovered(220654,instrument='PG3'),recovered(220654,bank=3),
+                        recovered(220654,metadata_run=220650),recovered(220654,suffix='_unverified')]:
+        assert conflicting['experiment']!=first['experiment']
+
+
 def test_refinement_recovers_completed_live_job_outputs_after_viewer_restart():
     queued=SimpleNamespace(uid='job-43124',name='IPTS-2767_PG3_43124',status=SimpleNamespace(value='queued'),output_dataset_ids={})
     complete=copy.deepcopy(queued)

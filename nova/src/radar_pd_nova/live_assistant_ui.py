@@ -40,7 +40,9 @@ class LiveAssistantUi:
                                  id="radar-assistant-refresh-inputs", prepend_icon="mdi-refresh",
                                  variant="text", size="small", disabled=(LOCK,))
                     vuetify.VBtn("Use the Live panel", click=(self.live_assistant_manual, "[0]"),
-                                 variant="outlined", size="small", disabled=(LOCK,))
+                                 variant="outlined", size="small")
+                    html.Span("Discovery continues in the background.", v_if="live_assistant_busy",
+                              classes="radar-help-copy", raw_attrs=['role="status"'])
             html.P("Added files in Galaxy? Refresh History inputs to update the profile, CIF and library choices. "
                    "{{ history_instrument_datasets.length }} profiles and {{ history_cif_datasets.length }} CIFs currently available.",
                    v_show="live_assistant_step === 'selection' || live_assistant_step === 'structures'",
