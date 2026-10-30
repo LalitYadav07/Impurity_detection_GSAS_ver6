@@ -163,3 +163,13 @@ uses a selected per-user `api_key` secret. Galaxy injects `AZURE_ILLUMINE_API_KE
 and `BCS_API_KEY` into NOVA only. Recheck selection for each new Galaxy tool
 version. The headless launcher accepts `--with-illumine --with-bilbao` and submits
 only selected group references. Numerical model jobs receive neither key.
+
+## Ending a viewer
+
+End session saves its recovery checkpoint before leaving the page. In the
+supervised NDIP image, a detached helper then shuts down that container's own
+supervisor, releasing both the application and web proxy. Exiting only the
+application child can leave the interactive job running. The helper inherits
+no API credentials and is enabled only in the supervised image; local runs
+retain their normal application exit. If supervisor control is unavailable,
+the page stays open with a warning instead of reporting a successful shutdown.

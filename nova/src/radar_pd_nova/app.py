@@ -944,11 +944,21 @@ class RadarPdNovaApp(LiveAssistantMixin, LiveSetupMixin, SetupEditorMixin, PostA
             state.flush()
             return
         state.nova_kill_jobs_on_exit = False
+        from .session_lifecycle import schedule_supervised_shutdown
+        try:
+            supervised = schedule_supervised_shutdown()
+        except (OSError, RuntimeError) as exc:
+            state.end_session_dialog = False
+            state.workspace_notice = f"The session is still open because container shutdown could not be scheduled: {exc}"
+            state.workspace_notice_kind = "warning"
+            state.flush()
+            return
         state.end_session_dialog = False
         state.flush()
         self._leave_session_page()
-        await asyncio.sleep(0.1)
-        await self.exit_callback()
+        if not supervised:
+            await asyncio.sleep(0.1)
+            await self.exit_callback()
 
     async def clear_workspace(self, **_: Any) -> None:
         """Release this session's run and plot memory while retaining Galaxy outputs."""
