@@ -107,3 +107,11 @@ prototype process. The template is outside `tools/`, so an unfinished worker
 cannot accidentally enter the live catalog. Publish NOVA separately and pin its
 successful image only after both worker availability and end-to-end NDIP tests.
 No deployment, running viewer or registry pin is changed by local integration.
+
+## NDIP credentials
+
+The NOVA tool declares optional `ornl_illumine` and `bilbao` vault groups. Each
+uses a selected per-user `api_key` secret. Galaxy injects `AZURE_ILLUMINE_API_KEY`
+and `BCS_API_KEY` into NOVA only. Recheck selection for each new Galaxy tool
+version. The headless launcher accepts `--with-illumine --with-bilbao` and submits
+only selected group references. Numerical model jobs receive neither key.

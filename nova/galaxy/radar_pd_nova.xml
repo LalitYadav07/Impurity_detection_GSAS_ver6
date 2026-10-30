@@ -1,4 +1,4 @@
-<tool id="neutrons_radar_pd_interactive_prototype" tool_type="interactive" name="RADAR-PD Interactive" version="0.4.38" profile="22.01">
+<tool id="neutrons_radar_pd_interactive_prototype" tool_type="interactive" name="RADAR-PD Interactive" version="0.5.0" profile="22.01">
     <description>configure, run, monitor, recover, and inspect Full or Rapid RADAR-PD analyses</description>
     <creator>
         <person name="Lalit Yadav"/>
@@ -12,6 +12,13 @@
             <secret name="api_key" inject_as_env="AZURE_ILLUMINE_API_KEY"
                     optional="false" label="Illumine API key"
                     description="Stored in your NDIP Galaxy credential vault and used only by your NOVA session for recipe requests."/>
+        </credentials>
+        <credentials name="bilbao" version="1.0" label="Bilbao Crystallographic Server"
+                     description="Personal Bilbao key for optional magnetic subgroup discovery"
+                     optional="true">
+            <secret name="api_key" inject_as_env="BCS_API_KEY"
+                    optional="false" label="Bilbao API key"
+                    description="Stored in your NDIP Galaxy credential vault and used by NOVA only for Bilbao discovery. Numerical refinement jobs do not receive it."/>
         </credentials>
     </requirements>
     <entry_points>
@@ -42,6 +49,8 @@ Recovered runs can reopen their published GPX checkpoints directly in the hosted
 Use the User guide button in the application header to open the screenshot walkthrough and example configuration downloads in a separate tab.
 
 For optional reviewed refinement recipes, add your personal ORNL Illumine key to the ORNL Illumine credential group in NDIP. Galaxy injects the selected credential into your NOVA session; regular RADAR-PD analysis does not require it.
+
+For optional magnetic model exploration, select your personal Bilbao credential group. Galaxy injects its key as BCS_API_KEY into NOVA for authenticated subgroup discovery. Candidate catalogs are then passed to the scientific worker without the key. The headless launcher accepts --with-bilbao together with --with-illumine.
 
 Credential selection belongs to the exact Galaxy tool version. Check it after an upgrade and start a new session to apply it. Headless launches must include the selected credentials_context; the packaged radar_pd_nova.launch helper sends vault references without reading the Illumine secret.
 

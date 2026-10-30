@@ -56,6 +56,7 @@ jobs:
           assert allocation(4,environ={})["workers"]==1
           os.environ["GALAXY_API_KEY"]="must-not-transfer"
           os.environ["AZURE_ILLUMINE_API_KEY"]="must-not-transfer"
+          os.environ["BCS_API_KEY"]="must-not-transfer"
           assert not any("KEY" in k or "TOKEN" in k for k in scientific_environment())
           print("Verified worker implementation",package_signature())'
           docker run --rm --entrypoint python "$IMAGE" /opt/radar-symmetry/ndip_model_campaign.py --help

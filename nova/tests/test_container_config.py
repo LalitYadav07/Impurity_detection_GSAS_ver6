@@ -101,6 +101,15 @@ def test_illumine_key_is_an_optional_per_user_galaxy_credential() -> None:
     assert "AZURE_ILLUMINE_API_KEY" not in root.findtext("command", default="")
 
 
+def test_bilbao_key_is_an_optional_per_user_nova_only_credential() -> None:
+    root = ET.parse(NOVA_ROOT / "galaxy" / "radar_pd_nova.xml").getroot()
+    credential=root.find("./requirements/credentials[@name='bilbao']")
+    assert credential is not None and credential.get('optional')=='true'
+    assert credential.find('./secret').get('inject_as_env')=='BCS_API_KEY'
+    assert root.find("./environment_variables/environment_variable[@name='BCS_API_KEY']") is None
+    assert 'BCS_API_KEY' not in root.findtext('command',default='')
+
+
 def test_release_workflow_builds_and_smoke_tests_versioned_image() -> None:
     workflow = _read("../.github/workflows/publish-nova-to-ghcr.yaml")
 
