@@ -131,5 +131,7 @@ def test_queued_source_capture_survives_a_new_viewer_without_trusting_local_path
     restored.set_setting('enrollments',entries)
     workspace.state['sources']['selected']=dict(source,collection_id='replacement')
     with pytest.raises(ValueError,match='differs'):module.restore_captured_sources(restored,workspace)
+    workspace.state['sources']['selected']=dict(source,live_watch=True,sample_key='specimen:B')
+    with pytest.raises(ValueError,match='reviewed acquisition mapping changed'):module.restore_captured_sources(restored,workspace)
     workspace.runtime.kind='local'
     assert module.restore_captured_sources(restored,workspace)==0

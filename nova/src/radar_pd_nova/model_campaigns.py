@@ -35,6 +35,8 @@ def captured_source(entry,template):
 def restore_captured_sources(campaign,workspace):
     if getattr(getattr(workspace,'runtime',None),'kind',None)!='galaxy':return 0
     template=validate_template(campaign.setting('template'))
+    if len(campaign.setting('enrollments',{}))>template['maximum_scans']:
+        raise ValueError('Captured acquisitions exceed the reviewed campaign budget')
     sources=[]
     for entry in campaign.setting('enrollments',{}).values():
         if entry.get('origin')=='radar' and entry.get('source'):
@@ -43,6 +45,10 @@ def restore_captured_sources(campaign,workspace):
             if current and any(current.get(field)!=source.get(field) for field in
                     ['collection_id','collection_name','internal_source_sha256','published_sha256']):
                 raise ValueError('The captured publication differs from the current source; review its revision')
+            if current and current.get('live_watch'):
+                if not matches(template,current,'radar'):
+                    raise ValueError('The reviewed acquisition mapping changed; review the campaign scope')
+                continue
             sources.append(source)
     if sources:workspace.observe(sources)
     return len(sources)
@@ -103,6 +109,8 @@ def enroll_source(campaign,workspace,key,inspect,*,transport=None):
             # compatibility through the same runtime as ordinary enrollment.
             source=captured_source(entry,template)
             current=workspace.state.get('sources',{}).get(key)
+            if current and current.get('live_watch') and not matches(template,current,'radar'):
+                raise ValueError('The reviewed acquisition mapping changed; review the campaign scope')
             if current and any(current.get(field)!=source.get(field) for field in
                     ['collection_id','collection_name','internal_source_sha256','published_sha256']):
                 raise ValueError('The captured publication differs from the current source; review its revision')

@@ -186,11 +186,14 @@ def source_from_record(record, payload: dict, scan: dict | None, history: str,
     publication = str(project.get('collection_name') or Path(str(project.get('collection_path') or project.get('path') or '')).name)
     # Watch metadata can arrive after the archive. It must not create a second
     # source identity or enroll the same published result a second time.
-    uid = digest([history, record.uid, project.get('sha256'), project.get('published_sha256'), publication])[:24]
+    # A submitted Live record retains its local pending-* UI handle. Recovery
+    # uses the acknowledged Galaxy job ID; both must identify the same GPX.
+    job_identity=str(getattr(record,'galaxy_job_id',None) or record.uid)
+    uid = digest([history, job_identity, project.get('sha256'), project.get('published_sha256'), publication])[:24]
     scan_label=str(scan.get('scan_label') or record.name)
     if bank and 'bank' not in scan_label.lower():scan_label+=' · bank '+bank
     return dict(id=uid, experiment=exp, experiment_label=(f'{instrument} · {ipts}' if ipts else record.name),
-                scan_key=scan_key, record_uid=record.uid, run_id=run_id,
+                scan_key=scan_key, record_uid=record.uid, galaxy_job_id=job_identity, run_id=run_id,
                 run_number=run_number, bank=bank, sample_key=sample_key,
                 sample_label=scan_sample_label or ' · '.join(x for x in [sample_id, sample_name] if x) or 'Unassigned sample',
                 scan_label=scan_label, metadata=metadata, axis_overrides=scan.get('axis_overrides') or {},

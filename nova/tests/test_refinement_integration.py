@@ -221,9 +221,23 @@ def test_summary_only_refresh_preserves_reviewed_live_provenance_for_same_public
     recovered=w.state['sources']['1']
     assert recovered['experiment']=='exp' and recovered['sample_label']=='Reviewed Er specimen'
     assert recovered['metadata']==reviewed['metadata'] and recovered['live_watch']
+    w.observe([dict(reviewed,metadata={'conditions':{'reviewed':True,'temperature':.29}})])
+    assert w.state['sources']['1']['metadata']['conditions']['temperature']==.29
     # A different publication must not inherit the old sample/condition mapping.
     w.observe([dict(weak,collection_id='new-collection')])
     assert w.state['sources']['1']['experiment']=='single-job'
+
+
+def test_acknowledged_live_and_recovered_records_have_the_same_publication_identity(tmp_path):
+    project=dict(collection_name='final.gpx',sha256='original',published_sha256='published',status='accepted',stage='main_phase_anchor')
+    def record(uid):
+        return SimpleNamespace(uid=uid,galaxy_job_id='acknowledged-job',name='Live scan',local_output_dir=tmp_path,
+            output_dataset_ids={'gpx_projects':'collection'},inputs=None)
+    live=source_from_record(record('pending-token'),{'summary':{'gpx_projects':[project]}},None,'history')
+    restored=source_from_record(record('acknowledged-job'),{'summary':{'gpx_projects':[project]}},None,'history')
+    assert live['id']==restored['id']
+    assert live['record_uid']=='pending-token' and restored['record_uid']=='acknowledged-job'
+    assert live['galaxy_job_id']==restored['galaxy_job_id']=='acknowledged-job'
 
 
 def test_recovered_live_ages_scans_share_experiment_sample_and_bank_from_publications(tmp_path):
