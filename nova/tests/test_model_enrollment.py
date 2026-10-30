@@ -6,6 +6,7 @@ from gpx_recipe.symmetry.campaign import Campaign
 from radar_pd_nova import model_campaigns as module
 from radar_pd_nova.symmetry_controller import SymmetryMixin
 from radar_pd_nova.symmetry_workspace import campaign_can_resume
+from radar_pd_nova.model_runtime import GalaxyChunkTransport
 
 
 def setup(tmp_path,monkeypatch):
@@ -69,3 +70,16 @@ def test_switching_exploration_kind_removes_stale_candidate_choices():
     app._symmetry_draft={'discovery_identity':('magnetic','Parent','0, 0, 0','scan')}
     app._symmetry_unapprove()
     assert not s.sx_discovered and not s.sx_candidates and not s.sx_candidate_options
+
+
+def test_resource_budget_updates_dispatch_limits_without_changing_scientific_approval():
+    runtime=SimpleNamespace(max_active_jobs=1)
+    transport=object.__new__(GalaxyChunkTransport);transport.runtime=runtime;transport.max_active_jobs=1
+    state=SimpleNamespace(sx_parallel_jobs=2,sx_error='')
+    app=SymmetryMixin();app.server=SimpleNamespace(state=state);app._model_runtime_cache=runtime
+    app._model_active_campaigns={'campaign':(None,transport)};app._symmetry_approved='sealed-science'
+    app._symmetry_resource_changed()
+    assert runtime.max_active_jobs==transport.max_active_jobs==2
+    assert app._symmetry_approved=='sealed-science'
+    state.sx_parallel_jobs=16;app._symmetry_resource_changed()
+    assert 'one or two' in state.sx_error and runtime.max_active_jobs==2

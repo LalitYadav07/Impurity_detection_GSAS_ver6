@@ -30,6 +30,12 @@ def model_exploration(app):
         html.P('{{ sx_backend }}',classes='rf-notice')
         html.P('{{ sx_queue_notice }}',v_if='!!sx_queue_notice',classes='rf-notice')
         html.P('Pause or end any other viewer for this campaign before continuing here.',v_if='sx_resumable && !sx_campaign_running',classes='rf-notice')
+        with html.Details(classes='rf-card mb-3'):
+            html.Summary('Compute budget')
+            with html.Div(classes='sx-settings'):
+                select('Concurrent Galaxy batches','sx_parallel_jobs','[1,2]')
+                select('Native workers requested per batch','sx_slots','[1,2,4]')
+            html.P('Each batch contains many independent starts. Galaxy controls admission and CPU/RAM allocation; an unreported allocation permits one native worker per job. The batch limit includes model preparation jobs in this History. Lowering the limit lets accepted jobs finish before submitting more.',classes='rf-notice')
         v.VProgressLinear(v_if='sx_busy',indeterminate=True,color='#267653',height=3,classes='mb-3')
         html.P('{{ sx_message }}',classes='rf-notice',raw_attrs=['aria-live="polite"'])
         with html.Div(v_if='sx_setup || !sx_campaign',classes='rf-card sx-setup'):
@@ -121,7 +127,6 @@ def model_exploration(app):
                     v.VDataTable(items=('sx_plan_candidates',),headers=("[{title:'Model',key:'name'},{title:'BNS',key:'bns'},{title:'Basis',key:'basis'},{title:'Origin',key:'origin'},{title:'Free modes',key:'modes'}]",),items_per_page=8,density='compact')
                 with html.Div(classes='rf-actions'):
                     v.VBtn('Approve finite plan',click=(app.approve_symmetry,form),disabled=('sx_approved || sx_campaign_running',),variant='outlined',color='#15543c')
-                    select('Requested native workers','sx_slots',"[1,2,4]",style='max-width:220px')
                     v.VBtn('Start approved campaign',click=(app.start_symmetry_campaign,form),disabled=('!sx_approved || sx_busy || sx_campaign_running',),variant='flat',color='#15543c')
                 html.P('Each start uses a fresh native process. Galaxy jobs share immutable inputs and batch independent starts within allocated CPU/RAM. Missing allocation information limits the pool to one worker. Model calls run only during setup.',classes='rf-notice')
                 html.P('Structural fit comparisons require a matched parent/nuisance refinement. A lower Rwp alone does not establish a transition.',v_if="sx_kind === 'structural'",classes='rf-notice')

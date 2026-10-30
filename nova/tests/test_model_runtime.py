@@ -10,7 +10,7 @@ import zipfile
 import pytest
 
 from radar_pd_nova.models import UtilityActionRecord,RunStatus
-from radar_pd_nova.model_runtime import GalaxyModelRuntime,GalaxyChunkTransport,MODEL_TOOL_ID
+from radar_pd_nova.model_runtime import GalaxyModelRuntime,GalaxyChunkTransport,MODEL_TOOL_ID,active_batch_count
 from radar_pd_nova.refinement_runtime import RuntimeUnavailable
 from gpx_recipe.symmetry.compiler import file_sha,package_signature
 from gpx_recipe.symmetry.contracts import digest
@@ -83,6 +83,33 @@ def test_lost_ack_is_recovered_without_resubmission(remote):
     with pytest.raises(RuntimeUnavailable,match='did not acknowledge'):runtime._submit('chunk',source,{},'assets','a'*24)
     assert runtime._submit('chunk',source,{},'assets','a'*24).galaxy_job_id=='job0'
     assert len(service.submissions)==1
+
+
+@pytest.mark.parametrize('limit,occupancies,expected_calls',[(1,[1,0],2),(2,[1],1),(2,[2,1],2)])
+def test_history_capacity_respects_the_reviewed_batch_limit(tmp_path,monkeypatch,limit,occupancies,expected_calls):
+    runtime=GalaxyModelRuntime(tmp_path/'bounded',Service(tmp_path),poll_seconds=.001,max_active_jobs=limit)
+    calls=[]
+    def get(url,**kwargs):
+        calls.append(kwargs);jobs=[{}]*occupancies.pop(0)
+        return SimpleNamespace(raise_for_status=lambda:None,json=lambda:jobs)
+    monkeypatch.setattr('requests.get',get)
+    runtime.wait_capacity()
+    assert len(calls)==expected_calls
+    assert all(q['params']['history_id']=='history' and q['params']['tool_id']==MODEL_TOOL_ID and q['params']['limit']==limit for q in calls)
+
+
+@pytest.mark.parametrize('limit',[0,3,16,True,'2',1.5])
+def test_parallel_batch_budget_cannot_expand_beyond_two(tmp_path,limit):
+    with pytest.raises(ValueError,match='one or two'):
+        GalaxyModelRuntime(tmp_path/'invalid',Service(tmp_path),max_active_jobs=limit)
+
+
+def test_enrollment_counts_dispatched_batches_rather_than_their_member_trials():
+    rows=[dict(id=str(i),state='running',handle=json.dumps({'dispatch_key':'first'})) for i in range(49)]
+    assert active_batch_count(rows)==1
+    rows.append(dict(id='next',state='submitting',handle=json.dumps({'dispatch_key':'second'})))
+    rows.append(dict(id='done',state='terminal',handle=json.dumps({'dispatch_key':'finished'})))
+    assert active_batch_count(rows)==2
 
 
 def test_unresolved_ack_never_retries_and_cancel_before_post_submits_nothing(remote,monkeypatch):

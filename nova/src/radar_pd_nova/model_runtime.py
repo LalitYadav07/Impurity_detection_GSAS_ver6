@@ -31,15 +31,29 @@ def document_label(name):
     return name[len('RADAR-PD '):].split(' | ',1)[0] if name.startswith('RADAR-PD ') and ' | ' in name else name
 
 
+def active_batch_count(trials):
+    return len({json.loads(r['handle']).get('dispatch_key',r['id']) if r.get('handle') else r['id']
+                for r in trials if r['state'] in {'running','submitting','cancelling'}})
+
+
 class GalaxyModelRuntime(GalaxyRefinementRuntime):
     tool_id=MODEL_TOOL_ID
     workspace_schema='radar-model-campaign/v1'
 
-    def __init__(self,root,service,*,poll_seconds=3,timeout=7200):
+    def __init__(self,root,service,*,poll_seconds=3,timeout=7200,max_active_jobs=1):
         super().__init__(root,service,timeout=timeout,poll_seconds=poll_seconds)
+        self.max_active_jobs=max_active_jobs
         self._lock=threading.RLock();self._event_lock=threading.Lock();self._events=set();self._cancelled_roots=set();self._verified_jobs=set()
         self.state_path=self.root/'model-dispatches.json'
         self.state=json.loads(self.state_path.read_text()) if self.state_path.exists() else {'assets':{},'dispatches':{}}
+
+    @property
+    def max_active_jobs(self):return self._max_active_jobs
+
+    @max_active_jobs.setter
+    def max_active_jobs(self,value):
+        if type(value) is not int or value not in {1,2}:raise ValueError('Choose one or two concurrent Galaxy model batches')
+        self._max_active_jobs=value
 
     def _save(self):
         with self._lock:write_json(self.state_path,self.state)
@@ -82,18 +96,18 @@ class GalaxyModelRuntime(GalaxyRefinementRuntime):
             galaxy_job_id=str(job['id']),status=normalize_status(job.get('state')),outputs=self.service._job_output_ids(job))
 
     def wait_capacity(self,cancel=None):
-        """One active model job per History; Galaxy still owns site-wide quotas."""
+        """A bounded per-History queue; Galaxy still owns site-wide admission."""
         import requests
         started=time.monotonic()
         while True:
             if cancel and cancel.is_set():raise RuntimeUnavailable('Model submission paused before dispatch')
             response=requests.get(self.service.galaxy_url+'/api/jobs',headers=self.service._headers,
                 params={'history_id':self.service.history_id,'tool_id':self.tool_id,
-                    'state':['new','waiting','queued','running','resubmitted','paused'],'limit':2},timeout=30)
+                    'state':['new','waiting','queued','running','resubmitted','paused'],'limit':self.max_active_jobs},timeout=30)
             response.raise_for_status()
             jobs=response.json()
             if not isinstance(jobs,list):raise RuntimeUnavailable('Galaxy did not report the model resource queue')
-            if not jobs:return
+            if len(jobs)<self.max_active_jobs:return
             if time.monotonic()-started>self.timeout:raise RuntimeUnavailable('Waiting for the existing model job to release its resource slot')
             if cancel:cancel.wait(self.poll_seconds)
             else:time.sleep(self.poll_seconds)
@@ -259,6 +273,7 @@ class GalaxyChunkTransport:
 
     def __init__(self,runtime,campaign):
         self.runtime=runtime;self.campaign=campaign;self.path=campaign.root/'galaxy.json';self.cache={}
+        self.max_active_jobs=runtime.max_active_jobs
         self.state=json.loads(self.path.read_text()) if self.path.exists() else {'sources':{},'inputs':{},'chunks':{},'members':{}}
         self._checkpoint_hash=None
         self.checkpointer=GalaxyRefinementRuntime(campaign.root/'checkpoints',runtime.service)

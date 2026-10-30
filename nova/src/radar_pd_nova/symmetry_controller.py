@@ -31,7 +31,7 @@ from .symmetry_workspace import campaign_rows,group_models,view_for,choose_group
 from . import symmetry_plots as plots
 from .symmetry_sources import start_choices,resolve_start
 from .k_search_controller import KSearchMixin
-from .model_runtime import GalaxyModelRuntime,GalaxyChunkTransport
+from .model_runtime import GalaxyModelRuntime,GalaxyChunkTransport,active_batch_count
 from .model_campaigns import choices as model_choices,origin as model_origin,queue_sources,enroll_source,restore_history
 from gpx_recipe.symmetry.compiler import prepare_shared_inputs
 from gpx_recipe.symmetry.templates import make_template,trial_count
@@ -55,7 +55,7 @@ class SymmetryMixin(KSearchMixin):
             sx_plan_ready=False,sx_approved=False,sx_plan_summary='',sx_plan_candidates=[],sx_setup=False,sx_has_context=False,sx_has_gpx=False,sx_has_receipt=False,sx_resumable=False,
             sx_request='',sx_planning_summary='',sx_planning_notes=[],sx_planning_usage='',sx_planning_cost='',sx_sign_starts=True,sx_coverage=[],sx_group_limit=12,sx_result_scope='experiment',sx_start_source='',sx_start_sources=[],sx_results_current=False)
         for key,value in defaults.items():setattr(s,key,value)
-        extra=dict(sx_existing='selected',sx_follow_new=False,sx_max_scans=200,sx_enrollments=[],sx_following=False,sx_campaign_running=False,
+        extra=dict(sx_existing='selected',sx_follow_new=False,sx_max_scans=200,sx_enrollments=[],sx_following=False,sx_campaign_running=False,sx_parallel_jobs=1,
             sx_queue_notice='',sx_backend='',sx_plan_token='',sx_cancel_notice='Cancelling a Galaxy chunk stops all starts in that job.',
             sx_opd_policy='highest-symmetry-per-irrep',sx_construct_limit=100)
         for key,value in extra.items():setattr(s,key,value)
@@ -73,6 +73,7 @@ class SymmetryMixin(KSearchMixin):
         s.change('sx_candidates','sx_modes')(self._symmetry_unapprove)
         s.change('sx_opd_policy','sx_construct_limit')(self._symmetry_unapprove)
         s.change('sx_start_source')(self._symmetry_start_changed)
+        s.change('sx_parallel_jobs')(self._symmetry_resource_changed)
         self._init_k_search()
 
     def _symmetry_root(self):
@@ -86,7 +87,17 @@ class SymmetryMixin(KSearchMixin):
         if not isinstance(self.service,GalaxyService):return None
         if not (self.service.galaxy_url and self.service.galaxy_key and self.service.history_id):return None
         if self._model_runtime_cache is None:self._model_runtime_cache=GalaxyModelRuntime(self._symmetry_root()/'runtime',self.service)
+        self._model_runtime_cache.max_active_jobs=self.server.state.sx_parallel_jobs
         return self._model_runtime_cache
+
+    def _symmetry_resource_changed(self,**_):
+        try:
+            value=self.server.state.sx_parallel_jobs
+            if type(value) is not int or value not in {1,2}:raise ValueError('Choose one or two concurrent Galaxy model batches')
+            if self._model_runtime_cache:self._model_runtime_cache.max_active_jobs=value
+            for _,transport in self._model_active_campaigns.values():
+                if isinstance(transport,GalaxyChunkTransport):transport.max_active_jobs=value;transport.runtime.max_active_jobs=value
+        except ValueError as exc:self.server.state.sx_error=str(exc)
 
     def _symmetry_transport(self,campaign=None):
         python=os.environ.get('RADAR_PD_SYMMETRY_PYTHON','')
@@ -565,8 +576,8 @@ class SymmetryMixin(KSearchMixin):
                 self._model_following_active=following
                 if campaign.setting('template'):
                     entries=await asyncio.to_thread(queue_sources,campaign,self._refinement_store())
-                    active=any(r['state'] in {'running','submitting','cancelling'} for r in campaign.trials())
-                    if not active and not campaign.setting('paused',False):
+                    active=active_batch_count(campaign.trials())
+                    if active<getattr(transport,'max_active_jobs',1) and not campaign.setting('paused',False):
                         pending=next((r for r in entries.values() if r['status'] in {'queued','preparing'}),None)
                         if pending:
                             self.server.state.sx_queue_notice='Inspecting '+pending['scan']+' for compatibility with the reviewed model template'
