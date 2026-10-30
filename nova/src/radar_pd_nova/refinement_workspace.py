@@ -64,7 +64,7 @@ class RefinementWorkspace:
             with self.lock:document=copy.deepcopy(self.state)
             return self.runtime.save_workspace(document)
 
-    def observe(self,sources):
+    def observe(self,sources,*,active_live_ids=None):
         with self.lock:
             changed=False
             for value in sources:
@@ -101,6 +101,14 @@ class RefinementWorkspace:
                         if key in old:source[key]=old[key]
                 if old != source:changed=True
                 self.state['sources'][source['id']]=source
+            # Only a complete Live catalog can retire earlier watch flags.
+            # Incremental GPX inspection/recovery must retain its provenance.
+            if active_live_ids is not None:
+                active=set(active_live_ids)
+                for source in self.state['sources'].values():
+                    watched=source['id'] in active
+                    if bool(source.get('live_watch'))!=watched:
+                        source['live_watch']=watched;changed=True
             if changed:
                 for recipe in self.state['recipes'].values():
                     if recipe.get('armed'):

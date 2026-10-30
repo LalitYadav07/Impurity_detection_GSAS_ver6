@@ -300,6 +300,32 @@ def test_live_watch_publication_replaces_earlier_test_job_in_recipe_scope(tmp_pa
     assert [row['id'] for row in snapshot['baseline']]==['watch43106']
 
 
+def test_switching_live_reduction_retires_stale_watch_without_erasing_provenance(tmp_path):
+    w,_=create(tmp_path)
+    old=dict(source('modern43106',exp='ages'),live_watch=True,
+             collection_id='modern',collection_name='final.gpx',internal_source_sha256='modern-hash',
+             metadata={'reduction_family':'modern'})
+    new=dict(source('original43106',exp='ages'),live_watch=True,
+             collection_id='original',collection_name='final.gpx',internal_source_sha256='original-hash',
+             metadata={'reduction_family':'original'})
+    w.observe([old],active_live_ids={old['id']})
+    # A recovered summary must not keep the previous controller's watch active.
+    recovered=dict(old,live_watch=False,metadata={})
+    w.observe([recovered,new],active_live_ids={new['id']})
+    assert [row['id'] for row in w.sources('ages')]==[new['id']]
+    assert w.state['sources'][old['id']]['metadata']==old['metadata']
+    assert not w.state['sources'][old['id']]['live_watch']
+    snapshot,_=w.selection(RefinementScope('ages'))
+    assert [row['id'] for row in snapshot['baseline']]==[new['id']]
+    # Incremental materialization cannot reactivate the prior reduction.
+    w.observe([dict(w.state['sources'][old['id']],context=context(old))])
+    assert [row['id'] for row in w.sources('ages')]==[new['id']]
+    restored=RefinementWorkspace(w.root,history_id='history',runtime=w.runtime)
+    assert [row['id'] for row in restored.sources('ages')]==[new['id']]
+    w.observe([],active_live_ids=set())
+    assert not any(row.get('live_watch') for row in w.state['sources'].values())
+
+
 def test_summary_refresh_retains_inspected_atom_context_for_immutable_collection(tmp_path):
     w,_=create(tmp_path)
     summary=dict(source('43124'),source_sha256=None,source_path=None,collection_id='collection-43124',

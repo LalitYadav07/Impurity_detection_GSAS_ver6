@@ -273,7 +273,8 @@ class RefinementMixin:
                 return sources,warnings
             sources,warnings=await asyncio.to_thread(catalog)
             warnings=recovery_warnings+warnings
-            await asyncio.to_thread(workspace.observe,sources)
+            await asyncio.to_thread(workspace.observe,sources,
+                                    active_live_ids={source['id'] for source in sources if source.get('live_watch')})
             # Legacy publications need a checksum captured from actual bytes.
             # Download only newly enrolled future matches here; backlog choices
             # remain browsable before materializing the user's selected scope.
