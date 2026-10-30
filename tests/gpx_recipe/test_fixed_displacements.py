@@ -2,7 +2,7 @@ import copy
 import numpy as np
 import pytest
 
-from gpx_recipe.symmetry.displacements import metric,matrix,transform_uij,transfer_fixed_displacements,verify_fixed_displacements
+from gpx_recipe.symmetry.displacements import metric,matrix,transform_uij,expand_magnetic_phase,transfer_fixed_displacements,verify_fixed_displacements
 
 
 def six(u):return [u[i,j] for i,j in [(0,0),(1,1),(2,2),(0,1),(0,2),(1,2)]]
@@ -85,6 +85,20 @@ def test_fixed_isotropic_model_remains_isotropic_and_audited():
     with pytest.raises(ValueError,match='ellipsoid changed'):verify_fixed_displacements(parent,child,receipt,np.eye(3))
 
 
+def test_topology_expansion_does_not_change_the_original_or_use_an_isotropic_physical_model():
+    parent,child=phases();before=copy.deepcopy(parent['Atoms'])
+    def transformer(topology,new,*args):
+        assert topology['Atoms'][0][9]=='I'
+        assert parent['Atoms'][0][9]=='A'
+        new['Atoms'][0][12]='I'
+        return new,['0:1']
+    expanded,codes=expand_magnetic_phase(parent,child,np.eye(3),[0,0,0],[0,0,0],transformer)
+    assert expanded['Atoms'][0][12]=='A'
+    receipt=transfer_fixed_displacements(parent,expanded,codes,np.eye(3))
+    assert verify_fixed_displacements(parent,expanded,receipt,np.eye(3))
+    assert parent['Atoms']==before
+
+
 def test_fixed_tensor_transfer_rejects_releases_bad_mapping_and_nonphysical_tensors():
     parent,child=phases();child['Atoms'][0][2]='MU'
     with pytest.raises(ValueError,match='held'):transfer_fixed_displacements(parent,child,['0:1'],np.eye(3))
@@ -103,7 +117,7 @@ def test_installed_gsas_expansion_with_anisotropic_atoms_preserves_physical_elli
     child=copy.deepcopy(phase.data);basis=np.diag([1.,1.,2.])
     child['General']['SGData']=S.SpcGroup('P 1')[1]
     child['General']['Cell'][1:]=list(L.TransformCell(phase.data['General']['Cell'][1:7],basis))
-    child,codes=L.TransformPhase(phase.data,child,basis,np.zeros(3),np.zeros(3),True)
+    child,codes=expand_magnetic_phase(phase.data,child,basis,np.zeros(3),np.zeros(3),L.TransformPhase)
     for atom in child['Atoms']:atom[2]='M'
     receipt=transfer_fixed_displacements(phase.data,child,codes,basis)
     assert len(receipt['atoms'])>1

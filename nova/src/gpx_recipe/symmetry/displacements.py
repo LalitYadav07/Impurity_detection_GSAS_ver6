@@ -44,6 +44,32 @@ def transform_uij(six,parent_cell,child_cell,basis,operation):
     return [float(child[i,j]) for i,j in [(0,0),(1,1),(2,2),(0,1),(0,2),(1,2)]]
 
 
+def expand_magnetic_phase(parent,child,basis,uvec,vvec,transformer):
+    """Use native coordinate expansion without its anisotropic code defect.
+
+    FillUnitCell's A branch adds a lattice vector to the operation number,
+    producing codes such as ``0:[1 1 1]``. ADPs do not determine coordinates.
+    Expand an internal topology-only copy through its scalar-code path, then
+    restore each original ADP type. No calculation or saved physical project
+    uses an isotropic approximation: transfer_fixed_displacements installs the
+    complete original ellipsoids before the magnetic phase is calculated.
+    """
+    import copy
+    topology=copy.deepcopy(parent);pcia=parent['General']['AtomPtrs'][3]
+    for atom in topology['Atoms']:
+        if atom[pcia]=='A':atom[pcia]='I'
+    result,codes=transformer(topology,child,basis,uvec,vvec,True)
+    cia=result['General']['AtomPtrs'][3]
+    if len(codes)!=len(result['Atoms']):raise ValueError('Native magnetic coordinate expansion lost its site mapping')
+    for atom,code in zip(result['Atoms'],codes):
+        try:
+            index=int(str(code).split(':',1)[0])
+            if index<0:raise ValueError()
+            atom[cia]=parent['Atoms'][index][pcia]
+        except (ValueError,IndexError,TypeError):raise ValueError('Native magnetic coordinate expansion has an invalid parent identity') from None
+    return result,codes
+
+
 def transfer_fixed_displacements(parent,child,codes,basis):
     """Bind every generated magnetic atom to an exact fixed parent ADP."""
     _pcx,pct,_pcs,pcia=parent['General']['AtomPtrs']

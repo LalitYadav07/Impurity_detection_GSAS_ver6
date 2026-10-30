@@ -269,7 +269,8 @@ def _run(source_gpx,ctx,protocol,candidate_record,seed,*,forward_only):
     general['MagDmin'] = cutoff
     ctx.save_json('magnetic-reflection-range.json',dict(declared_d_min=protocol['policy'].get('magnetic_d_min','legacy 1.0 A'),actual_d_min=cutoff,full_fitted_range=protocol['policy'].get('magnetic_d_min')==0))
     new_phase['MagXform'] = (trans, uvec, vvec)
-    new_phase, atom_codes = G2lat.TransformPhase(old_phase, new_phase, trans, uvec, vvec, True)
+    from .displacements import expand_magnetic_phase
+    new_phase, atom_codes = expand_magnetic_phase(old_phase,new_phase,trans,uvec,vvec,G2lat.TransformPhase)
     parent_seed_moment_direction = initial_moment_direction if initial_moment_direction is not None else fixed_moment_direction
     candidate_seed_moment_direction = None
     candidate_fixed_moment_direction = None
