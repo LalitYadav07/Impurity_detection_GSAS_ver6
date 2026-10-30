@@ -85,6 +85,97 @@ def test_lost_ack_is_recovered_without_resubmission(remote):
     assert len(service.submissions)==1
 
 
+def test_failed_request_staging_cannot_create_a_scientific_job(remote,monkeypatch):
+    runtime,service,source=remote
+    def failed(value,**kwargs):
+        assert kwargs['wait_ready'] is True
+        raise RuntimeError('Owned request upload failed')
+    monkeypatch.setattr(service,'upload_json_document',failed)
+    with pytest.raises(RuntimeError,match='upload failed'):
+        runtime._submit('chunk',source,{},'assets','1'*24)
+    assert not service.submissions and not runtime.state['dispatches']['1'*24]['pending']
+
+
+def paused_request(remote,tmp_path,monkeypatch):
+    runtime,service,source=remote;key='2'*24
+    job=service.submit_utility(inputs={'dispatch_key':key});job.status=RunStatus.ERROR
+    details=dict(id=job.galaxy_job_id,history_id='history',tool_id=MODEL_TOOL_ID,state='paused',
+        inputs={k:{'id':k} for k in ['source_gpx','model_assets','model_request']})
+    metadata={k:dict(state='ok',file_size=100) for k in ['source_gpx','model_assets']}
+    metadata['model_request']=dict(state='error',file_size=0,name='RADAR-PD RADAR-PD Model request '+key+' | request.json')
+    service._job_details=lambda uid:copy.deepcopy(details)
+    service._dataset_metadata=lambda uid:copy.deepcopy(metadata[uid])
+    cancellations=[]
+    def cancel(*args,**kwargs):
+        cancellations.append(args);details['state']='deleted';job.status=RunStatus.CANCELLED
+        return SimpleNamespace(raise_for_status=lambda:None)
+    monkeypatch.setattr('requests.delete',cancel)
+    campaign=Campaign(tmp_path/'failed-staging');transport=GalaxyChunkTransport(runtime,campaign)
+    transport.state['chunks'][key]=dict(key=key,job=job.model_dump(mode='json'),members=['trial'])
+    transport.state['members']['trial']=key
+    return runtime,transport,job,details,metadata,cancellations,key
+
+
+def test_owned_empty_request_is_retired_before_same_starts_can_retry(remote,tmp_path,monkeypatch):
+    runtime,t,job,details,metadata,cancel,key=paused_request(remote,tmp_path,monkeypatch)
+    assert t.poll(dict(dispatch_key=key,key='trial'),tmp_path)=={'state':'not_started'}
+    assert len(cancel)==1 and details['state']=='deleted'
+    assert t.state['chunks'][key]['not_dispatched']
+    # Durable intent and terminal acknowledgment survive a viewer loss.
+    restored=GalaxyChunkTransport(runtime,t.campaign)
+    assert restored.recover('trial',tmp_path)=={'state':'not_started'}
+    assert len(cancel)==1
+
+
+@pytest.mark.parametrize('change',[
+    ('job','state','running'),('job','external_id','runner-1'),('job','job_runner_name','pulsar'),
+    ('job','command_line','already assigned'),('job','exit_code',0),('job','history_id','other-history'),
+    ('request','file_size',1),('request','state','ok'),('request','name','unowned request'),
+    ('source','state','error')])
+def test_ambiguous_or_started_batches_are_never_automatically_retried(remote,tmp_path,monkeypatch,change):
+    runtime,t,job,details,metadata,cancel,key=paused_request(remote,tmp_path,monkeypatch)
+    kind,field,value=change
+    target=details if kind=='job' else metadata['model_request' if kind=='request' else 'source_gpx']
+    target[field]=value
+    assert t.poll(dict(dispatch_key=key,key='trial'),tmp_path)['state']=='unknown'
+    assert not cancel and not t.state['chunks'][key].get('not_dispatched')
+
+
+def test_staging_recovery_is_bounded_and_does_not_repeat_an_ordinary_cancellation(remote,tmp_path,monkeypatch):
+    runtime,t,job,details,metadata,cancel,key=paused_request(remote,tmp_path,monkeypatch)
+    for n in range(2):t.state['chunks']['previous'+str(n)]={'staging_retirement':{'job_id':str(n)}}
+    assert t.poll(dict(dispatch_key=key,key='trial'),tmp_path)['state']=='unknown'
+    assert not cancel
+    t.cache.clear();job.status=RunStatus.CANCELLED;details['state']='deleted'
+    assert t.poll(dict(dispatch_key=key,key='trial'),tmp_path)['state']=='cancelled'
+    assert not cancel
+
+
+def test_retirement_resumes_after_cancellation_but_before_final_checkpoint(remote,tmp_path,monkeypatch):
+    runtime,t,job,details,metadata,cancel,key=paused_request(remote,tmp_path,monkeypatch)
+    real=runtime.retire_failed_request
+    def interrupted(*args):
+        real(*args)
+        raise TimeoutError('Viewer interrupted after cancellation')
+    monkeypatch.setattr(runtime,'retire_failed_request',interrupted)
+    with pytest.raises(TimeoutError):t.poll(dict(dispatch_key=key,key='trial'),tmp_path)
+    assert details['state']=='deleted' and t.state['chunks'][key]['staging_retirement']
+    monkeypatch.setattr(runtime,'retire_failed_request',real)
+    restored=GalaxyChunkTransport(runtime,t.campaign)
+    assert restored.poll(dict(dispatch_key=key,key='trial'),tmp_path)['state']=='not_started'
+    assert len(cancel)==1
+
+
+def test_execution_proof_is_rechecked_after_the_saved_retirement_intent(remote,tmp_path,monkeypatch):
+    runtime,t,job,details,metadata,cancel,key=paused_request(remote,tmp_path,monkeypatch)
+    proof=runtime.failed_request_proof(job,key)
+    assert proof
+    details['job_runner_name']='pulsar'
+    with pytest.raises(RuntimeUnavailable,match='proof changed'):
+        runtime.retire_failed_request(job,key,proof)
+    assert not cancel
+
+
 @pytest.mark.parametrize('limit,occupancies,expected_calls',[(1,[1,0],2),(2,[1],1),(2,[2,1],2)])
 def test_history_capacity_respects_the_reviewed_batch_limit(tmp_path,monkeypatch,limit,occupancies,expected_calls):
     runtime=GalaxyModelRuntime(tmp_path/'bounded',Service(tmp_path),poll_seconds=.001,max_active_jobs=limit)

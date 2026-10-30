@@ -148,7 +148,7 @@ class GalaxyModelRuntime(GalaxyRefinementRuntime):
                 raise RuntimeUnavailable('This model submission has no acknowledged job yet. Recover the existing dispatch before retrying; no duplicate was submitted.')
             self.wait_capacity(cancel)
             request_id=self.service.upload_json_document(request,name='model-request.json',
-                label='RADAR-PD Model request '+key,wait_ready=False)
+                label='RADAR-PD Model request '+key,wait_ready=True)
             if cancel and cancel.is_set():raise RuntimeUnavailable('Model submission paused before dispatch')
             entry.update(pending=True,request_id=request_id);self._save()
             try:
@@ -174,6 +174,47 @@ class GalaxyModelRuntime(GalaxyRefinementRuntime):
         self.verify_job(job,key)
         response=requests.delete(self.service.galaxy_url+'/api/jobs/'+identifier(str(job.galaxy_job_id)),headers=self.service._headers,timeout=30)
         response.raise_for_status()
+
+    def failed_request_proof(self,job,key,*,retiring=False):
+        """Prove an owned, empty request failed before a runner was assigned.
+
+        Scientific failures, manually paused work and uncertain acknowledgments
+        never qualify. A deleted job qualifies only with a saved retirement
+        intent, so an ordinary user cancellation cannot restart itself.
+        """
+        if not hasattr(self.service,'_job_details'):return None
+        self.verify_job(job,key)
+        details=self.service._job_details(str(job.galaxy_job_id))
+        states={'paused','deleted','deleted_new'} if retiring else {'paused'}
+        if (details.get('state') not in states or details.get('tool_id')!=self.tool_id
+                or details.get('history_id')!=self.service.history_id):return None
+        if any(details.get(k) not in (None,'') for k in
+               ['external_id','job_runner_name','command_line','command_version','exit_code']):return None
+        refs=details.get('inputs') or {}
+        if not isinstance(refs,dict):return None
+        ids={k:(refs.get(k) or {}).get('id') for k in ['source_gpx','model_assets','model_request']}
+        if not all(isinstance(v,str) and v for v in ids.values()):return None
+        data={k:self.service._dataset_metadata(identifier(v)) for k,v in ids.items()}
+        if any(d.get('deleted') or d.get('purged') for d in data.values()):return None
+        if any(data[k].get('state')!='ok' for k in ['source_gpx','model_assets']):return None
+        request=data['model_request']
+        if (request.get('state')!='error' or request.get('file_size')!=0
+                or document_label(request.get('name'))!='RADAR-PD Model request '+key):return None
+        return dict(job_id=str(job.galaxy_job_id),dispatch_key=key,inputs=ids,
+                    reason='Owned empty request failed before runner assignment')
+
+    def retire_failed_request(self,job,key,proof):
+        # Recheck after the durable intent and again after cancellation. No new
+        # scientific submission is possible until the old job is terminal.
+        if self.failed_request_proof(job,key,retiring=True)!=proof:
+            raise RuntimeUnavailable('The failed-input execution proof changed; review this batch')
+        details=self.service._job_details(str(job.galaxy_job_id))
+        if details.get('state')=='paused':self.cancel_job(job,key)
+        details=self.service._job_details(str(job.galaxy_job_id))
+        if details.get('state') not in {'deleted','deleted_new'}:
+            raise RuntimeUnavailable('Waiting for cancellation acknowledgment before retrying input staging')
+        if self.failed_request_proof(job,key,retiring=True)!=proof:
+            raise RuntimeUnavailable('The retired batch execution proof changed; review it before retrying')
 
     def wait_job(self,job,*,key,cancel=None):
         started=time.monotonic()
@@ -373,11 +414,25 @@ class GalaxyChunkTransport:
 
     def poll(self,handle,directory):
         dispatch=handle['dispatch_key'];chunk=self.state['chunks'][dispatch]
+        if chunk.get('not_dispatched'):return dict(state='not_started')
         current=self.cache.get(dispatch)
         if current is None or (current[1]['state']!='complete' and time.monotonic()-current[0]>1):
             job=self._job(chunk)
             if job is None:return dict(state='unknown',reason='The model chunk has no acknowledged Galaxy job')
             self.runtime.service.refresh_utility(job);chunk['job']=job.model_dump(mode='json');self.save()
+            intent=chunk.get('staging_retirement')
+            prior=sum(bool(c.get('staging_retirement')) for c in self.state['chunks'].values())
+            if intent or (job.status==RunStatus.ERROR and prior<2):
+                proof=self.runtime.failed_request_proof(job,dispatch,retiring=bool(intent))
+                if proof is not None:
+                    if intent and intent!=proof:raise RuntimeUnavailable('The saved staging retirement belongs to different inputs')
+                    if not intent:
+                        chunk['staging_retirement']=proof;self.save();self.checkpoint(force=True)
+                    self.runtime.retire_failed_request(job,dispatch,proof)
+                    chunk.update(not_dispatched=True,complete=True);self.save();self.checkpoint(force=True)
+                    self.campaign.set_setting('preparation_message','Recovered a failed empty request upload; retrying the same finite starts after confirmed cancellation. No native calculation ran in the retired batch.')
+                    self.cache.pop(dispatch,None)
+                    return dict(state='not_started')
             if job.status==RunStatus.CANCELLED:
                 self.cache[dispatch]=(time.monotonic(),dict(state='cancelled'))
             elif job.status==RunStatus.ERROR:
