@@ -5349,7 +5349,7 @@ class RadarPdNovaApp(LiveAssistantMixin, LiveSetupMixin, SetupEditorMixin, PostA
                 {"label": "Read-only source", "value": state.powgen_source_directory},
                 {"label": "Samples to process", "value": ", ".join(self._powgen_processing_ids() or ()) or "All samples"},
                 {"label": "Run review", "value": f"{result.get('excluded_count', 0)} excluded by role or individual selection; unclassified titles remain included"},
-                {"label": "Bank analyses", "value": f"{result.get('analysis_count', 0)}; banks {result.get('available_banks', [])}; each bank is analyzed separately"},
+                {"label": "Bank analyses", "value": f"{result.get('analysis_count', 0)}; selected source banks {list(preflight_arguments['selected_banks']) if preflight_arguments['selected_banks'] is not None else result.get('available_banks', [])}; each bank is analyzed separately"},
                 {
                     "label": "Available reductions",
                     "value": f"{result.get('scan_count', 0)} ({scan_range})",

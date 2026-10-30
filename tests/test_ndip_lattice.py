@@ -27,3 +27,4 @@ def test_final_project_prefers_final_polish_then_highest_accepted_pass():
     files = [Path(p) for p in ["pattern_project.gpx", "seq_pass1_kept_polished.gpx", "seq_pass10_kept_polished.gpx"]]
     assert max(files, key=final_project_key).name == "seq_pass10_kept_polished.gpx"
     assert max([*files, Path("seq_final_main_polished.gpx")], key=final_project_key).name == "seq_final_main_polished.gpx"
+    assert max([*files,Path('seq_final_joint_polished.gpx'),Path('seq_final_accepted_model.gpx')],key=final_project_key).name=='seq_final_accepted_model.gpx'

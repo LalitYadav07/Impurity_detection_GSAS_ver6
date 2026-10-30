@@ -394,7 +394,7 @@ class SymmetryMixin(KSearchMixin):
     def plan_symmetry_request(self):
         """A setup-only call; discovery and native dispatch still need review."""
         async def plan():
-            s=self.server.state;s.sx_busy=True;s.sx_error='';s.sx_planning_usage='';s.sx_planning_cost=''
+            s=self.server.state;s.sx_busy=True;s.sx_error='';s.sx_planning_usage='';s.sx_planning_cost='';s.sx_planning_summary='';s.sx_planning_notes=[]
             s.sx_message='Asking Illumine for a setup-only draft. No model refinement starts from this request.';s.flush()
             try:
                 d=self._symmetry_draft
@@ -430,7 +430,12 @@ class SymmetryMixin(KSearchMixin):
                         s.sx_mag_d_min=settings['magnetic_d_min'];s.sx_cycles=settings['cycles'];s.sx_sign_starts=settings['relative_sign_starts'];s.flush()
                     finally:self._symmetry_applying_intent=False
                 s.sx_message=s.sx_planning_summary
-            except Exception as exc:s.sx_error=str(exc);s.sx_message='Setup planning stopped; review the error above.'
+            except Exception as exc:
+                calls=getattr(exc,'planning_calls',[])
+                if calls:
+                    s.sx_planning_usage,s.sx_planning_cost=usage_labels(summarize_calls(calls))
+                    s.sx_planning_summary=f'{len(calls)} setup call(s) · no settings accepted'
+                s.sx_error=str(exc);s.sx_message='Setup planning stopped; review the error above.'
             finally:s.sx_busy=False;s.flush()
         self._refinement_schedule(plan(),'radar-symmetry-plan')
 

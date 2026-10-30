@@ -9,6 +9,7 @@ import sys
 import zipfile
 from pathlib import Path
 
+import pytest
 import yaml
 
 
@@ -466,6 +467,44 @@ def test_full_polished_main_anchor_supersedes_the_fallback_project(tmp_path: Pat
     assert len(result["gpx_projects"]) == 1
     assert result["gpx_projects"][0]["collection_name"] == "02_Main_phase_anchor.gpx"
     assert result["gpx_projects"][0]["source_path"].endswith("seq_final_main_polished.gpx")
+
+
+def test_retained_prenudged_project_drives_handoff_cell_and_rwp_together(tmp_path: Path) -> None:
+    import hashlib
+    run=tmp_path/'run';projects=run/'Technical/GSAS_Projects';projects.mkdir(parents=True)
+    def project(path,a,rwp):
+        records=[[["Covariance",{"Rvals":{"Rwp":rwp}}]],[["Phases",{}],
+            ["Main",{"General":{"Cell":[False,a,a,13.77,90,90,120,300],"Mass":160,"SGData":{"SpGrp":"R -3 c"}},
+                     "Histograms":{"PWDR test":{"Scale":[1,False],"Use":True}}}]]]
+        with path.open('wb')as handle:
+            for record in records:pickle.dump(record,handle,protocol=1)
+    project(projects/'demo_project.gpx',5.009,45.85)
+    adopted=projects/'demo_project_main_prenudged.gpx';project(adopted,5.038,35.15)
+    # A speculative candidate exists too; neither filename nor lowest Rwp
+    # authorizes publishing it as the retained result.
+    project(projects/'demo_project_other_trial.gpx',4.9,1.)
+    handoff=projects/'seq_final_accepted_model.gpx';handoff.write_bytes(adopted.read_bytes())
+    receipt=dict(path=handoff.relative_to(run).as_posix(),source_path=adopted.relative_to(run).as_posix(),
+        sha256=hashlib.sha256(handoff.read_bytes()).hexdigest())
+    (run/'run_manifest.json').write_text(json.dumps(dict(metrics=dict(accepted_final_project=receipt))))
+    result=collect_outputs(run,tmp_path/'portal',mode='full',include_archive=False)
+    assert result['final_rwp']==35.15
+    assert result['lattice_parameters'][0]['a']==5.038
+    assert [p['collection_name']for p in result['gpx_projects']]==['03_Final_accepted_model.gpx']
+    assert result['gpx_projects'][0]['stage']=='final_refinement'
+    assert result['gpx_projects'][0]['status']=='accepted'
+    assert result['gpx_projects'][0]['sha256']==receipt['sha256']
+    assert result['lattice_parameters'][0]['source_gpx']==receipt['path']
+
+
+@pytest.mark.parametrize('path,digest',[('../outside.gpx','a'*64),('Technical/GSAS_Projects/seq_final_accepted_model.gpx','b'*64)])
+def test_changed_or_unconfined_retained_project_cannot_silently_fall_back(tmp_path: Path,path,digest) -> None:
+    run=tmp_path/'run';projects=run/'Technical/GSAS_Projects';projects.mkdir(parents=True)
+    (projects/'demo_project.gpx').write_bytes(b'earlier project')
+    (projects/'seq_final_accepted_model.gpx').write_bytes(b'retained project')
+    (run/'run_manifest.json').write_text(json.dumps(dict(metrics=dict(accepted_final_project=dict(path=path,sha256=digest)))))
+    with pytest.raises(ValueError,match='final.project|accepted GPX'):
+        collect_outputs(run,tmp_path/'portal',mode='full',include_archive=False)
 
 
 def test_published_gpx_uses_unique_scientific_phase_names(tmp_path: Path) -> None:

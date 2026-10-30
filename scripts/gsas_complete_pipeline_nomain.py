@@ -33,6 +33,7 @@ import io
 import datetime
 import csv
 import shutil
+import hashlib
 from pathlib import Path
 
 import numpy as np
@@ -4671,6 +4672,26 @@ class UnifiedPipeline:
                         rwp_final = kept_rwp
                 except Exception:
                     rwp_final = kept_rwp
+
+                # The retained project can have a pre-nudge/cleanup name that
+                # predates the Galaxy publication rules. Freeze its exact bytes
+                # under one stable handoff name; never select a final model by
+                # its residual or by guessing which trial filename was adopted.
+                final_handoff = Path(technical_dir) / "GSAS_Projects" / "seq_final_accepted_model.gpx"
+                final_handoff.parent.mkdir(parents=True, exist_ok=True)
+                retained_project = Path(kept_gpx).resolve()
+                temporary_handoff = final_handoff.with_suffix(".gpx.tmp")
+                shutil.copyfile(retained_project, temporary_handoff)
+                retained_sha = hashlib.sha256(retained_project.read_bytes()).hexdigest()
+                if hashlib.sha256(temporary_handoff.read_bytes()).hexdigest() != retained_sha:
+                    raise RuntimeError("The retained final project changed while preparing its handoff")
+                temporary_handoff.replace(final_handoff)
+                self.manifest.update_metrics({"accepted_final_project": {
+                    "path": final_handoff.relative_to(Path(work_dir)).as_posix(),
+                    "source_path": retained_project.relative_to(Path(work_dir).resolve()).as_posix(),
+                    "sha256": retained_sha,
+                }})
+                self.manifest.add_artifact(str(final_handoff))
 
                 # Build CSV rows from accepted list
                 rows: List[Dict[str, Any]] = []

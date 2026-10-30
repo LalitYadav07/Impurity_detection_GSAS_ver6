@@ -88,6 +88,26 @@ def test_resource_budget_updates_dispatch_limits_without_changing_scientific_app
     assert 'one or two' in state.sx_error and runtime.max_active_jobs==2
 
 
+def test_failed_magnetic_setup_keeps_token_cost_and_clears_previous_planning_notes(monkeypatch):
+    import radar_pd_nova.symmetry_controller as controller
+    state=SimpleNamespace(sx_start_source='scan',sx_request='Find magnetic k',sx_k='',
+        sx_planning_notes=['Previous accepted note'],sx_planning_summary='Previous accepted plan',flush=lambda:None)
+    app=SymmetryMixin();app.server=SimpleNamespace(state=state)
+    app._symmetry_draft=dict(source_id='scan',context={})
+    app._refinement_schedule=lambda coroutine,name:asyncio.run(coroutine)
+    def failed(*args,**kwargs):
+        error=ValueError('Invalid ionic form factor for Fe')
+        error.planning_calls=[dict(provider='illumine-luna',model='gpt-6-luna',
+            usage=dict(input_tokens=700,output_tokens=100,total_tokens=800))]
+        raise error
+    monkeypatch.setattr(controller,'make_intent',failed)
+    app.plan_symmetry_request()
+    assert state.sx_error=='Invalid ionic form factor for Fe'
+    assert not state.sx_busy and state.sx_planning_notes==[]
+    assert 'no settings accepted' in state.sx_planning_summary
+    assert '800 tokens' in state.sx_planning_usage and 'Approximate Luna' in state.sx_planning_cost
+
+
 def test_continue_reports_recovery_before_waiting_for_remote_results(tmp_path,monkeypatch):
     import radar_pd_nova.symmetry_controller as controller
     root=tmp_path/'campaign';root.mkdir();(root/'campaign.sqlite').touch()

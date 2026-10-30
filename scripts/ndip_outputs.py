@@ -93,12 +93,13 @@ def _publish_gpx(path: Path, run_dir: Path) -> bool:
         return any(token in name for token in ("stable_", "accepted", "final"))
     if "gsas_projects" in relative:
         fallback_main_project = name.endswith("_project.gpx") and not any(
-            "seq_final_main_polished" in candidate.name.lower()
+            any(token in candidate.name.lower() for token in ("seq_final_main_polished", "seq_final_accepted_model"))
             and not _is_intermediate_file(candidate)
             for candidate in path.parent.glob("*.gpx")
         )
         return (
             "pattern_project" in name
+            or "seq_final_accepted_model" in name
             or "seq_final_main_polished" in name
             or "seq_final_joint_polished" in name
             or ("seq_pass" in name and "kept_polished" in name)
@@ -138,7 +139,9 @@ def _published_name(path: Path, run_dir: Path, collection: str) -> str:
         elif "reranked_512" in relative:
             stem = "Lattice_aware_pattern_ranking"
     elif collection == "gpx":
-        if "seq_final_joint_polished" in relative:
+        if "seq_final_accepted_model" in relative:
+            stem = "03_Final_accepted_model"
+        elif "seq_final_joint_polished" in relative:
             stem = "03_Final_accepted_joint_cell_model"
         elif "pattern_project" in relative:
             stem = "01_Imported_pattern_and_main_phase"
@@ -319,7 +322,7 @@ def _iter_artifacts(run_dir: Path) -> Iterable[Path]:
 
 def _gpx_stage(relative: str) -> str:
     lowered = relative.lower()
-    if "seq_final_joint_polished" in lowered:
+    if "seq_final_accepted_model" in lowered or "seq_final_joint_polished" in lowered:
         return "final_refinement"
     if "gsas_projects" in lowered and lowered.endswith("_project.gpx"):
         return "main_phase_anchor"
@@ -445,6 +448,24 @@ def _find_suffix(root: Path, suffix: str) -> Path | None:
         if path.relative_to(root).as_posix().endswith(expected):
             return path
     return None
+
+
+def _declared_final_project(root: Path) -> Path | None:
+    """Verify the pipeline's retained handoff before publishing derived values."""
+    manifest_path = _find_suffix(root, "run_manifest.json")
+    manifest = read_json(manifest_path) if manifest_path else {}
+    record = (manifest.get("metrics") or {}).get("accepted_final_project")
+    if record is None:
+        return None  # Historical runs retain their established fallback rules.
+    if not isinstance(record, dict) or not isinstance(record.get("path"), str):
+        raise ValueError("Invalid retained final-project receipt")
+    relative = Path(record["path"])
+    path = (root / relative).resolve()
+    if relative.is_absolute() or ".." in relative.parts or not path.is_relative_to(root) or path.suffix.lower() != ".gpx" or _is_intermediate_file(path):
+        raise ValueError("Retained final project must be a run-confined accepted GPX")
+    if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != record.get("sha256"):
+        raise ValueError("Retained final-project handoff is missing or changed; no substitute project was selected")
+    return path
 
 
 def _summary_sources(
@@ -832,11 +853,15 @@ def collect_outputs(
     if not run_root.exists():
         raise FileNotFoundError(f"RADAR-PD run directory does not exist: {run_root}")
 
+    declared_final = _declared_final_project(run_root) if mode == "full" else None
+
     published_gpx_sources = [
         path
         for path in _iter_artifacts(run_root)
         if path.suffix.casefold() == ".gpx" and _publish_gpx(path, run_root)
     ]
+    if declared_final is not None and declared_final not in published_gpx_sources:
+        raise ValueError("The retained final project is not eligible for the handoff collection")
     gpx_phase_ids: set[str] = set()
     for source in published_gpx_sources:
         try:
@@ -887,7 +912,7 @@ def collect_outputs(
                 from .ndip_lattice import extract_lattice, final_project_key, lattice_quality
             except ImportError:
                 from ndip_lattice import extract_lattice, final_project_key, lattice_quality
-            final_gpx = max(published_gpx_sources, key=final_project_key)
+            final_gpx = declared_final or max(published_gpx_sources, key=final_project_key)
             lattice, final_rwp = extract_lattice(final_gpx, _read_gpx_records(final_gpx),
                 source=final_gpx.relative_to(run_root).as_posix(), labels=gpx_phase_labels)
             scientific_warnings = lattice_quality(lattice)

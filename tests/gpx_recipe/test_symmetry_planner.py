@@ -123,6 +123,30 @@ def test_refusal_stays_blocked_without_unnecessary_model_repair(source,intent):
     assert r['status']=='needs_input' and len(c.calls)==1
 
 
+def test_paragraphs_in_clarification_are_prose_and_do_not_discard_a_safe_block(source,intent):
+    intent.update(questions=['Choose an adequate Rwp criterion.\n\tThe current reduction is unqualified.'],settings=None)
+    c=Client([intent]);r=make_intent('Survey this series; review the fit criterion later',source,client=c)
+    assert r['status']=='needs_input' and len(c.calls)==1
+    assert r['intent']['questions']==['Choose an adequate Rwp criterion. The current reduction is unqualified.']
+    assert r['intent']['settings'] is None
+
+
+@pytest.mark.parametrize('note',['', '   ', 'bad\x00text', 'x'*2001, None])
+def test_invalid_explanation_names_the_field_without_accepting_settings(source,intent,note):
+    intent.update(questions=[note],settings=None)
+    with pytest.raises(ValueError,match=r'questions\[0\]'):
+        validate_intent(intent,source,request='test')
+
+
+def test_ionic_notation_error_is_specific_enough_for_one_bounded_repair(source,intent):
+    intent['settings']['sites'][0]['form_factor']='Fe+3'
+    bad=copy.deepcopy(intent);bad['settings']['sites'][0]['form_factor']='Fe3+'
+    c=Client([bad,intent]);r=make_intent('Use Fe3+, g=2',source,client=c)
+    assert len(c.calls)==2 and r['intent']['settings']['sites'][0]['form_factor']=='Fe+3'
+    repair=c.calls[1][0][-1]['content']
+    assert 'ionic form factor for Fe1' in repair and 'Fe+3' in repair
+
+
 def test_source_payload_does_not_export_arrays_or_paths(source):
     source['runtime']={'root':'/private/runtime'}
     source['histograms'][0].update(observed=[999],source='/private/pattern')

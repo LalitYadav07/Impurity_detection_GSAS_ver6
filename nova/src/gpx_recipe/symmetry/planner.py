@@ -28,8 +28,10 @@ def response_schema(context):
         return dict(type='string', **({'enum': values} if values else {}))
     def array(item):
         return dict(type='array', items=item)
-    site = obj(dict(label=strings(), form_factor=strings(), lande_g=dict(type='number')))
-    settings = obj(dict(kind=strings(['magnetic']), parent=strings(), histogram=strings(),
+    site = obj(dict(label=strings(), form_factor=dict(type='string', pattern=r'^[A-Z][a-z]?(?:[+-][1-9])?$'), lande_g=dict(type='number')))
+    settings = obj(dict(kind=strings(['magnetic']),
+                        parent=strings([p['name'] for p in context['phases'] if p['type']=='nuclear']),
+                        histogram=strings([h['name'] for h in context['histograms']]),
                         k={'anyOf':[array(strings()),{'type':'null'}]}, sites=array(site), directions=array(strings(['x', 'y', 'z'])),
                         moment_model=strings(['collinear','symmetry_allowed']),
                         refine_histogram_scale=dict(type='boolean'),
@@ -51,9 +53,11 @@ def payload(request, context, declared=None):
                 declared=copy.deepcopy(declared or {}),
                 rules=[
                     'One nuclear parent phase and one linked neutron powder histogram per search.',
+                    'A campaign can repeat the same reviewed single-GPX protocol for selected acquisitions and follow newly published matching GPXs. A temperature series or following new scans is supported host orchestration, not an unsupported simultaneous multi-histogram refinement. Never invent temperature-dependent constraints or shared parameters across scans.',
                     'Single exact rational k in the actual parent basis; never reduce integer components modulo one.',
                     'The user supplies magnetic sites/ions, fit criterion and bounds. Ask if absent or ambiguous; do not invent oxidation states or propagation vectors. If k is unknown and the user requests a data-based k survey, return settings.k=null, questions=[] and unsupported=[] when other inputs are clear. The host only prepares the reviewed site/ion settings; no subgroup search or refinement may execute until a measured k-survey candidate or explicit rational k is reviewed.',
                     'Use exact atom labels, phase and histogram names from this GPX. Site labels are scoped to the selected phase.',
+                    'Write ionic form factors in native GSAS-II notation: a user request for Fe3+ means Fe+3, preserving the same element and charge. Do not invent an oxidation state.',
                     'moment_model=collinear uses child-axis x/y/z starts and requires a collinear full structure. moment_model=symmetry_allowed refines every site-symmetry-allowed moment component, permitting commensurate canted structures. Its parent-axis-dominated starts include relative component signs. Neither is an exhaustive continuous-orientation search. Nuclear geometry, calibration, occupancy, positions, Uiso and relative phase amounts stay fixed.',
                     'refine_histogram_scale=true is supported only when the user explicitly requests a shared/common/global nuclear-and-magnetic intensity scale. It refines one positive histogram scale for both contributions, never independent nuclear/magnetic phase amounts. A cold nuclear-only scale can otherwise absorb magnetic scattering and bias moment estimates. Default false when unrequested; a request to keep all scale factors fixed means false.',
                     'refine_background=true is supported only when the user explicitly requests refinement of the existing background coefficients. The basis, coefficient count, extra peaks and Debye terms stay fixed. The same scope applies to every candidate. Default false when unrequested or when the user requests a fixed background.',
@@ -77,7 +81,17 @@ def validate_intent(value, context, *, request, declared=None):
     for key in ['assumptions', 'questions', 'unsupported']:
         if not isinstance(p[key], list) or len(p[key]) > 30:
             raise ValueError('Invalid setup explanations')
-        p[key] = [text(item, maximum=2000) for item in p[key]]
+        explanations=[]
+        for index,item in enumerate(p[key]):
+            # These are displayed prose, not executable identities. A normal
+            # paragraph break must not invalidate an otherwise closed plan.
+            if not isinstance(item,str) or len(item)>2000:
+                raise ValueError(f'Invalid {key}[{index}]: use a nonempty explanation of at most 2000 characters')
+            try:
+                explanations.append(text(re.sub(r'[\t\r\n]+',' ',item).strip(),maximum=2000))
+            except ValueError:
+                raise ValueError(f'Invalid {key}[{index}]: use nonempty plain-text prose') from None
+        p[key] = explanations
     if p['questions'] or p['unsupported']:
         if p['settings'] is not None:
             raise ValueError('Unresolved setup requests cannot retain executable settings')
@@ -109,7 +123,10 @@ def validate_intent(value, context, *, request, declared=None):
     for site in s['sites']:
         fields(site, ['label', 'form_factor', 'lande_g'])
         text(site['label'], maximum=100)
-        text(site['form_factor'], pattern=r'[A-Z][a-z]?(?:[+-][1-9])?')
+        try:
+            text(site['form_factor'], pattern=r'[A-Z][a-z]?(?:[+-][1-9])?')
+        except ValueError:
+            raise ValueError('Invalid ionic form factor for '+str(site['label'])+'; use native notation such as Fe+3, preserving the requested element and charge') from None
         site['lande_g'] = number(site['lande_g'], 0, 10, positive=True)
     if len({site['label'] for site in s['sites']}) != len(s['sites']):
         raise ValueError('Magnetic site labels must be unique within the parent')

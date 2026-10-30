@@ -207,6 +207,19 @@ def test_preflight_is_read_only_and_requires_no_history_configuration(live):
     )
 
 
+@pytest.mark.parametrize('scope,expected',[('selected','[2]'),('all','[1, 2, 3, 4, 5, 6]')])
+def test_bank_summary_distinguishes_selected_from_available_histograms(live,monkeypatch,scope,expected):
+    live.server.state.powgen_bank_scope=scope
+    def preflight(*args,**kwargs):
+        return dict(ready=True,source_directory='/SNS/PG3/IPTS-2767/shared/autoreduce',
+            scan_count=2,analysis_count=2 if kwargs['selected_banks'] else 12,
+            available_banks=[1,2,3,4,5,6],message='Ready',selected_wavelength='1.5',profile_filename='official.instprm')
+    monkeypatch.setattr('radar_pd_nova.app.preflight_powgen_experiment',preflight)
+    assert asyncio.run(live.check_powgen_experiment())
+    row=next(r for r in live.server.state.powgen_preflight_details if r['label']=='Bank analyses')
+    assert 'selected source banks '+expected+';' in row['value']
+
+
 def test_start_saves_exact_draft_and_freezes_the_watch(live):
     state = live.server.state
     state.live_full_profile = "custom"

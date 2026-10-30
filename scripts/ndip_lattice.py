@@ -25,6 +25,8 @@ GSAS_KEYS = (
 
 def final_project_key(path: Path) -> tuple[int, int, str]:
     name = path.name.lower()
+    if "seq_final_accepted_model" in name:
+        return (5, 0, name)
     if "seq_final_joint_polished" in name:
         return (4, 0, name)
     match = re.search(r"seq_pass(\d+)_kept_polished", name)
