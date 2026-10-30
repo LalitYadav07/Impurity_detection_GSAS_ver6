@@ -127,6 +127,38 @@ class LiveAssistantMixin(LiveAssistantUi):
         self.server.state.live_assistant_open = False
         self.server.state.flush()
 
+    def _queue_live_assistant_action(self, action, *args, **kwargs):
+        """Release the browser RPC while read-only discovery/inspection awaits I/O.
+
+        Awaiting the whole operation in a wslink event serializes later browser
+        events, including navigation. Keep a single tracked task instead; the
+        existing action owns its scientific validation and busy state.
+        """
+        task = getattr(self, "_live_assistant_action_task", None)
+        if self._assistant_locked() or self.server.state.live_assistant_busy or (task and not task.done()):
+            return
+
+        async def run():
+            try:
+                await action(*args, **kwargs)
+            except Exception as exc:
+                self.server.state.live_assistant_error = str(exc)
+                self.server.state.flush()
+
+        self._live_assistant_action_task = asyncio.create_task(run())
+
+    def start_live_assistant_continue(self, payload=None, **kwargs):
+        self._queue_live_assistant_action(self.live_assistant_continue, deepcopy(payload), **kwargs)
+
+    def start_live_assistant_send(self, text="", context_token=None, **kwargs):
+        self._queue_live_assistant_action(self.live_assistant_send, text, context_token=context_token, **kwargs)
+
+    def start_live_assistant_choose_reply(self, choice_id="", **kwargs):
+        self._queue_live_assistant_action(self.live_assistant_choose_reply, choice_id, **kwargs)
+
+    def start_live_assistant_preview(self, **kwargs):
+        self._queue_live_assistant_action(self.live_assistant_preview, **kwargs)
+
     def _assistant_ingest(self, payload):
         """Use button-time visible values, including debounced text fields."""
         if not isinstance(payload, dict):

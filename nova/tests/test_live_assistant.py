@@ -67,6 +67,42 @@ def test_commands_are_bounded_and_chemical_symbols_are_not_guessed():
             parse_elements(value)
 
 
+def test_discovery_releases_browser_event_and_allows_navigation_without_duplicate_work(assistant):
+    async def run():
+        entered, release = asyncio.Event(), asyncio.Event()
+        calls = []
+        original = assistant.refresh_powgen_samples
+
+        async def discovery(ipts=None):
+            calls.append(ipts)
+            entered.set()
+            await release.wait()
+            await original(ipts)
+
+        assistant.refresh_powgen_samples = discovery
+        payload = {"live_beamline": "PG3", "powgen_ipts": "IPTS-123", "powgen_source_subfolder": "shared/autoreduce"}
+        assert assistant.start_live_assistant_continue(payload) is None
+        task = assistant._live_assistant_action_task
+        assistant.start_live_assistant_continue(payload)  # same browser turn
+        assert assistant._live_assistant_action_task is task
+        await entered.wait()
+        assert assistant.server.state.live_assistant_busy
+        assistant.live_assistant_manual(0)
+        assert not assistant.server.state.live_assistant_open
+        assert assistant.server.state.live_setup_panels == [0]
+        assistant.start_live_assistant_continue(payload)  # while I/O is pending
+        assert assistant._live_assistant_action_task is task
+        release.set()
+        await task
+        assert calls == ["IPTS-123"]
+        assert not assistant.server.state.live_assistant_busy
+        assert not assistant.server.state.live_assistant_open
+        assert assistant.server.state.live_assistant_step == "selection"
+        assert not assistant.service.jobs
+
+    asyncio.run(run())
+
+
 def test_partial_draft_invalidates_only_dependent_confirmations():
     conversation = SetupConversation()
     snapshots = {s: {"value": s} for s in STEPS[:-1]}

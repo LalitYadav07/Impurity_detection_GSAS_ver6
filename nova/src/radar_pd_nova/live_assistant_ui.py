@@ -23,7 +23,7 @@ class LiveAssistantUi:
     def _assistant_next(self, step, label="Continue"):
         fields = STEP_FIELDS.get(step, ())
         payload = "{" + ",".join(f"{name}:{name}" for name in fields) + "}"
-        vuetify.VBtn(label, click=(self.live_assistant_continue, f"[{payload}]"),
+        vuetify.VBtn(label, click=(self.start_live_assistant_continue, f"[{payload}]"),
                      disabled=(LOCK,), loading=("live_assistant_busy",),
                      color="#15543c", variant="flat", prepend_icon="mdi-arrow-right")
 
@@ -65,9 +65,9 @@ class LiveAssistantUi:
                 html.P("Nothing from this suggestion is applied until you choose. You can also type an option number, or yes for a single choice.")
                 with html.Div(classes="radar-assistant-actions"):
                     vuetify.VBtn(v_for="choice in live_assistant_reply_choices", key="choice.id",
-                                 text=("choice.label",), click=(self.live_assistant_choose_reply, "[choice.id]"),
+                                 text=("choice.label",), click=(self.start_live_assistant_choose_reply, "[choice.id]"),
                                  variant="outlined", color="#15543c", disabled=(LOCK,))
-                    vuetify.VBtn("Cancel suggestion", click=(self.live_assistant_send, "['cancel']"),
+                    vuetify.VBtn("Cancel suggestion", click=(self.start_live_assistant_send, "['cancel']"),
                                  variant="text", disabled=(LOCK,))
             with html.Div(classes="radar-assistant-question"):
                 html.Div("SETUP ASSISTANT", classes="radar-micro-label")
@@ -92,15 +92,15 @@ class LiveAssistantUi:
                                    maxlength=1000, disabled=(LOCK,),
                                    __properties=["maxlength"],
                                    __events=[("keydown_enter", "keydown.enter.prevent")],
-                                   keydown_enter=(self.live_assistant_send, "[live_assistant_text, live_assistant_context_token]"))
-                vuetify.VBtn("Send", click=(self.live_assistant_send, "[live_assistant_text, live_assistant_context_token]"), disabled=(LOCK,),
+                                   keydown_enter=(self.start_live_assistant_send, "[live_assistant_text, live_assistant_context_token]"))
+                vuetify.VBtn("Send", click=(self.start_live_assistant_send, "[live_assistant_text, live_assistant_context_token]"), disabled=(LOCK,),
                              variant="outlined", color="#15543c")
             with html.Details(classes="radar-assistant-help"):
                 html.Summary("What can I ask?")
                 html.P("Reply with a beamline/IPTS, sample name, displayed sample option number, element list, or analysis goal. Ask what a setting means, say back or undo, or change an earlier choice. Spelling suggestions need confirmation; identifier digits and bank mappings are never guessed.")
                 with html.Div(classes="radar-assistant-actions"):
                     for topic in HELP:
-                        vuetify.VBtn(topic.capitalize(), click=(self.live_assistant_send, f"['why {topic}']"),
+                        vuetify.VBtn(topic.capitalize(), click=(self.start_live_assistant_send, f"['why {topic}']"),
                                      variant="text", size="small", disabled=(LOCK,))
 
     def _assistant_experiment_card(self):
@@ -219,7 +219,7 @@ class LiveAssistantUi:
                     html.Summary("Fit region, background and curve inspection")
                     self._regions_controls("live_", locked=LOCK)
                     self._background_controls("live_", locked=LOCK)
-                    vuetify.VBtn("Inspect a representative curve", click=self.live_assistant_preview,
+                    vuetify.VBtn("Inspect a representative curve", click=self.start_live_assistant_preview,
                                  prepend_icon="mdi-chart-line", variant="outlined", size="small", disabled=(LOCK,))
                     self._assistant_curve_preview()
                 with html.Details(classes="radar-soft-panel mb-3"):

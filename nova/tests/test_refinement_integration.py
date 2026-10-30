@@ -187,6 +187,21 @@ def test_ambiguous_or_stale_model_index_cannot_fall_back_to_arbitrary_project(tm
     assert published_project_path(tmp_path,{'path':'../outside.gpx'}) is None
 
 
+def test_identical_anchor_and_frozen_final_publications_are_one_model():
+    anchor = dict(status='accepted', stage='main_phase_anchor', sha256='a'*64,
+                  published_sha256='b'*64, collection_name='02_Main_phase_anchor.gpx')
+    final = dict(anchor, stage='final_refinement', collection_name='03_Final_accepted_model.gpx')
+    result = dict(observables={'source_gpx_sha256':'a'*64}, gpx_projects=[anchor, final])
+    assert select_published_project(result, {}) == final
+    # Internal source identity alone cannot establish the identity of the
+    # published model, nor resolve two different final-model claims.
+    for replacement in (dict(anchor, published_sha256='c'*64),
+                        {k:v for k,v in anchor.items() if k != 'published_sha256'},
+                        dict(anchor, stage='final_refinement')):
+        with pytest.raises(ValueError, match='Several published GPXs'):
+            select_published_project(dict(result, gpx_projects=[replacement, final]), {})
+
+
 def test_local_runtime_captures_immutable_original_and_holds_changed_input(tmp_path):
     original=tmp_path/'incoming.gpx';original.write_bytes(b'original')
     rt=LocalRefinementRuntime(tmp_path/'runtime',python='unused');s=dict(source_path=str(original),source_sha256=file_sha(original));capture=rt.resolve(s)
