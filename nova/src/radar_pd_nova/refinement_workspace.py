@@ -69,6 +69,16 @@ class RefinementWorkspace:
             changed=False
             for value in sources:
                 source=copy.deepcopy(value);old=self.state['sources'].get(source['id'])
+                # A summary-only recovery lacks the reviewed Live condition
+                # channels and experiment/sample mapping. It must not erase
+                # that provenance for the same exact published checkpoint.
+                same_publication=(old and source.get('collection_id') and all(
+                    old.get(key)==source.get(key) for key in
+                    ['collection_id','collection_name','internal_source_sha256','published_sha256']))
+                if same_publication and old.get('live_watch') and not source.get('live_watch'):
+                    for key in ['experiment','experiment_label','scan_key','sample_key','sample_label','scan_label',
+                                'run_id','run_number','bank','metadata','axis_overrides','live_watch']:
+                        if key in old:source[key]=copy.deepcopy(old[key])
                 for key,prior in list(self.state['sources'].items()):
                     if key!=source['id'] and prior.get('record_uid')==source.get('record_uid') and prior.get('collection_name')==source.get('collection_name') and source.get('record_uid'):
                         self.state.setdefault('superseded_sources',{})[key]=self.state['sources'].pop(key)

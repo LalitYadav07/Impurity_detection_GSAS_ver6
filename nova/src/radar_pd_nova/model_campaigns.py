@@ -11,6 +11,43 @@ from gpx_recipe.execution import write_json
 from .symmetry_sources import start_choices,resolve_start
 
 
+def portable_source(source):
+    """Capture Galaxy references and acquisition provenance, never local paths."""
+    source=copy.deepcopy(source)
+    for key in ['source_path','context','inspection','inspection_error']:
+        source.pop(key,None)
+    return source
+
+
+def captured_source(entry,template):
+    source=entry.get('source')
+    if (entry.get('origin')!='radar' or not isinstance(source,dict) or
+            source.get('id')!=entry.get('id') or not matches(template,source,'radar')):
+        raise ValueError('The captured acquisition is absent or outside the reviewed campaign scope')
+    if (source['id'] not in template['existing_ids'] and
+            not (template.get('future') and source['id'] not in template['seen_ids'])):
+        raise ValueError('The captured acquisition was not selected at approval or eligible for future enrollment')
+    if not source.get('collection_id') or not source.get('collection_name'):
+        raise ValueError('The captured acquisition has no immutable Galaxy publication reference')
+    return portable_source(source)
+
+
+def restore_captured_sources(campaign,workspace):
+    if getattr(getattr(workspace,'runtime',None),'kind',None)!='galaxy':return 0
+    template=validate_template(campaign.setting('template'))
+    sources=[]
+    for entry in campaign.setting('enrollments',{}).values():
+        if entry.get('origin')=='radar' and entry.get('source'):
+            source=captured_source(entry,template)
+            current=workspace.state.get('sources',{}).get(source['id'])
+            if current and any(current.get(field)!=source.get(field) for field in
+                    ['collection_id','collection_name','internal_source_sha256','published_sha256']):
+                raise ValueError('The captured publication differs from the current source; review its revision')
+            sources.append(source)
+    if sources:workspace.observe(sources)
+    return len(sources)
+
+
 def origin(source,workspace):
     if not source.get('recipe_job_id'):return 'radar'
     job=workspace.state['jobs'][source['recipe_job_id']]
@@ -48,7 +85,8 @@ def queue_sources(campaign,workspace):
         if len(entries)>=template['maximum_scans']:
             campaign.set_setting('following',False);campaign.set_setting('budget_message','Acquisition budget reached; review a new campaign to enroll more scans.')
             break
-        entries[key]=dict(id=key,status='queued',scan=source['scan_label'],sample=source['sample_label'],bank=source.get('bank'))
+        entries[key]=dict(id=key,status='queued',scan=source['scan_label'],sample=source['sample_label'],bank=source.get('bank'),
+            source=portable_source(source),origin=kind)
     campaign.set_setting('enrollments',entries)
     return entries
 
@@ -58,8 +96,19 @@ def enroll_source(campaign,workspace,key,inspect,*,transport=None):
     template=validate_template(campaign.setting('template'));entries=campaign.setting('enrollments',{})
     entry=entries[key];entry['status']='preparing';campaign.set_setting('enrollments',entries)
     try:
-        source=resolve_start(workspace,template['scope']['experiment'],key)
+        try:source=resolve_start(workspace,template['scope']['experiment'],key)
+        except ValueError:
+            # A fresh viewer need not have the Live monitor open. Recover the
+            # exact captured publication, then verify its bytes and native
+            # compatibility through the same runtime as ordinary enrollment.
+            source=captured_source(entry,template)
+            current=workspace.state.get('sources',{}).get(key)
+            if current and any(current.get(field)!=source.get(field) for field in
+                    ['collection_id','collection_name','internal_source_sha256','published_sha256']):
+                raise ValueError('The captured publication differs from the current source; review its revision')
+            workspace.observe([source])
         source=workspace.runtime.resolve(source)
+        if entry.get('origin')=='radar':entry['source']=portable_source(source)
         if campaign.setting('paused',False):raise ValueError('Campaign paused before enrollment')
         reference=template['protocol'];root=campaign.root/'enrollment-inputs'/digest([key,source['source_sha256']])[:24]
         root.mkdir(parents=True,exist_ok=True)

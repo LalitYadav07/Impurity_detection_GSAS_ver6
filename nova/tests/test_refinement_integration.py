@@ -211,6 +211,21 @@ def test_late_watch_metadata_enriches_same_source_identity_without_second_enroll
     assert restored.state['sources'][first['id']]['observed_utc']==stamp
 
 
+def test_summary_only_refresh_preserves_reviewed_live_provenance_for_same_publication(tmp_path):
+    w,_=create(tmp_path)
+    reviewed=dict(source('1'),collection_id='collection',collection_name='final.gpx',internal_source_sha256='internal',
+        published_sha256='published',live_watch=True,experiment_label='HB2A · IPTS-28749',
+        sample_label='Reviewed Er specimen',metadata={'conditions':{'reviewed':True,'temperature':.28}})
+    weak=dict(reviewed,live_watch=False,experiment='single-job',sample_key='scan:1',sample_label='Unassigned sample',metadata={})
+    w.observe([reviewed]);w.observe([weak])
+    recovered=w.state['sources']['1']
+    assert recovered['experiment']=='exp' and recovered['sample_label']=='Reviewed Er specimen'
+    assert recovered['metadata']==reviewed['metadata'] and recovered['live_watch']
+    # A different publication must not inherit the old sample/condition mapping.
+    w.observe([dict(weak,collection_id='new-collection')])
+    assert w.state['sources']['1']['experiment']=='single-job'
+
+
 def test_recovered_live_ages_scans_share_experiment_sample_and_bank_from_publications(tmp_path):
     project=dict(collection_name='final.gpx',sha256='model',status='accepted',stage='final_refinement')
     def recovered(run):

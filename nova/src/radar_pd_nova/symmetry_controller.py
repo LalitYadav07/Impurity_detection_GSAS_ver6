@@ -32,7 +32,7 @@ from . import symmetry_plots as plots
 from .symmetry_sources import start_choices,resolve_start
 from .k_search_controller import KSearchMixin
 from .model_runtime import GalaxyModelRuntime,GalaxyChunkTransport,active_batch_count
-from .model_campaigns import choices as model_choices,origin as model_origin,queue_sources,enroll_source,restore_history
+from .model_campaigns import choices as model_choices,origin as model_origin,queue_sources,enroll_source,restore_history,portable_source,restore_captured_sources
 from gpx_recipe.symmetry.compiler import prepare_shared_inputs
 from gpx_recipe.symmetry.templates import make_template,trial_count
 
@@ -509,6 +509,7 @@ class SymmetryMixin(KSearchMixin):
                 origin=model_origin(d['source'],w),existing=s.sx_existing,future=bool(s.sx_follow_new),maximum_scans=int(s.sx_max_scans))
             d.update(template=template,form_signature=form);s.sx_plan_token=digest(template)
             d['scope_sources']={v['id']:v for v,_ in model_choices(w,s.rf_experiment)}
+            d['scope_origins']={v['id']:kind for v,kind in model_choices(w,s.rf_experiment)}
             magnetic_scope='Site-symmetry-allowed moment components' if s.sx_moment_model=='symmetry_allowed' else 'Selected collinear moments'
             s.sx_plan_candidates=[dict(name=c['magnetic_space_group'] or c['irrep'],bns=c['bns_number'] or '—',basis=str(c['transformation_matrix']),origin=str(c['origin_shift']),modes=', '.join(c['modes']) or magnetic_scope) for c in p['candidates']]
             free='Selected modes, cell, background and global scale' if s.sx_kind=='structural' else magnetic_scope+('; shared nuclear/magnetic histogram scale varied' if s.sx_refine_scale else '; all scales fixed')+('; existing background coefficients varied' if s.sx_refine_background else '; background fixed')+'; nuclear geometry fixed'
@@ -542,6 +543,9 @@ class SymmetryMixin(KSearchMixin):
                 current=await asyncio.to_thread(self._refinement_store().runtime.resolve,current)
                 if d['source_id']!=s.sx_start_source or d.get('experiment',s.rf_experiment)!=s.rf_experiment:raise ValueError('The source selection changed while its revision was checked')
                 if current.get('source_sha256') and current['source_sha256']!=d['protocol']['source']['sha256']:raise ValueError('The published GPX revision changed after approval; inspect it again')
+                # A crash or external cancellation must not strand queued
+                # acquisitions whose GPXs have not entered a native batch yet.
+                await asyncio.to_thread(self._refinement_store().checkpoint)
                 c=Campaign(self._symmetry_root()/('campaign-'+self._symmetry_approved[:12]),shared_inputs=True)
                 if c.trials():raise ValueError('This campaign already exists. Use Continue to recover its work.')
                 ref=await asyncio.to_thread(prepare_shared_inputs,d['protocol'],d['root'],c.root)
@@ -550,7 +554,8 @@ class SymmetryMixin(KSearchMixin):
                 c.set_setting('following',d['template']['future']);c.set_setting('paused',False)
                 c.set_setting('enrollments',{key:dict(id=key,status='queued',
                     scan=d['scope_sources'][key]['scan_label'],sample=d['scope_sources'][key]['sample_label'],
-                    bank=d['scope_sources'][key].get('bank')) for key in d['template']['existing_ids']})
+                    bank=d['scope_sources'][key].get('bank'),source=portable_source(d['scope_sources'][key]),
+                    origin=d['scope_origins'][key]) for key in d['template']['existing_ids']})
                 transport=self._symmetry_transport(c)
                 if isinstance(transport,GalaxyChunkTransport):
                     transport.state['inputs'][digest(d['protocol'])]=await asyncio.to_thread(transport.runtime.packet,ref,['protocol.json']+[a['path'] for a in __import__('gpx_recipe.symmetry.compiler',fromlist=['assets']).assets(d['protocol'])])
@@ -611,6 +616,7 @@ class SymmetryMixin(KSearchMixin):
                 root=(self._symmetry_root()/s.sx_campaign).resolve()
                 if root.parent!=self._symmetry_root() or not (root/'campaign.sqlite').is_file():raise ValueError('Select an existing campaign')
                 campaign=Campaign(root,shared_inputs=True)
+                await asyncio.to_thread(restore_captured_sources,campaign,self._refinement_store())
                 transport=self._symmetry_transport(campaign)
                 await asyncio.to_thread(campaign.recover,transport)
                 pending=any(r['state'] not in {'terminal','cancelled'} for r in campaign.trials())

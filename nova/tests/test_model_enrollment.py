@@ -1,6 +1,8 @@
 """Enrollment scope stays fixed while acquisition and viewer state change."""
 import asyncio
+import copy
 from types import SimpleNamespace
+import pytest
 
 from gpx_recipe.symmetry.campaign import Campaign
 from radar_pd_nova import model_campaigns as module
@@ -14,7 +16,7 @@ def setup(tmp_path,monkeypatch):
     # Contract and native compatibility have independent worker tests; this
     # fixture isolates the queue's historical/future acquisition policy.
     t=dict(scope=dict(experiment='IPTS-1',sample_key='specimen:A',bank='2'),origin='radar',
-        existing_ids=['selected'],seen_ids=['selected','unselected'],maximum_scans=20)
+        existing_ids=['selected'],seen_ids=['selected','unselected'],maximum_scans=20,future=True)
     c.set_setting('template',t);c.set_setting('following',True)
     monkeypatch.setattr(module,'validate_template',lambda template:template)
     def source(key,**kwargs):
@@ -93,6 +95,8 @@ def test_continue_reports_recovery_before_waiting_for_remote_results(tmp_path,mo
         flush=lambda:flushes.append((state.sx_busy,state.sx_message)))
     app=SymmetryMixin();app.server=SimpleNamespace(state=state);app._symmetry_task=None
     app._symmetry_root=lambda:tmp_path;app._symmetry_transport=lambda campaign:object()
+    app._refinement_store=lambda:object()
+    monkeypatch.setattr(controller,'restore_captured_sources',lambda *args:None)
     def recover(transport):
         assert state.sx_busy and flushes
         assert 'before dispatching' in state.sx_message
@@ -101,3 +105,31 @@ def test_continue_reports_recovery_before_waiting_for_remote_results(tmp_path,mo
     app._refinement_schedule=lambda coroutine,name:asyncio.run(coroutine)
     app.continue_symmetry_campaign()
     assert not state.sx_busy and state.sx_error=='Remote result temporarily unavailable'
+
+
+def test_queued_source_capture_survives_a_new_viewer_without_trusting_local_paths(tmp_path,monkeypatch):
+    c,rows=setup(tmp_path,monkeypatch)
+    for source,kind in rows:
+        source.update(collection_id='collection-'+source['id'],collection_name='final.gpx',
+            internal_source_sha256='original',published_sha256='published',source_path='/old/viewer/source.gpx',
+            context={'unsafe':'must re-inspect'})
+    entries=module.queue_sources(c,None)
+    source=entries['selected']['source']
+    assert 'source_path' not in source and 'context' not in source
+    # The portable ledger carries the exact source identity across viewers.
+    snapshot=c.snapshot();restored=Campaign(tmp_path/'new-viewer');
+    for key,value in snapshot['settings'].items():restored.set_setting(key,value)
+    workspace=SimpleNamespace(state={'sources':{}},runtime=SimpleNamespace(kind='galaxy'),
+        observe=lambda sources:workspace.state['sources'].update({s['id']:s for s in sources}))
+    assert module.restore_captured_sources(restored,workspace)==2
+    assert set(workspace.state['sources'])=={'selected','new'}
+    assert workspace.state['sources']['selected']['collection_id']=='collection-selected'
+    bad=copy.deepcopy(entries);bad['selected']['source']['experiment']='IPTS-2';restored.set_setting('enrollments',bad)
+    with pytest.raises(ValueError,match='outside the reviewed'):module.restore_captured_sources(restored,workspace)
+    unselected=copy.deepcopy(entries['selected']);unselected['id']='unselected';unselected['source']['id']='unselected'
+    with pytest.raises(ValueError,match='not selected'):module.captured_source(unselected,c.setting('template'))
+    restored.set_setting('enrollments',entries)
+    workspace.state['sources']['selected']=dict(source,collection_id='replacement')
+    with pytest.raises(ValueError,match='differs'):module.restore_captured_sources(restored,workspace)
+    workspace.runtime.kind='local'
+    assert module.restore_captured_sources(restored,workspace)==0
