@@ -6,8 +6,7 @@ USER root
 
 # Hide NOVA developer-resource links in the deployed scientific workspace.
 ENV PIXI_ENVIRONMENT_NAME=production \
-    PYTHONPATH=/src/src \
-    RADAR_PD_SUPERVISED_SESSION=1
+    PYTHONPATH=/src/src
 
 WORKDIR /src
 COPY pyproject.toml README.md /src/
