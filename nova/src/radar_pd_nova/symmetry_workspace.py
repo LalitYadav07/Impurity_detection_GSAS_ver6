@@ -113,6 +113,49 @@ def disposition_reason(row):
     return 'Native parameter/data audits retained.' if row['has_view'] else 'Awaiting an independently audited native result.'
 
 
+def display_status(status):
+    return {'prepared':'awaiting dispatch','running':'dispatched to Galaxy',
+            'submitting':'submission pending'}.get(status,status.replace('_',' '))
+
+
+def campaign_can_resume(summaries,enrollments,*,following=False):
+    """A queued acquisition is recoverable even before its first trial exists."""
+    return (any(s['pending_count'] for s in summaries) or following or
+            any(e['status'] in {'queued','preparing'} for e in enrollments))
+
+
+def moment_precision_note(row):
+    """Flag weak conditional estimates without turning a screen into a test.
+
+    This does not change a sealed trial's disposition, infer a norm error,
+    combine correlated components, or assign a probability of magnetic order.
+    """
+    if row.get('kind') != 'magnetic':return ''
+    estimates=row.get('refined_moments') or []
+    if not estimates:return 'Moment uncertainties are unavailable in this receipt. An audited fit alone does not establish magnetic order.'
+    weak=[];missing=[]
+    for item in estimates:
+        ratios=[];sigmas=item.get('component_esd') or {};values=item.get('moment') or []
+        for index,axis in enumerate(('mx','my','mz')):
+            if index>=len(values):continue
+            value,sigma=values[index],sigmas.get(axis)
+            if isinstance(value,(int,float)) and isinstance(sigma,(int,float)) and np.isfinite(value) and np.isfinite(sigma) and sigma>0:
+                ratios.append(abs(value)/sigma)
+        # A legacy collinear norm may have an actual native uncertainty.
+        if not ratios:
+            value,sigma=item.get('magnitude'),item.get('magnitude_esd')
+            if isinstance(value,(int,float)) and isinstance(sigma,(int,float)) and np.isfinite(value) and np.isfinite(sigma) and sigma>0:
+                ratios.append(abs(value)/sigma)
+        label=item.get('label','Magnetic atom')
+        if not ratios:missing.append(label)
+        elif max(ratios)<3:weak.append(f'{label} (largest component / s.u. {max(ratios):.2f})')
+    messages=[]
+    if weak:messages.append('Weak conditional moment estimates: '+', '.join(weak)+'. No independently varied component exceeds 3 conditional standard uncertainties for these atoms.')
+    if missing:messages.append('Moment uncertainty unavailable for '+', '.join(missing)+'.')
+    if messages:messages.append('This component screen is not a joint significance test or proof of magnetic order; uncertainties depend on the selected model and fixed nuclear parameters.')
+    return ' '.join(messages)
+
+
 def parameter_rows(row,view):
     """Conditional moment uncertainties come from the audited native receipt.
 

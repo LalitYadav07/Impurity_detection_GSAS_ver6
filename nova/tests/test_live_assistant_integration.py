@@ -81,3 +81,18 @@ def test_preview_uses_registered_reader_facility_and_native_units(tmp_path,monke
     assert called==[(facility,{'normalization':'monitor','product_family':'reviewed-family'})]
     assert inventory['unit']==unit
     assert inventory['setup_key']==BEAMLINES[instrument].controller.setup_metadata_key
+
+
+@pytest.mark.parametrize('normalization,suffix', [('monitor','autoreduced'),('time','norm_time')])
+def test_hb2a_preview_finds_the_requested_product_with_real_listing_readers(tmp_path, monkeypatch, normalization, suffix):
+    from radar_pd_nova.powgen_watch import WatchDefinition
+    from radar_pd_nova.live_beamlines import _hb2a_runs
+    for variant in ['autoreduced','norm_time']:
+        (tmp_path/f'HB2A_exp0853_scan0014_{variant}.dat').write_text('1 2 3\n')
+    monkeypatch.setattr(WatchDefinition,'source_directory',property(lambda self:str(tmp_path)))
+    definition=WatchDefinition('IPTS-28749','shared/autoreduce','preview','config','profile',
+                               instrument='HB2A',facility='HFIR')
+    runs=_hb2a_runs(definition,{'normalization':normalization})
+    assert len(runs)==1
+    assert runs[0].source_path.endswith('_'+suffix+'.dat')
+    assert 'hb2a_normalization' not in definition.config_refs

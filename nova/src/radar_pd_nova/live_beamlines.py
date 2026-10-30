@@ -4,7 +4,7 @@ Each adapter owns scientific discovery, metadata, preflight and bank staging;
 the controller lifecycle remains shared. Adding a beamline is an explicit
 registration, never a filename-prefix or nominal-wavelength guess.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Callable
 
 from .powgen_controller import (PowgenExperimentSettings, PowgenWatchController,
@@ -57,8 +57,13 @@ def _tof_setup(path, definition, policy):
 
 def _hb2a_runs(definition, policy):
     from . import hb2a
-    return hb2a.discover_listing(definition, hb2a.directory_listing(definition.source_directory,
-        normalization=policy.get('normalization', 'time')))
+    normalization = policy.get('normalization', 'time')
+    # Both readers enforce the selected product family. Keep their policies
+    # identical without mutating the caller's immutable watch definition.
+    preview = replace(definition, config_refs={**definition.config_refs,
+                                              'hb2a_normalization': normalization})
+    return hb2a.discover_listing(preview, hb2a.directory_listing(preview.source_directory,
+        normalization=normalization))
 
 
 def _hb2a_setup(path, definition, policy):

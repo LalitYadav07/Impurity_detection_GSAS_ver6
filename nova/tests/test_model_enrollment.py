@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from gpx_recipe.symmetry.campaign import Campaign
 from radar_pd_nova import model_campaigns as module
 from radar_pd_nova.symmetry_controller import SymmetryMixin
+from radar_pd_nova.symmetry_workspace import campaign_can_resume
 
 
 def setup(tmp_path,monkeypatch):
@@ -38,6 +39,17 @@ def test_budget_stops_following_with_visible_reason(tmp_path,monkeypatch):
     c,rows=setup(tmp_path,monkeypatch);t=c.setting('template');t['maximum_scans']=1;c.set_setting('template',t)
     assert set(module.queue_sources(c,None))=={'selected'}
     assert c.setting('following') is False and 'budget reached' in c.setting('budget_message')
+
+
+def test_recover_queued_acquisitions_before_the_first_trial_is_created(tmp_path,monkeypatch):
+    c,_=setup(tmp_path,monkeypatch);c.set_setting('following',False)
+    entries=module.queue_sources(c,None)
+    assert not c.trials() and not c.summaries()
+    assert campaign_can_resume(c.summaries(),list(entries.values()))
+    entries['selected']['status']='preparing'
+    assert campaign_can_resume(c.summaries(),list(entries.values()))
+    entries['selected']['status']='needs_review'
+    assert not campaign_can_resume(c.summaries(),list(entries.values()))
 
 
 def test_session_close_prevents_dispatch_and_retains_follow_policy_for_explicit_continue(tmp_path,monkeypatch):

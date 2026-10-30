@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 import numpy as np
 
-from radar_pd_nova.symmetry_workspace import group_models,choose_group,disposition_reason,coverage_rows,scope_rows,parameter_rows
+from radar_pd_nova.symmetry_workspace import group_models,choose_group,disposition_reason,coverage_rows,scope_rows,parameter_rows,moment_precision_note
 from radar_pd_nova.symmetry_plots import coordinate,fit
 
 
@@ -128,6 +128,23 @@ def test_small_nonzero_moment_keeps_its_large_native_conditional_uncertainty():
     value=parameter_rows(r,view)[0]
     assert value['value']==.2 and value['uncertainty']==1.1 and value['unit']=='µB'
     assert parameter_rows({},view)[0]['uncertainty']=='—'
+
+
+def test_warm_scan_precision_warning_does_not_relabel_a_native_fit_or_invent_norm_uncertainty():
+    row=dict(kind='magnetic',status='valid',refined_moments=[dict(label='Tb1',moment=[.238,.238,.264],
+        component_esd={'mx':42.85,'my':42.67,'mz':.1445},magnitude=.428,magnitude_esd=None)])
+    note=moment_precision_note(row)
+    assert 'Weak conditional moment' in note and '1.83' in note
+    assert 'not a joint significance test' in note
+    assert row['status']=='valid' and row['refined_moments'][0]['magnitude_esd'] is None
+
+
+def test_precision_screen_keeps_strong_and_unavailable_estimates_distinct():
+    assert moment_precision_note(dict(kind='magnetic',refined_moments=[dict(label='Er1',moment=[1.7,1.3,6.1],
+        component_esd={'mx':.1,'my':.2,'mz':.1})]))==''
+    assert 'unavailable' in moment_precision_note(dict(kind='magnetic',refined_moments=[dict(label='Tb1',moment=[.2,0,0],
+        component_esd={'mx':None,'my':None,'mz':None},magnitude=.2,magnitude_esd=None)]))
+    assert moment_precision_note(dict(kind='structural'))==''
 
 
 def test_experiment_scope_filters_before_reading_foreign_result_files(tmp_path,monkeypatch):

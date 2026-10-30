@@ -31,6 +31,7 @@ def model_exploration(app):
         html.P('{{ sx_queue_notice }}',v_if='!!sx_queue_notice',classes='rf-notice')
         html.P('Pause or end any other viewer for this campaign before continuing here.',v_if='sx_resumable && !sx_campaign_running',classes='rf-notice')
         v.VProgressLinear(v_if='sx_busy',indeterminate=True,color='#267653',height=3,classes='mb-3')
+        html.P('{{ sx_message }}',classes='rf-notice',raw_attrs=['aria-live="polite"'])
         with html.Div(v_if='sx_setup || !sx_campaign',classes='rf-card sx-setup'):
             html.H3('Explore models from a completed GPX')
             html.P('Enter a commensurate k vector, or use the magnetic k survey below. Review hypotheses before native refinement.',classes='rf-notice')
@@ -124,8 +125,9 @@ def model_exploration(app):
                     v.VBtn('Start approved campaign',click=(app.start_symmetry_campaign,form),disabled=('!sx_approved || sx_busy || sx_campaign_running',),variant='flat',color='#15543c')
                 html.P('Each start uses a fresh native process. Galaxy jobs share immutable inputs and batch independent starts within allocated CPU/RAM. Missing allocation information limits the pool to one worker. Model calls run only during setup.',classes='rf-notice')
                 html.P('Structural fit comparisons require a matched parent/nuisance refinement. A lower Rwp alone does not establish a transition.',v_if="sx_kind === 'structural'",classes='rf-notice')
-        html.P('{{ sx_message }}',classes='rf-notice')
         html.Div('{{ sx_progress }}',v_if='sx_results_current && !!sx_progress',classes='sx-status')
+        html.P('Dispatched starts share a Galaxy job, which can be queued or running. The native worker count is reported after the first batch; it is separate from the number of dispatched starts.',
+            v_if='sx_results_current && sx_campaign_running',classes='rf-notice')
         with html.Details(v_if='sx_enrollments.length',classes='rf-card mb-4'):
             html.Summary('Acquisition queue ({{ sx_enrollments.length }}) · {{ sx_following ? "following new scans" : "captured scans" }}')
             v.VDataTable(items=('sx_enrollments',),headers=("[{title:'Scan',key:'scan'},{title:'Bank',key:'bank'},{title:'State',key:'status'},{title:'Review needed',key:'reason'}]",),items_per_page=8,density='compact')
@@ -160,11 +162,20 @@ def model_exploration(app):
                 with html.Div(classes='sx-evidence'):
                     with html.P(v_for='item in sx_details',key='item.label'):
                         html.B('{{ item.label }}: ');html.Span('{{ item.value }}')
+                v.VAlert(v_if='!!sx_moment_note',text=('sx_moment_note',),type='warning',variant='tonal',density='compact',classes='my-3')
                 v.VDataTable(v_if='sx_parameters.length',items=('sx_parameters',),headers=("[{title:'Phase',key:'phase'},{title:'Moment / normalized mode',key:'parameter'},{title:'Value',key:'value'},{title:'Conditional s.u.',key:'uncertainty'},{title:'Unit',key:'unit'}]",),items_per_page=6,density='compact')
                 html.P('The first row for each magnetic atom is its magnitude; mx, my and mz use the candidate crystallographic basis shown in the embedding. Uncertainties are conditional on this model and its fixed nuclear parameters. A dash means fixed, dependent or unavailable; a magnitude uncertainty is not inferred from component errors without their covariance. A nonzero moment or qualified fit does not establish ordering.',v_if='sx_parameters.length',classes='rf-notice')
                 with html.Div(classes='rf-actions'):
+                    v.VBtn('Open selected GPX in GSAS-II',click=app.open_symmetry_in_gsasii,
+                        disabled=("!sx_has_gpx || gsasii_session_status === 'starting' || gsasii_session_status === 'ready'",),
+                        loading=("gsasii_session_status === 'starting'",),variant='outlined',size='small')
+                    v.VBtn('Open current GSAS-II desktop',href=('gsasii_launch_url',),target='_blank',rel='noopener noreferrer',
+                        v_if="gsasii_session_status === 'ready' && !!gsasii_launch_url",variant='flat',color='#15543c',size='small')
                     v.VBtn('Download native GPX',click=(app.download_symmetry_artifact,"['gpx']"),disabled=('!sx_has_gpx',),variant='outlined',size='small',prepend_icon='mdi-download')
                     v.VBtn('Download trial receipt',click=(app.download_symmetry_artifact,"['receipt']"),disabled=('!sx_has_receipt',),variant='text',size='small')
+                html.P('{{ gsasii_status_message }}',v_if="gsasii_session_status === 'starting' || gsasii_session_status === 'error'",classes='rf-notice',raw_attrs=['aria-live="polite"'])
+                html.P('Desktop target: {{ sx_gsas_model || "another GPX opened in this viewer" }}. Save and exit that desktop before opening a different model.',
+                    v_if="gsasii_session_status === 'ready'",classes='rf-notice')
                 with html.Details(classes='mt-3'):
                     html.Summary('Trial control')
                     v.VBtn('Stop job containing selected trial',click=app.cancel_symmetry_selected,variant='text',size='small',classes='mt-2')

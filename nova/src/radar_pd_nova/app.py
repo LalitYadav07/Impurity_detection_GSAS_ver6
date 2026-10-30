@@ -7761,7 +7761,7 @@ class RadarPdNovaApp(LiveAssistantMixin, LiveSetupMixin, SetupEditorMixin, PostA
         .radar-app-shell { min-height: calc(100vh - 64px); background: #f2f7f4; }
         .radar-context-header {
           min-height: 58px; display: flex; align-items: center; gap: 10px; padding: 8px 18px;
-          background: var(--radar-surface); border-bottom: 1px solid var(--radar-line); position: sticky; top: 0; z-index: 8;
+          background: var(--radar-surface); border-bottom: 1px solid var(--radar-line); position: sticky; top: var(--v-layout-top, 64px); z-index: 8;
         }
         .radar-context-title { min-width: 220px; }
         .radar-product-name { color: var(--radar-brand-900); font-size: 16px; font-weight: 800; line-height: 1.2; }

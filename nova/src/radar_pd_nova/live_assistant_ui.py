@@ -35,8 +35,16 @@ class LiveAssistantUi:
                     html.Div("LIVE BEAMLINE SETUP", classes="radar-kicker")
                     html.H1("Let’s configure your experiment")
                     html.P("A guided setup using experiment metadata and scientific rules. Your choices fill the Live panel as you go.")
-                vuetify.VBtn("Use the Live panel", click=(self.live_assistant_manual, "[0]"),
-                             variant="outlined", size="small", disabled=(LOCK,))
+                with html.Div(classes="radar-assistant-actions"):
+                    vuetify.VBtn("Refresh History inputs", click=self.refresh_history,
+                                 id="radar-assistant-refresh-inputs", prepend_icon="mdi-refresh",
+                                 variant="text", size="small", disabled=(LOCK,))
+                    vuetify.VBtn("Use the Live panel", click=(self.live_assistant_manual, "[0]"),
+                                 variant="outlined", size="small", disabled=(LOCK,))
+            html.P("Added files in Galaxy? Refresh History inputs to update the profile, CIF and library choices. "
+                   "{{ history_instrument_datasets.length }} profiles and {{ history_cif_datasets.length }} CIFs currently available.",
+                   v_show="live_assistant_step === 'selection' || live_assistant_step === 'structures'",
+                   classes="radar-help-copy", raw_attrs=['aria-live="polite"'])
             with html.Nav(classes="radar-assistant-steps", raw_attrs=['aria-label="Setup questions"']):
                 vuetify.VBtn(v_for="item in live_assistant_steps", key="item.value",
                              text=("item.title",),
