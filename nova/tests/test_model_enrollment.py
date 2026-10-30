@@ -9,6 +9,7 @@ from radar_pd_nova import model_campaigns as module
 from radar_pd_nova.symmetry_controller import SymmetryMixin
 from radar_pd_nova.symmetry_workspace import campaign_can_resume
 from radar_pd_nova.model_runtime import GalaxyChunkTransport
+from radar_pd_nova.model_runtime import CollectOnlyTransport
 
 
 def setup(tmp_path,monkeypatch):
@@ -135,3 +136,39 @@ def test_queued_source_capture_survives_a_new_viewer_without_trusting_local_path
     with pytest.raises(ValueError,match='reviewed acquisition mapping changed'):module.restore_captured_sources(restored,workspace)
     workspace.runtime.kind='local'
     assert module.restore_captured_sources(restored,workspace)==0
+
+
+@pytest.mark.parametrize('slot_frees',[True,False])
+def test_waiting_acquisition_gets_a_freed_slot_before_more_old_starts(tmp_path,monkeypatch,slot_frees):
+    import json
+    import radar_pd_nova.symmetry_controller as controller
+    events=[];entry=dict(id='new-scan',scan='New acquisition',status='queued')
+    rows=[dict(id=str(i),state='running',handle=json.dumps({'dispatch_key':str(i)})) for i in range(2)]
+    class C:
+        root=tmp_path/'campaign'
+        def __init__(self):self.settings={'template':{'future':False},'enrollments':{'new-scan':entry}};self.polls=0
+        def setting(self,key,default=None):return self.settings.get(key,default)
+        def set_setting(self,key,value):self.settings[key]=value
+        def trials(self):return rows
+        def tick(self,transport,**kwargs):
+            if isinstance(transport,CollectOnlyTransport):
+                self.polls+=1;events.append('collect')
+                if slot_frees:rows[0]['state']='terminal'
+                elif self.polls>=2:self.settings['paused']=True
+            else:
+                events.append('admit more starts');self.settings['paused']=True
+            return rows
+    c=C();transport=SimpleNamespace(max_active_jobs=2)
+    monkeypatch.setattr(controller,'queue_sources',lambda *args:{'new-scan':entry})
+    def enroll(*args,**kwargs):events.append('prepare new scan');entry['status']='enrolled'
+    monkeypatch.setattr(controller,'enroll_source',enroll)
+    app=SymmetryMixin();app._model_active_campaigns={};app._model_stopping=False
+    app._refinement_store=lambda:None;app._inspect_model_input=lambda *args:None;app.refresh_symmetry=lambda:None
+    app.server=SimpleNamespace(state=SimpleNamespace(sx_slots=2,flush=lambda:None))
+    asyncio.run(app._drive_symmetry_campaign(c,transport))
+    if slot_frees:
+        assert events==['collect','prepare new scan','admit more starts']
+        assert entry['status']=='enrolled'
+    else:
+        assert events==['collect','collect'] and entry['status']=='queued'
+    assert transport.max_active_jobs==2

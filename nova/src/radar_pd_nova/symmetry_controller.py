@@ -31,7 +31,7 @@ from .symmetry_workspace import campaign_rows,group_models,display_groups,view_f
 from . import symmetry_plots as plots
 from .symmetry_sources import start_choices,resolve_start
 from .k_search_controller import KSearchMixin
-from .model_runtime import GalaxyModelRuntime,GalaxyChunkTransport,active_batch_count
+from .model_runtime import GalaxyModelRuntime,GalaxyChunkTransport,CollectOnlyTransport,active_batch_count
 from .model_campaigns import choices as model_choices,origin as model_origin,queue_sources,enroll_source,restore_history,portable_source,restore_captured_sources
 from gpx_recipe.symmetry.compiler import prepare_shared_inputs
 from gpx_recipe.symmetry.templates import make_template,trial_count
@@ -212,7 +212,7 @@ class SymmetryMixin(KSearchMixin):
                 visible=s.sx_result_scope!='experiment' or template.get('scope',{}).get('experiment')==s.rf_experiment
                 s.sx_enrollments=list(campaign.setting('enrollments',{}).values()) if visible else []
                 s.sx_following=bool(campaign.setting('following',False)) and not campaign.setting('paused',False)
-                s.sx_queue_notice=campaign.setting('budget_message','')
+                s.sx_queue_notice=campaign.setting('preparation_message','') or campaign.setting('budget_message','')
                 if campaign.setting('paused',False):s.sx_queue_notice='Campaign paused. Submitted Galaxy jobs continue independently; Continue recovers them before new starts.'
                 identity=(s.sx_campaign,s.rf_experiment,s.sx_result_scope)
                 self._symmetry_loading_identity=identity
@@ -579,18 +579,29 @@ class SymmetryMixin(KSearchMixin):
                     if isinstance(transport,GalaxyChunkTransport):transport.pause()
                 following=bool(campaign.setting('following',False)) and not campaign.setting('paused',False)
                 self._model_following_active=following
+                tick_transport=transport
                 if campaign.setting('template'):
                     entries=await asyncio.to_thread(queue_sources,campaign,self._refinement_store())
+                    pending=next((r for r in entries.values() if r['status'] in {'queued','preparing'}),None)
+                    if pending and not campaign.setting('paused',False):
+                        # Collect first. A normal tick can refill a newly freed
+                        # slot before the next acquisition ever gets a turn.
+                        await asyncio.to_thread(campaign.tick,CollectOnlyTransport(transport),slots=int(self.server.state.sx_slots))
                     active=active_batch_count(campaign.trials())
                     if active<getattr(transport,'max_active_jobs',1) and not campaign.setting('paused',False):
-                        pending=next((r for r in entries.values() if r['status'] in {'queued','preparing'}),None)
                         if pending:
-                            self.server.state.sx_queue_notice='Inspecting '+pending['scan']+' for compatibility with the reviewed model template'
+                            message='Preparing '+pending['scan']+': checking its GPX and declaring the reviewed finite model starts.'
+                            campaign.set_setting('preparation_message',message)
+                            self.server.state.sx_queue_notice=message
                             self.server.state.flush()
                             self._model_enrollment_task=asyncio.create_task(asyncio.to_thread(enroll_source,campaign,self._refinement_store(),pending['id'],
                                 self._inspect_model_input,transport=transport if isinstance(transport,GalaxyChunkTransport) else None))
                             await asyncio.shield(self._model_enrollment_task)
-                self._model_tick_task=asyncio.create_task(asyncio.to_thread(campaign.tick,transport,slots=int(self.server.state.sx_slots)))
+                            campaign.set_setting('preparation_message','')
+                    elif pending and not campaign.setting('paused',False):
+                        tick_transport=CollectOnlyTransport(transport)
+                        campaign.set_setting('preparation_message','Waiting for an accepted Galaxy batch to finish before preparing '+pending['scan']+'.')
+                self._model_tick_task=asyncio.create_task(asyncio.to_thread(campaign.tick,tick_transport,slots=int(self.server.state.sx_slots)))
                 trials=await asyncio.shield(self._model_tick_task)
                 if isinstance(transport,GalaxyChunkTransport):await asyncio.to_thread(transport.checkpoint)
                 self.refresh_symmetry()

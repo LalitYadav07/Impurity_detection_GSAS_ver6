@@ -19,6 +19,15 @@ MODEL_TOOL_ID='neutrons_radar_pd_model_campaign_prototype'
 CAMPAIGN_LABEL='RADAR-PD Model campaign '
 
 
+class CollectOnlyTransport:
+    """Poll existing work without admitting more starts into a freed slot."""
+    max_active_jobs=0
+
+    def __init__(self,transport):self.transport=transport
+    def __getattr__(self,name):return getattr(self.transport,name)
+    def submit_many(self,*args,**kwargs):raise RuntimeError('Collection-only pass cannot submit work')
+
+
 def identifier(value):
     import re
     if not isinstance(value,str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}',value):raise ValueError('Invalid saved Galaxy dataset/job identity')
