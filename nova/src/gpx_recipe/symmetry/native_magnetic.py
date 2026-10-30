@@ -387,6 +387,8 @@ def _run(source_gpx,ctx,protocol,candidate_record,seed,*,forward_only):
         raise TrialDisposition('site_incompatible',f'No site of the requested magnetic elements {sorted(magnetic_elements)} supports the requested symmetry-compatible moment orientation; omitted_sites={omitted_magnetic_sites}')
     new_phase['Atoms'] = kept_atoms
     atom_codes = kept_codes
+    from .displacements import transfer_fixed_displacements
+    ctx.save_json('fixed-displacements.json',transfer_fixed_displacements(old_phase,new_phase,atom_codes,trans))
     general['Lande g'] = [2.0] * len(general.get('AtomTypes', []))
     general['Map'] = copy.deepcopy(G2elem.mapDefault)
     new_phase['Drawing'] = []
@@ -452,8 +454,8 @@ def _run(source_gpx,ctx,protocol,candidate_record,seed,*,forward_only):
         coordinate_names = ['dAx', 'dAy', 'dAz']
         for atom_index, code in enumerate(codes):
             new_atom = new_atoms[atom_index]
-            if new_atom[new_cia] != 'I':
-                raise ValueError('Anisotropic displacement coupling is not yet supported by the headless magnetic adapter')
+            if new_atom[new_cia] not in {'I','A'}:
+                raise ValueError('Unsupported magnetic displacement model')
             site_symmetry = G2spc.SytSym(new_atom[new_cx:new_cx + 3], new['General']['SGData'])[0]
             coordinate_selection = G2spc.GetCSxinel(site_symmetry)[0]
             source, operation = code.split('+')[0].split(':')
@@ -479,7 +481,10 @@ def _run(source_gpx,ctx,protocol,candidate_record,seed,*,forward_only):
                 elif len(dependent) > 1:
                     independent[0] = -1.0
                     generated.append([independent] + dependent + [0.0, None, 'c'])
-            for parameter_name in ('Afrac', 'AUiso'):
+            # All atomic ADPs are held in this moment-only protocol. The full
+            # anisotropic ellipsoid has already been transferred and is audited
+            # after refinement; it has no AUiso variable to equate.
+            for parameter_name in (('Afrac','AUiso') if new_atom[new_cia]=='I' else ('Afrac',)):
                 generated.append([[1.0, G2obj.G2VarObj([new_ran_id, None, parameter_name, new_atom[-1]])], [1.0, G2obj.G2VarObj([old_ran_id, None, parameter_name, old_atoms[source_index][-1]])], None, None, 'e'])
         return generated
     atom_constraints = coupled_atom_constraints(old_phase, new_phase, atom_codes, trans)

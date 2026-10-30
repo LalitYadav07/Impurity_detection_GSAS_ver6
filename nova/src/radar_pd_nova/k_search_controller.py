@@ -18,6 +18,17 @@ from .symmetry_sources import resolve_start
 from .k_search_plot import evidence
 
 
+def survey_status_message(result):
+    failures=sum(len(f.get('simulation_failures',[])) for f in result['families'])
+    simulated=sum(f['simulated'] for f in result['families'])
+    if failures:
+        return (f'No usable magnetic profiles; {failures} native simulations failed. Review the coverage details' if not simulated
+                else f'Partial survey; {failures} native simulations failed. Review the coverage details')
+    return {'shortlist':'Candidate shortlist','ambiguous':'Several k families remain competitive',
+            'no_support':'No supported magnetic template in this sample',
+            'incomplete':'Partial survey; review untested families and the time budget'}[result['status']]
+
+
 class KSearchMixin:
     def _init_k_search(self):
         self._k_task=None;self._k_cancel=None;self._k_result=None;self._k_result_identity=None
@@ -92,11 +103,11 @@ class KSearchMixin:
                 self._k_result=result;self._k_result_identity=identity
                 s.sx_k_rows=[dict(k='('+', '.join(f['k'])+')',score=(f'{f["score"]:.3g}' if f.get('score') is not None else '—'),
                     sampled=(f'{f["simulated"]} / {f["available_starts"]}' if 'available_starts' in f else 'Not checked'),catalog=str(f['discovered']) if f['discovery'] in {'cached','complete'} else 'Unavailable',
-                    status=f['status'].replace('_',' '),value=','.join(f['k']),reason=f.get('reason','')) for f in result['families']]
+                    status=f['status'].replace('_',' ')+(f' · {len(f["simulation_failures"])} failed starts' if f.get('simulation_failures') else ''),value=','.join(f['k']),reason=f.get('reason','')) for f in result['families']]
                 s.sx_k_choices=[dict(title='('+', '.join(f['k'])+') · '+f['status'].replace('_',' '),value=','.join(f['k'])) for f in result['families']]
                 s.sx_k_notes=coverage_notes(result)
                 s.sx_k_selected=s.sx_k_choices[0]['value'] if s.sx_k_choices else ''
-                summary={'shortlist':'Candidate shortlist','ambiguous':'Several k families remain competitive','no_support':'No supported magnetic template in this sample','incomplete':'Partial survey; increase the budget to check remaining families'}[result['status']]
+                summary=survey_status_message(result)
                 wall_seconds=time.monotonic()-wall_started
                 timing=f'{wall_seconds:.1f} s total'
                 if remote:timing+=f' · {result["elapsed_seconds"]:.1f} s budgeted work; remainder includes staging and queueing'

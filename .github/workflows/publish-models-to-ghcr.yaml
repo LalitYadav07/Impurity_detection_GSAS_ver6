@@ -66,6 +66,7 @@ jobs:
           python -m pip install --quiet pytest &&
           PYTHONPATH=/opt/radar-symmetry:/validation/tests/gpx_recipe python -m pytest -q -o cache_dir=/tmp/pytest-cache \
             /validation/tests/gpx_recipe/test_model_campaign_worker.py \
-            /validation/tests/gpx_recipe/test_symmetry_runtime.py'
+            /validation/tests/gpx_recipe/test_symmetry_runtime.py \
+            /validation/tests/gpx_recipe/test_fixed_displacements.py'
       - name: Publish verified immutable image
         run: docker push "$IMAGE"

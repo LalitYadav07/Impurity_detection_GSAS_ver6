@@ -82,6 +82,10 @@ def audit_trial(source,output,protocol,candidate):
             checks['background_basis_and_extra_terms_preserved']=same(ah.data['Background'][0][:3],bh.data['Background'][0][:3]) and len(ah.data['Background'][0])==len(bh.data['Background'][0]) and same(ah.data['Background'][1:],bh.data['Background'][1:])
         if len(magnets)==1:
             magnetic=magnets[0];det=abs(np.linalg.det(candidate['transformation_matrix']))
+            from .displacements import verify_fixed_displacements
+            import json
+            displacement_receipt=json.loads(Path(output).with_name('fixed-displacements.json').read_text())
+            checks['fixed_magnetic_displacement_ellipsoids_preserved']=verify_fixed_displacements(parent.data,magnetic.data,displacement_receipt,candidate['transformation_matrix'])
             from .magnetic_identity import verify_native_operators,verify_collinear_structure,verify_symmetry_moments
             try:verify_native_operators(candidate,magnetic.data['General']['SGData']);checks['complete_magnetic_operators_preserved']=True
             except ValueError:checks['complete_magnetic_operators_preserved']=False

@@ -133,3 +133,11 @@ def test_incomplete_survey_explains_global_and_per_family_failures():
     notes=coverage_notes(result)
     assert notes==['Inventory exceeded the time budget','(0, 0, 1/2): Catalog unavailable',
         '(0, 0, 0): 1 native starts failed; first reason: Unsupported native representation']
+def test_failed_simulations_are_visible_as_failures_instead_of_a_time_budget_suggestion():
+    from radar_pd_nova.k_search_controller import survey_status_message
+    failed=dict(status='incomplete',families=[dict(simulated=0,simulation_failures=[{'reason':'unsupported ADP'}]*12)])
+    assert '12 native simulations failed' in survey_status_message(failed)
+    assert 'No usable magnetic profiles' in survey_status_message(failed)
+    assert 'time budget' not in survey_status_message(failed)
+    failed['families'][0]['simulated']=2
+    assert 'Partial survey' in survey_status_message(failed)
