@@ -270,4 +270,5 @@ def restore_history(root,runtime):
             write_json(campaign.root/'galaxy.json',transport)
             # A restored viewer is read-only until the user chooses Continue.
             campaign.set_setting('restored',True)
+            campaign.set_setting('checkpoint_updated_utc',row.get('update_time') or '')
     return seen

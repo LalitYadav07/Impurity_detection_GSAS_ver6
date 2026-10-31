@@ -508,16 +508,9 @@ class GalaxyChunkTransport:
         root=self.campaign.root/'inputs'/protocol
         p=json.loads((root/'protocol.json').read_text())
         size=confined(root,p['source']['path']).stat().st_size
-        # A small diverse pilot measures native cost before the long campaign.
-        results=[c['result'] for c in self.state['chunks'].values() if c.get('result')]
-        size_limit=min(self.chunk_size,max(1,(128*1024*1024)//max(1,8*size)))
-        if not results:return min(8,size_limit)
-        import math,statistics
-        durations=[float(row['wall_seconds']) for result in results for row in result['trials'] if row.get('wall_seconds',0)>0]
-        if not durations:return size_limit
-        durations.sort();p80=durations[min(len(durations)-1,math.ceil(.8*len(durations))-1)]
-        workers=results[-1]['allocation']['workers']
-        return min(size_limit,max(1,int(180*workers/max(p80,.1))))
+        from .model_batch_budget import batch_size
+        measured=[c for c in self.state['chunks'].values() if c.get('protocol')==protocol]
+        return batch_size(size,measured,maximum=self.chunk_size)
 
     def submit_many(self,entries,*,workers):
         if self._paused.is_set() or self.campaign.setting('paused',False):raise RuntimeUnavailable('Model campaign is paused before dispatch')
@@ -638,7 +631,9 @@ class GalaxyChunkTransport:
                         # A receipt is the atomic commit marker, after all of its artifacts.
                         temporary=target/('.result-'+uuid.uuid4().hex+'.partial')
                         shutil.copyfile(source/'result.json',temporary);temporary.replace(target/'result.json')
-                with self._state_lock:chunk.update(complete=True,result=response);self.save()
+                from .model_batch_budget import output_measurements
+                measurements=output_measurements(received,set(chunk['members']))
+                with self._state_lock:chunk.update(complete=True,result=response,output_measurements=measurements);self.save()
                 self.campaign.set_setting('allocation',response['allocation'])
                 self.cache[dispatch]=(time.monotonic(),dict(state='complete',terminal=terminal,pending=pending))
         state=self.cache[dispatch][1]

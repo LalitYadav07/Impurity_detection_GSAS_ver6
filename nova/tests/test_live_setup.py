@@ -222,6 +222,7 @@ def test_bank_summary_distinguishes_selected_from_available_histograms(live,monk
 
 def test_start_saves_exact_draft_and_freezes_the_watch(live):
     state = live.server.state
+    state.powgen_retry_requested=True
     state.live_full_profile = "custom"
     state.live_full_max_passes = 8
     state.live_full_dedup_threshold = 0.999
@@ -233,6 +234,7 @@ def test_start_saves_exact_draft_and_freezes_the_watch(live):
         await live.start_powgen_monitoring()
         await asyncio.sleep(0)
         settings = live._powgen_controller.settings
+        assert not state.powgen_retry_requested and not state.powgen_retry_busy
         assert settings.configuration_dataset_id == "config-1"
         assert settings.selected_banks == (2,) and settings.selected_sample_ids == (
             "sample-A",

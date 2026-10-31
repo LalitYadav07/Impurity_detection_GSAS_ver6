@@ -171,3 +171,32 @@ def test_watch_does_not_retry_an_acknowledged_pending_upload(tmp_path):
     controller._checkpoint_key=lambda:'stable'
     with pytest.raises(CheckpointUploadPending):controller.persist_state(WatchCheckpoint(1,'{}','{}'))
     assert calls==[1] and controller.state_dataset_ids==[]
+
+
+def test_confirmed_restart_interruption_retries_only_the_metadata_backup(tmp_path):
+    from radar_pd_nova.checkpoint_uploads import CheckpointUploadInterrupted
+    queue,path,clock,posts,states=manager(tmp_path,initial='error')
+    states['hda1']=dict(id='hda1',state='error',file_size=0,
+        misc_info='This job was killed when Galaxy was restarted.  Please retry the job.')
+    # The fixture upload installs its initial state before the first read.
+    original=queue.upload
+    def upload(*args,**kwargs):
+        key=original(*args,**kwargs)
+        states[key]=(dict(id=key,state='error',file_size=0,
+            misc_info='This job was killed when Galaxy was restarted.  Please retry the job.')
+            if len(posts)==1 else dict(id=key,state='ok',file_size=128))
+        return key
+    queue.upload=upload
+    with pytest.raises(CheckpointUploadInterrupted) as caught:queue.save(path,label='models',timeout=2)
+    assert caught.value.dataset_id=='hda1' and len(posts)==1
+    assert queue.save(path,label='models',timeout=2)=='hda2' and len(posts)==2
+
+
+@pytest.mark.parametrize('update',[
+    dict(file_size=1),dict(file_size=None),dict(file_size=False),dict(state='running'),
+    dict(misc_info='Worker failed'),dict(deleted=True),dict(purged=True)])
+def test_other_failures_are_not_classified_as_restart_interruption(update):
+    from radar_pd_nova.checkpoint_uploads import restart_interrupted_upload
+    row=dict(state='error',file_size=0,misc_info='This job was killed when Galaxy was restarted.  Please retry the job.')
+    row.update(update)
+    assert not restart_interrupted_upload(row)

@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import uuid
 from fractions import Fraction
 
@@ -22,7 +23,7 @@ from gpx_recipe.symmetry.discovery import discover_magnetic
 from gpx_recipe.symmetry.local_transport import LocalTransport
 from gpx_recipe.symmetry.worker import require_runtime
 from gpx_recipe.symmetry.chemistry import validate_sites,sites_from_inputs
-from gpx_recipe.symmetry.planner import make_intent
+from .model_planner import make_intent
 from gpx_recipe.usage import summarize_calls,usage_labels
 from gpx_recipe.symmetry.isodistort_discovery import discover_structural
 from gpx_recipe.symmetry.plans import build_plan
@@ -32,7 +33,8 @@ from . import symmetry_plots as plots
 from .symmetry_sources import start_choices,resolve_start,acquisition_details
 from .k_search_controller import KSearchMixin
 from .model_runtime import GalaxyModelRuntime,GalaxyChunkTransport,CollectOnlyTransport,PreparationSlotTransport,active_batch_count,MODEL_BATCH_LIMITS
-from .checkpoint_uploads import CheckpointUploadPending
+from .checkpoint_uploads import CheckpointUploadPending, CheckpointUploadInterrupted
+from .model_review_recovery import SelectionRecovery, ReviewSelectionChanged, campaign_recency
 from .model_campaigns import choices as model_choices,origin as model_origin,queue_sources,enroll_source,restore_history,portable_source,restore_captured_sources,scope_progress
 from gpx_recipe.symmetry.compiler import prepare_shared_inputs
 from gpx_recipe.symmetry.templates import make_template,trial_count
@@ -96,8 +98,9 @@ class SymmetryMixin(KSearchMixin):
             value=self.server.state.sx_parallel_jobs
             if type(value) is not int or value not in MODEL_BATCH_LIMITS:raise ValueError('Choose 1, 2, 4 or 8 concurrent Galaxy model batches')
             if self._model_runtime_cache:self._model_runtime_cache.max_active_jobs=value
-            for _,transport in self._model_active_campaigns.values():
+            for campaign,transport in self._model_active_campaigns.values():
                 if isinstance(transport,GalaxyChunkTransport):transport.max_active_jobs=value;transport.runtime.max_active_jobs=value
+                if campaign is not None:campaign.set_setting('viewer_parallel_jobs',value)
         except ValueError as exc:self.server.state.sx_error=str(exc)
 
     def _symmetry_transport(self,campaign=None):
@@ -209,13 +212,16 @@ class SymmetryMixin(KSearchMixin):
 
     def _symmetry_campaign_changed(self,**_):
         if not self._symmetry_loading:
-            self._symmetry_explicit_selection=False;self.refresh_symmetry()
+            self._symmetry_explicit_selection=False
+        self.refresh_symmetry()
 
     def refresh_symmetry(self):
         if self._symmetry_loading:
             s=self.server.state
             if (s.sx_campaign,s.rf_experiment,s.sx_result_scope)!=self._symmetry_loading_identity:
                 self._symmetry_refresh_pending=True;s.sx_results_current=False
+                event=getattr(self,'_symmetry_review_cancel',None)
+                if event:event.set()
             return
         # Claim the refresh before scheduling it. Several ticks/UI events can
         # arrive before the coroutine starts; only one may audit this ledger.
@@ -238,7 +244,7 @@ class SymmetryMixin(KSearchMixin):
                 s.sx_start_sources=[dict(title=entry['title'],value=entry['id']) for entry in choices]
                 if s.sx_start_source not in {entry['id'] for entry in choices}:
                     s.sx_start_source=s.rf_source if s.rf_source in {entry['id'] for entry in choices} else (choices[0]['id'] if choices else '')
-                roots=sorted(self._symmetry_root().glob('*/campaign.sqlite'))
+                roots=sorted(self._symmetry_root().glob('*/campaign.sqlite'),key=campaign_recency)
                 s.sx_campaigns=[dict(title=p.parent.name,value=p.parent.name) for p in roots]
                 if s.sx_campaign not in {p.parent.name for p in roots}:s.sx_campaign=roots[-1].parent.name if roots else ''
                 if not s.sx_campaign:
@@ -256,7 +262,10 @@ class SymmetryMixin(KSearchMixin):
                         else 'Recovering saved Galaxy results and checking their artifacts. No new refinements are being submitted.')
                     s.flush()
                     if not coordinating:
-                        await asyncio.to_thread(campaign.recover,self._symmetry_transport(campaign))
+                        self._symmetry_loading_identity=(s.sx_campaign,s.rf_experiment,s.sx_result_scope)
+                        self._symmetry_review_cancel=threading.Event()
+                        recovery=SelectionRecovery(self._symmetry_transport(campaign),self._symmetry_review_cancel)
+                        await asyncio.to_thread(campaign.recover,recovery)
                 allocated=campaign.setting('allocation')
                 if allocated:backend+=f" · last chunk: {allocated['workers']} native workers · {allocated.get('memory_mb') or 'unreported'} MiB memory"
                 s.sx_backend=backend
@@ -306,8 +315,10 @@ class SymmetryMixin(KSearchMixin):
                 s.sx_source=selected
                 self._symmetry_publish_source()
                 self._symmetry_display_identity=identity;s.sx_results_current=True
+            except ReviewSelectionChanged:self._symmetry_refresh_pending=True
             except Exception as exc:s.sx_error=str(exc)
             finally:
+                self._symmetry_review_cancel=None
                 s.sx_results_current=getattr(self,'_symmetry_display_identity',None)==(s.sx_campaign,s.rf_experiment,s.sx_result_scope)
                 self._symmetry_loading=False;s.sx_busy=False;s.flush()
                 if self._symmetry_refresh_pending:
@@ -510,7 +521,15 @@ class SymmetryMixin(KSearchMixin):
                         gs={site['lande_g'] for site in settings['sites']}
                         s.sx_lande=str(next(iter(gs))) if len(gs)==1 else '; '.join(site['label']+'='+str(site['lande_g']) for site in settings['sites'])
                         s.sx_directions=settings['directions'];s.sx_adequate=settings['adequate_rwp'];s.sx_max_moment=settings['maximum_moment']
-                        s.sx_mag_d_min=settings['magnetic_d_min'];s.sx_cycles=settings['cycles'];s.sx_sign_starts=settings['relative_sign_starts'];s.flush()
+                        s.sx_mag_d_min=settings['magnetic_d_min'];s.sx_cycles=settings['cycles'];s.sx_sign_starts=settings['relative_sign_starts']
+                        enrollment=intent.get('enrollment')
+                        if enrollment is not None:
+                            s.sx_existing=enrollment['existing'];s.sx_max_scans=enrollment['maximum_scans'];s.sx_follow_new=enrollment['follow_new']
+                            scope='published matching scans for this sample and bank' if s.sx_existing=='sample' else 'the selected scan'
+                            s.sx_planning_notes=list(s.sx_planning_notes)+[f"Enrollment controls set to {scope}, maximum {s.sx_max_scans}; following new scans {'on' if s.sx_follow_new else 'off'}. Build the finite plan to check the actual eligible count."]
+                        else:
+                            s.sx_planning_notes=list(s.sx_planning_notes)+['Scan enrollment controls are unchanged. Review the acquisition scope and follow-new-scans setting before building the finite plan.']
+                        s.flush()
                     finally:self._symmetry_applying_intent=False
                 s.sx_message=s.sx_planning_summary
             except Exception as exc:
@@ -673,13 +692,17 @@ class SymmetryMixin(KSearchMixin):
 
     def _model_checkpoint_pending(self,campaign,error):
         self._model_checkpoint_errors[campaign.root.name]=error
-        campaign.set_setting('checkpoint_notice',
+        notice=(f'Galaxy restart interrupted recovery checkpoint {error.dataset_id}. '
+            'Its failed zero-byte backup will be retried. Accepted jobs continue; new batches wait for a ready checkpoint.'
+            if isinstance(error,CheckpointUploadInterrupted) else
             f'Recovery checkpoint {error.dataset_id} is still {error.state}. '
             'Accepted jobs continue and their results are collected. New batches wait for the existing upload; no replacement is posted while it is pending.')
+        campaign.set_setting('checkpoint_notice',notice)
         self.refresh_symmetry()
 
     async def _drive_symmetry_campaign(self,campaign,transport):
         preparation=None
+        campaign.set_setting('viewer_parallel_jobs',self.server.state.sx_parallel_jobs)
         self._model_active_campaigns[campaign.root.name]=(campaign,transport)
         if isinstance(transport,GalaxyChunkTransport):
             if not hasattr(self,'_model_owned_campaigns'):self._model_owned_campaigns={}
@@ -754,7 +777,7 @@ class SymmetryMixin(KSearchMixin):
                         self.refresh_symmetry()
                         self._model_tick_task=asyncio.create_task(asyncio.to_thread(transport.flush_dispatch_wave))
                         await self._await_model_checkpoint_work(self._model_tick_task,campaign,transport)
-                except CheckpointUploadPending as exc:
+                except (CheckpointUploadPending,CheckpointUploadInterrupted) as exc:
                     # flush_dispatch_wave retains proof that its aborted wave
                     # made no POST. Recover those exact starts on the next
                     # collection pass; a queued metadata job is not a failed
@@ -784,7 +807,7 @@ class SymmetryMixin(KSearchMixin):
                     try:
                         self._model_tick_task=asyncio.create_task(asyncio.to_thread(transport.checkpoint))
                         await self._await_model_checkpoint_work(self._model_tick_task,campaign,transport)
-                    except CheckpointUploadPending as exc:self._model_checkpoint_pending(campaign,exc)
+                    except (CheckpointUploadPending,CheckpointUploadInterrupted) as exc:self._model_checkpoint_pending(campaign,exc)
                     else:
                         self._model_checkpoint_errors.pop(campaign.root.name,None)
                         campaign.set_setting('checkpoint_notice','')
@@ -824,6 +847,9 @@ class SymmetryMixin(KSearchMixin):
                 root=(self._symmetry_root()/s.sx_campaign).resolve()
                 if root.parent!=self._symmetry_root() or not (root/'campaign.sqlite').is_file():raise ValueError('Select an existing campaign')
                 campaign=Campaign(root,shared_inputs=True)
+                saved_budget=campaign.setting('viewer_parallel_jobs')
+                if type(saved_budget) is int and saved_budget in MODEL_BATCH_LIMITS:
+                    s.sx_parallel_jobs=saved_budget
                 await asyncio.to_thread(restore_captured_sources,campaign,self._refinement_store())
                 transport=self._symmetry_transport(campaign)
                 await asyncio.to_thread(campaign.recover,transport)

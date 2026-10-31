@@ -265,7 +265,8 @@ def test_refresh_recovers_restored_remote_evidence_without_resuming_or_submittin
     transport=ReadOnlyTransport();app._symmetry_transport=lambda campaign:transport
     original_recover=Campaign.recover
     def recover(campaign,t):
-        assert t is transport and campaign.setting('paused') is True
+        from radar_pd_nova.model_review_recovery import SelectionRecovery
+        assert isinstance(t,SelectionRecovery) and t.transport is transport and campaign.setting('paused') is True
         assert not active
         assert 'No new refinements are being submitted' in state.sx_message
         events.append('recover')

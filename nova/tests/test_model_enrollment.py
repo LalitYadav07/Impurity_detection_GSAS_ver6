@@ -257,7 +257,7 @@ def test_continue_reports_recovery_before_waiting_for_remote_results(tmp_path,mo
         assert state.sx_busy and flushes
         assert 'before dispatching' in state.sx_message
         raise RuntimeError('Remote result temporarily unavailable')
-    monkeypatch.setattr(controller,'Campaign',lambda *args,**kwargs:SimpleNamespace(recover=recover))
+    monkeypatch.setattr(controller,'Campaign',lambda *args,**kwargs:SimpleNamespace(recover=recover,setting=lambda key,default=None:default))
     app._refinement_schedule=lambda coroutine,name:asyncio.run(coroutine)
     app.continue_symmetry_campaign()
     assert not state.sx_busy and state.sx_error=='Remote result temporarily unavailable'
@@ -319,7 +319,7 @@ def test_waiting_acquisition_gets_a_freed_slot_before_more_old_starts(tmp_path,m
     monkeypatch.setattr(controller,'enroll_source',enroll)
     app=SymmetryMixin();app._model_active_campaigns={};app._model_stopping=False
     app._refinement_store=lambda:None;app._inspect_model_input=lambda *args:None;app.refresh_symmetry=lambda:None
-    app.server=SimpleNamespace(state=SimpleNamespace(sx_slots=2,flush=lambda:None))
+    app.server=SimpleNamespace(state=SimpleNamespace(sx_slots=2,sx_parallel_jobs=1,flush=lambda:None))
     asyncio.run(app._drive_symmetry_campaign(c,transport))
     if slot_frees:
         assert events==['collect','prepare new scan','admit more starts']
@@ -363,7 +363,7 @@ def test_scan_preparation_does_not_block_other_refinements_or_exceed_job_budget(
     monkeypatch.setattr(controller.asyncio,'sleep',short_sleep)
     app=SymmetryMixin();app._model_active_campaigns={};app._model_stopping=False;app._model_preparations={}
     app._refinement_store=lambda:None;app._inspect_model_input=lambda *a:None;app.refresh_symmetry=lambda:None
-    app.server=SimpleNamespace(state=SimpleNamespace(sx_slots=2,flush=lambda:None))
+    app.server=SimpleNamespace(state=SimpleNamespace(sx_slots=2,sx_parallel_jobs=1,flush=lambda:None))
     async def exercise():
         task=asyncio.create_task(app._drive_symmetry_campaign(c,transport))
         try:
@@ -389,7 +389,7 @@ def test_preparation_failure_clears_active_campaign_state(tmp_path,monkeypatch):
     monkeypatch.setattr(controller,'enroll_source',fail)
     app=SymmetryMixin();app._model_active_campaigns={};app._model_stopping=False;app._model_preparations={}
     app._refinement_store=lambda:None;app._inspect_model_input=lambda *a:None;app.refresh_symmetry=lambda:None
-    app.server=SimpleNamespace(state=SimpleNamespace(sx_slots=2,flush=lambda:None))
+    app.server=SimpleNamespace(state=SimpleNamespace(sx_slots=2,sx_parallel_jobs=1,flush=lambda:None))
     with pytest.raises(ValueError,match='Invalid captured source'):
         asyncio.run(app._drive_symmetry_campaign(c,SimpleNamespace(max_active_jobs=2,submit_many=lambda *a:None)))
     assert not app.server.state.sx_campaign_running and not app._model_active_campaigns
@@ -425,7 +425,7 @@ def test_preparation_finishing_during_empty_tick_does_not_end_campaign(tmp_path,
     monkeypatch.setattr(controller.asyncio,'sleep',short_sleep)
     app=SymmetryMixin();app._model_active_campaigns={};app._model_stopping=False;app._model_preparations={}
     app._refinement_store=lambda:None;app._inspect_model_input=lambda *a:None;app.refresh_symmetry=lambda:None
-    app.server=SimpleNamespace(state=SimpleNamespace(sx_slots=2,flush=lambda:None))
+    app.server=SimpleNamespace(state=SimpleNamespace(sx_slots=2,sx_parallel_jobs=1,flush=lambda:None))
     asyncio.run(app._drive_symmetry_campaign(c,SimpleNamespace(max_active_jobs=budget,submit_many=lambda *a:None)))
     assert events==['old empty snapshot','newly enrolled work polled']
     assert entry['status']=='enrolled' and app._model_enrollment_task is None
@@ -451,7 +451,7 @@ def test_driver_fills_all_free_model_slots_in_one_bounded_wave(tmp_path):
     def refresh():
         if sum(r['state']=='running'for r in rows)==8:settings['paused']=True
     app.refresh_symmetry=refresh
-    app.server=SimpleNamespace(state=SimpleNamespace(sx_slots=2,flush=lambda:None))
+    app.server=SimpleNamespace(state=SimpleNamespace(sx_slots=2,sx_parallel_jobs=1,flush=lambda:None))
     asyncio.run(app._drive_symmetry_campaign(C(),SimpleNamespace(max_active_jobs=8)))
     assert len(ticks)==8 and sum(r['state']=='running'for r in rows)==8
     assert sum(r['state']=='prepared'for r in rows)==4
@@ -478,7 +478,7 @@ def test_galaxy_driver_flushes_one_durable_wave_before_its_acknowledgment_checkp
         def checkpoint(self,**kwargs):events.append('ack')
     app=SymmetryMixin();app._model_active_campaigns={};app._model_stopping=False
     app._refinement_store=lambda:None;app.refresh_symmetry=lambda:None
-    app.server=SimpleNamespace(state=SimpleNamespace(sx_slots=2,flush=lambda:None))
+    app.server=SimpleNamespace(state=SimpleNamespace(sx_slots=2,sx_parallel_jobs=1,flush=lambda:None))
     asyncio.run(app._drive_symmetry_campaign(C(),T()))
     assert events==['begin']+['stage']*8+['durable-before-post','ack']
     assert sum(r['state']=='running' for r in rows)==8
@@ -506,7 +506,8 @@ def test_slow_checkpoint_keeps_collecting_finished_jobs_without_new_dispatch(tmp
     assert sorted(events)==sorted(['accepted result collected','result displayed','checkpoint ready'])
 
 
-def test_pending_checkpoint_wait_is_recoverable_without_pausing_or_duplicate_posts(tmp_path,monkeypatch):
+@pytest.mark.parametrize('interrupted',[False,True])
+def test_pending_checkpoint_wait_is_recoverable_without_pausing_or_duplicate_posts(tmp_path,monkeypatch,interrupted):
     import json
     import radar_pd_nova.symmetry_controller as controller
     from radar_pd_nova.checkpoint_uploads import CheckpointUploadPending
@@ -529,6 +530,9 @@ def test_pending_checkpoint_wait_is_recoverable_without_pausing_or_duplicate_pos
             self.attempts+=1
             if self.attempts==1:
                 rows[0]['state']='prepared'
+                if interrupted:
+                    from radar_pd_nova.checkpoint_uploads import CheckpointUploadInterrupted
+                    raise CheckpointUploadInterrupted('owned-hda')
                 raise CheckpointUploadPending('owned-hda','queued')
             events.append('POST once');settings['paused']=True
         def abort_dispatch_wave(self):events.append('unposted wave recovered')
@@ -539,7 +543,7 @@ def test_pending_checkpoint_wait_is_recoverable_without_pausing_or_duplicate_pos
     monkeypatch.setattr(controller.asyncio,'sleep',short_sleep)
     app=SymmetryMixin();app._model_active_campaigns={};app._model_stopping=False
     app._refinement_store=lambda:None;app.refresh_symmetry=lambda:None
-    app.server=SimpleNamespace(state=SimpleNamespace(sx_slots=2,flush=lambda:None))
+    app.server=SimpleNamespace(state=SimpleNamespace(sx_slots=2,sx_parallel_jobs=1,flush=lambda:None))
     asyncio.run(app._drive_symmetry_campaign(C(),T()))
     assert events==['unposted wave recovered','POST once','acknowledgment saved']
     assert settings['checkpoint_notice']==''
@@ -574,7 +578,7 @@ def test_canceling_driver_waits_for_its_shielded_flush_before_aborting(tmp_path)
         def checkpoint(self,**kwargs):events.append('ack')
     t=T();app=SymmetryMixin();app._model_active_campaigns={};app._model_stopping=False
     app._refinement_store=lambda:None;app.refresh_symmetry=lambda:None
-    app.server=SimpleNamespace(state=SimpleNamespace(sx_slots=2,flush=lambda:None))
+    app.server=SimpleNamespace(state=SimpleNamespace(sx_slots=2,sx_parallel_jobs=1,flush=lambda:None))
     async def run():
         task=asyncio.create_task(app._drive_symmetry_campaign(C(),t))
         assert await asyncio.to_thread(entered.wait,4)
@@ -584,3 +588,61 @@ def test_canceling_driver_waits_for_its_shielded_flush_before_aborting(tmp_path)
         with pytest.raises(asyncio.CancelledError):await task
     asyncio.run(run())
     assert events==['pause','settled','abort']
+
+
+@pytest.mark.parametrize('enrollment',[None,dict(existing='sample',maximum_scans=57,follow_new=False),dict(existing='sample',maximum_scans=2000,follow_new=True)])
+def test_luna_enrollment_updates_visible_controls_without_starting_jobs(tmp_path,monkeypatch,enrollment):
+    import radar_pd_nova.symmetry_controller as controller
+    state=SimpleNamespace(sx_start_source='scan',sx_request='Refine this series',sx_k='',
+        sx_existing='selected',sx_max_scans=1,sx_follow_new=False,flush=lambda:None)
+    app=SymmetryMixin();app.server=SimpleNamespace(state=state)
+    app._symmetry_draft=dict(source_id='scan',context={},root=tmp_path)
+    app._refinement_schedule=lambda coroutine,name:asyncio.run(coroutine)
+    app._symmetry_unapprove=lambda:None
+    settings=dict(kind='magnetic',parent='Hematite',histogram='PWDR scan',k=None,
+        sites=[dict(label='Fe',form_factor='Fe+3',lande_g=2.)],moment_model='symmetry_allowed',
+        refine_histogram_scale=True,refine_background=True,directions=['x','y','z'],
+        adequate_rwp=15.,maximum_moment=6.,magnetic_d_min=0.,cycles=20,relative_sign_starts=True)
+    monkeypatch.setattr(controller,'make_intent',lambda *args,**kwargs:dict(status='ready_for_k_survey',calls=[],
+        intent=dict(settings=settings,enrollment=enrollment,assumptions=[],questions=[],unsupported=[])))
+    app.plan_symmetry_request()
+    assert not state.sx_busy and not state.sx_error
+    assert state.sx_moment_model=='symmetry_allowed' and state.sx_k==''
+    if enrollment is None:
+        assert (state.sx_existing,state.sx_max_scans,state.sx_follow_new)==('selected',1,False)
+        assert 'unchanged' in state.sx_planning_notes[-1]
+    else:
+        assert (state.sx_existing,state.sx_max_scans,state.sx_follow_new)==('sample',enrollment['maximum_scans'],enrollment['follow_new'])
+        assert 'actual eligible count' in state.sx_planning_notes[-1]
+    assert app._symmetry_draft['planning']['intent']['enrollment']==enrollment
+
+
+def test_parallel_budget_is_checkpointed_without_changing_scientific_approval(tmp_path):
+    campaign=Campaign(tmp_path/'campaign')
+    runtime=SimpleNamespace(max_active_jobs=1)
+    transport=object.__new__(GalaxyChunkTransport);transport.runtime=runtime
+    app=SymmetryMixin();app._model_runtime_cache=runtime;app._model_active_campaigns={'campaign':(campaign,transport)}
+    app.server=SimpleNamespace(state=SimpleNamespace(sx_parallel_jobs=8,sx_error=''))
+    app._symmetry_approved='original-native-protocol'
+    app._symmetry_resource_changed()
+    assert campaign.setting('viewer_parallel_jobs')==8 and transport.max_active_jobs==8
+    assert app._symmetry_approved=='original-native-protocol'
+
+
+def test_continue_restores_parallel_budget_before_recovering_jobs(tmp_path,monkeypatch):
+    import radar_pd_nova.symmetry_controller as controller
+    root=tmp_path/'campaign';root.mkdir();(root/'campaign.sqlite').touch()
+    state=SimpleNamespace(sx_campaign='campaign',sx_parallel_jobs=1,sx_busy=False,sx_error='',flush=lambda:None)
+    app=SymmetryMixin();app.server=SimpleNamespace(state=state);app._symmetry_task=None
+    app._symmetry_root=lambda:tmp_path;app._refinement_store=lambda:None
+    monkeypatch.setattr(controller,'restore_captured_sources',lambda *args:None)
+    def transport(campaign):
+        assert state.sx_parallel_jobs==8
+        return object()
+    app._symmetry_transport=transport
+    def recover(transport):raise RuntimeError('Verified resource restoration')
+    monkeypatch.setattr(controller,'Campaign',lambda *args,**kwargs:SimpleNamespace(
+        setting=lambda key,default=None:8 if key=='viewer_parallel_jobs' else default,recover=recover))
+    app._refinement_schedule=lambda coroutine,name:asyncio.run(coroutine)
+    app.continue_symmetry_campaign()
+    assert state.sx_parallel_jobs==8 and state.sx_error=='Verified resource restoration'

@@ -1,0 +1,60 @@
+"""Host-side batching from verified output sizes and measured native cost."""
+from collections import Counter
+import math
+
+TARGET_BYTES = 128 * 1024 * 1024
+TARGET_FILES = 8000
+
+
+def output_measurements(root, members):
+    sizes, counts = Counter(), Counter()
+    fixed_bytes = fixed_files = 0
+    native = False
+    for path in root.rglob('*'):
+        if not path.is_file():
+            continue
+        relative = path.relative_to(root).parts
+        size = path.stat().st_size
+        if len(relative) > 2 and relative[0] == 'trials' and relative[1] in members:
+            sizes[relative[1]] += size
+            counts[relative[1]] += 1
+            native |= path.suffix.lower() == '.gpx' and size > 0
+        else:
+            fixed_bytes += size
+            fixed_files += 1
+    return dict(max_trial_bytes=max(sizes.values(), default=0),
+        max_trial_files=max(counts.values(), default=0),
+        fixed_bytes=fixed_bytes, fixed_files=fixed_files, native_artifacts=native)
+
+
+def batch_size(source_bytes, chunks, *, maximum=128):
+    """Keep the initial pilot small; learn only from this exact source protocol.
+
+    A fourfold output reserve and a two-source-file floor leave room for other
+    embeddings. The existing 512 MiB unpack bound remains independent. Nothing
+    here raises worker counts or drops a reviewed scientific start.
+    """
+    initial = min(maximum, max(1, TARGET_BYTES // max(1, 8 * source_bytes)))
+    results = [c for c in chunks if c.get('result')]
+    if not results:
+        return min(8, initial)
+    measured = [c['output_measurements'] for c in results
+        if c.get('output_measurements', {}).get('native_artifacts')]
+    limit = initial
+    if measured:
+        per_trial = max(2 * source_bytes, 4 * max(m['max_trial_bytes'] for m in measured), 1)
+        overhead = 4 * max(m['fixed_bytes'] for m in measured)
+        file_cost = max(1, 4 * max(m['max_trial_files'] for m in measured))
+        file_overhead = 4 * max(m['fixed_files'] for m in measured)
+        limit = min(maximum, max(1, (TARGET_BYTES - overhead) // per_trial),
+                    max(1, (TARGET_FILES - file_overhead) // file_cost))
+    durations = [float(row['wall_seconds']) for c in results for row in c['result']['trials']
+        if isinstance(row.get('wall_seconds'), (int, float))
+        and not isinstance(row['wall_seconds'], bool)
+        and math.isfinite(row['wall_seconds']) and row['wall_seconds'] > 0]
+    if not durations:
+        return limit
+    durations.sort()
+    p80 = durations[min(len(durations) - 1, math.ceil(.8 * len(durations)) - 1)]
+    workers = results[-1]['result']['allocation']['workers']
+    return min(limit, max(1, int(180 * workers / max(p80, .1))))

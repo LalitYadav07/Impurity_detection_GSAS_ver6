@@ -351,7 +351,9 @@ class PowgenWatchController:
                 yield row
 
     def _run_name(self, run):
-        return f"{self.settings.ipts}_{run.run_id}"
+        generation=run.scan_metadata.get('retry_generation',0)
+        suffix=f'_retry{generation}' if generation else ''
+        return f"{self.settings.ipts}_{run.run_id}{suffix}"
 
     def _list_source_directory(self):
         return bounded_directory_listing(self.source_directory)
@@ -385,6 +387,54 @@ class PowgenWatchController:
         self._manual_setup_lock = threading.Lock()
         self._recent_runs_reconciled = False
         self.refresh_errors: dict[str, str] = {}
+        self._retry_checkpoint_pending = False
+
+    @property
+    def interrupted_retries_pending(self):
+        return self._retry_checkpoint_pending or any(
+            run.scan_metadata.get('input_retry_intent') for run in self.state.failed.values())
+
+    def retry_interrupted_uploads(self, *, request=False):
+        """Explicitly retry proven input failures, retaining both job attempts.
+
+        Save the retirement intent, confirm the old unstarted job is terminal,
+        then save a new idempotency generation before admitting any native POST.
+        A pending checkpoint holds submission rather than duplicating uploads.
+        """
+        from .live_recovery import failed_input_proof, retire_failed_input
+        if request:
+            for key,run in list(self.state.failed.items()):
+                if not run.galaxy_job_id or run.scan_metadata.get('input_retry_intent'):
+                    continue
+                generation=run.scan_metadata.get('retry_generation',0)
+                if type(generation) is not int or not 0<=generation<20:
+                    continue
+                proof=failed_input_proof(self.service,run.galaxy_job_id)
+                if proof:
+                    self.state.failed[key]=replace(run,scan_metadata={**run.scan_metadata,'input_retry_intent':proof})
+                    self._retry_checkpoint_pending=True
+        if not self.interrupted_retries_pending:
+            return 0
+        self._retry_checkpoint_pending=True
+        self.persist_state()
+        retried=0
+        for key,run in list(self.state.failed.items()):
+            proof=run.scan_metadata.get('input_retry_intent')
+            if not proof:
+                continue
+            retire_failed_input(self.service,proof)
+            metadata=dict(run.scan_metadata);metadata.pop('input_retry_intent')
+            metadata['retry_generation']=metadata.get('retry_generation',0)+1
+            metadata['previous_attempts']=[*metadata.get('previous_attempts',[]),proof]
+            self.state.failed.pop(key)
+            self.state.discovered[key]=replace(run,galaxy_job_id=None,error=None,
+                galaxy_result_ids=(),scientific_summary={},next_retry_utc=None,
+                submission_attempts=0,scan_metadata=metadata)
+            self.records.pop(key,None)
+            retried+=1
+        self.persist_state()
+        self._retry_checkpoint_pending=False
+        return retried
 
     def restore_latest_state(self) -> bool:
         """Recover the newest matching checkpoint and acknowledged Galaxy jobs.
@@ -751,6 +801,8 @@ class PowgenWatchController:
     def due_submissions(self, *, reserved_run_ids: set[str] | None = None) -> list[WatchedRun]:
         """Return ready runs without exceeding the active Galaxy-job cap."""
 
+        if self.interrupted_retries_pending:
+            return []
         reserved = set(reserved_run_ids or ())
         available = max(0, self.settings.max_active_jobs - len(self.state.submitted) - len(reserved))
         ready = [run for run in self.state.retryable_runs()

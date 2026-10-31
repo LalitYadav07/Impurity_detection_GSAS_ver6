@@ -21,6 +21,22 @@ class CheckpointUploadFailed(RuntimeError):
     pass
 
 
+class CheckpointUploadInterrupted(CheckpointUploadFailed):
+    def __init__(self, dataset_id):
+        self.dataset_id = dataset_id
+        self.state = 'interrupted by Galaxy restart'
+        super().__init__(f'Galaxy restart interrupted checkpoint {dataset_id}; its zero-byte upload can be retried')
+
+
+def restart_interrupted_upload(metadata):
+    """Only explicit, terminal Galaxy restart evidence permits auto-replacement."""
+    return (metadata.get('state') == 'error'
+            and type(metadata.get('file_size')) is int and metadata['file_size'] == 0
+            and not metadata.get('deleted') and not metadata.get('purged')
+            and str(metadata.get('misc_info') or metadata.get('info') or '').strip()
+            == 'This job was killed when Galaxy was restarted.  Please retry the job.')
+
+
 class CheckpointUploads:
     """Serialize each checkpoint stream, retaining its acknowledged HDA.
 
@@ -57,6 +73,8 @@ class CheckpointUploads:
             if state == 'ok':
                 return row['id']
             if state in {'error', 'discarded', 'deleted', 'empty', 'failed_metadata'}:
+                if restart_interrupted_upload(metadata):
+                    raise CheckpointUploadInterrupted(row['id'])
                 raise CheckpointUploadFailed(f'Galaxy checkpoint {row["id"]} ended in state {state}')
             if state not in {'new', 'upload', 'uploading', 'queued', 'running', 'waiting',
                              'setting_metadata', 'paused', 'deferred', 'resubmitted'}:

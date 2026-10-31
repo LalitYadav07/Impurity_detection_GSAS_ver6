@@ -597,6 +597,9 @@ class RadarPdNovaApp(LiveAssistantMixin, LiveSetupMixin, SetupEditorMixin, PostA
         state.watch_retry_delay_seconds = 120
         state.watch_recipe_message = ""
         state.powgen_monitoring = False
+        state.powgen_retry_requested = False
+        state.powgen_retry_busy = False
+        state.powgen_failed_count = 0
         state.live_beamline = "PG3"
         state.nomad_physical_bank = None
         state.snap_product_family = ""
@@ -1868,6 +1871,17 @@ class RadarPdNovaApp(LiveAssistantMixin, LiveSetupMixin, SetupEditorMixin, PostA
                         size="small",
                         disabled=("!powgen_monitoring",),
                     )
+                    vuetify.VBtn(
+                        "Retry failed uploads",
+                        v_if="powgen_failed_count > 0",
+                        click=self.retry_powgen_interrupted_uploads,
+                        prepend_icon="mdi-upload-refresh-outline",
+                        variant="outlined", size="small",
+                        disabled=("!powgen_monitoring || powgen_retry_busy || powgen_retry_requested",),
+                        loading=("powgen_retry_busy",),
+                    )
+                html.P("Retry re-stages failed empty input uploads after confirming that no refinement received a runner. The earlier attempt stays in History.",
+                    v_if="powgen_failed_count > 0", classes="radar-help-copy")
                 vuetify.VBtn(
                     "Open experiment dashboard",
                     v_show="powgen_rows.length",
@@ -4154,6 +4168,7 @@ class RadarPdNovaApp(LiveAssistantMixin, LiveSetupMixin, SetupEditorMixin, PostA
 
         self._sync_powgen_dashboard_provenance()
         controller = self._powgen_controller
+        self.server.state.powgen_failed_count = len(controller.state.failed) if controller else 0
         if controller is None:
             self._interpretation_all_watch_scans = []
             self.server.state.powgen_rows = []
@@ -5468,6 +5483,7 @@ class RadarPdNovaApp(LiveAssistantMixin, LiveSetupMixin, SetupEditorMixin, PostA
             adapter = self._live_adapter()
             signature = (adapter.instrument, json.dumps(asdict(settings), sort_keys=True))
             if self._powgen_controller is None or self._powgen_settings_signature != signature:
+                state.powgen_retry_requested=False;state.powgen_retry_busy=False
                 controller_class = PowgenWatchController if adapter.instrument == "PG3" else adapter.controller
                 self._powgen_controller = controller_class(self.service, settings, sample_index=self._powgen_sample_index(ipts))
                 state.powgen_message = "Inputs saved. Checking for a previous watch with the same settings..."
@@ -5614,6 +5630,16 @@ class RadarPdNovaApp(LiveAssistantMixin, LiveSetupMixin, SetupEditorMixin, PostA
         self._powgen_wake_event.set()
         state.flush()
 
+    def retry_powgen_interrupted_uploads(self, **_: Any) -> None:
+        """Queue an explicit retry on the monitor's serial lifecycle loop."""
+        state=self.server.state
+        if not state.powgen_monitoring or self._powgen_controller is None:
+            return
+        state.powgen_retry_requested=True
+        state.powgen_message='Retry requested: checking failed uploads before re-staging; active refinements continue.'
+        self._powgen_wake_event.set()
+        state.flush()
+
     async def _refresh_powgen_jobs(self, controller, warnings) -> None:
         """Publish job progress before any slow recovery-checkpoint upload."""
         if not controller.state.submitted:
@@ -5646,6 +5672,19 @@ class RadarPdNovaApp(LiveAssistantMixin, LiveSetupMixin, SetupEditorMixin, PostA
                 warnings: list[str] = []
                 state.powgen_message = "Checking completed reduced files and scan metadata..."
                 state.flush()
+                if state.powgen_retry_requested or getattr(controller,'interrupted_retries_pending',False):
+                    requested=bool(state.powgen_retry_requested)
+                    state.powgen_retry_requested=False;state.powgen_retry_busy=True
+                    state.powgen_message='Verifying interrupted inputs, retiring unstarted placeholders and saving retry recovery state...'
+                    state.flush()
+                    try:
+                        retried=await asyncio.to_thread(controller.retry_interrupted_uploads,request=requested)
+                        warnings.append(f'{retried} interrupted input(s) returned to the submission queue' if retried else
+                            'No additional failed inputs qualified for a restart retry')
+                    except Exception as exc:
+                        warnings.append(f'Input retry is held for recovery: {_powgen_submission_error_summary(exc)}')
+                    finally:
+                        state.powgen_retry_busy=False
                 try:
                     await asyncio.to_thread(controller.discover, checkpoint=False)
                 except Exception as exc:

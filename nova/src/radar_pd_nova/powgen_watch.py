@@ -678,6 +678,11 @@ def build_submission_plan(
     key_material = (
         f"{definition.history_id}\0{run.run_id}\0{run.fingerprint}\0{immutable_refs}"
     ).encode()
+    generation = run.scan_metadata.get('retry_generation', 0)
+    if type(generation) is not int or not 0 <= generation <= 20:
+        raise ValueError('Invalid explicit input-retry generation')
+    if generation:
+        key_material += f'\0input-retry:{generation}'.encode()
     idempotency_key = sha256(key_material).hexdigest()
     inputs: dict[str, Any] = {
         "data_inputs|input_source|source_kind": "history",
