@@ -172,6 +172,53 @@ def test_model_choices_show_qualified_measured_temperature_without_changing_sour
     assert not start_choices(w,'IPTS-1')[0]['title'].endswith('0.2799 K')
 
 
+@pytest.mark.parametrize('restored,remote',[(True,True),(False,True),(True,False)])
+def test_refresh_recovers_restored_remote_evidence_without_resuming_or_submitting(tmp_path,monkeypatch,restored,remote):
+    import asyncio
+    import radar_pd_nova.symmetry_controller as controller
+    from gpx_recipe.symmetry.campaign import Campaign
+    class State(SimpleNamespace):
+        def flush(self):pass
+    state=State(rf_experiment='IPTS-1',sx_result_scope='experiment',sx_start_source='',rf_source='',
+                sx_campaign='campaign',sx_source='')
+    app=controller.SymmetryMixin();app.server=SimpleNamespace(state=state)
+    app._models_restored=True;app._model_remote=lambda:object() if remote else None
+    app._symmetry_loading=False;app._symmetry_refresh_pending=False
+    app._symmetry_display_identity=None
+    app._refinement_store=lambda:None;app._symmetry_root=lambda:tmp_path
+    c=Campaign(tmp_path/'campaign');c.set_setting('restored',restored);c.set_setting('paused',True)
+    c.set_setting('template',{'scope':{'experiment':'IPTS-1'},'protocol':{'implementation_sha256':'old-worker'}})
+    events=[]
+    class ReadOnlyTransport:
+        def submit_many(self,*args,**kwargs):raise AssertionError('Refreshing evidence must not submit refinements')
+        def submit(self,*args,**kwargs):raise AssertionError('Refreshing evidence must not submit refinements')
+    transport=ReadOnlyTransport();app._symmetry_transport=lambda campaign:transport
+    original_recover=Campaign.recover
+    def recover(campaign,t):
+        assert t is transport and campaign.setting('paused') is True
+        events.append('recover')
+        return original_recover(campaign,t)
+    monkeypatch.setattr(Campaign,'recover',recover)
+    def cannot_continue(*args,**kwargs):raise AssertionError('Viewing old results must not continue their worker')
+    monkeypatch.setattr(Campaign,'verify_sealed_continuation',cannot_continue)
+    monkeypatch.setattr(controller,'start_choices',lambda *args:[])
+    monkeypatch.setattr(controller,'coverage_rows',lambda rows:[])
+    def read(root,*,experiment):
+        events.append('read')
+        return [],[]
+    monkeypatch.setattr(controller,'campaign_rows',read)
+    app._symmetry_source_data=lambda *args:None
+    app._symmetry_publish_source=lambda:None
+    async def run():
+        tasks=[]
+        app._refinement_schedule=lambda coroutine,*args:tasks.append(asyncio.create_task(coroutine))
+        app.refresh_symmetry()
+        await asyncio.gather(*tasks)
+    asyncio.run(run())
+    assert events==(['recover','read'] if restored and remote else ['read'])
+    assert c.setting('paused') is True and state.sx_error==''
+
+
 def test_recipe_versions_and_byte_revisions_disambiguate_the_same_scan(tmp_path):
     w=workspace(tmp_path)
     w.state['recipes']={'r1':{'version':1},'r2':{'version':2}}

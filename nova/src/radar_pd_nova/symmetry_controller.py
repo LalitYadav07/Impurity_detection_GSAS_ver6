@@ -221,6 +221,13 @@ class SymmetryMixin(KSearchMixin):
                     s.sx_message='Select a completed RADAR-PD GPX above, then prepare model exploration.';return
                 root=next(p.parent for p in roots if p.parent.name==s.sx_campaign)
                 campaign=Campaign(root)
+                if remote and campaign.setting('restored',False):
+                    # Restored ledgers name terminal receipts before their
+                    # Galaxy artifacts have been downloaded. Recover only
+                    # existing jobs; refresh must never admit finite starts.
+                    s.sx_message='Recovering saved Galaxy results and checking their artifacts. No new refinements are being submitted.'
+                    s.flush()
+                    await asyncio.to_thread(campaign.recover,self._symmetry_transport(campaign))
                 allocated=campaign.setting('allocation')
                 if allocated:s.sx_backend+=f" · last chunk: {allocated['workers']} native workers · {allocated.get('memory_mb') or 'unreported'} MiB memory"
                 template=campaign.setting('template') or {}
