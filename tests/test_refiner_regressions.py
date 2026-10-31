@@ -337,6 +337,14 @@ class BackgroundConfigTests(unittest.TestCase):
 
 
 class LimitPreservationTests(unittest.TestCase):
+    def test_pearson_does_not_run_after_initial_safety_setup_fails(self):
+        manager = MagicMock()
+        with patch.object(refiner_mod, 'GSASMainPhaseRefiner', autospec=True) as factory:
+            factory.return_value.setup_initial_state.return_value = False
+            with self.assertRaisesRegex(RuntimeError, 'instrument safety check failed'):
+                refiner_mod.compute_gsas_ycalc_pearson(manager)
+        manager.project.do_refinements.assert_not_called()
+
     def test_set_limits_to_data_preserves_existing_user_window(self):
         class _FakeHistogram:
             def __init__(self):

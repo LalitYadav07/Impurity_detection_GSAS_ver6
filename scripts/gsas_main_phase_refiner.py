@@ -1525,7 +1525,8 @@ def compute_gsas_ycalc_pearson(project_manager) -> float:
     hist = project_manager.main_histogram
     phase = project_manager.main_phase
 
-    refiner.setup_initial_state()
+    if not refiner.setup_initial_state():
+        raise RuntimeError('Cannot calculate a Pearson score: the initial model or instrument safety check failed')
     try:
         hist.set_refinements({'Background': {'type': 'chebyschev-1', 'refine': False, 'no. coeffs': 12, 'coeffs': [0.0]*12}})
     except Exception:
