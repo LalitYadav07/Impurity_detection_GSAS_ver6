@@ -33,6 +33,11 @@ so it is not uploaded a second time inside asset ZIPs. GPX-only inspections shar
 one empty asset packet. Fresh-viewer recovery reconstructs and rechecks the same
 inputs from the saved Galaxy publication; failed/deleted asset uploads are not
 reused.
+When the registered Model Campaign wrapper supports it, the bounded closed JSON
+request is sent as base64 tool input and decoded into a data file by the wrapper.
+No request upload job is needed per chunk. Its alphabet remains sanitized, its
+decoded size is limited to 4 MiB, and the native contract/hash checks are unchanged.
+Older wrappers retain the uploaded-request path.
 
 New symmetry-allowed magnetic plans vary independent child-orbit signs and
 amplitudes while preserving exact site-symmetry couplings. They retain a finite,

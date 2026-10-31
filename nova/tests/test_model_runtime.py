@@ -101,6 +101,43 @@ def test_failed_asset_upload_does_not_poison_future_native_inspections(remote,tm
     assert runtime.packet(tmp_path,['source.gpx'],source_sha256=source['source_sha256'])==second
 
 
+def test_supported_inline_request_avoids_an_upload_and_survives_lost_ack(remote):
+    import base64
+    runtime,service,source=remote
+    service.tool_has_input=lambda tool,name:tool==MODEL_TOOL_ID and name=='model_request_b64'
+    request={'schema':'closed-test','literal':"Fe'\n$(never_run)"}
+    service.lose_ack=True
+    with pytest.raises(RuntimeUnavailable):runtime._submit('native',source,request,'assets','4'*24)
+    assert not service.requests  # no DATA_FETCH dependency for this request
+    encoded=service.submissions[0]['inputs']['model_request_b64']
+    assert json.loads(base64.b64decode(encoded,validate=True))==request
+    assert 'model_request' not in service.submissions[0]['inputs']
+    assert runtime._submit('native',source,request,'assets','4'*24).galaxy_job_id=='job0'
+    assert len(service.submissions)==1
+
+
+def test_inline_request_has_a_bounded_size_before_submission(remote):
+    runtime,service,source=remote;service.tool_has_input=lambda *a:True
+    with pytest.raises(ValueError,match='4 MiB'):runtime._submit('native',source,{'text':'x'*(4*1024*1024)},'assets','5'*24)
+    assert not service.submissions and not runtime.state['dispatches']['5'*24]['pending']
+
+
+def test_inline_capability_is_taken_from_the_registered_tool_contract(tmp_path,monkeypatch):
+    from radar_pd_nova.galaxy_service import GalaxyService
+    service=GalaxyService('https://galaxy.invalid','sentinel','history',output_root=tmp_path)
+    seen=[]
+    def get(url,**kwargs):
+        seen.append(url)
+        return SimpleNamespace(raise_for_status=lambda:None,json=lambda:{'inputs':[{'name':'model_request_b64'}]})
+    monkeypatch.setattr('requests.get',get)
+    assert service.tool_has_input(MODEL_TOOL_ID,'model_request_b64')
+    assert not service.tool_has_input(MODEL_TOOL_ID,'nonexistent')
+    assert len(seen)==1
+    fresh=GalaxyService('https://galaxy.invalid','sentinel','history',output_root=tmp_path/'fresh')
+    monkeypatch.setattr('requests.get',lambda *a,**kw:SimpleNamespace(raise_for_status=lambda:None,json=lambda:{}))
+    with pytest.raises(RuntimeError,match='input contract'):fresh.tool_has_input(MODEL_TOOL_ID,'model_request_b64')
+
+
 def test_lost_ack_is_recovered_without_resubmission(remote):
     runtime,service,source=remote;service.lose_ack=True
     with pytest.raises(RuntimeUnavailable,match='did not acknowledge'):runtime._submit('chunk',source,{},'assets','a'*24)

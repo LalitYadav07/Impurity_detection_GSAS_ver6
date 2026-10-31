@@ -161,15 +161,27 @@ class GalaxyModelRuntime(GalaxyRefinementRuntime):
             if entry.get('pending'):
                 raise RuntimeUnavailable('This model submission has no acknowledged job yet. Recover the existing dispatch before retrying; no duplicate was submitted.')
             self.wait_capacity(cancel)
-            request_id=self.service.upload_json_document(request,name='model-request.json',
-                label='RADAR-PD Model request '+key,wait_ready=True)
+            capability=getattr(self.service,'tool_has_input',None)
+            inline=bool(capability and capability(self.tool_id,'model_request_b64'))
+            request_id=None;encoded=None
+            if inline:
+                import base64
+                raw=json.dumps(request,separators=(',',':'),allow_nan=False).encode('utf-8')
+                if len(raw)>4*1024*1024:raise ValueError('Model request exceeds the 4 MiB transport bound')
+                encoded=base64.b64encode(raw).decode('ascii')
+            else:
+                request_id=self.service.upload_json_document(request,name='model-request.json',
+                    label='RADAR-PD Model request '+key,wait_ready=True)
             if cancel and cancel.is_set():raise RuntimeUnavailable('Model submission paused before dispatch')
-            entry.update(pending=True,request_id=request_id);self._save()
+            entry.update(pending=True,request_id=request_id,request_sha256=digest(request),
+                         request_format='inline_base64' if inline else 'history_json');self._save()
             try:
+                inputs={'action':action,'dispatch_key':key,'source_gpx':{'dataset_id':self.dataset_id(source)},
+                        'model_assets':{'dataset_id':asset_id}}
+                if inline:inputs['model_request_b64']=encoded
+                else:inputs['model_request']={'dataset_id':request_id}
                 job=self.service.submit_utility(tool_id=self.tool_id,name='RADAR-PD model '+key,
-                    associated_run_uid=source.get('record_uid'),inputs={'action':action,'dispatch_key':key,
-                        'source_gpx':{'dataset_id':self.dataset_id(source)},'model_assets':{'dataset_id':asset_id},
-                        'model_request':{'dataset_id':request_id}})
+                    associated_run_uid=source.get('record_uid'),inputs=inputs)
             except Exception as exc:
                 raise RuntimeUnavailable('Galaxy did not acknowledge the model job. Its stable dispatch key was retained for recovery.') from exc
             entry['job']=job.model_dump(mode='json');self._save()

@@ -351,6 +351,7 @@ class GalaxyService:
         )
         self.output_root.mkdir(parents=True, exist_ok=True)
         self._tools: dict[str, Any] = {}
+        self._tool_input_names: dict[str,set[str]] = {}
         self._submissions: dict[str, RunRecord] = {}
         self._submission_cancel_events: dict[str, threading.Event] = {}
         self._active_submission_tokens: set[str] = set()
@@ -445,6 +446,19 @@ class GalaxyService:
         with self._store() as store:
             dataset = self._upload_dataset(str(path), store, label, wait_ready=wait_ready)
             return str(dataset.id)
+
+    def tool_has_input(self,tool_id: str,name: str) -> bool:
+        """Discover optional transport capabilities from the registered wrapper."""
+        from urllib.parse import quote
+        with self._lock:
+            if tool_id not in self._tool_input_names:
+                response=requests.get(self.galaxy_url+'/api/tools/'+quote(tool_id,safe=''),
+                    headers=self._headers,timeout=30)
+                response.raise_for_status();document=response.json()
+                if not isinstance(document,dict) or not isinstance(document.get('inputs'),list):
+                    raise RuntimeError('Galaxy did not report the tool input contract')
+                self._tool_input_names[tool_id]={r.get('name') for r in document['inputs'] if isinstance(r,dict)}
+            return name in self._tool_input_names[tool_id]
 
     def stage_instrument_profile(self, path: str | Path, *, label: str) -> str:
         """Reuse an exact, ready History profile or queue it as an input.
