@@ -336,6 +336,7 @@ class RadarPdNovaApp(LiveAssistantMixin, LiveSetupMixin, SetupEditorMixin, PostA
         state.cancel_dialog = False
         state.clear_workspace_dialog = False
         state.end_session_dialog = False
+        state.session_closing = False
         state.workspace_notice = ""
         state.workspace_notice_kind = "success"
         state.previous_runs_hidden = False
@@ -780,6 +781,8 @@ class RadarPdNovaApp(LiveAssistantMixin, LiveSetupMixin, SetupEditorMixin, PostA
                     color="white",
                     classes="mr-4 bg-secondary",
                     click=self.request_end_session,
+                    loading=("session_closing",),
+                    disabled=("session_closing",),
                 )
             self._leave_session_page = client.JSEval(exec="window.location.replace('/');").exec
             # Vue deliberately ignores <style> elements embedded in a component
@@ -877,10 +880,12 @@ class RadarPdNovaApp(LiveAssistantMixin, LiveSetupMixin, SetupEditorMixin, PostA
                     vuetify.VCardText(
                         "Release this interactive container and return to Galaxy. Live monitoring and queued/future refinement work stop. Already-submitted Galaxy jobs continue and their results remain in History."
                     )
+                    html.Div("Saving the latest recovery checkpoints. Submitted scientific jobs continue independently.",
+                             v_if="session_closing", classes="pa-4")
                     with vuetify.VCardActions():
                         vuetify.VSpacer()
-                        vuetify.VBtn("Keep working", click="end_session_dialog = false", variant="text")
-                        vuetify.VBtn("End session", click=self.end_session, color="primary")
+                        vuetify.VBtn("Keep working", click="end_session_dialog = false", variant="text", disabled=("session_closing",))
+                        vuetify.VBtn("End session", click=self.end_session, color="primary", loading=("session_closing",), disabled=("session_closing",))
 
     def request_clear_workspace(self, **_: Any) -> None:
         self.server.state.clear_workspace_dialog = True
@@ -892,6 +897,8 @@ class RadarPdNovaApp(LiveAssistantMixin, LiveSetupMixin, SetupEditorMixin, PostA
 
     def _session_action_blocker(self) -> str:
         state = self.server.state
+        if getattr(state, 'session_closing', False):
+            return "This session is saving its recovery state before closing."
         if (state.busy or state.live_launch_busy or self._pending_submission_tokens
                 or getattr(self, "_powgen_submissions_in_flight", 0)):
             return "Wait for the current Galaxy submission to be acknowledged, then try again."
@@ -903,6 +910,7 @@ class RadarPdNovaApp(LiveAssistantMixin, LiveSetupMixin, SetupEditorMixin, PostA
     async def _stop_session_enrollment(self) -> None:
         await self._pause_model_campaigns()
         monitor_task = self._powgen_monitor_task
+        was_draining_monitor = monitor_task is not None and not monitor_task.done()
         if self.server.state.powgen_monitoring:
             self.stop_powgen_monitoring()
         if monitor_task is not None and not monitor_task.done():
@@ -910,6 +918,9 @@ class RadarPdNovaApp(LiveAssistantMixin, LiveSetupMixin, SetupEditorMixin, PostA
             # must reach History before this container or workspace is removed.
             await monitor_task
         if getattr(self, '_powgen_checkpoint_error', None):
+            from .checkpoint_uploads import CheckpointUploadPending
+            if was_draining_monitor and isinstance(self._powgen_checkpoint_error, CheckpointUploadPending):
+                raise self._powgen_checkpoint_error
             controller = self._powgen_controller
             if controller is None:
                 raise self._powgen_checkpoint_error
@@ -936,6 +947,8 @@ class RadarPdNovaApp(LiveAssistantMixin, LiveSetupMixin, SetupEditorMixin, PostA
 
     async def end_session(self, **_: Any) -> None:
         state = self.server.state
+        if getattr(state, 'session_closing', False):
+            return
         blocker = self._session_action_blocker()
         if blocker:
             state.end_session_dialog = False
@@ -943,9 +956,12 @@ class RadarPdNovaApp(LiveAssistantMixin, LiveSetupMixin, SetupEditorMixin, PostA
             state.workspace_notice_kind = "warning"
             state.flush()
             return
+        state.session_closing = True
+        state.flush()
         try:
             await self._stop_session_enrollment()
         except Exception as exc:
+            state.session_closing = False
             state.end_session_dialog = False
             state.workspace_notice = f"The session is still open because its recovery state could not be saved: {exc}"
             state.workspace_notice_kind = "warning"

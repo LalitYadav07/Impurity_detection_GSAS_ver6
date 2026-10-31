@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from radar_pd_nova.refinement_sources import file_sha
-from radar_pd_nova.symmetry_sources import start_choices,resolve_start,acquisition_details
+from radar_pd_nova.symmetry_sources import start_choices,resolve_start,acquisition_details,recipe_source
 
 
 def workspace(tmp_path):
@@ -184,6 +184,57 @@ def test_model_choices_show_qualified_measured_temperature_without_changing_sour
     assert w.state['sources']['raw']==before
     source['metadata']['conditions']['channels'][0]['role']='setpoint'
     assert not start_choices(w,'IPTS-1')[0]['title'].endswith('0.2799 K')
+
+
+def recovered_conditions_workspace(tmp_path):
+    w=workspace(tmp_path)
+    w.state['jobs']['job1']['recipe_id']='r1'
+    w.state['jobs']['job1']['source']=copy.deepcopy(w.state['sources']['raw'])
+    w.state['sources']['raw']['metadata']={'conditions':{'channels':[
+        dict(quantity='temperature',value=240.,minimum=239.,maximum=241.,unit='K',
+             statistic='time_weighted_step_hold',role='measured',status='recorded')]}}
+    return w
+
+
+def test_derived_checkpoint_can_recover_missing_conditions_from_exact_original_bytes(tmp_path):
+    from radar_pd_nova.model_campaigns import choices
+    w=recovered_conditions_workspace(tmp_path);before=copy.deepcopy(w.state)
+    final=next(e for e in start_choices(w,'IPTS-1') if e.get('stage')=='final')
+    assert '240 K' in final['title']
+    assert '239–241 K' in acquisition_details(w,'IPTS-1',final['id'])[0]['value']
+    for source in [resolve_start(w,'IPTS-1',final['id']),
+                   next(s for s,kind in choices(w,'IPTS-1') if s['id']==final['id'])]:
+        assert source['metadata']['temperature']['value']==240.
+        assert source['acquisition_metadata_recovery']['source_sha256']==w.state['sources']['raw']['source_sha256']
+    assert w.state==before  # Neither job receipts nor incoming sources are rewritten.
+
+
+@pytest.mark.parametrize('field',['source_sha256','experiment','scan_key','sample_key','run_number','bank',
+                                  'collection_id','collection_name','internal_source_sha256','published_sha256'])
+def test_recipe_condition_recovery_rejects_conflicting_original_identity(tmp_path,field):
+    w=recovered_conditions_workspace(tmp_path)
+    w.state['sources']['raw'][field]='DIFFERENT'
+    source=recipe_source(w,w.state['jobs']['job1'])
+    assert 'temperature' not in source.get('metadata',{}) and 'acquisition_metadata_recovery' not in source
+
+
+@pytest.mark.parametrize('old',['scalar','rejected','recorded','observation'])
+def test_recipe_recovery_preserves_original_observations_including_rejections(tmp_path,old):
+    w=recovered_conditions_workspace(tmp_path)
+    metadata={'scalar':{'temperature':120.},
+              'recorded':{'temperature':dict(value=120.,unit='K')},
+              'observation':{'temperature_observation':dict(value=120.,unit='K')},
+              'rejected':{'conditions':{'channels':[dict(quantity='temperature',role='measured',status='unqualified_units')]}}}[old]
+    w.state['jobs']['job1']['source']['metadata']=metadata
+    source=recipe_source(w,w.state['jobs']['job1'])
+    assert source['metadata']==metadata and 'acquisition_metadata_recovery' not in source
+
+
+@pytest.mark.parametrize('status,role',[('needs_mapping','measured'),('recorded','setpoint'),('unqualified_units','measured')])
+def test_recipe_recovery_never_promotes_an_unqualified_or_setpoint_channel(tmp_path,status,role):
+    w=recovered_conditions_workspace(tmp_path)
+    w.state['sources']['raw']['metadata']['conditions']['channels'][0].update(status=status,role=role)
+    assert 'temperature' not in recipe_source(w,w.state['jobs']['job1']).get('metadata',{})
 
 
 @pytest.mark.parametrize('restored,remote',[(True,True),(False,True),(True,False)])

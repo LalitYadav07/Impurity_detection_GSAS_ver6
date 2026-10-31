@@ -22,6 +22,7 @@ from hashlib import sha256
 from typing import Any, Iterable, Mapping
 
 from .galaxy_service import GalaxyService
+from .checkpoint_uploads import CheckpointUploadPending
 from .models import AnalysisConfig, AnalysisMode, InputSelection, InputSource, RunRecord, RunStatus
 from .powgen_setup import (
     RESOLVER_VERSION, CATALOG_PATH, BankProfile, inspect_reduced_setup, resolve_bank_profile, stage_bank, text_hash,
@@ -1205,7 +1206,8 @@ class PowgenWatchController:
             last_error: Exception | None = None
             for attempt in range(3):
                 try:
-                    dataset_id = self.service.upload_json_document(
+                    uploader = getattr(self.service, 'upload_checkpoint_json_document', self.service.upload_json_document)
+                    dataset_id = uploader(
                         payload,
                         name=f"{self.settings.ipts}_{self.beamline_label.lower()}_watch_state.json",
                         label=f"{self.beamline_label} watch state {self.settings.ipts} [watch:{self._checkpoint_key()}]",
@@ -1214,6 +1216,10 @@ class PowgenWatchController:
                     self._last_persisted_state = snapshot.state_json
                     self._persisted_checkpoint_generation = snapshot.generation
                     return dataset_id
+                except CheckpointUploadPending:
+                    # Its POST was acknowledged. Retain that HDA and let a
+                    # later checkpoint offer poll it; do not duplicate uploads.
+                    raise
                 except Exception as exc:
                     last_error = exc
                     if attempt < 2:

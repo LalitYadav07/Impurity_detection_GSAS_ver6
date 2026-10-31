@@ -168,3 +168,56 @@ def test_close_retries_a_previously_failed_checkpoint_before_releasing_container
     asyncio.run(app.end_session())
     assert events==['saved','leave','exit']
     assert app._powgen_checkpoint_error is None
+
+
+def test_concurrent_end_actions_share_one_checkpoint_and_exit():
+    app=RadarPdNovaApp();events=[]
+    app._leave_session_page=lambda:events.append('leave')
+    async def exit_callback():events.append('exit')
+    app.exit_callback=exit_callback
+    async def run():
+        entered=asyncio.Event();release=asyncio.Event()
+        async def save():entered.set();await release.wait();events.append('saved')
+        app._stop_session_enrollment=save
+        first=asyncio.create_task(app.end_session());await entered.wait()
+        assert app.server.state.session_closing
+        await app.end_session()
+        assert events==[] and not first.done()
+        release.set();await first
+    asyncio.run(run())
+    assert events==['saved','leave','exit']
+
+
+def test_pending_checkpoint_keeps_session_open_and_reenables_retry():
+    from radar_pd_nova.checkpoint_uploads import CheckpointUploadPending
+    app=RadarPdNovaApp();events=[]
+    async def pending():raise CheckpointUploadPending('hda1','queued')
+    app._stop_session_enrollment=pending
+    app._leave_session_page=lambda:events.append('leave')
+    asyncio.run(app.end_session())
+    assert not events and not app.server.state.session_closing
+    assert not app.server.state.end_session_dialog
+    assert 'No replacement upload was submitted' in app.server.state.workspace_notice
+
+
+def test_close_does_not_stack_a_second_pending_wait_after_monitor_drain():
+    from radar_pd_nova.checkpoint_uploads import CheckpointUploadPending
+    app=RadarPdNovaApp();events=[]
+    app._powgen_controller=SimpleNamespace(persist_state=lambda:events.append('explicit retry'))
+    app._leave_session_page=lambda:events.append('leave')
+    async def exit_callback():events.append('exit')
+    app.exit_callback=exit_callback
+    async def run():
+        release=asyncio.Event()
+        async def monitor():
+            await release.wait();app._powgen_checkpoint_error=CheckpointUploadPending('hda1','queued')
+            app.server.state.live_launch_busy=False
+        app._powgen_monitor_task=asyncio.create_task(monitor())
+        app.server.state.powgen_monitoring=True
+        closing=asyncio.create_task(app.end_session());await asyncio.sleep(0)
+        release.set();await closing
+        assert events==[] and not app.server.state.session_closing
+        # An explicit subsequent close may retry the retained checkpoint once.
+        await app.end_session()
+        assert events==['explicit retry','leave','exit']
+    asyncio.run(run())

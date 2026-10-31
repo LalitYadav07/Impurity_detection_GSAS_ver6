@@ -55,3 +55,20 @@ def test_final_checkpoint_failure_is_not_reported_as_durable():
         with pytest.raises(RuntimeError, match='unavailable'):
             await worker.drain()
     asyncio.run(run())
+
+
+def test_pending_ack_stops_drain_after_one_wait_and_retains_newest_snapshot():
+    from radar_pd_nova.checkpoint_uploads import CheckpointUploadPending
+    entered=threading.Event();release=threading.Event();calls=[];current=[1]
+    def write(snapshot):
+        calls.append(snapshot);entered.set();assert release.wait(3)
+        raise CheckpointUploadPending('hda1','queued')
+    async def run():
+        worker=CoalescedCheckpoint(lambda:current[0],write);worker.offer()
+        assert await asyncio.to_thread(entered.wait,2)
+        current[0]=2
+        draining=asyncio.create_task(worker.drain());await asyncio.sleep(0)
+        release.set()
+        with pytest.raises(CheckpointUploadPending):await draining
+        assert calls==[1] and worker.pending==2
+    asyncio.run(run())

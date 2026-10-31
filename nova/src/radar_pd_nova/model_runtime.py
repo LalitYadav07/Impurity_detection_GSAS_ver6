@@ -15,6 +15,7 @@ from gpx_recipe.symmetry.compiler import assets,confined,file_sha,job_inputs,pac
 from gpx_recipe.symmetry.contracts import digest
 from .refinement_runtime import GalaxyRefinementRuntime,RuntimeUnavailable
 from .models import UtilityActionRecord,RunStatus
+from .checkpoint_uploads import CheckpointUploadPending
 
 MODEL_TOOL_ID='neutrons_radar_pd_model_campaign_prototype'
 CAMPAIGN_LABEL='RADAR-PD Model campaign '
@@ -467,7 +468,13 @@ class GalaxyChunkTransport:
         chunk=dict(key=key,members=ids,protocol=sha,request=request,job=None,pending=True)
         self.state['chunks'][key]=chunk
         self.state['members'].update({uid:key for uid in ids});self.save()
-        self.checkpoint(force=True)  # durable intent precedes the remote submission
+        try:
+            self.checkpoint(force=True)  # durable intent precedes the remote submission
+        except CheckpointUploadPending:
+            # No native POST has been attempted. Preserve that proof locally so
+            # explicit recovery can safely return these starts to the queue.
+            chunk.update(not_dispatched=True,complete=True);self.save()
+            raise
         try:job=self.runtime._submit('chunk',self.state['sources'][sha],request,self.state['inputs'][sha],key,cancel=self._paused)
         except Exception:
             if not self.runtime.state['dispatches'].get(key,{}).get('pending'):

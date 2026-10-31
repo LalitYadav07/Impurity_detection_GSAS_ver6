@@ -181,6 +181,24 @@ def test_failed_request_staging_cannot_create_a_scientific_job(remote,monkeypatc
     assert not service.submissions and not runtime.state['dispatches']['1'*24]['pending']
 
 
+def test_pending_intent_checkpoint_cannot_post_a_native_job_and_is_locally_recoverable(remote,tmp_path,monkeypatch):
+    from radar_pd_nova.checkpoint_uploads import CheckpointUploadPending
+    runtime,service,source=remote
+    c=Campaign(tmp_path/'pending-intent');t=GalaxyChunkTransport(runtime,c)
+    protocol=dict(source=dict(path='source.gpx',sha256=source['source_sha256']))
+    sha=digest(protocol);t.state['inputs'][sha]='assets';t.state['sources'][sha]=source
+    directory=tmp_path/'trial';directory.mkdir()
+    (directory/'job.json').write_text(json.dumps(dict(schema='radar-symmetry-job/v1',protocol=protocol,protocol_sha256=sha)))
+    def pending(**kwargs):raise CheckpointUploadPending('checkpoint-hda','queued')
+    monkeypatch.setattr(t,'checkpoint',pending)
+    with pytest.raises(CheckpointUploadPending):t.submit_many([('trial',directory)],workers=1)
+    assert not service.submissions
+    assert t.recover('trial',directory)==dict(state='not_started')
+    monkeypatch.setattr(t,'checkpoint',lambda **kwargs:None)
+    t.submit_many([('trial',directory)],workers=1)
+    assert len(service.submissions)==1
+
+
 def paused_request(remote,tmp_path,monkeypatch):
     runtime,service,source=remote;key='2'*24
     job=service.submit_utility(inputs={'dispatch_key':key});job.status=RunStatus.ERROR

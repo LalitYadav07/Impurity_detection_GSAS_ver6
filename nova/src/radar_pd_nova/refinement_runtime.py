@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 from pathlib import Path
 import shutil
@@ -214,8 +215,15 @@ class GalaxyRefinementRuntime(LocalRefinementRuntime):
     def save_workspace(self,manifest):
         import gzip,uuid
         path=self.root/('workspace-'+uuid.uuid4().hex+'.json.gz')
-        with gzip.open(path,'wt',encoding='utf-8') as handle:json.dump(manifest,handle,allow_nan=False,separators=(',',':'))
-        try:return self.service.upload_document(path,label=self.workspace_label)
+        payload=json.dumps(manifest,allow_nan=False,separators=(',',':'),sort_keys=True).encode()
+        path.write_bytes(gzip.compress(payload,mtime=0))
+        try:
+            bounded=getattr(self.service,'upload_checkpoint_document',None)
+            if bounded:
+                stable=dict(manifest);stable.pop('updated_utc',None)
+                fingerprint=hashlib.sha256(json.dumps(stable,allow_nan=False,separators=(',',':'),sort_keys=True).encode()).hexdigest()
+                return bounded(path,label=self.workspace_label,semantic_sha256=fingerprint)
+            return self.service.upload_document(path,label=self.workspace_label)
         finally:path.unlink(missing_ok=True)
 
     def recover_workspace(self):

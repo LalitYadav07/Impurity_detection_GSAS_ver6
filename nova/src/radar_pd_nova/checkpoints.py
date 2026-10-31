@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from typing import Any
+from .checkpoint_uploads import CheckpointUploadPending
 
 
 class CoalescedCheckpoint:
@@ -31,6 +32,11 @@ class CoalescedCheckpoint:
             try:
                 await asyncio.to_thread(self.write, snapshot)
                 self.error = None
+            except CheckpointUploadPending as exc:
+                # Leave the newest waiting snapshot available for an explicit
+                # later offer, rather than stacking bounded waits during drain.
+                self.error = exc
+                return
             except Exception as exc:
                 # The controller already retries transient transport failures.
                 # A subsequent offer retries the latest state, without a busy

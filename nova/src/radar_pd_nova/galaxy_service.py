@@ -357,6 +357,7 @@ class GalaxyService:
         self._active_submission_tokens: set[str] = set()
         self._lock = threading.RLock()
         self._result_download_slots = threading.BoundedSemaphore(4)
+        self._checkpoint_uploads = None
 
     def validate_connection(self) -> None:
         if not self.galaxy_url or not self.galaxy_key or not self.history_id:
@@ -446,6 +447,37 @@ class GalaxyService:
         with self._store() as store:
             dataset = self._upload_dataset(str(path), store, label, wait_ready=wait_ready)
             return str(dataset.id)
+
+    def upload_checkpoint_document(self, path, *, label, semantic_sha256=None, timeout=180.):
+        """Keep an acknowledged checkpoint upload recoverable during queue stalls."""
+        from .checkpoint_uploads import CheckpointUploads
+        with self._lock:
+            if self._checkpoint_uploads is None:
+                def status(identifier, seconds):
+                    response = requests.get(self.galaxy_url + '/api/datasets/' + identifier,
+                                            headers=self._headers, timeout=seconds)
+                    response.raise_for_status()
+                    return response.json()
+                self._checkpoint_uploads = CheckpointUploads(
+                    lambda source, label: self.upload_document(source, label=label, wait_ready=False),
+                    status,
+                )
+            uploads = self._checkpoint_uploads
+        return uploads.save(path, label=label, semantic_sha256=semantic_sha256, timeout=timeout)
+
+    def upload_checkpoint_json_document(self, payload, *, name, label):
+        """Serialize a watch checkpoint and use its bounded acknowledged wait."""
+        safe_name = re.sub(r'[^A-Za-z0-9_.-]+', '-', str(name)).strip('.-') or 'checkpoint.json'
+        if not safe_name.endswith('.json'):
+            safe_name += '.json'
+        staging = self.output_root / 'provenance'
+        staging.mkdir(parents=True, exist_ok=True)
+        path = staging / (Path(safe_name).stem + '-' + uuid.uuid4().hex + '.json')
+        try:
+            path.write_text(json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + '\n', encoding='utf-8')
+            return self.upload_checkpoint_document(path, label=label)
+        finally:
+            path.unlink(missing_ok=True)
 
     def tool_has_input(self,tool_id: str,name: str) -> bool:
         """Discover optional transport capabilities from the registered wrapper."""

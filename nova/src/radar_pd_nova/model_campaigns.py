@@ -9,7 +9,7 @@ from gpx_recipe.symmetry.compiler import assets,confined,file_sha
 from gpx_recipe.symmetry.contracts import digest
 from gpx_recipe.symmetry.templates import matches,rebind,validate_template
 from gpx_recipe.execution import write_json
-from .symmetry_sources import start_choices,resolve_start
+from .symmetry_sources import start_choices,resolve_start,recipe_source
 
 
 def portable_source(source):
@@ -72,7 +72,7 @@ def _choices(workspace,experiment):
         if 'source' in entry:source=copy.deepcopy(entry['source']);kind='radar'
         else:
             job=workspace.state['jobs'][entry['job_id']]
-            source=copy.deepcopy(job['source']);source['id']=entry['id']
+            source=recipe_source(workspace,job);source['id']=entry['id']
             kind='recipe:'+job['recipe_id']+':'+entry['stage']
         result.append((source,kind))
     return result
