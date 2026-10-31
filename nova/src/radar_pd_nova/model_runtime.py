@@ -1,6 +1,7 @@
 """Galaxy model preparation and chunk transport; credentials stay in NOVA."""
 from __future__ import annotations
 import copy
+import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -18,6 +19,9 @@ from .models import UtilityActionRecord,RunStatus
 MODEL_TOOL_ID='neutrons_radar_pd_model_campaign_prototype'
 CAMPAIGN_LABEL='RADAR-PD Model campaign '
 MODEL_BATCH_LIMITS=(1,2,4,8)
+EMPTY_PACKET_NAME='radar-model-packet.json'
+EMPTY_PACKET_BYTES=b'{"schema":"radar-model-packet/v1","files":{}}\n'
+EMPTY_PACKET_SHA256=hashlib.sha256(EMPTY_PACKET_BYTES).hexdigest()
 
 
 class CollectOnlyTransport:
@@ -135,7 +139,12 @@ class GalaxyModelRuntime(GalaxyRefinementRuntime):
         root=Path(root).resolve()
         paths=[p for p in paths if not (source_sha256 and Path(p).suffix.lower()=='.gpx'
                                       and file_sha(confined(root,p))==source_sha256)]
-        signature=digest({p:file_sha(confined(root,p)) for p in sorted(set(paths))})
+        hashes={p:file_sha(confined(root,p)) for p in sorted(set(paths))}
+        if not hashes:
+            # Galaxy's archive sniffing rejects a zero-member ZIP. Parent-only
+            # inspection still needs a valid packet, without duplicating GPX.
+            hashes={EMPTY_PACKET_NAME:EMPTY_PACKET_SHA256}
+        signature=digest(hashes)
         with self._lock:
             cached=self.state['assets'].get(signature)
             if cached and self._packet_available(cached):return cached
@@ -146,6 +155,10 @@ class GalaxyModelRuntime(GalaxyRefinementRuntime):
             if found:
                 self.state['assets'][signature]=found[0]['id'];self._save();return found[0]['id']
             archive=self.root/(signature+'.zip');pack(root,archive,paths)
+            if not paths:
+                import zipfile
+                with zipfile.ZipFile(archive,'a',compression=zipfile.ZIP_DEFLATED) as packet:
+                    packet.writestr(EMPTY_PACKET_NAME,EMPTY_PACKET_BYTES)
             try:identifier=self.service.upload_document(archive,label='RADAR-PD Model inputs '+signature,wait_ready=False)
             finally:archive.unlink(missing_ok=True)
             self.state['assets'][signature]=identifier;self._save()
@@ -297,6 +310,12 @@ class GalaxyModelRuntime(GalaxyRefinementRuntime):
                 implementation_sha256=package_signature(),expected_source_sha256=source['source_sha256'],
                 input_hashes={p:file_sha(confined(root,p)) for p in files},
                 timeout=min(600,max(1,float(timeout))))
+            if all(Path(p).suffix.lower()=='.gpx' and sha==source['source_sha256']
+                   for p,sha in request['input_hashes'].items()):
+                # The marker is a real captured transport input. Hashing it in
+                # the request also separates fixed inspections from failed
+                # zero-member-packet dispatches, without retrying those jobs.
+                request['input_hashes'][EMPTY_PACKET_NAME]=EMPTY_PACKET_SHA256
             key=digest([self.service.history_id,source['id'],request])[:24]
             request['dispatch_key']=key
             asset_id=self.packet(root,files,source_sha256=source['source_sha256'])

@@ -78,10 +78,16 @@ def test_native_packet_result_roundtrip_and_credentials_stay_in_nova(remote,tmp_
         assert b'PRIVATE-' not in value
     import io
     packet=service.data[service.submissions[0]['inputs']['model_assets']['dataset_id']]
-    with zipfile.ZipFile(io.BytesIO(packet)) as archive:assert archive.namelist()==[]
+    with zipfile.ZipFile(io.BytesIO(packet)) as archive:
+        assert archive.namelist()==['radar-model-packet.json']
+        assert json.loads(archive.read('radar-model-packet.json'))==dict(schema='radar-model-packet/v1',files={})
+    request=next(iter(service.requests.values()))
+    assert 'radar-model-packet.json' in request['input_hashes']
+    old=copy.deepcopy(request);old.pop('dispatch_key');old['input_hashes'].pop('radar-model-packet.json')
+    assert request['dispatch_key']!=digest([service.history_id,source['id'],old])[:24]
 
 
-def test_native_inspections_reuse_an_empty_asset_packet_without_copying_gpx(remote,tmp_path):
+def test_native_inspections_reuse_a_manifest_only_packet_without_copying_gpx(remote,tmp_path):
     runtime,service,source=remote
     first=runtime.packet(tmp_path,['source.gpx'],source_sha256=source['source_sha256'])
     second_file=tmp_path/'second.gpx';second_file.write_bytes(b'another exact native project')
@@ -90,6 +96,22 @@ def test_native_inspections_reuse_an_empty_asset_packet_without_copying_gpx(remo
     # A different GPX is an actual scientific asset, not the supplied source.
     third=runtime.packet(tmp_path,['second.gpx'],source_sha256=source['source_sha256'])
     assert third!=first
+
+
+def test_parent_inspection_does_not_reuse_old_zero_member_zip(remote,tmp_path):
+    import io
+    from gpx_recipe.symmetry.bundle import unpack
+    runtime,service,source=remote
+    old=service._put(b'old-zero-member-archive','old input')
+    runtime.state['assets'][digest({})]=old
+    current=runtime.packet(tmp_path,['source.gpx'],source_sha256=source['source_sha256'])
+    assert current!=old
+    packet=tmp_path/'captured.zip';packet.write_bytes(service.data[current])
+    expanded=unpack(packet,tmp_path/'expanded')
+    assert [p.name for p in expanded.iterdir()]==['radar-model-packet.json']
+    assert source['source_sha256'] not in (expanded/'radar-model-packet.json').read_text()
+    with zipfile.ZipFile(io.BytesIO(service.data[current])) as archive:
+        assert all(not p.filename.endswith('.gpx')for p in archive.infolist())
 
 
 def test_failed_asset_upload_does_not_poison_future_native_inspections(remote,tmp_path):
