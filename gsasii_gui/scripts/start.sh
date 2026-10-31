@@ -34,7 +34,8 @@ mkdir -p "${export_dir}"
 cat > "${export_dir}/README.txt" <<'EOF'
 Save plots, CIFs, tables, and other GSAS-II exports in this folder.
 The folder is preserved in Galaxy History as "GSAS-II exported files".
-The working GPX is preserved separately and does not need to be copied here.
+The last successfully saved GPX, including Save As, is the edited Galaxy project.
+Named saved project branches are also preserved under Saved_projects/ here.
 EOF
 
 export GSASII_PROJECT_PATH="${session_dir}/radar_pd_project.gpx"
@@ -72,6 +73,8 @@ echo "Writable session GPX: ${GSASII_PROJECT_PATH}"
 echo "Galaxy output GPX: ${GSASII_OUTPUT_PROJECT}"
 echo "Export folder: ${GSASII_EXPORT_DIR}"
 echo "Galaxy export archive: ${GSASII_OUTPUT_ARCHIVE}"
+
+/opt/conda/bin/python /opt/gsasii-gui/project_tracking.py initialize
 
 /opt/conda/bin/python /opt/gsasii-gui/snapshot_exports.py \
     "${GSASII_EXPORT_DIR}" "${GSASII_OUTPUT_ARCHIVE}" "${GSASII_SESSION_DIR}/export-manifest.json"

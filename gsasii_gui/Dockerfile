@@ -5,7 +5,7 @@ ARG NOVNC_REF=9e7def8703ac3234c4bae0cd08663f5dd526ee22
 ARG WEBSOCKIFY_VERSION=0.13.0
 ARG GSASII_UID=1000
 ARG GSASII_GID=1000
-ARG RADAR_PD_GSASII_GUI_VERSION=0.1.13
+ARG RADAR_PD_GSASII_GUI_VERSION=0.1.14
 
 LABEL org.opencontainers.image.title="RADAR-PD GSAS-II Interactive" \
       org.opencontainers.image.description="Browser-hosted native GSAS-II desktop for RADAR-PD GPX handoff" \

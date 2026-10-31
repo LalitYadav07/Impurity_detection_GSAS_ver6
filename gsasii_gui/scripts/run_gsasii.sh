@@ -12,21 +12,17 @@ mkdir -p "${HOME}/.GSASII" "${XDG_RUNTIME_DIR}"
 chmod 0700 "${XDG_RUNTIME_DIR}"
 
 set +e
-dbus-run-session -- /opt/conda/bin/GSAS-II "${project}"
+dbus-run-session -- /opt/conda/bin/python /opt/gsasii-gui/launch_gsasii.py "${project}"
 status=$?
 set -e
 
-if [[ -s "${project}" ]]; then
-    final_copy="${output_project}.final.$$"
-    if cp "${project}" "${final_copy}" \
-        && mv -f "${final_copy}" "${output_project}" \
-        && chmod a+r "${output_project}"; then
-        echo "Saved final GPX project to the Galaxy output"
-    else
-        rm -f "${final_copy}"
-        echo "Could not save the final GPX project" >&2
-        [[ "${status}" -ne 0 ]] || status=74
-    fi
+if /opt/conda/bin/python /opt/gsasii-gui/project_tracking.py sync \
+    && /opt/conda/bin/python /opt/gsasii-gui/snapshot_exports.py \
+        "${GSASII_EXPORT_DIR}" "${GSASII_OUTPUT_ARCHIVE}" "${GSASII_SESSION_DIR}/export-manifest.json"; then
+    echo "Saved the active final GPX and named project branches to Galaxy"
+else
+    echo "Could not preserve the active saved GPX; inspect the session log" >&2
+    [[ "${status}" -ne 0 ]] || status=74
 fi
 
 exit "${status}"

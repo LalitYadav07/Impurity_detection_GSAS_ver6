@@ -79,6 +79,22 @@ jobs:
           print("No GSAS-II importer load errors")
           PY
 
+      - name: Smoke test native Save As project preservation
+        shell: bash
+        run: |
+          docker run --rm "${IMAGE_NAME}:gsasii-gui" bash -c '
+            set -euo pipefail
+            Xvfb :95 -screen 0 1280x800x24 -nolisten tcp >/tmp/save-as-xvfb.log 2>&1 &
+            display_pid=$!
+            trap "kill $display_pid 2>/dev/null || true" EXIT
+            export DISPLAY=:95
+            for attempt in $(seq 1 100); do
+              if xdpyinfo -display :95 >/dev/null 2>&1; then break; fi
+              sleep 0.1
+            done
+            /opt/conda/bin/python /opt/gsasii-gui/smoke_save_as.py /tmp/public-save-as-smoke
+          '
+
       - name: Smoke test the noVNC gateway
         shell: bash
         run: |

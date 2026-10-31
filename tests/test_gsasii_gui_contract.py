@@ -72,13 +72,13 @@ def test_gpx_is_edited_as_a_copy_and_continuously_preserved() -> None:
     assert "libnss_wrapper.so" in start
     assert 'export USER="$(id -un)"' in start
     assert '"${session_dir}/radar_pd_project.gpx"' in start
-    assert 'source_digest="$(sha256sum "${source_project}"' in sync
-    assert 'mv -f "${output_copy}" "${output_project}"' in sync
-    assert "sleep 0.5" in sync
-    assert "set -uo pipefail" in sync
-    assert "retrying" in sync
-    assert '/opt/conda/bin/GSAS-II "${project}"' in gui
-    assert 'mv -f "${final_copy}" "${output_project}"' in gui
+    assert "project_tracking.py initialize" in start
+    assert "project_tracking.py sync --watch" in sync
+    assert "set -euo pipefail" in sync
+    assert 'launch_gsasii.py "${project}"' in gui
+    assert "project_tracking.py sync" in gui
+    assert "snapshot_exports.py" in gui
+    assert 'status=74' in gui
 
 
 def test_exports_are_visible_and_continuously_preserved() -> None:

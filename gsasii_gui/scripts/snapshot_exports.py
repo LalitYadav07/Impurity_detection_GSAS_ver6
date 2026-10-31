@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import nullcontext
 import os
 import sys
 import tempfile
@@ -12,7 +13,8 @@ from pathlib import Path
 def _manifest(root: Path) -> list[dict[str, int | str]]:
     entries: list[dict[str, int | str]] = []
     for path in sorted(root.rglob("*")):
-        if not path.is_file() or path.is_symlink():
+        if (not path.is_file() or path.is_symlink()
+                or any(part.startswith('.') for part in path.relative_to(root).parts)):
             continue
         stat = path.stat()
         entries.append(
@@ -26,6 +28,17 @@ def _manifest(root: Path) -> list[dict[str, int | str]]:
 
 
 def snapshot(export_dir: Path, archive: Path, state_file: Path) -> bool:
+    session = os.environ.get('GSASII_SESSION_DIR')
+    if session:
+        from project_tracking import project_lock
+        guard = project_lock(session)
+    else:
+        guard = nullcontext()
+    with guard:
+        return _snapshot(export_dir, archive, state_file)
+
+
+def _snapshot(export_dir: Path, archive: Path, state_file: Path) -> bool:
     export_dir.mkdir(parents=True, exist_ok=True)
     archive.parent.mkdir(parents=True, exist_ok=True)
     state_file.parent.mkdir(parents=True, exist_ok=True)
