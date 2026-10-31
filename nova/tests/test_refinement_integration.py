@@ -80,6 +80,19 @@ def test_unchanged_refinement_backups_coalesce_but_new_claims_and_failures_do_no
     assert snapshots[-1]['jobs']['claimed']['remote_action']['galaxy_job_id']=='acknowledged'
 
 
+def test_planner_knows_multi_scan_enrollment_is_host_managed_without_changing_native_context(tmp_path):
+    w,rt=create(tmp_path);w.observe([source('1')]);seen=[]
+    def planner(request,context,previous=None):
+        seen.append(copy.deepcopy(context));return dict(plan=plan(context),calls=[])
+    w._planner=planner
+    draft=w.prepare('exp','1','Apply to the three scans selected in NOVA')
+    assert seen[0]['host_execution']['histogram_keys']==['h0']
+    assert 'independently' in seen[0]['host_execution']['scan_enrollment']
+    assert 'host_execution' not in draft['context']
+    assert draft['context']==w.state['sources']['1']['context']
+    assert draft['status']=='ready' and draft['preview']['model_signature']=='same-model'
+
+
 def test_parallel_polishing_claims_distinct_scans_once_and_respects_limit(tmp_path):
     import threading
     from concurrent.futures import ThreadPoolExecutor

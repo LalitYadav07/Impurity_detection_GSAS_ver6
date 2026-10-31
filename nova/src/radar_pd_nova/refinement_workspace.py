@@ -195,6 +195,14 @@ class RefinementWorkspace:
                 configure_provider(os.getenv('RADAR_GPX_PLANNER_PROVIDER','illumine-luna'),os.getenv('RADAR_PD_REFINEMENT_KEY_FILE') or None)
                 client=make_client()
             source=self.inspect(source_id);context=source['context']
+            planning_context=copy.deepcopy(context)
+            planning_context['host_execution']={
+                'recipe_unit':'One supplied GPX, using only its actual histogram keys',
+                'histogram_keys':[h['key']for h in context['histograms']],
+                'scan_enrollment':'NOVA already manages scan, sample and bank selection outside this project. '
+                    'Apply this per-project recipe independently after compatibility checks. A request for '
+                    'several scans does not imply several histograms in this GPX. Do not invent extra '
+                    'histograms or ask for a cross-scan mapping that this host already handles.'}
             if previous and previous.get('model_signature')!=context['model_signature']:previous=None
             if reuse_recipe:
                 from gpx_recipe.contracts import validate_plan
@@ -203,9 +211,9 @@ class RefinementWorkspace:
                 plan=validate_plan(saved['plan'],context)
                 if request!=plan['request']:raise ValueError('A changed request needs a revised plan')
                 planning=dict(plan=plan,calls=[],origin='Saved recipe '+str(saved['version']))
-            elif self._planner:planning=self._planner(request,context,previous=previous)
+            elif self._planner:planning=self._planner(request,planning_context,previous=previous)
             else:
-                planning=make_plan(request,context,previous=previous,client=client)
+                planning=make_plan(request,planning_context,previous=previous,client=client)
             planning=dict(planning)
             planning['usage_summary']=summarize_calls(planning.get('calls',[]))
             plan=planning['plan'];directory=self.root/'drafts'/generation;directory.mkdir(parents=True,exist_ok=True)
