@@ -98,6 +98,19 @@ def test_exact_sample_identity_retains_punctuation():
     assert interpret_reply("sample ID A.", context).value["powgen_processing_sample_ids"] == ["A."]
 
 
+@pytest.mark.parametrize('phrase',['Select sample 106208.','Use sample 106208!','sample 106208?'])
+def test_sentence_punctuation_resolves_an_exact_discovered_numeric_sample_id(phrase):
+    samples=(SampleOption('106208','106208 — oxide'),SampleOption('102085','102085 — nanoparticle'))
+    context=replace(SELECTION,samples=samples,shown_samples=samples)
+    reply=interpret_reply(phrase,context)
+    assert reply.action=='patch' and reply.value['powgen_processing_sample_ids']==['106208']
+    dotted=samples+(SampleOption('106208.','106208. — a distinct identity'),)
+    literal=interpret_reply('Select sample 106208.',replace(context,samples=dotted,shown_samples=dotted))
+    assert literal.value['powgen_processing_sample_ids']==['106208.']
+    assert interpret_reply('sample ID 106208.',context).action=='clarify'
+    assert interpret_reply('sample "106208."',context).action=='clarify'
+
+
 def test_sample_names_with_reserved_words_use_the_active_question():
     samples = (SampleOption("42", "42 — NOMAD"), SampleOption("43", "43 — balanced"))
     context = replace(SELECTION, samples=samples, shown_samples=samples)

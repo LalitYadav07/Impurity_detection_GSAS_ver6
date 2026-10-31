@@ -273,10 +273,20 @@ def _sample_names(option: SampleOption) -> set[str]:
 
 
 def _one_sample(text: str, context: ReplyContext) -> ParsedReply:
+    token=text.strip()
+    quoted=token[:1] in {'"',"'"} or token[-1:] in {'"',"'"}
     raw = text.strip(" \"'")
     explicit_id = bool(re.match(r"^(?:with\s+)?ids?\s*[:# ]", raw, re.I))
     raw = re.sub(r"^(?:with\s+)?ids?\s*[:# ]\s*", "", raw, flags=re.I)
     exact_ids = [s for s in context.samples if s.value == raw]
+    # Preserve real punctuated IDs and explicitly literal/quoted IDs first.
+    # An ordinary sentence may end "select sample 106208."; remove only one
+    # sentence mark when the remaining ID exists exactly in the discovered list.
+    if (not exact_ids and not explicit_id and not quoted and raw[-1:] in {'.','!','?'}
+            and raw[-2:-1] not in {'.','!','?'}):
+        plain=raw[:-1]
+        matches=[s for s in context.samples if s.value==plain]
+        if matches:raw=plain;exact_ids=matches
     ordinal = None if explicit_id else _ordinal(raw)
     explicit_option = bool(re.search(r"\b(?:option|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth)\b|\d(?:st|nd|rd|th)\b", raw, re.I))
     positional = context.shown_samples[ordinal - 1] if ordinal and 1 <= ordinal <= len(context.shown_samples) else None
