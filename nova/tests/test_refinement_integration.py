@@ -193,13 +193,34 @@ def test_identical_anchor_and_frozen_final_publications_are_one_model():
     final = dict(anchor, stage='final_refinement', collection_name='03_Final_accepted_model.gpx')
     result = dict(observables={'source_gpx_sha256':'a'*64}, gpx_projects=[anchor, final])
     assert select_published_project(result, {}) == final
-    # Internal source identity alone cannot establish the identity of the
-    # published model, nor resolve two different final-model claims.
+    # Internal source identity alone cannot establish publication identity.
     for replacement in (dict(anchor, published_sha256='c'*64),
-                        {k:v for k,v in anchor.items() if k != 'published_sha256'},
-                        dict(anchor, stage='final_refinement')):
+                        {k:v for k,v in anchor.items() if k != 'published_sha256'}):
         with pytest.raises(ValueError, match='Several published GPXs'):
             select_published_project(dict(result, gpx_projects=[replacement, final]), {})
+
+
+def test_identical_final_and_joint_cell_aliases_keep_canonical_source_identity(tmp_path):
+    final = dict(status='accepted', stage='final_refinement', sha256='a'*64,
+                 published_sha256='b'*64, collection_name='03_Final_accepted_model.gpx',
+                 source_path='Technical/GSAS_Projects/seq_final_accepted_model.gpx')
+    joint = dict(final, collection_name='03_Final_accepted_joint_cell_model.gpx',
+                 source_path='Technical/GSAS_Projects/seq_final_joint_polished.gpx')
+    record = SimpleNamespace(uid='live-handle', galaxy_job_id='job', name='IPTS-1_PG3_1',
+                             local_output_dir=tmp_path,
+                             output_dataset_ids={'gpx_projects':'collection'}, inputs=None)
+    sources = []
+    for projects in ([final, joint], [joint, final]):
+        result = dict(observables={'source_gpx_sha256':'a'*64}, gpx_projects=projects)
+        assert select_published_project(result, {}) == final
+        sources.append(source_from_record(record, {'summary':result},
+                       dict(instrument='PG3', ipts='IPTS-1', run_number=1), 'history'))
+    assert sources[0]['id'] == sources[1]['id']
+    assert sources[0]['collection_name'] == final['collection_name']
+    for replacement in (dict(joint, published_sha256='c'*64),
+                        {k:v for k,v in joint.items() if k != 'published_sha256'}):
+        with pytest.raises(ValueError, match='Several published GPXs'):
+            select_published_project(dict(result, gpx_projects=[final, replacement]), {})
 
 
 def test_local_runtime_captures_immutable_original_and_holds_changed_input(tmp_path):

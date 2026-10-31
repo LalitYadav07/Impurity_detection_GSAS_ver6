@@ -41,6 +41,9 @@ def refinement_dashboard(app):
                 v.VBtn('Refresh projects',click=app.refresh_refinement_sources,loading=('rf_loading',),variant='text',prepend_icon='mdi-refresh',size='small')
         v.VProgressLinear(v_if='rf_loading || rf_busy',indeterminate=True,color='#287654',height=3,classes='mb-4')
         v.VAlert(v_if="rf_mode !== 'models' && !!rf_error",text=('rf_error',),type='error',variant='tonal',density='compact',classes='mb-3',closable=True)
+        with html.Details(v_if='rf_source_warnings.length',classes='mb-4'):
+            html.Summary('{{ rf_source_warnings.length }} completed project(s) need attention before refinement',style='cursor:pointer;color:#8b6028;font-size:13px')
+            v.VDataTable(items=('rf_source_warnings',),headers=("[{title:'Scan',key:'scan'},{title:'Reason',key:'reason'}]",),items_per_page=5,density='compact')
         with html.Div(classes='rf-toolbar'):
             select('Experiment','rf_experiment','rf_experiments')
             with v.VBtnToggle(v_model=('rf_mode',),mandatory=True,color='#15543c',variant='outlined',divided=True):
@@ -178,9 +181,6 @@ def refinement_dashboard(app):
                     v.VBtn('Download',click=app.download_refinement_artifact,variant='outlined',size='small',prepend_icon='mdi-download')
                     v.VBtn('{{ rf_open_gsas_label }}',v_if='rf_can_open_gsas',click=app.open_refinement_in_gsasii,variant='outlined',size='small')
                 html.P('{{ rf_output_provenance }}',v_if='!!rf_output_provenance',classes='rf-notice')
-        with html.Details(v_if='rf_source_warnings.length',classes='mt-5'):
-            html.Summary('Projects needing attention ({{ rf_source_warnings.length }})',style='cursor:pointer;color:#8b6028;font-size:13px')
-            v.VDataTable(items=('rf_source_warnings',),headers=("[{title:'Scan',key:'scan'},{title:'Reason',key:'reason'}]",),items_per_page=5,density='compact')
         with html.Div(v_if='rf_expanded',classes='rf-overlay'):
             v.VBtn('Close expanded plot',click='rf_expanded = false',variant='text',prepend_icon='mdi-arrow-collapse')
             with html.Div(style='height:calc(100vh - 220px)'):

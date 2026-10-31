@@ -85,15 +85,21 @@ def select_published_project(result: dict, index: dict) -> dict:
         if len(exact) == 1:
             return dict(exact[0])
         if len(exact) > 1:
-            # A final-model freeze can be byte-identical to the earlier anchor
-            # when no subsequent step improved it. These are two publications
-            # of one model, not two scientific solutions. Require both the exact
-            # model hash above and a shared checksum of the published bytes.
+            # Final freezes and the retained joint-cell checkpoint can publish
+            # the same bytes under different names. They are one model only
+            # when both the selected internal hash and the published hash agree.
             published = {p.get('published_sha256') for p in exact}
             final = [p for p in exact if p.get('stage') == 'final_refinement' and p.get('status') == 'accepted']
             if (len(published) == 1 and re.fullmatch(r'[a-f0-9]{64}', str(next(iter(published))))
-                    and len(final) == 1):
-                return dict(final[0])
+                    and final):
+                # Prefer the established canonical publication, independent of
+                # index order. Other byte-identical aliases remain in History.
+                def publication_order(project):
+                    name = str(project.get('collection_name') or '')
+                    return (name != '03_Final_accepted_model.gpx', name,
+                            str(project.get('collection_path') or ''),
+                            str(project.get('source_path') or project.get('path') or ''))
+                return dict(min(final, key=publication_order))
             raise ValueError('Several published GPXs claim the selected model; choose a checkpoint explicitly')
         # A stale summary/index must not silently select a different solution.
         raise ValueError('The published GPX index does not identify the model used by this result')

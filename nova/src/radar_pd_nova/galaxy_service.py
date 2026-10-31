@@ -1105,7 +1105,54 @@ class GalaxyService:
         return outcomes
 
     def _download_collection(self, collection_id: str, destination: Path) -> None:
-        """Download a durable Galaxy collection without a live Tool object."""
+        """Read ready flat outputs directly, avoiding server archive-builder work.
+
+        The caller's shared transfer semaphore bounds concurrent collections.
+        Members stay serial within a collection, so this path adds no nested
+        pools or multiplied network concurrency. Nested collections retain the
+        Galaxy archive contract.
+        """
+
+        response = requests.get(
+            f"{self.galaxy_url}/api/dataset_collections/{collection_id}",
+            headers=self._headers, params={"view": "element"}, timeout=30,
+        )
+        response.raise_for_status()
+        collection = response.json()
+        elements = collection.get('elements') if isinstance(collection, dict) else None
+        flat = (isinstance(collection, dict) and collection.get('collection_type') == 'list'
+                and isinstance(elements, list) and len(elements) <= 2048
+                and all(isinstance(row, dict) and row.get('element_type') == 'hda' for row in elements))
+        if flat:
+            if collection.get('populated_state') != 'ok' or collection.get('element_count') != len(elements):
+                raise ValueError('Galaxy output collection is not completely populated yet')
+            downloads = []
+            names = set()
+            for row in elements:
+                item = row.get('object') or {}
+                identifier = str(item.get('id') or '')
+                name = str(row.get('element_identifier') or '')
+                extension = str(item.get('file_ext') or item.get('extension') or '')
+                if destination.name == 'gpx_projects' and extension in {'binary', 'data'}:
+                    extension = 'gpx'
+                if (not re.fullmatch(r'[A-Za-z0-9_-]+', identifier) or not name or name in {'.', '..'}
+                        or len(name) > 240 or any(c in name for c in '/\\:')
+                        or any(ord(c) < 32 for c in name)
+                        or not re.fullmatch(r'[A-Za-z0-9_.-]+', extension)):
+                    raise ValueError('Unsafe or incomplete Galaxy output collection member')
+                if item.get('state') != 'ok':
+                    raise ValueError('Galaxy output collection member is not ready')
+                filename = name if name.lower().endswith('.' + extension.lower()) else name + '.' + extension
+                if filename.casefold() in names:
+                    raise ValueError('Galaxy output collection has colliding filenames')
+                names.add(filename.casefold())
+                downloads.append((identifier, destination / filename, item.get('file_size')))
+            destination.mkdir(parents=True, exist_ok=True)
+            for identifier, target, expected_size in downloads:
+                self._download_dataset(identifier, target)
+                if type(expected_size) is int and expected_size >= 0 and target.stat().st_size != expected_size:
+                    raise ValueError('Galaxy output collection member size changed during transfer')
+            return
 
         archive = destination.parent / f".{destination.name}.zip"
         archive.unlink(missing_ok=True)

@@ -505,6 +505,9 @@ def test_durable_collection_download_uses_galaxy_zip_endpoint(tmp_path: Path, mo
         def raise_for_status(self) -> None:
             pass
 
+        def json(self):
+            return {'collection_type':'list:list', 'elements':[]}
+
         def iter_content(self, *, chunk_size: int) -> Iterator[bytes]:
             assert chunk_size == 1024 * 1024
             yield payload
@@ -519,11 +522,82 @@ def test_durable_collection_download_uses_galaxy_zip_endpoint(tmp_path: Path, mo
 
     service._download_collection("plots-id", destination)
 
-    assert calls[0]["url"] == "https://galaxy.example/api/dataset_collections/plots-id/download"
-    assert calls[0]["headers"]["x-api-key"] == "key"
-    assert calls[0]["stream"] is True
+    assert calls[0]["url"] == "https://galaxy.example/api/dataset_collections/plots-id"
+    assert calls[0]["params"] == {'view':'element'}
+    assert calls[1]["url"] == "https://galaxy.example/api/dataset_collections/plots-id/download"
+    assert calls[1]["headers"]["x-api-key"] == "key"
+    assert calls[1]["stream"] is True
     assert (destination / "curve.png.plotdata.json").is_file()
     assert not (destination.parent / ".plots.zip").exists()
+
+
+def test_flat_collection_reads_ready_plot_pair_without_archive_builder(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    arrays = tmp_path/'source.npz'
+    np.savez_compressed(arrays, x=[1.,2.,3.], yobs=[10.,20.,30.],
+                        ycalc=[9.,19.,29.], resid=[1.,1.,1.])
+    manifest = dict(plot_kind='gsas_fit_with_ticks_v1', source_plot='fit.png', rwp=6.25,
+                    arrays_npz='fit.png.plotdata_arrays.npz')
+    bodies = {'json':json.dumps(manifest).encode(), 'npz':arrays.read_bytes()}
+    elements = [dict(element_type='hda', element_identifier=name,
+                     object=dict(id=identifier, file_ext=extension, state='ok', file_size=len(bodies[identifier])))
+                for identifier,name,extension in [('json','fit.png.plotdata','json'),
+                                                  ('npz','fit.png.plotdata_arrays','npz')]]
+    urls = []
+    def get(url, **kwargs):
+        urls.append(url)
+        assert not url.endswith('/download'), 'Ready flat files must not request a Galaxy ZIP job'
+        return SimpleNamespace(raise_for_status=lambda:None, json=lambda:dict(
+            collection_type='list', populated_state='ok', element_count=2, elements=elements))
+    monkeypatch.setattr('radar_pd_nova.galaxy_service.requests.get', get)
+    service = GalaxyService('https://galaxy.example','key','history',output_root=tmp_path)
+    def download(identifier, target):target.write_bytes(bodies[identifier])
+    service._download_dataset = download
+    service._download_collection('plots-id', tmp_path/'plots')
+    view = build_result_view(dict(analysis_mode='full', final_rwp=6.25, phases=[]), tmp_path, submitted_mode='full')
+    selected = load_plot_with_fallback(view.plots, view.primary_plot_path)
+    assert selected is not None
+    assert list(selected[2].data[0].y) == [10.,20.,30.]
+    assert len(urls) == 1
+
+
+def test_flat_binary_gpx_keeps_publication_filename_and_checks_size(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    item = dict(element_type='hda', element_identifier='03_Final_accepted_model',
+                object=dict(id='project', file_ext='binary', state='ok', file_size=4))
+    payload = dict(collection_type='list', populated_state='ok', element_count=1, elements=[item])
+    monkeypatch.setattr('radar_pd_nova.galaxy_service.requests.get', lambda *a,**k:SimpleNamespace(
+        raise_for_status=lambda:None, json=lambda:payload))
+    service = GalaxyService('https://galaxy.example','key','history',output_root=tmp_path)
+    service._download_dataset = lambda identifier,target:target.write_bytes(b'gpx!')
+    destination = tmp_path/'gpx_projects'
+    service._download_collection('projects', destination)
+    assert (destination/'03_Final_accepted_model.gpx').read_bytes() == b'gpx!'
+    item['object']['file_size'] = 5
+    with pytest.raises(ValueError, match='size changed'):
+        service._download_collection('projects', destination)
+
+
+@pytest.mark.parametrize('change,reason', [
+    ('../escape','Unsafe'), ('back\\slash','Unsafe'), ('bad\nname','Unsafe'),
+    ('collision','colliding'), ('incomplete','completely populated'), ('error','not ready'),
+])
+def test_direct_collection_validates_all_members_before_any_download(tmp_path, monkeypatch, change, reason):
+    from types import SimpleNamespace
+    item = dict(element_type='hda', element_identifier='safe', object=dict(id='dataset', file_ext='json', state='ok'))
+    payload = dict(collection_type='list', populated_state='ok', element_count=1, elements=[item])
+    if change=='collision':
+        payload['elements'].append(dict(item,element_identifier='SAFE'));payload['element_count']=2
+    elif change=='incomplete':payload['element_count']=2
+    elif change=='error':item['object']['state']='error'
+    else:item['element_identifier']=change
+    monkeypatch.setattr('radar_pd_nova.galaxy_service.requests.get', lambda *a,**k:SimpleNamespace(
+        raise_for_status=lambda:None, json=lambda:payload))
+    service = GalaxyService('https://galaxy.example','key','history',output_root=tmp_path)
+    downloaded = []
+    service._download_dataset = lambda *args:downloaded.append(args)
+    with pytest.raises(ValueError, match=reason):service._download_collection('collection', tmp_path/'plots')
+    assert not downloaded
 
 
 def test_result_collector_recovers_archive_when_collections_are_unavailable(tmp_path: Path) -> None:
