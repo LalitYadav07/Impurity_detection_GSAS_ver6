@@ -199,6 +199,159 @@ def test_pending_intent_checkpoint_cannot_post_a_native_job_and_is_locally_recov
     assert len(service.submissions)==1
 
 
+def staged_wave(remote,tmp_path,monkeypatch,*,count=8):
+    runtime,service,source=remote
+    runtime.max_active_jobs=8;service.tool_has_input=lambda *a:True
+    campaign=Campaign(tmp_path/'wave-campaign');transport=GalaxyChunkTransport(runtime,campaign)
+    checkpoints=[]
+    monkeypatch.setattr(transport,'checkpoint',lambda **kwargs:checkpoints.append(copy.deepcopy(transport.state)))
+    entries=[];handles=[]
+    transport.begin_dispatch_wave()
+    for i in range(count):
+        protocol=dict(source=dict(path='source.gpx',sha256=source['source_sha256']),acquisition=i%3)
+        sha=digest(protocol);transport.state['inputs'][sha]='assets'
+        transport.state['sources'][sha]=dict(source,id='scan'+str(i%3))
+        directory=tmp_path/('wave-trial-'+str(i));directory.mkdir()
+        (directory/'job.json').write_text(json.dumps(dict(schema='radar-symmetry-job/v1',protocol=protocol,protocol_sha256=sha)))
+        uid='trial'+str(i);entries.append((uid,directory))
+        handles.append(transport.submit_many([(uid,directory)],workers=2)[uid])
+    return transport,service,entries,handles,checkpoints
+
+
+def test_one_durable_wave_precedes_every_native_post_for_several_scans(remote,tmp_path,monkeypatch):
+    t,service,entries,handles,checkpoints=staged_wave(remote,tmp_path,monkeypatch)
+    assert not service.submissions and not checkpoints
+    for (uid,directory),handle in zip(entries,handles):
+        assert t.poll(handle,directory)==dict(state='running',handle=handle)
+    original=service.submit_utility
+    def post(**kwargs):
+        assert len(checkpoints)==1
+        saved=checkpoints[0]
+        assert set(saved['members'])=={uid for uid,_ in entries}
+        assert set(saved['chunks'])=={h['dispatch_key'] for h in handles}
+        assert all(c['job'] is None for c in saved['chunks'].values())
+        assert set(saved['sources'])==set(saved['inputs'])
+        return original(**kwargs)
+    monkeypatch.setattr(service,'submit_utility',post)
+    t.flush_dispatch_wave()
+    assert len(service.submissions)==8 and len(checkpoints)==1
+    assert all(c['job'] for c in t.state['chunks'].values())
+    assert not t._buffered_dispatches
+
+
+def test_pending_wave_checkpoint_posts_nothing_and_keeps_all_starts_recoverable(remote,tmp_path,monkeypatch):
+    from radar_pd_nova.checkpoint_uploads import CheckpointUploadPending
+    t,service,entries,handles,checkpoints=staged_wave(remote,tmp_path,monkeypatch)
+    def pending(**kwargs):raise CheckpointUploadPending('owned-checkpoint','queued')
+    monkeypatch.setattr(t,'checkpoint',pending)
+    with pytest.raises(CheckpointUploadPending):t.flush_dispatch_wave()
+    assert not service.submissions
+    restored=GalaxyChunkTransport(t.runtime,t.campaign)
+    for uid,directory in entries:
+        assert restored.recover(uid,directory)==dict(state='not_started')
+
+
+def test_partial_wave_lost_ack_recovers_that_job_without_resubmitting_peers(remote,tmp_path,monkeypatch):
+    t,service,entries,handles,checkpoints=staged_wave(remote,tmp_path,monkeypatch)
+    original=service.submit_utility
+    def post(**kwargs):
+        service.lose_ack=len(service.submissions)==1
+        return original(**kwargs)
+    monkeypatch.setattr(service,'submit_utility',post)
+    with pytest.raises(RuntimeUnavailable,match='did not acknowledge'):t.flush_dispatch_wave()
+    assert len(service.submissions)==2
+    second=t.state['chunks'][handles[1]['dispatch_key']]
+    assert not second.get('not_dispatched')
+    service.lose_ack=False;monkeypatch.setattr(service,'submit_utility',original)
+    recovered=t.submit_many([entries[1]],workers=2)
+    assert recovered[entries[1][0]]==handles[1] and len(service.submissions)==2
+    for uid,directory in entries[2:]:assert t.recover(uid,directory)==dict(state='not_started')
+    t.submit_many([entries[2]],workers=2)
+    assert len(service.submissions)==3
+
+
+def test_pausing_while_wave_checkpoint_finishes_cannot_start_native_jobs(remote,tmp_path,monkeypatch):
+    t,service,entries,handles,checkpoints=staged_wave(remote,tmp_path,monkeypatch)
+    monkeypatch.setattr(t,'checkpoint',lambda **kwargs:t.pause())
+    t.flush_dispatch_wave()
+    assert not service.submissions
+    assert all(t.recover(uid,directory)==dict(state='not_started') for uid,directory in entries)
+
+
+def test_canceling_a_buffered_group_never_posts_it_and_preserves_other_starts(remote,tmp_path,monkeypatch):
+    t,service,entries,handles,checkpoints=staged_wave(remote,tmp_path,monkeypatch)
+    assert t.cancel(handles[2],entries[2][1]) is True
+    t.flush_dispatch_wave()
+    assert len(service.submissions)==7
+    assert handles[2]['dispatch_key'] not in service.jobs
+    assert t.recover(*entries[2])==dict(state='not_started')
+
+
+def test_abort_during_an_inflight_post_cannot_claim_it_was_never_dispatched(remote,tmp_path,monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    t,service,entries,handles,checkpoints=staged_wave(remote,tmp_path,monkeypatch,count=2)
+    entered=threading.Event();release=threading.Event();original=service.submit_utility
+    def post(**kwargs):
+        if not service.submissions:entered.set();assert release.wait(4)
+        return original(**kwargs)
+    monkeypatch.setattr(service,'submit_utility',post)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        work=pool.submit(t.flush_dispatch_wave);assert entered.wait(4)
+        assert t.abort_dispatch_wave() is False
+        assert not any(c.get('not_dispatched') for c in t.state['chunks'].values())
+        t.pause();release.set();work.result(4)
+    assert len(service.submissions)==1
+    first=t.state['chunks'][handles[0]['dispatch_key']]
+    assert first['job'] and not first.get('not_dispatched')
+    assert t.recover(*entries[1])==dict(state='not_started')
+
+
+def test_failed_absence_lookup_is_not_proof_that_a_saved_job_never_started(remote,tmp_path,monkeypatch):
+    t,service,entries,handles,checkpoints=staged_wave(remote,tmp_path,monkeypatch,count=1)
+    def unavailable(key):raise TimeoutError('PRIVATE-RESPONSE-SENTINEL')
+    monkeypatch.setattr(t.runtime,'find_dispatch',unavailable)
+    with pytest.raises(TimeoutError):t.flush_dispatch_wave()
+    chunk=t.state['chunks'][handles[0]['dispatch_key']]
+    assert not chunk.get('not_dispatched') and not service.submissions
+    assert not t.runtime.state['dispatches'][chunk['key']]['absence_verified']
+
+
+def test_empty_and_nested_dispatch_waves_do_not_submit_or_checkpoint(remote,tmp_path,monkeypatch):
+    runtime,service,source=remote;t=GalaxyChunkTransport(runtime,Campaign(tmp_path/'empty-wave'))
+    monkeypatch.setattr(t,'checkpoint',lambda **kwargs:pytest.fail('An empty wave needs no intent upload'))
+    t.begin_dispatch_wave()
+    with pytest.raises(RuntimeError,match='already open'):t.begin_dispatch_wave()
+    t.flush_dispatch_wave()
+    assert not service.submissions
+    with pytest.raises(RuntimeError,match='No dispatch wave'):t.flush_dispatch_wave()
+
+
+def test_background_checkpoint_cannot_capture_half_a_buffered_member_mapping(remote,tmp_path,monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    runtime,service,source=remote;t=GalaxyChunkTransport(runtime,Campaign(tmp_path/'atomic-wave'))
+    protocol=dict(source=dict(path='source.gpx',sha256=source['source_sha256']))
+    sha=digest(protocol);t.state['inputs'][sha]='assets';t.state['sources'][sha]=source
+    directory=tmp_path/'atomic-trial';directory.mkdir()
+    (directory/'job.json').write_text(json.dumps(dict(schema='radar-symmetry-job/v1',protocol=protocol,protocol_sha256=sha)))
+    inserted=threading.Event();release=threading.Event();read_started=threading.Event();captured=[]
+    class DelayedChunks(dict):
+        def __setitem__(self,key,value):
+            super().__setitem__(key,value);inserted.set();assert release.wait(4)
+    t.state['chunks']=DelayedChunks()
+    monkeypatch.setattr(t.checkpointer,'save_workspace',lambda document:captured.append(document))
+    t.begin_dispatch_wave()
+    def read():read_started.set();t.checkpoint(force=True)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        producer=pool.submit(t.submit_many,[('trial',directory)],workers=2)
+        assert inserted.wait(4)
+        snapshot=pool.submit(read);assert read_started.wait(4)
+        assert not snapshot.done() and not captured
+        release.set();producer.result(4);snapshot.result(4)
+    saved=captured[0]['transport']
+    key=saved['members']['trial']
+    assert saved['chunks'][key]['members']==['trial'] and not service.submissions
+
+
 def paused_request(remote,tmp_path,monkeypatch):
     runtime,service,source=remote;key='2'*24
     job=service.submit_utility(inputs={'dispatch_key':key});job.status=RunStatus.ERROR

@@ -201,5 +201,6 @@ def model_exploration(app):
                 html.P('Open diamonds are inadequate or unresolved fits. A lower residual is evidence to inspect, not a confirmed structure. Log intensity hides nonpositive values for display; the residual stays linear.',classes='rf-notice')
         with html.Div(v_if='sx_expanded',classes='rf-overlay'):
             v.VBtn('Close expanded fit',click='sx_expanded = false',variant='text',prepend_icon='mdi-arrow-collapse')
-            with html.Div(style='height:calc(100vh - 220px)'):
+            html.H3('{{ sx_fit_title }}',v_if='sx_fit_title',classes='mt-2 mb-2')
+            with html.Div(style='height:calc(100vh - 260px)'):
                 fig=plotly.Figure(display_mode_bar=True,responsive=True,display_logo=False,scroll_zoom=True,style='height:100%;width:100%');fig.data=('sx_fit.data',);fig.layout=('sx_expanded_layout',)

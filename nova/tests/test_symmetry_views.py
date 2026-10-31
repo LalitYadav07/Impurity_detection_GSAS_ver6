@@ -2,8 +2,17 @@ import json
 from pathlib import Path
 import numpy as np
 
-from radar_pd_nova.symmetry_workspace import group_models,display_groups,choose_group,choose_member,disposition_reason,coverage_rows,scope_rows,parameter_rows,moment_precision_note,embedding_evidence
+from radar_pd_nova.symmetry_workspace import group_models,display_groups,choose_group,choose_member,disposition_reason,coverage_rows,scope_rows,parameter_rows,moment_precision_note,embedding_evidence,fit_caption
 from radar_pd_nova.symmetry_plots import coordinate,fit
+
+
+def test_expanded_fit_caption_retains_scan_model_residual_and_disposition():
+    r=dict(metadata={'scan':'Run123 · Bank2'},name='R-3c',bns='167.103',rwp=23.171,status='inadequate_fit')
+    assert fit_caption(r)=='Run123 · Bank2 · R-3c · BNS 167.103 · Rwp 23.171% · inadequate fit'
+    assert fit_caption(dict(r,metadata={'scan':'Run124 · Bank2'},status='valid')).startswith('Run124 · Bank2')
+    assert 'qualified fit' in fit_caption(dict(r,status='valid'))
+    assert fit_caption(None)==''
+    assert 'Rwp' not in fit_caption(dict(r,rwp=float('nan')))
 
 
 def test_cached_evidence_rehashes_changed_bytes_even_if_mtime_is_restored(tmp_path,monkeypatch):

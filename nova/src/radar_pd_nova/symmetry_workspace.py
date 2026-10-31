@@ -161,6 +161,20 @@ def display_status(status):
             'submitting':'submission pending'}.get(status,status.replace('_',' '))
 
 
+def fit_caption(row):
+    """Keep the selected acquisition/model identifiable in a full-screen fit."""
+    if not row:return ''
+    metadata=row.get('metadata') or {}
+    parts=[str(metadata.get('scan') or 'Selected scan'),str(row.get('name') or 'Selected model')]
+    if row.get('bns'):parts.append('BNS '+str(row['bns']))
+    rwp=row.get('rwp')
+    if isinstance(rwp,(int,float)) and not isinstance(rwp,bool) and np.isfinite(rwp):
+        parts.append(f'Rwp {rwp:.3f}%')
+    status=row.get('status')
+    if status:parts.append('qualified fit' if status=='valid' else display_status(status))
+    return ' · '.join(parts)
+
+
 def embedding_evidence(rows,selected):
     """Compare exact model embeddings within one approved source protocol.
 

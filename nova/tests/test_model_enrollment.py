@@ -87,6 +87,98 @@ def test_session_close_prevents_dispatch_and_retains_follow_policy_for_explicit_
     assert module.queue_sources(c,None)=={}
 
 
+def closing_app(c,t):
+    app=SymmetryMixin();app._model_preparations={};app._k_cancel=None
+    app._model_enrollment_task=None;app._model_tick_task=None;app._symmetry_task=None;app._model_pause_task=None
+    app._model_remote=lambda:None;app._model_active_campaigns={}
+    app._model_owned_campaigns={c.root.name:(c,t)};app._model_checkpoint_errors={}
+    return app
+
+
+def test_owned_transport_is_reused_for_refresh_and_resume(tmp_path,monkeypatch):
+    monkeypatch.delenv('RADAR_PD_SYMMETRY_PYTHON',raising=False)
+    c=SimpleNamespace(root=tmp_path/'owned')
+    t=object.__new__(GalaxyChunkTransport);t.max_active_jobs=1;t.state={'unposted-proof':'retained'}
+    app=closing_app(c,t);app._model_remote=lambda:SimpleNamespace(max_active_jobs=8)
+    assert app._symmetry_transport(c) is t and t.max_active_jobs==8
+    assert t.state=={'unposted-proof':'retained'}
+
+
+def test_refresh_keeps_verified_receipt_cache_with_a_bounded_archive_window(tmp_path,monkeypatch):
+    import radar_pd_nova.symmetry_controller as controller
+    calls=[]
+    def create(root):
+        calls.append(root);return SimpleNamespace(root=root,_terminal_checks={})
+    monkeypatch.setattr(controller,'Campaign',create)
+    app=SymmetryMixin();app._model_owned_campaigns={}
+    first=app._symmetry_campaign(tmp_path/'first')
+    first._terminal_checks['verified']='stamp-checked'
+    assert app._symmetry_campaign(tmp_path/'first') is first
+    assert app._symmetry_campaign(tmp_path/'first')._terminal_checks['verified']=='stamp-checked'
+    app._symmetry_campaign(tmp_path/'second');app._symmetry_campaign(tmp_path/'third')
+    assert len(app._model_review_campaigns)==2
+    assert app._symmetry_campaign(tmp_path/'first') is not first and len(calls)==4
+    owned=SimpleNamespace(root=tmp_path/'owned',_terminal_checks={})
+    app._model_owned_campaigns={'owned':(owned,object())}
+    assert app._symmetry_campaign(tmp_path/'owned') is owned and len(calls)==4
+
+
+def test_close_backs_up_owned_campaign_even_after_its_driver_stopped(tmp_path):
+    events=[];settings={}
+    c=SimpleNamespace(root=tmp_path/'stopped',set_setting=lambda k,v:settings.update({k:v}))
+    class T(GalaxyChunkTransport):
+        def __init__(self):pass
+        def pause(self):events.append('paused')
+        def checkpoint(self,**kwargs):events.append('saved')
+    app=closing_app(c,T())
+    asyncio.run(app._pause_model_campaigns())
+    assert events==['paused','saved'] and settings['paused']
+
+
+def test_close_waits_for_model_settlement_before_saving_unposted_proof(tmp_path):
+    events=[];proof={}
+    c=SimpleNamespace(root=tmp_path/'settling',set_setting=lambda *a:None)
+    class T(GalaxyChunkTransport):
+        def __init__(self):pass
+        def pause(self):events.append('paused')
+        def checkpoint(self,**kwargs):assert proof.get('not_dispatched');events.append('saved')
+    app=closing_app(c,T())
+    async def run():
+        release=asyncio.Event()
+        async def driver():
+            await release.wait();proof['not_dispatched']=True;events.append('settled')
+        app._symmetry_task=asyncio.create_task(driver())
+        end=asyncio.create_task(app._pause_model_campaigns());await asyncio.sleep(0)
+        assert not end.done() and events==['paused']
+        release.set();await end
+    asyncio.run(run())
+    assert events==['paused','settled','saved']
+
+
+@pytest.mark.parametrize('draining_task',['_symmetry_task','_model_pause_task'])
+def test_close_does_not_stack_a_second_pending_model_checkpoint_wait(tmp_path,draining_task):
+    from radar_pd_nova.checkpoint_uploads import CheckpointUploadPending
+    calls=[];c=SimpleNamespace(root=tmp_path/'pending',set_setting=lambda *a:None)
+    class T(GalaxyChunkTransport):
+        def __init__(self):pass
+        def pause(self):pass
+        def checkpoint(self,**kwargs):calls.append('explicit retry')
+    app=closing_app(c,T())
+    async def run():
+        release=asyncio.Event()
+        async def driver():
+            await release.wait()
+            app._model_checkpoint_errors[c.root.name]=CheckpointUploadPending('hda1','queued')
+        setattr(app,draining_task,asyncio.create_task(driver()))
+        end=asyncio.create_task(app._pause_model_campaigns());await asyncio.sleep(0)
+        release.set()
+        with pytest.raises(CheckpointUploadPending):await end
+        assert not calls
+        await app._pause_model_campaigns()  # A later explicit retry is permitted.
+    asyncio.run(run())
+    assert calls==['explicit retry'] and not app._model_checkpoint_errors
+
+
 def test_switching_exploration_kind_removes_stale_candidate_choices():
     s=SimpleNamespace(sx_kind='structural',sx_parent='Parent',sx_k='0, 0, 0',sx_start_source='scan',
         sx_opd_policy='all',sx_construct_limit=50,sx_discovered=True,sx_candidates=['old'],sx_candidate_options=['old'])
@@ -353,3 +445,69 @@ def test_driver_fills_all_free_model_slots_in_one_bounded_wave(tmp_path):
     asyncio.run(app._drive_symmetry_campaign(C(),SimpleNamespace(max_active_jobs=8)))
     assert len(ticks)==8 and sum(r['state']=='running'for r in rows)==8
     assert sum(r['state']=='prepared'for r in rows)==4
+
+
+def test_galaxy_driver_flushes_one_durable_wave_before_its_acknowledgment_checkpoint(tmp_path):
+    import json
+    events=[];rows=[dict(id=str(i),state='prepared') for i in range(12)];settings={}
+    class C:
+        root=tmp_path/'galaxy-wave'
+        def setting(self,k,d=None):return settings.get(k,d)
+        def set_setting(self,k,v):settings[k]=v
+        def trials(self):return rows
+        def tick(self,transport,**kwargs):
+            events.append('stage')
+            row=next(r for r in rows if r['state']=='prepared')
+            row.update(state='running',handle=json.dumps(dict(dispatch_key=row['id'])))
+            return rows
+    class T(GalaxyChunkTransport):
+        max_active_jobs=8
+        def __init__(self):pass
+        def begin_dispatch_wave(self):events.append('begin')
+        def flush_dispatch_wave(self):events.append('durable-before-post');settings['paused']=True
+        def checkpoint(self,**kwargs):events.append('ack')
+    app=SymmetryMixin();app._model_active_campaigns={};app._model_stopping=False
+    app._refinement_store=lambda:None;app.refresh_symmetry=lambda:None
+    app.server=SimpleNamespace(state=SimpleNamespace(sx_slots=2,flush=lambda:None))
+    asyncio.run(app._drive_symmetry_campaign(C(),T()))
+    assert events==['begin']+['stage']*8+['durable-before-post','ack']
+    assert sum(r['state']=='running' for r in rows)==8
+
+
+def test_canceling_driver_waits_for_its_shielded_flush_before_aborting(tmp_path):
+    import json
+    import threading
+    entered=threading.Event();release=threading.Event();events=[]
+    rows=[dict(id=str(i),state='prepared') for i in range(2)]
+    class C:
+        root=tmp_path/'cancel-wave'
+        def setting(self,k,d=None):return d
+        def set_setting(self,k,v):pass
+        def trials(self):return rows
+        def tick(self,transport,**kwargs):
+            row=next(r for r in rows if r['state']=='prepared')
+            row.update(state='running',handle=json.dumps(dict(dispatch_key=row['id'])))
+            return rows
+    class T(GalaxyChunkTransport):
+        max_active_jobs=2
+        def __init__(self):self.paused=False;self.flushing=False
+        def begin_dispatch_wave(self):pass
+        def flush_dispatch_wave(self):
+            self.flushing=True;entered.set();assert release.wait(4)
+            if not self.paused:events.append('POST')
+            self.flushing=False;events.append('settled')
+        def pause(self):self.paused=True;events.append('pause')
+        def abort_dispatch_wave(self):assert not self.flushing;events.append('abort')
+        def checkpoint(self,**kwargs):events.append('ack')
+    t=T();app=SymmetryMixin();app._model_active_campaigns={};app._model_stopping=False
+    app._refinement_store=lambda:None;app.refresh_symmetry=lambda:None
+    app.server=SimpleNamespace(state=SimpleNamespace(sx_slots=2,flush=lambda:None))
+    async def run():
+        task=asyncio.create_task(app._drive_symmetry_campaign(C(),t))
+        assert await asyncio.to_thread(entered.wait,4)
+        task.cancel();await asyncio.sleep(0)
+        assert t.paused and not task.done()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):await task
+    asyncio.run(run())
+    assert events==['pause','settled','abort']

@@ -15,7 +15,6 @@ from gpx_recipe.symmetry.compiler import assets,confined,file_sha,job_inputs,pac
 from gpx_recipe.symmetry.contracts import digest
 from .refinement_runtime import GalaxyRefinementRuntime,RuntimeUnavailable
 from .models import UtilityActionRecord,RunStatus
-from .checkpoint_uploads import CheckpointUploadPending
 
 MODEL_TOOL_ID='neutrons_radar_pd_model_campaign_prototype'
 CAMPAIGN_LABEL='RADAR-PD Model campaign '
@@ -181,11 +180,13 @@ class GalaxyModelRuntime(GalaxyRefinementRuntime):
         with self._lock:
             entry=self.state['dispatches'].setdefault(key,{'pending':False})
             if entry.get('job'):return UtilityActionRecord.model_validate(entry['job'])
+            entry['absence_verified']=False
             existing=self.find_dispatch(key)
             if existing:
                 entry['job']=existing.model_dump(mode='json');self._save();return existing
             if entry.get('pending'):
                 raise RuntimeUnavailable('This model submission has no acknowledged job yet. Recover the existing dispatch before retrying; no duplicate was submitted.')
+            entry['absence_verified']=True
             self.wait_capacity(cancel)
             capability=getattr(self.service,'tool_has_input',None)
             inline=bool(capability and capability(self.tool_id,'model_request_b64'))
@@ -388,9 +389,72 @@ class GalaxyChunkTransport:
         self.checkpointer=GalaxyRefinementRuntime(campaign.root/'checkpoints',runtime.service)
         self.checkpointer.workspace_label=CAMPAIGN_LABEL+campaign.root.name
         self._paused=threading.Event()
+        self._dispatch_wave=None
+        self._buffered_dispatches=set()
+        self._wave_flushing=False
+        self._attempted_dispatches=set()
 
     def pause(self):self._paused.set()
     def resume(self):self._paused.clear()
+
+    def begin_dispatch_wave(self):
+        """Collect a bounded scheduler wave before its single durable intent."""
+        with self._state_lock:
+            if self._dispatch_wave is not None:raise RuntimeError('A dispatch wave is already open')
+            self._dispatch_wave=[]
+
+    def abort_dispatch_wave(self):
+        """Only buffered, never-attempted starts may return to the local queue."""
+        with self._state_lock:
+            if self._wave_flushing:return False
+            for key in self._dispatch_wave or []:
+                self.state['chunks'][key].update(not_dispatched=True,complete=True)
+                self._buffered_dispatches.discard(key)
+            self._dispatch_wave=None
+            self.save()
+            return True
+
+    def flush_dispatch_wave(self):
+        """Persist every finite member list before the first scientific POST.
+
+        POSTs retain their individual stable keys and acknowledgment recovery.
+        An interrupted flush never treats a missing acknowledgment as absence.
+        """
+        with self._state_lock:
+            if self._dispatch_wave is None:raise RuntimeError('No dispatch wave is open')
+            keys=list(self._dispatch_wave)
+        if not keys:
+            with self._state_lock:self._dispatch_wave=None
+            return
+        if self._paused.is_set() or self.campaign.setting('paused',False):
+            self.abort_dispatch_wave();return
+        with self._state_lock:self._wave_flushing=True
+        try:
+            self.checkpoint(force=True)
+        except Exception:
+            # This wave has made no scientific POST. Keep that proof locally;
+            # a timed-out acknowledged checkpoint remains owned by its uploader.
+            with self._state_lock:self._wave_flushing=False
+            self.abort_dispatch_wave()
+            raise
+        attempted=set()
+        try:
+            for key in keys:
+                if self._paused.is_set() or self.campaign.setting('paused',False):break
+                if self.state['chunks'][key].get('not_dispatched'):continue
+                attempted.add(key)
+                with self._state_lock:self._attempted_dispatches.add(key)
+                self._dispatch_chunk(self.state['chunks'][key])
+        finally:
+            with self._state_lock:
+                for key in keys:
+                    if key not in attempted:
+                        self.state['chunks'][key].update(not_dispatched=True,complete=True)
+                    self._buffered_dispatches.discard(key)
+                    self._attempted_dispatches.discard(key)
+                self._dispatch_wave=None
+                self._wave_flushing=False
+                self.save()
 
     def save(self):
         with self._state_lock:write_json(self.path,self.state)
@@ -458,7 +522,8 @@ class GalaxyChunkTransport:
         key=digest([self.campaign.root.name,sha,ids,len(self.state['chunks'])])[:24]
         input_root=job_inputs(entries[0][1],first)
         if sha not in self.state['inputs']:
-            self.state['inputs'][sha]=self.runtime.packet(input_root,['protocol.json']+[a['path'] for a in assets(protocol)],source_sha256=protocol['source']['sha256'])
+            packet=self.runtime.packet(input_root,['protocol.json']+[a['path'] for a in assets(protocol)],source_sha256=protocol['source']['sha256'])
+            with self._state_lock:self.state['inputs'][sha]=packet
         request=dict(schema='radar-model-chunk/v1',protocol=protocol,protocol_sha256=sha,trials=ids,
             workers=workers,dispatch_key=key,seconds=240)
         if protocol.get('template_sha256'):
@@ -466,32 +531,43 @@ class GalaxyChunkTransport:
             request.update(template=template,origin=template['origin'],source_identity={k:source.get(k)
                 for k in ['id','experiment','sample_key','bank','source_sha256']})
         chunk=dict(key=key,members=ids,protocol=sha,request=request,job=None,pending=True)
-        self.state['chunks'][key]=chunk
-        self.state['members'].update({uid:key for uid in ids});self.save()
+        with self._state_lock:
+            self.state['chunks'][key]=chunk
+            self.state['members'].update({uid:key for uid in ids});self.save()
+            if self._dispatch_wave is not None:
+                self._dispatch_wave.append(key)
+                self._buffered_dispatches.add(key)
+                return {uid:dict(dispatch_key=key,key=uid) for uid in ids}
         try:
             self.checkpoint(force=True)  # durable intent precedes the remote submission
-        except CheckpointUploadPending:
+        except Exception:
             # No native POST has been attempted. Preserve that proof locally so
             # explicit recovery can safely return these starts to the queue.
-            chunk.update(not_dispatched=True,complete=True);self.save()
+            with self._state_lock:chunk.update(not_dispatched=True,complete=True);self.save()
             raise
-        try:job=self.runtime._submit('chunk',self.state['sources'][sha],request,self.state['inputs'][sha],key,cancel=self._paused)
+        return self._dispatch_chunk(chunk)
+
+    def _dispatch_chunk(self,chunk):
+        key,sha=chunk['key'],chunk['protocol']
+        try:job=self.runtime._submit('chunk',self.state['sources'][sha],chunk['request'],self.state['inputs'][sha],key,cancel=self._paused)
         except Exception:
-            if not self.runtime.state['dispatches'].get(key,{}).get('pending'):
-                chunk['not_dispatched']=True;self.save()
+            dispatch=self.runtime.state['dispatches'].get(key,{})
+            if dispatch.get('absence_verified') and not dispatch.get('pending'):
+                with self._state_lock:chunk['not_dispatched']=True;self.save()
             raise
-        chunk['job']=job.model_dump(mode='json');self.save()
+        with self._state_lock:chunk['job']=job.model_dump(mode='json');self.save()
         # The preceding remote intent already names every member and its stable
         # dispatch key. A lost viewer recovers the acknowledged job by that key.
         # The driver backs up acknowledgements together after filling free
         # slots, avoiding a metadata-job round trip after every individual POST.
-        return {uid:dict(dispatch_key=key,key=uid) for uid in ids}
+        return {uid:dict(dispatch_key=key,key=uid) for uid in chunk['members']}
 
     def _job(self,chunk):
         if chunk.get('job'):
             job=UtilityActionRecord.model_validate(chunk['job']);self.runtime.verify_job(job,chunk['key']);return job
         job=self.runtime.find_dispatch(chunk['key'])
-        if job:chunk['job']=job.model_dump(mode='json');self.save()
+        if job:
+            with self._state_lock:chunk['job']=job.model_dump(mode='json');self.save()
         return job
 
     def recover(self,key,directory):
@@ -503,11 +579,15 @@ class GalaxyChunkTransport:
     def poll(self,handle,directory):
         dispatch=handle['dispatch_key'];chunk=self.state['chunks'][dispatch]
         if chunk.get('not_dispatched'):return dict(state='not_started')
+        with self._state_lock:
+            if dispatch in self._buffered_dispatches:
+                return dict(state='running',handle=handle)
         current=self.cache.get(dispatch)
         if current is None or (current[1]['state']!='complete' and time.monotonic()-current[0]>1):
             job=self._job(chunk)
             if job is None:return dict(state='unknown',reason='The model chunk has no acknowledged Galaxy job')
-            self.runtime.service.refresh_utility(job);chunk['job']=job.model_dump(mode='json');self.save()
+            self.runtime.service.refresh_utility(job)
+            with self._state_lock:chunk['job']=job.model_dump(mode='json');self.save()
             intent=chunk.get('staging_retirement')
             prior=sum(bool(c.get('staging_retirement')) for c in self.state['chunks'].values())
             if not chunk.get('cancel_requested') and (intent or (job.status==RunStatus.ERROR and prior<2)):
@@ -515,9 +595,11 @@ class GalaxyChunkTransport:
                 if proof is not None:
                     if intent and intent!=proof:raise RuntimeUnavailable('The saved staging retirement belongs to different inputs')
                     if not intent:
-                        chunk['staging_retirement']=proof;self.save();self.checkpoint(force=True)
+                        with self._state_lock:chunk['staging_retirement']=proof;self.save()
+                        self.checkpoint(force=True)
                     self.runtime.retire_failed_request(job,dispatch,proof)
-                    chunk.update(not_dispatched=True,complete=True);self.save();self.checkpoint(force=True)
+                    with self._state_lock:chunk.update(not_dispatched=True,complete=True);self.save()
+                    self.checkpoint(force=True)
                     self.campaign.set_setting('preparation_message','Recovered a failed empty request upload; retrying the same finite starts after confirmed cancellation. No native calculation ran in the retired batch.')
                     self.cache.pop(dispatch,None)
                     return dict(state='not_started')
@@ -544,7 +626,7 @@ class GalaxyChunkTransport:
                         # A receipt is the atomic commit marker, after all of its artifacts.
                         temporary=target/('.result-'+uuid.uuid4().hex+'.partial')
                         shutil.copyfile(source/'result.json',temporary);temporary.replace(target/'result.json')
-                chunk.update(complete=True,result=response);self.save()
+                with self._state_lock:chunk.update(complete=True,result=response);self.save()
                 self.campaign.set_setting('allocation',response['allocation'])
                 self.cache[dispatch]=(time.monotonic(),dict(state='complete',terminal=terminal,pending=pending))
         state=self.cache[dispatch][1]
@@ -556,8 +638,15 @@ class GalaxyChunkTransport:
         return state
 
     def cancel(self,handle,directory):
-        chunk=self.state['chunks'][handle['dispatch_key']];job=self._job(chunk)
+        dispatch=handle['dispatch_key'];chunk=self.state['chunks'][dispatch]
+        with self._state_lock:
+            if dispatch in self._buffered_dispatches and dispatch not in self._attempted_dispatches:
+                chunk.update(not_dispatched=True,complete=True);self.save()
+                return True
+        job=self._job(chunk)
         if not job:return False
-        self.runtime.cancel_job(job,chunk['key']);chunk['cancel_requested']=True;self.save();self.checkpoint(force=True)
+        self.runtime.cancel_job(job,chunk['key'])
+        with self._state_lock:chunk['cancel_requested']=True;self.save()
+        self.checkpoint(force=True)
         self.cache.pop(handle['dispatch_key'],None)
         return False
