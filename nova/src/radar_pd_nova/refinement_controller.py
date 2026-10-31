@@ -204,6 +204,7 @@ class RefinementMixin:
         self.server.state.change('rf_request')(self._refinement_request_changed)
         self.server.state.change('rf_stage','rf_histogram','rf_axis','rf_display','rf_zoom')(self._refinement_plot_changed)
         self.server.state.change('rf_trend_metric','rf_trend_axis','rf_trend_display','rf_recipe_filter')(self._refinement_trend_changed)
+        self.server.state.change('rf_parallel_jobs')(self._refinement_parallel_changed)
 
     @staticmethod
     def _refinement_state_defaults():
@@ -212,7 +213,7 @@ class RefinementMixin:
             rf_existing=True,rf_future=False,rf_scope_summary='No published GPXs available',rf_scope_token='',rf_request='',rf_draft_status='',rf_cards=[],rf_questions=[],rf_assumptions=[],rf_plan_calls='',rf_model_tokens='',rf_model_cost='',rf_model_has_luna_price=False,rf_plan_ready=False,
             rf_approved=False,rf_recipe_id='',rf_recipe_summary='',rf_active_summary='',rf_saved_recipe='',rf_recipe_versions=[],rf_recipe_filter='all',rf_metrics=[],rf_source_warnings=[],rf_future_armed=False,
             rf_jobs=[],rf_job_search='',rf_job_status='all',rf_progress_text='No refinements started',rf_progress_percent=0,rf_selected_job='',rf_selected_title='',rf_selected_message='',rf_has_output=False,rf_output_provenance='',
-            rf_result_tab='fit',rf_stage='final',rf_stages=[],rf_histogram='',rf_histograms=[],rf_axis='d',rf_display='compare',rf_fit=figure_json(empty_figure()),rf_fit_notice='',rf_rwp_summary='',rf_parameter_warnings=[],rf_zoom=0,
+            rf_result_tab='fit',rf_stage='final',rf_stages=[],rf_histogram='',rf_histograms=[],rf_axis='d',rf_display='compare',rf_fit=figure_json(empty_figure()),rf_fit_notice='',rf_rwp_summary='',rf_parameter_warnings=[],rf_zoom=0,rf_parallel_jobs=1,
             rf_trend=figure_json(empty_figure('Completed refinements will populate this trend')),rf_trend_notice='',rf_trend_metric='rwp',rf_trend_metrics=[dict(title='Rwp · original and polished',value='rwp')],rf_trend_axis='run_number',rf_trend_axes=[dict(title='Scan number',value='run_number')],rf_trend_display='absolute',
             rf_parameters=[],rf_parameter_search='',rf_downloads=[],rf_download='',rf_can_open_gsas=False,rf_open_gsas_label='Open selected verified GPX in GSAS-II',rf_queue_running=False,rf_follow=True,rf_expanded=False)
 
@@ -243,7 +244,21 @@ class RefinementMixin:
         if runtime is None:raise ValueError('Configure the native refinement worker or a signed-in Galaxy history to use Refinement')
         workspace=RefinementWorkspace(root,history_id=history,runtime=runtime)
         workspace.restore_remote();self._refinement_workspace=workspace
+        self.server.state.rf_parallel_jobs=workspace.parallel_jobs
         return workspace
+
+    def _refinement_parallel_changed(self,**_):
+        workspace=getattr(self,'_refinement_workspace',None)
+        if workspace is None:return
+        try:
+            if type(self.server.state.rf_parallel_jobs) is int and self.server.state.rf_parallel_jobs==workspace.parallel_jobs:return
+            if self.server.state.rf_queue_running:
+                raise ValueError('Let active polishing jobs finish before changing their concurrency')
+            workspace.set_parallel_jobs(self.server.state.rf_parallel_jobs)
+            self._refinement_checkpoint()
+        except ValueError as exc:
+            self.server.state.rf_parallel_jobs=workspace.parallel_jobs
+            self.server.state.rf_error=str(exc)
 
     def refresh_refinement_sources(self,**_):
         if self._refinement_refresh_task and not self._refinement_refresh_task.done():
@@ -516,15 +531,17 @@ class RefinementMixin:
         if not w:return
         s.rf_queue_running=True;s.flush()
         try:
-            while True:
-                task=asyncio.create_task(asyncio.to_thread(w.run_next))
-                await asyncio.sleep(0)
-                self._refinement_sync()
-                job=await task
-                if job is None:break
-                self._refinement_sync();self._refinement_checkpoint()
-                if job['source']['experiment']==s.rf_experiment and (s.rf_follow or not s.rf_selected_job or s.rf_selected_job==job['id']):
-                    await self._select_refinement_job(job['id'])
+            async def lane():
+                while True:
+                    task=asyncio.create_task(asyncio.to_thread(w.run_next))
+                    await asyncio.sleep(0)
+                    self._refinement_sync()
+                    job=await task
+                    if job is None:return
+                    self._refinement_sync();self._refinement_checkpoint()
+                    if job['source']['experiment']==s.rf_experiment and (s.rf_follow or not s.rf_selected_job or s.rf_selected_job==job['id']):
+                        await self._select_refinement_job(job['id'])
+            await asyncio.gather(*(lane() for _ in range(getattr(w,'parallel_jobs',1))))
         except Exception as exc:s.rf_error=str(exc)
         finally:s.rf_queue_running=False;s.flush()
 
@@ -540,7 +557,7 @@ class RefinementMixin:
         self._refinement_checkpoint_task=self._refinement_schedule(work(),'radar-refinement-checkpoint')
 
     def pause_refinement_queue(self,**_):
-        self._refinement_workspace.pause(self.server.state.rf_experiment);self.server.state.rf_message='Queued work paused and future enrollment stopped. The active native job will finish.';self._refinement_sync();self._refinement_checkpoint()
+        self._refinement_workspace.pause(self.server.state.rf_experiment);self.server.state.rf_message='Queued work paused and future enrollment stopped. Active native jobs will finish.';self._refinement_sync();self._refinement_checkpoint()
 
     def resume_refinement_queue(self,**_):
         self._refinement_workspace.resume_queue(self.server.state.rf_experiment);self._refinement_sync();self._refinement_start_pump()
@@ -569,12 +586,19 @@ class RefinementMixin:
         s=self.server.state;w=self._refinement_workspace
         job=w.state['jobs'].get(uid)
         if not job or job['source']['experiment']!=s.rf_experiment:return
+        experiment=s.rf_experiment
+        def current():return s.rf_selected_job==uid and s.rf_experiment==experiment
         s.rf_selected_job=uid;s.rf_selected_title=job['source']['scan_label']+f" · {job['source']['sample_label']}"
         s.rf_selected_message=job['message'];s.rf_error='';s.rf_stage='final';s.rf_has_output=False;s.rf_output_provenance='';s.rf_parameter_warnings=[]
         result=job.get('result') or {};s.rf_can_open_gsas=False;s.rf_open_gsas_label='Open selected verified GPX in GSAS-II'
         if result and not Path(result.get('directory','')).is_dir() and job.get('remote_action'):
-            try:await asyncio.to_thread(w.recover_job_artifacts,uid);result=job['result']
-            except Exception as exc:s.rf_error=str(exc)
+            try:
+                await asyncio.to_thread(w.recover_job_artifacts,uid)
+                if not current():return
+                result=job['result']
+            except Exception as exc:
+                if not current():return
+                s.rf_error=str(exc)
         stages=result.get('stages') or []
         s.rf_stages=([dict(title='Final refined result',value='final')] if result.get('final_view') else [])+[dict(title=f"{i+1}. {v['title']}",value=v['id']) for i,v in enumerate(stages)]
         baseline=None
@@ -583,9 +607,12 @@ class RefinementMixin:
             if not result.get('final_view'):s.rf_stage=s.rf_stages[-1]['value']
             try:
                 baseline=await asyncio.to_thread(self._read_refinement_view,job,result['baseline_view'])
+                if not current():return
                 s.rf_histograms=[dict(title=h['name'],value=h['name']) for h in baseline['histograms']]
                 s.rf_histogram=s.rf_histograms[0]['value']
-            except Exception as exc:s.rf_error=str(exc);s.rf_has_output=False
+            except Exception as exc:
+                if not current():return
+                s.rf_error=str(exc);s.rf_has_output=False
         stage_labels={v['gpx']:f"Stage {i+1} GPX · {v['title']}" for i,v in enumerate(stages)}
         s.rf_downloads=[dict(title=('Final refined GPX' if name==result.get('final_gpx') else stage_labels.get(name,name)),value=name) for name in sorted(result.get('files',{})) if name.endswith('.gpx') or name in ['refine.py','polished.execution.json','plan.json','approval.json']]
         s.rf_download=(result.get('final_gpx') or (stages[-1]['gpx'] if stages else (s.rf_downloads[0]['value'] if s.rf_downloads else '')))

@@ -56,6 +56,10 @@ def refinement_dashboard(app):
                 html.Strong('{{ metric.value }}');html.Span('{{ metric.label }}')
             html.Span('{{ rf_transport }}',classes='rf-muted')
             v.VChip('Future matching scans enrolled',v_if='rf_future_armed',color='#157347',size='small',variant='tonal',prepend_icon='mdi-access-point')
+        with html.Details(v_if="rf_mode !== 'models' && rf_transport === 'Galaxy scientific jobs'",classes='rf-card mb-3'):
+            html.Summary('Polishing compute budget')
+            select('Concurrent polishing jobs','rf_parallel_jobs','[1,2,4]',disabled=('rf_queue_running',),classes='mt-3')
+            html.P('Independent scans can run together; stages within each scan keep their approved order. This limit covers polishing jobs. Model batches have a separate budget, and Galaxy controls admission and allocated resources. Change this setting after active polishing jobs finish.',classes='rf-notice')
         with html.Div(v_if="rf_mode !== 'models' && rf_jobs.length",classes='mb-4'):
             html.P('{{ rf_progress_text }}',classes='rf-notice')
             v.VProgressLinear(model_value=('rf_progress_percent',),height=6,color='#157347',rounded=True)
@@ -136,7 +140,7 @@ def refinement_dashboard(app):
                 with html.Div(classes='rf-actions'):
                     v.VBtn('Pause',click=app.pause_refinement_queue,variant='text',size='small',prepend_icon='mdi-pause')
                     v.VBtn('Resume queued',click=app.resume_refinement_queue,variant='text',size='small',prepend_icon='mdi-play')
-                html.P('Pause stops new enrollment. The active job finishes. Resume runs queued scans; future enrollment requires Start refinement.',classes='rf-notice')
+                html.P('Pause stops new enrollment. Active jobs finish. Resume runs queued scans; future enrollment requires Start refinement.',classes='rf-notice')
                 with html.Div(classes='rf-list'):
                     with html.Button(v_for="job in rf_jobs.filter(j => (rf_job_status === 'all' || j.status === rf_job_status) && (rf_recipe_filter === 'all' || j.recipe_ids.includes(rf_recipe_filter)) && (j.scan + ' ' + j.sample).toLowerCase().includes(rf_job_search.toLowerCase()))",key='job.id',classes=("'rf-scan ' + (job.id === rf_selected_job ? 'active' : '')",),click=(app.select_refinement_job,'[job.id]')):
                         html.Strong('{{ job.scan }}');html.Span('{{ job.sample }}');html.Span('Recipe {{ job.recipe }} · {{ job.status.replaceAll("_", " ") }}',classes='rf-state')

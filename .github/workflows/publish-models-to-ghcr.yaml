@@ -71,6 +71,7 @@ jobs:
             /validation/tests/gpx_recipe/test_symmetry_moment_models.py \
             /validation/tests/gpx_recipe/test_symmetry_campaign.py \
             /validation/tests/gpx_recipe/test_symmetry_runtime.py \
-            /validation/tests/gpx_recipe/test_fixed_displacements.py'
+            /validation/tests/gpx_recipe/test_fixed_displacements.py \
+            /validation/tests/gpx_recipe/test_project_view.py'
       - name: Publish verified immutable image
         run: docker push "$IMAGE"

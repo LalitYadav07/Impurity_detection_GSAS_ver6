@@ -21,6 +21,13 @@ def _finite_array(values):
     return [float(v) if np.isfinite(v) and not m else None for v, m in zip(a, mask)]
 
 
+def _optional_rwp(value):
+    if isinstance(value,(bool,np.bool_)):return None
+    try:number=float(value)
+    except (TypeError,ValueError):return None
+    return number if np.isfinite(number) and number>=0 else None
+
+
 def project_view(path):
     """Keep complete measured samples; the browser never performs GPX extraction."""
     path = Path(path); before = hashlib.sha256(path.read_bytes()).hexdigest()
@@ -60,7 +67,7 @@ def project_view(path):
                 observed=_finite_array(data[1]), calculated=_finite_array(data[3]),
                 background=_finite_array(data[4]) if len(data) > 4 else [],
                 valid=valid.tolist(), fitted=fitted.tolist(), limits=[lo, hi], exclusions=exclusions,
-                rwp=float(h.get_wR()) if np.isfinite(h.get_wR()) else None, ticks=ticks,
+                rwp=_optional_rwp(h.get_wR()), ticks=ticks,
                 instrument_parameters=json_safe(h.InstrumentParameters)))
         phases = []; metrics=[]
         for record in context['phases']:

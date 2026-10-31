@@ -27,13 +27,14 @@ class RefinementWorkspace:
     def __init__(self,root,*,history_id,runtime,planner=None):
         self.root=Path(root).resolve();self.root.mkdir(parents=True,exist_ok=True)
         self.manifest=self.root/'workspace.json';self.runtime=runtime;self.history_id=str(history_id)
-        self._planner=planner;self.lock=threading.RLock();self._checkpoint_lock=threading.Lock();self._inflight=False
+        self._planner=planner;self.lock=threading.RLock();self._checkpoint_lock=threading.Lock();self._inflight=set()
         self._inspection_locks={}
         if self.manifest.exists():
             self.state=json.loads(self.manifest.read_text())
             if self.state.get('schema')!='radar-refinement-workspace/v1' or self.state.get('history_id')!=self.history_id:
                 raise ValueError('Refinement workspace belongs to a different history')
         else:self.state=dict(schema='radar-refinement-workspace/v1',history_id=self.history_id,sources={},drafts={},recipes={},jobs={},paused=False)
+        self._validate_parallel_jobs(self.state.get('parallel_jobs',1))
         for draft in self.state['drafts'].values():
             if draft.get('status')=='busy':draft.update(status='interrupted',error='Planning/preflight was interrupted; review or regenerate this draft')
         for job in self.state['jobs'].values():
@@ -50,6 +51,7 @@ class RefinementWorkspace:
         document=self.runtime.recover_workspace()
         if not document:return False
         if document.get('history_id')!=self.history_id:raise ValueError('Saved refinement session belongs to another Galaxy history')
+        self._validate_parallel_jobs(document.get('parallel_jobs',1))
         with self.lock:
             self.state=document
             for job in self.state['jobs'].values():
@@ -97,7 +99,7 @@ class RefinementWorkspace:
                 else:source['observed_utc']=utc();changed=True
                 # Keep native context/view caches only for the same exact bytes.
                 if old and old.get('source_sha256')==source.get('source_sha256'):
-                    for key in ['context','inspection','inspection_error']:
+                    for key in ['context','inspection','inspection_revision','inspection_error']:
                         if key in old:source[key]=old[key]
                 if old != source:changed=True
                 self.state['sources'][source['id']]=source
@@ -142,18 +144,21 @@ class RefinementWorkspace:
         with inspection_lock:return self._inspect_source(source_id)
 
     def _inspect_source(self,source_id):
+        from gpx_recipe.symmetry.compiler import package_signature
+        revision=package_signature()
         with self.lock:
             source=copy.deepcopy(self.state['sources'][source_id])
-            if source.get('context') and source.get('source_sha256')==source['context']['source']['sha256']:
+            if (source.get('context') and source.get('inspection_revision')==revision
+                    and source.get('source_sha256')==source['context']['source']['sha256']):
                 return source
         material=self.runtime.resolve(source)
-        directory=self.root/'inspections'/material['source_sha256']
+        directory=self.root/'inspections'/material['source_sha256']/revision[:16]
         response_path=directory/'response.json'
         if response_path.exists():result=json.loads(response_path.read_text());result['directory']=str(directory)
-        else:result=self.runtime.call('inspect',material,directory,dispatch_key=digest(['inspect',material['source_sha256']])[:24])
+        else:result=self.runtime.call('inspect',material,directory,dispatch_key=digest(['inspect',material['source_sha256'],revision])[:24])
         if result['status']!='inspected':raise ValueError(result.get('error') or 'This GPX cannot be used for recipe polishing')
         if result['context']['source']['sha256']!=material['source_sha256']:raise ValueError('Inspection belongs to another GPX revision')
-        material.update(context=result['context'],inspection=str(directory),inspection_error=None)
+        material.update(context=result['context'],inspection=str(directory),inspection_revision=revision,inspection_error=None)
         with self.lock:
             current=self.state['sources'].get(source_id)
             if current is None or (current.get('source_sha256') and current['source_sha256']!=material['source_sha256']):
@@ -201,7 +206,7 @@ class RefinementWorkspace:
             preview=None
             if not plan['questions'] and not plan['unsupported']:
                 response=self.runtime.call('preview',source,directory/'preview',plan=plan,
-                    dispatch_key=digest(['preview',source['source_sha256'],plan_hash(plan)])[:24])
+                    dispatch_key=digest(['preview',source['source_sha256'],plan_hash(plan),source['inspection_revision']])[:24])
                 if response['status']!='preview_passed':raise ValueError(response.get('error') or 'Native parameter preflight failed')
                 preview=response['preview']
             with self.lock:
@@ -300,12 +305,30 @@ class RefinementWorkspace:
             job.setdefault('history',[]).append({k:copy.deepcopy(job.get(k)) for k in ['status','message','attempts','directory','remote_action']})
             job.update(status='recovering' if job.get('remote_action') else 'queued',message='Explicit retry requested');self.save()
 
+    @property
+    def parallel_jobs(self):
+        return self.state.get('parallel_jobs',1) if self.runtime.kind=='galaxy' else 1
+
+    @staticmethod
+    def _validate_parallel_jobs(value):
+        if type(value) is not int or value not in {1,2,4}:
+            raise ValueError('Choose 1, 2 or 4 concurrent polishing jobs')
+
+    def set_parallel_jobs(self,value):
+        self._validate_parallel_jobs(value)
+        if self.runtime.kind!='galaxy' and value!=1:
+            raise ValueError('Parallel polishing requires Galaxy-managed jobs')
+        with self.lock:
+            if self._inflight:
+                raise ValueError('Let active polishing jobs finish before changing their concurrency')
+            self.state['parallel_jobs']=value;self.save()
+
     def run_next(self):
         with self.lock:
-            if self._inflight:return None
+            if len(self._inflight)>=self.parallel_jobs:return None
             job=next((j for j in self.state['jobs'].values() if j['status'] in {'queued','recovering'}),None)
             if job is None:return None
-            self._inflight=True;job.update(status='running',attempts=job['attempts']+1,message='Refining the approved stages')
+            self._inflight.add(job['id']);job.update(status='running',attempts=job['attempts']+1,message='Refining the approved stages')
             recipe=copy.deepcopy(self.state['recipes'][job['recipe_id']]);source=copy.deepcopy(job['source'])
             directory=self.root/'jobs'/job['id']/('attempt-'+str(job['attempts']));job['directory']=str(directory);self.save()
         def submitted(action):
@@ -326,8 +349,8 @@ class RefinementWorkspace:
             with self.lock:
                 job.update(status='interrupted' if isinstance(exc,RuntimeUnavailable) or job.get('remote_action') else 'failed',message=str(exc),finished_utc=utc());self.save()
         finally:
-            with self.lock:self._inflight=False
-        return copy.deepcopy(job)
+            with self.lock:self._inflight.discard(job['id'])
+        with self.lock:return copy.deepcopy(job)
 
     def recover_job_artifacts(self,job_id):
         with self.lock:

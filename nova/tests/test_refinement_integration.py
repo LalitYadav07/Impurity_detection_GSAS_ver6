@@ -54,6 +54,156 @@ def create(tmp_path):
     return w,runtime
 
 
+def test_parallel_polishing_claims_distinct_scans_once_and_respects_limit(tmp_path):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    w,rt=create(tmp_path);rt.kind='galaxy'
+    w.observe([source(str(i)) for i in range(1,5)])
+    recipe=approved(w,RefinementScope('exp'));w.start(recipe['id'],recipe['selection_token'])
+    w.set_parallel_jobs(2)
+    release=threading.Event();entered=threading.Event();declined=threading.Event();lock=threading.Lock();active=0;peak=0;refusals=0;started=[]
+    original=rt.call
+    def call(action,src,directory,**kwargs):
+        nonlocal active,peak
+        if action!='run':return original(action,src,directory,**kwargs)
+        with lock:
+            active+=1;peak=max(peak,active);started.append(src['id'])
+            if active==2:entered.set()
+        try:
+            assert release.wait(5)
+            return original(action,src,directory,**kwargs)
+        finally:
+            with lock:active-=1
+    rt.call=call
+    def attempt():
+        nonlocal refusals
+        result=w.run_next()
+        if result is None:
+            with lock:
+                refusals+=1
+                if refusals==2:declined.set()
+        return result
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures=[pool.submit(attempt) for _ in range(4)]
+        assert entered.wait(5) and declined.wait(5)
+        assert len(w._inflight)==2
+        with pytest.raises(ValueError,match='active polishing'):w.set_parallel_jobs(4)
+        release.set()
+        results=[f.result(timeout=5) for f in futures]
+    assert peak==2 and len(set(started))==2
+    assert sum(r is not None for r in results)==2
+    assert sum(j['status']=='queued' for j in w.state['jobs'].values())==2
+    while w.run_next():pass
+    assert sorted(started)==['1','2','3','4']
+    assert all(j['attempts']==1 and j['status']=='completed' for j in w.state['jobs'].values())
+    restored=RefinementWorkspace(w.root,history_id='history',runtime=rt)
+    assert restored.parallel_jobs==2 and restored.run_next() is None
+
+
+def test_pause_parallel_polishing_keeps_active_jobs_and_holds_unstarted_scans(tmp_path):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    w,rt=create(tmp_path);rt.kind='galaxy';w.observe([source(str(i))for i in range(1,5)])
+    recipe=approved(w,RefinementScope('exp'),future=True);w.start(recipe['id'],recipe['selection_token']);w.set_parallel_jobs(2)
+    entered=threading.Barrier(3);release=threading.Event();original=rt.call
+    def call(action,src,directory,**kwargs):
+        if action=='run':entered.wait(timeout=5);assert release.wait(5)
+        return original(action,src,directory,**kwargs)
+    rt.call=call
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures=[pool.submit(w.run_next)for _ in range(2)];entered.wait(timeout=5)
+        w.pause('exp');w.observe([source('5')])
+        assert sum(j['status']=='running'for j in w.state['jobs'].values())==2
+        assert sum(j['status']=='paused'for j in w.state['jobs'].values())==2
+        assert len(w.state['jobs'])==4 and w.run_next() is None
+        release.set();assert all(f.result(timeout=5)['status']=='completed' for f in futures)
+    assert not w.state['recipes'][recipe['id']]['armed'] and w.run_next() is None
+
+
+@pytest.mark.parametrize('value',[True,0,3,8,'2'])
+def test_polishing_concurrency_requires_a_bounded_integer(value,tmp_path):
+    w,rt=create(tmp_path);rt.kind='galaxy'
+    with pytest.raises(ValueError,match='Choose 1, 2 or 4'):w.set_parallel_jobs(value)
+    assert w.parallel_jobs==1
+
+
+def test_local_polishing_stays_serial_without_a_galaxy_allocation(tmp_path):
+    w,rt=create(tmp_path)
+    with pytest.raises(ValueError,match='Galaxy-managed'):w.set_parallel_jobs(2)
+    assert w.parallel_jobs==1
+
+
+def test_inspection_and_preview_recover_under_new_worker_revision_without_reusing_failed_export(tmp_path,monkeypatch):
+    import gpx_recipe.symmetry.compiler as compiler
+    w,rt=create(tmp_path);w.observe([source('1')])
+    legacy=w.root/'inspections'/'1hash';legacy.mkdir(parents=True)
+    (legacy/'response.json').write_text(json.dumps(dict(status='failed',error='Old missing-Rwp export failure')))
+    monkeypatch.setattr(compiler,'package_signature',lambda:'a'*64)
+    first=w.inspect('1');assert first['inspection_revision']=='a'*64
+    first_call=next(row for row in rt.calls if row[0]=='inspect')
+    w.observe([source('1')])
+    w.inspect('1');assert sum(row[0]=='inspect'for row in rt.calls)==1
+    first_preview=w.prepare('exp','1','background only')
+    preview_key=next(row[2]['dispatch_key']for row in rt.calls if row[0]=='preview')
+    monkeypatch.setattr(compiler,'package_signature',lambda:'b'*64)
+    second=w.prepare('exp','1','background only')
+    inspections=[row for row in rt.calls if row[0]=='inspect']
+    previews=[row for row in rt.calls if row[0]=='preview']
+    assert len(inspections)==2 and inspections[-1][2]['dispatch_key']!=first_call[2]['dispatch_key']
+    assert previews[-1][2]['dispatch_key']!=preview_key
+    assert second['source']['inspection_revision']=='b'*64
+    assert (legacy/'response.json').is_file()
+
+
+def test_parallel_polishing_pump_keeps_working_after_an_earlier_scan_finishes(tmp_path):
+    import threading
+    w,rt=create(tmp_path);rt.kind='galaxy';w.observe([source(str(i))for i in range(1,5)])
+    recipe=approved(w,RefinementScope('exp'));w.start(recipe['id'],recipe['selection_token']);w.set_parallel_jobs(2)
+    barrier=threading.Barrier(2);original=rt.call;seen=[]
+    def call(action,src,directory,**kwargs):
+        if action=='run':barrier.wait(timeout=5)
+        return original(action,src,directory,**kwargs)
+    rt.call=call
+    class State(SimpleNamespace):
+        def flush(self):pass
+    class App(RefinementMixin):
+        def _refinement_sync(self):pass
+        def _refinement_checkpoint(self):pass
+        async def _select_refinement_job(self,uid):seen.append(uid)
+    app=App();app._refinement_workspace=w
+    app.server=SimpleNamespace(state=State(rf_experiment='exp',rf_follow=True,rf_selected_job='',rf_error=''))
+    asyncio.run(app._refinement_pump())
+    assert len(seen)==4 and len(set(seen))==4 and not app.server.state.rf_error
+    assert all(j['status']=='completed' and j['attempts']==1 for j in w.state['jobs'].values())
+    assert not app.server.state.rf_queue_running
+
+
+def test_slow_previous_refinement_load_cannot_overwrite_a_new_scan_selection(tmp_path):
+    import threading
+    entered=threading.Event();release=threading.Event()
+    jobs={uid:dict(id=uid,source=dict(experiment='exp',scan_label=uid,sample_label='sample'),message=uid,
+                  result=dict(directory=str(tmp_path),status='completed',stages=[],final_view='view.json',
+                              baseline_view='baseline.json',files={}))for uid in ['first','second']}
+    class State(SimpleNamespace):
+        def flush(self):pass
+    class App(RefinementMixin):
+        def _read_refinement_view(self,job,name):
+            if job['id']=='first':entered.set();assert release.wait(5)
+            return dict(histograms=[dict(name=job['id']+' histogram')])
+        def _refinement_plot_changed(self):pass
+        def _refinement_trend_changed(self):pass
+    app=App();app._refinement_workspace=SimpleNamespace(state=dict(jobs=jobs))
+    app.server=SimpleNamespace(state=State(rf_experiment='exp',rf_selected_job=''))
+    async def exercise():
+        first=asyncio.create_task(app._select_refinement_job('first'))
+        assert await asyncio.to_thread(entered.wait,5)
+        await app._select_refinement_job('second');release.set();await first
+    asyncio.run(exercise())
+    assert app.server.state.rf_selected_job=='second'
+    assert app.server.state.rf_histogram=='second histogram'
+    assert app.server.state.rf_selected_title.startswith('second')
+
+
 @pytest.mark.parametrize('mode,expected',[('models','models'),('recipe','results'),('results','results')])
 def test_changing_experiment_does_not_leave_model_exploration_for_an_existing_recipe_job(mode,expected):
     state=SimpleNamespace(rf_experiment='new-experiment',rf_mode=mode)
