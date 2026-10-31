@@ -29,9 +29,9 @@ from gpx_recipe.symmetry.plans import build_plan
 from gpx_recipe.symmetry.contracts import iter_trials
 from .symmetry_workspace import campaign_rows,group_models,display_groups,view_for,choose_group,choose_member,disposition_reason,coverage_rows,scope_rows,parameter_rows,moment_precision_note,campaign_can_resume,display_status,embedding_evidence
 from . import symmetry_plots as plots
-from .symmetry_sources import start_choices,resolve_start
+from .symmetry_sources import start_choices,resolve_start,acquisition_details
 from .k_search_controller import KSearchMixin
-from .model_runtime import GalaxyModelRuntime,GalaxyChunkTransport,CollectOnlyTransport,active_batch_count,MODEL_BATCH_LIMITS
+from .model_runtime import GalaxyModelRuntime,GalaxyChunkTransport,CollectOnlyTransport,PreparationSlotTransport,active_batch_count,MODEL_BATCH_LIMITS
 from .model_campaigns import choices as model_choices,origin as model_origin,queue_sources,enroll_source,restore_history,portable_source,restore_captured_sources
 from gpx_recipe.symmetry.compiler import prepare_shared_inputs
 from gpx_recipe.symmetry.templates import make_template,trial_count
@@ -326,6 +326,7 @@ class SymmetryMixin(KSearchMixin):
                 if row['kind']=='magnetic':s.sx_details.append(dict(label='Complete BNS operator audit',value='Passed' if row.get('bns_audited') else 'Not present in this archived or unfinished trial'))
                 s.sx_details.append(dict(label='Parent-basis k',value='('+', '.join(row['k'])+')'))
                 s.sx_details.append(dict(label='Starting GPX revision',value=row['source_sha256'][:16]))
+                s.sx_details.extend(acquisition_details(self._refinement_store(),s.rf_experiment,row['source']))
                 usage=row.get('resources') or {}
                 if isinstance(usage.get('wall_seconds'),(int,float)):
                     detail=f"{usage['wall_seconds']:.2f} s native wall time"
@@ -603,6 +604,7 @@ class SymmetryMixin(KSearchMixin):
         self._symmetry_task=self._refinement_schedule(run(),'radar-symmetry-campaign')
 
     async def _drive_symmetry_campaign(self,campaign,transport):
+        preparation=None
         self._model_active_campaigns[campaign.root.name]=(campaign,transport)
         self.server.state.sx_busy=False;self.server.state.sx_campaign_running=True
         self.server.state.sx_message='Campaign running. Each acquisition is checked before its finite starts enter the Galaxy resource queue.'
@@ -616,28 +618,53 @@ class SymmetryMixin(KSearchMixin):
                 self._model_following_active=following
                 tick_transport=transport
                 if campaign.setting('template'):
+                    if preparation and preparation.done():
+                        await asyncio.shield(preparation)
+                        preparation=None;self._model_enrollment_task=None
+                        campaign.set_setting('preparation_message','')
                     entries=await asyncio.to_thread(queue_sources,campaign,self._refinement_store())
                     pending=next((r for r in entries.values() if r['status'] in {'queued','preparing'}),None)
-                    if pending and not campaign.setting('paused',False):
+                    if pending and not preparation and not campaign.setting('paused',False):
                         # Collect first. A normal tick can refill a newly freed
                         # slot before the next acquisition ever gets a turn.
                         await asyncio.to_thread(campaign.tick,CollectOnlyTransport(transport),slots=int(self.server.state.sx_slots))
                     active=active_batch_count(campaign.trials())
-                    if active<getattr(transport,'max_active_jobs',1) and not campaign.setting('paused',False):
+                    if not preparation and active<getattr(transport,'max_active_jobs',1) and not campaign.setting('paused',False):
                         if pending:
                             message='Preparing '+pending['scan']+': checking its GPX and declaring the reviewed finite model starts.'
                             campaign.set_setting('preparation_message',message)
                             self.server.state.sx_queue_notice=message
                             self.server.state.flush()
-                            self._model_enrollment_task=asyncio.create_task(asyncio.to_thread(enroll_source,campaign,self._refinement_store(),pending['id'],
+                            preparation=asyncio.create_task(asyncio.to_thread(enroll_source,campaign,self._refinement_store(),pending['id'],
                                 self._inspect_model_input,transport=transport if isinstance(transport,GalaxyChunkTransport) else None))
-                            await asyncio.shield(self._model_enrollment_task)
-                            campaign.set_setting('preparation_message','')
-                    elif pending and not campaign.setting('paused',False):
+                            self._model_enrollment_task=preparation
+                            if not hasattr(transport,'submit_many'):
+                                # Preserve the local worker's serial preparation
+                                # policy; Galaxy has a separate bounded job slot.
+                                await asyncio.shield(preparation)
+                                preparation=None;self._model_enrollment_task=None
+                                campaign.set_setting('preparation_message','')
+                    elif pending and not preparation and not campaign.setting('paused',False):
                         tick_transport=CollectOnlyTransport(transport)
                         campaign.set_setting('preparation_message','Waiting for an accepted Galaxy batch to finish before preparing '+pending['scan']+'.')
-                self._model_tick_task=asyncio.create_task(asyncio.to_thread(campaign.tick,tick_transport,slots=int(self.server.state.sx_slots)))
-                trials=await asyncio.shield(self._model_tick_task)
+                    if preparation:
+                        # Native inspection can wait on Galaxy while existing
+                        # scans keep refining. Reserve its admission slot so
+                        # refilling old scans cannot starve the next one.
+                        tick_transport=PreparationSlotTransport(transport)
+                # One core scheduler tick admits one finite chunk. Fill a
+                # bounded wave before uploading a combined acknowledgement
+                # checkpoint; every individual dispatch still has a prior
+                # durable intent, including its full finite member list.
+                wave=max(1,getattr(tick_transport,'max_active_jobs',1))
+                for _ in range(wave):
+                    self._model_tick_task=asyncio.create_task(asyncio.to_thread(campaign.tick,tick_transport,slots=int(self.server.state.sx_slots)))
+                    trials=await asyncio.shield(self._model_tick_task)
+                    self.refresh_symmetry()
+                    if (campaign.setting('paused',False)
+                            or active_batch_count(trials)>=getattr(tick_transport,'max_active_jobs',1)
+                            or not any(r['state']=='prepared'for r in trials)):
+                        break
                 if isinstance(transport,GalaxyChunkTransport):await asyncio.to_thread(transport.checkpoint)
                 self.refresh_symmetry()
                 queued=any(r['status'] in {'queued','preparing'} for r in campaign.setting('enrollments',{}).values())
@@ -647,9 +674,16 @@ class SymmetryMixin(KSearchMixin):
                 if not pending and not queued and not following:break
                 await asyncio.sleep(3)
         finally:
-            self._model_following_active=False
-            self.server.state.sx_campaign_running=False
-            self._model_active_campaigns.pop(campaign.root.name,None)
+            try:
+                if preparation:
+                    for key,event in getattr(self,'_model_preparations',{}).items():
+                        if Path(key).is_relative_to(campaign.root):event.set()
+                    await asyncio.shield(preparation)
+            finally:
+                self._model_enrollment_task=None
+                self._model_following_active=False
+                self.server.state.sx_campaign_running=False
+                self._model_active_campaigns.pop(campaign.root.name,None)
 
     def continue_symmetry_campaign(self):
         if self._symmetry_task and not self._symmetry_task.done():return

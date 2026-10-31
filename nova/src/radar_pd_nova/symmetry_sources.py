@@ -11,6 +11,7 @@ from math import isfinite
 from .refinement_runtime import verify_result_files
 from .refinement_sources import digest, file_sha
 from .scan_conditions import qualified_metadata
+from .scan_conditions import condition_display
 
 
 def _scan_title(source):
@@ -43,6 +44,19 @@ def start_choices(workspace, experiment):
                                 recipe_label=recipe_label,
                                 job_id=job_id,stage=stage,name=name))
     return entries
+
+
+def acquisition_details(workspace,experiment,source_id):
+    """Show the recorded interval summary without loading a GPX or model file."""
+    if workspace is None:return []
+    entry=next((e for e in start_choices(workspace,experiment) if e['id']==source_id),None)
+    if not entry:return []
+    source=entry.get('source') or workspace.state['jobs'][entry['job_id']]['source']
+    metadata=qualified_metadata(source.get('metadata') or {})
+    return [dict(label='Measured acquisition condition',value=text)
+            for quantity,label in [('temperature','Sample temperature'),('magnetic_field','Magnetic field'),
+                                   ('pressure','Pressure'),('voltage','Voltage')]
+            if (text:=condition_display(metadata.get(quantity),label))]
 
 
 def resolve_start(workspace, experiment, identifier):

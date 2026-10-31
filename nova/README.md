@@ -28,9 +28,21 @@ cores do not grant workers. With no CPU allocation reported, a job uses one
 worker. Native startup, model/refinement, audit, wall/CPU time and peak RAM are
 recorded separately from Galaxy queue and transfer time. Larger site allocations
 require NDIP job-destination configuration; the UI cannot grant them.
+The next acquisition's native inspection runs alongside existing model batches,
+with one batch slot reserved until preparation finishes. Captured input-HDA
+references precede trial enrollment, and checkpoints keep the acquisition queue
+and ledger consistent while scans arrive. Parallel polishing uses its own
+1, 2 or 4-job budget; stages within a scan remain ordered. Identical polishing
+backups are coalesced only after a successful Galaxy acknowledgement. A changed
+claim, submitted job or result always needs a new backup.
+Model dispatch fills a bounded wave of free slots, with a durable intent before
+each POST and a combined acknowledgement backup afterward. A viewer lost between
+those steps recovers jobs by their original dispatch keys, without repeating
+scientific starts. This avoids redundant metadata jobs while preserving recovery.
 The explicitly supplied Galaxy GPX is reused at its declared hashed input paths,
 so it is not uploaded a second time inside asset ZIPs. GPX-only inspections share
-one empty asset packet. Fresh-viewer recovery reconstructs and rechecks the same
+one manifest-only asset packet; a zero-member ZIP fails Galaxy archive handling.
+Fresh-viewer recovery reconstructs and rechecks the same
 inputs from the saved Galaxy publication; failed/deleted asset uploads are not
 reused.
 When the registered Model Campaign wrapper supports it, the bounded closed JSON
@@ -53,6 +65,9 @@ block automatic analysis. Missing conditions remain unavailable, and supplied
 profiles still require scientific review. Excluding one derived product leaves
 other products of the parent eligible. Existing individual-run checkpoint and
 submission identities remain compatible.
+History-only refinement sources also recover the bounded published acquisition
+channels. Verified readbacks retain their means, ranges, units and intervals;
+ambiguous or unverified product conditions do not become plotting axes.
 
 Live uploads scientific inputs as Galaxy dependencies and acknowledges the
 analysis as soon as Galaxy creates its job. Galaxy waits for pending inputs;

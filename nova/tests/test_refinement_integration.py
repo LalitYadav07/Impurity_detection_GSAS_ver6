@@ -54,6 +54,32 @@ def create(tmp_path):
     return w,runtime
 
 
+def test_unchanged_refinement_backups_coalesce_but_new_claims_and_failures_do_not(tmp_path):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    w,rt=create(tmp_path);entered=threading.Event();release=threading.Event();snapshots=[]
+    def upload(document):
+        snapshots.append(copy.deepcopy(document));entered.set();assert release.wait(5)
+        return 'backup-'+str(len(snapshots))
+    rt.save_workspace=upload
+    with ThreadPoolExecutor(max_workers=2)as pool:
+        first=pool.submit(w.checkpoint);assert entered.wait(5)
+        # A timestamp-only save does not justify another Galaxy metadata job.
+        with w.lock:w.save()
+        second=pool.submit(w.checkpoint);release.set()
+        assert first.result(timeout=5)==second.result(timeout=5)=='backup-1'
+    assert len(snapshots)==1
+    with w.lock:w.state['jobs']['claimed']=dict(status='running',remote_action=None);w.save()
+    assert w.checkpoint()=='backup-2' and len(snapshots)==2
+    def unavailable(document):raise RuntimeError('Backup rejected')
+    rt.save_workspace=unavailable
+    with w.lock:w.state['jobs']['claimed']['remote_action']=dict(galaxy_job_id='acknowledged');w.save()
+    with pytest.raises(RuntimeError,match='Backup rejected'):w.checkpoint()
+    rt.save_workspace=upload
+    assert w.checkpoint()=='backup-3'
+    assert snapshots[-1]['jobs']['claimed']['remote_action']['galaxy_job_id']=='acknowledged'
+
+
 def test_parallel_polishing_claims_distinct_scans_once_and_respects_limit(tmp_path):
     import threading
     from concurrent.futures import ThreadPoolExecutor
@@ -447,6 +473,22 @@ def test_recovered_live_ages_scans_share_experiment_sample_and_bank_from_publica
         dict(sample_key='unassigned',sample_label='Unassigned sample',axis_overrides={'temperature':{'value':300,'unit':'C','reviewed_mapping':True}}),'history')
     assert placeholder['sample_label']=='21213 · MgO+Al2O3 temperature calibration'
     assert placeholder['axis_overrides']['temperature']['value']==300
+
+
+def test_history_only_source_recovers_published_measured_temperature(tmp_path):
+    from radar_pd_nova.scan_conditions import qualified_metadata
+    window=dict(start='2025-09-13T00:11:00.721224667-04:00',end='2025-09-13T00:16:00.859446667-04:00')
+    acquisition=dict(instrument='PG3',run_number=61020,sample_id='sample',sample_name='Oxide',
+        acquisition_window=window,product_window_verified=True,channels=[dict(quantity='temperature',value=169.6,
+        unit='K',minimum=169.5,maximum=169.7,role='measured',status='recorded',coverage_fraction=1.,
+        statistic='time_weighted_step_hold',source='/entry/DASlogs/temperature/value',acquisition_window=window)])
+    acquisition['$schema']='radar-pd-acquisition/v1'
+    project=dict(collection_name='final.gpx',sha256='model',status='accepted',stage='final_refinement')
+    record=SimpleNamespace(uid='record',name='IPTS-35915_PG3_61020',local_output_dir=tmp_path,
+                           output_dataset_ids={'gpx_projects':'collection'},inputs=None)
+    row=source_from_record(record,{'summary':dict(gpx_projects=[project],acquisition=acquisition)},None,'history')
+    temperature=qualified_metadata(row['metadata'])['temperature']
+    assert temperature['value']==169.6 and temperature['minimum']==169.5 and temperature['maximum']==169.7
 
 
 def test_recovered_banked_run_names_rejoin_the_verified_ipts_without_mixing_conflicts(tmp_path):

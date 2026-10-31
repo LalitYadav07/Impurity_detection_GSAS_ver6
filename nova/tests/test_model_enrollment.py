@@ -10,6 +10,7 @@ from radar_pd_nova.symmetry_controller import SymmetryMixin
 from radar_pd_nova.symmetry_workspace import campaign_can_resume
 from radar_pd_nova.model_runtime import GalaxyChunkTransport
 from radar_pd_nova.model_runtime import CollectOnlyTransport
+from radar_pd_nova.model_runtime import PreparationSlotTransport
 
 
 def setup(tmp_path,monkeypatch):
@@ -43,6 +44,26 @@ def test_budget_stops_following_with_visible_reason(tmp_path,monkeypatch):
     c,rows=setup(tmp_path,monkeypatch);t=c.setting('template');t['maximum_scans']=1;c.set_setting('template',t)
     assert set(module.queue_sources(c,None))=={'selected'}
     assert c.setting('following') is False and 'budget reached' in c.setting('budget_message')
+
+
+def test_completed_inspection_does_not_erase_scans_arriving_during_its_wait(tmp_path,monkeypatch):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    c,rows=setup(tmp_path,monkeypatch)
+    entry=module.queue_sources(c,None)['selected']
+    module._set_enrollment(c,'selected',dict(entry,status='preparing'))
+    entered=threading.Event();release=threading.Event()
+    def complete():
+        captured=copy.deepcopy(entry);entered.set();assert release.wait(5)
+        captured['status']='enrolled';module._set_enrollment(c,'selected',captured)
+    with ThreadPoolExecutor(max_workers=1)as pool:
+        task=pool.submit(complete);assert entered.wait(5)
+        rows.append((dict(rows[0][0],id='arrived-during-inspection'),'radar'))
+        assert 'arrived-during-inspection' in module.queue_sources(c,None)
+        release.set();task.result(timeout=5)
+    saved=c.setting('enrollments')
+    assert saved['selected']['status']=='enrolled'
+    assert saved['arrived-during-inspection']['status']=='queued' and 'new' in saved
 
 
 def test_recover_queued_acquisitions_before_the_first_trial_is_created(tmp_path,monkeypatch):
@@ -90,6 +111,14 @@ def test_resource_budget_updates_dispatch_limits_without_changing_scientific_app
         state.sx_parallel_jobs=count;app._symmetry_resource_changed()
         assert runtime.max_active_jobs==transport.max_active_jobs==count
         assert app._symmetry_approved=='sealed-science'
+
+
+def test_reserved_preparation_slot_tracks_a_budget_lowered_during_a_wave():
+    base=SimpleNamespace(max_active_jobs=8)
+    view=PreparationSlotTransport(base)
+    assert view.max_active_jobs==7
+    base.max_active_jobs=2;assert view.max_active_jobs==1
+    base.max_active_jobs=1;assert view.max_active_jobs==0
 
 
 def test_failed_magnetic_setup_keeps_token_cost_and_clears_previous_planning_notes(monkeypatch):
@@ -196,3 +225,96 @@ def test_waiting_acquisition_gets_a_freed_slot_before_more_old_starts(tmp_path,m
     else:
         assert events==['collect','collect'] and entry['status']=='queued'
     assert transport.max_active_jobs==2
+
+
+@pytest.mark.parametrize('budget',[1,2,4,8])
+def test_scan_preparation_does_not_block_other_refinements_or_exceed_job_budget(tmp_path,monkeypatch,budget):
+    import json
+    import threading
+    import radar_pd_nova.symmetry_controller as controller
+    entered=threading.Event();release=threading.Event();refilled=threading.Event()
+    entry=dict(id='next-scan',scan='Next acquisition',status='queued');limits=[];rows=[]
+    class C:
+        root=tmp_path/'campaign'
+        def __init__(self):self.settings={'template':{},'enrollments':{'next-scan':entry}}
+        def setting(self,key,default=None):return self.settings.get(key,default)
+        def set_setting(self,key,value):self.settings[key]=value
+        def trials(self):return rows
+        def tick(self,transport,**kwargs):
+            if isinstance(transport,PreparationSlotTransport):
+                limits.append(transport.max_active_jobs)
+                while len(rows)<transport.max_active_jobs:
+                    i=len(rows);rows.append(dict(id=str(i),state='running',handle=json.dumps({'dispatch_key':str(i)})))
+                refilled.set()
+            elif not isinstance(transport,CollectOnlyTransport) and entry['status']=='enrolled':
+                limits.append(transport.max_active_jobs);self.settings['paused']=True
+            return rows
+    c=C();c.settings['template']={'future':False}
+    transport=SimpleNamespace(max_active_jobs=budget,submit_many=lambda *a,**kw:None)
+    monkeypatch.setattr(controller,'queue_sources',lambda *a:{'next-scan':entry})
+    def inspect(*a,**kw):
+        entry['status']='preparing';entered.set();assert release.wait(5)
+        entry['status']='enrolled'
+    monkeypatch.setattr(controller,'enroll_source',inspect)
+    original_sleep=asyncio.sleep
+    async def short_sleep(seconds):await original_sleep(min(seconds,.01))
+    monkeypatch.setattr(controller.asyncio,'sleep',short_sleep)
+    app=SymmetryMixin();app._model_active_campaigns={};app._model_stopping=False;app._model_preparations={}
+    app._refinement_store=lambda:None;app._inspect_model_input=lambda *a:None;app.refresh_symmetry=lambda:None
+    app.server=SimpleNamespace(state=SimpleNamespace(sx_slots=2,flush=lambda:None))
+    async def exercise():
+        task=asyncio.create_task(app._drive_symmetry_campaign(c,transport))
+        try:
+            assert await asyncio.to_thread(entered.wait,3)
+            assert await asyncio.to_thread(refilled.wait,3)
+            assert entry['status']=='preparing' and len(rows)==budget-1
+            assert max(limits)==budget-1
+        finally:release.set()
+        await asyncio.wait_for(task,5)
+    asyncio.run(exercise())
+    assert limits[-1]==budget and entry['status']=='enrolled'
+    assert transport.max_active_jobs==budget and app._model_enrollment_task is None
+    assert not app.server.state.sx_campaign_running
+
+
+def test_preparation_failure_clears_active_campaign_state(tmp_path,monkeypatch):
+    import radar_pd_nova.symmetry_controller as controller
+    entry=dict(id='bad',scan='Bad acquisition',status='queued')
+    c=SimpleNamespace(root=tmp_path/'campaign',setting=lambda k,d=None:{'template':{'future':False}}.get(k,d),
+                      set_setting=lambda *a:None,trials=lambda:[],tick=lambda *a,**kw:[])
+    monkeypatch.setattr(controller,'queue_sources',lambda *a:{'bad':entry})
+    def fail(*a,**kw):raise ValueError('Invalid captured source')
+    monkeypatch.setattr(controller,'enroll_source',fail)
+    app=SymmetryMixin();app._model_active_campaigns={};app._model_stopping=False;app._model_preparations={}
+    app._refinement_store=lambda:None;app._inspect_model_input=lambda *a:None;app.refresh_symmetry=lambda:None
+    app.server=SimpleNamespace(state=SimpleNamespace(sx_slots=2,flush=lambda:None))
+    with pytest.raises(ValueError,match='Invalid captured source'):
+        asyncio.run(app._drive_symmetry_campaign(c,SimpleNamespace(max_active_jobs=2,submit_many=lambda *a:None)))
+    assert not app.server.state.sx_campaign_running and not app._model_active_campaigns
+    assert app._model_enrollment_task is None
+
+
+def test_driver_fills_all_free_model_slots_in_one_bounded_wave(tmp_path):
+    import json
+    rows=[dict(id=str(i),state='prepared')for i in range(12)];ticks=[];settings={}
+    class C:
+        root=tmp_path/'wave'
+        def setting(self,k,d=None):return settings.get(k,d)
+        def set_setting(self,k,v):settings[k]=v
+        def trials(self):return rows
+        def tick(self,transport,**kwargs):
+            ticks.append(len(ticks))
+            active=sum(r['state']=='running'for r in rows)
+            if active<transport.max_active_jobs:
+                row=next(r for r in rows if r['state']=='prepared')
+                row.update(state='running',handle=json.dumps(dict(dispatch_key=row['id'])))
+            return rows
+    app=SymmetryMixin();app._model_active_campaigns={};app._model_stopping=False
+    app._refinement_store=lambda:None
+    def refresh():
+        if sum(r['state']=='running'for r in rows)==8:settings['paused']=True
+    app.refresh_symmetry=refresh
+    app.server=SimpleNamespace(state=SimpleNamespace(sx_slots=2,flush=lambda:None))
+    asyncio.run(app._drive_symmetry_campaign(C(),SimpleNamespace(max_active_jobs=8)))
+    assert len(ticks)==8 and sum(r['state']=='running'for r in rows)==8
+    assert sum(r['state']=='prepared'for r in rows)==4

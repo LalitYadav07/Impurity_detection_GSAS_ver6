@@ -170,7 +170,8 @@ def source_from_record(record, payload: dict, scan: dict | None, history: str,
     selection=getattr(record,'inputs',None)
     acquisition=result.get('acquisition') or {}
     provenance_input=(result.get('provenance') or {}).get('input') or {}
-    metadata=dict(acquisition.get('metadata') or {})
+    from .acquisition import published_condition_metadata
+    metadata={**published_condition_metadata(acquisition),**dict(acquisition.get('metadata') or {})}
     # The published acquisition contract stores these fields directly. Older
     # history records often have no live-watch row or recoverable input contract.
     for key in ('instrument','run_number','sample_id','sample_name'):

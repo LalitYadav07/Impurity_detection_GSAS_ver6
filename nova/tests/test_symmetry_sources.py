@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from radar_pd_nova.refinement_sources import file_sha
-from radar_pd_nova.symmetry_sources import start_choices,resolve_start
+from radar_pd_nova.symmetry_sources import start_choices,resolve_start,acquisition_details
 
 
 def workspace(tmp_path):
@@ -36,6 +36,20 @@ def test_recipe_checkpoints_are_explicit_and_never_enroll_as_new_radar_sources(t
     assert source['dataset_id']=='POLISHED_DATASET' and 'collection_id' not in source and 'base_rwp' not in source
     assert not {'context','inspection','inspection_error'} & set(source)
     assert w.state['sources']==before
+
+
+def test_magnetic_model_conditions_show_the_scan_range_without_downloading_a_gpx(tmp_path):
+    w=workspace(tmp_path)
+    w.state['sources']['raw']['metadata']={'temperature':dict(value=166.5,minimum=163.,maximum=170.,unit='K',statistic='time_weighted_step_hold')}
+    final=next(e for e in start_choices(w,'IPTS-1') if e.get('stage')=='final')
+    w.state['jobs']['job1']['result']['directory']=str(tmp_path/'not-recovered')
+    def forbidden(*args):raise AssertionError('Condition display must not download or load a GPX')
+    w.recover_job_artifacts=forbidden
+    for key in ['raw',final['id']]:
+        details=acquisition_details(w,'IPTS-1',key)
+        assert len(details)==1 and 'time-weighted mean 166.5 K' in details[0]['value']
+        assert 'recorded scan range 163–170 K' in details[0]['value']
+    assert acquisition_details(w,'other-experiment',final['id'])==[]
 
 
 def test_final_and_stage_dataset_references_never_fall_back_to_original(tmp_path):

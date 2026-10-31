@@ -28,6 +28,7 @@ class RefinementWorkspace:
         self.root=Path(root).resolve();self.root.mkdir(parents=True,exist_ok=True)
         self.manifest=self.root/'workspace.json';self.runtime=runtime;self.history_id=str(history_id)
         self._planner=planner;self.lock=threading.RLock();self._checkpoint_lock=threading.Lock();self._inflight=set()
+        self._checkpoint_hash=None;self._checkpoint_dataset=None
         self._inspection_locks={}
         if self.manifest.exists():
             self.state=json.loads(self.manifest.read_text())
@@ -64,7 +65,13 @@ class RefinementWorkspace:
         # cannot overwrite the recovery order of a newer scientific receipt.
         with self._checkpoint_lock:
             with self.lock:document=copy.deepcopy(self.state)
-            return self.runtime.save_workspace(document)
+            stable={k:v for k,v in document.items() if k!='updated_utc'}
+            fingerprint=digest(stable)
+            if fingerprint==self._checkpoint_hash:return self._checkpoint_dataset
+            dataset=self.runtime.save_workspace(document)
+            # Publish the cache only after Galaxy acknowledged the backup.
+            self._checkpoint_hash=fingerprint;self._checkpoint_dataset=dataset
+            return dataset
 
     def observe(self,sources,*,active_live_ids=None):
         with self.lock:

@@ -1,5 +1,6 @@
 """Explicit model campaign enrollment, independent of the visible UI selection."""
 import copy
+import json
 from pathlib import Path
 import shutil
 from contextlib import nullcontext
@@ -79,28 +80,48 @@ def _choices(workspace,experiment):
 
 def queue_sources(campaign,workspace):
     template=validate_template(campaign.setting('template'))
-    entries=campaign.setting('enrollments',{})
-    following=campaign.setting('following',False) and not campaign.setting('paused',False)
-    if campaign.setting('paused',False):return entries
-    for source,kind in choices(workspace,template['scope']['experiment']):
-        key=source['id']
-        if key in entries or not matches(template,source,kind):continue
-        captured=key in template['existing_ids']
-        future=following and key not in template['seen_ids']
-        if not (captured or future):continue
-        if len(entries)>=template['maximum_scans']:
-            campaign.set_setting('following',False);campaign.set_setting('budget_message','Acquisition budget reached; review a new campaign to enroll more scans.')
-            break
-        entries[key]=dict(id=key,status='queued',scan=source['scan_label'],sample=source['sample_label'],bank=source.get('bank'),
-            source=portable_source(source),origin=kind)
-    campaign.set_setting('enrollments',entries)
+    available=choices(workspace,template['scope']['experiment'])
+    # Input inspection can finish while a newly arriving acquisition is being
+    # queued. Merge under the SQLite writer guard, never replace an old snapshot.
+    with campaign.connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        settings={r['key']:json.loads(r['body']) for r in db.execute(
+            "SELECT key,body FROM settings WHERE key IN ('enrollments','following','paused')")}
+        entries=settings.get('enrollments',{})
+        if settings.get('paused',False):return entries
+        following=settings.get('following',False)
+        for source,kind in available:
+            key=source['id']
+            if key in entries or not matches(template,source,kind):continue
+            captured=key in template['existing_ids']
+            future=following and key not in template['seen_ids']
+            if not (captured or future):continue
+            if len(entries)>=template['maximum_scans']:
+                _set_setting(db,'following',False)
+                _set_setting(db,'budget_message','Acquisition budget reached; review a new campaign to enroll more scans.')
+                break
+            entries[key]=dict(id=key,status='queued',scan=source['scan_label'],sample=source['sample_label'],bank=source.get('bank'),
+                source=portable_source(source),origin=kind)
+        _set_setting(db,'enrollments',entries)
     return entries
+
+
+def _set_setting(db,key,value):
+    db.execute('INSERT OR REPLACE INTO settings VALUES(?,?)',(key,json.dumps(value,allow_nan=False)))
+
+
+def _set_enrollment(campaign,key,value):
+    with campaign.connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        row=db.execute("SELECT body FROM settings WHERE key='enrollments'").fetchone()
+        entries=json.loads(row['body']) if row else {}
+        entries[key]=value;_set_setting(db,'enrollments',entries)
 
 
 def enroll_source(campaign,workspace,key,inspect,*,transport=None):
     """Recheck an exact source and native setting before a per-scan protocol."""
     template=validate_template(campaign.setting('template'));entries=campaign.setting('enrollments',{})
-    entry=entries[key];entry['status']='preparing';campaign.set_setting('enrollments',entries)
+    entry=entries[key];entry['status']='preparing';_set_enrollment(campaign,key,entry)
     try:
         try:source=resolve_start(workspace,template['scope']['experiment'],key)
         except ValueError:
@@ -137,13 +158,16 @@ def enroll_source(campaign,workspace,key,inspect,*,transport=None):
         condition=qualified_metadata(source.get('metadata') or {}).get('temperature') or {}
         if isinstance(condition,dict) and condition.get('value') is not None and condition.get('unit'):
             metadata.update(condition=condition['value'],condition_unit=condition['unit'])
+        if transport:
+            # A simultaneous checkpoint must never contain a new protocol
+            # without the Galaxy inputs required to restore its trials.
+            transport.prepare_source(protocol,root,source)
         if campaign.setting('paused',False):raise ValueError('Campaign paused while its input was inspected')
         campaign.enroll(protocol,root,approved_hash=digest(protocol),metadata=metadata)
-        if transport:transport.bind_source(digest(protocol),source)
         entry.update(status='enrolled',protocol=digest(protocol),source_sha256=source['source_sha256'])
     except Exception as exc:
         entry.update(status='queued' if campaign.setting('paused',False) else 'needs_review',reason=str(exc))
-    entries[key]=entry;campaign.set_setting('enrollments',entries)
+    _set_enrollment(campaign,key,entry)
     return entry
 
 

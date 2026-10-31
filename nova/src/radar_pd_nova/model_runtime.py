@@ -33,6 +33,18 @@ class CollectOnlyTransport:
     def submit_many(self,*args,**kwargs):raise RuntimeError('Collection-only pass cannot submit work')
 
 
+class PreparationSlotTransport:
+    """Keep one model-job slot for an acquisition being inspected."""
+    def __init__(self,transport):
+        self.transport=transport
+    @property
+    def max_active_jobs(self):return max(0,self.transport.max_active_jobs-1)
+    def __getattr__(self,name):return getattr(self.transport,name)
+    def submit_many(self,*args,**kwargs):
+        if not self.max_active_jobs:raise RuntimeError('The only model-job slot is reserved for input preparation')
+        return self.transport.submit_many(*args,**kwargs)
+
+
 def identifier(value):
     import re
     if not isinstance(value,str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}',value):raise ValueError('Invalid saved Galaxy dataset/job identity')
@@ -370,6 +382,7 @@ class GalaxyChunkTransport:
         self.runtime=runtime;self.campaign=campaign;self.path=campaign.root/'galaxy.json';self.cache={}
         self.max_active_jobs=runtime.max_active_jobs
         self.state=json.loads(self.path.read_text()) if self.path.exists() else {'sources':{},'inputs':{},'chunks':{},'members':{}}
+        self._state_lock=threading.RLock();self._checkpoint_lock=threading.Lock()
         self._checkpoint_hash=None
         self.checkpointer=GalaxyRefinementRuntime(campaign.root/'checkpoints',runtime.service)
         self.checkpointer.workspace_label=CAMPAIGN_LABEL+campaign.root.name
@@ -378,22 +391,41 @@ class GalaxyChunkTransport:
     def pause(self):self._paused.set()
     def resume(self):self._paused.clear()
 
-    def save(self):write_json(self.path,self.state)
+    def save(self):
+        with self._state_lock:write_json(self.path,self.state)
 
     def bind_source(self,protocol,source):
         source=copy.deepcopy(source)
         for key in ['context','inspection','source_path']:source.pop(key,None)
-        self.state['sources'][protocol]=source;self.save()
+        with self._state_lock:self.state['sources'][protocol]=source;self.save()
+
+    def prepare_source(self,protocol,root,source):
+        """Capture input-HDA references before new trials enter the ledger."""
+        from gpx_recipe.symmetry.compiler import prepare_shared_inputs
+        sha=digest(protocol)
+        captured=prepare_shared_inputs(protocol,root,self.campaign.root)
+        packet=self.runtime.packet(captured,['protocol.json']+[a['path'] for a in assets(protocol)],
+                                   source_sha256=protocol['source']['sha256'])
+        with self._state_lock:
+            self.state['inputs'][sha]=packet
+            self.bind_source(sha,source)
 
     def checkpoint(self,*,force=False):
-        document=dict(schema='radar-model-campaign/v1',history_id=self.runtime.service.history_id,
-            campaign=self.campaign.root.name,ledger=self.campaign.snapshot(),transport=copy.deepcopy(self.state))
-        stable=copy.deepcopy(document)
-        for chunk in stable['transport']['chunks'].values():
-            if chunk.get('job'):chunk['job']={k:chunk['job'].get(k) for k in ['galaxy_job_id','outputs']}
-        sha=digest(stable)
-        if not force and sha==self._checkpoint_hash:return
-        self.checkpointer.save_workspace(document);self._checkpoint_hash=sha
+        with self._checkpoint_lock:
+            # A background enrollment commits protocols and their trials in one
+            # transaction. Keep all snapshot SELECTs on the same side of that
+            # commit, without nesting Campaign's file lock inside a tick.
+            with self.campaign.connect() as guard:
+                guard.execute('BEGIN IMMEDIATE')
+                with self._state_lock:
+                    document=dict(schema='radar-model-campaign/v1',history_id=self.runtime.service.history_id,
+                        campaign=self.campaign.root.name,ledger=self.campaign.snapshot(),transport=copy.deepcopy(self.state))
+            stable=copy.deepcopy(document)
+            for chunk in stable['transport']['chunks'].values():
+                if chunk.get('job'):chunk['job']={k:chunk['job'].get(k) for k in ['galaxy_job_id','outputs']}
+            sha=digest(stable)
+            if not force and sha==self._checkpoint_hash:return
+            self.checkpointer.save_workspace(document);self._checkpoint_hash=sha
 
     def chunk_size_for(self,protocol):
         root=self.campaign.root/'inputs'/protocol
@@ -441,7 +473,11 @@ class GalaxyChunkTransport:
             if not self.runtime.state['dispatches'].get(key,{}).get('pending'):
                 chunk['not_dispatched']=True;self.save()
             raise
-        chunk['job']=job.model_dump(mode='json');self.save();self.checkpoint(force=True)
+        chunk['job']=job.model_dump(mode='json');self.save()
+        # The preceding remote intent already names every member and its stable
+        # dispatch key. A lost viewer recovers the acknowledged job by that key.
+        # The driver backs up acknowledgements together after filling free
+        # slots, avoiding a metadata-job round trip after every individual POST.
         return {uid:dict(dispatch_key=key,key=uid) for uid in ids}
 
     def _job(self,chunk):

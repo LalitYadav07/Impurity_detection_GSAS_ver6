@@ -3,7 +3,8 @@ from copy import deepcopy
 import hashlib
 import json
 
-from radar_pd_nova.acquisition import acquisition_context, stage_manual_acquisition, PREFIX
+from radar_pd_nova.acquisition import acquisition_context, stage_manual_acquisition, published_condition_metadata, PREFIX
+import pytest
 
 
 def metadata():
@@ -16,6 +17,39 @@ def metadata():
         'temperature':channel,'conditions':{'$schema':'radar-pd-conditions/v1','registry':'SNS-PG3-NOM-conditions/2',
         'acquisition_window':window,'window_scope':'parent_run; verify reduction does not select a narrower time interval',
         'channels':[channel]}}
+
+
+def published():
+    m=metadata()
+    return {'$schema':'radar-pd-acquisition/v1','instrument':'PG3','run_number':50713,
+            'acquisition_window':m['conditions']['acquisition_window'],'product_window_verified':True,
+            'channels':[{k:v for k,v in m['temperature'].items() if k not in {'trajectory','requires_binding'}}]}
+
+
+def test_published_conditions_keep_mean_range_and_interval_without_live_watch():
+    p=published();restored=published_condition_metadata(p)
+    assert restored['temperature']['value']==322.5178 and restored['temperature']['minimum']==322.509
+    assert restored['temperature']['maximum']==322.528 and restored['temperature']['unit']=='K'
+    assert restored['temperature']['quality']=='changing'
+    assert restored['start_time']==p['acquisition_window']['start']
+    assert p['channels'][0]['status']=='recorded'  # The publication remains unchanged.
+
+
+@pytest.mark.parametrize('change',[
+    {'coverage_fraction':.7},{'value':True},{'value':float('nan')},{'value':-1},
+    {'role':'requested'},{'status':'needs_mapping'},{'unit':'C'},{'source':''},
+    {'acquisition_window':{'start':'other','end':'interval'}},
+    {'minimum':323.,'maximum':324.}])
+def test_unqualified_published_channel_does_not_become_a_temperature_axis(change):
+    p=published();p['channels'][0].update(change)
+    assert 'temperature' not in published_condition_metadata(p)
+
+
+def test_unverified_or_ambiguous_product_conditions_remain_unassigned():
+    p=published();p['product_window_verified']=False
+    assert 'temperature' not in published_condition_metadata(p)
+    p=published();p['channels'].append(deepcopy(p['channels'][0]))
+    assert 'temperature' not in published_condition_metadata(p)
 
 
 def test_verified_whole_run_compacts_the_actual_readback_without_trajectories(tmp_path):

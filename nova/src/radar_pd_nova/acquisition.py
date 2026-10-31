@@ -18,6 +18,44 @@ PREFIX = b"# RADAR-PD input provenance: "
 SCHEMA = "radar-pd-acquisition/v1"
 
 
+def published_condition_metadata(acquisition):
+    """Recover qualified plotting channels from the bounded publication handoff."""
+    if not isinstance(acquisition,dict) or acquisition.get('$schema')!=SCHEMA:return {}
+    try:
+        if len(json.dumps(acquisition,allow_nan=False).encode('ascii'))>6000:return {}
+        window=acquisition['acquisition_window']
+        start,end=(parse_nexus_timestamp(window[k])for k in ('start','end'))
+        if start.tzinfo is None or end.tzinfo is None or end<=start:return {}
+        channels=acquisition['channels']
+        if not isinstance(channels,list) or len(channels)>4:return {}
+    except (KeyError,TypeError,ValueError,AttributeError):return {}
+    units={'temperature':'K','magnetic_field':'T','pressure':'Pa','voltage':'V'}
+    counts={q:sum(isinstance(c,dict) and c.get('quantity')==q for c in channels)for q in units}
+    recovered=[]
+    for channel in channels:
+        q=channel.get('quantity') if isinstance(channel,dict) else None
+        if not isinstance(q,str) or q not in units:continue
+        c=dict(channel)
+        numeric=lambda x:isinstance(x,(int,float)) and not isinstance(x,bool) and math.isfinite(x)
+        value,coverage=c.get('value'),c.get('coverage_fraction')
+        valid=(acquisition.get('product_window_verified') is True and counts[q]==1
+               and c.get('role')=='measured' and c.get('status')=='recorded'
+               and c.get('unit')==units[q] and isinstance(c.get('source'),str) and bool(c['source'])
+               and c.get('acquisition_window',window)==window and numeric(value) and numeric(coverage)
+               and 1-1e-6<=coverage<=1+1e-6 and (q!='temperature' or value>=0))
+        low,high=c.get('minimum'),c.get('maximum')
+        if low is not None or high is not None:
+            valid=valid and numeric(low) and numeric(high) and low<=value<=high
+        if not valid:
+            c.update(status='needs_mapping',notices=['Published condition or reduced-product interval needs review'])
+        recovered.append(c)
+    return qualified_metadata(dict(start_time=window['start'],end_time=window['end'],conditions={
+        '$schema':'radar-pd-conditions/v1','registry':SCHEMA,'acquisition_window':dict(window),
+        'source_metadata_sha256':acquisition.get('source_metadata_sha256'),
+        'window_scope':'explicit_product_window' if acquisition.get('product_window_verified') is True else 'unverified_product_window',
+        'channels':recovered}))
+
+
 def _full_powgen_run(source, metadata, expected_script_hash):
     """Recognize the unfiltered, one-file SNSPowderReduction recipe only."""
     path = Path(source).with_suffix('.py')

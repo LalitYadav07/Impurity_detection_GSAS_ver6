@@ -358,7 +358,35 @@ def test_native_and_chunk_have_distinct_history_recovery_names(remote,tmp_path):
     assert all('Model campaign campaign-' in label for label in labels)
 
 
-def test_lost_viewer_restores_the_existing_chunk_and_all_trial_receipts(remote,tmp_path,monkeypatch):
+def test_checkpoint_keeps_ledger_tables_on_one_side_of_a_concurrent_commit(remote,tmp_path,monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    runtime,service,_=remote;c=Campaign(tmp_path/'snapshot');t=GalaxyChunkTransport(runtime,c)
+    entered=threading.Event();release=threading.Event();writing=threading.Event();written=threading.Event();saved=[]
+    original=c.snapshot
+    def snapshot():
+        entered.set();assert release.wait(5)
+        return original()
+    monkeypatch.setattr(c,'snapshot',snapshot)
+    monkeypatch.setattr(t.checkpointer,'save_workspace',lambda document:saved.append(document))
+    def write():
+        writing.set()
+        with c.connect()as db:
+            db.execute('INSERT INTO protocols VALUES(?,?,?,?)',('protocol','{}','source','{}'))
+            db.execute('INSERT INTO trials(id,protocol,candidate,seed,state,updated) VALUES(?,?,?,?,?,?)',
+                       ('trial','protocol','candidate','seed','prepared',1.))
+        written.set()
+    with ThreadPoolExecutor(max_workers=2)as pool:
+        backup=pool.submit(t.checkpoint);assert entered.wait(5)
+        writer=pool.submit(write);assert writing.wait(5)
+        assert not written.wait(.05)
+        release.set();backup.result(timeout=5);writer.result(timeout=5)
+    assert saved[0]['ledger']['protocols']==saved[0]['ledger']['trials']==[]
+    t.checkpoint()
+    assert len(saved[-1]['ledger']['protocols'])==len(saved[-1]['ledger']['trials'])==1
+
+
+@pytest.mark.parametrize('lost_ack',[True,False])
+def test_lost_viewer_restores_the_existing_chunk_and_all_trial_receipts(remote,tmp_path,monkeypatch,lost_ack):
     from gpx_recipe.symmetry.contracts import validate_protocol
     from gpx_recipe.symmetry.templates import make_template
     from radar_pd_nova.model_campaigns import restore_history
@@ -374,13 +402,16 @@ def test_lost_viewer_restores_the_existing_chunk_and_all_trial_receipts(remote,t
     source.update(experiment='IPTS-1',sample_key='specimen:A',bank='1')
     context=dict(sha256=source['source_sha256'])
     template=make_template(p,context,source,[(source,'radar')],origin='radar')
-    c=Campaign(tmp_path/'original/campaign-aaaaaaaaaaaa',shared_inputs=True);c.enroll(p,inputs,approved_hash=digest(p))
+    c=Campaign(tmp_path/'original/campaign-aaaaaaaaaaaa',shared_inputs=True)
+    t=GalaxyChunkTransport(runtime,c);t.prepare_source(p,inputs,source)
+    assert not c.trials() and digest(p) in t.state['inputs'] and digest(p) in t.state['sources']
+    c.enroll(p,inputs,approved_hash=digest(p))
     c.set_setting('template',template)
-    t=GalaxyChunkTransport(runtime,c);t.bind_source(digest(p),source)
     original_submit=service.submit_utility
     def submit(**kwargs):
         result=original_submit(**kwargs);result.status=RunStatus.RUNNING
-        raise TimeoutError('Viewer lost after the Galaxy job accepted the chunk')
+        if lost_ack:raise TimeoutError('Viewer lost after the Galaxy job accepted the chunk')
+        return result
     monkeypatch.setattr(service,'submit_utility',submit)
     c.tick(t,slots=2);assert len(service.submissions)==1
     assert any(label.startswith('RADAR-PD RADAR-PD Model campaign ') for label in service.labels.values())
