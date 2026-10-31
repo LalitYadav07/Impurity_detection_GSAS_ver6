@@ -216,10 +216,22 @@ class GalaxyModelRuntime(GalaxyRefinementRuntime):
             return job
 
     def verify_job(self,job,key):
+        """Bind an acknowledged job directly to its History/tool/dispatch.
+
+        Searching named outputs is necessary after an uncertain POST, but an
+        authenticated full job record already proves a saved acknowledgement.
+        Keep that search in find_dispatch; do not make recovery depend on an
+        output HDA having been named or published yet.
+        """
+        from .galaxy_service import _parameter_value
         identity=(str(job.galaxy_job_id),key)
         if identity not in self._verified_jobs:
-            recovered=self.find_dispatch(key)
-            if not recovered or str(recovered.galaxy_job_id)!=identity[0]:raise RuntimeUnavailable('The saved model job does not belong to this History and dispatch')
+            details=self.service._job_details(identifier(identity[0]))
+            if (not isinstance(details,dict) or details.get('id')!=identity[0]
+                    or details.get('history_id')!=self.service.history_id
+                    or details.get('tool_id')!=self.tool_id
+                    or _parameter_value(details.get('params') or details.get('parameters') or {},'dispatch_key')!=key):
+                raise RuntimeUnavailable('The saved model job does not belong to this History and dispatch')
             self._verified_jobs.add(identity)
 
     def cancel_job(self,job,key):

@@ -63,7 +63,8 @@ def read_trial(directory,metadata=None,*,expected_receipt=None):
     row=dict(id=job['id'],protocol=job['protocol_sha256'],candidate=job['candidate_id'],seed=job['seed_id'],directory=str(directory),
         name=candidate['magnetic_space_group'] or candidate['irrep'] or candidate['id'],bns=candidate.get('bns_number'),
         embedding=dict(basis=candidate['transformation_matrix'],origin=candidate['origin_shift']),kind=p['kind'],source=p.get('acquisition_id') or p['source']['sha256'],source_sha256=p['source']['sha256'],sites=p.get('sites',[]),
-        metadata=metadata or {},parent=p['parent_phase'],histogram=p['histogram'],k=p['k'],worker_revision=job.get('package_sha256',''),status='pending',rwp=None,nvars=None,reason='',has_view=False,has_gpx=False)
+        metadata=metadata or {},parent=p['parent_phase'],histogram=p['histogram'],k=p['k'],worker_revision=job.get('package_sha256',''),status='pending',rwp=None,nvars=None,reason='',has_view=False,has_gpx=False,
+        adequate_rwp_percent=(p.get('policy') or {}).get('adequate_rwp_percent'))
     if (directory/'result.json').is_file():
         try:
             result=checked_receipt(directory,job,expected_receipt)
@@ -82,9 +83,13 @@ def read_trial(directory,metadata=None,*,expected_receipt=None):
             if native in result.get('files',{}):
                 evidence=json.loads(confined(directory,native).read_text())
                 row['baseline_rwp']=(evidence.get('baseline_residuals',{}).get(p['histogram']) or {}).get('wR')
+                row['native_convergence']={key:evidence.get('refinement_rvals',{}).get(key)
+                                           for key in ['converged','Aborted','SVD0']}
+                row['residual_targets']={key:evidence.get('target_peak_audit',{}).get(key)
+                                         for key in ['target_count','underfit_peak_count','weighted_residual_improvement']}
         except Exception as exc:
             row.update(status='integrity_failure',reason=str(exc),has_view=False,has_gpx=False,rwp=None,nvars=None)
-            for key in ['receipt_sha256','view_path','gpx_relative']:row.pop(key,None)
+            for key in ['receipt_sha256','view_path','gpx_relative','baseline_rwp','native_convergence','residual_targets']:row.pop(key,None)
     elif expected_receipt:
         row.update(status='integrity_failure',reason='The collected terminal receipt is missing')
     return row
@@ -173,6 +178,35 @@ def fit_caption(row):
     status=row.get('status')
     if status:parts.append('qualified fit' if status=='valid' else display_status(status))
     return ' · '.join(parts)
+
+
+def fit_diagnostics(row):
+    """Explain the declared screen and the audited native result separately.
+
+    Baseline residual windows can include profile or nuclear-model errors. They
+    are not indexed magnetic reflections, nor another acceptance rule.
+    """
+    if not row:return []
+    def finite(value):
+        return isinstance(value,(int,float)) and not isinstance(value,bool) and np.isfinite(value)
+    details=[];criterion=row.get('adequate_rwp_percent')
+    if finite(criterion):
+        details.append(dict(label='Declared fit criterion',value=f'Rwp ≤ {criterion:g}% after native convergence, parameter and physicality checks.'))
+    native=row.get('native_convergence') or {}
+    parts=[]
+    if type(native.get('converged')) is bool:parts.append('converged' if native['converged'] else 'not converged')
+    if native.get('Aborted') is True:parts.append('aborted')
+    rank=native.get('SVD0')
+    if type(rank) is int and rank>=0:parts.append(f'{rank} rank deficiencies')
+    if parts:details.append(dict(label='Native optimization',value=' · '.join(parts)))
+    targets=row.get('residual_targets') or {};count=targets.get('target_count');underfit=targets.get('underfit_peak_count')
+    if type(count) is int and count>0 and type(underfit) is int and 0<=underfit<=count:
+        text=f'{underfit} of {count} fixed nuclear-baseline residual windows still below 50% integrated signal coverage.'
+        improvement=targets.get('weighted_residual_improvement')
+        if finite(improvement):text+=f' Weighted absolute residual change {(-100*improvement):+.1f}% in those windows.'
+        text+=' Windows can contain nuclear or profile mismatch; inspect the measured and calculated curves.'
+        details.append(dict(label='Residual-window check',value=text))
+    return details
 
 
 def embedding_evidence(rows,selected):

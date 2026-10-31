@@ -175,6 +175,8 @@ def model_exploration(app):
                 v.VAlert(v_if='!!sx_moment_note',text=('sx_moment_note',),type='warning',variant='tonal',density='compact',classes='my-3')
                 with html.Details(v_if='sx_embedding_evidence.length',classes='mt-3 mb-3'):
                     html.Summary('Compare fit quality and search repeatability')
+                    with html.P(v_for='item in sx_fit_diagnostics',key='item.label',classes='rf-notice'):
+                        html.B('{{ item.label }}: ');html.Span('{{ item.value }}')
                     html.P('{{ sx_embedding_summary }}',classes='rf-notice')
                     v.VDataTable(items=('sx_embedding_evidence',),headers=("[{title:'Exact model embedding',key:'model'},{title:'Terminal starts',key:'coverage',sortable:false},{title:'Qualified starts',key:'qualified'},{title:'Refined variables',key:'parameters'},{title:'Best qualified Rwp (%)',key:'best_rwp'},{title:'Qualified Rwp range',key:'rwp_range',sortable:false},{title:'Lowest unresolved Rwp (%)',key:'unresolved_rwp'},{title:'Selected',key:'selected'}]",),items_per_page=5,density='compact')
                     html.P('Each row belongs to this same starting GPX and approved fit protocol. The final identifier distinguishes embeddings with the same BNS number. Empty residual or variable-count cells are unavailable. Start counts describe optimization repeatability, not independent experimental replication or confidence in a structure. Compare residuals, model complexity, uncertainties and temperature evidence together; unresolved checkpoints remain visible.',classes='rf-notice')

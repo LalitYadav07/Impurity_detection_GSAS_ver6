@@ -41,6 +41,12 @@ class Service:
     def refresh_utility(self,job):
         actual=next(v for v in self.jobs.values() if v.galaxy_job_id==job.galaxy_job_id)
         job.status=actual.status;job.outputs=copy.deepcopy(actual.outputs);return job
+    def _job_details(self,uid):
+        match=next(((key,job) for key,job in self.jobs.items() if job.galaxy_job_id==uid),None)
+        if not match:return {}
+        key,job=match
+        return dict(id=uid,history_id=self.history_id,tool_id=job.tool_id,state=job.status.value,
+                    params={'dispatch_key':key},outputs={})
 
 
 @pytest.fixture
@@ -356,11 +362,15 @@ def paused_request(remote,tmp_path,monkeypatch):
     runtime,service,source=remote;key='2'*24
     job=service.submit_utility(inputs={'dispatch_key':key});job.status=RunStatus.ERROR
     details=dict(id=job.galaxy_job_id,history_id='history',tool_id=MODEL_TOOL_ID,state='paused',
+        params={'dispatch_key':key},
         inputs={k:{'id':k} for k in ['source_gpx','model_assets','model_request']})
     metadata={k:dict(state='ok',file_size=100) for k in ['source_gpx','model_assets']}
     metadata['model_request']=dict(state='error',file_size=0,name='RADAR-PD RADAR-PD Model request '+key+' | request.json')
     service._job_details=lambda uid:copy.deepcopy(details)
     service._dataset_metadata=lambda uid:copy.deepcopy(metadata[uid])
+    # This helper represents the batch already acknowledged in this runtime.
+    # Foreign/missing restored-job identity is exercised independently below.
+    runtime.verify_job(job,key)
     cancellations=[]
     def cancel(*args,**kwargs):
         cancellations.append(args);details['state']='deleted';job.status=RunStatus.CANCELLED
@@ -484,6 +494,45 @@ def test_restored_job_identity_is_verified_before_cancellation(remote,monkeypatc
     calls=[];monkeypatch.setattr('requests.delete',lambda *a,**k:calls.append(a))
     with pytest.raises(RuntimeUnavailable,match='does not belong'):runtime.cancel_job(wrong,'d'*24)
     assert calls==[]
+
+
+@pytest.mark.parametrize('field,value',[
+    ('id','another-job'),('history_id','another-history'),('history_id',None),
+    ('tool_id','another-tool'),('params',{'dispatch_key':'another-key'}),
+    ('params',{}),
+])
+def test_known_job_verification_rejects_incomplete_or_foreign_bindings(remote,monkeypatch,field,value):
+    runtime,service,_=remote;key='e'*24
+    job=service.submit_utility(inputs={'dispatch_key':key})
+    details=service._job_details(job.galaxy_job_id);details[field]=value
+    monkeypatch.setattr(service,'_job_details',lambda uid:details)
+    monkeypatch.setattr(runtime,'find_dispatch',lambda key:pytest.fail('Known jobs require their own identity proof'))
+    with pytest.raises(RuntimeUnavailable,match='does not belong'):runtime.verify_job(job,key)
+    assert not runtime._verified_jobs
+
+
+def test_known_job_verification_uses_one_full_record_without_output_search(remote,monkeypatch):
+    runtime,service,_=remote;key='e'*24
+    job=service.submit_utility(inputs={'dispatch_key':key});details=service._job_details(job.galaxy_job_id)
+    details['parameters']=[{'name':'dispatch_key','value':key}];details.pop('params')
+    calls=[]
+    def read(uid):calls.append(uid);return details
+    monkeypatch.setattr(service,'_job_details',read)
+    monkeypatch.setattr(runtime,'find_dispatch',lambda key:pytest.fail('No output lookup for an acknowledged job'))
+    runtime.verify_job(job,key);runtime.verify_job(job,key)
+    assert calls==[job.galaxy_job_id]
+
+
+def test_known_job_metadata_failure_is_not_cached_or_treated_as_absence(remote,monkeypatch):
+    runtime,service,_=remote;key='e'*24
+    job=service.submit_utility(inputs={'dispatch_key':key});details=service._job_details(job.galaxy_job_id)
+    def failed(uid):raise TimeoutError('Metadata unavailable')
+    monkeypatch.setattr(service,'_job_details',failed)
+    with pytest.raises(TimeoutError):runtime.verify_job(job,key)
+    assert not runtime._verified_jobs
+    monkeypatch.setattr(service,'_job_details',lambda uid:details)
+    runtime.verify_job(job,key)
+    assert runtime._verified_jobs=={(job.galaxy_job_id,key)}
 
 
 def test_external_cancellation_is_terminal_in_preparation_and_chunk_poll(remote,tmp_path):

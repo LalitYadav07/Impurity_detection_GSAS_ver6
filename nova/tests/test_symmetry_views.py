@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 import numpy as np
 
-from radar_pd_nova.symmetry_workspace import group_models,display_groups,choose_group,choose_member,disposition_reason,coverage_rows,scope_rows,parameter_rows,moment_precision_note,embedding_evidence,fit_caption
+from radar_pd_nova.symmetry_workspace import group_models,display_groups,choose_group,choose_member,disposition_reason,coverage_rows,scope_rows,parameter_rows,moment_precision_note,embedding_evidence,fit_caption,fit_diagnostics
 from radar_pd_nova.symmetry_plots import coordinate,fit
 
 
@@ -13,6 +13,29 @@ def test_expanded_fit_caption_retains_scan_model_residual_and_disposition():
     assert 'qualified fit' in fit_caption(dict(r,status='valid'))
     assert fit_caption(None)==''
     assert 'Rwp' not in fit_caption(dict(r,rwp=float('nan')))
+
+
+def test_native_diagnostics_keep_declared_fit_screen_rank_and_residual_targets_distinct():
+    r=dict(status='optimization_unresolved',adequate_rwp_percent=20.,
+        native_convergence=dict(converged=True,Aborted=False,SVD0=4),
+        residual_targets=dict(target_count=12,underfit_peak_count=3,weighted_residual_improvement=.35))
+    original=json.loads(json.dumps(r));details=fit_diagnostics(r)
+    assert 'Rwp ≤ 20%' in details[0]['value']
+    assert details[1]['value']=='converged · 4 rank deficiencies'
+    assert '3 of 12' in details[2]['value'] and '-35.0%' in details[2]['value']
+    assert 'nuclear or profile mismatch' in details[2]['value']
+    assert r==original  # Display cannot qualify or change a sealed result.
+
+
+def test_native_diagnostics_never_invent_missing_counts_or_convergence():
+    assert fit_diagnostics(None)==[]
+    assert fit_diagnostics(dict(status='unsupported',reason='BNS setting mismatch'))==[]
+    assert fit_diagnostics(dict(adequate_rwp_percent=float('nan'),native_convergence={'SVD0':True},
+        residual_targets={'target_count':12,'underfit_peak_count':None}))==[]
+    details=fit_diagnostics(dict(native_convergence={'converged':False,'Aborted':True},
+        residual_targets={'target_count':2,'underfit_peak_count':2,'weighted_residual_improvement':-.2}))
+    assert details[0]['value']=='not converged · aborted'
+    assert '+20.0%' in details[1]['value']
 
 
 def test_cached_evidence_rehashes_changed_bytes_even_if_mtime_is_restored(tmp_path,monkeypatch):
@@ -322,6 +345,30 @@ def test_a_late_native_evidence_read_failure_clears_all_verified_artifact_flags(
     assert value['status']=='integrity_failure' and value['rwp'] is None
     assert not value['has_view'] and not value['has_gpx']
     assert not {'receipt_sha256','view_path','gpx_relative'} & set(value)
+
+
+def test_native_fit_diagnostics_are_taken_from_the_verified_selected_histogram(tmp_path,monkeypatch):
+    import radar_pd_nova.symmetry_workspace as module
+    candidate=dict(id='c',magnetic_space_group='P1',irrep='',bns_number='1.1',transformation_matrix=np.eye(3).tolist(),origin_shift=[0,0,0])
+    protocol=dict(candidates=[candidate],kind='magnetic',source={'sha256':'a'*64},parent_phase='Parent',
+                  histogram='selected-bank',k=['0','0','0'],policy={'adequate_rwp_percent':20.})
+    (tmp_path/'job.json').write_text(json.dumps(dict(id='trial',protocol=protocol,protocol_sha256='p',candidate_id='c',seed_id='s')))
+    (tmp_path/'results').mkdir()
+    evidence=dict(baseline_residuals={'other-bank':{'wR':99.},'selected-bank':{'wR':25.}},
+                  refinement_rvals={'converged':True,'SVD0':4,'Nobs':12345},
+                  target_peak_audit={'target_count':12,'underfit_peak_count':3,
+                                     'weighted_residual_improvement':.35,'histograms':{'private-array':'not copied'}})
+    (tmp_path/'results/native.json').write_text(json.dumps(evidence))
+    result=dict(status='optimization_unresolved',rwp=23.,nvars=12,native_receipt='native.json',
+                files={'results/native.json':'checked-by-receipt'})
+    monkeypatch.setattr(module,'checked_receipt',lambda *args:result)
+    (tmp_path/'result.json').write_text(json.dumps(result))
+    row=module.read_trial(tmp_path)
+    assert row['baseline_rwp']==25. and row['adequate_rwp_percent']==20.
+    assert row['native_convergence']=={'converged':True,'Aborted':None,'SVD0':4}
+    assert row['residual_targets']=={'target_count':12,'underfit_peak_count':3,'weighted_residual_improvement':.35}
+    assert row['status']=='optimization_unresolved' and not row['has_gpx']
+    assert '4 rank deficiencies' in fit_diagnostics(row)[1]['value']
 
 
 def test_canted_components_show_native_uncertainties_without_inventing_a_norm_error():

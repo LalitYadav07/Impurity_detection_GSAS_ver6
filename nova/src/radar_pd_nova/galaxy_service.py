@@ -924,6 +924,7 @@ class GalaxyService:
             f"{self.galaxy_url}/api/jobs/{uid}",
             headers=self._headers,
             params={"full": "true"},
+            allow_redirects=False,
             timeout=30,
         )
         response.raise_for_status()

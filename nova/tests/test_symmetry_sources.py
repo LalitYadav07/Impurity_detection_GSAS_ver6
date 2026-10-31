@@ -266,8 +266,8 @@ def test_refresh_recovers_restored_remote_evidence_without_resuming_or_submittin
     original_recover=Campaign.recover
     def recover(campaign,t):
         assert t is transport and campaign.setting('paused') is True
-        if active:assert 'while this campaign continues' in state.sx_message
-        else:assert 'No new refinements are being submitted' in state.sx_message
+        assert not active
+        assert 'No new refinements are being submitted' in state.sx_message
         events.append('recover')
         return original_recover(campaign,t)
     monkeypatch.setattr(Campaign,'recover',recover)
@@ -287,7 +287,7 @@ def test_refresh_recovers_restored_remote_evidence_without_resuming_or_submittin
         app.refresh_symmetry()
         await asyncio.gather(*tasks)
     asyncio.run(run())
-    assert events==(['recover','read'] if restored and remote else ['read'])
+    assert events==(['recover','read'] if restored and remote and not active else ['read'])
     assert c.setting('paused') is True and state.sx_error==''
 
 
