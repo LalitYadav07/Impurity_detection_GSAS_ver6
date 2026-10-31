@@ -129,7 +129,7 @@ def test_native_inspection_cannot_apply_a_previous_source_to_a_new_selection(tmp
         assert state.sx_has_context and app._symmetry_draft['source_id']=='raw'
 
 
-@pytest.mark.parametrize('change_during',['portfolio','grouping','duplicate_poll'])
+@pytest.mark.parametrize('change_during',['portfolio','grouping','duplicate_poll','duplicate_before_scheduled'])
 def test_experiment_change_during_refresh_reloads_instead_of_publishing_stale_results(tmp_path,monkeypatch,change_during):
     import asyncio
     import radar_pd_nova.symmetry_controller as controller
@@ -164,10 +164,13 @@ def test_experiment_change_during_refresh_reloads_instead_of_publishing_stale_re
         tasks=[]
         app._refinement_schedule=lambda coroutine,*args:tasks.append(asyncio.create_task(coroutine))
         app.refresh_symmetry()
+        if change_during=='duplicate_before_scheduled':
+            for _ in range(8):app.refresh_symmetry()
+            assert len(tasks)==1
         while tasks:
             pending=list(tasks);tasks.clear();await asyncio.gather(*pending)
     asyncio.run(run())
-    if change_during=='duplicate_poll':
+    if change_during in {'duplicate_poll','duplicate_before_scheduled'}:
         assert requested==['IPTS-1'] and published==[('IPTS-1','IPTS-1')]
     else:
         assert requested==['IPTS-1','IPTS-2']
@@ -237,8 +240,8 @@ def test_recipe_recovery_never_promotes_an_unqualified_or_setpoint_channel(tmp_p
     assert 'temperature' not in recipe_source(w,w.state['jobs']['job1']).get('metadata',{})
 
 
-@pytest.mark.parametrize('restored,remote',[(True,True),(False,True),(True,False)])
-def test_refresh_recovers_restored_remote_evidence_without_resuming_or_submitting(tmp_path,monkeypatch,restored,remote):
+@pytest.mark.parametrize('restored,remote,active',[(True,True,False),(False,True,False),(True,False,False),(True,True,True)])
+def test_refresh_recovers_restored_remote_evidence_without_resuming_or_submitting(tmp_path,monkeypatch,restored,remote,active):
     import asyncio
     import radar_pd_nova.symmetry_controller as controller
     from gpx_recipe.symmetry.campaign import Campaign
@@ -252,6 +255,7 @@ def test_refresh_recovers_restored_remote_evidence_without_resuming_or_submittin
     app._symmetry_display_identity=None
     app._refinement_store=lambda:None;app._symmetry_root=lambda:tmp_path
     c=Campaign(tmp_path/'campaign');c.set_setting('restored',restored);c.set_setting('paused',True)
+    app._model_active_campaigns={'campaign':(c,None)} if active else {}
     c.set_setting('template',{'scope':{'experiment':'IPTS-1'},'protocol':{'implementation_sha256':'old-worker'}})
     events=[]
     class ReadOnlyTransport:
@@ -261,6 +265,8 @@ def test_refresh_recovers_restored_remote_evidence_without_resuming_or_submittin
     original_recover=Campaign.recover
     def recover(campaign,t):
         assert t is transport and campaign.setting('paused') is True
+        if active:assert 'while this campaign continues' in state.sx_message
+        else:assert 'No new refinements are being submitted' in state.sx_message
         events.append('recover')
         return original_recover(campaign,t)
     monkeypatch.setattr(Campaign,'recover',recover)
@@ -315,3 +321,13 @@ def test_scan_navigation_is_bounded_and_never_changes_the_campaign():
     app.symmetry_adjacent_scan(1);assert state.sx_source=='second'
     app.symmetry_adjacent_scan(1);assert state.sx_source=='second'
     app.symmetry_adjacent_scan(-1);assert state.sx_source=='first' and state.sx_campaign=='original'
+
+
+def test_failed_refresh_scheduling_releases_the_pending_guard():
+    from radar_pd_nova.symmetry_controller import SymmetryMixin
+    app=SymmetryMixin();app._symmetry_loading=False
+    app.server=SimpleNamespace(state=SimpleNamespace(sx_campaign='campaign',rf_experiment='IPTS-1',sx_result_scope='experiment'))
+    def fail(*args):raise RuntimeError('Event loop unavailable')
+    app._refinement_schedule=fail
+    with pytest.raises(RuntimeError,match='Event loop unavailable'):app.refresh_symmetry()
+    assert app._symmetry_loading is False

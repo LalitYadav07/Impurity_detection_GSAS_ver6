@@ -1933,55 +1933,57 @@ class GalaxyService:
         inputs: dict[str, Any],
         associated_run_uid: str | None = None,
     ) -> UtilityActionRecord:
-        """Submit one deployed RADAR-PD companion tool with typed references."""
+        """Submit existing History references without starting an ingress job.
 
-        from nova.galaxy import Parameters, Tool
+        These inputs need no upload. The SDK's generic runner invokes its
+        ingestion tool even for an empty upload list, creating one unrelated
+        job and a background polling thread per model batch. Use the same
+        authenticated Galaxy tool endpoint directly and leave retries to the
+        caller's durable dispatch ledger.
+        """
 
-        with self._store() as store:
-            params = Parameters()
-            serialized_inputs: dict[str, Any] = {}
-            for parameter_name, value in inputs.items():
-                resolved = value
-                if (
-                    isinstance(value, list)
-                    and value
-                    and all(isinstance(item, dict) and item.get("dataset_id") for item in value)
-                ):
-                    dataset_ids = [str(item["dataset_id"]) for item in value]
-                    # Galaxy multiple-data parameters require a list of native
-                    # HDA references. Keep this as an ordinary Parameters value;
-                    # nova-galaxy's Dataset wrapper is only suitable for uploads.
-                    resolved = [{"src": "hda", "id": dataset_id} for dataset_id in dataset_ids]
-                    serialized_inputs[parameter_name] = [
-                        {"dataset_id": dataset_id} for dataset_id in dataset_ids
-                    ]
-                elif isinstance(value, dict) and value.get("dataset_id"):
-                    dataset_id = str(value["dataset_id"])
-                    # Utility tools receive existing History datasets, not new
-                    # uploads. Use Galaxy's native HDA reference here. The
-                    # nova-galaxy Dataset wrapper serializes an existing dataset
-                    # as a ``values`` list, which breaks scalar data parameters
-                    # nested inside conditionals (for example cif_archive).
-                    resolved = {"src": "hda", "id": dataset_id}
-                    serialized_inputs[parameter_name] = {"dataset_id": dataset_id}
-                elif isinstance(value, dict) and value.get("collection_id"):
-                    collection_id = str(value["collection_id"])
-                    # nova-galaxy only special-cases Dataset inputs. Passing its
-                    # DatasetCollection object through Parameters leaves that object
-                    # in the run_tool JSON payload and fails at serialization time.
-                    # Galaxy's public tool API accepts the native HDCA reference.
-                    resolved = {"src": "hdca", "id": collection_id}
-                    serialized_inputs[parameter_name] = {"collection_id": collection_id}
-                else:
-                    serialized_inputs[parameter_name] = value
-                params.add_input(name=parameter_name, value=resolved)
-            tool = Tool(id=tool_id)
-            tool.run(store, params, wait=False)
-            uid = self._wait_for_submission(tool)
-            if not uid:
-                raise RuntimeError(f"Galaxy did not acknowledge {name}")
-            with self._lock:
-                self._tools[uid] = tool
+        resolved_inputs: dict[str, Any] = {}
+        serialized_inputs: dict[str, Any] = {}
+        for parameter_name, value in inputs.items():
+            resolved = value
+            if (
+                isinstance(value, list)
+                and value
+                and all(isinstance(item, dict) and item.get("dataset_id") for item in value)
+            ):
+                dataset_ids = [str(item["dataset_id"]) for item in value]
+                resolved = [{"src": "hda", "id": dataset_id} for dataset_id in dataset_ids]
+                serialized_inputs[parameter_name] = [
+                    {"dataset_id": dataset_id} for dataset_id in dataset_ids
+                ]
+            elif isinstance(value, dict) and value.get("dataset_id"):
+                dataset_id = str(value["dataset_id"])
+                resolved = {"src": "hda", "id": dataset_id}
+                serialized_inputs[parameter_name] = {"dataset_id": dataset_id}
+            elif isinstance(value, dict) and value.get("collection_id"):
+                collection_id = str(value["collection_id"])
+                resolved = {"src": "hdca", "id": collection_id}
+                serialized_inputs[parameter_name] = {"collection_id": collection_id}
+            else:
+                serialized_inputs[parameter_name] = value
+            resolved_inputs[parameter_name] = resolved
+        response = requests.post(
+            f"{self.galaxy_url}/api/tools",
+            headers={**self._headers, "content-type": "application/json"},
+            json={"history_id": self.history_id, "tool_id": tool_id, "inputs": resolved_inputs},
+            timeout=60,
+            allow_redirects=False,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        jobs = payload.get("jobs") if isinstance(payload, dict) else None
+        if (not isinstance(jobs, list) or len(jobs) != 1
+                or not isinstance(jobs[0], dict) or not isinstance(jobs[0].get("id"), str)
+                or not jobs[0]["id"].strip()):
+            # A malformed acknowledgment is not proof that the POST failed.
+            # Do not retry here, especially for model/recipe dispatches.
+            raise RuntimeError("Galaxy did not acknowledge exactly one utility job; recover its dispatch before retrying")
+        uid = jobs[0]["id"]
         return UtilityActionRecord(
             uid=f"utility-{uuid.uuid4().hex}",
             tool_id=tool_id,

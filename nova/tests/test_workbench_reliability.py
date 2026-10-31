@@ -251,53 +251,28 @@ def test_every_companion_action_serializes_dataset_and_collection_references(
 ) -> None:
     submissions: list[tuple[str, dict[str, Any]]] = []
 
-    class Parameters:
-        def __init__(self) -> None:
-            self.values: dict[str, Any] = {}
+    class Response:
+        def raise_for_status(self):
+            pass
 
-        def add_input(self, *, name: str, value: Any) -> None:
-            self.values[name] = value
+        def json(self):
+            return {"jobs": [{"id": f"job-{len(submissions)}"}]}
 
-    class Dataset:
-        def __init__(self, path: str = "", name: str | None = None, **_: Any) -> None:
-            self.name = name
-            self.id = ""
-            self.store: Any = None
+    def post(url, **kwargs):
+        assert url == "https://example.invalid/api/tools"
+        assert kwargs["headers"]["x-api-key"] == "key"
+        assert kwargs["json"]["history_id"] == "history"
+        assert kwargs["allow_redirects"] is False
+        submissions.append((kwargs["json"]["tool_id"], kwargs["json"]["inputs"]))
+        return Response()
 
-    class DatasetCollection(Dataset):
-        pass
-
-    class Tool:
-        def __init__(self, id: str) -> None:
-            self.id = id
-            self.parameters: Parameters | None = None
-
-        def run(self, store: Any, params: Parameters, *, wait: bool) -> None:
-            assert wait is False
-            self.parameters = params
-            submissions.append((self.id, params.values))
-
-        def get_uid(self) -> str:
-            return f"job-{len(submissions)}"
-
-    nova = ModuleType("nova")
-    galaxy = ModuleType("nova.galaxy")
-    galaxy.Parameters = Parameters  # type: ignore[attr-defined]
-    galaxy.Tool = Tool  # type: ignore[attr-defined]
-    galaxy.Dataset = Dataset  # type: ignore[attr-defined]
-    galaxy.DatasetCollection = DatasetCollection  # type: ignore[attr-defined]
-    nova.galaxy = galaxy  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "nova", nova)
-    monkeypatch.setitem(sys.modules, "nova.galaxy", galaxy)
-
-    store = object()
-
-    @contextmanager
-    def fake_store():
-        yield store
+    monkeypatch.setattr("radar_pd_nova.galaxy_service.requests.post", post)
 
     service = GalaxyService("https://example.invalid", "key", "history", output_root=tmp_path)
-    service._store = fake_store  # type: ignore[method-assign]
+    def no_ingress():
+        raise AssertionError("Existing History references must not open the SDK upload/ingestion path")
+
+    service._store = no_ingress  # type: ignore[method-assign]
     cases = [
         (
             SNS_RESOLVER_TOOL_ID,
@@ -321,6 +296,12 @@ def test_every_companion_action_serializes_dataset_and_collection_references(
             RESULT_EXPLORER_TOOL_ID,
             {"result_source|source_kind": "archive", "result_source|results_archive": {"dataset_id": "archive"}},
         ),
+        (
+            "neutrons_radar_pd_model_campaign_prototype",
+            {"source_gpx": {"dataset_id": "gpx"}, "model_assets": {"dataset_id": "assets"},
+             "action": "chunk", "dispatch_key": "stable-key", "model_request_b64": "e30=",
+             "enabled": False, "selected": []},
+        ),
     ]
 
     for tool_id, inputs in cases:
@@ -329,6 +310,7 @@ def test_every_companion_action_serializes_dataset_and_collection_references(
         assert action.inputs == inputs
         assert action.associated_run_uid == "run"
         assert action.galaxy_job_id
+        assert action.status == RunStatus.QUEUED
 
     assert [tool_id for tool_id, _ in submissions] == [case[0] for case in cases]
     assert submissions[0][1]["source|event_file"] == {"src": "hda", "id": "event"}
@@ -339,6 +321,49 @@ def test_every_companion_action_serializes_dataset_and_collection_references(
     assert submissions[2][1]["gpx_index"] == {"src": "hda", "id": "index"}
     assert submissions[3][1]["summaries"] == {"src": "hdca", "id": "summaries"}
     assert submissions[4][1]["result_source|results_archive"] == {"src": "hda", "id": "archive"}
+    assert submissions[5][1]["enabled"] is False
+    assert submissions[5][1]["selected"] == []
+    assert submissions[5][1]["model_request_b64"] == "e30="
+    assert service._tools == {}  # no SDK background polling threads per batch
+
+
+@pytest.mark.parametrize("payload", [None, [], {}, {"jobs": []}, {"jobs": [{}]},
+    {"jobs": [{"id": 12}]}, {"jobs": [{"id": " "}]},
+    {"jobs": [{"id": "one"}, {"id": "two"}]}])
+def test_utility_uncertain_acknowledgment_never_reposts(tmp_path, monkeypatch, payload):
+    from types import SimpleNamespace
+
+    posts = []
+    def post(*args, **kwargs):
+        posts.append(kwargs)
+        return SimpleNamespace(raise_for_status=lambda: None, json=lambda: payload)
+    monkeypatch.setattr("radar_pd_nova.galaxy_service.requests.post", post)
+    service = GalaxyService("https://example.invalid", "key", "history", output_root=tmp_path)
+    with pytest.raises(RuntimeError, match="recover its dispatch before retrying"):
+        service.submit_utility(tool_id="model", name="search", inputs={"dispatch_key": "stable"})
+    assert len(posts) == 1
+
+
+@pytest.mark.parametrize("failure", ["timeout", "http", "json"])
+def test_utility_submission_failures_are_not_automatically_retried(tmp_path, monkeypatch, failure):
+    import requests
+    from types import SimpleNamespace
+
+    posts = []
+    def fail():
+        if failure == "timeout":raise requests.Timeout("Acknowledgment timed out")
+        if failure == "http":raise requests.HTTPError("Server failed after accepting request")
+        raise ValueError("Invalid acknowledgment JSON")
+    def post(*args, **kwargs):
+        posts.append(kwargs)
+        if failure == "timeout":fail()
+        return SimpleNamespace(raise_for_status=fail if failure == "http" else lambda: None,
+                               json=fail)
+    monkeypatch.setattr("radar_pd_nova.galaxy_service.requests.post", post)
+    service = GalaxyService("https://example.invalid", "key", "history", output_root=tmp_path)
+    with pytest.raises((requests.RequestException, ValueError)):
+        service.submit_utility(tool_id="model", name="search", inputs={"dispatch_key": "stable"})
+    assert len(posts) == 1
 
 
 def test_utility_refresh_exposes_outputs_and_result_explorer_entrypoint(

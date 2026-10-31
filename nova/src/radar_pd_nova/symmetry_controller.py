@@ -216,14 +216,20 @@ class SymmetryMixin(KSearchMixin):
             if (s.sx_campaign,s.rf_experiment,s.sx_result_scope)!=self._symmetry_loading_identity:
                 self._symmetry_refresh_pending=True;s.sx_results_current=False
             return
+        # Claim the refresh before scheduling it. Several ticks/UI events can
+        # arrive before the coroutine starts; only one may audit this ledger.
+        self._symmetry_loading=True
+        s=self.server.state
+        self._symmetry_loading_identity=(s.sx_campaign,s.rf_experiment,s.sx_result_scope)
         async def load():
-            self._symmetry_loading=True;s=self.server.state;s.sx_busy=True;s.sx_error=''
+            s=self.server.state;s.sx_busy=True;s.sx_error=''
             self._symmetry_loading_identity=(s.sx_campaign,s.rf_experiment,s.sx_result_scope)
             s.sx_results_current=getattr(self,'_symmetry_display_identity',None)==self._symmetry_loading_identity
             s.flush()
             try:
                 remote=self._model_remote()
-                s.sx_backend='Galaxy jobs · allocated CPU/RAM' if remote else 'Configured local scientific worker'
+                backend='Galaxy jobs · allocated CPU/RAM' if remote else 'Configured local scientific worker'
+                s.sx_backend=backend
                 if remote and not self._models_restored:
                     await asyncio.to_thread(restore_history,self._symmetry_root(),remote)
                     self._models_restored=True
@@ -242,11 +248,14 @@ class SymmetryMixin(KSearchMixin):
                     # Restored ledgers name terminal receipts before their
                     # Galaxy artifacts have been downloaded. Recover only
                     # existing jobs; refresh must never admit finite starts.
-                    s.sx_message='Recovering saved Galaxy results and checking their artifacts. No new refinements are being submitted.'
+                    coordinating=campaign.root.name in getattr(self,'_model_active_campaigns',{})
+                    s.sx_message=('Checking accepted Galaxy jobs and saved artifacts while this campaign continues.' if coordinating
+                        else 'Recovering saved Galaxy results and checking their artifacts. No new refinements are being submitted.')
                     s.flush()
                     await asyncio.to_thread(campaign.recover,self._symmetry_transport(campaign))
                 allocated=campaign.setting('allocation')
-                if allocated:s.sx_backend+=f" · last chunk: {allocated['workers']} native workers · {allocated.get('memory_mb') or 'unreported'} MiB memory"
+                if allocated:backend+=f" · last chunk: {allocated['workers']} native workers · {allocated.get('memory_mb') or 'unreported'} MiB memory"
+                s.sx_backend=backend
                 template=campaign.setting('template') or {}
                 visible=s.sx_result_scope!='experiment' or template.get('scope',{}).get('experiment')==s.rf_experiment
                 s.sx_enrollments=list(campaign.setting('enrollments',{}).values()) if visible else []
@@ -290,7 +299,11 @@ class SymmetryMixin(KSearchMixin):
                 self._symmetry_loading=False;s.sx_busy=False;s.flush()
                 if self._symmetry_refresh_pending:
                     self._symmetry_refresh_pending=False;self.refresh_symmetry()
-        self._refinement_schedule(load(),'radar-symmetry-refresh')
+        request=load()
+        try:self._refinement_schedule(request,'radar-symmetry-refresh')
+        except Exception:
+            self._symmetry_loading=False;request.close()
+            raise
 
     def _symmetry_source_data(self,source):
         rows=[r for r in self._symmetry_all_rows if r['source']==source]
