@@ -40,6 +40,16 @@ def test_future_following_adds_only_new_matching_scans_not_old_unselected(tmp_pa
     assert set(module.queue_sources(c,None))=={'selected','new'}
 
 
+def test_captured_scope_is_visible_before_all_native_trials_are_declared(monkeypatch):
+    monkeypatch.setattr(module,'trial_count',lambda template:912)
+    entries=[dict(status='enrolled')]*4+[dict(status='preparing')]+[dict(status='queued')]*51+[dict(status='needs_review')]
+    label=module.scope_progress({'protocol':{'reviewed':True}},entries)
+    assert '57 captured scans' in label and '4 prepared' in label
+    assert '52 awaiting preparation' in label and '1 need review' in label
+    assert '51,984 starts before per-scan compatibility checks' in label
+    assert module.scope_progress({},[])==''
+
+
 def test_budget_stops_following_with_visible_reason(tmp_path,monkeypatch):
     c,rows=setup(tmp_path,monkeypatch);t=c.setting('template');t['maximum_scans']=1;c.set_setting('template',t)
     assert set(module.queue_sources(c,None))=={'selected'}
@@ -472,6 +482,69 @@ def test_galaxy_driver_flushes_one_durable_wave_before_its_acknowledgment_checkp
     asyncio.run(app._drive_symmetry_campaign(C(),T()))
     assert events==['begin']+['stage']*8+['durable-before-post','ack']
     assert sum(r['state']=='running' for r in rows)==8
+
+
+def test_slow_checkpoint_keeps_collecting_finished_jobs_without_new_dispatch(tmp_path):
+    import threading
+    released=threading.Event();events=[]
+    class C:
+        def tick(self,transport,**kwargs):
+            assert isinstance(transport,CollectOnlyTransport)
+            assert transport.max_active_jobs==0
+            events.append('accepted result collected');released.set()
+    app=SymmetryMixin();app._model_checkpoint_poll_seconds=.001
+    app.server=SimpleNamespace(state=SimpleNamespace(sx_slots=2))
+    app.refresh_symmetry=lambda:events.append('result displayed')
+    def checkpoint():
+        assert released.wait(2)
+        events.append('checkpoint ready');return 'owned-checkpoint'
+    async def run():
+        task=asyncio.create_task(asyncio.to_thread(checkpoint))
+        return await app._await_model_checkpoint_work(task,C(),SimpleNamespace())
+    assert asyncio.run(run())=='owned-checkpoint'
+    assert events[0]=='accepted result collected'
+    assert sorted(events)==sorted(['accepted result collected','result displayed','checkpoint ready'])
+
+
+def test_pending_checkpoint_wait_is_recoverable_without_pausing_or_duplicate_posts(tmp_path,monkeypatch):
+    import json
+    import radar_pd_nova.symmetry_controller as controller
+    from radar_pd_nova.checkpoint_uploads import CheckpointUploadPending
+    settings={};events=[];rows=[dict(id='new',state='prepared')]
+    class C:
+        root=tmp_path/'pending-checkpoint'
+        def setting(self,k,d=None):return settings.get(k,d)
+        def set_setting(self,k,v):settings[k]=v
+        def trials(self):return rows
+        def tick(self,transport,**kwargs):
+            if isinstance(transport,CollectOnlyTransport):return rows
+            if rows[0]['state']=='prepared':
+                rows[0].update(state='running',handle=json.dumps(dict(dispatch_key='new')))
+            return rows
+    class T(GalaxyChunkTransport):
+        max_active_jobs=1
+        def __init__(self):self.attempts=0
+        def begin_dispatch_wave(self):pass
+        def flush_dispatch_wave(self):
+            self.attempts+=1
+            if self.attempts==1:
+                rows[0]['state']='prepared'
+                raise CheckpointUploadPending('owned-hda','queued')
+            events.append('POST once');settings['paused']=True
+        def abort_dispatch_wave(self):events.append('unposted wave recovered')
+        def checkpoint(self,**kwargs):events.append('acknowledgment saved')
+        def pause(self):raise AssertionError('A queued checkpoint must not pause accepted work')
+    original_sleep=asyncio.sleep
+    async def short_sleep(seconds):await original_sleep(0)
+    monkeypatch.setattr(controller.asyncio,'sleep',short_sleep)
+    app=SymmetryMixin();app._model_active_campaigns={};app._model_stopping=False
+    app._refinement_store=lambda:None;app.refresh_symmetry=lambda:None
+    app.server=SimpleNamespace(state=SimpleNamespace(sx_slots=2,flush=lambda:None))
+    asyncio.run(app._drive_symmetry_campaign(C(),T()))
+    assert events==['unposted wave recovered','POST once','acknowledgment saved']
+    assert settings['checkpoint_notice']==''
+    assert not app._model_checkpoint_errors
+    assert not app.server.state.sx_campaign_running
 
 
 def test_canceling_driver_waits_for_its_shielded_flush_before_aborting(tmp_path):

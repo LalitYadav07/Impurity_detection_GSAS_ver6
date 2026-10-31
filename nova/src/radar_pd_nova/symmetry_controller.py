@@ -32,7 +32,8 @@ from . import symmetry_plots as plots
 from .symmetry_sources import start_choices,resolve_start,acquisition_details
 from .k_search_controller import KSearchMixin
 from .model_runtime import GalaxyModelRuntime,GalaxyChunkTransport,CollectOnlyTransport,PreparationSlotTransport,active_batch_count,MODEL_BATCH_LIMITS
-from .model_campaigns import choices as model_choices,origin as model_origin,queue_sources,enroll_source,restore_history,portable_source,restore_captured_sources
+from .checkpoint_uploads import CheckpointUploadPending
+from .model_campaigns import choices as model_choices,origin as model_origin,queue_sources,enroll_source,restore_history,portable_source,restore_captured_sources,scope_progress
 from gpx_recipe.symmetry.compiler import prepare_shared_inputs
 from gpx_recipe.symmetry.templates import make_template,trial_count
 
@@ -53,7 +54,7 @@ class SymmetryMixin(KSearchMixin):
             sx_parent='',sx_parents=[],sx_histogram='',sx_histograms=[],sx_k='',sx_sites=[],sx_site_options=[],sx_form_factors='',sx_lande='',sx_directions=['x','y','z'],sx_adequate=None,sx_max_moment='',sx_cycles=20,sx_slots=2,sx_moment_model='collinear',sx_refine_scale=False,sx_refine_background=False,
             sx_kind='magnetic',sx_mag_d_min=0.,sx_max_mode=.5,sx_start_mode=.1,sx_candidate_options=[],sx_candidates=[],sx_mode_options=[],sx_modes=[],sx_discovered=False,sx_discovery_scope='',
             sx_plan_ready=False,sx_approved=False,sx_plan_summary='',sx_plan_candidates=[],sx_setup=False,sx_expanded=False,sx_expanded_layout={},sx_has_context=False,sx_has_gpx=False,sx_has_receipt=False,sx_resumable=False,
-            sx_request='',sx_planning_summary='',sx_planning_notes=[],sx_planning_usage='',sx_planning_cost='',sx_sign_starts=True,sx_coverage=[],sx_group_limit=12,sx_result_scope='experiment',sx_start_source='',sx_start_sources=[],sx_results_current=False)
+            sx_request='',sx_planning_summary='',sx_planning_notes=[],sx_planning_usage='',sx_planning_cost='',sx_sign_starts=True,sx_coverage=[],sx_group_limit=12,sx_result_scope='experiment',sx_start_source='',sx_start_sources=[],sx_results_current=False,sx_scope_progress='')
         for key,value in defaults.items():setattr(s,key,value)
         extra=dict(sx_existing='selected',sx_follow_new=False,sx_max_scans=200,sx_enrollments=[],sx_following=False,sx_campaign_running=False,sx_parallel_jobs=1,
             sx_queue_notice='',sx_backend='',sx_plan_token='',sx_cancel_notice='Cancelling a Galaxy chunk stops all starts in that job.',
@@ -262,8 +263,9 @@ class SymmetryMixin(KSearchMixin):
                 template=campaign.setting('template') or {}
                 visible=s.sx_result_scope!='experiment' or template.get('scope',{}).get('experiment')==s.rf_experiment
                 s.sx_enrollments=list(campaign.setting('enrollments',{}).values()) if visible else []
+                s.sx_scope_progress=scope_progress(template,s.sx_enrollments)
                 s.sx_following=bool(campaign.setting('following',False)) and not campaign.setting('paused',False)
-                s.sx_queue_notice=campaign.setting('dispatch_notice','') or campaign.setting('preparation_message','') or campaign.setting('budget_message','')
+                s.sx_queue_notice=campaign.setting('checkpoint_notice','') or campaign.setting('dispatch_notice','') or campaign.setting('preparation_message','') or campaign.setting('budget_message','')
                 if campaign.setting('paused',False):s.sx_queue_notice='Campaign paused. Submitted Galaxy jobs continue independently; Continue recovers them before new starts.'
                 identity=(s.sx_campaign,s.rf_experiment,s.sx_result_scope)
                 self._symmetry_loading_identity=identity
@@ -656,6 +658,26 @@ class SymmetryMixin(KSearchMixin):
             finally:s.sx_busy=False;s.flush()
         self._symmetry_task=self._refinement_schedule(run(),'radar-symmetry-campaign')
 
+    async def _await_model_checkpoint_work(self,task,campaign,transport):
+        """Keep collecting accepted work while a durable upload/POST settles.
+
+        This pass cannot dispatch. A slow recovery checkpoint must hold new
+        admission, rather than hiding already finished scientific results.
+        The shielded owner still settles before cancellation can abort a wave.
+        """
+        while True:
+            done,_=await asyncio.wait({task},timeout=getattr(self,'_model_checkpoint_poll_seconds',3.))
+            if done:return await asyncio.shield(task)
+            await asyncio.to_thread(campaign.tick,CollectOnlyTransport(transport),slots=int(self.server.state.sx_slots))
+            self.refresh_symmetry()
+
+    def _model_checkpoint_pending(self,campaign,error):
+        self._model_checkpoint_errors[campaign.root.name]=error
+        campaign.set_setting('checkpoint_notice',
+            f'Recovery checkpoint {error.dataset_id} is still {error.state}. '
+            'Accepted jobs continue and their results are collected. New batches wait for the existing upload; no replacement is posted while it is pending.')
+        self.refresh_symmetry()
+
     async def _drive_symmetry_campaign(self,campaign,transport):
         preparation=None
         self._model_active_campaigns[campaign.root.name]=(campaign,transport)
@@ -717,6 +739,7 @@ class SymmetryMixin(KSearchMixin):
                 wave=max(1,getattr(tick_transport,'max_active_jobs',1))
                 buffered=isinstance(transport,GalaxyChunkTransport)
                 if buffered:transport.begin_dispatch_wave()
+                checkpoint_pending=False
                 try:
                     for _ in range(wave):
                         self._model_tick_task=asyncio.create_task(asyncio.to_thread(campaign.tick,tick_transport,slots=int(self.server.state.sx_slots)))
@@ -730,7 +753,15 @@ class SymmetryMixin(KSearchMixin):
                         campaign.set_setting('dispatch_notice','Saving queued batch recovery state before submitting new Galaxy jobs.')
                         self.refresh_symmetry()
                         self._model_tick_task=asyncio.create_task(asyncio.to_thread(transport.flush_dispatch_wave))
-                        await asyncio.shield(self._model_tick_task)
+                        await self._await_model_checkpoint_work(self._model_tick_task,campaign,transport)
+                except CheckpointUploadPending as exc:
+                    # flush_dispatch_wave retains proof that its aborted wave
+                    # made no POST. Recover those exact starts on the next
+                    # collection pass; a queued metadata job is not a failed
+                    # scientific campaign and must not pause its transport.
+                    if buffered:transport.abort_dispatch_wave()
+                    self._model_checkpoint_pending(campaign,exc)
+                    checkpoint_pending=True
                 except BaseException:
                     if buffered:
                         # Shielded thread work can outlive cancellation of its
@@ -745,7 +776,18 @@ class SymmetryMixin(KSearchMixin):
                     raise
                 finally:
                     if buffered:campaign.set_setting('dispatch_notice','')
-                if isinstance(transport,GalaxyChunkTransport):await asyncio.to_thread(transport.checkpoint)
+                if checkpoint_pending:
+                    if campaign.setting('paused',False):break
+                    await asyncio.sleep(3)
+                    continue
+                if isinstance(transport,GalaxyChunkTransport):
+                    try:
+                        self._model_tick_task=asyncio.create_task(asyncio.to_thread(transport.checkpoint))
+                        await self._await_model_checkpoint_work(self._model_tick_task,campaign,transport)
+                    except CheckpointUploadPending as exc:self._model_checkpoint_pending(campaign,exc)
+                    else:
+                        self._model_checkpoint_errors.pop(campaign.root.name,None)
+                        campaign.set_setting('checkpoint_notice','')
                 self.refresh_symmetry()
                 queued=any(r['status'] in {'queued','preparing'} for r in campaign.setting('enrollments',{}).values())
                 pending=any(r['state'] not in {'terminal','cancelled','needs_recovery'} for r in trials)

@@ -246,8 +246,17 @@ def _h5dump_snapshot(path: Path, dataset: str) -> _Snapshot | None:
     )
 
 
+def _h5py_available() -> bool:
+    """Select the installed reader once per request, not by file-read outcome."""
+    try:
+        import h5py  # noqa: F401
+    except (ImportError, OSError, ValueError):
+        return False
+    return True
+
+
 def _h5py_snapshot(path: Path, dataset: str) -> _Snapshot | None:
-    """Developer fallback used only when h5dump is unavailable."""
+    """Read one named, bounded metadata dataset without a CLI process."""
 
     try:
         import h5py  # type: ignore
@@ -283,7 +292,11 @@ def _h5py_snapshot(path: Path, dataset: str) -> _Snapshot | None:
 
 
 def _first_snapshot(path: Path, candidates: Iterable[str]) -> _Snapshot | None:
-    reader = _h5dump_snapshot if shutil.which("h5dump") else _h5py_snapshot
+    # NOVA ships h5py. Spawning h5dump separately for every optional alias and
+    # scalar makes an all-scan replay wait for hundreds of processes before
+    # submitting its first job. Retain the CLI for environments without h5py,
+    # but never retry a damaged/absent native dataset through another backend.
+    reader = _h5py_snapshot if _h5py_available() else _h5dump_snapshot
     for dataset in candidates:
         snapshot = reader(path, dataset)
         if snapshot is not None:

@@ -132,6 +132,7 @@ def model_exploration(app):
                     v.VBtn('Start approved campaign',click=(app.start_symmetry_campaign,form),disabled=('!sx_approved || sx_busy || sx_campaign_running',),variant='flat',color='#15543c')
                 html.P('Each start uses a fresh native process. Galaxy jobs share immutable inputs and batch independent starts within allocated CPU/RAM. Missing allocation information limits the pool to one worker. Model calls run only during setup.',classes='rf-notice')
                 html.P('Structural fit comparisons require a matched parent/nuisance refinement. A lower Rwp alone does not establish a transition.',v_if="sx_kind === 'structural'",classes='rf-notice')
+        html.P('{{ sx_scope_progress }}',v_if='sx_results_current && !!sx_scope_progress',classes='rf-notice')
         html.Div('{{ sx_progress }}',v_if='sx_results_current && !!sx_progress',classes='sx-status')
         html.P('Starts assigned to a batch share a Galaxy job after its recovery checkpoint is ready. Jobs can be queued or running. The native worker count is reported after the first batch; it is separate from the number of starts.',
             v_if='sx_results_current && sx_campaign_running',classes='rf-notice')

@@ -20,6 +20,35 @@ def test_h5dump_numeric_snapshot_requests_roundtrip_precision(monkeypatch, tmp_p
     assert snapshot.values == (29.334920630000001,)
 
 
+def test_full_metadata_prefers_bounded_native_reads_even_when_cli_is_installed(tmp_path,monkeypatch):
+    from radar_pd_nova import powgen_metadata
+    path=tmp_path/'raw.h5'
+    with h5py.File(path,'w') as handle:
+        handle.create_dataset('/entry/title',data=[b'Native metadata replay'])
+        value=handle.create_dataset('/entry/DASlogs/BL11A:SE:SampleTemp/average_value',data=[143.3])
+        value.attrs['units']='K'
+        handle.create_dataset('/entry/bank1_events/event_id',shape=(10_000_000,),dtype='i8')
+    monkeypatch.setattr(powgen_metadata.shutil,'which',lambda _: '/usr/bin/h5dump')
+    def no_cli(*args,**kwargs):raise AssertionError('Installed h5py must avoid metadata subprocesses')
+    monkeypatch.setattr(powgen_metadata.subprocess,'run',no_cli)
+    result=read_powgen_scan_metadata('IPTS-1',42,nexus_path=path)
+    assert result['run_title']=='Native metadata replay'
+    assert result['temperature']['value']==143.3
+
+
+def test_reader_fallback_is_only_for_unavailable_h5py_not_missing_data(tmp_path,monkeypatch):
+    from radar_pd_nova import powgen_metadata
+    calls=[]
+    monkeypatch.setattr(powgen_metadata,'_h5dump_snapshot',lambda path,key: calls.append(key) or powgen_metadata._Snapshot(key,text='CLI'))
+    monkeypatch.setattr(powgen_metadata,'_h5py_available',lambda:False)
+    assert powgen_metadata._first_snapshot(tmp_path/'raw.h5',['/entry/title']).text=='CLI'
+    assert calls==['/entry/title']
+    monkeypatch.setattr(powgen_metadata,'_h5py_available',lambda:True)
+    monkeypatch.setattr(powgen_metadata,'_h5py_snapshot',lambda *args:None)
+    assert powgen_metadata._first_snapshot(tmp_path/'raw.h5',['/entry/title']) is None
+    assert calls==['/entry/title']
+
+
 def test_reads_bounded_powgen_nexus_conditions(tmp_path: Path) -> None:
     nexus = tmp_path / "PG3_63716.nxs.h5"
     with h5py.File(nexus, "w") as handle:

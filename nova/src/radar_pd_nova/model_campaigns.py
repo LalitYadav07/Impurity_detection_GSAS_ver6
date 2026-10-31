@@ -1,15 +1,27 @@
 """Explicit model campaign enrollment, independent of the visible UI selection."""
 import copy
 import json
+from collections import Counter
 from pathlib import Path
 import shutil
 from contextlib import nullcontext
 
 from gpx_recipe.symmetry.compiler import assets,confined,file_sha
 from gpx_recipe.symmetry.contracts import digest
-from gpx_recipe.symmetry.templates import matches,rebind,validate_template
+from gpx_recipe.symmetry.templates import matches,rebind,validate_template,trial_count
 from gpx_recipe.execution import write_json
 from .symmetry_sources import start_choices,resolve_start,recipe_source
+
+
+def scope_progress(template,entries):
+    """Keep the reviewed total visible while individual scans enter the ledger."""
+    if not entries:return ''
+    counts=Counter(entry['status'] for entry in entries)
+    label=(f"{len(entries)} captured scans · {counts['enrolled']} prepared · "
+           f"{counts['queued']+counts['preparing']} awaiting preparation · {counts['needs_review']} need review.")
+    if template.get('protocol'):
+        label+=f" Reviewed budget: {len(entries)*trial_count(template):,} starts before per-scan compatibility checks."
+    return label
 
 
 def portable_source(source):

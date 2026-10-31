@@ -508,7 +508,8 @@ def _cached_read(path, size, mtime, instrument, window_json, bindings_json, back
         "notices": [],
     }
     try:
-        use_native = backend == "h5dump" or (backend is None and shutil.which("h5dump"))
+        from .powgen_metadata import _h5py_available
+        use_native = backend == "h5dump" or (backend is None and not _h5py_available())
         data = (_read_native if use_native else _read_h5py)(path, keys)
         requested_window = json.loads(window_json)
         window = requested_window or {

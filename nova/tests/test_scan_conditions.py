@@ -109,6 +109,16 @@ def test_h5py_named_reads_and_returned_receipts_are_independent(tmp_path):
     json.dumps(result, allow_nan=False)
 
 
+def test_automatic_conditions_reader_avoids_cli_and_matches_explicit_native(tmp_path,monkeypatch):
+    from radar_pd_nova import scan_conditions
+    path=tmp_path/'automatic-reader.h5';write_nexus(path)
+    def no_cli(*args,**kwargs):raise AssertionError('Automatic conditions must use installed h5py')
+    monkeypatch.setattr(scan_conditions,'_read_native',no_cli)
+    explicit=read_conditions(path,'PG3',backend='h5py')
+    automatic=read_conditions(path,'PG3')
+    assert automatic==explicit
+
+
 def test_conflicting_devices_never_choose_nonzero_or_larger_value(tmp_path):
     path = tmp_path / "raw.h5"
     write_nexus(path)
