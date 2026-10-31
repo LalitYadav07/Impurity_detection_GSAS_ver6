@@ -16,9 +16,11 @@ RUN apt-get update \
 COPY src /src/src
 # Serve the versioned guide through the same path-prefixed NDIP endpoint as NOVA.
 COPY help /app/www-content/user-guide/
-# The pinned runtime uses Python 3.10 and does not contain SciPy. Keep the
-# measured-pattern engine reproducible without upgrading the NOVA stack.
+# The pinned runtime uses Python 3.10. Install the numerical/metadata readers
+# explicitly: the application install intentionally skips dependency resolution.
+# The h5py wheel reuses the existing NumPy; it must not upgrade the NOVA stack.
 RUN python -m pip install --no-cache-dir 'scipy==1.15.3' \
+    && python -m pip install --no-cache-dir --no-deps --only-binary=:all: 'h5py==3.13.0' \
     && python -m pip install --no-cache-dir --no-deps 'RapidFuzz==3.14.3' \
     && python -m pip install --no-cache-dir --no-deps /src \
     && python -m compileall -q /src/src/radar_pd_nova

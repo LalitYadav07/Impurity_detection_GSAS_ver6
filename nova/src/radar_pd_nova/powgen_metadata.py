@@ -2,9 +2,10 @@
 
 The live monitor remains read-only with respect to the IPTS. Only small,
 explicit metadata datasets are read; detector event arrays are never visited.
-Deployed NOVA images use the native ``h5dump`` command so their Python/NumPy
-environment is not changed. Tests and developer environments may use h5py as
-a compatible fallback.
+Sample discovery uses the installed h5py reader to open each file once.
+The bounded ``h5dump`` reader remains available for environments without a
+compatible h5py installation. Full scan-condition readers retain their own
+bounded HDF5 access paths.
 """
 
 from __future__ import annotations
@@ -58,16 +59,32 @@ def _sample_identifier_number(raw: str) -> str:
     return str(int(value)) if value == value.to_integral_value() else format(value.normalize(), "f")
 
 
-def read_powgen_sample_identity(ipts: str, run_number: int, *, nexus_path=None, instrument="PG3") -> dict[str, Any]:
+def read_powgen_sample_identity(ipts: str, run_number: int, *, nexus_path=None, instrument="PG3", backend="auto") -> dict[str, Any]:
     """Read bounded sample identity fields, never detector event data."""
 
+    if backend not in {"auto", "h5py", "h5dump"}:
+        raise ValueError("Choose auto, h5py or h5dump for the identity reader")
+    h5py = None
+    if backend != "h5dump":
+        try:
+            import h5py as native_h5py
+        except (ImportError, OSError, ValueError):
+            # This fallback concerns loading the reader itself. An invalid or
+            # changing file below must never be retried through another reader
+            # that could erase a source-identity conflict.
+            if backend == "h5py":
+                raise
+        else:
+            h5py = native_h5py
+    executable = shutil.which("h5dump") if h5py is None else None
+    if executable is None and h5py is None:
+        raise ImportError("No compatible bounded HDF5 identity reader is available")
     path = Path(nexus_path) if nexus_path is not None else powgen_nexus_path(ipts, run_number)
     fields = (*_SAMPLE_ID_PATHS, "/entry/sample/name", "/entry/run_number", "/entry/experiment_identifier", "/entry/instrument/name")
     numeric_fields = (*_SAMPLE_ID_PATHS, "/entry/run_number")
     before = path.stat()
     values: dict[str, str] = {}
     identity_observations: dict[str, list[str]] = {}
-    executable = shutil.which("h5dump")
     if executable:
         # Request only named sample fields. Missing aliases do not invalidate
         # fields which h5dump successfully returned in the same invocation.
@@ -125,8 +142,6 @@ def read_powgen_sample_identity(ipts: str, run_number: int, *, nexus_path=None, 
                     if len(tokens)>1000:raise ValueError('Sample identity log exceeds the bounded identity limit')
                     identity_observations[field] = [_sample_identifier_number(v) for v in tokens]
     else:
-        import h5py  # type: ignore
-
         with h5py.File(path, "r") as handle:
             for field in fields:
                 dataset = handle.get(field)

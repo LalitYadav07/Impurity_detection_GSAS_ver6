@@ -102,6 +102,14 @@ jobs:
           ' > "${RUNNER_TEMP}/nova-upload-handlers.json"
           node nova/tests/client_upload.test.js "${RUNNER_TEMP}/nova-upload-handlers.json"
 
+      - name: Verify packaged native and CLI sample-identity readers
+        shell: bash
+        run: |
+          docker run --rm --entrypoint python \
+            -v "$PWD/nova/tests/verify_sample_identity.py:/tmp/verify_sample_identity.py:ro" \
+            "${IMAGE_NAME}:nova-${NOVA_VERSION}" \
+            /tmp/verify_sample_identity.py
+
       - name: Verify packaged User guide and NDIP session routes
         shell: bash
         run: |
