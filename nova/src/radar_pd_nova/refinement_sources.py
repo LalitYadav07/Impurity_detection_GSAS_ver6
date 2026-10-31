@@ -169,7 +169,7 @@ def source_from_record(record, payload: dict, scan: dict | None, history: str,
     # history records often have no live-watch row or recoverable input contract.
     for key in ('instrument','run_number','sample_id','sample_name'):
         if acquisition.get(key) is not None:metadata.setdefault(key,acquisition[key])
-    for key in ('source_bank','instrument'):
+    for key in ('source_bank','instrument','product_id','product_kind','member_runs'):
         if provenance_input.get(key) is not None:metadata.setdefault(key,provenance_input[key])
     metadata.update(scan.get('metadata') or {})
     scan={**dict(run_number=getattr(selection,'run_number',None),bank=getattr(selection,'bank',''),instrument=getattr(selection,'instrument',''),ipts=getattr(selection,'ipts','')),**scan}
@@ -179,12 +179,15 @@ def source_from_record(record, payload: dict, scan: dict | None, history: str,
     if not ipts:
         # A recovered Live job can have a Galaxy data input and no saved
         # ndip_delivery block. Accept only the unambiguous run-name contract.
-        match=re.fullmatch(r'(IPTS-\d+)_([A-Za-z][A-Za-z0-9]*)_(\d+)(?:_BANK(\d+)(?:_[a-f0-9]{8,64})?)?',str(record.name))
+        match=re.fullmatch(r'(IPTS-\d+)_([A-Za-z][A-Za-z0-9]*)_(\d+)(?:_(SLICE_[0-9]+(?:P[0-9]+)?|SUM_[A-F0-9]{12}))?(?:_BANK(\d+)(?:_[a-f0-9]{8,64})?)?',str(record.name))
         known_bank=scan.get('bank') or metadata.get('source_bank') or metadata.get('bank')
-        bank_agrees=match and (not match.group(4) or not known_bank or str(known_bank)==match.group(4))
-        if match and bank_agrees and instrument.upper()==match.group(2).upper() and str(run_number or '')==match.group(3):
+        bank_agrees=match and (not match.group(5) or not known_bank or str(known_bank)==match.group(5))
+        known_product=scan.get('product_id') or metadata.get('product_id')
+        product_agrees=match and (not match.group(4) or (instrument.upper()=='NOM' and (not known_product or known_product==match.group(4))))
+        if match and bank_agrees and product_agrees and instrument.upper()==match.group(2).upper() and str(run_number or '')==match.group(3):
             ipts=match.group(1)
-            if match.group(4):metadata.setdefault('source_bank',int(match.group(4)))
+            if match.group(5):metadata.setdefault('source_bank',int(match.group(5)))
+            if match.group(4):metadata.setdefault('product_id',match.group(4))
     exp = experiment_key(history, instrument, ipts, record_uid=record.uid)
     sample_id = str(metadata.get('sample_id') or '').strip()
     sample_name = str(metadata.get('sample_name') or '').strip()
@@ -192,9 +195,13 @@ def source_from_record(record, payload: dict, scan: dict | None, history: str,
     scan_sample_label = str(scan.get('sample_label') or '').strip()
     if scan_sample_label.lower() in {'unassigned sample', 'sample not identified'}:
         scan_sample_label = ''
-    run_id = str(scan.get('run_id') or (f'{instrument}_{run_number}' if run_number else record.uid))
+    product_id=scan.get('product_id') or metadata.get('product_id')
+    if product_id and (instrument!='NOM' or not isinstance(product_id,str) or
+            not re.fullmatch(r'SLICE_[0-9]+(?:P[0-9]+)?|SUM_[A-F0-9]{12}',product_id)):
+        raise ValueError('Unsupported or conflicting derived-product identity')
+    run_id = str(scan.get('run_id') or (f'{instrument}_{run_number}'+('_'+product_id if product_id else '') if run_number else record.uid))
     bank = str(scan.get('bank') or metadata.get('source_bank') or metadata.get('bank') or '')
-    scan_key = digest([exp,scan.get('experiment_number'),run_number or record.uid,bank])[:24]
+    scan_key = digest([exp,scan.get('experiment_number'),run_number or record.uid,bank,*([product_id] if product_id else [])])[:24]
     publication = str(project.get('collection_name') or Path(str(project.get('collection_path') or project.get('path') or '')).name)
     # Watch metadata can arrive after the archive. It must not create a second
     # source identity or enroll the same published result a second time.

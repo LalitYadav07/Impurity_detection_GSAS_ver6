@@ -68,15 +68,14 @@ class PowgenExperimentSettings:
     retry_max_seconds: int = 300
     selected_sample_ids: tuple[str, ...] | None = None
     selected_banks: tuple[int, ...] | None = None
-    excluded_run_numbers: tuple[int, ...] = ()
+    excluded_run_numbers: tuple[int | str, ...] = ()
     include_background_runs: bool = False
     include_ramp_runs: bool = False
     instrument: str = "PG3"
 
     def __post_init__(self) -> None:
-        if any(isinstance(n, bool) or not isinstance(n, int) or n <= 0 for n in self.excluded_run_numbers):
-            raise ValueError("Excluded run numbers must be positive integers")
-        object.__setattr__(self, "excluded_run_numbers", tuple(sorted(set(self.excluded_run_numbers))))
+        from .powgen_watch import normalize_exclusions
+        object.__setattr__(self, "excluded_run_numbers", normalize_exclusions(self.excluded_run_numbers,self.instrument))
         if self.selected_banks is not None:
             banks = tuple(sorted(set(self.selected_banks)))
             if not banks or any(isinstance(b, bool) or not isinstance(b, int) or b <= 0 for b in banks):
@@ -507,6 +506,7 @@ class PowgenWatchController:
             self._flag_powgen_revisions(completed_rows, checkpoint=checkpoint)
         if not self.state.initial_backfill_complete:
             available = discover_from_listing(self.definition, completed_rows)
+            self._remember_startup_sources(available)
             if available:
                 self._startup_run_floor = max(run.run_number for run in available)
             limit = self.settings.initial_backfill_limit
@@ -532,9 +532,23 @@ class PowgenWatchController:
                 self.persist_state()
             return discovered
 
-        discovered = discover_from_listing(
+        discovered = self._subsequent_discoveries(completed_rows)
+        discovered = self._remember_discoveries(self._expand_banks(self._matching_samples(discovered)))
+        discovered = self._attach_scan_metadata(discovered)
+        if discovered:
+            self._last_seen_run_number = max(
+                self._last_seen_run_number or 0,
+                *(run.run_number for run in discovered),
+            )
+        return discovered
+
+    def _remember_startup_sources(self, runs):
+        """Beamlines with derived-product IDs may persist their startup baseline."""
+
+    def _subsequent_discoveries(self, rows):
+        return discover_from_listing(
             self.definition,
-            completed_rows,
+            rows,
             minimum_run_number=max(
                 1,
                 (self._last_seen_run_number or 0) - self.settings.late_arrival_window,
@@ -545,14 +559,6 @@ class PowgenWatchController:
                 ),
             ),
         )
-        discovered = self._remember_discoveries(self._expand_banks(self._matching_samples(discovered)))
-        discovered = self._attach_scan_metadata(discovered)
-        if discovered:
-            self._last_seen_run_number = max(
-                self._last_seen_run_number or 0,
-                *(run.run_number for run in discovered),
-            )
-        return discovered
 
     def _refresh_incomplete_discoveries(self, rows, *, checkpoint=True):
         """Replace an unsubmitted parse-error placeholder when writing finishes.
@@ -696,7 +702,7 @@ class PowgenWatchController:
             if run.source_path not in by_source:
                 by_source[run.source_path] = self._read_scan_metadata(run)
             metadata = {**by_source[run.source_path], **dict(run.scan_metadata or {})}
-            if hasattr(self.sample_index, 'metadata_index'):
+            if hasattr(self.sample_index, 'metadata_index') and not run.product_id:
                 metadata.update(self.sample_index.metadata_index.enrich(run.run_number, metadata))
             metadata.update(run_role(run))
             updated = replace(run, scan_metadata=metadata) if metadata else run

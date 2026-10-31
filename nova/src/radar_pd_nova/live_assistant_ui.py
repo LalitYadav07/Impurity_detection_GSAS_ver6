@@ -159,7 +159,7 @@ class LiveAssistantUi:
                 self._assistant_select("When monitoring starts", "powgen_backfill_mode", "powgen_backfill_options")
                 vuetify.VCheckbox(label="Include background / empty scans", v_model=("powgen_include_background",), density="compact", disabled=(LOCK,))
                 vuetify.VCheckbox(label="Include ramp / cooling scans", v_model=("powgen_include_ramps",), density="compact", disabled=(LOCK,))
-                vuetify.VAutocomplete(label="Exclude individual runs", v_model=("powgen_excluded_runs",),
+                vuetify.VAutocomplete(label="Exclude runs or reduced products", v_model=("powgen_excluded_runs",),
                                       items=("powgen_run_options.filter(r => powgen_processing_scope === 'all' || powgen_processing_sample_ids.includes(r.sample_id))",),
                                       item_title="title", item_value="value", multiple=True, chips=True,
                                       density="compact", variant="outlined", disabled=(LOCK,))

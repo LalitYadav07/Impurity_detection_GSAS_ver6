@@ -7,7 +7,7 @@ from pathlib import Path
 from . import nomad
 from .acquisition import acquisition_context
 from .models import InputSelection, InputSource
-from .nomad_metadata import NomadSampleIndex, read_nomad_scan_metadata
+from .nomad_metadata import NomadSampleIndex, read_nomad_scan_metadata, read_nomad_product_metadata
 from .powgen_controller import PowgenExperimentSettings, PowgenWatchController
 from .powgen_samples import identity_readiness, select_runs
 from .powgen_watch import WatchDefinition, discover_from_listing, build_submission_plan
@@ -85,9 +85,12 @@ def preflight_nomad_experiment(ipts, *, selected_sample_ids=None, selected_banks
         except (OSError,ValueError,UnicodeError) as exc:errors.append(f'{run.run_id}: {exc}')
     if len({(s.calibration,s.environment) for s in setups})>1:
         errors.append('The selected runs use different detector calibrations or sample environments; split them before reusing one supplied profile')
-    if not runs:errors.append('No completed individual Bragg reductions match this selection; raw, summed, S(Q) and PDF products do not trigger analysis')
+    if not runs:errors.append('No completed normalized Bragg products match this selection; raw, unnormalized, S(Q) and PDF products do not trigger analysis')
     latest=runs[-1] if runs else None
-    metadata=read_nomad_scan_metadata(ipts,latest.run_number) if latest else {}
+    try:metadata=(read_nomad_product_metadata(ipts,latest.run_number,latest.source_path) if latest and latest.product_id
+                  else read_nomad_scan_metadata(ipts,latest.run_number) if latest else {})
+    except (OSError,ValueError,KeyError,TypeError) as exc:
+        metadata={};errors.append(f'Product conditions need review: {exc}')
     notices.insert(0,'Supplied NOMAD profile is not automatically scientifically validated; outputs require scientific review')
     return {'ready':not errors,'source_directory':definition.source_directory,'scan_count':len(runs),
         'total_scan_count':total,'excluded_count':excluded,'analysis_count':len(mapping),
@@ -113,6 +116,8 @@ class NomadWatchController(PowgenWatchController):
     setup_metadata_key='nomad_setup'
 
     def __init__(self,service,settings,*,sample_index=None):
+        self.resolver_version=(nomad.VERSION if settings.subfolder in {nomad.SLICED_FOLDER,nomad.SUMMED_FOLDER}
+                               else nomad.LEGACY_VERSION)
         super().__init__(service,settings,sample_index=sample_index or NomadSampleIndex(settings.ipts))
         self._supplied_profile=None
         self.display_profile_error=''
@@ -131,7 +136,7 @@ class NomadWatchController(PowgenWatchController):
 
     def _catalog_digest(self):
         # No automatic registry is advertised before scientific acceptance.
-        return sha256(nomad.VERSION.encode()).hexdigest()
+        return sha256(self.resolver_version.encode()).hexdigest()
 
     def _watch_extension(self):
         return {'nomad_profile_bank':self.settings.profile_bank,
@@ -142,9 +147,9 @@ class NomadWatchController(PowgenWatchController):
     def _submission_identity(self, run):
         plan = build_submission_plan(self.definition, run)
         setup = run.scan_metadata.get('nomad_setup') or {}
-        return sha256(json.dumps({'plan': plan.idempotency_key,
-            'data': setup.get('source_sha256'), 'reduction': setup.get('sidecar_sha256')},
-            sort_keys=True).encode()).hexdigest()
+        identity={'plan':plan.idempotency_key,'data':setup.get('source_sha256'),'reduction':setup.get('sidecar_sha256')}
+        if setup.get('product_metadata') is not None:identity['product_metadata']=setup['product_metadata']
+        return sha256(json.dumps(identity,sort_keys=True).encode()).hexdigest()
 
     def _run_name(self, run):
         # Galaxy retries also search by run name/configuration. Include the
@@ -157,13 +162,34 @@ class NomadWatchController(PowgenWatchController):
     def _setup(self,run):
         path=Path(run.source_path);sidecar=nomad.reduction_input_path(path)
         bank=self.settings.selected_banks[0]
-        key=(str(path),nomad.signature(path),nomad.signature(sidecar) if sidecar.is_file() else None,bank)
+        companion=nomad.slice_metadata_path(path) if run.product_id and run.product_id.startswith('SLICE_') else None
+        key=(str(path),nomad.signature(path),nomad.signature(sidecar) if sidecar.is_file() else None,bank,
+             nomad.signature(companion) if companion is not None else None)
         if key not in self._setup_cache:self._setup_cache[key]=nomad.inspect_reduced_setup(path,selected_bank=bank)
         return self._setup_cache[key]
 
     def _read_scan_metadata(self,run):
-        try:return read_nomad_scan_metadata(self.settings.ipts,run.run_number)
-        except (OSError,ValueError,TypeError):return {}
+        try:
+            return (read_nomad_product_metadata(self.settings.ipts,run.run_number,run.source_path) if run.product_id
+                    else read_nomad_scan_metadata(self.settings.ipts,run.run_number))
+        except (OSError,ValueError,TypeError,KeyError,ImportError) as exc:
+            return {'product_metadata_error':str(exc)} if run.product_id else {}
+
+    def _remember_startup_sources(self,runs):
+        if self.settings.subfolder in {nomad.SLICED_FOLDER,nomad.SUMMED_FOLDER}:
+            self.state.discovery_cursor['nomad_product_baseline']=[r.run_id for r in runs]
+
+    def _subsequent_discoveries(self,rows):
+        if self.settings.subfolder not in {nomad.SLICED_FOLDER,nomad.SUMMED_FOLDER}:
+            return super()._subsequent_discoveries(rows)
+        # Several products can arrive for the same parent run, including late
+        # slices. Parent run-number floors would permanently skip those inputs.
+        baseline=self.state.discovery_cursor.get('nomad_product_baseline')
+        if baseline is None:
+            raise ValueError('A derived-product watch needs its saved startup baseline; check a new watch')
+        replaced={r.source_path for phase in (self.state.discovered,self.state.submitted,self.state.completed,self.state.failed)
+                  for r in phase.values() if r.scan_metadata.get('source_revision_warning')}
+        return [r for r in discover_from_listing(self.definition,rows) if r.run_id not in baseline and r.source_path not in replaced]
 
     def discover(self, listing=None, *, checkpoint=True):
         rows = list(listing) if listing is not None else self._list_source_directory()
@@ -177,12 +203,19 @@ class NomadWatchController(PowgenWatchController):
                 if observed is None:
                     continue
                 setup = old.scan_metadata.get('nomad_setup') or {}
+                if not setup or old.scan_metadata.get('setup_error'):continue
                 sidecar = nomad.reduction_input_path(old.source_path)
                 side_signature = nomad.signature(sidecar) if sidecar.is_file() else None
                 expected_side = setup.get('sidecar_signature')
                 expected_side = tuple(expected_side) if expected_side is not None else None
                 revision = [observed.fingerprint, list(side_signature) if side_signature is not None else None]
-                if ((observed.fingerprint == old.fingerprint and side_signature == expected_side)
+                companion_signature=None
+                if old.product_id and old.product_id.startswith('SLICE_'):
+                    try:companion_signature=list(nomad.signature(nomad.slice_metadata_path(old.source_path)))
+                    except OSError:companion_signature='unavailable'
+                    revision.append(companion_signature)
+                expected_companion=(setup.get('product_metadata') or {}).get('metadata_signature')
+                if ((observed.fingerprint == old.fingerprint and side_signature == expected_side and companion_signature==expected_companion)
                         or old.scan_metadata.get('replacement_revision') == revision):
                     continue
                 notice = ('Source reduction or reduction input was replaced after discovery; retained results '
@@ -212,8 +245,10 @@ class NomadWatchController(PowgenWatchController):
         setup=self._setup(run)
         discovered_setup = run.scan_metadata.get('nomad_setup') or {}
         if (run.scan_metadata.get('source_revision_warning') or
+                run.scan_metadata.get('product_metadata_error') or
                 discovered_setup.get('source_sha256') != setup.source_sha256 or
-                discovered_setup.get('sidecar_sha256') != setup.sidecar_sha256):
+                discovered_setup.get('sidecar_sha256') != setup.sidecar_sha256 or
+                discovered_setup.get('product_metadata') != setup.product_metadata):
             raise ValueError('NOMAD source changed after discovery; check a new watch before reprocessing')
         if setup.warnings and not self.settings.allow_exploratory:
             raise ValueError('NOMAD reduction corrections require exploratory-analysis acknowledgement')

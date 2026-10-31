@@ -1603,7 +1603,7 @@ class RadarPdNovaApp(LiveAssistantMixin, LiveSetupMixin, SetupEditorMixin, PostA
                     disabled=("powgen_monitoring || live_launch_busy",), density="compact", hide_details=True,
                 )
                 vuetify.VAutocomplete(
-                    label="Review run titles / exclude individual runs", v_model=("powgen_excluded_runs",),
+                    label="Review titles / exclude runs or reduced products", v_model=("powgen_excluded_runs",),
                     items=("powgen_run_options.filter(r => powgen_processing_scope === 'all' || powgen_processing_sample_ids.includes(r.sample_id))",),
                     item_title="title", item_value="value", multiple=True, chips=True, closable_chips=True,
                     density="compact", variant="outlined", disabled=("powgen_monitoring || live_launch_busy",),
@@ -5252,7 +5252,7 @@ class RadarPdNovaApp(LiveAssistantMixin, LiveSetupMixin, SetupEditorMixin, PostA
                 selected_sample_ids=self._powgen_processing_ids(),
                 sample_index=self._powgen_sample_index(ipts),
                 selected_banks=self._powgen_processing_bank_ids(),
-                excluded_run_numbers=tuple(int(n) for n in (getattr(state, "powgen_excluded_runs", []) or [])) if self._live_adapter().instrument != 'HB2A' else (),
+                excluded_run_numbers=self._live_excluded_numbers(getattr(state,"powgen_excluded_runs",[])),
                 include_background_runs=bool(getattr(state, "powgen_include_background", False)),
                 include_ramp_runs=bool(getattr(state, "powgen_include_ramps", False)),
                 initial_backfill_limit=_POWGEN_BACKFILL_LIMITS[backfill_mode],

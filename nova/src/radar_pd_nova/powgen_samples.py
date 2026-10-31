@@ -30,10 +30,19 @@ def run_role(run: WatchedRun) -> dict[str, str]:
     return {"run_title": title, "run_role": role}
 
 
+def explicitly_excluded(run, exclusions):
+    if run.run_number in exclusions or run.run_id in exclusions:return True
+    if run.product_id and f'NOM_{run.run_number}_{run.product_id}' in exclusions:return True
+    if run.instrument=='NOM' and run.product_id and run.product_id.startswith('SUM_') and exclusions:
+        from .nomad_products import product_from_path
+        product=product_from_path(run.source_path)
+        if product is None or set(product.members).intersection(exclusions):return True
+    return False
+
+
 def include_run(run: WatchedRun, *, excluded_run_numbers=(), include_background_runs=False,
                 include_ramp_runs=False) -> bool:
-    if run.run_number in excluded_run_numbers:
-        return False
+    if explicitly_excluded(run,excluded_run_numbers):return False
     role = run_role(run)["run_role"]
     return ((role != "background" or include_background_runs)
             and (role != "ramp" or include_ramp_runs))
@@ -193,8 +202,8 @@ def select_runs(runs, index, selected_ids, *, limit=None, excluded_run_numbers=(
     excluded = set()
     identity_review = {}
     def eligible(run):
-        if run.run_number in excluded_run_numbers:
-            excluded.add(run.run_number)
+        if explicitly_excluded(run,excluded_run_numbers):
+            excluded.add(run.run_id if run.product_id else run.run_number)
             return False
         if selected_ids is not None:
             identity = index.identity(run)
@@ -206,7 +215,7 @@ def select_runs(runs, index, selected_ids, *, limit=None, excluded_run_numbers=(
         ok = include_run(run, excluded_run_numbers=excluded_run_numbers,
             include_background_runs=include_background_runs, include_ramp_runs=include_ramp_runs)
         if not ok:
-            excluded.add(run.run_number)
+            excluded.add(run.run_id if run.product_id else run.run_number)
         return ok
     if limit is not None:
         selected = []

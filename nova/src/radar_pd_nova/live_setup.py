@@ -42,6 +42,11 @@ def local_asset_signature(path: str) -> tuple[str, int, int]:
 
 
 class LiveSetupMixin:
+    def _live_excluded_numbers(self,values):
+        from .powgen_watch import normalize_exclusions
+        instrument=self._live_adapter().instrument
+        return () if instrument=='HB2A' else normalize_exclusions(values or (),instrument,from_form=True)
+
     def _init_live_setup(self):
         state = self.server.state
         for field in CONFIG_FORM_FIELDS:
@@ -638,9 +643,7 @@ class LiveSetupMixin:
             initial_backfill_limit=1 if test else backfill,
             selected_sample_ids=selected_samples,
             selected_banks=selected_banks,
-            excluded_run_numbers=tuple(
-                int(n) for n in (values["powgen_excluded_runs"] or [])
-            ) if adapter.instrument != 'HB2A' else (),
+            excluded_run_numbers=self._live_excluded_numbers(values["powgen_excluded_runs"]),
             include_background_runs=bool(values["powgen_include_background"]),
             include_ramp_runs=bool(values["powgen_include_ramps"]),
             subfolder=str(values["powgen_source_subfolder"] or adapter.default_folder),

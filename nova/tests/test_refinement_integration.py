@@ -294,6 +294,22 @@ def test_recovered_banked_run_names_rejoin_the_verified_ipts_without_mixing_conf
         assert conflicting['experiment']!=first['experiment']
 
 
+def test_distinct_nomad_slices_of_one_parent_stay_distinct_after_recovery(tmp_path):
+    project=dict(collection_name='final.gpx',sha256='model',status='accepted',stage='final_refinement')
+    def recovered(product):
+        record=SimpleNamespace(uid=product,name=f'IPTS-34537_NOM_208518_{product}_BANK2_f7539ed36c037c34',
+            local_output_dir=tmp_path,output_dataset_ids={'gpx_projects':'collection-'+product},inputs=None)
+        summary=dict(gpx_projects=[project],acquisition=dict(instrument='NOM',run_number=208518,
+            sample_id='77003',sample_name='Iron oxide'),provenance={'input':{'source_bank':2,'product_id':product}})
+        return source_from_record(record,{'summary':summary},None,'history')
+    first,second=recovered('SLICE_100'),recovered('SLICE_103')
+    assert first['experiment']==second['experiment'] and first['sample_key']==second['sample_key']
+    assert first['experiment_label']=='NOM · IPTS-34537'
+    assert first['scan_key']!=second['scan_key'] and first['id']!=second['id']
+    assert first['run_id']=='NOM_208518_SLICE_100'
+    assert second['metadata']['product_id']=='SLICE_103'
+
+
 def test_refinement_recovers_completed_live_job_outputs_after_viewer_restart():
     queued=SimpleNamespace(uid='job-43124',name='IPTS-2767_PG3_43124',status=SimpleNamespace(value='queued'),output_dataset_ids={})
     complete=copy.deepcopy(queued)

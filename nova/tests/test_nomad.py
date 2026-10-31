@@ -183,7 +183,7 @@ def test_discovery_ignores_summed_pdf_unnormalized_and_nested_products(tmp_path)
     for name in ('NOM_42.gsa','NOM_Si_summed.gsa','NOM_42.xye','NOM_42.gofr'): (tmp_path/name).write_text('')
     (tmp_path/'nested').mkdir();(tmp_path/'nested/NOM_43.gsa').write_text('')
     assert [Path(r['path']).name for r in nomad.directory_listing(tmp_path)]==['NOM_42.gsa']
-    for folder in ('shared/autoreduce/multi_banks_summed/GSAS','shared/autoreduce/multi_banks/GSAS_unnorm','shared/autoreduce/single_bank'):
+    for folder in ('shared/autoreduce/multi_banks/GSAS_unnorm','shared/autoreduce/single_bank'):
         with pytest.raises(ValueError):WatchDefinition('IPTS-1',folder,'h','c','p',instrument='NOM')
 
 
@@ -344,6 +344,13 @@ def test_trial_discovery_stages_one_nomad_bank_without_checkpoint(source,supplie
     assert len(service.jobs)==1 and not service.records
     assert record.provenance['nomad_bank']['source_bank']==5
     assert record.provenance['nomad_bank']['profile_bank']==1
+    assert controller.resolver_version=='nomad-individual-bragg/v1'
+    from radar_pd_nova.powgen_watch import build_submission_plan
+    from hashlib import sha256
+    run=runs[0];setup=run.scan_metadata['nomad_setup']
+    legacy=sha256(json.dumps({'plan':build_submission_plan(controller.definition,run).idempotency_key,
+        'data':setup['source_sha256'],'reduction':setup['sidecar_sha256']},sort_keys=True).encode()).hexdigest()
+    assert controller._submission_identity(run)==legacy
 
 
 def test_controller_submits_selected_bank_and_records_scientific_provenance(source,supplied,monkeypatch):

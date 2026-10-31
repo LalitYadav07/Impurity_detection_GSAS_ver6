@@ -133,6 +133,7 @@ class WatchedRun:
     bank: int | None = None
     instrument: str = "PG3"
     experiment_number: int | None = None
+    product_id: str | None = None
 
     def __post_init__(self) -> None:
         if self.instrument not in {"PG3", "NOM", "SNAP", "HB2A"}:
@@ -144,12 +145,14 @@ class WatchedRun:
             raise ValueError('SPICE experiment identity is specific to HB-2A')
         if self.bank is not None and (isinstance(self.bank, bool) or not isinstance(self.bank, int) or self.bank <= 0):
             raise ValueError("POWGEN bank must be a positive integer")
+        if self.product_id is not None and (self.instrument!='NOM' or not re.fullmatch(r'SLICE_[0-9]+(?:P[0-9]+)?|SUM_[A-F0-9]{12}',self.product_id)):
+            raise ValueError('A derived NOMAD product needs its exact slice or summed-product identity')
 
     @property
     def run_id(self) -> str:
         if self.instrument == 'HB2A':
             return f'HB2A_EXP{self.experiment_number}_SCAN{self.run_number:04d}'
-        return f"{self.instrument}_{self.run_number}" + (f"_BANK{self.bank}" if self.bank is not None else "")
+        return f"{self.instrument}_{self.run_number}" + (f'_{self.product_id}' if self.product_id else '') + (f"_BANK{self.bank}" if self.bank is not None else "")
 
     @property
     def result_dataset_ids(self) -> tuple[str, ...]:
@@ -161,6 +164,7 @@ class WatchedRun:
         payload = asdict(self)
         if self.experiment_number is None:
             payload.pop('experiment_number')
+        if self.product_id is None:payload.pop('product_id')
         payload["galaxy_result_ids"] = list(self.galaxy_result_ids)
         payload["scan_metadata"] = dict(self.scan_metadata)
         payload["scientific_summary"] = dict(self.scientific_summary)
@@ -175,6 +179,7 @@ class WatchedRun:
             bank=value.get("bank"),
             instrument=str(value.get("instrument") or "PG3"),
             experiment_number=value.get('experiment_number'),
+            product_id=value.get('product_id'),
             discovered_utc=str(value.get("discovered_utc") or _utc_now()),
             galaxy_job_id=(str(value["galaxy_job_id"]) if value.get("galaxy_job_id") else None),
             galaxy_result_ids=tuple(str(item) for item in value.get("galaxy_result_ids", ())),
@@ -467,6 +472,17 @@ def _replace_run(run: WatchedRun, **changes: Any) -> WatchedRun:
     return WatchedRun.from_dict(payload)
 
 
+def normalize_exclusions(values, instrument, *, from_form=False):
+    result=[]
+    for value in values:
+        if from_form and isinstance(value,str) and value.isdecimal():value=int(value)
+        valid=(type(value) is int and value>0) or (instrument=='NOM' and isinstance(value,str)
+            and re.fullmatch(r'NOM_[1-9][0-9]*_(?:SLICE_[0-9]+(?:P[0-9]+)?|SUM_[A-F0-9]{12})',value))
+        if not valid:raise ValueError('Excluded run numbers must be positive integers, or exact NOMAD derived-product IDs')
+        result.append(value)
+    return tuple(sorted(set(result),key=lambda value:(isinstance(value,str),value)))
+
+
 def _coerce_run_id(value: int | str | WatchedRun, instrument: str = "PG3") -> str:
     if isinstance(value, WatchedRun):
         return value.run_id
@@ -475,7 +491,7 @@ def _coerce_run_id(value: int | str | WatchedRun, instrument: str = "PG3") -> st
             raise ValueError('Use the full HB2A experiment and scan identifier')
         return f"{instrument}_{value}"
     text = str(value).strip().upper()
-    if re.fullmatch(r'(?:PG3|NOM|SNAP)_\d+(?:_BANK\d+)?|HB2A_EXP\d+_SCAN\d+', text):
+    if re.fullmatch(r'(?:PG3|SNAP)_\d+(?:_BANK\d+)?|NOM_\d+(?:_(?:SLICE_[0-9]+(?:P[0-9]+)?|SUM_[A-F0-9]{12}))?(?:_BANK\d+)?|HB2A_EXP\d+_SCAN\d+', text):
         return text
     if instrument == 'HB2A':
         raise ValueError('Use the full HB2A experiment and scan identifier')
@@ -555,36 +571,40 @@ def discover_from_listing(
         from .hb2a import discover_listing
         return discover_listing(definition, file_listing, state, newest_limit=newest_limit)
 
-    by_run: dict[int, list[tuple[PowgenReducedFile, Mapping[str, Any]]]] = {}
+    by_run: dict[tuple[int,str], list[tuple[PowgenReducedFile, Mapping[str, Any]]]] = {}
     for entry in file_listing:
         raw_path, metadata = _listing_path(entry)
         candidate_path = _path_in_watch(definition, raw_path)
         if candidate_path is None:
             continue
         try:
+            product_id=None
             if definition.instrument == "SNAP":
                 from .snap import parse_filename
                 snap_name = parse_filename(candidate_path)
                 parsed = PowgenReducedFile(candidate_path, PurePosixPath(candidate_path).name, snap_name.run_number, None, ".gsa")
             elif definition.instrument == "NOM":
-                number = nomad_run_number(PurePosixPath(candidate_path).name)
-                if number is None:
+                from .nomad_products import product_from_path
+                product=product_from_path(candidate_path)
+                if product is None:
                     continue
-                parsed = PowgenReducedFile(candidate_path, PurePosixPath(candidate_path).name, number, None, ".gsa")
+                product_id=product.product_id
+                parsed = PowgenReducedFile(candidate_path, PurePosixPath(candidate_path).name, product.run_number, None, ".gsa")
             else:
                 parsed = select_preferred_reduced_file([candidate_path])
         except ValueError:
             continue
         if minimum_run_number is not None and parsed.run_number < minimum_run_number:
             continue
-        by_run.setdefault(parsed.run_number, []).append((parsed, metadata))
+        by_run.setdefault((parsed.run_number,product_id or ''), []).append((parsed, metadata))
 
     discovered: list[WatchedRun] = []
-    run_numbers = sorted(by_run)
+    run_numbers = sorted(by_run,key=lambda key:(key[0],str(by_run[key][0][1].get('product_order') or ''),key[1]))
     if newest_limit is not None:
         run_numbers = run_numbers[-newest_limit:]
-    for run_number in run_numbers:
-        candidates = by_run[run_number]
+    for product_key in run_numbers:
+        run_number,product_id=product_key
+        candidates = by_run[product_key]
         if definition.instrument == "NOM" and len(candidates) != 1:
             raise ValueError(f'Multiple NOMAD reductions for run {run_number} in one folder; choose an unambiguous source')
         if definition.instrument == "SNAP" and len(candidates) != 1:
@@ -596,6 +616,7 @@ def discover_from_listing(
             source_path=preferred.path,
             fingerprint=_fingerprint(preferred.path, metadata),
             instrument=definition.instrument,
+            product_id=product_id or None,
         )
         if state is not None:
             if state.contains(run):

@@ -1,17 +1,14 @@
-"""Strict individual-run NOMAD Bragg products and explicit profile mappings.
-
-No raw reduction, summed products, PDF analysis or guessed calibration rules.
-The prototype requires a user-selected bank and profile, and carries the
-unverified-profile/reduction-quality notices through to scientific results.
-"""
+"""Normalized NOMAD Bragg products with explicit, reviewed profile mappings."""
 from dataclasses import asdict, dataclass
 from hashlib import sha256
 import json
 import math
 from pathlib import Path
 import re
+from .nomad_products import Product,product_from_path,slice_metadata_path,slice_window,member_runs,SLICED_FOLDER,SUMMED_FOLDER
 
-VERSION = 'nomad-individual-bragg/v1'
+VERSION = 'nomad-normalized-bragg-products/v2'
+LEGACY_VERSION = 'nomad-individual-bragg/v1'
 MODERN_FOLDER = 'shared/autoreduce/multi_banks/GSAS'
 LEGACY_FOLDER = 'shared/autoreduce'
 _FILE = re.compile(r'(?:NOM_(\d+)|NOM(\d+)tof)\.gsa', re.I)
@@ -27,17 +24,17 @@ def signature(path):
 
 
 def is_source_subfolder(subfolder):
-    return subfolder in {MODERN_FOLDER, LEGACY_FOLDER} or bool(_IDL_FOLDER.fullmatch(str(subfolder)))
+    return subfolder in {MODERN_FOLDER, LEGACY_FOLDER,SLICED_FOLDER,SUMMED_FOLDER} or bool(_IDL_FOLDER.fullmatch(str(subfolder)))
 
 
 def run_number_from_filename(name):
-    match = _FILE.fullmatch(str(name))
-    return next((int(v) for v in match.groups() if v is not None), None) if match else None
+    product=product_from_path(name)
+    return product.run_number if product else None
 
 
 def source_directory(ipts, subfolder=MODERN_FOLDER):
     if not re.fullmatch(r'IPTS-\d+', str(ipts).upper()) or not is_source_subfolder(subfolder):
-        raise ValueError('Choose an IPTS and an individual NOMAD Bragg product folder')
+        raise ValueError('Choose an IPTS and a supported normalized NOMAD Bragg product folder')
     return Path('/SNS/NOM') / str(ipts).upper() / subfolder
 
 
@@ -54,19 +51,30 @@ def directory_listing(directory):
     rows = []
     with os.scandir(root) as entries:
         for e in entries:
-            if not _FILE.fullmatch(e.name) or not e.is_file(follow_symlinks=False):
+            if not e.name.lower().endswith('.gsa') or not e.is_file(follow_symlinks=False):
                 continue
             try:
                 stat = e.stat(follow_symlinks=False)
             except FileNotFoundError:
                 continue
-            rows.append({'path':str(root/e.name), 'size':stat.st_size, 'modified_ns':stat.st_mtime_ns})
+            product=product_from_path(root/e.name)
+            if product is None:continue
+            row={'path':str(root/e.name), 'size':stat.st_size, 'modified_ns':stat.st_mtime_ns}
+            if product.kind=='slice':
+                try:
+                    window=slice_window(slice_metadata_path(root/e.name))
+                    if window['run_number']!=product.run_number:raise ValueError('Processed slice parent differs from its filename')
+                    row['product_order']=window['start']
+                except (OSError,ValueError,KeyError,ImportError) as exc:row['product_metadata_error']=str(exc)
+            rows.append(row)
     return rows
 
 
 def source_options(ipts):
     options = [{'title': title, 'value': folder} for title, folder in
-            [('Individual Bragg reductions',MODERN_FOLDER), ('Legacy individual reductions',LEGACY_FOLDER)]
+            [('Individual Bragg reductions',MODERN_FOLDER), ('Legacy individual reductions',LEGACY_FOLDER),
+             ('Temperature-sliced normalized Bragg reductions',SLICED_FOLDER),
+             ('Summed setpoint normalized Bragg reductions',SUMMED_FOLDER)]
             if source_directory(ipts,folder).is_dir()]
     # Each named family remains an explicit, separate watch. Never recursively
     # merge regenerated products, unnormalized data, PDF or summed exports.
@@ -109,6 +117,10 @@ class NomadSetup:
     title: str
     warnings: tuple[str,...]
     source_family: str = 'NOMAD individual GSAS/SLOG'
+    product_kind: str = 'individual'
+    product_id: str | None = None
+    member_runs: tuple[int,...] = ()
+    product_metadata: dict | None = None
 
     def as_dict(self):
         return asdict(self)
@@ -118,10 +130,11 @@ def inspect_reduced_setup(path, *, selected_bank=None, inventory_only=False):
     path = Path(path)
     if selected_bank is not None and (isinstance(selected_bank,bool) or selected_bank not in range(1,7)):
         raise ValueError('Choose a supported NOMAD histogram label')
-    run_number = run_number_from_filename(path.name)
+    product=product_from_path(path)
+    run_number=product.run_number if product else None
     before = signature(path)
     if run_number is None or before[0] > _MAX_GSA:
-        raise ValueError('Expected an individual NOM_<run>.gsa or NOM<run>tof.gsa Bragg reduction')
+        raise ValueError('Expected a supported normalized NOMAD individual, sliced or explicitly summed Bragg product')
     banks, prefix, values, digest = [], [], None, sha256()
     geometry = None
     declared = None
@@ -187,7 +200,7 @@ def inspect_reduced_setup(path, *, selected_bank=None, inventory_only=False):
                 count+=1;bank_digest.update(line)
     finish()
     header='\n'.join(prefix);run=re.search(r'Sample Run:\s*(\d+)',header)
-    if not run or int(run[1])!=run_number:
+    if not run or int(run[1]) not in (product.members or (run_number,)):
         raise ValueError('NOMAD filename and Sample Run header disagree')
     if not banks or declared!=len(banks) or len({b.bank for b in banks})!=len(banks):
         raise ValueError('Missing, duplicate or incomplete NOMAD diffraction banks')
@@ -201,8 +214,9 @@ def inspect_reduced_setup(path, *, selected_bank=None, inventory_only=False):
         if not isinstance(config,dict) or not isinstance(config.get('Sample'),dict):
             raise ValueError('Invalid NOMAD reduction input')
         sample=config['Sample']
-        if str(sample.get('Runs','')).strip()!=str(run[1]):
-            raise ValueError('Reduction input is summed or does not belong to this individual run')
+        expected=product.members or (run_number,)
+        if member_runs(str(sample.get('Runs','')))!=expected:
+            raise ValueError('Reduction input is summed or differs from this exact NOMAD product membership')
         if str(config.get('Instrument','NOMAD')).upper() not in {'NOM','NOMAD'}:
             raise ValueError('Reduction input names another instrument')
         calibration_config = config.get('Calibration') or {}
@@ -222,8 +236,15 @@ def inspect_reduced_setup(path, *, selected_bank=None, inventory_only=False):
     if not calibration:notices.append('Applied detector calibration is not recorded')
     title=next((v[2:] for v in prefix if v.startswith('# ')),'')
     family = 'NOMAD IDL individual GSAS/SLOG' if any('File generated by IDL' in v for v in prefix) else 'NOMAD individual GSAS/SLOG'
-    return NomadSetup(int(run[1]),tuple(banks),before,digest.hexdigest(),str(sidecar),side_sig,side_hash,
-                      calibration,environment,title,tuple(notices),family)
+    product_metadata=None
+    if product.kind=='slice':
+        window=slice_window(slice_metadata_path(path))
+        if window['run_number']!=run_number:raise ValueError('Processed slice parent differs from its GSAS product')
+        product_metadata=window
+        family='NOMAD normalized Mantid temperature-sliced GSAS/SLOG'
+    elif product.kind=='sum':family='NOMAD normalized explicitly summed GSAS/SLOG'
+    return NomadSetup(run_number,tuple(banks),before,digest.hexdigest(),str(sidecar),side_sig,side_hash,
+                      calibration,environment,title,tuple(notices),family,product.kind,product.product_id,product.members,product_metadata)
 
 
 def profile_blocks(path):
@@ -289,6 +310,8 @@ def stage_bank(source, setup, bank, profile_path, profile_bank, destination, *, 
             raise ValueError('NOMAD source or reduction input changed after inspection')
         if setup.sidecar_signature is not None and sha256(sidecar.read_bytes()).hexdigest()!=setup.sidecar_sha256:
             raise ValueError('NOMAD reduction input content changed after inspection')
+        if setup.product_kind=='slice' and slice_window(slice_metadata_path(source))!=setup.product_metadata:
+            raise ValueError('NOMAD processed slice metadata changed after inspection')
     unchanged()
     text,receipt=validate_profile(setup,bank,profile_path,profile_bank,acknowledged=acknowledged)
     header=[];payload=[];active=False;seen_bank=False;actual=sha256()
@@ -321,6 +344,7 @@ def stage_bank(source, setup, bank, profile_path, profile_bank, destination, *, 
         'reduction_setup':{'calibration':setup.calibration,'environment':setup.environment},
         'source_bank':bank,'profile_bank':profile_bank,'calibration':setup.calibration,
         'source_sha256':setup.source_sha256,'reduction_input_sha256':setup.sidecar_sha256,
+        'product_kind':setup.product_kind,'product_id':setup.product_id,'member_runs':list(setup.member_runs),
         'profile_sha256':receipt['profile_sha256'],
         'warnings':[{'code':'unverified_nomad_profile','message':'NOMAD profile supplied by user; scientific calibration acceptance is pending'},
                     *geometry_notices,
