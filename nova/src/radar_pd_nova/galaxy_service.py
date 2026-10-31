@@ -453,7 +453,7 @@ class GalaxyService:
         with self._lock:
             if tool_id not in self._tool_input_names:
                 response=requests.get(self.galaxy_url+'/api/tools/'+quote(tool_id,safe=''),
-                    headers=self._headers,timeout=30)
+                    headers=self._headers,params={'io_details':'true'},timeout=30)
                 response.raise_for_status();document=response.json()
                 if not isinstance(document,dict) or not isinstance(document.get('inputs'),list):
                     raise RuntimeError('Galaxy did not report the tool input contract')

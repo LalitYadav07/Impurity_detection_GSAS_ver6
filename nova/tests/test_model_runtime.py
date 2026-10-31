@@ -128,6 +128,9 @@ def test_inline_capability_is_taken_from_the_registered_tool_contract(tmp_path,m
     seen=[]
     def get(url,**kwargs):
         seen.append(url)
+        # Galaxy's summary response omits inputs unless io_details is requested.
+        if kwargs.get('params') != {'io_details':'true'}:
+            return SimpleNamespace(raise_for_status=lambda:None,json=lambda:{'id':MODEL_TOOL_ID})
         return SimpleNamespace(raise_for_status=lambda:None,json=lambda:{'inputs':[{'name':'model_request_b64'}]})
     monkeypatch.setattr('requests.get',get)
     assert service.tool_has_input(MODEL_TOOL_ID,'model_request_b64')
