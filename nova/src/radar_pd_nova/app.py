@@ -6458,7 +6458,7 @@ class RadarPdNovaApp(LiveAssistantMixin, LiveSetupMixin, SetupEditorMixin, PostA
                 if main_id
                 else (Path(main_path).name if main_path else "Not supplied"),
             },
-            {"label": "Application", "value": str(getattr(self.server.state, "application_version", "RADAR-PD"))},
+            {"label": "Viewer version", "value": str(getattr(self.server.state, "application_version", "RADAR-PD"))},
         ]
 
     @staticmethod
