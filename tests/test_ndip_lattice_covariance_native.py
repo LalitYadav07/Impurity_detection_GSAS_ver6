@@ -68,11 +68,34 @@ class CellCovarianceTests(unittest.TestCase):
                 result = cell_fit_information(phase,covariance)
                 J = analytic_jacobian(A,basis)
                 np.testing.assert_allclose(result['cell_covariance'],J@C@J.T,rtol=2e-5,atol=1e-13)
+                if laue == '-1' or laue in {'3R','3mR'}:
+                    fixed_angles = set()
+                elif laue == '2/m':
+                    fixed_angles = {'alpha','beta','gamma'} - {{'a':'alpha','b':'beta','c':'gamma'}[unique]}
+                else:
+                    fixed_angles = {'alpha','beta','gamma'}
+                for i, key in enumerate(('a','b','c','alpha','beta','gamma','volume')):
+                    self.assertEqual(result['metric_states'][key], 'fixed' if key in fixed_angles else 'refined')
+                    if key in fixed_angles:
+                        np.testing.assert_array_equal(np.asarray(result['cell_covariance'])[i],0)
+                        np.testing.assert_array_equal(np.asarray(result['cell_covariance'])[:,i],0)
                 for invalid in (-C, np.full_like(C, np.nan)):
                     self.assertIsNone(cell_fit_information(phase,{**covariance,'covMatrix':invalid})['cell_covariance'])
                 partial = {**covariance,'varyList':names[:-1],'variables':A[independent[:-1]].tolist(),'covMatrix':C[:-1,:-1]}
                 self.assertIsNone(cell_fit_information(phase,partial)['cell_covariance'])
                 self.assertIsNone(cell_fit_information(phase,{**covariance,'freshCOV':False})['cell_covariance'])
+
+    def test_hexagonal_fixed_gamma_survives_roundoff_in_large_cells(self):
+        for a, c in ((5.0321356,13.739348),(12.7,80.0),(57.1,13.7)):
+            cell=[a,a,c,90,90,120]
+            A=np.asarray(lattice.cell2A(cell))
+            phase=SimpleNamespace(id=0,data={'General':{'Cell':[True,*cell,lattice.calc_V(A)],
+                'SGData':{'SGLaue':'3m1','SGUniq':''}}})
+            result=cell_fit_information(phase,dict(freshCOV=True,varyList=['0::A0','0::A2'],
+                variables=A[[0,2]].tolist(),covMatrix=np.eye(2)*1e-13))
+            self.assertEqual(result['metric_states']['gamma'],'fixed')
+            np.testing.assert_array_equal(np.asarray(result['cell_jacobian'])[5],0)
+            self.assertEqual(result['cell_covariance'][5][5],0)
 
 
 if __name__ == '__main__':

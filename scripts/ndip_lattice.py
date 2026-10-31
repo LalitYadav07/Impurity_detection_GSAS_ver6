@@ -246,12 +246,20 @@ def cell_fit_information(phase, covariance):
         plus[name] += step
         minus[name] -= step
         jacobian[:, j] = (evaluate(plus) - evaluate(minus)) / (2 * step)
+    # Classify symmetry-fixed angles from the model, not a finite-difference
+    # tolerance. Roundoff in A2cell can otherwise give a fixed hexagonal gamma
+    # a tiny nonzero derivative and publish it as refined with a spurious ESD.
+    # Conversely, a numerically small derivative does not make a free angle fixed.
+    fixed_angles = set()
+    if sg["SGLaue"] == "2/m":
+        free_angle = {"a": "alpha", "b": "beta", "c": "gamma"}[sg["SGUniq"]]
+        fixed_angles = {"alpha", "beta", "gamma"} - {free_angle}
+    elif sg["SGLaue"] not in {"-1", "3R", "3mR"}:
+        fixed_angles = {"alpha", "beta", "gamma"}
     for i, key in enumerate(CELL_KEYS):
-        if not np.any(np.abs(jacobian[i]) > 1e-7):
+        if key in fixed_angles:
             jacobian[i] = 0.0
-        states[key] = (
-            ("refined" if fresh else "stale") if np.any(np.abs(jacobian[i]) > 1e-7) else "fixed"
-        )
+        states[key] = "fixed" if key in fixed_angles else "refined" if fresh else "stale"
     output["cell_jacobian"] = jacobian.tolist()
     output['cell_variable_names'] = direct
     matrix = covariance.get("covMatrix")
