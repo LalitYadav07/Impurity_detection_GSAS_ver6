@@ -294,6 +294,41 @@ def test_preparation_failure_clears_active_campaign_state(tmp_path,monkeypatch):
     assert app._model_enrollment_task is None
 
 
+@pytest.mark.parametrize('budget',[1,8])
+def test_preparation_finishing_during_empty_tick_does_not_end_campaign(tmp_path,monkeypatch,budget):
+    import threading
+    import radar_pd_nova.symmetry_controller as controller
+    release=threading.Event();finished=threading.Event();events=[]
+    entry=dict(id='first',scan='First acquisition',status='queued')
+    class C:
+        root=tmp_path/'campaign'
+        def __init__(self):self.settings={'template':{'future':False}}
+        def setting(self,key,default=None):return self.settings.get(key,default)
+        def set_setting(self,key,value):self.settings[key]=value
+        def trials(self):return []
+        def tick(self,transport,**kwargs):
+            if isinstance(transport,PreparationSlotTransport):
+                events.append('old empty snapshot');release.set();assert finished.wait(3)
+            elif not isinstance(transport,CollectOnlyTransport):
+                events.append('newly enrolled work polled');self.settings['paused']=True
+            return []
+    c=C()
+    monkeypatch.setattr(controller,'queue_sources',lambda *a:{'first':entry})
+    def inspect(*a,**kw):
+        entry['status']='preparing';assert release.wait(3)
+        entry['status']='enrolled';finished.set()
+    monkeypatch.setattr(controller,'enroll_source',inspect)
+    original_sleep=asyncio.sleep
+    async def short_sleep(seconds):await original_sleep(0)
+    monkeypatch.setattr(controller.asyncio,'sleep',short_sleep)
+    app=SymmetryMixin();app._model_active_campaigns={};app._model_stopping=False;app._model_preparations={}
+    app._refinement_store=lambda:None;app._inspect_model_input=lambda *a:None;app.refresh_symmetry=lambda:None
+    app.server=SimpleNamespace(state=SimpleNamespace(sx_slots=2,flush=lambda:None))
+    asyncio.run(app._drive_symmetry_campaign(c,SimpleNamespace(max_active_jobs=budget,submit_many=lambda *a:None)))
+    assert events==['old empty snapshot','newly enrolled work polled']
+    assert entry['status']=='enrolled' and app._model_enrollment_task is None
+
+
 def test_driver_fills_all_free_model_slots_in_one_bounded_wave(tmp_path):
     import json
     rows=[dict(id=str(i),state='prepared')for i in range(12)];ticks=[];settings={}

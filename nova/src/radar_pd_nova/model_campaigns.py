@@ -171,6 +171,38 @@ def enroll_source(campaign,workspace,key,inspect,*,transport=None):
     return entry
 
 
+def _recovery_source(document,sha,protocol,template):
+    """Recover an old reference binding only through its exact enrolled copy.
+
+    Early thin checkpoints captured the reviewed reference packet before its
+    per-acquisition protocol, without binding the former to a Galaxy GPX. The
+    latter can supply that binding only when the saved ledger proves it is the
+    same approved reference, including its exact bytes and campaign scope.
+    """
+    transport=document['transport']
+    source=transport['sources'].get(sha)
+    if source is None and sha==digest(template['protocol']):
+        key=protocol.get('acquisition_id')
+        entry=document['ledger']['settings'].get('enrollments',{}).get(key) or {}
+        rebound_sha=entry.get('protocol')
+        rebound=next((json.loads(row['body']) for row in document['ledger']['protocols']
+                      if row['hash']==rebound_sha),None)
+        expected=copy.deepcopy(protocol)
+        expected['template_sha256']=digest(template)
+        candidate=transport['sources'].get(rebound_sha) or {}
+        if (entry.get('status')=='enrolled' and entry.get('origin')==template['origin']
+                and entry.get('source_sha256')==protocol['source']['sha256']
+                and rebound is not None and digest(rebound)==rebound_sha
+                and rebound==expected and candidate.get('id')==key
+                and candidate.get('source_sha256')==protocol['source']['sha256']
+                and matches(template,candidate,entry['origin'])):
+            source=candidate
+    source=portable_source(source or {})
+    if source.get('source_sha256')!=protocol['source']['sha256']:
+        raise ValueError('The saved source reference differs from its approved protocol')
+    return source
+
+
 def restore_history(root,runtime):
     """Restore owned campaign ledgers plus immutable input-HDA references."""
     import gzip,json,re,uuid
@@ -201,6 +233,7 @@ def restore_history(root,runtime):
             finally:archive.unlink(missing_ok=True)
             if document.get('schema')!='radar-model-campaign/v1' or document.get('history_id')!=runtime.service.history_id or document.get('campaign')!=identifier:
                 raise ValueError('The saved model campaign belongs to another History/identity')
+            template=validate_template(document['ledger']['settings']['template'])
             transport=document['transport'];inputs={}
             for sha,dataset in transport['inputs'].items():
                 if not re.fullmatch('[a-f0-9]{64}',sha):raise ValueError('Invalid saved input identity')
@@ -211,15 +244,12 @@ def restore_history(root,runtime):
                 source_path=target/'unpacked'/protocol['source']['path']
                 if not source_path.is_file():
                     from gpx_recipe.symmetry.bundle import hydrate_source
-                    source=dict(transport['sources'].get(sha) or {})
-                    source.pop('source_path',None);source.pop('context',None)
-                    if source.get('source_sha256')!=protocol['source']['sha256']:
-                        raise ValueError('The saved source reference differs from its approved protocol')
+                    source=_recovery_source(document,sha,protocol,template)
                     resolved=runtime.resolve(source)
                     hydrate_source(target/'unpacked',resolved['source_path'],
                         {asset['path']:asset['sha256'] for asset in assets(protocol)},protocol['source']['sha256'])
+                    transport['sources'][sha]=portable_source(resolved)
                 inputs[sha]=prepare_shared_inputs(protocol,target/'unpacked',campaign.root)
-            template=validate_template(document['ledger']['settings']['template'])
             if digest(template['protocol']) not in inputs:raise ValueError('The reviewed reference inputs are absent from the checkpoint')
             campaign.restore(document['ledger'],inputs)
             campaign.set_setting('reference_input_root',str(inputs[digest(template['protocol'])]))

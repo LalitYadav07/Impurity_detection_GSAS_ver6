@@ -386,7 +386,8 @@ def test_checkpoint_keeps_ledger_tables_on_one_side_of_a_concurrent_commit(remot
 
 
 @pytest.mark.parametrize('lost_ack',[True,False])
-def test_lost_viewer_restores_the_existing_chunk_and_all_trial_receipts(remote,tmp_path,monkeypatch,lost_ack):
+@pytest.mark.parametrize('reference_binding',['direct','legacy-enrolled-copy'])
+def test_lost_viewer_restores_the_existing_chunk_and_all_trial_receipts(remote,tmp_path,monkeypatch,lost_ack,reference_binding):
     from gpx_recipe.symmetry.contracts import validate_protocol
     from gpx_recipe.symmetry.templates import make_template
     from radar_pd_nova.model_campaigns import restore_history
@@ -394,7 +395,7 @@ def test_lost_viewer_restores_the_existing_chunk_and_all_trial_receipts(remote,t
     inputs=tmp_path/'captured';inputs.mkdir();shutil.copyfile(source['source_path'],inputs/'source.gpx')
     candidate=dict(id='mag:fixture',magnetic_space_group="Pn'ma'",transformation_matrix=[[1,0,0],[0,1,0],[0,0,1]],origin_shift=[0,0,0])
     (inputs/'catalog.json').write_text(json.dumps(dict(schema='radar-symmetry-catalog/v1',parent_setting_sha256='a'*64,k=['0','0','0'],candidates=[candidate])))
-    p=validate_protocol(dict(kind='magnetic',source=dict(path='source.gpx',sha256=file_sha(inputs/'source.gpx')),
+    p=validate_protocol(dict(kind='magnetic',acquisition_id=source['id'],source=dict(path='source.gpx',sha256=file_sha(inputs/'source.gpx')),
         catalog=dict(path='catalog.json',sha256=file_sha(inputs/'catalog.json')),parent_phase='Parent',histogram='Bank',
         parent_setting_sha256='a'*64,magnetic_function_sha256='b'*64,implementation_sha256=package_signature(),
         k=['0','0','0'],candidates=[candidate],seeds=[dict(id='start'+str(i),axis='x',magnitude=3.) for i in range(3)],sites=[dict(label='Mn',form_factor='Mn',lande_g=2.)],
@@ -403,10 +404,18 @@ def test_lost_viewer_restores_the_existing_chunk_and_all_trial_receipts(remote,t
     context=dict(sha256=source['source_sha256'])
     template=make_template(p,context,source,[(source,'radar')],origin='radar')
     c=Campaign(tmp_path/'original/campaign-aaaaaaaaaaaa',shared_inputs=True)
-    t=GalaxyChunkTransport(runtime,c);t.prepare_source(p,inputs,source)
+    t=GalaxyChunkTransport(runtime,c)
+    if reference_binding=='legacy-enrolled-copy':
+        from gpx_recipe.symmetry.compiler import prepare_shared_inputs,assets
+        reference=prepare_shared_inputs(p,inputs,c.root)
+        t.state['inputs'][digest(p)]=runtime.packet(reference,['protocol.json']+[a['path'] for a in assets(p)],source_sha256=p['source']['sha256'])
+        p=validate_protocol(dict(p,template_sha256=digest(template)))
+    t.prepare_source(p,inputs,source)
     assert not c.trials() and digest(p) in t.state['inputs'] and digest(p) in t.state['sources']
     c.enroll(p,inputs,approved_hash=digest(p))
     c.set_setting('template',template)
+    c.set_setting('enrollments',{source['id']:dict(status='enrolled',origin='radar',
+        source_sha256=source['source_sha256'],protocol=digest(p))})
     original_submit=service.submit_utility
     def submit(**kwargs):
         result=original_submit(**kwargs);result.status=RunStatus.RUNNING
@@ -434,3 +443,31 @@ def test_lost_viewer_restores_the_existing_chunk_and_all_trial_receipts(remote,t
     transport.cache.clear();restored.tick(transport)
     assert {r['state'] for r in restored.trials()}=={'terminal'}
     assert len(service.submissions)==1 and len(restored.trials())==3
+
+
+@pytest.mark.parametrize('alteration',[
+    'conflicting-direct','wrong-source-bytes','wrong-acquisition','wrong-experiment',
+    'wrong-bank','wrong-origin','unapproved-copy','unenrolled','wrong-enrolled-hash',
+])
+def test_legacy_reference_recovery_never_substitutes_a_different_input(alteration):
+    from radar_pd_nova.model_campaigns import _recovery_source
+    protocol=dict(source=dict(sha256='a'*64),acquisition_id='recipe:exact')
+    template=dict(protocol=protocol,scope=dict(experiment='PG3:1',sample_key='sample:A',bank='2'),origin='recipe:r1:final')
+    rebound=dict(protocol,template_sha256=digest(template));rebound_sha=digest(rebound)
+    source=dict(id='recipe:exact',source_sha256='a'*64,dataset_id='exact-hda',
+                experiment='PG3:1',sample_key='sample:A',bank='2')
+    entry=dict(status='enrolled',origin=template['origin'],protocol=rebound_sha,source_sha256='a'*64)
+    document=dict(transport=dict(sources={rebound_sha:source}),ledger=dict(
+        settings=dict(enrollments={'recipe:exact':entry}),protocols=[dict(hash=rebound_sha,body=json.dumps(rebound))]))
+    assert _recovery_source(document,digest(protocol),protocol,template)==source
+    if alteration=='conflicting-direct':document['transport']['sources'][digest(protocol)]=dict(source,source_sha256='b'*64)
+    elif alteration=='wrong-source-bytes':source['source_sha256']='b'*64
+    elif alteration=='wrong-acquisition':source['id']='recipe:another'
+    elif alteration=='wrong-experiment':source['experiment']='PG3:2'
+    elif alteration=='wrong-bank':source['bank']='1'
+    elif alteration=='wrong-origin':entry['origin']='recipe:r2:final'
+    elif alteration=='unapproved-copy':document['ledger']['protocols'][0]['body']=json.dumps(dict(rebound,template_sha256='c'*64))
+    elif alteration=='unenrolled':entry['status']='queued'
+    elif alteration=='wrong-enrolled-hash':entry['source_sha256']='b'*64
+    with pytest.raises(ValueError,match='saved source reference differs'):
+        _recovery_source(document,digest(protocol),protocol,template)

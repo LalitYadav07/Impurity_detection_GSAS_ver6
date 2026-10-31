@@ -594,8 +594,10 @@ class SymmetryMixin(KSearchMixin):
                     origin=d['scope_origins'][key]) for key in d['template']['existing_ids']})
                 transport=self._symmetry_transport(c)
                 if isinstance(transport,GalaxyChunkTransport):
-                    transport.state['inputs'][digest(d['protocol'])]=await asyncio.to_thread(transport.runtime.packet,ref,['protocol.json']+[a['path'] for a in __import__('gpx_recipe.symmetry.compiler',fromlist=['assets']).assets(d['protocol'])],source_sha256=d['protocol']['source']['sha256'])
-                    transport.save()
+                    # The reviewed reference protocol and each acquisition's
+                    # rebound protocol have different hashes. Both thin input
+                    # packets need their own exact GPX/HDA binding for recovery.
+                    await asyncio.to_thread(transport.prepare_source,d['protocol'],ref,current)
                 await asyncio.to_thread(queue_sources,c,self._refinement_store())
                 s.sx_campaign=c.root.name;s.sx_setup=False
                 await self._drive_symmetry_campaign(c,transport)
@@ -671,7 +673,10 @@ class SymmetryMixin(KSearchMixin):
                 pending=any(r['state'] not in {'terminal','cancelled','needs_recovery'} for r in trials)
                 active=any(r['state'] in {'running','submitting','cancelling'} for r in trials)
                 if campaign.setting('paused',False):break
-                if not pending and not queued and not following:break
+                # An inspection can commit new trials after this tick's local
+                # snapshot. Consume that task and poll the new ledger on the
+                # next pass before declaring the finite campaign complete.
+                if not pending and not queued and not following and preparation is None:break
                 await asyncio.sleep(3)
         finally:
             try:
