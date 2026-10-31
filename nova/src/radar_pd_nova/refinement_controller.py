@@ -95,6 +95,13 @@ def selected_refinement_dataset(result, stage):
     return (result.get('stage_dataset_ids') or {}).get(stage)
 
 
+def refinement_result_title(job, recipes):
+    versions=[str(recipes[rid]['version']) for rid in (job.get('recipes') or [job.get('recipe_id')])
+              if rid in recipes]
+    recipe='Recipe '+', '.join(versions) if versions else 'Recipe unavailable'
+    return f"{job['source']['scan_label']} · {job['source']['sample_label']} · {recipe}"
+
+
 def refinement_output_provenance(result, stage):
     if stage=='final' and result.get('final_gpx'):
         location=(f"Galaxy History → Verified refinement-stage GPXs → final (dataset {result['final_dataset_id']})"
@@ -588,9 +595,14 @@ class RefinementMixin:
         if not job or job['source']['experiment']!=s.rf_experiment:return
         experiment=s.rf_experiment
         def current():return s.rf_selected_job==uid and s.rf_experiment==experiment
-        s.rf_selected_job=uid;s.rf_selected_title=job['source']['scan_label']+f" · {job['source']['sample_label']}"
+        s.rf_selected_job=uid;s.rf_selected_title=refinement_result_title(job,w.state.get('recipes',{}))
         s.rf_selected_message=job['message'];s.rf_error='';s.rf_stage='final';s.rf_has_output=False;s.rf_output_provenance='';s.rf_parameter_warnings=[]
+        # A running scan or a slow artifact recovery must not inherit another
+        # scan's parameter table or downloads under its new heading.
+        s.rf_parameters=[];s.rf_stages=[];s.rf_histograms=[];s.rf_histogram=''
+        s.rf_downloads=[];s.rf_download='';s.rf_rwp_summary='';s.rf_fit_notice=''
         result=job.get('result') or {};s.rf_can_open_gsas=False;s.rf_open_gsas_label='Open selected verified GPX in GSAS-II'
+        s.flush()
         if result and not Path(result.get('directory','')).is_dir() and job.get('remote_action'):
             try:
                 await asyncio.to_thread(w.recover_job_artifacts,uid)

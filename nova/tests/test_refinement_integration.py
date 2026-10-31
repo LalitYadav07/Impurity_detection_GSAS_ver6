@@ -12,7 +12,7 @@ from radar_pd_nova.refinement_sources import (RefinementScope, source_from_recor
 from radar_pd_nova.refinement_controller import (published_refinement_source,refinement_rwp_summary,
     refinement_status_message,refinement_output_provenance,selected_refinement_dataset,
     recover_completed_refinement_records,refinement_experiment_options,RefinementMixin,
-    refinement_parameter_warnings)
+    refinement_parameter_warnings,refinement_result_title)
 from radar_pd_nova.refinement_workspace import RefinementWorkspace
 from radar_pd_nova.refinement_runtime import LocalRefinementRuntime,verify_result_files
 
@@ -659,6 +659,35 @@ def test_completed_refinement_reports_verified_stage_count_and_final_gpx():
     message=refinement_status_message(dict(status='completed',final_gpx='final.gpx',stages=[{}, {}, {}, {}]),None)
     assert '4 verified stages completed' in message
     assert 'Final GPX ready for scientific review' in message
+
+
+def test_switching_to_running_scan_clears_the_previous_scans_parameters_and_outputs():
+    snapshots=[]
+    class State(SimpleNamespace):
+        def flush(self):snapshots.append(copy.deepcopy(vars(self)))
+    class App(RefinementMixin):
+        def _refinement_plot_changed(self):pass
+        def _refinement_trend_changed(self):pass
+    job=dict(id='next',source=dict(experiment='exp',scan_label='Run 20',sample_label='sample'),
+             recipe_id='r3',recipes=['r3'],status='running',message='Refining the approved stages')
+    app=App();app.server=SimpleNamespace(state=State(rf_experiment='exp',rf_selected_job='earlier',
+        rf_parameters=[{'label':'earlier scan cell','value':5.1}],rf_downloads=[{'value':'earlier.gpx'}],
+        rf_download='earlier.gpx',rf_has_output=True,rf_can_open_gsas=True,
+        rf_rwp_summary='Earlier score',rf_fit_notice='Earlier observations'))
+    app._refinement_workspace=SimpleNamespace(state={'jobs':{'next':job},'recipes':{'r3':{'version':3}}})
+    asyncio.run(app._select_refinement_job('next'))
+    assert snapshots and all(row['rf_selected_job']=='next' for row in snapshots)
+    assert all(not row['rf_parameters'] and not row['rf_downloads'] and not row['rf_has_output']
+               and not row['rf_can_open_gsas'] for row in snapshots)
+    assert all(row['rf_selected_title']=='Run 20 · sample · Recipe 3' for row in snapshots)
+    assert app.server.state.rf_selected_message=='Refining the approved stages'
+    assert not app.server.state.rf_rwp_summary and not app.server.state.rf_fit_notice
+
+
+def test_reused_result_heading_identifies_each_actual_recipe():
+    job={'source':{'scan_label':'Run 20','sample_label':'sample'},'recipes':['first','reused']}
+    assert refinement_result_title(job,{'first':{'version':1},'reused':{'version':4}}).endswith('Recipe 1, 4')
+    assert refinement_result_title(job,{}).endswith('Recipe unavailable')
 
 
 @pytest.mark.parametrize('selected,follow,experiment,expected',[

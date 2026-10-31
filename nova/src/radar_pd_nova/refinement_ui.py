@@ -177,9 +177,11 @@ def refinement_dashboard(app):
                     html.P('{{ rf_trend_notice }}',classes='rf-notice')
                     html.P('Traces remain separate by sample, bank and recipe. Missing measured conditions leave gaps. Relative percent is supported for cell lengths and volume.',classes='rf-notice')
                 with html.Div(v_show="rf_result_tab === 'parameters'"):
-                    v.VTextField(label='Find phase, atom or parameter',v_model=('rf_parameter_search',),density='compact',variant='outlined',hide_details=True,classes='mb-3')
-                    v.VDataTable(items=('rf_parameters',),search=('rf_parameter_search',),headers=("[{title:'Parameter',key:'label'},{title:'Value',key:'value_display'},{title:'Unit',key:'unit'},{title:'Conditional s.u.',key:'sigma_display'},{title:'Status',key:'status_display'},{title:'Stage',key:'stage'}]",),density='compact',items_per_page=12)
-                    html.P('Phase HAP scales are not weight fractions. Crystalline weight values are shown only when derived by GSAS-II. Earlier-stage uncertainties retain their stage provenance.',classes='rf-notice')
+                    with html.Div(v_if='rf_has_output'):
+                        v.VTextField(label='Find phase, atom or parameter',v_model=('rf_parameter_search',),density='compact',variant='outlined',hide_details=True,classes='mb-3')
+                        v.VDataTable(items=('rf_parameters',),search=('rf_parameter_search',),headers=("[{title:'Parameter',key:'label'},{title:'Value',key:'value_display'},{title:'Unit',key:'unit'},{title:'Conditional s.u.',key:'sigma_display'},{title:'Status',key:'status_display'},{title:'Stage',key:'stage'}]",),density='compact',items_per_page=12)
+                        html.P('Phase HAP scales are not weight fractions. Crystalline weight values are shown only when derived by GSAS-II. Earlier-stage uncertainties retain their stage provenance.',classes='rf-notice')
+                    html.Div('Parameters for this scan and recipe appear after a verified refinement stage is available.',v_if='!rf_has_output',classes='rf-empty')
                 with html.Div(v_if='rf_downloads.length',classes='rf-toolbar',style='border-top:1px solid #e0e9e2;padding-top:18px'):
                     select('Verified output','rf_download','rf_downloads')
                     v.VBtn('Download',click=app.download_refinement_artifact,variant='outlined',size='small',prepend_icon='mdi-download')
