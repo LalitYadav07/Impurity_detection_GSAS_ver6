@@ -157,7 +157,7 @@ def disposition_reason(row):
 
 
 def display_status(status):
-    return {'prepared':'awaiting dispatch','running':'dispatched to Galaxy',
+    return {'prepared':'awaiting dispatch','running':'assigned to a batch',
             'submitting':'submission pending'}.get(status,status.replace('_',' '))
 
 

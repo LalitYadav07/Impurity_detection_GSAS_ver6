@@ -156,9 +156,10 @@ def test_experiment_change_during_refresh_reloads_instead_of_publishing_stale_re
             app.refresh_symmetry()
         return [dict(source=experiment,parent='Parent',metadata=dict(series=experiment),status='prepared',execution_state='prepared')],[]
     monkeypatch.setattr(controller,'campaign_rows',read)
-    def group(source):
+    def group(rows,source):
         if source=='IPTS-1' and change_during=='grouping':change()
-    app._symmetry_source_data=group
+        return rows,[]
+    app._symmetry_source_snapshot=group
     app._symmetry_publish_source=lambda:published.append((state.rf_experiment,app._symmetry_all_rows[0]['source']))
     async def run():
         tasks=[]
@@ -278,7 +279,7 @@ def test_refresh_recovers_restored_remote_evidence_without_resuming_or_submittin
         events.append('read')
         return [],[]
     monkeypatch.setattr(controller,'campaign_rows',read)
-    app._symmetry_source_data=lambda *args:None
+    app._symmetry_source_snapshot=lambda *args:([],[])
     app._symmetry_publish_source=lambda:None
     async def run():
         tasks=[]
@@ -331,3 +332,71 @@ def test_failed_refresh_scheduling_releases_the_pending_guard():
     app._refinement_schedule=fail
     with pytest.raises(RuntimeError,match='Event loop unavailable'):app.refresh_symmetry()
     assert app._symmetry_loading is False
+
+
+@pytest.mark.parametrize('blocked_stage',['portfolio','grouping'])
+def test_verified_scan_navigation_remains_live_during_background_audit(tmp_path,monkeypatch,blocked_stage):
+    import asyncio
+    import threading
+    import radar_pd_nova.symmetry_controller as controller
+    class State(SimpleNamespace):
+        def flush(self):pass
+    state=State(rf_experiment='IPTS-1',sx_result_scope='experiment',sx_start_source='',rf_source='',
+                sx_campaign='campaign',sx_source='first',sx_results_current=True)
+    app=controller.SymmetryMixin();app.server=SimpleNamespace(state=state)
+    app._model_remote=lambda:None;app._refinement_store=lambda:None;app._symmetry_root=lambda:tmp_path
+    app._symmetry_loading=False;app._symmetry_refresh_pending=False
+    app._symmetry_display_identity=('campaign','IPTS-1','experiment')
+    (tmp_path/'campaign').mkdir();(tmp_path/'campaign/campaign.sqlite').touch()
+    def row(source,revision):
+        return dict(source=source,parent='Parent',metadata=dict(series='IPTS-1'),status='prepared',
+                    execution_state='prepared',revision=revision)
+    old=[row(s,'verified-old')for s in ['first','second']]
+    fresh=[row(s,'verified-new')for s in ['first','second']]
+    app._symmetry_all_rows=old
+    entered=threading.Event();release=threading.Event();blocked=[];published=[]
+    def block_once(stage):
+        if stage==blocked_stage and not blocked:
+            blocked.append(stage);entered.set();assert release.wait(5)
+    monkeypatch.setattr(controller,'start_choices',lambda *args:[])
+    monkeypatch.setattr(controller,'coverage_rows',lambda rows:[])
+    def read(*args,**kwargs):
+        block_once('portfolio');return fresh,[]
+    monkeypatch.setattr(controller,'campaign_rows',read)
+    def snapshot(rows,source):
+        if rows is not old:block_once('grouping')
+        selected=[r for r in rows if r['source']==source]
+        return selected,[dict(source=source,revision=selected[0]['revision'])]
+    app._symmetry_source_snapshot=snapshot
+    app._symmetry_publish_source=lambda:published.append((state.sx_source,
+        tuple((r['source'],r['revision'])for r in app._symmetry_rows),
+        tuple((g['source'],g['revision'])for g in app._symmetry_groups)))
+    async def run():
+        tasks=[]
+        app._refinement_schedule=lambda coro,*args:tasks.append(asyncio.create_task(coro))
+        app.refresh_symmetry()
+        assert await asyncio.to_thread(entered.wait,5)
+        try:
+            assert app._symmetry_loading and state.sx_busy
+            state.sx_source='second';app._symmetry_source_changed()
+            assert published[-1]==('second',(('second','verified-old'),),(('second','verified-old'),))
+            assert app._symmetry_all_rows is old
+        finally:release.set()
+        while tasks:
+            pending=list(tasks);tasks.clear();await asyncio.gather(*pending)
+    asyncio.run(run())
+    assert published[-1]==('second',(('second','verified-new'),),(('second','verified-new'),))
+    assert state.sx_source=='second' and state.sx_campaign=='campaign'
+    assert state.sx_results_current and not app._symmetry_loading and not app._symmetry_refresh_pending
+
+
+@pytest.mark.parametrize('current,experiment',[(False,'IPTS-1'),(True,'IPTS-2')])
+def test_scan_inspection_never_publishes_a_snapshot_from_another_scope(current,experiment):
+    from radar_pd_nova.symmetry_controller import SymmetryMixin
+    state=SimpleNamespace(sx_results_current=current,sx_campaign='campaign',rf_experiment=experiment,
+                          sx_result_scope='experiment',sx_source='second')
+    app=SymmetryMixin();app.server=SimpleNamespace(state=state);app._symmetry_loading=True
+    app._symmetry_display_identity=('campaign','IPTS-1','experiment')
+    def stale(*args):raise AssertionError('Unqualified or stale experiment rows must remain hidden')
+    app._symmetry_source_data=stale;app._symmetry_publish_source=stale
+    app._symmetry_source_changed()

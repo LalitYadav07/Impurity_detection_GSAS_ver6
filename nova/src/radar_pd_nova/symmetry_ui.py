@@ -133,18 +133,18 @@ def model_exploration(app):
                 html.P('Each start uses a fresh native process. Galaxy jobs share immutable inputs and batch independent starts within allocated CPU/RAM. Missing allocation information limits the pool to one worker. Model calls run only during setup.',classes='rf-notice')
                 html.P('Structural fit comparisons require a matched parent/nuisance refinement. A lower Rwp alone does not establish a transition.',v_if="sx_kind === 'structural'",classes='rf-notice')
         html.Div('{{ sx_progress }}',v_if='sx_results_current && !!sx_progress',classes='sx-status')
-        html.P('Dispatched starts share a Galaxy job, which can be queued or running. The native worker count is reported after the first batch; it is separate from the number of dispatched starts.',
+        html.P('Starts assigned to a batch share a Galaxy job after its recovery checkpoint is ready. Jobs can be queued or running. The native worker count is reported after the first batch; it is separate from the number of starts.',
             v_if='sx_results_current && sx_campaign_running',classes='rf-notice')
         with html.Details(v_if='sx_enrollments.length',classes='rf-card mb-4'):
             html.Summary('Acquisition queue ({{ sx_enrollments.length }}) · {{ sx_following ? "following new scans" : "captured scans" }}')
             v.VDataTable(items=('sx_enrollments',),headers=("[{title:'Scan',key:'scan'},{title:'Bank',key:'bank'},{title:'State',key:'status'},{title:'Review needed',key:'reason'}]",),items_per_page=8,density='compact')
         with html.Details(v_if='sx_results_current && sx_coverage.length > 1',classes='rf-card mb-4'):
-            html.Summary('Scans and search coverage ({{ sx_coverage.length }} hypotheses)')
+            html.Summary('Scans and search coverage ({{ sx_coverage.length }})')
             v.VDataTable(items=('sx_coverage',),headers=("[{title:'Scan',key:'scan'},{title:'Condition',key:'condition'},{title:'Bank',key:'bank'},{title:'Magnetic sites',key:'sites'},{title:'Terminal starts',key:'coverage'},{title:'Qualified starts',key:'qualified'},{title:'Best qualified Rwp',key:'best_qualified'},{title:'Best audited Rwp',key:'best_audited'},{title:'Status',key:'status'}]",),items_per_page=8,density='compact',classes='mt-3')
         with html.Div(v_if='sx_results_current && sx_source_options.length > 1',classes='rf-toolbar'):
-            v.VBtn('Previous scan',click=(app.symmetry_adjacent_scan,'[-1]'),disabled=("sx_busy || sx_source_options.findIndex(x => x.value === sx_source) <= 0",),variant='text',prepend_icon='mdi-chevron-left')
-            select('Compare models for this exact scan / bank','sx_source','sx_source_options',disabled=('sx_busy',))
-            v.VBtn('Next scan',click=(app.symmetry_adjacent_scan,'[1]'),disabled=("sx_busy || sx_source_options.findIndex(x => x.value === sx_source) >= sx_source_options.length - 1",),variant='text',append_icon='mdi-chevron-right')
+            v.VBtn('Previous scan',click=(app.symmetry_adjacent_scan,'[-1]'),disabled=("!sx_results_current || sx_source_options.findIndex(x => x.value === sx_source) <= 0",),variant='text',prepend_icon='mdi-chevron-left')
+            select('Compare models for this exact scan / bank','sx_source','sx_source_options',disabled=('!sx_results_current',))
+            v.VBtn('Next scan',click=(app.symmetry_adjacent_scan,'[1]'),disabled=("!sx_results_current || sx_source_options.findIndex(x => x.value === sx_source) >= sx_source_options.length - 1",),variant='text',append_icon='mdi-chevron-right')
         with html.Div(v_if='sx_results_current && sx_groups.length',classes='sx-layout'):
             with html.Aside(classes='rf-card'):
                 html.H3('Calculated-pattern groups')

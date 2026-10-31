@@ -268,7 +268,6 @@ class SymmetryMixin(KSearchMixin):
                 if identity!=(s.sx_campaign,s.rf_experiment,s.sx_result_scope):
                     self._symmetry_refresh_pending=True;return
                 rows=scope_rows(rows,s.rf_experiment,s.sx_result_scope)
-                self._symmetry_all_rows=rows
                 s.sx_coverage=coverage_rows(rows)
                 s.sx_resumable=campaign_can_resume(summaries,list(campaign.setting('enrollments',{}).values()),
                     following=bool(template and campaign.setting('following',False)))
@@ -286,11 +285,20 @@ class SymmetryMixin(KSearchMixin):
                 options={r['source']:(' · '.join(str(v) for v in [r['metadata'].get('scan') or r['parent'],
                     (f"{r['metadata']['condition']:g} {r['metadata'].get('condition_unit','')}" if isinstance(r['metadata'].get('condition'),(int,float)) else None),
                     ('bank '+str(r['metadata']['bank']) if r['metadata'].get('bank') else None)] if v)) for r in rows}
-                s.sx_source_options=[dict(title=label,value=key) for key,label in options.items()]
-                if s.sx_source not in options:s.sx_source=next(iter(options),'')
-                await asyncio.to_thread(self._symmetry_source_data,s.sx_source)
+                selected=s.sx_source if s.sx_source in options else next(iter(options),'')
+                # Prepare a new view without mutating the displayed snapshot.
+                # The user may inspect its verified scans while this audit waits
+                # on Galaxy. A late result must not restore an old selection.
+                source_rows,groups=await asyncio.to_thread(self._symmetry_source_snapshot,rows,selected)
                 if identity!=(s.sx_campaign,s.rf_experiment,s.sx_result_scope):
                     self._symmetry_refresh_pending=True;return
+                latest=s.sx_source if s.sx_source in options else next(iter(options),'')
+                if selected!=latest:
+                    self._symmetry_refresh_pending=True;return
+                self._symmetry_all_rows=rows
+                self._symmetry_rows=source_rows;self._symmetry_groups=groups
+                s.sx_source_options=[dict(title=label,value=key) for key,label in options.items()]
+                s.sx_source=selected
                 self._symmetry_publish_source()
                 self._symmetry_display_identity=identity;s.sx_results_current=True
             except Exception as exc:s.sx_error=str(exc)
@@ -305,9 +313,13 @@ class SymmetryMixin(KSearchMixin):
             self._symmetry_loading=False;request.close()
             raise
 
+    @staticmethod
+    def _symmetry_source_snapshot(rows,source):
+        selected=[r for r in rows if r['source']==source]
+        return selected,display_groups(group_models(selected))
+
     def _symmetry_source_data(self,source):
-        rows=[r for r in self._symmetry_all_rows if r['source']==source]
-        self._symmetry_rows=rows;self._symmetry_groups=display_groups(group_models(rows))
+        self._symmetry_rows,self._symmetry_groups=self._symmetry_source_snapshot(self._symmetry_all_rows,source)
 
     def _symmetry_publish_source(self):
         s=self.server.state;groups=self._symmetry_groups;rows=self._symmetry_rows
@@ -320,10 +332,14 @@ class SymmetryMixin(KSearchMixin):
         self._symmetry_group_changed()
 
     def _symmetry_source_changed(self,**_):
-        if self._symmetry_loading:return
+        # Inspection consumes only the last verified snapshot. It neither
+        # resumes work nor changes the reviewed campaign's input/plan scope.
+        s=self.server.state
+        if not s.sx_results_current:return
+        if getattr(self,'_symmetry_display_identity',None)!=(s.sx_campaign,s.rf_experiment,s.sx_result_scope):return
         self._symmetry_explicit_selection=False
-        self.server.state.sx_group_limit=12
-        self._symmetry_source_data(self.server.state.sx_source);self._symmetry_publish_source()
+        s.sx_group_limit=12
+        self._symmetry_source_data(s.sx_source);self._symmetry_publish_source()
 
     def select_symmetry_group(self,uid):
         self._symmetry_explicit_selection=True;self.server.state.sx_group=uid
