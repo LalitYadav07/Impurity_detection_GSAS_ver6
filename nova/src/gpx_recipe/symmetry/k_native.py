@@ -124,7 +124,7 @@ def inventory(request,root):
 
 def audit_simulation(source,output,protocol,candidate):
     from .native_audit import same,nuclear_atoms
-    from .magnetic_identity import verify_native_operators,verify_collinear_structure
+    from .magnetic_identity import verify_native_operators,verify_collinear_structure,verify_symmetry_moments
     from GSASII import GSASIIlattice as L
     a,b=_open(source),_open(output)
     from .native_preparation import normalize_flags
@@ -138,8 +138,12 @@ def audit_simulation(source,output,protocol,candidate):
     checks['one_magnetic_phase']=len(magnetic)==1
     if len(magnetic)==1:
         m=magnetic[0];parent=a.phase(protocol['parent_phase']);det=abs(np.linalg.det(candidate['transformation_matrix']))
-        verify_native_operators(candidate,m.data['General']['SGData']);verify_collinear_structure(m.data)
-        checks.update(bns_operators_verified=True,collinearity_verified=True,
+        verify_native_operators(candidate,m.data['General']['SGData'])
+        if protocol['policy'].get('moment_model','collinear')=='symmetry_allowed':
+            verify_symmetry_moments(m.data);checks['site_symmetry_moments_verified']=True
+        else:
+            verify_collinear_structure(m.data);checks['collinearity_verified']=True
+        checks.update(bns_operators_verified=True,
             nuclear_cell_linked=bool(np.allclose(L.TransformCell(parent.data['General']['Cell'][1:7],candidate['transformation_matrix'])[:6],m.data['General']['Cell'][1:7],atol=1e-8,rtol=0)),
             material_amount_linked=bool(np.isclose(m.data['Histograms'][h.name]['Scale'][0]*det,parent.data['Histograms'][h.name]['Scale'][0],atol=1e-10,rtol=0)))
         from gsas_magnetic_preflight import magnetic_magnitude

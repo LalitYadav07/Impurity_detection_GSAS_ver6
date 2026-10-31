@@ -56,6 +56,10 @@ def execute(directory):
     output=directory/'results';output.mkdir(exist_ok=False)
     response=dict(schema='radar-symmetry-trial/v1',status='technical_failure',llm_calls=0)
     protocol=None;input_root=directory
+    timings={};stage_started=started
+    def mark(stage):
+        nonlocal stage_started
+        now=time.monotonic();timings[stage]=now-stage_started;stage_started=now
     try:
         job=json.loads((directory/'job.json').read_text());protocol=validate_protocol(job['protocol'])
         response.update(id=job['id'],protocol_sha256=digest(protocol),candidate_id=job['candidate_id'],seed_id=job['seed_id'])
@@ -65,8 +69,10 @@ def execute(directory):
         input_root=job_inputs(directory,job)
         verify_inputs(protocol,input_root)
         if job['schema']=='radar-symmetry-job/v2':require_adapters()
+        mark('input_verification_seconds')
         runtime=runtime_identity();response['runtime']=runtime
         require_runtime(runtime,protocol['magnetic_function_sha256'])
+        mark('native_runtime_initialization_seconds')
         candidate=next(c for c in protocol['candidates'] if c['id']==job['candidate_id'])
         seed=next(s for s in protocol['seeds'] if s['id']==job['seed_id'])
         if 'candidate_ids' in seed and candidate['id'] not in seed['candidate_ids']:raise TrialDisposition('integrity_failure','Start is outside this candidate’s approved finite set')
@@ -76,9 +82,11 @@ def execute(directory):
         else:
             from .native_structural import run
         result=run(source,ctx,protocol,candidate,seed)
+        mark('model_and_refinement_seconds')
         response.update(result)
         from .native_audit import audit_trial
         response['audit']=audit_trial(source,output/result['gpx'],protocol,candidate)
+        mark('independent_audit_seconds')
         response['native_reported_rwp']=response.get('rwp');response['rwp']=response['audit']['rwp_recomputed']
         registered=output/'artifacts.json'
         if registered.exists():
@@ -96,6 +104,8 @@ def execute(directory):
         if protocol is not None:
             try:verify_inputs(protocol,input_root)
             except Exception as exc:response.update(status='integrity_failure',reason=str(exc),inputs_verified=False)
+        mark('remaining_work_and_final_integrity_seconds')
+        response['timings']=timings
         usage=resource.getrusage(resource.RUSAGE_SELF)
         response['resources']=dict(wall_seconds=time.monotonic()-started,cpu_seconds=usage.ru_utime+usage.ru_stime,
                                   peak_rss_bytes=int(usage.ru_maxrss*(1024 if sys.platform.startswith('linux') else 1)))

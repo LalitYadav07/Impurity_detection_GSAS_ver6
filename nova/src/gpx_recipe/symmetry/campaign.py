@@ -20,6 +20,26 @@ from .contracts import digest, trial_id, validate_protocol,iter_trials
 from ..symmetry_results import TERMINAL, summarize_portfolio
 
 
+def balanced_trial_order(rows):
+    """Interleave declared candidates/seed families without omitting starts."""
+    from collections import deque
+    candidates={}
+    for row in rows:candidates.setdefault(row['candidate'],{}).setdefault(row['seed'].split('-',1)[0],[]).append(row)
+    queues=[]
+    for index,families in enumerate(candidates.values()):
+        local=[];depth=0
+        while any(depth<len(group) for group in families.values()):
+            local.extend(group[depth] for group in families.values() if depth<len(group))
+            depth+=1
+        offset=index%min(3,len(local))
+        queues.append(deque(local[offset:]+local[:offset]))
+    result=[]
+    while any(queues):
+        for queue in queues:
+            if queue:result.append(queue.popleft())
+    return result
+
+
 def verify_receipt(directory, expected):
     """Rehash terminal artifacts on every collection/restart, not just once."""
     directory=Path(directory)
@@ -260,10 +280,18 @@ class Campaign:
                         if last in protocols:
                             index=(protocols.index(last)+1)%len(protocols)
                             protocols=protocols[index:]+protocols[:index]
+                        # Let a ready acquisition use a free batch before
+                        # assigning a second batch to an already active scan.
+                        active_protocols={r['protocol'] for r in rows
+                            if r['state'] in {'running','submitting','cancelling'}}
+                        idle=[p for p in protocols if p not in active_protocols]
+                        if idle:protocols=idle
                         selected=protocols[0]
                         prepared=[r for r in prepared if r['protocol']==selected]
                         size=transport.chunk_size_for(prepared[0]['protocol']) if hasattr(transport,'chunk_size_for') else transport.chunk_size
-                        group=[r for r in prepared if r['protocol']==prepared[0]['protocol']][:size]
+                        # A pilot must sample different candidates and starts,
+                        # not exhaust one cheap/unsupported model first.
+                        group=balanced_trial_order(prepared)[:size]
                         for row in group:self.set_state(row['id'],'submitting')
                         try:
                             handles=transport.submit_many([(r['id'],self.trial_directory(r)) for r in group],workers=slots)

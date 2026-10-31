@@ -69,6 +69,8 @@ def read_trial(directory,metadata=None,*,expected_receipt=None):
             result=checked_receipt(directory,job,expected_receipt)
             row.update({k:result.get(k) for k in ['status','rwp','nvars','reason']})
             row['refined_moments']=result.get('moments',[])
+            row['resources']=result.get('resources',{})
+            row['timings']=result.get('timings',{})
             row['receipt_sha256']=digest(result);row['native_version']=result.get('runtime',{}).get('version','unknown')
             row['bns_audited']=result.get('audit',{}).get('checks',{}).get('complete_magnetic_operators_preserved') is True
             gpx='results/'+str(result.get('gpx') or '')

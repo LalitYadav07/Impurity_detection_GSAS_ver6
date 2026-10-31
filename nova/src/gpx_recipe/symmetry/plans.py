@@ -48,7 +48,7 @@ def build_plan(context,catalog,root,settings):
             for index,signs in enumerate(itertools.product([-1,1],repeat=2)):
                 direction={seed['axis']:1.,**{axis:.5*sign for axis,sign in zip(other,signs)}}
                 for level,fraction in enumerate([.25,.75]):
-                    starts.append(dict(seed,id=seed['id']+'-cant-'+str(index+1)+'-amp-'+str(level+1),
+                    starts.append(dict(seed,id=seed['id']+'-cant-'+str(index+1)+'-amp-'+str(level+1),independent_mode_seed='xyz'.index(seed['axis'])*8+index*2+level+1,
                         magnitude=settings['maximum_moment']*fraction,parent_direction=[direction[a] for a in 'xyz']))
         seeds=starts
     policy=dict(cycles=settings['cycles'],timeout_seconds=120,maximum_trials=2000,maximum_cell_multiplier=8,maximum_moment=settings['maximum_moment'],fit_band_percent=.25,maximum_mode=settings['maximum_mode'],adequate_rwp_percent=settings['adequate_rwp'],

@@ -184,6 +184,16 @@ def restore_history(root,runtime):
                 packet=target/'inputs.zip';runtime.service._download_dataset(checked_id(dataset),packet)
                 unpack(packet,target/'unpacked');protocol=json.loads((target/'unpacked/protocol.json').read_text())
                 if digest(protocol)!=sha:raise ValueError('The saved model input catalogue changed')
+                source_path=target/'unpacked'/protocol['source']['path']
+                if not source_path.is_file():
+                    from gpx_recipe.symmetry.bundle import hydrate_source
+                    source=dict(transport['sources'].get(sha) or {})
+                    source.pop('source_path',None);source.pop('context',None)
+                    if source.get('source_sha256')!=protocol['source']['sha256']:
+                        raise ValueError('The saved source reference differs from its approved protocol')
+                    resolved=runtime.resolve(source)
+                    hydrate_source(target/'unpacked',resolved['source_path'],
+                        {asset['path']:asset['sha256'] for asset in assets(protocol)},protocol['source']['sha256'])
                 inputs[sha]=prepare_shared_inputs(protocol,target/'unpacked',campaign.root)
             template=validate_template(document['ledger']['settings']['template'])
             if digest(template['protocol']) not in inputs:raise ValueError('The reviewed reference inputs are absent from the checkpoint')

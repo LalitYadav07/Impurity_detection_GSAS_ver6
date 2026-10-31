@@ -31,7 +31,7 @@ from .symmetry_workspace import campaign_rows,group_models,display_groups,view_f
 from . import symmetry_plots as plots
 from .symmetry_sources import start_choices,resolve_start
 from .k_search_controller import KSearchMixin
-from .model_runtime import GalaxyModelRuntime,GalaxyChunkTransport,CollectOnlyTransport,active_batch_count
+from .model_runtime import GalaxyModelRuntime,GalaxyChunkTransport,CollectOnlyTransport,active_batch_count,MODEL_BATCH_LIMITS
 from .model_campaigns import choices as model_choices,origin as model_origin,queue_sources,enroll_source,restore_history,portable_source,restore_captured_sources
 from gpx_recipe.symmetry.compiler import prepare_shared_inputs
 from gpx_recipe.symmetry.templates import make_template,trial_count
@@ -52,7 +52,7 @@ class SymmetryMixin(KSearchMixin):
             sx_overview=plots.empty('Open a campaign to inspect its coverage'),sx_fit=plots.empty('Select an audited checkpoint'),sx_axis='d',sx_reset=0,sx_pins=[],sx_pin_options=[],sx_parameters=[],sx_details=[],sx_moment_note='',sx_embedding_evidence=[],sx_embedding_summary='',sx_gsas_model='',sx_intensity_scale='linear',
             sx_parent='',sx_parents=[],sx_histogram='',sx_histograms=[],sx_k='',sx_sites=[],sx_site_options=[],sx_form_factors='',sx_lande='',sx_directions=['x','y','z'],sx_adequate=None,sx_max_moment='',sx_cycles=20,sx_slots=2,sx_moment_model='collinear',sx_refine_scale=False,sx_refine_background=False,
             sx_kind='magnetic',sx_mag_d_min=0.,sx_max_mode=.5,sx_start_mode=.1,sx_candidate_options=[],sx_candidates=[],sx_mode_options=[],sx_modes=[],sx_discovered=False,sx_discovery_scope='',
-            sx_plan_ready=False,sx_approved=False,sx_plan_summary='',sx_plan_candidates=[],sx_setup=False,sx_has_context=False,sx_has_gpx=False,sx_has_receipt=False,sx_resumable=False,
+            sx_plan_ready=False,sx_approved=False,sx_plan_summary='',sx_plan_candidates=[],sx_setup=False,sx_expanded=False,sx_expanded_layout={},sx_has_context=False,sx_has_gpx=False,sx_has_receipt=False,sx_resumable=False,
             sx_request='',sx_planning_summary='',sx_planning_notes=[],sx_planning_usage='',sx_planning_cost='',sx_sign_starts=True,sx_coverage=[],sx_group_limit=12,sx_result_scope='experiment',sx_start_source='',sx_start_sources=[],sx_results_current=False)
         for key,value in defaults.items():setattr(s,key,value)
         extra=dict(sx_existing='selected',sx_follow_new=False,sx_max_scans=200,sx_enrollments=[],sx_following=False,sx_campaign_running=False,sx_parallel_jobs=1,
@@ -93,7 +93,7 @@ class SymmetryMixin(KSearchMixin):
     def _symmetry_resource_changed(self,**_):
         try:
             value=self.server.state.sx_parallel_jobs
-            if type(value) is not int or value not in {1,2}:raise ValueError('Choose one or two concurrent Galaxy model batches')
+            if type(value) is not int or value not in MODEL_BATCH_LIMITS:raise ValueError('Choose 1, 2, 4 or 8 concurrent Galaxy model batches')
             if self._model_runtime_cache:self._model_runtime_cache.max_active_jobs=value
             for _,transport in self._model_active_campaigns.values():
                 if isinstance(transport,GalaxyChunkTransport):transport.max_active_jobs=value;transport.runtime.max_active_jobs=value
@@ -132,6 +132,21 @@ class SymmetryMixin(KSearchMixin):
         self._symmetry_draft=None
         s=self.server.state;s.sx_has_context=False;s.sx_discovered=False;s.sx_planning_summary='';s.sx_planning_notes=[];s.sx_planning_usage='';s.sx_planning_cost=''
         s.sx_sites=[];s.sx_form_factors='';s.sx_lande=''
+
+    def new_symmetry_search(self):
+        self._symmetry_start_changed()
+        self._symmetry_unapprove()
+        s=self.server.state
+        s.sx_setup=True;s.sx_plan_token='';s.sx_plan_summary='';s.sx_plan_candidates=[]
+        s.sx_candidates=[];s.sx_candidate_options=[];s.sx_modes=[];s.sx_mode_options=[]
+        s.sx_message='Select a starting GPX and inspect its exact parent to prepare a new search.'
+
+    def symmetry_adjacent_scan(self,step):
+        if type(step) is not int or step not in (-1,1):return
+        s=self.server.state;ids=[row['value'] for row in s.sx_source_options]
+        if s.sx_source in ids:
+            index=ids.index(s.sx_source)+step
+            if 0<=index<len(ids):s.sx_source=ids[index]
 
     def _symmetry_native(self,action,payload,root):
         import threading
@@ -292,6 +307,7 @@ class SymmetryMixin(KSearchMixin):
         try:
             s.sx_overview=plots.overview(self._symmetry_rows,s.sx_selected)
             s.sx_fit=plots.fit(row,pins,axis=s.sx_axis,reset=s.sx_reset,intensity_scale=s.sx_intensity_scale)
+            s.sx_expanded_layout={**{k:v for k,v in s.sx_fit['layout'].items() if k!='height'},'autosize':True}
             s.sx_details=[];s.sx_parameters=[];s.sx_moment_note='';s.sx_has_gpx=bool(row and row.get('has_gpx') and row['has_view'])
             s.sx_embedding_evidence,s.sx_embedding_summary=embedding_evidence(self._symmetry_rows,row)
             s.sx_has_receipt=bool(row and row.get('receipt_sha256'))
@@ -303,6 +319,12 @@ class SymmetryMixin(KSearchMixin):
                 if row['kind']=='magnetic':s.sx_details.append(dict(label='Complete BNS operator audit',value='Passed' if row.get('bns_audited') else 'Not present in this archived or unfinished trial'))
                 s.sx_details.append(dict(label='Parent-basis k',value='('+', '.join(row['k'])+')'))
                 s.sx_details.append(dict(label='Starting GPX revision',value=row['source_sha256'][:16]))
+                usage=row.get('resources') or {}
+                if isinstance(usage.get('wall_seconds'),(int,float)):
+                    detail=f"{usage['wall_seconds']:.2f} s native wall time"
+                    if isinstance(usage.get('cpu_seconds'),(int,float)):detail+=f" · {usage['cpu_seconds']:.2f} s CPU"
+                    if isinstance(usage.get('peak_rss_bytes'),(int,float)):detail+=f" · {usage['peak_rss_bytes']/1024**2:.0f} MiB peak RAM"
+                    s.sx_details.append(dict(label='Measured resources',value=detail+' · excludes Galaxy queue and transfer'))
                 if row.get('sites'):s.sx_details.append(dict(label='Magnetic sites',value='; '.join(site['label']+'='+site['form_factor']+' (g='+str(site['lande_g'])+')' for site in row['sites'])))
                 if row.get('baseline_rwp') is not None and row.get('rwp') is not None:
                     baseline=row['baseline_rwp']
@@ -564,7 +586,7 @@ class SymmetryMixin(KSearchMixin):
                     origin=d['scope_origins'][key]) for key in d['template']['existing_ids']})
                 transport=self._symmetry_transport(c)
                 if isinstance(transport,GalaxyChunkTransport):
-                    transport.state['inputs'][digest(d['protocol'])]=await asyncio.to_thread(transport.runtime.packet,ref,['protocol.json']+[a['path'] for a in __import__('gpx_recipe.symmetry.compiler',fromlist=['assets']).assets(d['protocol'])])
+                    transport.state['inputs'][digest(d['protocol'])]=await asyncio.to_thread(transport.runtime.packet,ref,['protocol.json']+[a['path'] for a in __import__('gpx_recipe.symmetry.compiler',fromlist=['assets']).assets(d['protocol'])],source_sha256=d['protocol']['source']['sha256'])
                     transport.save()
                 await asyncio.to_thread(queue_sources,c,self._refinement_store())
                 s.sx_campaign=c.root.name;s.sx_setup=False

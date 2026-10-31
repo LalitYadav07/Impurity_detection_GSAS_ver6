@@ -30,13 +30,17 @@ def start_choices(workspace, experiment):
         result=job.get('result') or {};source=job.get('source') or {}
         if job.get('status')!='completed' or result.get('status')!='completed' or source.get('experiment')!=experiment:
             continue
+        recipe_id=job.get('recipe_id') or next(iter(job.get('recipes') or []),'')
+        version=(workspace.state.get('recipes',{}).get(recipe_id) or {}).get('version')
+        recipe_label='Recipe '+str(version) if version is not None else 'Recipe checkpoint'
         checkpoints=[('final','Final recipe output',result.get('final_gpx'))]
         checkpoints.extend((stage['id'],stage.get('title') or stage['id'],stage.get('gpx'))
                            for stage in result.get('stages',[]))
         for stage,label,name in checkpoints:
             if not name or name not in result.get('files',{}) or Path(name).suffix.lower()!='.gpx':continue
             identifier='recipe:'+digest([job_id,stage,name,result['files'][name]])[:24]
-            entries.append(dict(id=identifier,title='Recipe output · '+_scan_title(source)+' · '+label,
+            entries.append(dict(id=identifier,title=recipe_label+' · '+_scan_title(source)+' · '+label+' · '+result['files'][name][:8],
+                                recipe_label=recipe_label,
                                 job_id=job_id,stage=stage,name=name))
     return entries
 
@@ -68,7 +72,7 @@ def resolve_start(workspace, experiment, identifier):
     dataset=(result.get('final_dataset_id') if entry['stage']=='final' else
              (result.get('stage_dataset_ids') or {}).get(entry['stage']))
     source.update(id=identifier,source_path=str(path),source_sha256=checksum,
-                  scan_label=source['scan_label']+' · '+('final recipe output' if entry['stage']=='final' else 'recipe stage '+entry['stage']),
+                  scan_label=source['scan_label']+' · '+entry['recipe_label']+' · '+('final' if entry['stage']=='final' else entry['stage']),
                   origin_source_id=job['source']['id'],recipe_job_id=entry['job_id'],recipe_stage=entry['stage'],
                   project=dict(stage='verified_recipe_checkpoint',status='completed'))
     if dataset:source['dataset_id']=dataset

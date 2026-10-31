@@ -16,7 +16,8 @@ def simulate(source_gpx,ctx,protocol,candidate_record,seed):
 
 def _run(source_gpx,ctx,protocol,candidate_record,seed,*,forward_only):
     from pathlib import Path
-    import copy,hashlib,math,re
+    import copy,hashlib,math,re,time
+    stage_started=time.monotonic()
     import numpy as np
     from GSASII import GSASIIscriptable as G2sc,GSASIIElem as G2elem,GSASIIlattice as G2lat,GSASIIobj as G2obj,GSASIIspc as G2spc
     from gsas_magnetic_preflight import transform_native_moment,magnetic_magnitude,moment_basis,direction_in_basis
@@ -44,7 +45,7 @@ def _run(source_gpx,ctx,protocol,candidate_record,seed,*,forward_only):
     refine_components = set('xyz') if symmetry_allowed or seed['parent_direction'] else {seed['axis']}
     fixed_moment_direction = None if symmetry_allowed else seed['parent_direction']
     ctx.save_json('moment-model.json',dict(model='symmetry_allowed' if symmetry_allowed else 'collinear',
-        seed_axis=seed['axis'],nuclear_geometry_fixed=True,common_histogram_scale_refined=protocol['policy']['refine_histogram_scale'],continuous_orientation_search_exhaustive=False))
+        seed_axis=seed['axis'],independent_mode_seed=seed.get('independent_mode_seed'),nuclear_geometry_fixed=True,common_histogram_scale_refined=protocol['policy']['refine_histogram_scale'],continuous_orientation_search_exhaustive=False))
     moment_site_coupling = 'independent'
     cycles = protocol['policy']['cycles']
     minimum_relative_chi2_change = float(1e-08)
@@ -374,6 +375,12 @@ def _run(source_gpx,ctx,protocol,candidate_record,seed,*,forward_only):
         if not any((abs(moment[component_index[axis]]) >= 1e-08 for axis in refined)):
             raise ValueError('A refined magnetic component would start at zero')
         moment *= seed.get('site_signs',{}).get(parent_label,1)
+        if symmetry_allowed and 'independent_mode_seed' in seed:
+            from .moment_starts import independent_orbit_start
+            cell=new_phase['General']['Cell'][1:7]
+            axes=G2lat.cell2AB(cell)[0] @ np.diag(1/np.asarray(cell[:3]))
+            moment=independent_orbit_start(allowed_ids,allowed_coefficients,moment,axes.T @ axes,
+                magnitude=seed['magnitude'],seed=seed['independent_mode_seed'],orbit=str(code))
         atom[cx + 4:cx + 7] = list(moment)
         for axis in {'x', 'y', 'z'} - refined:
             hold_specs.append((component_var[axis], atom[-1]))
@@ -583,7 +590,10 @@ def _run(source_gpx,ctx,protocol,candidate_record,seed,*,forward_only):
         np.savez_compressed(target,intensity=np.maximum(difference,0.))
         return dict(status='simulated',profile=target.name,gpx=output_gpx.name,
                     audit=audit,periodicity=periodicity,no_refinement=True,initial_maximum_moment=audit['maximum_moment'],magnetic_atoms=len(new_phase['Atoms']))
+    construction_seconds=time.monotonic()-stage_started
+    refinement_started=time.monotonic()
     gpx.do_refinements([{}])
+    refinement_seconds=time.monotonic()-refinement_started
     gpx.save(str(output_gpx))
     magnetic = gpx.phase(magnetic_name)
     covariance = (gpx.data.get('Covariance') or {}).get('data') or {}
@@ -711,6 +721,8 @@ def _run(source_gpx,ctx,protocol,candidate_record,seed,*,forward_only):
     if listing.is_file():
         ctx.register_file(source_path=listing, relative_path='magnetic-refinement.lst', artifact_type='gsasii_listing', title='GSAS-II magnetic refinement listing')
     ctx.save_json('magnetic-refinement-receipt.json', receipt, title='Coupled nuclear/magnetic refinement receipt', artifact_type='magnetic_refinement_receipt')
+    ctx.save_json('native-timings.json',dict(construction_seconds=construction_seconds,
+        refinement_seconds=refinement_seconds,postprocessing_seconds=time.monotonic()-refinement_started-refinement_seconds))
     ctx.log_metric('rwp', min(rwp_values))
     ctx.log_metric('magnetic_phase_count', 1)
     ctx.log_metric('magnetic_atom_count', len(final_moments))

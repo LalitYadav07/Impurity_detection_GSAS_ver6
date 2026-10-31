@@ -19,6 +19,36 @@ asset and download through nginx at both root and NDIP-style session paths.
 
 ## Facility experiment integration
 
+Model exploration uses a separate, History-wide budget of 1, 2, 4 or 8 Galaxy
+batches. Ready acquisitions get a turn before a second batch for an active
+scan. Candidate and start-family pilots measure cost before adaptive chunks
+amortize transfers. Each start runs in a fresh native process; CPU grants,
+cgroup v1/v2 quotas, CPU affinity and memory constrain its pool. Visible host
+cores do not grant workers. With no CPU allocation reported, a job uses one
+worker. Native startup, model/refinement, audit, wall/CPU time and peak RAM are
+recorded separately from Galaxy queue and transfer time. Larger site allocations
+require NDIP job-destination configuration; the UI cannot grant them.
+The explicitly supplied Galaxy GPX is reused at its declared hashed input paths,
+so it is not uploaded a second time inside asset ZIPs. GPX-only inspections share
+one empty asset packet. Fresh-viewer recovery reconstructs and rechecks the same
+inputs from the saved Galaxy publication; failed/deleted asset uploads are not
+reused.
+
+New symmetry-allowed magnetic plans vary independent child-orbit signs and
+amplitudes while preserving exact site-symmetry couplings. They retain a finite,
+reviewed portfolio, rather than claiming exhaustive orientation coverage. Old
+sealed plans keep their original starts and require their original worker.
+
+NOMAD normalized sliced and summed products are explicit source families.
+Separate slices of one parent have separate lifecycle and plotting identities.
+Filtered pulse intervals are checked against duration and parent NeXus bounds;
+a retained parent end timestamp or filename token is not a slice temperature.
+Summed membership comes from the reduction JSON and mixed sample identities
+block automatic analysis. Missing conditions remain unavailable, and supplied
+profiles still require scientific review. Excluding one derived product leaves
+other products of the parent eligible. Existing individual-run checkpoint and
+submission identities remain compatible.
+
 Live uploads scientific inputs as Galaxy dependencies and acknowledges the
 analysis as soon as Galaxy creates its job. Galaxy waits for pending inputs;
 NOVA can prepare the next scan without occupying an upload lane during that

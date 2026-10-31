@@ -9,7 +9,7 @@ import zipfile
 import pytest
 
 from gpx_recipe.symmetry import chunks
-from gpx_recipe.symmetry.bundle import pack,unpack
+from gpx_recipe.symmetry.bundle import pack,unpack,hydrate_source
 from gpx_recipe.symmetry.campaign import Campaign,verify_receipt
 from gpx_recipe.symmetry.compiler import package_signature,job_inputs,file_sha
 from gpx_recipe.symmetry.contracts import digest,iter_trials,trial_id,validate_protocol
@@ -64,12 +64,43 @@ def test_restore_prevalidates_full_denominator_before_mutating(model,tmp_path):
 @pytest.mark.parametrize('slots,quota,memory,expected',[
     (None,'max 100000',8192,1),('4','max 100000',8192,4),
     ('16','250000 100000',16384,2),('8','max 100000',3072,2),
-    ('invalid','max 100000',4096,1),('0','max 100000',4096,1)])
-def test_allocation_uses_entitlement_and_memory(tmp_path,slots,quota,memory,expected):
+    ('invalid','max 100000',4096,1),('0','max 100000',4096,1),
+    (None,'400000 100000',8192,4),(None,'400000 100000',3072,2),
+    (None,'50000 100000',4096,1)])
+def test_allocation_uses_entitlement_and_memory(tmp_path,slots,quota,memory,expected,monkeypatch):
+    monkeypatch.setattr('gpx_recipe.symmetry.resources.affinity_limit',lambda:128)
     (tmp_path/'cpu.max').write_text(quota);(tmp_path/'memory.max').write_text(str(memory*1024**2))
     env={} if slots is None else {'GALAXY_SLOTS':slots}
     value=allocation(16,environ=env,cgroup=tmp_path)
     assert value['workers']==expected and value['blas_threads']==1
+
+
+def test_cgroup_v1_cpu_grant_and_memory_limit_are_respected(tmp_path,monkeypatch):
+    monkeypatch.setattr('gpx_recipe.symmetry.resources.affinity_limit',lambda:128)
+    cpu=tmp_path/'cpu';memory=tmp_path/'memory';cpu.mkdir();memory.mkdir()
+    (cpu/'cpu.cfs_quota_us').write_text('600000')
+    (cpu/'cpu.cfs_period_us').write_text('100000')
+    (memory/'memory.limit_in_bytes').write_text(str(5*1024**3))
+    value=allocation(8,environ={},cgroup=tmp_path)
+    assert value['workers']==4  # 512 MiB reserve plus four 1024 MiB workers
+    assert value['allocation_source']=='container_cpu_quota'
+    assert value['allocation_reported'] and value['memory_mb']==5120
+
+
+def test_visible_host_cpus_and_unlimited_v1_controls_grant_no_workers(tmp_path,monkeypatch):
+    monkeypatch.setattr('os.cpu_count',lambda:128)
+    (tmp_path/'cpu.cfs_quota_us').write_text('-1')
+    (tmp_path/'cpu.cfs_period_us').write_text('100000')
+    (tmp_path/'memory.limit_in_bytes').write_text(str(2**63-4096))
+    value=allocation(16,environ={},cgroup=tmp_path)
+    assert value['workers']==1 and not value['allocation_reported']
+    assert value['memory_mb'] is None
+
+
+def test_affinity_can_limit_but_cannot_grant_workers(tmp_path,monkeypatch):
+    monkeypatch.setattr('gpx_recipe.symmetry.resources.affinity_limit',lambda:2)
+    assert allocation(8,environ={'GALAXY_SLOTS':'8'},cgroup=tmp_path)['workers']==2
+    assert allocation(8,environ={},cgroup=tmp_path)['workers']==1
 
 
 @pytest.mark.parametrize('value',[True,0,17,1.5,'4'])
@@ -137,6 +168,47 @@ def test_packet_roundtrip_and_duplicate_paths(tmp_path):
     assert (unpack(tmp_path/'packet.zip',tmp_path/'out')/'source.gpx').read_bytes()==b'project'
     with zipfile.ZipFile(tmp_path/'duplicate.zip','w') as z:z.writestr('A.gpx',b'a');z.writestr('a.gpx',b'b')
     with pytest.raises(ValueError,match='duplicate'):unpack(tmp_path/'duplicate.zip',tmp_path/'duplicates')
+
+
+def test_missing_gpx_copies_are_hydrated_only_from_the_exact_galaxy_source(tmp_path,monkeypatch):
+    source=tmp_path/'galaxy.gpx';source.write_bytes(b'exact Galaxy source')
+    checksum=file_sha(source);inputs=tmp_path/'inputs';inputs.mkdir()
+    hashes={'source.gpx':checksum,'template/source.gpx':checksum}
+    hydrate_source(inputs,source,hashes,checksum)
+    assert all((inputs/p).read_bytes()==source.read_bytes() for p in hashes)
+    # Existing legacy packets are not rewritten.
+    (inputs/'source.gpx').write_bytes(b'existing captured bytes')
+    hydrate_source(inputs,source,hashes,checksum)
+    assert (inputs/'source.gpx').read_bytes()==b'existing captured bytes'
+    for bad in ['../outside.gpx','/outside.gpx','escape\\outside.gpx']:
+        with pytest.raises(ValueError,match='confined'):hydrate_source(inputs,source,{bad:checksum},checksum)
+    with pytest.raises(ValueError):hydrate_source(inputs,source,{'another.gpx':checksum},'0'*64)
+    monkeypatch.setattr('gpx_recipe.symmetry.bundle.MAX_BYTES',1)
+    with pytest.raises(ValueError,match='expanded-size'):hydrate_source(inputs,source,{'more.gpx':checksum},checksum)
+
+
+@pytest.mark.parametrize('legacy',[False,True])
+def test_galaxy_entrypoint_uses_separate_source_without_reupload_and_preserves_old_packets(tmp_path,monkeypatch,legacy):
+    import importlib.util
+    script=Path(__file__).resolve().parents[2]/'scripts/ndip_model_campaign.py'
+    spec=importlib.util.spec_from_file_location('ndip_model_campaign_test',script)
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    source=tmp_path/'source.gpx';source.write_bytes(b'exact native source')
+    assets=tmp_path/'assets.zip'
+    with zipfile.ZipFile(assets,'w') as z:
+        if legacy:z.write(source,'source.gpx')
+    request=tmp_path/'request.json'
+    request.write_text(json.dumps(dict(schema='radar-model-native/v1',expected_source_sha256=file_sha(source),
+        input_hashes={'source.gpx':file_sha(source)},dispatch_key='a'*24)))
+    def native(value,inputs,root,cancel):
+        assert (inputs/'source.gpx').read_bytes()==source.read_bytes()
+        (root/'checked.json').write_text('{"checked":true}')
+        return {'checked':True},root
+    monkeypatch.setattr(module,'native',native)
+    result=module.work('native',source,assets,request,tmp_path/'worker',tmp_path/'output.zip')
+    assert result['result']=={'checked':True}
+    with zipfile.ZipFile(tmp_path/'output.zip') as z:
+        assert not any(p.endswith('source.gpx') for p in z.namelist())
 
 
 def template(p):

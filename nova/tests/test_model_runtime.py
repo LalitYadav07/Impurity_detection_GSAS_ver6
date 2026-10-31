@@ -76,6 +76,29 @@ def test_native_packet_result_roundtrip_and_credentials_stay_in_nova(remote,tmp_
     assert 'SENTINEL' not in json.dumps(service.requests)
     for value in service.data.values():
         assert b'PRIVATE-' not in value
+    import io
+    packet=service.data[service.submissions[0]['inputs']['model_assets']['dataset_id']]
+    with zipfile.ZipFile(io.BytesIO(packet)) as archive:assert archive.namelist()==[]
+
+
+def test_native_inspections_reuse_an_empty_asset_packet_without_copying_gpx(remote,tmp_path):
+    runtime,service,source=remote
+    first=runtime.packet(tmp_path,['source.gpx'],source_sha256=source['source_sha256'])
+    second_file=tmp_path/'second.gpx';second_file.write_bytes(b'another exact native project')
+    second=runtime.packet(tmp_path,['second.gpx'],source_sha256=file_sha(second_file))
+    assert first==second and len(service.data)==1
+    # A different GPX is an actual scientific asset, not the supplied source.
+    third=runtime.packet(tmp_path,['second.gpx'],source_sha256=source['source_sha256'])
+    assert third!=first
+
+
+def test_failed_asset_upload_does_not_poison_future_native_inspections(remote,tmp_path):
+    runtime,service,source=remote
+    first=runtime.packet(tmp_path,['source.gpx'],source_sha256=source['source_sha256'])
+    service._dataset_metadata=lambda key:dict(state='error' if key==first else 'ok')
+    second=runtime.packet(tmp_path,['source.gpx'],source_sha256=source['source_sha256'])
+    assert second!=first
+    assert runtime.packet(tmp_path,['source.gpx'],source_sha256=source['source_sha256'])==second
 
 
 def test_lost_ack_is_recovered_without_resubmission(remote):
@@ -185,7 +208,7 @@ def test_user_cancellation_wins_over_automatic_staging_recovery(remote,tmp_path,
     assert not cancel and not t.state['chunks'][key].get('not_dispatched')
 
 
-@pytest.mark.parametrize('limit,occupancies,expected_calls',[(1,[1,0],2),(2,[1],1),(2,[2,1],2)])
+@pytest.mark.parametrize('limit,occupancies,expected_calls',[(1,[1,0],2),(2,[1],1),(2,[2,1],2),(4,[4,3],2),(8,[8,7],2)])
 def test_history_capacity_respects_the_reviewed_batch_limit(tmp_path,monkeypatch,limit,occupancies,expected_calls):
     runtime=GalaxyModelRuntime(tmp_path/'bounded',Service(tmp_path),poll_seconds=.001,max_active_jobs=limit)
     calls=[]
@@ -199,8 +222,8 @@ def test_history_capacity_respects_the_reviewed_batch_limit(tmp_path,monkeypatch
 
 
 @pytest.mark.parametrize('limit',[0,3,16,True,'2',1.5])
-def test_parallel_batch_budget_cannot_expand_beyond_two(tmp_path,limit):
-    with pytest.raises(ValueError,match='one or two'):
+def test_parallel_batch_budget_requires_a_supported_explicit_limit(tmp_path,limit):
+    with pytest.raises(ValueError,match='1, 2, 4 or 8'):
         GalaxyModelRuntime(tmp_path/'invalid',Service(tmp_path),max_active_jobs=limit)
 
 
@@ -301,6 +324,7 @@ def test_lost_viewer_restores_the_existing_chunk_and_all_trial_receipts(remote,t
     assert any(label.startswith('RADAR-PD RADAR-PD Model campaign ') for label in service.labels.values())
     new=GalaxyModelRuntime(tmp_path/'new-runtime',service)
     monkeypatch.setattr(new,'find_dispatch',lambda key:service.jobs.get(key))
+    service.data['original-data']=Path(source['source_path']).read_bytes()
     restore_history(tmp_path/'new-viewer',new)
     restored=Campaign(tmp_path/'new-viewer/campaign-aaaaaaaaaaaa',shared_inputs=True)
     transport=GalaxyChunkTransport(new,restored);restored.recover(transport)

@@ -25,7 +25,7 @@ def model_exploration(app):
             v.VBtn('Refresh evidence',click=app.refresh_symmetry,loading=('sx_busy',),variant='text',prepend_icon='mdi-refresh')
             v.VBtn('Continue saved campaign',click=app.continue_symmetry_campaign,disabled=('!sx_resumable || sx_busy || sx_campaign_running',),variant='text',prepend_icon='mdi-play')
             v.VBtn('Pause campaign',click=app.pause_model_campaign,disabled=('!sx_campaign_running',),variant='text',prepend_icon='mdi-pause')
-            v.VBtn('New model search',v_if='!!sx_campaign',click='sx_setup = !sx_setup',variant='outlined',prepend_icon='mdi-molecule')
+            v.VBtn('New model search',v_if='!!sx_campaign',click=app.new_symmetry_search,disabled=('sx_busy',),variant='outlined',prepend_icon='mdi-molecule')
         v.VAlert(v_if='!!sx_error',text=('sx_error',),type='error',variant='tonal',density='compact',classes='mb-3')
         html.P('{{ sx_backend }}',classes='rf-notice')
         html.P('{{ sx_queue_notice }}',v_if='!!sx_queue_notice',classes='rf-notice')
@@ -33,9 +33,9 @@ def model_exploration(app):
         with html.Details(classes='rf-card mb-3'):
             html.Summary('Compute budget')
             with html.Div(classes='sx-settings'):
-                select('Concurrent Galaxy batches','sx_parallel_jobs','[1,2]')
+                select('Concurrent Galaxy batches','sx_parallel_jobs','[1,2,4,8]')
                 select('Native workers requested per batch','sx_slots','[1,2,4]')
-            html.P('Each batch contains many independent starts. Galaxy controls admission and CPU/RAM allocation; an unreported allocation permits one native worker per job. The batch limit includes model preparation jobs in this History. Lowering the limit lets accepted jobs finish before submitting more.',classes='rf-notice')
+            html.P('Galaxy controls admission and CPU/RAM allocation. More batches can process different scans at once; they may remain queued when the cluster is busy. An unreported allocation permits one native worker per job. This History-wide limit includes model preparation jobs. Lowering it lets accepted jobs finish before submitting more.',classes='rf-notice')
         v.VProgressLinear(v_if='sx_busy',indeterminate=True,color='#267653',height=3,classes='mb-3')
         html.P('{{ sx_message }}',classes='rf-notice',raw_attrs=['aria-live="polite"'])
         html.P('Qualified fits appear first when available. All failed, unresolved and physically rejected trials remain inspectable.',v_if='sx_groups.length',classes='rf-notice')
@@ -66,7 +66,7 @@ def model_exploration(app):
                 v.VTextField(v_if="sx_kind === 'magnetic'",label='Ionic form factors · atom=ion; atom=ion',v_model=('sx_form_factors',),placeholder='Cr1=Cr+3',density='compact',variant='outlined',hide_details=True)
                 v.VTextField(v_if="sx_kind === 'magnetic'",label='Landé g · number or atom=value; atom=value',v_model=('sx_lande',),type='text',density='compact',variant='outlined',hide_details=True)
                 select(("sx_moment_model === 'symmetry_allowed' ? 'Dominant parent-axis starts' : 'Finite child-axis starts'",),'sx_directions',"[{title:'x',value:'x'},{title:'y',value:'y'},{title:'z',value:'z'}]",v_if="sx_kind === 'magnetic'",multiple=True,chips=True)
-                html.P('Each selected axis uses four relative-component sign combinations and moment starts at 25% and 75% of your ceiling. Only site-symmetry-allowed components vary. This finite set does not exhaust continuous orientations or signs between split child orbits.',v_if="sx_kind === 'magnetic' && sx_moment_model === 'symmetry_allowed'",classes='rf-notice')
+                html.P('Each selected axis uses four relative-component sign combinations and two amplitude levels. Independent child-orbit signs and amplitudes vary between starts, preserving exact site-symmetry couplings. This finite portfolio is not exhaustive.',v_if="sx_kind === 'magnetic' && sx_moment_model === 'symmetry_allowed'",classes='rf-notice')
                 v.VCheckbox(v_if="sx_kind === 'magnetic'",label='Test relative initial signs between selected parent sites',v_model=('sx_sign_starts',),density='compact',hide_details=True)
                 with html.Div(v_if="sx_kind === 'magnetic'"):
                     v.VCheckbox(label='Refine shared nuclear/magnetic intensity scale',v_model=('sx_refine_scale',),density='compact',hide_details=True)
@@ -111,6 +111,7 @@ def model_exploration(app):
             with html.Div(v_if='sx_discovered',classes='mt-4'):
                 html.P('{{ sx_discovery_scope }}',classes='rf-notice')
                 v.VBtn('Include all catalog embeddings',click='sx_candidates = sx_candidate_options.map(c => c.value)',variant='text',size='small')
+                v.VBtn('Clear model selection',click='sx_candidates = []',variant='text',size='small')
                 v.VAutocomplete(label='Constructed models to explore',v_model=('sx_candidates',),items=('sx_candidate_options',),multiple=True,chips=True,closable_chips=True,density='compact',variant='outlined',hide_details=True,classes='sx-choices',update_modelValue=app._symmetry_unapprove)
                 with html.Details(v_if="sx_kind === 'structural'",classes='mt-3'):
                     html.Summary('Select native displacement modes')
@@ -141,7 +142,9 @@ def model_exploration(app):
             html.Summary('Scans and search coverage ({{ sx_coverage.length }} hypotheses)')
             v.VDataTable(items=('sx_coverage',),headers=("[{title:'Scan',key:'scan'},{title:'Condition',key:'condition'},{title:'Bank',key:'bank'},{title:'Magnetic sites',key:'sites'},{title:'Terminal starts',key:'coverage'},{title:'Qualified starts',key:'qualified'},{title:'Best qualified Rwp',key:'best_qualified'},{title:'Best audited Rwp',key:'best_audited'},{title:'Status',key:'status'}]",),items_per_page=8,density='compact',classes='mt-3')
         with html.Div(v_if='sx_results_current && sx_source_options.length > 1',classes='rf-toolbar'):
+            v.VBtn('Previous scan',click=(app.symmetry_adjacent_scan,'[-1]'),disabled=("sx_busy || sx_source_options.findIndex(x => x.value === sx_source) <= 0",),variant='text',prepend_icon='mdi-chevron-left')
             select('Compare models for this exact scan / bank','sx_source','sx_source_options',disabled=('sx_busy',))
+            v.VBtn('Next scan',click=(app.symmetry_adjacent_scan,'[1]'),disabled=("sx_busy || sx_source_options.findIndex(x => x.value === sx_source) >= sx_source_options.length - 1",),variant='text',append_icon='mdi-chevron-right')
         with html.Div(v_if='sx_results_current && sx_groups.length',classes='sx-layout'):
             with html.Aside(classes='rf-card'):
                 html.H3('Calculated-pattern groups')
@@ -163,6 +166,7 @@ def model_exploration(app):
                     select('Intensity display','sx_intensity_scale',"[{title:'Linear',value:'linear'},{title:'Log · positive values',value:'log'}]")
                     v.VAutocomplete(label='Pin alternatives · at most two',v_model=('sx_pins',),items=('sx_pin_options',),multiple=True,chips=True,closable_chips=True,density='compact',variant='outlined',hide_details=True)
                     v.VBtn('Reset zoom',click=app.symmetry_reset_zoom,variant='text',size='small')
+                    v.VBtn('Expand fit',click='sx_expanded = true',variant='text',size='small',prepend_icon='mdi-arrow-expand')
                 with html.Div(classes='sx-fit'):
                     fig=plotly.Figure(display_mode_bar=True,responsive=True,display_logo=False,scroll_zoom=True,style='height:100%;width:100%');fig.data=('sx_fit.data',);fig.layout=('sx_fit.layout',)
                 with html.Div(classes='sx-evidence'):
@@ -195,3 +199,7 @@ def model_exploration(app):
                 with html.Div(classes='sx-overview'):
                     fig=plotly.Figure(display_mode_bar=True,responsive=True,display_logo=False,style='height:100%;width:100%',click=(app.symmetry_overview_click,'[$event]'));fig.data=('sx_overview.data',);fig.layout=('sx_overview.layout',)
                 html.P('Open diamonds are inadequate or unresolved fits. A lower residual is evidence to inspect, not a confirmed structure. Log intensity hides nonpositive values for display; the residual stays linear.',classes='rf-notice')
+        with html.Div(v_if='sx_expanded',classes='rf-overlay'):
+            v.VBtn('Close expanded fit',click='sx_expanded = false',variant='text',prepend_icon='mdi-arrow-collapse')
+            with html.Div(style='height:calc(100vh - 220px)'):
+                fig=plotly.Figure(display_mode_bar=True,responsive=True,display_logo=False,scroll_zoom=True,style='height:100%;width:100%');fig.data=('sx_fit.data',);fig.layout=('sx_expanded_layout',)

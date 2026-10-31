@@ -78,7 +78,9 @@ def seed(value):
     defaults=dict(axis='x',magnitude=1.,parent_direction=None,mode_values={})
     if isinstance(value,dict) and 'candidate_ids' in value:defaults['candidate_ids']=None
     if isinstance(value,dict) and 'site_signs' in value:defaults['site_signs']=None
+    if isinstance(value,dict) and 'independent_mode_seed' in value:defaults['independent_mode_seed']=None
     s=fields(value,['id'],defaults)
+    if 'independent_mode_seed' in s:s['independent_mode_seed']=number(s['independent_mode_seed'],1,2000,integer=True)
     if 'site_signs' in s:
         if not isinstance(s['site_signs'],dict) or not s['site_signs']:raise ValueError('Parent-site signs need an explicit nonempty mapping')
         s['site_signs']={text(k,maximum=100):number(v,-1,1,integer=True) for k,v in s['site_signs'].items()}
@@ -142,6 +144,8 @@ def validate_protocol(value):
     for s in p['sites']:
         s=fields(s,['label','form_factor','lande_g']);s['label']=text(s['label'],maximum=100);s['form_factor']=text(s['form_factor'],pattern=r'[A-Z][a-z]?(?:[+-][1-9])?');s['lande_g']=number(s['lande_g'],0,10,positive=True);sites.append(s)
     p['sites']=sites
+    if any('independent_mode_seed' in s for s in p['seeds']) and (p['kind']!='magnetic' or p['policy'].get('moment_model')!='symmetry_allowed'):
+        raise ValueError('Independent child-orbit starts require the symmetry-allowed magnetic model')
     if p['kind']=='magnetic':
         if not sites or len({s['label'] for s in sites})!=len(sites):raise ValueError('Select unique magnetic sites and form factors')
         if any(not c['magnetic_space_group'] or c['child'] or c['modes'] for c in p['candidates']):raise ValueError('Magnetic candidates require native MSG records')

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from gpx_recipe.symmetry.campaign import Campaign
+from gpx_recipe.symmetry.campaign import Campaign,balanced_trial_order
 from gpx_recipe.symmetry.compiler import file_sha
 from gpx_recipe.symmetry.contracts import digest
 from test_symmetry_contracts import make_protocol
@@ -42,6 +42,39 @@ def test_lost_ack_restart_and_identical_arrivals_do_not_duplicate(setup):
     c.tick(t,slots=1);assert len(t.submissions)==1;assert c.trials()[0]['state']=='running'
     finish(c,t,ids[0]);c.tick(t,slots=1);assert len(t.submissions)==2
     assert c.trials()[0]['state']=='terminal';assert c.summaries()[0]['received_count']==1
+
+
+def test_pilot_spreads_work_across_candidates_and_start_families():
+    rows=[dict(id=f'{candidate}-{axis}-{n}',candidate=str(candidate),seed=f'{axis}-cant-{n}')
+        for candidate in range(8) for axis in 'xyz' for n in range(8)]
+    ordered=balanced_trial_order(rows)
+    assert len({r['candidate'] for r in ordered[:8]})==8
+    assert {r['seed'][0] for r in ordered[:3]}==set('xyz')
+    assert len(ordered)==len(rows) and {r['id'] for r in ordered}=={r['id'] for r in rows}
+    assert ordered==balanced_trial_order(rows)
+
+
+def test_new_scan_gets_a_parallel_batch_before_active_scan_gets_another(setup):
+    root,p,c,_=setup
+    class Chunks:
+        max_active_jobs=4;chunk_size=1
+        def __init__(self):self.submissions=[]
+        def submit_many(self,entries,*,workers):
+            self.submissions.append(entries[0][0])
+            return {uid:dict(key=uid,dispatch_key=uid) for uid,_ in entries}
+        def poll(self,handle,directory):return dict(state='running',handle=handle)
+        recover=lambda self,uid,directory:dict(state='running',handle=dict(key=uid,dispatch_key=uid))
+    transport=Chunks()
+    for key in ['first','second','third']:
+        q=dict(p,acquisition_id=key)
+        c.enroll(q,root/'inputs',approved_hash=digest(q))
+    for _ in range(4):c.tick(transport,slots=1)
+    indexed={r['id']:r for r in c.trials()}
+    assert len({indexed[uid]['protocol'] for uid in transport.submissions[:3]})==3
+    assert len(transport.submissions)==4
+    # A fresh viewer recovers the same four accepted batches at capacity.
+    Campaign(c.root).tick(transport,slots=1)
+    assert len(transport.submissions)==4
 
 
 def test_unknown_remote_state_stays_visible_and_other_branches_continue(setup):

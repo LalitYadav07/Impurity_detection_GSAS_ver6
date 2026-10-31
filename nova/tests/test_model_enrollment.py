@@ -85,7 +85,11 @@ def test_resource_budget_updates_dispatch_limits_without_changing_scientific_app
     assert runtime.max_active_jobs==transport.max_active_jobs==2
     assert app._symmetry_approved=='sealed-science'
     state.sx_parallel_jobs=16;app._symmetry_resource_changed()
-    assert 'one or two' in state.sx_error and runtime.max_active_jobs==2
+    assert '1, 2, 4 or 8' in state.sx_error and runtime.max_active_jobs==2
+    for count in [4,8]:
+        state.sx_parallel_jobs=count;app._symmetry_resource_changed()
+        assert runtime.max_active_jobs==transport.max_active_jobs==count
+        assert app._symmetry_approved=='sealed-science'
 
 
 def test_failed_magnetic_setup_keeps_token_cost_and_clears_previous_planning_notes(monkeypatch):

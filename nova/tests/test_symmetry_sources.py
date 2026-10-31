@@ -170,3 +170,36 @@ def test_model_choices_show_qualified_measured_temperature_without_changing_sour
     assert w.state['sources']['raw']==before
     source['metadata']['conditions']['channels'][0]['role']='setpoint'
     assert not start_choices(w,'IPTS-1')[0]['title'].endswith('0.2799 K')
+
+
+def test_recipe_versions_and_byte_revisions_disambiguate_the_same_scan(tmp_path):
+    w=workspace(tmp_path)
+    w.state['recipes']={'r1':{'version':1},'r2':{'version':2}}
+    w.state['jobs']['job1']['recipe_id']='r1'
+    w.state['jobs']['job2']=copy.deepcopy(w.state['jobs']['job1'])
+    w.state['jobs']['job2']['recipe_id']='r2'
+    choices=[e for e in start_choices(w,'IPTS-1') if e.get('stage')=='final']
+    assert len({e['title'] for e in choices})==2
+    assert choices[0]['title'].startswith('Recipe 1') and choices[1]['title'].startswith('Recipe 2')
+    assert resolve_start(w,'IPTS-1',choices[1]['id'])['scan_label'].endswith('Recipe 2 · final')
+
+
+def test_new_search_cannot_reuse_an_old_approval():
+    from radar_pd_nova.symmetry_controller import SymmetryMixin
+    app=SymmetryMixin();app._symmetry_draft=None;app._symmetry_approved='previous-plan'
+    state=SimpleNamespace(sx_approved=True,sx_plan_ready=True,sx_plan_token='old-token',sx_setup=False)
+    app.server=SimpleNamespace(state=state)
+    app.new_symmetry_search()
+    assert state.sx_setup and not state.sx_has_context
+    assert not state.sx_approved and not state.sx_plan_ready and not state.sx_plan_token
+    assert app._symmetry_approved=='' and state.sx_candidates==[]
+
+
+def test_scan_navigation_is_bounded_and_never_changes_the_campaign():
+    from radar_pd_nova.symmetry_controller import SymmetryMixin
+    state=SimpleNamespace(sx_source_options=[{'value':'first'},{'value':'second'}],sx_source='first',sx_campaign='original')
+    app=SymmetryMixin();app.server=SimpleNamespace(state=state)
+    app.symmetry_adjacent_scan(-1);assert state.sx_source=='first'
+    app.symmetry_adjacent_scan(1);assert state.sx_source=='second'
+    app.symmetry_adjacent_scan(1);assert state.sx_source=='second'
+    app.symmetry_adjacent_scan(-1);assert state.sx_source=='first' and state.sx_campaign=='original'

@@ -14,7 +14,7 @@ import time
 from gpx_recipe.execution import write_json
 from gpx_recipe.jobs import scientific_environment
 from gpx_recipe.process import run_scientific
-from gpx_recipe.symmetry.bundle import unpack,pack
+from gpx_recipe.symmetry.bundle import unpack,pack,hydrate_source
 from gpx_recipe.symmetry.compiler import confined,file_sha,package_signature,require_adapters
 from gpx_recipe.symmetry.contracts import digest
 from gpx_recipe.symmetry.chunks import execute_chunk
@@ -79,11 +79,18 @@ def native(request,inputs,root,cancel):
 def work(action,source,assets,request_file,directory,archive):
     directory=Path(directory).resolve();directory.mkdir(parents=True,exist_ok=True)
     inputs=unpack(assets,directory/'inputs-packet')
-    before={str(p.relative_to(inputs)):file_sha(p) for p in inputs.rglob('*') if p.is_file()}
     request=json.loads(Path(request_file).read_text())
     started=time.monotonic()
     expected=(request.get('protocol') or {}).get('source',{}).get('sha256') if action=='chunk' else request.get('expected_source_sha256')
     if not expected or file_sha(source)!=expected:raise ValueError('Galaxy source GPX differs from the captured acquisition')
+    if action=='chunk':
+        from gpx_recipe.symmetry.contracts import validate_protocol
+        from gpx_recipe.symmetry.compiler import assets as protocol_assets
+        protocol=validate_protocol(request.get('protocol'))
+        hashes={asset['path']:asset['sha256'] for asset in protocol_assets(protocol)}
+    else:hashes=request.get('input_hashes')
+    hydrate_source(inputs,source,hashes,expected)
+    before={str(p.relative_to(inputs)):file_sha(p) for p in inputs.rglob('*') if p.is_file()}
     cancel=threading.Event()
     def stop(*_):cancel.set()
     if threading.current_thread() is threading.main_thread():

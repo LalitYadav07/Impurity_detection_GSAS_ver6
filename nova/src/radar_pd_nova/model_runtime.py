@@ -17,6 +17,7 @@ from .models import UtilityActionRecord,RunStatus
 
 MODEL_TOOL_ID='neutrons_radar_pd_model_campaign_prototype'
 CAMPAIGN_LABEL='RADAR-PD Model campaign '
+MODEL_BATCH_LIMITS=(1,2,4,8)
 
 
 class CollectOnlyTransport:
@@ -61,7 +62,7 @@ class GalaxyModelRuntime(GalaxyRefinementRuntime):
 
     @max_active_jobs.setter
     def max_active_jobs(self,value):
-        if type(value) is not int or value not in {1,2}:raise ValueError('Choose one or two concurrent Galaxy model batches')
+        if type(value) is not int or value not in MODEL_BATCH_LIMITS:raise ValueError('Choose 1, 2, 4 or 8 concurrent Galaxy model batches')
         self._max_active_jobs=value
 
     def _save(self):
@@ -121,14 +122,27 @@ class GalaxyModelRuntime(GalaxyRefinementRuntime):
             if cancel:cancel.wait(self.poll_seconds)
             else:time.sleep(self.poll_seconds)
 
-    def packet(self,root,paths):
+    def _packet_available(self,key):
+        if not hasattr(self.service,'_dataset_metadata'):return True
+        import requests
+        try:metadata=self.service._dataset_metadata(key)
+        except requests.HTTPError as exc:
+            if exc.response is not None and exc.response.status_code==404:return False
+            raise
+        return not metadata.get('deleted') and not metadata.get('purged') and metadata.get('state') not in {'error','discarded','deleted'}
+
+    def packet(self,root,paths,*,source_sha256=None):
         root=Path(root).resolve()
+        paths=[p for p in paths if not (source_sha256 and Path(p).suffix.lower()=='.gpx'
+                                      and file_sha(confined(root,p))==source_sha256)]
         signature=digest({p:file_sha(confined(root,p)) for p in sorted(set(paths))})
         with self._lock:
             cached=self.state['assets'].get(signature)
-            if cached:return cached
+            if cached and self._packet_available(cached):return cached
+            self.state['assets'].pop(signature,None)
             label='RADAR-PD Model inputs '+signature
-            found=[r for r in self.service.search_history_datasets(query=label,limit=2,include_generated=True) if document_label(r.get('name'))==label]
+            found=[r for r in self.service.search_history_datasets(query=label,limit=10,include_generated=True)
+                   if document_label(r.get('name'))==label and self._packet_available(r['id'])]
             if found:
                 self.state['assets'][signature]=found[0]['id'];self._save();return found[0]['id']
             archive=self.root/(signature+'.zip');pack(root,archive,paths)
@@ -273,7 +287,7 @@ class GalaxyModelRuntime(GalaxyRefinementRuntime):
                 timeout=min(600,max(1,float(timeout))))
             key=digest([self.service.history_id,source['id'],request])[:24]
             request['dispatch_key']=key
-            asset_id=self.packet(root,files)
+            asset_id=self.packet(root,files,source_sha256=source['source_sha256'])
             if event.is_set():raise RuntimeUnavailable('Model preparation cancelled before dispatch')
             job=self._submit('native',source,request,asset_id,key,cancel=event)
             self.wait_job(job,key=key,cancel=event)
@@ -380,7 +394,7 @@ class GalaxyChunkTransport:
         key=digest([self.campaign.root.name,sha,ids,len(self.state['chunks'])])[:24]
         input_root=job_inputs(entries[0][1],first)
         if sha not in self.state['inputs']:
-            self.state['inputs'][sha]=self.runtime.packet(input_root,['protocol.json']+[a['path'] for a in assets(protocol)])
+            self.state['inputs'][sha]=self.runtime.packet(input_root,['protocol.json']+[a['path'] for a in assets(protocol)],source_sha256=protocol['source']['sha256'])
         request=dict(schema='radar-model-chunk/v1',protocol=protocol,protocol_sha256=sha,trials=ids,
             workers=workers,dispatch_key=key,seconds=240)
         if protocol.get('template_sha256'):
