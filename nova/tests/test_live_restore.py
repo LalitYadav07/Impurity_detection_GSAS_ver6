@@ -371,3 +371,19 @@ def test_only_ready_current_history_metadata_can_be_read(metadata):
     with pytest.raises(ValueError):
         read_saved_watch(service, "checkpoint-1")
     assert [r[0] for r in service.reads] == ["metadata"]
+
+
+@pytest.mark.parametrize("cancel", ["handler", "dialog_closed"])
+def test_delayed_confirmation_after_cancel_never_replaces_view(app, cancel):
+    checkpoint(app.service)
+    app.server.state.powgen_ipts = "1234"
+    asyncio.run(inspect(app))
+    app.restore_saved_live_watch()
+    assert app.server.state.live_restore_confirm
+    if cancel == "handler":
+        app.cancel_restore_saved_live_watch()
+        assert app._live_restore_confirm_signature is None
+    else:
+        app.server.state.live_restore_confirm = False
+    app.confirm_restore_saved_live_watch()
+    assert app._powgen_controller is None

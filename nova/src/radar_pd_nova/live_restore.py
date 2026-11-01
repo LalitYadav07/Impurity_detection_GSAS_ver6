@@ -343,7 +343,7 @@ class LiveRestoreMixin:
             self._live_restore_confirm_signature = context
             state.live_restore_confirm = True
             return
-        if confirmed and self._live_restore_confirm_signature != context:
+        if confirmed and (not state.live_restore_confirm or self._live_restore_confirm_signature != context):
             state.live_restore_confirm = False
             return
         controller = review.controller
@@ -395,6 +395,11 @@ class LiveRestoreMixin:
     def confirm_restore_saved_live_watch(self, **_):
         self.restore_saved_live_watch(confirmed=True)
 
+    def cancel_restore_saved_live_watch(self, **_):
+        self._live_restore_confirm_signature = None
+        self.server.state.live_restore_confirm = False
+        self.server.state.flush()
+
     def _live_restore_ui(self):
         with html.Details(v_show="workflow_mode === 'powgen'", classes="radar-soft-panel mb-3"):
             html.Summary("Restore a saved Live watch (stopped)")
@@ -415,5 +420,5 @@ class LiveRestoreMixin:
                 vuetify.VCardTitle("Replace the displayed Live watch?")
                 vuetify.VCardText("The selected checkpoint replaces the displayed watch and its result selection. Existing Galaxy jobs, checkpoints and cached results are preserved. The editable setup draft remains separate. Monitoring stays stopped.")
                 with vuetify.VCardActions():
-                    vuetify.VBtn("Keep current view", click="live_restore_confirm = false", variant="text")
+                    vuetify.VBtn("Keep current view", click=self.cancel_restore_saved_live_watch, variant="text")
                     vuetify.VBtn("Restore stopped watch", click=self.confirm_restore_saved_live_watch, color="primary", variant="flat")
