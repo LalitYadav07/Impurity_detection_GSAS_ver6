@@ -532,7 +532,7 @@ class SetupEditorMixin:
         ):
             pending_revision = (
                 f"({scope} === 'custom_mini' || {scope} === 'custom_augmented') && "
-                f"({prefix}library_builder_status === 'ready' || {prefix}library_builder_status === 'partial')"
+                f"{prefix}library_builder_status === 'ready'"
             )
             html.Strong(
                 "{{ (" + pending_revision + ") ? 'Build the current CIF selection before using it. Previous builds remain in History.' : "
@@ -556,19 +556,44 @@ class SetupEditorMixin:
             html.Span(
                 "{{ "
                 + prefix
-                + "library_builder_built_count }} usable / {{ "
+                + "library_builder_built_count }} built / {{ "
                 + prefix
-                + "library_builder_skipped_count }} skipped",
-                v_show=f"!({pending_revision}) && ({prefix}library_builder_status === 'ready' || {prefix}library_builder_status === 'partial')",
+                + "library_builder_requested_count }} supplied CIF(s) · {{ "
+                + prefix
+                + "library_builder_skipped_count }} failed / {{ "
+                + prefix
+                + "library_builder_duplicate_count }} duplicate or already present",
+                v_show=f"!({pending_revision}) && {prefix}library_builder_progress === 100",
             )
+            with html.Div(v_if=f"!!{prefix}library_builder_partial_review.token", classes="mt-2"):
+                html.P("The partial library excludes the failed sources listed below. Review their scientific role before using it.")
+                vuetify.VBtn(
+                    "Use partial library",
+                    click=(self.use_partial_candidate_library,
+                           f"['{context}', {prefix}library_builder_partial_review.token]"),
+                    disabled=(locked,), color="#15543c", variant="flat", size="small",
+                )
+                vuetify.VBtn(
+                    "Keep previous library",
+                    click=(self.retain_current_candidate_library,
+                           f"['{context}', {prefix}library_builder_partial_review.token]"),
+                    disabled=(locked,), variant="outlined", size="small", classes="ml-2",
+                )
             with html.Div(
-                v_for=f"failure in {prefix}library_builder_failure_rows.slice(0, 8)",
+                v_for=f"failure in {prefix}library_builder_failure_rows",
                 key="failure.name + failure.reason",
                 classes="radar-library-failure-row",
                 v_show=f"!({pending_revision})",
             ):
                 html.Strong("{{ failure.name }}")
                 html.Span("{{ failure.reason }}")
+            with html.Div(
+                v_for=f"item in {prefix}library_builder_duplicate_rows",
+                key="item.name + item.reason", classes="radar-library-failure-row",
+                v_show=f"!({pending_revision})",
+            ):
+                html.Strong("{{ item.name }} · already represented")
+                html.Span("{{ item.reason }}")
 
     def _custom_budget_controls(self, prefix="", locked=None, include_basic=True):
         with html.Div(classes="radar-custom-budget-grid"):

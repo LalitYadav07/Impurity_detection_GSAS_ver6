@@ -39,6 +39,7 @@ from .library_setup import (
     library_manifest_phase_count,
     read_library_manifest,
 )
+from .library_review import LibraryReviewMixin, library_build_outcome, library_review_signature
 from .post_analysis_ui import PostAnalysisMixin
 from .unet_transition_ui import UnetTransitionMixin
 from .refinement_controller import RefinementMixin
@@ -267,7 +268,7 @@ def _powgen_retry_time(value: Any) -> datetime | None:
 from .webmon.ui import WebmonMixin
 
 
-class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssistantMixin, LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, RefinementMixin, SymmetryMixin, ThemedApp):
+class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssistantMixin, LiveSetupMixin, LibraryReviewMixin, SetupEditorMixin, PostAnalysisMixin, RefinementMixin, SymmetryMixin, ThemedApp):
     """Interactive orchestration and results workspace backed by Galaxy."""
 
     def __init__(self) -> None:
@@ -552,6 +553,12 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         state.library_builder_built_count = 0
         state.library_builder_skipped_count = 0
         state.library_builder_failure_rows = []
+        state.library_builder_requested_count = 0
+        state.library_builder_duplicate_count = 0
+        state.library_builder_duplicate_rows = []
+        state.library_builder_generation = ""
+        state.library_builder_partial_review = {}
+        state.library_builder_previous_library = {}
         state.sns_resolution = {}
         state.use_facility_workspace = False
         state.facility_site = "SNS"
@@ -784,6 +791,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
             {"title": "Choose archive from Galaxy History", "value": "galaxy"},
         ]
         self._init_live_setup()
+        self._init_library_reviews()
         self._init_live_assistant()
         self._single_reset_values = {
             field: deepcopy(getattr(state, field)) for field in CONFIG_FORM_FIELDS
@@ -1141,6 +1149,20 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         self._live_uploaded_assets.clear()
         self._live_saved_configurations.clear()
         self._library_action_contexts.clear()
+        for context in ("single", "live"):
+            draft = LibraryDraft(state, context)
+            draft.library_builder_generation = ""
+            draft.library_builder_partial_review = {}
+            draft.library_builder_previous_library = {}
+            draft.library_builder_active = False
+            draft.library_builder_status = "idle"
+            draft.library_builder_progress = 0
+            draft.library_builder_built_count = 0
+            draft.library_builder_requested_count = 0
+            draft.library_builder_skipped_count = 0
+            draft.library_builder_failure_rows = []
+            draft.library_builder_duplicate_count = 0
+            draft.library_builder_duplicate_rows = []
         for name in ("data_path", "instrument_path", "main_cif_path", "database_archive_path",
                      "config_import_path", "sample_elements", "environment_elements", "run_name",
                      "history_data_id", "history_instrument_id", "history_main_cif_id",
@@ -7738,7 +7760,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         name: str,
         inputs: dict[str, Any],
         associated_run_uid: str | None = None,
-        library_context: dict[str, str] | None = None,
+        library_context: dict[str, Any] | None = None,
     ) -> UtilityActionRecord | None:
         cancel_event = threading.Event()
         try:
@@ -7820,9 +7842,11 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         state = self.server.state
         if action.tool_id == LIBRARY_BUILDER_TOOL_ID and action.outputs.get("library_archive"):
             owner_context = getattr(self, "_library_action_contexts", {}).get(action.uid)
-            owner = dict(owner_context or {})
+            owner = deepcopy(owner_context or {})
             state = LibraryDraft(self.server.state, owner.get("workflow", "single"))
-            selection_current = not owner.get("signature") or owner["signature"] == state.signature()
+            if not self._library_build_owner_current(action, owner_context, owner):
+                self._remember_history_dataset(action.outputs["library_archive"], action.name + ".zip", "candidate_library")
+                return
             manifest: dict[str, Any] = {}
             manifest_id = action.outputs.get("library_manifest")
             state.library_builder_status = "verifying"
@@ -7830,6 +7854,8 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
             state.flush()
 
             def retry_manifest(reason: str) -> None:
+                if not self._library_build_owner_current(action, owner_context, owner):
+                    return
                 state.library_builder_message = (
                     f"Build completed; the manifest read was unavailable ({reason}). "
                     "Checking the same output once more; the library will not be rebuilt."
@@ -7842,6 +7868,13 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                     self.service._dataset_document, manifest_id, on_retry=retry_manifest
                 )
                 built = library_manifest_phase_count(manifest)
+            except asyncio.CancelledError:
+                if self._library_build_owner_current(action, owner_context, owner):
+                    state.library_builder_active = False
+                    state.library_builder_status = "interrupted"
+                    state.library_builder_message = "Library verification was interrupted. The completed outputs remain in History; no library was selected."
+                    state.flush()
+                raise
             except LibraryManifestReadError as exc:
                 built = 0
                 manifest_error = (
@@ -7854,55 +7887,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                     f"The completed library manifest could not be verified: {exc} "
                     "The library was not selected; inspect the existing manifest and build log."
                 )
-            failures = list(manifest.get("failures") or [])
-            preflight_failures = list(state.library_builder_failure_rows or [])
-            preflight_skipped = int(state.library_builder_skipped_count or 0)
-            builder_failure_rows = [
-                {
-                    "name": str(item.get("source_name") or item.get("id") or "CIF"),
-                    "reason": str(item.get("error") or "Could not be added"),
-                }
-                for item in failures
-                if isinstance(item, dict)
-            ]
-            contexts = getattr(self, "_library_action_contexts", {})
-            if owner_context is not None:
-                if contexts.get(action.uid) is not owner_context or owner_context != owner:
-                    # Clearing/replacing the owning workspace during the read
-                    # must not let this completion overwrite its new draft.
-                    self._remember_history_dataset(action.outputs["library_archive"], action.name + ".zip", "candidate_library")
-                    self._sync_activities()
-                    self.server.state.flush()
-                    return
-                contexts.pop(action.uid, None)
-            selection_current = selection_current and (not owner.get("signature") or owner["signature"] == state.signature())
-            if selection_current and built > 0:
-                state.database_source = "archive"
-                state.library_archive_source = "galaxy"
-                state.history_database_id = action.outputs["library_archive"]
-                if state.workflow == "live":
-                    self._use_live_element_suggestion(only_if_empty=True)
-            state.library_builder_built_count = built
-            total_skipped = preflight_skipped + len(failures)
-            state.library_builder_skipped_count = total_skipped
-            state.library_builder_failure_rows = [*preflight_failures, *builder_failure_rows][:8]
-            state.library_builder_progress = 100
-            state.library_builder_status = "partial" if total_skipped else "ready"
-            if total_skipped:
-                state.library_builder_message = (
-                    f"Library ready with {built} usable phase(s); {total_skipped} source item(s) were skipped. "
-                    "Open the build log for details."
-                )
-            else:
-                state.library_builder_message = f"Library ready with {built} usable phase(s) and selected for the next analysis."
-            if not selection_current:
-                state.library_builder_message = f"Library ready with {built} usable phase(s) in History. Your changed selection was kept."
-            if built <= 0:
-                state.library_builder_status = "error"
-                state.library_builder_message = manifest_error or (
-                    "The build completed with no usable phases. The library was not selected; inspect the build log and manifest."
-                )
-            state.notice = state.library_builder_message
+            self._complete_candidate_library(action, owner_context, owner, manifest, built, manifest_error)
         elif action.tool_id == SNS_RESOLVER_TOOL_ID:
             pattern_id = action.outputs.get("pattern")
             profile_id = action.outputs.get("instrument_profile")
@@ -7996,6 +7981,10 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
             state.error_message = "Enter a library name before building."
             return
         library_mode = "augmented" if state.database_source == "custom_augmented" else "mini"
+        generation = uuid.uuid4().hex
+        state.library_builder_generation = generation
+        state.library_builder_partial_review = {}
+        source_signature = library_review_signature(state)
         state.library_builder_mode = library_mode
         state.library_builder_active = True
         state.library_builder_status = "uploading"
@@ -8003,6 +7992,9 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         state.library_builder_built_count = 0
         state.library_builder_skipped_count = 0
         state.library_builder_failure_rows = []
+        state.library_builder_requested_count = 0
+        state.library_builder_duplicate_count = 0
+        state.library_builder_duplicate_rows = []
         state.library_builder_message = "Preparing CIF structures for Galaxy…"
         state.flush()
 
@@ -8026,13 +8018,22 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                         return build_cif_source_archive(combined_paths, library_name)
 
                 bundle_path, bundle_stats = await asyncio.to_thread(prepare_bundle)
+                if state.library_builder_generation != generation:
+                    return
+                preflight = {
+                    "requested_count": int(bundle_stats.get("source_count") or
+                        int(bundle_stats.get("cif_count") or 0) + int(bundle_stats.get("skipped_count") or 0)),
+                    "skipped_count": int(bundle_stats.get("skipped_count") or 0),
+                    "failure_rows": list(bundle_stats.get("failure_rows") or bundle_stats.get("failures") or []),
+                }
+                preflight_outcome = library_build_outcome({}, int(bundle_stats.get("cif_count") or 0), preflight)
                 state.library_builder_elements = list(bundle_stats.get("elements") or [])
                 state.library_builder_unknown_elements = int(bundle_stats.get("unknown_elements") or 0)
-                state.library_builder_skipped_count = int(bundle_stats.get("skipped_count") or 0)
-                state.library_builder_failure_rows = [
-                    {"name": "Source preflight", "reason": str(reason)}
-                    for reason in list(bundle_stats.get("failures") or [])[:8]
-                ]
+                state.library_builder_requested_count = preflight_outcome["requested_count"]
+                state.library_builder_skipped_count = preflight_outcome["skipped_count"]
+                state.library_builder_failure_rows = preflight_outcome["failure_rows"]
+                state.library_builder_duplicate_count = preflight_outcome["duplicate_count"]
+                state.library_builder_duplicate_rows = preflight_outcome["duplicate_rows"]
                 state.library_builder_message = (
                     f"Uploading one validated bundle containing {int(bundle_stats.get('cif_count') or 0):,} unique CIF(s)..."
                 )
@@ -8044,30 +8045,44 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                     str(bundle_path),
                     "CIF source bundle",
                 )
+                if state.library_builder_generation != generation:
+                    return
                 source_inputs = {"cif_archive": {"dataset_id": archive_id}}
                 state.library_builder_status = "building"
                 state.library_builder_progress = 35
                 state.library_builder_message = f"Building {library_name} in Galaxy..."
                 state.flush()
+            except asyncio.CancelledError:
+                self._interrupt_candidate_library(state, generation)
+                raise
             except Exception as exc:
+                if state.library_builder_generation != generation:
+                    return
                 state.library_builder_active = False
                 state.library_builder_status = "error"
                 state.library_builder_message = f"Could not prepare the CIF inputs: {exc}"
                 state.error_message = state.library_builder_message
                 state.flush()
                 return
-            action = await self._submit_utility_action(
-                tool_id=LIBRARY_BUILDER_TOOL_ID,
-                library_context={"workflow": context, "signature": build_signature},
-                name=f"Build custom library: {library_name}",
-                inputs={
-                    **source_inputs,
-                    "library_name": library_name,
-                    "library_mode": library_mode,
-                    "radiation": radiation,
-                    "overwrite": "",
-                },
-            )
+            try:
+                action = await self._submit_utility_action(
+                    tool_id=LIBRARY_BUILDER_TOOL_ID,
+                    library_context={"workflow": context, "signature": build_signature,
+                        "source_signature": source_signature, "generation": generation, "preflight": preflight},
+                    name=f"Build custom library: {library_name}",
+                    inputs={
+                        **source_inputs,
+                        "library_name": library_name,
+                        "library_mode": library_mode,
+                        "radiation": radiation,
+                        "overwrite": "",
+                    },
+                )
+            except asyncio.CancelledError:
+                self._interrupt_candidate_library(state, generation)
+                raise
+            if state.library_builder_generation != generation:
+                return
             state.library_builder_active = False
             if action is None or action.status != RunStatus.OK:
                 state.library_builder_status = "error"

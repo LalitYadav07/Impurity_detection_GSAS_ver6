@@ -336,6 +336,10 @@ def build_cif_source_archive(source_paths: Iterable[str], library_name: str) -> 
             try:
                 with zipfile.ZipFile(source) as archive:
                     members = [item for item in archive.infolist() if not item.is_dir() and item.filename.lower().endswith(".cif")]
+                    if not members:
+                        skipped.append(f"{source.name}: contains no CIF files")
+                    for member in members[_MAX_ARCHIVE_CIFS:]:
+                        skipped.append(f"{Path(member.filename).name}: exceeds the {_MAX_ARCHIVE_CIFS:,} CIF archive limit")
                     for member in members[:_MAX_ARCHIVE_CIFS]:
                         if member.file_size > _MAX_CIF_BYTES:
                             skipped.append(f"{Path(member.filename).name}: exceeds the 20 MB CIF limit")
@@ -347,7 +351,10 @@ def build_cif_source_archive(source_paths: Iterable[str], library_name: str) -> 
     if not written:
         target.unlink(missing_ok=True)
         raise ValueError("No usable CIF structures remained after validation")
-    return target, {"cif_count": written, "skipped_count": len(skipped), "failures": skipped,
+    duplicate_count = sum(reason.endswith(": duplicate structure file") for reason in skipped)
+    return target, {"cif_count": written, "source_count": written + len(skipped),
+                    "skipped_count": len(skipped), "failures": skipped,
+                    "duplicate_count": duplicate_count,
                     "elements": sorted(elements), "unknown_elements": unknown_elements}
 
 

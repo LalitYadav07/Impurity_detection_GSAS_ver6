@@ -25,6 +25,12 @@ LIBRARY_FIELDS = (
     "library_builder_file_rows",
     "library_builder_elements",
     "library_builder_unknown_elements",
+    "library_builder_requested_count",
+    "library_builder_duplicate_count",
+    "library_builder_duplicate_rows",
+    "library_builder_generation",
+    "library_builder_partial_review",
+    "library_builder_previous_library",
 )
 
 
