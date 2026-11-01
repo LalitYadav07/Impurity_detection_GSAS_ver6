@@ -1,0 +1,84 @@
+"""Durable Galaxy dispatch for provisional scan jobs; no native code in NOVA."""
+from __future__ import annotations
+import hashlib,json,re,time
+from pathlib import Path
+from gpx_recipe.live.packet import create_packet,canonical
+from gpx_recipe.live.contracts import file_hash
+from ..refinement_runtime import GalaxyRefinementRuntime,RuntimeUnavailable
+
+LIVE_TOOL_ID='neutrons_radar_pd_live_snapshot_prototype'
+
+
+class GalaxyLiveRuntime(GalaxyRefinementRuntime):
+    tool_id=LIVE_TOOL_ID
+    workspace_label='RADAR-PD live snapshot workspace'
+    workspace_schema='radar-live-workspace/v1'
+
+    def call(self,request,directory,*,dispatch_key,on_submitted=None,resume=None,
+             cache_dataset_id=None,recover=False,cancel_event=None):
+        from ..models import UtilityActionRecord,RunStatus
+        from ..galaxy_service import _extract_results_archive
+        if not re.fullmatch('[a-f0-9]{24}',dispatch_key):raise ValueError('A stable live dispatch key is required')
+        directory=Path(directory).resolve();directory.mkdir(parents=True,exist_ok=True)
+        packet=directory/'request-packet.zip';packet_id=create_packet(request,packet)
+        ledger=self.root/'dispatches';ledger.mkdir(exist_ok=True)
+        acknowledged=ledger/(dispatch_key+'.json');pending=ledger/(dispatch_key+'.pending')
+        if pending.exists() and pending.read_text().strip()!=packet_id:
+            raise ValueError('Pending dispatch key already belongs to different live inputs')
+        if acknowledged.exists():
+            saved=json.loads(acknowledged.read_text())
+            if saved['packet_id']!=packet_id:raise ValueError('Dispatch key already belongs to different live inputs')
+            job=UtilityActionRecord.model_validate(saved['job'])
+        elif resume:
+            job=UtilityActionRecord.model_validate(resume)
+        else:
+            job=self.find_dispatch(dispatch_key) if recover or pending.exists() else None
+            if job is None and pending.exists():
+                raise RuntimeUnavailable('Live submission acknowledgement is missing; recover before retrying. No duplicate was submitted.')
+            if job is None:
+                packet_dataset=self.service.upload_document(packet,label='RADAR-PD live packet '+dispatch_key,wait_ready=False)
+                inputs={'dispatch_key':dispatch_key,'packet':{'dataset_id':packet_dataset}}
+                if cache_dataset_id:inputs['response_cache']={'dataset_id':cache_dataset_id}
+                try:
+                    with pending.open('x') as handle:handle.write(packet_id+'\n')
+                except FileExistsError:raise RuntimeUnavailable('Another caller owns this live dispatch; recover it') from None
+                try:
+                    job=self.service.submit_utility(tool_id=self.tool_id,name='RADAR-PD live snapshot '+dispatch_key,
+                        associated_run_uid=request.get('source_revision'),inputs=inputs)
+                except Exception as exc:
+                    raise RuntimeUnavailable('Galaxy did not acknowledge the live submission. The dispatch key is retained for recovery.') from exc
+        from gpx_recipe.live.io import atomic_json
+        atomic_json(acknowledged,{'packet_id':packet_id,'job':job.model_dump(mode='json')})
+        if on_submitted:on_submitted(job.model_dump(mode='json'))
+        start=time.monotonic()
+        while job.status not in {RunStatus.OK,RunStatus.ERROR}:
+            if cancel_event is not None and cancel_event.is_set():
+                raise RuntimeUnavailable('Stopped waiting for the live job; its immutable Galaxy dispatch remains recoverable')
+            if time.monotonic()-start>self.timeout:raise RuntimeUnavailable('The live job is still queued/running; recover it without resubmitting')
+            time.sleep(self.poll_seconds);self.service.refresh_utility(job)
+        if job.status==RunStatus.ERROR:raise RuntimeError(job.message or 'The live snapshot worker failed')
+        if not job.outputs.get('result_bundle'):raise RuntimeError('The live snapshot worker has no result bundle')
+        archive=directory/'result.zip';self.service._download_dataset(job.outputs['result_bundle'],archive)
+        output=directory/'result';output.mkdir(exist_ok=True);_extract_results_archive(archive,output)
+        transport=json.loads((output/'transport.json').read_text())
+        if transport.get('schema')!='radar-live-result/v1' or transport.get('packet_id')!=packet_id:
+            raise ValueError('Live worker returned a different packet')
+        actual={str(p.relative_to(output)) for p in output.rglob('*') if p.is_file() and p.name!='transport.json'}
+        if set(transport.get('files',{}))!=actual:raise ValueError('Live result manifest does not cover all artifacts')
+        for name,expected in transport['files'].items():
+            path=(output/name).resolve()
+            if not path.is_relative_to(output) or not path.is_file() or file_hash(path)!=expected:
+                raise ValueError('Live result artifact differs from its receipt')
+        result=json.loads((output/'result.json').read_text())
+        if result.get('packet_id')!=packet_id:raise ValueError('Live result belongs to a different request')
+        for field in ('source_revision','reference_revision'):
+            if result.get(field)!=request[field]:raise ValueError('Live result scientific revision mismatch')
+        for row in result['rows']:
+            for field in ('posterior','fitted_gpx'):
+                if row.get(field):
+                    p=(output/row[field]).resolve()
+                    if not p.is_relative_to(output) or not p.is_file():raise ValueError('Live result path escapes verified output')
+                    row[field]=str(p)
+        result.update(directory=str(output),galaxy_job_id=job.galaxy_job_id,
+                      response_cache_dataset_id=job.outputs.get('response_cache'),transport_sha256=file_hash(output/'transport.json'))
+        return result

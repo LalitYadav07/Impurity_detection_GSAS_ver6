@@ -43,6 +43,7 @@ def validate_request(req,binding=None):
     catalog=json.loads(Path(req['catalog']).read_text());preflight=json.loads(Path(req['preflight']).read_text())
     ids=[c['id'] for c in catalog['candidates']]
     if not ids or len(ids)!=len(set(ids)) or any(not re.fullmatch(r'[A-Za-z0-9:_-]{1,160}',i) for i in ids):raise ValueError('Invalid or duplicate candidate identifiers')
+    if len({v.replace(':','_') for v in ids})!=len(ids):raise ValueError('Candidate identifiers collide after directory normalization')
     pre_ids=[c['id'] for c in preflight]
     if len(pre_ids)!=len(set(pre_ids)) or set(pre_ids)!=set(ids):raise ValueError('Candidate preflight does not cover exactly this catalogue')
     if [Fraction(str(v)) for v in catalog['k']]!=k:raise ValueError('Catalogue propagation vector differs from request')

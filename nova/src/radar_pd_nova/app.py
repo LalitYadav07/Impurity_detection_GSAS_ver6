@@ -2719,7 +2719,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                             html.Div("{{ metric.value }}", classes="radar-metric-value")
                             html.Div("{{ metric.detail }}", classes="radar-run-list-meta")
         with vuetify.VTabs(v_model=("experiment_result_view",), color="#15543c", classes="radar-experiment-result-tabs"):
-            for title, value in (("Results", "results"), ("Transition tracking", "transitions"), ("Live scan", "webmon"), ("Refinement", "refinement")):
+            for title, value in (("Results", "results"), ("Transition tracking", "transitions"), ("In-progress scans", "webmon"), ("Refinement", "refinement")):
                 if value == "webmon" and not self._webmon_configured:
                     continue
                 vuetify.VTab(

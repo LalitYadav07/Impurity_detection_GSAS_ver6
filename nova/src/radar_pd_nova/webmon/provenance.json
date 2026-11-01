@@ -1,13 +1,8 @@
 {
   "adapter_origin": "development/virtual-powder-beamline/virtual_powder",
-  "ported_modules": [
-    "validated_backend.py",
-    "native_quadratic.py",
-    "native_kernel_policy.py",
-    "gpx_index.py",
-    "snapshot.py (powgen_live.py)"
-  ],
-  "deployed_app_baseline": "704a16d051dd9ee7630314c2893f09abbe93c7dc",
-  "native_scope": "Local pinned correction adapter; not a claim of equivalence to validated Linux deployment stack",
-  "shared_subgroup_kernel": false
+  "feature_source_head": "d340e26",
+  "integration_baseline": "3a27057",
+  "scientific_package": "gpx_recipe.live",
+  "shared_subgroup_kernel": true,
+  "native_scope": "Shared pinned production worker; legacy runtime correction restricted to explicit local replay"
 }

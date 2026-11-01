@@ -85,8 +85,8 @@ def prepare(receipt_path):
     step=spacing[0];a=density_to_tof(live,d_edges=np.r_[live.x[0]-step/2,live.x+step/2],export_difc=difc)
     limits=copy.deepcopy(h.data['Limits']);limits[0]=[float(a['x'][0]),float(a['x'][-1])]
     limits[1]=[max(limits[1][0],limits[0][0]),min(limits[1][1],limits[0][1])]
-    transfer_limits=[max(limits[1][0],.7*difc),min(limits[1][1],1.65*difc)]
-    if transfer_limits[0]>=transfer_limits[1]:raise ValueError('Edited fit limits exclude the reviewed transfer interval d 0.7–1.65 Å')
+    transfer_limits=list(limits[1])
+    if transfer_limits[0]>=transfer_limits[1]:raise ValueError('The reviewed source fit interval and live snapshot have no common range')
     h.data['data'][1]=[a['x'],a['y'],a['weights'],np.zeros_like(a['x']),np.zeros_like(a['x']),np.zeros_like(a['x'])]
     h.data['data'][0]['Dummy']=False;h.data['Limits']=copy.deepcopy(limits);h.data['Limits'][1]=transfer_limits
     for ph in g.phases():ph.set_HAP_refinements({'Scale':True})
@@ -106,12 +106,12 @@ def prepare(receipt_path):
     req.update(source_gpx=str(out/'ordered-live.gpx'),source_sha256=digest(out/'ordered-live.gpx'),preflight=str(preflight),preflight_sha256=digest(preflight),reference_revision=f"PG3_{choice['run']}:{source_sha}")
     request=out/'request.json';request.write_text(json.dumps(req,indent=2))
     binding.update(reference_gpx=str(source),reference_sha256=source_sha,source_gpx=req['source_gpx'],source_sha256=req['source_sha256'],request=str(request),description=f"Refined nuclear checkpoint from run {choice['run']}; original-data Rwp {rwp:.2f}%. Native preparation complete; scientific adequacy and transfer remain unqualified. No counting forecasts.")
-    binding['review']=[dict(label='Origin',value=f"Refinement job {r['job_id']} of {choice['id']}"),dict(label='Original fit',value=f'Rwp {rwp:.4f}%; inspect the residuals below'),dict(label='Transfer',value='Cell, atoms, instrument and sample profile retained; only scale/background refit in d 0.7–1.65 Å. Limits and exclusions preserved.'),dict(label='Checkpoint hash',value=source_sha)]
+    binding['review']=[dict(label='Origin',value=f"Refinement job {r['job_id']} of {choice['id']}"),dict(label='Original fit',value=f'Rwp {rwp:.4f}%; inspect the residuals below'),dict(label='Transfer',value='Cell, atoms, instrument and sample profile retained; only scale/background refit over the common source/snapshot fit interval. Limits and exclusions preserved.'),dict(label='Checkpoint hash',value=source_sha)]
     vfy=copy.deepcopy(choice['verification']);vfy.update(path=str(source),sha256=source_sha,rwp_recomputed=rwp,native_saved_curve_relative_error=error,saved_curve_error_sigma=saved_curve_error_sigma,curve_source='Fresh native evaluation at saved parameters',peaks=width_review,phases=phase_review)
     rs=copy.deepcopy(choice['refinement_source']);rs.update(id='polished-'+source_sha[:24],source_path=str(source),source_sha256=source_sha,record_uid='polished-'+source_sha[:24],collection_name=source.name,base_rwp=rwp,published_sha256=source_sha,internal_source_sha256=source_sha)
     choice.update(id='refined-'+source_sha[:12]+'-'+req['source_sha256'][:12],title=f"Refined {choice['role']} · run {choice['run']} · Rwp {rwp:.2f}%",source_path=str(source),source_sha256=source_sha,view_path=str(view_path),view_sha256=digest(view_path),verification=vfy,refinement_source=rs,parent_checkpoint=r['base_option']['id'],refinement_job=r['job_id'])
     if digest(source)!=source_sha:raise ValueError('Original refinement output was modified')
-    (out/'transfer-receipt.json').write_text(json.dumps(dict(qualified=False,numerical_checks=transfer,source_unchanged=True,instrument_preserved=True,forecast_enabled=False),indent=2))
+    (out/'transfer-receipt.json').write_text(json.dumps(dict(qualified=False,numerical_checks=transfer,transfer_limits_tof=transfer_limits,source_unchanged=True,instrument_preserved=True,forecast_enabled=False),indent=2))
     (out/'option.json').write_text(json.dumps(choice,indent=2));return choice
 
 if __name__=='__main__':prepare(sys.argv[1])

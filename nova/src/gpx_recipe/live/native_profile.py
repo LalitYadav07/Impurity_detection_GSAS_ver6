@@ -126,4 +126,3 @@ class NativeReducedProfile:
     def _difference_step(self, values, j, relative):
         key = self.vary[j]
         return relative * max(abs(values[j]), .1 if ':dA' in key or ':AUiso:' in key else .001)
-

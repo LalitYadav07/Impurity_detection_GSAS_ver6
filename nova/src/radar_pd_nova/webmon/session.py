@@ -15,7 +15,8 @@ def digest(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 class WebmonSession:
     def __init__(self,manifest):
-        self.manifest_path=Path(manifest).resolve();self.config=json.loads(self.manifest_path.read_text())
+        self.manifest_path=None if isinstance(manifest,dict) else Path(manifest).resolve()
+        self.config=copy.deepcopy(manifest) if isinstance(manifest,dict) else json.loads(self.manifest_path.read_text())
         # Lightweight discovery-only fixtures need no launch settings.
         if 'worker_command' in self.config:validate_config(self.config)
         self.root=Path(self.config['facility_root']).resolve();self.archive=SnapshotArchive(self.config['archive'])

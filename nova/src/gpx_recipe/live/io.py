@@ -8,4 +8,3 @@ def atomic_json(path, value):
     with temp.open('w') as f:
         json.dump(value,f,indent=2,allow_nan=False);f.flush();os.fsync(f.fileno())
     os.replace(temp,path)
-

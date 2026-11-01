@@ -19,11 +19,20 @@ class WebmonMixin:
     def _init_webmon(self):
         s=self.server.state;manifest=os.environ.get('RADAR_PD_WEBMON_CONTEXT','')
         s.update(dict(webmon_checkpoints=[],webmon_checkpoint='',webmon_checkpoint_axis='d',webmon_checkpoint_summary='',webmon_width_rows=[],webmon_polished_jobs=[],webmon_polished_job=''))
-        self._webmon_configured=bool(manifest);self._webmon_config_error=''
+        production=bool(getattr(getattr(self,'service',None),'galaxy_url',None) and getattr(self.service,'history_id',None))
+        self._webmon_configured=bool(manifest) or production;self._webmon_config_error=''
         s.webmon_calculation_status='Not started'
+        s.webmon_published_sources=[];s.webmon_published_source='';s.webmon_source_notice='Select a published GPX; producer bank/export/normalization mapping and native model preparation are checked separately.'
         self._webmon_stream=None;self._webmon_queue=None
         s.webmon_stream_active=False;s.webmon_stream_message='Automatic updates are off.'
-        try:self._webmon=WebmonSession(manifest) if manifest else None
+        try:
+            if not manifest and production:
+                # Private per-history work roots; ordinary setup needs no
+                # prebuilt science manifest just to browse the live source.
+                history_hash=hashlib.sha256(str(self.service.history_id).encode()).hexdigest()[:24]
+                base=Path(getattr(self.service,'output_root','/tmp'))/'live-snapshots'/history_hash
+                manifest=dict(facility_root=os.environ.get('RADAR_PD_SNS_ROOT','/SNS'),archive=str(base/'snapshots'),jobs=str(base/'jobs'),local_replay=False)
+            self._webmon=WebmonSession(manifest) if manifest else None
         except (OSError,ValueError,KeyError) as exc:
             self._webmon=None;self._webmon_config_error=f'WebMON configuration unavailable: {exc}'
             logging.getLogger(__name__).error(self._webmon_config_error)
@@ -87,8 +96,8 @@ class WebmonMixin:
             """)
             with html.Div(classes='wm-top'):
                 with html.Div():
-                    html.H2('WebMON · Magnetic structure')
-                    html.P('Compare hypotheses, inspect uncertainty, and assess whether the data support a decision.')
+                    html.H2('In-progress scans')
+                    html.P('POWGEN WebMON source · inspect provisional patterns and conditional magnetic fits.')
                 v.VChip('Archived-data replay',v_if='webmon_local',size='small',variant='outlined')
             with html.Div(classes='wm-controls'):
                 v.VSelect(label='Viewed scan',v_model=('webmon_run',),items=('webmon_runs',),item_title='label',item_value='value',update_modelValue=(self.webmon_select,'[$event]'),density='compact',hide_details=True)
@@ -104,6 +113,11 @@ class WebmonMixin:
             with v.VExpansionPanels(variant='accordion'):
                 with v.VExpansionPanel(title='Review nuclear reference & magnetic assumptions'):
                     with v.VExpansionPanelText():
+                        with html.Div(v_if='!webmon_local && !webmon_context_ready'):
+                            v.VBtn('Load published GPX sources',click=self.webmon_load_published_sources,disabled=('webmon_busy',),variant='outlined')
+                            v.VSelect(label='Published source GPX',v_model=('webmon_published_source',),items=('webmon_published_sources',),update_modelValue=(self.webmon_published_source_changed,'[$event]'),density='compact')
+                            html.P('{{ webmon_source_notice }}')
+                            v.VBtn('Inspect selected GPX in Refinement',click=self.webmon_open_published_source,disabled=('!webmon_published_source || webmon_busy',),variant='text')
                         v.VSelect(label='Starting nuclear checkpoint',v_model=('webmon_checkpoint',),items=('webmon_checkpoints',),update_modelValue=(self.webmon_checkpoint_changed,'[$event]'),disabled=('webmon_busy',),density='compact')
                         html.P('{{ webmon_reference }}')
                         v.VDataTable(headers=("[{title:'Input',key:'label'},{title:'Reviewed value',key:'value'}]",),items=('webmon_reference_rows',),items_per_page=-1,hide_default_footer=True,density='compact')
@@ -334,6 +348,38 @@ class WebmonMixin:
         except Exception as exc:s.webmon_message=f'Refinement handoff failed: {exc}'
         s.flush()
 
+    async def webmon_load_published_sources(self,**_):
+        s=self.server.state
+        try:
+            task=getattr(self,'_refinement_refresh_task',None)
+            if task and not task.done():await task
+            else:await self._refresh_refinement_sources()
+            from ..refinement_sources import experiment_key
+            experiment=experiment_key(str(self.service.history_id),'PG3','IPTS-'+str(s.powgen_ipts).removeprefix('IPTS-'))
+            w=self._refinement_store()
+            self._webmon_published_catalog={key:dict(value) for key,value in w.state['sources'].items() if value['experiment']==experiment}
+            s.webmon_published_sources=[dict(title=f"{v['scan_label']} · {v['sample_label']}",value=key) for key,v in self._webmon_published_catalog.items()]
+            if s.webmon_published_source not in self._webmon_published_catalog:s.webmon_published_source=''
+            s.webmon_source_notice=f'{len(s.webmon_published_sources)} published GPX sources in this IPTS. Inspect a reference, then resolve the live producer mapping before analysis.'
+        except Exception as exc:s.webmon_source_notice='Published source lookup failed: '+str(exc)
+        s.flush()
+
+    def webmon_published_source_changed(self,value,**_):
+        s=self.server.state;s.webmon_published_source=value
+        source=getattr(self,'_webmon_published_catalog',{}).get(value)
+        if source:
+            s.webmon_source_notice=f"Selected {source['scan_label']}, {source['sample_label']}, bank {source.get('bank') or 'unresolved'}. The GPX's instrument calibration does not establish the live export conversion. Producer mapping and native preparation are still required."
+        s.flush()
+
+    def webmon_open_published_source(self,**_):
+        s=self.server.state
+        try:
+            source=getattr(self,'_webmon_published_catalog',{}).get(s.webmon_published_source)
+            if not source:raise ValueError('Select a published source first')
+            self._webmon_handoff_source(source,'Inspect this published GPX as a possible nuclear reference for an in-progress POWGEN scan. Preserve the recorded bank, calibration, fit limits and phases. Do not assume its TOF calibration is the live d-spacing export convention.')
+        except Exception as exc:s.webmon_source_notice=str(exc)
+        s.flush()
+
     def _webmon_handoff_source(self,source,prompt):
         from ..refinement_controller import refinement_experiment_options
         s=self.server.state;w=self._refinement_store();w.observe([source])
@@ -545,6 +591,8 @@ class WebmonMixin:
         return await acquire(self._webmon.config.get('slot_root',str(Path(self._webmon.config['jobs'])/'.slots')),self._webmon.config.get('max_active_jobs',1),self._webmon.config.get('job_timeout_seconds',3600))
 
     async def _webmon_execute(self,launch):
+        if not self._webmon_is_local():
+            return await self._webmon_execute_galaxy(launch)
         s=self.server.state;lease=None
         try:
             b,req=launch['sealed'];validate_request(req,b)
@@ -594,6 +642,49 @@ class WebmonMixin:
             if self._webmon_process and self._webmon_process.returncode is None:await stop_process(self._webmon_process)
             if lease:lease.release()
             self._webmon_process=None;s.webmon_busy=False;self.webmon_saved_list();s.flush()
+    async def _webmon_execute_galaxy(self,launch):
+        from .galaxy_runtime import GalaxyLiveRuntime
+        from gpx_recipe.live.io import atomic_json
+        import threading
+        s=self.server.state
+        try:
+            b,req=launch['sealed'];validate_request(req,b)
+            identity=hashlib.sha256(json.dumps(req,sort_keys=True).encode()).hexdigest()
+            root=Path(self._webmon.config['jobs'])/'galaxy';root.mkdir(parents=True,exist_ok=True)
+            runtime=GalaxyLiveRuntime(root,self.service)
+            self._webmon_remote_cancel=threading.Event()
+            self._webmon_pending_binding=b;self._webmon_pending_request=req
+            s.webmon_busy=True;s.webmon_stale=bool(s.webmon_has_result)
+            s.webmon_message='Submitting this snapshot to the Galaxy scientific worker. New snapshots will replace only pending work.';s.flush()
+            loop=asyncio.get_running_loop()
+            def submitted(job):
+                def update():
+                    s.webmon_message='Galaxy job '+str(job.get('galaxy_job_id',''))+' is queued or running.';s.flush()
+                loop.call_soon_threadsafe(update)
+            result=await asyncio.to_thread(runtime.call,req,root/identity[:24],dispatch_key=identity[:24],
+                cache_dataset_id=getattr(self,'_webmon_response_cache',None),on_submitted=submitted,cancel_event=self._webmon_remote_cancel)
+            if self._webmon_cancelled:return
+            self._webmon_response_cache=result.get('response_cache_dataset_id')
+            # Keep the original checked bundle intact. The UI view contains
+            # hard-linked immutable models and explicitly rebased presentation
+            # paths; it never changes scientific artifacts or their receipts.
+            native=Path(result['directory']);view=native.parent/'view';view.mkdir(exist_ok=True)
+            if not (view/'models').exists():shutil.copytree(native/'models',view/'models',copy_function=os.link)
+            display=dict(result);display['rows']=[dict(row) for row in result['rows']]
+            for row in display['rows']:
+                for key in ('posterior','fitted_gpx'):
+                    if row.get(key):row[key]=str(view/Path(row[key]).relative_to(native))
+            atomic_json(view/'request.json',req)
+            display['request_sha256']=digest(view/'request.json')
+            display['verified_native_transport_sha256']=result['transport_sha256']
+            atomic_json(view/'result.json',display)
+            self._webmon_load_result(view)
+            s.webmon_calculation_status='Completed';s.webmon_message='Galaxy snapshot analysis completed. Results remain conditional on the reviewed fixed nuclear response.'
+        except Exception as exc:
+            s.webmon_calculation_status='Stopped' if self._webmon_cancelled else 'Failed'
+            s.webmon_message=str(exc)
+        finally:s.webmon_busy=False;s.flush()
+
     def _webmon_load_result(self,out):
         s=self.server.state;p=out/'result.json'
         if not p.exists():return
@@ -739,12 +830,15 @@ class WebmonMixin:
     async def webmon_cancel(self,**_):
         self.webmon_pause_stream()
         self._webmon_cancelled=True
+        if getattr(self,'_webmon_remote_cancel',None):
+            self._webmon_remote_cancel.set()
         self.server.state.webmon_calculation_status='Cancelled'
         await stop_process(self._webmon_process)
 
     async def webmon_shutdown(self):
         self.webmon_pause_stream()
         self._webmon_cancelled=True
+        if getattr(self,'_webmon_remote_cancel',None):self._webmon_remote_cancel.set()
         if self._webmon_poll_task and not self._webmon_poll_task.done():
             self._webmon_poll_task.cancel()
             await asyncio.gather(self._webmon_poll_task,return_exceptions=True)
