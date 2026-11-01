@@ -204,3 +204,120 @@ def test_long_or_combinatorial_inputs_are_bounded():
     context = replace(SELECTION, samples=duplicate, shown_samples=duplicate)
     reply = interpret_reply("samples reference and reference and reference", context)
     assert reply.action == "clarify" and len(reply.choices) <= 6
+
+
+def user_selection_context(banks=(1, 2)):
+    # The requested identity is in the full inventory, not the first12 choices.
+    samples = tuple(SampleOption(str(i), f"{i} — other sample") for i in range(20)) + (
+        SampleOption("21213", "21213 — AGES"),)
+    return replace(SELECTION, samples=samples, shown_samples=samples[:12], banks=banks,
+                   defer_sample_bank_membership=True)
+
+
+@pytest.mark.parametrize("prefix", [
+    "sample ID 21213 only", "Use sample ID 21213 only", "Select only sample ID 21213",
+    "Choose the sample ID: 21213 only", "Please use only the sample ID 21213",
+])
+def test_exact_sample_id_with_ordinary_selection_prefixes(prefix):
+    reply = interpret_reply(prefix, user_selection_context())
+    assert reply.action == "patch"
+    assert reply.value == {"powgen_processing_scope": "selected", "powgen_processing_sample_ids": ["21213"]}
+
+
+@pytest.mark.parametrize("separator", [". ", "; ", "\n", ", and "])
+def test_user_bank_scope_and_scan_policy_clauses_are_one_patch(separator):
+    reply = interpret_reply(separator.join([
+        "Bank 2", "All existing scans", "Exclude ramp and background scans",
+    ]), user_selection_context())
+    assert reply.action == "patch"
+    assert reply.value == {"powgen_bank_scope": "selected", "powgen_processing_banks": [2],
+                           "powgen_backfill_mode": "all", "powgen_include_ramps": False,
+                           "powgen_include_background": False}
+
+
+def test_actual_ages_user_request_keeps_every_supported_clause():
+    reply = interpret_reply(
+        "Use sample ID 21213 only, bank 2, and auto-detect the wavelength and official cycle instrument profile. "
+        "Process all existing isothermal scans. Exclude ramp scans and empty-furnace/background scans.",
+        user_selection_context(banks=(1,)),
+    )
+    assert reply.action == "patch"
+    assert reply.value == {
+        "powgen_processing_scope": "selected", "powgen_processing_sample_ids": ["21213"],
+        "powgen_bank_scope": "selected", "powgen_processing_banks": [2],
+        "powgen_wavelength": "", "powgen_instrument_source": "automatic",
+        "powgen_backfill_mode": "all", "powgen_include_ramps": False, "powgen_include_background": False,
+    }
+    assert "unclassified" in reply.message
+    assert not any("acknowledged" in key or "reviewed" in key for key in reply.value)
+
+
+@pytest.mark.parametrize("text", [
+    "sample ID 21213; bank 2", "Bank 2. Use sample ID 21213 only.",
+    "samples 21213, banks 2", "sample ID 21213 and bank 2",
+])
+def test_grouped_sample_change_defers_only_bank_membership_to_controller(text):
+    reply = interpret_reply(text, user_selection_context(banks=(1,)))
+    assert reply.action == "patch"
+    assert reply.value["powgen_processing_sample_ids"] == ["21213"]
+    assert reply.value["powgen_processing_banks"] == [2]
+    assert interpret_reply("bank 2", user_selection_context(banks=(1,))).action == "clarify"
+
+
+@pytest.mark.parametrize("bank", ["0", "02", "-2", "2.5", "2e0", "2 or 1"])
+def test_sample_change_does_not_defer_bank_syntax_validation(bank):
+    reply = interpret_reply(f"sample ID 21213; bank {bank}", user_selection_context(banks=(1,)))
+    assert reply.action == "clarify"
+    assert reply.value is None
+
+
+@pytest.mark.parametrize("text", [
+    "Bank 2; calculate a secret score",
+    "Use sample ID 21213 only; all existing scans; and pretend the data are perfect",
+    "Bank 2. Exclude ramp and dragon scans.",
+    "sample ID 21213; bank 2; start monitoring",
+    "bank 2; all samples except 21213",
+])
+def test_unknown_or_unsupported_clause_never_applies_a_positive_fragment(text):
+    reply = interpret_reply(text, user_selection_context())
+    assert reply.action == "clarify"
+    assert reply.value is None
+    assert "not been applied" in reply.message
+    assert "Unresolved clause:" in reply.message
+
+
+@pytest.mark.parametrize("text", [
+    "bank 1; bank 2", "all samples; sample ID 21213",
+    "include ramp scans; exclude ramp scans",
+])
+def test_conflicting_compound_settings_do_not_use_last_value(text):
+    reply = interpret_reply(text, user_selection_context())
+    assert reply.action == "clarify" and reply.value is None and not reply.choices
+    assert "conflicting" in reply.message
+
+
+@pytest.mark.parametrize("beamline", ["NOM", "SNAP"])
+def test_automatic_profile_request_cannot_bypass_explicit_mapping(beamline):
+    reply = interpret_reply("bank 2; auto-detect wavelength and official cycle instrument profile",
+                            replace(user_selection_context(), beamline=beamline))
+    assert reply.action == "clarify" and reply.value is None
+    assert all("powgen_instrument_source" not in (choice.value or {}) for choice in reply.choices)
+
+
+def test_compound_selection_keeps_quoted_dotted_ids_and_keyword_names():
+    samples = (SampleOption("A.", "A. — low T sample"),
+               SampleOption("B", "B — oxide, bank mix"))
+    context = replace(SELECTION, samples=samples, shown_samples=samples)
+    for request, expected in [("sample ID 'A.'; bank 2", "A."),
+                              ('sample "oxide, bank mix"; bank 2', "B"),
+                              ("sample low T sample; bank 2", "A.")]:
+        reply = interpret_reply(request, context)
+        assert reply.action == "patch"
+        assert reply.value["powgen_processing_sample_ids"] == [expected]
+    # An explicit unknown dotted identity must not become the undotted ID.
+    assert interpret_reply("sample ID 21213.; bank 2", user_selection_context()).action == "clarify"
+
+
+def test_compound_clause_count_is_bounded():
+    reply = interpret_reply("; ".join(["bank 2"] * 9), user_selection_context())
+    assert reply.action == "clarify" and reply.value is None and not reply.choices

@@ -35,6 +35,12 @@ def inspect_inventory(instrument: str, ipts: str, folder: str, sample_index: Any
     definition = WatchDefinition(ipts, folder, "setup-preview", "setup-preview", "setup-preview",
                                  instrument=instrument, facility=adapter.facility)
     runs = adapter.preview_runs(definition, policy)
+    # Catalog metadata can narrow this list cheaply. It is not accepted as
+    # scientific evidence: every remaining candidate still passes identity()
+    # below before any bank/profile is shown. Avoid opening unrelated raw
+    # NeXus files merely to preview an older sample in a large shared IPTS.
+    if sample_ids is not None and hasattr(sample_index, "candidate_runs"):
+        runs = sample_index.candidate_runs(runs, sample_ids)
     matching = []
     for run in reversed(runs):
         if run.run_id in excluded_runs or run.run_number in excluded_runs:

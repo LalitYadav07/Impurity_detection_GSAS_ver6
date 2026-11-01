@@ -31,9 +31,15 @@ class LiveAssistantMixin(LiveAssistantUi):
     def _reset_live_assistant(self):
         """Forget experiment-scoped conversation state without registering watchers twice."""
         state = self.server.state
+        task = getattr(self, "_live_assistant_action_task", None)
+        self._assistant_generation = object()
+        self._live_assistant_action_task = None
+        if task is not None and not task.done():
+            task.cancel()
         self._live_conversation = SetupConversation()
         self._assistant_request = None
         self._assistant_inventory = None
+        self._assistant_inventory_signature = None
         self._assistant_checked_signature = None
         self._assistant_preview_signature = None
         self._assistant_preview_inventory = None
@@ -68,6 +74,12 @@ class LiveAssistantMixin(LiveAssistantUi):
         if not hasattr(self, "_live_conversation"):
             return
         state = self.server.state
+        if (self._assistant_inventory_signature is not None
+                and self._assistant_inventory_signature != self._assistant_inventory_scope()):
+            self._assistant_inventory_signature = None
+            self._assistant_inventory = None
+            state.powgen_bank_options = []
+            state.live_assistant_inventory_note = "Sample or run selection changed. Refresh banks for these samples before choosing a bank."
         self._assistant_refresh_sample_choices()
         pending = self._live_conversation.pending
         if pending and pending["signature"] != self._assistant_language_signature():
@@ -159,6 +171,26 @@ class LiveAssistantMixin(LiveAssistantUi):
     def start_live_assistant_preview(self, **kwargs):
         self._queue_live_assistant_action(self.live_assistant_preview, **kwargs)
 
+    def start_live_assistant_inventory(self, **kwargs):
+        self._queue_live_assistant_action(self.live_assistant_inventory, **kwargs)
+
+    async def live_assistant_inventory(self, **_):
+        state = self.server.state
+        if self._assistant_locked() or state.live_assistant_busy:
+            return
+        state.live_assistant_busy = True
+        generation = self._assistant_generation
+        state.live_assistant_error = ""
+        state.flush()
+        try:
+            await self._assistant_inspect()
+        except (ValueError, OSError) as exc:
+            state.live_assistant_error = str(exc)
+        finally:
+            if generation is self._assistant_generation:
+                state.live_assistant_busy = False
+                state.flush()
+
     def _assistant_ingest(self, payload):
         """Use button-time visible values, including debounced text fields."""
         if not isinstance(payload, dict):
@@ -189,21 +221,41 @@ class LiveAssistantMixin(LiveAssistantUi):
         state = self.server.state
         return (state.live_beamline, self._normalize_powgen_ipts(state.powgen_ipts), state.powgen_source_subfolder)
 
-    async def _assistant_inspect(self, *, allow_waiting=True):
+    def _assistant_inventory_scope(self):
+        state = self.server.state
+        fields = ("live_beamline", "powgen_ipts", "powgen_source_subfolder",
+                  "powgen_processing_scope", "powgen_processing_sample_ids", "powgen_excluded_runs",
+                  "powgen_include_background", "powgen_include_ramps", "hb2a_normalization",
+                  "snap_product_family", "hb2a_collimator_override", "hb2a_allow_stopped")
+        return signature({key: getattr(state, key, None) for key in fields})
+
+    async def _assistant_inspect(self, *, allow_waiting=True, proposed=None):
         state = self.server.state
         context = self._assistant_context()
-        selected = (self._powgen_processing_ids()
-                    if state.powgen_processing_scope != "selected" or state.powgen_processing_sample_ids else None)
+        inventory_scope = self._assistant_inventory_scope()
+        proposed = proposed or {}
+        def value(name):
+            return proposed.get(name, getattr(state, name))
+        selected = (tuple(value("powgen_processing_sample_ids"))
+                    if value("powgen_processing_scope") == "selected" else None)
         selection = signature(self._assistant_snapshots()["selection"])
+        # Discovery precedes the sensor-review controls. Unreviewed suggested
+        # channels must not prevent seeing those controls or become qualified
+        # temperatures in a preview. The launch preflight still validates the
+        # full configured binding, including its explicit acknowledgement.
+        condition_bindings = None
+        if context[0] == "HB2A":
+            condition_bindings = {key: value for key, value in self._hb2a_condition_bindings(state).items()
+                                  if value.get("reviewed") is True}
         try:
             inventory = await asyncio.to_thread(
                 inspect_inventory, *context, self._powgen_sample_index(context[1]),
-                sample_ids=selected, excluded_runs=tuple(state.powgen_excluded_runs or []),
-                include_background=bool(state.powgen_include_background),
-                include_ramps=bool(state.powgen_include_ramps),
+                sample_ids=selected, excluded_runs=tuple(value("powgen_excluded_runs") or []),
+                include_background=bool(value("powgen_include_background")),
+                include_ramps=bool(value("powgen_include_ramps")),
                 normalization=state.hb2a_normalization,
                 product_family=state.snap_product_family,
-                condition_bindings=self._hb2a_condition_bindings(state) if context[0] == 'HB2A' else None,
+                condition_bindings=condition_bindings,
                 collimator_override=state.hb2a_collimator_override,
                 allow_stopped=bool(state.hb2a_allow_stopped),
             )
@@ -212,10 +264,21 @@ class LiveAssistantMixin(LiveAssistantUi):
                 raise
             inventory = None
             waiting_message = str(exc)
-        if context != self._assistant_context() or selection != signature(self._assistant_snapshots()["selection"]):
+        if (context != self._assistant_context()
+                or inventory_scope != self._assistant_inventory_scope()
+                or selection != signature(self._assistant_snapshots()["selection"])):
             raise ValueError("The experiment or sample selection changed during discovery. Continue with the current selection again.")
+        if proposed:
+            return inventory
+        self._assistant_publish_inventory(inventory, waiting_message if inventory is None else "")
+        return inventory
+
+    def _assistant_publish_inventory(self, inventory, waiting_message=""):
+        state = self.server.state
         self._assistant_inventory = inventory
+        self._assistant_inventory_signature = self._assistant_inventory_scope()
         if inventory is None:
+            state.powgen_bank_options = []
             state.live_assistant_inventory_note = waiting_message
             return None
         state.powgen_bank_options = inventory["banks"]
@@ -231,7 +294,10 @@ class LiveAssistantMixin(LiveAssistantUi):
         allowed = {str(item["value"]) for item in state.powgen_discovered_sample_options}
         if selected and set(selected) - allowed:
             raise ValueError("A selected sample is no longer in this experiment. Refresh the samples and select it again.")
-        self._powgen_processing_bank_ids()
+        selected_banks = self._powgen_processing_bank_ids()
+        available_banks = {int(item["value"]) for item in state.powgen_bank_options}
+        if selected_banks and set(selected_banks) - available_banks:
+            raise ValueError("A selected bank is not available for these samples. Refresh banks and choose a displayed bank.")
         if state.powgen_backfill_mode not in {"new_only", "latest_1", "latest_5", "latest_20", "all"}:
             raise ValueError("Choose the initial monitoring scope.")
         source = state.powgen_instrument_source
@@ -294,8 +360,8 @@ class LiveAssistantMixin(LiveAssistantUi):
                 self._assistant_confirm(step, f"{state.live_beamline_label} · {state.powgen_ipts} · {state.powgen_source_subfolder}")
                 self._assistant_step("selection")
             elif step == "selection":
-                self._assistant_validate_selection()
                 await self._assistant_inspect()
+                self._assistant_validate_selection()
                 samples = ", ".join(self._powgen_processing_ids() or ()) or "All samples, including unidentified scans"
                 banks = ", ".join(map(str, self._powgen_processing_bank_ids() or ())) or "All banks, separately"
                 self._assistant_confirm(step, f"Samples: {samples}. Banks: {banks}.")
@@ -500,6 +566,7 @@ class LiveAssistantMixin(LiveAssistantUi):
             banks=tuple(int(b["value"]) for b in state.powgen_bank_options),
             focus=state.live_assistant_focus,
             reference_presets=tuple(state.live_reference_mask_presets or []),
+            defer_sample_bank_membership=True,
         )
 
     def _assistant_language_signature(self):
@@ -586,12 +653,28 @@ class LiveAssistantMixin(LiveAssistantUi):
             allowed = {str(s["value"]) for s in state.powgen_discovered_sample_options}
             if set(values["powgen_processing_sample_ids"]) - allowed:
                 raise ValueError("A sample is no longer in the current experiment. Refresh the list.")
+        scope_fields = {"powgen_processing_scope", "powgen_processing_sample_ids", "powgen_excluded_runs",
+                        "powgen_include_background", "powgen_include_ramps"}
+        inventory = None
+        if set(values) & scope_fields:
+            generation = self._assistant_generation
+            state.live_assistant_busy = True
+            state.flush()
+            try:
+                inventory = await self._assistant_inspect(proposed=values, allow_waiting=False)
+            finally:
+                if generation is self._assistant_generation:
+                    state.live_assistant_busy = False
         banks = values.get("powgen_processing_banks", [])
         if "nomad_physical_bank" in values:
             banks = [values["nomad_physical_bank"]]
-        if set(banks) - {int(b["value"]) for b in state.powgen_bank_options}:
+        available = inventory["banks"] if inventory is not None else state.powgen_bank_options
+        if set(banks) - {int(b["value"]) for b in available}:
             raise ValueError("A bank is no longer in the current experiment. Refresh the list.")
         self._live_conversation.apply(state, values, description or "Use typed Live setup values")
+        if inventory is not None:
+            state.flush()
+            self._assistant_publish_inventory(inventory)
         self._assistant_say("assistant", (description or "Updated the Live setup fields") + ". Review the values before continuing.")
 
     async def _assistant_dispatch_reply(self, reply):

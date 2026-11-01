@@ -119,7 +119,9 @@ class PowgenSampleIndex:
                 fingerprint, revision, generation, created = signature
                 if (fingerprint == run.fingerprint and revision == self.metadata_index.revision
                         and generation == self.metadata_index.generation and time.monotonic() - created < TTL_SECONDS):
-                    if metadata.get("sample_id") not in selected and metadata.get("identity_status") != "conflict":
+                    candidate_id = metadata.get("sample_id")
+                    if (candidate_id and metadata.get("identity_status") == "resolved"
+                            and candidate_id not in selected):
                         continue
             result.append(run)
         return result

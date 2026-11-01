@@ -136,6 +136,8 @@ class LiveAssistantUi:
                                   v_model=("powgen_processing_sample_ids",), items=("powgen_discovered_sample_options",),
                                   item_title="title", item_value="value", multiple=True, chips=True,
                                   closable_chips=True, clearable=True, density="compact", variant="outlined", disabled=(LOCK,))
+            vuetify.VBtn("Refresh banks for these samples", click=self.start_live_assistant_inventory,
+                         variant="outlined", size="small", disabled=(LOCK,), classes="mb-3")
             with html.Div(v_show="live_beamline === 'PG3'"):
                 self._assistant_select("Banks to process", "powgen_bank_scope",
                                        "[{title:'All available banks, separately',value:'all'},{title:'Selected banks',value:'selected'}]")

@@ -22,6 +22,7 @@ from .uploads import _ELEMENT_SYMBOLS
 
 MAX_REPLY = 1000
 MAX_SHOWN_SAMPLES = 12
+MAX_CLAUSES = 8
 
 
 @dataclass(frozen=True)
@@ -39,6 +40,7 @@ class ReplyContext:
     banks: tuple[int, ...] = ()
     focus: str = ""
     reference_presets: tuple[str, ...] = ()
+    defer_sample_bank_membership: bool = False
 
 
 @dataclass(frozen=True)
@@ -273,12 +275,19 @@ def _sample_names(option: SampleOption) -> set[str]:
 
 
 def _one_sample(text: str, context: ReplyContext) -> ParsedReply:
-    token=text.strip()
-    quoted=token[:1] in {'"',"'"} or token[-1:] in {'"',"'"}
-    raw = text.strip(" \"'")
+    raw = text.strip()
     explicit_id = bool(re.match(r"^(?:with\s+)?ids?\s*[:# ]", raw, re.I))
     raw = re.sub(r"^(?:with\s+)?ids?\s*[:# ]\s*", "", raw, flags=re.I)
+    quoted = raw[:1] in {'"', "'"} or raw[-1:] in {'"', "'"}
+    raw = raw.strip(" \"'")
     exact_ids = [s for s in context.samples if s.value == raw]
+    if not exact_ids and not quoted and not any(_key(raw) in _sample_aliases(s) for s in context.samples):
+        # "Only" qualifies a selection, but can also be part of a real name.
+        # Exact names/IDs win before removing this ordinary trailing qualifier.
+        qualified = re.sub(r"\s+only[.!?]?$", "", raw, flags=re.I)
+        if qualified != raw:
+            raw = qualified
+            exact_ids = [s for s in context.samples if s.value == raw]
     # Preserve real punctuated IDs and explicitly literal/quoted IDs first.
     # An ordinary sentence may end "select sample 106208."; remove only one
     # sentence mark when the remaining ID exists exactly in the discovered list.
@@ -367,7 +376,7 @@ def _samples(text: str, context: ReplyContext) -> ParsedReply:
     return whole
 
 
-def _banks(text: str, context: ReplyContext) -> ParsedReply:
+def _banks(text: str, context: ReplyContext, *, defer_membership: bool = False) -> ParsedReply:
     body = _body(text)
     if body in {"all", "all banks", "every bank", "all of them"}:
         if context.beamline in {'NOM','SNAP'}:
@@ -377,7 +386,10 @@ def _banks(text: str, context: ReplyContext) -> ParsedReply:
     if not parts or any(not re.fullmatch(r"[1-9][0-9]*", p) for p in parts):
         return _clarify("Use exact bank numbers from the discovered list. I do not correct or round bank numbers.")
     banks = list(dict.fromkeys(int(p) for p in parts))
-    if set(banks) - set(context.banks):
+    # A simultaneous sample change requires the controller to inspect that
+    # proposed scope before checking membership. Numeric syntax and one-bank
+    # instrument constraints still apply here; standalone requests never defer.
+    if not defer_membership and set(banks) - set(context.banks):
         return _clarify("A requested bank is not in the current bank list. Choose a discovered bank or refresh the experiment.")
     if context.beamline in {'NOM','SNAP'}:
         if len(banks) != 1:
@@ -389,6 +401,12 @@ def _banks(text: str, context: ReplyContext) -> ParsedReply:
 def _selection(text: str, context: ReplyContext) -> ParsedReply | None:
     # Keep chemical symbols in their original case; selection names also retain IDs.
     body = _raw_body(text, trim_punctuation=False)
+    body = re.sub(r"^(?:(?:only|the)\s+)+(?=samples?\b)", "", body, flags=re.I)
+    literal = re.fullmatch(r"samples?\s+(.+)", body, re.I)
+    if literal:
+        exact = _one_sample(literal[1], context)
+        if exact.action == "patch":
+            return exact
     # Parse a delimited pair as two fields before looking for keywords inside
     # its values. Exact IDs/names such as "oxide-sample" or "low T sample"
     # are values, not repeated commands. Unknown/ambiguous parts stay atomic.
@@ -396,7 +414,9 @@ def _selection(text: str, context: ReplyContext) -> ParsedReply | None:
     if not pair and context.step=='selection':
         pair=re.fullmatch(r"(.+?)[;,]\s*(?:banks?|histograms?)\s+(.*)",body,re.I)
     if pair:
-        return _merge([_samples(pair[1].strip(), context), _banks(pair[2].strip(), context)], 'Updated samples and banks')
+        sample = _samples(pair[1].strip(), context)
+        defer = context.defer_sample_bank_membership and sample.action == "patch"
+        return _merge([sample, _banks(pair[2].strip(), context, defer_membership=defer)], 'Updated samples and banks')
     all_choices = re.fullmatch(r"(?:all|every)\s+(?:available\s+)?(samples?|banks?|histograms?)", body.strip(" .!?"), re.I)
     if all_choices:
         return _samples("all", context) if all_choices[1].lower().startswith("sample") else _banks("all", context)
@@ -414,7 +434,7 @@ def _selection(text: str, context: ReplyContext) -> ParsedReply | None:
         return _banks(body, context) if context.focus == "banks" else _samples(body, context)
     if body[:matches[0].start()].strip(" ,;"):
         return None
-    replies = []
+    fields = []
     kinds = []
     for i, match in enumerate(matches):
         kind = "samples" if match[1].lower().startswith("sample") else "banks"
@@ -425,7 +445,11 @@ def _selection(text: str, context: ReplyContext) -> ParsedReply | None:
         chunk = re.sub(r"\s+and$", "", chunk, flags=re.I).strip(" ,;")
         if not chunk:
             return ParsedReply("focus", kind, "Choose " + kind + " by name or displayed number.")
-        replies.append(_samples(chunk, context) if kind == "samples" else _banks(chunk, context))
+        fields.append((kind, chunk))
+    samples = {kind: _samples(chunk, context) for kind, chunk in fields if kind == "samples"}
+    defer = context.defer_sample_bank_membership and any(reply.action == "patch" for reply in samples.values())
+    replies = [samples[kind] if kind == "samples" else _banks(chunk, context, defer_membership=defer)
+               for kind, chunk in fields]
     return _merge(replies, "Updated " + " and ".join(kinds))
 
 
@@ -503,7 +527,53 @@ def _reference_masks(body: str, context: ReplyContext) -> ParsedReply | None:
                   "Enabled " + preset + " reference-peak exclusions; positions use the instrument profile and widths use the current mask settings. Inspect the masks for overlaps with sample peaks")
 
 
-def interpret_reply(text: str, context: ReplyContext | None = None) -> ParsedReply:
+def _run_policy(text: str, context: ReplyContext) -> ParsedReply | None:
+    """Translate explicit scope policies without certifying acquisition roles."""
+    body = _body(text)
+    existing = re.fullmatch(r"(?:process\s+)?(?:all|every)\s+existing\s+(isothermal\s+)?(?:scans?|runs?)(?:\s+only)?", body)
+    if existing:
+        values = {"powgen_backfill_mode": "all"}
+        label = "Process all existing matching scans, then new scans"
+        if existing[1]:
+            values["powgen_include_ramps"] = False
+            label += "; exclude title-classified ramps (unclassified scans still need review)"
+        return _patch(values, label)
+    roles = re.fullmatch(r"(exclude|omit|ignore|include|allow)\s+(?:the\s+)?(.+)", body)
+    if roles:
+        words = re.sub(r"\bempty(?:[- ]furnace)?\b", "background", roles[2])
+        words = re.sub(r"\b(?:scans?|runs?)\b", "", words)
+        words = re.sub(r"\b(?:and|or)\b|[/,]", " ", words).split()
+        if words and set(words) <= {"ramp", "ramps", "ramping", "cooling", "background"}:
+            include = roles[1] in {"include", "allow"}
+            values = {}
+            if set(words) & {"ramp", "ramps", "ramping", "cooling"}:
+                values["powgen_include_ramps"] = include
+            if "background" in words:
+                values["powgen_include_background"] = include
+            return _patch(values, ("Include" if include else "Exclude") +
+                          " title-classified " + " and ".join("ramp/cooling scans" if k.endswith("ramps") else "background/empty scans" for k in values) +
+                          "; review unclassified scan titles separately")
+    automatic = re.fullmatch(
+        r"(?:auto[- ]detect|automatically\s+(?:detect|choose|select)|automatic)\s+(.+)", body)
+    if automatic is None:
+        automatic = re.fullmatch(r"(.+?)\s+automatically", body)
+    if automatic:
+        request = re.sub(r"\bthe\s+", "", automatic[1])
+        profile = r"(?:official\s+)?(?:cycle\s+)?(?:instrument\s+)?profile"
+        if re.fullmatch(r"wavelength(?:\s+and\s+" + profile + r")?|" + profile + r"(?:\s+and\s+wavelength)?", request):
+            values = {}
+            if "wavelength" in request:
+                values["powgen_wavelength"] = ""
+            if "profile" in request:
+                adapter = LIVE_BEAMLINES.get(context.beamline)
+                if adapter is None or not adapter.automatic_profiles:
+                    return _clarify("This beamline needs a supplied matching profile and reviewed bank mapping; it has no automatic cycle-profile selection.")
+                values["powgen_instrument_source"] = "automatic"
+            return _patch(values, "Use automatic " + request + "; profile matching remains subject to the experiment check")
+    return None
+
+
+def _interpret_single_reply(text: str, context: ReplyContext | None = None, *, defer_banks=False) -> ParsedReply:
     context = context or ReplyContext()
     text = str(text or "").strip()
     if len(text) > MAX_REPLY:
@@ -514,6 +584,13 @@ def interpret_reply(text: str, context: ReplyContext | None = None) -> ParsedRep
     if explanation:
         return explanation
     body = _body(text)
+    policy = _run_policy(text, context)
+    if policy:
+        return policy
+    if defer_banks:
+        bank = re.fullmatch(r"(?:banks?|histograms?)\s*(?:are\b|is\b|:|=)?\s*(.+)", _raw_body(text, trim_punctuation=False), re.I)
+        if bank:
+            return _banks(bank[1], context, defer_membership=True)
     if re.search(r"\b(?:start monitoring|submit|launch|execute|analy[sz]e (?:a |the )?(?:scan|run))\b", body):
         return _clarify("This assistant fills the Live setup. Use the ordinary monitoring controls after reviewing the configuration.")
     navigation = {"back": "back", "go back": "back", "previous": "back", "previous question": "back", "undo": "undo", "undo that": "undo", "undo last change": "undo", "continue": "continue", "next": "continue", "next question": "continue", "move on": "continue", "keep current settings": "continue", "keep my settings": "continue", "keep the current settings": "continue"}
@@ -554,7 +631,7 @@ def interpret_reply(text: str, context: ReplyContext | None = None) -> ParsedRep
         if selected:
             return selected
     if context.step == "selection" and any(raw_body == s.value or _key(raw_body) in _sample_aliases(s) for s in context.samples):
-        return _selection(text, context)
+        return _samples(raw_body, context)
     experiment = _experiment(text, context)
     if experiment:
         return experiment
@@ -580,3 +657,95 @@ def interpret_reply(text: str, context: ReplyContext | None = None) -> ParsedRep
     if nearby:
         return _clarify("Did you mean this setup action?", [ReplyChoice(word.capitalize(), word) for word in nearby])
     return ParsedReply("unknown", message="I could not interpret that reply. Use the choices for this question, give a sample name/number, or ask 'what does background mean?'.")
+
+
+_CLAUSE_START = re.compile(
+    r"(?:(?:please|use|select|choose|apply)\s+)*(?:only\s+)?"
+    r"(?:samples?\b|banks?\b|histograms?\b|(?:process\s+)?(?:all|every)\s+existing\b|"
+    r"exclude\b|omit\b|ignore\b|include\b|allow\b|auto[- ]detect\b|automatic(?:ally)?\b|"
+    r"environment\b|can\b|elements\b|IPTS\b|POWGEN\b|HB2A\b|NOMAD\b|SNAP\b)", re.I)
+
+
+def _reply_clauses(text: str) -> list[str]:
+    """Split command boundaries, leaving quoted names and decimal values whole."""
+    clauses = []
+    start = 0
+    quote = None
+    i = 0
+    while i < len(text):
+        char = text[i]
+        if quote:
+            if char == quote:
+                quote = None
+            i += 1
+            continue
+        if char in {'"', "'"} and (i == 0 or not text[i - 1].isalnum()):
+            quote = char
+            i += 1
+            continue
+        cut = None
+        after = i + 1
+        if char in ";\n":
+            cut = i
+        elif char in ".!?" and after < len(text) and text[after].isspace():
+            following = text[after:].lstrip()
+            if _CLAUSE_START.match(following):
+                cut = after  # Keep a real dotted identity available to lookup.
+        elif char == ",":
+            following = re.sub(r"^\s*(?:and\s+)?", "", text[after:], flags=re.I)
+            if _CLAUSE_START.match(following):
+                cut = i
+                after = len(text) - len(following)
+        elif text[i:i + 3].lower() == "and" and (i == 0 or text[i - 1].isspace()) and (i + 3 == len(text) or text[i + 3].isspace()):
+            following = text[i + 3:].lstrip()
+            if _CLAUSE_START.match(following):
+                cut = i
+                after = len(text) - len(following)
+        if cut is not None:
+            clause = text[start:cut].strip(" ,;\n")
+            if clause:
+                clauses.append(clause)
+            start = after
+            i = after
+        else:
+            i += 1
+    last = text[start:].strip(" ,;\n")
+    if last:
+        clauses.append(last)
+    return clauses
+
+
+def interpret_reply(text: str, context: ReplyContext | None = None) -> ParsedReply:
+    """Parse supported clauses as one atomic edit; retain unknown/ambiguous text."""
+    context = context or ReplyContext()
+    text = str(text or "").strip()
+    if not text or len(text) > MAX_REPLY or _help(text):
+        return _interpret_single_reply(text, context)
+    raw = _raw_body(text, trim_punctuation=False)
+    literal = re.sub(r"^(?:only\s+)?samples?\s+", "", raw, flags=re.I)
+    literal = re.sub(r"^(?:with\s+)?ids?\s*[:# ]\s*", "", literal, flags=re.I).strip(" \"'")
+    if context.step == "selection" and any(literal == s.value or _key(literal) in _sample_aliases(s) for s in context.samples):
+        return _interpret_single_reply(text, context)
+    clauses = _reply_clauses(text)
+    if len(clauses) <= 1:
+        return _interpret_single_reply(text, context)
+    if len(clauses) > MAX_CLAUSES:
+        return _clarify("Please use at most eight setup clauses in one reply, or use the controls. No part of this answer has been applied.")
+    replies = [_interpret_single_reply(clause, context) for clause in clauses]
+    if context.defer_sample_bank_membership and any(r.action == "patch" and "powgen_processing_scope" in r.value for r in replies):
+        replies = [_interpret_single_reply(clause, context, defer_banks=True)
+                   for clause in clauses]
+    seen = {}
+    for reply in replies:
+        if reply.action != "patch":
+            continue
+        for key, value in reply.value.items():
+            if key in seen and seen[key] != value:
+                return _clarify("The clauses give conflicting values for the same setting. Specify each selection or policy once. No part of this answer has been applied.")
+            seen[key] = value
+    result = _merge(replies, "Updated setup: " + "; ".join(r.message for r in replies))
+    if result.action != "patch":
+        unresolved = [clause for clause, reply in zip(clauses, replies) if reply.action != "patch"]
+        result = ParsedReply(result.action, result.value,
+                             result.message + " Unresolved clause: " + "; ".join(unresolved), result.choices)
+    return result
