@@ -40,7 +40,7 @@ def test_reference_q_plot_keeps_sorted_observations_and_residuals():
 
 def test_changed_checkpoint_clears_old_acceptance_and_results(tmp_path):
     backend,_=session(tmp_path)
-    backend.binding=lambda *a:dict(description='second',review=[],k=['0','0','0'],ion='Fe+3')
+    backend.binding=lambda *a:dict(description='second',review=[],k=['0','0','0'],ion='Fe+3',maximum_moment=6.)
     obj=WebmonMixin();obj._webmon=backend;obj._webmon_review_checkpoint=lambda c:None;obj.webmon_saved_list=lambda:None
     s=SimpleNamespace(powgen_ipts='7',webmon_run='10',webmon_busy=False,webmon_accepted=True,webmon_has_result=True,flush=lambda:None)
     obj.server=SimpleNamespace(state=s);obj.webmon_checkpoint_changed('2')

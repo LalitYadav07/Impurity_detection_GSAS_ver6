@@ -197,3 +197,16 @@ def test_preparing_new_revision_retains_last_verified_result(tmp_path):
     assert state.webmon_model=='previous-posterior'
     assert state.webmon_rows==['previous']
     assert state.webmon_pending_rows[0]['status']=='preparing'
+
+
+def test_prepared_immutable_snapshot_can_start_after_new_compatible_revision(tmp_path):
+    from radar_pd_nova.webmon.stream import scope_of
+    stream,p=fixture(tmp_path)
+    original=p.read_bytes();reviewed=tmp_path/'reviewed.dat';reviewed.write_bytes(original)
+    binding=dict(stream.binding,source_dat=str(reviewed),live_source_path=str(p),source_scope=scope_of(stream.session.runs('1')[0]))
+    p.write_bytes(original.replace(b'1,10,2',b'1,19,2'))
+    resumed=ObservationStream(stream.session,'1','2',binding,stream.request,tmp_path/'delayed')
+    latest=resumed.capture()
+    assert latest['request']['source_revision'].endswith(file_hash(p))
+    assert latest['binding']['source_sha256']==binding['source_sha256']
+    assert file_hash(resumed.binding['source_dat'])==file_hash(reviewed)

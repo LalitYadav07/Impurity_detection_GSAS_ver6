@@ -40,7 +40,7 @@ class WebmonMixin:
                 # prebuilt science manifest just to browse the live source.
                 history_hash=hashlib.sha256(str(self.service.history_id).encode()).hexdigest()[:24]
                 base=Path(getattr(self.service,'output_root','/tmp'))/'live-snapshots'/history_hash
-                manifest=dict(facility_root=os.environ.get('RADAR_PD_SNS_ROOT','/SNS'),archive=str(base/'snapshots'),jobs=str(base/'jobs'),checkpoint_registry=str(base/'checkpoints.json'),local_replay=False)
+                manifest=dict(facility_root=os.environ.get('RADAR_PD_SNS_ROOT','/SNS'),archive=str(base/'snapshots'),jobs=str(base/'jobs'),checkpoint_registry=str(base/'checkpoints.json'),local_replay=False,allow_conditional_stream=True)
             self._webmon=WebmonSession(manifest) if manifest else None
         except (OSError,ValueError,KeyError) as exc:
             self._webmon=None;self._webmon_config_error=f'WebMON configuration unavailable: {exc}'
@@ -309,7 +309,7 @@ class WebmonMixin:
                     s.webmon_checkpoint=choice['id'];self._webmon_review_checkpoint(choice)
                 b=self._webmon.binding(s.powgen_ipts,value);self._webmon_binding=b;s.webmon_context_ready=True
                 s.webmon_reference=b['description'];s.webmon_reference_rows=b['review']
-                s.webmon_k=', '.join(str(v) for v in b['k']);s.webmon_ion=b['ion']
+                s.webmon_k=', '.join(str(v) for v in b['k']);s.webmon_ion=b['ion'];s.webmon_upper=b['maximum_moment'];s.webmon_lower=0.
             except (ValueError,OSError,KeyError) as e:self._webmon_binding=None;s.webmon_reference=str(e);s.webmon_reference_rows=[]
             self.webmon_saved_list()
         except Exception as e:
@@ -356,7 +356,7 @@ class WebmonMixin:
             s.webmon_checkpoint=choice['id'];self._webmon_review_checkpoint(choice)
             b=self._webmon.binding(s.powgen_ipts,s.webmon_run);self._webmon_binding=b
             s.webmon_reference=b['description'];s.webmon_reference_rows=b['review']
-            s.webmon_k=', '.join(str(v) for v in b['k']);s.webmon_ion=b['ion'];s.webmon_context_ready=True
+            s.webmon_k=', '.join(str(v) for v in b['k']);s.webmon_ion=b['ion'];s.webmon_upper=b['maximum_moment'];s.webmon_lower=0.;s.webmon_context_ready=True
             s.webmon_message='Starting checkpoint changed. Review its original fit and explicitly accept this revision before conditional magnetic analysis.'
         except Exception as exc:s.webmon_reference=str(exc);s.webmon_reference_rows=[];s.webmon_message=str(exc)
         self.webmon_saved_list();s.flush()
@@ -416,6 +416,7 @@ class WebmonMixin:
         from gpx_recipe.symmetry.chemistry import sites_from_inputs
         from gpx_recipe.live.io import atomic_json
         from .galaxy_runtime import GalaxyLiveRuntime
+        from .stream import scope_of
         s=self.server.state
         if s.webmon_busy:return
         try:
@@ -425,18 +426,25 @@ class WebmonMixin:
             if not source or not d or d.get('source_id')!=source['id'] or d.get('discovery_identity')!=self._discovery_identity() or s.sx_kind!='magnetic':
                 raise ValueError('Inspect and discover magnetic candidates for this exact source in Model exploration first')
             launch=(str(s.powgen_ipts),str(s.webmon_run),source['id'])
+            reviewed_form=self._model_form()
             row,receipt,_=self._webmon.capture(s.powgen_ipts,s.webmon_run)
             if not mapping or mapping['source_id']!=source['id'] or mapping['snapshot_sha256']!=receipt['content_sha256']:
                 raise ValueError('Review the producer mapping for the current source snapshot first')
+            import threading
+            s.webmon_busy=True;self._webmon_cancelled=False
+            self._webmon_task=asyncio.current_task();self._webmon_remote_cancel=threading.Event()
+            root=Path(self._webmon.config['jobs'])/'preparations'/uuid.uuid4().hex;root.mkdir(parents=True)
+            captured=root/'snapshot.dat';captured.write_bytes(self._webmon.archive.read(receipt))
             material=await asyncio.to_thread(self._refinement_store().runtime.resolve,source)
+            if self._webmon_cancelled:raise ValueError('Preparation stopped before dispatch')
+            if self._model_form()!=reviewed_form:raise ValueError('Magnetic setup changed while resolving the source; review it again')
             sites=sites_from_inputs(s.sx_sites,s.sx_form_factors,s.sx_lande)
             catalog=copy.deepcopy(d['catalog']);selected=set(s.sx_candidates)
             catalog['candidates']=[c for c in catalog['candidates'] if c['id'] in selected]
             if not catalog['candidates']:raise ValueError('Select at least one discovered magnetic candidate')
-            root=Path(self._webmon.config['jobs'])/'preparations'/uuid.uuid4().hex;root.mkdir(parents=True)
             atomic_json(root/'catalog.json',catalog)
             req=dict(action='prepare',source_gpx=material['source_path'],source_sha256=material['source_sha256'],
-                catalog=str(root/'catalog.json'),catalog_sha256=digest(root/'catalog.json'),observation_source=row['path'],observation_source_sha256=receipt['content_sha256'],
+                catalog=str(root/'catalog.json'),catalog_sha256=digest(root/'catalog.json'),observation_source=str(captured),observation_source_sha256=receipt['content_sha256'],
                 mapping=mapping,parent_phase=s.sx_parent,k=[str(Fraction(v.strip())) for v in s.sx_k.split(',')],sites=sites,
                 source_revision=f"PG3_{s.webmon_run}:"+receipt['content_sha256'],reference_revision=f"PG3_{source['run_number']}:"+material['source_sha256'],
                 upper=float(s.sx_max_moment),lower=0.,refine_transfer=bool(s.webmon_refine_transfer),workers=min(4,max(1,int(s.sx_slots))),particles=256)
@@ -444,9 +452,9 @@ class WebmonMixin:
             key=request_identity(req)[:24]
             runtime=GalaxyLiveRuntime(Path(self._webmon.config['jobs'])/'galaxy',self.service)
             import threading
-            self._webmon_remote_cancel=threading.Event()
-            self._webmon_task=asyncio.current_task()
             result=await asyncio.to_thread(runtime.call,req,root/'dispatch',dispatch_key=key,cancel_event=self._webmon_remote_cancel)
+            if self._webmon_cancelled:raise ValueError('Stopped waiting; the prepared Galaxy result was not adopted')
+            if self._model_form()!=reviewed_form:raise ValueError('Magnetic setup changed during preparation; the archived result was not adopted')
             if (str(s.powgen_ipts),str(s.webmon_run),s.webmon_published_source)!=launch:
                 raise ValueError('Selection changed while preparing. The Galaxy result is retained; review it for the original scan before adopting it.')
             prepared=result['preparation'];result_root=Path(result['directory'])
@@ -455,7 +463,7 @@ class WebmonMixin:
             atomic_json(root/'inference-request.json',inference)
             forms={v['label']:v['form_factor'] for v in sites};ions=set(forms.values())
             binding=dict(reference_gpx=material['source_path'],reference_sha256=material['source_sha256'],source_gpx=prepared['source_gpx'],source_sha256=prepared['source_sha256'],
-                source_dat=row['path'],source_dat_sha256=receipt['content_sha256'],request=str(root/'inference-request.json'),k=req['k'],ion=next(iter(ions)) if len(ions)==1 else 'per-site',site_forms=forms,
+                source_dat=prepared['source_dat'],live_source_path=row['path'],source_scope=scope_of(row),source_dat_sha256=receipt['content_sha256'],request=str(root/'inference-request.json'),k=req['k'],ion=next(iter(ions)) if len(ions)==1 else 'per-site',site_forms=forms,
                 maximum_moment=req['upper'],display_export_difc=prepared['display_export_difc'],
                 description='Galaxy-prepared fixed nuclear response; empirical covariance/normalization qualification remains pending.',
                 review=[dict(label='Source',value=source['scan_label']),dict(label='Live snapshot',value=receipt['content_sha256'][:12]),dict(label='Candidates',value=str(len(catalog['candidates']))),dict(label='Mapping',value=mapping['evidence'])])
@@ -708,6 +716,10 @@ class WebmonMixin:
                 from fractions import Fraction
                 k=[str(Fraction(x.strip())) for x in str(launch['webmon_k']).split(',')]
                 launch['sealed']=self._webmon.request(launch['powgen_ipts'],launch['webmon_run'],k=k,ion=str(launch['webmon_ion']).strip(),lower=float(launch['webmon_lower']),upper=float(launch['webmon_upper']),accepted=launch['webmon_accepted'])
+                if launch['sealed'][0].get('source_scope'):
+                    from .stream import ObservationStream
+                    capture=ObservationStream(self._webmon,launch['powgen_ipts'],launch['webmon_run'],*launch['sealed'],Path(self._webmon.config['jobs'])/'single-snapshots'/uuid.uuid4().hex)
+                    latest=capture.capture();launch['sealed']=(latest['binding'],latest['request'])
             except Exception as exc:
                 s.webmon_busy=False;s.webmon_calculation_status='Rejected before launch';s.webmon_message=f'Analysis not started: {exc}';s.flush();return
         self._webmon_task=asyncio.create_task(self._webmon_execute(launch))

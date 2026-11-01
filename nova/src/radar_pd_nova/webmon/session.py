@@ -89,7 +89,7 @@ class WebmonSession:
         for path_key,hash_key in [('reference_gpx','reference_sha256'),('source_gpx','source_sha256'),('source_dat','source_dat_sha256')]:
             if digest(b[path_key])!=b[hash_key]:raise ValueError('Reviewed input changed: '+path_key)
         row=next((r for r in self.runs(ipts) if r['run']==str(run)),None)
-        if row is None or Path(row['path']).resolve()!=Path(b['source_dat']).resolve():raise ValueError('Snapshot binding mismatch')
+        if row is None or Path(row['path']).resolve()!=Path(b.get('live_source_path',b['source_dat'])).resolve():raise ValueError('Snapshot binding mismatch')
         return b
     def request(self,ipts,run,*,k,ion,lower,upper,accepted):
         if not accepted:raise ValueError('Review and accept the nuclear revision first')

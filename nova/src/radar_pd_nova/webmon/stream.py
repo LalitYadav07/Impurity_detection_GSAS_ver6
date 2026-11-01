@@ -24,11 +24,17 @@ class ObservationStream:
         self.binding=copy.deepcopy(binding);self.request=copy.deepcopy(request)
         validate_request(self.request,self.binding)
         row,receipt,pattern=session.capture(ipts,run)
-        if receipt['content_sha256']!=binding['source_dat_sha256']:
+        reviewed=Path(binding['source_dat']).read_bytes()
+        if binding.get('source_scope'):
+            from .snapshot import parse_live_ascii
+            original=parse_live_ascii(reviewed)
+            if binding['source_scope']!=scope_of(row) or not np.array_equal(original.x,pattern.x) or not np.array_equal(original.mask,pattern.mask):
+                raise ReviewRequired('Current snapshot no longer matches the reviewed source/grid/mask')
+        elif receipt['content_sha256']!=binding['source_dat_sha256']:
             raise ValueError('Review the current snapshot before starting updates')
         self.scope=scope_of(row);self.grid=pattern.x.copy();self.mask=pattern.mask.copy()
         self.root=Path(directory);self.root.mkdir(parents=True,exist_ok=False)
-        source=self.root/'reviewed-source.dat';source.write_bytes(session.archive.read(receipt))
+        source=self.root/'reviewed-source.dat';source.write_bytes(reviewed)
         self.binding['source_dat']=str(source);self.last_content=None
         atomic_json(self.root/'review.json',dict(ipts=self.ipts,run=self.run,scope=self.scope,binding=self.binding,request=self.request,
             conditional_fixed_response=True,resume_requires_review=True,forecast_enabled=False))
