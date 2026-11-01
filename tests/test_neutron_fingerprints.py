@@ -13,7 +13,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from pymatgen.core import Lattice, Structure
-from pymatgen.core.periodic_table import DummySpecies, get_el_sp
+from pymatgen.core.periodic_table import DummySpecies, Species, get_el_sp
 from pymatgen.analysis.diffraction.neutron import ATOMIC_SCATTERING_LEN, NDCalculator
 import neutron_fingerprints as nf
 from database_catalog_builder import process_one_phase, simulate_topM_peaks, resolve_space_group_with_analyzer
@@ -168,6 +168,27 @@ def test_cached_metadata_keeps_dependency_and_table_identity(monkeypatch):
 def test_named_isotope_ions_deliberately_share_nuclear_identity():
     assert {nf.species_identity(get_el_sp(token)) for token in ["D", "D1+", "D1-"]} == {"D"}
     assert {nf.species_identity(get_el_sp(token)) for token in ["T", "T1+", "T1-"]} == {"T"}
+
+
+@pytest.mark.parametrize("ordered_species", [
+    [get_el_sp("D1+"), get_el_sp("D1-")],
+    [Species("D", 0, spin=.5), Species("D", 0, spin=-.5)],
+])
+def test_structural_charge_and_spin_order_is_not_erased_by_scattering_identity(ordered_species):
+    ordered = Structure(Lattice.cubic(4), ordered_species, [[0, 0, 0], [.5, .5, .5]])
+    equal_labels = Structure(Lattice.cubic(4), [ordered_species[0]] * 2, ordered.frac_coords)
+    before = [nf.structural_species_identity(sp) for sp in ordered.species]
+    assert nf.isotope_preserving_space_group_info(ordered) == ("Pm-3m", 221)
+    assert nf.isotope_preserving_space_group_info(equal_labels) == ("Im-3m", 229)
+    assert nf.structure_cache_key(ordered) != nf.structure_cache_key(equal_labels)
+    assert [nf.structural_species_identity(sp) for sp in ordered.species] == before
+    # This is structural metadata preservation. Nuclear amplitudes remain
+    # independent of charge/spin; no magnetic scattering model is invented.
+    calculator = nf.NeutronFingerprintCalculator(wavelength=1.54)
+    first = calculator.get_pattern(ordered, scaled=False, two_theta_range=(5, 100))
+    second = calculator.get_pattern(equal_labels, scaled=False, two_theta_range=(5, 100))
+    np.testing.assert_array_equal(first.x, second.x)
+    np.testing.assert_array_equal(first.y, second.y)
 
 
 def test_old_disk_fingerprint_is_rebuilt_before_resume(tmp_path):

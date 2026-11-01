@@ -26,6 +26,13 @@ rejected for isotope inputs. Structural duplicate matching is skipped for such
 candidates until an isotope-preserving matcher exists; byte-identical uploads
 are still deduplicated.
 
+Scattering identity and structural identity are separate. D⁺, D⁻ and neutral D
+use the same coherent nuclear length, while symmetry labels and cache identity
+retain their explicit oxidation and spin fields. Opposite explicit spin labels
+are kept distinct conservatively; this does not infer magnetic space groups or
+add magnetic scattering. Generator version2 records this structural-identity
+contract so earlier metadata/cache entries are not reused as equivalent.
+
 This change consumes the shared CIF loader's Structure. Mixed H/D CIF loading
 requires the accompanying raw-value occupancy-loader implementation; this
 module does not implement a second CIF parser. Supported named isotope species

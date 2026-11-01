@@ -46,7 +46,7 @@ from pymatgen.analysis.diffraction.core import DiffractionPattern, get_unique_fa
 from pymatgen.analysis.diffraction.neutron import ATOMIC_SCATTERING_LEN, NDCalculator
 from pymatgen.core.periodic_table import DummySpecies
 
-GENERATOR_VERSION = "radar-neutron-fingerprint/1"
+GENERATOR_VERSION = "radar-neutron-fingerprint/2"
 ISOTOPE_LENGTHS_FM = MappingProxyType({"D": 6.681, "T": 4.792})
 ISOTOPE_TABLE_PROVENANCE = MappingProxyType({
     "source": "GSAS-II/GSASII/atmdata.py:AtmBlens",
@@ -64,10 +64,11 @@ def _digest(value) -> str:
 
 
 def species_identity(species) -> str:
-    """D/T ions share nuclear identity regardless of charge.
+    """Resolve scattering identity; D/T ions share a nucleus regardless of charge.
 
-    Other species retain their existing charge labels for cache and symmetry
-    compatibility; D+, D- and neutral D deliberately all use the D nucleus.
+    This identity is only for scattering lookup and isotope detection. Use
+    structural_species_identity for symmetry or source-structure cache keys.
+    D+, D- and neutral D deliberately all use the same D scattering length.
     """
     if isinstance(species, DummySpecies):
         raise ValueError(f"Unsupported neutron atom/isotope {species!s}; an explicit supported species is required")
@@ -80,6 +81,20 @@ def species_identity(species) -> str:
     if symbol == "H" and getattr(species, "A", 1) not in (None, 1):
         raise ValueError(f"Unsupported hydrogen isotope {species!s}; only H, D and T are supported")
     return str(species)
+
+
+def structural_species_identity(species) -> tuple[str, str, str]:
+    """Keep isotope, explicit oxidation and spin labels in structural identity.
+
+    Spin is retained as a source label, not interpreted as a magnetic symmetry
+    model. Unspecified and explicit zero values remain distinct, conservatively
+    avoiding any new equivalence that the source did not establish.
+    """
+    charge = getattr(species, "oxi_state", None)
+    spin = getattr(species, "spin", None)
+    return (species_identity(species),
+            "unspecified" if charge is None else float(charge).hex(),
+            "unspecified" if spin is None else float(spin).hex())
 
 
 def named_isotopes(structure) -> tuple[str, ...]:
@@ -109,6 +124,7 @@ def _generator_metadata_json(radiation, generator_version, pymatgen_version,
             "isotope_lengths_fm": dict(isotope_items),
             "isotope_table": json.loads(provenance_json),
             "symmetry_refinement": "disabled for isotope-bearing structures",
+            "structural_identity": "isotope, explicit oxidation state and spin labels",
         }
     return json.dumps(metadata, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
@@ -144,7 +160,7 @@ def structure_cache_key(structure, radiation: str = "neutron") -> str:
         "generator": generator_metadata(radiation),
         "lattice": [[float(v).hex() for v in row] for row in structure.lattice.matrix],
         "sites": [{"fractional": [float(v).hex() for v in site.frac_coords],
-                   "species": sorted((species_identity(sp), float(n).hex()) for sp, n in site.species.items())}
+                   "species": sorted((structural_species_identity(sp), float(n).hex()) for sp, n in site.species.items())}
                   for site in structure],
     })
 
@@ -153,8 +169,9 @@ def isotope_preserving_space_group_info(structure, symprec=1e-2, angle_tolerance
     """Analyze identity without allowing Composition equality to merge H/D.
 
     spglib accepts arbitrary positive integer type labels. These labels encode
-    the complete species/occupancy identity and never enter a physical model.
+    isotope/charge/spin/occupancy identity and never enter a physical model.
     The source Structure is not standardized, averaged or mutated.
+    Explicit spin labels are kept distinct; this does not infer a magnetic group.
     """
     if not named_isotopes(structure):
         from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
@@ -164,7 +181,7 @@ def isotope_preserving_space_group_info(structure, symprec=1e-2, angle_tolerance
     types = {}
     labels = []
     for site in structure:
-        identity = tuple(sorted((species_identity(sp), float(n).hex()) for sp, n in site.species.items()))
+        identity = tuple(sorted((structural_species_identity(sp), float(n).hex()) for sp, n in site.species.items()))
         labels.append(types.setdefault(identity, len(types) + 1))
     dataset = spglib.get_symmetry_dataset((structure.lattice.matrix, structure.frac_coords, labels),
                                          symprec=symprec, angle_tolerance=angle_tolerance)
