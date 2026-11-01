@@ -1165,6 +1165,39 @@ def test_refinement_outputs_are_not_reusable_candidate_libraries() -> None:
     assert GalaxyService._dataset_scientific_role({'name':'My refinement candidates.zip','extension':'zip'}) == ('candidate_library',False)
 
 
+def test_live_worker_outputs_and_packets_are_not_scientific_inputs() -> None:
+    from xml.etree import ElementTree
+    definition = Path(__file__).resolve().parents[2]/'galaxy/radar_pd_live_snapshot.xml.in'
+    outputs = ElementTree.parse(definition).findall('./outputs/data')
+    labels = [(row.attrib['label'],row.attrib['format']) for row in outputs]
+    assert sum(extension == 'zip' for _,extension in labels) == 2
+    labels.append(('RADAR-PD live packet '+'a'*24,'zip'))
+    for label,extension in labels:
+        for name in (label, 'RADAR-PD '+label+' | output.'+extension):
+            assert GalaxyService._dataset_scientific_role({'name':name,'extension':extension}) == ('other',True)
+    for name in ('My live snapshot response cache.zip',
+                 'RADAR-PD candidate library | live snapshot result bundle.zip',
+                 'RADAR-PD live snapshot reference library.zip',
+                 'RADAR-PD live packet example.zip'):
+        assert GalaxyService._dataset_scientific_role({'name':name,'extension':'zip'}) == ('candidate_library',False)
+
+
+def test_live_outputs_remain_available_to_explicit_generated_history_queries(monkeypatch,tmp_path) -> None:
+    from types import SimpleNamespace
+    rows = [dict(id='cache',name='RADAR-PD live snapshot response cache',extension='zip',state='ok'),
+            dict(id='result',name='RADAR-PD live snapshot result bundle',extension='zip',state='ok'),
+            dict(id='console',name='RADAR-PD live snapshot console',extension='txt',state='ok'),
+            dict(id='library',name='RADAR-PD portable custom library | Fe_O.zip',extension='zip',state='ok')]
+    monkeypatch.setattr('radar_pd_nova.galaxy_service.requests.get',
+        lambda *args,**kwargs:SimpleNamespace(raise_for_status=lambda:None,json=lambda:rows))
+    service = GalaxyService('https://galaxy.example','key','history',output_root=tmp_path)
+    assert [row['id'] for row in service.search_history_datasets()] == ['library']
+    recovered = service.search_history_datasets(include_generated=True)
+    assert [row['id'] for row in recovered] == ['cache','result','console','library']
+    assert all(row['role']=='other' and row['generated'] for row in recovered[:3])
+    assert GalaxyService._history_dataset_item(rows[0])['id'] == 'cache'
+
+
 def test_legacy_candidate_library_is_labeled_as_unnamed() -> None:
     item = GalaxyService._history_dataset_item(
         {

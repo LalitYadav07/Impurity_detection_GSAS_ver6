@@ -644,6 +644,25 @@ def test_history_search_preserves_selected_sibling_labels() -> None:
     assert [item["id"] for item in state.history_instrument_datasets] == ["instrument-id"]
 
 
+@pytest.mark.parametrize('show_all',[False,True])
+def test_live_snapshot_outputs_never_enter_input_selectors(show_all):
+    from radar_pd_nova.galaxy_service import GalaxyService
+    app = RadarPdNovaApp.__new__(RadarPdNovaApp)
+    state = _State(history_datasets=[],history_show_all=show_all,history_data_id='',
+        history_instrument_id='',history_main_cif_id='',history_database_id='',
+        history_configuration_id='',library_builder_cif_ids=[])
+    app.server = SimpleNamespace(state=state)
+    names = ['RADAR-PD live snapshot response cache','RADAR-PD live snapshot result bundle',
+             'RADAR-PD RADAR-PD live packet '+'a'*24+' | request-packet.zip',
+             'RADAR-PD portable custom library | Fe_O.zip']
+    items = [GalaxyService._history_dataset_item(dict(id=str(i),name=name,extension='zip',state='ok'))
+             for i,name in enumerate(names)]
+    app._apply_history_page(items,append=False)
+    assert [item['name'] for item in state.history_archive_datasets] == [names[-1]]
+    assert state.history_data_datasets == state.history_instrument_datasets == state.history_cif_datasets == []
+    assert [item['id'] for item in state.history_datasets] == ['3']
+
+
 def test_history_refresh_keeps_reusable_configurations_visible_after_large_upload() -> None:
     app = RadarPdNovaApp.__new__(RadarPdNovaApp)
     newest = [
