@@ -8,9 +8,9 @@
     ]]></command>
     <inputs>
         <param name="action" type="select" label="Reviewed refinement operation">
-            <option value="inspect">Inspect project</option><option value="edit">Correct phase model</option><option value="preview">Native preflight</option><option value="run">Run approved recipe</option>
+            <option value="prepare">Prepare reviewed input packet</option><option value="inspect">Inspect project</option><option value="edit">Correct phase model</option><option value="preview">Native preflight</option><option value="run">Run approved recipe</option>
         </param>
-        <param name="source_gpx" type="data" format="binary" label="Published RADAR-PD GPX"/>
+        <param name="source_gpx" type="data" format="binary" label="Published RADAR-PD GPX or reviewed preparation packet"/>
         <param name="recipe_request" type="data" format="json" label="Recipe, approval and source checksum"/>
         <param name="dispatch_key" type="text" label="NOVA dispatch identity">
             <validator type="regex" message="Use the NOVA-generated dispatch key">^[a-f0-9]{24}$</validator>

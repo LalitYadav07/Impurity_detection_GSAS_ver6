@@ -25,7 +25,7 @@ RUN python -m py_compile \
         scripts/ndip_runner.py \
     && python -m compileall -q nova/src/gpx_recipe
 
-ENV PYTHONPATH=/opt/radar-pd/scripts:/opt/radar-pd/GSAS-II
+ENV PYTHONPATH=/opt/radar-pd/nova/src:/opt/radar-pd/scripts:/opt/radar-pd/GSAS-II
 
 VOLUME ["/work", "/opt/radar-pd/data"]
 CMD ["python", "/opt/radar-pd/scripts/ndip_runner.py", "--help"]

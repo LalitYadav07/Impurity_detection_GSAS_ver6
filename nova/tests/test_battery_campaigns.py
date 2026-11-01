@@ -397,7 +397,7 @@ def test_changing_transport_after_preflight_cannot_dispatch_a_local_portfolio(se
     w,rt,_,entries=setup
     token,_=m.prepare_portfolio(w,entries,note='review')
     rt.kind='galaxy'
-    with pytest.raises(ValueError,match='local scientific worker'):
+    with pytest.raises(ValueError,match='no published Galaxy inputs'):
         m.start_portfolio(w,token,approver='reviewer')
     assert not w.state['jobs']
 

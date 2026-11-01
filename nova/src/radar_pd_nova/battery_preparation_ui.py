@@ -8,7 +8,7 @@ def preparation_panel(app):
         html.H3('4 · Prepare a joint-bank model')
         html.P('Choose one exposure, its complementary banks and a reviewed starting model. Preparation preserves the measurements and keeps every refinement parameter fixed.',classes='text-body-2')
         with html.Details(classes='my-3'):
-            html.Summary('Reopen a saved local model',style='cursor:pointer')
+            html.Summary('Reopen a saved prepared model',style='cursor:pointer')
             v.VBtn('Find saved models',click=app.refresh_saved_battery_models,disabled=('battery_busy',),variant='text',size='small')
             v.VSelect(label='Saved prepared model',v_model=('battery_saved_model',),items=('battery_saved_models',),disabled=('battery_busy',),density='compact',variant='outlined')
             html.P('{{ battery_saved_notice }}',classes='text-body-2')
@@ -66,7 +66,7 @@ def preparation_panel(app):
             v.VTextarea(label='Profile mapping and model review notes',v_model=('battery_model_review',),disabled=('battery_busy',),variant='outlined',rows=2,hint='Record why these profiles match the selected banks and acquisition, and any unresolved model assumptions. This does not certify calibration.',persistent_hint=True)
             html.P('{{ battery_model_message }}',role='status',aria_live='polite',classes='text-body-2 mt-3')
             v.VAlert(v_for='note in battery_model_profile_notes',key='note',text=('note',),type='warning',variant='tonal',density='compact',classes='my-2')
-            v.VAlert(v_if='!battery_native_available',text='Native preparation is available when a local scientific worker is configured. The input review above remains available.',type='info',variant='tonal',density='compact',classes='mb-3')
+            v.VAlert(v_if='!battery_native_available',text='Native preparation requires a configured local worker or signed-in Galaxy History.',type='info',variant='tonal',density='compact',classes='mb-3')
             with html.Div(classes='d-flex flex-wrap ga-2'):
                 v.VBtn('Prepare and verify model',click=app.prepare_battery_model,disabled=("battery_busy || !battery_native_available || !battery_model_banks.length || !battery_model_phases.length || !battery_model_cell.trim() || !battery_model_review.trim()",),variant='flat',color='#15543c')
                 v.VBtn('Download model and provenance',click=app.download_battery_model,disabled=('battery_busy || !battery_model_ready',),variant='outlined')

@@ -22,7 +22,7 @@ WORKSPACE_LABEL = 'RADAR-PD Refinement workspace'
 def verify_result_files(directory,result, *, action=None):
     root=Path(directory).resolve()
     if action is not None:
-        statuses={'inspect':{'inspected','failed'},'edit':{'model_edited','failed'},
+        statuses={'prepare':{'model_prepared','failed'},'inspect':{'inspected','failed'},'edit':{'model_edited','failed'},
                   'preview':{'preview_passed','failed'},'run':{'completed','needs_review','failed'}}
         if (result.get('schema')!='radar-refinement-worker/v1' or result.get('action')!=action
                 or result.get('status') not in statuses.get(action,set())):
@@ -34,13 +34,13 @@ def verify_result_files(directory,result, *, action=None):
         path=(root/name).resolve()
         if not path.is_relative_to(root) or not path.is_file() or file_sha(path)!=expected:
             raise ValueError('A saved refinement artifact changed or is missing: '+Path(name).name)
-    if result.get('status') in {'completed','model_edited'}:
+    if result.get('status') in {'completed','model_edited','model_prepared'}:
         final=(root/str(result.get('final_gpx') or '')).resolve()
         if not final.is_relative_to(root) or not final.is_file() or file_sha(final)!=result.get('output_sha256'):
             raise ValueError('The checked final GPX changed or is unavailable')
     if result.get('status')=='completed' and any(not result.get(k) for k in ('final_view','baseline_view','execution','stages')):
         raise ValueError('The completed refinement is missing its scientific review artifacts')
-    if result.get('status') not in {'completed','model_edited'} and any(result.get(k) for k in ('final_gpx','final_view','output_sha256','trend_views')):
+    if result.get('status') not in {'completed','model_edited','model_prepared'} and any(result.get(k) for k in ('final_gpx','final_view','output_sha256','trend_views')):
         raise ValueError('An incomplete refinement cannot publish a final result')
     references=[result[k] for k in ('view','baseline_view','final_view','execution') if result.get(k)]
     stages=result.get('stages') or []

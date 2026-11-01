@@ -113,6 +113,8 @@ def _current_observation_view(workspace, source):
 
 
 def _native_observation_view(workspace, source, *, revision='native-domain-v4'):
+    from gpx_recipe.symmetry.compiler import package_signature
+    revision = revision + '-' + package_signature()[:16]
     key = 'battery-native/'+revision+'/'+source['source_sha256']
     with workspace.lock:
         lock = workspace._inspection_locks.setdefault(key, threading.Lock())
@@ -155,6 +157,10 @@ def _retained_result_report(workspace, source, plan, contract):
         return None
     final_source = dict(source, source_path=str(directory/result['final_gpx']),
                         source_sha256=result['output_sha256'])
+    if workspace.runtime.kind=='galaxy':
+        if not result.get('final_dataset_id'):raise ValueError('Final native result has no verified Galaxy publication')
+        final_source['dataset_id']=result['final_dataset_id']
+        final_source.pop('collection_id',None)
     inspected, view = _native_observation_view(workspace, final_source)
     if observation_contract(view, source['metadata']['physical_banks']) != contract:
         raise ValueError('Retained output does not match the reviewed observations and profile')
@@ -178,8 +184,6 @@ def prepare_portfolio(workspace, entries, *, note, close_fit_band=0.1,
                       maximum_wss_per_point=None, refinement_policy=None,
                       maximum_last_cycle_shift_over_sigma=0.1, li_profile=None):
     """Preflight a closed set; preparing never enqueues or runs a refinement."""
-    if workspace.runtime.kind != 'local':
-        raise ValueError('Battery portfolios currently require the local scientific worker')
     note = _label(note, 'portfolio review note', maximum=2000)
     refinement_policy = validate_policy(refinement_policy)
     li_profile = validate_profile(li_profile)
@@ -282,7 +286,7 @@ def prepare_portfolio(workspace, entries, *, note, close_fit_band=0.1,
     write_json(path, document)
     with workspace.lock:
         workspace.state.setdefault('battery_portfolios', {}).setdefault(token,
-            dict(token=token, path=str(path), status='ready', created_utc=utc(), jobs={}))
+            dict(token=token, path=str(path), status='ready', created_utc=utc(), jobs={}, document=deepcopy(document)))
         workspace.save()
     return token, document
 
@@ -294,9 +298,13 @@ def load_portfolio(workspace, token):
     if not record:
         raise ValueError('Choose a retained, preflighted portfolio')
     path = workspace.root/'battery-portfolios'/(token+'.json')
-    if path.is_symlink() or not path.resolve().is_relative_to(workspace.root) or path.stat().st_size>64*1024*1024:
-        raise ValueError('The portfolio is outside its workspace or exceeds 64 MiB')
-    document = json.loads(path.read_text())
+    if path.exists():
+        if path.is_symlink() or not path.resolve().is_relative_to(workspace.root) or path.stat().st_size>64*1024*1024:
+            raise ValueError('The portfolio is outside its workspace or exceeds 64 MiB')
+        document = json.loads(path.read_text())
+    else:
+        document = deepcopy(record.get('document'))
+        if document is None:raise ValueError('Restore the original portfolio file before continuing this historical review')
     if digest(document) != token or document.get('schema') != SCHEMA:
         raise ValueError('The reviewed portfolio changed; prepare a new revision')
     return document
@@ -304,10 +312,10 @@ def load_portfolio(workspace, token):
 
 def start_portfolio(workspace, token, *, approver):
     """Approve the exact reviewed set atomically, then reuse ordinary job dispatch."""
-    if workspace.runtime.kind != 'local':
-        raise ValueError('Battery portfolios currently require the local scientific worker')
     approver = _label(approver, 'reviewer identity')
     document = load_portfolio(workspace, token)
+    if workspace.runtime.kind=='galaxy' and any(not t['source'].get('dataset_id') and not t['source'].get('collection_id') for t in document['trials']):
+        raise ValueError('A locally prepared portfolio has no published Galaxy inputs; prepare its models through the Galaxy worker first')
     approved = []
     # Rehash every input before any recipe or queue mutation.
     for trial in document['trials']:

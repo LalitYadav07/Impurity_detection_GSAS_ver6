@@ -37,7 +37,16 @@ def work(action, source, directory, *, plan=None, approval=None, expected_source
     response=dict(schema='radar-refinement-worker/v1',action=action,source_sha256=before,status='running')
     try:
         if expected_source_sha256 and before!=expected_source_sha256:raise ValueError('The supplied dataset is not the approved source GPX revision')
-        if action=='inspect':
+        if action=='prepare':
+            from .battery.transport import prepare_packet
+            prepared=prepare_packet(source,directory)
+            model=directory/'model/prepared.gpx'
+            shutil.copy2(model,directory/'verified_model.gpx')
+            view=write_project_view(model,directory/'baseline.view.json')
+            response.update(status='model_prepared',context=json.loads((directory/'model/context.json').read_text()),
+                preparation=prepared,final_gpx='verified_model.gpx',output_sha256=prepared['project_sha256'],
+                view='baseline.view.json')
+        elif action=='inspect':
             response['context']=snapshot(source)
             write_project_view(source,directory/'baseline.view.json')
             response['view']='baseline.view.json';response['status']='inspected'
@@ -124,21 +133,21 @@ def work(action, source, directory, *, plan=None, approval=None, expected_source
         for path in directory.glob('verified_*.gpx'):path.replace(path.with_name('untrusted_'+path.name))
         response['stages']=[]
         for key in ['final_gpx','final_view','output_sha256','baseline_view','trend_views']:response.pop(key,None)
-    response['files']={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in directory.iterdir()
-        if p.is_file() and (p.suffix in {'.json','.py'} or p.name.startswith('verified_')) and p.name!='response.json'}
+    response['files']={p.relative_to(directory).as_posix():hashlib.sha256(p.read_bytes()).hexdigest() for p in directory.rglob('*')
+        if p.is_file() and (action=='prepare' or p.suffix in {'.json','.py'} or p.name.startswith('verified_')) and p.name!='response.json'}
     write_json(directory/'response.json',response)
     return response
 
 
 def main():
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('action',choices=['inspect','edit','preview','run']);p.add_argument('source');p.add_argument('directory');p.add_argument('--plan');p.add_argument('--approval');p.add_argument('--archive');args=p.parse_args()
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('action',choices=['prepare','inspect','edit','preview','run']);p.add_argument('source');p.add_argument('directory');p.add_argument('--plan');p.add_argument('--approval');p.add_argument('--archive');args=p.parse_args()
     load=lambda value:json.loads(Path(value).read_text()) if value else None
     response=work(args.action,args.source,args.directory,plan=load(args.plan),approval=load(args.approval))
     if args.archive:
         dest=Path(args.archive).resolve();root=Path(args.directory).resolve()
         with zipfile.ZipFile(dest,'w',zipfile.ZIP_DEFLATED) as z:
-            for path in sorted(root.iterdir()):
-                if path.is_file() and path.resolve()!=dest:z.write(path,path.name)
+            for path in sorted(root.rglob('*')):
+                if path.is_file() and path.resolve()!=dest:z.write(path,path.relative_to(root).as_posix())
     print(json.dumps({k:response[k] for k in ['action','status','error'] if k in response}))
 
 

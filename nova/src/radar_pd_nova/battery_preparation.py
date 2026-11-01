@@ -145,8 +145,6 @@ def prepared_source(workspace, job, result):
     if verify_prepared(job)!=result:
         raise ValueError('Prepared receipt changed; reopen the saved revision')
     check_prepared_profiles(job, result)
-    if workspace.runtime.kind!='local':
-        raise ValueError('Open the prepared model with the configured local scientific worker')
     spec=result['specification'];a=spec['acquisition']
     key=digest([result['project_sha256'],spec])[:24]
     source=dict(id=key,experiment=battery_experiment_id(workspace,a,spec['reduction_family']),
@@ -160,6 +158,12 @@ def prepared_source(workspace, job, result):
             'physical_banks':{b['histogram']:b['physical_bank'] for b in result['banks']}},axis_overrides={},
         source_path=str(job/'model/prepared.gpx'),source_sha256=result['project_sha256'],
         collection_name='prepared.gpx',base_rwp=None,project=dict(stage='prepared_unqualified'))
+    if workspace.runtime.kind=='galaxy':
+        publication=job/'preparation-publication.json'
+        if not publication.is_file():raise ValueError('Publish this prepared model through the native Galaxy worker first')
+        record=json.loads(publication.read_text())
+        if record.get('source_sha256')!=result['project_sha256']:raise ValueError('Published preparation changed')
+        source['dataset_id']=record['dataset_id']
     workspace.observe([workspace.runtime.resolve(source)])
     return source
 
@@ -183,7 +187,7 @@ class BatteryPreparationMixin:
         s.battery_phase_path='';s.battery_phase_name='';s.battery_phase_role='';s.battery_phase_scale='0.1'
         s.battery_phase_size_um='';s.battery_phase_microstrain_ustrain=''
         s.battery_model_phases=[]
-        s.battery_native_available=bool(os.getenv('RADAR_PD_REFINEMENT_PYTHON','').strip())
+        s.battery_native_available=bool(os.getenv('RADAR_PD_REFINEMENT_PYTHON','').strip() or (getattr(getattr(self,'service',None),'galaxy_url',None) and getattr(getattr(self,'service',None),'history_id',None)))
         s.battery_profile_options=[dict(title='Upload a peak profile',value='upload')]
         fields=['battery_model_banks','battery_model_cell','battery_model_review','battery_allow_invalid_edges','battery_model_include_echem']
         for bank in range(1,7):
@@ -361,7 +365,7 @@ class BatteryPreparationMixin:
         s=self.server.state
         try:
             python=os.getenv('RADAR_PD_REFINEMENT_PYTHON','').strip()
-            if not python:raise ValueError('A local scientific worker is required for model preparation on this development branch')
+            if not python and self._refinement_store().runtime.kind!='galaxy':raise ValueError('A native local or Galaxy worker is required for model preparation')
             if not self._battery_bank_setup:raise ValueError('Inspect the selected reduced file first')
             source,setup=self._battery_bank_setup
             instrument=self._battery_inventory['instrument'] if self._battery_inventory else 'NOM'
@@ -440,6 +444,9 @@ class BatteryPreparationMixin:
     async def _prepare_battery_model_async(self,job,python,generation,revision):
         s=self.server.state;s.battery_busy=True;s.battery_error='';s.battery_model_message='Preparing and reopening the joint-bank model; no refinement is run.';s.flush()
         def work():
+            if not python:
+                from .battery_transport import prepare_on_galaxy
+                return prepare_on_galaxy(self._refinement_store().runtime, job)
             command=[python,'-m','gpx_recipe.battery.preparation',str(job/'inputs/preparation.json'),str(job/'model')]
             with (job/'native.log').open('w') as log:
                 process=run_scientific(command,cwd=job,env=scientific_environment(os.getenv('GSASII_ROOT')),stdout=log,stderr=subprocess.STDOUT,timeout=600)

@@ -900,3 +900,26 @@ worktree. Keep the previous NOVA image and utility XML available for rollback.
 The remaining live gate is one staged NDIP inspect/edit/preflight/run round
 trip, final/stage downloads, and workspace recovery in that deployed session.
 No registry push or NDIP deployment was performed during this audit.
+
+
+## Unified native transport (integration review, 2026-11-01)
+
+Preparation now uses the same credential-free native worker as recipe previews
+and runs. NOVA sends one bounded, hash-identified ZIP of reviewed data, profile,
+CIF and metadata inputs. The worker rejects paths, symlinks, duplicate entries
+and excessive payloads; it returns the native preparation receipt, preserved
+inputs and a separately published prepared GPX. Existing local preparation is
+still supported. No GSAS-II runtime is added to the interactive image.
+
+Finite battery portfolios use the existing parallel recipe queue on Galaxy.
+Every trial retains its independently prepared model and approved recipe.
+Locally prepared models cannot silently become remote jobs without a published
+Galaxy source. Re-export of a fitted result uses that result's exact dataset ID.
+The reviewed portfolio document is included in workspace checkpoints so a new
+viewer can recover the approved trial set; native observations are refreshed
+when the scientific package changes.
+
+An integration smoke on already-local NOMAD run 219049 preserved banks 2 and 5
+through preparation, native preflight and both recipe stages. This verifies
+execution and provenance, not the phase hypothesis or battery stoichiometry.
+Actual NDIP submission and browser acceptance remain deployment checks.
