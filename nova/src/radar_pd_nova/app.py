@@ -27,6 +27,7 @@ from trame.widgets import client, html, plotly, vuetify3 as vuetify
 import yaml
 
 from .configuration import config_from_contract, load_configuration
+from .run_timing import run_elapsed_label
 from .setup_forms import configuration_from_form, configuration_form_values, CONFIG_FORM_FIELDS
 from .setup_ui import SetupEditorMixin
 from .live_setup import LiveSetupMixin
@@ -6643,14 +6644,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
             state.gsasii_launch_url = ""
             state.gsasii_session_status = ""
             state.gsasii_status_message = ""
-        try:
-            created = datetime.fromisoformat(record.created_utc.replace("Z", "+00:00"))
-            if created.tzinfo is None:
-                created = created.replace(tzinfo=timezone.utc)
-            elapsed = max(0.0, (datetime.now(timezone.utc) - created).total_seconds())
-            state.selected_run_elapsed = f"{elapsed:.0f} s elapsed"
-        except (TypeError, ValueError):
-            state.selected_run_elapsed = "-"
+        state.selected_run_elapsed = run_elapsed_label(record)
         self._sync_workspace_options(record.mode)
         state.viewed_configuration = self._record_configuration_yaml(record)
         state.run_provenance_rows = self._run_provenance(record)

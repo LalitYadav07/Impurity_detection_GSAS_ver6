@@ -24,6 +24,7 @@ import requests
 import yaml
 
 from .configuration import config_from_contract, delivery_from_contract, dump_configuration
+from .run_timing import galaxy_terminal_timestamp
 from .facility import build_facility_export_path
 from .models import (
     AnalysisConfig,
@@ -2405,6 +2406,7 @@ class GalaxyService:
         record.progress = progress
         record.console_tail = stdout[-12000:]
         record.updated_utc = datetime.now(timezone.utc).isoformat()
+        record.galaxy_terminal_utc = galaxy_terminal_timestamp(job) or record.galaxy_terminal_utc
         if status == RunStatus.ERROR:
             record.message = (dependency_error or stderr or stdout or "Galaxy reported an error")[-4000:]
         return record
@@ -2502,6 +2504,7 @@ class GalaxyService:
                     progress=stage_from_console("", state, galaxy_state=job.get("state"))[1],
                     created_utc=created,
                     updated_utc=updated,
+                    galaxy_terminal_utc=galaxy_terminal_timestamp(job),
                     input_dataset_ids={**self._input_dataset_ids(parameters), **public_input_ids},
                     output_dataset_ids=output_ids,
                     config=config,

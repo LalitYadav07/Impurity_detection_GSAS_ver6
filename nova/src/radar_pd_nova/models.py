@@ -415,6 +415,7 @@ class RunRecord(BaseModel):
     progress: int = Field(default=0, ge=0, le=100)
     created_utc: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_utc: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    galaxy_terminal_utc: str | None = None
     input_dataset_ids: dict[str, str] = Field(default_factory=dict)
     output_dataset_ids: dict[str, str] = Field(default_factory=dict)
     config: AnalysisConfig | None = None
