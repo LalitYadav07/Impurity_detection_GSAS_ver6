@@ -1041,7 +1041,10 @@ def command_build_library(args: argparse.Namespace) -> int:
 
     cif_paths = [Path(path).resolve() for path in args.cif]
     if args.cif_dir:
-        cif_paths.extend(sorted(Path(args.cif_dir).resolve().glob("*.cif")))
+        # Match the wrapper's case-insensitive CIF intake without renaming
+        # sources or silently dropping uppercase extensions on Linux.
+        cif_paths.extend(sorted(path for path in Path(args.cif_dir).resolve().iterdir()
+                                if path.suffix.lower() == ".cif"))
     if not cif_paths:
         raise ValueError("At least one CIF file is required")
     output_root = Path(args.output_root).resolve()
