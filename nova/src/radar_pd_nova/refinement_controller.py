@@ -666,8 +666,8 @@ class RefinementMixin(GuidedRefinementMixin):
 
     def _refinement_sync(self):
         w=self._refinement_workspace;s=self.server.state
-        self._sync_recipe_preparation_progress()
         if not w or not s.rf_experiment:
+            self._sync_recipe_preparation_progress()
             self._clear_refinement_output(clear_trends=True)
             return
         w.lock.acquire()
@@ -717,6 +717,7 @@ class RefinementMixin(GuidedRefinementMixin):
             s.rf_progress_percent=round(100*processed/len(jobs)) if jobs else 0
             s.rf_metrics=[dict(label='Available GPXs',value=len(sources)),dict(label='Queued / running',value=queued+running),dict(label='Completed',value=completed),dict(label='Needs attention',value=attention)]
             self._refinement_sync_approval()
+            self._sync_recipe_preparation_progress()
             s.flush()
         finally:self._refinement_internal=False;w.lock.release()
 

@@ -266,6 +266,28 @@ def test_same_source_id_with_new_bytes_rejects_old_inspection_without_stale_ui(t
     assert not app._refinement_preparations
 
 
+def test_completed_progress_follows_automatic_scope_source_selection(tmp_path):
+    w,rt=create(tmp_path);w.observe([source('1'),source('2')]);w.prepare('exp','1','background')
+    app=RefinementMixin()
+    s=State(**app._refinement_state_defaults());app.server=SimpleNamespace(state=s)
+    app._refinement_workspace=w;app._refinement_internal=False
+    app._refinement_approving=False;app._refinement_inspecting=False;app._refinement_preparations={}
+    app._init_guided_refinement()
+    s.rf_experiment='exp';s.rf_source='1';s.rf_setup_mode='expert';s.rf_request='background'
+    app._refinement_sync()
+    assert s.rf_source=='1' and s.rf_plan_ready and s.rf_preparation_progress.startswith('Preparation complete')
+    s.rf_scope='scans';s.rf_scans=['scan-2'];app._refinement_scope_changed()
+    assert s.rf_source=='2' and not s.rf_draft_status and not s.rf_plan_ready
+    assert not s.rf_preparation_progress
+    s.rf_scans=['scan-1'];app._refinement_scope_changed()
+    assert s.rf_source=='1' and s.rf_plan_ready and s.rf_preparation_progress.startswith('Preparation complete')
+    s.rf_scans=['missing-scan'];app._refinement_scope_changed()
+    assert not s.rf_source and not s.rf_preparation_progress and not s.rf_plan_ready
+    app._refinement_workspace=None;app._refinement_sync()
+    assert not s.rf_preparation_progress
+    assert [c[0] for c in rt.calls]==['inspect','preview']
+
+
 def test_preparation_is_labelled_separately_from_real_polishing_counts():
     from radar_pd_nova.app import RadarPdNovaApp
     html=RadarPdNovaApp().layout.html
