@@ -1,7 +1,61 @@
 """Scientific names for native failures, without interpreting them as fits."""
+import copy
 import re
 
-from gpx_recipe.convergence import SCHEMA as CONVERGENCE_SCHEMA, finite
+from gpx_recipe.convergence import SCHEMA as CONVERGENCE_SCHEMA, assess_convergence, finite
+
+REVIEW_SCHEMA = 'radar-refinement-review/v1'
+
+
+def retain_review_evidence(result, view, criteria=None):
+    """Retain small diagnostics from the verified final view, not its curves."""
+    if (not isinstance(view,dict) or result.get('status')!='completed' or not result.get('output_sha256')
+            or view.get('source_sha256')!=result['output_sha256']):return False
+    evidence=view.get('convergence')
+    if not isinstance(evidence,dict) or evidence.get('schema')!=CONVERGENCE_SCHEMA:return False
+    retained=dict(schema=REVIEW_SCHEMA,source_sha256=result.get('source_sha256'),
+        output_sha256=result['output_sha256'],convergence=copy.deepcopy(evidence),criteria=copy.deepcopy(criteria))
+    if result.get('review_evidence')==retained:return False
+    result['review_evidence']=retained
+    return True
+
+
+def refinement_review_status(result):
+    """Flag recorded diagnostic failures without inventing a scientific cutoff."""
+    retained=result.get('review_evidence') or {}
+    if not isinstance(retained,dict):retained={}
+    bound=(bool(result.get('source_sha256')) and bool(result.get('output_sha256')) and retained.get('schema')==REVIEW_SCHEMA
+        and retained.get('source_sha256')==result.get('source_sha256')
+        and retained.get('output_sha256')==result.get('output_sha256'))
+    evidence=retained.get('convergence') if bound else None
+    if not isinstance(evidence,dict) or evidence.get('schema')!=CONVERGENCE_SCHEMA:
+        return dict(status='unavailable',needs_review=False,
+            message='Convergence diagnostics unavailable. Final GPXs require scientific review.')
+    reasons=[]
+    if evidence.get('native_converged') is False:reasons.append('Native solver did not report convergence.')
+    if evidence.get('aborted') is True:reasons.append('Native solver reported an abort.')
+    if evidence.get('last_cycle_complete') is False or evidence.get('missing_last_cycle_parameters'):
+        reasons.append('Final-cycle evidence is incomplete.')
+    value=evidence.get('last_cycle_max_shift_over_sigma')
+    if (value is not None and (not finite(value) or value<0)) or (evidence.get('last_cycle_complete') is True and value is None):
+        reasons.append('Final-cycle shift evidence is invalid or unavailable.')
+    for key in ('relative_objective_change','relative_objective_tolerance'):
+        if evidence.get(key) is not None and not finite(evidence[key]):
+            reasons.append('Native objective diagnostic is nonfinite.');break
+    criteria=retained.get('criteria')
+    if isinstance(criteria,dict) and criteria.get('max_shift_over_sigma') is not None:
+        try:
+            assessment=assess_convergence(evidence,criteria['max_shift_over_sigma'])
+        except ValueError:
+            reasons.append('The recorded convergence criterion is invalid.')
+        else:
+            if assessment['status']!='passed':reasons.append(assessment['message'])
+    missing=(type(evidence.get('native_converged')) is not bool
+             or evidence.get('last_cycle_complete') is not True or not finite(value))
+    status='needs_review' if reasons else 'unavailable' if missing else 'recorded'
+    message=convergence_notice({'convergence':evidence})
+    if reasons:message=' '.join(dict.fromkeys(reasons))+' '+message
+    return dict(status=status,needs_review=bool(reasons),message=message)
 
 
 def convergence_notice(view):

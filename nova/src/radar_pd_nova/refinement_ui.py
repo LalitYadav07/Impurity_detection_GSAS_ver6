@@ -143,15 +143,16 @@ def refinement_dashboard(app):
                 html.Div('Scan queue',classes='rf-subtitle')
                 v.VTextField(label='Find scan or sample',v_model=('rf_job_search',),density='compact',variant='outlined',hide_details=True,prepend_inner_icon='mdi-magnify')
                 select('Recipe','rf_recipe_filter',"[{title:'All recipes',value:'all'}, ...rf_recipe_versions]",classes='mt-3')
-                select('Status','rf_job_status',"[{title:'All statuses',value:'all'},{title:'Completed',value:'completed'},{title:'Queued',value:'queued'},{title:'Running',value:'running'},{title:'Needs review',value:'needs_review'},{title:'Different model',value:'needs_recipe'},{title:'Paused',value:'paused'},{title:'Interrupted',value:'interrupted'},{title:'Failed',value:'failed'}]",classes='mt-3')
+                select('Status','rf_job_status',"[{title:'All statuses',value:'all'},{title:'Completed jobs',value:'completed'},{title:'Queued',value:'queued'},{title:'Running',value:'running'},{title:'Needs review',value:'needs_review'},{title:'Different model',value:'needs_recipe'},{title:'Paused',value:'paused'},{title:'Interrupted',value:'interrupted'},{title:'Failed',value:'failed'}]",classes='mt-3')
                 v.VCheckbox(label='Follow newly completed results',v_model=('rf_follow',),density='compact',hide_details=True,classes='mt-2')
                 with html.Div(classes='rf-actions'):
                     v.VBtn('Pause',click=app.pause_refinement_queue,variant='text',size='small',prepend_icon='mdi-pause')
                     v.VBtn('Resume queued',click=app.resume_refinement_queue,variant='text',size='small',prepend_icon='mdi-play')
                 html.P('Pause stops new enrollment. Active jobs finish. Resume runs queued scans; future enrollment requires Start refinement.',classes='rf-notice')
                 with html.Div(classes='rf-list'):
-                    with html.Button(v_for="job in rf_jobs.filter(j => (rf_job_status === 'all' || j.status === rf_job_status) && (rf_recipe_filter === 'all' || j.recipe_ids.includes(rf_recipe_filter)) && (j.scan + ' ' + j.sample).toLowerCase().includes(rf_job_search.toLowerCase()))",key='job.id',classes=("'rf-scan ' + (job.id === rf_selected_job ? 'active' : '')",),click=(app.select_refinement_job,'[job.id]')):
-                        html.Strong('{{ job.scan }}');html.Span('{{ job.sample }}');html.Span('Recipe {{ job.recipe }} · {{ job.status.replaceAll("_", " ") }}',classes='rf-state')
+                    with html.Button(v_for="job in rf_jobs.filter(j => (rf_job_status === 'all' || j.filter_statuses.includes(rf_job_status)) && (rf_recipe_filter === 'all' || j.recipe_ids.includes(rf_recipe_filter)) && (j.scan + ' ' + j.sample).toLowerCase().includes(rf_job_search.toLowerCase()))",key='job.id',classes=("'rf-scan ' + (job.id === rf_selected_job ? 'active' : '')",),click=(app.select_refinement_job,'[job.id]'),title=('job.review_message',)):
+                        html.Strong('{{ job.scan }}');html.Span('{{ job.sample }}');html.Span('Recipe {{ job.recipe }} · {{ job.status_label }}',classes='rf-state')
+                html.P('Final GPXs require scientific review. Completed jobs count finished executions, not scientific acceptance.',v_if='rf_jobs.length',classes='rf-notice')
                 html.P('No refinements queued yet.',v_if='!rf_jobs.length',classes='rf-notice')
             with html.Div(classes='rf-card'):
                 with html.Div(classes='rf-result-title'):

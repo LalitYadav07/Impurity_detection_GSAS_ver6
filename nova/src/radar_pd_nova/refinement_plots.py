@@ -9,6 +9,7 @@ import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from .results import experiment_axis_options, _experiment_axis
+from .refinement_messages import refinement_review_status
 from gpx_recipe.fit_domain import DOMAIN_SCHEMAS, NATIVE_FIT_CONVENTION, histogram_domain_schema, canonical_observations, fit_domain_digest
 
 COLORS=['#147d64','#b56016','#8064a2','#1d82a3','#c35069','#6c7d28','#5064a2']
@@ -215,6 +216,10 @@ def trend_figure(rows,*,metric='rwp',x_key='run_number',display='absolute'):
     for row in sorted(rows,key=lambda r:(r['source'].get('run_number') or 0,r['id'])):groups.setdefault(_group(row),[]).append(row)
     title='Rwp (%)' if metric=='rwp' else 'Modeled crystalline weight (%)' if metric=='phase_fractions' else ''
     for index,group in enumerate(groups.values()):
+        reviews=[row.get('review') or refinement_review_status({}) for row in group]
+        needs_review=[review['needs_review'] for review in reviews]
+        review_hover=[escape(review['message']) for review in reviews]
+        review_suffix=' · × needs review' if any(needs_review) else ''
         scans=[dict(run_number=j['source'].get('run_number'),metadata=j['source'].get('metadata') or {},
                     axis_overrides=j['source'].get('axis_overrides') or {}) for j in group]
         if x_key=='battery_voltage':
@@ -237,7 +242,9 @@ def trend_figure(rows,*,metric='rwp',x_key='run_number',display='absolute'):
                     values=[histogram_map(row[source_key]).get(hkey,{}).get('rwp') for row in group]
                     if all(value is None for value in values):continue
                     suffix=' · '+histogram_series_label(group[0]['final'],group[0]['source'],hkey) if len(histograms)>1 else ''
-                    figure.add_trace(go.Scatter(x=x,y=values,mode='lines+markers',name=label+suffix+(' · original' if source_key=='baseline' else ' · polished'),line=dict(color=color,dash=line,width=1.3),marker=dict(symbol=marker,size=6),customdata=[j['id'] for j in group],connectgaps=False))
+                    review_options=(dict(hovertext=review_hover,hovertemplate='%{x}<br>%{y}<br>%{hovertext}<extra>%{fullData.name}</extra>') if source_key=='final' else {})
+                    symbols=['x' if value else marker for value in needs_review] if source_key=='final' and any(needs_review) else marker
+                    figure.add_trace(go.Scatter(x=x,y=values,mode='lines+markers',name=label+suffix+(' · original' if source_key=='baseline' else ' · polished'+review_suffix),line=dict(color=color,dash=line,width=1.3),marker=dict(symbol=symbols,size=6),customdata=[j['id'] for j in group],connectgaps=False,**review_options))
             continue
         if metric=='phase_fractions':
             phases={p['key']:p for row in group for p in row['final'].get('parameters',[]) if p['kind']=='weight'}
@@ -246,7 +253,10 @@ def trend_figure(rows,*,metric='rwp',x_key='run_number',display='absolute'):
                 phase=parameter['phase']
                 if len(histogram_map(group[0]['final']))>1:
                     phase+=' · '+histogram_series_label(group[0]['final'],group[0]['source'],parameter.get('histogram_key') or key.rsplit('|',1)[-1])
-                figure.add_trace(go.Scatter(x=x,y=values,mode='lines+markers',name=phase+' · '+label,line=dict(color=COLORS[(index+phase_index)%len(COLORS)],width=1.3),customdata=[j['id'] for j in group],connectgaps=False))
+                figure.add_trace(go.Scatter(x=x,y=values,mode='lines+markers',name=phase+' · '+label+review_suffix,line=dict(color=COLORS[(index+phase_index)%len(COLORS)],width=1.3),
+                    marker=dict(symbol=['x' if value else 'circle' for value in needs_review],size=6),
+                    hovertext=review_hover,hovertemplate='%{x}<br>%{y}<br>%{hovertext}<extra>%{fullData.name}</extra>',
+                    customdata=[j['id'] for j in group],connectgaps=False))
             continue
         values=[];errors=[];statuses=[];unit='';parameter=None
         for row in group:
@@ -279,12 +289,12 @@ def trend_figure(rows,*,metric='rwp',x_key='run_number',display='absolute'):
             values=[((v-reference+.5)%1-.5 if fractional else v-reference) if v is not None else None for v in values];title='Change from reference'+(f' ({unit})' if unit else '')
             # Reference covariance/cross-scan correlations are unknown; do not manufacture difference errors.
             errors=[None]*len(errors)
-        figure.add_trace(go.Scatter(x=x,y=values,mode='lines+markers',name=label,line=dict(color=color,width=1.3),marker=dict(size=6),
+        hover=[('Reference: '+escape(reference_description)+'<br>' if reference_description else '')+review for review in review_hover]
+        figure.add_trace(go.Scatter(x=x,y=values,mode='lines+markers',name=label+review_suffix,line=dict(color=color,width=1.3),
+            marker=dict(size=6,symbol=['x' if value else 'circle' for value in needs_review]),
             error_y=dict(type='data',array=errors,visible=display=='absolute' and any(e is not None for e in errors)),
             customdata=[j['id'] for j in group],connectgaps=False,
-            **(dict(hovertext=[escape(reference_description)]*len(group),
-                    hovertemplate='%{x}<br>%{y}<br>Reference: %{hovertext}<extra>%{fullData.name}</extra>')
-               if reference_description else {})))
+            hovertext=hover,hovertemplate='%{x}<br>%{y}<br>%{hovertext}<extra>%{fullData.name}</extra>'))
     figure.update_layout(template='plotly_white',height=430,margin=dict(l=75,r=25,t=55,b=60),legend=dict(orientation='h',y=1.18),
         xaxis=dict(title=x_title if groups else 'Scan number',type=x_type if groups else 'linear'),yaxis=dict(title=title),
         uirevision='refinement-trend/'+metric+'/'+x_key+'/'+display,
