@@ -1047,7 +1047,7 @@ class NDSticksQ:
     def _calc(self, wavelength: Optional[float] = None):
         """Return a thread-local diffraction calculator appropriate for the radiation type."""
         wl = float(wavelength if wavelength is not None else self.wl)
-        key = round(wl, 8)
+        key = (self.radiation, round(wl, 8))
         if not hasattr(self._local, "calcs"):
             self._local.calcs = {}
         if key not in self._local.calcs:
@@ -1056,7 +1056,7 @@ class NDSticksQ:
                 self._local.calcs[key] = XRDCalculator(wavelength=wl)
             else:
                 # Local import to avoid hard dependency at module import time
-                from pymatgen.analysis.diffraction.neutron import NDCalculator
+                from neutron_fingerprints import NeutronFingerprintCalculator as NDCalculator
                 self._local.calcs[key] = NDCalculator(wavelength=wl)
         return self._local.calcs[key]
 
@@ -1075,26 +1075,15 @@ class NDSticksQ:
         return self.wl
 
     def _get_structure_hash(self, structure: Structure) -> str:
-        """Create a hash for structure caching"""
-        lat = structure.lattice
-        # Include chemistry and fractional coordinates. Lattice-only keys can
-        # incorrectly reuse patterns for distinct phases with similar cells.
-        parts = [
-            f"{lat.a:.6f}_{lat.b:.6f}_{lat.c:.6f}_{lat.alpha:.3f}_{lat.beta:.3f}_{lat.gamma:.3f}",
-            str(len(structure)),
-        ]
-        for site in structure:
-            fc = site.frac_coords
-            parts.append(
-                f"{site.species_string}@{fc[0]:.5f},{fc[1]:.5f},{fc[2]:.5f}"
-            )
-        return hashlib.blake2b("|".join(parts).encode("utf-8"), digest_size=16).hexdigest()
+        """Bind cached patterns to isotope identity, values and generator."""
+        from neutron_fingerprints import structure_cache_key
+        return structure_cache_key(structure, self.radiation)
 
     def simulate_QI(self, structure: Structure, q_window: Optional[Tuple[float, float]] = None) -> Tuple[np.ndarray, np.ndarray]:
         # Create cache key
         wl_eff = self._effective_wavelength_for_q_window(q_window)
         struct_hash = self._get_structure_hash(structure)
-        cache_key = (struct_hash, q_window, round(wl_eff, 8))
+        cache_key = (struct_hash, q_window, round(wl_eff, 8), self.tt)
 
         # Check cache first
         if cache_key in self._pattern_cache:
@@ -1138,7 +1127,7 @@ class NDSticksQ:
         """Build an HKL/intensity table once for fast lattice-only rescoring."""
         wl_eff = self._effective_wavelength_for_q_window(q_window)
         struct_hash = self._get_structure_hash(structure)
-        cache_key = ("hkl_table", struct_hash, q_window, round(wl_eff, 8))
+        cache_key = ("hkl_table", struct_hash, q_window, round(wl_eff, 8), self.tt)
         if cache_key in self._pattern_cache:
             return self._pattern_cache[cache_key]
 
@@ -1583,14 +1572,8 @@ class LatticeNudger:
             pass
         if sgnum is None:
             try:
-                from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
-                sgnum = int(
-                    SpacegroupAnalyzer(
-                        base_struct,
-                        symprec=1e-2,
-                        angle_tolerance=-1.0,
-                    ).get_space_group_number()
-                )
+                from neutron_fingerprints import isotope_preserving_space_group_info
+                _, sgnum = isotope_preserving_space_group_info(base_struct, symprec=1e-2, angle_tolerance=-1.0)
             except Exception:
                 sgnum = None
         cons = infer_constraints(base_struct, sgnum)

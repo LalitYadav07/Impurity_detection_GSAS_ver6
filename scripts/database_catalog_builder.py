@@ -36,9 +36,10 @@ except Exception:
     HAS_TQDM = False
 
 from pymatgen.core import Structure, Element
-from pymatgen.analysis.diffraction.neutron import NDCalculator
+from neutron_fingerprints import (NeutronFingerprintCalculator as NDCalculator,
+                                  generator_metadata, isotope_preserving_space_group_info,
+                                  request_metadata)
 from pymatgen.analysis.diffraction.xrd import XRDCalculator
-from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 
 ELEMENT_BITS = 128  # Z=1..128
 
@@ -72,9 +73,7 @@ def resolve_space_group_with_analyzer(meta: Dict, s: Structure,
     rep_sym = str(meta.get("SG_symbol", meta.get("spacegroup_symbol", "")) or "")
 
     # analyzer (authoritative)
-    sga = SpacegroupAnalyzer(s, symprec=symprec, angle_tolerance=angle_tolerance)
-    ana_num = int(sga.get_space_group_number())
-    ana_sym = str(sga.get_space_group_symbol())
+    ana_sym, ana_num = isotope_preserving_space_group_info(s, symprec=symprec, angle_tolerance=angle_tolerance)
 
     mismatch = None
     if rep_num or rep_sym:  # only compare when something was reported
@@ -222,7 +221,7 @@ def _space_group_from_meta_or_structure(meta: Dict, s: Structure) -> Tuple[int, 
             pass
     # compute from structure (symprec modest)
     try:
-        sym, num = s.get_space_group_info(symprec=1e-2)
+        sym, num = isotope_preserving_space_group_info(s, symprec=1e-2)
         return int(num or 0), str(sym or "")
     except Exception:
         return int(sgnum), ""  # keep whatever we had
@@ -243,6 +242,8 @@ def process_one_phase(phase_id: str, meta: Dict,
     mismatch_dict is non-None only when reported SG != analyzer SG; we always keep analyzer SG.
     """
     phase_npz = os.path.join(out_dir, "phases", f"{phase_id}.npz")
+    fingerprint = request_metadata(meta["cif_content"], radiation, wavelength,
+                                   two_theta_min, two_theta_max, topM)
 
     # --- Resume path: still run analyzer to log mismatch, but reuse NPZ on success ---
     if resume and os.path.exists(phase_npz):
@@ -252,6 +253,9 @@ def process_one_phase(phase_id: str, meta: Dict,
             ana_num, ana_sym, mismatch = resolve_space_group_with_analyzer(meta, s)
 
             with np.load(phase_npz) as npz:
+                if ("fingerprint_request_sha256" not in npz
+                    or str(npz["fingerprint_request_sha256"].item()) != fingerprint["request_sha256"]):
+                    raise ValueError("Fingerprint source, settings or generator changed; rebuild required")
                 n = int(npz["hkls"].shape[0])
                 hi = np.uint64(npz["elements_mask_hi"]) if "elements_mask_hi" in npz else np.uint64(0)
                 lo = np.uint64(npz["elements_mask_lo"]) if "elements_mask_lo" in npz else np.uint64(0)
@@ -323,6 +327,8 @@ def process_one_phase(phase_id: str, meta: Dict,
             elements_mask_hi=np.asarray(hi_mask, dtype=np.uint64),
             elements_mask_lo=np.asarray(lo_mask, dtype=np.uint64),
             ratio_hist=r_hist.astype(np.float32),
+            fingerprint_request_sha256=np.asarray(fingerprint["request_sha256"]),
+            fingerprint_provenance=np.asarray(json.dumps(fingerprint, sort_keys=True)),
         )
 
         row = {
@@ -381,7 +387,8 @@ def main():
     ensure_dir(args.out_dir); ensure_dir(os.path.join(args.out_dir, "phases"))
 
     manifest = {
-        "version": "aniso-1.2",
+        "version": "aniso-1.3",
+        "fingerprint_generator": generator_metadata(args.radiation),
         "created_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "two_theta_range_deg": [args.two_theta_min, args.two_theta_max],
         "topM": int(args.topM),
