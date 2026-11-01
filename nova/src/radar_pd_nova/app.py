@@ -31,7 +31,13 @@ from .setup_forms import configuration_from_form, configuration_form_values, CON
 from .setup_ui import SetupEditorMixin
 from .live_setup import LiveSetupMixin
 from .live_assistant_controller import LiveAssistantMixin
-from .library_setup import LIBRARY_FIELDS, LibraryDraft
+from .library_setup import (
+    LIBRARY_FIELDS,
+    LibraryDraft,
+    LibraryManifestReadError,
+    library_manifest_phase_count,
+    read_library_manifest,
+)
 from .post_analysis_ui import PostAnalysisMixin
 from .unet_transition_ui import UnetTransitionMixin
 from .refinement_controller import RefinementMixin
@@ -50,6 +56,7 @@ from .galaxy_service import (
     RESULT_EXPLORER_TOOL_ID,
     SNS_RESOLVER_TOOL_ID,
     GalaxyService,
+    stage_progress_is_known,
 )
 from .models import (
     AnalysisConfig,
@@ -476,6 +483,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         state.selected_galaxy_job_id = "Pending"
         state.selected_run_stage = "-"
         state.selected_run_progress = 0
+        state.selected_run_progress_known = False
         state.selected_run_message = ""
         state.selected_run_console = ""
         state.selected_run_loading = False
@@ -1048,6 +1056,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
             "selected_publication_target": "", "selected_publication_job_id": "",
             "selected_publish_message": "", "selected_galaxy_job_id": "Pending",
             "selected_run_stage": "-", "selected_run_progress": 0,
+            "selected_run_progress_known": False,
             "selected_run_message": "", "selected_run_console": "",
             "selected_run_loading": False, "selected_result_load_error": "",
             "selected_result_load_message": "", "selected_run_elapsed": "-",
@@ -2961,9 +2970,14 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                         variant="tonal",
                     )
             with html.Div(classes="radar-progress-number"):
-                html.Strong("{{ selected_run_progress }}%")
-                html.Span("complete")
-        vuetify.VProgressLinear(model_value=("selected_run_progress",), color="#1f6b4b", height=10, rounded=True, classes="mb-4")
+                html.Strong("{{ selected_run_progress }}%", v_if="selected_run_progress_known")
+                html.Span("complete", v_if="selected_run_status === 'Ok'")
+                html.Span("stage estimate", v_else_if="selected_run_progress_known")
+                html.Span("Stopped", v_else_if="['Error', 'Cancelled'].includes(selected_run_status)")
+                html.Span("Awaiting stage updates", v_else=True)
+        vuetify.VProgressLinear(model_value=("selected_run_progress_known ? selected_run_progress : 0",),
+            indeterminate=("!selected_run_progress_known && !['Ok', 'Error', 'Cancelled'].includes(selected_run_status)",),
+            color="#1f6b4b", height=10, rounded=True, classes="mb-4")
         vuetify.VAlert(v_show="selected_run_loading", text="Loading the completed run and reconstructing its scientific results...", type="info", variant="tonal", classes="mb-3")
         vuetify.VAlert(v_show="selected_run_status === 'Error' && !!selected_run_message", text=("selected_run_message",), type="error", variant="tonal", classes="mb-3")
         vuetify.VAlert(
@@ -4269,7 +4283,9 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                     stage = str(record.stage or "Waiting for Galaxy") if record is not None else "Waiting for Galaxy"
                     progress = int(record.progress or 0) if record is not None else 0
                     job_id = run.galaxy_job_id or (record.galaxy_job_id if record is not None else "")
-                    detail = f"{stage} · {progress}%{f' · job {job_id[:8]}' if job_id else ''}"
+                    measured_progress = (f" · {progress}% stage estimate"
+                        if record is not None and stage_progress_is_known(stage, record.status) else "")
+                    detail = f"{stage}{measured_progress}{f' · job {job_id[:8]}' if job_id else ''}"
                 else:
                     if run.scan_metadata.get("setup_error"):
                         status = "Waiting for complete data"
@@ -6455,16 +6471,21 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
             ]
         if record.status == RunStatus.OK:
             active_index = len(names)
+        elif record.status in {RunStatus.QUEUED, RunStatus.ERROR, RunStatus.CANCELLED}:
+            # A scheduler state or a terminal error does not prove which
+            # scientific stages ran. Do not manufacture milestones from a
+            # fallback percentage (including the historical error value 100).
+            active_index = None
         else:
             lowered = str(record.stage or "").lower()
             active_index = next(
                 (index for index, stage_tokens in enumerate(tokens) if any(token in lowered for token in stage_tokens)),
-                min(len(names) - 1, max(0, int(record.progress) * len(names) // 101)),
+                None,
             )
         return [
             {
                 "name": name,
-                "state": "complete" if index < active_index or record.status == RunStatus.OK else "active" if index == active_index else "pending",
+                "state": "complete" if record.status == RunStatus.OK or (active_index is not None and index < active_index) else "active" if index == active_index else "pending",
             }
             for index, name in enumerate(names)
         ]
@@ -6601,6 +6622,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         state.selected_galaxy_job_id = record.galaxy_job_id or "Pending"
         state.selected_run_stage = record.stage
         state.selected_run_progress = record.progress
+        state.selected_run_progress_known = stage_progress_is_known(record.stage, record.status)
         state.selected_run_message = record.message
         state.selected_run_console = record.console_tail
         state.viewed_run_mode = record.mode.value
@@ -7373,17 +7395,41 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
     async def _utility_completed(self, action: UtilityActionRecord) -> None:
         state = self.server.state
         if action.tool_id == LIBRARY_BUILDER_TOOL_ID and action.outputs.get("library_archive"):
-            owner = getattr(self, "_library_action_contexts", {}).pop(action.uid, {})
+            owner_context = getattr(self, "_library_action_contexts", {}).get(action.uid)
+            owner = dict(owner_context or {})
             state = LibraryDraft(self.server.state, owner.get("workflow", "single"))
             selection_current = not owner.get("signature") or owner["signature"] == state.signature()
             manifest: dict[str, Any] = {}
             manifest_id = action.outputs.get("library_manifest")
-            if manifest_id:
-                try:
-                    manifest = await asyncio.to_thread(self.service._dataset_document, manifest_id) or {}
-                except Exception:
-                    manifest = {}
-            built = int(manifest.get("phase_count") or manifest.get("n_phases") or 0)
+            state.library_builder_status = "verifying"
+            state.library_builder_message = "Build completed; verifying the published library manifest..."
+            state.flush()
+
+            def retry_manifest(reason: str) -> None:
+                state.library_builder_message = (
+                    f"Build completed; the manifest read was unavailable ({reason}). "
+                    "Checking the same output once more; the library will not be rebuilt."
+                )
+                state.flush()
+
+            manifest_error = ""
+            try:
+                manifest = await read_library_manifest(
+                    self.service._dataset_document, manifest_id, on_retry=retry_manifest
+                )
+                built = library_manifest_phase_count(manifest)
+            except LibraryManifestReadError as exc:
+                built = 0
+                manifest_error = (
+                    f"The build completed, but its manifest could not be read: {exc} "
+                    "The library was not selected. Inspect the existing manifest and build log in History; do not rebuild it."
+                )
+            except ValueError as exc:
+                built = 0
+                manifest_error = (
+                    f"The completed library manifest could not be verified: {exc} "
+                    "The library was not selected; inspect the existing manifest and build log."
+                )
             failures = list(manifest.get("failures") or [])
             preflight_failures = list(state.library_builder_failure_rows or [])
             preflight_skipped = int(state.library_builder_skipped_count or 0)
@@ -7395,6 +7441,16 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                 for item in failures
                 if isinstance(item, dict)
             ]
+            contexts = getattr(self, "_library_action_contexts", {})
+            if owner_context is not None:
+                if contexts.get(action.uid) is not owner_context or owner_context != owner:
+                    # Clearing/replacing the owning workspace during the read
+                    # must not let this completion overwrite its new draft.
+                    self._remember_history_dataset(action.outputs["library_archive"], action.name + ".zip", "candidate_library")
+                    self._sync_activities()
+                    self.server.state.flush()
+                    return
+                contexts.pop(action.uid, None)
             selection_current = selection_current and (not owner.get("signature") or owner["signature"] == state.signature())
             if selection_current and built > 0:
                 state.database_source = "archive"
@@ -7419,7 +7475,9 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                 state.library_builder_message = f"Library ready with {built} usable phase(s) in History. Your changed selection was kept."
             if built <= 0:
                 state.library_builder_status = "error"
-                state.library_builder_message = "The usable phase count could not be verified. The library was not selected; inspect the build log and manifest."
+                state.library_builder_message = manifest_error or (
+                    "The build completed with no usable phases. The library was not selected; inspect the build log and manifest."
+                )
             state.notice = state.library_builder_message
         elif action.tool_id == SNS_RESOLVER_TOOL_ID:
             pattern_id = action.outputs.get("pattern")

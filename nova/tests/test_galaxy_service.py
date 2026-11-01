@@ -19,6 +19,7 @@ from radar_pd_nova.galaxy_service import (
     _upload_filename,
     normalize_status,
     stage_from_console,
+    stage_progress_is_known,
 )
 from radar_pd_nova.models import (
     AnalysisConfig,
@@ -152,6 +153,61 @@ def test_progress_stage_inference() -> None:
     assert stage_from_console("starting lattice nudge", RunStatus.RUNNING) == ("Lattice nudging", 55)
     assert stage_from_console("rerank 512 patterns", RunStatus.RUNNING) == ("Pattern scoring", 72)
     assert stage_from_console("", RunStatus.OK) == ("Results ready", 100)
+
+
+@pytest.mark.parametrize("raw,status,label", [
+    ("new", RunStatus.QUEUED, "Preparing inputs or scheduling"),
+    ("waiting", RunStatus.QUEUED, "Preparing inputs or scheduling"),
+    ("queued", RunStatus.QUEUED, "Queued on NDIP; waiting for a worker"),
+    ("running", RunStatus.RUNNING, "Running on NDIP; stage details pending"),
+])
+def test_unavailable_console_does_not_invent_stage_progress(raw, status, label):
+    stage, progress = stage_from_console("", status, galaxy_state=raw)
+    assert (stage, progress) == (label, 0)
+    assert stage_progress_is_known(stage, status) is False
+    assert stage_from_console("Unclassified worker output", status, galaxy_state=raw) == (label, 0)
+
+
+@pytest.mark.parametrize("stage", [
+    "Preparing inputs or scheduling", "Queued on NDIP; waiting for a worker",
+    "Running on NDIP; stage details pending", "Galaxy job paused",
+    "Starting RADAR-PD", "Waiting for compute",
+])
+def test_stage_progress_helper_handles_fallbacks_and_legacy_records(stage):
+    assert not stage_progress_is_known(stage, RunStatus.RUNNING)
+    assert not stage_progress_is_known(stage, RunStatus.QUEUED)
+    assert stage_progress_is_known(stage, RunStatus.OK)
+    assert not stage_progress_is_known(stage, RunStatus.ERROR)
+    assert not stage_progress_is_known(stage, RunStatus.CANCELLED)
+
+
+def test_console_evidence_retains_existing_stage_and_progress():
+    stage, progress = stage_from_console("starting lattice nudge", RunStatus.RUNNING, galaxy_state="running")
+    assert (stage, progress) == ("Lattice nudging", 55)
+    assert stage_progress_is_known(stage, RunStatus.RUNNING)
+    assert not stage_progress_is_known("Uploading inputs", RunStatus.UPLOADING)
+    assert not stage_progress_is_known("Unrecognized stage", RunStatus.RUNNING)
+    assert not stage_progress_is_known(stage, RunStatus.ERROR)
+    assert not stage_progress_is_known("Stopped", RunStatus.CANCELLED)
+
+
+@pytest.mark.parametrize("raw,label", [
+    ("new", "Preparing inputs or scheduling"),
+    ("queued", "Queued on NDIP; waiting for a worker"),
+    ("running", "Running on NDIP; stage details pending"),
+])
+def test_refresh_preserves_raw_galaxy_stage_without_polling_inputs(tmp_path, raw, label):
+    service = GalaxyService("https://galaxy.example", "key", "history", output_root=tmp_path)
+    calls = []
+    service._job_details = lambda uid: calls.append(uid) or {"id": uid, "state": raw, "stdout": ""}
+    service._config_from_job = lambda *args, **kwargs: None
+    service._inputs_from_parameters = lambda *args, **kwargs: None
+    service._dataset_document = lambda *args, **kwargs: pytest.fail("Progress must not poll each input dataset")
+    record = RunRecord(uid="job-1", galaxy_job_id="job-1", name="run", mode=AnalysisMode.FULL, history_id="history")
+    service.refresh(record)
+    assert calls == ["job-1"]
+    assert record.stage == label and record.progress == 0
+    assert not stage_progress_is_known(record.stage, record.status)
 
 
 def test_json_checkpoint_uses_fast_parser_without_yaml(monkeypatch, tmp_path):

@@ -135,10 +135,13 @@ class DBPackLayoutTests(unittest.TestCase):
             )
             cfg = yaml.safe_load(cfg_text)
 
-            self.assertEqual(cfg["db"]["catalog_csv"], str(pack_root / "catalog_deduplicated.csv"))
-            self.assertEqual(cfg["db"]["stable_csv"], str(pack_root / "mp_experimental_stable.csv"))
-            self.assertEqual(cfg["db"]["profiles_dir"], str(pack_root / "profiles64"))
-            self.assertEqual(cfg["db"]["cif_map_json"], str(pack_root / "cif_map.json"))
+            # macOS exposes /var through /private/var; these are the same
+            # requested paths even when the builder canonicalizes them.
+            for key, relative in (("catalog_csv", "catalog_deduplicated.csv"),
+                                  ("stable_csv", "mp_experimental_stable.csv"),
+                                  ("profiles_dir", "profiles64"),
+                                  ("cif_map_json", "cif_map.json")):
+                self.assertEqual(Path(cfg["db"][key]).resolve(), (pack_root / relative).resolve())
             self.assertNotIn("original_json", cfg["db"])
             self.assertEqual(cfg["stage4"]["seed"], 0)
             self.assertEqual(cfg["stage4"]["pearson_q_max"], 8.0)
@@ -300,7 +303,7 @@ class DBLoaderPathResolutionTests(unittest.TestCase):
                 )
             )
 
-            self.assertEqual(loader.ensure_cif_on_disk(phase_id), str(cif_path.resolve()))
+            self.assertTrue(Path(loader.ensure_cif_on_disk(phase_id)).samefile(cif_path))
             loaded = loader.load_structure(phase_id)
             self.assertEqual(loaded.composition.reduced_formula, structure.composition.reduced_formula)
 

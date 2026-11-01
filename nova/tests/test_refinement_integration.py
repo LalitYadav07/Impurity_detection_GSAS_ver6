@@ -523,6 +523,18 @@ def test_prepared_source_is_labeled_unqualified_in_refinement():
     assert s.rf_source_details[-1]['label']=='Prepared GPX'
 
 
+def test_starting_result_warnings_stay_visible_and_clear_with_source():
+    app=RefinementMixin();s=SimpleNamespace(rf_source='1');app.server=SimpleNamespace(state=s)
+    warning='Measured signal unresolved under the supplied errors; small Rwp does not establish phase identification.'
+    app._refinement_workspace=SimpleNamespace(state={'sources':{
+        '1':{**source('1'),'scientific_status':'needs_review','scientific_warnings':[warning]},
+        '2':source('2')}})
+    app._refinement_sync_source()
+    assert warning in s.rf_source_qualification
+    s.rf_source='2';app._refinement_sync_source()
+    assert not s.rf_source_qualification
+
+
 def test_saved_catalog_disagreement_stays_visible_in_refinement_and_clears_with_source():
     app=RefinementMixin();s=SimpleNamespace(rf_source='1');app.server=SimpleNamespace(state=s)
     prepared={**source('1'),'project':{'stage':'prepared_unqualified'},'collection_name':'prepared.gpx',
@@ -639,6 +651,9 @@ def test_published_source_prefers_explicit_publication_and_hashes_its_actual_byt
     assert reviewed['id']==item['id'] and reviewed['source_sha256']==item['source_sha256']
     assert reviewed['scientific_status']=='needs_review'
     assert reviewed['scientific_warnings']==['Calibration requires review','Source interval unconfirmed']
+    payload['summary']['warnings']=[{'code':'signal_unresolved','message':'Signal unresolved under supplied errors'}]
+    reviewed=source_from_record(record,payload,{},'history')
+    assert reviewed['scientific_warnings']==['Calibration requires review','Signal unresolved under supplied errors']
     pub.write_bytes(b'changed')
     with pytest.raises(ValueError,match='checksum changed'):source_from_record(record,payload,{},'history')
 

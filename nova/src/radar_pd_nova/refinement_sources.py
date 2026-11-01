@@ -220,9 +220,12 @@ def source_from_record(record, payload: dict, scan: dict | None, history: str,
     if bank and 'bank' not in scan_label.lower():scan_label+=' · bank '+bank
     warnings=[]
     for document in (result,scan):
-        values=document.get('scientific_warnings') or []
-        if isinstance(values,(list,tuple)):
-            warnings.extend(value.strip() for value in values if isinstance(value,str) and value.strip())
+        for field in ('scientific_warnings','warnings'):
+            values=document.get(field) or []
+            if isinstance(values,(list,tuple)):
+                for value in values:
+                    text=value.get('message') if isinstance(value,dict) else value
+                    if isinstance(text,str) and text.strip():warnings.append(text.strip())
     return dict(id=uid, experiment=exp, experiment_label=(f'{instrument} · {ipts}' if ipts else record.name),
                 scan_key=scan_key, record_uid=record.uid, galaxy_job_id=job_identity, run_id=run_id,
                 run_number=run_number, bank=bank, sample_key=sample_key,

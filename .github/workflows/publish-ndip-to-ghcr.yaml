@@ -9,6 +9,7 @@ on:
       - requirements.txt
       - scripts/**
       - nova/src/gpx_recipe/**
+      - nova/src/radar_pd_nova/signal_quality.py
       - schemas/**
       - ML_components/**
       - ML_ranker/**
@@ -81,6 +82,8 @@ jobs:
           from gsas_cif_import import add_verified_phase, elemental_counts
           from gsas_legacy_bridge import write_dummy_nacl_cif
           import ndip_pattern_observation
+          from radar_pd_nova.signal_quality import supplied_error_signal_quality
+          assert supplied_error_signal_quality([1e-8, 2e-8], [0.01, 0.01])["needs_review"]
           assert bootstrap_fraction_window({"len_tol_pct": 0.6}) == 0.006
           cell = [4.8, 4.8, 13., 90., 90., 120.]
           assert candidate_cell_rejection(cell, [5.7, 5.7, 15.5, 90., 90., 120.], .59, .60)

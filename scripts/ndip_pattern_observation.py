@@ -13,6 +13,32 @@ import math
 from pathlib import Path
 
 import numpy as np
+try:
+    from gpx_recipe.fit_domain import NATIVE_FIT_CONVENTION, native_powder_fit_mask
+except ModuleNotFoundError as exc:
+    if exc.name not in {"gpx_recipe", "gpx_recipe.fit_domain"}:
+        raise
+    # Match ndip_cell_covariance's source-tree compatibility path: use the
+    # same implementation without requiring an editable NOVA installation.
+    import importlib.util
+    _source = Path(__file__).resolve().parents[1] / "nova/src/gpx_recipe/fit_domain.py"
+    _spec = importlib.util.spec_from_file_location("_radar_native_fit_domain", _source)
+    _module = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(_module)
+    NATIVE_FIT_CONVENTION = _module.NATIVE_FIT_CONVENTION
+    native_powder_fit_mask = _module.native_powder_fit_mask
+
+try:
+    from radar_pd_nova.signal_quality import supplied_error_signal_quality
+except ModuleNotFoundError as exc:
+    if exc.name not in {"radar_pd_nova", "radar_pd_nova.signal_quality"}:
+        raise
+    import importlib.util
+    _source = Path(__file__).resolve().parents[1] / "nova/src/radar_pd_nova/signal_quality.py"
+    _spec = importlib.util.spec_from_file_location("_radar_signal_quality", _source)
+    _module = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(_module)
+    supplied_error_signal_quality = _module.supplied_error_signal_quality
 
 SCHEMA = "radar-pd-pattern-observation/v1"
 MAX_POINTS = 100_000
@@ -50,14 +76,16 @@ def pattern_from_records(path: Path, records, *, input_provenance=None, mode="fu
     lo, hi = map(float, limits[1])
     if not math.isfinite(lo) or not math.isfinite(hi) or lo >= hi:
         raise ValueError("Actual histogram fit interval is invalid")
-    fitted = valid & (xx >= lo) & (xx <= hi)
     excluded = []
     for interval in limits[2:]:
         a, b = map(float, interval)
         if not math.isfinite(a) or not math.isfinite(b) or a > b:
             raise ValueError("Histogram exclusion interval is invalid")
-        fitted &= ~((xx >= a) & (xx <= b))
         excluded.append([a, b])
+    # errRefine includes the first bin at/above the upper limit. Reuse the
+    # same domain contract as native recipe exports so the published mask
+    # reproduces its Nobs and weighted residual, including between-bin limits.
+    fitted = valid & native_powder_fit_mask(xx, [lo, hi], excluded)
     parameters = components.get("Instrument Parameters", [{}, {}])[0]
     initial = {
         key: (value[0] if isinstance(value, (list, tuple)) else value)
@@ -71,9 +99,11 @@ def pattern_from_records(path: Path, records, *, input_provenance=None, mode="fu
     else:
         coordinate = {"kind": "unknown", "unit": ""}
     original = input_provenance or {}
+    sigma = [float(1 / math.sqrt(v)) if ok else None for v, ok in zip(ww, valid)]
+    signal_quality = supplied_error_signal_quality(yy, sigma, fitted)
     packet = {
         "$schema": SCHEMA,
-        "extractor_version": 1,
+        "extractor_version": 2,
         "source_gpx_sha256": sha256(Path(path).read_bytes()).hexdigest(),
         "histogram": name,
         "coordinate": coordinate,
@@ -98,11 +128,13 @@ def pattern_from_records(path: Path, records, *, input_provenance=None, mode="fu
         "fit_domain": {
             "limits": [lo, hi],
             "excluded": excluded,
+            "convention": NATIVE_FIT_CONVENTION,
             "weight_factor": float(main[0].get("wtFactor", 1)) if isinstance(main[0], dict) else 1,
         },
+        "signal_quality": signal_quality,
         "x": xx.tolist(),
         "y": np.where(np.isfinite(yy), yy, 0).tolist(),
-        "sigma": [float(1 / math.sqrt(v)) if ok else None for v, ok in zip(ww, valid)],
+        "sigma": sigma,
         "ycalc": [float(v) if ok and math.isfinite(v) else None for v, ok in zip(cc, fitted)],
         "valid": valid.tolist(),
         "fit_valid": fitted.tolist(),
@@ -127,4 +159,5 @@ def publish_pattern(path, records, destination, *, input_provenance=None, mode="
         "sha256": sha256(raw).hexdigest(),
         "points": len(packet["x"]),
         "source_gpx_sha256": packet["source_gpx_sha256"],
+        "signal_quality": packet["signal_quality"],
     }

@@ -561,6 +561,32 @@ def test_monitor_timeline_uses_mode_specific_stages() -> None:
     assert full_rows[3] == {"name": "Refinement passes", "state": "active"}
 
 
+@pytest.mark.parametrize("status, stage, progress", [
+    (RunStatus.QUEUED, "Preparing inputs or scheduling", 0),
+    (RunStatus.QUEUED, "Waiting for compute", 3),
+    (RunStatus.RUNNING, "Running on NDIP; stage details pending", 0),
+    (RunStatus.RUNNING, "Starting RADAR-PD", 8),
+    (RunStatus.ERROR, "Stopped", 100),
+    (RunStatus.CANCELLED, "Stopped", 100),
+])
+def test_unobserved_stages_do_not_claim_scientific_progress(status, stage, progress):
+    record = RunRecord(uid="pending", name="pending", mode=AnalysisMode.FULL,
+        history_id="history-1", status=status, stage=stage, progress=progress)
+    app, state = _app_with_record(record)
+    app._select_record(record)
+    assert not state.selected_run_progress_known
+    assert all(row["state"] == "pending" for row in app._monitor_stage_rows(record))
+
+
+def test_finished_job_marks_stages_complete_even_without_console():
+    record = RunRecord(uid="done", name="done", mode=AnalysisMode.FULL,
+        history_id="history-1", status=RunStatus.OK, stage="Results ready", progress=100)
+    app, state = _app_with_record(record)
+    app._select_record(record)
+    assert state.selected_run_progress_known
+    assert all(row["state"] == "complete" for row in app._monitor_stage_rows(record))
+
+
 def test_async_monitor_publishes_updates_on_the_event_loop(tmp_path) -> None:
     record = RunRecord(
         uid="monitor-1",

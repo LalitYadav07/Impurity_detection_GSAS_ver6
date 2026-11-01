@@ -295,7 +295,30 @@ def _dataset_id(value: Any) -> str | None:
     return None
 
 
-def stage_from_console(text: str, status: RunStatus) -> tuple[str, int]:
+_CONSOLE_PROGRESS_STAGES = (
+    (("final refinement", "gsas validation", "polish"), "Final refinement ranking", 88),
+    (("512", "pattern scoring", "rerank"), "Pattern scoring", 72),
+    (("pearson", "lattice nudge", "nudg"), "Lattice nudging", 55),
+    (("coarse", "histogram", "ml rank"), "Candidate search", 35),
+    (("main phase", "background", "signal"), "Signal and main-phase preparation", 18),
+)
+
+
+def stage_progress_is_known(stage: str, status: RunStatus) -> bool:
+    """Whether a stage's percentage has evidence rather than a fallback value."""
+
+    if status == RunStatus.OK:
+        return True
+    if status in {RunStatus.ERROR, RunStatus.CANCELLED}:
+        return False
+    return str(stage).strip().casefold() in {
+        label.casefold() for _, label, _ in _CONSOLE_PROGRESS_STAGES
+    }
+
+
+def stage_from_console(
+    text: str, status: RunStatus, *, galaxy_state: str | None = None,
+) -> tuple[str, int]:
     """Infer a stable user-facing stage from the existing batch console log."""
 
     lowered = text.lower()
@@ -303,19 +326,14 @@ def stage_from_console(text: str, status: RunStatus) -> tuple[str, int]:
         return "Results ready", 100
     if status in {RunStatus.ERROR, RunStatus.CANCELLED}:
         return "Stopped", 100
-    stages = [
-        (("final refinement", "gsas validation", "polish"), "Final refinement ranking", 88),
-        (("512", "pattern scoring", "rerank"), "Pattern scoring", 72),
-        (("pearson", "lattice nudge", "nudg"), "Lattice nudging", 55),
-        (("coarse", "histogram", "ml rank"), "Candidate search", 35),
-        (("main phase", "background", "signal"), "Signal and main-phase preparation", 18),
-    ]
-    for needles, label, progress in stages:
+    for needles, label, progress in _CONSOLE_PROGRESS_STAGES:
         if any(needle in lowered for needle in needles):
             return label, progress
     if status == RunStatus.RUNNING:
-        return "Starting RADAR-PD", 8
-    return "Waiting for compute", 3
+        return "Running on NDIP; stage details pending", 0
+    if str(galaxy_state or "").strip().lower() == "queued":
+        return "Queued on NDIP; waiting for a worker", 0
+    return "Preparing inputs or scheduling", 0
 
 
 def normalize_status(value: Any) -> RunStatus:
@@ -2377,7 +2395,7 @@ class GalaxyService:
                 # settings once, without changing a submitted click-time snapshot.
                 record.inputs = recovered_inputs
             record.inputs = self._merge_recovered_inputs(record.inputs, recovered_inputs)
-        stage, progress = stage_from_console(stdout, status)
+        stage, progress = stage_from_console(stdout, status, galaxy_state=job.get("state"))
         if paused and not dependency_error:
             stage = "Galaxy job paused"
             record.message = "Galaxy paused this job. Review or resume it in History."
@@ -2480,8 +2498,8 @@ class GalaxyService:
                     history_id=self.history_id,
                     status=state,
                     analysis_status=state,
-                    stage=stage_from_console("", state)[0],
-                    progress=stage_from_console("", state)[1],
+                    stage=stage_from_console("", state, galaxy_state=job.get("state"))[0],
+                    progress=stage_from_console("", state, galaxy_state=job.get("state"))[1],
                     created_utc=created,
                     updated_utc=updated,
                     input_dataset_ids={**self._input_dataset_ids(parameters), **public_input_ids},

@@ -440,6 +440,10 @@ class RefinementMixin(GuidedRefinementMixin):
         source=(w.state['sources'].get(s.rf_source) if w else None) or {}
         prepared=source.get('project',{}).get('stage') in {'prepared_unqualified','edited_unqualified'}
         s.rf_source_qualification=('Prepared starting hypothesis. No refinement has been accepted; calibration, phase assignments and composition require scientific review.' if prepared else '')
+        warnings=[str(value) for value in source.get('scientific_warnings',[]) if str(value).strip()]
+        if warnings:
+            s.rf_source_qualification=(' '.join([s.rf_source_qualification,
+                'Starting result requires scientific review: ' + ' '.join(warnings)])).strip()
         s.rf_can_load_baseline=source.get('project',{}).get('stage')=='prepared_unqualified'
         s.rf_source_details=[dict(label='Sample',value=source.get('sample_label','—')),dict(label='Bank',value=source.get('bank') or '—'),dict(label='Prepared GPX' if prepared else 'Published GPX',value=source.get('collection_name','—'))]
         catalog=(source.get('metadata') or {}).get('catalog_context') or {}

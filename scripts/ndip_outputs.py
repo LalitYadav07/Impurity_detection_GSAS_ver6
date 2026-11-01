@@ -965,6 +965,15 @@ def collect_outputs(
             pattern_observation = publish_pattern(final_gpx, _read_gpx_records(final_gpx), pattern_path,
                 input_provenance=input_provenance if isinstance(input_provenance, dict) else {}, mode=mode)
             collection_records["tables"].append(file_record(pattern_path, role="table", root=portal))
+            signal_quality = pattern_observation.get("signal_quality") or {}
+            if signal_quality.get("needs_review"):
+                norm = signal_quality.get("total_norm_squared")
+                detail = (f" Total squared signal/error ratio: {norm:.4g} over {signal_quality['point_count']} fitted bins."
+                          if isinstance(norm, (int, float)) else "")
+                scientific_warnings.insert(0, {
+                    "code": "signal_unresolved" if signal_quality.get("unresolved") else "signal_quality_unavailable",
+                    "message": str(signal_quality.get("message") or "Signal quality needs review.") + detail,
+                })
         except Exception as exc:
             scientific_warnings.append({"code": "pattern_observation_unavailable", "message": f"Curve-comparison observation unavailable: {exc}"})
     effective_status = "failed" if status == "failed" else ("complete" if manifest.get("status", status) == "complete" else status)

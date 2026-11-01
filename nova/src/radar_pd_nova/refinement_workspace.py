@@ -253,6 +253,10 @@ class RefinementWorkspace:
             source=self.inspect(source_id);context=source['context']
             planning_context=copy.deepcopy(context)
             planning_context['host_execution']={
+                'starting_result_review':{
+                    'status':source.get('scientific_status') or 'not_assessed',
+                    'warnings':list(source.get('scientific_warnings') or []),
+                    'scope':'These are qualifications of the starting data/model. Generating or executing a recipe does not resolve or remove them.'},
                 'recipe_unit':'One supplied GPX, using only its actual histogram keys',
                 'histogram_keys':[h['key']for h in context['histograms']],
                 'scan_enrollment':'NOVA already manages scan, sample and bank selection outside this project. '
