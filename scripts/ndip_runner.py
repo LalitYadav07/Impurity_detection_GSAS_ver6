@@ -828,6 +828,12 @@ def command_analyze(args: argparse.Namespace) -> int:
             work_root=run_dir,
             mode=mode,
         )
+    if args.db_pack and radiation == 'neutron':
+        from library_fingerprint_guard import validate_custom_neutron_library
+        fingerprint_check = validate_custom_neutron_library(
+            db_root, resolved, original_json=original_json_override)
+        input_doc['custom_isotope_fingerprint_validation'] = fingerprint_check
+        atomic_write_json(portal / 'input_manifest.json', input_doc)
     resolved["instrument_mode"] = instrument_mode
     for dataset in resolved.get("datasets") or []:
         if isinstance(dataset, dict):
