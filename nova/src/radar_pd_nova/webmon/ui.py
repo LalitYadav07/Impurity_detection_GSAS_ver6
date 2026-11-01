@@ -172,8 +172,9 @@ class WebmonMixin:
                         v.VBtn('Analyze updates for this run',click=self.webmon_enable_stream,disabled=('webmon_busy || webmon_stream_active || !webmon_accepted',),variant='outlined')
                         v.VBtn('Pause automatic analysis',click=self.webmon_pause_stream,disabled=('!webmon_stream_active',),variant='text')
                     html.P('{{ webmon_stream_message }}')
-                with v.VExpansionPanel(title='Restore a saved analysis'):
+                with v.VExpansionPanel(title='Review completed analyses in this workspace'):
                     with v.VExpansionPanelText():
+                        html.P('Galaxy retains the result bundles and published GPXs after this container closes. This list shows analyses indexed in the current workspace.')
                         html.P('Reload a completed analysis of this exact scan and reviewed reference without rerunning inference.')
                         v.VSelect(label='Saved analysis',v_model=('webmon_saved_job',),items=('webmon_saved',),item_title='title',item_value='value',density='compact')
                         v.VBtn('Load saved results',click=self.webmon_restore,disabled=('!webmon_saved_job || webmon_busy',),variant='outlined')

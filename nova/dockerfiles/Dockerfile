@@ -25,6 +25,7 @@ COPY help /app/www-content/user-guide/
 RUN python -m pip install --no-cache-dir 'scipy==1.15.3' \
     && python -m pip install --no-cache-dir --no-deps --only-binary=:all: 'h5py==3.13.0' \
     && python -m pip install --no-cache-dir --no-deps 'RapidFuzz==3.14.3' \
+    && python -m pip install --no-cache-dir --no-deps 'galvani==0.5.0' \
     && python -m pip install --no-cache-dir --trusted-host download-r2.pytorch.org \
        'https://download-r2.pytorch.org/whl/cpu/torch-2.5.1%2Bcpu-cp310-cp310-linux_x86_64.whl#sha256=7f91a2200e352745d70e22396bd501448e28350fbdbd8d8b1c83037e25451150' \
     && python -m pip install --no-cache-dir --no-deps /src \

@@ -50,6 +50,22 @@ def test_scope_and_other_run_not_inherits_checkpoint(tmp_path):
     with pytest.raises(ValueError,match='No reviewed'):s.binding('1','3')
 
 
+def test_inventory_cache_detaches_rows_and_detects_new_runs(tmp_path,monkeypatch):
+    root=tmp_path/'SNS';folder=root/'PG3/IPTS-1/shared/livereduce';folder.mkdir(parents=True)
+    (folder/'PG3_1.dat').write_text('snapshot')
+    session=WebmonSession(dict(facility_root=str(root),archive=str(tmp_path/'archive')))
+    original=Path.glob;calls=[]
+    def glob(path,pattern):
+        calls.append((path,pattern));return original(path,pattern)
+    monkeypatch.setattr(Path,'glob',glob)
+    first=session.runs('1');first[0]['sample']='changed by caller'
+    assert session.runs('1')[0]['sample']=='Unknown'
+    assert len(calls)==1
+    (folder/'PG3_2.dat').write_text('next snapshot')
+    assert [r['run'] for r in session.runs('1')]==['2','1']
+    assert len(calls)==2
+
+
 def test_per_site_bound_box_does_not_remove_valid_points():
     forms=np.array([[[1.,0],[0,0]],[[0,0],[0,1.]]]);m=QuadraticObservation(np.zeros(3),np.zeros((2,2,3)),np.zeros(3),np.ones(3),forms,5,7)
     p=m.prior(np.random.default_rng(2),1000);assert m.valid(p).all()

@@ -8,6 +8,34 @@ recovers jobs from the user's Galaxy history, and renders completed artifacts.
 The Full and Rapid paths share one setup form and one Galaxy submission
 contract. Scientific work remains inside the versioned RADAR-PD batch image.
 
+## Version 0.6.0
+
+The existing Results and Transition tracking views remain available. Transition
+tracking adds an optional **U-Net local features** view; the original selected
+indicators and recurring pattern groups remain the default. U-Net suggestions
+describe measured-curve morphology, not proven structural or magnetic causes.
+
+Reviewed refinement adds guided battery recipes, explicit phase corrections,
+multi-bank preparation and finite model portfolios. Mobile-ion occupancies
+remain conditional on the supplied reference and held model parameters. The
+native worker preserves each input GPX and publishes separately verified outputs.
+
+POWGEN **In-progress scans** captures immutable WebMON revisions and supports
+conditional magnetic fits through a separate Galaxy worker. First select a
+published nuclear reference, review the producer mapping, and discover the
+magnetic candidates through Model exploration. Unknown bank, export or
+normalization conventions are not inferred from the GPX alone. Updates remain
+pinned to the reviewed run and replace the likelihood rather than adding
+cumulative scans. Automatic counting/beamline-control recommendations are off.
+The current-workspace review list is separate from durable result bundles and
+GPXs retained in Galaxy History.
+
+All Analyze and utility submissions share a bounded admission check; the
+individual refinement/model concurrency controls still apply. Galaxy determines
+the actual CPU and memory allocation. See
+[`docs/unified_live_refinement.md`](../docs/unified_live_refinement.md) for source
+identity, native-kernel and release contracts.
+
 The **User guide** header button opens the bundled screenshot walkthrough in a
 new tab. The guide is served below the current session path, so opening it does
 not navigate away from the analysis or require a separate documentation server.

@@ -3,12 +3,12 @@
     <requirements><container type="docker">@IMMUTABLE_MODELS_IMAGE@</container></requirements>
     <command detect_errors="exit_code"><![CDATA[
         touch '$result_bundle' '$response_cache_output' '$console_output' &&
-        trap "chmod a+r '$result_bundle' '$response_cache_output' '$console_output' >/dev/null 2>&amp;1 || true" EXIT &&
-        python -m gpx_recipe.live.galaxy_worker '$packet' worker '$result_bundle' '$response_cache_output'
+        trap "chmod a+r '$result_bundle' '$response_cache_output' '$console_output' >/dev/null 2>&1 || true" EXIT &&
+        python -m gpx_recipe.live.galaxy_worker '$packet' worker '$result_bundle' '$response_cache_output' \
         #if $response_cache
-            --cache '$response_cache'
+            --cache '$response_cache' \
         #end if
-        > '$console_output' 2>&amp;1
+        > '$console_output' 2>&1
     ]]></command>
     <inputs>
         <param name="packet" type="data" format="zip" label="Reviewed source, observations and magnetic settings"/>

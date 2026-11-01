@@ -4,7 +4,7 @@ A deployment supplies a context manifest after checkpoint review; it is never
 accepted as an arbitrary browser path. Local acceptance uses the same adapter
 against a bounded mirror. Source files are never modified.
 """
-import csv,hashlib,json,re,copy
+import csv,hashlib,json,re,copy,time,threading
 from pathlib import Path
 from .snapshot import stable_read,parse_live_ascii,SnapshotArchive
 from .contracts import validate_request
@@ -21,6 +21,7 @@ class WebmonSession:
         if 'worker_command' in self.config:validate_config(self.config)
         self.root=Path(self.config['facility_root']).resolve();self.archive=SnapshotArchive(self.config['archive'])
         self.active=None;self.selected_checkpoints={};self.extra_checkpoints={}
+        self._inventory_cache={};self._inventory_lock=threading.RLock()
         self.registry=CheckpointRegistry(self.config['checkpoint_registry']) if self.config.get('checkpoint_registry') else None
         if self.registry:self.extra_checkpoints=self.registry.read()
     def scope(self,ipts):
@@ -31,17 +32,30 @@ class WebmonSession:
         return path
     def runs(self,ipts):
         scope=self.scope(ipts);summary=scope/'shared/autoreduce'/f'PG3_IPTS-{str(ipts).removeprefix("IPTS-")}_runsummary.csv'
+        folder=scope/'shared/livereduce'
+        def stamp(path):
+            try:
+                value=path.stat();return (value.st_mtime_ns,value.st_size)
+            except FileNotFoundError:return None
+        fingerprint=(stamp(summary),stamp(folder))
+        key=str(scope)
+        with self._inventory_lock:
+            cached=self._inventory_cache.get(key)
+            if cached and cached[0]==fingerprint and time.monotonic()-cached[1]<15:
+                return copy.deepcopy(cached[2])
         metadata={}
         if summary.exists():
             with summary.open() as f:metadata={r['RUN']:r for r in csv.DictReader(f)}
         rows=[]
-        for p in sorted((scope/'shared/livereduce').glob('PG3_*.dat'),reverse=True):
+        for p in folder.glob('PG3_*.dat'):
             m=re.fullmatch(r'PG3_(\d+)\.dat',p.name)
             if not m or not p.resolve().is_relative_to(scope):continue
             run=m[1];r=metadata.get(run,{})
             rows.append(dict(run=run,path=str(p),sample_id=r.get('ITEMS-ID',''),sample=r.get('SAMPLE','Unknown'),temperature=r.get('TEMP','Unknown'),wavelength=r.get('WAVELENGTH','Unknown'),final_duration=r.get('DURATION','Unknown'),title=r.get('TITLE',''),value=run,
                 label=f"{run} · {r.get('SAMPLE','Unknown')} · {r.get('TEMP','?')} K · {r.get('WAVELENGTH','?')} Å"))
-        return sorted(rows,key=lambda r:int(r['run']),reverse=True)
+        rows.sort(key=lambda r:int(r['run']),reverse=True)
+        with self._inventory_lock:self._inventory_cache[key]=(fingerprint,time.monotonic(),rows)
+        return copy.deepcopy(rows)
     def capture(self,ipts,run):
         row=next((r for r in self.runs(ipts) if r['run']==str(run)),None)
         if row is None:raise ValueError('Run is not in the selected IPTS')
