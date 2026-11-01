@@ -1,0 +1,39 @@
+<tool id="neutrons_radar_pd_live_snapshot_prototype" name="RADAR-PD Utility: Live Snapshot Analysis" version="0.1.0" profile="22.05">
+    <description>analyze one immutable provisional scan against a reviewed nuclear reference</description>
+    <requirements><container type="docker">@IMMUTABLE_MODELS_IMAGE@</container></requirements>
+    <command detect_errors="exit_code"><![CDATA[
+        touch '$result_bundle' '$response_cache_output' '$console_output' &&
+        trap "chmod a+r '$result_bundle' '$response_cache_output' '$console_output' >/dev/null 2>&amp;1 || true" EXIT &&
+        python -m gpx_recipe.live.galaxy_worker '$packet' worker '$result_bundle' '$response_cache_output'
+        #if $response_cache
+            --cache '$response_cache'
+        #end if
+        > '$console_output' 2>&amp;1
+    ]]></command>
+    <inputs>
+        <param name="packet" type="data" format="zip" label="Reviewed source, observations and magnetic settings"/>
+        <param name="response_cache" type="data" format="zip" optional="true" label="Compatible native response cache"/>
+        <param name="dispatch_key" type="text" label="NOVA dispatch identity">
+            <validator type="regex" message="Use the NOVA-generated dispatch key">^[a-f0-9]{24}$</validator>
+        </param>
+    </inputs>
+    <outputs>
+        <data name="result_bundle" format="zip" label="RADAR-PD live snapshot result bundle"/>
+        <data name="response_cache_output" format="zip" label="RADAR-PD live snapshot response cache"/>
+        <data name="console_output" format="txt" label="RADAR-PD live snapshot console"/>
+        <collection name="verified_projects" type="list" label="Verified conditional live-snapshot GPXs">
+            <discover_datasets pattern="(?P&lt;designation>.+)\.gpx" ext="binary" directory="worker/verified_projects" visible="true"/>
+        </collection>
+    </outputs>
+    <help><![CDATA[
+NOVA captures and reviews the provisional scan and nuclear reference before
+submitting this worker. Cumulative snapshots replace the likelihood; they are
+not added to one another. Cache reuse requires matching observations geometry,
+fixed reference, magnetic settings and scientific implementation.
+
+The result reports conditional uncertainty and sampling diagnostics. It does
+not establish a phase, calibrated stopping decision or a converged conventional
+Rietveld refinement. Published GPXs represent the verified displayed parameter
+values; the original source is preserved. No model API credential is required.
+    ]]></help>
+</tool>

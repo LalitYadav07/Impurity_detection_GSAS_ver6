@@ -81,9 +81,6 @@
     "visual_repeat": 1,
     "train_code_sha256": "f0585bf04b4d4bcd5e44df20b5b64d1b8142faa46d672cd38f3bdf8f8ea0596f"
   },
-  "dataset_path": "/Users/ly6/Documents/ChatGPT/NDIP_Radarpd/benchmarks/luna_pilot/focus_v2/data_pipeline/tensor_v2_definite_v1_v2_and_linked_ecb5dc633343/focus_156_robust_linear.npz",
-  "summary_path": "/Users/ly6/Documents/ChatGPT/NDIP_Radarpd/benchmarks/luna_pilot/focus_v2/data_pipeline/tensor_v2_definite_v1_v2_and_linked_ecb5dc633343/summary_robust_linear.json",
-  "run_path": "/Users/ly6/Documents/ChatGPT/NDIP_Radarpd/benchmarks/luna_pilot/local_unet/runs/focus_v2/mass_definite_v1_v2_and_linked_ecb5dc633343/robust_linear/joint/seed_42",
   "device": "cpu",
   "torch": "2.15.0",
   "parameters": 216044,
@@ -92,5 +89,6 @@
     "feature_types"
   ],
   "feature_type_status": "trained",
-  "epochs_initially_requested": 20
+  "epochs_initially_requested": 20,
+  "source_receipt_sha256": "80ad4bead4bb0b8e0520e036bddcca1ea1682bb21bce3a5f750aae71f472fbfc"
 }
