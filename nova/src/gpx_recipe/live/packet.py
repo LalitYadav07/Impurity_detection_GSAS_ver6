@@ -1,6 +1,6 @@
 """Bounded, portable requests and response caches for isolated live workers."""
 from __future__ import annotations
-import hashlib,json,re,stat,zipfile
+import hashlib,json,re,stat,zipfile,uuid
 from pathlib import Path,PurePosixPath
 from .contracts import file_hash,validate_request
 
@@ -8,9 +8,13 @@ SCHEMA='radar-live-packet/v1'
 INPUTS={'source_gpx':'inputs/source.gpx','catalog':'inputs/catalog.json',
         'preflight':'inputs/preflight.json','observation':'inputs/observation.npz',
         'observation_source':'inputs/source.dat'}
+INPUT_LIMITS={'source_gpx':128*1024*1024,'catalog':4*1024*1024,'preflight':4*1024*1024,
+              'observation':32*1024*1024,'observation_source':64*1024*1024}
 CACHE_FILES={'kernel.json','kernel.npz','magnetic-refinement.gpx'}
 MAX_BYTES=1024*1024*1024
 MAX_FILES=4096
+MAX_CACHE_BYTES=384*1024*1024
+MAX_JSON_BYTES=4*1024*1024
 
 
 def canonical(value):return json.dumps(value,sort_keys=True,separators=(',',':'),allow_nan=False).encode()
@@ -23,40 +27,84 @@ def _member(name):
     return name
 
 
-def _entries(archive):
+def _entries(archive,*,maximum=MAX_BYTES):
     entries=archive.infolist()
-    if len(entries)>MAX_FILES or sum(v.file_size for v in entries)>MAX_BYTES:
+    if len(entries)>MAX_FILES or sum(v.file_size for v in entries)>maximum:
         raise ValueError('Live packet exceeds archive limits')
     names=set()
     for item in entries:
         _member(item.filename)
-        if item.filename in names or item.is_dir() or stat.S_ISLNK(item.external_attr>>16):
+        if item.filename.endswith('.json') and item.file_size>MAX_JSON_BYTES:
+            raise ValueError('Live packet JSON exceeds metadata limit')
+        if (item.filename in names or item.is_dir() or item.flag_bits & 1
+                or stat.S_IFMT(item.external_attr>>16) not in {0,stat.S_IFREG}):
             raise ValueError('Repeated or nonregular live-packet member')
         names.add(item.filename)
     return entries
 
 
-def _zip(path,payload):
-    with zipfile.ZipFile(path,'w',zipfile.ZIP_DEFLATED) as z:
-        for name,data in sorted(payload.items()):
-            info=zipfile.ZipInfo(_member(name),date_time=(1980,1,1,0,0,0));info.compress_type=zipfile.ZIP_DEFLATED
-            info.external_attr=(stat.S_IFREG|0o600)<<16
-            z.writestr(info,data)
+def _read_json(archive,name):
+    if archive.getinfo(name).file_size>MAX_JSON_BYTES:
+        raise ValueError('Live packet JSON exceeds metadata limit')
+    return json.loads(archive.read(name))
+
+
+def _zip(path,payload,expected=None):
+    """Write files incrementally and publish only the completed archive."""
+    path=Path(path);temporary=path.with_name(path.name+'.'+uuid.uuid4().hex+'.partial')
+    try:
+        with zipfile.ZipFile(temporary,'w',zipfile.ZIP_DEFLATED) as z:
+            for name,value in sorted(payload.items()):
+                info=zipfile.ZipInfo(_member(name),date_time=(1980,1,1,0,0,0));info.compress_type=zipfile.ZIP_DEFLATED
+                info.create_system=3;info.external_attr=(stat.S_IFREG|0o600)<<16
+                if isinstance(value,Path):
+                    digest=hashlib.sha256();count=0
+                    with value.open('rb') as source,z.open(info,'w') as target:
+                        for block in iter(lambda:source.read(1024*1024),b''):
+                            count+=len(block)
+                            if count>MAX_BYTES:raise ValueError('Live input grew beyond archive budget')
+                            digest.update(block);target.write(block)
+                    if expected and digest.hexdigest()!=expected[name]:raise ValueError('Live input changed during packing')
+                else:z.writestr(info,value)
+        temporary.replace(path)
+    finally:temporary.unlink(missing_ok=True)
+
+
+def _validate(request):
+    if request.get('action')=='prepare':
+        from .prepare_source import validate_preparation
+        validate_preparation(request)
+    else:validate_request(request)
 
 
 def create_packet(request,destination):
-    validate_request(request)
-    portable=dict(request);payload={}
-    total=sum(Path(request[field]).stat().st_size for field in INPUTS if request.get(field))
-    if total>MAX_BYTES:raise ValueError('Live request exceeds packet limits')
+    portable=dict(request);payload={};hashes={}
     for field,name in INPUTS.items():
         if request.get(field):
-            payload[name]=Path(request[field]).read_bytes();portable[field]=name
-    payload['request.json']=canonical(portable)
-    manifest={'schema':SCHEMA,'files':{name:hashlib.sha256(data).hexdigest() for name,data in payload.items()}}
+            path=Path(request[field])
+            if path.is_symlink() or not path.is_file() or path.stat().st_size>INPUT_LIMITS[field]:
+                raise ValueError('Live input exceeds its file budget: '+field)
+            payload[name]=path;hashes[name]=file_hash(path);portable[field]=name
+    _validate(request)
+    metadata=canonical(portable)
+    if len(metadata)>MAX_JSON_BYTES:raise ValueError('Live request exceeds metadata limit')
+    payload['request.json']=metadata;hashes['request.json']=hashlib.sha256(metadata).hexdigest()
+    manifest={'schema':SCHEMA,'files':hashes}
     packet_id=hashlib.sha256(canonical(manifest)).hexdigest()
-    payload['manifest.json']=canonical(manifest);_zip(destination,payload)
+    payload['manifest.json']=canonical(manifest);_zip(destination,payload,hashes)
     return packet_id
+
+
+def _copy_entry(archive,name,target,checksum):
+    if not isinstance(checksum,str) or not re.fullmatch('[a-f0-9]{64}',checksum):
+        raise ValueError('Invalid live-packet checksum')
+    target.parent.mkdir(parents=True,exist_ok=True)
+    digest=hashlib.sha256()
+    with archive.open(name) as source,target.open('xb') as output:
+        for block in iter(lambda:source.read(1024*1024),b''):
+            digest.update(block);output.write(block)
+    if digest.hexdigest()!=checksum:
+        target.unlink(missing_ok=True);raise ValueError('Live-packet input checksum mismatch')
 
 
 def unpack_packet(archive,directory):
@@ -64,56 +112,81 @@ def unpack_packet(archive,directory):
     if any(root.iterdir()):raise ValueError('Live request requires a fresh working directory')
     with zipfile.ZipFile(archive) as z:
         entries=_entries(z)
-        manifest=json.loads(z.read('manifest.json'))
+        manifest=_read_json(z,'manifest.json')
         if manifest.get('schema')!=SCHEMA:raise ValueError('Unsupported live-packet schema')
         files=manifest.get('files')
         if not isinstance(files,dict) or set(files)|{'manifest.json'}!={v.filename for v in entries}:
             raise ValueError('Live packet is not completely enumerated')
         if set(files)-({'request.json'}|set(INPUTS.values())):raise ValueError('Unexpected live-packet input')
-        payload={}
-        for name,expected in files.items():
-            data=z.read(name)
-            if hashlib.sha256(data).hexdigest()!=expected:raise ValueError('Live-packet input checksum mismatch')
-            payload[name]=data
-    portable=json.loads(payload['request.json'])
-    for field,name in INPUTS.items():
-        if portable.get(field) and (portable[field]!=name or name not in payload):
-            raise ValueError('Live packet contains an unbound input path')
-    for name,data in payload.items():
-        target=root/name;target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes(data)
+        portable=_read_json(z,'request.json')
+        for field,name in INPUTS.items():
+            if portable.get(field) and (portable[field]!=name or name not in files):
+                raise ValueError('Live packet contains an unbound input path')
+            if name in files and z.getinfo(name).file_size>INPUT_LIMITS[field]:
+                raise ValueError('Live input exceeds its file budget: '+field)
+        for name,expected in files.items():_copy_entry(z,name,root/name,expected)
     request=dict(portable)
     for field,name in INPUTS.items():
         if request.get(field):request[field]=str((root/name).resolve())
-    validate_request(request)
+    _validate(request)
     (root/'request.json').write_bytes(canonical(request))
     return request,hashlib.sha256(canonical(manifest)).hexdigest()
 
 
 def pack_cache(directory,destination):
-    root=Path(directory);payload={}
-    for path in sorted((root/'models').glob('*/*')):
-        if path.name not in CACHE_FILES:continue
-        if path.is_symlink() or not path.is_file():raise ValueError('Invalid response cache source')
-        payload[str(path.relative_to(root))]=path.read_bytes()
-    manifest={'schema':'radar-live-cache/v1','files':{n:hashlib.sha256(v).hexdigest() for n,v in payload.items()}}
-    payload['manifest.json']=canonical(manifest);_zip(destination,payload)
+    """Cache whole model groups within budget; omitting cache never drops a fit."""
+    root=Path(directory);payload={};hashes={};omitted=[];total=0
+    for folder in sorted((root/'models').glob('*')):
+        if folder.is_symlink() or not folder.is_dir():raise ValueError('Invalid response cache source')
+        paths=[folder/name for name in sorted(CACHE_FILES)]
+        if any(not p.is_file() or p.is_symlink() for p in paths):
+            omitted.append(folder.name);continue
+        size=sum(p.stat().st_size for p in paths)
+        if (total+size>MAX_CACHE_BYTES or len(payload)+len(paths)>MAX_FILES-1
+                or (folder/'kernel.json').stat().st_size>MAX_JSON_BYTES):
+            omitted.append(folder.name);continue
+        try:
+            from .array_limits import validate_npz
+            validate_npz(folder/'kernel.npz')
+        except (ValueError, OSError, zipfile.BadZipFile):
+            omitted.append(folder.name);continue
+        for path in paths:
+            name=str(path.relative_to(root));payload[name]=path;hashes[name]=file_hash(path)
+        total+=size
+    manifest={'schema':'radar-live-cache/v1','files':hashes,'omitted_models':omitted}
+    payload['manifest.json']=canonical(manifest);_zip(destination,payload,hashes)
 
 
 def unpack_cache(archive,directory):
     root=Path(directory);root.mkdir(parents=True,exist_ok=True)
     with zipfile.ZipFile(archive) as z:
-        entries=_entries(z);manifest=json.loads(z.read('manifest.json'));files=manifest.get('files')
+        entries=_entries(z,maximum=MAX_CACHE_BYTES+MAX_JSON_BYTES);manifest=_read_json(z,'manifest.json');files=manifest.get('files')
         if manifest.get('schema')!='radar-live-cache/v1' or not isinstance(files,dict):raise ValueError('Unsupported live-response cache')
         if set(files)|{'manifest.json'}!={v.filename for v in entries}:raise ValueError('Incomplete live-response cache')
         for name,checksum in files.items():
             parts=PurePosixPath(name).parts
             if len(parts)!=3 or parts[0]!='models' or parts[-1] not in CACHE_FILES or not re.fullmatch('[A-Za-z0-9_-]{1,160}',parts[1]):
                 raise ValueError('Unexpected response-cache file')
-            data=z.read(name)
-            if hashlib.sha256(data).hexdigest()!=checksum:raise ValueError('Live-response cache checksum mismatch')
             path=root/name
             if not path.resolve().is_relative_to(root.resolve()):raise ValueError('Response cache escapes work root')
             if path.exists():raise ValueError('Response cache may not replace existing work')
-            path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(data)
-    # The native worker still verifies candidate/source/kernel/code/runtime/mask
-    # compatibility. A valid archive receipt alone never makes a cache reusable.
+            _copy_entry(z,name,path,checksum)
+            if path.suffix=='.npz':
+                from .array_limits import validate_npz
+                validate_npz(path)
+
+
+def extract_result_archive(archive,directory):
+    """Bound result extraction before any scientific arrays are loaded."""
+    root=Path(directory).resolve();root.mkdir(parents=True,exist_ok=False)
+    with zipfile.ZipFile(archive) as z:
+        entries=_entries(z)
+        for item in entries:
+            target=root/item.filename
+            target.parent.mkdir(parents=True,exist_ok=True)
+            with z.open(item) as source,target.open('xb') as output:
+                for block in iter(lambda:source.read(1024*1024),b''):output.write(block)
+            if target.suffix=='.npz':
+                from .array_limits import validate_npz
+                validate_npz(target)
+    return root

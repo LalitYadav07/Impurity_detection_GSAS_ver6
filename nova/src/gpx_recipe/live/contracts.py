@@ -13,6 +13,9 @@ def file_hash(path):
 
 def validate_request(req,binding=None):
     if not isinstance(req,dict):raise ValueError('A scientific request object is required')
+    for field,maximum in [('source_gpx',128),('catalog',4),('preflight',4),('observation',32),('observation_source',64)]:
+        if req.get(field) and Path(req[field]).stat().st_size>maximum*1024*1024:
+            raise ValueError('Scientific input exceeds its byte budget: '+field)
     for field in ('source_gpx','catalog','preflight'):
         if file_hash(req[field])!=req[field.replace('_gpx','')+'_sha256']:raise ValueError('Scientific input changed: '+field)
     for key,lo,hi,integer in [('particles',64,4096,True),('workers',1,4,True),('maximum_dimensions',1,64,True),('candidate_seconds',.01,600,False),('preparation_timeout_seconds',1,3600,False)]:
@@ -35,7 +38,8 @@ def validate_request(req,binding=None):
         for field in ('source_gpx','source_sha256'):
             if req[field]!=binding[field]:raise ValueError('Request does not match reviewed nuclear preparation')
         if req['source_revision'].split(':')[-1]!=binding['source_dat_sha256'] or req['reference_revision'].split(':')[-1]!=binding['reference_sha256']:raise ValueError('Request revision does not match reviewed inputs')
-        if k!=[Fraction(str(v)) for v in binding['k']] or any(s['form_factor']!=binding['ion'] for s in sites):raise ValueError('Request magnetic assumptions differ from reviewed inputs')
+        expected_forms=binding.get('site_forms') or {s['label']:binding['ion'] for s in sites}
+        if k!=[Fraction(str(v)) for v in binding['k']] or {s['label']:s['form_factor'] for s in sites}!=expected_forms:raise ValueError('Request magnetic assumptions differ from reviewed inputs')
         if upper>binding['maximum_moment']:raise ValueError('Moment bound exceeds reviewed policy')
     excluded=req.get('excluded_parent_space_groups',[])
     if not isinstance(excluded,list) or any(isinstance(v,bool) or not isinstance(v,int) or not 1<=v<=230 for v in excluded):
@@ -52,6 +56,8 @@ def validate_request(req,binding=None):
         for key in ('observation','observation_source'):
             if file_hash(req[key])!=req[key+'_sha256']:raise ValueError('Changed stream observation')
         if req['source_revision'].split(':')[-1]!=req['observation_source_sha256']:raise ValueError('Observation source revision mismatch')
+        from .array_limits import validate_npz
+        validate_npz(req['observation'], observation=True)
         import numpy as np
         with np.load(req['observation'],allow_pickle=False) as a:
             if set(a.files)!={'x','y','sigma','mask'}:raise ValueError('Invalid observation arrays')

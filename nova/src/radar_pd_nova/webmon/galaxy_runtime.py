@@ -1,8 +1,8 @@
 """Durable Galaxy dispatch for provisional scan jobs; no native code in NOVA."""
 from __future__ import annotations
-import hashlib,json,re,time
+import hashlib,json,re,time,uuid
 from pathlib import Path
-from gpx_recipe.live.packet import create_packet,canonical
+from gpx_recipe.live.packet import create_packet,canonical,extract_result_archive
 from gpx_recipe.live.contracts import file_hash
 from ..refinement_runtime import GalaxyRefinementRuntime,RuntimeUnavailable
 
@@ -17,7 +17,6 @@ class GalaxyLiveRuntime(GalaxyRefinementRuntime):
     def call(self,request,directory,*,dispatch_key,on_submitted=None,resume=None,
              cache_dataset_id=None,recover=False,cancel_event=None):
         from ..models import UtilityActionRecord,RunStatus
-        from ..galaxy_service import _extract_results_archive
         if not re.fullmatch('[a-f0-9]{24}',dispatch_key):raise ValueError('A stable live dispatch key is required')
         directory=Path(directory).resolve();directory.mkdir(parents=True,exist_ok=True)
         packet=directory/'request-packet.zip';packet_id=create_packet(request,packet)
@@ -63,7 +62,7 @@ class GalaxyLiveRuntime(GalaxyRefinementRuntime):
         if job.status==RunStatus.ERROR:raise RuntimeError(job.message or 'The live snapshot worker failed')
         if not job.outputs.get('result_bundle'):raise RuntimeError('The live snapshot worker has no result bundle')
         archive=directory/'result.zip';self.service._download_dataset(job.outputs['result_bundle'],archive)
-        output=directory/'result';output.mkdir(exist_ok=True);_extract_results_archive(archive,output)
+        output=extract_result_archive(archive,directory/('result-'+uuid.uuid4().hex))
         transport=json.loads((output/'transport.json').read_text())
         if transport.get('schema')!='radar-live-result/v1' or transport.get('packet_id')!=packet_id:
             raise ValueError('Live worker returned a different packet')

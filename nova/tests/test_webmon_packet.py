@@ -34,12 +34,14 @@ def test_packet_rejects_tampering_traversal_and_symlink(tmp_path):
 
 def test_response_cache_is_exact_and_does_not_overwrite_work(tmp_path):
     first=tmp_path/'first';model=first/'models'/'test';model.mkdir(parents=True)
-    for name in ['kernel.json','kernel.npz','magnetic-refinement.gpx']:(model/name).write_bytes(name.encode())
+    for name in ['kernel.json','magnetic-refinement.gpx']:(model/name).write_bytes(name.encode())
+    import numpy as np
+    np.savez_compressed(model/'kernel.npz',x=np.array([1.,2.]))
     (model/'posterior.npz').write_bytes(b'not cached')
     cache=tmp_path/'cache.zip';pack_cache(first,cache)
     second=tmp_path/'second';unpack_cache(cache,second)
     assert not (second/'models/test/posterior.npz').exists()
-    assert (second/'models/test/kernel.npz').read_bytes()==b'kernel.npz'
+    assert (second/'models/test/kernel.npz').read_bytes()==(model/'kernel.npz').read_bytes()
     with pytest.raises(ValueError,match='replace'):unpack_cache(cache,second)
 
 
