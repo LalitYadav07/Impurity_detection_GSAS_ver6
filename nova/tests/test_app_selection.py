@@ -28,9 +28,20 @@ def test_powgen_sample_selection_invalidates_preflight_and_is_exact():
     assert state.powgen_preflight_ready is False
     assert state.powgen_preflight_details == []
     assert state.powgen_preflight_checked == "Not checked"
+    assert state.powgen_message == state.powgen_preflight_message
     assert app._powgen_processing_ids() == ("00123", "B")
     state.powgen_processing_scope = "all"
     assert app._powgen_processing_ids() is None
+
+
+def test_live_selection_edit_keeps_active_monitor_status():
+    app = RadarPdNovaApp.__new__(RadarPdNovaApp)
+    state = _State(powgen_monitoring=True,
+                   powgen_message="64 completed; watching for new scans.")
+    app.server = SimpleNamespace(state=state)
+    app._powgen_processing_changed()
+    assert state.powgen_message == "64 completed; watching for new scans."
+    assert not state.powgen_preflight_ready
 
 
 def test_live_results_keep_monitor_provenance_when_new_experiment_is_entered():

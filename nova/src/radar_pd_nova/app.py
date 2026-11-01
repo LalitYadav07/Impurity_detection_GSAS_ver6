@@ -4909,6 +4909,8 @@ class RadarPdNovaApp(LiveAssistantMixin, LiveSetupMixin, SetupEditorMixin, PostA
         state.powgen_metadata_resolution = []
         state.powgen_metadata_notices = []
         state.powgen_preflight_message = "Check experiment and inputs after changing the scan, sample, wavelength or bank selection."
+        if not getattr(state, "powgen_monitoring", False):
+            state.powgen_message = state.powgen_preflight_message
         state.flush()
 
     def _hb2a_normalization_changed(self, **_):
