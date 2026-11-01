@@ -409,53 +409,165 @@ class PowgenWatchController:
         self._recent_runs_reconciled = False
         self.refresh_errors: dict[str, str] = {}
         self._retry_checkpoint_pending = False
+        self._retry_submission_allowed = lambda: True
 
     @property
     def interrupted_retries_pending(self):
         return self._retry_checkpoint_pending or any(
-            run.scan_metadata.get('input_retry_intent') for run in self.state.failed.values())
+            (run.scan_metadata.get('input_retry_intent') or run.scan_metadata.get('run_retry_intent'))
+            and not run.scan_metadata.get('retry_deferred_by_stop')
+            for run in self.state.failed.values())
 
     def retry_interrupted_uploads(self, *, request=False):
-        """Explicitly retry proven input failures, retaining both job attempts.
+        """Compatibility name for the explicit failed-run recovery flow."""
+        return self.retry_failed_runs(request=request)
 
-        Save the retirement intent, confirm the old unstarted job is terminal,
-        then save a new idempotency generation before admitting any native POST.
-        A pending checkpoint holds submission rather than duplicating uploads.
+    def retry_failed_runs(self, *, request=False):
+        """Save explicit intent and generation before admitting fresh science.
+
+        Terminal errors retain their jobs and artifacts. Only the separately
+        proven paused-empty-input path may retire an unstarted placeholder.
+        request=False resumes already saved intent; it never enrolls errors.
         """
-        from .live_recovery import failed_input_proof, retire_failed_input
+        from .live_recovery import (RetrySourceChanged, failed_input_proof, failed_run_proof,
+                                    retire_failed_input, validate_retry_source)
+        resumed=0
         if request:
+            for phase in (self.state.failed,self.state.discovered):
+                for key,run in list(phase.items()):
+                    if run.scan_metadata.get('retry_deferred_by_stop'):
+                        metadata=dict(run.scan_metadata);metadata.pop('retry_deferred_by_stop')
+                        phase[key]=replace(run,scan_metadata=metadata)
+                        self._retry_checkpoint_pending=True
+                        resumed+=int(phase is self.state.discovered)
+                        if phase is self.state.discovered:
+                            self._recent_runs_reconciled=False
+            intents = []
             for key,run in list(self.state.failed.items()):
-                if not run.galaxy_job_id or run.scan_metadata.get('input_retry_intent'):
+                if (not run.galaxy_job_id or run.scan_metadata.get('input_retry_intent')
+                        or run.scan_metadata.get('run_retry_intent')):
                     continue
                 generation=run.scan_metadata.get('retry_generation',0)
                 if type(generation) is not int or not 0<=generation<20:
                     continue
-                proof=failed_input_proof(self.service,run.galaxy_job_id)
+                proof=failed_run_proof(self.service,run.galaxy_job_id) or failed_input_proof(self.service,run.galaxy_job_id)
                 if proof:
-                    self.state.failed[key]=replace(run,scan_metadata={**run.scan_metadata,'input_retry_intent':proof})
-                    self._retry_checkpoint_pending=True
+                    intents.append((key,run,proof))
+            for key,run,proof in intents:
+                if self.state.failed.get(key) is not run:
+                    continue
+                field='run_retry_intent' if proof.get('kind')=='terminal_error' else 'input_retry_intent'
+                self.state.failed[key]=replace(run,scan_metadata={**run.scan_metadata,field:proof})
+                self._retry_checkpoint_pending=True
         if not self.interrupted_retries_pending:
             return 0
         self._retry_checkpoint_pending=True
         self.persist_state()
-        retried=0
+        retried=resumed
         for key,run in list(self.state.failed.items()):
-            proof=run.scan_metadata.get('input_retry_intent')
-            if not proof:
+            proof=run.scan_metadata.get('run_retry_intent') or run.scan_metadata.get('input_retry_intent')
+            if not proof or self.state.failed.get(key) is not run:
                 continue
-            retire_failed_input(self.service,proof)
-            metadata=dict(run.scan_metadata);metadata.pop('input_retry_intent')
+            generation=run.scan_metadata.get('retry_generation',0)
+            if type(generation) is not int or not 0<=generation<20:
+                raise RetrySourceChanged('Invalid saved retry generation; review the checkpoint before retrying')
+            if proof.get('kind')=='terminal_error':
+                try:
+                    validate_retry_source(self.service,proof)
+                except RetrySourceChanged as exc:
+                    metadata=dict(run.scan_metadata);metadata.pop('run_retry_intent',None)
+                    metadata['retry_hold']=str(exc)
+                    self.state.failed[key]=replace(run,scan_metadata=metadata)
+                    continue
+            else:
+                retire_failed_input(self.service,proof)
+            if self.state.failed.get(key) is not run:
+                raise RetrySourceChanged('The selected failed run changed while checking its retry; no replacement was submitted')
+            metadata=dict(run.scan_metadata)
+            metadata.pop('input_retry_intent',None);metadata.pop('run_retry_intent',None)
+            metadata.pop('retry_hold',None)
             metadata['retry_generation']=metadata.get('retry_generation',0)+1
             metadata['previous_attempts']=[*metadata.get('previous_attempts',[]),proof]
+            metadata['retry_source_proof']=proof
             self.state.failed.pop(key)
             self.state.discovered[key]=replace(run,galaxy_job_id=None,error=None,
                 galaxy_result_ids=(),scientific_summary={},next_retry_utc=None,
                 submission_attempts=0,scan_metadata=metadata)
             self.records.pop(key,None)
+            self._recent_runs_reconciled=False
             retried+=1
         self.persist_state()
+        # The generation checkpoint itself may wait on Galaxy. Recheck the
+        # old job before allowing this saved generation to reach submission.
+        held=False
+        for run in list(self.state.discovered.values()):
+            proof=run.scan_metadata.get('retry_source_proof')
+            if proof:
+                try:
+                    validate_retry_source(self.service,proof)
+                except RetrySourceChanged as exc:
+                    self.hold_failed_retry(run,str(exc))
+                    held=True
+                    retried=max(0,retried-1)
+        if held:
+            self.persist_state()
         self._retry_checkpoint_pending=False
         return retried
+
+    def pause_failed_run_retries(self):
+        """Stop/End defers unsubmitted retry intent until another explicit click."""
+        changed=False
+        for phase in (self.state.failed,self.state.discovered):
+            for key,run in list(phase.items()):
+                names=(('input_retry_intent','run_retry_intent') if phase is self.state.failed
+                       else ('retry_source_proof',))
+                if any(run.scan_metadata.get(name) for name in names):
+                    phase[key]=replace(run,scan_metadata={**run.scan_metadata,'retry_deferred_by_stop':True})
+                    changed=True
+        if changed:
+            self._retry_checkpoint_pending=False
+        return changed
+
+    def hold_failed_retry(self, run, message):
+        """Keep a revoked retry out of automatic submission and keep its past."""
+        current=self.state.discovered.get(run.run_id)
+        if current is None or current.fingerprint!=run.fingerprint:
+            return
+        metadata=dict(current.scan_metadata)
+        proof=metadata.pop('retry_source_proof',None)
+        if not proof:
+            return
+        metadata['retry_hold']=message
+        self.state.discovered.pop(run.run_id)
+        self.state.failed[run.run_id]=replace(current,galaxy_job_id=proof['job_id'],
+            error=message,scan_metadata=metadata,galaxy_result_ids=tuple(proof.get('outputs',{}).values()))
+
+    def _validate_retry_submission(self, run):
+        from .live_recovery import RetrySourceChanged, validate_retry_source
+        proof=run.scan_metadata.get('retry_source_proof')
+        if not proof:
+            return
+        def current():
+            known=self.state.discovered.get(run.run_id)
+            return (known is not None and known.fingerprint==run.fingerprint and known.source_path==run.source_path
+                    and known.scan_metadata.get('retry_generation')==run.scan_metadata.get('retry_generation')
+                    and known.scan_metadata.get('retry_source_proof')==proof
+                    and not known.scan_metadata.get('source_revision_warning')
+                    and not known.scan_metadata.get('setup_error')
+                    and not known.scan_metadata.get('retry_deferred_by_stop')
+                    and not self.interrupted_retries_pending and self._retry_submission_allowed())
+        if not current():
+            raise RetrySourceChanged('This explicit retry is no longer active or its checkpoint is pending; no fresh analysis was submitted')
+        if proof.get('kind')=='terminal_error' and not self._recent_runs_reconciled:
+            raise RetrySourceChanged('The saved retry generation has not reconciled with Galaxy; no fresh analysis was submitted')
+        validate_retry_source(self.service,proof)
+        if not current():
+            raise RetrySourceChanged('The Live session or retry changed while checking; no fresh analysis was submitted')
+
+    def _submit_live_snapshot(self, run, snapshot):
+        if not run.scan_metadata.get('retry_source_proof'):
+            return self.service.submit_snapshot(snapshot)
+        return self.service.submit_snapshot(snapshot,before_submit=lambda:self._validate_retry_submission(run))
 
     def restore_latest_state(self) -> bool:
         """Recover the newest matching checkpoint and acknowledged Galaxy jobs.
@@ -828,8 +940,11 @@ class PowgenWatchController:
         available = max(0, self.settings.max_active_jobs - len(self.state.submitted) - len(reserved))
         ready = [run for run in self.state.retryable_runs()
                  if run.run_id not in reserved
+                 and not run.scan_metadata.get('retry_deferred_by_stop')
                  and not run.scan_metadata.get("setup_error")
-                 and not run.scan_metadata.get("source_revision_warning")]
+                 and not run.scan_metadata.get("source_revision_warning")
+                 and not (run.scan_metadata.get('retry_source_proof',{}).get('kind')=='terminal_error'
+                          and not self._recent_runs_reconciled)]
         return ready[:available]
 
     def defer_submission(
@@ -975,7 +1090,7 @@ class PowgenWatchController:
             output_profile="monitor",
             prepared_dataset_ids={"configuration": self.settings.configuration_dataset_id},
         )
-        record = self.service.submit_snapshot(snapshot)
+        record = self._submit_live_snapshot(run,snapshot)
         if not record.galaxy_job_id:
             raise RuntimeError(f"Galaxy did not acknowledge {run.run_id}")
         record.provenance["powgen_bank"] = bank_provenance

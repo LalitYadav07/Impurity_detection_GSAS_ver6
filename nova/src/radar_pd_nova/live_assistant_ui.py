@@ -98,6 +98,7 @@ class LiveAssistantUi:
             with html.Details(classes="radar-assistant-help"):
                 html.Summary("What can I ask?")
                 html.P("Reply with a beamline/IPTS, sample name, displayed sample option number, element list, or analysis goal. Ask what a setting means, say back or undo, or change an earlier choice. Spelling suggestions need confirmation; identifier digits and bank mappings are never guessed.")
+                html.P("Copy the exact sample ID and bank number from the discovered list, or say 'Full analysis; one discovery round'. The discovery count is a maximum per-pattern limit; it does not start analysis. Give a new beamline/IPTS first and find its samples before selecting them. Use Edit advanced Live settings for other budgets, refinement constraints and result plots.")
                 with html.Div(classes="radar-assistant-actions"):
                     for topic in HELP:
                         vuetify.VBtn(topic.capitalize(), click=(self.start_live_assistant_send, f"['why {topic}']"),
@@ -213,7 +214,8 @@ class LiveAssistantUi:
                             html.P(description)
                             vuetify.VBtn("Apply " + goal, click=(self.live_assistant_goal, f"['{goal}']"),
                                          variant="outlined", size="small", disabled=(LOCK,))
-                html.P("Current: {{ live_analysis_mode === 'full' ? 'Full / ' + live_full_profile : 'Rapid / ' + live_rapid_phases_per_hypothesis + ' candidate phases per hypothesis' }}. Continue to keep these settings.", classes="radar-help-copy")
+                html.P("Current: {{ live_analysis_mode === 'full' ? 'Full / ' + live_full_profile + (live_full_profile === 'custom' ? ' / up to ' + live_full_max_passes + ' discovery rounds per pattern' : '') : 'Rapid / ' + live_rapid_phases_per_hypothesis + ' candidate phases per hypothesis' }}. Continue to keep these settings.", classes="radar-help-copy")
+                html.P("You can reply 'Full analysis; one discovery round' to keep the other search settings and set the maximum per-pattern discovery count. This does not start analysis; Start monitoring remains a separate action.", classes="radar-help-copy")
                 with html.Div(v_show="live_analysis_mode === 'rapid'", classes="radar-field-pair"):
                     self._number_field(label="Candidate phases per hypothesis", v_model=("live_rapid_phases_per_hypothesis",), density="compact", variant="outlined", disabled=(LOCK,))
                     self._number_field(label="Number of final refinements", v_model=("live_rapid_gsas_validation_limit",), density="compact", variant="outlined", disabled=(LOCK,))

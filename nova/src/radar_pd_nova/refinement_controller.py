@@ -322,6 +322,7 @@ class RefinementMixin(GuidedRefinementMixin):
         self.server.state.change('rf_experiment')(self._refinement_experiment_changed)
         self.server.state.change('rf_scope','rf_samples','rf_scans','rf_banks','rf_existing','rf_future')(self._refinement_scope_changed)
         self.server.state.change('rf_source')(self._refinement_source_changed)
+        self.server.state.change('rf_selected_job')(self._refinement_selection_changed)
         self.server.state.change('rf_request')(self._refinement_request_changed)
         self.server.state.change('rf_setup_mode')(self._refinement_setup_changed)
         self.server.state.change('rf_stage','rf_histogram','rf_axis','rf_display','rf_zoom')(self._refinement_plot_changed)
@@ -516,6 +517,7 @@ class RefinementMixin(GuidedRefinementMixin):
     def _refinement_experiment_changed(self,**_):
         if self._refinement_internal:return
         s=self.server.state;w=self._refinement_workspace
+        self._clear_refinement_output(clear_trends=True)
         draft=(w.state['drafts'].get(s.rf_experiment) if w else None) or {}
         recipe=(w.state['recipes'].get(draft.get('approved_recipe')) if w else None) or {}
         if draft:s.rf_setup_mode='guided' if draft.get('guided') else 'expert'
@@ -525,6 +527,21 @@ class RefinementMixin(GuidedRefinementMixin):
         s.rf_existing=recipe.get('existing',True);s.rf_future=recipe.get('future',False);s.rf_selected_job='';s.rf_recipe_filter='all'
         if s.rf_mode!='models' and w and any(j['source']['experiment']==s.rf_experiment for j in w.state['jobs'].values()):s.rf_mode='results'
         self._refinement_sync()
+
+    def _clear_refinement_output(self,*,clear_trends=False):
+        """Release visible output ownership, retaining saved jobs and view caches."""
+        defaults=self._refinement_state_defaults()
+        fields=('rf_selected_job','rf_selected_title','rf_selected_message','rf_has_output',
+            'rf_output_provenance','rf_parameters','rf_parameter_warnings','rf_convergence_notice',
+            'rf_exposure_notice','rf_stages','rf_stage','rf_histograms','rf_histogram',
+            'rf_downloads','rf_download','rf_rwp_summary','rf_fit_notice','rf_fit',
+            'rf_can_open_gsas','rf_open_gsas_label','rf_expanded')
+        if clear_trends:
+            fields+=('rf_trend','rf_trend_notice','rf_trend_metrics','rf_trend_axes')
+        for name in fields:setattr(self.server.state,name,copy.deepcopy(defaults[name]))
+
+    def _refinement_selection_changed(self,**_):
+        if not self.server.state.rf_selected_job:self._clear_refinement_output()
 
     def _refinement_scope(self):
         s=self.server.state
@@ -629,7 +646,9 @@ class RefinementMixin(GuidedRefinementMixin):
 
     def _refinement_sync(self):
         w=self._refinement_workspace;s=self.server.state
-        if not w or not s.rf_experiment:return
+        if not w or not s.rf_experiment:
+            self._clear_refinement_output(clear_trends=True)
+            return
         w.lock.acquire()
         self._refinement_internal=True
         try:
@@ -664,6 +683,7 @@ class RefinementMixin(GuidedRefinementMixin):
             active=[r for r in recipes if r.get('armed')]
             s.rf_active_summary=('Active recipe '+', '.join(str(r['version']) for r in active)+' continues to enroll matching future results. Approving the current form captures its available scans separately.') if active else ''
             jobs=[j for j in w.state['jobs'].values() if j['source']['experiment']==s.rf_experiment]
+            if s.rf_selected_job not in {j['id'] for j in jobs}:self._clear_refinement_output()
             jobs.sort(key=lambda j:(j['source'].get('run_number') or 0,j['queued_utc']),reverse=True)
             version={r['id']:r['version'] for r in recipes}
             s.rf_jobs=[dict(id=j['id'],scan=j['source']['scan_label'],sample=j['source']['sample_label'],bank=j['source'].get('bank'),status=j['status'],message=j['message'],recipe=', '.join(str(version.get(rid,'?')) for rid in j['recipes']),recipe_id=j['recipe_id'],recipe_ids=j['recipes'],has_output=bool((j.get('result') or {}).get('final_view') or (j.get('result') or {}).get('stages'))) for j in jobs]
@@ -884,6 +904,9 @@ class RefinementMixin(GuidedRefinementMixin):
 
     async def _select_refinement_job(self,uid):
         s=self.server.state;w=self._refinement_workspace
+        if not uid:
+            self._clear_refinement_output();s.flush();return
+        if w is None:return
         job=w.state['jobs'].get(uid)
         if not job or job['source']['experiment']!=s.rf_experiment:return
         experiment=s.rf_experiment
@@ -936,7 +959,8 @@ class RefinementMixin(GuidedRefinementMixin):
         s=self.server.state;w=self._refinement_workspace
         if not w or not s.rf_has_output:return
         job=w.state['jobs'].get(s.rf_selected_job)
-        if not job:return
+        if not job or job['source']['experiment']!=s.rf_experiment:
+            self._clear_refinement_output();return
         try:
             result=job['result'];name=result.get('final_view') if s.rf_stage=='final' else next((v['view'] for v in result.get('stages',[]) if v['id']==s.rf_stage),None)
             if not name:return

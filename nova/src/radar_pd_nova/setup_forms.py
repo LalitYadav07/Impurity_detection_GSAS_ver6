@@ -126,6 +126,81 @@ CONFIG_FORM_FIELDS = (
 )
 
 
+_FULL_PROFILE_SETTINGS: dict[str, dict[str, Any]] = {
+    "quick": {
+        "full_max_passes": 1,
+        "full_min_phase_percent": 1.0,
+        "full_top_n_ml": 12,
+        "full_nudge_candidates": 3,
+        "full_nudge_samples": 800,
+        "full_nudge_representatives": 10,
+        "full_compare_candidates": 1,
+        "full_compare_cycles": 4,
+        "full_cell_length_tolerance_pct": 0.6,
+        "full_cell_angle_tolerance_deg": 1.5,
+        "full_rwp_improvement_threshold": 0.12,
+        "full_dedup_threshold": 0.95,
+        "full_score_q_max": 8.0,
+        "full_pearson_cell_min_r": 0.50,
+        "full_lattice_tiebreak_score_tol": 0.0005,
+        "full_candidate_pruning": True,
+        "full_knee_min_points_hist": 5,
+        "full_knee_min_relative_span": 0.03,
+        "full_knee_keep_if_no_knee": 1,
+        "full_knee_keep_at_most": 3,
+    },
+    "balanced": {
+        "full_max_passes": 2,
+        "full_min_phase_percent": 0.5,
+        "full_top_n_ml": 35,
+        "full_nudge_candidates": 7,
+        "full_nudge_samples": 5000,
+        "full_nudge_representatives": 50,
+        "full_compare_candidates": 2,
+        "full_compare_cycles": 6,
+        "full_cell_length_tolerance_pct": 1.0,
+        "full_cell_angle_tolerance_deg": 3.0,
+        "full_rwp_improvement_threshold": 0.06,
+        "full_dedup_threshold": 0.95,
+        "full_score_q_max": 8.0,
+        "full_pearson_cell_min_r": 0.50,
+        "full_lattice_tiebreak_score_tol": 0.0005,
+        "full_candidate_pruning": True,
+        "full_knee_min_points_hist": 5,
+        "full_knee_min_relative_span": 0.03,
+        "full_knee_keep_if_no_knee": 2,
+        "full_knee_keep_at_most": 5,
+    },
+    "thorough": {
+        "full_max_passes": 3,
+        "full_min_phase_percent": 0.25,
+        "full_top_n_ml": 75,
+        "full_nudge_candidates": 12,
+        "full_nudge_samples": 20000,
+        "full_nudge_representatives": 150,
+        "full_compare_candidates": 3,
+        "full_compare_cycles": 8,
+        "full_cell_length_tolerance_pct": 2.0,
+        "full_cell_angle_tolerance_deg": 5.0,
+        "full_rwp_improvement_threshold": 0.0,
+        "full_dedup_threshold": 0.95,
+        "full_score_q_max": 8.0,
+        "full_pearson_cell_min_r": 0.10,
+        "full_lattice_tiebreak_score_tol": 0.0005,
+        "full_candidate_pruning": True,
+        "full_knee_min_points_hist": 5,
+        "full_knee_min_relative_span": 0.03,
+        "full_knee_keep_if_no_knee": 0,
+        "full_knee_keep_at_most": 10,
+    },
+}
+
+
+def full_profile_settings(profile: str) -> dict[str, Any]:
+    """Copy an existing Full preset without validating an incomplete draft."""
+    return deepcopy(_FULL_PROFILE_SETTINGS.get(profile, {}))
+
+
 def configuration_from_form(state: Any) -> AnalysisConfig:
     run_name = str(state.run_name or "").strip()
     fit_start = _optional_float(state.fit_start)
@@ -140,74 +215,6 @@ def configuration_from_form(state: Any) -> AnalysisConfig:
         )
         or (state.main_cif_source == "ipts" and bool(state.facility_main_cif_path))
     )
-    presets: dict[str, dict[str, Any]] = {
-        "quick": {
-            "full_max_passes": 1,
-            "full_min_phase_percent": 1.0,
-            "full_top_n_ml": 12,
-            "full_nudge_candidates": 3,
-            "full_nudge_samples": 800,
-            "full_nudge_representatives": 10,
-            "full_compare_candidates": 1,
-            "full_compare_cycles": 4,
-            "full_cell_length_tolerance_pct": 0.6,
-            "full_cell_angle_tolerance_deg": 1.5,
-            "full_rwp_improvement_threshold": 0.12,
-            "full_dedup_threshold": 0.95,
-            "full_score_q_max": 8.0,
-            "full_pearson_cell_min_r": 0.50,
-            "full_lattice_tiebreak_score_tol": 0.0005,
-            "full_candidate_pruning": True,
-            "full_knee_min_points_hist": 5,
-            "full_knee_min_relative_span": 0.03,
-            "full_knee_keep_if_no_knee": 1,
-            "full_knee_keep_at_most": 3,
-        },
-        "balanced": {
-            "full_max_passes": 2,
-            "full_min_phase_percent": 0.5,
-            "full_top_n_ml": 35,
-            "full_nudge_candidates": 7,
-            "full_nudge_samples": 5000,
-            "full_nudge_representatives": 50,
-            "full_compare_candidates": 2,
-            "full_compare_cycles": 6,
-            "full_cell_length_tolerance_pct": 1.0,
-            "full_cell_angle_tolerance_deg": 3.0,
-            "full_rwp_improvement_threshold": 0.06,
-            "full_dedup_threshold": 0.95,
-            "full_score_q_max": 8.0,
-            "full_pearson_cell_min_r": 0.50,
-            "full_lattice_tiebreak_score_tol": 0.0005,
-            "full_candidate_pruning": True,
-            "full_knee_min_points_hist": 5,
-            "full_knee_min_relative_span": 0.03,
-            "full_knee_keep_if_no_knee": 2,
-            "full_knee_keep_at_most": 5,
-        },
-        "thorough": {
-            "full_max_passes": 3,
-            "full_min_phase_percent": 0.25,
-            "full_top_n_ml": 75,
-            "full_nudge_candidates": 12,
-            "full_nudge_samples": 20000,
-            "full_nudge_representatives": 150,
-            "full_compare_candidates": 3,
-            "full_compare_cycles": 8,
-            "full_cell_length_tolerance_pct": 2.0,
-            "full_cell_angle_tolerance_deg": 5.0,
-            "full_rwp_improvement_threshold": 0.0,
-            "full_dedup_threshold": 0.95,
-            "full_score_q_max": 8.0,
-            "full_pearson_cell_min_r": 0.10,
-            "full_lattice_tiebreak_score_tol": 0.0005,
-            "full_candidate_pruning": True,
-            "full_knee_min_points_hist": 5,
-            "full_knee_min_relative_span": 0.03,
-            "full_knee_keep_if_no_knee": 0,
-            "full_knee_keep_at_most": 10,
-        },
-    }
     values: dict[str, Any] = {
         "mode": state.analysis_mode,
         "radiation": state.radiation,
@@ -298,8 +305,8 @@ def configuration_from_form(state: Any) -> AnalysisConfig:
         "post_analysis": state.post_analysis,
         "scan_interpretation": state.scan_interpretation,
     }
-    if state.analysis_mode == "full" and state.full_profile in presets:
-        values.update(presets[state.full_profile])
+    if state.analysis_mode == "full":
+        values.update(full_profile_settings(state.full_profile))
     if run_name:
         values["run_name"] = run_name
     return AnalysisConfig(**values)

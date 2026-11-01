@@ -1339,7 +1339,9 @@ def test_refinement_outputs_are_not_reusable_candidate_libraries() -> None:
 
 def test_refinement_console_is_not_a_diffraction_input():
     for name in ('RADAR-PD refinement console',
-                 'RADAR-PD RADAR-PD refinement console | output.txt'):
+                 'RADAR-PD RADAR-PD refinement console | output.txt',
+                 'RADAR-PD model ' + 'a' * 24 + ' console',
+                 'RADAR-PD RADAR-PD model ' + 'a' * 24 + ' console | output.txt'):
         assert GalaxyService._dataset_scientific_role({'name': name, 'extension': 'txt'}) == ('other', True)
     assert GalaxyService._dataset_scientific_role(
         {'name': 'refinement console experiment.txt', 'extension': 'txt'}

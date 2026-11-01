@@ -14,7 +14,7 @@ import threading
 import uuid
 from dataclasses import asdict
 from copy import deepcopy
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -285,10 +285,13 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         self._history_search_task: asyncio.Task[None] | None = None
         self._powgen_controller: PowgenWatchController | None = None
         self._powgen_monitor_task: asyncio.Task[None] | None = None
+        self._powgen_stopped_refresh_task: asyncio.Task[None] | None = None
         self._powgen_wake_event = asyncio.Event()
         self._powgen_settings_signature: tuple[str, ...] | None = None
         self._powgen_sample_indexes: dict[str, PowgenSampleIndex] = {}
         self._opening_run_uid: str | None = None
+        self._result_context = object()
+        self._result_publications: dict[tuple, tuple[threading.Lock, dict[str, Any]]] = {}
         self._plot_widget: Any | None = None
         self._primary_plot_widget: Any | None = None
         self._powgen_phase_widget: Any | None = None
@@ -622,6 +625,8 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         state.powgen_retry_requested = False
         state.powgen_retry_busy = False
         state.powgen_failed_count = 0
+        state.powgen_results_refresh_available = False
+        state.powgen_results_refresh_busy = False
         state.live_beamline = "PG3"
         state.nomad_physical_bank = None
         state.snap_product_family = ""
@@ -1048,6 +1053,16 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         self._monitor_tasks.clear()
         self._utility_tasks.clear()
         self._monitored_uids.clear()
+        self._result_open_owner = None
+        self._result_context = object()
+        self._result_publications = {}
+        self._opening_run_uid = None
+        getattr(self, "_history_result_requests", {}).clear()
+        getattr(self, "_history_result_request_options", {}).clear()
+        # Active reads finish without touching the cleared workspace. Their
+        # completion callbacks release the last retained transfer references.
+        for uid, entry in tuple(getattr(self, "_history_result_downloads", {}).items()):
+            self._prune_history_result_download(uid, entry)
         self.records.clear()
         self.utility_actions.clear()
         if hasattr(self, "_battery_inventory"):
@@ -1086,6 +1101,9 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         }.items():
             setattr(state, name, value)
         self._reset_result_state()
+        self._post_analysis_scope_states.clear()
+        self._post_analysis_scope = ""
+        self._post_analysis_scope_owner = None
         self._post_analysis_scans = []
         self._post_analysis_result = {"views": []}
         state.post_analysis_panels = []
@@ -1486,7 +1504,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
 
     def _setup_page(self) -> None:
         vuetify.VBtn("Guided Live setup", v_show="workflow_mode === 'powgen'", click=self.open_live_assistant,
-                      prepend_icon="mdi-message-text-outline", disabled=("powgen_monitoring || live_launch_busy",),
+                      prepend_icon="mdi-message-text-outline", disabled=("powgen_monitoring || live_launch_busy || live_library_builder_active",),
                       color="#15543c", variant="outlined", block=True, classes="mb-3")
         html.Div("SETUP", classes="radar-rail-kicker")
         html.H2("Configure analysis", classes="radar-rail-heading")
@@ -1914,24 +1932,29 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                         disabled=("powgen_monitoring || live_launch_busy",),
                     )
                     vuetify.VBtn(
-                        "Refresh now",
+                        text=("powgen_monitoring ? 'Refresh now' : 'Refresh results'",),
                         click=self.refresh_powgen_monitor_now,
                         prepend_icon="mdi-refresh",
                         variant="text",
                         size="small",
-                        disabled=("!powgen_monitoring",),
+                        disabled=("(!powgen_monitoring && !powgen_results_refresh_available) || live_launch_busy || powgen_results_refresh_busy",),
+                        loading=("powgen_results_refresh_busy",),
                     )
                     vuetify.VBtn(
-                        "Retry failed uploads",
+                        "Retry failed runs",
                         v_if="powgen_failed_count > 0",
-                        click=self.retry_powgen_interrupted_uploads,
+                        click=self.retry_powgen_failed_runs,
                         prepend_icon="mdi-upload-refresh-outline",
                         variant="outlined", size="small",
                         disabled=("!powgen_monitoring || powgen_retry_busy || powgen_retry_requested",),
                         loading=("powgen_retry_busy",),
                     )
-                html.P("Retry re-stages failed empty input uploads after confirming that no refinement received a runner. The earlier attempt stays in History.",
+                html.P("Retry starts fresh analyses for eligible terminal errors; review existing outputs first because the earlier analysis may have run. Proven empty-upload failures are repaired separately. Earlier jobs and artifacts stay in History. No running, queued, successful or cancelled job is retried.",
                     v_if="powgen_failed_count > 0", classes="radar-help-copy")
+                html.P("Start monitoring to enable Retry failed runs for this watch. Refresh results keeps monitoring stopped.",
+                    v_if="powgen_failed_count > 0 && !powgen_monitoring", classes="radar-help-copy")
+                html.P("While stopped, Refresh results reads existing jobs and observations without discovering or submitting scans. Monitoring stays stopped.",
+                    v_if="!powgen_monitoring && powgen_results_refresh_available", classes="radar-help-copy")
                 vuetify.VBtn(
                     "Open experiment dashboard",
                     v_show="powgen_rows.length",
@@ -4241,11 +4264,14 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
             draft_ipts != ipts or draft_instrument != instrument or
             (getattr(state, "powgen_source_subfolder", None) or "shared/autoreduce") != getattr(settings, "subfolder", "shared/autoreduce")))
 
-    def _sync_powgen_rows(self) -> None:
+    def _sync_powgen_rows(self, *, refresh_dependents=True) -> None:
         """Project controller lifecycle state into compact user-facing rows."""
 
         self._sync_powgen_dashboard_provenance()
         controller = self._powgen_controller
+        self.server.state.powgen_results_refresh_available = controller is not None
+        if str(getattr(self.server.state, "workspace_view", "")) == "experiment":
+            self._activate_watch_post_analysis(controller)
         self.server.state.powgen_failed_count = len(controller.state.failed) if controller else 0
         if controller is None:
             self._interpretation_all_watch_scans = []
@@ -4522,7 +4548,8 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                 for phase in row["phases"][:3]
             ) or "No refined phase fractions"
         state.powgen_all_scientific_rows = scientific_rows
-        self._refinement_maybe_refresh()
+        if refresh_dependents:
+            self._refinement_maybe_refresh()
         sample_labels = {
             str(row["sample_key"]): str(row["sample_label"])
             for row in scientific_rows
@@ -4682,18 +4709,8 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
             ]
             if controller is not None else []
         )
-        scope = "watch:" + (controller.source_directory if controller is not None else "none")
-        if str(getattr(self.server.state, "workspace_view", "")) != "results":
-            if getattr(self, "_post_analysis_scope", None) != scope:
-                from .scan_interpretation import InterpretationSettings
-                self.server.state.scan_interpretation = InterpretationSettings.model_validate(
-                    controller.state.scan_interpretation if controller is not None else {}
-                ).model_dump(mode="json")
-                if controller is not None and controller.state.post_analysis:
-                    self._set_post_settings(
-                        PostAnalysisSettings.model_validate(controller.state.post_analysis)
-                    )
-                self._post_analysis_scope = scope
+        if str(getattr(self.server.state, "workspace_view", "")) == "experiment":
+            self._activate_watch_post_analysis(controller)
             self._refresh_post_analysis(rows, pending=pending)
         x_key = str(self.server.state.powgen_x_axis or "run_number")
         selected_labels = [str(label) for label in (self.server.state.powgen_selected_phase_labels or [])]
@@ -4854,20 +4871,37 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
             state.selected_result_load_error = 'This scan is not available in the current monitor.'
             state.flush()
             return
-        if self._opening_run_uid is not None:
+        if self._opening_run_uid == record.uid and state.selected_run_uid == record.uid:
             return
+        service = self.service
+        context = self._result_context
+        self.records[record.uid] = record
+        self._select_record(record)
+        owner = self._result_open_owner = object()
         self._opening_run_uid = record.uid
         state.selected_run_loading = True
         state.selected_result_load_error = ''
         state.selected_result_load_message = f'Opening {record.name}: checking its published result…'
+        state.workspace_view = 'experiment'
+        state.setup_collapsed = True
         state.flush()
+        expected = record
+        identity = self._result_source_identity(record)
+        def owns_selection():
+            return self._result_open_current(owner, expected, service, identity, controller, run_id, context=context)
         try:
             if record.status != RunStatus.OK or not record.output_dataset_ids:
-                record = await asyncio.to_thread(self.service.refresh, record)
+                record = await asyncio.to_thread(service.refresh, record.model_copy(deep=True))
+                if not owns_selection():
+                    return
+                record = self._merge_refreshed_result(record, self.records[record.uid])
+                self.records[record.uid] = expected = record
                 controller.records[run_id] = record
+                identity = self._result_source_identity(record)
             if record.status != RunStatus.OK:
                 raise RuntimeError(f'Galaxy reports {record.status.value}; the completed result is not available yet')
-            self.records[record.uid] = record
+            if not owns_selection() or state.workspace_view != 'experiment':
+                return
             self._select_record(record)
             self._reset_result_state()
             # Keep the completed-scan dashboard visible until collection has
@@ -4876,26 +4910,28 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
             state.workspace_view = 'experiment'
             state.selected_result_load_message = f'Opening {record.name}: downloading fit plots and saved projects…'
             state.flush()
-            if not record.output_dir:
-                record = await asyncio.to_thread(self.service.collect_results, record)
-                record = await asyncio.to_thread(self._publish_results_if_requested, record)
-            if not record.output_dir:
-                raise RuntimeError(record.message or 'Galaxy result collection is not ready; try opening this scan again')
-            self.records[record.uid] = record
-            controller.records[run_id] = record
-            self._select_record(record)
-            self._sync_runs()
-            self._load_results(record)
-            state.active_page = 'results'
-            state.workspace_view = 'results'
-            state.setup_collapsed = True
+            async with self._shared_result_read(record, record.model_copy(deep=True), service, context=context) as loaded:
+                if loaded is not None:
+                    identity = self._completed_result_identity(expected, loaded, service, identity, context)
+                if loaded is None or not owns_selection():
+                    return
+                loaded = self._cache_result_record(expected, loaded, service, identity, context)
+                if loaded is None:
+                    return
+                self.records[loaded.uid] = expected = loaded
+                identity = self._result_source_identity(loaded)
+                self._sync_runs()
+                if state.workspace_view != 'experiment':
+                    return
+                self._select_record(loaded)
+                self._load_results(loaded)
+                state.active_page = 'results'
+                state.workspace_view = 'results'
         except Exception as exc:
-            state.selected_result_load_error = f'Could not open {record.name}: {exc}'
-            state.workspace_view = 'experiment'
+            if owns_selection() and state.workspace_view == 'experiment':
+                state.selected_result_load_error = f'Could not open {record.name}: {exc}'
         finally:
-            state.selected_run_loading = False
-            self._opening_run_uid = None
-            state.flush()
+            self._finish_result_open(owner, record.uid)
 
     def _refresh_transition_tracking(self, scans, pending=()):
         """Keep boundary tracking authoritative; U-Net runs only on request."""
@@ -5704,6 +5740,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
 
         state = self.server.state
         state.powgen_monitoring = False
+        state.powgen_retry_requested = False
         self.webmon_pause_stream()
         task = self._powgen_monitor_task
         if task is not None and not task.done():
@@ -5719,27 +5756,82 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         state.flush()
 
     def refresh_powgen_monitor_now(self, **_: Any) -> None:
-        """Wake the monitor without restarting it or duplicating its checkpoint."""
+        """Wake an active monitor, or only refresh existing results while stopped."""
 
         state = self.server.state
-        if not state.powgen_monitoring:
+        if state.powgen_monitoring:
+            state.powgen_next_check = "Now"
+            state.powgen_message = f"Refresh requested; checking the {self._live_adapter().name} source and Galaxy jobs now."
+            self._powgen_wake_event.set()
+            state.flush()
             return
-        state.powgen_next_check = "Now"
-        state.powgen_message = f"Refresh requested; checking the {self._live_adapter().name} source and Galaxy jobs now."
-        self._powgen_wake_event.set()
+        current_task = getattr(self, '_powgen_stopped_refresh_task', None)
+        monitor_task = getattr(self, '_powgen_monitor_task', None)
+        controller, service, context = self._powgen_controller, self.service, self._result_context
+        if (controller is None or state.live_launch_busy
+                or (current_task is not None and not current_task.done())
+                or (monitor_task is not None and not monitor_task.done())
+                or getattr(state, 'workspace_clearing', False) or getattr(state, 'session_closing', False)):
+            return
+        state.powgen_results_refresh_busy = True
+        state.live_launch_busy = True  # Starting a new watch must wait for this read.
+        state.powgen_message = 'Refreshing existing jobs and observations; monitoring remains stopped...'
         state.flush()
+        self._powgen_stopped_refresh_task = asyncio.create_task(self._refresh_stopped_powgen_results(
+            controller, service, context))
+
+    async def _refresh_stopped_powgen_results(self, controller, service, context) -> None:
+        state = self.server.state
+        def current():
+            return (controller is self._powgen_controller and service is self.service
+                    and context is self._result_context and not state.powgen_monitoring
+                    and not getattr(state, 'workspace_clearing', False)
+                    and not getattr(state, 'session_closing', False))
+        warnings = []
+        try:
+            if not current():
+                return
+            await self._refresh_powgen_jobs(controller, warnings, is_current=current, refresh_dependents=False)
+            if not current():
+                return
+            snapshot = controller.capture_checkpoint()
+            state.powgen_message = 'Existing results refreshed; saving their recovery checkpoint. Monitoring remains stopped...'
+            state.flush()
+            await asyncio.to_thread(controller.persist_state, snapshot)
+            if current():
+                self._powgen_checkpoint_error = None
+                state.powgen_next_check = 'Stopped'
+                state.powgen_message = 'Existing results refreshed and checkpoint saved. Monitoring remains stopped.'
+                if warnings:
+                    state.powgen_message += ' ' + ' '.join(warnings)
+        except Exception as exc:
+            if current():
+                self._powgen_checkpoint_error = exc
+                state.powgen_message = 'Results refresh needs attention; monitoring remains stopped: ' + _powgen_submission_error_summary(exc)
+        finally:
+            if current():
+                state.powgen_results_refresh_busy = False
+                state.live_launch_busy = False
+                state.flush()
+            if getattr(self, '_powgen_stopped_refresh_task', None) is asyncio.current_task():
+                self._powgen_stopped_refresh_task = None
 
     def retry_powgen_interrupted_uploads(self, **_: Any) -> None:
+        """Compatibility entry point for the renamed explicit control."""
+        self.retry_powgen_failed_runs()
+
+    def retry_powgen_failed_runs(self, **_: Any) -> None:
         """Queue an explicit retry on the monitor's serial lifecycle loop."""
         state=self.server.state
-        if not state.powgen_monitoring or self._powgen_controller is None:
+        if (not state.powgen_monitoring or self._powgen_controller is None
+                or state.powgen_retry_busy or state.powgen_retry_requested):
             return
         state.powgen_retry_requested=True
-        state.powgen_message='Retry requested: checking failed uploads before re-staging; active refinements continue.'
+        state.powgen_message='Retry requested: verifying terminal failures and saving fresh-analysis intent; earlier work remains in History.'
         self._powgen_wake_event.set()
         state.flush()
 
-    async def _refresh_powgen_jobs(self, controller, warnings) -> None:
+    async def _refresh_powgen_jobs(self, controller, warnings, *, is_current=None, refresh_dependents=True) -> None:
         """Publish job progress before any slow recovery-checkpoint upload."""
         # A restored watch may contain only completed runs. Its immutable
         # observation receipts still need to be cached in this container before
@@ -5748,16 +5840,29 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         # missing small observations, never full result archives.
         if not (controller.state.submitted or controller.state.completed):
             return
+        context, service = self._result_context, self.service
         try:
             refreshed = await asyncio.to_thread(controller.refresh, checkpoint=False)
-            for record in refreshed.values():
+            if (controller is not self._powgen_controller or service is not self.service
+                    or context is not self._result_context or (is_current is not None and not is_current())):
+                return
+            for run_id, record in refreshed.items():
+                current = self.records.get(record.uid)
+                if current is not None:
+                    record = self._merge_refreshed_result(record, current)
+                    controller.records[run_id] = record
                 self.records[record.uid] = record
             self._sync_runs()
             if controller.refresh_errors:
                 warnings.append(f"{len(controller.refresh_errors)} Galaxy status update(s) will be retried")
         except Exception as exc:
             warnings.append(f"Galaxy status refresh failed: {_powgen_submission_error_summary(exc)}")
-        self._sync_powgen_rows()
+        if is_current is not None and not is_current():
+            return
+        if refresh_dependents:
+            self._sync_powgen_rows()
+        else:
+            self._sync_powgen_rows(refresh_dependents=False)
         self.server.state.flush()
 
     async def _powgen_monitor_loop(self) -> None:
@@ -5769,6 +5874,10 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
             state.powgen_monitoring = False
             return
         checkpoints = CoalescedCheckpoint(controller.capture_checkpoint, controller.persist_state)
+        retry_context, retry_service = self._result_context, self.service
+        controller._retry_submission_allowed = lambda: (
+            state.powgen_monitoring and controller is self._powgen_controller
+            and retry_context is self._result_context and retry_service is self.service)
         self._powgen_checkpoint_error = None
         try:
             while state.powgen_monitoring and controller is self._powgen_controller:
@@ -5779,14 +5888,14 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                 if state.powgen_retry_requested or getattr(controller,'interrupted_retries_pending',False):
                     requested=bool(state.powgen_retry_requested)
                     state.powgen_retry_requested=False;state.powgen_retry_busy=True
-                    state.powgen_message='Verifying interrupted inputs, retiring unstarted placeholders and saving retry recovery state...'
+                    state.powgen_message='Verifying failed runs and saving retry recovery state before any fresh analysis...'
                     state.flush()
                     try:
-                        retried=await asyncio.to_thread(controller.retry_interrupted_uploads,request=requested)
-                        warnings.append(f'{retried} interrupted input(s) returned to the submission queue' if retried else
-                            'No additional failed inputs qualified for a restart retry')
+                        retried=await asyncio.to_thread(controller.retry_failed_runs,request=requested)
+                        warnings.append(f'{retried} explicitly requested failed run(s) returned to the submission queue' if retried else
+                            'No additional failed runs qualified; existing jobs and artifacts were kept')
                     except Exception as exc:
-                        warnings.append(f'Input retry is held for recovery: {_powgen_submission_error_summary(exc)}')
+                        warnings.append(f'Failed-run retry is held for recovery: {_powgen_submission_error_summary(exc)}')
                     finally:
                         state.powgen_retry_busy=False
                 try:
@@ -5870,8 +5979,12 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                                 self._sync_runs()
                                 acknowledged_since_checkpoint += 1
                             except Exception as exc:
-                                warnings.append(f"{run.run_id} submission failed and will be retried: {exc}")
-                                if run.run_id in controller.state.discovered:
+                                from .live_recovery import RetrySourceChanged
+                                if isinstance(exc, RetrySourceChanged):
+                                    controller.hold_failed_retry(run,str(exc))
+                                    warnings.append(f"{run.run_id} explicit retry was held: {exc}")
+                                elif run.run_id in controller.state.discovered:
+                                    warnings.append(f"{run.run_id} submission failed and will be retried: {exc}")
                                     try:
                                         await asyncio.to_thread(
                                             controller.defer_submission,
@@ -5958,6 +6071,8 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
             state.powgen_message = "Monitoring stopped. Finishing the latest recovery checkpoint..."
             state.flush()
             try:
+                if getattr(controller,'pause_failed_run_retries',lambda:False)():
+                    checkpoints.offer()
                 await checkpoints.drain()
             except Exception as exc:
                 self._powgen_checkpoint_error = exc
@@ -6058,9 +6173,11 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
     def _monitor_update(self, record: RunRecord) -> None:
         self.records[record.uid] = record
         self._sync_runs()
-        if self.server.state.selected_run_uid == record.uid:
+        if (self.server.state.selected_run_uid == record.uid
+                and self.server.state.workspace_view in {"monitor", "results", "plots", "files"}):
             self._select_record(record)
-            if record.status == RunStatus.OK and record.output_dir:
+            if (record.status == RunStatus.OK and record.output_dir
+                    and self._opening_run_uid != record.uid):
                 self._load_results(record)
                 if record.uid not in self._auto_opened_uids:
                     self._auto_opened_uids.add(record.uid)
@@ -6081,21 +6198,43 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         """Poll Galaxy off-thread and publish UI state on Trame's event loop."""
 
         terminal = {RunStatus.OK, RunStatus.ERROR, RunStatus.CANCELLED}
+        service, context = self.service, self._result_context
         try:
             while record.status not in terminal:
+                identity = self._result_source_identity(record)
+                if not self._result_source_current(record, service, identity, context=context):
+                    return
                 try:
-                    record = await asyncio.to_thread(self.service.refresh, record)
+                    refreshed = await asyncio.to_thread(service.refresh, record.model_copy(deep=True))
                 except Exception as exc:
-                    record.message = str(exc)
+                    if not self._result_source_current(record, service, identity, context=context):
+                        return
+                    refreshed = self.records[record.uid].model_copy(deep=True)
+                    refreshed.message = str(exc)
+                if not self._result_source_current(record, service, identity, context=context):
+                    return
+                current = self.records[record.uid]
+                record = self._merge_refreshed_result(refreshed, current)
                 self._monitor_update(record)
                 if record.status in terminal:
                     break
                 await asyncio.sleep(poll_seconds)
             if record.status == RunStatus.OK:
+                identity = self._result_source_identity(record)
                 try:
-                    record = await asyncio.to_thread(self.service.collect_results, record)
-                    record = await asyncio.to_thread(self._publish_results_if_requested, record)
+                    async with self._shared_result_read(
+                            record, record.model_copy(deep=True), service, context=context) as loaded:
+                        if loaded is None:
+                            return
+                        identity = self._completed_result_identity(record, loaded, service, identity, context)
+                        cached = self._cache_result_record(record, loaded, service, identity, context)
+                        if cached is None:
+                            return
+                        record = cached
                 except Exception as exc:
+                    if not self._result_source_current(record, service, identity, context=context):
+                        return
+                    record = self.records[record.uid].model_copy(deep=True)
                     record.analysis_status = RunStatus.OK
                     record.status = RunStatus.OK
                     record.result_status = ResultStatus.ERROR
@@ -6115,9 +6254,11 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         finally:
             self._monitored_uids.discard(record.uid)
 
-    def _publish_results_if_requested(self, record: RunRecord) -> RunRecord:
-        """Submit or refresh NDIP's authenticated export of a result archive."""
-
+    def _publish_results_if_requested(self, record: RunRecord, *, service: Any = None,
+                                      context: object | None = None,
+                                      source_identity: tuple | None = None) -> RunRecord:
+        """Serialize exports across copied records and retain acknowledged job IDs."""
+        service = self.service if service is None else service
         inputs = record.inputs
         if (
             inputs is None
@@ -6125,6 +6266,29 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
             or record.published_output_dir
         ):
             return record
+        context = self._result_context if context is None else context
+        key = (context, id(service), record.history_id, record.galaxy_job_id,
+               record.output_dataset_ids.get("results_archive"), inputs.instrument, inputs.ipts,
+               inputs.publish_directory, inputs.publish_subfolder)
+        lock, acknowledged = self._result_publications.setdefault(key, (threading.Lock(), {}))
+        with lock:
+            if context is not self._result_context or service is not self.service:
+                return record
+            if source_identity is not None and not self._result_source_current(
+                    record, service, source_identity, context=context):
+                return record
+            private = record.model_copy(deep=True)
+            for name, value in acknowledged.items():
+                setattr(private, name, deepcopy(value))
+            private = self._publish_results_once(private, service)
+            if private.publication_job_id or private.published_output_dir:
+                for name in ("publication_job_id", "publication_status", "publication_target",
+                             "published_output_dir", "publish_message"):
+                    acknowledged[name] = deepcopy(getattr(private, name))
+            return private
+
+    def _publish_results_once(self, record: RunRecord, service: Any) -> RunRecord:
+        """Submit or refresh one source's authenticated export under its lock."""
 
         def set_message(message: str) -> None:
             previous = record.publish_message
@@ -6143,7 +6307,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                     galaxy_job_id=record.publication_job_id,
                     status=record.publication_status or RunStatus.QUEUED,
                 )
-                action = self.service.refresh_utility(action)
+                action = service.refresh_utility(action)
                 record.publication_status = action.status
                 if action.status == RunStatus.OK:
                     record.published_output_dir = record.publication_target
@@ -6163,7 +6327,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
             archive_dataset_id = record.output_dataset_ids.get("results_archive")
             if not archive_dataset_id:
                 raise RuntimeError("Galaxy did not expose the completed results archive for export")
-            action, destination = self.service.submit_results_export(
+            action, destination = service.submit_results_export(
                 record,
                 archive_dataset_id=archive_dataset_id,
             )
@@ -6180,10 +6344,18 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
 
     async def _monitor_results_publication(self, record: RunRecord) -> None:
         terminal = {RunStatus.OK, RunStatus.ERROR, RunStatus.CANCELLED}
+        service, context = self.service, self._result_context
+        identity = self._result_source_identity(record)
         while record.publication_status not in terminal:
             await asyncio.sleep(2.0)
-            record = await asyncio.to_thread(self._publish_results_if_requested, record)
-            self.records[record.uid] = record
+            if not self._result_source_current(record, service, identity, context=context):
+                return
+            loaded = await asyncio.to_thread(self._publish_results_if_requested,
+                                             self.records[record.uid].model_copy(deep=True),
+                                             service=service, context=context, source_identity=identity)
+            record = self._cache_result_record(record, loaded, service, identity, context)
+            if record is None:
+                return
             self._monitor_update(record)
 
     def _sync_runs(self) -> None:
@@ -6427,7 +6599,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         uid = selected_run_uid(run_selection)
         if not uid or uid not in self.records:
             return
-        if self._opening_run_uid == uid:
+        if self._opening_run_uid == uid and self.server.state.selected_run_uid == uid:
             return
         record = self.records[uid]
         self._select_record(record)
@@ -6643,6 +6815,11 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         state = self.server.state
         previous_run_uid = str(getattr(state, "selected_run_uid", "") or "")
         previous_result_uid = str(getattr(state, "result_owner_uid", "") or "")
+        if previous_run_uid != record.uid and getattr(self, "_result_open_owner", None) is not None:
+            self._result_open_owner = None
+            self._opening_run_uid = None
+            state.selected_run_loading = False
+            state.selected_result_load_message = ""
         if previous_result_uid != record.uid:
             self._reset_result_state()
         state.selected_run_uid = record.uid
@@ -6896,46 +7073,15 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
 
     def refresh_selected_run(self, **_: Any) -> None:
         uid = self.server.state.selected_run_uid
-        if not uid or uid not in self.records:
-            return
-        try:
-            record = self.service.refresh(self.records[uid])
-            if record.status == RunStatus.OK and not record.output_dir:
-                record = self.service.collect_results(record)
-            if record.status == RunStatus.OK and record.output_dir:
-                record = self._publish_results_if_requested(record)
-            self.records[uid] = record
-            self._select_record(record)
-            if record.status == RunStatus.OK and record.output_dir:
-                self._load_results(record)
-                self.server.state.workspace_view = "results"
-            self._sync_runs()
-        except Exception as exc:
-            self.server.state.selected_run_message = str(exc)
-        self.server.state.flush()
+        if uid and uid in self.records:
+            self._open_record_results(self.records[uid], refresh=True)
 
     def reload_selected_results(self, **_: Any) -> None:
         uid = self.server.state.selected_run_uid
         record = self.records.get(uid)
         if record is None or (record.analysis_status or record.status) != RunStatus.OK:
             return
-        try:
-            self.server.state.selected_run_loading = True
-            record = self.service.collect_results(record, force=True)
-            record = self._publish_results_if_requested(record)
-            self.records[uid] = record
-            self._select_record(record)
-            if record.result_status == ResultStatus.READY and record.output_dir:
-                self._load_results(record)
-                self.server.state.workspace_view = "results"
-                self.server.state.notice = f"Reloaded the canonical result archive for {record.name}."
-            else:
-                self.server.state.workspace_view = "monitor"
-        except Exception as exc:
-            self.server.state.selected_run_message = str(exc)
-        finally:
-            self.server.state.selected_run_loading = False
-            self.server.state.flush()
+        self._open_record_results(record, force=True)
 
     def download_diagnostics(self, **_: Any) -> None:
         record = self.records.get(self.server.state.selected_run_uid)
@@ -7006,40 +7152,272 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
             return
         self._open_record_results(self.records[uid])
 
-    def _open_record_results(self, record: RunRecord) -> None:
-        """Collect and display one completed run without allowing duplicate loads."""
-
-        if record.status != RunStatus.OK or self._opening_run_uid == record.uid:
+    def _open_record_results(self, record: RunRecord, *, refresh: bool = False, force: bool = False) -> None:
+        """Return to the browser before reading a saved run's remote artifacts."""
+        if record.status != RunStatus.OK and not refresh:
             return
         state = self.server.state
+        pending = getattr(self, "_history_result_requests", {})
+        options = getattr(self, "_history_result_request_options", {})
+        if record.uid in pending and not pending[record.uid].done() and self._opening_run_uid == record.uid:
+            if not force or options.get(record.uid, {}).get("force"):
+                return
+        owner = object()
+        self._result_open_owner = owner
         self._opening_run_uid = record.uid
         state.selected_run_loading = True
         state.selected_run_message = ""
+        state.selected_result_load_error = ""
+        state.selected_result_load_message = (
+            f"Refreshing {record.name}: checking its published result…" if refresh
+            else f"Opening {record.name}: downloading fit plots and saved projects…")
         state.error_message = ""
-        state.notice = f"Loading results for {record.name}..."
+        state.workspace_view = "results"
+        state.setup_collapsed = True
         state.flush()
+        operation = self._open_record_results_async(
+            record, record.model_copy(deep=True), owner, self.service,
+            context=self._result_context, refresh=refresh, force=force)
         try:
-            if not record.output_dir:
-                record = self.service.collect_results(record)
-                record = self._publish_results_if_requested(record)
-                self.records[record.uid] = record
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # Preserve direct synchronous callers; browser RPCs always have
+            # the server loop and return immediately through the task below.
+            asyncio.run(operation)
+            return
+        task = loop.create_task(operation)
+        self._history_result_requests = pending
+        self._history_result_request_options = options
+        options[record.uid] = {"force": force}
+        pending[record.uid] = task
+        def finished(done):
+            if pending.get(record.uid) is done:
+                pending.pop(record.uid, None)
+                options.pop(record.uid, None)
+        task.add_done_callback(finished)
+
+    def _prune_history_result_download(self, uid: str, entry: tuple) -> None:
+        downloads = getattr(self, "_history_result_downloads", {})
+        if entry[2].done() and not entry[4]["waiters"]:
+            if not entry[2].cancelled():
+                entry[2].exception()  # consume a failure after every waiter has left
+            if downloads.get(uid) is entry:
+                downloads.pop(uid)
+
+    @staticmethod
+    def _result_source_identity(record: RunRecord) -> tuple:
+        return (record.history_id, record.galaxy_job_id,
+                dict(record.output_dataset_ids))
+
+    @staticmethod
+    def _result_sources_compatible(left: tuple | None, right: tuple | None) -> bool:
+        """One Galaxy job may discover more HDAs, but never replace a known HDA."""
+        if left is None or right is None or left[:2] != right[:2]:
+            return False
+        return all(key not in right[2] or right[2][key] == value for key, value in left[2].items())
+
+    def _result_source_current(self, record: RunRecord, service: Any, identity: tuple | None,
+                               controller: Any = None, run_id: str = "", *, context: object | None = None) -> bool:
+        state = self.server.state
+        current = self.records.get(record.uid)
+        watched = controller.records.get(run_id) if controller is not None else None
+        return (self.service is service and current is not None
+                and (context is None or context is self._result_context)
+                and self._result_sources_compatible(self._result_source_identity(current), identity)
+                and not state.workspace_clearing and not state.session_closing
+                and (controller is None or (self._powgen_controller is controller
+                     and watched is not None
+                     and self._result_sources_compatible(self._result_source_identity(watched), identity))))
+
+    def _result_open_current(self, owner: object, record: RunRecord, service: Any,
+                             identity: tuple | None, controller: Any = None, run_id: str = "", *,
+                             context: object | None = None) -> bool:
+        return (getattr(self, "_result_open_owner", None) is owner
+                and self.server.state.selected_run_uid == record.uid
+                and (controller is None or self.server.state.powgen_selected_run_id == run_id)
+                and self._result_source_current(record, service, identity, controller, run_id, context=context))
+
+    @staticmethod
+    def _copy_result_cache(target: RunRecord, cached: RunRecord) -> RunRecord:
+        """Merge downloaded artifacts into fresh metadata without sharing mutable records."""
+        result = target.model_copy(deep=True)
+        if cached.output_dir:
+            for name in ("output_dir", "result_status", "cache_manifest"):
+                setattr(result, name, deepcopy(getattr(cached, name)))
+            result.output_dataset_ids.update(cached.output_dataset_ids)
+            if result.status == RunStatus.OK:
+                result.stage, result.progress, result.message = cached.stage, cached.progress, cached.message
+        if cached.publication_job_id or cached.published_output_dir or cached.publish_message:
+            for name in ("publication_job_id", "publication_status", "publication_target",
+                         "published_output_dir", "publish_message"):
+                setattr(result, name, deepcopy(getattr(cached, name)))
+        return result
+
+    def _merge_refreshed_result(self, refreshed: RunRecord, current: RunRecord) -> RunRecord:
+        if self._result_sources_compatible(self._result_source_identity(refreshed),
+                                           self._result_source_identity(current)):
+            return self._copy_result_cache(refreshed, current)
+        # A metadata copy can still carry local paths from the replaced source.
+        return refreshed.model_copy(deep=True, update={
+            "output_dir": None, "cache_manifest": None, "result_status": ResultStatus.NOT_REQUESTED,
+            "publication_job_id": None, "publication_status": None, "publication_target": None,
+            "published_output_dir": None, "publish_message": "",
+        })
+
+    def _cache_result_record(self, original: RunRecord, loaded: RunRecord, service: Any,
+                             identity: tuple | None, context: object) -> RunRecord | None:
+        if not self._result_source_current(original, service, identity, context=context):
+            return None
+        result = self._copy_result_cache(self.records[original.uid], loaded)
+        self.records[result.uid] = result
+        controller = self._powgen_controller
+        if controller is not None:
+            for run_id, watched in tuple(controller.records.items()):
+                if watched.uid == original.uid and self._result_sources_compatible(
+                        self._result_source_identity(watched), identity):
+                    controller.records[run_id] = self._copy_result_cache(watched, loaded)
+        return result
+
+    def _completed_result_identity(self, original: RunRecord, loaded: RunRecord,
+                                   service: Any, identity: tuple | None, context: object) -> tuple | None:
+        # Another waiter (for example the run monitor) may already have applied
+        # the extra output associations resolved by this same transaction.
+        loaded_identity = self._result_source_identity(loaded)
+        if not self._result_sources_compatible(identity, loaded_identity):
+            return None
+        if self._result_source_current(original, service, loaded_identity, context=context):
+            return loaded_identity
+        return identity
+
+    def _finish_result_open(self, owner: object, uid: str) -> None:
+        if getattr(self, "_result_open_owner", None) is owner and self._opening_run_uid == uid:
+            state = self.server.state
+            state.selected_run_loading = False
+            state.selected_result_load_message = ""
+            self._opening_run_uid = None
+            self._result_open_owner = None
+            state.flush()
+
+    @asynccontextmanager
+    async def _shared_result_read(self, original: RunRecord, captured: RunRecord,
+                                  service: Any, *, context: object, force: bool = False):
+        """Share a private archive/publication transaction across every waiter."""
+        identity = self._result_source_identity(captured)
+        read_entry = None
+        try:
+            downloads = getattr(self, "_history_result_downloads", None)
+            if downloads is None:
+                downloads = self._history_result_downloads = {}
+                self._history_result_download_lock = asyncio.Lock()
+            entry = downloads.get(original.uid)
+            reusable = not (entry is None or entry[1] is not service
+                    or entry[2].cancelled() or (entry[2].done() and entry[2].exception())
+                    or not any(self._result_sources_compatible(identity, source) for source in entry[4]["identities"])
+                    or entry[4]["context"] is not context)
+            previous = entry if reusable and force and not entry[4]["force"] else None
+            if not reusable or previous is not None:
+                async def collect() -> RunRecord | None:
+                    prior = None
+                    if previous is not None:
+                        try:
+                            prior = await asyncio.shield(previous[2])
+                        except Exception:
+                            pass  # An explicit forced reload can retry a failed ordinary read.
+                    async with self._history_result_download_lock:
+                        source = identity
+                        if prior is not None:
+                            source = self._completed_result_identity(original, prior, service, source, context)
+                        if not self._result_source_current(original, service, source, context=context):
+                            return None
+                        private = self.records[original.uid].model_copy(deep=True)
+                        if prior is not None:
+                            private = self._copy_result_cache(private, prior)
+                        if force:
+                            private = await asyncio.to_thread(service.collect_results, private, force=True)
+                        elif not private.output_dir:
+                            private = await asyncio.to_thread(service.collect_results, private)
+                        if not private.output_dir or (force and private.result_status == ResultStatus.ERROR):
+                            raise RuntimeError(private.message or "Galaxy result collection is not ready; try opening this run again")
+                    if not self._result_source_current(original, service, source, context=context):
+                        return None
+                    if not self._result_sources_compatible(source, self._result_source_identity(private)):
+                        return None
+                    private = await asyncio.to_thread(
+                        self._publish_results_if_requested, private, service=service,
+                        context=context, source_identity=source)
+                    entry[4]["identities"].append(self._result_source_identity(private))
+                    return private
+                entry = downloads[original.uid] = (
+                    original, service, asyncio.create_task(collect()), identity,
+                    {"waiters": 0, "force": force, "context": context, "identities": [identity]})
+                entry[2].add_done_callback(lambda done: self._prune_history_result_download(original.uid, entry))
+            read_entry = entry
+            entry[4]["waiters"] += 1
+            record = await asyncio.shield(entry[2])
+            yield record
+        finally:
+            if read_entry is not None:
+                read_entry[4]["waiters"] -= 1
+                self._prune_history_result_download(original.uid, read_entry)
+
+    async def _open_record_results_async(self, original: RunRecord, captured: RunRecord,
+                                       owner: object, service: Any, *, context: object,
+                                       refresh: bool = False, force: bool = False) -> None:
+        state = self.server.state
+        expected = original
+        identity = self._result_source_identity(captured)
+        def owns_selection():
+            return self._result_open_current(owner, expected, service, identity, context=context)
+        try:
+            if refresh:
+                record = await asyncio.to_thread(service.refresh, captured)
+                if not owns_selection():
+                    return
+                current = self.records[original.uid]
+                record = self._merge_refreshed_result(record, current)
+                self.records[record.uid] = expected = record
+                identity = self._result_source_identity(record)
+                controller = self._powgen_controller
+                if controller is not None:
+                    for run_id, watched in tuple(controller.records.items()):
+                        if watched.uid == original.uid and self._result_sources_compatible(
+                                self._result_source_identity(watched), self._result_source_identity(current)):
+                            controller.records[run_id] = record.model_copy(deep=True)
                 self._select_record(record)
                 self._sync_runs()
-            self._load_results(record)
-            state.active_page = "results"
-            state.workspace_view = "results"
-            state.setup_collapsed = True
-            state.notice = f"Showing results for {record.name}."
+                if record.status != RunStatus.OK:
+                    state.workspace_view = "monitor"
+                    return
+                captured = record.model_copy(deep=True)
+            async with self._shared_result_read(expected, captured, service, context=context, force=force) as record:
+                if record is not None:
+                    identity = self._completed_result_identity(expected, record, service, identity, context)
+                if record is None or not owns_selection():
+                    return
+                record = self._cache_result_record(expected, record, service, identity, context)
+                if record is None:
+                    return
+                self.records[record.uid] = expected = record
+                identity = self._result_source_identity(record)
+                self._sync_runs()
+                # Cache a completed read without replacing a newer workspace.
+                if state.workspace_view != "results":
+                    return
+                self._select_record(record)
+                self._load_results(record)
+                state.active_page = "results"
+                state.notice = (f"Reloaded the canonical result archive for {record.name}." if force
+                                else f"Showing results for {record.name}.")
         except Exception as exc:
-            message = f"Could not load results for {record.name}: {exc}"
-            state.active_page = "runs"
-            state.workspace_view = "monitor"
-            state.error_message = message
-            state.selected_run_message = message
+            if owns_selection() and state.workspace_view == "results":
+                message = f"Could not load results for {original.name}: {exc}"
+                state.active_page = "runs"
+                state.workspace_view = "monitor"
+                state.error_message = message
+                state.selected_run_message = message
+                state.selected_result_load_error = message
         finally:
-            state.selected_run_loading = False
-            self._opening_run_uid = None
-            state.flush()
+            self._finish_result_open(owner, original.uid)
 
     def _load_results(self, record: RunRecord) -> None:
         state = self.server.state
@@ -7050,9 +7428,9 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         payload = self.service.result_payload(record)
         self._refinement_maybe_refresh()
         result_document = payload.get("summary") or {}
-        self._post_analysis_scope = "single:" + record.uid
+        self._activate_post_analysis_scope(
+            "single:" + record.uid, record.config.post_analysis if record.config is not None else None)
         if record.config is not None:
-            self._set_post_settings(record.config.post_analysis)
             state.scan_interpretation = record.config.scan_interpretation.model_dump(mode="json")
         # A single fit has its own result page. Preserve the live experiment's
         # history rather than replaying its trend/transition tools on one point.

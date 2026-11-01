@@ -398,6 +398,7 @@ def test_completed_scan_is_visible_while_another_upload_is_still_waiting(live):
 
         def __init__(self):
             self.state = SimpleNamespace(submitted={}, completed={}, discovered={r.run_id: r for r in runs}, failed={})
+            self.records = {}
 
         def discover(self, *, checkpoint): assert not checkpoint
         def reconcile_recent_runs(self, *, checkpoint):
@@ -438,7 +439,8 @@ def test_completed_scan_is_visible_while_another_upload_is_still_waiting(live):
     live._powgen_controller = controller
 
     def sync():
-        if "scan-1" in controller.state.completed and live.records.get("scan-1", None):
+        record = live.records.get("scan-1")
+        if "scan-1" in controller.state.completed and record is not None and record.status == RunStatus.OK:
             first_visible.set()
 
     live._sync_powgen_rows = sync

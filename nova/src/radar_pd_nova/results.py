@@ -2336,11 +2336,20 @@ def _full_model_rows(result: dict[str, Any]) -> list[dict[str, str]]:
     for item in result.get("gpx_projects") or []:
         if not isinstance(item, dict):
             continue
+        rwp = _first_value(item, "rwp", "Rwp")
+        observables = result.get("observables")
+        final_hash = observables.get("source_gpx_sha256") if isinstance(observables, dict) else None
+        if (rwp is None and isinstance(final_hash, str)
+                and re.fullmatch(r"[0-9a-f]{64}", final_hash)
+                and item.get("sha256") == final_hash):
+            # A named checkpoint may be another publication of the exact final
+            # model. Do not borrow its residual for a different or unhashed GPX.
+            rwp = result.get("final_rwp")
         rows.append(
             {
                 "model": _humanize(str(item.get("label") or "Published model")),
                 "stage": _humanize(str(item.get("stage") or "Refinement")),
-                "rwp": _number_text(_first_value(item, "rwp", "Rwp")),
+                "rwp": _number_text(rwp),
                 "decision": _humanize(str(item.get("status") or "Published")),
                 "note": str(item.get("warning") or "-") or "-",
             }

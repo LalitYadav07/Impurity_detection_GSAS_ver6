@@ -17,7 +17,7 @@ def app_with_completed_record():
     app.records={record.uid:record}
     app._select_record=lambda r:setattr(app.server.state,'selected_run_uid',r.uid)
     app._sync_runs=lambda:None
-    app._publish_results_if_requested=lambda r:r
+    app._publish_results_if_requested=lambda r,**_:r
     return app,record
 
 

@@ -16,7 +16,7 @@ from typing import Any
 from rapidfuzz import process
 from rapidfuzz.distance import DamerauLevenshtein
 
-from .live_assistant import HELP, parse_elements
+from .live_assistant import HELP, goal_patch, parse_elements
 from .uploads import _ELEMENT_SYMBOLS
 
 
@@ -83,6 +83,14 @@ ORDINALS = {
     "seventh": 7, "seven": 7, "eighth": 8, "eight": 8, "ninth": 9, "nine": 9,
     "tenth": 10, "ten": 10, "eleventh": 11, "twelfth": 12,
 }
+COUNTS = {name: number for number, name in enumerate(
+    "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty".split(), 1)}
+_COUNT = r"(?:[1-9][0-9]*|" + "|".join(COUNTS) + r")"
+SETUP_REPLY_HELP = (
+    "Copy the exact sample ID from the discovered list without a description, and specify its bank number. "
+    "'Full analysis; one discovery round' sets a maximum per pattern. "
+    "Use Edit advanced Live settings for other budgets, refinement constraints and result plots."
+)
 ELEMENT_NAMES = dict(item.split(":") for item in """
 hydrogen:H helium:He lithium:Li beryllium:Be boron:B carbon:C nitrogen:N oxygen:O
 fluorine:F neon:Ne sodium:Na magnesium:Mg aluminium:Al aluminum:Al silicon:Si
@@ -335,7 +343,9 @@ def _merge(replies: list[ParsedReply], label: str) -> ParsedReply:
         else:
             known = {key: value for r in replies if r.action == "patch" for key, value in r.value.items()}
             choices = [ReplyChoice("Apply only: " + "; ".join(r.message for r in replies if r.action == "patch"), "patch", known)] if known else []
-            return _clarify(reply.message + " The grouped answer has not been applied.", choices)
+            notice = "The grouped answer has not been applied."
+            message = reply.message if notice in reply.message else reply.message + " " + notice
+            return _clarify(message, choices)
     if all(r.action == "patch" for r in replies):
         values = {key: value for r in replies for key, value in r.value.items()}
         # A list of sample replies appends identities instead of overwriting.
@@ -583,6 +593,33 @@ def _run_policy(text: str, context: ReplyContext) -> ParsedReply | None:
     return None
 
 
+def _analysis_settings(text: str) -> ParsedReply | None:
+    """Explicit draft settings only; a discovery count is not a solver cycle count."""
+    body = _body(text)
+    values = {}
+    mode = re.fullmatch(r"(full|rapid)\s+(?:analysis|mode)(?:\s+(?:with|using)\s+(.+))?", body)
+    if mode:
+        values["live_analysis_mode"] = mode[1]
+        if not mode[2]:
+            if mode[1] == "rapid":
+                return ParsedReply("goal", "rapid")
+            return _patch(values, mode[1].title() + " analysis; keep the current search settings")
+        body = mode[2]
+    count = re.fullmatch(r"(?:up to\s+)?(" + _COUNT + r")\s+(?:impurity\s+)?discovery\s+(?:rounds?|pass(?:es)?)", body)
+    if count:
+        number = COUNTS[count[1]] if count[1] in COUNTS else int(count[1])
+        if not 1 <= number <= 20:
+            return _clarify("Use an exact maximum of 1 to 20 discovery rounds per pattern. No setup values changed.")
+        if values.get("live_analysis_mode") == "rapid":
+            return _clarify("Discovery rounds apply to Full analysis. Choose Full analysis explicitly or edit the Rapid budget in advanced Live settings. No setup values changed.")
+        values["live_full_max_passes"] = number
+        return _patch(values, ("Full analysis; " if "live_analysis_mode" in values else "") +
+                      f"maximum {number} discovery round(s) per pattern; keep other search settings")
+    if mode or re.search(r"\bdiscovery\s+(?:rounds?|pass(?:es)?)\b", body):
+        return _clarify("I could not interpret the complete analysis-setting request. " + SETUP_REPLY_HELP)
+    return None
+
+
 def _interpret_single_reply(text: str, context: ReplyContext | None = None, *, defer_banks=False) -> ParsedReply:
     context = context or ReplyContext()
     text = str(text or "").strip()
@@ -645,6 +682,9 @@ def _interpret_single_reply(text: str, context: ReplyContext | None = None, *, d
     experiment = _experiment(text, context)
     if experiment:
         return experiment
+    settings = _analysis_settings(text)
+    if settings:
+        return settings
     goal_body = re.sub(r"\s+(?:mode|goal|analysis|preset)$", "", body)
     if goal_body in GOALS:
         return ParsedReply("goal", GOALS[goal_body])
@@ -666,13 +706,14 @@ def _interpret_single_reply(text: str, context: ReplyContext | None = None, *, d
     nearby = _near(body, {word: word for word in ("continue", "back", "undo")})
     if nearby:
         return _clarify("Did you mean this setup action?", [ReplyChoice(word.capitalize(), word) for word in nearby])
-    return ParsedReply("unknown", message="I could not interpret that reply. Use the choices for this question, give a sample name/number, or ask 'what does background mean?'.")
+    return ParsedReply("unknown", message="I could not interpret the complete reply. No setup values changed. " + SETUP_REPLY_HELP)
 
 
 _CLAUSE_START = re.compile(
     r"(?:please\s+)?(?:use|select|choose)\s+(?:the\s+)?(?:official\s+)?(?:cycle\s+)?(?:instrument\s+)?profile\b|"
     r"(?:(?:please|use|select|choose|apply)\s+)*(?:only\s+)?"
-    r"(?:samples?\b|banks?\b|histograms?\b|(?:process\s+)?(?:all|every)\s+existing\b|"
+    r"(?:samples?\b|(?:source\s+|physical\s+)?banks?\b|histograms?\b|(?:process\s+)?(?:all|every)\s+existing\b|"
+    r"(?:full|rapid)\s+(?:analysis|mode)\b|(?:up to\s+)?" + _COUNT + r"\s+(?:impurity\s+)?discovery\b|"
     r"exclude\b|omit\b|ignore\b|include\b|allow\b|auto[- ]detect\b|automatic(?:ally)?\b|"
     r"environment\b|can\b|elements\b|IPTS\b|POWGEN\b|HB2A\b|NOMAD\b|SNAP\b)", re.I)
 
@@ -746,6 +787,10 @@ def interpret_reply(text: str, context: ReplyContext | None = None) -> ParsedRep
     if context.defer_sample_bank_membership and any(r.action == "patch" and "powgen_processing_scope" in r.value for r in replies):
         replies = [_interpret_single_reply(clause, context, defer_banks=True)
                    for clause in clauses]
+    # Existing goal actions are ordinary draft patches too. Combining one with
+    # an explicit setting must retain both, including conflict validation.
+    replies = [ParsedReply("patch", goal_patch(r.value), "Use " + r.value) if r.action == "goal" else r
+               for r in replies]
     seen = {}
     for reply in replies:
         if reply.action != "patch":
@@ -758,5 +803,5 @@ def interpret_reply(text: str, context: ReplyContext | None = None) -> ParsedRep
     if result.action != "patch":
         unresolved = [clause for clause, reply in zip(clauses, replies) if reply.action != "patch"]
         result = ParsedReply(result.action, result.value,
-                             result.message + " Unresolved clause: " + "; ".join(unresolved), result.choices)
+                             result.message + " Unresolved clause: " + "; ".join(unresolved) + " " + SETUP_REPLY_HELP, result.choices)
     return result

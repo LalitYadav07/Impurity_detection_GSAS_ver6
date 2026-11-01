@@ -364,10 +364,12 @@ def test_rechecking_reusable_configuration_does_not_erase_post_analysis_choices(
     assert [v.kind for v in app._post_settings().views] == ["distortion"]
 
 
-def test_opening_an_uploaded_single_fit_preserves_the_experiment_history_instead_of_creating_one_point_trends():
+def test_opening_an_uploaded_single_fit_clears_out_of_scope_plots_without_replaying_trends():
     app = app_with_data()
-    before = copy.deepcopy(app._post_analysis_result)
-    history = copy.deepcopy(app._post_analysis_scans)
+    history = app._post_analysis_scans
+    before = copy.deepcopy(history)
+    refresh_calls = []
+    app._refresh_post_analysis = lambda *args, **kwargs: refresh_calls.append(args)
     packet = scan(1)["observables"]
     app.service = SimpleNamespace(
         result_payload=lambda _: {
@@ -385,6 +387,8 @@ def test_opening_an_uploaded_single_fit_preserves_the_experiment_history_instead
         ),
     )
     app._load_results(record)
-    assert app._post_analysis_result == before
-    assert app._post_analysis_scans == history
+    assert app._post_analysis_result == {"views": []}
+    assert app._post_analysis_scans == []
+    assert history == before and len(history) == 2
+    assert not refresh_calls
     assert app._post_analysis_scope == "single:job"

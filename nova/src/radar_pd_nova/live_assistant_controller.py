@@ -18,7 +18,7 @@ from .live_assistant_language import (
 )
 from .live_assistant_ui import LiveAssistantUi
 from .live_setup_preview import NoPreviewData, inspect_inventory, preview_pattern
-from .setup_forms import parse_regions
+from .setup_forms import full_profile_settings, parse_regions
 from .uploads import cif_element_suggestion, inspect_cif_upload
 from .live_beamlines import BEAMLINES, beamline_adapter
 
@@ -622,30 +622,50 @@ class LiveAssistantMixin(LiveAssistantUi):
             raise ValueError("Only Live setup fields can be changed.")
         context_keys = {"live_beamline", "powgen_ipts"}
         if set(values) & context_keys:
-            if set(values) - context_keys:
-                raise ValueError("Find the experiment first, then choose its samples and settings.")
             if "live_beamline" in values and values["live_beamline"] not in BEAMLINES:
                 raise ValueError("Choose a registered Live beamline.")
             ipts = self._normalize_powgen_ipts(values["powgen_ipts"]) if "powgen_ipts" in values else None
-            if "live_beamline" in values:
-                if values["live_beamline"] != state.live_beamline and ipts is None:
-                    state.powgen_ipts = ""
-                state.live_beamline = values["live_beamline"]
-                self._live_beamline_changed()
-            if ipts is not None:
-                state.powgen_ipts = ipts
-                self._powgen_ipts_changed()
-            # Undo cannot restore inputs from another experiment without discovery.
-            self._live_conversation.undo.clear()
-            self._assistant_step("experiment")
-            if ipts is not None:
-                await self.live_assistant_continue()
+            if set(values) - context_keys:
+                if (values.get("live_beamline", state.live_beamline) != state.live_beamline
+                        or (ipts is not None and ipts != self._normalize_powgen_ipts(state.powgen_ipts))):
+                    raise ValueError("Find the experiment first, then choose its samples and settings. No part of this request was applied.")
+                # An explicit current header is context, not a request to reset
+                # its discovered sample list or user-reviewed profile.
+                values = {key: value for key, value in values.items() if key not in context_keys}
             else:
-                self._assistant_say("assistant", "Beamline updated. What is the IPTS? Enter its digits or fill the IPTS field.")
-            return
+                if "live_beamline" in values:
+                    if values["live_beamline"] != state.live_beamline and ipts is None:
+                        state.powgen_ipts = ""
+                    state.live_beamline = values["live_beamline"]
+                    self._live_beamline_changed()
+                if ipts is not None:
+                    state.powgen_ipts = ipts
+                    self._powgen_ipts_changed()
+                # Undo cannot restore inputs from another experiment without discovery.
+                self._live_conversation.undo.clear()
+                self._assistant_step("experiment")
+                if ipts is not None:
+                    await self.live_assistant_continue()
+                else:
+                    self._assistant_say("assistant", "Beamline updated. What is the IPTS? Enter its digits or fill the IPTS field.")
+                return
         scientific = any(k.startswith("live_") and k not in {"live_database_source"} for k in values)
         if scientific and state.live_configuration_source != "inline":
             raise ValueError("Edit a copy of the saved configuration before changing its chemistry or settings.")
+        if "live_full_max_passes" in values:
+            rounds = values["live_full_max_passes"]
+            if type(rounds) is not int or not 1 <= rounds <= 20:
+                raise ValueError("Choose an integer maximum of 1 to 20 discovery rounds per pattern.")
+            if values.get("live_analysis_mode", state.live_analysis_mode) != "full":
+                raise ValueError("Discovery rounds apply to Full analysis. Say 'Full analysis; one discovery round' or edit the Rapid budget.")
+            profile = values.get("live_full_profile", state.live_full_profile)
+            if profile not in {"quick", "balanced", "thorough", "custom"}:
+                raise ValueError("Choose a valid Full search preset before changing its discovery limit.")
+            # Presets override stored custom values when the final configuration
+            # is resolved. Materialize that same preset, then change only the
+            # requested limit; do not silently switch to a smaller preset.
+            values = {**{"live_" + key: value for key, value in full_profile_settings(profile).items()},
+                      **values, "live_full_profile": "custom"}
         for key in ("live_sample_elements", "live_environment_elements"):
             if key in values:
                 parse_elements(values[key], optional=key == "live_environment_elements")
@@ -656,6 +676,7 @@ class LiveAssistantMixin(LiveAssistantUi):
         scope_fields = {"powgen_processing_scope", "powgen_processing_sample_ids", "powgen_excluded_runs",
                         "powgen_include_background", "powgen_include_ramps"}
         inventory = None
+        request_signature = self._assistant_language_signature()
         if set(values) & scope_fields:
             generation = self._assistant_generation
             state.live_assistant_busy = True
@@ -665,6 +686,8 @@ class LiveAssistantMixin(LiveAssistantUi):
             finally:
                 if generation is self._assistant_generation:
                     state.live_assistant_busy = False
+        if request_signature != self._assistant_language_signature():
+            raise ValueError("The setup changed while checking this request. No part was applied; repeat it for the current settings.")
         banks = values.get("powgen_processing_banks", [])
         if "nomad_physical_bank" in values:
             banks = [values["nomad_physical_bank"]]

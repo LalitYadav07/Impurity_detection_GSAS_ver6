@@ -1,4 +1,54 @@
-"""Prove a Live input was interrupted before retiring its unstarted job."""
+"""Authoritative evidence for explicitly requested Live retries."""
+
+
+class RetrySourceChanged(RuntimeError):
+    """A prepared explicit retry no longer has its original authorization."""
+
+
+def failed_run_proof(service, job_id):
+    """Qualify a terminal error for a fresh analysis, never infer execution.
+
+    An ERROR job may have run the full native pipeline and published useful
+    artifacts. Its runner/exit fields cannot establish otherwise. Unlike the
+    paused-empty-input path below, this path never cancels the old job.
+    """
+    from .galaxy_service import ANALYZE_TOOL_ID
+
+    def identity(job):
+        if (job.get('id') != job_id or job.get('history_id') != service.history_id
+                or job.get('tool_id') != ANALYZE_TOOL_ID or job.get('state') != 'error'
+                or job.get('deleted') or job.get('purged')):
+            return None
+        return dict(job_id=job_id, history_id=service.history_id,
+                    tool_id=ANALYZE_TOOL_ID, state='error',
+                    inputs=service._public_input_dataset_ids(job),
+                    outputs=service._job_output_ids(job),
+                    update_time=job.get('update_time'))
+
+    proof = identity(service._job_details(job_id))
+    if not proof or not proof['inputs']:
+        return None
+    for identifier in proof['inputs'].values():
+        metadata = service._dataset_metadata(identifier)
+        if (metadata.get('history_id') != service.history_id or metadata.get('state') != 'ok'
+                or metadata.get('deleted') or metadata.get('purged')):
+            return None
+    # Input metadata reads may be slow. Recheck the authoritative job after
+    # them, including its output associations, before saving an intent.
+    if identity(service._job_details(job_id)) != proof:
+        return None
+    return dict(proof, kind='terminal_error',
+                reason='Explicit fresh analysis after a terminal Galaxy error; earlier work and artifacts are retained')
+
+
+def validate_retry_source(service, proof):
+    current = (failed_run_proof(service, proof['job_id'])
+               if proof.get('kind') == 'terminal_error'
+               else failed_input_proof(service, proof['job_id'], retiring=True))
+    if current != proof:
+        raise RetrySourceChanged('The previous job or its inputs changed; no fresh analysis was submitted. Review the existing job before retrying.')
+
+
 def _cancelled_empty_upload(service, identifier, metadata):
     """Galaxy soft-deletes fetch outputs when their upload is cancelled.
 

@@ -353,7 +353,9 @@ class Hb2aWatchController(PowgenWatchController):
         setup=run.scan_metadata.get(self.setup_metadata_key) or {}
         key=sha256(json.dumps({'product':setup.get('source_sha256'),
             'spice':setup.get('metadata',{}).get('spice_sha256')},sort_keys=True).encode()).hexdigest()
-        return f'{self.settings.ipts}_{run.run_id}_{key[:16]}'
+        generation=run.scan_metadata.get('retry_generation',0)
+        suffix=f'_retry{generation}' if generation else ''
+        return f'{self.settings.ipts}_{run.run_id}_{key[:16]}{suffix}'
 
     def launch_submission(self,run):
         plan=build_submission_plan(self.definition,run,self.state)
@@ -375,7 +377,7 @@ class Hb2aWatchController(PowgenWatchController):
             data_relative_path=f'{self.settings.subfolder}/{Path(run.source_path).name}')
         snapshot=self.service.create_submission_snapshot(config,inputs,idempotency_token=plan.idempotency_key,
             output_profile='monitor',prepared_dataset_ids={'configuration':self.settings.configuration_dataset_id})
-        record=self.service.submit_snapshot(snapshot)
+        record=self._submit_live_snapshot(run,snapshot)
         if not record.galaxy_job_id:raise RuntimeError(f'Galaxy did not acknowledge {run.run_id}')
         record.provenance[self.bank_provenance_key]=receipt
         return record

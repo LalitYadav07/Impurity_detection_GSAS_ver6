@@ -5,10 +5,12 @@ from __future__ import annotations
 import csv
 from datetime import datetime, timezone
 import hashlib
+from html import escape
 import io
 import json
 import math
 import re
+import textwrap
 import zipfile
 
 from .post_analysis import ViewSettings
@@ -93,6 +95,57 @@ def y_title(view):
     return ("Δ" if rep == "difference" else "") + signal + (f" ({unit})" if unit else "")
 
 
+def _reference_caption(view):
+    """Describe the already-resolved baselines without selecting or changing one."""
+    if view.get("representation") not in {"difference", "relative", "permille", "normalized", "microstrain"}:
+        return {}, []
+    references, series_refs = {}, {}
+    for index, series in enumerate(view.get("series", [])):
+        points = series.get("points", [])
+        if not any(p.get("value") is not None and not p.get("display_hidden") for p in points):
+            continue
+        reference = series.get("reference_run")
+        if not reference:
+            recorded = {p["reference_run"] for p in points if p.get("reference_run")}
+            reference = next(iter(recorded)) if len(recorded) == 1 else None
+        point = next((p for p in points if p.get("run_id") == reference), {})
+        condition = []
+        temperature = point.get("temperature") or {}
+        value, unit = temperature.get("value"), temperature.get("unit")
+        if isinstance(value, (int, float)) and math.isfinite(value) and unit:
+            if unit == "K" and view.get("temperature_display_unit") == "C":
+                value, unit = value - 273.15, "°C"
+            condition.append(f"{value:.6g} {unit}")
+        axis = view.get("axis")
+        if axis not in {None, "run_number", "sample_state", "start_time", "elapsed_time"}:
+            x = display_x(view, point.get("x"))
+            if isinstance(x, (int, float)) and math.isfinite(x) and (axis != "temperature" or not condition):
+                unit = "°C" if axis == "temperature" and view.get("temperature_display_unit") == "C" else point.get("axis_unit", "")
+                condition.append(f"{axis.replace('_', ' ')} {x:.6g}" + (f" {unit}" if unit else ""))
+        label = str(reference) if reference else "not recorded"
+        if condition:
+            label += " · " + " · ".join(condition)
+        identity = (reference, series.get("bank"), series.get("sample"), tuple(condition))
+        references.setdefault(identity, label)
+        series_refs[index] = identity
+    if not references:
+        return {}, []
+    labels = list(references.values())
+    if len(references) == 1:
+        text = "Reference: " + labels[0]
+        tags = {}
+    else:
+        identifiers = {key: f"R{i+1}" for i, key in enumerate(references)}
+        parts = []
+        for key, label in references.items():
+            if labels.count(label) > 1:
+                label += f" · bank {key[1]} · sample {key[2]}"
+            parts.append(identifiers[key] + ": " + label)
+        text = "References · " + " | ".join(parts)
+        tags = {index: identifiers[key] for index, key in series_refs.items()}
+    return tags, textwrap.wrap(text, width=100, break_long_words=False, break_on_hyphens=False)
+
+
 def view_figure(view, settings: ViewSettings):
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
@@ -121,7 +174,10 @@ def view_figure(view, settings: ViewSettings):
     samples = {s["sample"] for s in view.get("series", [])}
     all_branches = {p.get("branch") for s in view.get("series", []) for p in s["points"]}
     legend_keys = set()
-    for series in view.get("series", []):
+    reference_tags, reference_lines = _reference_caption(view)
+    reference_height = len(reference_lines) * 16 + 12 if reference_lines else 0
+    for series_index, series in enumerate(view.get("series", [])):
+        reference_tag = reference_tags.get(series_index, "")
         branches = list(dict.fromkeys(p.get("branch") for p in series["points"]))
         color = colors[
             series.get(
@@ -146,7 +202,9 @@ def view_figure(view, settings: ViewSettings):
                 name += f" · sample {series['sample']}"
             if len(all_branches) > 1:
                 name += f" · {_legend_branch(branch)}"
-            legend_key = (series["phase_key"], metric, series["sample"], _legend_branch(branch))
+            if reference_tag:
+                name += f" · {reference_tag}"
+            legend_key = (series["phase_key"], metric, series["sample"], _legend_branch(branch), reference_tag)
             figure.add_trace(
                 go.Scatter(
                     x=xs,
@@ -154,7 +212,7 @@ def view_figure(view, settings: ViewSettings):
                     mode="lines+markers" if settings.connect else "markers",
                     connectgaps=False,
                     name=name,
-                    legendgroup=series["phase_key"] + ":" + str(metric),
+                    legendgroup=series["phase_key"] + ":" + str(metric) + (":" + reference_tag if reference_tag else ""),
                     showlegend=legend_key not in legend_keys,
                     line={
                         "color": color,
@@ -229,7 +287,7 @@ def view_figure(view, settings: ViewSettings):
                 figure.add_trace(go.Scatter(
                     x=[display_x(view, p["x"]) for p in points],
                     y=[p["value"] for p in points],
-                    name="Reference · " + _legend_phase(series["phase"]),
+                    name="Reference · " + _legend_phase(series["phase"]) + (" · " + reference_tag if reference_tag else ""),
                     legendgroup="reference:" + series["key"],
                     showlegend=branch == reference["points"][0]["branch"],
                     mode="lines", line={"color": color, "dash": "dot"},
@@ -237,8 +295,8 @@ def view_figure(view, settings: ViewSettings):
                 ), row=banks.index(series.get("bank"))+1, col=1)
     figure.update_layout(
         template="plotly_white",
-        height=max(460, len(banks) * 300 + 180),
-        margin={"l": 75, "r": 20, "t": 45, "b": 155},
+        height=max(460, len(banks) * 300 + 180) + reference_height,
+        margin={"l": 75, "r": 20, "t": 45 + reference_height, "b": 155},
         # Plotly 5 remains supported; it omits the newer legend height cap.
         legend=go.layout.Legend(
             orientation="h", y=-0.18, yanchor="top", maxheight=120, skip_invalid=True
@@ -252,7 +310,13 @@ def view_figure(view, settings: ViewSettings):
                 "font": {"size": 14},
                 "x": 0.02,
             },
-            margin={"l": 75, "r": 20, "t": 85, "b": 155},
+            margin={"l": 75, "r": 20, "t": 85 + reference_height, "b": 155},
+        )
+    if reference_lines:
+        figure.add_annotation(
+            text="<br>".join(escape(line) for line in reference_lines),
+            x=0, y=1, xref="paper", yref="paper", xanchor="left", yanchor="bottom",
+            yshift=28, showarrow=False, align="left", font={"size": 12, "color": "#46564e"},
         )
     figure.update_xaxes(
         title_text=axis_title(view),

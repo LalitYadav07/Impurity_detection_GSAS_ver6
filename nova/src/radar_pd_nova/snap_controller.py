@@ -328,7 +328,7 @@ class SnapWatchController(PowgenWatchController):
             data_relative_path=f'{self.settings.subfolder}/{Path(run.source_path).name}')
         snapshot = self.service.create_submission_snapshot(config,inputs,idempotency_token=self._submission_identity(run),
             output_profile='monitor',prepared_dataset_ids={'configuration':self.settings.configuration_dataset_id})
-        record = self.service.submit_snapshot(snapshot)
+        record = self._submit_live_snapshot(run,snapshot)
         if not record.galaxy_job_id:
             raise RuntimeError(f'Galaxy did not acknowledge {run.run_id}')
         receipt['staged_profile_dataset_id'] = profile_id

@@ -417,7 +417,8 @@ def _fit_figure_for_scan(scan, measured=None):
                     "plot_kind": "gsas_fit_with_ticks_v1",
                     "arrays": {"x": fit.x.tolist(), "yobs": fit.y.tolist(),
                                "ycalc": np.where(supported, fit.calculated, np.nan).tolist(),
-                               "resid": np.where(supported, fit.y - fit.calculated, np.nan).tolist()},
+                               "resid": np.where(supported, fit.y - fit.calculated, np.nan).tolist(),
+                               "valid": fit.valid.tolist(), "fit_valid": fit.fitted.tolist()},
                     "phase_ticks": packet.get("phase_ticks") or {},
                     "phase_order": packet.get("phase_order") or [],
                     "x_label": axis,
@@ -843,9 +844,6 @@ class UnetTransitionMixin:
                     fit.data = ("unet_transition_selected_fit.data",)
                     fit.layout = ("unet_transition_selected_fit.layout",)
                     html.P("{{ unet_transition_selected_fit_note }}", classes="radar-section-help")
-            html.P("Fit panels show RADAR-PD calculated curves, residuals and Bragg ticks available in this compact view.",
-                   v_show="!unet_transition_loading",
-                   classes="radar-section-help")
             with html.Details(classes="radar-tracker-provenance", v_show="!unet_transition_loading"):
                 html.Summary("Model and source details")
                 html.P("Focus U-Net {{ unet_transition_model_version }} · 151 native-point windows with 50% overlap · full checkpoint {{ unet_transition_model_sha }}")

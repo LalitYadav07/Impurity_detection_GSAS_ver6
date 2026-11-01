@@ -664,13 +664,15 @@ def test_async_monitor_publishes_updates_on_the_event_loop(tmp_path) -> None:
             current.message = "Results loaded"
             return current
 
-    app = RadarPdNovaApp.__new__(RadarPdNovaApp)
+    app = RadarPdNovaApp()
     app.service = _Service()
+    app.records = {record.uid: record}
     app._monitored_uids = {record.uid}
     updates: list[tuple[RunStatus, str, int, str]] = []
-    app._monitor_update = lambda current: updates.append(  # type: ignore[method-assign]
-        (current.status, current.stage, current.progress, current.message)
-    )
+    def capture(current):
+        app.records[current.uid] = current
+        updates.append((current.status, current.stage, current.progress, current.message))
+    app._monitor_update = capture
 
     asyncio.run(app._monitor_record(record, poll_seconds=0))
 

@@ -70,6 +70,8 @@ class PostAnalysisMixin(TransitionTrackingMixin, ScanInterpretationMixin):
         self._post_analysis_widgets = []
         self._post_analysis_scans = []
         self._post_analysis_result = {"views": []}
+        self._post_analysis_scope_states = {}
+        self._post_analysis_scope_owner = None
         self._select_post_analysis_editor()
         self._init_scan_interpretation()
         self._init_transition_tracking()
@@ -652,6 +654,79 @@ class PostAnalysisMixin(TransitionTrackingMixin, ScanInterpretationMixin):
     def _post_settings(self):
         return PostAnalysisSettings.model_validate(self.server.state.post_analysis)
 
+    @staticmethod
+    def _post_analysis_owner_token(owner):
+        if owner is None:
+            return None
+        marker = getattr(owner, "_radar_post_analysis_owner", None)
+        if not isinstance(marker, tuple) or len(marker) != 2 or marker[0] != id(owner):
+            # The identity check also gives copy.copy(controller) a new token.
+            marker = (id(owner), object())
+            owner._radar_post_analysis_owner = marker
+        return marker[1]
+
+    def _remember_post_analysis_scope(self):
+        scope = getattr(self, "_post_analysis_scope", "")
+        if not scope:
+            return
+        self._post_analysis_scope_states[scope] = {
+            "owner_token": self._post_analysis_owner_token(getattr(self, "_post_analysis_scope_owner", None)),
+            "settings": self._post_settings().model_dump(mode="json"),
+            "active": self.server.state.post_analysis_active,
+        }
+
+    def _activate_post_analysis_scope(self, scope, settings=None, *, owner=None, prefer_settings=False):
+        """Switch editor and rendered data together; calculations stay scope-local."""
+        if (getattr(self, "_post_analysis_scope", "") == scope
+                and getattr(self, "_post_analysis_scope_owner", None) is owner):
+            return False
+        cache = getattr(self, "_post_analysis_scope_states", {})
+        self._post_analysis_scope_states = cache
+        saved = cache.get(scope, {})
+        if saved.get("owner_token") is not self._post_analysis_owner_token(owner):
+            saved = {}
+        restored = settings if prefer_settings and settings is not None else (
+            PostAnalysisSettings.model_validate(saved["settings"]) if saved else settings)
+        state = self.server.state
+        self._post_analysis_scope = scope
+        self._post_analysis_scope_owner = owner
+        self._post_analysis_scans = []
+        self._post_analysis_pending = []
+        self._post_analysis_result = {"views": []}
+        state.post_analysis_active = saved.get("active", "")
+        state.post_analysis_panels = []
+        state.post_analysis_notices = []
+        state.post_analysis_fit_rows = []
+        state.post_analysis_observation_rows = []
+        state.post_analysis_phase_options = []
+        state.post_analysis_signal_options = []
+        state.post_analysis_reference_options = []
+        state.post_analysis_bank_options = []
+        state.post_analysis_sample_options = []
+        state.post_analysis_branch_options = ["all"]
+        state.post_analysis_active_points = 0
+        state.post_analysis_status = "Waiting for completed scans"
+        state.post_analysis_inspector_open = False
+        state.post_analysis_inspector_figure = {"data": [], "layout": {}}
+        state.post_analysis_point_open = False
+        self._set_post_settings(restored if restored is not None else PostAnalysisSettings())
+        from plotly.graph_objects import Figure
+        for widget in getattr(self, "_post_analysis_widgets", []):
+            widget.update(Figure())
+        self._remember_post_analysis_scope()
+        return True
+
+    def _activate_watch_post_analysis(self, controller):
+        scope = "watch:" + (str(controller.source_directory) if controller is not None else "none")
+        saved = controller.state.post_analysis if controller is not None else None
+        settings = PostAnalysisSettings.model_validate(saved) if saved else None
+        changed = self._activate_post_analysis_scope(scope, settings, owner=controller, prefer_settings=True)
+        if changed:
+            from .scan_interpretation import InterpretationSettings
+            self.server.state.scan_interpretation = InterpretationSettings.model_validate(
+                controller.state.scan_interpretation if controller is not None else {}
+            ).model_dump(mode="json")
+
     def _set_post_settings(self, settings):
         state = self.server.state
         state.post_analysis = settings.model_dump(mode="json")
@@ -1012,6 +1087,7 @@ class PostAnalysisMixin(TransitionTrackingMixin, ScanInterpretationMixin):
 
             for widget in self._post_analysis_widgets:
                 widget.update(go.Figure())
+        self._remember_post_analysis_scope()
 
     @staticmethod
     def _post_inline_figure(result, view):

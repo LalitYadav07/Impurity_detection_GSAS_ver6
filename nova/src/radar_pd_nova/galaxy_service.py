@@ -659,7 +659,7 @@ class GalaxyService:
         # not scientific inputs. Uploads have an extra RADAR-PD wrapper;
         # match only our exact reserved identities, preserving user ZIP names.
         internal_label = name.split("|", 1)[0].strip()
-        if re.fullmatch(r"(?:radar-pd )?radar-pd (?:model inputs [a-f0-9]{64}|model [a-f0-9]{24} results|"
+        if re.fullmatch(r"(?:radar-pd )?radar-pd (?:model inputs [a-f0-9]{64}|model [a-f0-9]{24} (?:results|console)|"
                         r"refinement (?:result bundle|console)|live packet [a-f0-9]{24}|"
                         r"live snapshot (?:result bundle|response cache|console))", internal_label):
             return "other", True
@@ -1830,6 +1830,7 @@ class GalaxyService:
         snapshot: SubmissionSnapshot,
         *,
         callback: Callable[[RunRecord], None] | None = None,
+        before_submit: Callable[[], None] | None = None,
     ) -> RunRecord:
         """Prepare inputs concurrently and launch Analyze exactly once."""
 
@@ -1882,6 +1883,7 @@ class GalaxyService:
                         params,
                         run_name=config.run_name,
                         config_dataset_id=prepared.get("configuration"),
+                        **({"before_submit": before_submit} if before_submit is not None else {}),
                     )
             with self._lock:
                 self._tools[uid] = tool
@@ -2250,6 +2252,7 @@ class GalaxyService:
         attempts: int = 3,
         run_name: str | None = None,
         config_dataset_id: str | None = None,
+        before_submit: Callable[[], None] | None = None,
     ) -> tuple[str, Any]:
         """Start the Analyze tool run, retrying on transient Galaxy submission failures.
 
@@ -2260,20 +2263,45 @@ class GalaxyService:
 
         from nova.galaxy import Tool
 
+        def acknowledged():
+            try:
+                uid = self._find_acknowledged_job(run_name, config_dataset_id) if run_name else None
+            except Exception:
+                uid = None
+            if not uid:
+                return None
+            tool = Tool(id=ANALYZE_TOOL_ID)
+            tool.assign_id(uid, store)
+            return uid, tool
+
         last_error: Exception | None = None
         for attempt in range(1, attempts + 1):
+            if attempt > 1 and before_submit is not None:
+                # A prior POST may have succeeded while its receipt was not
+                # visible. Stopping new work must not discard that job.
+                receipt = acknowledged()
+                if receipt is not None:
+                    return receipt
+            if before_submit is not None:
+                # Revalidate after dataset preparation, admission waits and
+                # any lost-acknowledgement retry delay, before each new POST.
+                try:
+                    before_submit()
+                except Exception:
+                    if attempt > 1:
+                        # The guard itself can await metadata reads. The
+                        # acknowledgement may have appeared during that wait.
+                        receipt = acknowledged()
+                        if receipt is not None:
+                            return receipt
+                    raise
             try:
                 uid, tool = self._submit_analysis(store, params)
             except Exception as exc:
                 last_error = exc
-                try:
-                    recovered_uid = self._find_acknowledged_job(run_name, config_dataset_id) if run_name else None
-                except Exception:
-                    recovered_uid = None
-                if recovered_uid:
-                    recovered = Tool(id=ANALYZE_TOOL_ID)
-                    recovered.assign_id(recovered_uid, store)
-                    return recovered_uid, recovered
+                receipt = acknowledged()
+                if receipt is not None:
+                    return receipt
                 if attempt < attempts:
                     time.sleep(2.0 * attempt)
                     continue

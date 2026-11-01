@@ -40,6 +40,8 @@ def app_harness(controller):
         powgen_selected_run_id="", powgen_x_axis="run_number", flush=Mock(),
     ))
     app.records = {}
+    app._result_context = object()
+    app.service = getattr(controller, "service", None)
     app._powgen_controller = controller
     app._post_analysis_scope = "watch:" + str(controller.source_directory)
     app._sync_runs = Mock()

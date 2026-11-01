@@ -144,6 +144,17 @@ def test_grouped_sample_bank_answer_is_atomic_and_partial_answers_are_explicit()
     assert bad.choices[0].value == {"powgen_processing_scope": "selected", "powgen_processing_sample_ids": ["B"]}
 
 
+def test_detailed_experiment_request_reports_unapplied_group_only_once():
+    samples = (SampleOption("101", "101 — Synthetic oxide (6 scans)"),)
+    context = ReplyContext(step="experiment", samples=samples, shown_samples=samples, banks=(2,))
+    text = ("POWGEN IPTS-99999, sample 101 (synthetic oxide, Al2O3). "
+            "Use all six existing scans and physical bank 2. I want Full analysis with one impurity discovery pass.")
+    reply = interpret_reply(text, context)
+    assert reply.action == "clarify"
+    assert reply.message.count("The grouped answer has not been applied.") == 1
+    assert "Unresolved clause:" in reply.message
+
+
 @pytest.mark.parametrize("bad", ["2.5", "2e0", "02", "-2", "7", "2 or 1", "2 and secret"])
 def test_bank_numbers_must_be_exact_and_available(bad):
     assert interpret_reply("bank " + bad, SELECTION).action != "patch"

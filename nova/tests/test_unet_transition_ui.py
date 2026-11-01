@@ -372,6 +372,24 @@ def test_compact_fit_receipt_does_not_claim_bragg_ticks_were_not_published():
     assert "no Bragg ticks were published" not in note
 
 
+def test_compact_fit_preserves_verified_observation_and_fit_masks_for_residuals():
+    row = scans()[0]
+    packet = row["pattern"]
+    packet["ycalc"] = (np.asarray(packet["y"]) - 1.5).tolist()
+    packet["valid"][:8] = [False] * 8
+    packet["fit_valid"][:8] = [False] * 8
+    packet["fit_valid"][-12:] = [False] * 12
+    figure, _ = _fit_figure_for_scan(row)
+    residual = next(trace for trace in figure["data"] if trace.get("name") == "Difference")
+    values = np.asarray([np.nan if value is None else value for value in residual["y"]], dtype=float)
+    fitted = np.asarray(packet["fit_valid"], dtype=bool)
+    assert np.isfinite(values).sum() == fitted.sum()
+    assert np.allclose(values[fitted], 1.5)
+    assert np.isnan(values[~fitted]).all()
+    assert not any("Observation validity unavailable" in str(annotation.get("text"))
+                   for annotation in figure["layout"].get("annotations", []))
+
+
 def test_fit_panel_reads_accepted_refinement_sidecar_for_its_scan(tmp_path):
     plots = tmp_path / "Results" / "Plots"
     plots.mkdir(parents=True)
