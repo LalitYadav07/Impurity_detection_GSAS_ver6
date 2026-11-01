@@ -13,6 +13,7 @@ import numpy as np
 from gpx_recipe.symmetry.campaign import Campaign,verify_receipt
 from gpx_recipe.symmetry.compiler import confined,assets,job_inputs
 from gpx_recipe.symmetry.contracts import digest
+from .model_portfolio import portfolio_snapshot
 
 _verified_receipts=OrderedDict()
 _evidence_lock=threading.RLock()
@@ -340,11 +341,8 @@ def group_models(rows,*,relative_tolerance=1e-6):
 
 def campaign_rows(root,*,experiment=None):
     campaign=Campaign(root)
-    with campaign.connect() as db:
-        protocols={r['hash']:dict(protocol=json.loads(r['body']),metadata=json.loads(r['metadata']))
-                   for r in db.execute('SELECT hash,body,metadata FROM protocols')}
+    protocols,trials,summaries=portfolio_snapshot(campaign)
     rows=[]
-    trials=campaign.trials()
     for trial in trials:
         # Restrict before opening any GPX/job/result files. Large portfolios in
         # another experiment must not delay the selected experiment's view.
@@ -363,9 +361,6 @@ def campaign_rows(root,*,experiment=None):
         row['execution_state']=trial['state']
         if trial['state']!='terminal' and row['status']=='pending':row.update(status=trial['state'],reason=trial['error'] or '')
         rows.append(row)
-    summaries=campaign.summaries()
-    for summary in summaries:
-        summary['pending_count']=sum(t['protocol']==summary['protocol'] and t['state'] not in {'terminal','cancelled'} for t in trials)
     return rows,summaries
 
 

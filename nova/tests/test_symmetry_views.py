@@ -296,20 +296,18 @@ def test_embedding_comparison_residuals_and_parameter_counts_keep_numeric_sort_v
 
 
 def test_experiment_scope_filters_before_reading_foreign_result_files(tmp_path,monkeypatch):
-    from contextlib import nullcontext
     import radar_pd_nova.symmetry_workspace as module
-    class DB:
-        def execute(self,*args):return [dict(hash='a',body='{}',metadata=json.dumps(dict(series='IPTS-1'))),dict(hash='b',body='{}',metadata=json.dumps(dict(series='IPTS-2')))]
     class C:
         def __init__(self,root):pass
-        def connect(self):return nullcontext(DB())
-        def trials(self):return [dict(id='first',protocol='a',state='running',receipt=None,error=None),dict(id='foreign',protocol='b',state='running',receipt=None,error=None)]
         def trial_directory(self,row):return tmp_path/row['id']
-        def summaries(self):return [dict(protocol='a'),dict(protocol='b')]
     accessed=[]
     def read(path,metadata,**kwargs):
         accessed.append(path.name);return dict(status='pending',metadata=metadata)
     monkeypatch.setattr(module,'Campaign',C);monkeypatch.setattr(module,'read_trial',read)
+    monkeypatch.setattr(module,'portfolio_snapshot',lambda campaign:(
+        {key:dict(protocol={},metadata=dict(series=experiment)) for key,experiment in [('a','IPTS-1'),('b','IPTS-2')]},
+        [dict(id='first',protocol='a',state='running',receipt=None,error=None),dict(id='foreign',protocol='b',state='running',receipt=None,error=None)],
+        [dict(protocol='a',pending_count=1),dict(protocol='b',pending_count=1)]))
     rows,summaries=module.campaign_rows(tmp_path,experiment='IPTS-1')
     assert accessed==['first'] and len(rows)==1
     assert len(summaries)==2 and all(s['pending_count']==1 for s in summaries)
