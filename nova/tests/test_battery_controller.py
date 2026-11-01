@@ -89,6 +89,8 @@ def test_unregistered_upload_path_cannot_read_server_files(app,tmp_path,monkeypa
     binding=CyclerBinding('66548','cell','C05','charge')
     asyncio.run(app._join_battery_async(binding,('upload','',str(file)),app._battery_generation,app._battery_binding_revision))
     assert 'Upload a completed' in app.server.state.battery_error
+    assert 'binding stopped' in app.server.state.battery_message
+    assert not app.server.state.battery_busy and app.server.state.battery_operation == ''
 
 
 def test_native_cycler_archive_selection_detects_revised_file(tmp_path):
@@ -237,3 +239,70 @@ def test_family_change_clears_old_run_coverage_but_retains_proposal_context(app,
     assert app.server.state.battery_catalog_rows==[]
     assert app.server.state.battery_catalog_title=='Proposal title'
     assert app.server.state.battery_catalog_proposal_message=='Proposal abstract unavailable'
+
+
+def test_inspection_announces_run_listing_before_filesystem_work_and_reports_failure(app,tmp_path,monkeypatch):
+    app.server.state.battery_message='Found 8 reduction families.'
+    def fail_listing(*args):
+        assert app.server.state.battery_busy and app.server.state.battery_operation == 'inspect'
+        assert 'Listing runs in shared/reduced' in app.server.state.battery_message
+        assert 'Found 8' not in app.server.state.battery_message
+        raise ValueError('Run-list inspection exceeded its time budget; no incomplete run list was used.')
+    monkeypatch.setattr(module,'family_runs',fail_listing)
+    asyncio.run(app._inspect_battery_async(inventory(tmp_path),'shared/reduced',12,app._battery_generation))
+    assert 'no incomplete run list' in app.server.state.battery_error
+    assert 'inspection stopped' in app.server.state.battery_message
+    assert not app.server.state.battery_busy and app.server.state.battery_operation == ''
+
+
+def test_inspection_reports_each_read_stage_and_finishes_with_a_review_prompt(app,tmp_path,monkeypatch):
+    stages=[]
+    monkeypatch.setattr(module,'family_runs',lambda *args:[138504])
+    def inspect(*args,**kwargs):
+        stages.append(app.server.state.battery_message)
+        return record()
+    def enrich(run,identity):
+        stages.append(app.server.state.battery_message)
+        return identity
+    def acquisition(*args,**kwargs):
+        stages.append(app.server.state.battery_message)
+        assert 'ONCat acquisition context 1/1' in app.server.state.battery_catalog_message
+        return catalog_record()
+    monkeypatch.setattr(module,'inspect_run',inspect)
+    monkeypatch.setattr(module,'ExperimentMetadataIndex',lambda *args,**kwargs:SimpleNamespace(enrich=enrich))
+    app._battery_catalog_client=SimpleNamespace(begin_batch=lambda:None,acquisition=acquisition)
+    asyncio.run(app._inspect_battery_async(inventory(tmp_path),'shared/reduced',12,app._battery_generation))
+    assert stages[0].startswith('Reading NeXus metadata 1/1')
+    assert stages[1].startswith('Checking sample tables and run-info XML 1/1')
+    assert stages[2].startswith('Reading catalog context 1/1')
+    assert app.server.state.battery_message.startswith('Inspected 1 of 1 runs')
+    assert not app.server.state.battery_busy and app.server.state.battery_operation == ''
+
+
+def test_empty_family_finishes_without_claiming_acquisitions_were_inspected(app,tmp_path,monkeypatch):
+    monkeypatch.setattr(module,'family_runs',lambda *args:[])
+    asyncio.run(app._inspect_battery_async(inventory(tmp_path),'shared/reduced',12,app._battery_generation))
+    assert 'No runs remain' in app.server.state.battery_message
+    assert 'No acquisition catalog context requested' in app.server.state.battery_catalog_message
+    assert app.server.state.battery_rows == [] and not app.server.state.battery_error
+    assert not app.server.state.battery_busy and app.server.state.battery_operation == ''
+
+
+def test_join_reports_parsing_and_success_then_invalidates_its_status_on_edit(app,tmp_path,monkeypatch):
+    file=tmp_path/'cell.csv';file.write_text('elapsed_seconds,voltage_v,current_a\n0,3,1\n10,4,1\n')
+    app._battery_acquisitions=[record()]
+    app._battery_upload=SimpleNamespace(current_path=file)
+    original=module.read_cycler
+    def read(*args,**kwargs):
+        assert app.server.state.battery_operation == 'join'
+        assert app.server.state.battery_message.startswith('Parsing cycler timestamps')
+        return original(*args,**kwargs)
+    monkeypatch.setattr(module,'read_cycler',read)
+    binding=CyclerBinding('66548','cell','C05','charge',clock_origin='2019-12-09T12:00:26-05:00')
+    asyncio.run(app._join_battery_async(binding,('upload','',str(file)),app._battery_generation,app._battery_binding_revision))
+    assert app.server.state.battery_message.startswith('Bound the cycler record to 1 inspected exposures')
+    assert not app.server.state.battery_error and not app.server.state.battery_busy
+    assert app.server.state.battery_operation == ''
+    app._battery_binding_changed()
+    assert app.server.state.battery_message.startswith('Electrochemical inputs changed')
+    assert not app.server.state.battery_echem_summary

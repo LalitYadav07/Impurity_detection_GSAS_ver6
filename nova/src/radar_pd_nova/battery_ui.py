@@ -18,7 +18,7 @@ def battery_dashboard(app):
         v.VAlert("Input qualification is separate from refinement acceptance. A folder name, voltage channel or low Rwp does not establish a valid battery model.", type="info", variant="tonal", density="compact", classes="mb-3")
         v.VAlert(v_if="!!battery_error", text=("battery_error",), type="error", variant="tonal", density="compact", classes="mb-3")
         html.P("{{ battery_message }}", role="status", aria_live="polite", classes="text-body-2")
-        v.VProgressLinear(v_if="battery_busy", indeterminate=True, color="#15543c", classes="mb-3")
+        v.VProgressLinear(v_if="battery_busy", indeterminate=True, color="#15543c", aria_label="Battery operation in progress", classes="mb-3")
         with v.VCard(variant="outlined", classes="pa-4 mb-4"):
             html.H3("1 · Find the experiment")
             with v.VRow(classes="mt-2"):
@@ -27,7 +27,7 @@ def battery_dashboard(app):
                 with v.VCol(cols=12, md=3):
                     v.VTextField(label="Battery IPTS", v_model=("battery_ipts",), placeholder="IPTS-21886", density="compact", variant="outlined", disabled=("battery_busy",), hide_details=True)
                 with v.VCol(cols=12, md=6):
-                    v.VBtn("Discover proposal sources", click=(app.discover_battery_proposal,"[{instrument:battery_instrument,ipts:battery_ipts}]"), disabled=("battery_busy || !battery_ipts.trim()",), color="#15543c", variant="flat", prepend_icon="mdi-folder-search-outline")
+                    v.VBtn("Discover proposal sources", click=(app.discover_battery_proposal,"[{instrument:battery_instrument,ipts:battery_ipts}]"), disabled=("battery_busy || !battery_ipts.trim()",), loading=("battery_busy && battery_operation === 'discover'",), color="#15543c", variant="flat", prepend_icon="mdi-folder-search-outline")
             html.P("The archive is read only. Discovery checks known layouts and shallow auxiliary folders; it does not load detector events.", classes="text-caption mt-2")
             html.P('{{ battery_catalog_message }}',role='status',aria_live='polite',classes='text-body-2 mt-2')
             html.P('{{ battery_catalog_proposal_message }}',v_if='battery_catalog_proposal_message',classes='text-caption')
@@ -39,11 +39,10 @@ def battery_dashboard(app):
             v.VAlert(v_for='item in battery_catalog_issues',key='item',text=('item',),type='warning',variant='tonal',density='compact')
             v.VAlert(v_for="item in battery_issues", key="item.code + item.path", text=("item.message + (item.path ? ' · ' + item.path : '')",), type="warning", variant="tonal", density="compact", classes="mt-2")
             v.VSelect(label="Diffraction reduction family", v_model=("battery_family",), items=("battery_families",), density="compact", variant="outlined", disabled=("battery_busy || !battery_families.length",), no_data_text="Discover a proposal to list its reduction families", hint="Choose one reduction family. Regenerated products are kept separate.", persistent_hint=True, classes="mt-4")
-            with v.VRow():
-                with v.VCol(cols=12, md=3):
-                    v.VTextField(label="Representative runs to inspect", v_model=("battery_inspection_limit",), type="text", inputmode="decimal", min=1, max=200, density="compact", variant="outlined", disabled=("battery_busy",), hint="Evenly sampled across the selected family, up to 200.", persistent_hint=True)
-                with v.VCol(cols=12, md=9):
-                    v.VBtn("Inspect acquisition metadata", click=app.inspect_battery_acquisitions, disabled=("battery_busy || !battery_family",), variant="outlined", prepend_icon="mdi-magnify")
+            v.VBtn("Inspect acquisition metadata", click=app.inspect_battery_acquisitions, disabled=("battery_busy || !battery_family",), loading=("battery_busy && battery_operation === 'inspect'",), variant="outlined", prepend_icon="mdi-magnify")
+            with html.Details(classes="my-3"):
+                html.Summary("Inspection sample · up to {{ battery_inspection_limit }} representative runs", style="cursor:pointer")
+                v.VTextField(label="Representative runs to inspect", v_model=("battery_inspection_limit",), type="text", inputmode="decimal", min=1, max=200, density="compact", variant="outlined", disabled=("battery_busy",), hint="Evenly sampled across the selected family, up to 200. More runs can take longer on the facility archive.", persistent_hint=True, classes="mt-3")
             with html.Details(v_if="battery_metadata_sources.length"):
                 html.Summary("Metadata and calibration candidates ({{ battery_metadata_sources.length }})")
                 v.VDataTable(items=("battery_metadata_sources",), headers=("[{title:'Kind',key:'kind'},{title:'Source within IPTS',key:'path'},{title:'Recorded setup references',key:'summary'}]",), density="compact", items_per_page=5)
@@ -83,14 +82,16 @@ def battery_dashboard(app):
                         v.VSelect(label="Recorded date format", v_model=("battery_date_format",), items=("[{title:'Elapsed seconds or timezone-qualified ISO timestamps',value:''},{title:'Month/day/year hours:minutes:seconds',value:'month/day/year'},{title:'Day/month/year hours:minutes:seconds',value:'day/month/year'},{title:'Year-month-day hours:minutes:seconds',value:'year-month-day'}]",), density="compact", variant="outlined", disabled=("battery_busy",))
                     with v.VCol(cols=12, md=6):
                         v.VTextField(label="Recorded clock timezone", v_model=("battery_timezone",), placeholder="America/New_York", density="compact", variant="outlined", disabled=("battery_busy",))
-            with v.VRow():
-                with v.VCol(cols=12, md=4):
-                    v.VTextField(label="Clock correction (seconds)", v_model=("battery_offset",), type="text", inputmode="decimal", density="compact", variant="outlined", disabled=("battery_busy",), hint="Added to the cycler timestamps", persistent_hint=True)
-                with v.VCol(cols=12, md=4):
-                    v.VTextField(label="Clock uncertainty (seconds)", v_model=("battery_clock_uncertainty",), type="text", inputmode="decimal", min=0, density="compact", variant="outlined", disabled=("battery_busy",), hint="Leave blank when unknown; zero means an explicitly exact mapping.", persistent_hint=True)
-                with v.VCol(cols=12, md=4):
-                    v.VTextField(label="Largest joined log interval (seconds)", v_model=("battery_gap",), type="text", inputmode="decimal", min=0, max=86400, density="compact", variant="outlined", disabled=("battery_busy",), hint="Longer gaps and protocol changes are excluded", persistent_hint=True)
-            v.VBtn("Bind and join exposure intervals", click=(app.join_battery_cycler,"[{sample:battery_sample,cell:battery_cell,channel:battery_channel,positive:battery_positive,origin:battery_origin,offset:battery_offset,clock_uncertainty:battery_clock_uncertainty,gap:battery_gap,date_format:battery_date_format,timezone:battery_timezone}]"), disabled=("battery_busy || !battery_rows.length || !battery_sample || !battery_cell.trim() || !battery_channel.trim() || !battery_positive || (battery_echem_source === 'archive' ? !battery_cycler : !battery_cycler_path)",), variant="flat", color="#15543c", prepend_icon="mdi-link-variant")
+            with html.Details(classes="mb-3"):
+                html.Summary("Clock alignment and gaps · correction {{ battery_offset }} s · uncertainty {{ battery_clock_uncertainty === null || battery_clock_uncertainty === '' ? 'unknown' : battery_clock_uncertainty + ' s' }} · gap limit {{ battery_gap }} s", style="cursor:pointer")
+                with v.VRow(classes="mt-2"):
+                    with v.VCol(cols=12, md=4):
+                        v.VTextField(label="Clock correction (seconds)", v_model=("battery_offset",), type="text", inputmode="decimal", density="compact", variant="outlined", disabled=("battery_busy",), hint="Added to the cycler timestamps", persistent_hint=True)
+                    with v.VCol(cols=12, md=4):
+                        v.VTextField(label="Clock uncertainty (seconds)", v_model=("battery_clock_uncertainty",), type="text", inputmode="decimal", min=0, density="compact", variant="outlined", disabled=("battery_busy",), hint="Leave blank when unknown; zero means an explicitly exact mapping.", persistent_hint=True)
+                    with v.VCol(cols=12, md=4):
+                        v.VTextField(label="Largest joined log interval (seconds)", v_model=("battery_gap",), type="text", inputmode="decimal", min=0, max=86400, density="compact", variant="outlined", disabled=("battery_busy",), hint="Longer gaps and protocol changes are excluded", persistent_hint=True)
+            v.VBtn("Bind and join exposure intervals", click=(app.join_battery_cycler,"[{sample:battery_sample,cell:battery_cell,channel:battery_channel,positive:battery_positive,origin:battery_origin,offset:battery_offset,clock_uncertainty:battery_clock_uncertainty,gap:battery_gap,date_format:battery_date_format,timezone:battery_timezone}]"), disabled=("battery_busy || !battery_rows.length || !battery_sample || !battery_cell.trim() || !battery_channel.trim() || !battery_positive || (battery_echem_source === 'archive' ? !battery_cycler : !battery_cycler_path)",), loading=("battery_busy && battery_operation === 'join'",), variant="flat", color="#15543c", prepend_icon="mdi-link-variant")
             v.VAlert(v_if="!!battery_echem_summary", text=("battery_echem_summary",), type="info", variant="tonal", density="compact", classes="mt-3")
             with html.Div(v_if="!!battery_echem_summary", style="height:440px;width:100%", classes="mt-3"):
                 figure = plotly.Figure(display_mode_bar=True, responsive=True, display_logo=False,

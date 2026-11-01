@@ -5,13 +5,14 @@ from trame.widgets import html, plotly, vuetify3 as v
 def portfolio_panel(app):
     with v.VCard(variant='outlined',classes='pa-4 mb-4'):
         html.H3('5 · Compare declared models')
+        html.P('Prepare models in step 4, or open the comparison form to use saved models.',v_if='!battery_portfolio_ready',classes='text-body-2')
         html.P('The sealed review below retains its displayed models and policy. Editing the form starts a new review.',v_if='battery_portfolio_ready',classes='text-body-2')
         with html.Details(classes='mt-4'):
             html.Summary('Recover a reviewed portfolio')
             v.VBtn('Refresh saved portfolios and results',click=app.refresh_battery_portfolios,disabled=('battery_busy',),variant='text',size='small')
             v.VSelect(label='Saved portfolio',v_model=('battery_portfolio_saved',),items=('battery_portfolio_options',),disabled=('battery_busy',),density='compact',variant='outlined')
             v.VBtn('Open saved portfolio',click=app.open_battery_portfolio,disabled=('battery_busy || !battery_portfolio_saved',),variant='outlined',size='small')
-        with html.Details(open=('!battery_portfolio_ready',),classes='my-4'):
+        with html.Details(open=('!battery_portfolio_ready && (battery_model_ready || battery_saved_models.length > 0 || battery_portfolio_entries.length > 0)',),classes='my-4'):
             html.Summary('Build or revise a comparison',style='cursor:pointer')
             _portfolio_form(app)
         v.VAlert('{{ battery_portfolio_message }}',type=('battery_portfolio_message_kind',),variant='tonal',density='compact',role='status',aria_live='polite',classes='text-body-2 my-3')
@@ -70,13 +71,14 @@ def _portfolio_form(app):
     with html.Div(classes='d-flex flex-wrap ga-2'):
         with v.VBtn(v_for='trial in battery_portfolio_entries',key='trial.index',click=(app.remove_battery_trial,'[trial.index]'),disabled=('battery_busy',),variant='text',size='small'):
             html.Span('Remove {{ trial.family }} / {{ trial.seed }}')
-    html.H4('Background and sample-width policy',classes='mt-4')
-    html.P('Use identical choices across this trial set. Compare a different policy in a separate reviewed portfolio; extra flexibility can absorb real diffraction signal.',classes='text-body-2')
-    v.VSelect(label='Background policy',v_model=('battery_portfolio_background',),items=("[{title:'Preserve starting background models',value:'preserve'},{title:'Set Chebyshev terms in every bank',value:'chebyshev'}]",),disabled=('battery_busy',),density='compact',variant='outlined')
-    v.VTextField(v_if="battery_portfolio_background === 'chebyshev'",label='Background coefficients per bank',v_model=('battery_portfolio_bg_coefficients',),disabled=('battery_busy',),inputmode='numeric',density='compact',variant='outlined',hint='1–36 coefficients. Existing background support points are retained.',persistent_hint=True)
-    v.VSelect(label='Refine sample size for',v_model=('battery_portfolio_sizes',),items=('battery_portfolio_width_options',),multiple=True,chips=True,disabled=('battery_busy || !battery_portfolio_entries.length',),density='compact',variant='outlined')
-    v.VSelect(label='Refine sample microstrain for',v_model=('battery_portfolio_strains',),items=('battery_portfolio_width_options',),multiple=True,chips=True,disabled=('battery_busy || !battery_portfolio_entries.length',),density='compact',variant='outlined')
-    html.P('Only phase/bank links shared by every trial are offered. Native preflight requires an existing isotropic model. Other widths remain fixed. These are separate bank parameters, not an automatically shared physical size. Changing the trial set removes choices it no longer shares.',classes='text-body-2')
+    with html.Details(classes='my-4'):
+        html.Summary("Background and sample-width policy · {{ battery_portfolio_background === 'preserve' ? 'preserve backgrounds' : battery_portfolio_bg_coefficients + ' Chebyshev terms per bank' }} · {{ battery_portfolio_sizes.length }} size / {{ battery_portfolio_strains.length }} microstrain selections",style='cursor:pointer')
+        html.P('Use identical choices across this trial set. Compare a different policy in a separate reviewed portfolio; extra flexibility can absorb real diffraction signal.',classes='text-body-2')
+        v.VSelect(label='Background policy',v_model=('battery_portfolio_background',),items=("[{title:'Preserve starting background models',value:'preserve'},{title:'Set Chebyshev terms in every bank',value:'chebyshev'}]",),disabled=('battery_busy',),density='compact',variant='outlined')
+        v.VTextField(v_if="battery_portfolio_background === 'chebyshev'",label='Background coefficients per bank',v_model=('battery_portfolio_bg_coefficients',),disabled=('battery_busy',),inputmode='numeric',density='compact',variant='outlined',hint='1–36 coefficients. Existing background support points are retained.',persistent_hint=True)
+        v.VSelect(label='Refine sample size for',v_model=('battery_portfolio_sizes',),items=('battery_portfolio_width_options',),multiple=True,chips=True,disabled=('battery_busy || !battery_portfolio_entries.length',),density='compact',variant='outlined')
+        v.VSelect(label='Refine sample microstrain for',v_model=('battery_portfolio_strains',),items=('battery_portfolio_width_options',),multiple=True,chips=True,disabled=('battery_busy || !battery_portfolio_entries.length',),density='compact',variant='outlined')
+        html.P('Only phase/bank links shared by every trial are offered. Native preflight requires an existing isotropic model. Other widths remain fixed. These are separate bank parameters, not an automatically shared physical size. Changing the trial set removes choices it no longer shares.',classes='text-body-2')
     with html.Details(classes='my-4'):
         html.Summary('Optional held-Li sensitivity',style='cursor:pointer')
         v.VCheckbox(label='Review a held-Li occupancy grid',v_model=('battery_li_enabled',),disabled=('battery_busy',),density='compact',hide_details=True)

@@ -70,6 +70,7 @@ class BatteryMixin(BatteryPreparationMixin, BatteryCampaignMixin):
         state.battery_instrument = "NOM"
         state.battery_ipts = ""
         state.battery_busy = False
+        state.battery_operation = ""
         state.battery_message = "Choose an IPTS to find diffraction, sample metadata and possible cycler records."
         state.battery_error = ""
         state.battery_issues = []
@@ -160,9 +161,14 @@ class BatteryMixin(BatteryPreparationMixin, BatteryCampaignMixin):
         state.battery_total_runs = 0
         self._battery_reset_preparation()
         self._battery_binding_changed()
+        if self._battery_inventory:
+            state.battery_error = ""
+            state.battery_message = ("Inspect acquisition metadata for the selected reduction family."
+                if state.battery_family else "Select a reduction family, then inspect its acquisition metadata.")
 
     def _battery_binding_changed(self, **_):
         self._battery_binding_revision += 1
+        had_binding = self._battery_series is not None
         self._battery_series = None; self._battery_joins = []
         self._battery_cycler_raw = None
         if self.server.state.battery_model_include_echem:
@@ -171,6 +177,8 @@ class BatteryMixin(BatteryPreparationMixin, BatteryCampaignMixin):
         self.server.state.battery_timeline = {"data": [], "layout": {}}
         self.server.state.battery_rows = [acquisition_row(row) for row in self._battery_acquisitions]
         self.server.state.battery_export_ready = bool(self._battery_acquisitions or self._battery_inventory)
+        if had_binding and self._battery_acquisitions:
+            self.server.state.battery_message = "Electrochemical inputs changed. Bind the revised record again to refresh exposure coverage."
 
     @staticmethod
     def _battery_root():
@@ -211,6 +219,7 @@ class BatteryMixin(BatteryPreparationMixin, BatteryCampaignMixin):
     async def _discover_battery_async(self, instrument, ipts, generation):
         state = self.server.state
         state.battery_busy = True; state.battery_error = ""
+        state.battery_operation = "discover"
         state.battery_message = "Inspecting known reduction layouts and shallow auxiliary folders…"; state.flush()
         try:
             result = await asyncio.to_thread(discover_proposal, instrument, ipts, facility_root=self._battery_root())
@@ -224,7 +233,8 @@ class BatteryMixin(BatteryPreparationMixin, BatteryCampaignMixin):
                 ("calibration_candidates", "Detector calibration · not a GSAS peak profile")]
                 for row in result.get(key, [])]
             state.battery_issues = result["issues"]
-            state.battery_message = f"Found {len(result['product_families'])} reduction families and {len(result['cycler_candidates'])} possible cycler sources. Select a family; sources are not yet bound to a cell."
+            found = f"Found {len(result['product_families'])} reduction families and {len(result['cycler_candidates'])} possible cycler sources."
+            state.battery_message = found + " Reading proposal catalog context…"
             if result["status"] == "unavailable": state.battery_error = result["issues"][0]["message"]
             state.battery_catalog_message = 'Reading proposal context from ONCat…'; state.flush()
             self._battery_catalog_client.begin_batch()
@@ -238,16 +248,20 @@ class BatteryMixin(BatteryPreparationMixin, BatteryCampaignMixin):
             state.battery_catalog_message = 'Select a reduction family and inspect its acquisition context.'
             state.battery_catalog_issues = catalog.get('issues',[])
             state.battery_export_ready = True
+            state.battery_message = found + (" Select a family; sources are not yet bound to a cell."
+                if result['product_families'] else " No reduction family is available to inspect. Review the discovery notices.")
         except Exception as exc:
-            if generation == self._battery_generation: state.battery_error = str(exc)
+            if generation == self._battery_generation:
+                state.battery_error = str(exc)
+                state.battery_message = "Proposal discovery stopped. Correct the reported error and discover the proposal again."
         finally:
-            state.battery_busy = False; state.flush()
+            state.battery_busy = False; state.battery_operation = ""; state.flush()
 
     def inspect_battery_acquisitions(self, **_):
         if self._battery_running(): return
         inventory = self._battery_inventory
         if not inventory:
-            self.server.state.battery_error = "Discover a proposal first"; return
+            self.server.state.battery_error = "Discover a proposal first"; self.server.state.flush(); return
         family = self.server.state.battery_family
         try:
             value = self.server.state.battery_inspection_limit
@@ -266,20 +280,30 @@ class BatteryMixin(BatteryPreparationMixin, BatteryCampaignMixin):
 
     async def _inspect_battery_async(self, inventory, family, limit, generation):
         state = self.server.state
-        state.battery_busy = True; state.battery_error = ""; state.flush()
+        state.battery_busy = True; state.battery_error = ""; state.battery_operation = "inspect"
+        state.battery_message = f"Listing runs in {family} before sampling up to {limit} acquisitions… Detector events are not loaded."
+        state.battery_catalog_message = "Waiting for the run list before reading acquisition catalog context."
+        state.flush()
         try:
             runs = await asyncio.to_thread(family_runs, inventory, family)
             chosen = runs if len(runs) <= limit else [runs[round(i*(len(runs)-1)/(limit-1))] for i in range(limit)] if limit>1 else runs[-1:]
+            if generation != self._battery_generation: return
+            if not chosen:
+                state.battery_message = "No runs remain in the selected reduction family. Discover the proposal again to refresh its sources."
+                state.battery_catalog_message = "No acquisition catalog context requested: the selected family has no runs."
+                return
             records = []
             self._battery_catalog_client.begin_batch()
             metadata = ExperimentMetadataIndex(inventory["instrument"], inventory["ipts"], root=Path(inventory["root"]))
             for index, run in enumerate(chosen):
                 if generation != self._battery_generation: return
-                state.battery_message = f"Reading metadata {index+1}/{len(chosen)} · run {run}. Detector events are not loaded."; state.flush()
+                state.battery_message = f"Reading NeXus metadata {index+1}/{len(chosen)} · run {run}. Detector events are not loaded."; state.flush()
                 try:
                     record = await asyncio.to_thread(inspect_run, inventory["instrument"], inventory["ipts"], run, facility_root=self._battery_root())
                 except (OSError,ValueError) as exc:
                     record=dict(run=run,status='unavailable',fields={},issues=[dict(code='acquisition_unavailable',message=str(exc))])
+                if generation != self._battery_generation: return
+                state.battery_message = f"Checking sample tables and run-info XML {index+1}/{len(chosen)} · run {run}."; state.flush()
                 try:
                     record['identity'] = await asyncio.to_thread(metadata.enrich, run, record.get('identity',{}))
                 except (OSError,ValueError) as exc:
@@ -292,6 +316,9 @@ class BatteryMixin(BatteryPreparationMixin, BatteryCampaignMixin):
                         relative = Path(record['path']).relative_to(Path(inventory['root']))
                         location = f"/SNS/{inventory['instrument']}/{inventory['ipts']}/"+relative.as_posix()
                     except ValueError: pass
+                state.battery_message = f"Reading catalog context {index+1}/{len(chosen)} · run {run}. Archive metadata checks finished for this run."
+                state.battery_catalog_message = f"Reading optional ONCat acquisition context {index+1}/{len(chosen)} · run {run}…"
+                state.flush()
                 catalog = await self._battery_read_catalog('run',
                     inventory['instrument'],inventory['ipts'],run=run,location=location)
                 record['catalog'] = catalog
@@ -322,9 +349,12 @@ class BatteryMixin(BatteryPreparationMixin, BatteryCampaignMixin):
             state.battery_message = f"Inspected {len(records)} of {len(runs)} runs across this family. Review sample IDs and titles: references and other cells may share the same folder."
             state.battery_export_ready = True
         except Exception as exc:
-            if generation == self._battery_generation: state.battery_error = str(exc)
+            if generation == self._battery_generation:
+                state.battery_error = str(exc)
+                state.battery_message = "Acquisition inspection stopped. Correct the reported error and inspect the family again."
+                state.battery_catalog_message = "Acquisition catalog inspection did not finish."
         finally:
-            state.battery_busy = False; state.flush()
+            state.battery_busy = False; state.battery_operation = ""; state.flush()
 
     def join_battery_cycler(self, payload=None, **_):
         if self._battery_running(): return
@@ -352,7 +382,8 @@ class BatteryMixin(BatteryPreparationMixin, BatteryCampaignMixin):
 
     async def _join_battery_async(self, binding, selection, generation, revision):
         state = self.server.state
-        state.battery_busy = True; state.battery_error = ""; state.flush()
+        state.battery_busy = True; state.battery_error = ""; state.battery_operation = "join"
+        state.battery_message = "Reading the selected cycler record…"; state.flush()
         try:
             source, candidate_id, upload = selection
             if source == "archive":
@@ -367,6 +398,8 @@ class BatteryMixin(BatteryPreparationMixin, BatteryCampaignMixin):
                 raw = await asyncio.to_thread(path.read_bytes); name = path.name
             else:
                 raise ValueError("Choose an archive or uploaded cycler source")
+            if generation != self._battery_generation or revision != self._battery_binding_revision: return
+            state.battery_message = "Parsing cycler timestamps, units and the recorded current convention…"; state.flush()
             series = await asyncio.to_thread(read_cycler, raw, binding, source_name=name)
             if generation != self._battery_generation or revision != self._battery_binding_revision: return
             joins, rows = [], []
@@ -394,11 +427,15 @@ class BatteryMixin(BatteryPreparationMixin, BatteryCampaignMixin):
                 else f" Reviewed clock uncertainty: {binding.clock_uncertainty_seconds:g} s.")
             if summary['median_recording_interval_seconds'] > binding.maximum_gap_seconds:
                 state.battery_echem_summary += " The allowed gap is shorter than the typical recording interval; review the coverage before changing that limit."
+            state.battery_message = (f"Bound the cycler record to {len(joins)} inspected exposures. Review the electrical coverage and clock mapping in step 3."
+                if joins else "The cycler record was read, but no inspected exposures matched this sample with a usable interval. Review sample identity and exposure metadata in step 2.")
             state.battery_export_ready = True
         except Exception as exc:
-            if generation == self._battery_generation and revision == self._battery_binding_revision: state.battery_error = str(exc)
+            if generation == self._battery_generation and revision == self._battery_binding_revision:
+                state.battery_error = str(exc)
+                state.battery_message = "Cycler binding stopped. Correct the reported error and bind the record again."
         finally:
-            state.battery_busy = False; state.flush()
+            state.battery_busy = False; state.battery_operation = ""; state.flush()
 
     def export_battery_evidence(self, **_):
         data = {"schema": "radar-battery-workspace/v1", "inventory": self._battery_inventory,

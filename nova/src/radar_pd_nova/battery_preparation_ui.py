@@ -24,8 +24,10 @@ def preparation_panel(app):
             v.VDataTable(v_if='battery_model_bank_rows.length',items=('battery_model_bank_rows',),headers=("[{title:'Physical bank',key:'bank'},{title:'Angle (degrees)',key:'angle'},{title:'Records',key:'points'},{title:'Nominal d range (Å)',key:'nominal_d'},{title:'Data check',key:'quality'}]",),density='compact',hide_default_footer=True,items_per_page=6,classes='mt-3')
             html.P('{{ note }}',v_for='note in battery_model_mapping_notes',key='note',classes='text-body-2')
             v.VSelect(label='Banks fitted jointly',v_model=('battery_model_banks',),items=('battery_model_bank_options',),multiple=True,chips=True,disabled=('battery_busy',),density='compact',variant='outlined',classes='mt-3')
-            v.VCheckbox(label='Allow invalid intensity or uncertainty bins only outside the selected fit limits',v_model=('battery_allow_invalid_edges',),disabled=('battery_busy',),density='compact',hide_details=True)
-            html.P('With this option, preparation must verify that every excluded bin lies outside the fitted interval. Invalid coordinates and invalid bins inside the fit still stop preparation. Original records are retained.',classes='text-body-2')
+            with html.Details(classes='mb-3'):
+                html.Summary("Excluded edge-bin policy · {{ battery_allow_invalid_edges ? 'enabled' : 'off' }}",style='cursor:pointer')
+                v.VCheckbox(label='Allow invalid intensity or uncertainty bins only outside the selected fit limits',v_model=('battery_allow_invalid_edges',),disabled=('battery_busy',),density='compact',hide_details=True)
+                html.P('With this option, preparation must verify that every excluded bin lies outside the fitted interval. Invalid coordinates and invalid bins inside the fit still stop preparation. Original records are retained.',classes='text-body-2')
             for bank in range(1,7):
                 with v.VCard(v_show=f'battery_model_banks.includes({bank})',variant='tonal',classes='pa-3 mb-3'):
                     html.H4(f'Physical bank {bank}')

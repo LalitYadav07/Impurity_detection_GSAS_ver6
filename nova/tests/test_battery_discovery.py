@@ -5,7 +5,7 @@ import h5py
 import numpy as np
 import pytest
 
-from radar_pd_nova.battery.discovery import DiscoveryLimits, discover_proposal, inspect_run
+from radar_pd_nova.battery.discovery import DiscoveryLimits, discover_proposal, family_runs, inspect_run
 
 
 def test_idl_reference_setup_is_evidence_and_cannot_replace_proposal_identity(tmp_path):
@@ -185,3 +185,69 @@ def test_raw_path_cannot_escape_the_selected_proposal(tmp_path):
     path.rename(relocated); path.symlink_to(relocated)
     with pytest.raises(ValueError, match="outside"):
         inspect_run("NOM", "IPTS-21886", 138504, facility_root=tmp_path)
+
+
+def family_inventory(tmp_path):
+    return dict(root=str(tmp_path), instrument='NOM', product_families=[dict(folder='shared/reduced')])
+
+
+def test_family_run_listing_skips_type_checks_for_unrelated_names(tmp_path, monkeypatch):
+    from contextlib import nullcontext
+    from radar_pd_nova.battery import discovery
+
+    class Unrelated:
+        def __init__(self, name): self.name = name
+        def is_symlink(self): raise AssertionError('Unrelated entry was inspected')
+        def is_dir(self, **kwargs): raise AssertionError('Unrelated entry was statted')
+
+    folder = tmp_path/'shared/reduced'; folder.mkdir(parents=True)
+    (folder/'NOM_12.gsa').write_text('No contents need to be read')
+    with discovery.os.scandir(folder) as stream:
+        valid = list(stream)
+    entries = [Unrelated('NOM_1.pdf'), Unrelated('PG3_11.gsa'), Unrelated('subdirectory'), *valid]
+    monkeypatch.setattr(discovery.os, 'scandir', lambda path: nullcontext(iter(entries)))
+    assert family_runs(family_inventory(tmp_path), 'shared/reduced') == [12]
+
+
+def test_family_run_listing_keeps_symlink_and_directory_protection(tmp_path):
+    folder = tmp_path/'shared/reduced'; folder.mkdir(parents=True)
+    (folder/'NOM_12.gsa').write_text('valid')
+    (folder/'NOM_12-2.xye').write_text('same run, another bank')
+    (folder/'NOM_2.gsa').write_text('valid')
+    (folder/'NOM_8.gsa').mkdir()
+    outside = tmp_path/'outside.gsa'; outside.write_text('outside the selected family')
+    (folder/'NOM_99.gsa').symlink_to(outside)
+    assert family_runs(family_inventory(tmp_path), 'shared/reduced') == [2, 12]
+
+
+def test_family_run_listing_rejects_entry_budget_without_a_partial_list(tmp_path):
+    folder = tmp_path/'shared/reduced'; folder.mkdir(parents=True)
+    for run in range(1, 4):
+        (folder/f'NOM_{run}.gsa').write_text('valid')
+    with pytest.raises(ValueError, match='entry budget; no incomplete run list was used'):
+        family_runs(family_inventory(tmp_path), 'shared/reduced', limits=DiscoveryLimits(entries_per_directory=2))
+
+
+@pytest.mark.parametrize('stall', ['between_entries', 'final_entry'])
+def test_family_run_listing_rejects_elapsed_budget_without_a_partial_list(tmp_path, monkeypatch, stall):
+    from contextlib import nullcontext
+    from radar_pd_nova.battery import discovery
+
+    clock = [0.]
+    class Entry:
+        name = 'NOM_12.gsa'
+        def is_symlink(self): return False
+        def is_dir(self, **kwargs):
+            if stall == 'final_entry': clock[0] = 2.
+            return False
+
+    def entries():
+        yield Entry()
+        if stall == 'between_entries':
+            clock[0] = 2.
+            yield Entry()
+
+    monkeypatch.setattr(discovery.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(discovery.os, 'scandir', lambda path: nullcontext(entries()))
+    with pytest.raises(ValueError, match='1 s budget; no incomplete run list was used'):
+        family_runs(family_inventory(tmp_path), 'shared/reduced', limits=DiscoveryLimits(elapsed_seconds=1.))

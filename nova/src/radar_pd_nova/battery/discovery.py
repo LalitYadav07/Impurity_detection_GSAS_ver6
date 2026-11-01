@@ -273,21 +273,45 @@ def discover_proposal(instrument, ipts, *, facility_root=Path("/SNS"), limits=No
     return result
 
 
-def family_runs(inventory, folder):
-    """Resolve only a discovered family; no browser-supplied arbitrary path."""
+def family_runs(inventory, folder, *, limits=None):
+    """Resolve a complete discovered family within the inventory budgets.
+
+    Filter names before checking file type: most files in a large reduction
+    folder are unrelated products, and a type check can require an NFS stat.
+    Symlinks are still excluded. A budget failure never returns a partial list.
+    """
     if folder not in {row["folder"] for row in inventory.get("product_families", [])}:
         raise ValueError("Select a diffraction family from the current proposal inventory")
+    limits = limits or DiscoveryLimits()
+    started = time.monotonic()
+
+    def check_elapsed():
+        # This bounds work between filesystem calls; it cannot interrupt a
+        # filesystem call already blocked in the operating system.
+        if time.monotonic() - started >= limits.elapsed_seconds:
+            raise ValueError(f"Run-list inspection exceeded its {limits.elapsed_seconds:g} s budget; "
+                             "no incomplete run list was used. Retry discovery or choose a smaller reduction family.")
+
     root = Path(inventory["root"])
     path = _inside(root / folder, root)
-    issues = []
-    entries = _entries(path, DiscoveryLimits(), issues)
-    if issues:
-        raise ValueError(issues[0]["message"])
     runs = set()
-    for name, directory, _ in entries:
-        match = _PRODUCT.fullmatch(name)
-        if not directory and match and name.upper().startswith(inventory["instrument"]):
-            runs.add(int(match[1] or match[2]))
+    check_elapsed()
+    try:
+        with os.scandir(path) as entries:
+            for index, entry in enumerate(entries):
+                check_elapsed()
+                if index >= limits.entries_per_directory:
+                    raise ValueError(f"Run-list inspection exceeded its {limits.entries_per_directory:,}-entry budget; "
+                                     "no incomplete run list was used. Choose a smaller reduction family.")
+                match = _PRODUCT.fullmatch(entry.name)
+                if not match or not entry.name.upper().startswith(inventory["instrument"]):
+                    continue
+                if entry.is_symlink() or entry.is_dir(follow_symlinks=False):
+                    continue
+                runs.add(int(match[1] or match[2]))
+    except OSError as exc:
+        raise ValueError(f"Run-list inspection could not read the selected reduction family: {exc}") from exc
+    check_elapsed()
     return sorted(runs)
 
 

@@ -27,6 +27,40 @@ def test_trial_action_expressions_survive_html_serialization():
     assert 'does not identify Li composition' in template
     assert 'Build or revise a comparison' in template
 
+    class Disclosure(HTMLParser):
+        def __init__(self):
+            super().__init__(); self.stack=[]; self.groups=[]; self.summary=False; self.actions={}
+        def handle_starttag(self,tag,attrs):
+            values=dict(attrs)
+            if tag=='details':
+                group=dict(attrs=values,summary='',labels=[])
+                self.stack.append(group); self.groups.append(group)
+            elif tag=='summary': self.summary=True
+            if self.stack and 'label' in values:
+                self.stack[-1]['labels'].append(values['label'])
+        def handle_endtag(self,tag):
+            if tag=='details': self.stack.pop()
+            elif tag=='summary': self.summary=False
+        def handle_data(self,data):
+            if self.summary and self.stack: self.stack[-1]['summary']+=data
+            if data.strip() in {'Inspect acquisition metadata','Bind and join exposure intervals','Prepare and verify model'}:
+                self.actions[data.strip()]=list(self.stack)
+    disclosure=Disclosure();disclosure.feed(template)
+    for label in ('Representative runs to inspect','Clock correction (seconds)',
+                  'Allow invalid intensity or uncertainty bins only outside the selected fit limits',
+                  'Background policy'):
+        group=next(g for g in disclosure.groups if label in g['labels'])
+        assert 'open' not in group['attrs'] and ':open' not in group['attrs']
+        assert 'v-if' not in group['attrs'] and 'v-show' not in group['attrs']
+    assert all(not groups for groups in disclosure.actions.values())
+    assert len(disclosure.actions)==3
+    comparison=next(g for g in disclosure.groups if g['summary'].strip()=='Build or revise a comparison')
+    assert 'battery_model_ready' in comparison['attrs'][':open']
+    assert 'battery_portfolio_entries.length' in comparison['attrs'][':open']
+    assert 'v-if' not in comparison['attrs']
+    assert 'correction {{ battery_offset }} s' in template
+    assert "battery_allow_invalid_edges ? 'enabled' : 'off'" in template
+
 
 def test_li_curve_keeps_unqualified_markers_and_gaps():
     from radar_pd_nova.refinement_plots import li_profile_figure
