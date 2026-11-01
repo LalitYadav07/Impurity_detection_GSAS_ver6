@@ -125,9 +125,10 @@ def work(action, source, directory, *, plan=None, approval=None, expected_source
                 except Exception as export_error:
                     response.setdefault('artifact_errors',[]).append(dict(stage=stage['id'],error=str(export_error)))
             response['stages']=stages
-        try:
-            write_project_view(source,directory/'baseline.view.json');response['baseline_view']='baseline.view.json'
-        except Exception:pass
+        if action != 'prepare':
+            try:
+                write_project_view(source,directory/'baseline.view.json');response['baseline_view']='baseline.view.json'
+            except Exception:pass
     if hashlib.sha256(source.read_bytes()).hexdigest()!=before:
         response.update(status='failed',error='The original RADAR-PD GPX changed during processing')
         for path in directory.glob('verified_*.gpx'):path.replace(path.with_name('untrusted_'+path.name))

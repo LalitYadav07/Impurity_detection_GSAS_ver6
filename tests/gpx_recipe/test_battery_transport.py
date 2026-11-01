@@ -63,9 +63,12 @@ def test_prepare_worker_uses_shared_native_preparer_and_publishes_provenance(tmp
     verify_result_files(tmp_path/'worker',response,action='prepare')
 
 
-def test_prepare_rejects_other_implementation_before_unpacking(tmp_path):
+def test_prepare_rejects_other_implementation_before_unpacking(tmp_path,monkeypatch):
     from gpx_recipe import worker
+    inspections=[]
+    monkeypatch.setattr(worker,'write_project_view',lambda *args:inspections.append(args))
     source=packet(tmp_path/'inputs.zip', [('preparation.json', '{}')])
     response=worker.work('prepare',source,tmp_path/'worker',plan={'implementation_sha256':'0'*64})
     assert response['status']=='failed' and 'implementation differs' in response['error']
     assert not (tmp_path/'worker/inputs').exists()
+    assert inspections == []  # A rejected ZIP is never opened as a GPX.
