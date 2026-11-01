@@ -419,6 +419,10 @@ class LiveAssistantMixin(LiveAssistantUi):
         state = self.server.state
         if self._assistant_locked() or state.live_assistant_busy:
             return
+        if self._library_decision_pending("live"):
+            state.live_assistant_error = "Resolve the partial candidate-library review before finishing this setup."
+            state.flush()
+            return
         if not state.powgen_preflight_ready or self._assistant_checked_signature != self._powgen_preflight_signature():
             state.live_assistant_complete = False
             state.live_assistant_error = "Settings changed. Check the current Live configuration again before finishing."

@@ -24,7 +24,7 @@ class LiveAssistantUi:
         fields = STEP_FIELDS.get(step, ())
         payload = "{" + ",".join(f"{name}:{name}" for name in fields) + "}"
         vuetify.VBtn(label, click=(self.start_live_assistant_continue, f"[{payload}]"),
-                     disabled=(LOCK,), loading=("live_assistant_busy",),
+                     disabled=(LOCK + (" || live_library_builder_decision_pending" if step in {"structures", "chemistry", "settings", "review"} else ""),), loading=("live_assistant_busy",),
                      color="#15543c", variant="flat", prepend_icon="mdi-arrow-right")
 
     def _live_assistant_ui(self):
@@ -268,7 +268,7 @@ class LiveAssistantUi:
             with html.Div(classes="radar-assistant-actions mt-3"):
                 self._assistant_next("review", "Check Live configuration")
                 vuetify.VBtn("Finish setup", v_show="live_assistant_complete", click=self.finish_live_assistant,
-                             color="#15543c", variant="flat", disabled=(LOCK,))
+                             color="#15543c", variant="flat", disabled=(LOCK + " || live_library_builder_decision_pending",))
 
     @staticmethod
     def _live_assistant_css():

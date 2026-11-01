@@ -104,6 +104,7 @@ class LiveSetupMixin:
         state.live_test_message = ""
 
     def _live_configuration(self):
+        self._require_library_decision("live")
         state = self.server.state
         # Old checkpoints/test harnesses without a draft can still select their
         # explicit configuration; there is no inheritance from Single pattern.
@@ -420,6 +421,7 @@ class LiveSetupMixin:
             self.server.state.flush()
 
     def _live_library_selection(self):
+        self._require_library_decision("live")
         state = self.server.state
         source = getattr(state, "live_database_source", None)
         if not source:
@@ -480,6 +482,7 @@ class LiveSetupMixin:
         return {"dataset_id": None, "path": str(path), "label": path.name}
 
     async def _save_live_configuration(self, config):
+        self._require_library_decision("live")
         state = self.server.state
         if (
             getattr(state, "live_configuration_source", None) or "history"
@@ -518,6 +521,7 @@ class LiveSetupMixin:
         return cache[key]
 
     async def _prepare_live_settings(self, *, test=False):
+        self._require_library_decision("live")
         state = self.server.state
         if not await self.check_powgen_experiment():
             return None

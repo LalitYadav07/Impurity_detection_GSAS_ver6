@@ -285,6 +285,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         self._pending_submission_tokens: set[str] = set()
         self._history_search_task: asyncio.Task[None] | None = None
         self._powgen_controller: PowgenWatchController | None = None
+        self._powgen_controller_configuration = None
         self._powgen_monitor_task: asyncio.Task[None] | None = None
         self._powgen_stopped_refresh_task: asyncio.Task[None] | None = None
         self._powgen_wake_event = asyncio.Event()
@@ -559,6 +560,9 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         state.library_builder_generation = ""
         state.library_builder_partial_review = {}
         state.library_builder_previous_library = {}
+        state.library_builder_decision_pending = False
+        state.library_builder_decision_token = ""
+        state.library_builder_failure_search = ""
         state.sns_resolution = {}
         state.use_facility_workspace = False
         state.facility_site = "SNS"
@@ -1154,6 +1158,9 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
             draft.library_builder_generation = ""
             draft.library_builder_partial_review = {}
             draft.library_builder_previous_library = {}
+            draft.library_builder_decision_pending = False
+            draft.library_builder_decision_token = ""
+            draft.library_builder_failure_search = ""
             draft.library_builder_active = False
             draft.library_builder_status = "idle"
             draft.library_builder_progress = 0
@@ -1867,7 +1874,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                     classes="mb-2",
                     disabled=(
                         "powgen_monitoring || !powgen_ipts || "
-                        "live_launch_busy || live_library_builder_active || powgen_sample_loading || powgen_preflight_status === 'checking'",
+                        "live_launch_busy || live_library_builder_active || live_library_builder_decision_pending || powgen_sample_loading || powgen_preflight_status === 'checking'",
                     ),
                 )
                 vuetify.VAlert(
@@ -1922,7 +1929,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                     classes="mb-2",
                 )
                 vuetify.VSelect(v_show="live_test_bank_options.length > 1", label="Bank for the one-scan test", v_model=("live_test_bank",), items=("live_test_bank_options",), item_title="title", item_value="value", density="compact", variant="outlined", disabled=("powgen_monitoring || live_launch_busy",))
-                vuetify.VBtn("Test latest scan", click=self.test_live_scan, prepend_icon="mdi-flask-outline", variant="outlined", size="small", block=True, classes="mb-2", disabled=("powgen_monitoring || !powgen_preflight_ready || live_launch_busy",))
+                vuetify.VBtn("Test latest scan", click=self.test_live_scan, prepend_icon="mdi-flask-outline", variant="outlined", size="small", block=True, classes="mb-2", disabled=("powgen_monitoring || !powgen_preflight_ready || live_launch_busy || live_library_builder_decision_pending",))
                 html.P("The test submits one analysis for the latest matching scan and selected test bank. Continuous monitoring stays stopped.", classes="radar-help-copy")
                 html.P("{{ live_test_message }}", v_show="!!live_test_message", classes="radar-help-copy")
                 with html.Div(classes="radar-button-row"):
@@ -1933,8 +1940,15 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                         color="#15543c",
                         variant="flat",
                         size="small",
-                        disabled=("powgen_monitoring || !powgen_preflight_ready || live_launch_busy || powgen_sample_loading",),
+                        disabled=("powgen_monitoring || !powgen_preflight_ready || live_launch_busy || powgen_sample_loading || live_library_builder_decision_pending",),
                         loading=("live_launch_busy",),
+                    )
+                    vuetify.VBtn(
+                        "Resume existing watch (previous settings)",
+                        click=self.resume_existing_powgen_monitoring,
+                        v_if="live_library_builder_decision_pending && powgen_results_refresh_available",
+                        disabled=("powgen_monitoring || live_launch_busy",),
+                        variant="outlined", size="small",
                     )
                     vuetify.VBtn(
                         "Stop",
@@ -2444,6 +2458,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                                     color="#15543c",
                                     variant="outlined",
                                     block=True,
+                                    disabled=("library_builder_decision_pending",),
                                 )
                                 vuetify.VAlert(
                                     v_show="!!watch_recipe_message",
@@ -2656,12 +2671,13 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                     variant="outlined",
                     block=True,
                     classes="mb-2",
+                    disabled=("library_builder_decision_pending",),
                 )
                 vuetify.VBtn(
                     "Run analysis on NDIP",
                     click=(self.submit_run, f"[{self._submission_payload_expression()}]"),
                     loading=("busy",),
-                    disabled=(f"busy || !({ready_expression})",),
+                    disabled=(f"busy || library_builder_decision_pending || !({ready_expression})",),
                     color="#15543c",
                     size="large",
                     block=True,
@@ -4163,9 +4179,11 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         return SimpleNamespace(**values)
 
     def _configuration(self, payload: dict[str, Any] | None = None) -> AnalysisConfig:
+        self._require_library_decision("single")
         return configuration_from_form(self._form_state(payload))
 
     def _inputs(self, payload: dict[str, Any] | None = None) -> InputSelection:
+        self._require_library_decision("single")
         state = self._form_state(payload)
         source = InputSource(state.input_source)
         instrument_source = "builtin" if bool(state.use_builtin_cuka) else str(state.instrument_source or "upload")
@@ -5017,6 +5035,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         state.live_instrument_mode = adapter.instrument_mode
         self._powgen_sample_request = object()
         self._powgen_controller = None
+        self._powgen_controller_configuration = None
         self._powgen_settings_signature = None
         self._sync_powgen_rows()
         self._powgen_form_ipts = None
@@ -5661,6 +5680,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
             else:
                 restored = False
 
+            self._powgen_controller_configuration = (self._powgen_controller, configuration.model_copy(deep=True))
             state.powgen_ipts = ipts
             state.powgen_source_directory = self._powgen_controller.source_directory
             state.workflow_mode = "powgen"
@@ -5690,6 +5710,47 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
             state.powgen_message = f"{self._live_adapter().name} monitor could not start: {exc}"
             state.error_message = str(exc)
             state.flush()
+        finally:
+            state.live_launch_busy = False
+            state.flush()
+
+    async def resume_existing_powgen_monitoring(self, **_: Any) -> None:
+        """Resume only the already approved controller, without rebuilding a form."""
+        state = self.server.state
+        controller = self._powgen_controller
+        if state.powgen_monitoring or state.live_launch_busy:
+            return
+        try:
+            if controller is None:
+                raise ValueError("There is no existing watch to resume. Resolve the library review before starting a new watch.")
+            if (self._live_adapter().instrument != controller.settings.instrument
+                    or self._normalize_powgen_ipts(state.powgen_ipts) != controller.settings.ipts
+                    or self.service.history_id != controller.settings.history_id):
+                raise ValueError("Return to the existing watch's experiment and History before resuming its previous settings.")
+            task = self._powgen_monitor_task
+            if task is not None and not task.done():
+                raise ValueError("The existing watch is still saving its stopped state. Wait for that save before resuming.")
+            state.live_launch_busy = True
+            saved = getattr(self, "_powgen_controller_configuration", None)
+            configuration = (saved[1] if saved and saved[0] is controller else
+                await asyncio.to_thread(self.service.load_configuration_dataset, controller.settings.configuration_dataset_id))
+            if controller is not self._powgen_controller:
+                raise ValueError("The existing watch changed while its saved configuration was read.")
+            state.powgen_monitoring = True
+            state.workflow_mode = "powgen"
+            state.workspace_view = "experiment"
+            state.powgen_source_directory = controller.source_directory
+            state.powgen_next_check = "Now"
+            state.powgen_message = "Resuming the existing watch with its previously approved configuration and library. The new partial-library choice remains unresolved."
+            state.error_message = ""
+            self._sync_powgen_rows()
+            self._sync_workspace_options(configuration.mode)
+            self._powgen_wake_event.clear()
+            self._powgen_monitor_task = asyncio.create_task(
+                self._powgen_monitor_loop(), name=f"radar-powgen-watch-{controller.settings.ipts.lower()}")
+            self.webmon_attach_monitor()
+        except Exception as exc:
+            state.error_message = str(exc)
         finally:
             state.live_launch_busy = False
             state.flush()
@@ -7996,6 +8057,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         state.library_builder_duplicate_count = 0
         state.library_builder_duplicate_rows = []
         state.library_builder_message = "Preparing CIF structures for Galaxy…"
+        state.library_builder_failure_search = ""
         state.flush()
 
         async def build() -> None:

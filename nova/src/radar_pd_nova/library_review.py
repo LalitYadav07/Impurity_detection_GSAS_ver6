@@ -101,6 +101,27 @@ def partial_library_archive_review(manifest: dict[str, Any]) -> dict[str, Any]:
 
 
 class LibraryReviewMixin:
+    def _library_decision_pending(self, context: str = "single") -> bool:
+        draft = LibraryDraft(self.server.state, context)
+        return bool(getattr(draft, "library_builder_decision_pending", False)
+                    or (getattr(draft, "library_builder_partial_review", None) or {}).get("token"))
+
+    def _require_library_decision(self, context: str = "single") -> None:
+        if self._library_decision_pending(context):
+            raise ValueError("Resolve the partial candidate-library review first: choose Use partial library or Keep current library before creating a new analysis or configuration.")
+
+    def download_candidate_library_review(self, context: str = "single", **_: Any) -> None:
+        draft = LibraryDraft(self.server.state, context)
+        document = {"built_count": draft.library_builder_built_count,
+            "requested_count": draft.library_builder_requested_count,
+            "failure_count": draft.library_builder_skipped_count,
+            "failures": draft.library_builder_failure_rows,
+            "duplicate_count": draft.library_builder_duplicate_count,
+            "duplicates": draft.library_builder_duplicate_rows,
+            "pending_review": draft.library_builder_partial_review}
+        self.download_file("candidate-library-review.json", "application/json",
+                           (json.dumps(document, indent=2, ensure_ascii=False) + "\n").encode())
+
     def _interrupt_candidate_library(self, draft: LibraryDraft, generation: str) -> None:
         if draft.library_builder_generation != generation:
             return
@@ -166,6 +187,8 @@ class LibraryReviewMixin:
             draft.library_builder_message = f"Library ready with {built} usable phase(s) and selected for the next analysis."
             if outcome["duplicate_count"]:
                 draft.library_builder_message += f" {outcome['duplicate_count']} duplicate/already-present source(s) were accounted for separately."
+            draft.library_builder_decision_pending = False
+            draft.library_builder_decision_token = ""
         draft.notice = draft.library_builder_message
         return True
 
@@ -216,6 +239,8 @@ class LibraryReviewMixin:
                 "manifest_id": action.outputs.get("library_manifest"), "job_id": action.galaxy_job_id,
                 "action_uid": action.uid, "outcome": deepcopy(outcome),
             }
+            draft.library_builder_decision_pending = True
+            draft.library_builder_decision_token = draft.library_builder_partial_review["token"]
             draft.flush()
         finally:
             self._library_review_internal = False
@@ -242,6 +267,8 @@ class LibraryReviewMixin:
             return
         draft, review = choice
         draft.library_builder_partial_review = {}
+        draft.library_builder_decision_pending = False
+        draft.library_builder_decision_token = ""
         draft.database_source = "archive"
         draft.library_archive_source = "galaxy"
         draft.history_database_id = review["archive_id"]
@@ -255,12 +282,16 @@ class LibraryReviewMixin:
         draft.flush()
 
     def retain_current_candidate_library(self, context: str = "single", review_token: str | None = None, **_: Any) -> None:
-        choice = self._partial_library_choice(context, review_token)
-        if choice is None:
+        draft = LibraryDraft(self.server.state, context)
+        expected = (getattr(draft, "library_builder_decision_token", None)
+                    or (draft.library_builder_partial_review or {}).get("token"))
+        if (not expected or review_token != expected or draft.library_builder_active
+                or (context == "live" and (self.server.state.powgen_monitoring or self.server.state.live_launch_busy))):
             return
-        draft, _ = choice
         draft.library_builder_partial_review = {}
+        draft.library_builder_decision_pending = False
+        draft.library_builder_decision_token = ""
         draft.library_builder_status = "partial_kept"
-        draft.library_builder_message = "Previous library selection kept. The unselected partial build and its failure details remain in History."
+        draft.library_builder_message = "Current library selection kept. The unselected partial build and its failure details remain in History."
         draft.notice = draft.library_builder_message
         draft.flush()

@@ -252,7 +252,7 @@ def test_unreported_selected_cif_is_an_explicit_incomplete_result():
 
 def test_all_failure_details_and_review_controls_are_visible():
     html = RadarPdNovaApp().layout.html
-    assert "Use partial library" in html and "Keep previous library" in html
+    assert "Use partial library" in html and "Keep current library" in html
     assert "library_builder_failure_rows.slice(0, 8)" not in html
     assert "library_builder_requested_count" in html
 

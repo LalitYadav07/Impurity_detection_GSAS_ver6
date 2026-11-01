@@ -31,6 +31,9 @@ LIBRARY_FIELDS = (
     "library_builder_generation",
     "library_builder_partial_review",
     "library_builder_previous_library",
+    "library_builder_decision_pending",
+    "library_builder_decision_token",
+    "library_builder_failure_search",
 )
 
 

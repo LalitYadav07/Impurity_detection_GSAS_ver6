@@ -565,35 +565,43 @@ class SetupEditorMixin:
                 + "library_builder_duplicate_count }} duplicate or already present",
                 v_show=f"!({pending_revision}) && {prefix}library_builder_progress === 100",
             )
-            with html.Div(v_if=f"!!{prefix}library_builder_partial_review.token", classes="mt-2"):
+            with html.Div(v_if=f"{prefix}library_builder_decision_pending", classes="mt-2"):
+                vuetify.VAlert(
+                    "Resolve this partial-library review before creating a new analysis or configuration. Existing jobs keep their original library.",
+                    type="warning", variant="tonal", density="compact", role="alert")
                 html.P("The partial library excludes the failed sources listed below. Review their scientific role before using it.")
                 vuetify.VBtn(
                     "Use partial library",
                     click=(self.use_partial_candidate_library,
                            f"['{context}', {prefix}library_builder_partial_review.token]"),
                     disabled=(locked,), color="#15543c", variant="flat", size="small",
+                    v_if=f"!!{prefix}library_builder_partial_review.token",
                 )
                 vuetify.VBtn(
-                    "Keep previous library",
+                    "Keep current library",
                     click=(self.retain_current_candidate_library,
-                           f"['{context}', {prefix}library_builder_partial_review.token]"),
+                           f"['{context}', {prefix}library_builder_decision_token]"),
                     disabled=(locked,), variant="outlined", size="small", classes="ml-2",
                 )
-            with html.Div(
-                v_for=f"failure in {prefix}library_builder_failure_rows",
-                key="failure.name + failure.reason",
-                classes="radar-library-failure-row",
-                v_show=f"!({pending_revision})",
-            ):
-                html.Strong("{{ failure.name }}")
-                html.Span("{{ failure.reason }}")
-            with html.Div(
-                v_for=f"item in {prefix}library_builder_duplicate_rows",
-                key="item.name + item.reason", classes="radar-library-failure-row",
-                v_show=f"!({pending_revision})",
-            ):
-                html.Strong("{{ item.name }} · already represented")
-                html.Span("{{ item.reason }}")
+            with html.Div(v_if=f"{prefix}library_builder_failure_rows.length || {prefix}library_builder_duplicate_rows.length"):
+                vuetify.VTextField(label="Search CIF names and review reasons",
+                    v_model=value("library_builder_failure_search"), density="compact", variant="outlined",
+                    clearable=True, classes="mt-3")
+                vuetify.VBtn("Download complete review", click=(self.download_candidate_library_review, f"['{context}']"),
+                    prepend_icon="mdi-download", variant="text", size="small")
+                vuetify.VDataTable(
+                    v_if=f"{prefix}library_builder_failure_rows.length",
+                    items=value("library_builder_failure_rows"), search=value("library_builder_failure_search"),
+                    headers=([{"title": "Failed CIF source", "key": "name"}, {"title": "Reason", "key": "reason"}],),
+                    items_per_page=20, items_per_page_options=([10, 20, 50, 100],),
+                    density="compact", no_data_text="No failed sources match this search.",
+                    raw_attrs=['aria-label="Failed CIF sources"'])
+                vuetify.VDataTable(
+                    v_if=f"{prefix}library_builder_duplicate_rows.length",
+                    items=value("library_builder_duplicate_rows"), search=value("library_builder_failure_search"),
+                    headers=([{"title": "Duplicate or already-present CIF", "key": "name"}, {"title": "Reason", "key": "reason"}],),
+                    items_per_page=20, items_per_page_options=([10, 20, 50, 100],), density="compact",
+                    no_data_text="No duplicate sources match this search.", raw_attrs=['aria-label="Duplicate CIF sources"'])
 
     def _custom_budget_controls(self, prefix="", locked=None, include_basic=True):
         with html.Div(classes="radar-custom-budget-grid"):
