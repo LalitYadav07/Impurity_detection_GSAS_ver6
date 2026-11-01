@@ -756,6 +756,7 @@ def test_result_archive_rejects_paths_outside_staging(tmp_path: Path) -> None:
 
 
 def test_submit_persists_configuration_and_resolved_input_selection(tmp_path: Path, monkeypatch: Any) -> None:
+    monkeypatch.setattr('radar_pd_nova.native_job_admission.HistoryJobAdmission.active_jobs',lambda self:[])
     submitted_parameters: list[tuple[str, Any]] = []
 
     class FakeParameters:
@@ -843,6 +844,7 @@ def test_submit_persists_configuration_and_resolved_input_selection(tmp_path: Pa
 
 
 def test_submit_waits_for_async_galaxy_job_identifier(tmp_path: Path, monkeypatch: Any) -> None:
+    monkeypatch.setattr('radar_pd_nova.native_job_admission.HistoryJobAdmission.active_jobs',lambda self:[])
     class FakeParameters:
         def add_input(self, **kwargs: Any) -> None:
             pass
@@ -912,6 +914,7 @@ def test_submit_retries_after_transient_galaxy_submission_failure(tmp_path: Path
     API response, with an identical retry succeeding immediately after.
     """
 
+    monkeypatch.setattr('radar_pd_nova.native_job_admission.HistoryJobAdmission.active_jobs',lambda self:[])
     monkeypatch.setattr("radar_pd_nova.galaxy_service.time.sleep", lambda _seconds: None)
 
     class FakeParameters:

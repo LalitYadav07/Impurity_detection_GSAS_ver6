@@ -86,3 +86,25 @@ def test_pause_during_capacity_request_never_admits_the_job():
     with pytest.raises(AdmissionUnavailable,match='paused'):
         with gate.slot('neutrons_radar_pd_refine_recipe_prototype',family_limit=1,cancel=event):
             pytest.fail('A paused job must not be submitted')
+
+
+def test_analyze_uses_same_admission_and_honors_pause(tmp_path,monkeypatch):
+    from contextlib import contextmanager
+    from radar_pd_nova.galaxy_service import GalaxyService
+    from radar_pd_nova.models import AnalysisConfig,InputSelection,RunStatus
+    service=GalaxyService('https://galaxy.invalid','test-key','history',output_root=tmp_path)
+    snapshot=service.create_submission_snapshot(
+        AnalysisConfig(sample_elements=['Al','O']), InputSelection(data_path='scan.gsa',instrument_path='profile.instprm'),
+        idempotency_token='capacity-test')
+    @contextmanager
+    def store():yield object()
+    monkeypatch.setattr(service,'_store',store)
+    monkeypatch.setattr(service,'_prepare_datasets',lambda *args:{'configuration':'config'})
+    monkeypatch.setattr(service,'_prepared_parameters',lambda *args:(object(),snapshot.inputs))
+    monkeypatch.setattr(service,'_submit_with_retry',lambda *a,**kw:pytest.fail('Paused Analyze must not POST'))
+    def active(self):
+        service.cancel_pending_submission('capacity-test')
+        return []
+    monkeypatch.setattr(HistoryJobAdmission,'active_jobs',active)
+    result=service.submit_snapshot(snapshot)
+    assert result.status==RunStatus.CANCELLED and result.galaxy_job_id is None

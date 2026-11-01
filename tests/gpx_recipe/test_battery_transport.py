@@ -11,7 +11,11 @@ from gpx_recipe.battery.transport import extract_preparation_packet
 def packet(path, members):
     with zipfile.ZipFile(path, 'w') as archive:
         for name, value in members:
-            archive.writestr(name, value)
+            # Pass an explicit ZipInfo so Python 3.11 can represent an invalid
+            # empty member name for the extractor's cross-version guard test.
+            info=zipfile.ZipInfo(name or 'placeholder')
+            info.filename=name
+            archive.writestr(info, value)
     return path
 
 

@@ -1855,12 +1855,15 @@ class GalaxyService:
             acknowledgement_started = time.monotonic()
             with self._store() as store:
                 params, submitted_inputs = self._prepared_parameters(store, snapshot, prepared)
-                uid, tool = self._submit_with_retry(
-                    store,
-                    params,
-                    run_name=config.run_name,
-                    config_dataset_id=prepared.get("configuration"),
-                )
+                from .native_job_admission import HistoryJobAdmission
+                gate=HistoryJobAdmission(self)
+                with gate.slot(ANALYZE_TOOL_ID,family_limit=gate.total_limit,cancel=cancel_event):
+                    uid, tool = self._submit_with_retry(
+                        store,
+                        params,
+                        run_name=config.run_name,
+                        config_dataset_id=prepared.get("configuration"),
+                    )
             with self._lock:
                 self._tools[uid] = tool
             record.galaxy_job_id = uid
@@ -1886,6 +1889,12 @@ class GalaxyService:
                 callback(record)
             return record
         except Exception as exc:
+            from .native_job_admission import AdmissionUnavailable
+            if isinstance(exc,AdmissionUnavailable) and cancel_event.is_set():
+                record.status=RunStatus.CANCELLED;record.analysis_status=RunStatus.CANCELLED
+                self._emit_submission_progress(record,SubmissionPhase.CANCELLED,
+                    'Submission cancelled before Analyze',len(record.prepared_dataset_ids),len(record.prepared_dataset_ids),callback)
+                return record
             record.status = RunStatus.ERROR
             record.analysis_status = RunStatus.ERROR
             record.message = str(exc)
