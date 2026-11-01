@@ -636,6 +636,12 @@ class GalaxyService:
         # alone for these input roles.
         preserved_name = name.rsplit("|", 1)[-1].strip()
         preserved_suffix = Path(preserved_name).suffix.lower().lstrip(".")
+        # Model-worker packets and result bundles are internal archives, not
+        # CIF libraries. Uploaded packets have an extra RADAR-PD label wrapper;
+        # match only our exact reserved identities, preserving user ZIP names.
+        internal_label = name.split("|", 1)[0].strip()
+        if re.fullmatch(r"(?:radar-pd )?radar-pd (?:model inputs [a-f0-9]{64}|model [a-f0-9]{24} results)", internal_label):
+            return "other", True
         generated_tokens = (
             "results archive",
             "analysis log",

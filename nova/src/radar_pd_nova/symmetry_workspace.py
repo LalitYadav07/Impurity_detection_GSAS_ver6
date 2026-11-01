@@ -57,14 +57,19 @@ def _checked_receipt(directory,job,expected_receipt):
     return result
 
 
-def read_trial(directory,metadata=None,*,expected_receipt=None):
-    directory=Path(directory).resolve();job=json.loads((directory/'job.json').read_text());p=job['protocol']
+def _trial_identity(directory,job,metadata=None):
+    p=job['protocol']
     candidate=next(c for c in p['candidates'] if c['id']==job['candidate_id'])
-    row=dict(id=job['id'],protocol=job['protocol_sha256'],candidate=job['candidate_id'],seed=job['seed_id'],directory=str(directory),
+    return dict(id=job['id'],protocol=job['protocol_sha256'],candidate=job['candidate_id'],seed=job['seed_id'],directory=str(directory),
         name=candidate['magnetic_space_group'] or candidate['irrep'] or candidate['id'],bns=candidate.get('bns_number'),
         embedding=dict(basis=candidate['transformation_matrix'],origin=candidate['origin_shift']),kind=p['kind'],source=p.get('acquisition_id') or p['source']['sha256'],source_sha256=p['source']['sha256'],sites=p.get('sites',[]),
         metadata=metadata or {},parent=p['parent_phase'],histogram=p['histogram'],k=p['k'],worker_revision=job.get('package_sha256',''),status='pending',rwp=None,nvars=None,reason='',has_view=False,has_gpx=False,
         adequate_rwp_percent=(p.get('policy') or {}).get('adequate_rwp_percent'))
+
+
+def read_trial(directory,metadata=None,*,expected_receipt=None):
+    directory=Path(directory).resolve();job=json.loads((directory/'job.json').read_text());p=job['protocol']
+    row=_trial_identity(directory,job,metadata)
     if (directory/'result.json').is_file():
         try:
             result=checked_receipt(directory,job,expected_receipt)
@@ -335,14 +340,26 @@ def group_models(rows,*,relative_tolerance=1e-6):
 
 def campaign_rows(root,*,experiment=None):
     campaign=Campaign(root)
-    with campaign.connect() as db:metadata={r['hash']:json.loads(r['metadata']) for r in db.execute('SELECT hash,metadata FROM protocols')}
+    with campaign.connect() as db:
+        protocols={r['hash']:dict(protocol=json.loads(r['body']),metadata=json.loads(r['metadata']))
+                   for r in db.execute('SELECT hash,body,metadata FROM protocols')}
     rows=[]
     trials=campaign.trials()
     for trial in trials:
         # Restrict before opening any GPX/job/result files. Large portfolios in
         # another experiment must not delay the selected experiment's view.
-        if experiment is not None and metadata[trial['protocol']].get('series')!=experiment:continue
-        row=read_trial(campaign.trial_directory(trial),metadata[trial['protocol']],expected_receipt=trial.get('receipt'))
+        entry=protocols[trial['protocol']];metadata=entry['metadata'];protocol=entry['protocol']
+        if experiment is not None and metadata.get('series')!=experiment:continue
+        if trial['state']=='prepared':
+            # Pending starts have no scientific evidence to display. Read their
+            # exact sealed identity from the ledger once per protocol instead
+            # of parsing tens of thousands of identical job.json files on each
+            # refresh. Executed results still follow the full artifact audit.
+            job=dict(id=trial['id'],protocol=protocol,protocol_sha256=trial['protocol'],
+                     candidate_id=trial['candidate'],seed_id=trial['seed'],package_sha256=protocol['implementation_sha256'])
+            row=_trial_identity(campaign.trial_directory(trial),job,metadata)
+        else:
+            row=read_trial(campaign.trial_directory(trial),metadata,expected_receipt=trial.get('receipt'))
         row['execution_state']=trial['state']
         if trial['state']!='terminal' and row['status']=='pending':row.update(status=trial['state'],reason=trial['error'] or '')
         rows.append(row)

@@ -15,6 +15,7 @@ from gpx_recipe.symmetry.compiler import assets,confined,file_sha,job_inputs,pac
 from gpx_recipe.symmetry.contracts import digest
 from .refinement_runtime import GalaxyRefinementRuntime,RuntimeUnavailable
 from .models import UtilityActionRecord,RunStatus
+from .model_checkpoint import job_record, compact_transport, portable_checkpoint, verify_archived_receipts
 
 MODEL_TOOL_ID='neutrons_radar_pd_model_campaign_prototype'
 CAMPAIGN_LABEL='RADAR-PD Model campaign '
@@ -183,7 +184,7 @@ class GalaxyModelRuntime(GalaxyRefinementRuntime):
             entry['absence_verified']=False
             existing=self.find_dispatch(key)
             if existing:
-                entry['job']=existing.model_dump(mode='json');self._save();return existing
+                entry['job']=job_record(existing);self._save();return existing
             if entry.get('pending'):
                 raise RuntimeUnavailable('This model submission has no acknowledged job yet. Recover the existing dispatch before retrying; no duplicate was submitted.')
             entry['absence_verified']=True
@@ -211,7 +212,7 @@ class GalaxyModelRuntime(GalaxyRefinementRuntime):
                     associated_run_uid=source.get('record_uid'),inputs=inputs)
             except Exception as exc:
                 raise RuntimeUnavailable('Galaxy did not acknowledge the model job. Its stable dispatch key was retained for recovery.') from exc
-            entry['job']=job.model_dump(mode='json');self._save()
+            entry['job']=job_record(job);self._save()
             self._verified_jobs.add((str(job.galaxy_job_id),key))
             return job
 
@@ -469,7 +470,9 @@ class GalaxyChunkTransport:
                 self.save()
 
     def save(self):
-        with self._state_lock:write_json(self.path,self.state)
+        with self._state_lock:
+            compact_transport(self.state)
+            write_json(self.path,self.state)
 
     def bind_source(self,protocol,source):
         source=copy.deepcopy(source)
@@ -497,6 +500,7 @@ class GalaxyChunkTransport:
                 with self._state_lock:
                     document=dict(schema='radar-model-campaign/v1',history_id=self.runtime.service.history_id,
                         campaign=self.campaign.root.name,ledger=self.campaign.snapshot(),transport=copy.deepcopy(self.state))
+            document=portable_checkpoint(document)
             stable=copy.deepcopy(document)
             for chunk in stable['transport']['chunks'].values():
                 if chunk.get('job'):chunk['job']={k:chunk['job'].get(k) for k in ['galaxy_job_id','outputs']}
@@ -560,7 +564,7 @@ class GalaxyChunkTransport:
             if dispatch.get('absence_verified') and not dispatch.get('pending'):
                 with self._state_lock:chunk['not_dispatched']=True;self.save()
             raise
-        with self._state_lock:chunk['job']=job.model_dump(mode='json');self.save()
+        with self._state_lock:chunk['job']=job_record(job);self.save()
         # The preceding remote intent already names every member and its stable
         # dispatch key. A lost viewer recovers the acknowledged job by that key.
         # The driver backs up acknowledgements together after filling free
@@ -572,7 +576,7 @@ class GalaxyChunkTransport:
             job=UtilityActionRecord.model_validate(chunk['job']);self.runtime.verify_job(job,chunk['key']);return job
         job=self.runtime.find_dispatch(chunk['key'])
         if job:
-            with self._state_lock:chunk['job']=job.model_dump(mode='json');self.save()
+            with self._state_lock:chunk['job']=job_record(job);self.save()
         return job
 
     def recover(self,key,directory):
@@ -592,7 +596,7 @@ class GalaxyChunkTransport:
             job=self._job(chunk)
             if job is None:return dict(state='unknown',reason='The model chunk has no acknowledged Galaxy job')
             self.runtime.service.refresh_utility(job)
-            with self._state_lock:chunk['job']=job.model_dump(mode='json');self.save()
+            with self._state_lock:chunk['job']=job_record(job);self.save()
             intent=chunk.get('staging_retirement')
             prior=sum(bool(c.get('staging_retirement')) for c in self.state['chunks'].values())
             if not chunk.get('cancel_requested') and (intent or (job.status==RunStatus.ERROR and prior<2)):
@@ -621,6 +625,7 @@ class GalaxyChunkTransport:
                     raise ValueError('Model chunk result differs from the submitted search')
                 terminal={r['id']:r for r in response['trials']};pending=response['pending']
                 if len(terminal)!=len(response['trials']) or len(set(pending))!=len(pending) or set(terminal)|set(pending)!=set(chunk['members']) or set(terminal)&set(pending):raise ValueError('Model chunk coverage changed')
+                verify_archived_receipts(self.state,terminal,received)
                 for uid,row in terminal.items():
                     if row['state']=='finished':
                         source=received/'trials'/uid;target=self.campaign.root/'trials'/uid

@@ -97,6 +97,39 @@ def test_explicit_retry_can_handle_cancelled_empty_upload_without_inventing_rest
     assert proof and 'Galaxy restart' not in proof['reason']
 
 
+def cancelled_upload_service():
+    service=Service()
+    service.metadata['data'].update(state='discarded',deleted=True,purged=False,creating_job='fetch')
+    service.fetch=dict(id='fetch',history_id='history',tool_id='__DATA_FETCH__',state='deleted',outputs={'output0':'data'})
+    details=service._job_details
+    service._job_details=lambda key:deepcopy(service.fetch) if key=='fetch' else details(key)
+    service._job_output_ids=lambda job:job.get('outputs',{})
+    return service
+
+
+def test_cancelled_empty_fetch_tombstone_can_be_retried_without_undeleting_it():
+    service=cancelled_upload_service()
+    assert failed_input_proof(service,'job-old')
+    assert service.metadata['data']['deleted'] is True
+
+
+@pytest.mark.parametrize('change',[
+    {'history_id':'other'}, {'tool_id':ANALYZE_TOOL_ID}, {'state':'running'},
+    {'state':'ok'}, {'outputs':{'output0':'other'}}, {'id':'different'},
+])
+def test_deleted_input_needs_authoritative_matching_cancelled_fetch(change):
+    service=cancelled_upload_service();service.fetch.update(change)
+    assert failed_input_proof(service,'job-old') is None
+
+
+@pytest.mark.parametrize('change',[
+    {'purged':True}, {'file_size':1}, {'state':'error'}, {'creating_job':None},
+])
+def test_deleted_input_with_content_or_no_fetch_proof_never_qualifies(change):
+    service=cancelled_upload_service();service.metadata['data'].update(change)
+    assert failed_input_proof(service,'job-old') is None
+
+
 def test_changed_execution_proof_does_not_cancel_or_restage(monkeypatch):
     service=Service();proof=failed_input_proof(service,'job-old');service.job['state']='running'
     monkeypatch.setattr('requests.delete',lambda *a,**k:pytest.fail('Must not cancel active refinement'))

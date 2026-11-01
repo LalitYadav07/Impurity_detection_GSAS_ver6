@@ -142,7 +142,9 @@ def test_experiment_change_during_refresh_reloads_instead_of_publishing_stale_re
     app._symmetry_loading=False;app._symmetry_refresh_pending=False
     app._symmetry_display_identity=('campaign','IPTS-1','experiment')
     app._refinement_store=lambda:None;app._symmetry_root=lambda:tmp_path
-    root=tmp_path/'campaign';root.mkdir();(root/'campaign.sqlite').touch()
+    from gpx_recipe.symmetry.campaign import Campaign
+    for name,experiment in [('campaign','IPTS-1'),('second-campaign','IPTS-2')]:
+        Campaign(tmp_path/name).set_setting('template',{'scope':{'experiment':experiment}})
     monkeypatch.setattr(controller,'start_choices',lambda *args:[])
     monkeypatch.setattr(controller,'coverage_rows',lambda rows:[])
     requested=[];published=[]
@@ -251,7 +253,7 @@ def test_refresh_recovers_restored_remote_evidence_without_resuming_or_submittin
     state=State(rf_experiment='IPTS-1',sx_result_scope='experiment',sx_start_source='',rf_source='',
                 sx_campaign='campaign',sx_source='')
     app=controller.SymmetryMixin();app.server=SimpleNamespace(state=state)
-    app._models_restored=True;app._model_remote=lambda:object() if remote else None
+    app._models_restored=True;app._model_restored_scopes={'IPTS-1'};app._model_remote=lambda:object() if remote else None
     app._symmetry_loading=False;app._symmetry_refresh_pending=False
     app._symmetry_display_identity=None
     app._refinement_store=lambda:None;app._symmetry_root=lambda:tmp_path
@@ -348,7 +350,8 @@ def test_verified_scan_navigation_remains_live_during_background_audit(tmp_path,
     app._model_remote=lambda:None;app._refinement_store=lambda:None;app._symmetry_root=lambda:tmp_path
     app._symmetry_loading=False;app._symmetry_refresh_pending=False
     app._symmetry_display_identity=('campaign','IPTS-1','experiment')
-    (tmp_path/'campaign').mkdir();(tmp_path/'campaign/campaign.sqlite').touch()
+    from gpx_recipe.symmetry.campaign import Campaign
+    Campaign(tmp_path/'campaign').set_setting('template',{'scope':{'experiment':'IPTS-1'}})
     def row(source,revision):
         return dict(source=source,parent='Parent',metadata=dict(series='IPTS-1'),status='prepared',
                     execution_state='prepared',revision=revision)

@@ -299,11 +299,11 @@ def test_experiment_scope_filters_before_reading_foreign_result_files(tmp_path,m
     from contextlib import nullcontext
     import radar_pd_nova.symmetry_workspace as module
     class DB:
-        def execute(self,*args):return [dict(hash='a',metadata=json.dumps(dict(series='IPTS-1'))),dict(hash='b',metadata=json.dumps(dict(series='IPTS-2')))]
+        def execute(self,*args):return [dict(hash='a',body='{}',metadata=json.dumps(dict(series='IPTS-1'))),dict(hash='b',body='{}',metadata=json.dumps(dict(series='IPTS-2')))]
     class C:
         def __init__(self,root):pass
         def connect(self):return nullcontext(DB())
-        def trials(self):return [dict(id='first',protocol='a',state='prepared',receipt=None,error=None),dict(id='foreign',protocol='b',state='prepared',receipt=None,error=None)]
+        def trials(self):return [dict(id='first',protocol='a',state='running',receipt=None,error=None),dict(id='foreign',protocol='b',state='running',receipt=None,error=None)]
         def trial_directory(self,row):return tmp_path/row['id']
         def summaries(self):return [dict(protocol='a'),dict(protocol='b')]
     accessed=[]

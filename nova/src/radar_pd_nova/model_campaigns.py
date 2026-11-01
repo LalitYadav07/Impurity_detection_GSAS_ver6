@@ -215,7 +215,7 @@ def _recovery_source(document,sha,protocol,template):
     return source
 
 
-def restore_history(root,runtime):
+def restore_history(root,runtime,*,experiment=None,progress=None):
     """Restore owned campaign ledgers plus immutable input-HDA references."""
     import gzip,json,re,uuid
     from gpx_recipe.symmetry.bundle import unpack
@@ -235,7 +235,7 @@ def restore_history(root,runtime):
             seen.add(identifier)
             if not re.fullmatch('campaign-[a-f0-9]{12}',identifier):continue
             campaign=Campaign(Path(root)/identifier,shared_inputs=True)
-            if campaign.trials():continue
+            if campaign.trials() and not campaign.setting('restore_in_progress',False):continue
             archive=campaign.root/('restore-'+uuid.uuid4().hex+'.json.gz')
             runtime.service._download_dataset(row['id'],archive)
             try:
@@ -246,8 +246,14 @@ def restore_history(root,runtime):
             if document.get('schema')!='radar-model-campaign/v1' or document.get('history_id')!=runtime.service.history_id or document.get('campaign')!=identifier:
                 raise ValueError('The saved model campaign belongs to another History/identity')
             template=validate_template(document['ledger']['settings']['template'])
+            # A new NOMAD search must not wait for an unrelated POWGEN ledger,
+            # its GPX inputs and every completed refinement to be recovered.
+            if experiment is not None and template['scope']['experiment'] != experiment:
+                continue
             transport=document['transport'];inputs={}
-            for sha,dataset in transport['inputs'].items():
+            total=len(transport['inputs'])
+            for index,(sha,dataset) in enumerate(transport['inputs'].items(),1):
+                if progress:progress(f'Recovering {identifier}: input {index} of {total}. No new refinements are being submitted.')
                 if not re.fullmatch('[a-f0-9]{64}',sha):raise ValueError('Invalid saved input identity')
                 target=campaign.root/'recovering'/uuid.uuid4().hex;target.mkdir(parents=True)
                 packet=target/'inputs.zip';runtime.service._download_dataset(checked_id(dataset),packet)
@@ -263,7 +269,9 @@ def restore_history(root,runtime):
                     transport['sources'][sha]=portable_source(resolved)
                 inputs[sha]=prepare_shared_inputs(protocol,target/'unpacked',campaign.root)
             if digest(template['protocol']) not in inputs:raise ValueError('The reviewed reference inputs are absent from the checkpoint')
-            campaign.restore(document['ledger'],inputs)
+            if progress:progress(f'Rebuilding {len(document["ledger"]["trials"]):,} saved starts for {identifier}. No new refinements are being submitted.')
+            from .model_ledger_recovery import restore_ledger
+            restore_ledger(campaign,document['ledger'],inputs)
             campaign.set_setting('reference_input_root',str(inputs[digest(template['protocol'])]))
             # Local paths in an external checkpoint never select files on this machine.
             for source in transport['sources'].values():source.pop('source_path',None);source.pop('context',None)
@@ -271,4 +279,5 @@ def restore_history(root,runtime):
             # A restored viewer is read-only until the user chooses Continue.
             campaign.set_setting('restored',True)
             campaign.set_setting('checkpoint_updated_utc',row.get('update_time') or '')
+            campaign.set_setting('restore_in_progress',False)
     return seen

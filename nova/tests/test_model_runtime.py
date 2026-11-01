@@ -647,7 +647,19 @@ def test_lost_viewer_restores_the_existing_chunk_and_all_trial_receipts(remote,t
     new=GalaxyModelRuntime(tmp_path/'new-runtime',service)
     monkeypatch.setattr(new,'find_dispatch',lambda key:service.jobs.get(key))
     service.data['original-data']=Path(source['source_path']).read_bytes()
-    restore_history(tmp_path/'new-viewer',new)
+    # Opening another beamline never hydrates this campaign's private inputs.
+    download=service._download_dataset
+    def irrelevant_download(key,target):
+        assert 'Model campaign ' in service.labels[key]
+        return download(key,target)
+    with monkeypatch.context() as scoped:
+        scoped.setattr(service,'_download_dataset',irrelevant_download)
+        restore_history(tmp_path/'unrelated-viewer',new,experiment='OTHER')
+    assert not Campaign(tmp_path/'unrelated-viewer/campaign-aaaaaaaaaaaa').trials()
+    messages=[]
+    restore_history(tmp_path/'new-viewer',new,experiment='IPTS-1',progress=messages.append)
+    assert any('input ' in message for message in messages)
+    assert any('3 saved starts' in message for message in messages)
     restored=Campaign(tmp_path/'new-viewer/campaign-aaaaaaaaaaaa',shared_inputs=True)
     transport=GalaxyChunkTransport(new,restored);restored.recover(transport)
     assert {r['state'] for r in restored.trials()}=={'running'}
@@ -663,6 +675,21 @@ def test_lost_viewer_restores_the_existing_chunk_and_all_trial_receipts(remote,t
     transport.cache.clear();restored.tick(transport)
     assert {r['state'] for r in restored.trials()}=={'terminal'}
     assert len(service.submissions)==1 and len(restored.trials())==3
+    # A second loss now restores compact terminal witnesses, rechecks the
+    # original archive, and still performs no additional scientific POST.
+    transport.checkpoint(force=True)
+    import gzip
+    newest_id=next(k for k,label in reversed(list(service.labels.items())) if 'Model campaign ' in label)
+    newest=json.loads(gzip.decompress(service.data[newest_id]))
+    assert all(row['receipt'] is None for row in newest['ledger']['trials'])
+    assert len(newest['transport']['receipt_hashes'])==3
+    again=GalaxyModelRuntime(tmp_path/'third-runtime',service)
+    monkeypatch.setattr(again,'find_dispatch',lambda key:service.jobs.get(key))
+    restore_history(tmp_path/'third-viewer',again,experiment='IPTS-1')
+    third=Campaign(tmp_path/'third-viewer/campaign-aaaaaaaaaaaa',shared_inputs=True)
+    third.recover(GalaxyChunkTransport(again,third))
+    assert {r['state'] for r in third.trials()}=={'terminal'}
+    assert len(service.submissions)==1
 
 
 @pytest.mark.parametrize('alteration',[

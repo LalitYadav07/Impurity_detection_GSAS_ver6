@@ -1144,6 +1144,17 @@ def test_cif_source_bundle_is_not_classified_as_candidate_library() -> None:
     ) == ("candidate_library", False)
 
 
+def test_model_worker_archives_are_not_offered_as_candidate_libraries() -> None:
+    for name in [
+        'RADAR-PD Model inputs '+'a'*64+' | packet.zip',
+        'RADAR-PD RADAR-PD Model inputs '+'a'*64+' | packet.zip',
+        'RADAR-PD model '+'a'*24+' results',
+    ]:
+        assert GalaxyService._dataset_scientific_role({'name':name,'extension':'zip'}) == ('other',True)
+    for name in ['My model candidates.zip','RADAR-PD candidate library | Fe2O3_only_nuclear_benchmark.zip']:
+        assert GalaxyService._dataset_scientific_role({'name':name,'extension':'zip'}) == ('candidate_library',False)
+
+
 def test_legacy_candidate_library_is_labeled_as_unnamed() -> None:
     item = GalaxyService._history_dataset_item(
         {

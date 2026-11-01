@@ -47,7 +47,7 @@ MODEL_FIELDS=('sx_kind','sx_moment_model','sx_refine_scale','sx_refine_backgroun
 
 class SymmetryMixin(KSearchMixin):
     def _init_symmetry(self):
-        self._model_runtime_cache=None;self._models_restored=False;self._model_following_active=False;self._model_stopping=False
+        self._model_runtime_cache=None;self._models_restored=False;self._model_restored_scopes=set();self._model_following_active=False;self._model_stopping=False
         self._model_active_campaigns={};self._model_owned_campaigns={};self._model_review_campaigns=OrderedDict();self._model_checkpoint_errors={};self._model_preparations={};self._model_enrollment_task=None;self._model_tick_task=None;self._model_pause_task=None
         self._symmetry_rows=[];self._symmetry_all_rows=[];self._symmetry_groups=[];self._symmetry_draft=None;self._symmetry_approved='';self._symmetry_task=None;self._symmetry_loading=False;self._symmetry_refresh_pending=False;self._symmetry_explicit_selection=False;self._symmetry_display_identity=None;self._symmetry_loading_identity=None
         s=self.server.state
@@ -237,17 +237,33 @@ class SymmetryMixin(KSearchMixin):
                 remote=self._model_remote()
                 backend='Galaxy jobs · allocated CPU/RAM' if remote else 'Configured local scientific worker'
                 s.sx_backend=backend
-                if remote and not self._models_restored:
-                    await asyncio.to_thread(restore_history,self._symmetry_root(),remote)
+                scope=s.rf_experiment if s.sx_result_scope=='experiment' else None
+                restored=getattr(self,'_model_restored_scopes',set())
+                if remote and scope not in restored and None not in restored:
+                    loop=asyncio.get_running_loop()
+                    identity=self._symmetry_loading_identity
+                    def publish_progress(message):
+                        if identity==(s.sx_campaign,s.rf_experiment,s.sx_result_scope):
+                            s.sx_message=message;s.flush()
+                    def progress(message):loop.call_soon_threadsafe(publish_progress,message)
+                    await asyncio.to_thread(restore_history,self._symmetry_root(),remote,experiment=scope,progress=progress)
+                    self._model_restored_scopes=restored|{scope}
                     self._models_restored=True
                 choices=start_choices(self._refinement_store(),s.rf_experiment)
                 s.sx_start_sources=[dict(title=entry['title'],value=entry['id']) for entry in choices]
                 if s.sx_start_source not in {entry['id'] for entry in choices}:
                     s.sx_start_source=s.rf_source if s.rf_source in {entry['id'] for entry in choices} else (choices[0]['id'] if choices else '')
-                roots=sorted(self._symmetry_root().glob('*/campaign.sqlite'),key=campaign_recency)
+                roots=list(self._symmetry_root().glob('*/campaign.sqlite'))
+                if scope is not None:
+                    roots=[p for p in roots if (Campaign(p.parent).setting('template',{}) or {}).get('scope',{}).get('experiment')==scope]
+                roots=sorted(roots,key=campaign_recency)
                 s.sx_campaigns=[dict(title=p.parent.name,value=p.parent.name) for p in roots]
                 if s.sx_campaign not in {p.parent.name for p in roots}:s.sx_campaign=roots[-1].parent.name if roots else ''
                 if not s.sx_campaign:
+                    self._symmetry_rows=[];self._symmetry_all_rows=[];self._symmetry_groups=[]
+                    s.sx_source='';s.sx_source_options=[];s.sx_enrollments=[];s.sx_coverage=[]
+                    s.sx_progress='';s.sx_scope_progress='';s.sx_resumable=False;s.sx_following=False
+                    self._symmetry_publish_source()
                     s.sx_message='Select a completed RADAR-PD GPX above, then prepare model exploration.';return
                 root=next(p.parent for p in roots if p.parent.name==s.sx_campaign)
                 campaign=self._symmetry_campaign(root)
@@ -854,7 +870,9 @@ class SymmetryMixin(KSearchMixin):
                 transport=self._symmetry_transport(campaign)
                 await asyncio.to_thread(campaign.recover,transport)
                 pending=any(r['state'] not in {'terminal','cancelled'} for r in campaign.trials())
-                if pending:await asyncio.to_thread(campaign.verify_sealed_continuation)
+                if pending:
+                    from .model_ledger_recovery import verify_continuation
+                    await asyncio.to_thread(verify_continuation,campaign)
                 template=campaign.setting('template')
                 if template and template['protocol']['implementation_sha256']!=package_signature():
                     raise ValueError('Use the original worker release to continue this template, or review a new campaign. Saved results remain viewable.')

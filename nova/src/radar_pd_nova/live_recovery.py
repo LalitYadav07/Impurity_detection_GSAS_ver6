@@ -1,4 +1,25 @@
 """Prove a Live input was interrupted before retiring its unstarted job."""
+def _cancelled_empty_upload(service, identifier, metadata):
+    """Galaxy soft-deletes fetch outputs when their upload is cancelled.
+
+    Accept that tombstone only with the creating fetch job's matching output
+    and History. A deleted user dataset or a cancelled scientific job provides
+    no such proof. The dataset remains deleted; retry stages a fresh input.
+    """
+    creator = metadata.get('creating_job')
+    if metadata.get('state') != 'discarded' or not creator:
+        return False
+    try:
+        fetch = service._job_details(creator)
+        return (fetch.get('id') == creator
+                and fetch.get('history_id') == service.history_id
+                and fetch.get('tool_id') == '__DATA_FETCH__'
+                and fetch.get('state') in {'deleted', 'deleted_new'}
+                and identifier in service._job_output_ids(fetch).values())
+    except Exception:
+        return False
+
+
 def failed_input_proof(service, job_id, *, retiring=False):
     job = service._job_details(job_id)
     states = {'paused', 'deleted', 'deleted_new'} if retiring else {'paused'}
@@ -19,7 +40,8 @@ def failed_input_proof(service, job_id, *, retiring=False):
             return None
         if (metadata.get('state') in {'error', 'discarded', 'failed_metadata'}
                 and type(metadata.get('file_size')) is int and metadata['file_size'] == 0
-                and not metadata.get('deleted') and not metadata.get('purged')):
+                and not metadata.get('purged')
+                and (not metadata.get('deleted') or _cancelled_empty_upload(service, identifier, metadata))):
             interrupted.append(identifier)
         elif metadata.get('state') != 'ok' or metadata.get('deleted') or metadata.get('purged'):
             return None

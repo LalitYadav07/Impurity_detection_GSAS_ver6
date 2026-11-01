@@ -311,7 +311,9 @@ class RefinementMixin:
             experiments=refinement_experiment_options(workspace)
             s.rf_experiments=[dict(title=v,value=k) for k,v in sorted(experiments.items(),key=lambda x:x[1])]
             if s.rf_experiment not in experiments:
-                selected=next((v['experiment'] for v in sources if v['record_uid']==s.selected_run_uid),None)
+                selected=next((v['experiment'] for v in sources if v.get('live_watch')),None)
+                if selected is None:
+                    selected=next((v['experiment'] for v in sources if v['record_uid']==s.selected_run_uid),None)
                 s.rf_experiment=selected or (next(iter(experiments)) if experiments else '')
                 self._refinement_experiment_changed()
             self._refinement_sync();self._refinement_start_pump()
