@@ -1968,7 +1968,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                     vuetify.VBtn(
                         "Resume existing watch",
                         click=self.resume_existing_powgen_monitoring,
-                        v_if="(live_library_builder_decision_pending || !!live_restored_checkpoint_id) && powgen_results_refresh_available && !live_restore_resume_blocked",
+                        v_if="live_library_builder_decision_pending && !live_restored_checkpoint_id && powgen_results_refresh_available && !live_restore_resume_blocked",
                         disabled=("powgen_monitoring || live_launch_busy || live_restore_busy",),
                         variant="outlined", size="small",
                     )
@@ -2718,8 +2718,10 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
             vuetify.VProgressLinear(v_if="selected_run_loading", indeterminate=True, height=3, color="#15543c")
             vuetify.VAlert(v_if="!!selected_result_load_error", text=("selected_result_load_error",),
                 type="error", variant="tonal", density="compact", classes="mb-2")
-            vuetify.VAlert(v_if="live_launch_busy", title="Preparing Live analysis",
-                text=("live_test_message || powgen_message",), type="info", variant="tonal", classes="mb-2")
+            vuetify.VAlert(v_if="live_launch_busy",
+                title=("powgen_results_refresh_busy ? 'Refreshing saved results' : 'Preparing Live analysis'",),
+                text=("powgen_results_refresh_busy ? powgen_message : (live_test_message || powgen_message)",),
+                type="info", variant="tonal", classes="mb-2")
             vuetify.VProgressLinear(v_if="live_launch_busy", indeterminate=True, height=3, color="#15543c")
             with html.Div(v_if="!live_launch_busy && !selected_run_uid && !['experiment','refinement','battery'].includes(workspace_view)", classes="radar-workspace-empty"):
                 html.Div("RADAR-PD SCIENTIFIC AI WORKSPACE", classes="radar-kicker")
@@ -2817,6 +2819,14 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                     v_if="!powgen_monitoring && powgen_results_refresh_available",
                     disabled=("live_launch_busy || live_restore_busy || powgen_results_refresh_busy",),
                     loading=("powgen_results_refresh_busy",), prepend_icon="mdi-refresh",
+                    variant="outlined", size="small",
+                )
+                vuetify.VBtn(
+                    "Resume existing watch", click=self.resume_existing_powgen_monitoring,
+                    v_if="!!live_restored_checkpoint_id && !powgen_monitoring && powgen_results_refresh_available && !live_restore_resume_blocked",
+                    disabled=("powgen_monitoring || live_launch_busy || live_restore_busy",),
+                    loading=("live_launch_busy && !powgen_results_refresh_busy",),
+                    prepend_icon="mdi-play-circle-outline", color="#15543c",
                     variant="outlined", size="small",
                 )
                 vuetify.VBtn(
@@ -5801,6 +5811,9 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
             if task is not None and not task.done():
                 raise ValueError("The existing watch is still saving its stopped state. Wait for that save before resuming.")
             state.live_launch_busy = True
+            state.live_test_message = ""
+            state.powgen_message = "Preparing to resume the existing watch; checking its saved configuration. Monitoring remains stopped…"
+            state.flush()
             saved = getattr(self, "_powgen_controller_configuration", None)
             configuration = (saved[1] if saved and saved[0] is controller else
                 await asyncio.to_thread(service.load_configuration_dataset, controller.settings.configuration_dataset_id))

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import asdict, dataclass, fields
-from datetime import datetime
+from datetime import datetime, timezone
 from hashlib import sha256
 import json
 from pathlib import PurePosixPath
@@ -22,7 +22,7 @@ from trame.widgets import html
 from trame.widgets import vuetify3 as vuetify
 
 from .library_setup import LibraryDraft
-from .live_beamlines import beamline_adapter
+from .live_beamlines import BEAMLINES, beamline_adapter
 from .powgen_watch import WatchState
 from .setup_forms import CONFIG_FORM_FIELDS
 
@@ -46,6 +46,44 @@ _EXTENSIONS = {
              "condition_bindings_json": "hb2a_condition_bindings", "collimator_override": "hb2a_collimator_override",
              "allow_stopped": "hb2a_allow_stopped", "excluded_acquisitions": "hb2a_excluded_acquisitions"},
 }
+_BEAMLINE_LABELS = {label.upper(): adapter.name for adapter in BEAMLINES.values()
+                    for label in (adapter.instrument, adapter.name)}
+_BEAMLINE_PATTERN = "|".join(re.escape(label) for label in _BEAMLINE_LABELS)
+
+
+def saved_watch_title(row):
+    """Summarize generated checkpoint names without dropping custom labels."""
+    dataset_id = str(row.get("id") or "")
+    name = str(row.get("name") or "").strip()
+    original = name.rsplit("|", 1)[-1].strip()
+    display = str(row.get("display_name") or "").strip()
+    # GalaxyService's general picker label already adds an unzoned update
+    # time and ID. Replace that suffix here, but preserve a custom display name.
+    update = str(row.get("update_time") or "")[:16].replace("T", " ")
+    suffix = " · ".join(value for value in (update, dataset_id[:8]) if value)
+    generated_display = f"{original} · {suffix}" if suffix else original
+    label = display if display and display not in {name, original, generated_display} else original
+    generated = re.fullmatch(
+        rf"(?P<ipts>IPTS-[1-9][0-9]*)_(?P<beamline>{_BEAMLINE_PATTERN})_watch_state(?:-[a-f0-9]{{32}})?\.json",
+        label, re.IGNORECASE,
+    ) or re.fullmatch(
+        rf"(?:RADAR-PD )?(?P<beamline>{_BEAMLINE_PATTERN}) watch state (?P<ipts>IPTS-[1-9][0-9]*)(?: \[watch:[a-f0-9]{{64}}\])?",
+        label, re.IGNORECASE,
+    )
+    if generated:
+        label = f"{_BEAMLINE_LABELS[generated['beamline'].upper()]} · {generated['ipts'].upper()}"
+    label = label or "Saved Live watch"
+    timing = "upload time unavailable"
+    for field, action in (("create_time", "uploaded"), ("update_time", "updated")):
+        try:
+            stamp = datetime.fromisoformat(str(row.get(field) or "").replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        # Galaxy's dataset metadata timestamps are UTC, including naive ones.
+        stamp = stamp if stamp.tzinfo is not None else stamp.replace(tzinfo=timezone.utc)
+        timing = f"{action} {stamp.astimezone(timezone.utc):%Y-%m-%d %H:%M UTC}"
+        break
+    return " · ".join(value for value in (label, timing, dataset_id[:8]) if value)
 
 
 def state_recorded_display(value):
@@ -315,7 +353,7 @@ class LiveRestoreMixin:
                 query=query, limit=100, offset=page * 100, include_generated=True)
             if self._live_restore_owner is not owner or context != self._live_restore_context() or not self._live_restore_can_read():
                 return
-            state.live_restore_options = [dict(row, title=row.get("display_name") or row.get("name") or row["id"])
+            state.live_restore_options = [dict(row, title=saved_watch_title(row))
                 for row in rows if row.get("state") == "ok" and "watch state" in str(row.get("name") or "").lower()]
             state.live_restore_page = page
             state.live_restore_has_more = len(rows) == 100

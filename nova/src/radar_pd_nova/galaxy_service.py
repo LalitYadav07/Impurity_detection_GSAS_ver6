@@ -754,6 +754,7 @@ class GalaxyService:
             "display_name": f"{original_name} · {display_suffix}" if display_suffix else original_name,
             "extension": str(row.get("extension") or row.get("file_ext") or "data"),
             "state": str(row.get("state") or ""),
+            "create_time": str(row.get("create_time") or ""),
             "update_time": str(row.get("update_time") or ""),
             "role": role,
             "generated": generated,
