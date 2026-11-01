@@ -12,6 +12,7 @@ from .providers import SambaNova, make_client, IncompleteResponse
 from .schema import response_schema, normalize_optional_nulls
 from .intent import literal_stage_cards,check_literal_free,natural_atom_only_cards
 from .usage import summarize_calls
+from .setup_context import setup_context
 
 ROOT = Path(__file__).resolve().parent
 
@@ -78,6 +79,8 @@ def output_allowance(payload):
 def build_payload(request, context, previous=None):
     if not isinstance(request, str) or not request.strip() or len(request) > 16000:
         raise ValueError("Supply a user request of 1–16000 characters")
+    if len(json.dumps(context).encode()) > 350000:
+        raise ValueError("Project context exceeds the validated planner budget; do not silently truncate scientific state")
     knowledge = json.loads((ROOT / "knowledge.json").read_text())
     capabilities = [{"phase": p["key"], "phase_name": p["name"], "active_histograms": [h["key"] for h in context["histograms"] if h["name"] in p["histograms"]], "can_refine_cell": bool(p["histograms"]), "occupancy_groups": p.get("occupancy_groups", []), "texture_orders": p.get("texture_orders"), "histogram_preferred_orientation": {h["key"]:{"scope":"HAP","supported_models":["march-dollase","spherical-harmonics"],"supported_SH_orders":p.get("texture_orders",[])} for h in context["histograms"] if h["name"] in p["histograms"]}, "phase_global_texture_release_supported":False, "existing_Uiso_equality_groups": [g for g in context.get('uiso_equivalence_groups',[]) if any(t['phase']==p['key'] for t in g)], "atoms": [
         {"label": a["label"], "position_dof": a.get("position_dof"),
@@ -86,6 +89,12 @@ def build_payload(request, context, previous=None):
          "can_refine_Uiso": bool(p["histograms"]) and a.get("adp_type") == "I",
          "allowed_flags": ("F" + ("X" if (a.get("position_dof") or 0) > 0 else "") + ("U" if a.get("adp_type") == "I" else "")) if p["histograms"] else ""}
         for a in p["atoms"]]} for p in context["phases"]]
+    for capability, phase in zip(capabilities, context['phases']):
+        capability['sample_widths'] = {key: {
+            kind: {'supported': bool(hap.get(family)) and hap[family][0] == 'isotropic', 'unit': unit,
+                   'scope': 'Existing isotropic HAP coefficient only; mixing and instrument held fixed'}
+            for kind, family, unit in [('sample_size', 'Size', 'micrometre'), ('sample_microstrain', 'Mustrain', 'microstrain')]}
+            for key, hap in phase.get('histogram_phase_models', {}).items() if hap.get('Use', True)}
     histogram_capabilities=[{'histogram':h['key'],'name':h['name'],
         'linked_phases':[p['key'] for p in context['phases'] if h['name'] in p['histograms']],
         'linked_phase_count':sum(h['name'] in p['histograms'] for p in context['phases']),
@@ -102,7 +111,7 @@ def build_payload(request, context, previous=None):
                 'histogram_scale_compensation_factor':total,'scope':'Starting source values only. After an earlier refinement, the operator uses that current stage state; these source numbers must not be imposed as later fixed values.'}
     payload = {"schema": "radar-gpx-planning-payload/v1",
                "project_encoding": "Tables marked _encoding=rows/v1 are lossless: columns give field names, each row supplies their values in order. context_sha256 refers to the decoded project.",
-               "target_capabilities": capabilities, "histogram_capabilities":histogram_capabilities, "project": compact_context(context), "knowledge": knowledge,
+               "target_capabilities": capabilities, "histogram_capabilities":histogram_capabilities, "project": compact_context(setup_context(context)), "knowledge": knowledge,
                "supported_background_functions": BACKGROUNDS,
                "response_schema": response_schema(context['model_signature']),
                "response_contract": "Use exactly the example's top-level/stage/target fields. Background and stage_extensions fields are optional. Use only their documented syntax; do not add a stage_extensions wrapper to the plan. constraints must always be a list. Use empty arrays for no questions/unsupported/assumptions. Exact context model_signature required. cycles integer 1–30. No extra keys. Every atom flag must be in that atom's allowed_flags. If the user requests a forbidden flag (including X when position_dof=0), explain it in unsupported or questions; never emit that invalid target even if the user insists. Use stages=[] when this prevents the requested refinement."}

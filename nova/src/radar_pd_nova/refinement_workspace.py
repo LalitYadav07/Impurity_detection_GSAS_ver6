@@ -23,6 +23,10 @@ def utc():
     return datetime.now(timezone.utc).isoformat()
 
 
+def refinement_job_key(source, plan):
+    return digest([source['experiment'],source['scan_key'],source['source_sha256'],plan_hash(plan)])[:24]
+
+
 class RefinementWorkspace:
     def __init__(self,root,*,history_id,runtime,planner=None):
         self.root=Path(root).resolve();self.root.mkdir(parents=True,exist_ok=True)
@@ -36,27 +40,31 @@ class RefinementWorkspace:
                 raise ValueError('Refinement workspace belongs to a different history')
         else:self.state=dict(schema='radar-refinement-workspace/v1',history_id=self.history_id,sources={},drafts={},recipes={},jobs={},paused=False)
         self._validate_parallel_jobs(self.state.get('parallel_jobs',1))
+        self._recover_interrupted()
+        self.save()
+
+    def _recover_interrupted(self):
         for draft in self.state['drafts'].values():
             if draft.get('status')=='busy':draft.update(status='interrupted',error='Planning/preflight was interrupted; review or regenerate this draft')
         for job in self.state['jobs'].values():
             if job['status']=='running':
                 job['status']='recovering' if job.get('remote_action') else 'interrupted'
                 job['message']='Recovering the existing Galaxy job' if job.get('remote_action') else 'The local worker was interrupted; explicitly retry after review'
-        self.save()
 
     def save(self):
-        self.state['updated_utc']=utc();write_json(self.manifest,self.state)
+        with self.lock:
+            self.state['updated_utc']=utc();write_json(self.manifest,self.state)
 
     def restore_remote(self):
         if self.state['recipes'] or self.state['jobs']:return False
         document=self.runtime.recover_workspace()
         if not document:return False
-        if document.get('history_id')!=self.history_id:raise ValueError('Saved refinement session belongs to another Galaxy history')
+        if document.get('schema')!='radar-refinement-workspace/v1' or document.get('history_id')!=self.history_id:
+            raise ValueError('Saved refinement session belongs to another schema or Galaxy history')
         self._validate_parallel_jobs(document.get('parallel_jobs',1))
         with self.lock:
             self.state=document
-            for job in self.state['jobs'].values():
-                if job['status']=='running':job['status']='recovering' if job.get('remote_action') else 'interrupted'
+            self._recover_interrupted()
             self.save()
         return True
 
@@ -137,7 +145,9 @@ class RefinementWorkspace:
             run=source.get('run_number')
             return (source['experiment'],str(run),str(source.get('bank') or '')) if run is not None else None
         monitored={identity(source) for source in values if source.get('live_watch') and identity(source) is not None}
-        return [source for source in values if source.get('live_watch') or identity(source) not in monitored]
+        superseded={source['model_parent_id'] for source in values if source.get('model_parent_id')}
+        return [source for source in values if source['id'] not in superseded and
+                (source.get('model_parent_id') or source.get('live_watch') or identity(source) not in monitored)]
 
     def selection(self,scope,*,existing=True,future=False):
         with self.lock:
@@ -161,7 +171,9 @@ class RefinementWorkspace:
         material=self.runtime.resolve(source)
         directory=self.root/'inspections'/material['source_sha256']/revision[:16]
         response_path=directory/'response.json'
-        if response_path.exists():result=json.loads(response_path.read_text());result['directory']=str(directory)
+        if response_path.exists():
+            from .refinement_runtime import verify_result_files
+            result=json.loads(response_path.read_text());verify_result_files(directory,result);result['directory']=str(directory)
         else:result=self.runtime.call('inspect',material,directory,dispatch_key=digest(['inspect',material['source_sha256'],revision])[:24])
         if result['status']!='inspected':raise ValueError(result.get('error') or 'This GPX cannot be used for recipe polishing')
         if result['context']['source']['sha256']!=material['source_sha256']:raise ValueError('Inspection belongs to another GPX revision')
@@ -173,8 +185,51 @@ class RefinementWorkspace:
             material['observed_utc']=current['observed_utc'];self.state['sources'][source_id]=material;self.save()
         return copy.deepcopy(material)
 
-    def prepare(self,experiment,source_id,request,*,previous=None,reuse_recipe=None):
+    def edit_source(self,source_id,request):
+        from gpx_recipe.model_edits import validate_edit
+        source=self.inspect(source_id)
+        request=validate_edit(source['context'],request)
+        revision=uuid.uuid4().hex
+        directory=self.root/'model_edits'/revision
+        result=self.runtime.call('edit',source,directory,plan=request,dispatch_key=digest(['edit',revision])[:24])
+        if result['status']!='model_edited':raise ValueError(result.get('error') or 'Phase correction failed')
+        from .refinement_runtime import verify_result_files
+        verify_result_files(directory,result)
+        edited=copy.deepcopy(source)
+        # Do not let catalog refresh coalesce a derivative with its publication.
+        for key in ('dataset_id','collection_id','record_uid','published_sha256','internal_source_sha256','live_watch'):
+            edited.pop(key,None)
+        edited.update(id='model-'+revision,model_parent_id=source_id,model_parent_sha256=source['source_sha256'],
+            source_path=str(directory/result['final_gpx']),source_sha256=result['output_sha256'],
+            scan_key=source['scan_key']+':model:'+revision,scan_label=source['scan_label']+' · corrected model',
+            collection_name=result['final_gpx'],context=result['context'],inspection=str(directory),
+            project=dict(stage='edited_unqualified'),model_edit=str(directory/'model_edit.json'),observed_utc=utc())
+        if result.get('model_dataset_id'):edited['dataset_id']=result['model_dataset_id']
+        edited['metadata']=copy.deepcopy(source.get('metadata') or {})
+        # Profile evidence remains valid for unchanged observations/instrument,
+        # but the parent receipt no longer certifies the phase list or GPX hash.
+        if edited['metadata'].get('preparation'):
+            edited['metadata']['parent_preparation']=edited['metadata'].pop('preparation')
+        with self.lock:
+            if self.state['sources'][source_id]['source_sha256']!=source['source_sha256']:
+                raise ValueError('The source changed while phase correction was running; edited model was not selected.')
+            self.state['sources'][edited['id']]=edited
+            self.state['drafts'].pop(source['experiment'],None)
+            for recipe in self.state['recipes'].values():
+                if recipe['experiment']==source['experiment']:
+                    recipe['armed']=False
+                    if recipe['source_id']==source_id or any(s['id']==source_id for s in recipe.get('baseline',[])):
+                        recipe['invalidated_by_model']=edited['id']
+            for job in self.state['jobs'].values():
+                if self.state['recipes'][job['recipe_id']].get('invalidated_by_model') and job['status'] in {'queued','paused','failed','interrupted'} and not job.get('remote_action'):
+                    job.update(status='needs_recipe',message='Starting phase model was corrected. Build and approve a recipe for the new revision.')
+            self.save()
+        return copy.deepcopy(edited)
+
+    def prepare(self,experiment,source_id,request,*,previous=None,reuse_recipe=None,template=None,guided=None):
         if not request.strip():raise ValueError('Describe the refinement stages first')
+        if template not in {None,'battery_baseline'} or sum(x is not None for x in (template,reuse_recipe,guided))>1:
+            raise ValueError('Choose one supported recipe source')
         generation=uuid.uuid4().hex
         with self.lock:
             source=self.state['sources'].get(source_id)
@@ -189,7 +244,7 @@ class RefinementWorkspace:
         planning=None
         try:
             client=None
-            if not reuse_recipe and not self._planner:
+            if not reuse_recipe and not template and guided is None and not self._planner:
                 # Fail before dispatching an inspection job when this session
                 # was launched without the selected Galaxy credential context.
                 configure_provider(os.getenv('RADAR_GPX_PLANNER_PROVIDER','illumine-luna'),os.getenv('RADAR_PD_REFINEMENT_KEY_FILE') or None)
@@ -204,13 +259,26 @@ class RefinementWorkspace:
                     'several scans does not imply several histograms in this GPX. Do not invent extra '
                     'histograms or ask for a cross-scan mapping that this host already handles.'}
             if previous and previous.get('model_signature')!=context['model_signature']:previous=None
-            if reuse_recipe:
+            if guided is not None:
+                from gpx_recipe.guided import build_plan
+                plan=build_plan(context,guided)
+                if request!=plan['request']:raise ValueError('The guided request changed; rebuild from the current answers')
+                planning=dict(plan=plan,calls=copy.deepcopy(guided.get('model_calls',[])),origin='Guided rules · deterministic recipe',guided=copy.deepcopy(guided))
+            elif template:
+                from gpx_recipe.battery.recipes import BASELINE_REQUEST,baseline_recipe
+                if source.get('project',{}).get('stage')!='prepared_unqualified' or request!=BASELINE_REQUEST:
+                    raise ValueError('The battery baseline requires an explicit prepared model and its displayed request')
+                planning=dict(plan=baseline_recipe(context),calls=[],origin='Battery baseline template · no model call')
+            elif reuse_recipe:
                 from gpx_recipe.contracts import validate_plan
                 with self.lock:saved=copy.deepcopy(self.state['recipes'][reuse_recipe])
                 if saved['experiment']!=experiment:raise ValueError('Choose a saved recipe from this experiment')
+                if saved.get('guided') and saved['plan'].get('source_sha256'):
+                    from gpx_recipe.guided import check_binding
+                    check_binding(context,saved['guided'])
                 plan=validate_plan(saved['plan'],context)
                 if request!=plan['request']:raise ValueError('A changed request needs a revised plan')
-                planning=dict(plan=plan,calls=[],origin='Saved recipe '+str(saved['version']))
+                planning=dict(plan=plan,calls=[],origin='Saved recipe '+str(saved['version']),guided=saved.get('guided'))
             elif self._planner:planning=self._planner(request,planning_context,previous=previous)
             else:
                 planning=make_plan(request,planning_context,previous=previous,client=client)
@@ -225,12 +293,12 @@ class RefinementWorkspace:
                 if response['status']!='preview_passed':raise ValueError(response.get('error') or 'Native parameter preflight failed')
                 preview=response['preview']
             with self.lock:
-                draft=self.state['drafts'][experiment]
-                if draft['generation']!=generation:return None
+                draft=self.state['drafts'].get(experiment)
+                if not draft or draft['generation']!=generation:return None
                 draft.update(status='needs_input' if plan['questions'] or plan['unsupported'] else 'ready',plan=plan,
                     context=context,source=source,preview=preview,directory=str(directory),planning_calls=len(planning.get('calls',[])),
-                    model_usage=planning['usage_summary'],
-                    origin=(planning['calls'][0]['label'] if planning.get('calls') else planning.get('origin','Deterministic clarification')))
+                    model_usage=planning['usage_summary'],guided=planning.get('guided'),
+                    origin=(planning.get('origin') or (planning['calls'][0]['label'] if planning.get('calls') else 'Deterministic clarification')))
                 self.save();return copy.deepcopy(draft)
         except Exception as exc:
             with self.lock:
@@ -254,6 +322,8 @@ class RefinementWorkspace:
                 raise ValueError('The recipe draft changed; review the current plan')
             snapshot,token=self.selection(scope,existing=existing,future=future)
             if token!=selection_token:raise ValueError('The selected scan set changed; review its updated scope before approving')
+            if draft['plan'].get('source_sha256') and (future or not existing or {row['id'] for row in snapshot['baseline']}!={draft['source_id']}):
+                raise ValueError('This recipe is approved for one exact GPX only. Select only its scan and turn off future enrollment, or rebuild with series reference applicability.')
             if existing and any(not row['sha256'] for row in snapshot['baseline']):raise ValueError('Some selected GPXs have not downloaded yet; refresh the results before approving')
             if not existing and not future:raise ValueError('Select existing scans, future matching arrivals, or both')
             if not scope.matches(draft['source']):raise ValueError('The representative source GPX is outside the selected scope')
@@ -263,18 +333,23 @@ class RefinementWorkspace:
             receipt=approve_plan(draft['plan'],draft['context'],draft.get('preview') or {},approver=approver)
             receipt['execution_policy_sha256']=token
             recipe_id=digest([plan_hash(draft['plan']),token])[:24]
-            if recipe_id in self.state['recipes']:return copy.deepcopy(self.state['recipes'][recipe_id])
+            if recipe_id in self.state['recipes']:
+                saved=self.state['recipes'][recipe_id]
+                if saved.get('invalidated_by_model'):
+                    raise ValueError('This recipe was invalidated by a phase correction. Review the corrected model.')
+                draft['approved_recipe']=recipe_id;self.save()
+                return copy.deepcopy(saved)
             recipe=dict(id=recipe_id,experiment=experiment,version=1+sum(r['experiment']==experiment for r in self.state['recipes'].values()),
                 plan=copy.deepcopy(draft['plan']),approval=receipt,context=copy.deepcopy(draft['context']),source_id=draft['source_id'],
                 scope=scope.to_dict(),selection_token=token,existing=existing,future=future,approved_utc=utc(),armed=False,started=False,
                 baseline=[copy.deepcopy(self.state['sources'][row['id']]) for row in snapshot['baseline']] if existing else [],
-                generation=generation)
+                generation=generation,guided=copy.deepcopy(draft.get('guided')))
             self.state['recipes'][recipe_id]=recipe;draft['approved_recipe']=recipe_id;self.save();return copy.deepcopy(recipe)
 
     def _enqueue(self,recipe,source):
         if not source.get('source_sha256'):
             return None
-        key=digest([source['experiment'],source['scan_key'],source['source_sha256'],plan_hash(recipe['plan'])])[:24]
+        key=refinement_job_key(source,recipe['plan'])
         if key in self.state['jobs']:
             job=self.state['jobs'][key]
             if recipe['id'] not in job['recipes']:job['recipes'].append(recipe['id'])
@@ -292,8 +367,11 @@ class RefinementWorkspace:
     def start(self,recipe_id,selection_token):
         with self.lock:
             recipe=self.state['recipes'][recipe_id]
+            if recipe.get('invalidated_by_model'):raise ValueError('This recipe was invalidated by a phase correction. Build and approve a recipe for the corrected model.')
             if recipe['selection_token']!=selection_token:raise ValueError('Approve this execution scope before starting')
-            for source in recipe['baseline']:self._enqueue(recipe,source)
+            for source in recipe['baseline']:
+                job=self._enqueue(recipe,source)
+                if job and job['status']=='paused':job.update(status='queued',message='Waiting for the refinement worker')
             recipe.update(started=True,armed=bool(recipe['future']))
             if recipe['armed']:self._enroll_future(recipe)
             self.state['paused']=False;self.save()
@@ -316,6 +394,8 @@ class RefinementWorkspace:
     def retry(self,job_id):
         with self.lock:
             job=self.state['jobs'][job_id]
+            if self.state['recipes'][job['recipe_id']].get('invalidated_by_model'):
+                raise ValueError('This recipe was invalidated by a phase correction. Use the corrected model.')
             if job['status'] not in {'interrupted','failed'}:raise ValueError('Only interrupted or failed transport jobs can be retried; changed models need a new recipe')
             job.setdefault('history',[]).append({k:copy.deepcopy(job.get(k)) for k in ['status','message','attempts','directory','remote_action']})
             job.update(status='recovering' if job.get('remote_action') else 'queued',message='Explicit retry requested');self.save()

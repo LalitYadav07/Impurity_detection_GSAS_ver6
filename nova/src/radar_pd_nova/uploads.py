@@ -23,6 +23,7 @@ from trame.widgets import html, vuetify3 as vuetify
 
 
 _UPLOAD_IDS = itertools.count(1)
+_BROWSER_UPLOADS: dict[Path, str] = {}
 _MAX_CIF_BYTES = 20 * 1024 * 1024
 _MAX_ARCHIVE_BYTES = 500 * 1024 * 1024
 _MAX_ARCHIVE_CIFS = 5000
@@ -112,7 +113,28 @@ def store_browser_upload(contents: bytes, original_name: Any) -> Path:
     directory = Path(tempfile.mkdtemp(prefix="radar_pd_upload_"))
     target = directory / safe_client_filename(original_name)
     target.write_bytes(contents)
+    _BROWSER_UPLOADS[target.resolve()] = hashlib.sha256(contents).hexdigest()
     return target
+
+
+def read_browser_upload(path: str, *, max_bytes: int, suffix: str) -> bytes:
+    """Read only a blob uploaded in this server session, unchanged since upload.
+
+    Browser state is editable by its client; a submitted path is not authority
+    to read arbitrary files from the NOVA container.
+    """
+    target = Path(path)
+    resolved = target.resolve()
+    expected = _BROWSER_UPLOADS.get(resolved)
+    if target.is_symlink() or expected is None or target.suffix.lower() != suffix:
+        raise ValueError('Upload the requested file in this session first.')
+    with target.open('rb') as handle:
+        contents = handle.read(max_bytes + 1)
+    if len(contents) > max_bytes:
+        raise ValueError('The uploaded file exceeds the allowed size.')
+    if hashlib.sha256(contents).hexdigest() != expected:
+        raise ValueError('The uploaded file changed; upload it again.')
+    return contents
 
 
 def _scientific_cif_display_name(name: str, formula: str, declared_name: str) -> str:
@@ -379,6 +401,7 @@ class NamedFileUpload:
         show_server_files: bool = False,
         color: str = "#15543c",
         key: str | None = None,
+        max_bytes: int | None = None,
         **_: Any,
     ) -> None:
         if return_contents:
@@ -398,14 +421,28 @@ class NamedFileUpload:
         self.ref_name = f"{key_slug}_input"
         self.decode_trigger = f"decode_named_blob_{self.instance_id}"
         self.clear_trigger = f"clear_named_blob_{self.instance_id}"
+        self.current_path: Path | None = None
+        self.error_model = f"{key_slug}_upload_error"
 
         state = self.server.state
         setattr(state, self.client_model, None)
         setattr(state, self.display_model, display_filename(getattr(state, v_model, "")))
+        setattr(state, self.error_model, "")
 
         @self.server.controller.trigger(self.decode_trigger)
         def _decode_named_blob(contents: bytes, original_name: str = "upload") -> None:
+            if max_bytes is not None and len(contents) > max_bytes:
+                # A rejected replacement must not leave the previous file active.
+                self.current_path = None
+                setattr(state, self.v_model, "")
+                setattr(state, self.display_model, "")
+                setattr(state, self.error_model, f"File exceeds the {max_bytes // (1024*1024)} MiB upload limit")
+                setattr(state, self.client_model, None)
+                state.flush()
+                return
             target = store_browser_upload(contents, original_name)
+            self.current_path = target
+            setattr(state, self.error_model, "")
             setattr(state, self.v_model, str(target))
             setattr(state, self.display_model, target.name)
             setattr(state, self.client_model, None)
@@ -413,6 +450,8 @@ class NamedFileUpload:
 
         @self.server.controller.trigger(self.clear_trigger)
         def _clear_named_blob() -> None:
+            self.current_path = None
+            setattr(state, self.error_model, "")
             setattr(state, self.v_model, "")
             setattr(state, self.display_model, "")
             setattr(state, self.client_model, None)
@@ -432,6 +471,7 @@ class NamedFileUpload:
         # Trame treats ``key`` as a JavaScript expression. Quote constant keys
         # so Vue receives stable string identities instead of unresolved names.
         with html.Div(classes="radar-upload-card", key=repr(self.key)):
+            vuetify.VAlert(v_if=self.error_model, text=(self.error_model,), type="error", density="compact", variant="tonal")
             vuetify.VFileInput(
                 v_model=(self.client_model,),
                 __properties=["accept"],

@@ -2,6 +2,7 @@
 import copy
 import asyncio
 import hashlib
+
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -16,6 +17,15 @@ from radar_pd_nova.refinement_controller import (published_refinement_source,ref
 from radar_pd_nova.refinement_workspace import RefinementWorkspace
 from radar_pd_nova.refinement_runtime import LocalRefinementRuntime,verify_result_files
 
+
+def test_battery_bank_labels_come_from_preparation_not_native_import_ordinal():
+    from radar_pd_nova.refinement_controller import refinement_histogram_options
+    view={'histograms':[{'name':'PWDR b2.gsa Bank 1'},{'name':'PWDR b5.gsa Bank 1'}]}
+    source={'metadata':{'physical_banks':{'PWDR b2.gsa Bank 1':2,'PWDR b5.gsa Bank 1':5}}}
+    assert refinement_histogram_options(view,source)==[
+        {'title':'Physical bank 2','value':'PWDR b2.gsa Bank 1'},
+        {'title':'Physical bank 5','value':'PWDR b5.gsa Bank 1'}]
+    assert refinement_histogram_options(view,{})[0]['title']=='PWDR b2.gsa Bank 1'
 
 def context(source):
     return dict(model_signature='same-model',source={'name':'source.gpx','sha256':source['source_sha256']},
@@ -243,6 +253,184 @@ def test_slow_previous_refinement_load_cannot_overwrite_a_new_scan_selection(tmp
     assert app.server.state.rf_selected_title.startswith('second')
 
 
+def test_guided_recipe_runs_selected_and_future_scans_without_planner_and_survives_restore(tmp_path):
+    from gpx_recipe import guided
+    from gpx_recipe.contracts import validate_plan
+    w,runtime=create(tmp_path);w.observe([source('s1'),source('s2'),source('outside',sample='another')])
+    ctx=w.inspect('s1')['context'];setup=guided.start(ctx)
+    for key,value in [('recipe','mixture'),('model_review','reviewed'),('cell_phases',[])]:
+        setup=guided.answer(ctx,setup,key,value)
+    w._planner=lambda *a,**k:pytest.fail('Guided setup must not invoke a scientific planner')
+    plan=guided.build_plan(ctx,setup)
+    draft=w.prepare('exp','s1',plan['request'],guided=setup)
+    assert draft['status']=='ready' and draft['guided']==setup and draft['planning_calls']==0
+    scope=RefinementScope('exp','samples',samples=('id:0012',));_,token=w.selection(scope,future=True)
+    recipe=w.approve('exp',draft['generation'],scope,existing=True,future=True,selection_token=token,approver='test')
+    assert recipe['guided']==setup
+    w.start(recipe['id'],token)
+    assert w.run_next()['status']==w.run_next()['status']=='completed'
+    w=RefinementWorkspace(tmp_path,history_id='history',runtime=runtime,planner=w._planner)
+    prior=runtime.call
+    def call(action,source,directory,**kwargs):
+        if action=='run':
+            ctx=context(source)
+            if source['id']=='bad':ctx['model_signature']='different-phase-model'
+            try:validate_plan(kwargs['plan'],ctx)
+            except ValueError as exc:return dict(status='needs_review',error=str(exc))
+        return prior(action,source,directory,**kwargs)
+    runtime.call=call
+    w.observe([source('bad'),source('s3'),source('other-future',sample='another')])
+    assert w.run_next()['status']=='needs_recipe'
+    assert w.run_next()['status']=='completed'
+    assert w.run_next() is None
+    assert len(w.state['jobs'])==4
+    assert all(job['source']['id'] not in {'outside','other-future'} for job in w.state['jobs'].values())
+    d=w.prepare('exp','s2',plan['request'],reuse_recipe=recipe['id'])
+    assert d['status']=='ready' and d['planning_calls']==0
+    assert d['plan']==recipe['plan']
+
+
+def test_legacy_guided_recipe_cannot_silently_gain_series_scope(tmp_path):
+    from gpx_recipe import guided
+    w,runtime=create(tmp_path);w.observe([source('s1'),source('s2')])
+    ctx=w.inspect('s1')['context'];setup=guided.start(ctx);setup['schema']=guided.LEGACY_SCHEMA
+    for key,value in [('recipe','mixture'),('model_review','reviewed'),('cell_phases',[])]:
+        setup=guided.answer(ctx,setup,key,value)
+    p=guided.build_plan(ctx,setup);draft=w.prepare('exp','s1',p['request'],guided=setup)
+    scope=RefinementScope('exp');_,token=w.selection(scope)
+    with pytest.raises(ValueError,match='one exact GPX'):
+        w.approve('exp',draft['generation'],scope,existing=True,future=False,selection_token=token,approver='test')
+    selected=RefinementScope('exp','scans',scans=('scan-s1',));_,token=w.selection(selected)
+    recipe=w.approve('exp',draft['generation'],selected,existing=True,future=False,selection_token=token,approver='test')
+    with pytest.raises(ValueError,match='starting model changed'):
+        w.prepare('exp','s2',p['request'],reuse_recipe=recipe['id'])
+
+
+def test_selected_setup_mode_cannot_approve_a_draft_from_another_mode(tmp_path):
+    w,rt=create(tmp_path);w.observe([source('1')]);recipe=approved(w,RefinementScope('exp'))
+    state=SimpleNamespace(rf_experiment='exp',rf_source='1',rf_request=w.state['drafts']['exp']['request'],rf_setup_mode='guided')
+    app=RefinementMixin();app.server=SimpleNamespace(state=state);app._refinement_workspace=w
+    app._refinement_selection_token=recipe['selection_token']
+    app._refinement_sync_approval()
+    assert not state.rf_approved and not state.rf_plan_ready
+    assert state.rf_recipe_id=='' and state.rf_recipe_summary==''
+    assert state.rf_transfer_notice.startswith('Prepare a recipe')
+    state.rf_setup_mode='expert';app._refinement_sync_approval()
+    assert state.rf_approved and state.rf_plan_ready
+
+
+def test_representative_change_clears_previous_scan_cards_and_preflight(tmp_path):
+    w,rt=create(tmp_path);w.observe([source('1'),source('2')])
+    approved(w,RefinementScope('exp'))
+    class State(SimpleNamespace):
+        def flush(self):pass
+    state=State(**RefinementMixin._refinement_state_defaults())
+    app=RefinementMixin();app.server=SimpleNamespace(state=state)
+    app._refinement_workspace=w;app._refinement_internal=False
+    app._refinement_approving=False;app._refinement_inspecting=False
+    app._init_guided_refinement()
+    state.rf_experiment='exp';state.rf_source='1';state.rf_setup_mode='expert'
+    state.rf_request=w.state['drafts']['exp']['request']
+    app._refinement_sync()
+    assert state.rf_cards and state.rf_plan_ready and state.rf_recipe_id
+    state.rf_source='2';app._refinement_source_changed()
+    assert not state.rf_cards and not state.rf_plan_ready and not state.rf_approved
+    assert state.rf_draft_status=='' and state.rf_plan_calls=='' and state.rf_recipe_id==''
+    assert state.rf_transfer_notice.startswith('Prepare a recipe')
+
+
+@pytest.mark.parametrize('element',['Na','Na_23','Li','Li_7'])
+def test_mobile_ion_notices_use_the_actual_element_and_atom_name(element):
+    symbol=element.split('_')[0]
+    view={'phases':[{'name':'Arbitrary host','atoms':[{'label':'mobile-X','element':element}]}],
+          'parameters':[dict(phase='Arbitrary host',atom='mobile-X',parameter='occupancy',value=.75,status='fixed')]}
+    notice=refinement_parameter_warnings(view)[0]
+    assert symbol+' content was not measured' in notice and 'mobile-X' in notice
+    view['parameters'][0]['status']='refined'
+    assert symbol+'-content interpretation' in refinement_parameter_warnings(view)[0]
+
+
+def test_phase_revision_invalidates_old_draft_queue_and_scope_without_refresh_overwrite(tmp_path):
+    from gpx_recipe.model_edits import SCHEMA
+    w,runtime=create(tmp_path);w.observe([source('s1')]);original=w.inspect('s1')
+    draft=w.prepare('exp','s1','background');scope=RefinementScope('exp','all');_,token=w.selection(scope)
+    recipe=w.approve('exp',draft['generation'],scope,existing=True,future=False,selection_token=token,approver='test')
+    w.start(recipe['id'],token)
+    ctx=original['context'];ctx['phases'].append(dict(key='p1',name='collector',histograms=['h'],atoms=[]))
+    w.state['sources']['s1']['context']=copy.deepcopy(ctx)
+    prior=runtime.call
+    def call(action,source,directory,**kwargs):
+        if action!='edit':return prior(action,source,directory,**kwargs)
+        directory=Path(directory);directory.mkdir(parents=True);target=directory/'verified_model.gpx';target.write_bytes(b'edited-model')
+        new=copy.deepcopy(ctx);new['source']['sha256']=file_sha(target);new['phases']=new['phases'][:1];new['model_signature']='changed'
+        return dict(status='model_edited',final_gpx=target.name,output_sha256=file_sha(target),context=new,files={target.name:file_sha(target)})
+    runtime.call=call
+    edited=w.edit_source('s1',dict(schema=SCHEMA,operation='remove',phase='p1',reason='Spurious collector phase',
+        model_signature=ctx['model_signature'],source_sha256=ctx['source']['sha256']))
+    assert edited['model_parent_id']=='s1' and edited['project']['stage']=='edited_unqualified'
+    assert w.state['sources']['s1']['source_sha256']==original['source_sha256']
+    assert 'exp' not in w.state['drafts']
+    assert next(iter(w.state['jobs'].values()))['status']=='needs_recipe'
+    with pytest.raises(ValueError,match='invalidated'):
+        w.start(recipe['id'],token)
+    w.observe([source('s1')])
+    assert [s['id'] for s in w.sources('exp')]==[edited['id']]
+
+
+def test_edited_model_digest_is_verified_even_without_file_manifest(tmp_path):
+    target=tmp_path/'verified_model.gpx';target.write_bytes(b'correct')
+    result=dict(status='model_edited',final_gpx=target.name,output_sha256=file_sha(target))
+    verify_result_files(tmp_path,result)
+    target.write_bytes(b'changed')
+    with pytest.raises(ValueError,match='final GPX changed'):
+        verify_result_files(tmp_path,result)
+
+
+def test_selecting_unfinished_result_clears_previous_parameters_and_diagnostics():
+    state=SimpleNamespace(rf_experiment='exp',rf_parameters=[dict(label='previous cell')],
+        rf_parameter_warnings=['previous warning'],rf_convergence_notice='previous convergence',flush=lambda:None)
+    app=RefinementMixin();app.server=SimpleNamespace(state=state)
+    app._refinement_workspace=SimpleNamespace(state=dict(jobs={'new':dict(source=source('new'),message='Queued')}))
+    app._refinement_plot_changed=lambda:None;app._refinement_trend_changed=lambda:None
+    asyncio.run(app._select_refinement_job('new'))
+    assert state.rf_parameters==[] and state.rf_parameter_warnings==[] and state.rf_convergence_notice==''
+    assert not state.rf_has_output and state.rf_downloads==[]
+
+
+def test_local_intermediate_result_does_not_claim_a_galaxy_publication():
+    result=dict(final_gpx='final.gpx',stages=[dict(id='scales')])
+    message=refinement_output_provenance(result,'scales')
+    assert 'stage 1' in message and 'Verified output' in message and 'Galaxy' not in message
+    assert 'Galaxy' not in refinement_output_provenance(result,'final')
+    result['final_dataset_id']='published-final'
+    assert 'final refined GPX is also available in Galaxy History' in refinement_output_provenance(result,'scales')
+
+
+def test_slow_previous_selection_cannot_replace_current_result_downloads(monkeypatch,tmp_path):
+    state=SimpleNamespace(rf_experiment='exp',flush=lambda:None)
+    app=RefinementMixin();app.server=SimpleNamespace(state=state)
+    jobs={name:dict(source=source(name),message='Completed',result=dict(directory=str(tmp_path),
+        final_view=name+'.json',final_gpx=name+'.gpx',baseline_view='baseline',files={name+'.gpx':'hash'}))
+        for name in ['old','new']}
+    app._refinement_workspace=SimpleNamespace(state=dict(jobs=jobs,sources={}))
+    app._read_refinement_view=lambda *args:None
+    app._refinement_plot_changed=lambda:None;app._refinement_trend_changed=lambda:None
+    async def scenario():
+        entered=asyncio.Event();release=asyncio.Event()
+        async def read(function,job,name):
+            if job is jobs['old']:
+                entered.set();await release.wait()
+            return dict(histograms=[dict(name=job['source']['id'])])
+        monkeypatch.setattr(asyncio,'to_thread',read)
+        previous=asyncio.create_task(app._select_refinement_job('old'))
+        await entered.wait()
+        await app._select_refinement_job('new')
+        release.set();await previous
+    asyncio.run(scenario())
+    assert state.rf_selected_job=='new' and state.rf_selected_title.startswith('new')
+    assert state.rf_download=='new.gpx' and state.rf_histogram=='new'
+
+
 @pytest.mark.parametrize('mode,expected',[('models','models'),('recipe','results'),('results','results')])
 def test_changing_experiment_does_not_leave_model_exploration_for_an_existing_recipe_job(mode,expected):
     state=SimpleNamespace(rf_experiment='new-experiment',rf_mode=mode)
@@ -283,6 +471,71 @@ def test_model_usage_survives_review_and_workspace_recovery(tmp_path):
     assert draft['model_usage']['estimated_usd'] is not None
     restored=RefinementWorkspace(tmp_path,history_id='history',runtime=rt)
     assert restored.state['drafts']['exp']['model_usage']==draft['model_usage']
+
+
+def test_battery_baseline_uses_native_preflight_without_model_provider(tmp_path,monkeypatch):
+    from gpx_recipe.battery.recipes import BASELINE_REQUEST
+    from radar_pd_nova import refinement_workspace as module
+    monkeypatch.setattr(module,'configure_provider',lambda *args:pytest.fail('Template configured a model provider'))
+    runtime=Runtime();w=RefinementWorkspace(tmp_path,history_id='history',runtime=runtime)
+    prepared=source('1');prepared['project']={'stage':'prepared_unqualified'}
+    w.observe([prepared])
+    draft=w.prepare('exp','1',BASELINE_REQUEST,template='battery_baseline')
+    assert draft['status']=='ready' and draft['planning_calls']==0
+    assert [call[0] for call in runtime.calls]==['inspect','preview']
+    plan=draft['plan']
+    assert [stage['id'] for stage in plan['stages']]==['scales','cells']
+    assert {target['kind'] for stage in plan['stages'] for target in stage['free']}=={'background','phase_scale','cell'}
+    assert 'Li remain fixed' in ' '.join(plan['assumptions'])
+
+
+def test_battery_template_cannot_silently_replace_a_custom_request(tmp_path):
+    from gpx_recipe.battery.recipes import BASELINE_REQUEST
+    w,_=create(tmp_path);prepared=source('1');prepared['project']={'stage':'prepared_unqualified'};w.observe([prepared])
+    with pytest.raises(ValueError,match='displayed request'):
+        w.prepare('exp','1','Refine Li occupancy',template='battery_baseline')
+    ordinary=source('2');w.observe([ordinary])
+    with pytest.raises(ValueError,match='prepared model'):
+        w.prepare('exp','2',BASELINE_REQUEST,template='battery_baseline')
+
+
+def test_prepared_source_is_labeled_unqualified_in_refinement():
+    app=RefinementMixin();s=SimpleNamespace(rf_source='1');app.server=SimpleNamespace(state=s)
+    app._refinement_workspace=SimpleNamespace(state={'sources':{'1':{**source('1'),'project':{'stage':'prepared_unqualified'},'collection_name':'prepared.gpx'}}})
+    app._refinement_sync_source()
+    assert 'No refinement has been accepted' in s.rf_source_qualification
+    assert s.rf_source_details[-1]['label']=='Prepared GPX'
+
+
+def test_saved_catalog_disagreement_stays_visible_in_refinement_and_clears_with_source():
+    app=RefinementMixin();s=SimpleNamespace(rf_source='1');app.server=SimpleNamespace(state=s)
+    prepared={**source('1'),'project':{'stage':'prepared_unqualified'},'collection_name':'prepared.gpx',
+        'metadata':{'catalog_context':dict(role='review_only',comparison_status='conflict',proposal_title='Recorded purpose',
+            message='Catalog disagrees on: run_title. File-derived binding is retained; review the sources.')}}
+    app._refinement_workspace=SimpleNamespace(state={'sources':{'1':prepared,'2':source('2')}})
+    app._refinement_sync_source()
+    assert 'No refinement has been accepted' in s.rf_source_qualification
+    assert 'Catalog disagrees' in s.rf_source_qualification
+    assert any(r['label']=='Catalog comparison' and r['value']=='conflict · recorded context only' for r in s.rf_source_details)
+    assert any(r['label']=='Recorded proposal' and r['value']=='Recorded purpose' for r in s.rf_source_details)
+    s.rf_source='2';app._refinement_sync_source()
+    assert not s.rf_source_qualification
+    assert not any(r['label'] in {'Catalog comparison','Recorded proposal'} for r in s.rf_source_details)
+
+
+def test_fixed_lithium_is_not_reported_as_measured_and_antisite_label_is_not_a_lithium_atom():
+    view={'phases':[{'name':'LNO','atoms':[{'label':'Li1','element':'Li'},{'label':'Ni_Li','element':'Ni'}]}],
+          'parameters':[{'phase':'LNO','atom':'Li1','parameter':'occupancy','value':.951,'status':'fixed'},
+                        {'phase':'LNO','atom':'Ni_Li','parameter':'occupancy','value':.049,'status':'fixed'}]}
+    warnings=refinement_parameter_warnings(view)
+    assert len(warnings)==1 and 'Li content was not measured' in warnings[0]
+    assert 'Ni_Li' not in warnings[0]
+    view['parameters'][0]['status']='refined'
+    assert 'sensitivity' in refinement_parameter_warnings(view)[0]
+
+
+def test_unrefined_starting_rwp_does_not_imply_an_improvement_from_zero():
+    assert refinement_rwp_summary({'original_rwp':None,'polished_rwp':2.5,'rwp_comparable':True})=='Starting model has no evaluated Rwp · selected 2.500%'
 
 
 def test_failed_plan_retains_reported_token_usage(tmp_path):
@@ -638,7 +891,7 @@ def test_refinement_catalog_reads_only_summary_until_source_gpx_is_selected(tmp_
 
 
 def test_needs_review_explains_unphysical_uiso_and_keeps_last_verified_stage_visible():
-    baseline={'phases':[{'name':'Al2O3','atoms':[{'label':'Al1'},{'label':'O1'}]}]}
+    baseline={'phases':[{'name':'Al2O3','native_id':0,'atoms':[{'label':'Al1','native_id':0},{'label':'O1','native_id':1}]}]}
     result={'status':'needs_review','error':("Native dependent parameters violated physical/requested bounds before save-time clipping: "
             "[('0::AUiso:1', -0.002485644520797271)]. Later stages were not executed"),
             'stages':[{'id':f'stage-{i}','gpx':f'verified_stage-{i}.gpx'} for i in range(1,4)],
@@ -657,7 +910,7 @@ def test_rwp_summary_does_not_imply_improvement_when_fit_range_changes():
     assert '→' in refinement_rwp_summary(comparable)
     changed={**comparable,'polished_rwp':8.202,'rwp_comparable':False}
     label=refinement_rwp_summary(changed)
-    assert 'different fit range' in label and '→' not in label
+    assert 'weighted comparison not qualified' in label and '→' not in label
 
 
 def test_completed_refinement_reports_verified_stage_count_and_final_gpx():

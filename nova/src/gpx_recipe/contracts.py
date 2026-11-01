@@ -8,7 +8,7 @@ from . import SCHEMA
 from .snapshot import digest
 
 BACKGROUNDS = ["chebyschev-1", "chebyschev", "cosine", "Q^2 power series", "Q^-2 power series", "lin interpolate", "inv interpolate", "log interpolate"]
-KINDS = {"background", "phase_scale", "histogram_scale", "preferred_orientation", "cell", "atom"}
+KINDS = {"background", "phase_scale", "histogram_scale", "preferred_orientation", "sample_size", "sample_microstrain", "cell", "atom"}
 
 
 def exact_keys(value, allowed, required=()):
@@ -17,10 +17,12 @@ def exact_keys(value, allowed, required=()):
 
 
 def validate_plan(plan, context):
-    exact_keys(plan, {"schema", "model_signature", "request", "assumptions", "questions", "unsupported", "stages"},
+    exact_keys(plan, {"schema", "model_signature", "source_sha256", "reference_policy", "request", "assumptions", "questions", "unsupported", "stages"},
                {"schema", "model_signature", "request", "assumptions", "questions", "unsupported", "stages"})
     if plan["schema"] != SCHEMA or plan["model_signature"] != context["model_signature"]:
         raise ValueError("Plan does not match the inspected GPX model")
+    if 'source_sha256' in plan and (not isinstance(plan['source_sha256'],str) or not plan['source_sha256'] or plan['source_sha256']!=context['source']['sha256']):
+        raise ValueError('This recipe is bound to a different source GPX revision; rebuild its reference decisions.')
     if not isinstance(plan["request"], str) or not 0 < len(plan["request"]) <= 16000:
         raise ValueError("A bounded user request is required")
     for field in ("assumptions", "questions", "unsupported"):
@@ -36,14 +38,22 @@ def validate_plan(plan, context):
     uiso_groups = copy.deepcopy(context.get('uiso_equivalence_groups',[]))
     for stage in plan["stages"]:
         from .advanced import STAGE_FIELDS, validate_stage
-        exact_keys(stage, {"id", "title", "cycles", "free", "background", "constraints"} | STAGE_FIELDS, {"id", "title", "cycles", "free", "constraints"})
-        if not isinstance(stage["id"], str) or not re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_-]{0,40}", stage["id"]) or stage["id"] in stage_ids:
+        exact_keys(stage, {"id", "title", "cycles", "free", "background", "constraints", "convergence"} | STAGE_FIELDS, {"id", "title", "cycles", "free", "constraints"})
+        if not isinstance(stage["id"], str) or not re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_-]{0,40}", stage["id"]) or stage["id"].casefold() in stage_ids:
             raise ValueError("Stage IDs must be unique safe identifiers")
-        stage_ids.add(stage["id"])
+        if stage['id'].casefold() in {'baseline','final'}:
+            raise ValueError('Stage IDs baseline and final are reserved for the original and final result artifacts')
+        stage_ids.add(stage["id"].casefold())
         if not isinstance(stage["title"], str) or not 0 < len(stage["title"]) <= 500:
             raise ValueError("Stage title required")
         if type(stage["cycles"]) is not int or not 1 <= stage["cycles"] <= 30:
             raise ValueError("Stage cycles must be an integer from 1 to 30")
+        if stage.get('convergence') is not None:
+            from .convergence import finite
+            exact_keys(stage['convergence'],{'max_shift_over_sigma'},{'max_shift_over_sigma'})
+            ceiling=stage['convergence']['max_shift_over_sigma']
+            if not finite(ceiling) or not 0 < ceiling <= 1:
+                raise ValueError('Convergence requires a final-cycle shift/sigma ceiling in (0, 1]')
         if not isinstance(stage["free"], list) or not stage["free"] or len(stage["free"]) > 500:
             raise ValueError("Every stage needs a bounded explicit active set")
         seen = set()
@@ -51,6 +61,7 @@ def validate_plan(plan, context):
             kind = target.get("kind") if isinstance(target, dict) else None
             fields = {"background": {"kind", "histogram"}, "histogram_scale": {"kind", "histogram"},
                       "preferred_orientation": {"kind", "phase", "histogram"}, "phase_scale": {"kind", "phase", "histogram"},
+                      "sample_size": {"kind", "phase", "histogram"}, "sample_microstrain": {"kind", "phase", "histogram"},
                       "cell": {"kind", "phase"}, "atom": {"kind", "phase", "atom", "flags"}}
             if kind not in KINDS:
                 raise ValueError("Unsupported active parameter family: " + str(kind))
@@ -62,8 +73,13 @@ def validate_plan(plan, context):
                 raise ValueError("Unknown phase " + str(target["phase"]))
             if kind in {"cell","atom"} and not phase['histograms']:
                 raise ValueError("The requested phase has no active powder-histogram links. Review its source setup; the worker will not infer links or enable excluded phases.")
-            if kind in {"phase_scale", "preferred_orientation"} and hists[target["histogram"]]["name"] not in phase["histograms"]:
+            if kind in {"phase_scale", "preferred_orientation", "sample_size", "sample_microstrain"} and hists[target["histogram"]]["name"] not in phase["histograms"]:
                 raise ValueError("Phase is not active in the selected histogram")
+            if kind in {"sample_size", "sample_microstrain"}:
+                family = "Size" if kind == "sample_size" else "Mustrain"
+                model = phase.get("histogram_phase_models", {}).get(target["histogram"], {}).get(family, [])
+                if not model or model[0] != "isotropic":
+                    raise ValueError("Sample width release requires an existing isotropic " + family + " model; model conversion must be prepared explicitly")
             if kind == "atom":
                 matches = [a for a in phase["atoms"] if a["label"] == target["atom"]]
                 if len(matches) != 1:
@@ -137,6 +153,9 @@ def validate_plan(plan, context):
             if len(identities & active_occupancies) == 1:
                 raise ValueError("A new occupancy equation with exactly one released occupant and all other terms held fixed removes that occupant's refinement freedom. Do not invent a site-total equation; preserve the user's requested fixed/free choices or ask for clarification.")
         validate_stage(stage, context, normalized)
+    if 'reference_policy' in plan:
+        from .reference_transfer import validate_reference_policy
+        validate_reference_policy(context, plan)
     return copy.deepcopy(plan)
 
 
@@ -164,6 +183,10 @@ def stage_table(plan, context=None):
             if any(texture.get(k,[False])[0] for k in ['Sample omega','Sample chi','Sample phi']):previous.add('texture_angles:'+p['key'])
             for key,record in p.get('histogram_phase_models',{}).items():
                 if record.get('Pref.Ori.',[None,None,False])[2]:previous.update(target_labels({'kind':'preferred_orientation','phase':p['key'],'histogram':key}))
+                for family,kind in [('Size','sample_size'),('Mustrain','sample_microstrain')]:
+                    model=record.get(family,[])
+                    if len(model)>2 and model[0]=='isotropic' and model[2][0]:
+                        previous.update(target_labels({'kind':kind,'phase':p['key'],'histogram':key}))
             if p.get("cell_refined"):
                 previous.update(target_labels({"kind": "cell", "phase": p["key"]}))
             for scale in p.get("phase_scales", []):
@@ -180,6 +203,6 @@ def stage_table(plan, context=None):
                      "newly_free": sorted(current - previous), "newly_fixed": sorted(previous - current),
                      "fixed_policy": "Every other ordinary refinement parameter is fixed; original constraints/restraints remain.",
                      "cycles": stage["cycles"], "background": stage.get("background"), "new_constraints": stage["constraints"],
-                     "edits": {k: stage[k] for k in ("fit_ranges", "exclusions", "bounds", "phase_normalization", "texture") if stage.get(k)}})
+                     "edits": {k: stage[k] for k in ("fit_ranges", "exclusions", "bounds", "phase_normalization", "texture", "convergence") if stage.get(k)}})
         previous = current
     return rows

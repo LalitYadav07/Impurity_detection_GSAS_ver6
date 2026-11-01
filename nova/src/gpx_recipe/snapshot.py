@@ -105,6 +105,9 @@ def snapshot(path):
         laue = general["SGData"]["SGLaue"]
         lat = importlib.import_module((G2.__package__ + "." if G2.__package__ else "") + "GSASIIlattice")
         phases.append({"key": f"p{index}", "native_id": int(phase.id), "name": phase.name, "space_group": general["SGData"]["SpGrp"],
+                       "neutron_isotopes": json_safe(general.get("Isotope")),
+                       "neutron_scattering": json_safe({key: general.get("Isotopes", {}).get(key, {}).get(value)
+                                                       for key, value in (general.get("Isotope") or {}).items()}),
                        "global_texture": json_safe(general.get("SH Texture", {})),
                        "laue": laue, "mass": general.get("Mass"),
                        "occupancy_groups": occupancy_groups(atoms),
@@ -123,6 +126,7 @@ def snapshot(path):
                            "limits": json_safe(hist.data["Limits"]), "point_count": len(hist.getdata("X")),
                            "background": {"function": bg[0][0], "coefficients": int(bg[0][2]), "values": bg[0][3:],
                                           "refine": bool(bg[0][1]), "fixed_point_count": len(bg[1].get("FixedPoints", []))},
+                           "background_auxiliary": json_safe(bg[1]),
                            "rwp": hist.get_wR(), "sample_parameters": json_safe(hist.SampleParameters)})
         histograms[-1]['sample_parameter_provenance']='GSAS-II project/model fields, which may contain defaults. These are not independently verified acquisition logs; do not infer measured temperature, pressure or other scan conditions from them without an authoritative run-log mapping.'
     if not histograms or not phases:

@@ -4,19 +4,27 @@ import json
 from pathlib import Path
 import time
 import importlib
+import uuid
 
 from .contracts import validate_plan, plan_hash, stage_table
 from .snapshot import snapshot, gsas, json_safe
 from .studio_state import extract_gsasii_refinement_state
 from . import advanced
 from .effects import parameter_changes, require_fixed_values_unchanged,require_native_covariance,constraint_bound_audit,require_constraint_bounds,blocking_frozen_variables
+from .effects import native_storage_audit, require_native_storage
+from .convergence import convergence_evidence
 
 
 def write_json(path, value):
     path = Path(path)
-    temporary = path.with_suffix(path.suffix + ".partial")
-    temporary.write_text(json.dumps(json_safe(value), indent=2, allow_nan=False) + "\n")
-    temporary.replace(path)
+    payload = json.dumps(json_safe(value), indent=2, allow_nan=False) + "\n"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + '.' + uuid.uuid4().hex + '.partial')
+    try:
+        temporary.write_text(payload, encoding='utf-8')
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def freeze(project):
@@ -77,6 +85,16 @@ def configure(project, stage, context, added_constraints):
             project.set_Controls("parmMin", max(0.0, lo) if lo is not None else 0.0, variable=variable)
         elif kind == "preferred_orientation":
             phases[target["phase"]].set_HAP_refinements({"Pref.Ori.": True}, histograms=[hists[target["histogram"]].name])
+        elif kind in {"sample_size", "sample_microstrain"}:
+            phase, hist = phases[target["phase"]], hists[target["histogram"]]
+            family = "Size" if kind == "sample_size" else "Mustrain"
+            if phase.data["Histograms"][hist.name][family][0] != "isotropic":
+                raise ValueError("Sample-width model changed since inspection")
+            phase.set_HAP_refinements({family: {"refine": True}}, histograms=[hist.name])
+            variable = f"{phase.id}:{hist.id}:{family};i"
+            lo = project.get_Controls("parmMin", variable=variable)
+            minimum = 1e-9 if kind == "sample_size" else 0.0
+            project.set_Controls("parmMin", max(minimum, lo) if lo is not None else minimum, variable=variable)
         elif kind == "phase_scale":
             phase, hist = phases[target["phase"]], hists[target["histogram"]]
             phase.set_HAP_refinements({"Scale": True}, histograms=[hist.name])
@@ -146,6 +164,9 @@ def parameter_matches_target(row, target, context):
     if kind == "cell": return group == "lattice" and row["histogram_id"] is None
     if kind in {"phase_scale", "preferred_orientation"}:
         return hist is not None and row["histogram_id"] == hist["native_id"] and group == ("phase_fraction" if kind == "phase_scale" else "preferred_orientation")
+    if kind in {"sample_size", "sample_microstrain"}:
+        family = "Size;i" if kind == "sample_size" else "Mustrain;i"
+        return hist is not None and row["histogram_id"] == hist["native_id"] and row.get("family", row["name"].split(":")[2]) == family
     if kind == "atom":
         atom = next(a for a in phase["atoms"] if a["label"] == target["atom"])
         flags = {"atomic_coordinates": "X", "atomic_displacement": "U", "occupancy": "F"}
@@ -163,7 +184,7 @@ def check_preflight(state, stage, context):
     if not space["effective_vary"]:
         raise ValueError("The requested stage has no effective independent refinement variables")
     # A rigid-body or custom variable must not bypass our closed active set.
-    allowed = {"background", "phase_fraction", "histogram_scale", "preferred_orientation", "lattice", "atomic_coordinates", "atomic_displacement", "occupancy"}
+    allowed = {"background", "phase_fraction", "histogram_scale", "preferred_orientation", "crystallite_size", "microstrain", "lattice", "atomic_coordinates", "atomic_displacement", "occupancy"}
     permitted = lambda row: row["configured_now"] and any(parameter_matches_target(row, target, context) for target in stage["free"])
     permitted_names={name for p in space['parameters'] if permitted(p)
                      for name in (p['name'],p.get('refinement_variable',p['name']))}
@@ -310,12 +331,15 @@ def run_plan(source, output, plan, *, approved=None, preview=False):
                            metric_rows=[p for p in after["parameter_space"]["parameters"] if p["group"] in {"lattice", "atomic_coordinates", "atomic_displacement", "occupancy"}],
                            frozen_variables=after["parameter_space"]["frozen_variables"])
                 row["constraint_bound_audit"] = native_bounds
+                row["native_storage_audit"] = native_storage_audit(native_bounds,after)
+                row["convergence"] = convergence_evidence(after)
                 row["blocking_frozen_variables"] = blocking_frozen_variables(state,after)
                 row["final_state"] = advanced.audit(project, context)
                 row["parameter_changes"] = parameter_changes(state, after)
                 require_fixed_values_unchanged(row["parameter_changes"])
                 require_native_covariance(cov,len(row['actual_vary']),row['covariance'])
                 require_constraint_bounds(native_bounds)
+                require_native_storage(row["native_storage_audit"])
                 advanced.check_site_totals(project, context)
                 row["normalization_checks"] = advanced.check_normalization(project,context,normalized_histograms)
                 advanced.check_requested_relations(project,context,list(declared_relations.values()))
@@ -325,6 +349,10 @@ def run_plan(source, output, plan, *, approved=None, preview=False):
                 if row["blocking_frozen_variables"]:
                     row["status"] = "needs_review"
                     raise ValueError("GSAS-II froze a variable at its bound; remaining stages were not executed")
+                if stage.get('convergence'):
+                    from .convergence import require_convergence,assess_convergence
+                    row['convergence_screen']=assess_convergence(row['convergence'],stage['convergence']['max_shift_over_sigma'])
+                    require_convergence(row['convergence'],stage['convergence'])
                 row["status"] = "completed"
                 checkpoint = output.with_name(output.stem + "_" + stage["id"] + ".gpx")
                 project.save(str(checkpoint))

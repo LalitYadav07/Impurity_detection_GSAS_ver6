@@ -64,6 +64,18 @@ def test_nonfirst_bank_staging_preserves_observations_and_uncertainties(source,s
     assert setup.warnings==()  # Instrument: Dummy is an export convention, not DummyInfo.
 
 
+def test_shared_numeric_parser_normalizes_padding_but_rejects_different_run_evidence(source):
+    source.write_text(source.read_text().replace('Sample Run: 42', 'Sample Run: 00042'))
+    sidecar=source.with_suffix('.json');record=json.loads(sidecar.read_text())
+    record['Sample']['Runs']='00042';sidecar.write_text(json.dumps(record))
+    assert nomad.inspect_reduced_setup(source).run_number==42
+    record['Sample']['Runs']='42';sidecar.write_text(json.dumps(record))
+    assert nomad.inspect_reduced_setup(source).run_number==42
+    record['Sample']['Runs']='43';sidecar.write_text(json.dumps(record))
+    with pytest.raises(ValueError,match='summed or differs'):
+        nomad.inspect_reduced_setup(source)
+
+
 def test_verbose_nomad_header_keeps_comparison_receipt_in_the_bounded_prefix(source,supplied,tmp_path):
     source.write_text(source.read_text().replace('# Synthetic standard\n','# Synthetic standard\n'+'# facility comment\n'*70))
     setup=nomad.inspect_reduced_setup(source)
@@ -85,6 +97,26 @@ def test_invalid_unused_bank_does_not_rewrite_or_block_selected_bank(source,supp
         nomad.inspect_reduced_setup(source,selected_bank=1)
     with pytest.raises(ValueError,match='invalid numerical'):
         nomad.validate_profile(selected,1,supplied,1,acknowledged=True)
+
+
+def test_explicit_battery_staging_records_invalid_count_bins_and_preserves_source(source,supplied,tmp_path):
+    source.write_text(source.read_text().replace('1100 5.25 0.2','1100 nan 0'))
+    original=source.read_bytes();setup=nomad.inspect_reduced_setup(source,inventory_only=True)
+    with pytest.raises(ValueError,match='invalid numerical'):
+        nomad.stage_bank(source,setup,5,supplied,1,tmp_path/'rejected',acknowledged=True)
+    data,_,receipt=nomad.stage_bank(source,setup,5,supplied,1,tmp_path/'staged',acknowledged=True,allow_invalid_counts=True)
+    assert source.read_bytes()==original
+    assert receipt['invalid_count_bins']==[{'record_index':1,'intensity':'nan','uncertainty':'0'}]
+    assert receipt['source_numeric_sha256']==setup.banks[4].numeric_sha256
+    assert receipt['numeric_sha256']!=receipt['source_numeric_sha256']
+    assert b'1000 -5.5 0.1\n1100 0 1\n' in data.read_bytes()
+
+
+def test_invalid_count_policy_cannot_hide_invalid_coordinates(source,supplied,tmp_path):
+    source.write_text(source.read_text().replace('1100 5.25 0.2','nan 5.25 0.2'))
+    setup=nomad.inspect_reduced_setup(source,inventory_only=True)
+    with pytest.raises(ValueError,match='TOF coordinates'):
+        nomad.stage_bank(source,setup,5,supplied,1,tmp_path/'staged',acknowledged=True,allow_invalid_counts=True)
 
 
 def test_preflight_invalid_selected_bank_keeps_alternatives_visible(source,supplied,monkeypatch):

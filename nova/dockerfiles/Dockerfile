@@ -23,4 +23,4 @@ RUN python -m pip install --no-cache-dir 'scipy==1.15.3' \
     && python -m pip install --no-cache-dir --no-deps --only-binary=:all: 'h5py==3.13.0' \
     && python -m pip install --no-cache-dir --no-deps 'RapidFuzz==3.14.3' \
     && python -m pip install --no-cache-dir --no-deps /src \
-    && python -m compileall -q /src/src/radar_pd_nova
+    && python -m compileall -q /src/src/radar_pd_nova /src/src/gpx_recipe

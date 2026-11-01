@@ -50,6 +50,21 @@ def test_display_filename_never_exposes_the_temporary_or_windows_path() -> None:
     assert display_filename("") == ""
 
 
+def test_rejected_replacement_cannot_leave_previous_file_active():
+    from trame.app import get_server
+    from trame.widgets import html
+    from radar_pd_nova.uploads import NamedFileUpload
+    server=get_server(None, client_type='vue3')
+    with html.Div(trame_server=server):
+        upload=NamedFileUpload('test_bounded_file',label='Test',key='bounded-test',max_bytes=4)
+    decode=server.controller.trigger_fn(upload.decode_trigger)
+    decode(b'old','old.csv')
+    assert upload.current_path is not None and server.state.test_bounded_file
+    decode(b'larger file','replacement.csv')
+    assert upload.current_path is None and server.state.test_bounded_file==''
+    assert getattr(server.state,upload.error_model)
+
+
 def test_inspect_cif_upload_reports_formula_space_group_and_digest() -> None:
     result = inspect_cif_upload(VALID_CIF, r"C:\fakepath\Fe.cif")
 
@@ -217,3 +232,15 @@ def test_mounted_uploads_use_the_event_bridge_instead_of_the_previous_bound_file
         assert f'{model}.arrayBuffer' not in handler, model
     assert 'radar_cif_library_upload_browser_file' in inputs.handlers
     assert 'radar_cif_library_upload_browser_archive' in inputs.handlers
+def test_phase_upload_reader_rejects_arbitrary_paths_and_changed_uploads(tmp_path):
+    import pytest
+    from radar_pd_nova.uploads import read_browser_upload, store_browser_upload
+    private = tmp_path / 'private.cif'
+    private.write_bytes(b'private data')
+    with pytest.raises(ValueError, match='Upload'):
+        read_browser_upload(str(private), max_bytes=1024, suffix='.cif')
+    uploaded = store_browser_upload(b'data_phase', 'phase.cif')
+    assert read_browser_upload(str(uploaded), max_bytes=1024, suffix='.cif') == b'data_phase'
+    uploaded.write_bytes(b'changed')
+    with pytest.raises(ValueError, match='changed'):
+        read_browser_upload(str(uploaded), max_bytes=1024, suffix='.cif')

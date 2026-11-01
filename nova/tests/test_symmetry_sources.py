@@ -17,9 +17,12 @@ def workspace(tmp_path):
                 source_sha256=file_sha(raw),sample_label='Cr sample',collection_id='ORIGINAL_COLLECTION',
                 dataset_id='ORIGINAL_DATASET',project={'stage':'final_refinement'},base_rwp=25.,
                 context={'original':'cached project'},inspection='original-inspection',inspection_error=None)
-    result=dict(status='completed',directory=str(result_dir),files={'polished.gpx':file_sha(final),'stage1.gpx':file_sha(stage)},
+    for name in ['baseline.view.json','final.view.json','stage1.view.json','polished.execution.json']:
+        (result_dir/name).write_text('{}')
+    result=dict(status='completed',directory=str(result_dir),files={p.name:file_sha(p) for p in result_dir.iterdir()},
                 final_gpx='polished.gpx',output_sha256=file_sha(final),final_dataset_id='POLISHED_DATASET',
-                stages=[dict(id='s1',title='First stage',gpx='stage1.gpx')],stage_dataset_ids={'s1':'STAGE_DATASET'})
+                baseline_view='baseline.view.json',final_view='final.view.json',execution='polished.execution.json',
+                stages=[dict(id='s1',title='First stage',gpx='stage1.gpx',view='stage1.view.json')],stage_dataset_ids={'s1':'STAGE_DATASET'})
     w=SimpleNamespace(state=dict(sources={'raw':source},jobs={'job1':dict(status='completed',source=source,result=result)}))
     w.sources=lambda experiment:[dict(s) for s in w.state['sources'].values() if s['experiment']==experiment]
     return w

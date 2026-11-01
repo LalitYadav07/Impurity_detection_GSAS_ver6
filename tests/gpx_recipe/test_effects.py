@@ -210,6 +210,30 @@ def test_solver_dependent_negative_scale_cannot_hide_behind_native_positive_clip
     audit=constraint_bound_audit(state(p),{'varyList':['::constr0'],'variables':[.4]},lambda v:v.update({'0:0:Scale':v['::constr0']}));require_constraint_bounds(audit)
 
 
+@pytest.mark.parametrize('solver,saved',[(.00035940976450951807,.001),(12.,10.)])
+def test_positive_size_clipping_is_rejected_even_when_physical_bounds_pass(solver,saved):
+    from gpx_recipe.effects import constraint_bound_audit,require_constraint_bounds,native_storage_audit,require_native_storage
+    p=row('7:9:Size;i',.01,'crystallite_size',True,'Size;i')
+    p.update(lower_bound={'value':1e-9},upper_bound=None)
+    # Exercise dependent reconstruction as well as the independent solver value.
+    audit=constraint_bound_audit(state(p),{'varyList':['::constr0'],'variables':[solver]},
+                                lambda values:values.update({'7:9:Size;i':values['::constr0']}))
+    require_constraint_bounds(audit)
+    stored=native_storage_audit(audit,state(dict(p,current_value=saved)))
+    assert stored['mismatches'][0]['solver_value_before_native_clipping']==solver
+    assert stored['mismatches'][0]['stored_value']==saved
+    with pytest.raises(ValueError,match='saved parameters differ'):require_native_storage(stored)
+
+
+def test_native_storage_allows_roundoff_but_not_missing_or_nonfinite_saved_values():
+    from gpx_recipe.effects import native_storage_audit,require_native_storage
+    audit={'parameters':[dict(variable='0:0:Size;i',solver_value_before_native_clipping=.1)]}
+    require_native_storage(native_storage_audit(audit,state(row('0:0:Size;i',.1+1e-14,'crystallite_size',True,'Size;i'))))
+    for after in (state(),state(row('0:0:Size;i',float('nan'),'crystallite_size',True,'Size;i'))):
+        with pytest.raises(ValueError,match='stored model disagree'):
+            require_native_storage(native_storage_audit(audit,after))
+
+
 def test_saved_normalization_must_hold_numerically_not_only_exist_as_an_equation():
     context={'histograms':[{'key':'h0','name':'PWDR sample'}]}
     def project(values):return SimpleNamespace(phases=lambda:[SimpleNamespace(data={'Histograms':{'PWDR sample':{'Use':True,'Scale':[v,True]}}}) for v in values])

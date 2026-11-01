@@ -12,7 +12,7 @@ class Service:
  def __init__(self,root,source):
   self.submissions=[];self.requests=[];self.error=False;self.source=source
   self.archive=root/'results.zip'
-  response={'schema':'radar-refinement-worker/v1','status':'inspected','source_sha256':file_sha(source),'files':{}}
+  response={'schema':'radar-refinement-worker/v1','action':'inspect','status':'inspected','source_sha256':file_sha(source),'files':{}}
   with zipfile.ZipFile(self.archive,'w') as z:z.writestr('response.json',json.dumps(response))
  def upload_json_document(self,value,**kwargs):self.requests.append(value);return 'request-data'
  def submit_utility(self,**kwargs):
@@ -108,9 +108,14 @@ def test_legacy_gpx_filename_matches_one_suffixless_collection_element(tmp_path)
 
 def test_galaxy_stage_collection_maps_each_verified_intermediate_gpx(tmp_path):
  rt,s,source=runtime(tmp_path)
- response={'schema':'radar-refinement-worker/v1','status':'needs_review','source_sha256':source['source_sha256'],
-           'files':{},'stages':[{'id':'stage-1','gpx':'verified_stage-1.gpx'}]}
- with zipfile.ZipFile(s.archive,'w') as z:z.writestr('response.json',json.dumps(response))
+ import hashlib
+ artifacts={'verified_stage-1.gpx':b'checked stage','stage-1.view.json':b'{}'}
+ response={'schema':'radar-refinement-worker/v1','action':'run','status':'needs_review','source_sha256':source['source_sha256'],
+           'files':{name:hashlib.sha256(value).hexdigest() for name,value in artifacts.items()},
+           'stages':[{'id':'stage-1','gpx':'verified_stage-1.gpx','view':'stage-1.view.json'}]}
+ with zipfile.ZipFile(s.archive,'w') as z:
+  z.writestr('response.json',json.dumps(response))
+  for name,value in artifacts.items():z.writestr(name,value)
  s.job=lambda:UtilityActionRecord(uid='utility',tool_id='neutrons_radar_pd_refine_recipe_prototype',name='native',
      galaxy_job_id='Galaxy-job',status=RunStatus.OK,outputs={'result_bundle':'bundle','stage_projects':'stages'})
  s.collection_elements=lambda key:[dict(id='intermediate-data',name='stage-1')]

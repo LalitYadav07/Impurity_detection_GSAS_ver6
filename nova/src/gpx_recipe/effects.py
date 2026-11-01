@@ -112,7 +112,7 @@ def constraint_bound_audit(before,covariance,reconstruct):
     reconstruct(values)
     checks=[];violations=[]
     for p in rows:
-        if not p.get('configured_now') or p['group'] not in {'phase_fraction','histogram_scale','occupancy','atomic_displacement','preferred_orientation'}:continue
+        if not p.get('configured_now') or p['group'] not in {'phase_fraction','histogram_scale','occupancy','atomic_displacement','preferred_orientation','crystallite_size','microstrain'}:continue
         if p['name'] not in values:continue
         lo,hi=p.get('lower_bound'),p.get('upper_bound')
         lo=lo.get('value') if isinstance(lo,dict) else lo;hi=hi.get('value') if isinstance(hi,dict) else hi
@@ -126,6 +126,35 @@ def constraint_bound_audit(before,covariance,reconstruct):
 def require_constraint_bounds(audit):
     if audit['violations']:
         raise ValueError('Native dependent parameters violated physical/requested bounds before save-time clipping: '+str([(r['variable'],r['solver_value_before_native_clipping']) for r in audit['violations']])+'. Later stages were not executed; no phases were silently removed or fixed.')
+
+
+def native_storage_audit(solver_audit, after):
+    """Verify that bounded physical parameters retain their actual solver values.
+
+    Bounds alone miss native storage limits: GSAS-II can save a positive Size;i
+    below 0.001 um as 0.001, or a value above 10 um as 10, while retaining the
+    covariance and calculated pattern from the different solver value. Compare
+    the reconstructed solver values captured before the extractor resets maps
+    against the saved model's parameter values, not its covariance values.
+    """
+    current={p['name']:p.get('current_value') for p in after['parameter_space']['parameters']}
+    checks=[];mismatches=[]
+    for row in solver_audit['parameters']:
+        saved=current.get(row['variable'])
+        check=dict(row,stored_value=saved)
+        checks.append(check)
+        solver=row['solver_value_before_native_clipping']
+        if not numeric(saved) or not numeric(solver) or not math.isclose(solver,saved,rel_tol=1e-10,abs_tol=1e-12):
+            mismatches.append(check)
+    return dict(checked=len(checks),parameters=checks,mismatches=mismatches,
+                comparison_tolerance=dict(relative=1e-10,absolute=1e-12))
+
+
+def require_native_storage(audit):
+    if audit['mismatches']:
+        values=[(r['variable'],r['solver_value_before_native_clipping'],r['stored_value']) for r in audit['mismatches']]
+        raise ValueError('Native saved parameters differ from solver values (variable, solver, saved): '+str(values)+
+                         '. The fitted calculation and stored model disagree; later stages were not executed and no final GPX was accepted.')
 
 
 def blocking_frozen_variables(before,after):

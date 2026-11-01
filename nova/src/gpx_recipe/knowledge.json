@@ -39,7 +39,8 @@
     "Fractional atom positions and isotropic Uiso can be refined while the unit cell, backgrounds and scales are fixed. GSAS-II does not require freeing cell parameters to refine atom positions. Never invent a cell release as a prerequisite for X or U.",
     "An explicit phase/histogram preferred_orientation target or texture edit is HAP preferred orientation. March-Dollase and supported-order HAP spherical harmonics are implemented even when phase-global texture release is unsupported. Do not misclassify a p0/h0 texture edit as phase-global; target_capabilities.histogram_preferred_orientation gives its exact supported scope.",
     "Some stage_instruction_cards bind an explicitly stated natural-language refine-only single-atom clause. Its exact atom flags are authoritative just like an explicit Free: list; no cell or scale may be silently added. Unrecognized prose remains unbound.",
-    "A normalization preserves starting intensity products by changing the common scale gauge. Source starting sums and normalized values are supplied as facts, not fixed-value edits for later stages. If a user insists that raw HAP numbers and the numerical histogram scale both remain unchanged while their raw HAP sum is not one, normalization is contradictory and needs clarification. Never silently relax source bounds to normalize; a normalized starting value outside an existing bound needs source/recipe review."
+    "A normalization preserves starting intensity products by changing the common scale gauge. Source starting sums and normalized values are supplied as facts, not fixed-value edits for later stages. If a user insists that raw HAP numbers and the numerical histogram scale both remain unchanged while their raw HAP sum is not one, normalization is contradictory and needs clarification. Never silently relax source bounds to normalize; a normalized starting value outside an existing bound needs source/recipe review.",
+    "sample_size and sample_microstrain release only the existing isotropic HAP Size;i (micrometres) or Mustrain;i (microstrain) for one exact phase/histogram. They do not release the Lorentzian/Gaussian mixing factor or instrument profile. Use sample_widths in target_capabilities; anisotropic conversion is unsupported. An improved peak fit is not by itself a qualified microstructure measurement."
   ],
   "tested_api": {
     "background": "hist.set_refinements({'Background': {'type': function, 'no. coeffs': n, 'refine': False}}); then separately hist.set_refinements({'Background': True}) when active",
@@ -141,6 +142,16 @@
       },
       {
         "kind": "preferred_orientation",
+        "phase": "p0",
+        "histogram": "h0"
+      },
+      {
+        "kind": "sample_size",
+        "phase": "p0",
+        "histogram": "h0"
+      },
+      {
+        "kind": "sample_microstrain",
         "phase": "p0",
         "histogram": "h0"
       }

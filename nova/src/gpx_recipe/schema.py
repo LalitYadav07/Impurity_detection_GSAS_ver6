@@ -12,12 +12,13 @@ def response_schema(model_signature=None):
     string={"type":"string"};number={"type":"number"};integer={"type":"integer"}
     target={"anyOf":[
         obj({"kind":enum("background","histogram_scale"),"histogram":string}),
-        obj({"kind":enum("phase_scale","preferred_orientation"),"phase":string,"histogram":string}),
+        obj({"kind":enum("phase_scale","preferred_orientation","sample_size","sample_microstrain"),"phase":string,"histogram":string}),
         obj({"kind":enum("cell"),"phase":string}),
         obj({"kind":enum("atom"),"phase":string,"atom":string,"flags":enum("F","X","U","FX","FU","XU","FXU")})]}
     background=obj({"histogram":string,"function":enum(*BACKGROUNDS),"coefficients":integer,"fixed_points":enum("preserve","remove")})
     constraint={"anyOf":[obj({"kind":enum("occupancy_sum"),"terms":array(obj({"phase":string,"atom":string,"coefficient":number})),"total":number,"reason":string}),obj({"kind":enum("uiso_equal"),"atoms":array(obj({"phase":string,"atom":string})),"reason":string})]}
-    stage=obj({"id":string,"title":string,"cycles":integer,"free":array(target),"constraints":array(constraint),
+    stage=obj({"id":{"type":"string","description":"Unique safe stage identifier; case-insensitive. Do not use reserved names baseline or final."},"title":string,"cycles":integer,"free":array(target),"constraints":array(constraint),
+               "convergence":nullable(obj({"max_shift_over_sigma":number})),
                "background":nullable(background),"phase_normalization":array(string),
                "fit_ranges":array(obj({"histogram":string,"unit":enum("native","tof","d","Q","two_theta"),"lower":number,"upper":number})),
                "exclusions":array(obj({"histogram":string,"unit":enum("native","tof","d","Q","two_theta"),"mode":enum("add","replace","clear"),"regions":array(array(number))})),

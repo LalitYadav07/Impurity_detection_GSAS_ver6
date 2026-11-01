@@ -19,16 +19,42 @@ REFINEMENT_TOOL_ID = 'neutrons_radar_pd_refine_recipe_prototype'
 WORKSPACE_LABEL = 'RADAR-PD Refinement workspace'
 
 
-def verify_result_files(directory,result):
+def verify_result_files(directory,result, *, action=None):
     root=Path(directory).resolve()
-    for name,expected in result.get('files',{}).items():
+    if action is not None:
+        statuses={'inspect':{'inspected','failed'},'edit':{'model_edited','failed'},
+                  'preview':{'preview_passed','failed'},'run':{'completed','needs_review','failed'}}
+        if (result.get('schema')!='radar-refinement-worker/v1' or result.get('action')!=action
+                or result.get('status') not in statuses.get(action,set())):
+            raise ValueError('Scientific worker response does not match the requested operation')
+    manifest=result.get('files',{})
+    if not isinstance(manifest,dict):raise ValueError('Invalid refinement artifact manifest')
+    for name,expected in manifest.items():
+        if not isinstance(name,str) or not isinstance(expected,str):raise ValueError('Invalid refinement artifact manifest')
         path=(root/name).resolve()
         if not path.is_relative_to(root) or not path.is_file() or file_sha(path)!=expected:
             raise ValueError('A saved refinement artifact changed or is missing: '+Path(name).name)
-    if result.get('status')=='completed':
+    if result.get('status') in {'completed','model_edited'}:
         final=(root/str(result.get('final_gpx') or '')).resolve()
         if not final.is_relative_to(root) or not final.is_file() or file_sha(final)!=result.get('output_sha256'):
             raise ValueError('The checked final GPX changed or is unavailable')
+    if result.get('status')=='completed' and any(not result.get(k) for k in ('final_view','baseline_view','execution','stages')):
+        raise ValueError('The completed refinement is missing its scientific review artifacts')
+    if result.get('status') not in {'completed','model_edited'} and any(result.get(k) for k in ('final_gpx','final_view','output_sha256','trend_views')):
+        raise ValueError('An incomplete refinement cannot publish a final result')
+    references=[result[k] for k in ('view','baseline_view','final_view','execution') if result.get(k)]
+    stages=result.get('stages') or []
+    if not isinstance(stages,list) or any(not isinstance(s,dict) for s in stages):
+        raise ValueError('Invalid verified stage list')
+    ids=[s.get('id') for s in stages]
+    if any(not isinstance(i,str) or not i for i in ids) or len(set(ids))!=len(ids):
+        raise ValueError('Invalid verified stage identities')
+    for stage in stages:
+        if not stage.get('gpx') or not stage.get('view'):raise ValueError('A verified stage is missing its GPX or review view')
+        references.extend((stage['gpx'],stage['view']))
+    for name in references:
+        if not isinstance(name,str) or name not in manifest:
+            raise ValueError('A referenced scientific artifact is absent from the verified manifest')
 
 
 class RuntimeUnavailable(RuntimeError):
@@ -61,6 +87,15 @@ class LocalRefinementRuntime:
 
     def call(self, action, source, directory, *, plan=None, approval=None, dispatch_key='',
              on_submitted=None, resume=None, recover=False):
+        # A previously registered battery source can outlive a converter fix.
+        # Retain inspection/recovery of historical artifacts, but recheck the
+        # captured legacy coefficients before any new preview or execution.
+        metadata=source.get('metadata') or {}
+        preparation = metadata.get('preparation') or metadata.get('parent_preparation')
+        if action in {'preview', 'run'} and preparation:
+            from .battery_preparation import verify_prepared, check_prepared_profiles
+            job = Path(preparation).parent.parent
+            check_prepared_profiles(job, verify_prepared(job))
         source=self.resolve(source);directory=Path(directory).resolve();directory.mkdir(parents=True,exist_ok=True)
         command=[self.python,'-m','gpx_recipe.worker',action,source['source_path'],str(directory)]
         for name,value in [('plan',plan),('approval',approval)]:
@@ -72,7 +107,7 @@ class LocalRefinementRuntime:
         response=directory/'response.json'
         if process.returncode or not response.exists():
             raise RuntimeError('Native refinement worker stopped before its result was published; inspect its captured log')
-        result=json.loads(response.read_text());verify_result_files(directory,result);result['directory']=str(directory)
+        result=json.loads(response.read_text());verify_result_files(directory,result,action=action);result['directory']=str(directory)
         if result.get('source_sha256')!=source['source_sha256']:
             raise ValueError('Scientific worker processed a different source revision')
         return result
@@ -175,7 +210,7 @@ class GalaxyRefinementRuntime(LocalRefinementRuntime):
         if not bundle:raise RuntimeError('Galaxy refinement completed without its result bundle')
         archive=directory/'result.zip';self.service._download_dataset(bundle,archive)
         _extract_results_archive(archive,directory)
-        result=json.loads((directory/'response.json').read_text());verify_result_files(directory,result)
+        result=json.loads((directory/'response.json').read_text());verify_result_files(directory,result,action=action)
         if result.get('source_sha256')!=source['source_sha256']:
             raise ValueError('Galaxy refinement result belongs to another source GPX revision')
         result['directory']=str(directory);result['galaxy_job_id']=job.galaxy_job_id
@@ -186,6 +221,8 @@ class GalaxyRefinementRuntime(LocalRefinementRuntime):
             result['stage_dataset_ids']={x['name']:x['id'] for x in elements if x['name'] in stages}
             final=[x for x in elements if x['name']=='final']
             if len(final)==1:result['final_dataset_id']=final[0]['id']
+            model=[x for x in elements if x['name']=='model']
+            if len(model)==1:result['model_dataset_id']=model[0]['id']
         return result
 
     def find_dispatch(self,key):

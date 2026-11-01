@@ -12,20 +12,27 @@ import zipfile
 from .execution import write_json, run_plan
 from .snapshot import snapshot
 from .artifacts import write_project_view
+from .fit_domain import histogram_domain_schema, fit_domain_digest
 
 
 def trend_view(view):
     """Small persistent trend data; raw curves remain in the artifact bundle."""
     histograms=[]
     for h in view['histograms']:
-        domain={key:h[key] for key in ['x','fitted','limits','exclusions']}
-        checksum=hashlib.sha256(json.dumps(domain,sort_keys=True,allow_nan=False).encode()).hexdigest()
-        histograms.append(dict(key=h.get('key'),name=h['name'],rwp=h.get('rwp'),fit_domain_sha256=checksum))
+        histograms.append(dict(key=h.get('key'),name=h['name'],rwp=h.get('rwp'),
+            fit_domain_schema=histogram_domain_schema(h),fit_domain_sha256=fit_domain_digest(h),
+            fit_statistics=h.get('fit_statistics',{})))
     return dict(histograms=histograms,parameters=view.get('parameters',[]))
 
 
 def work(action, source, directory, *, plan=None, approval=None, expected_source_sha256=None):
     directory=Path(directory).resolve(); directory.mkdir(parents=True,exist_ok=True)
+    # A retry needs a fresh attempt directory. Old receipts/checkpoints must
+    # never be interpreted as products of the newly requested action.
+    previous=[p for p in directory.iterdir() if p.name in {'response.json','baseline.view.json','model_edit.json','editing.gpx'}
+              or p.name.startswith(('polished','verified_','stopped','preview.gpx'))]
+    if previous:
+        raise ValueError('This worker directory already contains scientific outputs; use a fresh attempt directory.')
     source=Path(source).resolve(); before=hashlib.sha256(source.read_bytes()).hexdigest()
     response=dict(schema='radar-refinement-worker/v1',action=action,source_sha256=before,status='running')
     try:
@@ -34,6 +41,12 @@ def work(action, source, directory, *, plan=None, approval=None, expected_source
             response['context']=snapshot(source)
             write_project_view(source,directory/'baseline.view.json')
             response['view']='baseline.view.json';response['status']='inspected'
+        elif action=='edit':
+            from .model_edits import edit_model
+            context,receipt=edit_model(source,directory/'verified_model.gpx',plan)
+            write_project_view(directory/'verified_model.gpx',directory/'baseline.view.json')
+            response.update(status='model_edited',context=context,model_edit=receipt,
+                final_gpx='verified_model.gpx',output_sha256=receipt['output_sha256'],view='baseline.view.json')
         elif action=='preview':
             response['preview']=run_plan(source,directory/'preview.gpx',plan,preview=True)
             response['status']='preview_passed'
@@ -54,27 +67,36 @@ def work(action, source, directory, *, plan=None, approval=None, expected_source
             stages=[]; last_refined={}
             for stage in plan['stages']:
                 project=directory/('polished_'+stage['id']+'.gpx')
-                target=directory/('verified_'+stage['id']+'.gpx');shutil.copy2(project,target)
+                target=directory/('verified_'+stage['id']+'.gpx')
                 view=directory/(stage['id']+'.view.json');stage_view=write_project_view(project,view)
                 for parameter in stage_view.get('parameters',[]):
                     if parameter['status']=='refined':last_refined[parameter['key']]={**parameter,'refined_stage':stage['id']}
+                shutil.copy2(project,target)
                 stages.append(dict(id=stage['id'],title=stage['title'],gpx=target.name,view=view.name))
-            shutil.copy2(directory/'polished.gpx',directory/'verified_final.gpx')
             final_view=write_project_view(directory/'polished.gpx',directory/'final.view.json')
             for parameter in final_view.get('parameters',[]):
                 prior=last_refined.get(parameter['key'])
                 if prior and abs(parameter['value']-prior['value'])<=1e-10*max(1,abs(parameter['value'])):
                     parameter.update(sigma=prior.get('sigma'),refined_stage=prior['refined_stage'],status='refined' if parameter['status']=='refined' else 'refined_in_prior_stage')
             write_json(directory/'final.view.json',final_view)
+            trends=dict(baseline=trend_view(json.loads((directory/'baseline.view.json').read_text())),final=trend_view(final_view))
+            shutil.copy2(directory/'polished.gpx',directory/'verified_final.gpx')
             response.update(status='completed',execution='polished.execution.json',baseline_view='baseline.view.json',
                 final_view='final.view.json',final_gpx='verified_final.gpx',stages=stages,
                 output_sha256=hashlib.sha256((directory/'verified_final.gpx').read_bytes()).hexdigest())
-            response['trend_views']=dict(baseline=trend_view(json.loads((directory/'baseline.view.json').read_text())),final=trend_view(final_view))
+            response['trend_views']=trends
         else:raise ValueError('Unknown refinement worker action')
     except Exception as exc:
         response.update(status='needs_review' if isinstance(exc,ValueError) and action=='run' else 'failed',
                         error=str(exc),error_type=type(exc).__name__)
         (directory/'failure.log').write_text(traceback.format_exc())
+        for key in ['final_gpx','final_view','output_sha256','trend_views','context','model_edit','view']:
+            response.pop(key,None)
+        # An export can fail after refinement or a model edit has succeeded.
+        # Galaxy discovers files by prefix, so withdraw them before rebuilding
+        # only the stage outputs with complete, readable exports below.
+        for path in directory.glob('verified_*.gpx'):
+            path.replace(path.with_name('unpublished_'+path.name))
         # A partially refined project is retained as evidence, never published as a final result.
         partial=directory/'polished.gpx'
         if partial.exists():partial.replace(directory/'stopped.gpx')
@@ -85,10 +107,11 @@ def work(action, source, directory, *, plan=None, approval=None, expected_source
             for stage in saved.get('stages',[]):
                 project=directory/('polished_'+stage['id']+'.gpx')
                 if stage.get('status')!='completed' or not project.exists():continue
-                target=directory/('verified_'+stage['id']+'.gpx');shutil.copy2(project,target)
+                target=directory/('verified_'+stage['id']+'.gpx')
                 view=directory/(stage['id']+'.view.json')
                 try:
                     write_project_view(project,view)
+                    shutil.copy2(project,target)
                     stages.append(dict(id=stage['id'],title=stage['title'],gpx=target.name,view=view.name))
                 except Exception as export_error:
                     response.setdefault('artifact_errors',[]).append(dict(stage=stage['id'],error=str(export_error)))
@@ -108,7 +131,7 @@ def work(action, source, directory, *, plan=None, approval=None, expected_source
 
 
 def main():
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('action',choices=['inspect','preview','run']);p.add_argument('source');p.add_argument('directory');p.add_argument('--plan');p.add_argument('--approval');p.add_argument('--archive');args=p.parse_args()
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('action',choices=['inspect','edit','preview','run']);p.add_argument('source');p.add_argument('directory');p.add_argument('--plan');p.add_argument('--approval');p.add_argument('--archive');args=p.parse_args()
     load=lambda value:json.loads(Path(value).read_text()) if value else None
     response=work(args.action,args.source,args.directory,plan=load(args.plan),approval=load(args.approval))
     if args.archive:

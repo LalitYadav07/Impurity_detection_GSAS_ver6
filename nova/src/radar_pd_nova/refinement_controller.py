@@ -9,14 +9,17 @@ import os
 from pathlib import Path
 import re
 import tempfile
+import uuid
 
 from gpx_recipe.contracts import stage_table
 from gpx_recipe.usage import usage_labels
-from .refinement_plots import empty_figure, fit_figure, trend_figure
+from .refinement_plots import empty_figure, fit_figure, trend_figure, electrical_exposure, refinement_axis_options, refinement_parameter_label
 from .refinement_runtime import configured_runtime, verify_result_files
 from .refinement_sources import RefinementScope, digest, source_from_record
 from .refinement_workspace import RefinementWorkspace
+from .refinement_messages import convergence_notice
 from .results import experiment_axis_options
+from .guided_refinement_controller import GuidedRefinementMixin
 
 
 def figure_json(figure):
@@ -49,12 +52,36 @@ def refinement_rwp_summary(notice):
     def number(value):return f'{value:.3f}%' if value is not None else '—'
     original=number(notice.get('original_rwp'))
     selected=number(notice.get('polished_rwp'))
+    if notice.get('original_rwp') is None:
+        return f'Starting model has no evaluated Rwp · selected {selected}'
     if notice.get('rwp_comparable'):
         return f'Original Rwp {original} → selected {selected}'
-    return f'Original Rwp {original} (original fit range) · selected {selected} (different fit range; compare the curves, not these scores)'
+    return f'Original Rwp {original} · selected {selected} (weighted comparison not qualified; compare the curves, not these scores)'
 
 
-def refinement_status_message(result, baseline):
+def refinement_histogram_options(view, source):
+    """Use verified preparation labels; a native import ordinal is not a bank."""
+    banks=source.get('metadata',{}).get('physical_banks',{})
+    return [dict(title=f"Physical bank {banks[h['name']]}" if h['name'] in banks else h['name'],
+                 value=h['name']) for h in view['histograms']]
+
+
+def refinement_exposure_notice(source):
+    exposure=electrical_exposure(source)
+    if not exposure:return ''
+    voltage=exposure.get('voltage_v')
+    mean=f"Mean voltage {voltage['mean']:.4g} V over covered intervals" if voltage else 'Voltage unavailable'
+    current=exposure.get('current_a')
+    current_text=f"mean current {current['mean']:.4g} A ({exposure['current_coverage_fraction']:.1%} coverage)" if current else 'current unavailable'
+    clock=exposure.get('clock_uncertainty_seconds')
+    return (f"{mean} ({exposure['coverage_fraction']:.1%} voltage coverage); {current_text}. "
+            f"Clock uncertainty: {'unknown' if clock is None else str(clock)+' s'}. No SOC is inferred.")
+
+
+def refinement_status_message(result, baseline, *, source=None):
+    from .refinement_messages import sample_width_failure_message
+    width_message=sample_width_failure_message(result,source)
+    if width_message:return width_message
     completed=len(result.get('stages') or [])
     ready=(f"{completed} verified stage{'s' if completed!=1 else ''} completed. Final GPX ready for scientific review."
            if result.get('status')=='completed' and result.get('final_gpx')
@@ -63,14 +90,15 @@ def refinement_status_message(result, baseline):
     if result.get('status')!='needs_review' or 'violated physical/requested bounds' not in message:
         return message
     matches=re.findall(r"\('(\d+)::AUiso:(\d+)',\s*([-+\d.eE]+)\)",message)
-    phases=(baseline or {}).get('phases') or []
-    if not matches:return message
+    phases=((source or {}).get('context') or {}).get('phases') or (baseline or {}).get('phases') or []
+    if not matches or len(matches)!=len(re.findall(r"\('[^']+',\s*[-+\d.eE]+\)",message)):return message
     labels=[]
     for phase_index,atom_index,value in matches:
         try:
-            phase=phases[int(phase_index)];atom=phase['atoms'][int(atom_index)]
+            phase=next(p for p in phases if p.get('native_id')==int(phase_index))
+            atom=next(a for a in phase['atoms'] if a.get('native_id')==int(atom_index))
             labels.append(f"{phase['name']} · {atom['label']} Uiso = {float(value):.5g} Å²")
-        except (IndexError,KeyError,TypeError,ValueError):return message
+        except (StopIteration,IndexError,KeyError,TypeError,ValueError):return message
     return (f"Stage {completed+1} stopped: {'; '.join(labels)} fell outside the requested physical bounds. "
             f"{completed} earlier verified stage{'s' if completed!=1 else ''} remain available; no final GPX was accepted.")
 
@@ -87,6 +115,17 @@ def refinement_parameter_warnings(view):
             warnings.append(f'{label}: no usable conditional uncertainty was reported; review this parameter before interpreting it.')
         elif isinstance(value,(int,float)) and math.isfinite(value) and abs(value)<2*sigma:
             warnings.append(f'{label} = {value:.5g} ± {sigma:.3g} Å² (conditional 1σ). Its magnitude is less than twice its uncertainty; it is weakly constrained.')
+    from gpx_recipe.guided import species
+    mobile_ions={(phase['name'],atom['label']):species(atom) for phase in view.get('phases',[]) for atom in phase.get('atoms',[])
+                 if species(atom) in {'Li','Na'}}
+    for p in view.get('parameters') or []:
+        element=mobile_ions.get((p.get('phase'),p.get('atom')))
+        if p.get('parameter')!='occupancy' or not element:continue
+        label=p.get('label') or f"{p['phase']} · {p['atom']} occupancy"
+        if p.get('status') in {'fixed','fixed_by_model'}:
+            warnings.append(f"{label} = {p['value']:.6g} is fixed by the starting model; {element} content was not measured.")
+        else:
+            warnings.append(f'{label} is a conditional site parameter. {element}-content interpretation requires a reviewed site model, calibration and sensitivity to nuisance parameters and competing phases.')
     return warnings
 
 
@@ -105,17 +144,19 @@ def refinement_result_title(job, recipes):
 def refinement_output_provenance(result, stage):
     if stage=='final' and result.get('final_gpx'):
         location=(f"Galaxy History → Verified refinement-stage GPXs → final (dataset {result['final_dataset_id']})"
-                  if result.get('final_dataset_id') else 'Download below')
+                  if result.get('final_dataset_id') else 'available in Verified output')
         return f'Final refined GPX: {location}. The starting RADAR-PD GPX is unchanged.'
     stages=result.get('stages') or []
     selected=next((v for v in stages if v['id']==stage),None)
     if not selected:return ''
     dataset=selected_refinement_dataset(result,stage)
     location=(f'Galaxy History → Verified refinement-stage GPXs → {stage} (dataset {dataset})'
-              if dataset else 'Download below')
-    return (f'Verified intermediate GPX: {location}. This is stage {stages.index(selected)+1} of the recipe; '
-            'no final GPX was accepted.' if not result.get('final_gpx') else
-            f'Verified intermediate GPX: {location}. The final refined GPX is also available in Galaxy History.')
+              if dataset else 'available in Verified output')
+    message=f'Verified intermediate GPX: {location}. This is stage {stages.index(selected)+1} of the recipe. '
+    if not result.get('final_gpx'):
+        return message+'No final GPX was accepted.'
+    final_location='Galaxy History' if result.get('final_dataset_id') else 'Verified output'
+    return message+f'The final refined GPX is also available in {final_location}.'
 
 
 def published_refinement_source(service, workspace, record, scan, sha_cache):
@@ -170,14 +211,15 @@ def refinement_experiment_options(workspace):
     return labels
 
 
-def recipe_cards(plan, context):
+def recipe_cards(plan, context, *, physical_banks=None):
     phases={p['key']:p['name'] for p in context['phases']}
-    histograms={h['key']:h['name'] for h in context['histograms']}
+    banks=physical_banks or {}
+    histograms={h['key']:(f"Physical bank {banks[h['name']]}" if h['name'] in banks else h['name']) for h in context['histograms']}
     flags={'X':'positions','U':'Uiso','F':'occupancy'}
     def label(target):
         kind=target['kind'];p=phases.get(target.get('phase'),'');h=histograms.get(target.get('histogram'),'')
         if kind=='atom':return f"{p} / {target['atom']}: "+', '.join(flags[f] for f in target['flags'])
-        name={'cell':'cell','phase_scale':'phase scale','histogram_scale':'histogram scale','background':'background','preferred_orientation':'preferred orientation'}[kind]
+        name={'cell':'cell','phase_scale':'phase scale','histogram_scale':'histogram scale','background':'background','preferred_orientation':'preferred orientation','sample_size':'isotropic crystallite size (µm)','sample_microstrain':'isotropic sample microstrain'}[kind]
         return ' / '.join(x for x in [p,h,name] if x)
     def held(value):
         parts=value.split(':')
@@ -189,12 +231,14 @@ def recipe_cards(plan, context):
         if stage.get('background'):changes.append('Background: '+stage['background']['function']+f" · {stage['background']['coefficients']} coefficients")
         for key in ['phase_normalization','constraints','bounds','exclusions','fit_ranges','texture']:
             if stage.get(key):changes.append(key.replace('_',' ').capitalize()+': '+json.dumps(stage[key],ensure_ascii=False))
+        if stage.get('convergence'):
+            changes.append(f"Require native convergence, no abort, and complete final-cycle |shift/sigma| ≤ {stage['convergence']['max_shift_over_sigma']:g}.")
         cards.append(dict(id=stage['id'],number=number,title=stage['title'],cycles=stage['cycles'],free=[label(t) for t in stage['free']],
             held=[held(t) for t in row['newly_fixed']],edits=changes))
     return cards
 
 
-class RefinementMixin:
+class RefinementMixin(GuidedRefinementMixin):
     def _init_refinement(self):
         self._refinement_workspace=None;self._refinement_tasks=set();self._refinement_refresh_task=None;self._refinement_queue_task=None
         self._refinement_sha_cache={};self._refinement_view_cache={};self._refinement_selection_token=''
@@ -204,23 +248,25 @@ class RefinementMixin:
         self._refinement_inspecting=False
         s=self.server.state
         for key,value in self._refinement_state_defaults().items():setattr(s,key,value)
+        self._init_guided_refinement()
         self.server.state.change('experiment_result_view','workspace_view')(self._refinement_view_changed)
         self.server.state.change('rf_experiment')(self._refinement_experiment_changed)
         self.server.state.change('rf_scope','rf_samples','rf_scans','rf_banks','rf_existing','rf_future')(self._refinement_scope_changed)
         self.server.state.change('rf_source')(self._refinement_source_changed)
         self.server.state.change('rf_request')(self._refinement_request_changed)
+        self.server.state.change('rf_setup_mode')(self._refinement_setup_changed)
         self.server.state.change('rf_stage','rf_histogram','rf_axis','rf_display','rf_zoom')(self._refinement_plot_changed)
         self.server.state.change('rf_trend_metric','rf_trend_axis','rf_trend_display','rf_recipe_filter')(self._refinement_trend_changed)
         self.server.state.change('rf_parallel_jobs')(self._refinement_parallel_changed)
 
     @staticmethod
     def _refinement_state_defaults():
-        return dict(rf_mode='recipe',rf_busy=False,rf_loading=False,rf_message='',rf_error='',rf_transport='',rf_provider='Illumine Luna · lowest reasoning',
+        return dict(rf_mode='recipe',rf_busy=False,rf_loading=False,rf_message='',rf_error='',rf_transport='',rf_source_qualification='',rf_can_load_baseline=False,rf_provider='Guided rules · no model call required',
             rf_experiment='',rf_experiments=[],rf_source='',rf_sources=[],rf_source_details=[],rf_context_atoms=[],rf_context_search='',rf_scope='all',rf_samples=[],rf_sample_options=[],rf_scans=[],rf_scan_options=[],rf_banks=[],rf_bank_options=[],
             rf_existing=True,rf_future=False,rf_scope_summary='No published GPXs available',rf_scope_token='',rf_request='',rf_draft_status='',rf_cards=[],rf_questions=[],rf_assumptions=[],rf_plan_calls='',rf_model_tokens='',rf_model_cost='',rf_model_has_luna_price=False,rf_plan_ready=False,
             rf_approved=False,rf_recipe_id='',rf_recipe_summary='',rf_active_summary='',rf_saved_recipe='',rf_recipe_versions=[],rf_recipe_filter='all',rf_metrics=[],rf_source_warnings=[],rf_future_armed=False,
             rf_jobs=[],rf_job_search='',rf_job_status='all',rf_progress_text='No refinements started',rf_progress_percent=0,rf_selected_job='',rf_selected_title='',rf_selected_message='',rf_has_output=False,rf_output_provenance='',
-            rf_result_tab='fit',rf_stage='final',rf_stages=[],rf_histogram='',rf_histograms=[],rf_axis='d',rf_display='compare',rf_fit=figure_json(empty_figure()),rf_fit_notice='',rf_rwp_summary='',rf_parameter_warnings=[],rf_zoom=0,rf_parallel_jobs=1,
+            rf_result_tab='fit',rf_stage='final',rf_stages=[],rf_histogram='',rf_histograms=[],rf_axis='d',rf_display='compare',rf_fit=figure_json(empty_figure()),rf_fit_notice='',rf_rwp_summary='',rf_parameter_warnings=[],rf_convergence_notice='',rf_exposure_notice='',rf_zoom=0,rf_parallel_jobs=1,
             rf_trend=figure_json(empty_figure('Completed refinements will populate this trend')),rf_trend_notice='',rf_trend_metric='rwp',rf_trend_metrics=[dict(title='Rwp · original and polished',value='rwp')],rf_trend_axis='run_number',rf_trend_axes=[dict(title='Scan number',value='run_number')],rf_trend_display='absolute',
             rf_parameters=[],rf_parameter_search='',rf_downloads=[],rf_download='',rf_can_open_gsas=False,rf_open_gsas_label='Open selected verified GPX in GSAS-II',rf_queue_running=False,rf_follow=True,rf_expanded=False)
 
@@ -332,6 +378,7 @@ class RefinementMixin:
         s=self.server.state;w=self._refinement_workspace
         draft=(w.state['drafts'].get(s.rf_experiment) if w else None) or {}
         recipe=(w.state['recipes'].get(draft.get('approved_recipe')) if w else None) or {}
+        if draft:s.rf_setup_mode='guided' if draft.get('guided') else 'expert'
         scope=recipe.get('scope') or {}
         s.rf_source=draft.get('source_id','');s.rf_request=draft.get('request','')
         s.rf_scope=scope.get('mode','all');s.rf_samples=list(scope.get('samples',[]));s.rf_scans=list(scope.get('scans',[]));s.rf_banks=list(scope.get('banks',[]))
@@ -371,15 +418,39 @@ class RefinementMixin:
         if self._refinement_internal:return
         self._refinement_sync_approval()
 
+    def _refinement_setup_changed(self,**_):
+        if self._refinement_internal:return
+        self._guided_epoch=uuid.uuid4().hex
+        self._guided_proposal=None;self.server.state.rf_guide_can_accept=False;self.server.state.rf_guide_proposal=''
+        self._refinement_sync()
+
+    def _refinement_setup_matches(self,draft):
+        mode=getattr(self.server.state,'rf_setup_mode',None)
+        return not mode or mode==('guided' if draft.get('guided') else 'expert')
+
     def _refinement_source_changed(self,**_):
-        self._refinement_sync_source()
-        self._refinement_sync_approval()
+        if self._refinement_internal:return
+        self._refinement_sync()
 
     def _refinement_sync_source(self):
         s=self.server.state;w=self._refinement_workspace
         source=(w.state['sources'].get(s.rf_source) if w else None) or {}
-        s.rf_source_details=[dict(label='Sample',value=source.get('sample_label','—')),dict(label='Bank',value=source.get('bank') or '—'),dict(label='Published GPX',value=source.get('collection_name','—'))]
+        prepared=source.get('project',{}).get('stage') in {'prepared_unqualified','edited_unqualified'}
+        s.rf_source_qualification=('Prepared starting hypothesis. No refinement has been accepted; calibration, phase assignments and composition require scientific review.' if prepared else '')
+        s.rf_can_load_baseline=source.get('project',{}).get('stage')=='prepared_unqualified'
+        s.rf_source_details=[dict(label='Sample',value=source.get('sample_label','—')),dict(label='Bank',value=source.get('bank') or '—'),dict(label='Prepared GPX' if prepared else 'Published GPX',value=source.get('collection_name','—'))]
+        catalog=(source.get('metadata') or {}).get('catalog_context') or {}
+        if prepared and isinstance(catalog,dict) and catalog.get('role')=='review_only':
+            s.rf_source_details.append(dict(label='Catalog comparison',
+                value=catalog.get('comparison_status','unavailable').replace('_',' ')+' · recorded context only'))
+            if catalog.get('proposal_title'):
+                s.rf_source_details.append(dict(label='Recorded proposal',value=catalog['proposal_title']))
+            if catalog.get('comparison_status')=='conflict':
+                s.rf_source_qualification+=' '+catalog.get('message','Captured catalog disagreement requires review.')
+        exposure_notice=refinement_exposure_notice(source)
+        if exposure_notice:s.rf_source_details.append(dict(label='Electrical exposure',value=exposure_notice))
         s.rf_context_atoms=[dict(phase=p['name'],atom=a['label'],element=a['element'],adp=a['adp_type'],position_dof=a.get('position_dof'),occupancy=a.get('occupancy')) for p in source.get('context',{}).get('phases',[]) for a in p['atoms']]
+        self._guided_source_changed()
 
     def inspect_refinement_project(self,**_):
         s=self.server.state
@@ -396,12 +467,21 @@ class RefinementMixin:
     def _refinement_sync_approval(self):
         s=self.server.state;w=self._refinement_workspace
         draft=(w.state['drafts'].get(s.rf_experiment) if w else None) or {}
+        if draft.get('source_id')!=s.rf_source or not self._refinement_setup_matches(draft):
+            draft={}
         recipe=w.state['recipes'].get(draft.get('approved_recipe')) if w else None
         s.rf_recipe_id=recipe['id'] if recipe else ''
         same_request=draft.get('request')==s.rf_request
+        same_request=same_request and self._refinement_setup_matches(draft)
         s.rf_approved=bool(recipe and same_request and recipe['selection_token']==self._refinement_selection_token and draft.get('source_id')==s.rf_source)
         s.rf_plan_ready=bool(same_request and draft.get('status')=='ready' and draft.get('source_id')==s.rf_source)
         s.rf_recipe_summary=(f"Recipe {recipe['version']} · {len(recipe['baseline'])} captured results"+(' · future matches included' if recipe['future'] else '')) if recipe else ''
+        plan=draft.get('plan') or {}
+        s.rf_transfer_notice=(
+            'Prepare a recipe for the selected model and setup method to review its scan applicability.' if not plan else
+            'This recipe applies only to the exact starting GPX. Select its scan and turn off future enrollment.' if plan.get('source_sha256') else
+            'Apply once to the approved scan scope. Every scan must match the held reference model. You are responsible for reference applicability across the selected and enabled future scans.' if plan.get('reference_policy') else
+            'The approved stages run independently on each compatible selected scan and any enabled future arrivals. Each scan starts from its own GPX; no model call or previous-scan parameter transfer is needed.')
 
     def _refinement_sync(self):
         w=self._refinement_workspace;s=self.server.state
@@ -422,8 +502,12 @@ class RefinementMixin:
             if s.rf_source not in {v['id'] for v in selected}:s.rf_source=selected[0]['id'] if selected else ''
             self._refinement_sync_source()
             draft=w.state['drafts'].get(s.rf_experiment) or {}
+            if draft.get('source_id')!=s.rf_source or not self._refinement_setup_matches(draft):
+                draft={}  # A preflight for a different model is not this model's plan.
+            s.rf_provider=draft.get('origin') or ('Guided rules · no model call required' if getattr(s,'rf_setup_mode','guided')=='guided' else 'Illumine Luna · lowest reasoning')
             s.rf_draft_status=draft.get('status','');s.rf_busy=draft.get('status')=='busy' or self._refinement_approving or self._refinement_inspecting
-            s.rf_cards=recipe_cards(draft['plan'],draft['context']) if draft.get('plan') else []
+            s.rf_cards=recipe_cards(draft['plan'],draft['context'],
+                physical_banks=w.state['sources'].get(s.rf_source,{}).get('metadata',{}).get('physical_banks')) if draft.get('plan') else []
             s.rf_questions=(draft.get('plan') or {}).get('questions',[])+(draft.get('plan') or {}).get('unsupported',[])
             s.rf_assumptions=(draft.get('plan') or {}).get('assumptions',[])
             s.rf_plan_calls=f"{draft.get('planning_calls',0)} model call(s) · native preflight passed" if draft.get('preview') else ''
@@ -444,7 +528,7 @@ class RefinementMixin:
             processed=completed+attention
             s.rf_progress_text=(f'{processed} of {len(jobs)} processed · {completed} completed · {attention} need attention' if jobs else 'No refinements started')
             s.rf_progress_percent=round(100*processed/len(jobs)) if jobs else 0
-            s.rf_metrics=[dict(label='Published GPXs',value=len(sources)),dict(label='In progress',value=sum(j['status'] in {'queued','running','recovering'} for j in jobs)),dict(label='Completed',value=sum(j['status']=='completed' for j in jobs)),dict(label='Needs attention',value=sum(j['status'] in {'failed','interrupted','needs_review','needs_recipe'} for j in jobs))]
+            s.rf_metrics=[dict(label='Available GPXs',value=len(sources)),dict(label='In progress',value=sum(j['status'] in {'queued','running','recovering'} for j in jobs)),dict(label='Completed',value=sum(j['status']=='completed' for j in jobs)),dict(label='Needs attention',value=sum(j['status'] in {'failed','interrupted','needs_review','needs_recipe'} for j in jobs))]
             self._refinement_sync_approval()
             s.flush()
         finally:self._refinement_internal=False;w.lock.release()
@@ -474,18 +558,43 @@ class RefinementMixin:
             finally:self._refinement_sync();self._refinement_checkpoint();s.flush()
         self._refinement_schedule(work(),'radar-refinement-plan')
 
+    def load_battery_baseline_recipe(self,**_):
+        from gpx_recipe.battery.recipes import BASELINE_REQUEST
+        s=self.server.state;w=self._refinement_workspace
+        if s.rf_busy or not w or not s.rf_source:return
+        source=w.state['sources'].get(s.rf_source,{})
+        if source.get('project',{}).get('stage')!='prepared_unqualified':
+            s.rf_error='Choose the explicitly prepared battery starting model';return
+        experiment,source_id=s.rf_experiment,s.rf_source
+        self._refinement_hold_enrollment();s.rf_request=BASELINE_REQUEST
+        s.rf_busy=True;s.rf_error='';s.rf_message='Checking the baseline recipe against the native model; no model call is made.';s.flush()
+        async def work():
+            try:
+                await asyncio.to_thread(w.prepare,experiment,source_id,BASELINE_REQUEST,template='battery_baseline')
+                s.rf_message='Baseline preflight passed. Review both stages and the selected scans before approving.'
+            except Exception as exc:s.rf_error=str(exc)
+            finally:self._refinement_sync();self._refinement_checkpoint();s.flush()
+        self._refinement_schedule(work(),'radar-battery-baseline')
+
     def reuse_refinement_recipe(self,**_):
         s=self.server.state;w=self._refinement_workspace
-        if s.rf_busy or not s.rf_source or not s.rf_saved_recipe:return
+        if s.rf_busy or getattr(s,'rf_guided_busy',False) or not s.rf_source or not s.rf_saved_recipe:return
         saved=w.state['recipes'].get(s.rf_saved_recipe)
         if not saved or saved['experiment']!=s.rf_experiment:return
+        s.rf_setup_mode='guided' if saved.get('guided') else 'expert'
         experiment,source,recipe_id=s.rf_experiment,s.rf_source,s.rf_saved_recipe
         s.rf_request=saved['plan']['request'];s.rf_busy=True;s.rf_error='';self._refinement_hold_enrollment();s.rf_message='Checking the saved recipe against this source GPX without a model call…';s.flush()
         async def work():
             try:
-                await asyncio.to_thread(w.prepare,experiment,source,saved['plan']['request'],reuse_recipe=recipe_id)
-                s.rf_message='Saved recipe preflight passed. Review and approve the current scan scope.'
-            except Exception as exc:s.rf_error=str(exc)
+                draft=await asyncio.to_thread(w.prepare,experiment,source,saved['plan']['request'],reuse_recipe=recipe_id)
+                if s.rf_experiment==experiment and s.rf_source==source and draft:
+                    self._guided_state=None;self._guided_epoch=uuid.uuid4().hex;self._guided_proposal=None
+                    s.rf_guide_question=None;s.rf_guide_complete=False;s.rf_guide_summary=[];s.rf_guide_summary_notice=''
+                    s.rf_guide_proposal='';s.rf_guide_can_accept=False
+                    self._guided_source_changed()
+                    s.rf_message='Saved recipe preflight passed. Review and approve the current scan scope.'
+            except Exception as exc:
+                if s.rf_experiment==experiment and s.rf_source==source:s.rf_error=str(exc)
             finally:self._refinement_sync();self._refinement_checkpoint();s.flush()
         self._refinement_schedule(work(),'radar-refinement-reuse')
 
@@ -494,6 +603,7 @@ class RefinementMixin:
         if s.rf_busy:return
         try:
             experiment=s.rf_experiment;draft=copy.deepcopy(w.state['drafts'][experiment]);scope=self._refinement_scope()
+            if not self._refinement_setup_matches(draft):raise ValueError('Build and review a recipe using the selected setup method before approving.')
             existing,future=bool(s.rf_existing),bool(s.rf_future)
             before,before_token=w.selection(scope,existing=existing,future=future)
             if selection_token is not None and selection_token!=before_token:raise ValueError('The selected scans changed. Review the updated scope before approving.')
@@ -511,7 +621,7 @@ class RefinementMixin:
                     initial={v['id']:v['sha256'] for v in before['baseline']};current={v['id']:v['sha256'] for v in after['baseline']}
                     if set(initial)!=set(current) or any(sha and sha!=current[key] for key,sha in initial.items()):
                         raise ValueError('The selected scans changed while their GPXs were captured. Review the updated scope and approve again; no new model call is needed.')
-                    if s.rf_experiment!=experiment or self._refinement_scope()!=scope or s.rf_existing!=existing or s.rf_future!=future or s.rf_source!=draft['source_id'] or s.rf_request!=draft['request']:
+                    if s.rf_experiment!=experiment or self._refinement_scope()!=scope or s.rf_existing!=existing or s.rf_future!=future or s.rf_source!=draft['source_id'] or s.rf_request!=draft['request'] or not self._refinement_setup_matches(draft):
                         raise ValueError('The request or execution scope changed; review it before approving')
                     w.approve(experiment,draft['generation'],scope,existing=existing,future=future,selection_token=token,approver='RADAR-PD interactive approval')
                     s.rf_message='Recipe and scan scope approved. Start the queue when ready.'
@@ -548,6 +658,9 @@ class RefinementMixin:
                     job=await task
                     if job is None:return
                     self._refinement_sync();self._refinement_checkpoint()
+                    if getattr(self,'_battery_portfolio_token',None):
+                        try:self._battery_portfolio_sync()
+                        except Exception as exc:s.battery_error=str(exc)
                     if job['source']['experiment']==s.rf_experiment and (s.rf_follow or not s.rf_selected_job or s.rf_selected_job==job['id']):
                         await self._select_refinement_job(job['id'])
             await asyncio.gather(*(lane() for _ in range(getattr(w,'parallel_jobs',1))))
@@ -596,13 +709,15 @@ class RefinementMixin:
         job=w.state['jobs'].get(uid)
         if not job or job['source']['experiment']!=s.rf_experiment:return
         experiment=s.rf_experiment
-        def current():return s.rf_selected_job==uid and s.rf_experiment==experiment
+        def current():return self._refinement_workspace is w and s.rf_selected_job==uid and s.rf_experiment==experiment
         s.rf_selected_job=uid;s.rf_selected_title=refinement_result_title(job,w.state.get('recipes',{}))
         s.rf_selected_message=job['message'];s.rf_error='';s.rf_stage='final';s.rf_has_output=False;s.rf_output_provenance='';s.rf_parameter_warnings=[]
         # A running scan or a slow artifact recovery must not inherit another
         # scan's parameter table or downloads under its new heading.
         s.rf_parameters=[];s.rf_stages=[];s.rf_histograms=[];s.rf_histogram=''
         s.rf_downloads=[];s.rf_download='';s.rf_rwp_summary='';s.rf_fit_notice=''
+        s.rf_convergence_notice='';s.rf_exposure_notice=refinement_exposure_notice(job['source'])
+        s.rf_expanded=False
         result=job.get('result') or {};s.rf_can_open_gsas=False;s.rf_open_gsas_label='Open selected verified GPX in GSAS-II'
         s.flush()
         if result and not Path(result.get('directory','')).is_dir() and job.get('remote_action'):
@@ -622,15 +737,21 @@ class RefinementMixin:
             try:
                 baseline=await asyncio.to_thread(self._read_refinement_view,job,result['baseline_view'])
                 if not current():return
-                s.rf_histograms=[dict(title=h['name'],value=h['name']) for h in baseline['histograms']]
+                source=job['source']
+                current_source=w.state.get('sources',{}).get(source.get('id'),source)
+                if current_source.get('source_sha256')==source.get('source_sha256'):
+                    source=current_source
+                s.rf_histograms=refinement_histogram_options(baseline,source)
                 s.rf_histogram=s.rf_histograms[0]['value']
+                if all(h.get('fit_statistics',{}).get('calculation_status')=='not_yet_evaluated' for h in baseline['histograms']):
+                    s.rf_display='polished'
             except Exception as exc:
                 if not current():return
                 s.rf_error=str(exc);s.rf_has_output=False
         stage_labels={v['gpx']:f"Stage {i+1} GPX · {v['title']}" for i,v in enumerate(stages)}
         s.rf_downloads=[dict(title=('Final refined GPX' if name==result.get('final_gpx') else stage_labels.get(name,name)),value=name) for name in sorted(result.get('files',{})) if name.endswith('.gpx') or name in ['refine.py','polished.execution.json','plan.json','approval.json']]
         s.rf_download=(result.get('final_gpx') or (stages[-1]['gpx'] if stages else (s.rf_downloads[0]['value'] if s.rf_downloads else '')))
-        if result:s.rf_selected_message=refinement_status_message(result,baseline)
+        if result:s.rf_selected_message=refinement_status_message(result,baseline,source=job['source'])
         self._refinement_plot_changed();self._refinement_trend_changed();s.flush()
 
     def _refinement_plot_changed(self,**_):
@@ -646,12 +767,16 @@ class RefinementMixin:
             s.rf_fit=figure_json(fig);s.rf_fit_notice=notice.get('notice','')
             s.rf_rwp_summary=refinement_rwp_summary(notice)
             s.rf_parameter_warnings=refinement_parameter_warnings(view)
+            s.rf_convergence_notice=convergence_notice(view)
             s.rf_output_provenance=refinement_output_provenance(result,s.rf_stage)
             s.rf_can_open_gsas=bool(selected_refinement_dataset(result,s.rf_stage))
             s.rf_open_gsas_label=('Open final refined GPX in GSAS-II' if s.rf_stage=='final' else 'Open selected verified stage in GSAS-II')
             labels={'refined':'Refined','refined_in_prior_stage':'Refined earlier; held now','fixed':'Held','fixed_by_model':'Fixed by model','derived':'Derived','configured':'Released; not estimated','unknown':'Not estimated'}
-            s.rf_parameters=[dict(**p,value_display=f"{p['value']:.8g}",sigma_display=f"{p['sigma']:.3g}" if p.get('sigma') is not None else '—',status_display=labels.get(p['status'],p['status'].replace('_',' ')),stage=p.get('refined_stage') or s.rf_stage) for p in view.get('parameters',[])]
-        except Exception as exc:s.rf_error=str(exc);s.rf_fit=figure_json(empty_figure('The verified fit view is unavailable'))
+            s.rf_parameters=[dict(p,label=refinement_parameter_label(p,job['source']),value_display=f"{p['value']:.8g}",sigma_display=f"{p['sigma']:.3g}" if p.get('sigma') is not None else '—',status_display=labels.get(p['status'],p['status'].replace('_',' ')),stage=p.get('refined_stage') or s.rf_stage) for p in view.get('parameters',[])]
+        except Exception as exc:
+            s.rf_error=str(exc);s.rf_fit=figure_json(empty_figure('The verified fit view is unavailable'))
+            s.rf_convergence_notice='';s.rf_parameter_warnings=[];s.rf_parameters=[]
+            s.rf_rwp_summary='';s.rf_fit_notice='';s.rf_output_provenance='';s.rf_can_open_gsas=False
 
     def _refinement_trend_changed(self,**_):
         s=self.server.state;w=self._refinement_workspace
@@ -675,9 +800,9 @@ class RefinementMixin:
             for row in rows:
                 for p in row['final'].get('parameters',[]):
                     if p['kind']=='weight':options['phase_fractions']='Modeled crystalline phase fractions'
-                    options[p['key']]=p['label']+(f" ({p['unit']})" if p.get('unit') else '')
+                    options[p['key']]=refinement_parameter_label(p,row['source'])+(f" ({p['unit']})" if p.get('unit') else '')
             s.rf_trend_metrics=[dict(title=v,value=k) for k,v in options.items()]
-            s.rf_trend_axes=experiment_axis_options([dict(run_number=r['source'].get('run_number'),metadata=r['source']['metadata'],axis_overrides=r['source'].get('axis_overrides') or {}) for r in rows])
+            s.rf_trend_axes=refinement_axis_options([r['source'] for r in rows])
             if s.rf_trend_metric not in options:s.rf_trend_metric='rwp'
             if s.rf_trend_metric in {'rwp','phase_fractions'}:s.rf_trend_display='absolute'
             if s.rf_trend_axis not in {v['value'] for v in s.rf_trend_axes}:s.rf_trend_axis='run_number'
@@ -688,7 +813,7 @@ class RefinementMixin:
         s=self.server.state
         try:
             job=self._refinement_workspace.state['jobs'][s.rf_selected_job];result=job['result'];name=s.rf_download
-            if name not in {v['value'] for v in s.rf_downloads}:raise ValueError('Choose a verified output artifact')
+            if name not in {v['value'] for v in s.rf_downloads} or name not in result.get('files',{}):raise ValueError('Choose a verified output artifact')
             verify_result_files(result['directory'],result);path=Path(result['directory'])/name
             self.download_file(path.name,'application/octet-stream',path.read_bytes())
         except Exception as exc:s.rf_error=str(exc);s.flush()
@@ -700,4 +825,4 @@ class RefinementMixin:
         if not dataset:return
         from .galaxy_service import GSASII_INTERACTIVE_TOOL_ID
         self._schedule_utility(self._submit_utility_action(tool_id=GSASII_INTERACTIVE_TOOL_ID,name='Verified refinement '+s.rf_stage+': '+job['source']['scan_label'],
-            inputs={'project_source|source_kind':'single','project_source|gpx_project':{'dataset_id':dataset}},associated_run_uid=job['source']['record_uid']),'radar-polished-gsasii')
+            inputs={'project_source|source_kind':'single','project_source|gpx_project':{'dataset_id':dataset}},associated_run_uid=job['source'].get('record_uid')),'radar-polished-gsasii')

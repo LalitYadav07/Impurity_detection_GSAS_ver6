@@ -35,6 +35,8 @@ from .post_analysis_ui import PostAnalysisMixin
 from .refinement_controller import RefinementMixin
 from .symmetry_controller import SymmetryMixin
 from .refinement_ui import refinement_dashboard
+from .battery_controller import BatteryMixin
+from .battery_ui import battery_dashboard
 from .checkpoints import CoalescedCheckpoint
 from .post_analysis import PostAnalysisSettings
 from .facility import FacilityBrowser, FacilityPathError, WatchRecipe
@@ -252,7 +254,7 @@ def _powgen_retry_time(value: Any) -> datetime | None:
     return retry_at.astimezone(timezone.utc)
 
 
-class RadarPdNovaApp(LiveAssistantMixin, LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, RefinementMixin, SymmetryMixin, ThemedApp):
+class RadarPdNovaApp(BatteryMixin, LiveAssistantMixin, LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, RefinementMixin, SymmetryMixin, ThemedApp):
     """Interactive orchestration and results workspace backed by Galaxy."""
 
     def __init__(self) -> None:
@@ -428,6 +430,7 @@ class RadarPdNovaApp(LiveAssistantMixin, LiveSetupMixin, SetupEditorMixin, PostA
         self._init_post_analysis()
         self._init_refinement()
         self._init_symmetry()
+        self._init_battery()
         state.history_datasets = []
         state.history_search = ""
         state.history_offset = 0
@@ -860,6 +863,13 @@ class RadarPdNovaApp(LiveAssistantMixin, LiveSetupMixin, SetupEditorMixin, PostA
                 vuetify.VIcon("mdi-book-open-page-variant-outline", size="small")
                 html.Span("User guide")
             vuetify.VBtn(
+                "Battery experiments",
+                prepend_icon="mdi-battery-charging-outline",
+                variant="outlined",
+                size="small",
+                click=self.open_battery_workspace,
+            )
+            vuetify.VBtn(
                 "Clear workspace",
                 v_if="run_rows.length || rf_experiments.length || rf_jobs.length || !!powgen_ipts || !!selected_run_uid",
                 prepend_icon="mdi-broom",
@@ -1005,6 +1015,9 @@ class RadarPdNovaApp(LiveAssistantMixin, LiveSetupMixin, SetupEditorMixin, PostA
         self._monitored_uids.clear()
         self.records.clear()
         self.utility_actions.clear()
+        if hasattr(self, "_battery_inventory"):
+            self._battery_context_changed()
+            state.battery_ipts = ""
         self._auto_opened_uids.clear()
         self._published_checkpoint_ids.clear()
         self._dataset_label_cache.clear()
@@ -2587,7 +2600,7 @@ class RadarPdNovaApp(LiveAssistantMixin, LiveSetupMixin, SetupEditorMixin, PostA
             vuetify.VAlert(v_if="live_launch_busy", title="Preparing Live analysis",
                 text=("live_test_message || powgen_message",), type="info", variant="tonal", classes="mb-2")
             vuetify.VProgressLinear(v_if="live_launch_busy", indeterminate=True, height=3, color="#15543c")
-            with html.Div(v_if="!live_launch_busy && !selected_run_uid && !['experiment','refinement'].includes(workspace_view)", classes="radar-workspace-empty"):
+            with html.Div(v_if="!live_launch_busy && !selected_run_uid && !['experiment','refinement','battery'].includes(workspace_view)", classes="radar-workspace-empty"):
                 html.Div("RADAR-PD SCIENTIFIC AI WORKSPACE", classes="radar-kicker")
                 html.H1("Phase detection for powder diffraction")
                 html.P(
@@ -2615,7 +2628,10 @@ class RadarPdNovaApp(LiveAssistantMixin, LiveSetupMixin, SetupEditorMixin, PostA
             with html.Div(v_show="workspace_view === 'experiment'", classes="radar-workspace-view"):
                 self._powgen_experiment_dashboard()
 
-            with html.Div(v_if="!!selected_run_uid && workspace_view !== 'experiment'"):
+            with html.Div(v_show="workspace_view === 'battery'", classes="radar-workspace-view"):
+                battery_dashboard(self)
+
+            with html.Div(v_if="!!selected_run_uid && !['experiment','battery'].includes(workspace_view)"):
                 with html.Div(classes="radar-run-context"):
                     with html.Div():
                         html.Div("CURRENT GALAXY RUN", classes="radar-context-kicker")

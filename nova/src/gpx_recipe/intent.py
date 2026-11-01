@@ -78,6 +78,10 @@ def parse_free_item(item,context):
     # Type words are read only after quoted scientific identities are removed.
     if re.search(r'\b(?:HAP\s+)?phase\s+(?:scale|fraction)\b',clean,re.I):
         target={'kind':'phase_scale','phase':phase,'histogram':histogram};words=r'\b(?:HAP|phase|scale|fraction)\b'
+    elif re.search(r'\b(?:sample\s+)?(?:isotropic\s+)?(?:crystallite\s+)?size\b',clean,re.I):
+        target={'kind':'sample_size','phase':phase,'histogram':histogram};words=r'\b(?:sample|isotropic|crystallite|size)\b'
+    elif re.search(r'\b(?:sample\s+)?(?:isotropic\s+)?microstrain\b',clean,re.I):
+        target={'kind':'sample_microstrain','phase':phase,'histogram':histogram};words=r'\b(?:sample|isotropic|microstrain)\b'
     elif re.search(r'\b(?:global\s+)?histogram\s+scale\b',clean,re.I):
         if re.search(r'\bphase\b',clean,re.I):return None
         target={'kind':'histogram_scale','histogram':histogram};words=r'\b(?:global|histogram|scale)\b'

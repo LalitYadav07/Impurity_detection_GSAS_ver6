@@ -6,6 +6,7 @@ import math
 from pathlib import Path
 import re
 from .nomad_products import Product,product_from_path,slice_metadata_path,slice_window,member_runs,SLICED_FOLDER,SUMMED_FOLDER
+from .tof_fxye import TofBank as NomadBank, inspect_slog_banks
 
 VERSION = 'nomad-normalized-bragg-products/v2'
 LEGACY_VERSION = 'nomad-individual-bragg/v1'
@@ -13,8 +14,6 @@ MODERN_FOLDER = 'shared/autoreduce/multi_banks/GSAS'
 LEGACY_FOLDER = 'shared/autoreduce'
 _FILE = re.compile(r'(?:NOM_(\d+)|NOM(\d+)tof)\.gsa', re.I)
 _IDL_FOLDER = re.compile(r'shared/(?:autoNOM|autoMTS|manuNOM)[A-Za-z0-9_-]*/GSAS', re.I)
-_BANK = re.compile(r'^BANK\s+(\d+)\s+(\d+)\s+(\d+)\s+SLOG\s+.*\s+FXYE\s*$')
-_NUMBER = r'[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?'
 _MAX_GSA = 64 * 1024 * 1024
 
 
@@ -89,21 +88,6 @@ def source_options(ipts):
 
 
 @dataclass(frozen=True)
-class NomadBank:
-    bank: int
-    channels: int
-    records: int
-    header: str
-    difc: float
-    angle: float
-    minimum_tof: float
-    maximum_tof: float
-    numeric_sha256: str
-    geometry_header: str
-    quality_errors: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True)
 class NomadSetup:
     run_number: int
     banks: tuple[NomadBank, ...]
@@ -135,77 +119,9 @@ def inspect_reduced_setup(path, *, selected_bank=None, inventory_only=False):
     before = signature(path)
     if run_number is None or before[0] > _MAX_GSA:
         raise ValueError('Expected a supported normalized NOMAD individual, sliced or explicitly summed Bragg product')
-    banks, prefix, values, digest = [], [], None, sha256()
-    geometry = None
-    declared = None
-    count = 0
-    quality_errors = []
-    def finish():
-        if values is None:
-            return
-        if count != values['records']:
-            raise ValueError('NOMAD bank is truncated or still being written')
-        if quality_errors and not inventory_only and (selected_bank is None or values['bank']==selected_bank):
-            raise ValueError(quality_errors[0])
-        banks.append(NomadBank(**values, numeric_sha256=bank_digest.hexdigest(), quality_errors=tuple(dict.fromkeys(quality_errors))))
-    with path.open('rb') as stream:
-        for line in stream:
-            digest.update(line)
-            if len(line)>8192:
-                raise ValueError('NOMAD GSAS line exceeds the supported size')
-            text=line.decode('utf-8').strip()
-            if text.startswith('# Total flight path'):
-                found=re.search(r'tth\s+('+_NUMBER+r')deg,\s*DIFC\s+('+_NUMBER+')',text)
-                if not found:
-                    raise ValueError('NOMAD bank export geometry is incomplete')
-                geometry=(float(found[1]),float(found[2]),text)
-            if text.startswith('BANK'):
-                finish();m=_BANK.fullmatch(text)
-                if not m or not geometry:
-                    raise ValueError('NOMAD requires explicit SLOG/FXYE banks with export geometry')
-                bank,channels,records=map(int,m.groups())
-                if bank not in range(1,7) or records<=0 or channels!=records:
-                    raise ValueError('Invalid NOMAD physical bank or record counts')
-                values={'bank':bank,'channels':channels,'records':records,'header':text,
-                        'angle':geometry[0],'difc':geometry[1],'geometry_header':geometry[2],
-                        'minimum_tof':0.,'maximum_tof':0.}
-                if not all(math.isfinite(v) and v>0 for v in geometry[:2]) or geometry[0]>=180:
-                    raise ValueError('Invalid NOMAD export geometry')
-                geometry=None;count=0;bank_digest=sha256();quality_errors=[]
-                continue
-            if values is None:
-                prefix.append(text)
-                m=re.fullmatch(r'#\s*(\d+)\s+Histograms',text)
-                if m:declared=int(m[1])
-                if len(prefix)>100:
-                    raise ValueError('No NOMAD bank in the bounded GSAS header')
-            elif text and not text.startswith('#'):
-                parts=text.split()
-                if len(parts)!=3:
-                    quality_errors.append('Malformed NOMAD FXYE record')
-                    count+=1;bank_digest.update(line)
-                    continue
-                try:x,y,sigma=map(float,parts)
-                except ValueError:
-                    quality_errors.append('Malformed NOMAD FXYE record')
-                    count+=1;bank_digest.update(line)
-                    continue
-                if not all(math.isfinite(v) for v in (x,y,sigma)) or sigma<=0 or x<=0:
-                    quality_errors.append('Nonfinite data or nonpositive uncertainty/TOF in NOMAD bank')
-                if count and x<=values['maximum_tof']:
-                    quality_errors.append('NOMAD bank TOF must increase strictly')
-                if math.isfinite(x) and x>0:
-                    if not values['minimum_tof']:values['minimum_tof']=x
-                    values['maximum_tof']=x
-                count+=1;bank_digest.update(line)
-    finish()
-    header='\n'.join(prefix);run=re.search(r'Sample Run:\s*(\d+)',header)
-    if not run or int(run[1]) not in (product.members or (run_number,)):
-        raise ValueError('NOMAD filename and Sample Run header disagree')
-    if not banks or declared!=len(banks) or len({b.bank for b in banks})!=len(banks):
-        raise ValueError('Missing, duplicate or incomplete NOMAD diffraction banks')
-    if signature(path)!=before:
-        raise ValueError('NOMAD reduction changed during inspection; wait for completion')
+    banks,before,source_hash,prefix=inspect_slog_banks(path,run_number,label='NOMAD',
+        selected_bank=selected_bank,inventory_only=inventory_only,
+        allowed_run_numbers=product.members or (run_number,))
     sidecar=reduction_input_path(path);side_sig=None;side_hash='';calibration='';environment='';notices=[]
     if sidecar.is_file():
         side_sig=signature(sidecar)
@@ -215,7 +131,10 @@ def inspect_reduced_setup(path, *, selected_bank=None, inventory_only=False):
             raise ValueError('Invalid NOMAD reduction input')
         sample=config['Sample']
         expected=product.members or (run_number,)
-        if member_runs(str(sample.get('Runs','')))!=expected:
+        declared_runs = str(sample.get('Runs','')).strip()
+        actual = ((int(declared_runs),) if product.kind != 'sum' and re.fullmatch(r'\d+', declared_runs)
+                  else member_runs(declared_runs))
+        if actual!=expected:
             raise ValueError('Reduction input is summed or differs from this exact NOMAD product membership')
         if str(config.get('Instrument','NOMAD')).upper() not in {'NOM','NOMAD'}:
             raise ValueError('Reduction input names another instrument')
@@ -243,14 +162,14 @@ def inspect_reduced_setup(path, *, selected_bank=None, inventory_only=False):
         product_metadata=window
         family='NOMAD normalized Mantid temperature-sliced GSAS/SLOG'
     elif product.kind=='sum':family='NOMAD normalized explicitly summed GSAS/SLOG'
-    return NomadSetup(run_number,tuple(banks),before,digest.hexdigest(),str(sidecar),side_sig,side_hash,
+    return NomadSetup(run_number,tuple(banks),before,source_hash,str(sidecar),side_sig,side_hash,
                       calibration,environment,title,tuple(notices),family,product.kind,product.product_id,product.members,product_metadata)
 
 
 def profile_blocks(path):
     path=Path(path)
     if path.suffix.lower()!='.instprm' or path.stat().st_size>1048576:
-        raise ValueError('NOMAD currently requires an explicit GSAS-II .instprm file')
+        raise ValueError('Peak-profile inspection requires a bounded GSAS-II .instprm file')
     text=path.read_text(encoding='utf-8-sig')
     chunks=re.split(r'(?mi)^(?=#\s*Bank\s+\d+)',text)
     blocks={}
@@ -266,9 +185,9 @@ def profile_blocks(path):
         if not fields:continue
         required={'Type','Bank','difC','2-theta','alpha','beta-0','beta-1','sig-0','sig-1','sig-2'}
         if not required.issubset(fields) or fields.get('Type')!='PNT':
-            raise ValueError('NOMAD profile must contain complete neutron TOF peak-shape parameters')
+            raise ValueError('Profile must contain complete neutron TOF peak-shape parameters')
         numeric={k:float(v) for k,v in fields.items() if k!='Type'}
-        if not all(math.isfinite(v) for v in numeric.values()):raise ValueError('Nonfinite NOMAD profile parameter')
+        if not all(math.isfinite(v) for v in numeric.values()):raise ValueError('Nonfinite neutron TOF profile parameter')
         bank=int(numeric['Bank'])
         if bank<1 or bank!=numeric['Bank'] or bank in blocks:
             raise ValueError('Duplicate or invalid instrument Bank labels; ambiguous profiles cannot be selected')
@@ -277,12 +196,13 @@ def profile_blocks(path):
     return blocks
 
 
-def validate_profile(setup, bank, path, profile_bank, *, acknowledged=False):
+def validate_profile(setup, bank, path, profile_bank, *, acknowledged=False, allow_invalid_counts=False):
     if not acknowledged:
         raise ValueError('Confirm the supplied profile and its physical-bank mapping; automatic NOMAD profiles are not yet validated')
     selected=next((b for b in setup.banks if b.bank==bank),None)
     if not selected:raise ValueError('Selected physical bank is absent from this run')
-    if selected.quality_errors:raise ValueError('Selected NOMAD bank has invalid numerical records; choose a usable bank or obtain a corrected reduction')
+    if selected.quality_errors and not (allow_invalid_counts and all(error=='Nonfinite data or nonpositive uncertainty/TOF in NOMAD bank' for error in selected.quality_errors)):
+        raise ValueError('Selected NOMAD bank has invalid numerical records; choose a usable bank or obtain a corrected reduction')
     blocks=profile_blocks(path)
     if profile_bank not in blocks:raise ValueError('Selected profile Bank label is absent; ordinal block numbers are not bank labels')
     text,coeff=blocks[profile_bank]
@@ -303,7 +223,7 @@ def validate_profile(setup, bank, path, profile_bank, *, acknowledged=False):
         'nominal_geometry_notice':('Calibrated profile DIFC differs from nominal export geometry by more than 0.5%; verify the calibration and physical-bank mapping' if difference>.005 else '')}
 
 
-def stage_bank(source, setup, bank, profile_path, profile_bank, destination, *, acknowledged=False, acquisition=None):
+def stage_bank(source, setup, bank, profile_path, profile_bank, destination, *, acknowledged=False, acquisition=None, allow_invalid_counts=False):
     source=Path(source);sidecar=Path(setup.sidecar_path)
     def unchanged():
         if signature(source)!=setup.source_signature or (signature(sidecar) if sidecar.is_file() else None)!=setup.sidecar_signature:
@@ -313,7 +233,7 @@ def stage_bank(source, setup, bank, profile_path, profile_bank, destination, *, 
         if setup.product_kind=='slice' and slice_window(slice_metadata_path(source))!=setup.product_metadata:
             raise ValueError('NOMAD processed slice metadata changed after inspection')
     unchanged()
-    text,receipt=validate_profile(setup,bank,profile_path,profile_bank,acknowledged=acknowledged)
+    text,receipt=validate_profile(setup,bank,profile_path,profile_bank,acknowledged=acknowledged,allow_invalid_counts=allow_invalid_counts)
     header=[];payload=[];active=False;seen_bank=False;actual=sha256()
     selected=next(b for b in setup.banks if b.bank==bank)
     with source.open('rb') as stream:
@@ -332,6 +252,19 @@ def stage_bank(source, setup, bank, profile_path, profile_bank, destination, *, 
         raise ValueError('NOMAD source changed or selected bank is incomplete')
     numeric_hash=sha256(b''.join(payload[1:])).hexdigest()
     if numeric_hash!=selected.numeric_sha256:raise ValueError('Selected bank numerical records changed')
+    invalid_bins=[]
+    if allow_invalid_counts:
+        previous=0.
+        for index,line in enumerate(payload[1:]):
+            tokens=line.split();x,y,sigma=map(float,tokens)
+            if not math.isfinite(x) or x<=previous:
+                raise ValueError('Invalid TOF coordinates cannot be excluded by an intensity/uncertainty policy')
+            previous=x
+            if not math.isfinite(y) or not math.isfinite(sigma) or sigma<=0:
+                invalid_bins.append(dict(record_index=index,intensity=tokens[1].decode('ascii'),uncertainty=tokens[2].decode('ascii')))
+                # Importer placeholders, subsequently masked with zero weight
+                # and checked against the selected fit interval by preparation.
+                payload[index+1]=tokens[0]+b' 0 1\n'
     text=re.sub(r'(^|;)(\s*Bank\s*:)\s*[^;\n]+',r'\g<1>\g<2>1.0',text,flags=re.M)
     text=re.sub(r'(?mi)^#\s*Bank\s+\d+', '#Bank 1', text)
     out=Path(destination);out.mkdir(parents=True,exist_ok=True)
@@ -346,6 +279,7 @@ def stage_bank(source, setup, bank, profile_path, profile_bank, destination, *, 
         'source_sha256':setup.source_sha256,'reduction_input_sha256':setup.sidecar_sha256,
         'product_kind':setup.product_kind,'product_id':setup.product_id,'member_runs':list(setup.member_runs),
         'profile_sha256':receipt['profile_sha256'],
+        'invalid_count_bin_indices':[row['record_index'] for row in invalid_bins],
         'warnings':[{'code':'unverified_nomad_profile','message':'NOMAD profile supplied by user; scientific calibration acceptance is pending'},
                     *geometry_notices,
                     *[{'code':'nomad_reduction_quality','message':message} for message in setup.warnings]]}
@@ -357,7 +291,8 @@ def stage_bank(source, setup, bank, profile_path, profile_bank, destination, *, 
     if sha256(Path(profile_path).read_bytes()).hexdigest()!=receipt['profile_sha256']:
         raise ValueError('Supplied profile changed while staging')
     receipt.update({'source_path':str(source),'source_sha256':actual.hexdigest(),'staged_bank':1,
-        'numeric_sha256':numeric_hash,'data_sha256':sha256(data.read_bytes()).hexdigest(),
+        'numeric_sha256':sha256(b''.join(payload[1:])).hexdigest(),'source_numeric_sha256':numeric_hash,
+        'invalid_count_bins':invalid_bins,'data_sha256':sha256(data.read_bytes()).hexdigest(),
         'staged_profile_sha256':sha256(profile.read_bytes()).hexdigest(),'reduction_input_sha256':setup.sidecar_sha256,
         'warnings':list(setup.warnings),'setup':setup.as_dict()})
     (out/'bank-provenance.json').write_text(json.dumps(receipt,indent=2)+'\n')
