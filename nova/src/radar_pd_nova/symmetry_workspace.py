@@ -258,6 +258,15 @@ def campaign_can_resume(summaries,enrollments,*,following=False):
             any(e['status'] in {'queued','preparing'} for e in enrollments))
 
 
+def unqualified_covariance(row):
+    """An aborted or rank-deficient checkpoint has no qualified error bars."""
+    native=row.get('native_convergence') or {}
+    rank=native.get('SVD0')
+    return (row.get('status')=='optimization_unresolved' or
+            native.get('converged') is False or native.get('Aborted') is True or
+            (isinstance(rank,(int,float)) and np.isfinite(rank) and rank>0))
+
+
 def moment_precision_note(row):
     """Flag weak conditional estimates without turning a screen into a test.
 
@@ -265,6 +274,10 @@ def moment_precision_note(row):
     combine correlated components, or assign a probability of magnetic order.
     """
     if row.get('kind') != 'magnetic':return ''
+    if unqualified_covariance(row):
+        return ('This refinement did not qualify for convergence and full rank. '
+                'Moment values are retained as a checkpoint; uncertainty estimates '
+                'from this attempt are not qualified and are hidden in the table.')
     estimates=row.get('refined_moments') or []
     if not estimates:return 'Moment uncertainties are unavailable in this receipt. An audited fit alone does not establish magnetic order.'
     weak=[];missing=[]
@@ -297,6 +310,10 @@ def parameter_rows(row,view):
     not infer an uncertainty from its magnitude or hide a missing uncertainty.
     """
     estimates={a['label']:a for a in row.get('refined_moments',[])}
+    covariance_ok=not unqualified_covariance(row)
+    def uncertainty_label(value):
+        return round(value,6) if (covariance_ok and isinstance(value,(int,float))
+            and not isinstance(value,bool) and np.isfinite(value) and value>=0) else '—'
     rows=[]
     for phase in view['phases']:
         for value in phase.get('moments',phase.get('modes',[])):
@@ -304,14 +321,14 @@ def parameter_rows(row,view):
             uncertainty=estimates.get(value['label'],{}).get('magnitude_esd') if magnetic else value.get('esd')
             rows.append(dict(phase=phase['name'],parameter=value['label'],
                              value=round(value.get('magnitude',value.get('value')),6),
-                             uncertainty=round(uncertainty,6) if isinstance(uncertainty,(int,float)) else '—',
+                             uncertainty=uncertainty_label(uncertainty),
                              unit='µB' if magnetic else 'Å'))
             if magnetic and 'components' in value:
                 component_errors=estimates.get(value['label'],{}).get('component_esd') or {}
                 for axis,component in zip(('mx','my','mz'),value['components']):
                     error=component_errors.get(axis)
                     rows.append(dict(phase=phase['name'],parameter=value['label']+' · '+axis,
-                        value=round(component,6),uncertainty=round(error,6) if isinstance(error,(int,float)) else '—',unit='µB'))
+                        value=round(component,6),uncertainty=uncertainty_label(error),unit='µB'))
     return rows
 
 

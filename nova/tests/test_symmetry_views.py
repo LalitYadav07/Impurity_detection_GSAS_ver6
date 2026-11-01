@@ -377,3 +377,32 @@ def test_canted_components_show_native_uncertainties_without_inventing_a_norm_er
     assert [v['parameter'] for v in values[1:]]==['Er1_m1 · mx','Er1_m1 · my','Er1_m1 · mz']
     assert [v['value'] for v in values[1:]]==[1.7,1.3,6.1]
     assert [v['uncertainty'] for v in values[1:]]==[.3,.4,.1]
+
+
+def test_aborted_warm_checkpoint_does_not_present_covariance_as_qualified_errors():
+    view=dict(phases=[dict(name='Fe magnetic',moments=[dict(label='Fe1',magnitude=3.37,
+        components=[-.14,-3.37,.06])])])
+    row=dict(kind='magnetic',status='optimization_unresolved',
+        native_convergence={'converged':False,'Aborted':True,'SVD0':0},
+        refined_moments=[dict(label='Fe1',magnitude_esd=.02,
+            component_esd={'mx':1.64,'my':.037,'mz':2.96})])
+    before=json.loads(json.dumps(row))
+    values=parameter_rows(row,view)
+    assert [value['uncertainty'] for value in values]==['—']*4
+    assert values[2]['value']==-3.37
+    assert 'not qualified' in moment_precision_note(row)
+    assert row==before  # Sealed evidence and attempted values remain intact.
+
+
+def test_rank_deficiency_also_suppresses_errors_for_structural_modes():
+    row=dict(kind='structural',native_convergence={'converged':True,'SVD0':2})
+    view=dict(phases=[dict(name='Child',modes=[dict(label='mode1',value=.04,esd=.001)])])
+    assert parameter_rows(row,view)[0]['uncertainty']=='—'
+
+
+def test_invalid_error_values_are_not_rendered_as_scientific_uncertainties():
+    view=dict(phases=[dict(name='Fe magnetic',moments=[dict(label='Fe1',magnitude=3.,
+        components=[1.,2.,2.])])])
+    row=dict(status='valid',refined_moments=[dict(label='Fe1',magnitude_esd=float('nan'),
+        component_esd={'mx':float('inf'),'my':-1.,'mz':True})])
+    assert [value['uncertainty'] for value in parameter_rows(row,view)]==['—']*4
