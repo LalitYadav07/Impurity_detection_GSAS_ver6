@@ -9,7 +9,6 @@ ENV PIXI_ENVIRONMENT_NAME=production \
     PYTHONPATH=/src/src
 
 WORKDIR /src
-COPY pyproject.toml README.md /src/
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends hdf5-tools tzdata \
     && rm -rf /var/lib/apt/lists/*
@@ -27,6 +26,7 @@ RUN python -m pip install --no-cache-dir 'scipy==1.15.3' \
        'https://download-r2.pytorch.org/whl/cpu/torch-2.5.1%2Bcpu-cp310-cp310-linux_x86_64.whl#sha256=7f91a2200e352745d70e22396bd501448e28350fbdbd8d8b1c83037e25451150'
 
 # Keep the expensive fixed runtime cached across source and guide edits.
+COPY pyproject.toml README.md /src/
 COPY src /src/src
 RUN python -m pip install --no-cache-dir --no-deps /src \
     && python -c 'from radar_pd_nova.unet_core.production import FocusTransitionPredictor; FocusTransitionPredictor()._load()' \
