@@ -2565,6 +2565,7 @@ class GalaxyService:
             current_manifest = self._current_cache_manifest(record)
             cached_manifest = self._read_cache_manifest(destination)
             if not force and self._cache_is_current(cached_manifest, current_manifest, destination):
+                self._ensure_plot_observation(record, destination)
                 record.cache_manifest = cached_manifest
                 record.output_dir = str(destination)
                 record.result_status = ResultStatus.READY
@@ -2598,6 +2599,7 @@ class GalaxyService:
             suffixes = {
                     "report": ".html",
                     "summary": ".json",
+                    "pattern_observation": ".json",
                     "state": ".json",
                     "resolved_config": ".yaml",
                     "input_manifest": ".json",
@@ -2696,6 +2698,7 @@ class GalaxyService:
                 archive_dataset_id=record.output_dataset_ids.get("results_archive", "legacy-no-archive"),
             )
             (staging / ".radar-pd-cache.json").write_text(manifest.model_dump_json(indent=2), encoding="utf-8")
+            self._ensure_plot_observation(record, staging, allow_download=False)
             with self._lock:
                 if destination.exists():
                     shutil.rmtree(destination)
@@ -2724,10 +2727,104 @@ class GalaxyService:
         record.updated_utc = datetime.now(timezone.utc).isoformat()
         return record
 
+    def _ensure_plot_observation(self, record: RunRecord, root: Path, *, allow_download: bool = True) -> None:
+        """Bind optional display masks to this job without re-running analysis.
+
+        New collections prefetch the direct observation with their other small
+        outputs. Reopening an older cache may fetch just its immutable receipt.
+        Failure is a display limitation, never a scientific-job failure.
+        """
+        from .scan_interpretation import MAX_BYTES, Pattern, load_pattern
+
+        binding = {"schema": "radar-pd-plot-observation-binding/v1",
+                   "job_id": str(record.galaxy_job_id or record.uid), "status": "unavailable"}
+        previous = {}
+        try:
+            previous = json.loads((root / "plot_observation_binding.json").read_text(encoding="utf-8"))
+            if not isinstance(previous, dict):
+                previous = {}
+        except (OSError, ValueError):
+            pass
+        try:
+            summary_path = next((p for p in (root / "summary.json", root / "ndip" / "summary.json") if p.is_file()), None)
+            if summary_path is None or summary_path.stat().st_size > MAX_BYTES:
+                raise ValueError("Result receipt unavailable")
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            if not isinstance(summary, dict):
+                raise ValueError("Result receipt is not an object")
+            descriptor = dict(summary.get("pattern_observation") or {})
+            source = (summary.get("provenance") or {}).get("input") or {}
+            source_hash = source.get("original_product_sha256") or source.get("source_sha256")
+            if not re.fullmatch(r"[0-9a-f]{64}", str(source_hash or "")):
+                raise ValueError("Observation source identity unavailable")
+            project_hash = str(descriptor.get("source_gpx_sha256") or "")
+            if (not re.fullmatch(r"[0-9a-f]{64}", project_hash)
+                    or project_hash != (summary.get("observables") or {}).get("source_gpx_sha256")):
+                raise ValueError("Result and observation project identities differ")
+            checksum = str(descriptor.get("sha256") or "")
+            if not re.fullmatch(r"[0-9a-f]{64}", checksum):
+                raise ValueError("Observation checksum unavailable")
+
+            def verified(path: Path) -> dict:
+                packet = load_pattern(path, expected_sha256=checksum)
+                Pattern.parse(packet)
+                if packet.get("source_gpx_sha256") != descriptor.get("source_gpx_sha256"):
+                    raise ValueError("Observation project identity differs")
+                if (packet.get("context") or {}).get("source_product_sha256") != source_hash:
+                    raise ValueError("Observation source identity differs")
+                return packet
+
+            selected = None
+            candidates = [root / "pattern_observation.json", root / "tables" / "Pattern_observation.json"]
+            tables = root / "tables"
+            if tables.is_dir():
+                candidates.extend(tables.glob("*Pattern_observation.json"))
+            for candidate in dict.fromkeys(candidates):
+                if not candidate.is_file():
+                    continue
+                try:
+                    verified(candidate)
+                    selected = candidate
+                    break
+                except (OSError, ValueError, TypeError):
+                    continue
+            if selected is None and allow_download:
+                dataset_id = record.output_dataset_ids.get("pattern_observation")
+                identity = {"job_id": binding["job_id"], "sha256": checksum,
+                            "source_gpx_sha256": project_hash, "source_product_sha256": source_hash,
+                            "dataset_id": dataset_id, "collection_id": record.output_dataset_ids.get("tables")}
+                binding.update(fetch_identity=identity, download_attempted=True)
+                if previous.get("download_attempted") and previous.get("fetch_identity") == identity:
+                    raise ValueError("Observation fetch already attempted; refresh results to retry")
+                receipt = {**descriptor, **({"dataset_id": dataset_id} if dataset_id else {})}
+                cached = self.cache_pattern_observation(receipt, collection_id=record.output_dataset_ids.get("tables"))
+                cached_path = Path(cached["local_path"])
+                verified(cached_path)
+                selected = root / "pattern_observation.json"
+                with tempfile.NamedTemporaryFile(dir=root, suffix=".partial", delete=False) as handle:
+                    temporary = Path(handle.name)
+                    handle.write(cached_path.read_bytes())
+                try:
+                    temporary.replace(selected)
+                finally:
+                    temporary.unlink(missing_ok=True)
+            if selected is None:
+                raise ValueError("Observation validity metadata unavailable")
+            binding.update(status="verified", pattern_path=selected.relative_to(root).as_posix(),
+                           sha256=checksum, source_gpx_sha256=descriptor["source_gpx_sha256"],
+                           source_product_sha256=source_hash)
+        except (OSError, ValueError, TypeError, KeyError, AttributeError, RuntimeError, requests.RequestException):
+            binding["notice"] = "Observation validity metadata could not be verified; difference is withheld."
+        try:
+            (root / "plot_observation_binding.json").write_text(json.dumps(binding, sort_keys=True), encoding="utf-8")
+        except OSError:
+            pass
+
     def result_payload(self, record: RunRecord) -> dict[str, Any]:
         root = record.local_output_dir
         if root is None:
             return {}
+        self._ensure_plot_observation(record, root)
         payload: dict[str, Any] = {"artifacts": []}
         for key in ("summary", "state", "gpx_index", "input_manifest"):
             candidates = (root / f"{key}.json", root / "ndip" / f"{key}.json")

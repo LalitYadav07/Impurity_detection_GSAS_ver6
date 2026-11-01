@@ -21,6 +21,21 @@ def app_with_data():
     return app
 
 
+def test_cell_view_menu_distinguishes_absolute_and_relative_versions():
+    app = app_with_data()
+    app._set_post_settings(PostAnalysisSettings(views=[
+        ViewSettings(id="absolute-a", kind="thermal_expansion", metric="a", representation="absolute"),
+        ViewSettings(id="relative-a", kind="thermal_expansion", metric="a", representation="relative"),
+        ViewSettings(id="default-a", kind="thermal_expansion", metric="a"),
+        ViewSettings(id="permille-a", kind="thermal_expansion", metric="a", representation="permille"),
+    ]))
+    titles = {item["value"]: item["title"] for item in app.server.state.post_analysis_view_options}
+    assert titles["absolute-a"] == "Cell value · Lattice a"
+    assert titles["relative-a"] == "Relative change (%) · Lattice a (1)"
+    assert titles["default-a"] == "Relative change (%) · Lattice a (2)"
+    assert titles["permille-a"] == "Fractional expansion (‰) · Lattice a"
+
+
 def test_multisignal_controls_and_clicks_retain_the_selected_cell_direction():
     app = app_with_data()
     app.update_post_analysis_setting("representation", "permille")

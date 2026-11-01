@@ -57,6 +57,7 @@ def model_exploration(app):
                 html.P('Describe magnetic sites, ions and physical bounds. If k is unknown, request a data-based k survey; review its candidates before discovery. State whether moments may cant and whether to refine a shared nuclear/magnetic intensity scale.',classes='rf-notice')
                 v.VTextarea(label='Magnetic refinement request',v_model=('sx_request',),rows=3,auto_grow=True,variant='outlined',hide_details=True,classes='mt-3')
                 v.VBtn('Draft search settings',click=app.plan_symmetry_request,disabled=('sx_busy || !sx_request',),variant='outlined',classes='mt-3')
+                v.VBtn('Download setup details',click=app.download_symmetry_setup_details,disabled=('sx_busy || !sx_has_setup_details',),variant='text',classes='mt-3',prepend_icon='mdi-download')
                 html.P('{{ sx_planning_summary }}',v_if='!!sx_planning_summary',classes='rf-notice')
                 html.P('{{ sx_planning_usage }}',v_if='!!sx_planning_usage',classes='rf-notice')
                 html.P('{{ sx_planning_cost }}',v_if='!!sx_planning_cost',classes='rf-notice')

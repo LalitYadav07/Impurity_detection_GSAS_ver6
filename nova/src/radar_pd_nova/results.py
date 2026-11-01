@@ -156,19 +156,73 @@ def read_plot_payload(path: str | Path) -> dict[str, Any]:
     payload_path = Path(path)
     payload = read_json(payload_path)
     arrays_name = payload.get("arrays_npz")
-    if not isinstance(arrays_name, str) or not arrays_name.strip():
-        return payload
+    if isinstance(arrays_name, str) and arrays_name.strip():
+        arrays_path = _resolve_plot_companion(payload_path, arrays_name, {".npz"})
+        if arrays_path is not None:
+            try:
+                with np.load(arrays_path, allow_pickle=False) as archive:
+                    payload["arrays"] = {name: archive[name].tolist() for name in archive.files}
+            except Exception:
+                pass
+    return _attach_plot_observation_mask(payload_path, payload)
 
-    arrays_path = _resolve_plot_companion(payload_path, arrays_name, {".npz"})
-    if arrays_path is None:
-        return payload
 
+def _attach_plot_observation_mask(path: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    """Join only a verified same-job observation; never borrow its fit mask.
+
+    Different refinement stages can share observations and use different fit
+    domains. The plot's own explicit domain remains authoritative below.
+    """
+    arrays = payload.get("arrays") if isinstance(payload.get("arrays"), dict) else payload
+    if "valid" in arrays or "weights" in arrays or "weight" in arrays:
+        return payload
+    result = dict(payload)
+    result["_observation_validity"] = {"status": "unavailable"}
+    root = next((p for p in list(path.resolve().parents)[:6] if (p / ".radar-pd-cache.json").is_file()), None)
+    if root is None:
+        return result
     try:
-        with np.load(arrays_path, allow_pickle=False) as archive:
-            payload["arrays"] = {name: archive[name].tolist() for name in archive.files}
-    except Exception:
+        from .scan_interpretation import Pattern, load_pattern
+
+        binding = read_json(root / "plot_observation_binding.json")
+        cache = read_json(root / ".radar-pd-cache.json")
+        if (binding.get("schema") != "radar-pd-plot-observation-binding/v1"
+                or binding.get("status") != "verified"
+                or not binding.get("job_id") or binding["job_id"] != cache.get("job_id")):
+            return result
+        summary_path = next((p for p in (root / "summary.json", root / "ndip" / "summary.json") if p.is_file()), None)
+        summary = read_json(summary_path) if summary_path else {}
+        descriptor = summary.get("pattern_observation") or {}
+        source = (summary.get("provenance") or {}).get("input") or {}
+        source_hash = source.get("original_product_sha256") or source.get("source_sha256")
+        if (not source_hash or source_hash != binding.get("source_product_sha256")
+                or descriptor.get("sha256") != binding.get("sha256")
+                or descriptor.get("source_gpx_sha256") != binding.get("source_gpx_sha256")
+                or descriptor.get("source_gpx_sha256") != (summary.get("observables") or {}).get("source_gpx_sha256")):
+            return result
+        pattern_path = (root / str(binding.get("pattern_path") or "")).resolve()
+        pattern_path.relative_to(root.resolve())
+        packet = load_pattern(pattern_path, expected_sha256=binding["sha256"])
+        pattern = Pattern.parse(packet)
+        if (packet.get("source_gpx_sha256") != binding["source_gpx_sha256"]
+                or (packet.get("context") or {}).get("source_product_sha256") != source_hash):
+            return result
+        x = np.asarray(arrays.get("x"), dtype=float)
+        y = np.asarray(arrays.get("yobs", arrays.get("observed")), dtype=float)
+        if x.ndim != 1 or x.size == 0 or y.shape != x.shape or not np.all(np.isfinite(x)) or np.any(np.diff(x) <= 0):
+            return result
+        indices = np.searchsorted(pattern.x, x)
+        if np.any(indices >= len(pattern.x)) or not np.array_equal(pattern.x[indices], x):
+            return result
+        if not np.array_equal(pattern.y[indices], y, equal_nan=True):
+            return result
+        result["_observation_validity"] = {
+            "status": "verified", "valid": pattern.valid[indices].tolist(),
+            "basis": "same-job checksum and source-bound observation; exact x/y identity",
+        }
+    except (OSError, ValueError, TypeError, KeyError, IndexError, AttributeError):
         pass
-    return payload
+    return result
 
 
 def _resolve_plot_companion(
@@ -836,8 +890,55 @@ def gsas_figure(payload: dict[str, Any]) -> go.Figure:
         pair = [_as_float(v) for v in value]
         return pair if all(v is not None and np.isfinite(v) for v in pair) and pair[0] < pair[1] else None
     fit_limits = interval(payload.get("fit_limits"))
-    excluded_ranges = [pair for value in payload.get("excluded_ranges", [])
+    raw_exclusions = payload.get("excluded_ranges", [])
+    exclusion_values = raw_exclusions if isinstance(raw_exclusions, (list, tuple)) else []
+    excluded_ranges = [pair for value in exclusion_values
                        if (pair := interval(value)) is not None]
+    domain_metadata_valid = isinstance(raw_exclusions, (list, tuple)) and len(excluded_ranges) == len(raw_exclusions)
+    domain_metadata_valid &= payload.get("fit_limits") is None or fit_limits is not None
+    def boolean_mask(value):
+        try:
+            if (isinstance(value, (list, tuple, np.ndarray)) and len(value) == len(x)
+                    and all(isinstance(v, (bool, np.bool_)) for v in value)):
+                return np.asarray(value, dtype=bool)
+        except TypeError:
+            pass
+        return None
+
+    validity = payload.get("_observation_validity") or {}
+    valid = boolean_mask(arrays.get("valid"))
+    if "valid" not in arrays and valid is None:
+        weights = arrays.get("weights", arrays.get("weight"))
+        if isinstance(weights, (list, tuple, np.ndarray)):
+            try:
+                weights = np.asarray(weights, dtype=float)
+                if weights.shape == (len(x),):
+                    valid = np.isfinite(weights) & (weights > 0)
+            except (TypeError, ValueError):
+                pass
+        elif validity.get("status") == "verified":
+            valid = boolean_mask(validity.get("valid"))
+    # A nonfinite observed value claimed to be valid invalidates the metadata;
+    # it is not reclassified by inspecting the sign or magnitude of intensity.
+    if valid is not None and (len(yobs) != len(x) or np.any(valid & ~np.isfinite(yobs))):
+        valid = None
+    domain = np.asarray([
+        (fit_limits is None or fit_limits[0] <= value <= fit_limits[1])
+        and not any(low <= value <= high for low, high in excluded_ranges)
+        for value in x
+    ], dtype=bool)
+    stage_fit = boolean_mask(arrays.get("fit_valid"))
+    if (domain_metadata_valid and stage_fit is not None and valid is not None
+            and not np.any(stage_fit & ~valid) and not np.any(stage_fit & ~domain)):
+        fitted = stage_fit & domain
+    elif domain_metadata_valid and "fit_valid" not in arrays and valid is not None and fit_limits is not None:
+        fitted = valid & domain
+    else:
+        fitted = None
+    observed = [value if valid is None or (valid[index] and (fitted is None or fitted[index])) else None
+                for index, value in enumerate(yobs)]
+    excluded_observed = [value if valid is not None and fitted is not None and valid[index] and not fitted[index] else None
+                         for index, value in enumerate(yobs)]
     model_x, model_y, model_residual = [], [], []
     previous = None
     for index, value in enumerate(x):
@@ -848,7 +949,7 @@ def gsas_figure(payload: dict[str, Any]) -> go.Figure:
             low <= value <= high for low, high in excluded_ranges)
         model_x.append(value)
         model_y.append(ycalc[index] if eligible and index < len(ycalc) else None)
-        model_residual.append(residual[index] if eligible and index < len(residual) else None)
+        model_residual.append(residual[index] if fitted is not None and fitted[index] and index < len(residual) else None)
         previous = value
     phase_order = payload.get("phase_order") or []
     phase_labels = payload.get("phase_labels") or {}
@@ -869,7 +970,7 @@ def gsas_figure(payload: dict[str, Any]) -> go.Figure:
         row_heights=[0.67, 0.20, 0.13],
         vertical_spacing=0.035,
     )
-    figure.add_trace(go.Scatter(x=x, y=yobs, mode="markers", name="Observed", marker={"size": 3, "color": "#27313d", "opacity": 0.55}), row=1, col=1)
+    figure.add_trace(go.Scatter(x=x, y=observed, mode="markers", name="Observed", marker={"size": 3, "color": "#27313d", "opacity": 0.55}), row=1, col=1)
     figure.add_trace(go.Scatter(x=model_x, y=model_y, mode="lines", name="Calculated", connectgaps=False, line={"color": "#dc2626", "width": 2}), row=1, col=1)
     figure.add_trace(go.Scatter(x=model_x, y=model_residual, mode="lines", name="Difference", connectgaps=False, line={"color": "#0f766e", "width": 1.2}), row=2, col=1)
     figure.add_hline(y=0, line={"color": "#94a3b8", "width": 1}, row=2, col=1)
@@ -943,6 +1044,17 @@ def gsas_figure(payload: dict[str, Any]) -> go.Figure:
     figure.update_xaxes(title_text=axis_title, row=3, col=1)
     if fit_limits is not None:
         figure.update_xaxes(range=fit_limits, autorange=False)
+    if any(value is not None for value in excluded_observed):
+        figure.add_trace(go.Scatter(
+            x=x, y=excluded_observed, mode="markers", name="Outside fit (valid observations)",
+            marker={"size": 5, "symbol": "circle-open", "color": "#a66a00"},
+            hovertemplate="x=%{x:.5g}<br>Observed=%{y:.5g}<br>Outside fitted domain<extra></extra>",
+        ), row=1, col=1)
+    if valid is None or fitted is None:
+        notice = ("Observation validity unavailable; difference withheld."
+                  if valid is None else "Fitted-domain metadata unavailable; difference withheld.")
+        figure.add_annotation(text=notice, x=0, y=1.08, xref="paper", yref="paper",
+                              showarrow=False, xanchor="left", font={"size": 11, "color": "#a66a00"})
     rwp = payload.get("rwp")
     title = "Refinement fit" + (f" / Rwp {float(rwp):.2f}%" if rwp is not None else "")
     longest_label = max((len(label) for label in axis_labels), default=0)

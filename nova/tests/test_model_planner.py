@@ -4,7 +4,7 @@ import json
 import pytest
 
 from gpx_recipe.symmetry.chemistry import sites_from_inputs
-from radar_pd_nova.model_planner import make_intent, payload, validate_intent
+from radar_pd_nova.model_planner import make_intent, payload, validate_intent, planning_failure_receipt
 
 
 @pytest.fixture
@@ -49,6 +49,49 @@ def test_all_scan_replay_has_validated_enrollment_separate_from_native_refinemen
     assert 'enrollment' in c.calls[0][1]['required']
     assert 'enrollment' not in result['intent']['settings']
     assert any('Encode a requested scan scope' in rule for rule in payload('all scans',source)['rules'])
+
+
+@pytest.mark.parametrize('user_request',[
+    'Use only these three existing scans and do not follow future scans.',
+    'Refine all 57 published matching scans; historical replay only',
+    'Process all existing scans',
+])
+def test_clear_multiple_scan_request_cannot_accept_selected_only_enrollment(source,intent,user_request):
+    intent['enrollment']=dict(existing='selected',maximum_scans=1,follow_new=False)
+    with pytest.raises(ValueError,match='multiple existing scans'):
+        validate_intent(intent,source,request=user_request)
+
+
+def test_scope_contradiction_is_repaired_before_any_settings_are_accepted(source,intent):
+    bad=copy.deepcopy(intent);bad['enrollment']=dict(existing='selected',maximum_scans=1,follow_new=False)
+    good=copy.deepcopy(intent);good['enrollment']=dict(existing='sample',maximum_scans=3,follow_new=False)
+    client=Client([bad,good])
+    result=make_intent('Use only these three existing scans and do not follow future scans.',source,client=client)
+    assert len(result['calls'])==2 and result['intent']['enrollment']==good['enrollment']
+    assert 'multiple existing scans' in client.calls[1][0][-1]['content']
+
+
+@pytest.mark.parametrize('enrollment,message',[
+    (None,'explicitly requested scan scope'),
+    (dict(existing='sample',maximum_scans=2,follow_new=False),'maximum_scans is smaller'),
+    (dict(existing='sample',maximum_scans=3,follow_new=True),'excludes future scans'),
+])
+def test_explicit_count_and_no_future_request_remain_binding(source,intent,enrollment,message):
+    intent['enrollment']=enrollment
+    with pytest.raises(ValueError,match=message):
+        validate_intent(intent,source,request='Use only these three existing scans and do not follow future scans.')
+
+
+def test_selected_only_request_cannot_expand_to_whole_sample(source,intent):
+    intent['enrollment']=dict(existing='sample',maximum_scans=3,follow_new=False)
+    with pytest.raises(ValueError,match='only the selected scan'):
+        validate_intent(intent,source,request='Refine only this scan')
+
+
+def test_negated_multi_scan_instruction_does_not_become_a_positive_scope(source,intent):
+    intent['enrollment']=dict(existing='selected',maximum_scans=1,follow_new=False)
+    result=validate_intent(intent,source,request='Do not refine all existing scans. Refine only this scan.')
+    assert result['enrollment']==intent['enrollment']
 
 
 def test_k_survey_cannot_silently_reduce_later_refinement_to_one_cycle(source,intent):
@@ -123,6 +166,52 @@ def test_an_invalid_geometry_or_changed_declared_geometry_is_rejected(source,int
 def test_incompatible_or_unbounded_choices_are_rejected(source,intent,field,value):
     intent['settings'][field]=value
     with pytest.raises((ValueError,TypeError)):validate_intent(intent,source,request='test')
+
+
+@pytest.mark.parametrize('field,value,requirement',[
+    ('cycles',1.5,'an integer, at least 1 and at most 100'),
+    ('cycles',101,'an integer, at least 1 and at most 100'),
+    ('adequate_rwp',0,'a finite number, greater than 0 and at most 100'),
+    ('adequate_rwp',None,'a finite number, greater than 0 and at most 100'),
+    ('maximum_moment',float('inf'),'a finite number, greater than 0 and at most 20'),
+    ('magnetic_d_min',-1,'a finite number, at least 0 and at most 10'),
+])
+def test_numeric_failure_names_exact_setting_and_keeps_native_bounds(source,intent,field,value,requirement):
+    intent['settings'][field]=value
+    with pytest.raises(ValueError) as exc:
+        validate_intent(intent,source,request='test')
+    assert f'settings.{field}' in str(exc.value) and requirement in str(exc.value)
+
+
+def test_site_and_enrollment_numeric_failures_identify_their_paths(source,intent):
+    intent['settings']['sites'][0]['lande_g']=0
+    with pytest.raises(ValueError,match=r'settings.sites\[0\].lande_g'):
+        validate_intent(intent,source,request='test')
+    intent['settings']['sites'][0]['lande_g']=2
+    intent['enrollment']=dict(existing='sample',maximum_scans=True,follow_new=False)
+    with pytest.raises(ValueError,match=r'enrollment.maximum_scans'):
+        validate_intent(intent,source,request='test')
+
+
+def test_bounded_repair_receives_numeric_field_and_can_ask_instead_of_defaulting(source,intent):
+    bad=copy.deepcopy(intent);bad['settings']['adequate_rwp']=0
+    clarified=copy.deepcopy(intent)
+    clarified.update(settings=None,questions=['Which adequate Rwp criterion should be used?'])
+    client=Client([bad,clarified]);result=make_intent('Survey k; I have not chosen a fit criterion',source,client=client)
+    assert result['status']=='needs_input' and result['intent']['settings'] is None
+    assert 'settings.adequate_rwp' in client.calls[1][0][-1]['content']
+    assert len(result['calls'])==2
+
+
+def test_failed_planning_receipt_is_bounded_and_omits_transport_or_credentials():
+    error=RuntimeError('HTTPS error containing private transport content')
+    error.planning_calls=[dict(model='fake',response='x'*70000,usage={'input_tokens':4},
+        api_key='never-save',headers={'Authorization':'never-save'},request_dump='never-save')]*3
+    receipt=planning_failure_receipt(error,request='a'*13000,source_sha256='a'*64)
+    assert len(receipt['request'])==12000 and len(receipt['calls'])==2
+    assert receipt['validation_error'] is None and receipt['settings_accepted'] is False
+    assert len(receipt['calls'][0]['response'])==65536 and receipt['calls'][0]['response_truncated']
+    assert 'never-save' not in json.dumps(receipt) and 'private transport' not in json.dumps(receipt)
 
 
 def test_wrong_element_ambiguous_site_and_unsupported_code_never_compile(source,intent):

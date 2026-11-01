@@ -1,4 +1,5 @@
 import json
+import hashlib
 import sys
 import threading
 import time
@@ -30,6 +31,121 @@ from radar_pd_nova.models import (
     SubmissionPhase,
 )
 from radar_pd_nova.results import build_result_view, load_plot_with_fallback
+
+
+def _plot_observation_receipt():
+    packet = {"$schema": "radar-pd-pattern-observation/v1",
+              "x": list(range(1, 17)), "y": [0.0, -2.0] + [3.0] * 14,
+              "sigma": [1.0] * 16, "valid": [True] * 16,
+              "fit_valid": [True] * 16, "ycalc": [1.0] * 16,
+              "source_gpx_sha256": "b" * 64,
+              "context": {"source_product_sha256": "a" * 64}}
+    raw = json.dumps(packet).encode()
+    descriptor = {"name": "Pattern_observation.json", "sha256": hashlib.sha256(raw).hexdigest(),
+                  "source_gpx_sha256": "b" * 64}
+    summary = {"pattern_observation": descriptor, "observables": {"source_gpx_sha256": "b" * 64},
+               "provenance": {"input": {"source_sha256": "a" * 64}}}
+    return raw, summary
+
+
+def test_result_collector_prefetches_and_binds_direct_observation(tmp_path):
+    raw, summary = _plot_observation_receipt()
+    service = GalaxyService("https://galaxy.example", "key", "history", output_root=tmp_path)
+    service._job_details = lambda _uid: {}
+    service.job_output_ids = lambda _uid: {}
+    service.cache_pattern_observation = lambda *_a, **_kw: pytest.fail("Must reuse the prefetched receipt")
+    downloads = []
+
+    def download(dataset_id, target):
+        downloads.append(dataset_id)
+        target.write_bytes(raw if dataset_id == "pattern-id" else json.dumps(summary).encode())
+
+    service._download_dataset = download
+    record = RunRecord(uid="job-1", name="run", mode=AnalysisMode.FULL, history_id="history",
+                       output_dataset_ids={"summary": "summary-id", "pattern_observation": "pattern-id"})
+    service.collect_results(record)
+    root = Path(record.output_dir)
+    binding = json.loads((root / "plot_observation_binding.json").read_text())
+    assert sorted(downloads) == ["pattern-id", "summary-id"]
+    assert binding["status"] == "verified" and binding["job_id"] == "job-1"
+    assert binding["sha256"] == summary["pattern_observation"]["sha256"]
+    assert (root / binding["pattern_path"]).read_bytes() == raw
+    assert record.result_status is ResultStatus.READY and record.status is RunStatus.OK
+
+
+def test_existing_result_cache_repairs_missing_observation_once_without_analysis(tmp_path):
+    raw, summary = _plot_observation_receipt()
+    root = tmp_path / "runs" / "job-1"
+    root.mkdir(parents=True)
+    (root / "summary.json").write_text(json.dumps(summary))
+    service = GalaxyService("https://galaxy.example", "key", "history", output_root=tmp_path)
+    fetched = []
+
+    def download(dataset_id, *, max_bytes):
+        fetched.append((dataset_id, max_bytes))
+        return raw.decode()
+
+    service.load_text_document = download
+    record = RunRecord(uid="job-1", name="run", mode=AnalysisMode.FULL, history_id="history",
+                       output_dir=str(root), status=RunStatus.OK, result_status=ResultStatus.READY,
+                       output_dataset_ids={"pattern_observation": "pattern-id"})
+    first = service.result_payload(record)
+    service.result_payload(record)
+    assert first["summary"] == summary
+    assert fetched == [("pattern-id", 16_000_000)]
+    assert (root / "pattern_observation.json").read_bytes() == raw
+    assert json.loads((root / "plot_observation_binding.json").read_text())["status"] == "verified"
+    assert record.status is RunStatus.OK and record.result_status is ResultStatus.READY
+
+
+def test_observation_fetch_failure_is_bounded_and_preserves_completed_science(tmp_path):
+    raw, summary = _plot_observation_receipt()
+    root = tmp_path / "runs" / "job-1"
+    root.mkdir(parents=True)
+    (root / "summary.json").write_text(json.dumps(summary))
+    service = GalaxyService("https://galaxy.example", "key", "history", output_root=tmp_path)
+    fetched = []
+
+    def download(dataset_id, *, max_bytes):
+        fetched.append(dataset_id)
+        raise OSError("temporarily unavailable")
+
+    service.load_text_document = download
+    record = RunRecord(uid="job-1", name="run", mode=AnalysisMode.FULL, history_id="history",
+                       output_dir=str(root), status=RunStatus.OK, result_status=ResultStatus.READY,
+                       output_dataset_ids={"pattern_observation": "pattern-id"})
+    service.result_payload(record)
+    service.result_payload(record)
+    binding = json.loads((root / "plot_observation_binding.json").read_text())
+    assert fetched == ["pattern-id"]
+    assert binding["status"] == "unavailable" and binding["download_attempted"] is True
+    assert "withheld" in binding["notice"]
+    assert record.status is RunStatus.OK and record.result_status is ResultStatus.READY
+    # A changed durable output association is new evidence and may be retried.
+    record.output_dataset_ids["pattern_observation"] = "replacement-id"
+    service.load_text_document = lambda dataset_id, **kwargs: raw.decode()
+    service.result_payload(record)
+    assert json.loads((root / "plot_observation_binding.json").read_text())["status"] == "verified"
+
+
+@pytest.mark.parametrize("mismatch", ["source", "project", "checksum"])
+def test_observation_binding_rejects_source_project_or_checksum_mismatch(tmp_path, mismatch):
+    raw, summary = _plot_observation_receipt()
+    if mismatch == "source":
+        summary["provenance"]["input"]["source_sha256"] = "c" * 64
+    elif mismatch == "project":
+        summary["observables"]["source_gpx_sha256"] = "c" * 64
+    else:
+        summary["pattern_observation"]["sha256"] = "c" * 64
+    root = tmp_path / "runs" / "job-1"
+    root.mkdir(parents=True)
+    (root / "summary.json").write_text(json.dumps(summary))
+    (root / "pattern_observation.json").write_bytes(raw)
+    service = GalaxyService("https://galaxy.example", "key", "history", output_root=tmp_path)
+    record = RunRecord(uid="job-1", name="run", mode=AnalysisMode.FULL, history_id="history")
+    service._ensure_plot_observation(record, root, allow_download=False)
+    assert json.loads((root / "plot_observation_binding.json").read_text())["status"] == "unavailable"
+    assert (root / "pattern_observation.json").read_bytes() == raw
 
 
 def test_progress_stage_inference() -> None:

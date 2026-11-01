@@ -456,7 +456,7 @@ class LiveAssistantMixin(LiveAssistantUi):
                     raise ValueError("The selected main CIF exceeds the preview size limit.")
                 elements.update(cif_element_suggestion(path.read_text(encoding="utf-8-sig")))
             if not elements:
-                raise ValueError("No readable CIF chemistry is available. Enter the sample elements directly.")
+                raise ValueError("For CIFs selected from History, build the candidate library first, then use its element suggestion. You can also upload a main-phase CIF or enter the sample elements directly.")
             parse_elements(", ".join(sorted(elements)))
             self._live_conversation.apply(state, {"live_sample_elements": ", ".join(sorted(elements))}, "Use CIF element suggestion")
             self._assistant_say("assistant", "Copied the CIF element suggestion. Review it for missing impurity elements and assign environment contributions separately.")

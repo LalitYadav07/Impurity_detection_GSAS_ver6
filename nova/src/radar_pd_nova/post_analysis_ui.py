@@ -676,7 +676,11 @@ class PostAnalysisMixin(TransitionTrackingMixin, ScanInterpretationMixin):
             prefix = {"overlay": "Expansion + reference", "residual": "Excess expansion",
                 "temperature": "Inferred temperature", "temperature_offset": "Inferred − logged temperature"}[view.reference_output]
             return prefix + " · " + signal
-        return RECIPES[view.kind][0] if not view.metric else "Cell change · " + signal
+        representation = RECIPES[view.kind][2] if view.representation == "auto" else view.representation
+        prefix = {"absolute": "Cell value", "difference": "Change from reference",
+            "relative": "Relative change (%)", "permille": "Fractional expansion (‰)",
+            "normalized": "Normalized value"}.get(representation, "Cell change")
+        return prefix + " · " + signal
 
     def _select_post_analysis_editor(self):
         state = self.server.state

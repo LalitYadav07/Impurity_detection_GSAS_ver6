@@ -16,7 +16,7 @@ import numpy as np
 from trame.widgets import html, plotly
 from trame.widgets import vuetify3 as vuetify
 
-from .post_analysis import number
+from .post_analysis import number, PostAnalysisSettings, reviewed_axis_overrides
 from .results import discover_plot_payloads, read_plot_payload, figure_for_payload, read_json
 from .scan_conditions import condition_display
 from .scan_interpretation import InterpretationSettings, _conditions as _recorded_conditions, condition_scope, _time
@@ -752,6 +752,14 @@ class TransitionTrackingMixin:
         # A pending placeholder and its finished result represent one run;
         # multiple finished revisions require the engine's explicit review
         # outcome instead of silently retaining the final dictionary entry.
+        display_settings = PostAnalysisSettings.model_validate(self.server.state.post_analysis or {})
+        for row in sources.values():
+            # The same reviewed axis applies while a fit is queued and after
+            # completion. Rebuild from current settings so clearing a mapping
+            # also clears its display override; raw metadata is untouched.
+            if display_settings.axis_mappings or row.get("_reviewed_axis_settings_applied"):
+                row["axis_overrides"] = reviewed_axis_overrides(row, display_settings)
+                row["_reviewed_axis_settings_applied"] = True
         return sorted(
             [
                 *sources.values(),

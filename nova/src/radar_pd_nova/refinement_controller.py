@@ -529,9 +529,11 @@ class RefinementMixin(GuidedRefinementMixin):
             completed=sum(j['status']=='completed' for j in jobs)
             attention=sum(j['status'] in {'failed','interrupted','needs_review','needs_recipe'} for j in jobs)
             processed=completed+attention
-            s.rf_progress_text=(f'{processed} of {len(jobs)} processed · {completed} completed · {attention} need attention' if jobs else 'No refinements started')
+            running=sum(j['status'] in {'running','recovering'} for j in jobs)
+            queued=sum(j['status']=='queued' for j in jobs)
+            s.rf_progress_text=(f'{processed} of {len(jobs)} processed · {running} running · {queued} queued · {completed} completed · {attention} need attention' if jobs else 'No refinements started')
             s.rf_progress_percent=round(100*processed/len(jobs)) if jobs else 0
-            s.rf_metrics=[dict(label='Available GPXs',value=len(sources)),dict(label='In progress',value=sum(j['status'] in {'queued','running','recovering'} for j in jobs)),dict(label='Completed',value=sum(j['status']=='completed' for j in jobs)),dict(label='Needs attention',value=sum(j['status'] in {'failed','interrupted','needs_review','needs_recipe'} for j in jobs))]
+            s.rf_metrics=[dict(label='Available GPXs',value=len(sources)),dict(label='Queued / running',value=queued+running),dict(label='Completed',value=completed),dict(label='Needs attention',value=attention)]
             self._refinement_sync_approval()
             s.flush()
         finally:self._refinement_internal=False;w.lock.release()
@@ -854,10 +856,26 @@ class RefinementMixin(GuidedRefinementMixin):
         except Exception as exc:s.rf_error=str(exc);s.flush()
 
     def open_refinement_in_gsasii(self,**_):
-        s=self.server.state;job=self._refinement_workspace.state['jobs'].get(s.rf_selected_job)
-        if not job or not job.get('result'):return
+        s=self.server.state
+        if s.gsasii_session_status in {'starting','ready'}:
+            return
+        job=self._refinement_workspace.state['jobs'].get(s.rf_selected_job)
+        if not job or not job.get('result'):
+            s.rf_error='Select a verified refinement result before opening GSAS-II.';s.flush();return
         dataset=selected_refinement_dataset(job['result'],s.rf_stage)
-        if not dataset:return
+        if not dataset:
+            s.rf_error='This stage has no published Galaxy GPX. Choose a published verified stage.';s.flush();return
         from .galaxy_service import GSASII_INTERACTIVE_TOOL_ID
-        self._schedule_utility(self._submit_utility_action(tool_id=GSASII_INTERACTIVE_TOOL_ID,name='Verified refinement '+s.rf_stage+': '+job['source']['scan_label'],
-            inputs={'project_source|source_kind':'single','project_source|gpx_project':{'dataset_id':dataset}},associated_run_uid=job['source'].get('record_uid')),'radar-polished-gsasii')
+        name='Verified refinement '+s.rf_stage+': '+job['source']['scan_label']
+        s.rf_error='';s.gsasii_session_status='starting';s.gsasii_launch_url=''
+        s.gsasii_status_message='Submitting the selected verified GPX and waiting for a GSAS-II desktop.';s.flush()
+        async def launch():
+            try:
+                action=await self._submit_utility_action(tool_id=GSASII_INTERACTIVE_TOOL_ID,name=name,
+                    inputs={'project_source|source_kind':'single','project_source|gpx_project':{'dataset_id':dataset}},
+                    associated_run_uid=job['source'].get('record_uid'))
+                if action is None:
+                    raise RuntimeError(s.error_message or 'Galaxy did not accept the GSAS-II launch request.')
+            except Exception as exc:
+                s.rf_error=str(exc);s.gsasii_session_status='error';s.gsasii_status_message=str(exc);s.flush()
+        self._schedule_utility(launch(),'radar-polished-gsasii')

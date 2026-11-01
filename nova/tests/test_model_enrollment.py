@@ -748,6 +748,86 @@ def test_luna_enrollment_updates_visible_controls_without_starting_jobs(tmp_path
     assert app._symmetry_draft['planning']['intent']['enrollment']==enrollment
 
 
+def test_failed_luna_replies_are_retained_without_applying_settings(tmp_path,monkeypatch):
+    import json
+    import radar_pd_nova.symmetry_controller as controller
+    state=SimpleNamespace(sx_start_source='scan',sx_request='Find k for these three scans',sx_k='',
+        sx_existing='selected',sx_max_scans=1,sx_follow_new=False,flush=lambda:None)
+    app=SymmetryMixin();app.server=SimpleNamespace(state=state)
+    app._symmetry_draft=dict(source_id='scan',context={'sha256':'a'*64},root=tmp_path)
+    app._refinement_schedule=lambda coroutine,name:asyncio.run(coroutine)
+    def fail(*args,**kwargs):
+        error=ValueError('Magnetic setup failed bounded validation: settings.adequate_rwp must be a finite number, greater than 0 and at most 100; received 0')
+        error.planning_calls=[dict(model='fake',response='{"settings":{"adequate_rwp":0}}',finish_reason='stop')]
+        raise error
+    monkeypatch.setattr(controller,'make_intent',fail)
+    app.plan_symmetry_request()
+    first=list(tmp_path.glob('planning-failure-*.json'))
+    assert len(first)==1
+    receipt=json.loads(first[0].read_text())
+    assert receipt['request']==state.sx_request and receipt['source_sha256']=='a'*64
+    assert receipt['settings_accepted'] is False and 'settings.adequate_rwp' in receipt['validation_error']
+    assert receipt['calls'][0]['response']=='{"settings":{"adequate_rwp":0}}'
+    assert 'no settings accepted' in state.sx_planning_summary
+    assert not state.sx_busy and (state.sx_existing,state.sx_max_scans,state.sx_follow_new)==('selected',1,False)
+    assert 'planning' not in app._symmetry_draft
+    app.plan_symmetry_request()
+    assert len(list(tmp_path.glob('planning-failure-*.json')))==2
+    assert first[0].read_text()
+    downloaded=[];app.download_file=lambda name,mime,data:downloaded.append((name,mime,json.loads(data)))
+    app.download_symmetry_setup_details()
+    assert downloaded[0][:2]==('magnetic-setup-details.json','application/json')
+    assert downloaded[0][2]['validation_error']==receipt['validation_error']
+    assert state.sx_has_setup_details
+    assert all('planning-failure-' not in note for note in state.sx_planning_notes)
+
+
+@pytest.mark.parametrize('change',['request','source','experiment','revision','clear'])
+def test_setup_download_is_bound_to_current_request_source_and_revision(tmp_path,monkeypatch,change):
+    import copy,json
+    import radar_pd_nova.symmetry_controller as controller
+    state=SimpleNamespace(rf_experiment='experiment',sx_start_source='scan',sx_request='Find k',sx_k='',flush=lambda:None)
+    app=SymmetryMixin();app.server=SimpleNamespace(state=state)
+    app._symmetry_draft=dict(source_id='scan',context={'sha256':'a'*64},root=tmp_path)
+    app._symmetry_unapprove=lambda:None
+    app._refinement_schedule=lambda coroutine,name:asyncio.run(coroutine)
+    result=dict(schema='radar-symmetry-planning-result/v1',status='needs_input',
+        intent=dict(request='Find k',source_sha256='a'*64,settings=None,enrollment=None,
+                    assumptions=[],questions=['Choose a fit criterion'],unsupported=[]),
+        calls=[dict(model='fake',response='{"settings":null}',api_key='never-export',headers={'Authorization':'never-export'})])
+    monkeypatch.setattr(controller,'make_intent',lambda *args,**kwargs:copy.deepcopy(result))
+    app.plan_symmetry_request()
+    downloaded=[];app.download_file=lambda name,mime,data:downloaded.append(json.loads(data))
+    app.download_symmetry_setup_details()
+    assert len(downloaded)==1 and downloaded[0]['intent']['request']=='Find k'
+    assert 'never-export' not in json.dumps(downloaded)
+    if change=='request':state.sx_request='Different request'
+    elif change=='source':state.sx_start_source='other-scan'
+    elif change=='experiment':state.rf_experiment='other-experiment'
+    elif change=='revision':app._symmetry_draft['context']['sha256']='b'*64
+    else:app._clear_symmetry_setup_details()
+    app.download_symmetry_setup_details()
+    assert len(downloaded)==1 and not state.sx_has_setup_details
+    assert 'current source and request' in state.sx_error
+
+
+def test_request_change_during_failed_planning_cannot_export_the_old_response(tmp_path,monkeypatch):
+    import radar_pd_nova.symmetry_controller as controller
+    state=SimpleNamespace(rf_experiment='experiment',sx_start_source='scan',sx_request='First request',sx_k='',flush=lambda:None)
+    app=SymmetryMixin();app.server=SimpleNamespace(state=state)
+    app._symmetry_draft=dict(source_id='scan',context={'sha256':'a'*64},root=tmp_path)
+    app._refinement_schedule=lambda coroutine,name:asyncio.run(coroutine)
+    def fail(*args,**kwargs):
+        state.sx_request='Replacement request'
+        error=ValueError('Magnetic setup failed bounded validation: settings.adequate_rwp is invalid')
+        error.planning_calls=[dict(model='fake',response='{"old":true}')]
+        raise error
+    monkeypatch.setattr(controller,'make_intent',fail)
+    app.plan_symmetry_request()
+    assert not state.sx_has_setup_details and app._symmetry_setup_details is None
+    assert len(list(tmp_path.glob('planning-failure-*.json')))==1
+
+
 def test_parallel_budget_is_checkpointed_without_changing_scientific_approval(tmp_path):
     campaign=Campaign(tmp_path/'campaign')
     runtime=SimpleNamespace(max_active_jobs=1)

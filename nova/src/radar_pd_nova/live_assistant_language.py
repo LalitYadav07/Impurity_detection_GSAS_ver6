@@ -199,8 +199,8 @@ def pending_answer(text: str, choices: tuple[ReplyChoice, ...]) -> ParsedReply |
 
 def _help(text: str) -> ParsedReply | None:
     lower = normalize(text)
-    if not (lower in {"help", "why", "?"} or re.match(
-            r"^(?:please\s+)?(?:why\b|help\b|explain\b|what\b|how\b|tell me about\b|can you explain\b|could you explain\b)", lower)):
+    if not (lower in {"help", "why", "?"} or re.search(
+            r"(?:^|[.!?;]\s*)(?:please\s+)?(?:why\b|help\b|explain\b|what\b|how\b|tell me about\b|can you explain\b|could you explain\b)", lower)):
         return None
     found = {topic for topic, aliases in TOPICS.items()
              if any(re.search(r"\b" + re.escape(alias) + r"\b", lower) for alias in aliases)}
@@ -392,15 +392,23 @@ def _banks(text: str, context: ReplyContext, *, defer_membership: bool = False) 
     if not defer_membership and set(banks) - set(context.banks):
         return _clarify("A requested bank is not in the current bank list. Choose a discovered bank or refresh the experiment.")
     if context.beamline in {'NOM','SNAP'}:
+        name = LIVE_BEAMLINES[context.beamline].name
         if len(banks) != 1:
-            return _clarify("Choose exactly one NOMAD source histogram. Confirm its profile-bank mapping separately.")
-        return _patch({"nomad_physical_bank": banks[0], "nomad_profile_acknowledged": False}, f"NOMAD source bank {banks[0]}; profile mapping requires review")
+            return _clarify(f"Choose exactly one {name} source histogram. Confirm its profile-bank mapping separately.")
+        return _patch({"nomad_physical_bank": banks[0], "nomad_profile_acknowledged": False}, f"{name} source bank {banks[0]}; profile mapping requires review")
     return _patch({"powgen_bank_scope": "selected", "powgen_processing_banks": banks}, "Banks " + ", ".join(map(str, banks)))
 
 
 def _selection(text: str, context: ReplyContext) -> ParsedReply | None:
     # Keep chemical symbols in their original case; selection names also retain IDs.
     body = _raw_body(text, trim_punctuation=False)
+    scoped_bank = re.fullmatch(r"(?:source\s+|physical\s+)?bank\s+(\d+)\s+for\s+(?:run|scan)\s+(\d+)[.!?]?", body, re.I)
+    if scoped_bank:
+        bank = _banks(scoped_bank[1], context)
+        if bank.action != 'patch':
+            return bank
+        return _clarify("Bank selection applies to the selected scan scope, not one named run. Select that run in the Live panel before choosing its bank.")
+    body = re.sub(r"^(?:source|physical)\s+(?=banks?\b)", "", body, flags=re.I)
     body = re.sub(r"^(?:(?:only|the)\s+)+(?=samples?\b)", "", body, flags=re.I)
     literal = re.fullmatch(r"samples?\s+(.+)", body, re.I)
     if literal:
@@ -530,7 +538,9 @@ def _reference_masks(body: str, context: ReplyContext) -> ParsedReply | None:
 def _run_policy(text: str, context: ReplyContext) -> ParsedReply | None:
     """Translate explicit scope policies without certifying acquisition roles."""
     body = _body(text)
-    existing = re.fullmatch(r"(?:process\s+)?(?:all|every)\s+existing\s+(isothermal\s+)?(?:scans?|runs?)(?:\s+only)?", body)
+    existing = re.fullmatch(
+        r"(?:process\s+)?(?:all|every)\s+existing\s+(isothermal\s+)?(?:scans?|runs?)"
+        r"(?:\s+only|\s+(?:and|then)\s+(?:all\s+)?(?:future|new)\s+(?:scans?|runs?))?", body)
     if existing:
         values = {"powgen_backfill_mode": "all"}
         label = "Process all existing matching scans, then new scans"
@@ -660,6 +670,7 @@ def _interpret_single_reply(text: str, context: ReplyContext | None = None, *, d
 
 
 _CLAUSE_START = re.compile(
+    r"(?:please\s+)?(?:use|select|choose)\s+(?:the\s+)?(?:official\s+)?(?:cycle\s+)?(?:instrument\s+)?profile\b|"
     r"(?:(?:please|use|select|choose|apply)\s+)*(?:only\s+)?"
     r"(?:samples?\b|banks?\b|histograms?\b|(?:process\s+)?(?:all|every)\s+existing\b|"
     r"exclude\b|omit\b|ignore\b|include\b|allow\b|auto[- ]detect\b|automatic(?:ally)?\b|"

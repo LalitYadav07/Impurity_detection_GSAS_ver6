@@ -16,6 +16,7 @@ from functools import wraps
 from pathlib import Path
 
 from .pattern_transition import (
+    ENGINE_VERSION,
     TransitionSettings,
     compare_observed_patterns,
     prepare_pattern,
@@ -521,6 +522,7 @@ class TransitionTrackingEngine:
         self.styles = {k: v for k, v in self.styles.items() if k in active_styles}
         return {
             "schema": SCHEMA,
+            "engine": ENGINE_VERSION,
             "settings": asdict(self.settings),
             "settings_sha256": self.settings.fingerprint,
             "records": ordered,

@@ -31,6 +31,56 @@ CYCLE_RULE = (
 )
 
 
+def _number(value, low, high, *, field, positive=False, integer=False):
+    """Name a rejected host setting without changing the native contract."""
+    try:
+        return number(value, low, high, positive=positive, integer=integer)
+    except ValueError:
+        kind = 'an integer' if integer else 'a finite number'
+        lower = f'greater than {low}' if positive else f'at least {low}'
+        raise ValueError(f'{field} must be {kind}, {lower} and at most {high}; received {value!r}'[:400]) from None
+
+
+def _explain_numeric_failure(value):
+    """Recheck only numeric leaves after the native validator rejects one."""
+    settings = value.get('settings') if isinstance(value, dict) else None
+    if not isinstance(settings, dict):
+        return
+    sites = settings.get('sites')
+    if isinstance(sites, list):
+        for index, site in enumerate(sites):
+            if isinstance(site, dict) and 'lande_g' in site:
+                _number(site['lande_g'], 0, 10, field=f'settings.sites[{index}].lande_g', positive=True)
+    for field, low, high, positive, integer in [
+        ('cycles', 1, 100, False, True),
+        ('adequate_rwp', 0, 100, True, False),
+        ('maximum_moment', 0, 20, True, False),
+        ('magnetic_d_min', 0, 10, False, False),
+    ]:
+        if field in settings:
+            _number(settings[field], low, high, field='settings.'+field, positive=positive, integer=integer)
+
+
+def planning_failure_receipt(error, *, request, source_sha256):
+    """Retain bounded model replies, never exception transport state or keys."""
+    metadata = ('provider', 'label', 'model', 'reasoning_effort', 'purpose', 'output_format',
+                'finish_reason', 'output_allowance', 'elapsed_seconds', 'usage')
+    calls = []
+    for call in list(getattr(error, 'planning_calls', []))[:2]:
+        if not isinstance(call, dict):
+            continue
+        kept = {key: copy.deepcopy(call[key]) for key in metadata if key in call}
+        response = call.get('response')
+        if isinstance(response, str):
+            kept['response'] = response[:65536]
+            kept['response_truncated'] = len(response) > 65536
+        calls.append(kept)
+    message = str(error)
+    validation = message[:2000] if message.startswith('Magnetic setup failed bounded validation: ') else None
+    return dict(schema='radar-symmetry-planning-failure/v1', status='failed', source_sha256=source_sha256,
+                request=request[:12000], validation_error=validation, calls=calls, settings_accepted=False)
+
+
 def _declared_budget(request, declared):
     declared = copy.deepcopy(declared or {})
     if 'cycles' not in declared:
@@ -48,7 +98,7 @@ def _declared_budget(request, declared):
                   float(value) if re.fullmatch(r'[+-]?\d+\.\d+',value) else words[value.replace('-',' ')] for value in mentions}
         if len(limits) > 1:
             raise ValueError('Specify one refinement cycle limit per start; the request contains several cycle budgets')
-        declared['cycles'] = number(next(iter(limits), 20), 1, 100, integer=True)
+        declared['cycles'] = _number(next(iter(limits), 20), 1, 100, field='Requested cycles', integer=True)
     return declared
 
 
@@ -69,20 +119,57 @@ def payload(request, context, declared=None):
     return data
 
 
+def _check_requested_enrollment(request, enrollment):
+    """Reject clear scope contradictions; never infer or apply a wider scope."""
+    text = ' '.join(request.lower().split())
+    counts = {name: number for number, name in enumerate(
+        ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten'])}
+    command = r'(?:^|[.;]\s*)(?:please\s+)?(?:use|process|refine|enroll|include)\s+'
+    explicit = re.findall(
+        command + r'(?:only\s+)?(?:these\s+)?(?:all\s+)?'
+        r'(\d+|two|three|four|five|six|seven|eight|nine|ten)\s+'
+        r'(?:(?:existing|published|matching|selected)\s+)*(?:scans|runs)\b', text)
+    minimum = max([int(n) if n.isdigit() else counts[n] for n in explicit] or [0])
+    all_matching = bool(re.search(command + r'all\s+(?:(?:existing|published|matching)\s+)*(?:scans|runs)\b', text))
+    only_selected = bool(re.search(command + r'only\s+(?:this|the selected)\s+(?:scan|run)\b', text))
+    no_future = bool(re.search(r'\b(?:do not|don\x27t|without)\s+follow(?:ing)?\s+(?:new|future)\s+(?:scans|runs)\b|\bno\s+future\s+(?:scans|runs|enrollment)\b', text))
+    if not (minimum > 1 or all_matching or only_selected or no_future):
+        return
+    if enrollment is None:
+        raise ValueError('Encode the explicitly requested scan scope in enrollment, or ask a concrete scope question')
+    if (minimum > 1 or all_matching) and enrollment['existing'] != 'sample':
+        raise ValueError('The request includes multiple existing scans, but enrollment selects only one; use matching-sample scope or ask which scans to include')
+    if minimum > enrollment['maximum_scans']:
+        raise ValueError(f'The request explicitly includes {minimum} scans, but enrollment.maximum_scans is smaller')
+    if only_selected and enrollment['existing'] != 'selected':
+        raise ValueError('The request permits only the selected scan; enrollment must not include the whole sample')
+    if no_future and enrollment['follow_new']:
+        raise ValueError('The request excludes future scans; enrollment.follow_new must be false')
+
+
 def validate_intent(value, context, *, request, declared=None):
     value = copy.deepcopy(value)
     enrollment = value.pop('enrollment', None)
-    plan = native.validate_intent(value, context, request=request, declared=_declared_budget(request, declared))
+    budget = _declared_budget(request, declared)
+    try:
+        plan = native.validate_intent(value, context, request=request, declared=budget)
+    except ValueError as exc:
+        if str(exc) == 'Nonfinite, mistyped or out-of-budget contract number':
+            _explain_numeric_failure(value)
+        raise
     if enrollment is not None:
         if plan['settings'] is None:
             raise ValueError('Unresolved setup requests cannot retain scan enrollment')
         enrollment = fields(enrollment, ['existing', 'maximum_scans', 'follow_new'])
         enrollment['existing'] = choices(enrollment['existing'], ['selected', 'sample'])
-        enrollment['maximum_scans'] = number(enrollment['maximum_scans'], 1, 2000, integer=True)
+        enrollment['maximum_scans'] = _number(enrollment['maximum_scans'], 1, 2000,
+                                             field='enrollment.maximum_scans', integer=True)
         if type(enrollment['follow_new']) is not bool:
             raise ValueError('Following new acquisitions needs an explicit boolean')
         if enrollment['existing'] == 'selected' and enrollment['maximum_scans'] != 1:
             raise ValueError('Selected-scan scope requires a maximum of one acquisition')
+    if plan['settings'] is not None:
+        _check_requested_enrollment(request, enrollment)
     plan['enrollment'] = enrollment
     return plan
 

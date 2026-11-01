@@ -192,7 +192,14 @@ def refinement_dashboard(app):
                 with html.Div(v_if='rf_downloads.length',classes='rf-toolbar',style='border-top:1px solid #e0e9e2;padding-top:18px'):
                     select('Verified output','rf_download','rf_downloads')
                     v.VBtn('Download',click=app.download_refinement_artifact,variant='outlined',size='small',prepend_icon='mdi-download')
-                    v.VBtn('{{ rf_open_gsas_label }}',v_if='rf_can_open_gsas',click=app.open_refinement_in_gsasii,variant='outlined',size='small')
+                    v.VBtn('{{ rf_open_gsas_label }}',v_if='rf_can_open_gsas',click=app.open_refinement_in_gsasii,
+                        disabled=("gsasii_session_status === 'starting' || gsasii_session_status === 'ready'",),
+                        loading=("gsasii_session_status === 'starting'",),variant='outlined',size='small')
+                    v.VBtn('Open current GSAS-II desktop',href=('gsasii_launch_url',),target='_blank',rel='noopener noreferrer',
+                        v_if="gsasii_session_status === 'ready' && !!gsasii_launch_url",variant='flat',size='small')
+                html.P('{{ gsasii_status_message }}',v_if="gsasii_session_status === 'starting' || gsasii_session_status === 'error'",classes='rf-notice',raw_attrs=['aria-live="polite"'])
+                html.P('The open desktop keeps its original project. Save and close it before opening a different GPX.',
+                    v_if="gsasii_session_status === 'ready'",classes='rf-notice')
                 html.P('{{ rf_output_provenance }}',v_if='!!rf_output_provenance',classes='rf-notice')
         with html.Div(v_if='rf_expanded',classes='rf-overlay'):
             v.VBtn('Close expanded plot',click='rf_expanded = false',variant='text',prepend_icon='mdi-arrow-collapse')

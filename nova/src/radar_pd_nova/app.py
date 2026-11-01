@@ -4357,17 +4357,9 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
             metadata = qualified_metadata(run.scan_metadata or {})
             axis_overrides = {}
             if mapped_settings is not None:
-                from .post_analysis import _axis
+                from .post_analysis import reviewed_axis_overrides
                 source_scan = {"run_id": run_id, "run_number": run.run_number, "metadata": metadata}
-                for axis, mappings in mapped_settings.axis_mappings.items():
-                    key = str(metadata.get("sample_id") or "") if axis == "sample_state" else run_id
-                    mapped = mappings.get(key)
-                    if mapped is None or not mapped.verified:
-                        continue
-                    resolved = _axis(source_scan, axis, mapped_settings, None)
-                    if resolved is not None:
-                        axis_overrides[axis] = {**resolved, "source_unit": mapped.unit,
-                            "source": "Reviewed run mapping: " + mapped.source}
+                axis_overrides = reviewed_axis_overrides(source_scan, mapped_settings)
             display_metadata = {**metadata, **axis_overrides}
 
             def metric_display(key: str, fallback_unit: str, *, digits: int = 3) -> str:

@@ -2,6 +2,8 @@
 from dataclasses import asdict
 
 from .transition_input import digest
+from .pattern_transition import ENGINE_VERSION
+from .transition_signals import SIGNAL_VERSION
 
 
 class SignalStream:
@@ -92,6 +94,7 @@ class SignalStream:
 
     def report(self):
         return {"schema": "radar-pd-online-boundaries/v2", "records": list(self.records),
+            "engine": ENGINE_VERSION, "signal_engine": SIGNAL_VERSION,
             "groups": [{"id": k, "scope": v["scope"], "run_ids": list(v["run_ids"])} for k, v in self.series.items()],
             "styles": dict(self.engine.styles), "boundary_policy": asdict(self.policy),
             "policy_sha256": self.policy.fingerprint, "physical_transition_confirmed": False,

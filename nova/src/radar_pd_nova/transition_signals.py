@@ -22,7 +22,7 @@ SIGNALS = {
     "rwp": "Final Rwp change · refinement",
 }
 LOCAL_SIGNALS = tuple(k for k in SIGNALS if k!="rwp")
-SIGNAL_VERSION = "native-profile-indicators/3"
+SIGNAL_VERSION = "native-profile-indicators/4"
 
 
 @dataclass(frozen=True)
@@ -142,7 +142,11 @@ def measure_signals(before, after, report):
                and before.observation.scope == after.observation.scope
                and not before.quality["feature_cap_hit"] and not after.quality["feature_cap_hit"])
     measured = {"quality_ok": bool(quality), "width": [], "shape": [], "intensity": [],
-                "appearance": [], "splitting": [], "width_method": "relative FWHM / peak position"}
+                "appearance": [], "splitting": [], "width_method": "relative FWHM / peak position",
+                "appearance_unresolved": [row for row in report.get("source_support", [])
+                                          if row.get("status") == "unresolved" and not row.get("appearance_available")],
+                "appearance_consistent": [row for row in report.get("source_support", [])
+                                          if row.get("status") == "unresolved" and row.get("appearance_available")]}
     if not quality:
         return measured
     fa = {f.position: f for f in before.features}
@@ -206,6 +210,12 @@ def apply_policy(measurements, policy):
         elif key == "splitting":
             hits=[v for v in values if v.get("kind")!="local_component_separation_change"
                 or v["separation_change_fwhm"]>=policy.split_separation_fwhm and v["error_ratio"]>=policy.error_ratio]
+        elif key == "appearance":
+            hits = values
+            # Unknown local support is not an observed absence. A separate,
+            # available positive remains a positive even if another region
+            # cannot be classified.
+            available &= bool(hits) or not measurements.get("appearance_unresolved")
         else:
             hits = values
         indicators[key] = {"title": title, "available": bool(available),
@@ -217,6 +227,9 @@ def apply_policy(measurements, policy):
         if key=="splitting":
             indicators[key]["features"]=[{**v,"passes_rule":v in hits} for v in values
                 if v.get("kind")=="local_component_separation_change"]
+        if key == "appearance":
+            indicators[key]["unresolved_regions"] = measurements.get("appearance_unresolved", [])
+            indicators[key]["consistent_regions"] = measurements.get("appearance_consistent", [])
     fired = [key for key in policy.selected if indicators[key]["detected"]]
     unavailable = sum(not indicators[key]["available"] for key in policy.selected)
     if not policy.selected:

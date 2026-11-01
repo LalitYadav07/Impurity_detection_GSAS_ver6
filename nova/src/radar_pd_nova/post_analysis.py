@@ -382,6 +382,21 @@ def _axis(scan, key, settings, origin):
     }
 
 
+def reviewed_axis_overrides(scan, settings):
+    """Resolve explicit run mappings for display, preserving acquisition metadata."""
+    overrides = {}
+    for axis, mappings in settings.axis_mappings.items():
+        key = _sample(scan) if axis == "sample_state" else _run_id(scan)
+        mapped = mappings.get(key)
+        if mapped is None or not mapped.verified:
+            continue
+        resolved = _axis(scan, axis, settings, None)
+        if resolved is not None:
+            overrides[axis] = {**resolved, "source_unit": mapped.unit,
+                "source": "Reviewed run mapping: " + mapped.source}
+    return overrides
+
+
 def _axis_varies_beyond_acquisition_ranges(scans, key, settings, origin):
     """Resolve a sweep only when qualified acquisition intervals separate.
 

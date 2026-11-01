@@ -935,6 +935,36 @@ def test_completed_refinement_reports_verified_stage_count_and_final_gpx():
     assert 'Final GPX ready for scientific review' in message
 
 
+def test_refinement_desktop_launch_is_source_bound_and_surfaces_submission_failure():
+    tasks=[];calls=[]
+    s=SimpleNamespace(rf_selected_job='first',rf_stage='final',gsasii_session_status='idle',
+        gsasii_launch_url='',gsasii_status_message='',rf_error='',error_message='',flush=lambda:None)
+    async def submit(**kwargs):
+        calls.append(kwargs)
+        s.error_message='Desktop input unavailable'
+        return None
+    app=SimpleNamespace(server=SimpleNamespace(state=s),_refinement_workspace=SimpleNamespace(state={'jobs':{
+        'first':{'result':{'final_dataset_id':'verified-a'},'source':{'scan_label':'scan A','record_uid':'a'}},
+        'second':{'result':{'final_dataset_id':'verified-b'},'source':{'scan_label':'scan B','record_uid':'b'}}}}),
+        _schedule_utility=lambda coroutine,name:tasks.append(coroutine),_submit_utility_action=submit)
+    RefinementMixin.open_refinement_in_gsasii(app)
+    assert s.gsasii_session_status=='starting' and 'Submitting' in s.gsasii_status_message
+    s.rf_selected_job='second'
+    RefinementMixin.open_refinement_in_gsasii(app)
+    assert len(tasks)==1
+    asyncio.run(tasks[0])
+    assert calls[0]['inputs']['project_source|gpx_project']=={'dataset_id':'verified-a'}
+    assert s.gsasii_session_status=='error' and s.rf_error=='Desktop input unavailable'
+
+
+def test_refinement_desktop_cannot_silently_open_a_missing_stage():
+    s=SimpleNamespace(rf_selected_job='first',rf_stage='final',gsasii_session_status='idle',rf_error='',flush=lambda:None)
+    app=SimpleNamespace(server=SimpleNamespace(state=s),_refinement_workspace=SimpleNamespace(state={'jobs':{
+        'first':{'result':{'stage_dataset_ids':{'earlier':'verified-a'}}}}}))
+    RefinementMixin.open_refinement_in_gsasii(app)
+    assert 'no published Galaxy GPX' in s.rf_error and s.gsasii_session_status=='idle'
+
+
 def test_switching_to_running_scan_clears_the_previous_scans_parameters_and_outputs():
     snapshots=[]
     class State(SimpleNamespace):
@@ -1233,8 +1263,11 @@ def test_galaxy_claim_is_backed_up_before_any_native_submission(tmp_path):
     original=rt.call
     def call(action,source,directory,**kwargs):
         assert snapshots and next(iter(snapshots[-1]['jobs'].values()))['status']=='running'
+        assert next(iter(snapshots[-1]['jobs'].values()))['message']=='Saving the dispatch checkpoint before submission'
+        assert next(iter(w.state['jobs'].values()))['message']=='Preparing the approved refinement for Galaxy'
         kwargs['on_submitted']({'uid':'acknowledged-job'})
         assert next(iter(snapshots[-1]['jobs'].values()))['remote_action']=={'uid':'acknowledged-job'}
+        assert next(iter(snapshots[-1]['jobs'].values()))['message']=='Submitted to Galaxy; waiting for the verified result'
         return original(action,source,directory,**kwargs)
     rt.call=call
     assert w.run_next()['status']=='completed'

@@ -207,11 +207,17 @@ def test_native_failure_labels_use_native_ids_not_alphabetical_phase_order():
 
 
 def test_corrected_project_can_open_its_verified_galaxy_result_without_a_parent_record():
-    app=RefinementMixin();app.server=SimpleNamespace(state=SimpleNamespace(rf_selected_job='j',rf_stage='final'))
+    app=RefinementMixin();app.server=SimpleNamespace(state=SimpleNamespace(
+        rf_selected_job='j',rf_stage='final',gsasii_session_status='idle',flush=lambda:None))
     app._refinement_workspace=SimpleNamespace(state={'jobs':{'j':dict(source={'scan_label':'Corrected model'},result={'final_dataset_id':'verified-dataset'})}})
-    calls=[];app._submit_utility_action=lambda **kwargs:calls.append(kwargs)
-    app._schedule_utility=lambda *args:None
+    calls=[];tasks=[]
+    async def submit(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace()
+    app._submit_utility_action=submit
+    app._schedule_utility=lambda coroutine,name:tasks.append(coroutine)
     app.open_refinement_in_gsasii()
+    asyncio.run(tasks[0])
     assert calls[0]['associated_run_uid'] is None
     assert calls[0]['inputs']['project_source|gpx_project']=={'dataset_id':'verified-dataset'}
 

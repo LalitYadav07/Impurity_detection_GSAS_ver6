@@ -252,6 +252,58 @@ def test_actual_ages_user_request_keeps_every_supported_clause():
     assert not any("acknowledged" in key or "reviewed" in key for key in reply.value)
 
 
+def test_fresh_deployed_setup_reply_accepts_future_scans_and_profile_clause():
+    reply = interpret_reply(
+        "Use sample 21213, bank 2, all existing scans and future scans. "
+        "Exclude ramps and background runs, and use the official cycle profile automatically.",
+        user_selection_context(banks=(1,)),
+    )
+    assert reply.action == "patch"
+    assert reply.value == {
+        "powgen_processing_scope": "selected", "powgen_processing_sample_ids": ["21213"],
+        "powgen_bank_scope": "selected", "powgen_processing_banks": [2],
+        "powgen_backfill_mode": "all", "powgen_include_ramps": False,
+        "powgen_include_background": False, "powgen_instrument_source": "automatic",
+    }
+
+
+@pytest.mark.parametrize("suffix", ["and future scans", "then new scans", "and all future runs"])
+def test_explicit_future_scope_preserves_live_monitoring_semantics(suffix):
+    reply = interpret_reply("all existing scans " + suffix, user_selection_context())
+    assert reply.action == "patch"
+    assert reply.value == {"powgen_backfill_mode": "all"}
+
+
+def test_future_scope_does_not_ignore_unknown_trailing_instruction():
+    reply = interpret_reply("all existing scans and future scans until the phase is correct", user_selection_context())
+    assert reply.action == "clarify"
+    assert reply.value is None
+
+
+def test_context_followed_by_a_question_is_help_without_partial_setup_edits():
+    reply = interpret_reply(
+        "I want only SNAP run 63403. I have not confirmed its calibration or physical-bank mapping. "
+        "What can I safely set up before starting an analysis?",
+        replace(user_selection_context(banks=(1,)), beamline='SNAP'))
+    assert reply.action in {'help', 'clarify'} and reply.value is None
+    assert 'negative or exclusion instruction' not in reply.message
+    assert not any(c.action == 'patch' for c in reply.choices)
+
+
+def test_scoped_bank_instruction_does_not_drop_run_scope_or_bypass_discovery():
+    context = replace(user_selection_context(banks=(1,)), beamline='SNAP')
+    unavailable = interpret_reply('Use source bank 3 for run 63403.', context)
+    assert unavailable.action == 'clarify' and unavailable.value is None
+    assert 'not in the current bank list' in unavailable.message
+    scoped = interpret_reply('Use source bank 1 for run 63403.', context)
+    assert scoped.action == 'clarify' and scoped.value is None
+    assert 'not one named run' in scoped.message
+    general = interpret_reply('Use source bank 1', context)
+    assert general.action == 'patch'
+    assert general.value == {'nomad_physical_bank': 1, 'nomad_profile_acknowledged': False}
+    assert 'SNAP source histogram' in interpret_reply('banks 1 and 2', replace(context, banks=(1, 2))).message
+
+
 @pytest.mark.parametrize("text", [
     "sample ID 21213; bank 2", "Bank 2. Use sample ID 21213 only.",
     "samples 21213, banks 2", "sample ID 21213 and bank 2",

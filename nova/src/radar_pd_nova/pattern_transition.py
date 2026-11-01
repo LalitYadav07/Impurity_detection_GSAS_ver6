@@ -25,7 +25,7 @@ from scipy.ndimage import gaussian_filter1d, median_filter, percentile_filter
 from scipy.optimize import linear_sum_assignment
 from scipy.signal import find_peaks
 
-ENGINE_VERSION = "observed-pattern-transition/1"
+ENGINE_VERSION = "observed-pattern-transition/2"
 MAX_POINTS = 100_000
 
 
@@ -439,6 +439,56 @@ def partial_assignment(cost, unmatched_cost):
     )
 
 
+def _complete_feature_assignment(result, costs, settings):
+    """Complete feasible local correspondences before declaring a new signal.
+
+    A cheap chain of neighboring matches can leave two endpoints unmatched
+    even when all features have an admissible one-to-one explanation. Within
+    small affected components, first maximize explained features, then retain
+    the original cost preference. No previously forbidden edge is admitted,
+    and an unchanged cardinality keeps the original assignment. Individual
+    identities can remain ambiguous; their existing margin checks still apply.
+    """
+    matches, unmatched_a, unmatched_b = result
+    if not unmatched_a or not unmatched_b:
+        return result
+    n, m = costs.shape
+    eligible = np.isfinite(costs) & (costs < 2 * settings.unmatched_cost)
+    starts = [*unmatched_a, *(n + j for j in unmatched_b)]
+    visited, completed = set(), list(matches)
+    for start in starts:
+        if start in visited:
+            continue
+        pending, component = [start], set()
+        while pending:
+            node = pending.pop()
+            if node in component:
+                continue
+            component.add(node)
+            neighbors = (n + int(j) for j in np.flatnonzero(eligible[node])) if node < n else (
+                int(i) for i in np.flatnonzero(eligible[:, node - n]))
+            pending.extend(neighbors)
+        visited.update(component)
+        left = sorted(i for i in component if i < n)
+        right = sorted(i - n for i in component if i >= n)
+        if not left or not right or len(component) > 64:
+            continue
+        previous = [pair for pair in completed if pair[0] in left and pair[1] in right]
+        local = costs[np.ix_(left, right)].copy()
+        local[~eligible[np.ix_(left, right)]] = np.inf
+        # One unmatched endpoint pair must cost more than every feasible local
+        # edge combined. This changes priority, not the admissibility threshold.
+        penalty = (min(len(left), len(right)) + 1) * 2 * settings.unmatched_cost
+        proposed, _, _ = partial_assignment(local, penalty)
+        if len(proposed) <= len(previous):
+            continue
+        completed = [pair for pair in completed if pair not in previous]
+        completed.extend((left[i], right[j]) for i, j in proposed)
+    used_a, used_b = {i for i, j in completed}, {j for i, j in completed}
+    return (sorted(completed), [i for i in range(n) if i not in used_a],
+            [j for j in range(m) if j not in used_b])
+
+
 def _match_features(a, b, settings):
     fa, fb = a.features, b.features
     if not fa or not fb:
@@ -463,7 +513,8 @@ def _match_features(a, b, settings):
         + 0.12 * np.minimum(width_delta, 3) ** 2
     )
     cost[displacement > 1] = np.inf
-    return partial_assignment(cost, settings.unmatched_cost), cost
+    result = partial_assignment(cost, settings.unmatched_cost)
+    return _complete_feature_assignment(result, cost, settings), cost
 
 
 def _gain_model(fa, fb, matches, coordinate, settings, measurements):
@@ -608,6 +659,135 @@ def _supported(pattern, position, width):
         ):
             return True
     return False
+
+
+def _unmatched_source_support(own, source, feature, matches, settings, source_gain, *, side):
+    """Seek an unassigned predecessor on native samples, with uncertainty.
+
+    A matched source peak is already accounted for and cannot be reused to
+    explain an additional weak peak. Local profile fits span the allowed
+    independent motion; they do not warp the pattern. New means newly resolved
+    signal, never proof that a phase or an unresolved component did not exist.
+    """
+    pattern = source.observation
+    x = pattern.x
+    usable = pattern.valid & np.isfinite(source.noise) & (source.noise > 0)
+    lower = feature.position / (1 + settings.motion_limit)
+    upper = feature.position * (1 + settings.motion_limit)
+    candidates = np.flatnonzero((x >= lower) & (x <= upper))
+    result = {"status": "unresolved", "reason": "insufficient_native_source_support",
+              "appearance_available": False, "appearance_status": "unresolved",
+              "search_interval": [lower, upper], "source_gain": source_gain,
+              "source_candidates": 0, "best_source": None, "source_upper_bound": None,
+              "matched_source_peaks": 0, "occupied_source_fraction": 0.,
+              "meaning": "Observable signal support only, not physical phase creation or absence."}
+    if len(candidates) < 2:
+        return result
+    used = {m["before_position" if side == "after" else "after_position"] for m in matches}
+    occupied = np.zeros(len(x), dtype=bool)
+    competing = []
+    for other in source.features:
+        if other.position not in used:
+            continue
+        left = np.searchsorted(x, other.position - 2.25 * other.width, side="left")
+        right = np.searchsorted(x, other.position + 2.25 * other.width, side="right")
+        occupied[left:right] = True
+        if lower <= other.position <= upper:
+            result["matched_source_peaks"] += 1
+            height_ratio = feature.height / max(other.height * source_gain, 1e-30)
+            width_ratio = (feature.width / feature.position) / (other.width / other.position)
+            if (abs(math.log(height_ratio)) <= settings.intensity_log_effect
+                    and abs(math.log(width_ratio)) <= settings.width_log_effect):
+                competing.append(other.position)
+    result["occupied_source_fraction"] = float(np.mean(occupied[candidates]))
+    result["prior_overlap_possible"] = bool(np.any(occupied[candidates]))
+    result["competing_assigned_positions"] = competing
+    if competing:
+        # A dense assignment can consume the actual counterpart. It cannot
+        # then manufacture absence for this unmatched feature. Conversely, a
+        # much stronger unrelated matched peak is not a weak predecessor.
+        result["reason"] = "compatible_source_feature_is_already_assigned"
+        return result
+    missing = lower < x[0] or upper > x[-1] or not np.all(usable[candidates])
+    # The bounded center grid must still resolve the measured feature. A
+    # capacity limit is unknown support, not evidence of absence.
+    if len(candidates) > 128:
+        candidates = candidates[np.unique(np.linspace(0, len(candidates) - 1, 128, dtype=int))]
+        if np.max(np.diff(x[candidates])) > feature.width / 2:
+            result["reason"] = "source_motion_search_exceeds_native_resolution_bound"
+            return result
+    fits = []
+    for index in candidates:
+        center = float(x[index])
+        width = feature.width * center / feature.position
+        left = np.searchsorted(x, center - 2.25 * width, side="left")
+        right = np.searchsorted(x, center + 2.25 * width, side="right")
+        xx, valid = x[left:right], usable[left:right]
+        if len(xx) < 8 or not np.all(valid):
+            missing = True
+            continue
+        available = ~occupied[left:right]
+        if np.count_nonzero(available) < 8:
+            continue
+        z = (xx[available] - center) / width
+        template = np.exp(-4 * math.log(2) * z * z)
+        full_template_energy = np.sum(np.exp(-8 * math.log(2) * ((xx-center)/width)**2))
+        if np.dot(template, template) / max(float(full_template_energy), 1e-30) < settings.min_coverage:
+            continue
+        design = np.c_[template, np.ones(len(z)), z]
+        sigma = np.maximum(source.noise[left:right][available], np.finfo(float).tiny)
+        matrix, target = design / sigma[:, None], pattern.intensity[left:right][available] / sigma
+        normal = matrix.T @ matrix
+        if not np.all(np.isfinite(normal)):
+            continue
+        try:
+            if np.linalg.cond(normal) > 1e10:
+                continue
+            covariance = np.linalg.inv(normal)
+        except np.linalg.LinAlgError:
+            continue
+        coefficients = covariance @ (matrix.T @ target)
+        residual = target - matrix @ coefficients
+        scatter = max(1., float(np.dot(residual, residual)) / max(1, len(z) - 3))
+        amplitude = float(coefficients[0])
+        error = math.hypot(math.sqrt(max(float(covariance[0, 0]) * scatter, 0.)),
+                           settings.area_systematic_fraction * abs(amplitude))
+        if math.isfinite(error) and error > 0:
+            fits.append({"position": center, "height": amplitude, "error": error,
+                         "error_ratio": amplitude / error, "native_points": len(z),
+                         "residual_scatter": scatter})
+    result.update(source_candidates=len(fits), missing_source_support=bool(missing))
+    if not fits:
+        return result
+    best = max(fits, key=lambda row: row["error_ratio"])
+    upper_bound = max(max(0., row["height"]) + settings.change_snr * row["error"] for row in fits)
+    own_error = feature.height / max(feature.snr, 1e-30)
+    least_change = min((feature.height - max(0., row["height"]) * source_gain) / math.sqrt(
+        own_error**2 + (row["error"] * source_gain)**2 +
+        (settings.area_systematic_fraction * feature.height)**2) for row in fits)
+    result.update(best_source=best, source_upper_bound=upper_bound, minimum_change_error_ratio=least_change)
+    if feature.crowded:
+        result["reason"] = "new_feature_blends_with_an_existing_resolved_peak"
+    elif best["error_ratio"] >= settings.change_snr:
+        result.update(status="preexisting", reason="supported_unassigned_source_profile",
+                      appearance_available=True, appearance_status="no_resolved_change")
+    elif missing:
+        result["reason"] = "unobserved_source_region_could_contain_counterpart"
+    elif (least_change < settings.change_snr or feature.height < math.exp(settings.intensity_log_effect) *
+          source_gain * max(max(0., row["height"]) for row in fits)):
+        # Complete observed support can fail the change rule even when the
+        # physical origin is unresolved. This is a negative under the selected
+        # evidence rule, not a claim that the predecessor or a phase was absent.
+        result.update(reason="consistent_with_source_uncertainty", appearance_available=True,
+                      appearance_status="no_resolved_change")
+    elif best["error_ratio"] >= settings.change_snr / 2:
+        # A significant change with weaker positive predecessor support still
+        # leaves origin unresolved. Do not lower the detection threshold.
+        result["reason"] = "weak_source_profile_requires_review"
+    else:
+        result.update(status="new", reason="new_resolved_signal_without_supported_unassigned_counterpart",
+                      appearance_available=True, appearance_status="new_resolved_signal")
+    return result
 
 
 def _union_regions(evidence):
@@ -940,38 +1120,18 @@ def compare_observed_patterns(
                 ),
             }
             unmatched.append(item)
-            if (
-                not item["supported_in_both"]
-                or item["height_fraction"] < settings.min_feature_height_fraction
-            ):
+            if item["height_fraction"] < settings.min_feature_height_fraction:
                 continue
-            # Detection threshold crossings are not new peaks by themselves.
-            # Measure the old signal in the same window, allowing independent
-            # local motion across the declared displacement bound.
-            center_idx = int(np.searchsorted(other_prepared.observation.x, p.position))
-            radi = max(1, int(np.ceil(p.width / max(p.bin_width, 1e-30))))
-            lo = max(0, center_idx - radi)
-            hi = min(len(other_prepared.excess), center_idx + radi + 1)
-            existing = other_prepared.excess[lo:hi]
-            existing = existing[np.isfinite(existing)]
-            previous_height = max(float(np.max(existing)), 0) if len(existing) else 0
-            expected = previous_height * (
-                gain_at(p.position) if side == "after" else 1 / gain_at(p.position)
-            )
-            ratio = p.height / max(expected, p.height * 1e-8)
-            # A nearby resolved feature can be another branch or a competing
-            # correspondence. Preserve that ambiguity in the descriptive kind.
-            near = [
-                f
-                for f in other
-                if abs(math.log(f.position / p.position))
-                <= math.log1p(settings.motion_limit)
-            ]
-            kind = (
-                "additional_or_lost_signal"
-                if not near
-                else "additional_component_or_redistribution"
-            )
+            if not item["supported_in_both"]:
+                item["source_support"] = {"status": "unresolved",
+                    "reason": "insufficient_coincident_native_support", "missing_source_support": True}
+                continue
+            support = _unmatched_source_support(own_prepared, other_prepared, p, report["matches"], settings,
+                gain_at(p.position) if side == "after" else 1 / gain_at(p.position), side=side)
+            item["source_support"] = support
+            kind = ("additional_or_lost_signal" if support["status"] == "new" else
+                    "preexisting_signal_motion_or_intensity_change" if support["status"] == "preexisting" else
+                    "unresolved_signal_origin")
             interval = [p.position - 1.5 * p.width, p.position + 1.5 * p.width]
             event = {
                 "interval": interval,
@@ -979,16 +1139,10 @@ def compare_observed_patterns(
                 "mass": mass,
                 "position": p.position,
                 "side": side,
-                "height_ratio_at_previous_position": ratio,
                 "snr": p.snr,
+                "source_support": support,
             }
-            # Match thresholds may hide a pre-existing weak shoulder. Require
-            # a substantial local excess, or a well-separated branch near an
-            # existing peak; never simply count unmatched detections.
-            if (
-                ratio >= math.exp(settings.intensity_log_effect)
-                and p.snr >= settings.peak_snr
-            ):
+            if support["status"] == "new":
                 evidence.append(event)
             else:
                 hints.append(event)
@@ -997,6 +1151,11 @@ def compare_observed_patterns(
     changed_mass = min(sum(r["mass"] for r in regions), 1.0)
     max_mass = max([r["mass"] for r in regions] + [0])
     report["unmatched"] = unmatched
+    # Retain this compact evidence even when a caller drops the detailed
+    # assignment and hint lists. Unknown support must not become a negative.
+    report["source_support"] = [{"side": row["side"], "position": row["position"],
+        "interval": [row["position"] - 1.5*row["width"], row["position"] + 1.5*row["width"]],
+        **row["source_support"]} for row in unmatched if "source_support" in row]
     report["hints"] = _union_regions(hints)
     report["metrics"].update(
         matched_features=len(matches),

@@ -1,5 +1,7 @@
 import json
 import zipfile
+from copy import deepcopy
+from hashlib import sha256
 from pathlib import Path
 
 import numpy as np
@@ -73,16 +75,125 @@ def test_refinement_plot_uses_explicit_limits_and_preserves_excluded_gaps():
             "yobs": [100, 20, 30, 70, 80, 900],
             "ycalc": [0, 19, 29, 69, 79, 0],
             "resid": [100, 1, 1, 1, 1, 900],
+            "valid": [True] * 6,
         },
     }
     figure = figure_for_payload(payload)
-    assert list(figure.data[0].y) == payload["arrays"]["yobs"]
+    assert list(figure.data[0].y) == [None, 20, 30, 70, 80, None]
     assert list(figure.data[1].x) == [1, 2, 3, None, 7, 8, 9]
     assert list(figure.data[1].y) == [None, 19, 29, None, 69, 79, None]
     assert list(figure.data[2].y) == [None, 1, 1, None, 1, 1, None]
     assert list(figure.layout.xaxis.range) == [2, 8]
     assert list(figure.layout.xaxis3.range) == [2, 8]
     assert figure.data[1].connectgaps is False
+    assert figure.data[-1].name == "Outside fit (valid observations)"
+    assert list(figure.data[-1].y) == [100, None, None, None, None, 900]
+
+
+def test_refinement_plot_masks_invalid_bins_without_using_intensity_sign():
+    payload = {"plot_kind": "gsas_fit_with_ticks_v1", "fit_limits": [1, 6],
+               "excluded_ranges": [[5, 5.5]], "arrays": {
+        "x": [1, 2, 3, 4, 5, 6], "yobs": [10, 0, -3, 0, 20, 30],
+        "ycalc": [9, 1, -2, 8, 19, 29], "resid": [1, -1, -1, -8, 1, 1],
+        "valid": [True, True, True, False, True, True]}}
+    original = deepcopy(payload)
+    figure = figure_for_payload(payload)
+    assert list(figure.data[0].y) == [10, 0, -3, None, None, 30]
+    difference = dict(zip(figure.data[2].x, figure.data[2].y))
+    assert difference[2] == -1 and difference[3] == -1
+    assert difference[4] is None and difference[5] is None
+    assert figure.data[-1].name == "Outside fit (valid observations)"
+    assert list(figure.data[-1].y) == [None, None, None, None, 20, None]
+    assert payload == original
+
+
+def test_refinement_plot_accepts_explicit_weights_and_withholds_unknown_difference():
+    payload = {"plot_kind": "gsas_fit_with_ticks_v1", "fit_limits": [1, 3], "arrays": {
+        "x": [1, 2, 3], "yobs": [0, -2, 0], "ycalc": [1, -1, 3],
+        "resid": [-1, -1, -3], "weights": [1, 2, 0]}}
+    figure = figure_for_payload(payload)
+    assert list(figure.data[0].y) == [0, -2, None]
+    assert list(figure.data[2].y) == [-1, -1, None]
+    del payload["arrays"]["weights"]
+    legacy = figure_for_payload(payload)
+    assert list(legacy.data[0].y) == [0, -2, 0]
+    assert all(y is None for y in legacy.data[2].y)
+    assert any("validity unavailable" in a.text for a in legacy.layout.annotations)
+
+
+def _bound_plot_fixture(tmp_path):
+    x = list(range(1, 17))
+    y = [float(v) for v in x]
+    y[1], y[2], y[6] = 0.0, -2.0, 0.0
+    valid = [i != 6 for i in range(16)]
+    packet = {"$schema": "radar-pd-pattern-observation/v1", "x": x, "y": y,
+              "sigma": [1.0 if v else None for v in valid], "valid": valid,
+              "fit_valid": [v and i >= 9 for i, v in enumerate(valid)],
+              "ycalc": [y[i] - .1 if v and i >= 9 else None for i, v in enumerate(valid)],
+              "coordinate": {"kind": "tof", "unit": "us"},
+              "source_gpx_sha256": "b" * 64,
+              "context": {"source_product_sha256": "a" * 64}}
+    raw = json.dumps(packet).encode()
+    checksum = sha256(raw).hexdigest()
+    descriptor = {"name": "Pattern_observation.json", "sha256": checksum,
+                  "source_gpx_sha256": "b" * 64}
+    summary = {"pattern_observation": descriptor, "observables": {"source_gpx_sha256": "b" * 64},
+               "provenance": {"input": {"source_sha256": "a" * 64}}}
+    (tmp_path / "summary.json").write_text(json.dumps(summary))
+    (tmp_path / ".radar-pd-cache.json").write_text(json.dumps({"job_id": "job-1"}))
+    (tmp_path / "pattern_observation.json").write_bytes(raw)
+    binding = {"schema": "radar-pd-plot-observation-binding/v1", "status": "verified", "job_id": "job-1",
+               "pattern_path": "pattern_observation.json", "sha256": checksum,
+               "source_gpx_sha256": "b" * 64, "source_product_sha256": "a" * 64}
+    (tmp_path / "plot_observation_binding.json").write_text(json.dumps(binding))
+    path = tmp_path / "plots" / "stage.plotdata.json"
+    path.parent.mkdir()
+    path.write_text(json.dumps({"plot_kind": "gsas_fit_with_ticks_v1", "fit_limits": [3, 9],
+                               "excluded_ranges": [[5, 6]], "arrays": {
+        "x": x, "yobs": y, "ycalc": [v - .25 for v in y], "resid": [.25] * len(x)}}))
+    return path, binding
+
+
+def test_existing_plot_uses_bound_observation_but_its_own_stage_domain(tmp_path):
+    path, _ = _bound_plot_fixture(tmp_path)
+    original = path.read_bytes()
+    payload = read_plot_payload(path)
+    assert payload["_observation_validity"]["status"] == "verified"
+    figure = figure_for_payload(payload)
+    difference = dict(zip(figure.data[2].x, figure.data[2].y))
+    # The final observation's fit_valid starts at x=10; this earlier stage is
+    # explicitly fitted at x=3..9 and must not inherit that final-stage mask.
+    assert difference[3] == .25 and difference[8] == .25
+    assert difference[5] is None and difference[6] is None and difference[7] is None
+    assert difference[10] is None
+    assert figure.data[0].y[2] == -2
+    assert path.read_bytes() == original
+
+
+def test_plot_mask_requires_matching_job_source_checksum_and_exact_observations(tmp_path):
+    path, binding = _bound_plot_fixture(tmp_path)
+    binding_path = tmp_path / "plot_observation_binding.json"
+    for key, wrong in [("job_id", "other-job"), ("source_product_sha256", "c" * 64), ("sha256", "d" * 64)]:
+        binding_path.write_text(json.dumps({**binding, key: wrong}))
+        payload = read_plot_payload(path)
+        assert payload["_observation_validity"]["status"] == "unavailable"
+        assert all(y is None for y in figure_for_payload(payload).data[2].y)
+    binding_path.write_text(json.dumps(binding))
+    original = json.loads(path.read_text())
+    for key in ("x", "yobs"):
+        changed = deepcopy(original)
+        changed["arrays"][key][0] += .001
+        path.write_text(json.dumps(changed))
+        assert read_plot_payload(path)["_observation_validity"]["status"] == "unavailable"
+
+
+def test_validity_alone_does_not_invent_a_stage_fit_domain():
+    payload = {"plot_kind": "gsas_fit_with_ticks_v1", "arrays": {
+        "x": [1, 2, 3], "yobs": [0, -2, 4], "ycalc": [1, -1, 3],
+        "resid": [-1, -1, 1], "valid": [True, True, True]}}
+    figure = figure_for_payload(payload)
+    assert all(v is None for v in figure.data[2].y)
+    assert any("Fitted-domain metadata unavailable" in a.text for a in figure.layout.annotations)
 
 
 def test_legacy_refinement_plot_does_not_guess_limits_from_zero_calculated_values():

@@ -151,7 +151,7 @@ class LiveAssistantUi:
             with html.Div(v_show="powgen_instrument_source === 'computer'"):
                 NamedFileUpload("powgen_instrument_path", label="Matching instrument profile",
                                 extensions=[".instprm", ".prm", ".inst", ".ins"],
-                                help_text="NOMAD requires .instprm. POWGEN also accepts the supported legacy GSAS profiles.",
+                                help_text="Choose a profile supported by this beamline. NOMAD and SNAP use .instprm; POWGEN also accepts supported legacy GSAS profiles.",
                                 key="assistant-live-instrument")
             with html.Div(v_show="powgen_instrument_source === 'galaxy'"):
                 self._assistant_history("Profile from Galaxy History", "powgen_instrument_dataset_id", "history_instrument_datasets")
@@ -196,7 +196,7 @@ class LiveAssistantUi:
                                        placeholder="Al, V (optional)", density="compact", variant="outlined", disabled=(LOCK,))
                 vuetify.VBtn("Use CIF element suggestion", click=self.live_assistant_suggest_elements,
                              variant="outlined", size="small", disabled=(LOCK,))
-                html.P("The sample list permits candidate chemistry, including impurities. It is not a formula. CIF suggestions may omit contaminants; environment filtering does not automatically mask peaks.", classes="radar-help-copy")
+                html.P("CIF suggestions use the built candidate library or an uploaded main-phase CIF. Review them for missing impurity elements. This list is an allowed element set, not a formula; environment filtering does not automatically mask peaks.", classes="radar-help-copy")
             self._assistant_next("chemistry", "Confirm chemistry")
 
     def _assistant_settings_card(self):

@@ -258,7 +258,17 @@ class RefinementWorkspace:
                 'scan_enrollment':'NOVA already manages scan, sample and bank selection outside this project. '
                     'Apply this per-project recipe independently after compatibility checks. A request for '
                     'several scans does not imply several histograms in this GPX. Do not invent extra '
-                    'histograms or ask for a cross-scan mapping that this host already handles.'}
+                    'histograms or ask for a cross-scan mapping that this host already handles.',
+                'future_enrollment':{'supported':True,'requires_approval':True,
+                    'scope':'NOVA can enroll future matching scans after explicit recipe/scope approval and start. '
+                        'Compatibility checks and the host selection controls remain authoritative.'},
+                'output_artifacts':{'stage_gpx':True,'final_gpx':True,'source_plan_lineage':True,
+                    'scope':'The native worker and NOVA retain per-stage and final GPXs with source/plan lineage. '
+                        'These outputs are host-managed, not additional refinement targets.'},
+                'condition_mapping':{'preserve_reviewed_temperature_axis':True,
+                    'scope':'NOVA preserves available reviewed temperature/condition mappings in result metadata. '
+                        'Do not infer measured conditions from GPX defaults or invent a missing mapping; '
+                        'this capability does not change the diffraction fit.'}}
             if previous and previous.get('model_signature')!=context['model_signature']:previous=None
             if guided is not None:
                 from gpx_recipe.guided import build_plan
@@ -429,17 +439,24 @@ class RefinementWorkspace:
             if len(self._inflight)>=self.parallel_jobs:return None
             job=next((j for j in self.state['jobs'].values() if j['status'] in {'queued','recovering'}),None)
             if job is None:return None
-            self._inflight.add(job['id']);job.update(status='running',attempts=job['attempts']+1,message='Refining the approved stages')
+            self._inflight.add(job['id']);job.update(status='running',attempts=job['attempts']+1,
+                message='Saving the dispatch checkpoint before submission' if self.runtime.kind=='galaxy' else 'Refining the approved stages')
             cancel_event=threading.Event();self._submission_cancels[job['id']]=cancel_event
             recipe=copy.deepcopy(self.state['recipes'][job['recipe_id']]);source=copy.deepcopy(job['source'])
             directory=self.root/'jobs'/job['id']/('attempt-'+str(job['attempts']));job['directory']=str(directory);self.save()
         def submitted(action):
-            with self.lock:job['remote_action']=action;self.save()
+            with self.lock:
+                job['remote_action']=action
+                job['message']='Submitted to Galaxy; waiting for the verified result'
+                self.save()
             if self.runtime.kind=='galaxy':self.checkpoint()
         try:
             # Persist the claimed stable dispatch before contacting Galaxy.
             # A restored interrupted claim searches/reuses that dispatch.
             if self.runtime.kind=='galaxy':self.checkpoint()
+            with self.lock:
+                job['message']='Preparing the approved refinement for Galaxy' if self.runtime.kind=='galaxy' else 'Refining the approved stages'
+                self.save()
             result=self.runtime.call('run',source,directory,plan=recipe['plan'],approval=recipe['approval'],
                 dispatch_key=job['id'],on_submitted=submitted,resume=job.get('remote_action'),recover=job['attempts']>1,
                 cancel_event=cancel_event)
