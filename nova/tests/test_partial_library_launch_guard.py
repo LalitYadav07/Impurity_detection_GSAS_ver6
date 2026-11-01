@@ -140,4 +140,3 @@ def test_large_failure_review_is_paginated_and_download_retains_every_row(tmp_pa
     assert "Failed CIF sources" in html and "Download complete review" in html
     assert 'busy || library_builder_decision_pending ||' in html
     assert 'live_launch_busy || live_library_builder_decision_pending' in html
-
