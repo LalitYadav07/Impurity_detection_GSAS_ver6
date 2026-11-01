@@ -3,12 +3,15 @@ from __future__ import annotations
 
 import asyncio
 import copy
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 import json
 import math
 import os
 from pathlib import Path
 import re
 import tempfile
+from types import SimpleNamespace
 import uuid
 
 from gpx_recipe.contracts import stage_table
@@ -23,6 +26,69 @@ from .guided_refinement_controller import GuidedRefinementMixin
 
 
 REFINEMENT_PROGRESS_SECONDS = 1.0
+
+
+@dataclass(frozen=True)
+class _RefinementMetadataRead:
+    record_uid: str
+    name: str
+    dataset_id: str
+    destination: Path
+
+
+def _refinement_catalog_directory(workspace, record):
+    return workspace.root/'catalog'/digest([record.uid,record.output_dataset_ids])[:24]
+
+
+def _prefetch_refinement_metadata(service, workspace, records):
+    """Read small immutable publications with at most two REST transfers.
+
+    Workers never mutate records, the workspace, or a nova-galaxy datastore.
+    Legacy archive collection remains in the serial source reader.
+    """
+    reads=[]
+    for record in records:
+        root=record.local_output_dir
+        if root and any((root/name).is_file() for name in ('gpx_index.json','ndip/gpx_index.json')):
+            continue
+        if not (record.output_dataset_ids.get('summary') and record.output_dataset_ids.get('gpx_projects')):
+            continue
+        directory=_refinement_catalog_directory(workspace,record)
+        for name in ('summary','gpx_index'):
+            identifier=record.output_dataset_ids.get(name)
+            target=directory/(name+'.json')
+            if identifier and not target.exists():
+                reads.append(_RefinementMetadataRead(record.uid,name,str(identifier),target))
+    def fetch(read):
+        temporary=read.destination.with_name('.'+read.destination.name+'-'+uuid.uuid4().hex+'.partial')
+        try:
+            read.destination.parent.mkdir(parents=True,exist_ok=True)
+            service._download_dataset(read.dataset_id,temporary)
+            if not isinstance(json.loads(temporary.read_text()),dict):
+                raise ValueError('Published metadata is not a JSON object')
+            temporary.replace(read.destination)
+            return ''
+        except Exception as exc:
+            return f'{read.name}: {exc}'
+        finally:
+            temporary.unlink(missing_ok=True)
+    errors={}
+    if reads:
+        with ThreadPoolExecutor(max_workers=2,thread_name_prefix='radar-refinement-metadata') as workers:
+            pending=[workers.submit(fetch,read) for read in reads]
+            # Preserve record/document order even when requests finish out of order.
+            for read,future in zip(reads,pending):
+                error=future.result()
+                if error:errors.setdefault(read.record_uid,[]).append(error)
+    return errors
+
+
+def _refinement_record_stamp(record):
+    """Identity and source inputs that must still own a catalog result."""
+    return digest(dict(uid=record.uid,job=record.galaxy_job_id,name=record.name,
+        status=str(getattr(record.status,'value',record.status)),
+        inputs=record.inputs.model_dump(mode='json') if record.inputs else None,
+        outputs=record.output_dataset_ids,root=str(record.local_output_dir or '')))
 
 
 def figure_json(figure):
@@ -168,7 +234,7 @@ def published_refinement_source(service, workspace, record, scan, sha_cache):
     if not has_index and record.output_dataset_ids.get('summary') and record.output_dataset_ids.get('gpx_projects'):
         # Modern Live publications carry their project index in the summary.
         # Keep the initial catalog small; resolve a GPX only when selected.
-        root=workspace.root/'catalog'/digest([record.uid,record.output_dataset_ids])[:24];root.mkdir(parents=True,exist_ok=True)
+        root=_refinement_catalog_directory(workspace,record);root.mkdir(parents=True,exist_ok=True)
         for name in ['summary','gpx_index']:
             dataset=record.output_dataset_ids.get(name);target=root/(name+'.json')
             if dataset and not target.exists():
@@ -264,7 +330,7 @@ class RefinementMixin(GuidedRefinementMixin):
 
     @staticmethod
     def _refinement_state_defaults():
-        return dict(rf_mode='recipe',rf_busy=False,rf_loading=False,rf_message='',rf_error='',rf_transport='',rf_source_qualification='',rf_can_load_baseline=False,rf_provider='Guided rules · no model call required',
+        return dict(rf_mode='recipe',rf_busy=False,rf_loading=False,rf_catalog_message='',rf_message='',rf_error='',rf_transport='',rf_source_qualification='',rf_can_load_baseline=False,rf_provider='Guided rules · no model call required',
             rf_experiment='',rf_experiments=[],rf_source='',rf_sources=[],rf_source_details=[],rf_context_atoms=[],rf_context_search='',rf_scope='all',rf_samples=[],rf_sample_options=[],rf_scans=[],rf_scan_options=[],rf_banks=[],rf_bank_options=[],
             rf_existing=True,rf_future=False,rf_scope_summary='No published GPXs available',rf_scope_token='',rf_request='',rf_draft_status='',rf_cards=[],rf_questions=[],rf_assumptions=[],rf_plan_calls='',rf_model_tokens='',rf_model_cost='',rf_model_has_luna_price=False,rf_plan_ready=False,
             rf_approved=False,rf_recipe_id='',rf_recipe_summary='',rf_active_summary='',rf_saved_recipe='',rf_recipe_versions=[],rf_recipe_filter='all',rf_metrics=[],rf_source_warnings=[],rf_future_armed=False,
@@ -322,30 +388,103 @@ class RefinementMixin(GuidedRefinementMixin):
         self._refinement_refresh_task=self._refinement_schedule(self._refresh_refinement_sources(),'radar-refinement-catalog')
 
     async def _refresh_refinement_sources(self):
-        s=self.server.state;s.rf_loading=True;s.rf_error='';s.flush()
+        s=self.server.state;s.rf_loading=True;s.rf_error=''
+        s.rf_catalog_message='Refreshing published projects. Selected choices remain available while the catalog is checked.'
+        # Do not present stale unselected choices as a newly checked catalog.
+        for field,selected in (
+                ('rf_experiments',{s.rf_experiment}),('rf_sources',{s.rf_source}),
+                ('rf_sample_options',set(s.rf_samples or [])),
+                ('rf_scan_options',set(s.rf_scans or [])),('rf_bank_options',set(s.rf_banks or []))):
+            setattr(s,field,[item for item in (getattr(s,field,[]) or []) if item.get('value') in selected])
+        selection=(s.rf_experiment,s.rf_source,s.rf_selected_job)
+        owner=object();self._refinement_catalog_owner=owner;workspace=None;service=self.service
+        controller=getattr(self,'_powgen_controller',None)
+        def owns_workspace():
+            return (getattr(self,'_refinement_catalog_owner',None) is owner
+                    and self.service is service
+                    and getattr(self,'_powgen_controller',None) is controller
+                    and (workspace is None or self._refinement_workspace is workspace))
+        def live_records():
+            records=dict(self.records)
+            current=getattr(self,'_powgen_controller',None)
+            if current:records.update({r.uid:r for r in current.records.values()})
+            return records
+        s.flush()
         try:
             workspace=await asyncio.to_thread(self._refinement_store)
+            if not owns_workspace():return
             s.rf_transport='Local scientific worker' if workspace.runtime.kind=='local' else 'Galaxy scientific jobs'
-            controller=getattr(self,'_powgen_controller',None)
-            recovery_warnings=await asyncio.to_thread(recover_completed_refinement_records,self.service,controller) if controller else []
-            records=dict(self.records)
-            if controller:records.update({r.uid:r for r in controller.records.values()})
+            recovery_warnings=[]
+            if controller:
+                # Recovery also receives private records. Apply its results only
+                # if the live watch still owns the same job and source inputs.
+                completed=copy.deepcopy(dict(controller.state.completed))
+                recovery_records={};recovery_stamps={}
+                for run_id,run in completed.items():
+                    record=controller.records.get(run_id)
+                    if record is None and run.galaxy_job_id:record=controller._minimal_record(run)
+                    if record is not None:
+                        recovery_stamps[run_id]=_refinement_record_stamp(record)
+                        recovery_records[run_id]=copy.deepcopy(record)
+                snapshot=SimpleNamespace(state=SimpleNamespace(completed=completed),records=recovery_records,_minimal_record=lambda run:None)
+                recovery_warnings=await asyncio.to_thread(recover_completed_refinement_records,service,snapshot)
+                if not owns_workspace() or getattr(self,'_powgen_controller',None) is not controller:return
+                for run_id,record in snapshot.records.items():
+                    current=controller.state.completed.get(run_id);original=completed[run_id]
+                    live=controller.records.get(run_id)
+                    if (current is not None and current.galaxy_job_id==original.galaxy_job_id
+                            and current.fingerprint==original.fingerprint
+                            and (live is None or _refinement_record_stamp(live)==recovery_stamps[run_id])):
+                        controller.records[run_id]=record
+            records={uid:copy.deepcopy(record) for uid,record in live_records().items()
+                     if str(getattr(record.status,'value',record.status)).lower()=='ok'}
+            stamps={uid:_refinement_record_stamp(record) for uid,record in records.items()}
             watched_uids={r.uid for run_id,r in controller.records.items() if run_id in controller.state.completed} if controller else set()
-            rows={r.get('record_uid'):r for r in (s.powgen_all_scientific_rows or [])}
+            rows={r.get('record_uid'):copy.deepcopy(r) for r in (s.powgen_all_scientific_rows or [])}
+            s.rf_catalog_message='Loading published project details. Selected choices remain available.';s.flush()
+            failures=await asyncio.to_thread(_prefetch_refinement_metadata,service,workspace,tuple(records.values()))
+            if not owns_workspace():return
+            sha_cache=dict(self._refinement_sha_cache)
             def catalog():
                 sources=[];warnings=[]
-                for record in records.values():
-                    if str(getattr(record.status,'value',record.status)).lower()!='ok':continue
+                for uid,record in records.items():
+                    if uid in failures:
+                        warnings.append(dict(scan=record.name,reason='Could not read published project metadata: '+'; '.join(failures[uid])))
+                        continue
                     try:
-                        source=published_refinement_source(self.service,workspace,record,rows.get(record.uid),self._refinement_sha_cache)
+                        source=published_refinement_source(service,workspace,record,rows.get(record.uid),sha_cache)
                         source['live_watch']=record.uid in watched_uids
                         sources.append(source)
                     except Exception as exc:warnings.append(dict(scan=record.name,reason=str(exc)))
                 return sources,warnings
             sources,warnings=await asyncio.to_thread(catalog)
+            if not owns_workspace():return
             warnings=recovery_warnings+warnings
-            await asyncio.to_thread(workspace.observe,sources,
-                                    active_live_ids={source['id'] for source in sources if source.get('live_watch')})
+            current_records=live_records();current_rows={r.get('record_uid'):r for r in (s.powgen_all_scientific_rows or [])}
+            accepted=[]
+            for source in sources:
+                uid=source['record_uid'];current=current_records.get(uid)
+                if (current is None or _refinement_record_stamp(current)!=stamps[uid]
+                        or current_rows.get(uid)!=rows.get(uid)):
+                    warnings.append(dict(scan=source['scan_label'],reason='Published result changed while its metadata was loading; refresh the catalog.'))
+                    continue
+                # Legacy collection populated only the private snapshot. Keep
+                # its verified cache reference without replacing live timing,
+                # console, configuration, or selection fields.
+                snapshot=records[uid]
+                if snapshot.output_dir!=current.output_dir:
+                    current.output_dir=snapshot.output_dir
+                    current.cache_manifest=copy.deepcopy(snapshot.cache_manifest)
+                    current.result_status=snapshot.result_status
+                    current.output_dataset_ids=dict(snapshot.output_dataset_ids)
+                accepted.append(source)
+            sources=accepted
+            self._refinement_sha_cache.update(sha_cache)
+            # Incomplete metadata is not evidence that an older watched source
+            # disappeared. Only a complete catalog may retire those flags.
+            active_ids=None if warnings else {source['id'] for source in sources if source.get('live_watch')}
+            await asyncio.to_thread(workspace.observe,sources,active_live_ids=active_ids)
+            if not owns_workspace():return
             # Legacy publications need a checksum captured from actual bytes.
             # Download only newly enrolled future matches here; backlog choices
             # remain browsable before materializing the user's selected scope.
@@ -354,27 +493,31 @@ class RefinementMixin(GuidedRefinementMixin):
                 if not source.get('source_sha256') and enrolled:
                     try:
                         material=await asyncio.to_thread(workspace.runtime.resolve,source)
+                        if not owns_workspace():return
                         workspace.observe([material])
                     except Exception as exc:warnings.append(dict(scan=source['scan_label'],reason=str(exc)))
             s.rf_source_warnings=warnings
             experiments=refinement_experiment_options(workspace)
             s.rf_experiments=[dict(title=v,value=k) for k,v in sorted(experiments.items(),key=lambda x:x[1])]
-            if s.rf_experiment not in experiments:
+            selection_current=selection==(s.rf_experiment,s.rf_source,s.rf_selected_job)
+            if s.rf_experiment not in experiments and selection_current:
                 selected=next((v['experiment'] for v in sources if v.get('live_watch')),None)
                 if selected is None:
                     selected=next((v['experiment'] for v in sources if v['record_uid']==s.selected_run_uid),None)
                 s.rf_experiment=selected or (next(iter(experiments)) if experiments else '')
                 self._refinement_experiment_changed()
             self._refinement_sync();self._refinement_start_pump()
-            if not s.rf_selected_job:
+            if not s.rf_selected_job and selection_current:
                 completed=[j for j in workspace.state['jobs'].values() if j['source']['experiment']==s.rf_experiment and (j.get('result') or {}).get('stages')]
                 if completed:await self._select_refinement_job(max(completed,key=lambda j:(j['source'].get('run_number') or 0,j['queued_utc']))['id'])
-        except Exception as exc:s.rf_error=str(exc)
+        except Exception as exc:
+            if owns_workspace():s.rf_error=str(exc)
         finally:
-            s.rf_loading=False;s.flush()
-            if self._refinement_refresh_again:
-                self._refinement_refresh_again=False
-                self._refinement_refresh_task=None;self.refresh_refinement_sources()
+            if owns_workspace():
+                s.rf_loading=False;s.rf_catalog_message='';s.flush()
+                if self._refinement_refresh_again:
+                    self._refinement_refresh_again=False
+                    self._refinement_refresh_task=None;self.refresh_refinement_sources()
 
     def _refinement_experiment_changed(self,**_):
         if self._refinement_internal:return

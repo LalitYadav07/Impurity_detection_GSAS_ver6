@@ -41,6 +41,7 @@ def refinement_dashboard(app):
                 v.VChip('{{ rf_provider }}',v_if="rf_mode === 'recipe'",variant='tonal',color='#15543c',size='small')
                 v.VBtn('Refresh projects',click=app.refresh_refinement_sources,loading=('rf_loading',),variant='text',prepend_icon='mdi-refresh',size='small')
         v.VProgressLinear(v_if='rf_loading || rf_busy',indeterminate=True,color='#287654',height=3,classes='mb-4')
+        v.VAlert(v_if='rf_loading',text=('rf_catalog_message',),type='info',variant='tonal',density='compact',classes='mb-3')
         v.VAlert(v_if="rf_mode !== 'models' && !!rf_error",text=('rf_error',),type='error',variant='tonal',density='compact',classes='mb-3',closable=True)
         with html.Details(v_if='rf_source_warnings.length',classes='mb-4'):
             html.Summary('{{ rf_source_warnings.length }} completed project(s) need attention before refinement',style='cursor:pointer;color:#8b6028;font-size:13px')
