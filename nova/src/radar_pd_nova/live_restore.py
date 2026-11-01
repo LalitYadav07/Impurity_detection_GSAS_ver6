@@ -146,6 +146,11 @@ def inspect_checkpoint_payload(payload: Mapping, service, dataset_id: str, *, do
     controller.restore_document_sha256 = document_sha256
     controller.restore_missing_settings = tuple(missing)
     controller.restore_resume_blocked_reasons = tuple(blocked)
+    controller._last_persisted_payload_sha256 = sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    if watch.get("continuation_review"):
+        from .live_settings_review import validate_continuation_receipt
+        validate_continuation_receipt(watch["continuation_review"], settings)
+        controller.restore_settings_review = json.loads(json.dumps(watch["continuation_review"]))
     controller._retry_submission_allowed = lambda: False
     if watch.get("manual_setup_signature"):
         controller._manual_setup_signature = tuple(watch["manual_setup_signature"])
@@ -168,8 +173,10 @@ def inspect_checkpoint_payload(payload: Mapping, service, dataset_id: str, *, do
         {"label": "Main-phase CIF", "value": displayed("main_cif_dataset_id", settings.main_cif_dataset_id or "None")},
         {"label": "Concurrent analyses", "value": displayed("max_active_jobs", settings.max_active_jobs)},
         {"label": "Late-arrival window", "value": displayed("late_arrival_window", settings.late_arrival_window)},
-        {"label": "Missing original settings", "value": ", ".join(missing) or "None"},
+        {"label": "Settings still requiring review", "value": ", ".join(missing) or "None"},
     ]
+    if getattr(controller, "restore_settings_review", None):
+        rows.append({"label": "Settings provenance", "value": "Includes explicitly reviewed continuation settings; not all values were recovered from the original checkpoint"})
     return SavedWatchReview(controller, dataset_id, document_sha256, saved.updated_utc, rows, tuple(missing), tuple(blocked))
 
 
@@ -231,12 +238,15 @@ class LiveRestoreMixin:
         state.live_restore_ready = False
         state.live_restore_confirm = False
         state.live_restore_rows = []
+        if hasattr(self, "_live_missing_owner"):
+            self._invalidate_live_settings_review()
 
     def _live_restore_selection_changed(self, **_):
         self._invalidate_live_restore()
 
     def _live_restore_draft_changed(self, **_):
-        if self._live_restore_owner is not None or self._live_restore_review is not None:
+        if (self._live_restore_owner is not None or self._live_restore_review is not None
+                or getattr(self, "_live_missing_owner", None) is not None):
             self._invalidate_live_restore()
             self.server.state.live_restore_message = "The Live draft changed. Inspect the selected checkpoint again before restoring."
 
@@ -318,7 +328,9 @@ class LiveRestoreMixin:
             state.live_restore_rows = review.rows
             state.live_restore_ready = True
             state.live_restore_message = ("Read-only restoration. " + "; ".join(review.blocked) + ". Resume stays disabled."
-                if review.blocked else "The complete saved settings are available. Restore remains stopped; resuming requires a separate action.")
+                if review.blocked else "Saved user-reviewed continuation settings are available. Restore remains stopped; resuming requires a separate action."
+                if getattr(review.controller, "restore_settings_review", None) else
+                "The complete saved settings are available. Restore remains stopped; resuming requires a separate action.")
         except Exception as exc:
             if self._live_restore_owner is owner and context == self._live_restore_context():
                 state.live_restore_message = f"Checkpoint could not be restored: {exc}"

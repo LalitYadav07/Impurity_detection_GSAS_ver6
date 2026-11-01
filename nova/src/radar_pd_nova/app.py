@@ -32,6 +32,7 @@ from .setup_forms import configuration_from_form, configuration_form_values, CON
 from .setup_ui import SetupEditorMixin
 from .live_setup import LiveSetupMixin
 from .live_restore import LiveRestoreMixin
+from .live_settings_review import LiveSettingsReviewMixin
 from .live_assistant_controller import LiveAssistantMixin
 from .library_setup import (
     LIBRARY_FIELDS,
@@ -270,7 +271,7 @@ def _powgen_retry_time(value: Any) -> datetime | None:
 from .webmon.ui import WebmonMixin
 
 
-class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssistantMixin, LiveRestoreMixin, LiveSetupMixin, LibraryReviewMixin, SetupEditorMixin, PostAnalysisMixin, RefinementMixin, SymmetryMixin, ThemedApp):
+class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssistantMixin, LiveSettingsReviewMixin, LiveRestoreMixin, LiveSetupMixin, LibraryReviewMixin, SetupEditorMixin, PostAnalysisMixin, RefinementMixin, SymmetryMixin, ThemedApp):
     """Interactive orchestration and results workspace backed by Galaxy."""
 
     def __init__(self) -> None:
@@ -809,6 +810,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         ]
         self._init_live_setup()
         self._init_live_restore()
+        self._init_live_settings_review()
         self._init_library_reviews()
         self._init_live_assistant()
         self._single_reset_values = {
@@ -1654,6 +1656,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                     )
 
         self._live_restore_ui()
+        self._live_settings_review_ui()
         vuetify.VSelect(
             v_show="workflow_mode === 'powgen'", label="Live beamline",
             v_model=("live_beamline",), items=("live_beamline_options",),
@@ -1963,7 +1966,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                         loading=("live_launch_busy",),
                     )
                     vuetify.VBtn(
-                        "Resume existing watch (previous settings)",
+                        "Resume existing watch",
                         click=self.resume_existing_powgen_monitoring,
                         v_if="(live_library_builder_decision_pending || !!live_restored_checkpoint_id) && powgen_results_refresh_available && !live_restore_resume_blocked",
                         disabled=("powgen_monitoring || live_launch_busy || live_restore_busy",),
@@ -5796,6 +5799,8 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                 if owns_view():
                     state.error_message = "The Live context changed while the saved configuration was read. The existing watch was not resumed."
                 return
+            if not await self._checkpoint_live_continuation(controller, service, current=current):
+                return
             state.powgen_monitoring = True
             state.workflow_mode = "powgen"
             state.workspace_view = "experiment"
@@ -5804,6 +5809,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
             state.powgen_message = (
                 f"Resuming the existing {controller.settings.instrument} watch for {controller.settings.ipts} "
                 "with its previously approved configuration and library. "
+                + ("Missing monitor settings use the explicit continuation review. " if getattr(controller, "restore_settings_review", None) else "")
                 + ("The new partial-library choice remains unresolved." if self._library_decision_pending("live") else ""))
             state.error_message = ""
             self._sync_powgen_rows()

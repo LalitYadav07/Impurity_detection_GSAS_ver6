@@ -75,7 +75,7 @@ class PowgenExperimentSettings:
     wavelength_angstrom: str
     instrument_profile_dataset_id: str | None = None
     instrument_profile_name: str | None = None
-    frequency_hz: str = "60"
+    frequency_hz: str | None = "60"
     subfolder: str = "shared/autoreduce"
     main_cif_dataset_id: str | None = None
     database_dataset_id: str | None = None
@@ -391,6 +391,7 @@ class PowgenWatchController:
         self._last_seen_run_number: int | None = None
         self._startup_run_floor: int | None = None
         self._last_persisted_state: str | None = None
+        self._last_persisted_payload_sha256: str | None = None
         self._configuration: AnalysisConfig | None = None
         self._configuration_lock = threading.Lock()
         self._profile_dataset_ids: dict[str, str] = {}
@@ -637,6 +638,9 @@ class PowgenWatchController:
                     stored_samples = watch.get("selected_sample_ids")
                     if (tuple(sorted(stored_samples)) if stored_samples is not None else None) != self.settings.selected_sample_ids:
                         continue
+                    if watch.get("continuation_review"):
+                        from .live_settings_review import validate_continuation_receipt
+                        validate_continuation_receipt(watch["continuation_review"], self.settings)
                 candidate = WatchState.from_dict(payload)
                 if candidate.history_id != self.settings.history_id or candidate.instrument != self.settings.instrument:
                     continue
@@ -651,6 +655,9 @@ class PowgenWatchController:
             return False
 
         self._adopt_restored_state(restored, restored_dataset_id, hydrate_metadata=True)
+        if isinstance(watch, Mapping) and isinstance(watch.get("continuation_review"), Mapping):
+            self.restore_settings_review = json.loads(json.dumps(watch["continuation_review"]))
+        self._last_persisted_payload_sha256 = sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         return True
 
     def _adopt_restored_state(self, restored: WatchState, dataset_id: str, *, hydrate_metadata: bool) -> None:
@@ -1501,6 +1508,8 @@ class PowgenWatchController:
                 payload["watch"]["missing_settings"] = list(self.restore_missing_settings)
             if getattr(self, "restore_resume_blocked_reasons", ()):
                 payload["watch"]["resume_blocked_reasons"] = list(self.restore_resume_blocked_reasons)
+            if getattr(self, "restore_settings_review", None):
+                payload["watch"]["continuation_review"] = json.loads(json.dumps(self.restore_settings_review))
             self._checkpoint_generation += 1
             return WatchCheckpoint(self._checkpoint_generation, serialized, json.dumps(payload))
 
@@ -1508,13 +1517,14 @@ class PowgenWatchController:
         """Write one detached checkpoint; stale writers cannot replace newer state."""
         snapshot = snapshot or self.capture_checkpoint()
         with self._persist_lock:
+            payload = json.loads(snapshot.payload_json)
+            payload_sha256 = sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
             if self.state_dataset_ids and (
                 snapshot.generation <= self._persisted_checkpoint_generation
-                or snapshot.state_json == self._last_persisted_state
+                or payload_sha256 == getattr(self, "_last_persisted_payload_sha256", None)
             ):
                 self._persisted_checkpoint_generation = max(self._persisted_checkpoint_generation, snapshot.generation)
                 return self.state_dataset_ids[-1]
-            payload = json.loads(snapshot.payload_json)
             last_error: Exception | None = None
             for attempt in range(3):
                 try:
@@ -1526,6 +1536,7 @@ class PowgenWatchController:
                     )
                     self.state_dataset_ids.append(dataset_id)
                     self._last_persisted_state = snapshot.state_json
+                    self._last_persisted_payload_sha256 = payload_sha256
                     self._persisted_checkpoint_generation = snapshot.generation
                     return dataset_id
                 except CheckpointUploadPending:
