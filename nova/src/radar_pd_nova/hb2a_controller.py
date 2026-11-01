@@ -387,8 +387,8 @@ class Hb2aWatchController(PowgenWatchController):
             return self.service.load_text_document(candidate_instrument).replace('\r\n','\n')==profile.read_text().replace('\r\n','\n')
         except (OSError,ValueError,RuntimeError):return False
 
-    def _scientific_summary(self,record):
-        summary=super()._scientific_summary(record)
+    def _decorate_scientific_summary(self,record,summary):
+        summary=super()._decorate_scientific_summary(record,summary)
         if summary:
             summary['scientific_status']='needs_review'
             notices=['HB-2A profile requires independent calibration acceptance; magnetic-only peaks are outside nuclear phase identification.']

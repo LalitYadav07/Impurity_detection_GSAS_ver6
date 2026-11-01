@@ -301,8 +301,8 @@ class NomadWatchController(PowgenWatchController):
             return actual.replace('\r\n','\n')==profile.read_text().replace('\r\n','\n')
         except (OSError,ValueError,RuntimeError):return False
 
-    def _scientific_summary(self,record):
-        summary=super()._scientific_summary(record)
+    def _decorate_scientific_summary(self,record,summary):
+        summary=super()._decorate_scientific_summary(record,summary)
         if summary:
             notices=['NOMAD profile supplied by user; scientific calibration acceptance is pending']
             receipt=record.provenance.get(self.bank_provenance_key) or {}

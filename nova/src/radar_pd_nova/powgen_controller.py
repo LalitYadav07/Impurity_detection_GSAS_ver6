@@ -48,6 +48,24 @@ class WatchCheckpoint:
 
 
 @dataclass(frozen=True)
+class _MetadataRead:
+    run_id: str
+    job_id: str
+    fingerprint: str
+    kind: str
+    record_json: str = ""
+    receipt_json: str = ""
+    result_ids: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class _MetadataResult:
+    request: _MetadataRead
+    payload_json: str = ""
+    error: str = ""
+
+
+@dataclass(frozen=True)
 class PowgenExperimentSettings:
     """User-controlled settings for one read-only POWGEN experiment watch."""
 
@@ -379,6 +397,9 @@ class PowgenWatchController:
         self._profile_upload_lock = threading.Lock()
         self._persist_lock = threading.Lock()
         self._checkpoint_lock = threading.Lock()
+        self._refresh_lock = threading.Lock()
+        self._metadata_refresh_cursor = ""
+        self._curve_cache_stamps: dict[tuple[str, str], tuple] = {}
         self._checkpoint_generation = 0
         self._persisted_checkpoint_generation = 0
         self._staging = tempfile.TemporaryDirectory(prefix="radar-powgen-banks-")
@@ -1121,9 +1142,46 @@ class PowgenWatchController:
         return self.acknowledge_submission(run, self.launch_submission(run))
 
     def refresh(self, *, checkpoint: bool = True) -> dict[str, RunRecord]:
-        """Refresh results, optionally allowing the UI to publish before upload."""
+        """Read all statuses first, then resolve a bounded metadata batch."""
+        with self._refresh_lock:
+            return self._refresh_metadata_batch(checkpoint=checkpoint)
+
+    @staticmethod
+    def _same_run(run: WatchedRun | None, request: _MetadataRead) -> bool:
+        return (run is not None and run.galaxy_job_id == request.job_id
+                and run.fingerprint == request.fingerprint)
+
+    @staticmethod
+    def _curve_cache_stamp(receipt: Mapping[str, Any]) -> tuple | None:
+        try:
+            path = Path(str(receipt.get("local_path") or ""))
+            if not path.is_file():
+                return None
+            stat = path.stat()
+            return (str(path), receipt.get("sha256"), receipt.get("source_gpx_sha256"),
+                    stat.st_size, stat.st_mtime_ns)
+        except (OSError, TypeError, ValueError):
+            return None
+
+    def _fetch_metadata(self, request: _MetadataRead) -> _MetadataResult:
+        """Worker I/O only: no watch-state or shared RunRecord mutation."""
+        try:
+            if request.kind == "curve":
+                payload = self.service.cache_pattern_observation(json.loads(request.receipt_json))
+            else:
+                record = RunRecord.model_validate_json(request.record_json)
+                payload = self._read_scientific_summary(record)
+            return _MetadataResult(request, json.dumps(payload, allow_nan=False))
+        except Exception as exc:
+            return _MetadataResult(request, error=str(exc))
+
+    def _refresh_metadata_batch(self, *, checkpoint: bool) -> dict[str, RunRecord]:
         state_changed = False
         self.refresh_errors = {}
+        new_reads: list[_MetadataRead] = []
+        old_reads: list[_MetadataRead] = []
+        # Status refresh is intentionally separate from slow summary/curve
+        # downloads, so one unreadable result cannot hide later job states.
         for run_id, run in list(self.state.submitted.items()):
             record = self.records.get(run_id)
             if record is None and run.galaxy_job_id:
@@ -1133,7 +1191,7 @@ class PowgenWatchController:
                 self.refresh_errors[run_id] = "Acknowledged run has no Galaxy job ID"
                 continue
             try:
-                refreshed = self.service.refresh(record)
+                refreshed = self.service.refresh(record.model_copy(deep=True))
             except Exception as exc:
                 self.refresh_errors[run_id] = str(exc)
                 continue
@@ -1145,14 +1203,8 @@ class PowgenWatchController:
                 # collects the archive lazily when a user opens this record.
                 result_ids = tuple(str(value) for value in refreshed.output_dataset_ids.values() if value)
                 if result_ids:
-                    summary = self._scientific_summary(refreshed)
-                    self.state.mark_completed(
-                        run_id,
-                        result_ids,
-                        galaxy_job_id=refreshed.galaxy_job_id,
-                        scientific_summary=summary,
-                    )
-                    state_changed = True
+                    new_reads.append(_MetadataRead(run_id, str(refreshed.galaxy_job_id or ""), run.fingerprint,
+                        "complete", record_json=refreshed.model_dump_json(), result_ids=result_ids))
                 else:
                     refreshed.stage = "Finalizing Galaxy outputs"
                     refreshed.progress = max(refreshed.progress, 98)
@@ -1168,31 +1220,88 @@ class PowgenWatchController:
                 receipt = run.scientific_summary.get("pattern_observation") or {}
                 # Restore just this small artifact after a NOVA session restart.
                 if receipt.get("sha256") and hasattr(self.service, "cache_pattern_observation"):
-                    try:
-                        cached = self.service.cache_pattern_observation(receipt)
-                        if cached != receipt:
-                            self.state.set_scientific_summary(run_id, {**run.scientific_summary, "pattern_observation": cached})
-                            state_changed = True
-                    except Exception as exc:
-                        self.refresh_errors.setdefault(run_id, f"Curve observation pending: {exc}")
+                    stamp = self._curve_cache_stamp(receipt)
+                    key = (run_id, str(run.galaxy_job_id or ""))
+                    if stamp is None or self._curve_cache_stamps.get(key) != stamp:
+                        old_reads.append(_MetadataRead(run_id, key[1], run.fingerprint, "curve",
+                            receipt_json=json.dumps(dict(receipt), allow_nan=False)))
                 continue
             if not run.galaxy_job_id:
                 continue
             record = self.records.get(run_id) or self._minimal_record(run)
             try:
-                refreshed = self.service.refresh(record)
+                refreshed = self.service.refresh(record.model_copy(deep=True))
                 self.records[run_id] = refreshed
-                summary = self._scientific_summary(refreshed)
-                if summary:
-                    self.state.set_scientific_summary(run_id, summary)
-                    state_changed = True
+                old_reads.append(_MetadataRead(run_id, str(run.galaxy_job_id), run.fingerprint, "summary",
+                    record_json=refreshed.model_dump_json()))
             except Exception as exc:
                 self.refresh_errors.setdefault(run_id, f"Scientific summary pending: {exc}")
+        # New completions take priority. Only two older pending receipts are
+        # read per tick, rotating fairly even if one is permanently unavailable.
+        old_reads.sort(key=lambda item: item.run_id)
+        if old_reads:
+            split = next((i for i, item in enumerate(old_reads) if item.run_id > self._metadata_refresh_cursor), 0)
+            old_reads = old_reads[split:] + old_reads[:split]
+            old_reads = old_reads[:2]
+            self._metadata_refresh_cursor = old_reads[-1].run_id
+        reads = new_reads + old_reads
+        if reads:
+            with ThreadPoolExecutor(max_workers=2) as workers:
+                pending = [workers.submit(self._fetch_metadata, request) for request in reads]
+                # Preserve request order in checkpoints and summary consumers;
+                # completion timing of parallel reads must not reorder scans.
+                for future in pending:
+                    result = future.result()
+                    request = result.request
+                    current = (self.state.submitted if request.kind == "complete" else self.state.completed).get(request.run_id)
+                    if not self._same_run(current, request):
+                        self.refresh_errors[request.run_id] = "Result identity changed while metadata was loading; retrying current state"
+                        continue
+                    if request.kind == "complete" and (
+                            self.records.get(request.run_id) is None
+                            or self.records[request.run_id].galaxy_job_id != request.job_id
+                            or self.records[request.run_id].status != RunStatus.OK):
+                        self.refresh_errors[request.run_id] = "Job state changed while metadata was loading; retrying current state"
+                        continue
+                    if result.error:
+                        label = "Curve observation" if request.kind == "curve" else "Scientific summary"
+                        self.refresh_errors[request.run_id] = f"{label} pending: {result.error}"
+                        continue
+                    try:
+                        payload = json.loads(result.payload_json)
+                        if request.kind == "curve":
+                            receipt = current.scientific_summary.get("pattern_observation") or {}
+                            if dict(receipt) != json.loads(request.receipt_json):
+                                self.refresh_errors[request.run_id] = "Curve receipt changed while metadata was loading; retrying current state"
+                                continue
+                            summary = {**current.scientific_summary, "pattern_observation": payload}
+                        else:
+                            record = RunRecord.model_validate_json(request.record_json)
+                            summary = self._decorate_scientific_summary(record, payload)
+                        if request.kind == "complete":
+                            self.state.mark_completed(request.run_id, request.result_ids,
+                                galaxy_job_id=request.job_id, scientific_summary=summary)
+                            state_changed = True
+                        elif summary and dict(summary) != dict(current.scientific_summary):
+                            self.state.set_scientific_summary(request.run_id, summary)
+                            state_changed = True
+                        stamp = self._curve_cache_stamp(summary.get("pattern_observation") or {})
+                        if stamp is not None:
+                            self._curve_cache_stamps[(request.run_id, request.job_id)] = stamp
+                    except Exception as exc:
+                        self.refresh_errors[request.run_id] = f"Scientific summary pending: {exc}"
         if state_changed and checkpoint:
             self.persist_state()
         return dict(self.records)
 
     def _scientific_summary(self, record: RunRecord) -> dict[str, Any]:
+        return self._decorate_scientific_summary(record, self._read_scientific_summary(record))
+
+    def _decorate_scientific_summary(self, record: RunRecord, summary: dict[str, Any]) -> dict[str, Any]:
+        """Apply beamline warnings on the serial controller thread."""
+        return summary
+
+    def _read_scientific_summary(self, record: RunRecord) -> dict[str, Any]:
         """Load only the small normalized result JSON, never the result archive."""
 
         dataset_id = str(record.output_dataset_ids.get("summary") or "").strip()

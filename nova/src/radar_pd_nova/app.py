@@ -228,7 +228,7 @@ def _powgen_scan_label(run: Any) -> str:
 
 def _powgen_queue_sort_key(row: dict[str, Any]) -> tuple:
     """Keep active work visible even when a large historical backlog is newer."""
-    priority={"Running":0,"Queued":1,"Submitted":1,"Failed":2,
+    priority={"Running":0,"Loading results":0,"Queued":1,"Submitted":1,"Failed":2,
               "Waiting to retry":3,"Retry queued":3,"Waiting for slot":3,
               "Waiting for complete data":4,"Input changed":4,"Discovered":5,"Completed":6}
     return (priority.get(row['status'],4),-(row.get('experiment_number') or 0),-row['run_number'])
@@ -4267,9 +4267,14 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                     color = "#fde7e7"
                     detail = run.error or "RADAR-PD submission or analysis failed."
                 elif lifecycle == "Completed":
-                    color = "#dff2e8"
-                    count = len(run.galaxy_result_ids)
-                    detail = f"{count} Galaxy result dataset{'s' if count != 1 else ''} ready"
+                    if run.scientific_summary:
+                        color = "#dff2e8"
+                        count = len(run.galaxy_result_ids)
+                        detail = f"{count} Galaxy result dataset{'s' if count != 1 else ''} ready"
+                    else:
+                        status = "Loading results"
+                        color = "#fff0d4"
+                        detail = "Galaxy analysis finished; retrieving its scientific summary and fit. No new refinement is needed."
                 elif lifecycle == "Submitted":
                     record_status = str(getattr(getattr(record, "status", None), "value", "") or "")
                     if record_status == "running":
@@ -4278,6 +4283,9 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                     elif record_status in {"queued", "uploading", "new"}:
                         status = "Queued"
                         color = "#fff0d4"
+                    elif record_status == "ok":
+                        status = "Loading results"
+                        color = "#fff0d4"
                     else:
                         color = "#fff0d4"
                     stage = str(record.stage or "Waiting for Galaxy") if record is not None else "Waiting for Galaxy"
@@ -4285,6 +4293,9 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                     job_id = run.galaxy_job_id or (record.galaxy_job_id if record is not None else "")
                     measured_progress = (f" · {progress}% stage estimate"
                         if record is not None and stage_progress_is_known(stage, record.status) else "")
+                    if record_status == "ok":
+                        stage = "Galaxy analysis finished; retrieving its scientific summary and fit"
+                        measured_progress = ""
                     detail = f"{stage}{measured_progress}{f' · job {job_id[:8]}' if job_id else ''}"
                 else:
                     if run.scan_metadata.get("setup_error"):

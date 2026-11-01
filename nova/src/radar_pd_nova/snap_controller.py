@@ -346,8 +346,8 @@ class SnapWatchController(PowgenWatchController):
         except (OSError,ValueError,RuntimeError):
             return False
 
-    def _scientific_summary(self,record):
-        summary = super()._scientific_summary(record)
+    def _decorate_scientific_summary(self,record,summary):
+        summary = super()._decorate_scientific_summary(record,summary)
         if summary:
             receipt = record.provenance.get(self.bank_provenance_key) or {}
             summary['scientific_status'] = 'needs_review'

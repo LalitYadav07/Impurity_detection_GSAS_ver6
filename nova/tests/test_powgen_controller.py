@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+from dataclasses import replace
+import threading
 import pytest
 
 from radar_pd_nova.models import AnalysisConfig, AnalysisMode, InputSelection, RunRecord, RunStatus
@@ -12,6 +14,7 @@ from radar_pd_nova.powgen_controller import (
     preflight_powgen_experiment,
 )
 from radar_pd_nova import powgen_controller
+from radar_pd_nova.powgen_watch import WatchedRun
 
 
 @pytest.fixture(autouse=True)
@@ -104,6 +107,173 @@ class FakeGalaxyService:
 
     def collect_results(self, _record):
         raise AssertionError("POWGEN status refresh must not download the result archive")
+
+
+def _metadata_refresh_controller(count):
+    class Service(FakeGalaxyService):
+        def refresh(self, record):
+            record.status = record.analysis_status = RunStatus.OK
+            record.output_dataset_ids = {"summary": "summary-" + record.galaxy_job_id}
+            return record
+
+        def load_json_document(self, dataset_id):
+            return {"status": "complete", "analysis_mode": "full", "final_rwp": 2.5}
+
+    service = Service()
+    controller = PowgenWatchController(service,
+        PowgenExperimentSettings("IPTS-2767", service.history_id, "config-hda", "1.5"))
+    for number in range(63760, 63760 + count):
+        run = WatchedRun(number, f"/input/PG3_{number}.gsa", f"source-{number}")
+        controller.state.discovered[run.run_id] = run
+        controller.state.mark_submitted(run, f"job-{number}")
+        controller.records[run.run_id] = RunRecord(uid=f"job-{number}", galaxy_job_id=f"job-{number}",
+            name=f"IPTS-2767_{run.run_id}", mode=AnalysisMode.FULL, history_id=service.history_id)
+    return controller, service
+
+
+def test_refresh_reads_all_statuses_before_two_parallel_metadata_reads(monkeypatch):
+    controller, service = _metadata_refresh_controller(4)
+    status_ids, read_ids, apply_threads, checkpoints = [], [], [], []
+    gate, two_active = threading.Event(), threading.Event()
+    lock = threading.Lock()
+    active = peak = 0
+    original_refresh = service.refresh
+    original_mark = controller.state.mark_completed
+
+    def refresh(record):
+        status_ids.append(record.galaxy_job_id)
+        return original_refresh(record)
+
+    def read(identifier):
+        nonlocal active, peak
+        with lock:
+            read_ids.append(identifier)
+            active += 1
+            peak = max(peak, active)
+            if active == 2:
+                two_active.set()
+        assert len(status_ids) == 4
+        assert gate.wait(3)
+        with lock:
+            active -= 1
+        return {"status": "complete", "analysis_mode": "full", "final_rwp": 2.5}
+
+    def mark(*args, **kwargs):
+        apply_threads.append(threading.get_ident())
+        return original_mark(*args, **kwargs)
+
+    service.refresh, service.load_json_document = refresh, read
+    monkeypatch.setattr(controller.state, "mark_completed", mark)
+    monkeypatch.setattr(controller, "persist_state", lambda: checkpoints.append(threading.get_ident()))
+    errors = []
+    def run_refresh():
+        try:
+            controller.refresh()
+        except BaseException as exc:
+            errors.append(exc)
+    worker = threading.Thread(target=run_refresh)
+    worker.start()
+    try:
+        assert two_active.wait(3)
+        assert len(status_ids) == 4 and not controller.state.completed
+        assert all(r.status is RunStatus.OK for r in controller.records.values())
+    finally:
+        gate.set()
+        worker.join(3)
+    assert not worker.is_alive() and not errors
+    assert peak == 2 and len(set(read_ids)) == 4
+    assert len(controller.state.completed) == 4
+    assert apply_threads == [worker.ident] * 4
+    assert checkpoints == [worker.ident]
+
+
+def test_metadata_failure_keeps_status_and_does_not_block_other_completion():
+    controller, service = _metadata_refresh_controller(2)
+    attempts = []
+    fail = True
+    def read(identifier):
+        attempts.append(identifier)
+        if fail and identifier.endswith("63760"):
+            raise OSError("summary not readable")
+        return {"status": "complete", "analysis_mode": "full", "final_rwp": 2.5}
+    service.load_json_document = read
+    controller.refresh(checkpoint=False)
+    assert controller.records["PG3_63760"].status is RunStatus.OK
+    assert "PG3_63760" in controller.state.submitted
+    assert "PG3_63761" in controller.state.completed
+    assert "summary not readable" in controller.refresh_errors["PG3_63760"]
+    fail = False
+    controller.refresh(checkpoint=False)
+    assert len(controller.state.completed) == 2 and not controller.refresh_errors
+    assert controller.state.completed["PG3_63760"].galaxy_job_id == "job-63760"
+    assert attempts.count("summary-job-63761") == 1
+
+
+@pytest.mark.parametrize("changed", ["fingerprint", "galaxy_job_id"])
+def test_metadata_result_cannot_overwrite_a_changed_source_or_job(changed):
+    controller, service = _metadata_refresh_controller(1)
+    started, release = threading.Event(), threading.Event()
+    def read(_identifier):
+        started.set()
+        assert release.wait(3)
+        return {"status": "complete", "analysis_mode": "full", "final_rwp": 2.5}
+    service.load_json_document = read
+    worker = threading.Thread(target=lambda: controller.refresh(checkpoint=False))
+    worker.start()
+    try:
+        assert started.wait(3)
+        current = controller.state.submitted["PG3_63760"]
+        controller.state.submitted[current.run_id] = replace(current, **{changed: "changed"})
+    finally:
+        release.set()
+        worker.join(3)
+    assert not worker.is_alive()
+    assert "PG3_63760" not in controller.state.completed
+    assert getattr(controller.state.submitted["PG3_63760"], changed) == "changed"
+    assert "identity changed" in controller.refresh_errors["PG3_63760"]
+
+
+def test_old_missing_summaries_are_bounded_and_fair_even_when_one_fails():
+    controller, service = _metadata_refresh_controller(5)
+    for run_id, run in list(controller.state.submitted.items()):
+        controller.state.mark_completed(run_id, ["summary-" + run.galaxy_job_id], galaxy_job_id=run.galaxy_job_id)
+    reads = []
+    def read(identifier):
+        reads.append(identifier)
+        if identifier.endswith("63760"):
+            raise OSError("persistent unavailable receipt")
+        return {"status": "complete", "analysis_mode": "full", "final_rwp": 2.5}
+    service.load_json_document = read
+    for _ in range(3):
+        before = len(reads)
+        controller.refresh(checkpoint=False)
+        assert len(reads) - before <= 2
+    assert all(run.scientific_summary for key, run in controller.state.completed.items() if key != "PG3_63760")
+    assert not controller.state.failed and not controller.state.submitted
+    assert not controller.state.completed["PG3_63760"].scientific_summary
+
+
+def test_verified_curve_cache_is_reused_and_changed_files_are_rechecked(tmp_path):
+    controller, service = _metadata_refresh_controller(1)
+    run = controller.state.submitted["PG3_63760"]
+    receipt = {"sha256": "a" * 64, "source_gpx_sha256": "b" * 64}
+    controller.state.mark_completed(run.run_id, ["summary"], galaxy_job_id=run.galaxy_job_id,
+                                    scientific_summary={"rwp": 2.5, "pattern_observation": receipt})
+    path = tmp_path / "curve.json"
+    calls = []
+    def cache(value):
+        calls.append(dict(value))
+        path.write_text("verified data")
+        return {**value, "local_path": str(path)}
+    service.cache_pattern_observation = cache
+    controller.refresh(checkpoint=False)
+    controller.refresh(checkpoint=False)
+    assert len(calls) == 1
+    path.write_text("changed file contents")
+    controller.refresh(checkpoint=False)
+    assert len(calls) == 2
+    summary = controller.state.completed[run.run_id].scientific_summary
+    assert summary["rwp"] == 2.5 and summary["pattern_observation"]["sha256"] == "a" * 64
 
 
 def test_background_checkpoint_is_detached_and_stale_snapshots_are_ignored(monkeypatch):
