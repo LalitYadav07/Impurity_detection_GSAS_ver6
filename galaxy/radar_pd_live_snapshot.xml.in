@@ -1,12 +1,12 @@
-<tool id="neutrons_radar_pd_live_snapshot_prototype" name="RADAR-PD Utility: Live Snapshot Analysis" version="0.1.0" profile="22.05">
+<tool id="neutrons_radar_pd_live_snapshot_prototype" name="RADAR-PD Utility: Live Snapshot Analysis" version="0.1.1" profile="22.05">
     <description>analyze one immutable provisional scan against a reviewed nuclear reference</description>
     <requirements><container type="docker">@IMMUTABLE_MODELS_IMAGE@</container></requirements>
     <command detect_errors="exit_code"><![CDATA[
         touch '$result_bundle' '$response_cache_output' '$console_output' &&
         trap "chmod a+r '$result_bundle' '$response_cache_output' '$console_output' >/dev/null 2>&1 || true" EXIT &&
-        python -m gpx_recipe.live.galaxy_worker '$packet' worker '$result_bundle' '$response_cache_output' \
+        python -m gpx_recipe.live.galaxy_worker '$packet' worker '$result_bundle' '$response_cache_output'
         #if $response_cache
-            --cache '$response_cache' \
+            --cache '$response_cache'
         #end if
         > '$console_output' 2>&1
     ]]></command>
