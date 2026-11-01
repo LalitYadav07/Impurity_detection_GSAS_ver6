@@ -2746,9 +2746,11 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
             with html.Div(v_if="!!selected_run_uid && !['experiment','battery'].includes(workspace_view)"):
                 with html.Div(classes="radar-run-context"):
                     with html.Div():
-                        html.Div("CURRENT GALAXY RUN", classes="radar-context-kicker")
+                        html.Div("OPENED RADAR-PD RUN", classes="radar-context-kicker")
                         html.H1("{{ selected_run_name }}", classes="radar-run-title")
                         html.P("{{ viewed_run_mode === 'rapid' ? 'Rapid Hypothesis Mode' : 'Full RADAR-PD' }} / {{ selected_run_stage }}", classes="radar-run-subtitle")
+                        html.P("Refinement has its own experiment and scan selection below.",
+                            v_if="workspace_view === 'refinement'", classes="radar-help-copy")
                     vuetify.VChip(text=("selected_run_status",), color=("selected_run_status === 'Ok' ? '#dff2e8' : selected_run_status === 'Error' ? '#fde7e7' : '#fff0d4'",), variant="flat")
                 with vuetify.VBtnToggle(
                     v_model=("workspace_view",),
