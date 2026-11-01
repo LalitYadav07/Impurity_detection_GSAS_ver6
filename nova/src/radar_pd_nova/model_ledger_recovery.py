@@ -8,7 +8,7 @@ from gpx_recipe.symmetry.compiler import verify_inputs
 from gpx_recipe.symmetry.contracts import digest, iter_trials, validate_protocol
 
 
-def restore_ledger(campaign, snapshot, input_roots):
+def restore_ledger(campaign, snapshot, input_roots, *, progress=None):
     """Validate the entire finite plan, then restore states in one transaction.
 
     The shared compiler still reconstructs every original sealed job. A viewer
@@ -51,7 +51,9 @@ def restore_ledger(campaign, snapshot, input_roots):
     if any(expected.get(row['id'])!=tuple(row[k] for k in ['protocol','candidate','seed']) for row in existing):
         raise ValueError('Interrupted recovery contains a different finite plan')
     campaign.set_setting('restore_in_progress',True)
-    for sha,(protocol,metadata) in protocols.items():
+    for index, (sha,(protocol,metadata)) in enumerate(protocols.items(), 1):
+        if progress:
+            progress(f'Rebuilding approved input {index} of {len(protocols)}; {len(expected):,} declared starts')
         campaign.enroll(protocol,input_roots[sha],approved_hash=sha,metadata=metadata,_restoring=True)
     rebuilt={row['id']:tuple(row[k] for k in ['protocol','candidate','seed']) for row in campaign.trials()}
     if rebuilt!=expected:raise ValueError('Reconstructed ledger omits or changes declared starts')
@@ -63,7 +65,7 @@ def restore_ledger(campaign, snapshot, input_roots):
                        [(key,json.dumps(value,allow_nan=False)) for key,value in snapshot.get('settings',{}).items() if key!='restore_in_progress'])
 
 
-def verify_continuation(campaign):
+def verify_continuation(campaign, *, progress=None):
     """Verify each sealed start; hash shared inputs once per actual location.
 
     Native workers still independently rehash their inputs before/after every
@@ -78,7 +80,9 @@ def verify_continuation(campaign):
         raise ValueError('These trials need explicit transport recovery; no duplicate job was submitted')
     implementation=package_signature();entrypoint=hashlib.sha256(SHARED_ENTRYPOINT.encode()).hexdigest()
     protocols={};witnesses={}
-    for row in pending:
+    if progress:
+        progress(0, len(pending))
+    for index, row in enumerate(pending, 1):
         directory=Path(campaign.trial_directory(row)).resolve()
         job=json.loads(confined(directory,'job.json').read_text())
         if job.get('schema')!='radar-symmetry-job/v2':
@@ -106,8 +110,12 @@ def verify_continuation(campaign):
             verify_inputs(protocol,root)
             if before!=campaign._artifact_stamps(root,paths):raise ValueError('A shared input changed during verification')
             witnesses[key]=(root,paths,before)
+        if progress and index % 256 == 0 and index < len(pending):
+            progress(index, len(pending))
     for root,paths,before in witnesses.values():
         if before!=campaign._artifact_stamps(root,paths):raise ValueError('A shared input changed during verification')
     if package_signature()!=implementation:raise ValueError('The pinned worker changed during verification')
+    if progress:
+        progress(len(pending), len(pending))
     return [row['id'] for row in pending]
 

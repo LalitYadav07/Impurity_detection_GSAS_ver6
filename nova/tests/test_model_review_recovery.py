@@ -26,6 +26,19 @@ def test_selection_while_loading_requests_latest_review_without_pausing_jobs():
     assert event.is_set() and app._symmetry_refresh_pending and not state.sx_results_current
 
 
+def test_recovery_progress_counts_archives_before_reading_and_stops_after_cancellation():
+    event=threading.Event();calls=[];progress=[]
+    native=SimpleNamespace(state={'members':{'one':'batch-a','two':'batch-a','three':'batch-b'}},
+        recover=lambda key,directory:calls.append(key) or {'state':'running'})
+    view=SelectionRecovery(native,event,progress=lambda count:progress.append((count,len(calls))))
+    for key in ['one','two','three']:
+        assert view.recover(key,None)=={'state':'running'}
+    assert progress==[(1,0),(2,2)] and calls==['one','two','three']
+    event.set()
+    with pytest.raises(ReviewSelectionChanged):view.recover('four',None)
+    assert progress==[(1,0),(2,2)]
+
+
 def test_latest_saved_campaign_is_chosen_by_checkpoint_clock_not_random_id(tmp_path):
     older=Campaign(tmp_path/'campaign-ffffffffffff');older.set_setting('checkpoint_updated_utc','2026-10-30T12:00:00')
     newer=Campaign(tmp_path/'campaign-000000000000');newer.set_setting('checkpoint_updated_utc','2026-10-31T12:00:00Z')

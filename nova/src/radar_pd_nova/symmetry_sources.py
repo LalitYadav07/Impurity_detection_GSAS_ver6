@@ -91,12 +91,38 @@ def start_choices(workspace, experiment):
     return entries
 
 
+def _recorded_source(workspace,experiment,source_id):
+    if workspace is None:return None
+    entry=next((e for e in start_choices(workspace,experiment) if e['id']==source_id),None)
+    if not entry:return None
+    return entry.get('source') or recipe_source(workspace,workspace.state['jobs'][entry['job_id']])
+
+
+def acquisition_notices(workspace,experiment,source_id):
+    """Retain recorded source cautions beside original and derived model fits."""
+    source=_recorded_source(workspace,experiment,source_id)
+    if not source:return []
+    metadata=source.get('metadata') or {}
+    documents=[source,metadata]
+    documents.extend(metadata.get(key) or {} for key in
+        ('powgen_setup','nomad_setup','snap_setup','hb2a_setup','nomad_bank_provenance','snap_bank_provenance'))
+    notices=[]
+    for document in documents:
+        if not isinstance(document,dict):continue
+        for key in ('scientific_warnings','warnings','metadata_notices'):
+            values=document.get(key) or []
+            if isinstance(values,(list,tuple)):
+                notices.extend(value.strip() for value in values if isinstance(value,str) and value.strip())
+    for key in ('identity_warning','source_revision_warning'):
+        value=metadata.get(key)
+        if isinstance(value,str) and value.strip():notices.append(value.strip())
+    return list(dict.fromkeys(notices))
+
+
 def acquisition_details(workspace,experiment,source_id):
     """Show the recorded interval summary without loading a GPX or model file."""
-    if workspace is None:return []
-    entry=next((e for e in start_choices(workspace,experiment) if e['id']==source_id),None)
-    if not entry:return []
-    source=entry.get('source') or recipe_source(workspace,workspace.state['jobs'][entry['job_id']])
+    source=_recorded_source(workspace,experiment,source_id)
+    if not source:return []
     metadata=qualified_metadata(source.get('metadata') or {})
     return [dict(label='Measured acquisition condition',value=text)
             for quantity,label in [('temperature','Sample temperature'),('magnetic_field','Magnetic field'),

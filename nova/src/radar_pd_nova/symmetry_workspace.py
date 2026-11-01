@@ -182,7 +182,7 @@ def fit_caption(row):
     if isinstance(rwp,(int,float)) and not isinstance(rwp,bool) and np.isfinite(rwp):
         parts.append(f'Rwp {rwp:.3f}%')
     status=row.get('status')
-    if status:parts.append('qualified fit' if status=='valid' else display_status(status))
+    if status:parts.append('native checks passed' if status=='valid' else display_status(status))
     return ' · '.join(parts)
 
 

@@ -165,6 +165,9 @@ def model_exploration(app):
                 html.P('{{ sx_groups.length }} groups; every model and disposition remains inspectable.',classes='rf-notice')
             with html.Div(classes='rf-card'):
                 html.H3('Selected model fit')
+                with v.VAlert(v_if='sx_source_notices.length',type='warning',variant='tonal',density='compact',classes='my-2'):
+                    html.Strong('Source requires review')
+                    html.Div('{{ notice }}',v_for='notice in sx_source_notices',key='notice')
                 with html.Div(classes='rf-toolbar'):
                     v.VAutocomplete(label='Model / start in selected group',v_model=('sx_selected',),items=('sx_members',),density='compact',variant='outlined',hide_details=True,update_modelValue=app._symmetry_user_selected)
                 with html.Div(classes='rf-toolbar'):
@@ -210,5 +213,6 @@ def model_exploration(app):
         with html.Div(v_if='sx_expanded',classes='rf-overlay'):
             v.VBtn('Close expanded fit',click='sx_expanded = false',variant='text',prepend_icon='mdi-arrow-collapse')
             html.H3('{{ sx_fit_title }}',v_if='sx_fit_title',classes='mt-2 mb-2')
+            html.P('{{ sx_source_notices.join("; ") }}',v_if='sx_source_notices.length',classes='rf-notice')
             with html.Div(style='height:calc(100vh - 260px)'):
                 fig=plotly.Figure(display_mode_bar=True,responsive=True,display_logo=False,scroll_zoom=True,style='height:100%;width:100%');fig.data=('sx_fit.data',);fig.layout=('sx_expanded_layout',)

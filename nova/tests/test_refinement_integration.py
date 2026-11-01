@@ -365,6 +365,11 @@ def test_published_source_prefers_explicit_publication_and_hashes_its_actual_byt
     payload=dict(summary={'observables':{'source_gpx_sha256':file_sha(raw)},'gpx_projects':[project]})
     item=source_from_record(record,payload,dict(instrument='PG3',ipts='IPTS-1',run_number=1,metadata={'sample_id':'0012'}),'history')
     assert item['source_path']==str(pub) and item['source_sha256']==file_sha(pub) and item['sample_key']=='id:0012'
+    payload['summary'].update(scientific_status='needs_review',scientific_warnings=['Calibration requires review'])
+    reviewed=source_from_record(record,payload,dict(scientific_warnings=['Calibration requires review','Source interval unconfirmed']),'history')
+    assert reviewed['id']==item['id'] and reviewed['source_sha256']==item['source_sha256']
+    assert reviewed['scientific_status']=='needs_review'
+    assert reviewed['scientific_warnings']==['Calibration requires review','Source interval unconfirmed']
     pub.write_bytes(b'changed')
     with pytest.raises(ValueError,match='checksum changed'):source_from_record(record,payload,{},'history')
 

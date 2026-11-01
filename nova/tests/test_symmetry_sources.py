@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from radar_pd_nova.refinement_sources import file_sha
-from radar_pd_nova.symmetry_sources import start_choices,resolve_start,acquisition_details,recipe_source
+from radar_pd_nova.symmetry_sources import start_choices,resolve_start,acquisition_details,recipe_source,acquisition_notices
 
 
 def workspace(tmp_path):
@@ -60,6 +60,23 @@ def test_final_and_stage_dataset_references_never_fall_back_to_original(tmp_path
     del w.state['jobs']['job1']['result']['stage_dataset_ids']
     selected=resolve_start(w,'IPTS-1',stage['id'])
     assert 'dataset_id' not in selected
+
+
+def test_source_notices_follow_the_exact_original_and_recipe_checkpoint_without_gpx_reads(tmp_path):
+    w=workspace(tmp_path);source=w.state['sources']['raw']
+    source['scientific_warnings']=['Supplied profile needs scientific review']
+    source['metadata']={'nomad_setup':{'warnings':['Calibration provenance unconfirmed']},
+        'metadata_notices':['Calibration provenance unconfirmed'], 'identity_warning':'Review specimen identity'}
+    w.state['jobs']['job1']['source']=copy.deepcopy(source)
+    derived=next(e for e in start_choices(w,'IPTS-1') if e.get('stage')=='final')
+    w.state['jobs']['job1']['result']['directory']=str(tmp_path/'not-recovered')
+    def forbidden(*args):raise AssertionError('Source notices must not load or recover a GPX')
+    w.recover_job_artifacts=forbidden
+    for uid in ['raw',derived['id']]:
+        assert acquisition_notices(w,'IPTS-1',uid)==[
+            'Supplied profile needs scientific review','Calibration provenance unconfirmed','Review specimen identity']
+    assert acquisition_notices(w,'other-experiment',derived['id'])==[]
+    assert acquisition_notices(w,'IPTS-1','missing')==[]
 
 
 @pytest.mark.parametrize('state',['running','failed','interrupted'])

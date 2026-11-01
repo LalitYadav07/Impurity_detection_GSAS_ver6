@@ -31,7 +31,9 @@ def test_bulk_restore_matches_the_original_finite_ledger_and_sealed_jobs(saved,t
     original=Campaign(tmp_path/'old-reader',shared_inputs=True);original.restore(snapshot,inputs)
     recovered=Campaign(tmp_path/'new-reader',shared_inputs=True)
     monkeypatch.setattr(recovered,'set_state',lambda *a,**k:pytest.fail('Must not sync-commit once per start'))
-    restore_ledger(recovered,snapshot,inputs)
+    progress=[]
+    restore_ledger(recovered,snapshot,inputs,progress=progress.append)
+    assert progress==['Rebuilding approved input 1 of 1; 3 declared starts']
     expected=original.snapshot();actual=recovered.snapshot();actual['settings'].pop('restore_in_progress')
     assert actual==expected
     for row in recovered.trials():
@@ -96,7 +98,9 @@ def test_continuation_matches_core_and_rehashes_shared_inputs_once(saved,tmp_pat
     expected=campaign.verify_sealed_continuation();calls=[];verify=module.verify_inputs
     def counted(protocol,root):calls.append((digest(protocol),str(root)));return verify(protocol,root)
     monkeypatch.setattr(module,'verify_inputs',counted)
-    assert verify_continuation(campaign)==expected and len(calls)==1
+    progress=[]
+    assert verify_continuation(campaign,progress=lambda done,total:progress.append((done,total)))==expected and len(calls)==1
+    assert progress==[(0,3),(3,3)]
     assert campaign.setting('paused') is True
 
 

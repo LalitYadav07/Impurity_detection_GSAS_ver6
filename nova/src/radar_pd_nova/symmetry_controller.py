@@ -30,12 +30,12 @@ from gpx_recipe.symmetry.plans import build_plan
 from gpx_recipe.symmetry.contracts import iter_trials
 from .symmetry_workspace import campaign_rows,group_models,display_groups,view_for,choose_group,choose_member,disposition_reason,coverage_rows,scope_rows,parameter_rows,moment_precision_note,campaign_can_resume,display_status,embedding_evidence,fit_caption,fit_diagnostics
 from . import symmetry_plots as plots
-from .symmetry_sources import start_choices,resolve_start,acquisition_details
+from .symmetry_sources import start_choices,resolve_start,acquisition_details,acquisition_notices
 from .k_search_controller import KSearchMixin
 from .model_runtime import GalaxyModelRuntime,GalaxyChunkTransport,CollectOnlyTransport,PreparationSlotTransport,active_batch_count,MODEL_BATCH_LIMITS
 from .checkpoint_uploads import CheckpointUploadPending, CheckpointUploadInterrupted
 from .model_review_recovery import SelectionRecovery, ReviewSelectionChanged, campaign_recency
-from .model_campaigns import choices as model_choices,origin as model_origin,queue_sources,enroll_source,restore_history,portable_source,restore_captured_sources,scope_progress,next_acquisition,prioritize_acquisition
+from .model_campaigns import choices as model_choices,origin as model_origin,queue_sources,enroll_source,restore_history,portable_source,restore_captured_sources,scope_progress,next_acquisition,prioritize_acquisition,acquisition_rows
 from gpx_recipe.symmetry.compiler import prepare_shared_inputs
 from gpx_recipe.symmetry.templates import make_template,trial_count
 
@@ -52,7 +52,7 @@ class SymmetryMixin(KSearchMixin):
         self._symmetry_rows=[];self._symmetry_all_rows=[];self._symmetry_groups=[];self._symmetry_draft=None;self._symmetry_approved='';self._symmetry_task=None;self._symmetry_loading=False;self._symmetry_refresh_pending=False;self._symmetry_explicit_selection=False;self._symmetry_display_identity=None;self._symmetry_loading_identity=None
         s=self.server.state
         defaults=dict(sx_campaign='',sx_campaigns=[],sx_source='',sx_source_options=[],sx_busy=False,sx_error='',sx_message='',sx_progress='',sx_groups=[],sx_group='',sx_members=[],sx_selected='',sx_search='',sx_status='all',
-            sx_overview=plots.empty('Open a campaign to inspect its coverage'),sx_fit=plots.empty('Select an audited checkpoint'),sx_fit_title='',sx_axis='d',sx_reset=0,sx_pins=[],sx_pin_options=[],sx_parameters=[],sx_details=[],sx_fit_diagnostics=[],sx_moment_note='',sx_embedding_evidence=[],sx_embedding_summary='',sx_gsas_model='',sx_intensity_scale='linear',
+            sx_overview=plots.empty('Open a campaign to inspect its coverage'),sx_fit=plots.empty('Select an audited checkpoint'),sx_fit_title='',sx_source_notices=[],sx_axis='d',sx_reset=0,sx_pins=[],sx_pin_options=[],sx_parameters=[],sx_details=[],sx_fit_diagnostics=[],sx_moment_note='',sx_embedding_evidence=[],sx_embedding_summary='',sx_gsas_model='',sx_intensity_scale='linear',
             sx_parent='',sx_parents=[],sx_histogram='',sx_histograms=[],sx_k='',sx_sites=[],sx_site_options=[],sx_form_factors='',sx_lande='',sx_directions=['x','y','z'],sx_adequate=None,sx_max_moment='',sx_cycles=20,sx_slots=2,sx_moment_model='collinear',sx_refine_scale=False,sx_refine_background=False,
             sx_kind='magnetic',sx_mag_d_min=0.,sx_max_mode=.5,sx_start_mode=.1,sx_candidate_options=[],sx_candidates=[],sx_mode_options=[],sx_modes=[],sx_discovered=False,sx_discovery_scope='',
             sx_plan_ready=False,sx_approved=False,sx_plan_summary='',sx_plan_candidates=[],sx_setup=False,sx_expanded=False,sx_expanded_layout={},sx_has_context=False,sx_has_gpx=False,sx_has_receipt=False,sx_resumable=False,
@@ -280,14 +280,22 @@ class SymmetryMixin(KSearchMixin):
                     if not coordinating:
                         self._symmetry_loading_identity=(s.sx_campaign,s.rf_experiment,s.sx_result_scope)
                         self._symmetry_review_cancel=threading.Event()
-                        recovery=SelectionRecovery(self._symmetry_transport(campaign),self._symmetry_review_cancel)
+                        cancelled=self._symmetry_review_cancel
+                        identity=self._symmetry_loading_identity
+                        loop=asyncio.get_running_loop()
+                        def publish_result_progress(count, request_identity=identity, request_cancelled=cancelled):
+                            if not request_cancelled.is_set() and request_identity==(s.sx_campaign,s.rf_experiment,s.sx_result_scope):
+                                s.sx_message=f'Verifying saved native result group {count}. No new refinements are being submitted.'
+                                s.flush()
+                        def result_progress(count):loop.call_soon_threadsafe(publish_result_progress,count)
+                        recovery=SelectionRecovery(self._symmetry_transport(campaign),cancelled,progress=result_progress)
                         await asyncio.to_thread(campaign.recover,recovery)
                 allocated=campaign.setting('allocation')
                 if allocated:backend+=f" · last chunk: {allocated['workers']} native workers · {allocated.get('memory_mb') or 'unreported'} MiB memory"
                 s.sx_backend=backend
                 template=campaign.setting('template') or {}
                 visible=s.sx_result_scope!='experiment' or template.get('scope',{}).get('experiment')==s.rf_experiment
-                s.sx_enrollments=list(campaign.setting('enrollments',{}).values()) if visible else []
+                s.sx_enrollments=acquisition_rows(template,campaign.setting('enrollments',{})) if visible else []
                 s.sx_priority_options=[dict(title=entry['scan'],value=entry['id']) for entry in s.sx_enrollments if entry['status']=='queued']
                 eligible_priorities={option['value'] for option in s.sx_priority_options}
                 if getattr(s,'sx_priority_acquisition','') not in eligible_priorities:s.sx_priority_acquisition=''
@@ -321,6 +329,8 @@ class SymmetryMixin(KSearchMixin):
                 options={r['source']:(' · '.join(str(v) for v in [r['metadata'].get('scan') or r['parent'],
                     (f"{r['metadata']['condition']:g} {r['metadata'].get('condition_unit','')}" if isinstance(r['metadata'].get('condition'),(int,float)) else None),
                     ('bank '+str(r['metadata']['bank']) if r['metadata'].get('bank') else None)] if v)) for r in rows}
+                source_order={entry['id']:index for index,entry in enumerate(s.sx_enrollments)}
+                options=dict(sorted(options.items(),key=lambda item:source_order.get(item[0],len(source_order))))
                 selected=s.sx_source if s.sx_source in options else next(iter(options),'')
                 # Prepare a new view without mutating the displayed snapshot.
                 # The user may inspect its verified scans while this audit waits
@@ -394,6 +404,7 @@ class SymmetryMixin(KSearchMixin):
     def _symmetry_plot_changed(self,**_):
         s=self.server.state;row=next((r for r in self._symmetry_rows if r['id']==s.sx_selected),None)
         s.sx_fit_title=fit_caption(row)
+        s.sx_source_notices=[]
         if len(s.sx_pins)>2:s.sx_pins=s.sx_pins[-2:]
         pins=[r for r in self._symmetry_rows if r['id'] in s.sx_pins]
         try:
@@ -405,6 +416,7 @@ class SymmetryMixin(KSearchMixin):
             s.sx_embedding_evidence,s.sx_embedding_summary=embedding_evidence(self._symmetry_rows,row)
             s.sx_has_receipt=bool(row and row.get('receipt_sha256'))
             if row:
+                s.sx_source_notices=acquisition_notices(self._refinement_store(),s.rf_experiment,row['source'])
                 reason=disposition_reason(row)
                 s.sx_details=[dict(label='Status',value=display_status(row['status'])),dict(label='Reason',value=reason),
                     dict(label='Candidate',value=row['name']+(' · BNS '+row['bns'] if row['bns'] else '')),dict(label='Embedding',value=json.dumps(row['embedding'])),dict(label='Start',value=row['seed']),
@@ -881,7 +893,14 @@ class SymmetryMixin(KSearchMixin):
                 pending=any(r['state'] not in {'terminal','cancelled'} for r in campaign.trials())
                 if pending:
                     from .model_ledger_recovery import verify_continuation
-                    await asyncio.to_thread(verify_continuation,campaign)
+                    loop=asyncio.get_running_loop()
+                    identity=(s.sx_campaign,s.rf_experiment)
+                    def publish_verification(done,total, request_identity=identity):
+                        if request_identity==(s.sx_campaign,s.rf_experiment):
+                            s.sx_message=f'Verifying sealed starts: {done:,} of {total:,}. No new refinements are being submitted.'
+                            s.flush()
+                    def verification_progress(done,total):loop.call_soon_threadsafe(publish_verification,done,total)
+                    await asyncio.to_thread(verify_continuation,campaign,progress=verification_progress)
                 template=campaign.setting('template')
                 if template and template['protocol']['implementation_sha256']!=package_signature():
                     raise ValueError('Use the original worker release to continue this template, or review a new campaign. Saved results remain viewable.')

@@ -4904,6 +4904,8 @@ class RadarPdNovaApp(LiveAssistantMixin, LiveSetupMixin, SetupEditorMixin, PostA
         self._sync_powgen_dashboard_provenance()
         state.powgen_preflight_ready = False
         state.powgen_preflight_status = "idle"
+        state.powgen_preflight_details = []
+        state.powgen_preflight_checked = "Not checked"
         state.powgen_metadata_resolution = []
         state.powgen_metadata_notices = []
         state.powgen_preflight_message = "Check experiment and inputs after changing the scan, sample, wavelength or bank selection."

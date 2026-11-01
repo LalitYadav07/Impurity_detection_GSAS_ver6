@@ -2,6 +2,7 @@ import asyncio
 import threading
 from pathlib import Path
 from types import SimpleNamespace
+import pytest
 
 from radar_pd_nova.app import RadarPdNovaApp
 from radar_pd_nova.galaxy_service import GSASII_INTERACTIVE_TOOL_ID
@@ -19,10 +20,14 @@ from radar_pd_nova.models import (
 def test_powgen_sample_selection_invalidates_preflight_and_is_exact():
     app = RadarPdNovaApp.__new__(RadarPdNovaApp)
     state = _State(powgen_preflight_ready=True, powgen_processing_scope="selected",
-                   powgen_processing_sample_ids=["00123", "B", "00123"])
+                   powgen_processing_sample_ids=["00123", "B", "00123"],
+                   powgen_preflight_details=[{"label":"Bank analyses","value":"53"}],
+                   powgen_preflight_checked="Old successful check")
     app.server = SimpleNamespace(state=state)
     app._powgen_processing_changed()
     assert state.powgen_preflight_ready is False
+    assert state.powgen_preflight_details == []
+    assert state.powgen_preflight_checked == "Not checked"
     assert app._powgen_processing_ids() == ("00123", "B")
     state.powgen_processing_scope = "all"
     assert app._powgen_processing_ids() is None
@@ -1924,7 +1929,13 @@ def test_selected_value_normalizes_serialized_option_payloads() -> None:
     assert RadarPdNovaApp._selected_value('[{"title": "IPTS-1", "value": "IPTS-1"}]') == "IPTS-1"
 
 
-def test_powgen_preflight_runs_off_thread_and_discards_changed_selection(monkeypatch):
+@pytest.mark.parametrize('field,value',[
+    ('powgen_wavelength','0.8'),
+    ('powgen_include_ramps',True),
+    ('powgen_include_background',True),
+    ('powgen_processing_sample_ids',['different-sample']),
+])
+def test_powgen_preflight_runs_off_thread_and_discards_changed_selection(monkeypatch,field,value):
     app = RadarPdNovaApp.__new__(RadarPdNovaApp)
     state = _State(powgen_ipts="IPTS-2767", powgen_configuration_dataset_id="config-hda",
                    powgen_backfill_mode="all", powgen_instrument_source="automatic",
@@ -1944,7 +1955,7 @@ def test_powgen_preflight_runs_off_thread_and_discards_changed_selection(monkeyp
         assert await asyncio.to_thread(started.wait, 5)
         assert state.powgen_preflight_status == "checking"
         assert await app.check_powgen_experiment() is False
-        state.powgen_wavelength = "0.8"
+        setattr(state,field,value)
         release.set()
         assert await task is False
         assert state.powgen_preflight_ready is False

@@ -218,6 +218,11 @@ def source_from_record(record, payload: dict, scan: dict | None, history: str,
     uid = digest([history, job_identity, project.get('sha256'), project.get('published_sha256'), publication])[:24]
     scan_label=str(scan.get('scan_label') or record.name)
     if bank and 'bank' not in scan_label.lower():scan_label+=' · bank '+bank
+    warnings=[]
+    for document in (result,scan):
+        values=document.get('scientific_warnings') or []
+        if isinstance(values,(list,tuple)):
+            warnings.extend(value.strip() for value in values if isinstance(value,str) and value.strip())
     return dict(id=uid, experiment=exp, experiment_label=(f'{instrument} · {ipts}' if ipts else record.name),
                 scan_key=scan_key, record_uid=record.uid, galaxy_job_id=job_identity, run_id=run_id,
                 run_number=run_number, bank=bank, sample_key=sample_key,
@@ -227,4 +232,6 @@ def source_from_record(record, payload: dict, scan: dict | None, history: str,
                 internal_source_sha256=project.get('sha256'), collection_id=collection,
                 collection_name=publication, published_sha256=project.get('published_sha256'),
                 base_rwp=scan.get('rwp', result.get('final_rwp', result.get('rwp'))),
+                scientific_status=scan.get('scientific_status') or result.get('scientific_status'),
+                scientific_warnings=list(dict.fromkeys(warnings)),
                 project=project)

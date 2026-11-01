@@ -13,12 +13,21 @@ class SelectionRecovery:
     Deliberately exposes no dispatch/cancel methods. The campaign driver keeps
     its independent transport and is unaffected by changing a review selector.
     """
-    def __init__(self, transport, cancelled):
+    def __init__(self, transport, cancelled, *, progress=None):
         self.transport, self.cancelled = transport, cancelled
+        self.progress, self._seen = progress, set()
 
     def recover(self, key, directory):
         if self.cancelled.is_set():
             raise ReviewSelectionChanged()
+        # One native result archive can contain many starts. Count result
+        # groups rather than suggesting that this is the number of fits read.
+        state = getattr(self.transport, 'state', {})
+        group = state.get('members', {}).get(key, key)
+        if group not in self._seen:
+            self._seen.add(group)
+            if self.progress:
+                self.progress(len(self._seen))
         return self.transport.recover(key, directory)
 
 

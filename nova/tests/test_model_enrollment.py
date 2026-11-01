@@ -58,6 +58,30 @@ def test_priority_reorders_only_captured_queued_acquisitions_without_changing_th
     assert module.next_acquisition(c,entries) is None
 
 
+def test_checkpoint_dictionary_order_does_not_change_the_reviewed_acquisition_order(tmp_path):
+    import json
+    c=Campaign(tmp_path/'ordered')
+    template={'existing_ids':['z-first','m-second','a-third']}
+    c.set_setting('template',template)
+    entries={key:dict(id=key,status='queued',source={'run_number':run},bank='2',scan=str(run))
+             for key,run in [('a-third',30),('m-second',20),('z-first',10)]}
+    restored=json.loads(json.dumps(entries,sort_keys=True))
+    assert list(restored)==['a-third','m-second','z-first']
+    assert [e['id'] for e in module.acquisition_rows(template,restored)]==template['existing_ids']
+    assert module.next_acquisition(c,restored)['id']=='z-first'
+    c.set_setting('priority_acquisition','a-third')
+    assert module.next_acquisition(c,restored)['id']=='a-third'
+    restored['m-second']['status']='preparing'
+    assert module.next_acquisition(c,restored)['id']=='m-second'
+    assert not c.trials() and c.setting('template')==template
+
+
+def test_future_acquisitions_have_numeric_run_and_bank_order_with_safe_missing_metadata():
+    entries={key:dict(id=key,scan=key,bank=bank,source={'run_number':run})
+             for key,run,bank in [('ten',10,2),('two-b10',2,10),('unknown',None,None),('two-b2',2,2)]}
+    assert [e['id'] for e in module.acquisition_rows({},entries)]==['two-b2','two-b10','ten','unknown']
+
+
 @pytest.mark.parametrize('key',['unselected','wrong-bank','wrong-experiment','other-recipe','missing',None])
 def test_priority_cannot_add_an_uncaptured_or_out_of_scope_acquisition(tmp_path,monkeypatch,key):
     c,_=setup(tmp_path,monkeypatch)

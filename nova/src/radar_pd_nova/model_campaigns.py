@@ -147,6 +147,20 @@ def prioritize_acquisition(campaign, key):
     return entry
 
 
+def acquisition_rows(template, entries):
+    """Keep the reviewed cohort order across sorted-JSON checkpoint recovery."""
+    captured = {key: index for index, key in enumerate(template.get('existing_ids', []))}
+    def order(entry):
+        source = entry.get('source') or {}
+        run = source.get('run_number')
+        number = int(str(run)) if str(run).isdecimal() else float('inf')
+        bank = entry.get('bank')
+        bank_number = int(str(bank)) if str(bank).isdecimal() else float('inf')
+        return (captured.get(entry['id'], len(captured)), number, bank_number,
+                str(entry.get('scan') or ''), entry['id'])
+    return sorted(entries.values(), key=order)
+
+
 def next_acquisition(campaign, entries):
     """Finish acknowledged preparation before honoring a queued priority scan."""
     preparing = next((entry for entry in entries.values() if entry['status'] == 'preparing'), None)
@@ -156,7 +170,8 @@ def next_acquisition(campaign, entries):
     preferred = entries.get(priority) if isinstance(priority, str) else None
     if preferred and preferred['status'] == 'queued':
         return preferred
-    return next((entry for entry in entries.values() if entry['status'] == 'queued'), None)
+    return next((entry for entry in acquisition_rows(campaign.setting('template') or {}, entries)
+                 if entry['status'] == 'queued'), None)
 
 
 def enroll_source(campaign,workspace,key,inspect,*,transport=None):
@@ -300,7 +315,8 @@ def restore_history(root,runtime,*,experiment=None,progress=None):
             if digest(template['protocol']) not in inputs:raise ValueError('The reviewed reference inputs are absent from the checkpoint')
             if progress:progress(f'Rebuilding {len(document["ledger"]["trials"]):,} saved starts for {identifier}. No new refinements are being submitted.')
             from .model_ledger_recovery import restore_ledger
-            restore_ledger(campaign,document['ledger'],inputs)
+            restore_ledger(campaign,document['ledger'],inputs,
+                progress=(lambda message: progress(f'{identifier}: {message}. No new refinements are being submitted.')) if progress else None)
             campaign.set_setting('reference_input_root',str(inputs[digest(template['protocol'])]))
             # Local paths in an external checkpoint never select files on this machine.
             for source in transport['sources'].values():source.pop('source_path',None);source.pop('context',None)
