@@ -935,6 +935,7 @@ class UnetTransitionMixin:
             signatures.append((inference_row, stamp))
             fit_signatures.append((row.get("run_id"), row.get("unet_transition_fit_root"),
                                    row.get("fit_payload"), fit_packet,
+                                   row.get("pattern_path"), row.get("pattern_observation"),
                                    _fit_output_stamp(row)))
         signature = digest([scope, signatures, order, descending, gap])
         fit_signature = digest(fit_signatures)

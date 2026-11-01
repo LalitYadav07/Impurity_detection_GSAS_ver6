@@ -5699,7 +5699,12 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
 
     async def _refresh_powgen_jobs(self, controller, warnings) -> None:
         """Publish job progress before any slow recovery-checkpoint upload."""
-        if not controller.state.submitted:
+        # A restored watch may contain only completed runs. Its immutable
+        # observation receipts still need to be cached in this container before
+        # the fit/transition views can use them; the old local paths are not
+        # portable. refresh() validates existing cache files and fetches only
+        # missing small observations, never full result archives.
+        if not (controller.state.submitted or controller.state.completed):
             return
         try:
             refreshed = await asyncio.to_thread(controller.refresh, checkpoint=False)
