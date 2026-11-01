@@ -908,8 +908,19 @@ class RefinementMixin(GuidedRefinementMixin):
     async def _refinement_pump(self):
         w=self._refinement_workspace;s=self.server.state
         if not w:return
-        lanes=[];last_progress=None
+        lanes=[];last_progress=None;deferred_completion=False
         def current():return self._refinement_workspace is w
+        def checkpoint_completion():
+            nonlocal deferred_completion
+            with w.lock:
+                next_claim=(getattr(getattr(w,'runtime',None),'kind',None)=='galaxy' and
+                    any(j['status'] in {'queued','recovering'} for j in w.state['jobs'].values()))
+            if next_claim:
+                # run_next's mandatory claim checkpoint contains this completed
+                # receipt too. Do not serialize a redundant full upload first.
+                deferred_completion=True
+            else:
+                deferred_completion=False;self._refinement_checkpoint()
         def sync_progress(*,force=False):
             nonlocal last_progress
             if not current() or not w.lock.acquire(blocking=force):return
@@ -943,7 +954,7 @@ class RefinementMixin(GuidedRefinementMixin):
                         await asyncio.gather(task,return_exceptions=True)
                     if not current():return
                     if job is None:return
-                    sync_progress(force=True);self._refinement_checkpoint()
+                    sync_progress(force=True);checkpoint_completion()
                     if getattr(self,'_battery_portfolio_token',None):
                         try:self._battery_portfolio_sync()
                         except Exception as exc:s.battery_error=str(exc)
@@ -957,17 +968,26 @@ class RefinementMixin(GuidedRefinementMixin):
             for task in lanes:
                 if not task.done():task.cancel()
             await asyncio.gather(*lanes,return_exceptions=True)
-            if current():s.rf_queue_running=False;s.flush()
+            if current():
+                if deferred_completion:self._refinement_checkpoint()
+                s.rf_queue_running=False;s.flush()
 
     def _refinement_checkpoint(self):
+        w=self._refinement_workspace
+        if w is None:return
+        owner=getattr(self,'_refinement_checkpoint_workspace',None)
         self._refinement_checkpoint_dirty=True
-        if self._refinement_checkpoint_task and not self._refinement_checkpoint_task.done():return
+        if self._refinement_checkpoint_task and not self._refinement_checkpoint_task.done() and owner is w:return
+        self._refinement_checkpoint_workspace=w
         async def work():
             try:
-                while self._refinement_checkpoint_dirty:
+                while (self._refinement_checkpoint_dirty and self._refinement_workspace is w
+                       and self._refinement_checkpoint_workspace is w):
                     self._refinement_checkpoint_dirty=False
-                    await asyncio.to_thread(self._refinement_workspace.checkpoint)
-            except Exception as exc:self.server.state.rf_error='The local receipt is saved, but Galaxy session backup failed: '+str(exc);self.server.state.flush()
+                    await asyncio.to_thread(w.checkpoint)
+            except Exception as exc:
+                if self._refinement_workspace is w and self._refinement_checkpoint_workspace is w:
+                    self.server.state.rf_error='The local receipt is saved, but Galaxy session backup failed: '+str(exc);self.server.state.flush()
         self._refinement_checkpoint_task=self._refinement_schedule(work(),'radar-refinement-checkpoint')
 
     def pause_refinement_queue(self,**_):
