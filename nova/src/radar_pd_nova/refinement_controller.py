@@ -22,6 +22,9 @@ from .results import experiment_axis_options
 from .guided_refinement_controller import GuidedRefinementMixin
 
 
+REFINEMENT_PROGRESS_SECONDS = 1.0
+
+
 def figure_json(figure):
     return json.loads(figure.to_json())
 
@@ -648,24 +651,56 @@ class RefinementMixin(GuidedRefinementMixin):
     async def _refinement_pump(self):
         w=self._refinement_workspace;s=self.server.state
         if not w:return
+        lanes=[];last_progress=None
+        def current():return self._refinement_workspace is w
+        def sync_progress(*,force=False):
+            nonlocal last_progress
+            if not current() or not w.lock.acquire(blocking=force):return
+            try:
+                if not current():return
+                # Poll only queue metadata. Refresh forms on a real change;
+                # result files and plots are loaded once when a job finishes.
+                progress=(s.rf_experiment,tuple((j['id'],j['status'],j.get('message'),j.get('attempts'))
+                    for j in w.state['jobs'].values() if j['source']['experiment']==s.rf_experiment))
+                if progress!=last_progress:
+                    self._refinement_sync();last_progress=progress
+            finally:w.lock.release()
         s.rf_queue_running=True;s.flush()
         try:
             async def lane():
-                while True:
-                    task=asyncio.create_task(asyncio.to_thread(w.run_next))
-                    await asyncio.sleep(0)
-                    self._refinement_sync()
-                    job=await task
+                while current():
+                    task=asyncio.create_task(asyncio.to_thread(w.run_next),name='radar-refinement-worker')
+                    try:
+                        while not task.done():
+                            # wait() leaves the scientific worker running on a
+                            # timeout; wait_for() would cancel its async owner.
+                            await asyncio.wait({task},timeout=REFINEMENT_PROGRESS_SECONDS)
+                            if not current():return
+                            if not task.done():sync_progress()
+                        job=await task
+                    finally:
+                        # A native thread may still finish its durable dispatch,
+                        # but no detached async task may update a cleared view
+                        # or claim another queued scan after cancellation.
+                        if not task.done():task.cancel()
+                        await asyncio.gather(task,return_exceptions=True)
+                    if not current():return
                     if job is None:return
-                    self._refinement_sync();self._refinement_checkpoint()
+                    sync_progress(force=True);self._refinement_checkpoint()
                     if getattr(self,'_battery_portfolio_token',None):
                         try:self._battery_portfolio_sync()
                         except Exception as exc:s.battery_error=str(exc)
                     if job['source']['experiment']==s.rf_experiment and (s.rf_follow or not s.rf_selected_job or s.rf_selected_job==job['id']):
                         await self._select_refinement_job(job['id'])
-            await asyncio.gather(*(lane() for _ in range(getattr(w,'parallel_jobs',1))))
-        except Exception as exc:s.rf_error=str(exc)
-        finally:s.rf_queue_running=False;s.flush()
+            lanes=[asyncio.create_task(lane(),name='radar-refinement-lane') for _ in range(getattr(w,'parallel_jobs',1))]
+            await asyncio.gather(*lanes)
+        except Exception as exc:
+            if current():s.rf_error=str(exc)
+        finally:
+            for task in lanes:
+                if not task.done():task.cancel()
+            await asyncio.gather(*lanes,return_exceptions=True)
+            if current():s.rf_queue_running=False;s.flush()
 
     def _refinement_checkpoint(self):
         self._refinement_checkpoint_dirty=True

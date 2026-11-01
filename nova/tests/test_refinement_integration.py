@@ -972,6 +972,7 @@ def test_reused_result_heading_identifies_each_actual_recipe():
     ('current',True,'other',[]),
 ])
 def test_running_scan_details_refresh_on_completion_without_following_other_scans(selected,follow,experiment,expected):
+    import threading
     class State(SimpleNamespace):
         def flush(self):pass
     completed=dict(id='current',source=dict(experiment='exp'),status='completed')
@@ -980,11 +981,116 @@ def test_running_scan_details_refresh_on_completion_without_following_other_scan
         def _refinement_sync(self):pass
         def _refinement_checkpoint(self):pass
         async def _select_refinement_job(self,uid):seen.append(uid)
-    app=App();app._refinement_workspace=SimpleNamespace(run_next=lambda:next(queue))
+    app=App();app._refinement_workspace=SimpleNamespace(run_next=lambda:next(queue),
+        lock=threading.RLock(),state={'jobs':{'current':completed}})
     app.server=SimpleNamespace(state=State(rf_experiment=experiment,rf_follow=follow,rf_selected_job=selected,rf_error=''))
     asyncio.run(app._refinement_pump())
     assert seen==expected
     assert not app.server.state.rf_queue_running and not app.server.state.rf_error
+
+
+def test_refinement_pump_publishes_running_before_a_slow_worker_finishes(tmp_path,monkeypatch):
+    import threading
+    from radar_pd_nova import refinement_controller as module
+    monkeypatch.setattr(module,'REFINEMENT_PROGRESS_SECONDS',.01)
+    w,rt=create(tmp_path);w.observe([source('1')]);recipe=approved(w,RefinementScope('exp'))
+    w.start(recipe['id'],recipe['selection_token'])
+    claiming=threading.Event();claim=threading.Event();entered=threading.Event();release=threading.Event()
+    original_next=w.run_next;original_call=rt.call;first=True
+    def delayed_claim():
+        nonlocal first
+        if first:
+            first=False;claiming.set();assert claim.wait(5)
+        return original_next()
+    def call(action,*args,**kwargs):
+        if action=='run':entered.set();assert release.wait(5)
+        return original_call(action,*args,**kwargs)
+    w.run_next=delayed_claim;rt.call=call
+    snapshots=[];selected=[];checkpoints=[]
+    async def scenario():
+        running=asyncio.Event()
+        class App(RefinementMixin):
+            def _refinement_sync(self):
+                rows=tuple(j['status'] for j in w.state['jobs'].values())
+                snapshots.append(rows)
+                if 'running' in rows:running.set()
+            def _refinement_checkpoint(self):checkpoints.append(True)
+            async def _select_refinement_job(self,uid):selected.append(uid)
+        app=App();app._refinement_workspace=w
+        app.server=SimpleNamespace(state=SimpleNamespace(rf_experiment='exp',rf_follow=True,
+            rf_selected_job='',rf_error='',flush=lambda:None))
+        app._refinement_sync()
+        pump=asyncio.create_task(app._refinement_pump())
+        try:
+            assert await asyncio.to_thread(claiming.wait,5)
+            claim.set();assert await asyncio.to_thread(entered.wait,5)
+            await asyncio.wait_for(running.wait(),1)
+            assert not release.is_set() and not pump.done()
+            assert app.server.state.rf_queue_running and selected==[]
+            count=len(snapshots);await asyncio.sleep(.05)
+            assert len(snapshots)==count  # Unchanged polls do not rerender forms or results.
+            release.set();await asyncio.wait_for(pump,2)
+            assert snapshots[0]==('queued',) and snapshots[-1]==('completed',)
+            assert snapshots.count(('completed',))==1
+            assert len(selected)==1 and len(checkpoints)==1
+            assert not app.server.state.rf_queue_running and not app.server.state.rf_error
+        finally:
+            claim.set();release.set()
+            if not pump.done():pump.cancel()
+            await asyncio.gather(pump,return_exceptions=True)
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('replace_workspace',[False,True])
+def test_cancelled_refinement_pump_drains_async_tasks_and_leaves_no_stale_view_updates(tmp_path,monkeypatch,replace_workspace):
+    import threading
+    from radar_pd_nova import refinement_controller as module
+    monkeypatch.setattr(module,'REFINEMENT_PROGRESS_SECONDS',.01)
+    w,rt=create(tmp_path);w.observe([source('1'),source('2')]);recipe=approved(w,RefinementScope('exp'))
+    w.start(recipe['id'],recipe['selection_token'])
+    entered=threading.Event();release=threading.Event();finished=threading.Event()
+    original_call=rt.call;original_next=w.run_next
+    def call(action,*args,**kwargs):
+        if action=='run':entered.set();assert release.wait(5)
+        return original_call(action,*args,**kwargs)
+    def run_next():
+        try:return original_next()
+        finally:finished.set()
+    rt.call=call;w.run_next=run_next
+    snapshots=[];selected=[]
+    async def scenario():
+        running=asyncio.Event()
+        class App(RefinementMixin):
+            def _refinement_sync(self):
+                snapshots.append(tuple(j['status'] for j in w.state['jobs'].values()))
+                running.set()
+            def _refinement_checkpoint(self):raise AssertionError('Cancelled pump published a checkpoint')
+            async def _select_refinement_job(self,uid):selected.append(uid)
+        app=App();app._refinement_workspace=w
+        state=SimpleNamespace(rf_experiment='exp',rf_follow=True,rf_selected_job='',rf_error='',flush=lambda:None)
+        app.server=SimpleNamespace(state=state)
+        pump=asyncio.create_task(app._refinement_pump())
+        try:
+            assert await asyncio.to_thread(entered.wait,5)
+            await asyncio.wait_for(running.wait(),1)
+            if replace_workspace:
+                app._refinement_workspace=object()
+                state.rf_error='New workspace status'
+            pump.cancel()
+            with pytest.raises(asyncio.CancelledError):await pump
+            assert state.rf_queue_running is replace_workspace
+            assert not [t for t in asyncio.all_tasks() if t.get_name().startswith('radar-refinement-')]
+            before=list(snapshots);release.set()
+            assert await asyncio.to_thread(finished.wait,5)
+            await asyncio.sleep(.03)
+            assert snapshots==before and selected==[]
+            assert [j['status'] for j in w.state['jobs'].values()]==['completed','queued']
+            assert state.rf_error==('New workspace status' if replace_workspace else '')
+        finally:
+            release.set()
+            if not pump.done():pump.cancel()
+            await asyncio.gather(pump,return_exceptions=True)
+    asyncio.run(scenario())
 
 
 def test_weak_uiso_warning_uses_actual_conditional_uncertainty_only():
