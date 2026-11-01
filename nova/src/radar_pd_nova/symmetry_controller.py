@@ -35,6 +35,7 @@ from .k_search_controller import KSearchMixin
 from .model_runtime import GalaxyModelRuntime,GalaxyChunkTransport,CollectOnlyTransport,PreparationSlotTransport,active_batch_count,MODEL_BATCH_LIMITS
 from .checkpoint_uploads import CheckpointUploadPending, CheckpointUploadInterrupted
 from .model_review_recovery import SelectionRecovery, ReviewSelectionChanged, campaign_recency
+from .model_navigation import scan_options
 from .model_campaigns import choices as model_choices,origin as model_origin,queue_sources,enroll_source,restore_history,portable_source,restore_captured_sources,scope_progress,next_acquisition,prioritize_acquisition,acquisition_rows
 from gpx_recipe.symmetry.compiler import prepare_shared_inputs
 from gpx_recipe.symmetry.templates import make_template,trial_count
@@ -58,7 +59,7 @@ class SymmetryMixin(KSearchMixin):
             sx_plan_ready=False,sx_approved=False,sx_plan_summary='',sx_plan_candidates=[],sx_setup=False,sx_expanded=False,sx_expanded_layout={},sx_has_context=False,sx_has_gpx=False,sx_has_receipt=False,sx_resumable=False,
             sx_request='',sx_planning_summary='',sx_planning_notes=[],sx_planning_usage='',sx_planning_cost='',sx_sign_starts=True,sx_coverage=[],sx_group_limit=12,sx_result_scope='experiment',sx_start_source='',sx_start_sources=[],sx_results_current=False,sx_scope_progress='')
         for key,value in defaults.items():setattr(s,key,value)
-        extra=dict(sx_existing='selected',sx_follow_new=False,sx_max_scans=200,sx_enrollments=[],sx_priority_acquisition='',sx_priority_options=[],sx_priority_notice='',sx_following=False,sx_campaign_running=False,sx_parallel_jobs=1,
+        extra=dict(sx_existing='selected',sx_follow_new=False,sx_max_scans=200,sx_enrollments=[],sx_priority_acquisition='',sx_priority_options=[],sx_priority_notice='',sx_following=False,sx_campaign_running=False,sx_pause_pending=False,sx_parallel_jobs=1,
             sx_queue_notice='',sx_backend='',sx_plan_token='',sx_cancel_notice='Cancelling a Galaxy chunk stops all starts in that job.',
             sx_opd_policy='highest-symmetry-per-irrep',sx_construct_limit=100)
         for key,value in extra.items():setattr(s,key,value)
@@ -158,6 +159,9 @@ class SymmetryMixin(KSearchMixin):
         self._symmetry_start_changed()
         self._symmetry_unapprove()
         s=self.server.state
+        selected=getattr(s,'sx_source','')
+        if selected and selected in {entry['value'] for entry in getattr(s,'sx_start_sources',[])}:
+            s.sx_start_source=selected
         s.sx_setup=True;s.sx_plan_token='';s.sx_plan_summary='';s.sx_plan_candidates=[]
         s.sx_candidates=[];s.sx_candidate_options=[];s.sx_modes=[];s.sx_mode_options=[]
         s.sx_message='Select a starting GPX and inspect its exact parent to prepare a new search.'
@@ -306,6 +310,7 @@ class SymmetryMixin(KSearchMixin):
                 s.sx_following=bool(campaign.setting('following',False)) and not campaign.setting('paused',False)
                 s.sx_queue_notice=campaign.setting('checkpoint_notice','') or campaign.setting('dispatch_notice','') or campaign.setting('preparation_message','') or campaign.setting('budget_message','')
                 if campaign.setting('paused',False):s.sx_queue_notice='Campaign paused. Submitted Galaxy jobs continue independently; Continue recovers them before new starts.'
+                if getattr(s,'sx_pause_pending',False):s.sx_queue_notice='Pausing new submissions and saving recovery state. Already accepted native jobs are not cancelled.'
                 identity=(s.sx_campaign,s.rf_experiment,s.sx_result_scope)
                 self._symmetry_loading_identity=identity
                 rows,summaries=await asyncio.to_thread(campaign_rows,root,experiment=identity[1] if identity[2]=='experiment' else None)
@@ -326,9 +331,7 @@ class SymmetryMixin(KSearchMixin):
                         else 'No native starts are available yet. Open the acquisition queue to inspect compatibility or review reasons.')
                 elif not visible:s.sx_message='This campaign belongs to another experiment. Choose that experiment or view the whole campaign.'
                 else:s.sx_message='No native trials have been declared yet. Check the acquisition queue and reviewed campaign scope.'
-                options={r['source']:(' · '.join(str(v) for v in [r['metadata'].get('scan') or r['parent'],
-                    (f"{r['metadata']['condition']:g} {r['metadata'].get('condition_unit','')}" if isinstance(r['metadata'].get('condition'),(int,float)) else None),
-                    ('bank '+str(r['metadata']['bank']) if r['metadata'].get('bank') else None)] if v)) for r in rows}
+                options=scan_options(rows)
                 source_order={entry['id']:index for index,entry in enumerate(s.sx_enrollments)}
                 options=dict(sorted(options.items(),key=lambda item:source_order.get(item[0],len(source_order))))
                 selected=s.sx_source if s.sx_source in options else next(iter(options),'')
@@ -939,8 +942,13 @@ class SymmetryMixin(KSearchMixin):
         self._refinement_schedule(cancel(),'radar-symmetry-cancel')
 
     def pause_model_campaign(self):
+        pending=getattr(self,'_model_pause_task',None)
+        if pending and not pending.done():return
+        s=self.server.state
+        s.sx_pause_pending=True
+        s.sx_queue_notice='Pausing new submissions and saving recovery state. Already accepted native jobs are not cancelled.'
+        s.flush()
         async def pause():
-            s=self.server.state
             try:
                 for campaign,transport in list(self._model_active_campaigns.values()):
                     campaign.set_setting('paused',True)
@@ -950,8 +958,18 @@ class SymmetryMixin(KSearchMixin):
                 if not hasattr(self,'_model_checkpoint_errors'):self._model_checkpoint_errors={}
                 self._model_checkpoint_errors[campaign.root.name]=exc
                 s.sx_error=str(exc)
-            finally:self.refresh_symmetry()
-        self._model_pause_task=self._refinement_schedule(pause(),'radar-model-pause')
+            finally:
+                s.sx_pause_pending=False
+                self.refresh_symmetry()
+                s.flush()
+        work=pause()
+        try:
+            self._model_pause_task=self._refinement_schedule(work,'radar-model-pause')
+            if self._model_pause_task is None:
+                work.close();s.sx_pause_pending=False;s.flush()
+        except Exception:
+            work.close();s.sx_pause_pending=False;s.flush()
+            raise
 
     async def _pause_model_campaigns(self):
         """Stop new dispatch, preserve Galaxy jobs and await captured enrollment."""

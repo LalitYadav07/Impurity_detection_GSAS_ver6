@@ -1,9 +1,35 @@
 """Host-side batching from verified output sizes and measured native cost."""
 from collections import Counter
+import json
 import math
 
 TARGET_BYTES = 128 * 1024 * 1024
 TARGET_FILES = 8000
+
+
+def concurrency_batch_limit(campaign, protocol, maximum_jobs):
+    """Share a small finite tail across available, already approved job slots.
+
+    Native CPU/RAM and output-size caps remain independent. When many scans
+    are ready, retain a normal batch per scan; a lone 24-start control can use
+    eight three-start jobs instead of occupying only three of eight slots.
+    """
+    if type(maximum_jobs) is not int or maximum_jobs < 1:
+        raise ValueError('Use a positive configured Galaxy batch limit')
+    with campaign.connect() as db:
+        db.execute('BEGIN')
+        prepared={row['protocol']:row['pending'] for row in db.execute(
+            "SELECT protocol,COUNT(*) AS pending FROM trials WHERE state='prepared' GROUP BY protocol")}
+        running=[dict(row) for row in db.execute(
+            "SELECT id,protocol,handle FROM trials WHERE state IN ('running','submitting','cancelling')")]
+    active={json.loads(row['handle']).get('dispatch_key',row['id']) if row.get('handle')
+            else row['id'] for row in running}
+    active_protocols={row['protocol'] for row in running}
+    idle=set(prepared)-active_protocols
+    competitors=max(1,len(idle or prepared))
+    available=max(1,maximum_jobs-len(active))
+    shares=max(1,math.ceil(available/competitors))
+    return max(1,math.ceil(prepared.get(protocol,0)/shares))
 
 
 def output_measurements(root, members):

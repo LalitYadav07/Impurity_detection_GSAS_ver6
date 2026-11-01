@@ -6,6 +6,12 @@ def select(label,field,items,**kwargs):
     return v.VSelect(label=label,v_model=(field,),items=(items,),density='compact',variant='outlined',hide_details=True,**kwargs)
 
 
+def scan_select(label,field,items,**kwargs):
+    return v.VAutocomplete(label=label,v_model=(field,),items=(items,),
+        density='compact',variant='outlined',hide_details=True,
+        no_data_text='No matching scan or project',**kwargs)
+
+
 def model_exploration(app):
     from .symmetry_controller import MODEL_FIELDS
     form='[{' + ','.join(name+':'+name for name in (*MODEL_FIELDS,'sx_start_source','rf_experiment','sx_plan_token')) + '}]'
@@ -23,9 +29,9 @@ def model_exploration(app):
             select('Model campaign','sx_campaign','sx_campaigns')
             select('Results to show','sx_result_scope',"[{title:'Selected experiment',value:'experiment'},{title:'Whole campaign',value:'campaign'}]")
             v.VBtn('Refresh evidence',click=app.refresh_symmetry,loading=('sx_busy',),variant='text',prepend_icon='mdi-refresh')
-            v.VBtn('Continue saved campaign',click=app.continue_symmetry_campaign,disabled=('!sx_resumable || sx_busy || sx_campaign_running',),variant='text',prepend_icon='mdi-play')
-            v.VBtn('Pause campaign',click=app.pause_model_campaign,disabled=('!sx_campaign_running',),variant='text',prepend_icon='mdi-pause')
-            v.VBtn('New model search',v_if='!!sx_campaign',click=app.new_symmetry_search,disabled=('sx_busy',),variant='outlined',prepend_icon='mdi-molecule')
+            v.VBtn('Continue saved campaign',click=app.continue_symmetry_campaign,disabled=('!sx_resumable || sx_busy || sx_campaign_running || sx_pause_pending',),variant='text',prepend_icon='mdi-play')
+            v.VBtn('Pause campaign',click=app.pause_model_campaign,disabled=('!sx_campaign_running || sx_pause_pending',),loading=('sx_pause_pending',),variant='text',prepend_icon='mdi-pause')
+            v.VBtn('New model search',v_if='!!sx_campaign',click=app.new_symmetry_search,disabled=('sx_busy || sx_pause_pending',),variant='outlined',prepend_icon='mdi-molecule')
             v.VBtn('Return to campaign',v_if='sx_setup && !!sx_campaign',click='sx_setup = false',variant='text',prepend_icon='mdi-arrow-left')
         v.VAlert(v_if='!!sx_error',text=('sx_error',),type='error',variant='tonal',density='compact',classes='mb-3')
         html.P('{{ sx_backend }}',classes='rf-notice')
@@ -44,7 +50,7 @@ def model_exploration(app):
             html.H3('Explore models from a completed GPX')
             html.P('Enter a commensurate k vector, or use the magnetic k survey below. Review hypotheses before native refinement.',classes='rf-notice')
             with html.Div(classes='rf-toolbar'):
-                select('Starting GPX · original or recipe checkpoint','sx_start_source','sx_start_sources')
+                scan_select('Starting GPX · original or recipe checkpoint','sx_start_source','sx_start_sources')
                 v.VBtn('Inspect exact parent',click=app.inspect_symmetry_source,disabled=('!sx_start_source || sx_busy',),variant='outlined')
             with html.Details(v_if='sx_has_context',classes='mt-3'):
                 html.Summary('Describe a magnetic model search')
@@ -149,7 +155,7 @@ def model_exploration(app):
             v.VDataTable(items=('sx_coverage',),headers=("[{title:'Scan',key:'scan'},{title:'Condition',key:'condition'},{title:'Bank',key:'bank'},{title:'Magnetic sites',key:'sites'},{title:'Terminal starts',key:'coverage'},{title:'Qualified starts',key:'qualified'},{title:'Best qualified Rwp',key:'best_qualified'},{title:'Best audited Rwp',key:'best_audited'},{title:'Status',key:'status'}]",),items_per_page=8,density='compact',classes='mt-3')
         with html.Div(v_if='!sx_setup && sx_results_current && sx_source_options.length > 1',classes='rf-toolbar'):
             v.VBtn('Previous scan',click=(app.symmetry_adjacent_scan,'[-1]'),disabled=("!sx_results_current || sx_source_options.findIndex(x => x.value === sx_source) <= 0",),variant='text',prepend_icon='mdi-chevron-left')
-            select('Compare models for this exact scan / bank','sx_source','sx_source_options',disabled=('!sx_results_current',))
+            scan_select('Compare models for this exact scan / bank','sx_source','sx_source_options',disabled=('!sx_results_current',))
             v.VBtn('Next scan',click=(app.symmetry_adjacent_scan,'[1]'),disabled=("!sx_results_current || sx_source_options.findIndex(x => x.value === sx_source) >= sx_source_options.length - 1",),variant='text',append_icon='mdi-chevron-right')
         with html.Div(v_if='!sx_setup && sx_results_current && sx_groups.length',classes='sx-layout'):
             with html.Aside(classes='rf-card'):

@@ -512,9 +512,10 @@ class GalaxyChunkTransport:
         root=self.campaign.root/'inputs'/protocol
         p=json.loads((root/'protocol.json').read_text())
         size=confined(root,p['source']['path']).stat().st_size
-        from .model_batch_budget import batch_size
+        from .model_batch_budget import batch_size,concurrency_batch_limit
         measured=[c for c in self.state['chunks'].values() if c.get('protocol')==protocol]
-        return batch_size(size,measured,maximum=self.chunk_size)
+        return min(batch_size(size,measured,maximum=self.chunk_size),
+                   concurrency_batch_limit(self.campaign,protocol,self.max_active_jobs))
 
     def submit_many(self,entries,*,workers):
         if self._paused.is_set() or self.campaign.setting('paused',False):raise RuntimeUnavailable('Model campaign is paused before dispatch')

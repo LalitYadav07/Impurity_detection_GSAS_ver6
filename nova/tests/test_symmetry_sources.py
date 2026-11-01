@@ -334,6 +334,19 @@ def test_new_search_cannot_reuse_an_old_approval():
     assert app._symmetry_approved=='' and state.sx_candidates==[]
 
 
+@pytest.mark.parametrize('selected,expected',[('warm','warm'),('unavailable','cold'),('','cold')])
+def test_new_search_uses_the_inspected_scan_only_when_it_is_an_available_start(selected,expected):
+    from radar_pd_nova.symmetry_controller import SymmetryMixin
+    app=SymmetryMixin();app._symmetry_draft=None;app._symmetry_approved='old-plan'
+    state=SimpleNamespace(sx_source=selected,sx_start_source='cold',
+        sx_start_sources=[{'value':'cold'},{'value':'warm'}],sx_campaign='old-campaign')
+    app.server=SimpleNamespace(state=state)
+    app.new_symmetry_search()
+    assert state.sx_start_source==expected
+    assert state.sx_campaign=='old-campaign'
+    assert not state.sx_approved and not state.sx_has_context and not state.sx_plan_token
+
+
 def test_scan_navigation_is_bounded_and_never_changes_the_campaign():
     from radar_pd_nova.symmetry_controller import SymmetryMixin
     state=SimpleNamespace(sx_source_options=[{'value':'first'},{'value':'second'}],sx_source='first',sx_campaign='original')

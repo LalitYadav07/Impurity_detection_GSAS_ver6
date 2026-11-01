@@ -175,6 +175,59 @@ def test_session_close_prevents_dispatch_and_retains_follow_policy_for_explicit_
     assert module.queue_sources(c,None)=={}
 
 
+@pytest.mark.parametrize('checkpoint_fails',[False,True])
+def test_pause_reports_pending_and_deduplicates_clicks_until_checkpoint_settles(tmp_path,checkpoint_fails):
+    import threading
+    entered,release=threading.Event(),threading.Event()
+    c=Campaign(tmp_path/'pausing');calls=[]
+    transport=object.__new__(GalaxyChunkTransport)
+    transport.pause=lambda:calls.append('pause')
+    def checkpoint(*,force):
+        calls.append('checkpoint');entered.set();assert release.wait(5)
+        if checkpoint_fails:raise RuntimeError('Checkpoint failed')
+    transport.checkpoint=checkpoint
+    state=SimpleNamespace(sx_pause_pending=False,sx_queue_notice='',sx_error='',flush=lambda:None)
+    app=SymmetryMixin();app.server=SimpleNamespace(state=state)
+    app._model_active_campaigns={'pausing':(c,transport)};app._model_pause_task=None
+    refreshed=[];app.refresh_symmetry=lambda:refreshed.append(state.sx_pause_pending)
+    tasks=[]
+    def schedule(work,name):
+        task=asyncio.create_task(work);tasks.append(task);return task
+    app._refinement_schedule=schedule
+    async def exercise():
+        try:
+            app.pause_model_campaign();first=app._model_pause_task
+            assert state.sx_pause_pending and 'saving recovery' in state.sx_queue_notice
+            app.pause_model_campaign()
+            assert len(tasks)==1 and app._model_pause_task is first
+            assert await asyncio.to_thread(entered.wait,3)
+            assert c.setting('paused') is True and state.sx_pause_pending
+        finally:release.set()
+        await asyncio.wait_for(first,5)
+    asyncio.run(exercise())
+    assert calls==['pause','checkpoint'] and refreshed==[False]
+    assert not state.sx_pause_pending
+    assert bool(state.sx_error)==checkpoint_fails
+
+
+def test_failed_pause_scheduling_releases_the_pending_feedback_guard():
+    state=SimpleNamespace(sx_pause_pending=False,flush=lambda:None)
+    app=SymmetryMixin();app.server=SimpleNamespace(state=state);app._model_pause_task=None
+    def fail(*args):raise RuntimeError('Event loop unavailable')
+    app._refinement_schedule=fail
+    with pytest.raises(RuntimeError,match='Event loop unavailable'):app.pause_model_campaign()
+    assert not state.sx_pause_pending
+
+
+def test_pause_without_an_active_session_does_not_leave_a_pending_guard():
+    from radar_pd_nova.refinement_controller import RefinementMixin
+    class App(SymmetryMixin,RefinementMixin):pass
+    state=SimpleNamespace(sx_pause_pending=False,flush=lambda:None)
+    app=App();app.server=SimpleNamespace(state=state);app._model_pause_task=None
+    app.pause_model_campaign()
+    assert app._model_pause_task is None and not state.sx_pause_pending
+
+
 def closing_app(c,t):
     app=SymmetryMixin();app._model_preparations={};app._k_cancel=None
     app._model_enrollment_task=None;app._model_tick_task=None;app._symmetry_task=None;app._model_pause_task=None
