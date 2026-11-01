@@ -124,6 +124,30 @@ def test_background_watch_refresh_does_not_replace_single_scope(tmp_path, worksp
     assert not widget.figures[-1]["data"]
 
 
+def test_clearing_watch_preserves_an_open_single_result(tmp_path):
+    app, widget, record = navigation_app(tmp_path)
+    open_single(app, record)
+    before = copy.deepcopy(app.server.state.post_analysis)
+    app._powgen_controller = None
+    app._sync_powgen_rows()
+    assert app._post_analysis_scope == "single:single-704"
+    assert app.server.state.post_analysis == before
+    assert not widget.figures[-1]["data"]
+
+
+@pytest.mark.parametrize("workspace", ["experiment", "monitor", "setup"])
+def test_clearing_watch_removes_its_curves_outside_experiment_view(tmp_path, workspace):
+    app, widget, _ = navigation_app(tmp_path)
+    app.server.state.workspace_view = workspace
+    assert widget.figures[-1]["data"]
+    app._powgen_controller = None
+    app._sync_powgen_rows()
+    assert app._post_analysis_scope == "watch:none"
+    assert not app._post_analysis_scans
+    assert not app._interpretation_all_watch_scans
+    assert not widget.figures[-1]["data"]
+
+
 def test_replaced_watch_with_same_path_uses_its_own_settings(tmp_path):
     app, _, record = navigation_app(tmp_path)
     open_single(app, record)

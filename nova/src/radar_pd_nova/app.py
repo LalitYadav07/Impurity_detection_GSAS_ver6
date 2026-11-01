@@ -4709,7 +4709,10 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
             ]
             if controller is not None else []
         )
-        if str(getattr(self.server.state, "workspace_view", "")) == "experiment":
+        clearing_watch = controller is None and str(
+            getattr(self, "_post_analysis_scope", "")
+        ).startswith("watch:")
+        if str(getattr(self.server.state, "workspace_view", "")) == "experiment" or clearing_watch:
             self._activate_watch_post_analysis(controller)
             self._refresh_post_analysis(rows, pending=pending)
         x_key = str(self.server.state.powgen_x_axis or "run_number")
