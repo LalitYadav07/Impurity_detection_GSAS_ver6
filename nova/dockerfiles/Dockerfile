@@ -13,9 +13,6 @@ COPY pyproject.toml README.md /src/
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends hdf5-tools tzdata \
     && rm -rf /var/lib/apt/lists/*
-COPY src /src/src
-# Serve the versioned guide through the same path-prefixed NDIP endpoint as NOVA.
-COPY help /app/www-content/user-guide/
 # The pinned runtime uses Python 3.10. Install the numerical/metadata readers
 # explicitly: the application install intentionally skips dependency resolution.
 # The h5py wheel reuses the existing NumPy; it must not upgrade the NOVA stack.
@@ -27,7 +24,13 @@ RUN python -m pip install --no-cache-dir 'scipy==1.15.3' \
     && python -m pip install --no-cache-dir --no-deps 'RapidFuzz==3.14.3' \
     && python -m pip install --no-cache-dir --no-deps 'galvani==0.5.0' \
     && python -m pip install --no-cache-dir --trusted-host download-r2.pytorch.org \
-       'https://download-r2.pytorch.org/whl/cpu/torch-2.5.1%2Bcpu-cp310-cp310-linux_x86_64.whl#sha256=7f91a2200e352745d70e22396bd501448e28350fbdbd8d8b1c83037e25451150' \
-    && python -m pip install --no-cache-dir --no-deps /src \
+       'https://download-r2.pytorch.org/whl/cpu/torch-2.5.1%2Bcpu-cp310-cp310-linux_x86_64.whl#sha256=7f91a2200e352745d70e22396bd501448e28350fbdbd8d8b1c83037e25451150'
+
+# Keep the expensive fixed runtime cached across source and guide edits.
+COPY src /src/src
+RUN python -m pip install --no-cache-dir --no-deps /src \
     && python -c 'from radar_pd_nova.unet_core.production import FocusTransitionPredictor; FocusTransitionPredictor()._load()' \
     && python -m compileall -q /src/src/radar_pd_nova /src/src/gpx_recipe
+
+# Documentation-only updates must not reinstall the scientific/ML runtime.
+COPY help /app/www-content/user-guide/

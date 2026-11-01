@@ -178,3 +178,12 @@ def test_observation_table_and_inspector_use_the_plotted_temperature_unit():
     details={d['label']:d['value'] for d in app.server.state.post_analysis_point_details}
     assert float(details['Horizontal coordinate'])==pytest.approx(26.85)
     assert details['Axis unit']=='°C'
+def test_bundled_guide_manifest_matches_every_published_asset():
+    import hashlib,json
+    from pathlib import Path
+    root=Path(__file__).resolve().parents[1]/'help'
+    manifest=json.loads((root/'manifest.json').read_text())
+    for relative,expected in manifest['files'].items():
+        path=(root/relative).resolve()
+        assert path.is_relative_to(root.resolve())
+        assert hashlib.sha256(path.read_bytes()).hexdigest()==expected,relative
