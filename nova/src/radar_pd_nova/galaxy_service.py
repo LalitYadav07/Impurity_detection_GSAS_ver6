@@ -660,7 +660,7 @@ class GalaxyService:
         # match only our exact reserved identities, preserving user ZIP names.
         internal_label = name.split("|", 1)[0].strip()
         if re.fullmatch(r"(?:radar-pd )?radar-pd (?:model inputs [a-f0-9]{64}|model [a-f0-9]{24} results|"
-                        r"refinement result bundle|live packet [a-f0-9]{24}|"
+                        r"refinement (?:result bundle|console)|live packet [a-f0-9]{24}|"
                         r"live snapshot (?:result bundle|response cache|console))", internal_label):
             return "other", True
         generated_tokens = (

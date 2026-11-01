@@ -1337,6 +1337,15 @@ def test_refinement_outputs_are_not_reusable_candidate_libraries() -> None:
     assert GalaxyService._dataset_scientific_role({'name':'My refinement candidates.zip','extension':'zip'}) == ('candidate_library',False)
 
 
+def test_refinement_console_is_not_a_diffraction_input():
+    for name in ('RADAR-PD refinement console',
+                 'RADAR-PD RADAR-PD refinement console | output.txt'):
+        assert GalaxyService._dataset_scientific_role({'name': name, 'extension': 'txt'}) == ('other', True)
+    assert GalaxyService._dataset_scientific_role(
+        {'name': 'refinement console experiment.txt', 'extension': 'txt'}
+    ) == ('diffraction', False)
+
+
 def test_live_worker_outputs_and_packets_are_not_scientific_inputs() -> None:
     from xml.etree import ElementTree
     definition = Path(__file__).resolve().parents[2]/'galaxy/radar_pd_live_snapshot.xml.in'
