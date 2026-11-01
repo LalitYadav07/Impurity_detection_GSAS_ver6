@@ -144,7 +144,16 @@ def test_invalid_manifest_budgets_fail_closed():
 def test_cancelled_calculation_has_explicit_status():
     from radar_pd_nova.webmon.ui import WebmonMixin
     obj=WebmonMixin();obj.server=SimpleNamespace(state=SimpleNamespace())
-    obj._webmon_process=None
+    obj._webmon_process=None;obj._webmon=SimpleNamespace(config={'local_replay':True})
     asyncio.run(obj.webmon_cancel())
     assert obj._webmon_cancelled
     assert obj.server.state.webmon_calculation_status=='Cancelled'
+
+
+def test_stopping_remote_wait_is_not_reported_as_job_cancellation():
+    from radar_pd_nova.webmon.ui import WebmonMixin
+    obj=WebmonMixin();obj.server=SimpleNamespace(state=SimpleNamespace())
+    obj._webmon_process=None;obj._webmon=SimpleNamespace(config={'local_replay':False})
+    asyncio.run(obj.webmon_cancel())
+    assert obj.server.state.webmon_calculation_status=='Stopped waiting'
+    assert 'Galaxy job continues' in obj.server.state.webmon_message

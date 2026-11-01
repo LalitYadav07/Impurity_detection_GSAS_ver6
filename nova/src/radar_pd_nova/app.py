@@ -2724,7 +2724,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                 if value == "webmon" and not self._webmon_configured:
                     continue
                 vuetify.VTab(
-                    title, value=value,
+                    title, value=value, v_if="live_beamline === 'PG3'" if value == "webmon" else None,
                     click="$nextTick(() => window.setTimeout(() => window.document.querySelectorAll('.js-plotly-plot').forEach(el => el.getBoundingClientRect().width > 0 && el.getBoundingClientRect().height > 0 && window.Plotly && window.Plotly.Plots.resize(el)), 80))",
                 )
         if self._webmon_configured:
@@ -4903,6 +4903,9 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         if getattr(self, "_active_live_beamline", None) == adapter.instrument:
             return
         self._active_live_beamline = adapter.instrument
+        if adapter.instrument != 'PG3' and getattr(state,'experiment_result_view','') == 'webmon':
+            state.experiment_result_view = 'results'
+            if hasattr(self,'_webmon_stream'):self.webmon_pause_stream()
         self._init_scan_interpretation()
         state.live_beamline_label = adapter.name
         state.powgen_processing_options = [

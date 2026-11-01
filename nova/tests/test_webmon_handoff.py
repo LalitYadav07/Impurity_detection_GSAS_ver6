@@ -23,3 +23,11 @@ def test_posterior_handoff_never_uses_parent_dataset(published):
     else:
         assert not selected
         assert 'not been mapped' in state.webmon_message
+
+
+def test_dispatch_identity_uses_content_not_temporary_host_paths():
+    from radar_pd_nova.webmon.ui import request_identity
+    request=dict(source_gpx='/tmp/old/source.gpx',source_sha256='a'*64,catalog='/tmp/old/catalog.json',catalog_sha256='b'*64,source_revision='PG3_1:c')
+    moved=dict(request,source_gpx='/other/source.gpx',catalog='/other/catalog.json')
+    assert request_identity(request)==request_identity(moved)
+    assert request_identity(request)!=request_identity(dict(moved,source_sha256='d'*64))

@@ -15,6 +15,14 @@ from .processes import stop_process,wait_process,spawn_process
 from .viewdata import sampler_summary, full_posterior, moment_rows, STATUS
 from datetime import datetime
 
+def request_identity(request):
+    # Transient cache/download paths are not scientific identity. The request
+    # already binds each input by checksum; use stable packet member names.
+    from gpx_recipe.live.packet import INPUTS,canonical
+    portable={key:(INPUTS[key] if key in INPUTS and value else value) for key,value in request.items()}
+    return hashlib.sha256(canonical(portable)).hexdigest()
+
+
 class WebmonMixin:
     def _init_webmon(self):
         s=self.server.state;manifest=os.environ.get('RADAR_PD_WEBMON_CONTEXT','')
@@ -32,7 +40,7 @@ class WebmonMixin:
                 # prebuilt science manifest just to browse the live source.
                 history_hash=hashlib.sha256(str(self.service.history_id).encode()).hexdigest()[:24]
                 base=Path(getattr(self.service,'output_root','/tmp'))/'live-snapshots'/history_hash
-                manifest=dict(facility_root=os.environ.get('RADAR_PD_SNS_ROOT','/SNS'),archive=str(base/'snapshots'),jobs=str(base/'jobs'),local_replay=False)
+                manifest=dict(facility_root=os.environ.get('RADAR_PD_SNS_ROOT','/SNS'),archive=str(base/'snapshots'),jobs=str(base/'jobs'),checkpoint_registry=str(base/'checkpoints.json'),local_replay=False)
             self._webmon=WebmonSession(manifest) if manifest else None
         except (OSError,ValueError,KeyError) as exc:
             self._webmon=None;self._webmon_config_error=f'WebMON configuration unavailable: {exc}'
@@ -63,7 +71,7 @@ class WebmonMixin:
         return command
 
     def _webmon_ui(self):
-        with html.Section(v_show="experiment_result_view === 'webmon'",classes='radar-result-card wm-workspace'):
+        with html.Section(v_show="experiment_result_view === 'webmon' && live_beamline === 'PG3'",classes='radar-result-card wm-workspace'):
             client.Style("""
               .radar-workspace-inner:has(.wm-workspace:not([style*="display: none"])) {max-width:1920px;}
               .wm-workspace {grid-column:1/-1;min-width:0;padding:18px!important;}
@@ -145,12 +153,12 @@ class WebmonMixin:
                             v.VDataTable(headers=([dict(title='Peak d (Å)',key='d'),dict(title='Autoreduce width (Å)',key='observed'),dict(title='GPX width (Å)',key='calculated'),dict(title='WebMON width (Å)',key='webmon')],),items=('webmon_width_rows',),items_per_page=-1,hide_default_footer=True,density='compact')
                             html.P('Widths are local half-height estimates, not refined uncertainties. The green curve is the reference run’s WebMON scan, rescaled only for shape comparison. This does not validate normalization or its error bars.')
                             v.VBtn('Polish selected GPX in Refinement',click=self.webmon_open_refinement,disabled=('webmon_busy',),variant='outlined')
-                            html.P('Opens the existing Luna recipe workflow for this exact GPX: review phases, fit limits, background and supported refinement variables. Current recipe operations do not refine instrument profile, size or microstrain. Return here after refinement to prepare a new magnetic reference.')
-                            v.VBtn('Test bounded sample broadening',click=self.webmon_profile_polish,disabled=('webmon_busy',),variant='outlined')
-                            html.P('Diagnostic single-phase trials with the instrument fixed. A lower Rwp does not establish physical size or strain; inspect residuals and a suitable standard before accepting.')
-                            v.VBtn('Find completed polishes',click=self.webmon_find_polishes,disabled=('webmon_busy',),variant='text')
-                            v.VSelect(label='Completed polish of this checkpoint',v_model=('webmon_polished_job',),items=('webmon_polished_jobs',),v_if='webmon_polished_jobs.length',disabled=('webmon_busy',),density='compact')
-                            v.VBtn('Prepare polished GPX for magnetic review',click=self.webmon_prepare_polish,v_if='webmon_polished_jobs.length',disabled=('webmon_busy || !webmon_polished_job',),variant='outlined')
+                            html.P('Opens the existing Luna recipe workflow for this exact GPX. Review its phases, fit limits, background and explicitly supported variables before applying changes.')
+                            v.VBtn('Test bounded sample broadening',click=self.webmon_profile_polish,v_if='webmon_local',disabled=('webmon_busy',),variant='outlined')
+                            html.P('Diagnostic single-phase trials with the instrument fixed. A lower Rwp does not establish physical size or strain; inspect residuals and a suitable standard before accepting.',v_if='webmon_local')
+                            v.VBtn('Find completed polishes',click=self.webmon_find_polishes,v_if='webmon_local',disabled=('webmon_busy',),variant='text')
+                            v.VSelect(label='Completed polish of this checkpoint',v_model=('webmon_polished_job',),items=('webmon_polished_jobs',),v_if='webmon_local && webmon_polished_jobs.length',disabled=('webmon_busy',),density='compact')
+                            v.VBtn('Prepare polished GPX for magnetic review',click=self.webmon_prepare_polish,v_if='webmon_local && webmon_polished_jobs.length',disabled=('webmon_busy || !webmon_polished_job',),variant='outlined')
                         v.VCheckbox(label='Use this reviewed nuclear revision for conditional analysis',v_model=('webmon_accepted',),disabled=('!webmon_context_ready || webmon_busy',),density='compact')
                         with html.Div(classes='wm-assumptions'):
                             v.VTextField(label='Propagation vector k',v_model=('webmon_k',),disabled=('webmon_busy',),density='compact')
@@ -159,7 +167,7 @@ class WebmonMixin:
                             v.VTextField(label='Maximum moment (µB)',type='text',inputmode='decimal',v_model=('webmon_upper',),disabled=('webmon_busy',),density='compact')
                         html.P('Site inclusion, moment bounds and candidate omissions follow the explicitly reviewed model assumptions; unresolved settings are not exclusions from the data.')
                         v.VBtn('Start magnetic analysis',click=self.webmon_start,disabled=('!webmon_accepted || !webmon_context_ready || webmon_busy',),color='#15543c')
-                        v.VBtn('Cancel calculation',click=self.webmon_cancel,disabled=('!webmon_busy',),variant='text')
+                        v.VBtn('{{ webmon_local ? "Cancel calculation" : "Stop waiting for job" }}',click=self.webmon_cancel,disabled=('!webmon_busy',),variant='text')
                     with html.Div(classes='wm-toolbar'):
                         v.VBtn('Analyze updates for this run',click=self.webmon_enable_stream,disabled=('webmon_busy || webmon_stream_active || !webmon_accepted',),variant='outlined')
                         v.VBtn('Pause automatic analysis',click=self.webmon_pause_stream,disabled=('!webmon_stream_active',),variant='text')
@@ -315,7 +323,9 @@ class WebmonMixin:
         vfy=choice['verification'];b=choice.get('binding') or {}
         with np.load(choice['view_path'],allow_pickle=False) as data:
             self._webmon_checkpoint_plot.update(plots.checkpoint_review(data,axis=s.webmon_checkpoint_axis,difc=b.get('display_export_difc'),revision=choice['source_sha256']))
-        s.webmon_checkpoint_summary=f"Original run {choice['run']} · {choice['role']} · Rwp {vfy['rwp_recomputed']:.3f}%. Target WebMON run {s.webmon_run}. Native calculation agrees with the saved GPX curve to relative error {vfy['native_saved_curve_relative_error']:.2g}."
+        error=vfy.get('native_saved_curve_relative_error')
+        comparison=f'Saved curve relative difference from recomputed native model: {error:.2g}.' if isinstance(error,(int,float)) else 'Saved-curve consistency has not been measured.'
+        s.webmon_checkpoint_summary=f"Original run {choice['run']} · {choice['role']} · Rwp {vfy['rwp_recomputed']:.3f}%. Target WebMON run {s.webmon_run}. {comparison} Inspect the reference residuals."
         def width(peak,key):
             value=peak.get(key)
             return f"{value['fwhm_A']:.5f}" if value else 'Unavailable'
@@ -431,9 +441,12 @@ class WebmonMixin:
                 source_revision=f"PG3_{s.webmon_run}:"+receipt['content_sha256'],reference_revision=f"PG3_{source['run_number']}:"+material['source_sha256'],
                 upper=float(s.sx_max_moment),lower=0.,refine_transfer=bool(s.webmon_refine_transfer),workers=min(4,max(1,int(s.sx_slots))),particles=256)
             s.webmon_busy=True;s.webmon_source_notice='Preparing the reviewed snapshot in a Galaxy worker…';s.flush()
-            key=hashlib.sha256(json.dumps(req,sort_keys=True).encode()).hexdigest()[:24]
+            key=request_identity(req)[:24]
             runtime=GalaxyLiveRuntime(Path(self._webmon.config['jobs'])/'galaxy',self.service)
-            result=await asyncio.to_thread(runtime.call,req,root/'dispatch',dispatch_key=key)
+            import threading
+            self._webmon_remote_cancel=threading.Event()
+            self._webmon_task=asyncio.current_task()
+            result=await asyncio.to_thread(runtime.call,req,root/'dispatch',dispatch_key=key,cancel_event=self._webmon_remote_cancel)
             if (str(s.powgen_ipts),str(s.webmon_run),s.webmon_published_source)!=launch:
                 raise ValueError('Selection changed while preparing. The Galaxy result is retained; review it for the original scan before adopting it.')
             prepared=result['preparation'];result_root=Path(result['directory'])
@@ -448,14 +461,17 @@ class WebmonMixin:
                 review=[dict(label='Source',value=source['scan_label']),dict(label='Live snapshot',value=receipt['content_sha256'][:12]),dict(label='Candidates',value=str(len(catalog['candidates']))),dict(label='Mapping',value=mapping['evidence'])])
             choice=dict(id='prepared-'+key,title='Reviewed '+source['scan_label'],run=source['run_number'],role='Nuclear reference',source_path=material['source_path'],source_sha256=material['source_sha256'],
                 refinement_source=source,binding=binding,view_path=prepared['reference_view'],view_sha256=digest(prepared['reference_view']),
-                verification=dict(rwp_recomputed=prepared['original_reference_rwp'],native_saved_curve_relative_error=0.,peaks=[]))
+                verification=dict(rwp_recomputed=prepared['original_reference_rwp'],native_saved_curve_relative_error=prepared.get('native_saved_curve_relative_error'),peaks=[]))
             scope=f"IPTS-{str(s.powgen_ipts).removeprefix('IPTS-')}/{s.webmon_run}"
             self._webmon.config.setdefault('checkpoint_options',{}).setdefault(scope,[]).append(choice)
+            if self._webmon.registry:self._webmon.registry.add(scope,choice)
             self._webmon.selected_checkpoints[scope]=choice['id']
             self.webmon_select(s.webmon_run)
             s.webmon_source_notice='Prepared in Galaxy. Inspect the reference and assumptions, then accept this revision to start conditional live analysis.'
         except Exception as exc:s.webmon_source_notice='Live preparation stopped: '+str(exc)
-        finally:s.webmon_busy=False;s.flush()
+        finally:
+            if self._webmon_task is asyncio.current_task():self._webmon_task=None
+            s.webmon_busy=False;s.flush()
 
     def webmon_save_mapping(self,**_):
         from .mapping import reviewed_mapping
@@ -707,7 +723,7 @@ class WebmonMixin:
         try:
             b,req=launch['sealed'];validate_request(req,b)
             if self._webmon_cancelled:raise ValueError('Analysis cancelled before launch')
-            identity=hashlib.sha256(json.dumps(req,sort_keys=True).encode()).hexdigest()
+            identity=request_identity(req)
             out=Path(self._webmon.config['jobs'])/(identity[:24]+'-'+uuid.uuid4().hex);out.mkdir(parents=True,exist_ok=False)
             # Reuse only per-subgroup native kernels; the worker checks source and catalogue identity.
             cache_roots=[Path(b['request']).parent/'models',*Path(self._webmon.config['jobs']).glob('*/models')]
@@ -759,7 +775,7 @@ class WebmonMixin:
         s=self.server.state
         try:
             b,req=launch['sealed'];validate_request(req,b)
-            identity=hashlib.sha256(json.dumps(req,sort_keys=True).encode()).hexdigest()
+            identity=request_identity(req)
             root=Path(self._webmon.config['jobs'])/'galaxy';root.mkdir(parents=True,exist_ok=True)
             runtime=GalaxyLiveRuntime(root,self.service)
             self._webmon_remote_cancel=threading.Event()
@@ -778,7 +794,7 @@ class WebmonMixin:
             # Keep the original checked bundle intact. The UI view contains
             # hard-linked immutable models and explicitly rebased presentation
             # paths; it never changes scientific artifacts or their receipts.
-            native=Path(result['directory']);view=native.parent/'view';view.mkdir(exist_ok=True)
+            native=Path(result['directory']);view=Path(self._webmon.config['jobs'])/(identity[:24]+'-galaxy-view');view.mkdir(exist_ok=True)
             if not (view/'models').exists():shutil.copytree(native/'models',view/'models',copy_function=os.link)
             display=dict(result);display['rows']=[dict(row) for row in result['rows']]
             for row in display['rows']:
@@ -791,7 +807,7 @@ class WebmonMixin:
             self._webmon_load_result(view)
             s.webmon_calculation_status='Completed';s.webmon_message='Galaxy snapshot analysis completed. Results remain conditional on the reviewed fixed nuclear response.'
         except Exception as exc:
-            s.webmon_calculation_status='Stopped' if self._webmon_cancelled else 'Failed'
+            s.webmon_calculation_status='Stopped waiting' if self._webmon_cancelled else 'Failed'
             s.webmon_message=str(exc)
         finally:s.webmon_busy=False;s.flush()
 
@@ -933,6 +949,7 @@ class WebmonMixin:
             s.webmon_axis='d' if b.get('display_export_difc') else 'tof'
             s.webmon_latency=f"Saved calculation: {r['elapsed_seconds']:.1f} s; no new inference"
             s.webmon_calculation_status='Restored'
+            self._webmon_response_cache=r.get('response_cache_dataset_id')
             self._webmon_load_result(out);s.webmon_message='Saved analysis restored. Results remain conditional; no counting recommendation is authorized.'
         except (OSError,ValueError,KeyError) as e:s.webmon_message='Cannot restore saved analysis: '+str(e)
         s.flush()
@@ -942,7 +959,11 @@ class WebmonMixin:
         self._webmon_cancelled=True
         if getattr(self,'_webmon_remote_cancel',None):
             self._webmon_remote_cancel.set()
-        self.server.state.webmon_calculation_status='Cancelled'
+        if self._webmon_is_local():
+            self.server.state.webmon_calculation_status='Cancelled'
+        else:
+            self.server.state.webmon_calculation_status='Stopped waiting'
+            self.server.state.webmon_message='Stopped waiting. The submitted Galaxy job continues and remains recoverable; stop it in History if required.'
         await stop_process(self._webmon_process)
 
     async def webmon_shutdown(self):
@@ -956,6 +977,6 @@ class WebmonMixin:
             self._webmon_task.cancel()
             await asyncio.gather(self._webmon_task,return_exceptions=True)
         await stop_process(self._webmon_process)
-        self._webmon_process=None;self._webmon_payloads={};self._webmon_last_preview=None;self._webmon_start_scope=None
+        self._webmon_process=None;self._webmon_payloads={};self._webmon_last_preview=None;self._webmon_start_scope=None;self._webmon_response_cache=None
         self.server.state.webmon_has_result=False;self.server.state.webmon_accepted=False;self.server.state.webmon_context_ready=False
         self.server.state.webmon_calculation_status='Not started'

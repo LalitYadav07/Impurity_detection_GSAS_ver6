@@ -52,12 +52,15 @@ def prepare(request,root):
     if catalog.get('k')!=request.get('k'):raise ValueError('Magnetic catalogue has a different propagation vector')
     source_sha=file_hash(request['source_gpx']);instrument=copy.deepcopy(h.data['Instrument Parameters'])
     original_limits=copy.deepcopy(h.data['Limits']);normalize_flags(g);freeze(g)
-    # Export original reference data independently, before replacing observations.
+    # Compare, do not assume, the source's saved curve and recomputed model.
+    saved_curve=np.asarray(h.data['data'][1][3],float).copy()
     refresh_saved_profiles(g)
     x,y,w,calc,bg,*_=[np.asarray(np.ma.filled(a,0.)).copy() for a in h.data['data'][1]]
     valid=(w>0)&(x>=original_limits[1][0])&(x<=original_limits[1][1])
     for lo,hi in original_limits[2:]:valid&=~((x>=lo)&(x<=hi))
     if not valid.any() or not np.sum(w[valid]*y[valid]**2)>0:raise ValueError('Reference has no fitted positive-weight observations')
+    saved_curve_relative_error=float(np.max(abs(saved_curve-calc))/max(float(np.max(abs(calc))),1e-12))
+    saved_curve_error_sigma=float(np.max(abs(saved_curve[valid]-calc[valid])*np.sqrt(w[valid])))
     original_rwp=float(100*np.sqrt(np.sum(w[valid]*(y[valid]-calc[valid])**2)/np.sum(w[valid]*y[valid]**2)))
     live=parse_live_ascii(Path(request['observation_source']).read_bytes());spacing=np.diff(live.x)
     if not np.allclose(spacing,spacing[0],rtol=1e-6,atol=1e-10):raise ValueError('The reviewed exporter requires uniform d bins')
@@ -97,5 +100,5 @@ def prepare(request,root):
     return dict(request='prepared/inference-request.json',reference_view='prepared/reference-view.npz',
         source_gpx='prepared/source.gpx',source_sha256=inference['source_sha256'],reference_sha256=source_sha,
         source_dat='inputs/source.dat',source_dat_sha256=request['observation_source_sha256'],display_export_difc=factor,
-        original_reference_rwp=original_rwp,transfer_limits_tof=limits[1],transfer=transfer,
+        original_reference_rwp=original_rwp,native_saved_curve_relative_error=saved_curve_relative_error,saved_curve_error_sigma=saved_curve_error_sigma,transfer_limits_tof=limits[1],transfer=transfer,
         scientifically_qualified=False,forecast_enabled=False)
