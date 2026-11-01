@@ -34,7 +34,7 @@ from .symmetry_sources import start_choices,resolve_start,acquisition_details,ac
 from .k_search_controller import KSearchMixin
 from .model_runtime import GalaxyModelRuntime,GalaxyChunkTransport,CollectOnlyTransport,PreparationSlotTransport,active_batch_count,MODEL_BATCH_LIMITS
 from .checkpoint_uploads import CheckpointUploadPending, CheckpointUploadInterrupted
-from .model_review_recovery import SelectionRecovery, ReviewSelectionChanged, campaign_recency
+from .model_review_recovery import SelectionRecovery, ReviewSelectionChanged, campaign_recency,acquisition_index,AcquisitionReview
 from .model_navigation import scan_options
 from .model_campaigns import choices as model_choices,origin as model_origin,queue_sources,enroll_source,restore_history,portable_source,restore_captured_sources,scope_progress,next_acquisition,prioritize_acquisition,acquisition_rows
 from gpx_recipe.symmetry.compiler import prepare_shared_inputs
@@ -224,6 +224,7 @@ class SymmetryMixin(KSearchMixin):
             s=self.server.state
             if (s.sx_campaign,s.rf_experiment,s.sx_result_scope)!=self._symmetry_loading_identity:
                 self._symmetry_refresh_pending=True;s.sx_results_current=False
+                s.sx_source_options=[]
                 event=getattr(self,'_symmetry_review_cancel',None)
                 if event:event.set()
             return
@@ -231,7 +232,11 @@ class SymmetryMixin(KSearchMixin):
         # arrive before the coroutine starts; only one may audit this ledger.
         self._symmetry_loading=True
         s=self.server.state
+        self._symmetry_recovery_source=getattr(s,'sx_source','')
         self._symmetry_loading_identity=(s.sx_campaign,s.rf_experiment,s.sx_result_scope)
+        if getattr(self,'_symmetry_navigation_identity',None)!=self._symmetry_loading_identity:
+            s.sx_source_options=[]
+            self._symmetry_navigation_identity=self._symmetry_loading_identity
         async def load():
             s=self.server.state;s.sx_busy=True;s.sx_error=''
             self._symmetry_loading_identity=(s.sx_campaign,s.rf_experiment,s.sx_result_scope)
@@ -271,6 +276,7 @@ class SymmetryMixin(KSearchMixin):
                     s.sx_message='Select a completed RADAR-PD GPX above, then prepare model exploration.';return
                 root=next(p.parent for p in roots if p.parent.name==s.sx_campaign)
                 campaign=self._symmetry_campaign(root)
+                review_source=None;indexed_options=None
                 if remote and campaign.setting('restored',False):
                     # The active driver already polls and verifies these same
                     # batches under the campaign lock. A second recovery pass
@@ -282,6 +288,14 @@ class SymmetryMixin(KSearchMixin):
                         else 'Recovering saved Galaxy results and checking their artifacts. No new refinements are being submitted.')
                     s.flush()
                     if not coordinating:
+                        indexed_options,protocols_by_source=acquisition_index(campaign,experiment=scope)
+                        if indexed_options:
+                            review_source=s.sx_source if s.sx_source in indexed_options else next(iter(indexed_options))
+                            self._symmetry_recovery_source=review_source
+                            s.sx_source_options=[dict(title=label,value=key) for key,label in indexed_options.items()]
+                            s.sx_source=review_source
+                            s.sx_results_current=False;s.flush()
+                        else:indexed_options=None
                         self._symmetry_loading_identity=(s.sx_campaign,s.rf_experiment,s.sx_result_scope)
                         self._symmetry_review_cancel=threading.Event()
                         cancelled=self._symmetry_review_cancel
@@ -293,7 +307,10 @@ class SymmetryMixin(KSearchMixin):
                                 s.flush()
                         def result_progress(count):loop.call_soon_threadsafe(publish_result_progress,count)
                         recovery=SelectionRecovery(self._symmetry_transport(campaign),cancelled,progress=result_progress)
-                        await asyncio.to_thread(campaign.recover,recovery)
+                        if review_source:
+                            await asyncio.to_thread(AcquisitionReview(campaign,protocols_by_source[review_source]).recover,recovery)
+                        else:
+                            await asyncio.to_thread(campaign.recover,recovery)
                 allocated=campaign.setting('allocation')
                 if allocated:backend+=f" · last chunk: {allocated['workers']} native workers · {allocated.get('memory_mb') or 'unreported'} MiB memory"
                 s.sx_backend=backend
@@ -313,7 +330,9 @@ class SymmetryMixin(KSearchMixin):
                 if getattr(s,'sx_pause_pending',False):s.sx_queue_notice='Pausing new submissions and saving recovery state. Already accepted native jobs are not cancelled.'
                 identity=(s.sx_campaign,s.rf_experiment,s.sx_result_scope)
                 self._symmetry_loading_identity=identity
-                rows,summaries=await asyncio.to_thread(campaign_rows,root,experiment=identity[1] if identity[2]=='experiment' else None)
+                review_args=dict(experiment=identity[1] if identity[2]=='experiment' else None)
+                if review_source is not None:review_args['acquisition']=review_source
+                rows,summaries=await asyncio.to_thread(campaign_rows,root,**review_args)
                 if identity!=(s.sx_campaign,s.rf_experiment,s.sx_result_scope):
                     self._symmetry_refresh_pending=True;return
                 rows=scope_rows(rows,s.rf_experiment,s.sx_result_scope)
@@ -323,7 +342,7 @@ class SymmetryMixin(KSearchMixin):
                 counts=Counter(r['status'] for r in rows)
                 current=sum(r['execution_state']=='terminal' for r in rows)
                 s.sx_progress=f'{current} / {len(rows)} terminal receipts in this view · '+', '.join(f'{n} {display_status(k)}' for k,n in sorted(counts.items()))
-                if s.sx_result_scope=='experiment':s.sx_progress+=f' · whole campaign: {sum(v["received_count"] for v in summaries)} / {sum(v["declared_count"] for v in summaries)}'
+                if s.sx_result_scope=='experiment':s.sx_progress+=f' · whole campaign verified receipts: {sum(v["received_count"] for v in summaries)} / {sum(v["declared_count"] for v in summaries)}'
                 if rows:s.sx_message='Audited fits remain hypotheses. Matching calculated curves do not establish a unique space group.'
                 elif s.sx_enrollments:
                     pending=sum(e['status'] in {'queued','preparing'} for e in s.sx_enrollments)
@@ -331,7 +350,7 @@ class SymmetryMixin(KSearchMixin):
                         else 'No native starts are available yet. Open the acquisition queue to inspect compatibility or review reasons.')
                 elif not visible:s.sx_message='This campaign belongs to another experiment. Choose that experiment or view the whole campaign.'
                 else:s.sx_message='No native trials have been declared yet. Check the acquisition queue and reviewed campaign scope.'
-                options=scan_options(rows)
+                options=indexed_options if indexed_options is not None else scan_options(rows)
                 source_order={entry['id']:index for index,entry in enumerate(s.sx_enrollments)}
                 options=dict(sorted(options.items(),key=lambda item:source_order.get(item[0],len(source_order))))
                 selected=s.sx_source if s.sx_source in options else next(iter(options),'')
@@ -345,6 +364,8 @@ class SymmetryMixin(KSearchMixin):
                 if selected!=latest:
                     self._symmetry_refresh_pending=True;return
                 self._symmetry_all_rows=rows
+                self._symmetry_review_acquisition=review_source
+                self._symmetry_recovery_source=selected
                 self._symmetry_rows=source_rows;self._symmetry_groups=groups
                 s.sx_source_options=[dict(title=label,value=key) for key,label in options.items()]
                 s.sx_source=selected
@@ -386,6 +407,19 @@ class SymmetryMixin(KSearchMixin):
         # Inspection consumes only the last verified snapshot. It neither
         # resumes work nor changes the reviewed campaign's input/plan scope.
         s=self.server.state
+        loaded=getattr(self,'_symmetry_review_acquisition',None)
+        trusted_full_snapshot=(loaded is None and s.sx_results_current and
+            getattr(self,'_symmetry_display_identity',None)==
+            (getattr(s,'sx_campaign',''),getattr(s,'rf_experiment',''),getattr(s,'sx_result_scope','')))
+        if getattr(self,'_symmetry_loading',False) and not trusted_full_snapshot:
+            if getattr(self,'_symmetry_recovery_source',None)!=s.sx_source:
+                self._symmetry_refresh_pending=True;s.sx_results_current=False
+                event=getattr(self,'_symmetry_review_cancel',None)
+                if event:event.set()
+            return
+        if loaded is not None and s.sx_source!=loaded:
+            self._symmetry_explicit_selection=False;s.sx_results_current=False
+            self.refresh_symmetry();return
         if not s.sx_results_current:return
         if getattr(self,'_symmetry_display_identity',None)!=(s.sx_campaign,s.rf_experiment,s.sx_result_scope):return
         self._symmetry_explicit_selection=False

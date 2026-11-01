@@ -313,6 +313,25 @@ def test_experiment_scope_filters_before_reading_foreign_result_files(tmp_path,m
     assert len(summaries)==2 and all(s['pending_count']==1 for s in summaries)
 
 
+def test_exact_acquisition_scope_filters_before_reading_other_scan_artifacts(tmp_path,monkeypatch):
+    import radar_pd_nova.symmetry_workspace as module
+    class C:
+        def __init__(self,root):pass
+        def trial_directory(self,row):return tmp_path/row['id']
+    calls=[]
+    def read(path,metadata,**kwargs):
+        calls.append(path.name);return dict(status='pending',metadata=metadata)
+    monkeypatch.setattr(module,'Campaign',C);monkeypatch.setattr(module,'read_trial',read)
+    monkeypatch.setattr(module,'portfolio_snapshot',lambda campaign:(
+        {key:dict(protocol=dict(acquisition_id=key),metadata=dict(series='NOM')) for key in ['cold','warm']},
+        [dict(id='cold-fit',protocol='cold',state='running',receipt=None,error=None),
+         dict(id='warm-fit',protocol='warm',state='running',receipt=None,error=None)],
+        [dict(protocol='cold',pending_count=1),dict(protocol='warm',pending_count=1)]))
+    rows,summaries=module.campaign_rows(tmp_path,experiment='NOM',acquisition='warm')
+    assert calls==['warm-fit'] and len(rows)==1
+    assert len(summaries)==2
+
+
 def test_changed_collected_receipt_never_exposes_a_verified_plot_or_download(tmp_path,monkeypatch):
     import radar_pd_nova.symmetry_workspace as module
     candidate=dict(id='c',magnetic_space_group='P1',irrep='',bns_number='1.1',transformation_matrix=np.eye(3).tolist(),origin_shift=[0,0,0])

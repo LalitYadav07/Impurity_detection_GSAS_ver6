@@ -153,10 +153,11 @@ def model_exploration(app):
         with html.Details(v_if='!sx_setup && sx_results_current && sx_coverage.length > 1',classes='rf-card mb-4'):
             html.Summary('Scans and search coverage ({{ sx_coverage.length }})')
             v.VDataTable(items=('sx_coverage',),headers=("[{title:'Scan',key:'scan'},{title:'Condition',key:'condition'},{title:'Bank',key:'bank'},{title:'Magnetic sites',key:'sites'},{title:'Terminal starts',key:'coverage'},{title:'Qualified starts',key:'qualified'},{title:'Best qualified Rwp',key:'best_qualified'},{title:'Best audited Rwp',key:'best_audited'},{title:'Status',key:'status'}]",),items_per_page=8,density='compact',classes='mt-3')
-        with html.Div(v_if='!sx_setup && sx_results_current && sx_source_options.length > 1',classes='rf-toolbar'):
-            v.VBtn('Previous scan',click=(app.symmetry_adjacent_scan,'[-1]'),disabled=("!sx_results_current || sx_source_options.findIndex(x => x.value === sx_source) <= 0",),variant='text',prepend_icon='mdi-chevron-left')
-            scan_select('Compare models for this exact scan / bank','sx_source','sx_source_options',disabled=('!sx_results_current',))
-            v.VBtn('Next scan',click=(app.symmetry_adjacent_scan,'[1]'),disabled=("!sx_results_current || sx_source_options.findIndex(x => x.value === sx_source) >= sx_source_options.length - 1",),variant='text',append_icon='mdi-chevron-right')
+        with html.Div(v_if='!sx_setup && sx_source_options.length > 1',classes='rf-toolbar'):
+            v.VBtn('Previous scan',click=(app.symmetry_adjacent_scan,'[-1]'),disabled=("sx_source_options.findIndex(x => x.value === sx_source) <= 0",),variant='text',prepend_icon='mdi-chevron-left')
+            scan_select('Compare models for this exact scan / bank','sx_source','sx_source_options')
+            v.VBtn('Next scan',click=(app.symmetry_adjacent_scan,'[1]'),disabled=("sx_source_options.findIndex(x => x.value === sx_source) >= sx_source_options.length - 1",),variant='text',append_icon='mdi-chevron-right')
+        html.P('Saved results load for the selected scan. Switching scans reads and verifies their artifacts; it does not start new refinements.',v_if='!sx_setup && sx_source_options.length > 1',classes='rf-notice')
         with html.Div(v_if='!sx_setup && sx_results_current && sx_groups.length',classes='sx-layout'):
             with html.Aside(classes='rf-card'):
                 html.H3('Calculated-pattern groups')
@@ -171,6 +172,7 @@ def model_exploration(app):
                 html.P('{{ sx_groups.length }} groups; every model and disposition remains inspectable.',classes='rf-notice')
             with html.Div(classes='rf-card'):
                 html.H3('Selected model fit')
+                html.P('{{ sx_fit_title }}',v_if='sx_fit_title',classes='rf-notice')
                 with v.VAlert(v_if='sx_source_notices.length',type='warning',variant='tonal',density='compact',classes='my-2'):
                     html.Strong('Source requires review')
                     html.Div('{{ notice }}',v_for='notice in sx_source_notices',key='notice')

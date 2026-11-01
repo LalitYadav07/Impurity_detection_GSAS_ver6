@@ -361,7 +361,7 @@ def group_models(rows,*,relative_tolerance=1e-6):
     return groups
 
 
-def campaign_rows(root,*,experiment=None):
+def campaign_rows(root,*,experiment=None,acquisition=None):
     campaign=Campaign(root)
     protocols,trials,summaries=portfolio_snapshot(campaign)
     rows=[]
@@ -370,6 +370,7 @@ def campaign_rows(root,*,experiment=None):
         # another experiment must not delay the selected experiment's view.
         entry=protocols[trial['protocol']];metadata=entry['metadata'];protocol=entry['protocol']
         if experiment is not None and metadata.get('series')!=experiment:continue
+        if acquisition is not None and (protocol.get('acquisition_id') or protocol['source']['sha256'])!=acquisition:continue
         if trial['state']=='prepared':
             # Pending starts have no scientific evidence to display. Read their
             # exact sealed identity from the ledger once per protocol instead
