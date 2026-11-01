@@ -125,20 +125,22 @@ def test_failed_metadata_does_not_retry_or_contaminate_sibling_source(tmp_path):
     assert app.pumps==1 and not app._refinement_workspace.state['jobs']
 
 
-def test_current_selected_choices_remain_visible_and_unselected_options_wait(tmp_path):
+def test_all_verified_choices_remain_visible_and_new_selection_is_not_reset(tmp_path):
     records=[record(1),record(2)];service=Service(records);service.release=threading.Event()
     app=App(tmp_path,records,service);s=app.server.state
     s.rf_experiment='selected-experiment';s.rf_source='selected-source';s.rf_scans=['selected-scan']
     s.rf_experiments=[dict(value='selected-experiment'),dict(value='old-experiment')]
     s.rf_sources=[dict(value='selected-source'),dict(value='old-source')]
     s.rf_scan_options=[dict(value='selected-scan'),dict(value='old-scan')]
+    s.rf_sample_options=[dict(value='selected-sample'),dict(value='other-sample')]
+    s.rf_bank_options=[dict(value='2'),dict(value='5')]
+    original_options={name:copy.deepcopy(getattr(s,name)) for name in (
+        'rf_experiments','rf_sources','rf_scan_options','rf_sample_options','rf_bank_options')}
     async def run():
         pending=asyncio.create_task(app._refresh_refinement_sources())
         assert await asyncio.to_thread(service.entered.wait,5)
         assert s.rf_loading and 'Loading published project details' in s.rf_catalog_message
-        assert s.rf_sources==[dict(value='selected-source')]
-        assert s.rf_experiments==[dict(value='selected-experiment')]
-        assert s.rf_scan_options==[dict(value='selected-scan')]
+        assert {name:getattr(s,name) for name in original_options}==original_options
         # A user selection made while reads are pending is not overwritten.
         s.rf_experiment='user-choice';s.rf_source='user-source';s.rf_selected_job='user-job'
         service.release.set();await pending
@@ -227,6 +229,8 @@ def test_loading_message_is_rendered_in_refinement_workspace():
     app=RadarPdNovaApp()
     assert 'rf_catalog_message' in app.layout.html
     assert app.server.state.rf_catalog_message==''
+    app.server.state.rf_loading=True
+    assert 'result load' in app._session_action_blocker()
 
 
 def test_legacy_collection_stays_serial_and_retains_verified_cache(tmp_path):
@@ -250,3 +254,36 @@ def test_legacy_collection_stays_serial_and_retains_verified_cache(tmp_path):
     assert calls==['record-2'] and legacy.output_dir==str(tmp_path/'legacy')
     assert legacy.result_status=='ready'
     assert [s['record_uid'] for s in app._refinement_workspace.observations[0][0]]==['record-1','record-2']
+
+
+@pytest.mark.parametrize('pause_first',[False,True])
+def test_workspace_pause_and_observe_share_lock_and_do_not_leave_new_work_queued(tmp_path,pause_first):
+    from radar_pd_nova.refinement_workspace import RefinementWorkspace
+    workspace=RefinementWorkspace(tmp_path,history_id='history',runtime=SimpleNamespace(kind='galaxy'))
+    workspace.state['recipes']['recipe']=dict(id='recipe',experiment='experiment',armed=True,
+        scope=dict(experiment='experiment',mode='all'),approved_utc='1900-01-01',plan={'stages':[]})
+    source=dict(id='source',record_uid='record',experiment='experiment',scan_key='scan',source_sha256='a'*64)
+    if pause_first:
+        workspace.pause('experiment')
+        workspace.observe([source])
+        assert workspace.state['jobs']=={}
+    else:
+        entered=threading.Event();release=threading.Event();pause_started=threading.Event();pause_done=threading.Event()
+        enroll=workspace._enroll_future
+        def blocked_enroll(recipe):
+            entered.set();assert release.wait(5)
+            enroll(recipe)
+        workspace._enroll_future=blocked_enroll
+        def pause():
+            pause_started.set();workspace.pause('experiment');pause_done.set()
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            observation=pool.submit(workspace.observe,[source]);assert entered.wait(5)
+            pausing=pool.submit(pause);assert pause_started.wait(5)
+            assert not pause_done.is_set()
+            release.set();observation.result(timeout=5);pausing.result(timeout=5)
+        assert len(workspace.state['jobs'])==1
+        assert all(job['status']=='paused' for job in workspace.state['jobs'].values())
+    assert workspace.state['recipes']['recipe']['armed'] is False
+    jobs=copy.deepcopy(workspace.state['jobs'])
+    workspace.observe([{**source,'id':'late-source','scan_key':'late-scan','source_sha256':'b'*64}])
+    assert workspace.state['jobs']==jobs

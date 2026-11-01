@@ -389,13 +389,7 @@ class RefinementMixin(GuidedRefinementMixin):
 
     async def _refresh_refinement_sources(self):
         s=self.server.state;s.rf_loading=True;s.rf_error=''
-        s.rf_catalog_message='Refreshing published projects. Selected choices remain available while the catalog is checked.'
-        # Do not present stale unselected choices as a newly checked catalog.
-        for field,selected in (
-                ('rf_experiments',{s.rf_experiment}),('rf_sources',{s.rf_source}),
-                ('rf_sample_options',set(s.rf_samples or [])),
-                ('rf_scan_options',set(s.rf_scans or [])),('rf_bank_options',set(s.rf_banks or []))):
-            setattr(s,field,[item for item in (getattr(s,field,[]) or []) if item.get('value') in selected])
+        s.rf_catalog_message='Refreshing published projects. Existing choices remain available while the catalog is checked.'
         selection=(s.rf_experiment,s.rf_source,s.rf_selected_job)
         owner=object();self._refinement_catalog_owner=owner;workspace=None;service=self.service
         controller=getattr(self,'_powgen_controller',None)
@@ -441,7 +435,7 @@ class RefinementMixin(GuidedRefinementMixin):
             stamps={uid:_refinement_record_stamp(record) for uid,record in records.items()}
             watched_uids={r.uid for run_id,r in controller.records.items() if run_id in controller.state.completed} if controller else set()
             rows={r.get('record_uid'):copy.deepcopy(r) for r in (s.powgen_all_scientific_rows or [])}
-            s.rf_catalog_message='Loading published project details. Selected choices remain available.';s.flush()
+            s.rf_catalog_message='Loading published project details. Existing choices remain available.';s.flush()
             failures=await asyncio.to_thread(_prefetch_refinement_metadata,service,workspace,tuple(records.values()))
             if not owns_workspace():return
             sha_cache=dict(self._refinement_sha_cache)
