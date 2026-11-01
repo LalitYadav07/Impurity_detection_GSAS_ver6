@@ -136,9 +136,18 @@ def validate_custom_neutron_library(root, config, *, original_json=None, io_stat
         original_json_bytes_read=0, phase_npz_reads=0, profile_bundle_reads=0)
     manifest_path = root / 'manifest.json'
     manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {}
+    original_path = Path(original_json).expanduser() if original_json is not None else root / 'highsymm_metadata.json'
+    if not original_path.is_absolute():
+        original_path = root / original_path
+    if original_json is not None or original_path.exists():
+        if not original_path.is_file():
+            _fail('source metadata', 'the configured original JSON file is unavailable')
+        original_path = str(original_path)
+    else:
+        original_path = None
     loader = DBLoader(CatalogPaths(str(root / 'catalog_deduplicated.csv'),
         str(root / 'cif_map.json') if (root / 'cif_map.json').exists() else None,
-        str(original_json or root / 'highsymm_metadata.json')))
+        original_path))
     ids = _eligible_ids(loader, config)
     stats['catalog_rows'], stats['eligible_rows'] = len(loader.catalog), len(ids)
     hydrogen = [pid for pid in ids if int(loader._m_lo[loader._row_index[pid]]) & 1]

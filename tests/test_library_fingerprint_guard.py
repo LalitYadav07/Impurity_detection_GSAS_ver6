@@ -103,6 +103,22 @@ class LibraryFingerprintGuardContract(unittest.TestCase):
         self.assertEqual(result['io']['profile_bundle_reads'],0)
         self.assertEqual(hashes(root),before)
 
+    def test_local_cif_sources_do_not_require_optional_original_json(self):
+        for species in ('Fe','H','D','T'):
+            with self.subTest(species=species):
+                root=self.root/species;layout=pack(root,species,legacy=species in {'Fe','H'})
+                layout.original_json.unlink()
+                before=hashes(root)
+                result=validate_custom_neutron_library(root,{})
+                self.assertEqual(result['io']['original_json_reads'],0)
+                self.assertEqual(result['checked_isotope_phase_ids'],['p'] if species in {'D','T'} else [])
+                self.assertEqual(hashes(root),before)
+
+    def test_explicit_missing_original_json_is_an_actionable_error(self):
+        root=self.root/'explicit';pack(root,'H',legacy=True)
+        with self.assertRaisesRegex(LibraryFingerprintError,'configured original JSON file is unavailable'):
+            validate_custom_neutron_library(root,{},original_json=root/'missing.json')
+
     def test_changed_source_or_missing_bundle_receipt_or_wrong_row_fails(self):
         for corruption in ('source','bundle','row','generator','index'):
             with self.subTest(corruption=corruption):
