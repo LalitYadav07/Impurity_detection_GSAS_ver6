@@ -136,6 +136,40 @@ def test_cache_identity_binds_generator_source_and_settings(monkeypatch):
     assert nf.request_metadata(HEADER, "neutron", 1.55, 5, 100, 100)["request_sha256"] != base
 
 
+def test_generator_metadata_returns_deeply_independent_receipts():
+    natural_before = dict(ATOMIC_SCATTERING_LEN)
+    lengths_before = dict(nf.ISOTOPE_LENGTHS_FM)
+    entries_before = dict(nf.ISOTOPE_TABLE_PROVENANCE["entries"])
+    original = nf.generator_metadata()
+    received = nf.generator_metadata()
+    received["isotope_table"]["entries"]["D"] = "caller mutation"
+    received["isotope_lengths_fm"]["D"] = -999
+    received["isotope_table"]["new"] = ["caller-owned"]
+    received["generator"] = "caller replacement"
+    assert nf.generator_metadata() == original
+    assert dict(ATOMIC_SCATTERING_LEN) == natural_before
+    assert dict(nf.ISOTOPE_LENGTHS_FM) == lengths_before
+    assert dict(nf.ISOTOPE_TABLE_PROVENANCE["entries"]) == entries_before
+
+
+def test_cached_metadata_keeps_dependency_and_table_identity(monkeypatch):
+    original = nf.generator_metadata()
+    monkeypatch.setattr(nf, "_pymatgen_version", lambda: "future-pymatgen")
+    changed_version = nf.generator_metadata()
+    assert changed_version["pymatgen_version"] == "future-pymatgen"
+    assert changed_version != original
+    # Replace the local binding with a new mapping; never mutate the shared
+    # pymatgen table. A different actual table must get a different receipt.
+    changed_table = {**ATOMIC_SCATTERING_LEN, "H": ATOMIC_SCATTERING_LEN["H"] + .01}
+    monkeypatch.setattr(nf, "ATOMIC_SCATTERING_LEN", changed_table)
+    assert nf.generator_metadata()["natural_table_sha256"] != original["natural_table_sha256"]
+
+
+def test_named_isotope_ions_deliberately_share_nuclear_identity():
+    assert {nf.species_identity(get_el_sp(token)) for token in ["D", "D1+", "D1-"]} == {"D"}
+    assert {nf.species_identity(get_el_sp(token)) for token in ["T", "T1+", "T1-"]} == {"T"}
+
+
 def test_old_disk_fingerprint_is_rebuilt_before_resume(tmp_path):
     (tmp_path / "phases").mkdir()
     source = HEADER + "D1 D .12 .23 .34 1\nO1 O .67 .51 .19 1\n"

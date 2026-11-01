@@ -7,6 +7,30 @@ per-species coherent scattering length. No global scattering table is changed.
 D/T values below are from the frozen GSAS-II ``AtmBlens`` table. Its unit is
 10^-12 cm; multiplying by ten gives fm, the unit used by pymatgen. Natural
 elements deliberately retain pymatgen's existing table, including H=-3.739 fm.
+
+The reciprocal-point enumeration and powder-intensity calculation are adapted
+from pymatgen. The following notice applies to those portions:
+
+The MIT License (MIT)
+Copyright (c) 2011-2012 MIT & The Regents of the University of California,
+through Lawrence Berkeley National Laboratory
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 """
 from __future__ import annotations
 
@@ -14,6 +38,7 @@ import hashlib
 import importlib.metadata
 import json
 import math
+from functools import lru_cache
 from types import MappingProxyType
 
 import numpy as np
@@ -29,7 +54,7 @@ ISOTOPE_TABLE_PROVENANCE = MappingProxyType({
     "source_unit": "10^-12 cm",
     "fingerprint_unit": "fm",
     "conversion_factor": 10,
-    "entries": {"D": "D_ / H_2: 0.6681", "T": "T_ / H_3: 0.4792"},
+    "entries": MappingProxyType({"D": "D_ / H_2: 0.6681", "T": "T_ / H_3: 0.4792"}),
     "deuterium_reference": "Snow (2020), doi:10.1103/PhysRevD.101.062004 (GSAS-II table annotation)",
 })
 
@@ -39,7 +64,11 @@ def _digest(value) -> str:
 
 
 def species_identity(species) -> str:
-    """Keep named isotope identity; retain charge in cache/symmetry identity."""
+    """D/T ions share nuclear identity regardless of charge.
+
+    Other species retain their existing charge labels for cache and symmetry
+    compatibility; D+, D- and neutral D deliberately all use the D nucleus.
+    """
     if isinstance(species, DummySpecies):
         raise ValueError(f"Unsupported neutron atom/isotope {species!s}; an explicit supported species is required")
     name = getattr(species, "name", None)
@@ -58,20 +87,44 @@ def named_isotopes(structure) -> tuple[str, ...]:
     return tuple(sorted(identities.intersection(ISOTOPE_LENGTHS_FM)))
 
 
+@lru_cache(maxsize=1)
+def _pymatgen_version() -> str:
+    # Installed dependencies are fixed for this process. Avoid a distribution
+    # metadata scan for every candidate lattice tested by the nudge cache.
+    return importlib.metadata.version("pymatgen")
+
+
+@lru_cache(maxsize=32)
+def _generator_metadata_json(radiation, generator_version, pymatgen_version,
+                             natural_items, isotope_items, provenance_json) -> str:
+    """Cache only immutable text, keyed by every version/table identity."""
+    if radiation != "neutron":
+        metadata = {"generator": "pymatgen-xrd", "pymatgen_version": pymatgen_version}
+    else:
+        metadata = {
+            "generator": generator_version,
+            "pymatgen_version": pymatgen_version,
+            "natural_table": "pymatgen/neutron_scattering_length.json (unchanged)",
+            "natural_table_sha256": _digest(dict(natural_items)),
+            "isotope_lengths_fm": dict(isotope_items),
+            "isotope_table": json.loads(provenance_json),
+            "symmetry_refinement": "disabled for isotope-bearing structures",
+        }
+    return json.dumps(metadata, sort_keys=True, separators=(",", ":"), allow_nan=False)
+
+
 def generator_metadata(radiation: str = "neutron") -> dict:
-    """A portable receipt for the actual calculator/table generation."""
-    version = importlib.metadata.version("pymatgen")
-    if radiation.lower() != "neutron":
-        return {"generator": "pymatgen-xrd", "pymatgen_version": version}
-    return {
-        "generator": GENERATOR_VERSION,
-        "pymatgen_version": version,
-        "natural_table": "pymatgen/neutron_scattering_length.json (unchanged)",
-        "natural_table_sha256": _digest(ATOMIC_SCATTERING_LEN),
-        "isotope_lengths_fm": dict(ISOTOPE_LENGTHS_FM),
-        "isotope_table": dict(ISOTOPE_TABLE_PROVENANCE),
-        "symmetry_refinement": "disabled for isotope-bearing structures",
-    }
+    """Return an independent, portable receipt for the calculator generation."""
+    radiation = radiation.lower()
+    natural_items = tuple(sorted(ATOMIC_SCATTERING_LEN.items())) if radiation == "neutron" else ()
+    isotope_items = tuple(sorted(ISOTOPE_LENGTHS_FM.items())) if radiation == "neutron" else ()
+    provenance = {**ISOTOPE_TABLE_PROVENANCE, "entries": dict(ISOTOPE_TABLE_PROVENANCE["entries"])}
+    provenance_json = json.dumps(provenance, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    serialized = _generator_metadata_json(radiation, GENERATOR_VERSION, _pymatgen_version(),
+                                          natural_items, isotope_items, provenance_json)
+    # Returning the cached dict itself would let one caller rewrite subsequent
+    # fingerprints. JSON decoding makes all nested dictionaries independent.
+    return json.loads(serialized)
 
 
 def request_metadata(cif_content: str, radiation: str, wavelength: float,
