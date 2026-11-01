@@ -78,6 +78,8 @@ class PhaseInput:
     source_name: str
     cif_path: Path
     cif_content: str
+    reviewed_occupancy_excess: float = 0.0
+    occupancy_review_note: str = ''
 
 
 @dataclass(frozen=True)
@@ -278,17 +280,23 @@ def _worker_init() -> None:
 
 def _phase_id_for_cif(path: Path, cif_content: str, prefix: str = "user") -> str:
     stem = _sanitize_token(path.stem)
-    digest = hashlib.sha1(cif_content.encode("utf-8")).hexdigest()[:10]
+    from cif_occupancy import canonical_bytes
+    digest = hashlib.sha1(canonical_bytes(cif_content.encode("utf-8"))).hexdigest()[:10]
     return f"{prefix}_{stem}_{digest}"
 
 
-def collect_phase_inputs(cif_paths: Sequence[str | Path], prefix: str = "user") -> List[PhaseInput]:
+def collect_phase_inputs(cif_paths: Sequence[str | Path], prefix: str = "user", *, reviewed_occupancy_excess: float = 0.0, occupancy_review_note: str = '') -> List[PhaseInput]:
+    from cif_occupancy import maximum_excess
+    reviewed_occupancy_excess=maximum_excess(reviewed_occupancy_excess)
+    if reviewed_occupancy_excess and not occupancy_review_note.strip():
+        raise ValueError('An explicit occupancy review note is required')
     seen_content_digests: set[str] = set()
     out: List[PhaseInput] = []
     for raw in cif_paths:
         path = Path(raw).expanduser().resolve()
-        cif_text = path.read_text(encoding="utf-8")
-        content_digest = hashlib.sha1(cif_text.encode("utf-8")).hexdigest()
+        cif_text = path.read_bytes().decode("utf-8")
+        from cif_occupancy import canonical_bytes
+        content_digest = hashlib.sha1(canonical_bytes(cif_text.encode("utf-8"))).hexdigest()
         if content_digest in seen_content_digests:
             continue
         seen_content_digests.add(content_digest)
@@ -298,6 +306,8 @@ def collect_phase_inputs(cif_paths: Sequence[str | Path], prefix: str = "user") 
             source_name=path.name,
             cif_path=path,
             cif_content=cif_text,
+            reviewed_occupancy_excess=reviewed_occupancy_excess,
+            occupancy_review_note=occupancy_review_note,
         ))
     return out
 
@@ -457,7 +467,20 @@ def _materialize_phase(
     layout: Any,
 ) -> Tuple[Optional[Dict[str, Any]], Optional[np.ndarray], Optional[Dict[str, Any]], Optional[Dict[str, str]]]:
     dest_cif = layout.cifs_dir / f"{phase.phase_id}.cif"
-    dest_cif.write_text(phase.cif_content, encoding="utf-8")
+    dest_cif.write_bytes(phase.cif_content.encode("utf-8"))
+    review=None
+    if phase.reviewed_occupancy_excess:
+        from cif_occupancy import make_review, policy_hash, write_review
+        try:
+            review=make_review(dest_cif.read_bytes(),phase.reviewed_occupancy_excess,phase.occupancy_review_note)
+            if review['affected_sites']:
+                review['source_name'] = phase.source_name
+                review['policy_sha256'] = policy_hash(review)
+                write_review(dest_cif,review)
+            else:
+                review = None
+        except ValueError as exc:
+            return None,None,None,{'id':phase.phase_id,'source_name':phase.source_name,'error':str(exc)}
     row, fail, _ = process_one_phase(
         phase.phase_id,
         {"cif_content": phase.cif_content},
@@ -471,6 +494,7 @@ def _materialize_phase(
         False,
         settings.radiation,
         settings.wavelength if settings.wavelength is not None else NEUTRON_DEFAULT_WAVELENGTH,
+        occupancy_review=review,
     )
     if row is None:
         msg = "unknown failure"
@@ -497,15 +521,9 @@ def _materialize_phase(
         "spacegroup_symbol": row["SG_symbol"],
         "energy_above_hull_eV_per_atom": -1.0,
     }
-    meta_row = {
-        "cif_content": phase.cif_content,
-        "composition": {},
-        "formula_pretty": row["pretty_formula"],
-        "display_name": row["display_name"],
-        "space_group": int(row["space_group"]),
-        "SG_symbol": row["SG_symbol"],
-        "source_name": phase.source_name,
-    }
+    # Worker results must carry the policy into both the original-CIF record
+    # and the archive manifest; a sidecar alone is not a portable declaration.
+    row["occupancy_review"] = review
     return row, profile, stable_row, None
 
 
@@ -627,7 +645,10 @@ def _find_matching_base_phase_ids(
         return []
 
     try:
-        ref_structure = Structure.from_file(str(phase.cif_path))  # type: ignore[union-attr]
+        from cif_occupancy import make_review, load_structure
+        review=(make_review(phase.cif_path.read_bytes(),phase.reviewed_occupancy_excess,phase.occupancy_review_note)
+                if phase.reviewed_occupancy_excess else None)
+        ref_structure = load_structure(phase.cif_path,review)
         ref_elements = sorted({str(el) for el in ref_structure.composition.as_dict().keys()})
         ref_hi, ref_lo = build_mask(ref_elements)
         analyzer = SpacegroupAnalyzer(ref_structure, symprec=1e-2, angle_tolerance=5.0)  # type: ignore[misc]
@@ -751,6 +772,7 @@ def _build_phase_batch(
                     "SG_symbol": row["SG_symbol"],
                     "symmetry_provenance": row.get("symmetry_provenance", {}),
                     "source_name": source_name,
+                    "occupancy_review": row.get("occupancy_review"),
                 }
                 phase_ids.append(phase_id)
 
@@ -787,10 +809,12 @@ def build_mini_db_pack(
     wavelength_override: Optional[float] = None,
     overwrite: bool = False,
     progress_callback: ProgressCallback = None,
+    reviewed_occupancy_excess: float = 0.0,
+    occupancy_review_note: str = '',
 ) -> BuildResult:
     build_started_at = time.perf_counter()
     raw_input_count = len(cif_paths)
-    phase_inputs = collect_phase_inputs(cif_paths)
+    phase_inputs = collect_phase_inputs(cif_paths,reviewed_occupancy_excess=reviewed_occupancy_excess,occupancy_review_note=occupancy_review_note)
     if not phase_inputs:
         raise ValueError("No CIF files provided")
     total_phases = len(phase_inputs)
@@ -878,6 +902,7 @@ def build_mini_db_pack(
         "simulation": settings.to_manifest_dict(),
         "phase_ids": phase_ids,
         "failures": failures,
+        "occupancy_reviews": {pid: meta_rows[pid]['occupancy_review'] for pid in phase_ids if meta_rows[pid].get('occupancy_review')},
     }
     _write_manifest(layout, manifest)
     _emit_progress(
@@ -917,10 +942,12 @@ def build_augmented_db_pack(
     wavelength_override: Optional[float] = None,
     overwrite: bool = False,
     progress_callback: ProgressCallback = None,
+    reviewed_occupancy_excess: float = 0.0,
+    occupancy_review_note: str = '',
 ) -> BuildResult:
     build_started_at = time.perf_counter()
     raw_input_count = len(cif_paths)
-    phase_inputs = collect_phase_inputs(cif_paths)
+    phase_inputs = collect_phase_inputs(cif_paths,reviewed_occupancy_excess=reviewed_occupancy_excess,occupancy_review_note=occupancy_review_note)
     if not phase_inputs:
         raise ValueError("No CIF files provided")
     total_phases = len(phase_inputs)
@@ -962,6 +989,10 @@ def build_augmented_db_pack(
     base_load_started_at = time.perf_counter()
     base_catalog_df, base_stable_df, base_profiles, base_index_df = _build_base_frames(Path(base_db_root))
     base_layout = get_db_pack_layout(base_db_root)
+    if base_layout.manifest_json.exists():
+        base_manifest = json.loads(base_layout.manifest_json.read_text(encoding="utf-8"))
+        if base_manifest.get("occupancy_reviews"):
+            raise ValueError("A reviewed custom library cannot be used as the base of an augmented pack; rebuild from its original CIF sources with explicit review")
     base_loader = DBLoader(CatalogPaths(
         catalog_csv=str(base_layout.catalog_csv),
         cif_map_json=str(base_layout.cif_map_json) if base_layout.cif_map_json.exists() else None,
@@ -1170,6 +1201,7 @@ def build_augmented_db_pack(
         "simulation": settings.to_manifest_dict(),
         "phase_ids": phase_ids,
         "failures": failures,
+        "occupancy_reviews": {pid:_meta_rows[pid]['occupancy_review'] for pid in phase_ids if _meta_rows[pid].get('occupancy_review')},
     }
     _write_manifest(layout, manifest)
     _emit_progress(

@@ -61,6 +61,7 @@ def configuration_form_values(config: AnalysisConfig) -> dict[str, Any]:
 
 
 CONFIG_FORM_FIELDS = (
+    "library_review",
     "analysis_mode",
     "background_mode",
     "background_terms",
@@ -202,6 +203,10 @@ def full_profile_settings(profile: str) -> dict[str, Any]:
 
 
 def configuration_from_form(state: Any) -> AnalysisConfig:
+    from .library_setup import library_source_key
+    review=dict(getattr(state,'library_review',{}) or {})
+    if review and review.get('source_key')!=library_source_key(state):
+        raise ValueError('The selected library changed; review its qualifications again')
     run_name = str(state.run_name or "").strip()
     fit_start = _optional_float(state.fit_start)
     fit_end = _optional_float(state.fit_end)
@@ -216,6 +221,7 @@ def configuration_from_form(state: Any) -> AnalysisConfig:
         or (state.main_cif_source == "ipts" and bool(state.facility_main_cif_path))
     )
     values: dict[str, Any] = {
+        'library_review':review,
         "mode": state.analysis_mode,
         "radiation": state.radiation,
         "instrument_mode": state.instrument_mode,

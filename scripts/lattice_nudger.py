@@ -31,32 +31,9 @@ logger = logging.getLogger(__name__)
 
 
 def _load_cif_structure_relaxed(cif_path: str | Path) -> Structure:
-    """Load user/CIF-exported structures with the same tolerance used elsewhere.
-
-    GSAS-II can read a number of CIFs that pymatgen's default
-    ``Structure.from_file`` rejects, especially refined/exported CIFs with
-    slightly over-occupied sites. Main-phase lattice nudging should not fail
-    only because this helper used a stricter parser than the rest of RADAR-PD.
-    """
-    cif_path = Path(cif_path)
-    parser_error: Exception | None = None
-    try:
-        from pymatgen.io.cif import CifParser
-
-        structures = CifParser(str(cif_path), occupancy_tolerance=2.0).parse_structures(primitive=False)
-        if structures:
-            return structures[0]
-        parser_error = RuntimeError("CifParser returned no structures")
-    except Exception as exc:
-        parser_error = exc
-
-    try:
-        return Structure.from_file(str(cif_path))
-    except Exception as exc:
-        raise RuntimeError(
-            f"Could not parse CIF for lattice nudging: {cif_path}. "
-            f"Relaxed parser error: {parser_error}; default parser error: {exc}"
-        ) from exc
+    """Retain the compatibility entry point, with strict/explicit review policy."""
+    from cif_occupancy import load_authorized_structure
+    return load_authorized_structure(cif_path)
 try:
     from xray_doublet import apply_doublet_to_peaks, describe_doublet, is_active_for
 except Exception:
@@ -300,16 +277,12 @@ def _monoclinic_constraints_for_lattice(L: Lattice) -> LatticeConstraints:
                               False, False, False, 90.0, None, 90.0)
 
 def _rebuild_with_lattice(base_struct: Structure, new_latt: Lattice) -> Structure:
-    # Works for ordered & disordered sites
-    per_site_species = [site.species for site in base_struct]  # list of Composition
-    return Structure(
-        new_latt,
-        per_site_species,
-        base_struct.frac_coords,
-        site_properties=base_struct.site_properties,
-        charge=getattr(base_struct, "charge", None),
-        coords_are_cartesian=False,
-    )
+    # A constructor/copy() reapplies pymatgen's unreviewed occupancy limit.
+    # Deep-copy the independently validated sites and change only their cell.
+    from copy import deepcopy
+    result = deepcopy(base_struct)
+    result.lattice = new_latt
+    return result
 
 def _lattice_deviation_metric(
     base_lat: Lattice,
@@ -1300,10 +1273,22 @@ class LatticeNudger:
         # Add structure caching to avoid repeated database loads
         self._structure_cache = {}
         self._cif_source_cache = {}
+        self._structure_source_keys = {}
 
     def _structure_for_pid(self, pid: str) -> Structure:
-        if pid not in self._structure_cache:
-            self._structure_cache[pid] = self.db.load_structure(pid)
+        from cif_occupancy import cache_identity
+        source = getattr(self, "_cif_source_cache", {}).get(pid)
+        if source is None and hasattr(self.db, "ensure_cif_on_disk"):
+            source = self.db.ensure_cif_on_disk(pid)
+        key = cache_identity(source)
+        keys = getattr(self, "_structure_source_keys", {})
+        if pid not in self._structure_cache or keys.get(pid) != key:
+            self._structure_cache[pid] = (_load_cif_structure_relaxed(source)
+                                          if source else self.db.load_structure(pid))
+            keys[pid] = key
+            self._structure_source_keys = keys
+            if source:
+                self._cif_source_cache[pid] = str(source)
         return self._structure_cache[pid]
 
     def optimize_cif(self,
@@ -1339,6 +1324,10 @@ class LatticeNudger:
         if not hasattr(self, "_cif_source_cache"):
             self._cif_source_cache = {}
         self._cif_source_cache[safe_pid] = str(cif)
+        from cif_occupancy import cache_identity
+        if not hasattr(self, "_structure_source_keys"):
+            self._structure_source_keys = {}
+        self._structure_source_keys[safe_pid] = cache_identity(cif)
         return self.optimize_one(
             safe_pid,
             Q_res,
@@ -1370,6 +1359,11 @@ class LatticeNudger:
 
             if Path(source).resolve() == Path(path).resolve():
                 raise ValueError("Nudged output must not overwrite its source CIF")
+            from cif_occupancy import authorized_review, load_authorized_structure, same_site_values
+            original = load_authorized_structure(source)
+            review = authorized_review(source)
+            if (review is not None or structure.properties.get("radar_occupancy_review")) and not same_site_values(original, structure):
+                raise ValueError("Lattice nudging changed source atom sites or occupancies")
             source_sha256 = hashlib.sha256(Path(source).read_bytes()).hexdigest()
             document = CifFile.ReadCif(str(source))
             blocks = [document[key] for key in document.keys()
@@ -1393,6 +1387,8 @@ class LatticeNudger:
                     block["_atom_type_oxidation_number"] = ["0"] * len(block["_atom_type_oxidation_number"])
             Path(path).write_text(document.WriteOut(), encoding="utf-8")
             _sanitize_cif_data_block(path, pid, suffix="nudged", maxlen=5)
+            from cif_occupancy import derive_review
+            derive_review(source,path,neutral_elements=self.radiation == "neutron")
             Path(path + ".nudge.json").write_text(json.dumps({
                 "source_sha256": source_sha256,
                 "operation": "lattice only; source symmetry, fractional sites and occupancies retained",
@@ -1402,6 +1398,8 @@ class LatticeNudger:
         # Nuclear neutron scattering uses elements, not ionic X-ray form
         # factors. Fractional oxidation-state labels emitted by pymatgen can
         # otherwise be misread by GSAS-II as unknown atoms (falling back to H).
+        if structure.properties.get("radar_occupancy_review") or any(sum(site.species.values()) > 1 for site in structure):
+            raise ValueError("Reviewed occupancy requires the original CIF for a lattice-only derivative")
         exported = structure.copy()
         if self.radiation == "neutron":
             exported.remove_oxidation_states()

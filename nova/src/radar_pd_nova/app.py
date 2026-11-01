@@ -142,6 +142,7 @@ def _application_version() -> str:
 
 
 _SUBMISSION_FIELDS = (
+    "library_review",
     "analysis_mode", "radiation", "instrument_mode", "input_source", "instrument_source", "data_path", "instrument_path",
     "main_cif_path", "database_archive_path", "main_cif_source", "database_source", "library_archive_source", "event_file_path",
     "use_builtin_cuka", "ipts_instrument", "ipts", "run_number", "bank", "sample_elements",
@@ -309,6 +310,8 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         self.server.state.change("run_selection")(self._run_selection_changed)
         self.server.state.change(*_SUBMISSION_FIELDS[:-2])(self._submission_form_changed)
         self.server.state.change("workflow_mode")(self._workflow_mode_changed)
+        self.server.state.change('database_source','library_archive_source','history_database_id','database_archive_path')(lambda **_:self._invalidate_library_review('single'))
+        self.server.state.change('live_database_source','live_library_archive_source','powgen_database_dataset_id','live_database_archive_path')(lambda **_:self._invalidate_library_review('live'))
         self.server.state.change("radiation")(self._radiation_changed)
         self.server.state.change("facility_site")(self._facility_site_changed)
         self.server.state.change("facility_instrument")(self._facility_instrument_changed)
@@ -564,6 +567,13 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         state.library_builder_decision_pending = False
         state.library_builder_decision_token = ""
         state.library_builder_failure_search = ""
+        state.library_review = {}
+        state.library_review_source = ''
+        state.library_review_preview = {}
+        state.library_review_loading = False
+        state.library_review_message = ''
+        state.library_builder_allow_rounding = False
+        state.library_builder_rounding_note = ''
         state.sns_resolution = {}
         state.use_facility_workspace = False
         state.facility_site = "SNS"
@@ -8068,6 +8078,68 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
 
         self._schedule_utility(save(), "radar-save-configuration")
 
+    def _invalidate_library_review(self, context: str = 'single') -> None:
+        from .library_setup import library_source_key
+        draft=LibraryDraft(self.server.state,context)
+        current=library_source_key(draft)
+        if getattr(draft,'library_review_source','') != current:
+            getattr(self,'_library_review_tokens',{}).pop(context,None)
+            draft.library_review={}
+            draft.library_review_preview={}
+            draft.library_review_source=''
+            draft.library_review_message=''
+            draft.library_review_loading=False
+
+    def review_candidate_library(self, context: str = 'single', **_) -> None:
+        from .library_setup import library_source_key, inspect_library_review
+        draft=LibraryDraft(self.server.state,context)
+        if getattr(draft,'library_review_loading',False):return
+        signature=library_source_key(draft)
+        if draft.database_source!='archive':return
+        identifier=str(getattr(draft,'history_database_id','') or '')
+        local=str(getattr(draft,'database_archive_path','') or '')
+        source=str(draft.library_archive_source)
+        tokens=getattr(self,'_library_review_tokens',None)
+        if tokens is None:tokens=self._library_review_tokens={}
+        token=object();tokens[context]=token
+        draft.library_review_loading=True
+        draft.library_review_message='Reading the selected library manifest and source hashes...'
+        draft.flush()
+
+        async def inspect():
+            try:
+                if source=='galaxy':
+                    if not identifier:raise ValueError('Choose a library archive first')
+                    preview=await asyncio.to_thread(self.service.inspect_library_review,identifier)
+                else:
+                    if not local:raise ValueError('Choose a library archive first')
+                    preview=await asyncio.to_thread(inspect_library_review,local)
+                if tokens.get(context) is not token or library_source_key(draft)!=signature:return
+                draft.library_review_preview={**preview,'source_key':signature}
+                draft.library_review_message=(
+                    'Unverified archive declaration: review the listed source failures and bounded occupancy allowance. Actual affected sites remain unknown until native source validation. Values must remain unchanged; this does not certify specimen composition.'
+                    if preview['requires_review'] else 'The archive declares no source failures or occupancy allowance. This is not a crystallographic validation.')
+            except Exception as exc:
+                if tokens.get(context) is token and library_source_key(draft)==signature:
+                    draft.library_review_message=f'Library review failed: {exc}'
+            finally:
+                if tokens.get(context) is token:
+                    tokens.pop(context,None)
+                    draft.library_review_loading=False
+                    draft.flush()
+        self._schedule_utility(inspect(),'radar-library-review')
+
+    def approve_candidate_library_review(self, context: str = 'single', **_) -> None:
+        from .library_setup import library_source_key, activation_for_review
+        draft=LibraryDraft(self.server.state,context)
+        preview=getattr(draft,'library_review_preview',{}) or {}
+        current=library_source_key(draft)
+        if not preview or preview.get('source_key')!=current or getattr(draft,'library_review_loading',False):return
+        draft.library_review={**activation_for_review(preview),'source_key':current}
+        draft.library_review_source=current
+        draft.library_review_message='Bounded library policy permitted for this configuration. Native validation must verify the original source before analysis; this is not certification. Replacing the library invalidates this permission.'
+        draft.flush()
+
     def build_candidate_library(self, context: str = "single", **_: Any) -> None:
         state = LibraryDraft(self.server.state, context)
         if state.library_builder_active or (context == "live" and (self.server.state.powgen_monitoring or self.server.state.live_launch_busy)):
@@ -8084,6 +8156,12 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
             state.error_message = "Enter a library name before building."
             return
         library_mode = "augmented" if state.database_source == "custom_augmented" else "mini"
+        rounding=bool(getattr(state,'library_builder_allow_rounding',False))
+        rounding_note=str(getattr(state,'library_builder_rounding_note','') or '').strip()
+        if rounding and not rounding_note:
+            state.library_builder_message='Enter a review note before allowing occupancy rounding.'
+            state.flush()
+            return
         generation = uuid.uuid4().hex
         state.library_builder_generation = generation
         state.library_builder_partial_review = {}
@@ -8104,6 +8182,10 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
 
         async def build() -> None:
             try:
+                if rounding:
+                    supported=await asyncio.to_thread(self.service.tool_has_input,LIBRARY_BUILDER_TOOL_ID,'reviewed_occupancy_excess')
+                    if not supported:
+                        raise ValueError('The installed Library Builder does not support reviewed occupancy rounding. Strict builds remain available; a compatible builder wrapper and backend are required.')
                 state.library_builder_message = "Validating and deduplicating selected CIF and ZIP sources..."
                 state.library_builder_progress = 12
                 state.flush()
@@ -8180,6 +8262,8 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                         "library_mode": library_mode,
                         "radiation": radiation,
                         "overwrite": "",
+                        "reviewed_occupancy_excess": '0.001' if rounding else '0',
+                        "occupancy_review_note": rounding_note if rounding else '',
                     },
                 )
             except asyncio.CancelledError:

@@ -4,10 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import json
+import hashlib
+import math
+from pathlib import Path
 import re
+import zipfile
 from typing import Any, Callable
 
 LIBRARY_FIELDS = (
+    "library_review", "library_review_source", "library_review_preview", "library_review_loading", "library_review_message",
+    "library_builder_allow_rounding", "library_builder_rounding_note",
     "database_source",
     "library_archive_source",
     "database_archive_path",
@@ -35,6 +41,103 @@ LIBRARY_FIELDS = (
     "library_builder_decision_token",
     "library_builder_failure_search",
 )
+
+
+def library_source_key(state: Any) -> str:
+    return json.dumps([getattr(state,'database_source',None),getattr(state,'library_archive_source',None),
+                       getattr(state,'history_database_id',None),getattr(state,'database_archive_path',None)])
+
+
+def inspect_library_review(path: str | Path) -> dict[str, Any]:
+    """Inspect bounded manifest/CIF members; never trust a reviewed flag as consent."""
+    path=Path(path)
+    with zipfile.ZipFile(path) as archive:
+        if len(set(archive.namelist())) != len(archive.namelist()):
+            raise ValueError('Library archive contains duplicate member names')
+        names=[name for name in archive.namelist() if name.rstrip('/').endswith('/manifest.json') or name=='manifest.json']
+        if not names:
+            return {'archive_sha256':hashlib.sha256(path.read_bytes()).hexdigest(),
+                    'policy_set_sha256':hashlib.sha256(b'{}').hexdigest(),'phase_count':None,
+                    'reviews':[],'failures':[],'requires_review':False,
+                    'evidence_verification':'unverified archive declaration','actual_affected_site_count':None}
+        if len(names)!=1 or archive.getinfo(names[0]).file_size>2_000_000:
+            raise ValueError('Library must contain one bounded manifest')
+        manifest=json.loads(archive.read(names[0]))
+        count=library_manifest_phase_count(manifest)
+        reviews=manifest.get('occupancy_reviews') or {}
+        if not isinstance(reviews,dict):raise ValueError('Invalid library occupancy reviews')
+        root=names[0][:-len('manifest.json')]
+        mapping=json.loads(archive.read(root+'cif_map.json')) if reviews else {}
+        if not isinstance(mapping,dict) or not set(reviews).issubset(mapping):
+            raise ValueError('Reviewed sources are missing from the library CIF map')
+        rows=[]
+        for phase,review in reviews.items():
+            if not isinstance(review,dict) or review.get('schema')!='radar-cif-occupancy-review/v1' or review.get('reviewed') is not True or review.get('normalization_applied') is not False:
+                raise ValueError('Invalid reviewed occupancy record')
+            excess=review.get('maximum_site_excess')
+            if isinstance(excess,bool) or not isinstance(excess,(int,float)) or not 0<excess<=.001:
+                raise ValueError('Reviewed occupancy exceeds the 0.001 cap')
+            if not isinstance(review.get('review_note'),str) or not review['review_note'].strip():
+                raise ValueError('Reviewed occupancy declaration has no review note')
+            body={k:v for k,v in review.items() if k!='policy_sha256'}
+            digest=hashlib.sha256(json.dumps(body,sort_keys=True,separators=(',',':'),allow_nan=False).encode()).hexdigest()
+            if digest!=review.get('policy_sha256'):raise ValueError('Library occupancy policy hash mismatch')
+            if not isinstance(mapping[phase],str):
+                raise ValueError('Invalid reviewed CIF mapping')
+            member=root+mapping[phase]
+            if Path(mapping[phase]).is_absolute() or '..' in Path(member).parts or archive.getinfo(member).file_size>2_000_000:
+                raise ValueError('Invalid reviewed CIF member')
+            file_hash=hashlib.sha256(archive.read(member)).hexdigest()
+            if file_hash not in {review.get('source_sha256'),review.get('canonical_sha256')}:
+                raise ValueError('Reviewed CIF bytes do not match the manifest')
+            sites=review.get('affected_sites')
+            composition=review.get('composition')
+            def nonnegative_number(value):
+                return not isinstance(value,bool) and isinstance(value,(int,float)) and math.isfinite(value) and value>=0
+            if not isinstance(sites,list) or not sites:
+                raise ValueError('An occupancy allowance needs declared affected-site evidence; an empty declaration cannot be reviewed')
+            if not isinstance(composition,dict) or not composition or not all(nonnegative_number(v) for v in composition.values()) or sum(composition.values())<=0:
+                raise ValueError('Reviewed occupancy declaration has no finite source composition')
+            for site in sites:
+                if not isinstance(site,dict):raise ValueError('Invalid declared site evidence')
+                components=site.get('components');total=site.get('total');xyz=site.get('fractional_coordinates');labels=site.get('labels')
+                if (not isinstance(components,dict) or not components
+                    or not all(nonnegative_number(v) for v in components.values())
+                    or not nonnegative_number(total) or not 1<total<=1+excess+1e-12
+                    or not math.isclose(math.fsum(components.values()),total,rel_tol=0,abs_tol=1e-12)
+                    or not isinstance(xyz,list) or len(xyz)!=3 or not all(isinstance(v,(int,float)) and not isinstance(v,bool) and math.isfinite(v) for v in xyz)
+                    or not isinstance(labels,list) or not labels or not all(isinstance(v,str) and v.strip() for v in labels)):
+                    raise ValueError('Inconsistent declared occupancy site evidence')
+                rows.append({'phase':phase,'source_name':review.get('source_name') or phase,
+                             'labels':labels,'total':total,'components':components,
+                             'maximum_site_excess':excess,'evidence_verification':'unverified declaration'})
+        set_hash=hashlib.sha256(json.dumps({k:v['policy_sha256'] for k,v in reviews.items()},sort_keys=True,separators=(',',':')).encode()).hexdigest()
+        try:
+            from .library_review import partial_library_archive_review
+        except ImportError:
+            partial = None
+        else:
+            partial = partial_library_archive_review(manifest)
+        incomplete = partial['requires_review'] if partial is not None else bool(manifest.get('failures'))
+    return {'archive_sha256':hashlib.sha256(path.read_bytes()).hexdigest(),'policy_set_sha256':set_hash,
+            'phase_count':count,'reviews':rows,'failures':list(manifest.get('failures') or []),
+            'requires_review':bool(reviews or incomplete),'requires_incomplete_review':incomplete,
+            'manifest':manifest,'partial_review':partial,
+            'evidence_verification':'unverified archive declaration',
+            'actual_affected_site_count':None,'declared_affected_site_count':len(rows)}
+
+
+def activation_for_review(preview: dict[str, Any]) -> dict[str, Any]:
+    return {'acknowledged':True,'archive_sha256':preview['archive_sha256'],
+            'policy_set_sha256':preview['policy_set_sha256'],
+            'allow_incomplete':bool(preview.get('requires_incomplete_review',preview.get('failures')))}
+
+
+def require_library_activation(preview: dict[str, Any], activation: dict[str, Any]) -> None:
+    if not preview['requires_review'] and not activation:return
+    expected=activation_for_review(preview)
+    if not activation or any(activation.get(k)!=v for k,v in expected.items()):
+        raise ValueError('Review the selected library occupancy allowances and failed sources before analysis; the source or policy may have changed')
 
 
 class LibraryManifestReadError(ValueError):
@@ -132,6 +235,7 @@ class LibraryDraft:
                     "library_builder_name",
                     "library_builder_cif_ids",
                     "library_builder_local_paths",
+                    "library_builder_allow_rounding", "library_builder_rounding_note",
                     "radiation",
                 )
             },

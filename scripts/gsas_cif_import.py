@@ -28,7 +28,11 @@ def elemental_counts(atom_types):
         match = re.fullmatch(r"([A-Z][a-z]?)(?:(?:[+-]\d*)|(?:\d+[+-]))?", species)
         if not match:
             raise ValueError("Unrecognized atom type in imported CIF; structure review required")
-        result[match[1]] += float(count)
+        amount = float(count)
+        if not math.isfinite(amount) or amount < 0:
+            raise ValueError("Invalid atom count in imported CIF; structure review required")
+        if amount:
+            result[match[1]] += amount
     return dict(result)
 
 
@@ -187,9 +191,14 @@ def add_verified_phase(project, cif_file, **kwargs):
     source = Path(cif_file).resolve(strict=True)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        original = Structure.from_file(source)
-    original.remove_oxidation_states()
-    expected = original.composition.get_el_amt_dict()
+        from cif_occupancy import load_authorized_structure
+        original = load_authorized_structure(source)
+    # Elemental aggregation already ignores oxidation states. Mutating each
+    # species through pymatgen's setter would reject an explicitly reviewed
+    # small excess, even though its unchanged values are the import reference.
+    from cif_occupancy import authorized_review, raw_sites, species_inventory, species_key, _species
+    expected = species_inventory(original)
+    review = authorized_review(source)
     cache = Path(project.filename).resolve().parent / "verified_cif_settings"
     prepared = prepare_cif_for_gsas(source, cache)
     phase = project.add_phase(str(prepared), **kwargs)
@@ -199,12 +208,36 @@ def add_verified_phase(project, cif_file, **kwargs):
         not math.isclose(expected[k] / e_sum, actual[k] / a_sum, abs_tol=1e-6, rel_tol=1e-6) for k in expected
     ):
         raise ValueError("CIF import changed the relative elemental atom counts; refinement withheld for structure-setting review")
+    if review is not None:
+        if any(not math.isclose(expected[key],actual[key],rel_tol=0,abs_tol=1e-8) for key in expected):
+            raise ValueError("CIF import changed absolute reviewed atom counts; refinement withheld")
+        # Equal totals alone can hide redistribution or uniform normalization.
+        # Compare the imported asymmetric rows with the proven prepared CIF.
+        rows,_ = raw_sites(prepared.read_bytes())
+        general = phase.data['General']
+        if 'AtomPtrs' not in general or 'Atoms' not in phase.data:
+            raise ValueError("Reviewed CIF import has no auditable atom-site inventory")
+        cx,ct,_,_ = general['AtomPtrs']
+        atoms = phase.data['Atoms']
+        by_label = {str(atom[ct-1]):atom for atom in atoms}
+        if len(by_label) != len(atoms) or set(by_label) != {row['label'] for row in rows}:
+            raise ValueError("Reviewed CIF import changed the atom-site labels")
+        for row in rows:
+            atom = by_label[row['label']]
+            element = species_key(_species(str(atom[ct])))
+            if (element != species_key(_species(row['symbol']))
+                or not math.isclose(float(atom[cx+3]),row['occupancy'],rel_tol=0,abs_tol=1e-10)
+                or not np.allclose((np.asarray(atom[cx:cx+3],float)-row['xyz']+.5)%1-.5,0,rtol=0,atol=1e-8)):
+                raise ValueError("CIF import changed reviewed site occupancies or positions; refinement withheld")
     cache.mkdir(parents=True, exist_ok=True)
     receipt = {"schema": VERSION, "source": str(source),
                "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
                "imported_cif": str(prepared), "imported_cif_sha256": hashlib.sha256(prepared.read_bytes()).hexdigest(),
                "expected_elemental_counts": expected, "imported_elemental_counts": actual,
                "relative_elemental_inventory_preserved": True, "phase": phase.name}
+    if review is not None:
+        receipt['occupancy_review']=review
+        receipt['absolute_counts_and_site_values_preserved']=True
     target = cache / (source.stem + '__' + receipt['source_sha256'][:12] + '.import.json')
     temporary = target.with_suffix('.tmp')
     temporary.write_text(json.dumps(receipt, indent=2) + '\n')

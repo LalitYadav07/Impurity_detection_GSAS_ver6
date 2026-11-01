@@ -458,6 +458,19 @@ class SetupEditorMixin:
                 variant="outlined",
                 no_data_text="No library archives are in this history",
             )
+            vuetify.VBtn('Review selected library',click=(self.review_candidate_library,f"['{context}']"),
+                loading=value('library_review_loading'),disabled=(locked,),variant='outlined',block=True)
+            html.P("{{ "+key('library_review_message')+" }}",classes='radar-help-copy')
+            with html.Div(v_if=f"{key('library_review_preview')}.requires_review"):
+                html.P('These are unverified archive declarations. Actual affected sites remain unknown until native validation. Permit the bounded policy only after reviewing the original sources; permission applies to this configuration and its series.')
+                with html.Div(v_for=f"item in {key('library_review_preview')}.failures",key='item.id'):
+                    html.Strong('{{ item.source_name || item.id }}')
+                    html.Span('{{ item.error }}')
+                with html.Div(v_for=f"(item, index) in {key('library_review_preview')}.reviews",key='index'):
+                    html.Strong('{{ item.source_name }}: {{ item.labels.join(", ") }}')
+                    html.Span(' Declared site total {{ item.total }}; maximum excess {{ item.maximum_site_excess }}; declared components {{ JSON.stringify(item.components) }}')
+                vuetify.VBtn('Permit the declared bounded policy',click=(self.approve_candidate_library_review,f"['{context}']"),
+                    disabled=(locked,),variant='outlined',block=True)
         with html.Fieldset(
             v_show=f"{scope} === 'custom_mini' || {scope} === 'custom_augmented'",
             disabled=(locked,),
@@ -484,6 +497,11 @@ class SetupEditorMixin:
                 hint="A short scientific name, for example Y_Fe_Si_candidate_phases.",
                 persistent_hint=True,
             )
+            vuetify.VCheckbox(label='Explicitly allow reviewed occupancy rounding up to0.001 excess per site',
+                v_model=value('library_builder_allow_rounding'),disabled=(locked,),density='compact',hide_details=True)
+            html.P('Default is strict. If enabled, original occupancies are preserved without normalization. Review the affected sites in the completed library before use.',classes='radar-help-copy')
+            vuetify.VTextField(label='Occupancy review note',v_model=value('library_builder_rounding_note'),
+                v_show=key('library_builder_allow_rounding'),disabled=(locked,),density='compact',variant='outlined')
             NamedMultiCifUpload(
                 key("library_builder_local_paths"),
                 key("library_builder_file_rows"),

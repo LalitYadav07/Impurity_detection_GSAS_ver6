@@ -1,0 +1,36 @@
+--- a/tools/neutrons/powder_diffraction/radar_pd_analyze.xml
++++ b/tools/neutrons/powder_diffraction/radar_pd_analyze.xml
+@@ -148,6 +148,9 @@
+             #end if
+             #if str($library.database.database_kind) == 'custom'
+         analyze_args+=(--db-pack '$library.database.database_archive') &&
++                #if str($library.database.library_review_activation).strip() not in ('', 'None', 'Not available.')
++        analyze_args+=(--library-review-activation '$library_review_payload') &&
++                #end if
+             #end if
+             #if str($reproducibility.run_name) not in ('', 'None', 'Not available.')
+         analyze_args+=(--run-name '$reproducibility.run_name') &&
+@@ -159,6 +162,13 @@
+         python '$publish_plot_payloads' work/run portal
+     ]]></command>
+     <configfiles>
++        <configfile name="library_review_payload"><![CDATA[
++#if str($library.database.database_kind) == 'custom'
++$library.database.library_review_activation
++#else
++{}
++#end if
++        ]]></configfile>
+         <configfile name="ndip_runner_compat"><![CDATA[
+ import json
+ import sys
+@@ -428,6 +438,9 @@
+                 <when value="builtin"/>
+                 <when value="custom">
+                     <param name="database_archive" type="data" format="zip" label="Custom library archive" help="Select the ZIP produced by RADAR-PD CIF Library Builder. To upload it from your laptop, click the ... button, then New upload and Choose local file."/>
++                    <param name="library_review_activation" type="text" value="" optional="true" area="true" label="Explicit library policy activation JSON" help="Required for a library containing a reviewed occupancy policy or non-duplicate failed sources. Provide acknowledged:true plus the exact archive_sha256 and policy_set_sha256; set allow_incomplete:true only after reviewing the declared failures. A matching explicit library_review in the configuration also remains valid. Archive reviewed:true is never permission.">
++                        <sanitizer sanitize="false"/>
++                    </param>
+                 </when>
+             </conditional>
+         </section>

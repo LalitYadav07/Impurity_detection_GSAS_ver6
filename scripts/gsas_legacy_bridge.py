@@ -832,8 +832,8 @@ def get_lattice_from_structure_or_cif(db_loader: DBLoader, pid: str, cif_path: O
         pass
     try:
         if cif_path and Path(cif_path).exists():
-            from pymatgen.core import Structure
-            stn = Structure.from_file(cif_path)
+            from cif_occupancy import load_authorized_structure
+            stn = load_authorized_structure(cif_path)
             lat = stn.lattice
             nudged_lat = (lat.a, lat.b, lat.c, lat.alpha, lat.beta, lat.gamma)
     except Exception:

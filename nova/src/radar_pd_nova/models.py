@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
+import re
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -138,6 +139,24 @@ class AnalysisConfig(BaseModel):
     radiation: Radiation = Radiation.NEUTRON
     instrument_mode: Literal["auto", "cw", "tof"] = "auto"
     sample_elements: list[str] = Field(min_length=1)
+    library_review: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator('library_review')
+    @classmethod
+    def validate_library_review(cls,value):
+        if not value:return {}
+        if value.get('acknowledged') is not True:
+            raise ValueError('Library qualification review must be explicitly acknowledged')
+        for field in ('archive_sha256','policy_set_sha256'):
+            if not isinstance(value.get(field),str) or not re.fullmatch(r'[0-9a-f]{64}',value[field]):
+                raise ValueError('Library review requires exact archive and policy hashes')
+        if not isinstance(value.get('allow_incomplete',False),bool):
+            raise ValueError('Incomplete-library review must be a boolean decision')
+        if set(value) - {'acknowledged','archive_sha256','policy_set_sha256','allow_incomplete','source_key'}:
+            raise ValueError('Unknown library review activation field')
+        if 'source_key' in value and not isinstance(value['source_key'],str):
+            raise ValueError('Library review source binding must be a string')
+        return dict(value)
     environment_elements: list[str] = Field(default_factory=list)
     limits: tuple[float, float] | None = None
     exclude_regions: list[tuple[float, float]] = Field(default_factory=list)
@@ -254,6 +273,7 @@ class AnalysisConfig(BaseModel):
 
         return {
             "$schema": "radar-pd-config/v1",
+            "library_review": dict(self.library_review),
             "post_analysis": self.post_analysis.model_dump(mode="json"),
             "scan_interpretation": self.scan_interpretation.model_dump(mode="json"),
             "created_utc": datetime.now(timezone.utc).isoformat(),

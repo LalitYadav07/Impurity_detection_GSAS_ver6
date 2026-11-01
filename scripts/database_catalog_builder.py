@@ -235,7 +235,8 @@ def process_one_phase(phase_id: str, meta: Dict,
                       resume: bool,
                       strict_masks: bool,
                       verbose: bool,
-                      radiation: str = "neutron", wavelength: float = 1.54184
+                      radiation: str = "neutron", wavelength: float = 1.54184,
+                      occupancy_review: Optional[Dict] = None,
                       ) -> Tuple[Optional[Dict], Optional[Dict], Optional[Dict]]:
     """
     Returns (row_dict, failure_dict, mismatch_dict). Exactly one of (row, failure) is non-None.
@@ -246,7 +247,8 @@ def process_one_phase(phase_id: str, meta: Dict,
     # --- Resume path: still run analyzer to log mismatch, but reuse NPZ on success ---
     if resume and os.path.exists(phase_npz):
         try:
-            s = Structure.from_str(meta["cif_content"], fmt="cif")
+            from cif_occupancy import parse_structure
+            s = parse_structure(meta["cif_content"].encode('utf-8'), occupancy_review)
             ana_num, ana_sym, mismatch = resolve_space_group_with_analyzer(meta, s)
 
             with np.load(phase_npz) as npz:
@@ -273,7 +275,8 @@ def process_one_phase(phase_id: str, meta: Dict,
 
     # --- Full build path ---
     try:
-        s = Structure.from_str(meta["cif_content"], fmt="cif")
+        from cif_occupancy import parse_structure
+        s = parse_structure(meta["cif_content"].encode('utf-8'), occupancy_review)
 
         # Space group (authoritative via analyzer) + mismatch note
         sgnum, sgsym, mismatch = resolve_space_group_with_analyzer(meta, s)

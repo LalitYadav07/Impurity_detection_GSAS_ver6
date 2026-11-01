@@ -135,9 +135,17 @@ class LiveSetupMixin:
                 remote_main_cif_uri="",
                 facility_main_cif_path="",
             )
+            from .library_setup import LibraryDraft
+            draft=LibraryDraft(state,'live')
+            for key in ('database_source','library_archive_source','history_database_id','database_archive_path'):
+                payload[key]=getattr(draft,key,None)
             config = configuration_from_form(SimpleNamespace(**payload))
         else:
             raise ValueError("Choose how to configure the Live analysis")
+        if config.library_review:
+            from .library_setup import LibraryDraft, library_source_key
+            if config.library_review.get('source_key')!=library_source_key(LibraryDraft(state,'live')):
+                raise ValueError('The selected library changed; review its qualifications again')
         if config.radiation.value != "neutron" or config.instrument_mode not in {'auto', self._live_adapter().instrument_mode}:
             raise ValueError(
                 f"{self._live_adapter().name} requires neutron {self._live_adapter().instrument_mode} settings"

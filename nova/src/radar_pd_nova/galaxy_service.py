@@ -377,6 +377,22 @@ class GalaxyService:
         self._lock = threading.RLock()
         self._result_download_slots = threading.BoundedSemaphore(4)
         self._checkpoint_uploads = None
+        self._library_review_lock = threading.RLock()
+        self._library_review_cache: dict[str,dict[str,Any]] = {}
+
+    def inspect_library_review(self, dataset_id: str) -> dict[str,Any]:
+        from .library_setup import inspect_library_review
+        with self._library_review_lock:
+            metadata=self._dataset_metadata(dataset_id)
+            if metadata.get('state')!='ok':
+                raise ValueError('Wait for the selected library archive to finish publishing before reviewing it')
+            key=json.dumps([dataset_id,metadata.get('update_time'),metadata.get('file_size')])
+            if key not in self._library_review_cache:
+                with tempfile.TemporaryDirectory(prefix='radar-library-review-') as directory:
+                    path=Path(directory)/'library.zip'
+                    self._download_dataset(dataset_id,path)
+                    self._library_review_cache[key]=inspect_library_review(path)
+            return dict(self._library_review_cache[key])
 
     def validate_connection(self) -> None:
         if not self.galaxy_url or not self.galaxy_key or not self.history_id:
@@ -508,7 +524,15 @@ class GalaxyService:
                 response.raise_for_status();document=response.json()
                 if not isinstance(document,dict) or not isinstance(document.get('inputs'),list):
                     raise RuntimeError('Galaxy did not report the tool input contract')
-                self._tool_input_names[tool_id]={r.get('name') for r in document['inputs'] if isinstance(r,dict)}
+                names = set()
+                def visit(node):
+                    if isinstance(node,dict):
+                        if isinstance(node.get('name'),str):names.add(node['name'])
+                        for value in node.values():visit(value)
+                    elif isinstance(node,list):
+                        for value in node:visit(value)
+                visit(document['inputs'])
+                self._tool_input_names[tool_id]=names
             return name in self._tool_input_names[tool_id]
 
     def stage_instrument_profile(self, path: str | Path, *, label: str) -> str:
@@ -1756,7 +1780,18 @@ class GalaxyService:
 
         config = snapshot.config
         inputs = snapshot.inputs.model_copy(deep=True)
+        if 'database_archive' in prepared:
+            from .library_setup import inspect_library_review, require_library_activation
+            preview=(inspect_library_review(inputs.database_archive_path)
+                     if inputs.database_archive_path else self.inspect_library_review(prepared['database_archive']))
+            require_library_activation(preview,config.library_review)
+        elif config.library_review:
+            raise ValueError('Library review activation requires its selected archive')
         params = Parameters()
+        if config.library_review:
+            if not self.tool_has_input(ANALYZE_TOOL_ID,'library_review_activation'):
+                raise ValueError('The installed Analyze tool does not support explicit occupancy policy activation. Use strict CIFs or a compatible Analyze wrapper and backend.')
+            params.add_input(name="library|database|library_review_activation", value=json.dumps(config.library_review,sort_keys=True))
         params.add_input(name="measurement|radiation", value=config.radiation.value)
         params.add_input(name="measurement|instrument_mode", value=config.instrument_mode)
         params.add_input(name="chemistry|sample_elements", value=", ".join(config.sample_elements))
@@ -1981,6 +2016,10 @@ class GalaxyService:
         authenticated Galaxy tool endpoint directly and leave retries to the
         caller's durable dispatch ledger.
         """
+
+        if tool_id == LIBRARY_BUILDER_TOOL_ID and str(inputs.get('reviewed_occupancy_excess') or '0') not in {'0','0.0'}:
+            if not self.tool_has_input(tool_id,'reviewed_occupancy_excess'):
+                raise ValueError('The installed Library Builder does not support reviewed occupancy rounding. Strict builds remain available; a compatible builder wrapper and backend are required.')
 
         resolved_inputs: dict[str, Any] = {}
         serialized_inputs: dict[str, Any] = {}

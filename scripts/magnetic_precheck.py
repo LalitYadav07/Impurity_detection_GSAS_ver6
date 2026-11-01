@@ -114,7 +114,8 @@ def _lattice_from_cif(cif_path: Optional[str]):
     if not cif_path or Structure is None:
         return None
     try:
-        return Structure.from_file(str(cif_path)).lattice
+        from cif_occupancy import load_authorized_structure
+        return load_authorized_structure(cif_path).lattice
     except Exception:
         return None
 

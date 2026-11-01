@@ -680,7 +680,8 @@ def _parse_cif_metadata(cif_path: Optional[str]) -> Tuple[Optional[str], Optiona
                     pass
         if not sg_sym and HAVE_PYMATGEN_MATCHER:
             try:
-                structure = Structure.from_file(str(cif_path))  # type: ignore[union-attr]
+                from cif_occupancy import load_authorized_structure
+                structure = load_authorized_structure(cif_path)
                 analyzer = SpacegroupAnalyzer(  # type: ignore[misc]
                     structure,
                     symprec=1e-2,
@@ -949,7 +950,8 @@ class UnifiedPipeline:
             return set()
 
         try:
-            cache_key = str(Path(main_cif).resolve())
+            from cif_occupancy import cache_identity
+            cache_key = cache_identity(main_cif)
         except Exception:
             cache_key = str(main_cif)
         if cache_key in self._main_phase_match_cache:
@@ -957,7 +959,8 @@ class UnifiedPipeline:
 
         matches: Set[str] = set()
         try:
-            ref_structure = Structure.from_file(main_cif)  # type: ignore[union-attr]
+            from cif_occupancy import load_authorized_structure
+            ref_structure = load_authorized_structure(main_cif)
             ref_elements = sorted({str(el) for el in ref_structure.composition.as_dict().keys()})
             ref_hi, ref_lo = build_mask(ref_elements)
 
@@ -1058,10 +1061,10 @@ class UnifiedPipeline:
         prefer_cif = bool(cif_path and Path(cif_path).exists() and "nudg" in Path(cif_path).stem.lower())
         if prefer_cif:
             try:
-                from pymatgen.io.cif import CifParser
+                from cif_occupancy import load_authorized_structure
                 from database_catalog_builder import simulate_topM_peaks
 
-                structure = CifParser(str(cif_path), occupancy_tolerance=2.0).parse_structures(primitive=False)[0]
+                structure = load_authorized_structure(cif_path)
                 _hkls, _d, q, inten = simulate_topM_peaks(
                     structure,
                     float((s4_cfg.get("two_theta_range") or [0.0, 160.0])[0]),
@@ -1091,10 +1094,10 @@ class UnifiedPipeline:
         if not cif_path or not Path(cif_path).exists():
             return np.zeros(0, dtype=float), np.zeros(0, dtype=float)
         try:
-            from pymatgen.io.cif import CifParser
+            from cif_occupancy import load_authorized_structure
             from database_catalog_builder import simulate_topM_peaks
 
-            structure = CifParser(str(cif_path), occupancy_tolerance=2.0).parse_structures(primitive=False)[0]
+            structure = load_authorized_structure(cif_path)
             _hkls, _d, q, inten = simulate_topM_peaks(
                 structure,
                 float((s4_cfg.get("two_theta_range") or [0.0, 160.0])[0]),

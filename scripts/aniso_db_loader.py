@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from pathlib import Path
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -363,7 +364,13 @@ class DBLoader:
         # 0) output dir
         import tempfile
         if out_dir is None:
-            out_dir = os.path.join(tempfile.gettempdir(), "cifs_cache_tmp")
+            from cif_occupancy import AUTH_ENV
+            authorization=os.environ.get(AUTH_ENV)
+            if authorization:
+                with open(authorization, encoding="utf-8") as stream:
+                    out_dir = os.path.join(json.load(stream)['root'], 'cifs_cache_tmp')
+            else:
+                out_dir = os.path.join(tempfile.gettempdir(), "cifs_cache_tmp")
         os.makedirs(out_dir, exist_ok=True)
 
         # 1) mapped path
@@ -379,15 +386,20 @@ class DBLoader:
             cif_txt = rec.get("cif_content") if rec else None
             if isinstance(cif_txt, str) and cif_txt.strip():
                 out_path = os.path.join(out_dir, f"{pid}.cif")
-                if overwrite or not os.path.exists(out_path):
-                    with open(out_path, "w", encoding="utf-8") as f:
-                        f.write(cif_txt if cif_txt.endswith("\n") else cif_txt + "\n")
+                original_bytes = cif_txt.encode("utf-8")
+                if overwrite or not os.path.exists(out_path) or Path(out_path).read_bytes() != original_bytes:
+                    Path(out_path).write_bytes(original_bytes)
+                if rec.get('occupancy_review'):
+                    from cif_occupancy import write_review
+                    write_review(out_path,rec['occupancy_review'])
                 return out_path
 
         # 3) last resort: build via pymatgen Structure and write
         obj = self.load_structure(pid)  # may raise
         if not isinstance(obj, Structure):
             raise TypeError(f"load_structure({pid}) did not return a pymatgen Structure (got {type(obj)}).")
+        if obj.properties.get("radar_occupancy_review") or any(sum(site.species.values()) > 1 for site in obj):
+            raise ValueError("Reviewed occupancy requires the original CIF; structure serialization is not permitted")
 
         out_path = os.path.join(out_dir, f"{pid}.cif")
         if overwrite or not os.path.exists(out_path):
@@ -478,14 +490,17 @@ class DBLoader:
             path = self._cif_map[pid]
             if not os.path.exists(path):
                 raise FileNotFoundError(f"CIF path not found for {pid}: {path}")
-            return Structure.from_file(path)
+            from cif_occupancy import load_authorized_structure
+            return load_authorized_structure(path)
         # 2) original JSON with cif_content
         if self.paths.original_json:
             recs = _load_original_db(self.paths.original_json)
             rec = recs.get(pid)
             if not rec or "cif_content" not in rec:
                 raise KeyError(f"cif_content missing in original_json for {pid}")
-            return Structure.from_str(rec["cif_content"], fmt="cif")
+            from cif_occupancy import load_authorized_structure
+            path=self.ensure_cif_on_disk(pid)
+            return load_authorized_structure(path)
         raise FileNotFoundError(f"No CIF source for {pid}")
 
     def has_stable_catalog(self) -> bool:
@@ -732,13 +747,16 @@ _ORIG_DB_CACHE: Dict[str, Any] = {}
 
 
 def _load_original_db(path: str) -> Dict[str, Any]:
-    if path in _ORIG_DB_CACHE:
-        return _ORIG_DB_CACHE[path]
+    stat = os.stat(path)
+    signature = (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns)
+    cached = _ORIG_DB_CACHE.get(path)
+    if cached is not None and cached[0] == signature:
+        return cached[1]
     with open(path) as f:
         data = json.load(f)
     if not isinstance(data, dict):
         raise ValueError("original_json must be a dict mapping id -> record")
-    _ORIG_DB_CACHE[path] = data
+    _ORIG_DB_CACHE[path] = (signature, data)
     return data
 
 

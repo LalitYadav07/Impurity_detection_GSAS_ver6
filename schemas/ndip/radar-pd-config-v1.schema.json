@@ -14,6 +14,24 @@
     "rapid"
   ],
   "properties": {
+    "library_review": {
+      "description": "Explicit per-configuration permission for a hash-bound custom-library policy; archive declarations never activate it.",
+      "oneOf": [
+        {"type": "object", "maxProperties": 0},
+        {
+          "type": "object",
+          "required": ["acknowledged", "archive_sha256", "policy_set_sha256"],
+          "properties": {
+            "acknowledged": {"const": true},
+            "archive_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+            "policy_set_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+            "allow_incomplete": {"type": "boolean"},
+            "source_key": {"type": "string"}
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
     "$schema": {
       "const": "radar-pd-config/v1"
     },

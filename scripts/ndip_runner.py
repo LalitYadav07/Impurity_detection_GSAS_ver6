@@ -743,6 +743,14 @@ def command_analyze(args: argparse.Namespace) -> int:
         shutil.copy2(main_cif, copied_main)
 
     raw_config = _load_yaml(args.config)
+    review_path = getattr(args, 'library_review_activation', None)
+    if review_path:
+        explicit_review = json.loads(Path(review_path).read_text(encoding='utf-8'))
+        if not isinstance(explicit_review, dict):
+            raise ValueError('Library review activation must be a JSON object')
+        if raw_config.get('library_review') and raw_config['library_review'] != explicit_review:
+            raise ValueError('Configuration and explicit library review activation disagree')
+        raw_config['library_review'] = explicit_review
     instrument_mode, mode_source = _resolve_instrument_mode(
         _requested_instrument_mode(raw_config),
         copied_instrument,
@@ -783,6 +791,20 @@ def command_analyze(args: argparse.Namespace) -> int:
                 "[DB] augmented library base metadata: "
                 f"{original_json_override}"
             )
+        from cif_occupancy import activate_archive
+        occupancy_activation=activate_archive(args.db_pack,db_root,work,raw_config.get('library_review'))
+        if occupancy_activation:
+            input_doc['library_review']=occupancy_activation
+            input_provenance['library_review']=occupancy_activation
+            input_provenance.setdefault('warnings',[]).append({'code':'cif_occupancy_review',
+                'message':occupancy_activation['warning'],'policy_set_sha256':occupancy_activation['policy_set_sha256']})
+            atomic_write_json(portal/'input_manifest.json',input_doc)
+            print('[WARN] '+occupancy_activation['warning'])
+    elif raw_config.get('library_review'):
+        raise ValueError('A library review cannot be activated without its selected archive')
+    else:
+        from cif_occupancy import AUTH_ENV
+        os.environ.pop(AUTH_ENV,None)
 
     if raw_config.get("$schema") == CONFIG_SCHEMA:
         resolved = _materialize_contract_config(
@@ -1031,6 +1053,8 @@ def command_build_library(args: argparse.Namespace) -> int:
             source_type=args.radiation,
             base_db_root=Path(args.base_db_root).resolve(),
             overwrite=args.overwrite,
+            reviewed_occupancy_excess=getattr(args,'reviewed_occupancy_excess',0.0),
+            occupancy_review_note=getattr(args,'occupancy_review_note',''),
         )
     else:
         result = build_mini_db_pack(
@@ -1039,6 +1063,8 @@ def command_build_library(args: argparse.Namespace) -> int:
             source_type=args.radiation,
             reference_db_root=Path(args.base_db_root).resolve() if args.base_db_root else None,
             overwrite=args.overwrite,
+            reviewed_occupancy_excess=getattr(args,'reviewed_occupancy_excess',0.0),
+            occupancy_review_note=getattr(args,'occupancy_review_note',''),
         )
     manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
     manifest["$schema"] = LIBRARY_SCHEMA
@@ -1061,8 +1087,12 @@ def command_build_library(args: argparse.Namespace) -> int:
         }
     )
     atomic_write_json(args.manifest_output, manifest)
+    atomic_write_json(result.manifest_path, manifest)
     if args.archive:
         _archive_directory(result.pack_root, Path(args.archive).resolve())
+        import hashlib
+        manifest['archive_sha256']=hashlib.sha256(Path(args.archive).read_bytes()).hexdigest()
+        atomic_write_json(args.manifest_output,manifest)
     print(f"Built {args.library_mode} library with {len(result.phase_ids)} phase(s)")
     return 0
 
@@ -1190,6 +1220,7 @@ def build_parser() -> argparse.ArgumentParser:
     analyze.add_argument("--main-cif")
     analyze.add_argument("--db-root")
     analyze.add_argument("--db-pack")
+    analyze.add_argument("--library-review-activation", help="Explicit archive/policy-bound review JSON; never inferred from the archive")
     analyze.add_argument("--mode", choices=("auto", "rapid", "full"), default="auto")
     analyze.add_argument("--radiation", choices=("neutron", "xray"), default="neutron")
     analyze.add_argument("--run-name")
@@ -1224,6 +1255,8 @@ def build_parser() -> argparse.ArgumentParser:
     library.add_argument("--manifest-output", required=True)
     library.add_argument("--archive")
     library.add_argument("--overwrite", action="store_true")
+    library.add_argument('--reviewed-occupancy-excess',type=float,default=0.0)
+    library.add_argument('--occupancy-review-note',default='')
     library.set_defaults(handler=command_build_library)
 
     compare = sub.add_parser("compare-series", help="Compare a collection of normalized RADAR-PD results")

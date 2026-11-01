@@ -414,10 +414,10 @@ def _main_phase_display_from_cif(cif_path: Any) -> dict[str, Any]:
     sgnum: Optional[int] = None
     sgsym: Optional[str] = None
     try:
-        from pymatgen.io.cif import CifParser
+        from cif_occupancy import load_authorized_structure
         from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 
-        structure = CifParser(str(path), occupancy_tolerance=2.0).parse_structures(primitive=False)[0]
+        structure = load_authorized_structure(path)
         try:
             formula = str(structure.composition.reduced_formula)
         except Exception:
@@ -477,10 +477,10 @@ def _main_phase_signature(dataset: dict) -> Optional[dict[str, Any]]:
     formula: Optional[str] = None
     sgnum: Optional[int] = None
     try:
-        from pymatgen.io.cif import CifParser
+        from cif_occupancy import load_authorized_structure
         from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 
-        structure = CifParser(str(path), occupancy_tolerance=2.0).parse_structures(primitive=False)[0]
+        structure = load_authorized_structure(path)
         try:
             formula = str(structure.composition.reduced_formula)
         except Exception:
@@ -1532,7 +1532,7 @@ def _render_cif_profile512_with_peaks(
     doublet_spec: Optional[dict] = None,
 ) -> tuple[Optional[np.ndarray], np.ndarray, np.ndarray]:
     try:
-        from pymatgen.io.cif import CifParser
+        from cif_occupancy import load_authorized_structure
         from database_catalog_builder import simulate_topM_peaks
 
         stage4 = cfg.get("stage4") or {}
@@ -1546,7 +1546,7 @@ def _render_cif_profile512_with_peaks(
             )
         else:
             doublet_spec_obj = doublet_spec
-        structure = CifParser(str(cif_path), occupancy_tolerance=2.0).parse_structures(primitive=False)[0]
+        structure = load_authorized_structure(cif_path)
         _tt, _d, q, inten = simulate_topM_peaks(
             structure,
             float(stage4.get("two_theta_range", [0.0, 160.0])[0]),

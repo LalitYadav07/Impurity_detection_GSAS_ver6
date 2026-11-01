@@ -124,6 +124,7 @@ def pattern_from_records(path: Path, records, *, input_provenance=None, mode="fu
             "source_product_sha256": original.get("original_product_sha256")
             or original.get("source_sha256"),
             "normalization": "not independently qualified by GPX extraction",
+            "library_review": original.get('library_review'),
         },
         "fit_domain": {
             "limits": [lo, hi],
