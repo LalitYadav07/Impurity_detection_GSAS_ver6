@@ -6222,10 +6222,14 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
             known_ids = {str(item.get("id")) for item in merged}
             # Large uploads and repeated analyses can fill the newest page.
             # Query each durable input class independently so POWGEN setup does
-            # not lose an older configuration, library, CIF, or profile.
+            # not lose an older configuration, library, CIF, or profile. Include
+            # filename suffixes for inputs without our conventional labels.
             for targeted_query in (
                 "radar_pd_config",
                 "custom library",
+                ".zip",
+                ".yaml",
+                ".yml",
                 ".cif",
                 ".instprm",
             ):

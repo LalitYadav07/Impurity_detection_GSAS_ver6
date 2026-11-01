@@ -726,6 +726,87 @@ def test_history_refresh_keeps_reusable_configurations_visible_after_large_uploa
     assert state.flush_count == 1
 
 
+@pytest.mark.parametrize("show_all", [False, True])
+def test_history_refresh_finds_older_named_archives_and_configurations(show_all) -> None:
+    from radar_pd_nova.galaxy_service import GalaxyService
+
+    app = RadarPdNovaApp.__new__(RadarPdNovaApp)
+    newest = [
+        {
+            "id": f"cache-{index}",
+            "name": f"RADAR-PD live snapshot response cache | response-{index}.json",
+            "extension": "json",
+        }
+        for index in range(100)
+    ]
+    older = [
+        {"id": "named-library", "name": "er2o3-acceptance.zip", "extension": "zip"},
+        {
+            "id": "named-yaml",
+            "name": "RADAR-PD configuration | er2o3-live-acceptance.yaml",
+            "extension": "yaml",
+        },
+        {
+            "id": "named-yml",
+            "name": "RADAR-PD configuration | er2o3-live-acceptance.yml",
+            "extension": "yml",
+        },
+        {
+            "id": "portable-library",
+            "name": "RADAR-PD portable custom library | Fe_O.zip",
+            "extension": "zip",
+        },
+        {
+            "id": "internal-packet",
+            "name": "RADAR-PD RADAR-PD live packet " + "a" * 24 + " | request-packet.zip",
+            "extension": "zip",
+        },
+        {
+            "id": "internal-cif-bundle",
+            "name": "RADAR-PD CIF source bundle | inputs_cif_sources.zip",
+            "extension": "zip",
+        },
+    ]
+    rows = [GalaxyService._history_dataset_item(row) for row in newest + older]
+
+    class _Service:
+        def search_history_datasets(self, *, query, limit, offset, include_generated):
+            assert include_generated is True
+            matching = [row for row in rows if query.lower() in row["name"].lower()]
+            return matching[offset : offset + limit]
+
+    state = _State(
+        history_search="",
+        history_offset=100,
+        history_datasets=[],
+        history_show_all=show_all,
+        history_data_id="",
+        history_instrument_id="",
+        history_main_cif_id="",
+        history_database_id="",
+        history_configuration_id="",
+        library_builder_cif_ids=[],
+        error_message="",
+        notice="",
+    )
+    app.server = SimpleNamespace(state=state)
+    app.service = _Service()
+
+    app.refresh_history()
+
+    assert {item["id"] for item in state.history_archive_datasets} == {
+        "named-library", "portable-library"
+    }
+    assert {item["id"] for item in state.history_configuration_datasets} == {
+        "named-yaml", "named-yml"
+    }
+    assert len(state.history_datasets) == 4
+    assert state.history_offset == 0
+    assert state.history_has_more is True
+    assert state.error_message == ""
+    assert state.flush_count == 1
+
+
 def test_use_configuration_restores_durable_galaxy_inputs_and_full_mode() -> None:
     inputs = InputSelection(
         source="upload",
