@@ -13,6 +13,7 @@ from . import plots
 from .contracts import verify_result,verify_posterior,validate_request
 from .processes import stop_process,wait_process,spawn_process
 from .viewdata import sampler_summary, full_posterior, moment_rows, STATUS
+from ..facility import FacilityPathError
 from datetime import datetime
 
 def request_identity(request):
@@ -278,6 +279,11 @@ class WebmonMixin:
                 except (ValueError,OSError,KeyError):
                     s.webmon_stale=True;s.webmon_accepted=False;s.webmon_context_ready=False
                     s.webmon_message='Source revision changed. Displayed inference belongs to the previous snapshot; a new prepared context is required.'
+        except FacilityPathError as exc:
+            logging.getLogger(__name__).warning('WebMON source unavailable for %s: %s',s.powgen_ipts,exc)
+            s.webmon_message='The WebMON source is outside the selected experiment or is unavailable. Check the experiment selection.'
+            s.webmon_connection='Source unavailable — check selected experiment'
+            s.webmon_accepted=False;s.webmon_context_ready=False;s.webmon_stale=bool(s.webmon_has_result)
         except Exception as e:
             s.webmon_message=str(e);s.webmon_connection='Source unavailable — retry Refresh source'
             s.webmon_accepted=False;s.webmon_context_ready=False;s.webmon_stale=bool(s.webmon_has_result)

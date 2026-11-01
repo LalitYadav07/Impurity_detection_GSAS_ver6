@@ -10,6 +10,7 @@ from .snapshot import stable_read,parse_live_ascii,SnapshotArchive
 from .contracts import validate_request
 from .registry import CheckpointRegistry
 from .doctor import validate_config
+from ..facility import FacilityBrowser
 
 def digest(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
@@ -19,7 +20,8 @@ class WebmonSession:
         self.config=copy.deepcopy(manifest) if isinstance(manifest,dict) else json.loads(self.manifest_path.read_text())
         # Lightweight discovery-only fixtures need no launch settings.
         if 'worker_command' in self.config:validate_config(self.config)
-        self.root=Path(self.config['facility_root']).resolve();self.archive=SnapshotArchive(self.config['archive'])
+        self._facility=FacilityBrowser(self.config['facility_root'],facility='SNS')
+        self.root=self._facility.root;self.archive=SnapshotArchive(self.config['archive'])
         self.active=None;self.selected_checkpoints={};self.extra_checkpoints={}
         self._inventory_cache={};self._inventory_lock=threading.RLock()
         self.registry=CheckpointRegistry(self.config['checkpoint_registry']) if self.config.get('checkpoint_registry') else None
@@ -27,12 +29,15 @@ class WebmonSession:
     def scope(self,ipts):
         ipts=str(ipts).removeprefix('IPTS-')
         if not ipts.isdigit():raise ValueError('A numeric IPTS is required')
-        path=(self.root/'PG3'/('IPTS-'+ipts)).resolve()
-        if not path.is_relative_to(self.root):raise ValueError('Source escapes facility root')
-        return path
+        # The facility-managed instrument entry may resolve outside /SNS.
+        # Its selected IPTS, rather than a broad storage prefix, is the boundary.
+        return self._facility.resolve_directory('PG3',ipts)
     def runs(self,ipts):
-        scope=self.scope(ipts);summary=scope/'shared/autoreduce'/f'PG3_IPTS-{str(ipts).removeprefix("IPTS-")}_runsummary.csv'
-        folder=scope/'shared/livereduce'
+        scope=self.scope(ipts)
+        # Use the same containment check as the normal facility browser before
+        # stat/open/glob, including optional paths that do not exist yet.
+        summary=self._facility._resolve_ipts_path('PG3',ipts,f'shared/autoreduce/PG3_IPTS-{str(ipts).removeprefix("IPTS-")}_runsummary.csv')
+        folder=self._facility._resolve_ipts_path('PG3',ipts,'shared/livereduce')
         def stamp(path):
             try:
                 value=path.stat();return (value.st_mtime_ns,value.st_size)
@@ -59,7 +64,11 @@ class WebmonSession:
     def capture(self,ipts,run):
         row=next((r for r in self.runs(ipts) if r['run']==str(run)),None)
         if row is None:raise ValueError('Run is not in the selected IPTS')
-        receipt=self.archive.capture(row['path'],ipts=str(ipts).removeprefix('IPTS-'),run=run,epoch='stored-live',metadata=dict(sample_id=row['sample_id'],cumulative_exposure=None))
+        # Inventory rows can be cached; resolve again before reading a source
+        # whose symlink target may have changed since discovery.
+        relative=Path(row['path']).relative_to(self.scope(ipts)).as_posix()
+        source=self._facility._resolve_ipts_path('PG3',ipts,relative)
+        receipt=self.archive.capture(source,ipts=str(ipts).removeprefix('IPTS-'),run=run,epoch='stored-live',metadata=dict(sample_id=row['sample_id'],cumulative_exposure=None))
         return row,receipt,parse_live_ascii(self.archive.read(receipt))
     def checkpoints(self,ipts,run):
         key=f"IPTS-{str(ipts).removeprefix('IPTS-')}/{run}"
