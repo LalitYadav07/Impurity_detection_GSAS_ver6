@@ -6,7 +6,10 @@ from pathlib import Path
 import pytest
 
 from gpx_recipe.contracts import plan_hash
-from gpx_recipe.planner import build_payload, expand_context, make_plan
+from gpx_recipe import planner as native_planner
+from gpx_recipe.planner import expand_context
+from gpx_recipe.snapshot import digest
+from radar_pd_nova.refinement_planner import build_payload, make_plan
 from radar_pd_nova.refinement_workspace import RefinementWorkspace
 
 
@@ -37,6 +40,26 @@ class CapturingClient:
         return json.dumps(self.plan),{'model':'test-client','label':'test-client','finish_reason':'stop'}
 
 
+class ContractClient(CapturingClient):
+    def __init__(self, replies):
+        super().__init__(None)
+        self.replies=iter(replies);self.contracts=[];self.allowances=[]
+
+    def prepare_contract(self, model_signature):
+        self.contracts.append(model_signature)
+
+    def prepare_output(self, allowance):
+        self.allowances.append(allowance)
+
+    def complete(self, messages):
+        self.calls.append(copy.deepcopy(messages))
+        reply=next(self.replies)
+        if isinstance(reply,Exception):
+            raise reply
+        return reply,dict(model='test-client',label='test-client',finish_reason='stop',
+                          usage=dict(input_tokens=17,output_tokens=3,total_tokens=20))
+
+
 class Runtime:
     kind='local'
 
@@ -56,13 +79,14 @@ class Runtime:
             plan_sha256=plan_hash(kwargs['plan']),stages=[]))
 
 
-def test_workspace_capabilities_reach_the_complete_final_model_payload(tmp_path):
+def test_workspace_capabilities_reach_the_complete_final_model_payload(tmp_path, monkeypatch):
     context=native_context();original=copy.deepcopy(context)
     request=('Use exactly four stages over the full imported range. Apply the recipe to selected '
              'and future compatible scans; retain per-stage GPXs, lineage, and reviewed temperature mapping.')
     client=CapturingClient(four_stage_plan(context,request));runtime=Runtime(context)
-    workspace=RefinementWorkspace(tmp_path,history_id='test-history',runtime=runtime,
-        planner=lambda request,context,previous=None:make_plan(request,context,previous=previous,client=client))
+    monkeypatch.setattr('radar_pd_nova.refinement_workspace.configure_provider',lambda *a:None)
+    monkeypatch.setattr('radar_pd_nova.refinement_workspace.make_client',lambda:client)
+    workspace=RefinementWorkspace(tmp_path,history_id='test-history',runtime=runtime)
     workspace.observe([dict(id='source',experiment='exp',scan_key='scan',source_sha256='test-source',
                             sample_key='sample',bank='2',scan_label='scan',run_number=1)])
     draft=workspace.prepare('exp','source',request)
@@ -85,6 +109,16 @@ def test_workspace_capabilities_reach_the_complete_final_model_payload(tmp_path)
     assert 'host_execution' not in draft['context']
     assert context==original
     assert runtime.calls==['inspect','preview']
+    planning=json.loads((Path(draft['directory'])/'planning.json').read_text())
+    assert planning['payload_sha256']==digest(payload)
+    assert planning['base_payload_sha256']==digest(native_planner.build_payload(request,context))
+    assert planning['payload_sha256']!=planning['base_payload_sha256']
+    assert planning['outbound_requests'][0]['messages_sha256']==digest(client.calls[0])
+    assert planning['calls'][0]['messages_sha256']==digest(client.calls[0])
+    assert planning['payload_bytes']==len(client.calls[0][1]['content'].encode())
+    projection=expand_context(payload['project'])
+    projected_hash=projection.pop('context_sha256')
+    assert projected_hash==digest(projection)
 
 
 def test_full_imported_range_is_an_explicit_native_edit_not_the_current_fit():
@@ -171,3 +205,126 @@ def test_genuinely_unsupported_operation_stays_blocked_after_capability_recheck(
     assert repair['host_execution']['future_enrollment']['supported'] is True
     assert repair['histogram_capabilities'][0]['current_fit_range']==[500.,8000.]
     assert repair['fit_range_instruction']
+
+
+@pytest.mark.parametrize('first_reply',['malformed','refusal','incomplete'])
+def test_default_workspace_repairs_receive_enriched_context_and_preserve_contracts(
+        tmp_path,monkeypatch,first_reply):
+    from gpx_recipe.providers import IncompleteResponse
+    context=native_context();request='Use exactly four stages over the full imported range.'
+    plan=four_stage_plan(context,request)
+    if first_reply=='refusal':
+        first=json.dumps(dict(plan,stages=[],unsupported=['Future enrollment is unsupported']))
+    elif first_reply=='incomplete':
+        first=IncompleteResponse('{',dict(model='test-client',label='test-client',finish_reason='length',
+                                         usage=dict(input_tokens=17,output_tokens=3,total_tokens=20)))
+    else:
+        first='{'
+    client=ContractClient([first,json.dumps(plan)])
+    monkeypatch.setattr('radar_pd_nova.refinement_workspace.configure_provider',lambda *a:None)
+    monkeypatch.setattr('radar_pd_nova.refinement_workspace.make_client',lambda:client)
+    workspace=RefinementWorkspace(tmp_path,history_id='test',runtime=Runtime(context))
+    workspace.observe([dict(id='source',experiment='exp',scan_key='scan',source_sha256='test-source',
+                            sample_key='sample',bank='2',scan_label='scan',run_number=1)])
+    draft=workspace.prepare('exp','source',request)
+    assert draft['status']=='ready' and len(client.calls)==2
+    payload=json.loads(client.calls[0][1]['content'])
+    assert client.contracts==[payload['project']['model_signature']]
+    assert client.allowances==[native_planner.output_allowance(payload)]
+    assert native_planner.output_allowance(payload)==native_planner.output_allowance(
+        native_planner.build_payload(request,context))
+    repair=json.loads(client.calls[1][-1]['content'].rsplit('\n',1)[1])
+    assert repair['host_execution']['future_enrollment']['supported'] is True
+    assert repair['host_execution']['output_artifacts']['source_plan_lineage'] is True
+    assert repair['histogram_capabilities'][0]['native_data_range']==[100.25,12000.75]
+    assert repair['histogram_capabilities'][0]['current_fit_range']==[500.,8000.]
+    assert repair['fit_range_instruction']==payload['fit_range_instruction']
+    assert 'PRIVATE_' not in json.dumps(client.calls)
+    planning=json.loads((Path(draft['directory'])/'planning.json').read_text())
+    assert planning['usage_summary']['total_tokens']==40
+    assert planning['payload_sha256']==digest(payload)
+    assert planning['base_payload_sha256']==digest(native_planner.build_payload(request,context))
+    assert [r['messages_sha256'] for r in planning['outbound_requests']]==[
+        digest(messages) for messages in client.calls]
+    assert [r['messages_sha256'] for r in planning['calls']]==[
+        digest(messages) for messages in client.calls]
+
+
+def test_legacy_client_without_optional_hooks_and_native_globals_are_unchanged():
+    context=native_context();request='Use exactly four stages.'
+    client=CapturingClient(four_stage_plan(context,request))
+    assert not hasattr(client,'prepare_contract') and not hasattr(client,'prepare_output')
+    before=(native_planner.make_plan,native_planner.build_payload,native_planner.make_client)
+    result=make_plan(request,context,client=client)
+    assert result['status']=='ready_for_preflight' and len(client.calls)==1
+    assert before==(native_planner.make_plan,native_planner.build_payload,native_planner.make_client)
+    assert 'fit_range_instruction' not in native_planner.build_payload(request,context)
+
+
+def test_final_validation_failure_reports_effective_hash_and_both_call_usages():
+    context=native_context();request='Use exactly four stages.'
+    client=ContractClient(['{','{'])
+    with pytest.raises(native_planner.PlanningValidationError) as failure:
+        make_plan(request,context,client=client)
+    error=failure.value;payload=json.loads(client.calls[0][1]['content'])
+    assert error.payload_sha256==digest(payload)
+    assert error.base_payload_sha256==digest(native_planner.build_payload(request,context))
+    assert len(error.calls)==2 and len(error.planning_provenance['outbound_requests'])==2
+    assert all(call['usage']['total_tokens']==20 for call in error.calls)
+    assert error.calls[1]['messages_sha256']==digest(client.calls[1])
+
+
+def test_provider_failure_is_not_retried_and_retains_request_provenance():
+    context=native_context();request='Use exactly four stages.'
+    error=RuntimeError('Provider transport failed')
+    error.metadata=dict(model='test-client',usage=dict(input_tokens=17,output_tokens=3,total_tokens=20))
+    client=ContractClient([error])
+    with pytest.raises(RuntimeError,match='transport failed') as failure:
+        make_plan(request,context,client=client)
+    assert len(client.calls)==1 and failure.value is error
+    assert error.planning_calls[0]['messages_sha256']==digest(client.calls[0])
+    assert error.planning_calls[0]['usage']['total_tokens']==20
+    assert error.planning_provenance['payload_sha256']==digest(json.loads(client.calls[0][1]['content']))
+
+
+def test_default_workspace_persists_failed_request_hashes_and_usage(tmp_path,monkeypatch):
+    context=native_context();request='Use exactly four stages.'
+    client=ContractClient(['{','{']);runtime=Runtime(context)
+    monkeypatch.setattr('radar_pd_nova.refinement_workspace.configure_provider',lambda *a:None)
+    monkeypatch.setattr('radar_pd_nova.refinement_workspace.make_client',lambda:client)
+    workspace=RefinementWorkspace(tmp_path,history_id='test',runtime=runtime)
+    workspace.observe([dict(id='source',experiment='exp',scan_key='scan',source_sha256='test-source',
+                            sample_key='sample',bank='2',scan_label='scan',run_number=1)])
+    with pytest.raises(native_planner.PlanningValidationError):
+        workspace.prepare('exp','source',request)
+    saved=json.loads(workspace.manifest.read_text())['drafts']['exp']
+    assert saved['status']=='error' and saved['preview'] is None
+    assert saved['planning_calls']==2 and saved['model_usage']['total_tokens']==40
+    assert saved['planning_provenance']['payload_sha256']==digest(json.loads(client.calls[0][1]['content']))
+    assert saved['planning_provenance']['outbound_requests'][1]['messages_sha256']==digest(client.calls[1])
+    assert runtime.calls==['inspect']
+
+
+def test_deterministic_native_guard_still_needs_no_provider(monkeypatch):
+    context=native_context();context['normalized_histograms']=['h0']
+    context['phases'].append(dict(key='p1',name='second phase',histograms=['PWDR synthetic'],atoms=[]))
+    def forbidden():
+        raise AssertionError('A source-constraint clarification must not instantiate a provider')
+    monkeypatch.setattr(native_planner,'make_client',forbidden)
+    request=('Use exactly one stage. Each Free list is complete; everything unlisted stays fixed.\n'
+             'Stage 1: Free: global histogram scale h0; HAP phase scale p0 h0.')
+    result=make_plan(request,context)
+    assert result['status']=='needs_input' and result['calls']==[]
+    assert result['outbound_requests']==[]
+    assert result['origin']=='Deterministic source-constraint check'
+
+
+def test_enriched_payload_budget_fails_before_any_provider_call(monkeypatch):
+    from radar_pd_nova import refinement_planner
+    context=native_context();request='Use exactly four stages.'
+    base=native_planner.build_payload(request,context)
+    monkeypatch.setattr(refinement_planner,'MAX_PAYLOAD_BYTES',len(json.dumps(base).encode()))
+    client=CapturingClient(four_stage_plan(context,request))
+    with pytest.raises(ValueError,match='budget'):
+        make_plan(request,context,client=client)
+    assert client.calls==[]

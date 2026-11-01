@@ -12,7 +12,7 @@ import uuid
 from gpx_recipe.compiler import approve as approve_plan
 from gpx_recipe.contracts import plan_hash, stage_table
 from gpx_recipe.execution import write_json
-from gpx_recipe.planner import make_plan
+from .refinement_planner import make_plan
 from gpx_recipe.providers import configure_provider, provider_info, make_client
 from gpx_recipe.usage import summarize_calls
 from .refinement_runtime import RuntimeUnavailable
@@ -317,6 +317,8 @@ class RefinementWorkspace:
                 if draft and draft['generation']==generation:
                     calls=planning.get('calls',[]) if planning is not None else getattr(exc,'planning_calls',None)
                     draft.update(status='error',error=str(exc),preview=None)
+                    if isinstance(getattr(exc,'planning_provenance',None),dict):
+                        draft['planning_provenance']=copy.deepcopy(exc.planning_provenance)
                     if calls is not None:
                         draft.update(planning_calls=len(calls),model_usage=summarize_calls(calls))
                     self.save()
