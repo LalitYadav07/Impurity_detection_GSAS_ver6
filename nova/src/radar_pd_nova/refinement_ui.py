@@ -201,6 +201,8 @@ def refinement_dashboard(app):
                         loading=("gsasii_session_status === 'starting'",),variant='outlined',size='small')
                     v.VBtn('Open current GSAS-II desktop',href=('gsasii_launch_url',),target='_blank',rel='noopener noreferrer',
                         v_if="gsasii_session_status === 'ready' && !!gsasii_launch_url",variant='flat',size='small')
+                html.P("Download name: {{ (rf_downloads.find(item => item.value === rf_download) || {}).filename || rf_download }}",
+                    v_if='rf_downloads.length',classes='rf-notice',style='overflow-wrap:anywhere')
                 html.P('{{ gsasii_status_message }}',v_if="gsasii_session_status === 'starting' || gsasii_session_status === 'error'",classes='rf-notice',raw_attrs=['aria-live="polite"'])
                 html.P('The open desktop keeps its original project. Save and close it before opening a different GPX.',
                     v_if="gsasii_session_status === 'ready'",classes='rf-notice')

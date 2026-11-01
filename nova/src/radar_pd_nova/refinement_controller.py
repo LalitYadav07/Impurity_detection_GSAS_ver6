@@ -221,6 +221,30 @@ def selected_refinement_dataset(result, stage):
     return (result.get('stage_dataset_ids') or {}).get(stage)
 
 
+def refinement_artifact_filename(job, name, recipes):
+    """Name a download from its saved job, never from the current form or paths."""
+    def part(value, fallback, limit):
+        text=str(value or '')
+        # Experiment/scan labels are display metadata, not transport locations.
+        if '/' in text or '\\' in text or '://' in text:return fallback
+        return re.sub(r'[^A-Za-z0-9._-]+','_',text).strip('._-')[:limit] or fallback
+
+    source=job.get('source') or {}
+    experiment=part(source.get('experiment_label'),'',48) or part(source.get('experiment'),'experiment',48)
+    run=source.get('run_number')
+    scan=part('scan-'+str(run) if run is not None else source.get('scan_label'),'scan',40)
+    bank=part('bank-'+str(source['bank']),'bank',20) if source.get('bank') not in (None,'') else ''
+    recipe=recipes.get(job.get('recipe_id'),{})
+    version=recipe.get('version')
+    recipe_name=part('recipe-v'+str(version),'recipe',24) if version is not None else 'recipe-'+digest(job.get('recipe_id'))[:8]
+    native=Path(str(name).replace('\\','/')).name
+    suffix=Path(native).suffix
+    if not re.fullmatch(r'\.[A-Za-z0-9]{1,10}',suffix):suffix='.bin'
+    stem=part(native[:-len(suffix)] if native.endswith(suffix) else native,'artifact',55)
+    job_suffix=digest(str(job.get('id') or ''))[:10]
+    return '_'.join(value for value in [experiment,scan,bank,recipe_name,stem,job_suffix] if value)+suffix
+
+
 def refinement_result_title(job, recipes):
     versions=[str(recipes[rid]['version']) for rid in (job.get('recipes') or [job.get('recipe_id')])
               if rid in recipes]
@@ -1068,7 +1092,9 @@ class RefinementMixin(GuidedRefinementMixin):
                 if not current():return
                 s.rf_error=str(exc);s.rf_has_output=False
         stage_labels={v['gpx']:f"Stage {i+1} GPX · {v['title']}" for i,v in enumerate(stages)}
-        s.rf_downloads=[dict(title=('Final refined GPX' if name==result.get('final_gpx') else stage_labels.get(name,name)),value=name) for name in sorted(result.get('files',{})) if name.endswith('.gpx') or name in ['refine.py','polished.execution.json','plan.json','approval.json']]
+        s.rf_downloads=[dict(title=('Final refined GPX' if name==result.get('final_gpx') else stage_labels.get(name,name)),value=name,
+            filename=refinement_artifact_filename(job,name,w.state.get('recipes',{})))
+            for name in sorted(result.get('files',{})) if name.endswith('.gpx') or name in ['refine.py','polished.execution.json','plan.json','approval.json']]
         s.rf_download=(result.get('final_gpx') or (stages[-1]['gpx'] if stages else (s.rf_downloads[0]['value'] if s.rf_downloads else '')))
         if result:s.rf_selected_message=refinement_status_message(result,baseline,source=job['source'])
         self._refinement_plot_changed();self._refinement_trend_changed();s.flush()
@@ -1142,7 +1168,8 @@ class RefinementMixin(GuidedRefinementMixin):
             job=self._refinement_workspace.state['jobs'][s.rf_selected_job];result=job['result'];name=s.rf_download
             if name not in {v['value'] for v in s.rf_downloads} or name not in result.get('files',{}):raise ValueError('Choose a verified output artifact')
             verify_result_files(result['directory'],result);path=Path(result['directory'])/name
-            self.download_file(path.name,'application/octet-stream',path.read_bytes())
+            self.download_file(refinement_artifact_filename(job,name,self._refinement_workspace.state.get('recipes',{})),
+                               'application/octet-stream',path.read_bytes())
         except Exception as exc:s.rf_error=str(exc);s.flush()
 
     def open_refinement_in_gsasii(self,**_):
