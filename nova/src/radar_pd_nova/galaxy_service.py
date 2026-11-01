@@ -642,6 +642,8 @@ class GalaxyService:
         internal_label = name.split("|", 1)[0].strip()
         if re.fullmatch(r"(?:radar-pd )?radar-pd (?:model inputs [a-f0-9]{64}|model [a-f0-9]{24} results)", internal_label):
             return "other", True
+        if re.fullmatch(r"(?:radar-pd )?radar-pd refinement result bundle", internal_label):
+            return "other", True
         generated_tokens = (
             "results archive",
             "analysis log",

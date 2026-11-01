@@ -1155,6 +1155,13 @@ def test_model_worker_archives_are_not_offered_as_candidate_libraries() -> None:
         assert GalaxyService._dataset_scientific_role({'name':name,'extension':'zip'}) == ('candidate_library',False)
 
 
+def test_refinement_outputs_are_not_reusable_candidate_libraries() -> None:
+    for name in ['RADAR-PD refinement result bundle',
+                 'RADAR-PD RADAR-PD refinement result bundle | result.zip']:
+        assert GalaxyService._dataset_scientific_role({'name':name,'extension':'zip'}) == ('other',True)
+    assert GalaxyService._dataset_scientific_role({'name':'My refinement candidates.zip','extension':'zip'}) == ('candidate_library',False)
+
+
 def test_legacy_candidate_library_is_labeled_as_unnamed() -> None:
     item = GalaxyService._history_dataset_item(
         {
