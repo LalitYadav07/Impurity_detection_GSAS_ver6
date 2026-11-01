@@ -6,9 +6,9 @@ import sys
 from .contracts import digest
 
 # GSAS-II 5843 Linux image with the hash-pinned, independently checked magnetic
-# geometry/displacement correction. Legacy immutable workers keep their own
+# geometry/displacement and nuclear-powder derivative correction. Legacy immutable workers keep their own
 # original identity; they must not be repinned under an existing protocol.
-VALIDATED_STACKS={'cf51afc14c4a3c705644a3820e668a5196d69754b3b3cf36ff24da8703adac59'}
+VALIDATED_STACKS={'0c883537c381c3b91b31ee7ca6498a86ad9675bc1b1dfe4ca1c4d74a38b1ca95'}
 
 
 def native_stack():

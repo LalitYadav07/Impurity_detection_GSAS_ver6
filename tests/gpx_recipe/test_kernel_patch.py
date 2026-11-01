@@ -1,6 +1,6 @@
 import pytest
 
-from gpx_recipe.symmetry.kernel_patch import corrected_source,function_source,replace_once
+from gpx_recipe.symmetry.kernel_patch import corrected_source,function_source,replace_once,corrected_nuclear_derivative
 
 
 @pytest.mark.parametrize('source',['','def MagStructureFactor2():\n    pass\n',
@@ -15,6 +15,13 @@ def test_source_replacement_requires_exactly_one_expression():
     for source in ['no match','target target']:
         with pytest.raises(ValueError,match='source review required'):
             replace_once(source,'target','reviewed')
+
+
+@pytest.mark.parametrize('source', ['', 'def StructureFactorDerv2():\n    pass\n',
+                                   'raise RuntimeError("unreviewed code must not run")\n'])
+def test_nuclear_derivative_requires_the_independently_reviewed_source(source):
+    with pytest.raises(ValueError, match='pinned nuclear powder derivative changed'):
+        corrected_nuclear_derivative(source)
 
 
 def test_function_capture_preserves_exact_whitespace_and_ignores_neighbor_code():

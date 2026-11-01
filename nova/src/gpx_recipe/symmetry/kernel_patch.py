@@ -14,13 +14,14 @@ import inspect
 import json
 from pathlib import Path
 
-PATCH_VERSION = 'radar-gsas-powder-geometry/2'
+PATCH_VERSION = 'radar-gsas-powder-geometry/3'
 ORIGINAL_FILE_SHA256 = '2c9875e52546547b6ac565d1d0f25aabf5f06b1e1aba43fa8dd4cf359353f559'
 ORIGINAL_FUNCTION_SHA256 = {
     'MagStructureFactor2': '82076dc0571cad6d6e2882c5f7ced9003f08af94449aa293b0fb4c5c2ae7b9f6',
     'MagStructureFactorDerv': 'df959b6cb576c83efbea4117f2ad4b73768253310a6188254dd08033e07b72f7',
 }
 NUCLEAR_FUNCTION_SHA256 = 'bee9200e0751ec07a84d819a02a6ceff84f9a759a2f99d2725f17c997aca3385'
+NUCLEAR_DERIVATIVE_SHA256 = 'a3985fab5a791bbe60a52b1822545491c48eb1a659e3ea32b3ba23c43a5391c6'
 
 
 def corrected_nuclear_function(original):
@@ -36,6 +37,27 @@ def corrected_nuclear_function(original):
         'refl.T[9] = np.sum(fas[:,:],axis=0)**2+np.sum(fbs[:,:],axis=0)**2',
         "refl.T[9] = (np.sum(fas**2,axis=0)+np.sum(fbs**2,axis=0) if hType in ('PNC','PNT') "
         "else np.sum(fas[:,:],axis=0)**2+np.sum(fbs[:,:],axis=0)**2)")
+
+
+def corrected_nuclear_derivative(original):
+    """Differentiate the two occurrences of each off-diagonal neutron Uij.
+
+    UijtoU6 stores one off-diagonal element. In h^T U h, U12, U13 and
+    U23 each occur twice. Keep other radiation/geometry paths unchanged.
+    """
+    if sha256(original) != NUCLEAR_DERIVATIVE_SHA256:
+        raise ValueError('The pinned nuclear powder derivative changed')
+    updated = replace_once(original,
+        '    for i in range(len(Tdata)):         #loop over atoms',
+        "    nuclear_offdiag_factor = 2.0 if hType in ('PNC','PNT') else 1.0\n"
+        '    for i in range(len(Tdata)):         #loop over atoms')
+    for index, axis in enumerate(('12', '13', '23'), start=3):
+        updated = replace_once(updated,
+            "dFdvDict[pfx+'AU" + axis + ":'+str(i)] = dFdua.T[" + str(index) + "][i]",
+            "dFdvDict[pfx+'AU" + axis + ":'+str(i)] = nuclear_offdiag_factor*dFdua.T[" + str(index) + "][i]")
+    updated = updated.replace('    #should not be *2.0!',
+                              '    #neutron off-diagonal tensor derivative')
+    return updated
 
 
 def sha256(value):
@@ -96,14 +118,18 @@ def corrected_source(source):
         patched=replace_once(patched,original,updated)
     nuclear = function_source(source, 'StructureFactor2')
     patched = replace_once(patched, nuclear, corrected_nuclear_function(nuclear))
+    nuclear_derivative = function_source(source, 'StructureFactorDerv2')
+    patched = replace_once(patched, nuclear_derivative,
+                           corrected_nuclear_derivative(nuclear_derivative))
     ast.parse(patched)
-    all_original = {**ORIGINAL_FUNCTION_SHA256, 'StructureFactor2': NUCLEAR_FUNCTION_SHA256}
+    all_original = {**ORIGINAL_FUNCTION_SHA256, 'StructureFactor2': NUCLEAR_FUNCTION_SHA256,
+                    'StructureFactorDerv2': NUCLEAR_DERIVATIVE_SHA256}
     record=dict(version=PATCH_VERSION,original_file_sha256=ORIGINAL_FILE_SHA256,
         corrected_file_sha256=sha256(patched),
         original_functions=all_original,
         corrected_functions={name:sha256(function_source(patched,name)) for name in all_original},
-        scope='Commensurate PNC/PNT magnetic geometry, symmetry-rotated ADPs and nuclear Friedel intensity averaging',
-        rationale='Use consistent Cartesian transforms and average nuclear powder intensities over h and -h')
+        scope='Commensurate PNC/PNT magnetic geometry, symmetry-rotated ADPs, nuclear Friedel intensity averaging and nuclear anisotropic derivatives',
+        rationale='Use consistent Cartesian transforms, average nuclear powder intensities over h and -h, and differentiate both off-diagonal Uij contributions')
     return patched,record
 
 
