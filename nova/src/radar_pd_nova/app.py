@@ -2026,7 +2026,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                 )
                 html.P("{{ powgen_message }}", classes="radar-help-copy mt-2 mb-1")
                 html.Div("Inputs checked: {{ powgen_preflight_checked }}", classes="radar-run-list-meta")
-                html.Div("Monitor last polled: {{ powgen_last_checked }}", classes="radar-run-list-meta")
+                html.Div("Last status check: {{ powgen_last_checked }}", classes="radar-run-list-meta")
                 html.Div("Next check: {{ powgen_next_check }}", classes="radar-run-list-meta")
 
         html.Div(
@@ -2813,6 +2813,13 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                     prepend_icon="mdi-access-point",
                 )
                 vuetify.VBtn(
+                    "Refresh saved results", click=self.refresh_powgen_monitor_now,
+                    v_if="!powgen_monitoring && powgen_results_refresh_available",
+                    disabled=("live_launch_busy || live_restore_busy || powgen_results_refresh_busy",),
+                    loading=("powgen_results_refresh_busy",), prepend_icon="mdi-refresh",
+                    variant="outlined", size="small",
+                )
+                vuetify.VBtn(
                     "Back to current run",
                     v_show="!!selected_run_uid",
                     click="workspace_view = 'monitor'",
@@ -2821,9 +2828,11 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                     size="small",
                 )
         html.P(
-            "The setup refers to a different experiment or reduction folder. These results belong to the monitor shown above; starting a new monitor updates this workspace.",
+            "{{ live_restored_checkpoint_id ? 'The editable setup draft is separate from this restored watch. Review the saved settings for this watch; clear the workspace before configuring a separate watch.' : 'The setup refers to a different experiment or reduction folder. These results belong to the monitor shown above; starting a new monitor updates this workspace.' }}",
             v_if="powgen_dashboard_scope_changed", classes="radar-section-help mb-3",
         )
+        html.P("Refresh saved results checks existing jobs and saves their checkpoint. It does not discover or submit scans.",
+            v_if="!powgen_monitoring && powgen_results_refresh_available", classes="radar-section-help mb-3")
         with vuetify.VExpansionPanels(variant="accordion", classes="radar-experiment-meta mb-3"):
             with vuetify.VExpansionPanel(title="Monitor setup and processing summary"):
                 with vuetify.VExpansionPanelText():
@@ -2866,7 +2875,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                 with html.Div():
                     html.Div("LIVE QUEUE", classes="radar-micro-label")
                     html.H3("Queued, running and failed scans")
-                    html.P("Updated {{ powgen_last_checked }}", classes="radar-section-help")
+                    html.P("Last status check: {{ powgen_last_checked }}", classes="radar-section-help")
             vuetify.VDataTable(
                 headers=("[{title:'Scan / bank',key:'scan_label'},{title:'File',key:'file'},{title:'Status',key:'status'},{title:'Current activity',key:'detail'}]",),
                 items=("powgen_rows.filter(row => row.status !== 'Completed')",),
@@ -5959,6 +5968,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
             await self._refresh_powgen_jobs(controller, warnings, is_current=current, refresh_dependents=False)
             if not current():
                 return
+            state.powgen_last_checked = _format_eastern_time(datetime.now(timezone.utc))
             snapshot = controller.capture_checkpoint()
             state.powgen_message = 'Existing results refreshed; saving their recovery checkpoint. Monitoring remains stopped...'
             state.flush()

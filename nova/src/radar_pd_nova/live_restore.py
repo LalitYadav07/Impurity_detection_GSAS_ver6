@@ -8,11 +8,14 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import asdict, dataclass, fields
+from datetime import datetime
 from hashlib import sha256
 import json
 from pathlib import PurePosixPath
 import re
 from typing import Any, Mapping, get_type_hints
+
+from dateutil.tz import tzstr
 
 from pydantic import TypeAdapter
 from trame.widgets import html
@@ -43,6 +46,28 @@ _EXTENSIONS = {
              "condition_bindings_json": "hb2a_condition_bindings", "collimator_override": "hb2a_collimator_override",
              "allow_stopped": "hb2a_allow_stopped", "excluded_acquisitions": "hb2a_excluded_acquisitions"},
 }
+
+
+def state_recorded_display(value):
+    """Label the state timestamp, never imply it is the dataset upload time."""
+    try:
+        stamp = datetime.fromisoformat(str(value or "").replace("Z", "+00:00"))
+    except ValueError:
+        return "Not recorded"
+    if stamp.tzinfo is None:
+        return stamp.strftime("%Y-%m-%d %H:%M:%S") + " (timezone not recorded)"
+    return stamp.astimezone(tzstr("EST5EDT,M3.2.0/2,M11.1.0/2")).strftime("%Y-%m-%d %H:%M:%S %Z")
+
+
+def restore_restriction_display(reasons, missing):
+    from .live_settings_review import missing_setting_labels
+    readable = []
+    for reason in reasons:
+        if reason.startswith("Original settings are missing:") and missing:
+            reason = "Settings to review: " + ", ".join(missing_setting_labels(missing))
+        if reason not in readable:
+            readable.append(reason)
+    return "; ".join(readable)
 
 
 @dataclass(frozen=True)
@@ -154,12 +179,15 @@ def inspect_checkpoint_payload(payload: Mapping, service, dataset_id: str, *, do
     controller._retry_submission_allowed = lambda: False
     if watch.get("manual_setup_signature"):
         controller._manual_setup_signature = tuple(watch["manual_setup_signature"])
+    from .live_settings_review import missing_setting_labels
+
     def displayed(name, value):
         return "Unknown (not saved)" if name in missing else str(value)
     limit = settings.initial_backfill_limit
+    recorded_utc = str(payload.get("updated_utc") or "")
     rows = [
         {"label": "Checkpoint", "value": dataset_id},
-        {"label": "Saved time", "value": saved.updated_utc},
+        {"label": "State recorded", "value": state_recorded_display(recorded_utc)},
         {"label": "Experiment", "value": f"{adapter.name} · {ipts}"},
         {"label": "Source folder", "value": source},
         {"label": "Saved runs", "value": " · ".join(f"{len(getattr(saved, p))} {p}" for p in _PHASES)},
@@ -173,11 +201,11 @@ def inspect_checkpoint_payload(payload: Mapping, service, dataset_id: str, *, do
         {"label": "Main-phase CIF", "value": displayed("main_cif_dataset_id", settings.main_cif_dataset_id or "None")},
         {"label": "Concurrent analyses", "value": displayed("max_active_jobs", settings.max_active_jobs)},
         {"label": "Late-arrival window", "value": displayed("late_arrival_window", settings.late_arrival_window)},
-        {"label": "Settings still requiring review", "value": ", ".join(missing) or "None"},
+        {"label": "Settings still requiring review", "value": ", ".join(missing_setting_labels(missing)) or "None"},
     ]
     if getattr(controller, "restore_settings_review", None):
         rows.append({"label": "Settings provenance", "value": "Includes explicitly reviewed continuation settings; not all values were recovered from the original checkpoint"})
-    return SavedWatchReview(controller, dataset_id, document_sha256, saved.updated_utc, rows, tuple(missing), tuple(blocked))
+    return SavedWatchReview(controller, dataset_id, document_sha256, recorded_utc, rows, tuple(missing), tuple(blocked))
 
 
 def read_saved_watch(service, dataset_id: str) -> SavedWatchReview:
@@ -327,7 +355,7 @@ class LiveRestoreMixin:
             self._live_restore_review = (context, review)
             state.live_restore_rows = review.rows
             state.live_restore_ready = True
-            state.live_restore_message = ("Read-only restoration. " + "; ".join(review.blocked) + ". Resume stays disabled."
+            state.live_restore_message = ("Read-only restoration. " + restore_restriction_display(review.blocked, review.missing) + ". Resume stays disabled."
                 if review.blocked else "Saved user-reviewed continuation settings are available. Restore remains stopped; resuming requires a separate action."
                 if getattr(review.controller, "restore_settings_review", None) else
                 "The complete saved settings are available. Restore remains stopped; resuming requires a separate action.")
@@ -385,6 +413,7 @@ class LiveRestoreMixin:
         state.powgen_monitoring = False
         state.powgen_retry_requested = state.powgen_retry_busy = False
         state.powgen_next_check = "Stopped"
+        state.powgen_last_checked = "Saved checkpoint; not refreshed yet"
         state.workflow_mode = "powgen"
         state.experiment_result_view = "results"
         state.workspace_view = "experiment"
@@ -395,10 +424,11 @@ class LiveRestoreMixin:
         self._sync_powgen_rows(refresh_dependents=False, load_patterns=False)
         self._sync_runs()
         self._sync_workspace_options("full")
-        state.powgen_message = (f"Restored {settings.instrument} {settings.ipts} from checkpoint {review.dataset_id}, "
-            f"saved {review.saved_utc}. Monitoring is stopped. Statuses and results reflect that saved time; "
+        state.powgen_message = (f"Restored {settings.instrument} {settings.ipts} from checkpoint {review.dataset_id}. "
+            f"State recorded: {state_recorded_display(review.saved_utc)}. Monitoring is stopped. "
+            "This is the recorded state time, not the dataset upload time. "
             "Refresh results checks existing jobs only. The editable setup draft is separate.")
-        state.live_restore_message = (state.powgen_message + (" Read-only: " + "; ".join(review.blocked) if review.blocked else
+        state.live_restore_message = (state.powgen_message + (" Read-only: " + restore_restriction_display(review.blocked, review.missing) if review.blocked else
             " Use Resume existing watch to continue its saved settings. Clear workspace to configure a separate watch."))
         self._live_restore_review = None
         state.live_restore_ready = False

@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from hashlib import sha256
 import json
+import math
 import re
 
 from trame.widgets import html
@@ -27,6 +28,17 @@ FIELDS = {
     "retry_max_seconds": ("Maximum retry wait (seconds)", "integer", 0, 86400),
     "main_cif_dataset_id": ("Main-phase CIF", "cif", None, None),
 }
+
+
+def missing_setting_labels(names):
+    """Use the same field labels in the dialog and saved-watch status."""
+    return [FIELDS[name][0] if name in FIELDS else str(name).replace("_", " ").capitalize()
+            for name in names]
+
+
+def setting_error_display(error):
+    return re.sub(r"\b(" + "|".join(map(re.escape, FIELDS)) + r")\b",
+                  lambda match: FIELDS[match.group(0)][0], str(error))
 
 
 def json_sha256(value):
@@ -167,7 +179,7 @@ class LiveSettingsReviewMixin:
         try:
             missing = reviewable_missing_settings(controller)
         except ValueError as exc:
-            state.live_restore_message = str(exc)
+            state.live_restore_message = setting_error_display(exc)
             return
         self._live_missing_owner = object()
         self._live_missing_context = self._missing_settings_context(controller)
@@ -183,6 +195,29 @@ class LiveSettingsReviewMixin:
         state.live_missing_acknowledged = False
         state.live_missing_message = "Suggested values are unconfirmed. These will be new continuation settings, not recovered facts."
         state.live_missing_review_open = True
+        state.flush()
+
+    def update_missing_live_setting(self, name, value, **_):
+        """Commit a nested field edit to Trame's top-level synchronized state."""
+        state = self.server.state
+        controller = self._powgen_controller
+        if (controller is None or self._live_missing_owner is None or not state.live_missing_review_open
+                or state.live_restore_busy or not self._live_restore_can_read()
+                or not isinstance(name, str) or name not in FIELDS or name == "main_cif_dataset_id"
+                or name not in getattr(controller, "restore_missing_settings", ())):
+            return
+        if self._missing_settings_context(controller) != self._live_missing_context:
+            self._invalidate_live_settings_review()
+            state.live_restore_message = "The watch changed. Open the missing-settings review again."
+            state.flush()
+            return
+        if (value is not None and not isinstance(value, (str, int, float))) or isinstance(value, bool):
+            return
+        if isinstance(value, float) and not math.isfinite(value):
+            return
+        # Keep partial input text intact. Confirmation owns type/range checks.
+        state.live_missing_values = {**dict(state.live_missing_values or {}), name: value}
+        state.live_missing_acknowledged = False
         state.flush()
 
     async def confirm_missing_live_settings(self, **_):
@@ -257,7 +292,7 @@ class LiveSettingsReviewMixin:
             state.flush()
         except (TypeError, ValueError, OSError) as exc:
             if self._live_missing_owner is owner:
-                state.live_missing_message = str(exc)
+                state.live_missing_message = setting_error_display(exc)
         finally:
             if self._live_missing_io_owner is owner:
                 self._live_missing_io_owner = None
@@ -290,19 +325,20 @@ class LiveSettingsReviewMixin:
                     with html.Div(v_for="row in live_missing_rows", key="row.name"):
                         vuetify.VSelect(v_if="row.kind === 'frequency'", label="Frequency source: choose explicitly",
                             v_model="live_missing_frequency_mode", items=("live_missing_frequency_options",),
-                            item_title="title", item_value="value", density="compact", disabled=("live_restore_busy",))
-                        vuetify.VTextField(label=("row.label",), v_model="live_missing_values[row.name]",
+                            item_title="title", item_value="value", density="compact", variant="outlined", disabled=("live_restore_busy",))
+                        vuetify.VTextField(label=("row.label",), model_value=("live_missing_values[row.name]",),
+                            update_modelValue=(self.update_missing_live_setting, "[row.name, $event]"),
                             v_if="row.kind !== 'frequency' || live_missing_frequency_mode === 'recorded'",
                             type=("row.kind === 'integer' ? 'number' : 'text'",),
-                            min=("row.minimum",), max=("row.maximum",), density="compact",
+                            min=("row.minimum",), max=("row.maximum",), density="compact", variant="outlined",
                             disabled=("live_restore_busy",))
                     with html.Div(v_if="live_missing_has_cif"):
                         vuetify.VSelect(label="Main-phase CIF: choose explicitly", v_model="live_missing_cif_choice",
                             items=("live_missing_cif_options",),
-                            item_title="title", item_value="value", density="compact", disabled=("live_restore_busy",))
+                            item_title="title", item_value="value", density="compact", variant="outlined", disabled=("live_restore_busy",))
                         vuetify.VAutocomplete(label="Main-phase CIF in this History", v_model="live_missing_cif_id",
                             v_if="live_missing_cif_choice === 'history'", items=("history_cif_datasets",),
-                            item_title="display_name", item_value="id", density="compact", disabled=("live_restore_busy",))
+                            item_title="display_name", item_value="id", density="compact", variant="outlined", disabled=("live_restore_busy",))
                     vuetify.VCheckbox(label="I reviewed every listed value as new continuation settings; they are not recovered facts.",
                         v_model="live_missing_acknowledged", disabled=("live_restore_busy",))
                     html.P("{{ live_missing_message }}", classes="radar-help-copy")
