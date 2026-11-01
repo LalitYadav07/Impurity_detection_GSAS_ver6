@@ -142,6 +142,26 @@ def test_display_cell_count_is_bounded_for_a_long_experiment():
     assert len(fig.layout.yaxis.tickvals) < 40
 
 
+def test_long_map_cursor_updates_retain_the_same_readable_acquisition_labels():
+    from radar_pd_nova.transition_tracking_plot import selection_presentation
+
+    a = observed()
+    run_ids = [f"run-{i}" for i in range(64)]
+    labels = [f"{i} · {150+i} K" for i in range(64)]
+    fig, _ = heatmap_figure([a] * 64, labels=labels, run_ids=run_ids,
+                            limits=locked_limits(a), selected=run_ids[23])
+    update = selection_presentation(run_ids, labels, run_ids[23], ribbon=False)
+    assert list(fig.layout.yaxis.tickvals) == update["axis"]["tickvals"]
+    assert list(fig.layout.yaxis.ticktext) == update["axis"]["ticktext"]
+    assert len(fig.layout.yaxis.tickvals) <= 18
+    assert run_ids[0] in fig.layout.yaxis.tickvals
+    assert run_ids[-1] in fig.layout.yaxis.tickvals
+    assert run_ids[23] in fig.layout.yaxis.tickvals
+    assert update["axis"]["ticktext"][update["axis"]["tickvals"].index(run_ids[23])] == ""
+    assert any(item.get("text") == "<b>" + labels[23] + "</b>" for item in update["annotations"])
+    assert selection_presentation([], [], None, ribbon=False)["axis"]["tickvals"] == []
+
+
 def test_expanded_observed_overlay_retains_both_scan_and_temperature_labels():
     from radar_pd_nova.transition_tracking_plot import profile_figure
     a=observed()

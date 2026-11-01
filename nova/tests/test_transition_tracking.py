@@ -3,6 +3,7 @@
 from dataclasses import replace
 
 import numpy as np
+import pytest
 from radar_pd_nova.pattern_transition import prepare_pattern
 from radar_pd_nova.transition_input import observation, packet_observation
 from radar_pd_nova.transition_tracking import (
@@ -11,6 +12,47 @@ from radar_pd_nova.transition_tracking import (
 )
 from test_pattern_transition import observed
 from test_scan_interpretation import scan
+
+
+def test_a_full_hundred_scan_map_reuses_curves_instead_of_thrashing_the_cache():
+    calls = []
+
+    def loader(row):
+        calls.append(row["run_id"])
+        return packet_observation(row)
+
+    engine = TransitionTrackingEngine(loader=loader)
+    rows = [scan(i+1) for i in range(100)]
+    first = [engine.load(row) for row in rows]
+    assert sum(len(item.pattern.x) for item in first) < 500_000
+    repeated = [engine.load(row) for row in rows]
+    assert all(a is b for a, b in zip(first, repeated))
+    assert len(calls) == len(rows)
+
+
+def test_interrupted_replay_discards_partial_membership_before_the_same_policy_continues():
+    from radar_pd_nova.transition_signals import BoundaryPolicy
+
+    class Superseded(Exception):
+        pass
+
+    rows = [scan(i+1) for i in range(6)]
+    policy = BoundaryPolicy()
+    engine = TransitionTrackingEngine()
+    engine.evaluate_with_policy(rows[:2], policy)
+
+    def progress(done, total, run):
+        if done == 4:
+            raise Superseded()
+
+    with pytest.raises(Superseded):
+        engine.evaluate_with_policy(rows[:5], policy, progress=progress)
+    resumed = engine.evaluate_with_policy(rows, policy)
+    expected = TransitionTrackingEngine().evaluate_with_policy(rows, policy)
+    assert resumed["records"] == expected["records"]
+    assert resumed["groups"] == expected["groups"]
+    assert resumed["styles"] == expected["styles"]
+    assert len(engine._online.records) == len(rows)
 
 
 def sequence():

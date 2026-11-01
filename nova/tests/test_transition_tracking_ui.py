@@ -431,6 +431,46 @@ def test_progress_from_an_old_watch_or_superseded_request_never_replaces_current
     assert state.transition_loading_message == message
 
 
+def test_a_new_boundary_edit_stops_the_obsolete_replay_at_the_next_scan():
+    app = application()
+
+    async def exercise():
+        generation = app._transition_generation
+        started, proceed = threading.Event(), threading.Event()
+        completed = []
+        applied = []
+
+        class Engine:
+            def evaluate_with_policy(self, sources, policy, *, progress):
+                if sources == ["old"]:
+                    progress(1, 10, "old-1")
+                    started.set()
+                    assert proceed.wait(5)
+                    for i in range(2, 11):
+                        progress(i, 10, f"old-{i}")
+                    completed.append("old")
+                else:
+                    progress(1, 1, "new")
+                    completed.append("new")
+                return {}
+
+        engine = Engine()
+        app._apply_transition_tracking = lambda report, sources, signature: applied.append(signature)
+        app._transition_request = ("old", ["old"], generation, engine, None)
+        task = asyncio.create_task(app._run_transition_tracking())
+        try:
+            assert await asyncio.to_thread(started.wait, 5)
+            app._transition_request = ("new", ["new"], generation, engine, None)
+        finally:
+            proceed.set()
+        await task
+        assert completed == ["new"]
+        assert applied == ["new"]
+        assert not app.server.state.transition_loading
+
+    asyncio.run(exercise())
+
+
 def test_series_selector_identifies_the_calibration_and_measured_acquisition_dates():
     app = RadarPdNovaApp()
     rows = scans()

@@ -134,6 +134,31 @@ def _set_enrollment(campaign,key,value):
         entries[key]=value;_set_setting(db,'enrollments',entries)
 
 
+def prioritize_acquisition(campaign, key):
+    """Change admission order only within the already captured finite cohort."""
+    with campaign.connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        row = db.execute("SELECT body FROM settings WHERE key='enrollments'").fetchone()
+        entries = json.loads(row['body']) if row else {}
+        entry = entries.get(key) if isinstance(key, str) else None
+        if not entry or entry.get('id') != key or entry.get('status') != 'queued':
+            raise ValueError('Choose a captured acquisition that is still awaiting preparation')
+        _set_setting(db, 'priority_acquisition', key)
+    return entry
+
+
+def next_acquisition(campaign, entries):
+    """Finish acknowledged preparation before honoring a queued priority scan."""
+    preparing = next((entry for entry in entries.values() if entry['status'] == 'preparing'), None)
+    if preparing:
+        return preparing
+    priority = campaign.setting('priority_acquisition')
+    preferred = entries.get(priority) if isinstance(priority, str) else None
+    if preferred and preferred['status'] == 'queued':
+        return preferred
+    return next((entry for entry in entries.values() if entry['status'] == 'queued'), None)
+
+
 def enroll_source(campaign,workspace,key,inspect,*,transport=None):
     """Recheck an exact source and native setting before a per-scan protocol."""
     template=validate_template(campaign.setting('template'));entries=campaign.setting('enrollments',{})

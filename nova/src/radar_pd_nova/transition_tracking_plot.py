@@ -126,9 +126,22 @@ def ribbon_trace(pattern,background,limits,scale,contrast,label):
         "hovertemplate":label+"<br>%{x:.6g}<br>Intensity %{customdata:.6g}<extra></extra>"}
 
 
+def acquisition_ticks(run_ids, selected):
+    """Leave room for readable labels in the expanded map and cursor updates."""
+    if not run_ids:
+        return []
+    # The expanded map may have only about 320 vertical pixels at laptop size.
+    # Integer floor division previously produced 32 labels for a 64-scan map.
+    step = max(1, (len(run_ids) + 15) // 16)
+    indices = set(range(0, len(run_ids), step)) | {len(run_ids) - 1}
+    if selected in run_ids:
+        indices.add(run_ids.index(selected))
+    return sorted(indices)
+
+
 def selection_presentation(run_ids,labels,selected,*,ribbon=True,comparison_run=None,change_regions=(),overlay="off"):
     axis="y2" if ribbon else "y"
-    indices=set(range(0,len(run_ids),max(1,len(run_ids)//25)))|{len(run_ids)-1}
+    indices=set(acquisition_ticks(run_ids, selected))
     annotations=[];shapes=[]
     if selected in run_ids:
         i=run_ids.index(selected);indices.add(i)
@@ -260,12 +273,7 @@ def heatmap_figure(
         fig.add_trace(heat,row=2,col=1)
         fig.add_trace(go.Scatter(ribbon_trace(ribbon,ribbon_background,limits,scale,contrast,ribbon_label)),row=1,col=1)
         fig.update_yaxes(title="Selected scan",tickvals=ticks.tolist(),ticktext=texts,nticks=3,row=1,col=1)
-    tick_indices = set(range(0, len(patterns), max(1, len(patterns) // 25))) | {
-        len(patterns) - 1
-    }
-    if selected in run_ids:
-        tick_indices.add(run_ids.index(selected))
-    tick_indices = sorted(tick_indices)
+    tick_indices = acquisition_ticks(run_ids, selected)
     fig.update_layout(
         template="plotly_white",
         autosize=True,

@@ -40,6 +40,60 @@ def test_future_following_adds_only_new_matching_scans_not_old_unselected(tmp_pa
     assert set(module.queue_sources(c,None))=={'selected','new'}
 
 
+def test_priority_reorders_only_captured_queued_acquisitions_without_changing_the_plan(tmp_path,monkeypatch):
+    c,_=setup(tmp_path,monkeypatch)
+    entries=module.queue_sources(c,None)
+    template=copy.deepcopy(c.setting('template'))
+    original_entries=copy.deepcopy(entries)
+    assert module.next_acquisition(c,entries)['id']=='selected'
+    assert module.prioritize_acquisition(c,'new')['id']=='new'
+    assert module.next_acquisition(c,entries)['id']=='new'
+    assert c.setting('template')==template and c.setting('enrollments')==original_entries
+    assert not c.trials()
+    entries['selected']['status']='preparing'
+    assert module.next_acquisition(c,entries)['id']=='selected'
+    entries['selected']['status']='queued';entries['new']['status']='enrolled'
+    assert module.next_acquisition(c,entries)['id']=='selected'
+    entries['selected']['status']='enrolled'
+    assert module.next_acquisition(c,entries) is None
+
+
+@pytest.mark.parametrize('key',['unselected','wrong-bank','wrong-experiment','other-recipe','missing',None])
+def test_priority_cannot_add_an_uncaptured_or_out_of_scope_acquisition(tmp_path,monkeypatch,key):
+    c,_=setup(tmp_path,monkeypatch)
+    entries=module.queue_sources(c,None)
+    with pytest.raises(ValueError,match='captured acquisition'):
+        module.prioritize_acquisition(c,key)
+    assert c.setting('enrollments')==entries and c.setting('priority_acquisition') is None
+
+
+@pytest.mark.parametrize('status',['preparing','enrolled','needs_review'])
+def test_priority_does_not_restart_or_preempt_preparation(tmp_path,monkeypatch,status):
+    c,_=setup(tmp_path,monkeypatch)
+    entry=module.queue_sources(c,None)['selected']
+    module._set_enrollment(c,'selected',dict(entry,status=status))
+    with pytest.raises(ValueError,match='awaiting preparation'):
+        module.prioritize_acquisition(c,'selected')
+    assert c.setting('priority_acquisition') is None
+
+
+def test_priority_ui_rejects_a_different_selected_experiment(tmp_path,monkeypatch):
+    c,_=setup(tmp_path,monkeypatch);module.queue_sources(c,None)
+    app=SymmetryMixin()
+    state=SimpleNamespace(sx_campaign=c.root.name,rf_experiment='IPTS-2',
+        sx_priority_acquisition='selected',sx_error='',sx_priority_notice='')
+    app.server=SimpleNamespace(state=state)
+    app._symmetry_root=lambda:tmp_path
+    app._symmetry_campaign=lambda root:c
+    app.prioritize_symmetry_acquisition()
+    assert 'experiment belonging to this campaign' in state.sx_error
+    assert c.setting('priority_acquisition') is None
+    state.rf_experiment='IPTS-1'
+    app.prioritize_symmetry_acquisition()
+    assert not state.sx_error and 'selected' in state.sx_priority_notice
+    assert c.setting('priority_acquisition')=='selected'
+
+
 def test_captured_scope_is_visible_before_all_native_trials_are_declared(monkeypatch):
     monkeypatch.setattr(module,'trial_count',lambda template:912)
     entries=[dict(status='enrolled')]*4+[dict(status='preparing')]+[dict(status='queued')]*51+[dict(status='needs_review')]

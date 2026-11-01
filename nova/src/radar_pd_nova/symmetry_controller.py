@@ -35,7 +35,7 @@ from .k_search_controller import KSearchMixin
 from .model_runtime import GalaxyModelRuntime,GalaxyChunkTransport,CollectOnlyTransport,PreparationSlotTransport,active_batch_count,MODEL_BATCH_LIMITS
 from .checkpoint_uploads import CheckpointUploadPending, CheckpointUploadInterrupted
 from .model_review_recovery import SelectionRecovery, ReviewSelectionChanged, campaign_recency
-from .model_campaigns import choices as model_choices,origin as model_origin,queue_sources,enroll_source,restore_history,portable_source,restore_captured_sources,scope_progress
+from .model_campaigns import choices as model_choices,origin as model_origin,queue_sources,enroll_source,restore_history,portable_source,restore_captured_sources,scope_progress,next_acquisition,prioritize_acquisition
 from gpx_recipe.symmetry.compiler import prepare_shared_inputs
 from gpx_recipe.symmetry.templates import make_template,trial_count
 
@@ -58,7 +58,7 @@ class SymmetryMixin(KSearchMixin):
             sx_plan_ready=False,sx_approved=False,sx_plan_summary='',sx_plan_candidates=[],sx_setup=False,sx_expanded=False,sx_expanded_layout={},sx_has_context=False,sx_has_gpx=False,sx_has_receipt=False,sx_resumable=False,
             sx_request='',sx_planning_summary='',sx_planning_notes=[],sx_planning_usage='',sx_planning_cost='',sx_sign_starts=True,sx_coverage=[],sx_group_limit=12,sx_result_scope='experiment',sx_start_source='',sx_start_sources=[],sx_results_current=False,sx_scope_progress='')
         for key,value in defaults.items():setattr(s,key,value)
-        extra=dict(sx_existing='selected',sx_follow_new=False,sx_max_scans=200,sx_enrollments=[],sx_following=False,sx_campaign_running=False,sx_parallel_jobs=1,
+        extra=dict(sx_existing='selected',sx_follow_new=False,sx_max_scans=200,sx_enrollments=[],sx_priority_acquisition='',sx_priority_options=[],sx_priority_notice='',sx_following=False,sx_campaign_running=False,sx_parallel_jobs=1,
             sx_queue_notice='',sx_backend='',sx_plan_token='',sx_cancel_notice='Cancelling a Galaxy chunk stops all starts in that job.',
             sx_opd_policy='highest-symmetry-per-irrep',sx_construct_limit=100)
         for key,value in extra.items():setattr(s,key,value)
@@ -288,6 +288,12 @@ class SymmetryMixin(KSearchMixin):
                 template=campaign.setting('template') or {}
                 visible=s.sx_result_scope!='experiment' or template.get('scope',{}).get('experiment')==s.rf_experiment
                 s.sx_enrollments=list(campaign.setting('enrollments',{}).values()) if visible else []
+                s.sx_priority_options=[dict(title=entry['scan'],value=entry['id']) for entry in s.sx_enrollments if entry['status']=='queued']
+                eligible_priorities={option['value'] for option in s.sx_priority_options}
+                if getattr(s,'sx_priority_acquisition','') not in eligible_priorities:s.sx_priority_acquisition=''
+                priority=campaign.setting('priority_acquisition')
+                queued_priority=next((entry for entry in s.sx_enrollments if entry['id']==priority and entry['status'] in {'queued','preparing'}),None)
+                s.sx_priority_notice=('Priority: '+queued_priority['scan']+'. Already accepted work finishes normally; the remaining captured scans stay queued.' if queued_priority else '')
                 s.sx_scope_progress=scope_progress(template,s.sx_enrollments)
                 s.sx_following=bool(campaign.setting('following',False)) and not campaign.setting('paused',False)
                 s.sx_queue_notice=campaign.setting('checkpoint_notice','') or campaign.setting('dispatch_notice','') or campaign.setting('preparation_message','') or campaign.setting('budget_message','')
@@ -745,7 +751,7 @@ class SymmetryMixin(KSearchMixin):
                         preparation=None;self._model_enrollment_task=None
                         campaign.set_setting('preparation_message','')
                     entries=await asyncio.to_thread(queue_sources,campaign,self._refinement_store())
-                    pending=next((r for r in entries.values() if r['status'] in {'queued','preparing'}),None)
+                    pending=next_acquisition(campaign,entries)
                     if pending and not preparation and not campaign.setting('paused',False):
                         # Collect first. A normal tick can refill a newly freed
                         # slot before the next acquisition ever gets a turn.
@@ -889,6 +895,21 @@ class SymmetryMixin(KSearchMixin):
             except Exception as exc:s.sx_error=str(exc)
             finally:s.sx_busy=False;s.flush()
         self._symmetry_task=self._refinement_schedule(resume(),'radar-symmetry-continue')
+
+    def prioritize_symmetry_acquisition(self):
+        s=self.server.state
+        try:
+            root=(self._symmetry_root()/s.sx_campaign).resolve()
+            if root.parent!=self._symmetry_root() or not (root/'campaign.sqlite').is_file():
+                raise ValueError('Select an existing campaign')
+            campaign=self._symmetry_campaign(root)
+            scope=(campaign.setting('template') or {}).get('scope',{})
+            if scope.get('experiment')!=s.rf_experiment:
+                raise ValueError('Choose the experiment belonging to this campaign')
+            entry=prioritize_acquisition(campaign,s.sx_priority_acquisition)
+            s.sx_error=''
+            s.sx_priority_notice='Priority: '+entry['scan']+'. Already accepted work finishes normally; the remaining captured scans stay queued.'
+        except (OSError,ValueError,TypeError) as exc:s.sx_error=str(exc)
 
     def cancel_symmetry_selected(self):
         async def cancel():

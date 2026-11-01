@@ -86,6 +86,10 @@ FINDINGS = {
 }
 
 
+class _TransitionRequestSuperseded(Exception):
+    """A newer edit/watch owns the next replay; never publish the old result."""
+
+
 class TransitionTrackingMixin:
     def _init_transition_tracking(self):
         self._transition_engine = TransitionTrackingEngine(policy=BoundaryPolicy())
@@ -837,11 +841,17 @@ class TransitionTrackingMixin:
     async def _run_transition_tracking(self):
         try:
             while True:
+                if self._transition_request is None:
+                    break
                 signature, sources, generation, engine, policy = self._transition_request
                 try:
                     loop = asyncio.get_running_loop()
                     last_update = [0.0]
                     def progress(done, total, scan):
+                        if (generation != self._transition_generation
+                                or self._transition_request is None
+                                or self._transition_request[0] != signature):
+                            raise _TransitionRequestSuperseded()
                         now = time.monotonic()
                         if done == total or now - last_update[0] >= .25:
                             last_update[0] = now
@@ -849,11 +859,19 @@ class TransitionTrackingMixin:
                                 signature, generation, done, total, scan)
                     kwargs = {'progress':progress} if 'progress' in inspect.signature(engine.evaluate_with_policy).parameters else {}
                     report = await asyncio.to_thread(engine.evaluate_with_policy, sources, policy, **kwargs)
+                except _TransitionRequestSuperseded:
+                    if self._transition_request is None:
+                        break
+                    continue
                 except (ValueError, TypeError, OSError) as exc:
+                    if self._transition_request is None:
+                        break
                     if self._transition_request[0] != signature:
                         continue
                     if generation == self._transition_generation:
                         self.server.state.transition_error = str(exc)
+                    break
+                if self._transition_request is None:
                     break
                 if self._transition_request[0] != signature:
                     continue

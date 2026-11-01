@@ -833,7 +833,7 @@ class RadarPdNovaApp(LiveAssistantMixin, LiveSetupMixin, SetupEditorMixin, PostA
                 size="small",
             )
             vuetify.VChip(
-                v_if="!!selected_run_uid",
+                v_if="!!selected_run_uid && workspace_view !== 'experiment'",
                 text=("selected_run_name",),
                 prepend_icon="mdi-flask-outline",
                 variant="outlined",
@@ -841,7 +841,7 @@ class RadarPdNovaApp(LiveAssistantMixin, LiveSetupMixin, SetupEditorMixin, PostA
                 classes="radar-run-chip",
             )
             vuetify.VChip(
-                v_if="!!selected_run_uid",
+                v_if="!!selected_run_uid && workspace_view !== 'experiment'",
                 text=("selected_run_status",),
                 color=("selected_run_status === 'Ok' ? '#dff2e8' : selected_run_status === 'Error' ? '#fde7e7' : '#fff0d4'",),
                 variant="flat",

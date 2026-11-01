@@ -139,6 +139,10 @@ def model_exploration(app):
             v_if='!sx_setup && sx_results_current && sx_campaign_running',classes='rf-notice')
         with html.Details(v_if='!sx_setup && sx_enrollments.length',classes='rf-card mb-4'):
             html.Summary('Acquisition queue ({{ sx_enrollments.length }}) · {{ sx_following ? "following new scans" : "captured scans" }}')
+            with html.Div(v_if='sx_results_current && sx_priority_options.length',classes='rf-toolbar mt-3'):
+                select('Prepare this captured scan next','sx_priority_acquisition','sx_priority_options')
+                v.VBtn('Prioritize scan',click=app.prioritize_symmetry_acquisition,disabled=('!sx_priority_acquisition',),variant='outlined',size='small')
+            html.P('{{ sx_priority_notice }}',v_if='!!sx_priority_notice',classes='rf-notice',raw_attrs=['aria-live="polite"'])
             v.VDataTable(items=('sx_enrollments',),headers=("[{title:'Scan',key:'scan'},{title:'Bank',key:'bank'},{title:'State',key:'status'},{title:'Review needed',key:'reason'}]",),items_per_page=8,density='compact')
         with html.Details(v_if='!sx_setup && sx_results_current && sx_coverage.length > 1',classes='rf-card mb-4'):
             html.Summary('Scans and search coverage ({{ sx_coverage.length }})')

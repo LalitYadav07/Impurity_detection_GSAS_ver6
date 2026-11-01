@@ -308,18 +308,27 @@ class TransitionTrackingEngine:
             self._online_keys = []
         seen = [str(s.get("run_id")) for s in sources]
         duplicates = {r for r, count in Counter(seen).items() if count > 1}
-        for scan in sources[len(self._online_keys):]:
-            try:
-                if str(scan.get("run_id")) in duplicates:
-                    raise ValueError("multiple_result_revisions_require_review")
-                item = self.load(scan)
-                self._online.observe(scan, item, self.prepare(item))
-            except (OSError, ValueError, TypeError, UnicodeError) as exc:
-                self._online.records.append({"run_id": str(scan.get("run_id")), "state_id": None,
-                    "style_index": None, "event": "unassigned", "reason": str(exc), "group": None,
-                    "pattern_sha256": None, "boundary": False})
-            if progress is not None:
-                progress(len(self._online.records), len(sources), str(scan.get('run_number') or scan.get('run_id')))
+        try:
+            for scan in sources[len(self._online_keys):]:
+                try:
+                    if str(scan.get("run_id")) in duplicates:
+                        raise ValueError("multiple_result_revisions_require_review")
+                    item = self.load(scan)
+                    self._online.observe(scan, item, self.prepare(item))
+                except (OSError, ValueError, TypeError, UnicodeError) as exc:
+                    self._online.records.append({"run_id": str(scan.get("run_id")), "state_id": None,
+                        "style_index": None, "event": "unassigned", "reason": str(exc), "group": None,
+                        "pattern_sha256": None, "boundary": False})
+                if progress is not None:
+                    progress(len(self._online.records), len(sources), str(scan.get('run_number') or scan.get('run_id')))
+        except BaseException:
+            # An abandoned replay has not committed its source keys. Discard
+            # its partial state memory before accepting another policy or a
+            # newer scan list, while retaining immutable curve/pair caches.
+            self._online = None
+            self._online_keys = []
+            self._online_sources = []
+            raise
         self._online_keys = keys
         self._online_sources = list(sources)
         report = self._online.report()
@@ -380,7 +389,7 @@ class TransitionTrackingEngine:
                 self._loaded[key] = self.loader(scan)
             self._loaded.move_to_end(key)
             while (
-                len(self._loaded) > 48
+                len(self._loaded) > 128
                 or sum(len(v.pattern.x) for v in self._loaded.values()) > 500_000
             ):
                 if len(self._loaded) == 1:
@@ -396,7 +405,7 @@ class TransitionTrackingEngine:
             self._prepared[key]._tracking_fingerprint = item.fingerprint
         self._prepared.move_to_end(key)
         while (
-            len(self._prepared) > 64
+            len(self._prepared) > 128
             or sum(len(v.observation.x) for v in self._prepared.values()) > 500_000
         ):
             if len(self._prepared) == 1:
