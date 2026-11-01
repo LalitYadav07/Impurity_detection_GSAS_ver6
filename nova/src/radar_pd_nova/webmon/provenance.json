@@ -1,0 +1,13 @@
+{
+  "adapter_origin": "development/virtual-powder-beamline/virtual_powder",
+  "ported_modules": [
+    "validated_backend.py",
+    "native_quadratic.py",
+    "native_kernel_policy.py",
+    "gpx_index.py",
+    "snapshot.py (powgen_live.py)"
+  ],
+  "deployed_app_baseline": "704a16d051dd9ee7630314c2893f09abbe93c7dc",
+  "native_scope": "Local pinned correction adapter; not a claim of equivalence to validated Linux deployment stack",
+  "shared_subgroup_kernel": false
+}

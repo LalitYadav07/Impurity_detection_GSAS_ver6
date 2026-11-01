@@ -255,7 +255,10 @@ def _powgen_retry_time(value: Any) -> datetime | None:
     return retry_at.astimezone(timezone.utc)
 
 
-class RadarPdNovaApp(BatteryMixin, UnetTransitionMixin, LiveAssistantMixin, LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, RefinementMixin, SymmetryMixin, ThemedApp):
+from .webmon.ui import WebmonMixin
+
+
+class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssistantMixin, LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, RefinementMixin, SymmetryMixin, ThemedApp):
     """Interactive orchestration and results workspace backed by Galaxy."""
 
     def __init__(self) -> None:
@@ -287,6 +290,7 @@ class RadarPdNovaApp(BatteryMixin, UnetTransitionMixin, LiveAssistantMixin, Live
         self._auto_opened_uids: set[str] = set()
         self._run_visibility_cutoff: datetime | None = None
         self._initialize_state()
+        self._init_webmon()
         self.server.state.change("run_selection")(self._run_selection_changed)
         self.server.state.change(*_SUBMISSION_FIELDS[:-2])(self._submission_form_changed)
         self.server.state.change("workflow_mode")(self._workflow_mode_changed)
@@ -924,6 +928,7 @@ class RadarPdNovaApp(BatteryMixin, UnetTransitionMixin, LiveAssistantMixin, Live
         return ""
 
     async def _stop_session_enrollment(self) -> None:
+        await self.webmon_shutdown()
         await self._pause_model_campaigns()
         monitor_task = self._powgen_monitor_task
         was_draining_monitor = monitor_task is not None and not monitor_task.done()
@@ -2714,11 +2719,15 @@ class RadarPdNovaApp(BatteryMixin, UnetTransitionMixin, LiveAssistantMixin, Live
                             html.Div("{{ metric.value }}", classes="radar-metric-value")
                             html.Div("{{ metric.detail }}", classes="radar-run-list-meta")
         with vuetify.VTabs(v_model=("experiment_result_view",), color="#15543c", classes="radar-experiment-result-tabs"):
-            for title, value in (("Results", "results"), ("Transition tracking", "transitions"), ("Refinement", "refinement")):
+            for title, value in (("Results", "results"), ("Transition tracking", "transitions"), ("Live scan", "webmon"), ("Refinement", "refinement")):
+                if value == "webmon" and not self._webmon_configured:
+                    continue
                 vuetify.VTab(
                     title, value=value,
                     click="$nextTick(() => window.setTimeout(() => window.document.querySelectorAll('.js-plotly-plot').forEach(el => el.getBoundingClientRect().width > 0 && el.getBoundingClientRect().height > 0 && window.Plotly && window.Plotly.Plots.resize(el)), 80))",
                 )
+        if self._webmon_configured:
+            self._webmon_ui()
         with html.Div(v_show="experiment_result_view === 'results'", classes="radar-experiment-results"):
             self._experiment_results_dashboard()
         with html.Div(v_if="workspace_view === 'experiment' && experiment_result_view === 'transitions'"):
@@ -2733,7 +2742,7 @@ class RadarPdNovaApp(BatteryMixin, UnetTransitionMixin, LiveAssistantMixin, Live
             with html.Div(v_if="transition_evidence_mode === 'unet'"):
                 html.P("Local feature suggestions supplement the boundary indicators. They do not change pattern groups or identify the physical cause of a transition.", classes="radar-section-help")
                 self._unet_transition_tracking_dashboard()
-        with html.Section(v_if="experiment_result_view !== 'refinement' && powgen_rows.some(row => row.status !== 'Completed')", classes="radar-result-card radar-experiment-queue-card"):
+        with html.Section(v_if="!['refinement', 'webmon'].includes(experiment_result_view) && powgen_rows.some(row => row.status !== 'Completed')", classes="radar-result-card radar-experiment-queue-card"):
             with html.Div(classes="radar-card-heading"):
                 with html.Div():
                     html.Div("LIVE QUEUE", classes="radar-micro-label")
@@ -5568,6 +5577,7 @@ class RadarPdNovaApp(BatteryMixin, UnetTransitionMixin, LiveAssistantMixin, Live
                 name=f"radar-powgen-watch-{ipts.lower()}",
             )
             self._powgen_monitor_task = task
+            self.webmon_attach_monitor()
         except Exception as exc:
             state.powgen_monitoring = False
             state.powgen_message = f"{self._live_adapter().name} monitor could not start: {exc}"
@@ -5648,6 +5658,7 @@ class RadarPdNovaApp(BatteryMixin, UnetTransitionMixin, LiveAssistantMixin, Live
 
         state = self.server.state
         state.powgen_monitoring = False
+        self.webmon_pause_stream()
         task = self._powgen_monitor_task
         if task is not None and not task.done():
             # to_thread cannot cancel a running discovery/upload. Let the loop
