@@ -231,6 +231,28 @@ def test_metadata_result_cannot_overwrite_a_changed_source_or_job(changed):
     assert "PG3_63760" not in controller.state.completed
     assert getattr(controller.state.submitted["PG3_63760"], changed) == "changed"
     assert "identity changed" in controller.refresh_errors["PG3_63760"]
+    if changed == "galaxy_job_id":
+        refreshed_ids = []
+        original_refresh = service.refresh
+        service.refresh = lambda record: refreshed_ids.append(record.galaxy_job_id) or original_refresh(record)
+        controller.refresh(checkpoint=False)
+        assert refreshed_ids == ["changed"]
+        assert controller.records["PG3_63760"].galaxy_job_id == "changed"
+        assert controller.state.completed["PG3_63760"].galaxy_job_id == "changed"
+
+
+def test_missing_summary_refresh_rebuilds_a_cached_record_for_the_current_job():
+    controller, service = _metadata_refresh_controller(1)
+    run = controller.state.submitted["PG3_63760"]
+    controller.state.mark_completed(run.run_id, ["result"], galaxy_job_id=run.galaxy_job_id)
+    controller.state.completed[run.run_id] = replace(controller.state.completed[run.run_id], galaxy_job_id="current-job")
+    refreshed_ids = []
+    original_refresh = service.refresh
+    service.refresh = lambda record: refreshed_ids.append(record.galaxy_job_id) or original_refresh(record)
+    controller.refresh(checkpoint=False)
+    assert refreshed_ids == ["current-job"]
+    assert controller.records[run.run_id].galaxy_job_id == "current-job"
+    assert controller.state.completed[run.run_id].scientific_summary["rwp"] == 2.5
 
 
 def test_old_missing_summaries_are_bounded_and_fair_even_when_one_fails():

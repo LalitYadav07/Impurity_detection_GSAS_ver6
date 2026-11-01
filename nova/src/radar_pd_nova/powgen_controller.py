@@ -1184,7 +1184,7 @@ class PowgenWatchController:
         # downloads, so one unreadable result cannot hide later job states.
         for run_id, run in list(self.state.submitted.items()):
             record = self.records.get(run_id)
-            if record is None and run.galaxy_job_id:
+            if run.galaxy_job_id and (record is None or record.galaxy_job_id != run.galaxy_job_id):
                 record = self._minimal_record(run)
                 self.records[run_id] = record
             if record is None:
@@ -1228,7 +1228,10 @@ class PowgenWatchController:
                 continue
             if not run.galaxy_job_id:
                 continue
-            record = self.records.get(run_id) or self._minimal_record(run)
+            record = self.records.get(run_id)
+            if record is None or record.galaxy_job_id != run.galaxy_job_id:
+                record = self._minimal_record(run)
+                self.records[run_id] = record
             try:
                 refreshed = self.service.refresh(record.model_copy(deep=True))
                 self.records[run_id] = refreshed
