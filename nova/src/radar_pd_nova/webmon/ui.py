@@ -22,7 +22,7 @@ class WebmonMixin:
         production=bool(getattr(getattr(self,'service',None),'galaxy_url',None) and getattr(self.service,'history_id',None))
         self._webmon_configured=bool(manifest) or production;self._webmon_config_error=''
         s.webmon_calculation_status='Not started'
-        s.webmon_mapping_bank='';s.webmon_mapping_factor='';s.webmon_mapping_normalization='';s.webmon_mapping_producer='';s.webmon_mapping_evidence='';s.webmon_mapping_accepted=False
+        s.webmon_mapping_bank='';s.webmon_mapping_factor='';s.webmon_mapping_normalization='';s.webmon_mapping_producer='';s.webmon_mapping_evidence='';s.webmon_mapping_accepted=False;s.webmon_prepare_accepted=False;s.webmon_refine_transfer=False
         s.webmon_published_sources=[];s.webmon_published_source='';s.webmon_source_notice='Select a published GPX; producer bank/export/normalization mapping and native model preparation are checked separately.'
         self._webmon_stream=None;self._webmon_queue=None
         s.webmon_stream_active=False;s.webmon_stream_message='Automatic updates are off.'
@@ -119,6 +119,11 @@ class WebmonMixin:
                             v.VSelect(label='Published source GPX',v_model=('webmon_published_source',),items=('webmon_published_sources',),update_modelValue=(self.webmon_published_source_changed,'[$event]'),density='compact')
                             html.P('{{ webmon_source_notice }}')
                             v.VBtn('Inspect selected GPX in Refinement',click=self.webmon_open_published_source,disabled=('!webmon_published_source || webmon_busy',),variant='text')
+                            v.VBtn('Set magnetic models in Refinement',click=self.webmon_open_model_setup,disabled=('!webmon_published_source || webmon_busy',),variant='outlined')
+                            html.P('Use the existing Model exploration setup or Luna assistant to inspect the selected parent, select sites/k and discover candidates. Return here after discovery; this does not start the completed-scan campaign.')
+                            v.VCheckbox(label='Refit existing scales/background during snapshot preparation',v_model=('webmon_refine_transfer',),density='compact')
+                            v.VCheckbox(label='I reviewed the current Model exploration parent, sites, k and candidate set for this live run',v_model=('webmon_prepare_accepted',),density='compact')
+                            v.VBtn('Prepare reviewed live models in Galaxy',click=self.webmon_prepare_from_models,disabled=('!webmon_prepare_accepted || !webmon_published_source || webmon_busy',),variant='outlined')
                             with html.Details():
                                 html.Summary('Reviewed producer mapping')
                                 html.P('Use this only after checking the live producer calibration. The GPX instrument DIFC is not evidence for the live export conversion. Saving records your mapping; native preparation and model review are still required.')
@@ -383,6 +388,75 @@ class WebmonMixin:
             s.webmon_source_notice=f"Selected {source['scan_label']}, {source['sample_label']}, bank {source.get('bank') or 'unresolved'}. The GPX's instrument calibration does not establish the live export conversion. Producer mapping and native preparation are still required."
         s.flush()
 
+    def webmon_open_model_setup(self,**_):
+        s=self.server.state
+        try:
+            source=getattr(self,'_webmon_published_catalog',{}).get(s.webmon_published_source)
+            if not source:raise ValueError('Select a published GPX first')
+            self._webmon_handoff_source(source,'Prepare commensurate magnetic candidates for a provisional live snapshot. Inspect this exact nuclear parent and choose the magnetic sites, form factors and k before discovery. No completed-scan campaign is requested.')
+            s.rf_mode='models';s.sx_kind='magnetic';s.sx_moment_model='symmetry_allowed'
+            s.sx_start_source=source['id'];s.sx_source=source['id'];s.sx_follow_new=False;s.sx_existing='selected'
+            self.inspect_symmetry_source()
+        except Exception as exc:s.webmon_source_notice=str(exc)
+        s.flush()
+
+    async def webmon_prepare_from_models(self,**_):
+        import copy
+        from fractions import Fraction
+        from gpx_recipe.symmetry.chemistry import sites_from_inputs
+        from gpx_recipe.live.io import atomic_json
+        from .galaxy_runtime import GalaxyLiveRuntime
+        s=self.server.state
+        if s.webmon_busy:return
+        try:
+            if not s.webmon_prepare_accepted:raise ValueError('Review the magnetic setup before preparation')
+            source=getattr(self,'_webmon_published_catalog',{}).get(s.webmon_published_source)
+            d=getattr(self,'_symmetry_draft',None);mapping=getattr(self,'_webmon_reviewed_mapping',None)
+            if not source or not d or d.get('source_id')!=source['id'] or d.get('discovery_identity')!=self._discovery_identity() or s.sx_kind!='magnetic':
+                raise ValueError('Inspect and discover magnetic candidates for this exact source in Model exploration first')
+            launch=(str(s.powgen_ipts),str(s.webmon_run),source['id'])
+            row,receipt,_=self._webmon.capture(s.powgen_ipts,s.webmon_run)
+            if not mapping or mapping['source_id']!=source['id'] or mapping['snapshot_sha256']!=receipt['content_sha256']:
+                raise ValueError('Review the producer mapping for the current source snapshot first')
+            material=await asyncio.to_thread(self._refinement_store().runtime.resolve,source)
+            sites=sites_from_inputs(s.sx_sites,s.sx_form_factors,s.sx_lande)
+            catalog=copy.deepcopy(d['catalog']);selected=set(s.sx_candidates)
+            catalog['candidates']=[c for c in catalog['candidates'] if c['id'] in selected]
+            if not catalog['candidates']:raise ValueError('Select at least one discovered magnetic candidate')
+            root=Path(self._webmon.config['jobs'])/'preparations'/uuid.uuid4().hex;root.mkdir(parents=True)
+            atomic_json(root/'catalog.json',catalog)
+            req=dict(action='prepare',source_gpx=material['source_path'],source_sha256=material['source_sha256'],
+                catalog=str(root/'catalog.json'),catalog_sha256=digest(root/'catalog.json'),observation_source=row['path'],observation_source_sha256=receipt['content_sha256'],
+                mapping=mapping,parent_phase=s.sx_parent,k=[str(Fraction(v.strip())) for v in s.sx_k.split(',')],sites=sites,
+                source_revision=f"PG3_{s.webmon_run}:"+receipt['content_sha256'],reference_revision=f"PG3_{source['run_number']}:"+material['source_sha256'],
+                upper=float(s.sx_max_moment),lower=0.,refine_transfer=bool(s.webmon_refine_transfer),workers=min(4,max(1,int(s.sx_slots))),particles=256)
+            s.webmon_busy=True;s.webmon_source_notice='Preparing the reviewed snapshot in a Galaxy worker…';s.flush()
+            key=hashlib.sha256(json.dumps(req,sort_keys=True).encode()).hexdigest()[:24]
+            runtime=GalaxyLiveRuntime(Path(self._webmon.config['jobs'])/'galaxy',self.service)
+            result=await asyncio.to_thread(runtime.call,req,root/'dispatch',dispatch_key=key)
+            if (str(s.powgen_ipts),str(s.webmon_run),s.webmon_published_source)!=launch:
+                raise ValueError('Selection changed while preparing. The Galaxy result is retained; review it for the original scan before adopting it.')
+            prepared=result['preparation'];result_root=Path(result['directory'])
+            inference=json.loads(Path(prepared['request']).read_text())
+            for field in ('source_gpx','catalog','preflight'):inference[field]=str(result_root/inference[field])
+            atomic_json(root/'inference-request.json',inference)
+            forms={v['label']:v['form_factor'] for v in sites};ions=set(forms.values())
+            binding=dict(reference_gpx=material['source_path'],reference_sha256=material['source_sha256'],source_gpx=prepared['source_gpx'],source_sha256=prepared['source_sha256'],
+                source_dat=row['path'],source_dat_sha256=receipt['content_sha256'],request=str(root/'inference-request.json'),k=req['k'],ion=next(iter(ions)) if len(ions)==1 else 'per-site',site_forms=forms,
+                maximum_moment=req['upper'],display_export_difc=prepared['display_export_difc'],
+                description='Galaxy-prepared fixed nuclear response; empirical covariance/normalization qualification remains pending.',
+                review=[dict(label='Source',value=source['scan_label']),dict(label='Live snapshot',value=receipt['content_sha256'][:12]),dict(label='Candidates',value=str(len(catalog['candidates']))),dict(label='Mapping',value=mapping['evidence'])])
+            choice=dict(id='prepared-'+key,title='Reviewed '+source['scan_label'],run=source['run_number'],role='Nuclear reference',source_path=material['source_path'],source_sha256=material['source_sha256'],
+                refinement_source=source,binding=binding,view_path=prepared['reference_view'],view_sha256=digest(prepared['reference_view']),
+                verification=dict(rwp_recomputed=prepared['original_reference_rwp'],native_saved_curve_relative_error=0.,peaks=[]))
+            scope=f"IPTS-{str(s.powgen_ipts).removeprefix('IPTS-')}/{s.webmon_run}"
+            self._webmon.config.setdefault('checkpoint_options',{}).setdefault(scope,[]).append(choice)
+            self._webmon.selected_checkpoints[scope]=choice['id']
+            self.webmon_select(s.webmon_run)
+            s.webmon_source_notice='Prepared in Galaxy. Inspect the reference and assumptions, then accept this revision to start conditional live analysis.'
+        except Exception as exc:s.webmon_source_notice='Live preparation stopped: '+str(exc)
+        finally:s.webmon_busy=False;s.flush()
+
     def webmon_save_mapping(self,**_):
         from .mapping import reviewed_mapping
         from gpx_recipe.live.io import atomic_json
@@ -435,6 +509,11 @@ class WebmonMixin:
             if not choice or not choice.get('refinement_source'):raise ValueError('The original experiment source is unavailable')
             if choice['source_sha256']!=self._webmon_request['reference_revision'].split(':')[-1]:raise ValueError('Select the reference used by this posterior first')
             source=copy.deepcopy(choice['refinement_source']);checksum=export['fitted_gpx_sha256']
+            for key in ('dataset_id','collection_id','collection_name','galaxy_job_id'):source.pop(key,None)
+            row=next(r for r in s.webmon_rows if r.get('posterior')==s.webmon_model)
+            if not self._webmon_is_local() and not row.get('fitted_dataset_id'):
+                raise ValueError('The verified posterior GPX has not been mapped to a Galaxy collection element yet')
+            if row.get('fitted_dataset_id'):source['dataset_id']=row['fitted_dataset_id']
             source.update(id='live-posterior-'+checksum[:24],record_uid='live-posterior-'+checksum[:24],source_path=path,source_sha256=checksum,
                 internal_source_sha256=checksum,published_sha256=checksum,collection_name=Path(path).name,collection_id='',base_rwp=post['rwp'],
                 origin='conditional_live_posterior',parent_source_sha256=choice['source_sha256'],snapshot_revision=self._webmon_request['source_revision'])

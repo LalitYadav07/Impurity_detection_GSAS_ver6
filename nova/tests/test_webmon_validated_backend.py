@@ -1,28 +1,38 @@
-import unittest
+import hashlib
+from pathlib import Path
 from unittest.mock import patch
-from radar_pd_nova.webmon.validated_backend import corrected_backend,active_identity,VERSION
+import pytest
 
-class BackendTests(unittest.TestCase):
- def test_version_pinning_and_restore(self):
-  from GSASII import GSASIIstrMath as M
-  original=M.MagStructureFactor2
-  with corrected_backend() as identity:
-   self.assertEqual(identity['version'],VERSION);self.assertIsNot(M.MagStructureFactor2,original)
-   self.assertEqual(active_identity(),identity)
-   with self.assertRaises(RuntimeError):
-    with corrected_backend():pass
-  self.assertIs(M.MagStructureFactor2,original);self.assertIsNone(active_identity())
-  with self.assertRaises(ValueError):
-   with corrected_backend():raise ValueError('worker failure')
-  self.assertIs(M.MagStructureFactor2,original)
- def test_wrong_native_version_refused(self):
-  with patch('radar_pd_nova.webmon.validated_backend.PINNED_STRMATH','wrong'),patch('radar_pd_nova.webmon.validated_backend.PINNED_LINUX_STRMATH','wrong'):
-   with self.assertRaises(RuntimeError):
-    with corrected_backend():pass
-  with corrected_backend():pass
- def test_single_crystal_refused(self):
-  from GSASII import GSASIIstrMath as M
-  with corrected_backend():
-   with self.assertRaises(ValueError):M.MagStructureFactor2({},None,':0:','0::',{}, {':0:histType':'SNC'}, {})
+pytest.importorskip('GSASII.GSASIIstrMath')
+from GSASII import GSASIIstrMath as M
+from gpx_recipe.live import validated_backend as backend
 
-if __name__=='__main__':unittest.main()
+
+def test_version_pinning_and_restore():
+    original=M.MagStructureFactor2
+    production=hashlib.sha256(Path(M.__file__).read_bytes()).hexdigest()==backend.PINNED_PRODUCTION_STRMATH
+    with backend.corrected_backend() as identity:
+        assert identity['version']==backend.VERSION
+        assert (M.MagStructureFactor2 is original) is production
+        assert backend.active_identity()==identity
+        with pytest.raises(RuntimeError):
+            with backend.corrected_backend():pass
+    assert M.MagStructureFactor2 is original
+    assert backend.active_identity() is None
+    with pytest.raises(ValueError):
+        with backend.corrected_backend():raise ValueError('worker failure')
+    assert M.MagStructureFactor2 is original
+
+
+def test_wrong_native_version_refused(monkeypatch):
+    for name in ('PINNED_PRODUCTION_STRMATH','PINNED_STRMATH','PINNED_LINUX_STRMATH'):
+        monkeypatch.setattr(backend,name,'wrong')
+    with pytest.raises(RuntimeError):
+        with backend.corrected_backend():pass
+
+
+def test_legacy_single_crystal_guard():
+    if hashlib.sha256(Path(M.__file__).read_bytes()).hexdigest()==backend.PINNED_PRODUCTION_STRMATH:
+        pytest.skip('Shared production entry points validate the neutron-powder input before native execution')
+    with backend.corrected_backend():
+        with pytest.raises(ValueError):M.MagStructureFactor2({},None,':0:','0::',{}, {':0:histType':'SNC'}, {})

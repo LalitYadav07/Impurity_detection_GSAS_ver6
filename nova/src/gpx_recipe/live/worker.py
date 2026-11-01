@@ -10,7 +10,7 @@ from .contracts import validate_request,seal_posterior,verify_posterior
 
 def _read_code_identity():
     import inspect
-    result={name:sha(Path(__file__).parent/name) for name in ["statistics.py","native_profile.py","validated_backend.py","native_quadratic.py","native_kernel_policy.py","central_quadratic.py","gpx_index.py","native_validation.py","contracts.py","worker.py","observations.py","gpx_export.py"]}
+    result={name:sha(Path(__file__).parent/name) for name in ["statistics.py","native_profile.py","validated_backend.py","native_quadratic.py","native_kernel_policy.py","central_quadratic.py","gpx_index.py","native_validation.py","contracts.py","worker.py","observations.py","gpx_export.py","resources.py"]}
     import importlib.util
     for name in ['gsas_magnetic_preflight','gpx_recipe.symmetry.native_magnetic','gpx_recipe.symmetry.native_preparation','gpx_recipe.symmetry.worker','gpx_recipe.execution']:
         spec=importlib.util.find_spec(name)
@@ -24,7 +24,7 @@ def sha(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 def write(path,value):
     path=Path(path);tmp=path.with_suffix('.tmp');tmp.write_text(json.dumps(value,indent=2,allow_nan=False));tmp.replace(path)
 
-def compile_candidate(source,candidate,k,sites,out):
+def compile_candidate(source,candidate,k,sites,out,*,particles=256):
     from GSASII import GSASIIscriptable as G,GSASIIlattice as L
     from gpx_recipe.symmetry.native_magnetic import simulate
     from gpx_recipe.symmetry.worker import Artifacts
@@ -43,6 +43,8 @@ def compile_candidate(source,candidate,k,sites,out):
     project=out/result['gpx'];native=NativeReducedProfile(project)
     n=len(native.x0)
     if not n:raise ValueError('No independent magnetic parameters')
+    from .resources import kernel_budget
+    memory_budget=kernel_budget(n,len(native.counts),particles)
     # The native candidate constructor freezes all nonmagnetic parameters.
     from .native_kernel_policy import compile_native_magnetic_kernel
     compiled=compile_native_magnetic_kernel(native,np.zeros(n),list(range(n)),checks=5)
@@ -67,7 +69,7 @@ def compile_candidate(source,candidate,k,sites,out):
         if e>1e-7:raise ValueError('Independent native kernel validation failed')
     np.savez_compressed(out/'kernel.npz',base=base[mask],quadratic=q[:,:,mask],forms=np.array(forms),x=x[mask],y=y[mask],sigma=1/np.sqrt(weight[mask]),labels=np.array(labels))
     from .validated_backend import active_identity
-    meta=dict(native_gpx_sha256=sha(project),kernel_sha256=sha(out/'kernel.npz'),compiler=compiled['diagnostics'],code_identity=code_identity(),backend=active_identity(),id=candidate['id'],name=candidate['magnetic_space_group'],dimensions=n,labels=labels,source_sha256=sha(source),candidate=candidate,k=k,sites=sites,native_errors=errors,validated=True,fixed_nuclear=True)
+    meta=dict(native_gpx_sha256=sha(project),kernel_sha256=sha(out/'kernel.npz'),compiler=compiled['diagnostics'],code_identity=code_identity(),backend=active_identity(),id=candidate['id'],name=candidate['magnetic_space_group'],dimensions=n,bin_count=len(native.counts),memory_budget=memory_budget,labels=labels,source_sha256=sha(source),candidate=candidate,k=k,sites=sites,native_errors=errors,validated=True,fixed_nuclear=True)
     write(out/'kernel.json',meta);return meta
 
 def infer(kernel,destination,*,lower,upper,particles=256,seconds=45.,seed=0):
@@ -113,12 +115,15 @@ def execute(request_path,candidate_id=None):
             r['status']='preparing';write(report_dir/'result.json',report)
             meta=json.loads((dest/'kernel.json').read_text()) if (dest/'kernel.json').exists() else None
             preparation_started=time.monotonic()
+            if meta and not meta.get('bin_count'):meta=None
             if meta and meta.get('observation_revision') and not req.get('observation'):meta=None
             from .validated_backend import active_identity
             if meta and (meta.get('backend')!=active_identity() or meta.get('sites')!=req['sites'] or meta.get('k')!=req['k']):meta=None
             cache_hit=not (meta is None or not (dest/'magnetic-refinement.gpx').is_file() or meta.get('native_gpx_sha256')!=sha(dest/'magnetic-refinement.gpx') or meta.get('code_identity')!=code_identity() or meta['source_sha256']!=sha(source) or meta['candidate']!=c or meta.get('kernel_sha256')!=sha(dest/'kernel.npz'))
             if not cache_hit:
-                meta=compile_candidate(source,c,req['k'],req['sites'],dest)
+                meta=compile_candidate(source,c,req['k'],req['sites'],dest,particles=req['particles'])
+            from .resources import kernel_budget
+            kernel_budget(meta['dimensions'],meta['bin_count'],req['particles'])
             from .observations import replace_observations
             if replace_observations(dest/'kernel.npz',req):
                 meta['kernel_sha256']=sha(dest/'kernel.npz');meta['observation_revision']=req['source_revision'];write(dest/'kernel.json',meta)
@@ -166,7 +171,10 @@ def parallel(request_path):
     req=json.loads(Path(request_path).read_text());out=Path(request_path).parent
     catalog=json.loads(Path(req['catalog']).read_text());rows=[dict(id=c['id'],name=c['magnetic_space_group'],bns=c['bns_number'],status='pending') for c in catalog['candidates']]
     report=dict(code_identity=code_identity(),schema='radar-webmon-result/v1',status='running',request_sha256=sha(request_path),source_revision=req['source_revision'],reference_revision=req['reference_revision'],rows=rows,forecast_enabled=False,exclusion_authorized=False,workers=req['workers'])
+    from gpx_recipe.symmetry.resources import allocation
+    resources=allocation(req['workers']);report['resources']=resources;report['workers']=resources['workers']
     active={};waiting=list(range(len(rows)));started=time.monotonic();env=dict(os.environ)
+    env['RADAR_PD_LIVE_WORKERS']=str(resources['workers'])
     env['PYTHONPATH']=os.pathsep.join(sys.path)
     def cleanup(*_):
         for process,log,_ in active.values():
@@ -178,11 +186,11 @@ def parallel(request_path):
     previous=signal.signal(signal.SIGTERM,cleanup)
     try:
         while waiting or active:
-            while waiting and len(active)<max(1,min(int(req['workers']),4)):
+            while waiting and len(active)<resources['workers']:
                 i=waiting.pop(0);item=out/'items'/rows[i]['id'].replace(':','_');item.mkdir(parents=True,exist_ok=True)
                 previous_result=item/'result.json'
                 if previous_result.exists():previous_result.rename(item/f'prior-result-{time.time_ns()}.json')
-                log=(item/'worker.log').open('ab');process=subprocess.Popen([sys.executable,'-m','radar_pd_nova.webmon.worker',str(request_path),'--candidate',rows[i]['id']],env=env,stdout=log,stderr=log)
+                log=(item/'worker.log').open('ab');process=subprocess.Popen([sys.executable,'-m','gpx_recipe.live.worker',str(request_path),'--candidate',rows[i]['id']],env=env,stdout=log,stderr=log)
                 active[i]=(process,log,time.monotonic())
             for i,(process,log,t0) in list(active.items()):
                 result=out/'items'/rows[i]['id'].replace(':','_')/'result.json'

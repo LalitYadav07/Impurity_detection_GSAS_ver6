@@ -76,12 +76,27 @@ class GalaxyLiveRuntime(GalaxyRefinementRuntime):
         if result.get('packet_id')!=packet_id:raise ValueError('Live result belongs to a different request')
         for field in ('source_revision','reference_revision'):
             if result.get(field)!=request[field]:raise ValueError('Live result scientific revision mismatch')
+        published=[]
+        if job.outputs.get('verified_projects'):
+            published=self.service.collection_elements(job.outputs['verified_projects'])
+        def dataset_for(name):
+            matches=[v['id'] for v in published if str(v['name']).removesuffix('.gpx')==name]
+            return matches[0] if len(matches)==1 else None
         for row in result['rows']:
+            if row.get('published_project'):
+                row['fitted_dataset_id']=dataset_for(row['published_project'])
             for field in ('posterior','fitted_gpx'):
                 if row.get(field):
                     p=(output/row[field]).resolve()
                     if not p.is_relative_to(output) or not p.is_file():raise ValueError('Live result path escapes verified output')
                     row[field]=str(p)
+        if result.get('preparation'):
+            result['preparation']=dict(result['preparation'])
+            result['preparation']['dataset_id']=dataset_for(result['preparation'].get('published_project'))
+            for field in ('request','reference_view','source_gpx','source_dat'):
+                p=(output/result['preparation'][field]).resolve()
+                if not p.is_relative_to(output) or not p.is_file():raise ValueError('Prepared live source escapes verified result')
+                result['preparation'][field]=str(p)
         result.update(directory=str(output),galaxy_job_id=job.galaxy_job_id,
-                      response_cache_dataset_id=job.outputs.get('response_cache'),transport_sha256=file_hash(output/'transport.json'))
+                      response_cache_dataset_id=job.outputs.get('response_cache_output'),transport_sha256=file_hash(output/'transport.json'))
         return result

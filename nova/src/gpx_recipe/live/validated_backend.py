@@ -12,7 +12,7 @@ from pathlib import Path
 import threading
 
 VERSION = 'virtual-powder-gsas-corrections/1'
-PINNED_PRODUCTION_STRMATH = '2a6ffce516b8edef1760d12599c98414c1eead83cd1006291d49bc5cbfef5593'
+PINNED_PRODUCTION_STRMATH = '6fea6023fa33a2585d091b04a479194c37f6efac4336ee29c7bef7af31e930af'
 PINNED_STRMATH = '5b39f376fa8555e88bfec8496cf5c475b4fdfe7d6d78ac05caaa1363cb617938'
 PINNED_LINUX_STRMATH = 'cc56d2ff8855a773cb1a48ec7576d5bdcb8850ec6a73e10d43e093874108173f'
 _LOCK = threading.Lock()

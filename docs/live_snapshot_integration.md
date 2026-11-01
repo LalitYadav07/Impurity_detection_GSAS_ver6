@@ -47,7 +47,7 @@ is preparing, the last verified result and its identity remain visible.
 ## Native runtime
 
 Production accepts the shared build-time-corrected GSAS-II source hash
-`2a6ffce516b8edef1760d12599c98414c1eead83cd1006291d49bc5cbfef5593`
+`6fea6023fa33a2585d091b04a479194c37f6efac4336ee29c7bef7af31e930af`
 without changing native functions at runtime. The earlier Mac/pilot correction
 adapter is retained solely behind `RADAR_PD_LOCAL_EXPERIMENTAL_BACKEND=1`, for
 explicit local experimental replay. It is not a route to change old immutable
@@ -67,7 +67,7 @@ uses `submit_utility` for shared admission, and recovers ambiguous submissions
 without duplicate dispatch. Its CLI is `python -m gpx_recipe.live.galaxy_worker
 packet.zip work result.zip cache.zip [--cache previous.zip]`. Inputs are
 `packet`, optional `response_cache`, and `dispatch_key`; outputs are
-`result_bundle` and `response_cache`. The production image/tool definition is
+`result_bundle`, `response_cache_output`, and the `verified_projects` collection. The production image/tool definition is
 provided by the combined integration release. The local
 process adapter is intentionally refused for a production context. The feature
 does not yet advertise a production-ready scientific endpoint merely because its
@@ -77,3 +77,27 @@ Counting advice and phase exclusion remain disabled. Supplied reduced-data
 variances omit shared nuclear/reference and cross-bin covariance. Passing a
 replica agreement screen does not establish correct magnetic structure, global
 convergence or valid stopping-time uncertainty.
+
+## Production setup path
+
+1. Start the normal POWGEN Live monitor and open **In-progress scans**.
+2. Load published sources from the existing Refinement catalog and select the
+   nuclear GPX. Inspect it through the existing native inspection workflow.
+3. Record an explicitly checked producer mapping. This remains a user-reviewed
+   mapping, not a claim of calibration by the software.
+4. Open **Set magnetic models in Refinement**. The existing Luna/native/Bilbao
+   workflow supplies the parent, site form factors, k and selected candidates.
+   No separate credentials or duplicate model-discovery code is introduced.
+5. Return to the live tab, review those settings, and prepare the live models in
+   Galaxy. This imports one native TOF histogram, retains the nuclear model,
+   sample/instrument profiles and exclusions, and uses the overlap between the
+   existing fitted interval and the live snapshot. Optional existing
+   scale/background transfer is explicit.
+6. Inspect and accept the returned fixed-response checkpoint. Conditional
+   analysis and subsequent cumulative revisions use the Galaxy worker. Every
+   verified posterior GPX is separately published in `verified_projects`, and
+   its exact HDA, not the nuclear parent's HDA, is used for further Refinement.
+
+The stream is intentionally pinned to one run. Viewing a newer run does not
+change which data is being analyzed. A new run/configuration needs review;
+provisional revisions never enter the completed-acquisition transition timeline.

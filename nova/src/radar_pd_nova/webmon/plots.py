@@ -45,7 +45,7 @@ def checkpoint_review(data, *, axis='d', difc=None, revision=''):
     f.add_trace(go.Scattergl(x=x,y=y,mode='markers',marker=dict(size=3,color='#334155'),name='Original autoreduced observations'),row=1,col=1)
     f.add_trace(go.Scattergl(x=x,y=calc,mode='lines',line=dict(color='#dd6b20',width=1.6),name='Published GPX calculation'),row=1,col=1)
     lx,_=coordinates({'x':data['live_x']},axis,difc);lo=np.argsort(lx)
-    f.add_trace(go.Scattergl(x=lx[lo],y=np.asarray(data['live_scaled'])[lo],mode='lines',line=dict(color='#008577',width=1),name='Same-run WebMON · affine scaled for shape comparison'),row=1,col=1)
+    f.add_trace(go.Scattergl(x=lx[lo],y=np.asarray(data['live_scaled'])[lo],mode='lines',line=dict(color='#008577',width=1),name=('Target live snapshot · reviewed unit conversion' if 'reviewed_live_conversion' in data else 'Same-run WebMON · affine scaled for shape comparison')),row=1,col=1)
     f.add_trace(go.Scattergl(x=x,y=(y-calc)/sigma,mode='lines',line=dict(color='#66788a',width=1),name='Original fit residual',showlegend=False),row=2,col=1)
     f.add_hline(y=0,line_color='#7c8894',row=2,col=1)
     layout(f,height=510,revision=f'checkpoint-{revision}-{axis}')

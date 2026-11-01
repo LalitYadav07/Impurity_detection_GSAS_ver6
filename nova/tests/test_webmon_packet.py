@@ -51,11 +51,11 @@ def test_worker_envelope_runs_without_nova_and_records_packet_identity(tmp_path,
     source=tmp_path/'source';source.mkdir();request,_=scientific_request(source);packet=tmp_path/'packet.zip';identity=create_packet(request,packet)
     def native(path):
         root=path.parent;model=root/'models/test';model.mkdir(parents=True)
-        for name in ['kernel.json','kernel.npz','magnetic-refinement.gpx','posterior.npz','posterior.json']:(model/name).write_text(name)
-        (root/'result.json').write_text(json.dumps(dict(status='complete',source_revision=request['source_revision'],reference_revision=request['reference_revision'],request_sha256=file_hash(path),rows=[dict(id='test',posterior=str(model/'posterior.json'))])))
+        for name in ['kernel.json','kernel.npz','magnetic-refinement.gpx','posterior.npz','posterior.json','posterior-maximum.gpx']:(model/name).write_text(name)
+        (root/'result.json').write_text(json.dumps(dict(status='complete',source_revision=request['source_revision'],reference_revision=request['reference_revision'],request_sha256=file_hash(path),rows=[dict(id='test',posterior=str(model/'posterior.json'),fitted_gpx=str(model/'posterior-maximum.gpx'),fitted_gpx_sha256=file_hash(model/'posterior-maximum.gpx'))])))
     monkeypatch.setattr(worker,'run',native)
     result=run_packet(packet,tmp_path/'job',tmp_path/'result.zip',tmp_path/'cache.zip')
     assert result['packet_id']==identity
     assert result['rows'][0]['posterior']=='models/test/posterior.json'
     assert result['native_result_sha256']==file_hash(tmp_path/'job/native-result.json')
-    with zipfile.ZipFile(tmp_path/'result.zip') as z:assert 'transport.json' in z.namelist()
+    with zipfile.ZipFile(tmp_path/'result.zip') as z:assert 'transport.json' in z.namelist() and 'verified_projects/test.gpx' in z.namelist()

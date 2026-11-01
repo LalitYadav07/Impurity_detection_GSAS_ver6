@@ -15,7 +15,10 @@ class Service:
     def submit_utility(self,**kw):
         self.submissions.append(kw)
         if self.fail:raise RuntimeError('connection lost')
-        return UtilityActionRecord(uid='job',name='Live',tool_id=LIVE_TOOL_ID,galaxy_job_id='galaxy-job',status=RunStatus.OK,outputs={'result_bundle':'results-hda','response_cache':'cache-hda'})
+        return UtilityActionRecord(uid='job',name='Live',tool_id=LIVE_TOOL_ID,galaxy_job_id='galaxy-job',status=RunStatus.OK,outputs={'result_bundle':'results-hda','response_cache_output':'cache-hda','verified_projects':'projects-hdca'})
+    def collection_elements(self,uid):
+        assert uid=='projects-hdca'
+        return [{'name':'test','id':'inferred-gpx-hda'}]
     def _download_dataset(self,uid,target):assert uid=='results-hda';shutil.copy2(self.bundle,target)
 
 
@@ -23,7 +26,7 @@ def bundle_for(tmp_path,request):
     packet=tmp_path/'packet.zip';identity=create_packet(request,packet)
     root=tmp_path/'response';(root/'models/test').mkdir(parents=True)
     (root/'models/test/posterior.json').write_text('{}')
-    result=dict(packet_id=identity,source_revision=request['source_revision'],reference_revision=request['reference_revision'],rows=[{'posterior':'models/test/posterior.json'}])
+    result=dict(packet_id=identity,source_revision=request['source_revision'],reference_revision=request['reference_revision'],rows=[{'posterior':'models/test/posterior.json','published_project':'test'}])
     (root/'result.json').write_text(json.dumps(result));files={str(p.relative_to(root)):file_hash(p) for p in root.rglob('*') if p.is_file()}
     (root/'transport.json').write_bytes(canonical(dict(schema='radar-live-result/v1',packet_id=identity,files=files)))
     bundle=tmp_path/'result.zip'
@@ -41,6 +44,7 @@ def test_galaxy_dispatch_restores_outputs_and_reuses_acknowledged_job(tmp_path):
     assert len(service.submissions)==1
     assert service.submissions[0]['inputs']['response_cache']=={'dataset_id':'previous-cache'}
     assert first['response_cache_dataset_id']=='cache-hda'
+    assert first['rows'][0]['fitted_dataset_id']=='inferred-gpx-hda'
     assert Path(second['rows'][0]['posterior']).is_file()
 
 
