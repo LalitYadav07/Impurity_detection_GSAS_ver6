@@ -174,6 +174,40 @@ def histogram_series_label(view, source, key):
     return 'histogram '+str(list(histograms).index(key)+1) if key in histograms else str(key)
 
 
+def _reference_caption(references):
+    """Bound the static caption; full identities remain in each trace's hover."""
+    def short(value, limit):
+        text=' '.join(str(value).split())
+        return escape(text if len(text)<=limit else text[:limit-1]+'…')
+
+    def number(value):
+        return f'{value:.8g}' if isinstance(value,(int,float)) else str(value)
+
+    shown=references if len(references)<=3 else references[:2]
+    lines=[]
+    for reference in shown:
+        run=reference['run_number']
+        identity=f'scan {run}' if run is not None else 'result '+short(reference['result_id'],24)
+        parts=[identity]
+        if reference['coordinate_key']!='run_number':
+            value=reference['coordinate_value'];label=reference['coordinate_label']
+            if value is None:
+                condition=short(label,30)+': unavailable'
+            elif label.endswith(')') and ' (' in label:
+                unit=label.rsplit(' (',1)[1][:-1]
+                condition=short(number(value),28)+' '+escape(unit)
+            else:
+                condition=short(label,22)+': '+short(number(value),28)
+            parts.append(condition)
+        parts.append('value '+number(reference['reference_value'])+
+                     (' '+escape(reference['unit']) if reference['unit'] else ''))
+        prefix='Reference' if len(references)==1 else 'Reference · '+short(reference['group'],36)
+        lines.append(prefix+': '+' · '.join(parts))
+    if len(shown)<len(references):
+        lines.append(f'{len(references)-len(shown)} more reference groups; hover each series for its full reference.')
+    return '<br>'.join(lines),len(lines)
+
+
 def trend_figure(rows,*,metric='rwp',x_key='run_number',display='absolute'):
     """Rows contain source metadata and native baseline/final views, never guessed conditions."""
     if not rows:return empty_figure('Completed refinements will populate this trend')
@@ -263,4 +297,11 @@ def trend_figure(rows,*,metric='rwp',x_key='run_number',display='absolute'):
         figure.add_annotation(text='Voltage means describe covered intervals only; inspect exposure coverage and clock uncertainty in each result.',
             xref='paper',yref='paper',x=0,y=-.22,xanchor='left',showarrow=False,font=dict(size=11,color='#64776c'))
         figure.update_layout(margin=dict(b=90))
+    if references:
+        caption,lines=_reference_caption(references)
+        offset=92 if x_key=='battery_voltage' else 58
+        figure.add_annotation(text=caption,xref='paper',yref='paper',x=0,y=0,
+            xanchor='left',yanchor='top',yshift=-offset,showarrow=False,align='left',
+            font=dict(size=10,color='#52665b'),name='reference-caption')
+        figure.update_layout(margin=dict(b=offset+15*lines+12))
     return figure
