@@ -8264,8 +8264,8 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                         "library_mode": library_mode,
                         "radiation": radiation,
                         "overwrite": "",
-                        "reviewed_occupancy_excess": '0.001' if rounding else '0',
-                        "occupancy_review_note": rounding_note if rounding else '',
+                        **({"reviewed_occupancy_excess": "0.001", "occupancy_review_note": rounding_note}
+                           if rounding else {}),
                     },
                 )
             except asyncio.CancelledError:

@@ -2018,8 +2018,14 @@ class GalaxyService:
         caller's durable dispatch ledger.
         """
 
-        if tool_id == LIBRARY_BUILDER_TOOL_ID and str(inputs.get('reviewed_occupancy_excess') or '0') not in {'0','0.0'}:
-            if not self.tool_has_input(tool_id,'reviewed_occupancy_excess'):
+        if tool_id == LIBRARY_BUILDER_TOOL_ID:
+            inputs = dict(inputs)
+            if str(inputs.get('reviewed_occupancy_excess') or '0') in {'0', '0.0'}:
+                # Older wrappers have no policy fields. The omitted option is
+                # strict by default, so never send unsupported zero/empty keys.
+                inputs.pop('reviewed_occupancy_excess', None)
+                inputs.pop('occupancy_review_note', None)
+            elif not self.tool_has_input(tool_id,'reviewed_occupancy_excess'):
                 raise ValueError('The installed Library Builder does not support reviewed occupancy rounding. Strict builds remain available; a compatible builder wrapper and backend are required.')
 
         resolved_inputs: dict[str, Any] = {}

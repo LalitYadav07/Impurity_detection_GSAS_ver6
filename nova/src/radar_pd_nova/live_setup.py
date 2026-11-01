@@ -122,7 +122,9 @@ class LiveSetupMixin:
             current_review = deepcopy(getattr(state, 'live_library_review', {}) or {})
             from .library_setup import LibraryDraft, library_source_key
             draft=LibraryDraft(state,'live')
-            if draft.database_source == 'builtin':
+            library_source = getattr(draft, 'database_source', None) or (
+                'archive' if getattr(state, 'powgen_database_dataset_id', None) else 'builtin')
+            if library_source == 'builtin':
                 config = config.model_copy(update={'library_review': {}}, deep=True)
             elif current_review:
                 if current_review.get('source_key') != library_source_key(draft):
