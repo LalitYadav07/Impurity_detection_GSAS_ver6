@@ -351,6 +351,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         state.history_panels = []
         state.cancel_dialog = False
         state.clear_workspace_dialog = False
+        state.workspace_clearing = False
         state.end_session_dialog = False
         state.session_closing = False
         state.workspace_notice = ""
@@ -493,6 +494,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         state.selected_run_elapsed = "-"
         state.monitor_stages = []
         state.summary_cards = []
+        state.result_owner_uid = ""
         state.result_metrics = []
         state.result_warnings = []
         state.phase_total = "-"
@@ -900,10 +902,17 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                     vuetify.VCardText(
                         "Stop Live monitoring and queued/future refinement work, release loaded run and plot data, and reset the IPTS setup. Already-submitted Galaxy jobs continue. Saved results and refinement receipts remain in History and can be reopened."
                     )
+                    vuetify.VCardText(
+                        "Saving recovery state before clearing. Please keep this session open.",
+                        v_if="workspace_clearing",
+                        role="status",
+                    )
                     with vuetify.VCardActions():
                         vuetify.VSpacer()
-                        vuetify.VBtn("Keep working", click="clear_workspace_dialog = false", variant="text")
-                        vuetify.VBtn("Clear workspace", click=self.clear_workspace, color="primary")
+                        vuetify.VBtn("Keep working", click="clear_workspace_dialog = false", variant="text",
+                                     disabled=("workspace_clearing",))
+                        vuetify.VBtn("Clear workspace", click=self.clear_workspace, color="primary",
+                                     disabled=("workspace_clearing",), loading=("workspace_clearing",))
             with vuetify.VDialog(v_model="end_session_dialog", max_width=560, persistent=True):
                 with vuetify.VCard():
                     vuetify.VCardTitle("End RADAR-PD session")
@@ -929,6 +938,8 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         state = self.server.state
         if getattr(state, 'session_closing', False):
             return "This session is saving its recovery state before closing."
+        if getattr(state, 'workspace_clearing', False):
+            return "This workspace is saving its recovery state before clearing."
         if (state.busy or state.live_launch_busy or self._pending_submission_tokens
                 or getattr(self, "_powgen_submissions_in_flight", 0)):
             return "Wait for the current Galaxy submission to be acknowledged, then try again."
@@ -1009,6 +1020,8 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         """Release this session's run and plot memory while retaining Galaxy outputs."""
 
         state = self.server.state
+        if getattr(state, "workspace_clearing", False):
+            return
         blocker = self._session_action_blocker()
         if blocker:
             state.clear_workspace_dialog = False
@@ -1016,14 +1029,18 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
             state.workspace_notice_kind = "warning"
             state.flush()
             return
+        state.workspace_clearing = True
+        state.flush()
         try:
             await self._stop_session_enrollment()
         except Exception as exc:
+            state.workspace_clearing = False
             state.clear_workspace_dialog = False
             state.workspace_notice = f"The workspace was not cleared because recovery state could not be saved: {exc}"
             state.workspace_notice_kind = "warning"
             state.flush()
             return
+        state.workspace_clearing = False
 
         for task in tuple(self._monitor_tasks | self._utility_tasks):
             if not task.done():
@@ -2680,11 +2697,16 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
 
                 with html.Div(v_show="workspace_view === 'monitor'", classes="radar-workspace-view"):
                     self._run_monitor_view()
-                with html.Div(v_show="workspace_view === 'results'", classes="radar-workspace-view"):
+                vuetify.VAlert(
+                    v_if="['results', 'plots', 'files'].includes(workspace_view) && result_owner_uid !== selected_run_uid",
+                    text="Results for this run are not loaded yet. Follow its status in Run Monitor; results from other runs remain hidden.",
+                    type="info", variant="tonal", classes="mb-3",
+                )
+                with html.Div(v_show="workspace_view === 'results' && result_owner_uid === selected_run_uid", classes="radar-workspace-view"):
                     self._results_dashboard()
-                with html.Div(v_show="workspace_view === 'plots'", classes="radar-workspace-view"):
+                with html.Div(v_show="workspace_view === 'plots' && result_owner_uid === selected_run_uid", classes="radar-workspace-view"):
                     self._interactive_plots_view()
-                with html.Div(v_show="workspace_view === 'files'", classes="radar-workspace-view"):
+                with html.Div(v_show="workspace_view === 'files' && result_owner_uid === selected_run_uid", classes="radar-workspace-view"):
                     self._file_browser_view()
                 self._activity_panel()
             with html.Div(v_show="workspace_view === 'refinement' || (workspace_view === 'experiment' && experiment_result_view === 'refinement')"):
@@ -2972,7 +2994,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                     )
             with html.Div(classes="radar-progress-number"):
                 html.Strong("{{ selected_run_progress }}%", v_if="selected_run_progress_known")
-                html.Span("complete", v_if="selected_run_status === 'Ok'")
+                html.Span("{{ selected_result_status === 'Ready' ? 'Complete' : 'Analysis complete' }}", v_if="selected_run_status === 'Ok'")
                 html.Span("stage estimate", v_else_if="selected_run_progress_known")
                 html.Span("Stopped", v_else_if="['Error', 'Cancelled'].includes(selected_run_status)")
                 html.Span("Awaiting stage updates", v_else=True)
@@ -6482,7 +6504,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                 ("result", "download", "collect", "ready"),
             ]
         if record.status == RunStatus.OK:
-            active_index = len(names)
+            active_index = len(names) if record.result_status == ResultStatus.READY else len(names) - 1
         elif record.status in {RunStatus.QUEUED, RunStatus.ERROR, RunStatus.CANCELLED}:
             # A scheduler state or a terminal error does not prove which
             # scientific stages ran. Do not manufacture milestones from a
@@ -6497,7 +6519,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         return [
             {
                 "name": name,
-                "state": "complete" if record.status == RunStatus.OK or (active_index is not None and index < active_index) else "active" if index == active_index else "pending",
+                "state": "complete" if active_index is not None and index < active_index else "active" if index == active_index and record.result_status != ResultStatus.ERROR else "pending",
             }
             for index, name in enumerate(names)
         ]
@@ -6620,12 +6642,17 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
     def _select_record(self, record: RunRecord) -> None:
         state = self.server.state
         previous_run_uid = str(getattr(state, "selected_run_uid", "") or "")
+        previous_result_uid = str(getattr(state, "result_owner_uid", "") or "")
+        if previous_result_uid != record.uid:
+            self._reset_result_state()
         state.selected_run_uid = record.uid
         state.run_selection = [record.uid]
         state.selected_run_name = record.name
         state.selected_run_status = record.status.value.title()
         state.selected_analysis_status = (record.analysis_status or record.status).value.title()
         state.selected_result_status = record.result_status.value.replace("_", " ").title()
+        if record.status == RunStatus.OK and record.result_status == ResultStatus.NOT_REQUESTED:
+            state.selected_result_status = "Loading"
         state.selected_publication_status = record.publication_status.value.title() if record.publication_status else "-"
         state.selected_publication_target = record.publication_target or ""
         state.selected_publication_job_id = record.publication_job_id or ""
@@ -6633,17 +6660,23 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         state.result_explorer_available = bool(record.output_dataset_ids.get("results_archive"))
         state.selected_galaxy_job_id = record.galaxy_job_id or "Pending"
         state.selected_run_stage = record.stage
-        state.selected_run_progress = record.progress
+        if record.status == RunStatus.OK and record.result_status != ResultStatus.READY:
+            state.selected_run_stage = (
+                "Analysis complete; results unavailable" if record.result_status == ResultStatus.ERROR
+                else "Analysis complete; loading results"
+            )
+        state.selected_run_progress = 100 if record.status == RunStatus.OK else record.progress
         state.selected_run_progress_known = stage_progress_is_known(record.stage, record.status)
         state.selected_run_message = record.message
         state.selected_run_console = record.console_tail
         state.viewed_run_mode = record.mode.value
         state.viewed_output_profile = record.output_profile
         state.monitor_stages = self._monitor_stage_rows(record)
-        if previous_run_uid != record.uid:
+        if previous_run_uid != record.uid or (previous_result_uid and previous_result_uid != record.uid):
             state.gsasii_launch_url = ""
             state.gsasii_session_status = ""
             state.gsasii_status_message = ""
+            state.selected_result_load_error = ""
         state.selected_run_elapsed = run_elapsed_label(record)
         self._sync_workspace_options(record.mode)
         state.viewed_configuration = self._record_configuration_yaml(record)
@@ -7010,6 +7043,9 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
 
     def _load_results(self, record: RunRecord) -> None:
         state = self.server.state
+        selected_uid = str(getattr(state, "selected_run_uid", "") or "")
+        if selected_uid and selected_uid != record.uid:
+            return
         self._reset_result_state()
         payload = self.service.result_payload(record)
         self._refinement_maybe_refresh()
@@ -7092,6 +7128,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                 state.rapid_final_rows[1]["rank"] if len(state.rapid_final_rows) > 1 else None
             )
         self._sync_workspace_options(view["mode"])
+        state.result_owner_uid = record.uid
         state.flush()
 
     def _launchable_checkpoint_rows(
@@ -7127,6 +7164,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
 
     def _reset_result_state(self) -> None:
         state = self.server.state
+        state.result_owner_uid = ""
         state.summary_cards = []
         state.result_metrics = []
         state.result_warnings = []

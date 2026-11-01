@@ -12,6 +12,7 @@ from radar_pd_nova.models import (
     InputSelection,
     RunRecord,
     RunStatus,
+    ResultStatus,
     UtilityActionRecord,
     selected_run_uid,
 )
@@ -580,11 +581,56 @@ def test_unobserved_stages_do_not_claim_scientific_progress(status, stage, progr
 
 def test_finished_job_marks_stages_complete_even_without_console():
     record = RunRecord(uid="done", name="done", mode=AnalysisMode.FULL,
-        history_id="history-1", status=RunStatus.OK, stage="Results ready", progress=100)
+        history_id="history-1", status=RunStatus.OK, result_status=ResultStatus.READY,
+        stage="Results ready", progress=100)
     app, state = _app_with_record(record)
     app._select_record(record)
     assert state.selected_run_progress_known
     assert all(row["state"] == "complete" for row in app._monitor_stage_rows(record))
+
+
+def test_new_run_hides_previous_scientific_values_even_if_header_already_changed():
+    record = RunRecord(uid="negative", name="different measurement", mode=AnalysisMode.FULL,
+                       history_id="history-1", status=RunStatus.RUNNING)
+    app, state = _app_with_record(record)
+    # submit_run sets the header UID before calling _select_record. The loaded
+    # result's own identity must still invalidate the old positive values.
+    state.selected_run_uid = record.uid
+    state.result_owner_uid = "positive"
+    state.result_metrics = [{"label": "Best Rwp", "value": "1.612%"}]
+    state.phase_rows = [{"phase": "old positive", "weight_percent": 100}]
+    state.result_warnings = ["old warning"]
+    state.gsasii_launch_url = "/old-result-desktop"
+    state.gsasii_session_status = "ready"
+    app._select_record(record)
+    assert state.result_owner_uid == ""
+    assert not state.result_metrics and not state.phase_rows and not state.result_warnings
+    assert not state.gsasii_launch_url and not state.gsasii_session_status
+
+
+def test_server_completion_does_not_mark_uncollected_results_complete():
+    record = RunRecord(uid="finished", name="new run", mode=AnalysisMode.FULL,
+                       history_id="history-1", status=RunStatus.OK, stage="Results ready")
+    app, state = _app_with_record(record)
+    app._select_record(record)
+    assert state.selected_run_stage == "Analysis complete; loading results"
+    assert state.selected_result_status == "Loading"
+    assert state.selected_run_progress == 100
+    assert app._monitor_stage_rows(record)[-1] == {"name": "Result collection", "state": "active"}
+    assert all(row["state"] == "complete" for row in app._monitor_stage_rows(record)[:-1])
+
+
+def test_late_load_for_a_different_run_cannot_replace_visible_results():
+    app = RadarPdNovaApp()
+    state = app.server.state
+    state.selected_run_uid = "current"
+    state.result_owner_uid = "current"
+    state.phase_rows = [{"phase": "current model"}]
+    app.service = SimpleNamespace(result_payload=lambda _record: pytest.fail("Foreign load must be rejected"))
+    old = RunRecord(uid="old", name="old", mode=AnalysisMode.FULL, history_id="history-1")
+    app._load_results(old)
+    assert state.result_owner_uid == "current"
+    assert state.phase_rows == [{"phase": "current model"}]
 
 
 def test_async_monitor_publishes_updates_on_the_event_loop(tmp_path) -> None:

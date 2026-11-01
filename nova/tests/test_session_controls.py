@@ -97,6 +97,49 @@ def test_clear_workspace_waits_for_submission_acknowledgement():
     assert "acknowledged" in state.workspace_notice
 
 
+def test_clear_workspace_shows_pending_save_and_prevents_duplicate_actions():
+    app = RadarPdNovaApp()
+    calls = []
+    app.server.state.clear_workspace_dialog = True
+
+    async def scenario():
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        async def save():
+            calls.append("save")
+            entered.set()
+            await release.wait()
+
+        app._stop_session_enrollment = save
+        pending = asyncio.create_task(app.clear_workspace())
+        await entered.wait()
+        assert app.server.state.workspace_clearing
+        assert "before clearing" in app._session_action_blocker()
+        await app.clear_workspace()
+        assert app.server.state.clear_workspace_dialog
+        assert calls == ["save"]
+        release.set()
+        await pending
+        assert not app.server.state.workspace_clearing
+        assert not app.server.state.clear_workspace_dialog
+
+    asyncio.run(scenario())
+
+
+def test_failed_clear_save_keeps_data_and_allows_explicit_retry():
+    app = RadarPdNovaApp()
+    app.records["saved"] = object()
+
+    async def failed_save():
+        raise RuntimeError("checkpoint temporarily unavailable")
+
+    app._stop_session_enrollment = failed_save
+    asyncio.run(app.clear_workspace())
+    assert "saved" in app.records
+    assert not app.server.state.workspace_clearing
+    assert "was not cleared" in app.server.state.workspace_notice
+
+
 def test_end_session_pauses_queued_refinements_even_without_future_enrollment():
     app = RadarPdNovaApp()
     workspace = app._refinement_workspace = _Workspace()
