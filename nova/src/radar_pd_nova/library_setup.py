@@ -6,6 +6,7 @@ import asyncio
 import json
 import hashlib
 import math
+import os
 from pathlib import Path
 import re
 import zipfile
@@ -57,16 +58,44 @@ def file_sha256(path: str | Path) -> str:
     return result.hexdigest()
 
 
+def _hash_library_stream(stream) -> str:
+    digest = hashlib.sha256()
+    stream.seek(0)
+    for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+        digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _library_file_identity(value) -> tuple:
+    return (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+
+
 def inspect_library_review(path: str | Path) -> dict[str, Any]:
-    """Inspect bounded manifest/CIF members; never trust a reviewed flag as consent."""
-    path=Path(path)
-    with zipfile.ZipFile(path) as archive:
+    """Bind the declared review and digest to one unchanged open archive."""
+    path = Path(path)
+    with path.open('rb') as stream:
+        before = _library_file_identity(os.fstat(stream.fileno()))
+        result = _inspect_library_review_contents(stream)
+        digest = _hash_library_stream(stream)
+        after = _library_file_identity(os.fstat(stream.fileno()))
+        try:
+            current = _library_file_identity(path.stat())
+        except OSError as exc:
+            raise ValueError('The library archive changed during review; select and review it again') from exc
+        if before != after or before != current:
+            raise ValueError('The library archive changed during review; select and review it again')
+        result['archive_sha256'] = digest
+        return result
+
+
+def _inspect_library_review_contents(source) -> dict[str, Any]:
+    """Inspect bounded members of the caller's already-open archive."""
+    with zipfile.ZipFile(source) as archive:
         if len(set(archive.namelist())) != len(archive.namelist()):
             raise ValueError('Library archive contains duplicate member names')
         names=[name for name in archive.namelist() if name.rstrip('/').endswith('/manifest.json') or name=='manifest.json']
         if not names:
-            return {'archive_sha256':file_sha256(path),
-                    'policy_set_sha256':hashlib.sha256(b'{}').hexdigest(),'phase_count':None,
+            return {'policy_set_sha256':hashlib.sha256(b'{}').hexdigest(),'phase_count':None,
                     'reviews':[],'failures':[],'requires_review':False,
                     'evidence_verification':'unverified archive declaration','actual_affected_site_count':None}
         if len(names)!=1 or archive.getinfo(names[0]).file_size>2_000_000:
@@ -141,7 +170,7 @@ def inspect_library_review(path: str | Path) -> dict[str, Any]:
         else:
             partial = partial_library_archive_review(manifest)
         incomplete = partial['requires_review'] if partial is not None else bool(manifest.get('failures'))
-    return {'archive_sha256':file_sha256(path),'policy_set_sha256':set_hash,
+    return {'policy_set_sha256':set_hash,
             'phase_count':count,'reviews':rows,'failures':list(manifest.get('failures') or []),
             'declared_augmented_counts':declared_counts,
             'requires_review':bool(reviews or incomplete),'requires_incomplete_review':incomplete,
