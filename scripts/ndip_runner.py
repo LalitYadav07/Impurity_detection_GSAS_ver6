@@ -831,7 +831,8 @@ def command_analyze(args: argparse.Namespace) -> int:
     if args.db_pack and radiation == 'neutron':
         from library_fingerprint_guard import validate_custom_neutron_library
         fingerprint_check = validate_custom_neutron_library(
-            db_root, resolved, original_json=original_json_override)
+            db_root, resolved, original_json=original_json_override,
+            pipeline_mode=mode, config_directory=work)
         input_doc['custom_isotope_fingerprint_validation'] = fingerprint_check
         atomic_write_json(portal / 'input_manifest.json', input_doc)
     resolved["instrument_mode"] = instrument_mode

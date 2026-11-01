@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+import shutil
 from pathlib import Path
 import sys
 import tempfile
@@ -172,6 +173,85 @@ class LibraryFingerprintGuardContract(unittest.TestCase):
         config={'db':{'catalog_csv':str(self.root/'other/catalog_deduplicated.csv')}}
         with self.assertRaisesRegex(LibraryFingerprintError,'configured ranking database differs'):
             validate_custom_neutron_library(root,config)
+
+    def test_alternate_source_paths_are_rejected_at_each_effective_config_scope(self):
+        root=self.root/'selected';selected=pack(root,'D')
+        other=pack(self.root/'other','H',legacy=True)
+        base={'catalog_csv':str(selected.catalog_csv),'profiles_dir':str(selected.profiles_dir),
+            'cif_map_json':str(selected.cif_map_json),'original_json':str(selected.original_json)}
+        for key in ('cif_map_json','original_json'):
+            changed={**base,key:str(getattr(other,key))}
+            cases=[{'db':changed}, {'db':base,'datasets':[{'db':{key:changed[key]}}]},
+                {'db':base,'datasets':[{key:changed[key]}]},
+                {'db_source':'neutron','db_neutron':changed},
+                {'db':base,'datasets':[{}, {'db':{key:changed[key]}}]}]
+            for config in cases:
+                for mode in ('full','rapid'):
+                    with self.subTest(key=key,config=config,mode=mode):
+                        with self.assertRaisesRegex(LibraryFingerprintError,'source contract'):
+                            validate_custom_neutron_library(root,config,
+                                original_json=selected.original_json,pipeline_mode=mode)
+
+    def test_actual_original_only_source_is_used_instead_of_available_cif_map(self):
+        for species in ('H','D'):
+            with self.subTest(species=species):
+                root=self.root/species;layout=pack(root,species,legacy=species=='H')
+                config={'db':{'catalog_csv':str(layout.catalog_csv),'profiles_dir':str(layout.profiles_dir),
+                    'original_json':str(layout.original_json)}}
+                result=validate_custom_neutron_library(root,config,original_json=layout.original_json)
+                self.assertEqual(result['source_bindings'],[{'cif_map_json':None,'original_json':str(layout.original_json.resolve())}])
+                self.assertEqual(result['io']['cif_file_reads'],0)
+                self.assertEqual(result['io']['original_json_reads'],1)
+                self.assertEqual(result['checked_isotope_phase_ids'],['p'] if species=='D' else [])
+
+    def test_matching_aliases_and_db_neutron_precedence_remain_valid(self):
+        root=self.root/'aliases';layout=pack(root,'D')
+        base={'catalog_csv':str(layout.catalog_csv),'profiles_dir':str(layout.profiles_dir),
+            'cif_map_json':'${CONFIG_DIR}/folder/../cif_map.json','original_json':'./highsymm_metadata.json'}
+        configs=[{'db':base,'CONFIG_DIR':str(root)},
+            {'db_source':'neutron','db_neutron':base,'CONFIG_DIR':str(root)},
+            {'db':base,'db_source':'neutron','db_neutron':{'original_json':'ignored'},'CONFIG_DIR':str(root)}]
+        with patch.dict(os.environ,{'CONFIG_DIR':str(root)}):
+            for config in configs:
+                for mode in ('full','rapid'):
+                    with self.subTest(mode=mode,config=config):
+                        result=validate_custom_neutron_library(root,config,
+                            original_json=layout.original_json,pipeline_mode=mode,config_directory=root)
+                        self.assertEqual(result['isotopes'],{'p':['D']})
+
+    def test_dataset_null_source_semantics_match_each_ranker(self):
+        root=self.root/'null';layout=pack(root,'D')
+        config={'db':{'catalog_csv':str(layout.catalog_csv),'profiles_dir':str(layout.profiles_dir),
+            'cif_map_json':str(layout.cif_map_json),'original_json':str(layout.original_json)},
+            'datasets':[{'cif_map_json':None}]}
+        full=validate_custom_neutron_library(root,config,pipeline_mode='full')
+        rapid=validate_custom_neutron_library(root,config,pipeline_mode='rapid')
+        self.assertIsNone(full['source_bindings'][0]['cif_map_json'])
+        self.assertEqual(rapid['source_bindings'][0]['cif_map_json'],str(layout.cif_map_json.resolve()))
+        self.assertEqual(full['isotopes'],rapid['isotopes'])
+
+    def test_legitimate_augmented_base_metadata_is_retained_without_relabeling(self):
+        root=self.root/'augmented';layout=pack(root,'D')
+        base=pack(self.root/'base','H',legacy=True)
+        raw=(base.cifs_dir/'p.cif').read_text()
+        base.original_json.write_text(json.dumps({'q':{'cif_content':raw}}))
+        catalog=pd.read_csv(base.catalog_csv);catalog['id']='q';catalog['npz']='phases/q.npz'
+        pd.concat([pd.read_csv(layout.catalog_csv),catalog],ignore_index=True).to_csv(layout.catalog_csv,index=False)
+        shutil.copyfile(base.phases_dir/'p.npz',layout.phases_dir/'q.npz')
+        with np.load(layout.profiles_npz) as value: bundle={key:value[key] for key in value.files}
+        with np.load(base.profiles_npz) as value: bundle['profiles']=np.concatenate([bundle['profiles'],value['profiles']])
+        np.savez_compressed(layout.profiles_npz,**bundle)
+        pd.DataFrame({'id':['p','q'],'row':[0,1]}).to_csv(layout.profiles_index_csv,index=False)
+        manifest=json.loads(layout.manifest_json.read_text());manifest['kind']='augmented'
+        layout.manifest_json.write_text(json.dumps(manifest));layout.original_json.unlink()
+        config={'db_source':'neutron','db_neutron':{'catalog_csv':str(layout.catalog_csv),
+            'profiles_dir':str(layout.profiles_dir),'cif_map_json':str(layout.cif_map_json),
+            'original_json':str(base.original_json)}}
+        result=validate_custom_neutron_library(root,config,original_json=base.original_json)
+        self.assertEqual(result['isotopes'],{'p':['D']})
+        self.assertEqual(result['io']['original_json_reads'],1)
+        with np.load(layout.profiles_npz) as value:
+            self.assertEqual(set(json.loads(str(value['fingerprint_provenance'].item()))['phases']),{'p'})
 
     def test_both_runner_modes_fail_before_pipeline_dispatch(self):
         for mode in ('full','rapid'):

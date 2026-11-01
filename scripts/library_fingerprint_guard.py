@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 import math
+import os
+import re
 from hashlib import sha256
 from pathlib import Path
 from types import SimpleNamespace
@@ -51,16 +53,72 @@ def _eligible_ids(loader, config):
     return [pid for pid in ids if pid in selected]
 
 
-def _check_database_binding(root, config):
-    # A legacy config must not validate one archive while ranking another.
-    for dataset in config.get('datasets') or [{}]:
-        database = {**(config.get('db') or {}), **(dataset.get('db') or {})}
-        if not database:
-            database = config.get('db_neutron') or {}
-        for key, relative in (('catalog_csv', 'catalog_deduplicated.csv'), ('profiles_dir', 'profiles64')):
-            value = dataset.get(key) or database.get(key)
-            if value and Path(value).expanduser().resolve() != root / relative:
-                _fail('configuration', 'the configured ranking database differs from the selected custom library')
+def _expand_variables(text, environ):
+    return re.sub(r'\$(\w+|\{[^}]*\})',
+        lambda match: environ.get(match[1].strip('{}'), match[0]), text)
+
+
+def _pipeline_path(value, config, mode, config_directory):
+    if not value:
+        return None
+    environ = dict(os.environ)
+    if mode == 'full':
+        environ.setdefault('CONFIG_DIR', str(config_directory or Path.cwd()))
+        for key in ('PROJECT_ROOT', 'WORK_ROOT', 'DATA_ROOT'):
+            configured = config.get(key) or config.get(key.lower())
+            if isinstance(configured, str) and configured:
+                environ[key] = _expand_variables(os.path.expanduser(configured), environ)
+    text = _expand_variables(os.path.expanduser(str(value)), environ)
+    if mode == 'rapid':
+        for key in ('CONFIG_DIR', 'PROJECT_ROOT', 'DATA_ROOT', 'WORK_ROOT'):
+            if config.get(key):
+                text = text.replace('${'+key+'}', str(config[key]))
+        base = config.get('CONFIG_DIR') or Path(__file__).resolve().parent.parent
+    else:
+        base = environ['CONFIG_DIR']
+    path = Path(text)
+    return str((path if path.is_absolute() else Path(base) / path).resolve())
+
+
+def _database_bindings(root, config, original_path, *, pipeline_mode=None, config_directory=None):
+    """Mirror the two rankers' DB precedence, including explicit source removal."""
+    keys = ('catalog_csv', 'profiles_dir', 'cif_map_json', 'original_json', 'stable_csv')
+    expected = {'catalog_csv': str(root / 'catalog_deduplicated.csv'),
+        'profiles_dir': str(root / 'profiles64'), 'original_json': original_path,
+        'cif_map_json': str(root / 'cif_map.json') if (root / 'cif_map.json').is_file() else None}
+    datasets = config.get('datasets') or [{}]
+    # Direct validator callers may supply only selection controls. The Analyze
+    # entry point supplies the actual materialized DB configuration and mode.
+    has_database = any(key in config for key in ('db', 'db_neutron', 'db_xray')) or any(
+        'db' in dataset or any(key in dataset for key in keys) for dataset in datasets)
+    if not has_database:
+        return [(expected['cif_map_json'], original_path, datasets)]
+    grouped = {}
+    modes = (pipeline_mode,) if pipeline_mode in {'full', 'rapid'} else ('full', 'rapid')
+    for mode in modes:
+        for dataset in datasets:
+            database = dict(config.get('db') or {})
+            if isinstance(dataset.get('db'), dict):
+                database.update(dataset['db'])
+            for key in keys:
+                if (key in dataset if mode == 'full' else bool(dataset.get(key))):
+                    database[key] = dataset[key]
+            if not database:
+                source = (dataset.get('db_source', config.get('db_source', 'xray')) if mode == 'full'
+                          else dataset.get('db_source') or config.get('db_source') or 'xray')
+                database = dict(config.get('db_neutron' if str(source).strip().lower() == 'neutron' else 'db_xray') or {})
+            paths = {key: _pipeline_path(database.get(key), config, mode, config_directory) for key in expected}
+            for key in ('catalog_csv', 'profiles_dir'):
+                if paths[key] != expected[key]:
+                    _fail('configuration', 'the configured ranking database differs from the selected custom library')
+            for key in ('cif_map_json', 'original_json'):
+                if paths[key] is not None and paths[key] != expected[key]:
+                    _fail('configuration', f'the configured {key} differs from the selected library source contract')
+            identity = (paths['cif_map_json'], paths['original_json'])
+            rows = grouped.setdefault(identity, [])
+            if dataset not in rows:
+                rows.append(dataset)
+    return [(mapping, original, rows) for (mapping, original), rows in grouped.items()]
 
 
 def _source_bytes(loader, phase, stats):
@@ -121,37 +179,14 @@ def _expected_receipt(raw, simulation, phase):
         _fail(phase, 'the original fingerprint generation settings are unavailable or invalid')
 
 
-def validate_custom_neutron_library(root, config, *, original_json=None, io_stats=None):
-    """Check eligible H-mask rows; D/T require current phase and profile receipts.
-
-    The existing element-mask contract supplies a conservative candidate set.
-    CIF parsing is restricted to its hydrogen-bearing rows; the whole mounted
-    base metadata is never read merely to prove that it might contain isotopes.
-    """
-    root = Path(root).resolve()
-    _check_database_binding(root, config)
-    stats = io_stats if io_stats is not None else {}
-    stats.update(catalog_rows=0, eligible_rows=0, hydrogen_rows=0, cif_parses=0,
-        cif_file_reads=0, cif_bytes_read=0, original_json_reads=0,
-        original_json_bytes_read=0, phase_npz_reads=0, profile_bundle_reads=0)
-    manifest_path = root / 'manifest.json'
-    manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {}
-    original_path = Path(original_json).expanduser() if original_json is not None else root / 'highsymm_metadata.json'
-    if not original_path.is_absolute():
-        original_path = root / original_path
-    if original_json is not None or original_path.exists():
-        if not original_path.is_file():
-            _fail('source metadata', 'the configured original JSON file is unavailable')
-        original_path = str(original_path)
-    else:
-        original_path = None
+def _validate_bound_library(root, config, cif_map, original_path, stats, manifest):
     loader = DBLoader(CatalogPaths(str(root / 'catalog_deduplicated.csv'),
-        str(root / 'cif_map.json') if (root / 'cif_map.json').exists() else None,
-        original_path))
+        cif_map, original_path))
     ids = _eligible_ids(loader, config)
-    stats['catalog_rows'], stats['eligible_rows'] = len(loader.catalog), len(ids)
+    stats['catalog_rows'] += len(loader.catalog)
+    stats['eligible_rows'] += len(ids)
     hydrogen = [pid for pid in ids if int(loader._m_lo[loader._row_index[pid]]) & 1]
-    stats['hydrogen_rows'] = len(hydrogen)
+    stats['hydrogen_rows'] += len(hydrogen)
     isotopes = {}
     parsed = {}
     for phase in hydrogen:
@@ -223,3 +258,40 @@ def validate_custom_neutron_library(root, config, *, original_json=None, io_stat
         'isotopes': {phase: list(value[1]) for phase, value in isotopes.items()}, 'io': stats,
         'scope': 'Eligible hydrogen-bearing rows in the selected custom neutron library; no archive migration',
         'builtin_only_legacy_scope': 'Not validated or migrated by this custom-library guard'}
+
+
+def validate_custom_neutron_library(root, config, *, original_json=None, io_stats=None,
+                                    pipeline_mode=None, config_directory=None):
+    """Validate every effective source binding before custom neutron ranking.
+
+    Missing optional source fields remain absent, just as in DBLoader. A
+    configured source cannot be replaced by another copy merely for validation.
+    """
+    root = Path(root).resolve()
+    stats = io_stats if io_stats is not None else {}
+    stats.update(catalog_rows=0, eligible_rows=0, hydrogen_rows=0, cif_parses=0,
+        cif_file_reads=0, cif_bytes_read=0, original_json_reads=0,
+        original_json_bytes_read=0, phase_npz_reads=0, profile_bundle_reads=0)
+    original_path = Path(original_json).expanduser() if original_json is not None else root / 'highsymm_metadata.json'
+    if not original_path.is_absolute():
+        original_path = root / original_path
+    if original_json is not None or original_path.exists():
+        if not original_path.is_file():
+            _fail('source metadata', 'the configured original JSON file is unavailable')
+        original_path = str(original_path.resolve())
+    else:
+        original_path = None
+    bindings = _database_bindings(root, config, original_path,
+        pipeline_mode=pipeline_mode, config_directory=config_directory)
+    manifest_path = root / 'manifest.json'
+    manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {}
+    isotope_phases = {}
+    result = None
+    for mapping, original, datasets in bindings:
+        result = _validate_bound_library(root, {**config, 'datasets': datasets}, mapping, original, stats, manifest)
+        isotope_phases.update(result['isotopes'])
+    result['isotopes'] = isotope_phases
+    result['checked_isotope_phase_ids'] = list(isotope_phases)
+    result['source_bindings'] = [{'cif_map_json': mapping, 'original_json': original}
+                                for mapping, original, _ in bindings]
+    return result
