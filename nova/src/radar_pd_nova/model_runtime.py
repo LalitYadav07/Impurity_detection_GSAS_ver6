@@ -589,7 +589,12 @@ class GalaxyChunkTransport:
         dispatch=handle['dispatch_key'];chunk=self.state['chunks'][dispatch]
         if chunk.get('not_dispatched'):return dict(state='not_started')
         with self._state_lock:
-            if dispatch in self._buffered_dispatches:
+            # A later member of this durable wave may still be waiting for
+            # shared History capacity. Earlier acknowledged jobs can already
+            # have finished: collect them while that POST wave is in flight.
+            # An attempted POST without an acknowledgment must remain buffered;
+            # absence has not been established and cannot justify a retry.
+            if dispatch in self._buffered_dispatches and not chunk.get('job'):
                 return dict(state='running',handle=handle)
         current=self.cache.get(dispatch)
         if current is None or (current[1]['state']!='complete' and time.monotonic()-current[0]>1):

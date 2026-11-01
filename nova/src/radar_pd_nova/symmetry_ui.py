@@ -26,10 +26,11 @@ def model_exploration(app):
             v.VBtn('Continue saved campaign',click=app.continue_symmetry_campaign,disabled=('!sx_resumable || sx_busy || sx_campaign_running',),variant='text',prepend_icon='mdi-play')
             v.VBtn('Pause campaign',click=app.pause_model_campaign,disabled=('!sx_campaign_running',),variant='text',prepend_icon='mdi-pause')
             v.VBtn('New model search',v_if='!!sx_campaign',click=app.new_symmetry_search,disabled=('sx_busy',),variant='outlined',prepend_icon='mdi-molecule')
+            v.VBtn('Return to campaign',v_if='sx_setup && !!sx_campaign',click='sx_setup = false',variant='text',prepend_icon='mdi-arrow-left')
         v.VAlert(v_if='!!sx_error',text=('sx_error',),type='error',variant='tonal',density='compact',classes='mb-3')
         html.P('{{ sx_backend }}',classes='rf-notice')
-        html.P('{{ sx_queue_notice }}',v_if='!!sx_queue_notice',classes='rf-notice')
-        html.P('Pause or end any other viewer for this campaign before continuing here.',v_if='sx_resumable && !sx_campaign_running',classes='rf-notice')
+        html.P('{{ sx_queue_notice }}',v_if='!sx_setup && !!sx_queue_notice',classes='rf-notice')
+        html.P('Pause or end any other viewer for this campaign before continuing here.',v_if='!sx_setup && sx_resumable && !sx_campaign_running',classes='rf-notice')
         with html.Details(classes='rf-card mb-3'):
             html.Summary('Compute budget')
             with html.Div(classes='sx-settings'):
@@ -38,7 +39,7 @@ def model_exploration(app):
             html.P('Galaxy controls admission and CPU/RAM allocation. More batches can process different scans at once; they may remain queued when the cluster is busy. An unreported allocation permits one native worker per job. This History-wide limit includes model preparation jobs. Lowering it lets accepted jobs finish before submitting more.',classes='rf-notice')
         v.VProgressLinear(v_if='sx_busy',indeterminate=True,color='#267653',height=3,classes='mb-3')
         html.P('{{ sx_message }}',classes='rf-notice',raw_attrs=['aria-live="polite"'])
-        html.P('Qualified fits appear first when available. All failed, unresolved and physically rejected trials remain inspectable.',v_if='sx_groups.length',classes='rf-notice')
+        html.P('Qualified fits appear first when available. All failed, unresolved and physically rejected trials remain inspectable.',v_if='!sx_setup && sx_groups.length',classes='rf-notice')
         with html.Div(v_if='sx_setup || !sx_campaign',classes='rf-card sx-setup'):
             html.H3('Explore models from a completed GPX')
             html.P('Enter a commensurate k vector, or use the magnetic k survey below. Review hypotheses before native refinement.',classes='rf-notice')
@@ -132,21 +133,21 @@ def model_exploration(app):
                     v.VBtn('Start approved campaign',click=(app.start_symmetry_campaign,form),disabled=('!sx_approved || sx_busy || sx_campaign_running',),variant='flat',color='#15543c')
                 html.P('Each start uses a fresh native process. Galaxy jobs share immutable inputs and batch independent starts within allocated CPU/RAM. Missing allocation information limits the pool to one worker. Model calls run only during setup.',classes='rf-notice')
                 html.P('Structural fit comparisons require a matched parent/nuisance refinement. A lower Rwp alone does not establish a transition.',v_if="sx_kind === 'structural'",classes='rf-notice')
-        html.P('{{ sx_scope_progress }}',v_if='sx_results_current && !!sx_scope_progress',classes='rf-notice')
-        html.Div('{{ sx_progress }}',v_if='sx_results_current && !!sx_progress',classes='sx-status')
+        html.P('{{ sx_scope_progress }}',v_if='!sx_setup && sx_results_current && !!sx_scope_progress',classes='rf-notice')
+        html.Div('{{ sx_progress }}',v_if='!sx_setup && sx_results_current && !!sx_progress',classes='sx-status')
         html.P('Starts assigned to a batch share a Galaxy job after its recovery checkpoint is ready. Jobs can be queued or running. The native worker count is reported after the first batch; it is separate from the number of starts.',
-            v_if='sx_results_current && sx_campaign_running',classes='rf-notice')
-        with html.Details(v_if='sx_enrollments.length',classes='rf-card mb-4'):
+            v_if='!sx_setup && sx_results_current && sx_campaign_running',classes='rf-notice')
+        with html.Details(v_if='!sx_setup && sx_enrollments.length',classes='rf-card mb-4'):
             html.Summary('Acquisition queue ({{ sx_enrollments.length }}) · {{ sx_following ? "following new scans" : "captured scans" }}')
             v.VDataTable(items=('sx_enrollments',),headers=("[{title:'Scan',key:'scan'},{title:'Bank',key:'bank'},{title:'State',key:'status'},{title:'Review needed',key:'reason'}]",),items_per_page=8,density='compact')
-        with html.Details(v_if='sx_results_current && sx_coverage.length > 1',classes='rf-card mb-4'):
+        with html.Details(v_if='!sx_setup && sx_results_current && sx_coverage.length > 1',classes='rf-card mb-4'):
             html.Summary('Scans and search coverage ({{ sx_coverage.length }})')
             v.VDataTable(items=('sx_coverage',),headers=("[{title:'Scan',key:'scan'},{title:'Condition',key:'condition'},{title:'Bank',key:'bank'},{title:'Magnetic sites',key:'sites'},{title:'Terminal starts',key:'coverage'},{title:'Qualified starts',key:'qualified'},{title:'Best qualified Rwp',key:'best_qualified'},{title:'Best audited Rwp',key:'best_audited'},{title:'Status',key:'status'}]",),items_per_page=8,density='compact',classes='mt-3')
-        with html.Div(v_if='sx_results_current && sx_source_options.length > 1',classes='rf-toolbar'):
+        with html.Div(v_if='!sx_setup && sx_results_current && sx_source_options.length > 1',classes='rf-toolbar'):
             v.VBtn('Previous scan',click=(app.symmetry_adjacent_scan,'[-1]'),disabled=("!sx_results_current || sx_source_options.findIndex(x => x.value === sx_source) <= 0",),variant='text',prepend_icon='mdi-chevron-left')
             select('Compare models for this exact scan / bank','sx_source','sx_source_options',disabled=('!sx_results_current',))
             v.VBtn('Next scan',click=(app.symmetry_adjacent_scan,'[1]'),disabled=("!sx_results_current || sx_source_options.findIndex(x => x.value === sx_source) >= sx_source_options.length - 1",),variant='text',append_icon='mdi-chevron-right')
-        with html.Div(v_if='sx_results_current && sx_groups.length',classes='sx-layout'):
+        with html.Div(v_if='!sx_setup && sx_results_current && sx_groups.length',classes='sx-layout'):
             with html.Aside(classes='rf-card'):
                 html.H3('Calculated-pattern groups')
                 html.P('Grouped only within the same source and fit domain. Expand a group to inspect each model and start.',classes='rf-notice')

@@ -51,6 +51,44 @@ def test_all_scan_replay_has_validated_enrollment_separate_from_native_refinemen
     assert any('Encode a requested scan scope' in rule for rule in payload('all scans',source)['rules'])
 
 
+def test_k_survey_cannot_silently_reduce_later_refinement_to_one_cycle(source,intent):
+    request='Find k from the data, then screen and refine all magnetic subgroups across the series'
+    bad=copy.deepcopy(intent);bad['settings'].update(k=None,cycles=1)
+    good=copy.deepcopy(bad);good['settings']['cycles']=20
+    client=Client([bad,good]);result=make_intent(request,source,client=client)
+    assert result['intent']['settings']['cycles']==20 and len(result['calls'])==2
+    data=json.loads(client.calls[0][0][1]['content'])
+    assert data['declared']['cycles']==20
+    assert 'declared cycles' in client.calls[1][0][-1]['content']
+
+
+@pytest.mark.parametrize('cycles',[1,30,100])
+def test_an_explicit_cycle_budget_is_preserved_and_displayed_as_declared(source,intent,cycles):
+    request=f'Use {cycles} refinement cycles per start'
+    intent['settings']['cycles']=cycles
+    assert payload(request,source)['declared']['cycles']==cycles
+    assert validate_intent(intent,source,request=request)['settings']['cycles']==cycles
+
+
+def test_declared_cycle_budget_is_binding_and_conflicting_literals_need_review(source,intent):
+    with pytest.raises(ValueError,match='declared cycles'):
+        validate_intent(intent,source,request='Use the reviewed budget',declared={'cycles':30})
+    with pytest.raises(ValueError,match='several cycle budgets'):
+        payload('Use 1 cycle, then 30 cycles',source)
+
+
+@pytest.mark.parametrize('literal,cycles',[('one',1),('single',1),('twenty-five',25),('one hundred',100)])
+def test_written_cycle_limits_do_not_get_replaced_by_the_default(source,intent,literal,cycles):
+    request=f'Use {literal} refinement cycles per start'
+    intent['settings']['cycles']=cycles
+    assert validate_intent(intent,source,request=request)['settings']['cycles']==cycles
+
+
+@pytest.mark.parametrize('literal',['-1','0','1.5','101'])
+def test_invalid_requested_cycle_limit_is_not_silently_replaced(source,literal):
+    with pytest.raises(ValueError):payload(f'Use {literal} refinement cycles per start',source)
+
+
 @pytest.mark.parametrize('update',[
     dict(existing='all_histories'),dict(maximum_scans=0),dict(maximum_scans=2001),
     dict(maximum_scans=True),dict(maximum_scans=2.5),dict(follow_new='yes'),

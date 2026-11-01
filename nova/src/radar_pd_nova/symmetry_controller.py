@@ -638,8 +638,10 @@ class SymmetryMixin(KSearchMixin):
             s.sx_plan_candidates=[dict(name=c['magnetic_space_group'] or c['irrep'],bns=c['bns_number'] or '—',basis=str(c['transformation_matrix']),origin=str(c['origin_shift']),modes=', '.join(c['modes']) or magnetic_scope) for c in p['candidates']]
             free='Selected modes, cell, background and global scale' if s.sx_kind=='structural' else magnetic_scope+('; shared nuclear/magnetic histogram scale varied' if s.sx_refine_scale else '; all scales fixed')+('; existing background coefficients varied' if s.sx_refine_background else '; background fixed')+'; nuclear geometry fixed'
             if s.sx_kind=='magnetic':free+=('; all fitted d spacings' if settings['magnetic_d_min']==0 else f"; magnetic d ≥ {settings['magnetic_d_min']} Å")
-            s.sx_plan_summary=f"{len(p['candidates'])} embeddings · {sum(1 for _ in iter_trials(p))} finite trials. {free}. Instrument, occupancy and displacement parameters fixed. Adequacy: Rwp ≤ {s.sx_adequate}%."
+            s.sx_plan_summary=f"{len(p['candidates'])} embeddings · {sum(1 for _ in iter_trials(p))} finite trials · up to {settings['cycles']} refinement cycles per start. {free}. Instrument, occupancy and displacement parameters fixed. Adequacy: Rwp ≤ {s.sx_adequate}%."
+            if settings['cycles']==1:s.sx_plan_summary+=' One-cycle preliminary screening; not a completed convergence search.'
             s.sx_plan_summary+=f" {len(template['existing_ids'])} existing acquisitions · {trial_count(template)} starts per acquisition · maximum {template['maximum_scans']} acquisitions. Following new scans: {'on' if template['future'] else 'off'}."
+            s.sx_plan_summary+=f" Existing-cohort budget: {len(template['existing_ids'])*trial_count(template):,} starts before per-scan compatibility checks."
             s.sx_plan_ready=True;s.sx_approved=False
         except Exception as exc:s.sx_error=str(exc)
 
@@ -858,6 +860,7 @@ class SymmetryMixin(KSearchMixin):
         async def resume():
             s=self.server.state;s.sx_error='';s.sx_busy=True
             s.sx_message='Recovering accepted Galaxy jobs and verifying saved results before dispatching any new starts.'
+            s.sx_queue_notice=''
             s.flush()
             try:
                 root=(self._symmetry_root()/s.sx_campaign).resolve()

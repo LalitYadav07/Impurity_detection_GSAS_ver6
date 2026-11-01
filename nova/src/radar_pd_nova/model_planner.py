@@ -6,6 +6,7 @@ enrollment belongs to the host UI and never changes the scientific worker hash.
 from __future__ import annotations
 import copy
 import json
+import re
 import time
 from gpx_recipe.providers import make_client
 from gpx_recipe.symmetry import planner as native
@@ -21,6 +22,34 @@ ENROLLMENT_RULE = (
     'If questions or unsupported is nonempty, settings and enrollment must both be null. '
     'A finite plan still reports actual eligible counts and requires review before execution.'
 )
+CYCLE_RULE = (
+    'cycles is the maximum native Rietveld refinement cycles PER START in the subsequent model campaign. '
+    'The k survey is a separate forward-only profile calculation, not a one-cycle refinement setting. '
+    'Use the declared cycles budget: 20 unless the user explicitly requests another numeric cycle limit. '
+    'Do not reduce it to 1 because the request also describes screening or finding k. '
+    'The native convergence checks still decide whether a fit qualifies; reaching this limit is not convergence.'
+)
+
+
+def _declared_budget(request, declared):
+    declared = copy.deepcopy(declared or {})
+    if 'cycles' not in declared:
+        units = ['one','two','three','four','five','six','seven','eight','nine','ten',
+                 'eleven','twelve','thirteen','fourteen','fifteen','sixteen','seventeen','eighteen','nineteen']
+        words = {word:value for value,word in enumerate(units,1)}
+        for value,word in enumerate(['twenty','thirty','forty','fifty','sixty','seventy','eighty','ninety'],2):
+            words[word]=value*10
+            words.update({word+' '+unit:value*10+i for i,unit in enumerate(units[:9],1)})
+        words.update(single=1,**{'one hundred':100,'a hundred':100,'hundred':100})
+        word_pattern='|'.join(re.escape(word).replace(r'\ ',r'[ -]') for word in sorted(words,key=len,reverse=True))
+        pattern=r'(?<![\w.])([+-]?\d+(?:\.\d+)?|'+word_pattern+r')\s+(?:(?:refinement|rietveld|native|gsas-ii)\s+)?cycles?\b'
+        mentions=re.findall(pattern,request.lower())
+        limits = {int(value) if re.fullmatch(r'[+-]?\d+',value) else
+                  float(value) if re.fullmatch(r'[+-]?\d+\.\d+',value) else words[value.replace('-',' ')] for value in mentions}
+        if len(limits) > 1:
+            raise ValueError('Specify one refinement cycle limit per start; the request contains several cycle budgets')
+        declared['cycles'] = number(next(iter(limits), 20), 1, 100, integer=True)
+    return declared
 
 
 def response_schema(context):
@@ -35,15 +64,15 @@ def response_schema(context):
 
 
 def payload(request, context, declared=None):
-    data = native.payload(request, context, declared)
-    data['rules'].append(ENROLLMENT_RULE)
+    data = native.payload(request, context, _declared_budget(request, declared))
+    data['rules'].extend([ENROLLMENT_RULE, CYCLE_RULE])
     return data
 
 
 def validate_intent(value, context, *, request, declared=None):
     value = copy.deepcopy(value)
     enrollment = value.pop('enrollment', None)
-    plan = native.validate_intent(value, context, request=request, declared=declared)
+    plan = native.validate_intent(value, context, request=request, declared=_declared_budget(request, declared))
     if enrollment is not None:
         if plan['settings'] is None:
             raise ValueError('Unresolved setup requests cannot retain scan enrollment')

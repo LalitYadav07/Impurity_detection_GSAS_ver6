@@ -245,6 +245,46 @@ def test_one_durable_wave_precedes_every_native_post_for_several_scans(remote,tm
     assert not t._buffered_dispatches
 
 
+def test_finished_acknowledged_batch_is_collected_while_a_later_post_waits(remote,tmp_path,monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    t,service,entries,handles,checkpoints=staged_wave(remote,tmp_path,monkeypatch,count=2)
+    entered=threading.Event();release=threading.Event();original=t.runtime._submit
+    def submit(*args,**kwargs):
+        if service.submissions:
+            entered.set();assert release.wait(4)
+        return original(*args,**kwargs)
+    monkeypatch.setattr(t.runtime,'_submit',submit)
+    first=handles[0]['dispatch_key'];uid,directory=entries[0]
+    result=tmp_path/'accepted-result';(result/'trials'/uid).mkdir(parents=True)
+    response=dict(schema='radar-model-chunk-result/v1',dispatch_key=first,
+        protocol_sha256=t.state['chunks'][first]['protocol'],
+        trials=[dict(id=uid,state='finished',status='unsupported')],pending=[],allocation=dict(workers=1))
+    (result/'response.json').write_text(json.dumps(response))
+    (result/'trials'/uid/'result.json').write_text(json.dumps(dict(
+        schema='radar-symmetry-trial/v1',id=uid,protocol_sha256=response['protocol_sha256'],status='unsupported')))
+    (t.campaign.root/'trials'/uid).mkdir(parents=True)
+    monkeypatch.setattr(t.runtime,'result',lambda job,target:result)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        work=pool.submit(t.flush_dispatch_wave)
+        try:
+            assert entered.wait(4)
+            assert len(service.submissions)==1 and first in t._buffered_dispatches
+            assert t.poll(handles[0],directory)==dict(state='finished',reason=None)
+            assert json.loads((t.campaign.root/'trials'/uid/'result.json').read_text())['id']==uid
+            # The second dispatch has begun waiting for capacity, but has no
+            # acknowledged job. Polling must neither search nor repost it.
+            assert handles[1]['dispatch_key'] in t._attempted_dispatches
+            with monkeypatch.context() as scoped:
+                scoped.setattr(t.runtime,'find_dispatch',lambda key:pytest.fail('No absence lookup for a buffered POST'))
+                assert t.poll(handles[1],entries[1][1])==dict(state='running',handle=handles[1])
+            assert len(service.submissions)==1
+        finally:
+            release.set();work.result(4)
+    assert len(service.submissions)==2
+    assert t.poll(handles[0],directory)==dict(state='finished',reason=None)
+    assert not t._buffered_dispatches
+
+
 def test_pending_wave_checkpoint_posts_nothing_and_keeps_all_starts_recoverable(remote,tmp_path,monkeypatch):
     from radar_pd_nova.checkpoint_uploads import CheckpointUploadPending
     t,service,entries,handles,checkpoints=staged_wave(remote,tmp_path,monkeypatch)

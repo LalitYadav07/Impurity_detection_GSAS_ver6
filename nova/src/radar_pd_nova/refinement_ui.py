@@ -189,5 +189,7 @@ def refinement_dashboard(app):
                 html.P('{{ rf_output_provenance }}',v_if='!!rf_output_provenance',classes='rf-notice')
         with html.Div(v_if='rf_expanded',classes='rf-overlay'):
             v.VBtn('Close expanded plot',click='rf_expanded = false',variant='text',prepend_icon='mdi-arrow-collapse')
-            with html.Div(style='height:calc(100vh - 220px)'):
+            html.H3('{{ rf_selected_title }}',classes='mt-2')
+            html.P('{{ rf_rwp_summary }}',classes='rf-notice')
+            with html.Div(style='height:calc(100vh - 300px);min-height:260px'):
                 fig=plotly.Figure(display_mode_bar=True,responsive=True,style='height:100%;width:100%');fig.data=('rf_fit.data',);fig.layout=('rf_fit.layout',)
