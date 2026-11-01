@@ -655,13 +655,13 @@ def test_pending_checkpoint_wait_is_recoverable_without_pausing_or_duplicate_pos
             return rows
     class T(GalaxyChunkTransport):
         max_active_jobs=1
-        def __init__(self):self.attempts=0
-        def begin_dispatch_wave(self):pass
+        def __init__(self):self.attempts=0;self.waves=0
+        def begin_dispatch_wave(self):self.waves+=1
         def flush_dispatch_wave(self):
             self.attempts+=1
             if self.attempts==1:
-                rows[0]['state']='prepared'
                 if interrupted:
+                    rows[0]['state']='prepared'
                     from radar_pd_nova.checkpoint_uploads import CheckpointUploadInterrupted
                     raise CheckpointUploadInterrupted('owned-hda')
                 raise CheckpointUploadPending('owned-hda','queued')
@@ -675,11 +675,98 @@ def test_pending_checkpoint_wait_is_recoverable_without_pausing_or_duplicate_pos
     app=SymmetryMixin();app._model_active_campaigns={};app._model_stopping=False
     app._refinement_store=lambda:None;app.refresh_symmetry=lambda:None
     app.server=SimpleNamespace(state=SimpleNamespace(sx_slots=2,sx_parallel_jobs=1,flush=lambda:None))
-    asyncio.run(app._drive_symmetry_campaign(C(),T()))
-    assert events==['unposted wave recovered','POST once','acknowledgment saved']
+    t=T();asyncio.run(app._drive_symmetry_campaign(C(),t))
+    assert events==(['unposted wave recovered'] if interrupted else [])+['POST once','acknowledgment saved']
+    assert t.waves==(2 if interrupted else 1)
     assert settings['checkpoint_notice']==''
     assert not app._model_checkpoint_errors
     assert not app.server.state.sx_campaign_running
+
+
+@pytest.mark.parametrize('change',['pause','approval','owner'])
+def test_pending_wave_stops_on_explicit_pause_or_approved_scope_invalidation(tmp_path,change):
+    import json
+    from radar_pd_nova.checkpoint_uploads import CheckpointUploadPending
+    settings={};events=[];rows=[dict(id='new',state='prepared')]
+    class C:
+        root=tmp_path/'frozen-wave'
+        def setting(self,k,d=None):return settings.get(k,d)
+        def set_setting(self,k,v):settings[k]=v
+        def trials(self):return rows
+        def tick(self,transport,**kwargs):
+            assert not events.count('reserve')
+            events.append('reserve');rows[0].update(state='running',handle=json.dumps(dict(dispatch_key='fixed')))
+            return rows
+    class T(GalaxyChunkTransport):
+        max_active_jobs=1
+        def __init__(self):self.attempts=0
+        def begin_dispatch_wave(self):events.append('begin')
+        def flush_dispatch_wave(self):
+            self.attempts+=1
+            if self.attempts>1:pytest.fail('Paused/superseded intent was retried')
+            raise CheckpointUploadPending('same-hda','queued')
+        def abort_dispatch_wave(self):events.append('abort')
+        def checkpoint(self,**kwargs):events.append('current state saved')
+        def pause(self):events.append('pause')
+    app=SymmetryMixin();t=T();app._model_active_campaigns={};app._model_stopping=False
+    app._refinement_store=lambda:None
+    state=SimpleNamespace(sx_slots=2,sx_parallel_jobs=1,sx_campaign='frozen-wave',rf_experiment='experiment-a',flush=lambda:None)
+    app.server=SimpleNamespace(state=state)
+    changed=False
+    def refresh():
+        nonlocal changed
+        if not t.attempts or changed:return
+        changed=True
+        if change=='pause':settings['paused']=True;t.pause()
+        elif change=='approval':settings['template']=dict(scope=dict(experiment='different-approved-source'))
+        else:app._model_active_campaigns[C.root.name]=(C(),T())
+    app.refresh_symmetry=refresh
+    asyncio.run(app._drive_symmetry_campaign(C(),t))
+    assert events.count('reserve')==events.count('begin')==events.count('abort')==1
+    assert events.count('pause')>=1 and settings['paused'] is True
+    assert events[-1]=='current state saved' and not app.server.state.sx_campaign_running
+    if change=='owner':assert C.root.name in app._model_active_campaigns
+
+
+def test_browsing_other_results_during_pending_ack_keeps_same_approved_wave(tmp_path,monkeypatch):
+    import json
+    import radar_pd_nova.symmetry_controller as controller
+    from radar_pd_nova.checkpoint_uploads import CheckpointUploadPending
+    events=[];settings={};rows=[dict(id='fixed-trial',state='prepared')]
+    class C:
+        root=tmp_path/'approved-campaign'
+        def setting(self,k,d=None):return settings.get(k,d)
+        def set_setting(self,k,v):settings[k]=v
+        def trials(self):return rows
+        def tick(self,transport,**kwargs):
+            assert not events.count('reserve')
+            events.append('reserve');rows[0].update(state='running',handle=json.dumps(dict(dispatch_key='fixed-intent')))
+            return rows
+    class T(GalaxyChunkTransport):
+        max_active_jobs=1
+        def __init__(self):self.attempts=0
+        def begin_dispatch_wave(self):events.append('begin')
+        def flush_dispatch_wave(self):
+            self.attempts+=1
+            if self.attempts<3:raise CheckpointUploadPending('same-hda','queued')
+            events.append('POST fixed intent');settings['paused']=True
+        def checkpoint(self,**kwargs):events.append('current state saved')
+        def abort_dispatch_wave(self):pytest.fail('Viewing another result must not abort the approved wave')
+        def pause(self):pytest.fail('Viewing another result must not pause the approved wave')
+    app=SymmetryMixin();t=T();app._model_active_campaigns={};app._model_stopping=False
+    app._refinement_store=lambda:None
+    state=SimpleNamespace(sx_slots=2,sx_parallel_jobs=1,sx_campaign='approved-campaign',rf_experiment='experiment-a',flush=lambda:None)
+    app.server=SimpleNamespace(state=state)
+    def refresh():
+        if t.attempts==1:state.sx_campaign='viewed-campaign';state.rf_experiment='experiment-b'
+        elif t.attempts==2:state.sx_campaign='approved-campaign';state.rf_experiment='experiment-a'
+    app.refresh_symmetry=refresh
+    original_sleep=asyncio.sleep
+    async def short_sleep(seconds):await original_sleep(0)
+    monkeypatch.setattr(controller.asyncio,'sleep',short_sleep)
+    asyncio.run(app._drive_symmetry_campaign(C(),t))
+    assert events==['begin','reserve','POST fixed intent','current state saved']
+    assert t.attempts==3 and state.rf_experiment=='experiment-a'
 
 
 def test_canceling_driver_waits_for_its_shielded_flush_before_aborting(tmp_path):

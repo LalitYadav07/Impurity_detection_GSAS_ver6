@@ -292,9 +292,97 @@ def test_pending_wave_checkpoint_posts_nothing_and_keeps_all_starts_recoverable(
     monkeypatch.setattr(t,'checkpoint',pending)
     with pytest.raises(CheckpointUploadPending):t.flush_dispatch_wave()
     assert not service.submissions
+    assert t._dispatch_wave==[h['dispatch_key'] for h in handles]
+    assert not any(c.get('not_dispatched') for c in t.state['chunks'].values())
     restored=GalaxyChunkTransport(t.runtime,t.campaign)
-    for uid,directory in entries:
-        assert restored.recover(uid,directory)==dict(state='not_started')
+    for (uid,directory),handle in zip(entries,handles):
+        assert t.poll(handle,directory)==dict(state='running',handle=handle)
+        # A different process must verify remote absence. It cannot infer that
+        # the original owner never posted after its saved pre-POST checkpoint.
+        assert restored.recover(uid,directory)['state']=='unknown'
+    monkeypatch.setattr(t,'checkpoint',lambda **kwargs:None)
+    t.flush_dispatch_wave()
+    assert len(service.submissions)==len(entries)
+
+
+def test_pending_wave_reuses_exact_document_and_hda_while_new_receipts_arrive(remote,tmp_path,monkeypatch):
+    import gzip
+    from radar_pd_nova.checkpoint_uploads import CheckpointUploads,CheckpointUploadPending
+    t,service,entries,handles,_=staged_wave(remote,tmp_path,monkeypatch,count=2)
+    monkeypatch.setattr(t,'checkpoint',GalaxyChunkTransport.checkpoint.__get__(t))
+    old=dict(id='old',protocol='prior',candidate='c',seed='s',state='running',
+             handle=json.dumps(dict(dispatch_key='prior',key='old')),receipt=None)
+    ledger=dict(schema='radar-model-ledger/v1',protocols=[],trials=[old],settings={})
+    monkeypatch.setattr(t.campaign,'snapshot',lambda:copy.deepcopy(ledger))
+    t.state['chunks']['prior']=dict(key='prior',protocol='prior',members=['old'],
+        job=dict(galaxy_job_id='old-job',outputs=dict(result_bundle='old-result')),complete=False)
+    t.state['members']['old']='prior'
+    clock=[0.];uploads=[];states={};attempts=[]
+    def upload(path,*,label):
+        key='hda'+str(len(uploads)+1)
+        uploads.append(json.loads(gzip.decompress(Path(path).read_bytes())))
+        states[key]='queued' if len(uploads)==1 else 'ok'
+        return key
+    queue=CheckpointUploads(upload,lambda key,seconds:dict(id=key,state=states[key]),
+        clock=lambda:clock[0],sleep=lambda seconds:clock.__setitem__(0,clock[0]+seconds))
+    def save(path,**kwargs):
+        attempts.append(json.loads(gzip.decompress(Path(path).read_bytes())))
+        return queue.save(path,timeout=2,**kwargs)
+    service.upload_checkpoint_document=save
+    with pytest.raises(CheckpointUploadPending):t.flush_dispatch_wave()
+    frozen=copy.deepcopy(attempts[0]);keys=list(t._dispatch_wave)
+    old.update(state='terminal',receipt=json.dumps(dict(status='valid',id='old')))
+    ledger['settings']['checkpoint_notice']='a later UI notice'
+    t.state['chunks']['prior'].update(complete=True,result=dict(schema='radar-model-chunk-result/v1',
+        dispatch_key='prior',protocol_sha256='prior',trials=[dict(id='old',state='finished')]))
+    states['hda1']='ok'
+    t.flush_dispatch_wave()
+    assert attempts[1]==frozen and len(uploads)==1
+    assert {p['inputs']['dispatch_key'] for p in service.submissions}==set(keys)
+    assert len(service.submissions)==2 and t._dispatch_wave is None
+    assert old['state']=='terminal' and all(t.state['chunks'][k]['job'] for k in keys)
+    t.checkpoint(force=True)
+    current=uploads[-1]
+    assert len(uploads)==2 and current!=frozen
+    assert current['ledger']['trials'][0]['state']=='terminal'
+    assert current['ledger']['settings']['checkpoint_notice']=='a later UI notice'
+    assert all(current['transport']['chunks'][k]['job'] for k in keys)
+    assert current['transport']['receipt_hashes']['old']==digest(json.loads(old['receipt']))
+
+
+@pytest.mark.parametrize('change',['pause','cancel','scope'])
+def test_pending_wave_respects_pause_cancel_and_scope_before_acknowledgment(remote,tmp_path,monkeypatch,change):
+    from radar_pd_nova.checkpoint_uploads import CheckpointUploadPending
+    t,service,entries,handles,_=staged_wave(remote,tmp_path,monkeypatch,count=2)
+    monkeypatch.setattr(t,'checkpoint',GalaxyChunkTransport.checkpoint.__get__(t))
+    saved=[]
+    def save(document):
+        saved.append(copy.deepcopy(document))
+        if len(saved)==1:raise CheckpointUploadPending('owned-hda','queued')
+    monkeypatch.setattr(t.checkpointer,'save_workspace',save)
+    with pytest.raises(CheckpointUploadPending):t.flush_dispatch_wave()
+    if change=='pause':t.pause()
+    elif change=='cancel':t.cancel(handles[0],entries[0][1])
+    else:t.dispatch_guard=lambda:False
+    t.flush_dispatch_wave()
+    expected=1 if change=='cancel' else 0
+    assert len(service.submissions)==expected
+    if change=='cancel':
+        assert saved[0]==saved[1]
+        assert handles[0]['dispatch_key'] not in service.jobs
+    assert t._dispatch_wave is None
+
+
+def test_scope_guard_is_rechecked_after_request_staging_before_native_post(remote,tmp_path,monkeypatch):
+    t,service,entries,handles,_=staged_wave(remote,tmp_path,monkeypatch,count=1)
+    permitted=[True];t.dispatch_guard=lambda:permitted[0]
+    service.tool_has_input=lambda *args:False
+    original=service.upload_json_document
+    def stage(*args,**kwargs):
+        result=original(*args,**kwargs);permitted[0]=False;return result
+    monkeypatch.setattr(service,'upload_json_document',stage)
+    with pytest.raises(RuntimeUnavailable,match='paused before dispatch'):t.flush_dispatch_wave()
+    assert not service.submissions
 
 
 def test_partial_wave_lost_ack_recovers_that_job_without_resubmitting_peers(remote,tmp_path,monkeypatch):

@@ -82,8 +82,57 @@ def test_status_read_failure_preserves_ack_and_does_not_expose_response(tmp_path
     queue.status=broken
     with pytest.raises(CheckpointUploadPending) as caught:queue.save(path,label='watch')
     assert 'SENTINEL' not in str(caught.value)
+    assert 'TimeoutError' in str(caught.value)
+    assert clock.now == 180
     queue.status=lambda key,seconds:dict(state='ok')
     assert queue.save(path,label='watch')=='hda1' and len(posts)==1
+
+
+def test_slow_status_header_recovers_with_larger_budget_for_same_hda(tmp_path):
+    queue,path,clock,posts,states=manager(tmp_path)
+    reads=[]
+    def slow_status(key, seconds):
+        reads.append((key, seconds))
+        clock.sleep(min(seconds, 20.))
+        if seconds < 20:
+            raise TimeoutError('https://private.invalid?key=PRIVATE-RESPONSE-SENTINEL')
+        return dict(id=key, state='ok')
+    queue.status=slow_status
+    assert queue.save(path,label='watch',timeout=60)=='hda1'
+    assert reads==[('hda1',15.),('hda1',30.)]
+    assert len(posts)==1 and clock.now==37
+
+
+def test_status_read_budgets_increase_to_forty_five_seconds(tmp_path):
+    queue,path,clock,posts,states=manager(tmp_path)
+    budgets=[]
+    def status(key,seconds):
+        budgets.append(seconds)
+        if len(budgets)<3:
+            clock.sleep(seconds)
+            raise TimeoutError('private transport detail')
+        return dict(id=key,state='ok')
+    queue.status=status
+    assert queue.save(path,label='watch',timeout=120)=='hda1'
+    assert budgets==[15.,30.,45.] and len(posts)==1
+
+
+@pytest.mark.parametrize('timeout',[60.,600.])
+def test_failed_status_reads_never_exceed_original_deadline_or_repost(tmp_path,timeout):
+    queue,path,clock,posts,states=manager(tmp_path)
+    budgets=[]
+    def status(key,seconds):
+        assert seconds <= timeout-clock.now
+        budgets.append(seconds)
+        clock.sleep(seconds)
+        raise TimeoutError('PRIVATE-RESPONSE-SENTINEL')
+    queue.status=status
+    with pytest.raises(CheckpointUploadPending,match=r'awaiting status \(TimeoutError\)') as caught:
+        queue.save(path,label='watch',timeout=timeout)
+    assert caught.value.dataset_id=='hda1' and len(posts)==1
+    assert clock.now==timeout and max(budgets)<=45
+    assert 'SENTINEL' not in str(caught.value)
+    if timeout==60:assert budgets==[15.,30.,11.]
 
 
 def test_other_dataset_status_cannot_acknowledge_this_checkpoint(tmp_path):

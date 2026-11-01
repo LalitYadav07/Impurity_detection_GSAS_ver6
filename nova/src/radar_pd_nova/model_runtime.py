@@ -16,6 +16,7 @@ from gpx_recipe.symmetry.contracts import digest
 from .refinement_runtime import GalaxyRefinementRuntime,RuntimeUnavailable
 from .models import UtilityActionRecord,RunStatus
 from .model_checkpoint import job_record, compact_transport, portable_checkpoint, verify_archived_receipts
+from .checkpoint_uploads import CheckpointUploadPending
 
 MODEL_TOOL_ID='neutrons_radar_pd_model_campaign_prototype'
 CAMPAIGN_LABEL='RADAR-PD Model campaign '
@@ -61,6 +62,15 @@ def document_label(name):
 def active_batch_count(trials):
     return len({json.loads(r['handle']).get('dispatch_key',r['id']) if r.get('handle') else r['id']
                 for r in trials if r['state'] in {'running','submitting','cancelling'}})
+
+
+class _DispatchCancellation:
+    """Recheck the live admission guard immediately before a native POST."""
+    def __init__(self, transport):self.transport=transport
+    def is_set(self):return not self.transport._can_dispatch()
+    def wait(self, seconds):
+        self.transport._paused.wait(seconds)
+        return self.is_set()
 
 
 class GalaxyModelRuntime(GalaxyRefinementRuntime):
@@ -411,6 +421,8 @@ class GalaxyChunkTransport:
         self.checkpointer.workspace_label=CAMPAIGN_LABEL+campaign.root.name
         self._paused=threading.Event()
         self._dispatch_wave=None
+        self._dispatch_checkpoint=None
+        self.dispatch_guard=None
         self._buffered_dispatches=set()
         self._wave_flushing=False
         self._attempted_dispatches=set()
@@ -418,11 +430,17 @@ class GalaxyChunkTransport:
     def pause(self):self._paused.set()
     def resume(self):self._paused.clear()
 
+    def _can_dispatch(self):
+        guard=self.dispatch_guard
+        return (not self._paused.is_set() and not self.campaign.setting('paused',False)
+                and (guard is None or guard()))
+
     def begin_dispatch_wave(self):
         """Collect a bounded scheduler wave before its single durable intent."""
         with self._state_lock:
             if self._dispatch_wave is not None:raise RuntimeError('A dispatch wave is already open')
             self._dispatch_wave=[]
+            self._dispatch_checkpoint=None
 
     def abort_dispatch_wave(self):
         """Only buffered, never-attempted starts may return to the local queue."""
@@ -432,6 +450,7 @@ class GalaxyChunkTransport:
                 self.state['chunks'][key].update(not_dispatched=True,complete=True)
                 self._buffered_dispatches.discard(key)
             self._dispatch_wave=None
+            self._dispatch_checkpoint=None
             self.save()
             return True
 
@@ -447,11 +466,17 @@ class GalaxyChunkTransport:
         if not keys:
             with self._state_lock:self._dispatch_wave=None
             return
-        if self._paused.is_set() or self.campaign.setting('paused',False):
+        if not self._can_dispatch():
             self.abort_dispatch_wave();return
         with self._state_lock:self._wave_flushing=True
         try:
-            self.checkpoint(force=True)
+            self.checkpoint(force=True,dispatch_intent=True)
+        except CheckpointUploadPending:
+            # Keep this exact wave and immutable intent until its acknowledged
+            # upload settles. Collection may advance unrelated receipts, but
+            # must not create a replacement intent or reserve new members.
+            with self._state_lock:self._wave_flushing=False
+            raise
         except Exception:
             # This wave has made no scientific POST. Keep that proof locally;
             # a timed-out acknowledged checkpoint remains owned by its uploader.
@@ -461,7 +486,7 @@ class GalaxyChunkTransport:
         attempted=set()
         try:
             for key in keys:
-                if self._paused.is_set() or self.campaign.setting('paused',False):break
+                if not self._can_dispatch():break
                 if self.state['chunks'][key].get('not_dispatched'):continue
                 attempted.add(key)
                 with self._state_lock:self._attempted_dispatches.add(key)
@@ -474,6 +499,7 @@ class GalaxyChunkTransport:
                     self._buffered_dispatches.discard(key)
                     self._attempted_dispatches.discard(key)
                 self._dispatch_wave=None
+                self._dispatch_checkpoint=None
                 self._wave_flushing=False
                 self.save()
 
@@ -498,17 +524,21 @@ class GalaxyChunkTransport:
             self.state['inputs'][sha]=packet
             self.bind_source(sha,source)
 
-    def checkpoint(self,*,force=False):
+    def checkpoint(self,*,force=False,dispatch_intent=False):
         with self._checkpoint_lock:
             # A background enrollment commits protocols and their trials in one
             # transaction. Keep all snapshot SELECTs on the same side of that
             # commit, without nesting Campaign's file lock inside a tick.
-            with self.campaign.connect() as guard:
-                guard.execute('BEGIN IMMEDIATE')
-                with self._state_lock:
-                    document=dict(schema='radar-model-campaign/v1',history_id=self.runtime.service.history_id,
-                        campaign=self.campaign.root.name,ledger=self.campaign.snapshot(),transport=copy.deepcopy(self.state))
-            document=portable_checkpoint(document)
+            if dispatch_intent and self._dispatch_checkpoint is not None:
+                document=copy.deepcopy(self._dispatch_checkpoint)
+            else:
+                with self.campaign.connect() as guard:
+                    guard.execute('BEGIN IMMEDIATE')
+                    with self._state_lock:
+                        document=dict(schema='radar-model-campaign/v1',history_id=self.runtime.service.history_id,
+                            campaign=self.campaign.root.name,ledger=self.campaign.snapshot(),transport=copy.deepcopy(self.state))
+                document=portable_checkpoint(document)
+                if dispatch_intent:self._dispatch_checkpoint=copy.deepcopy(document)
             stable=copy.deepcopy(document)
             for chunk in stable['transport']['chunks'].values():
                 if chunk.get('job'):chunk['job']={k:chunk['job'].get(k) for k in ['galaxy_job_id','outputs']}
@@ -567,7 +597,7 @@ class GalaxyChunkTransport:
 
     def _dispatch_chunk(self,chunk):
         key,sha=chunk['key'],chunk['protocol']
-        try:job=self.runtime._submit('chunk',self.state['sources'][sha],chunk['request'],self.state['inputs'][sha],key,cancel=self._paused)
+        try:job=self.runtime._submit('chunk',self.state['sources'][sha],chunk['request'],self.state['inputs'][sha],key,cancel=_DispatchCancellation(self))
         except Exception:
             dispatch=self.runtime.state['dispatches'].get(key,{})
             if dispatch.get('absence_verified') and not dispatch.get('pending'):

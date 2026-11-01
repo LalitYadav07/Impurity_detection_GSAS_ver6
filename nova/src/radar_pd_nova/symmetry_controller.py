@@ -818,11 +818,39 @@ class SymmetryMixin(KSearchMixin):
         campaign.set_setting('checkpoint_notice',notice)
         self.refresh_symmetry()
 
+    async def _flush_model_dispatch_wave(self,campaign,transport):
+        """Retry one frozen intent, without another scheduler admission pass."""
+        def allowed():
+            return not campaign.setting('paused',False) and transport.dispatch_guard()
+        while True:
+            if not allowed():
+                campaign.set_setting('paused',True)
+                transport.pause()
+                transport.abort_dispatch_wave()
+                return
+            self._model_tick_task=asyncio.create_task(asyncio.to_thread(transport.flush_dispatch_wave))
+            try:
+                await self._await_model_checkpoint_work(self._model_tick_task,campaign,transport)
+                return
+            except CheckpointUploadPending as exc:
+                self._model_checkpoint_pending(campaign,exc)
+                if not allowed():
+                    campaign.set_setting('paused',True)
+                    transport.pause()
+                    transport.abort_dispatch_wave()
+                    return
+                await asyncio.sleep(3)
+
     async def _drive_symmetry_campaign(self,campaign,transport):
         preparation=None
         campaign.set_setting('viewer_parallel_jobs',self.server.state.sx_parallel_jobs)
-        self._model_active_campaigns[campaign.root.name]=(campaign,transport)
+        owner=(campaign,transport)
+        self._model_active_campaigns[campaign.root.name]=owner
         if isinstance(transport,GalaxyChunkTransport):
+            approved_template=digest(campaign.setting('template'))
+            transport.dispatch_guard=lambda: (not self._model_stopping
+                and self._model_active_campaigns.get(campaign.root.name) is owner
+                and digest(campaign.setting('template'))==approved_template)
             if not hasattr(self,'_model_owned_campaigns'):self._model_owned_campaigns={}
             self._model_owned_campaigns[campaign.root.name]=(campaign,transport)
             getattr(self,'_model_review_campaigns',{}).pop(campaign.root,None)
@@ -893,13 +921,11 @@ class SymmetryMixin(KSearchMixin):
                     if buffered:
                         campaign.set_setting('dispatch_notice','Saving queued batch recovery state before submitting new Galaxy jobs.')
                         self.refresh_symmetry()
-                        self._model_tick_task=asyncio.create_task(asyncio.to_thread(transport.flush_dispatch_wave))
-                        await self._await_model_checkpoint_work(self._model_tick_task,campaign,transport)
+                        await self._flush_model_dispatch_wave(campaign,transport)
                 except (CheckpointUploadPending,CheckpointUploadInterrupted) as exc:
-                    # flush_dispatch_wave retains proof that its aborted wave
-                    # made no POST. Recover those exact starts on the next
-                    # collection pass; a queued metadata job is not a failed
-                    # scientific campaign and must not pause its transport.
+                    # The inner flush retries its frozen pending intent. A
+                    # confirmed interrupted upload, or pending work encountered
+                    # outside that flush, still leaves this wave unposted.
                     if buffered:transport.abort_dispatch_wave()
                     self._model_checkpoint_pending(campaign,exc)
                     checkpoint_pending=True
@@ -952,7 +978,8 @@ class SymmetryMixin(KSearchMixin):
                 self._model_enrollment_task=None
                 self._model_following_active=False
                 self.server.state.sx_campaign_running=False
-                self._model_active_campaigns.pop(campaign.root.name,None)
+                if self._model_active_campaigns.get(campaign.root.name) is owner:
+                    self._model_active_campaigns.pop(campaign.root.name,None)
 
     def continue_symmetry_campaign(self):
         if self._symmetry_task and not self._symmetry_task.done():return

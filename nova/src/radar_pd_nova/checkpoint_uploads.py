@@ -53,16 +53,28 @@ class CheckpointUploads:
 
     def _wait(self, row, deadline):
         state = 'awaiting status'
+        read_failures = 0
         while True:
             remaining = deadline - self.clock()
             if remaining <= 0:
-                raise CheckpointUploadPending(row['id'], state)
+                raise CheckpointUploadPending(row['id'], state) from None
             try:
-                metadata = self.status(row['id'], min(15., remaining))
-            except Exception:
+                # A slow response header can exhaust the first short probe.
+                # Retry this same acknowledged HDA with a larger read budget,
+                # always bounded by the original checkpoint deadline.
+                read_timeout = min(15. * (read_failures + 1), 45., remaining)
+                metadata = self.status(row['id'], read_timeout)
+            except Exception as exc:
                 # An acknowledged upload remains ambiguous after a status-read
                 # failure. Retain it; never turn that failure into another POST.
-                raise CheckpointUploadPending(row['id'], 'awaiting status') from None
+                error_type = type(exc).__name__
+                if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,79}', error_type):
+                    error_type = 'Exception'
+                state = f'awaiting status ({error_type})'
+                read_failures = min(read_failures + 1, 2)
+                self.sleep(min(2., max(0., deadline - self.clock())))
+                continue
+            read_failures = 0
             if not isinstance(metadata, dict) or not isinstance(metadata.get('state'), str):
                 raise CheckpointUploadPending(row['id'], 'awaiting status')
             if metadata.get('id') is not None and metadata['id'] != row['id']:
