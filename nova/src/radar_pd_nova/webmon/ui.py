@@ -438,6 +438,8 @@ class WebmonMixin:
             captured=root/'snapshot.dat';captured.write_bytes(self._webmon.archive.read(receipt))
             material=await asyncio.to_thread(self._refinement_store().runtime.resolve,source)
             if self._webmon_cancelled:raise ValueError('Preparation stopped before dispatch')
+            if (str(s.powgen_ipts),str(s.webmon_run),s.webmon_published_source)!=launch:
+                raise ValueError('Live source selection changed while resolving the reference; review it again')
             if self._model_form()!=reviewed_form:raise ValueError('Magnetic setup changed while resolving the source; review it again')
             sites=sites_from_inputs(s.sx_sites,s.sx_form_factors,s.sx_lande)
             catalog=copy.deepcopy(d['catalog']);selected=set(s.sx_candidates)
@@ -447,7 +449,7 @@ class WebmonMixin:
             req=dict(action='prepare',source_gpx=material['source_path'],source_sha256=material['source_sha256'],
                 catalog=str(root/'catalog.json'),catalog_sha256=digest(root/'catalog.json'),observation_source=str(captured),observation_source_sha256=receipt['content_sha256'],
                 mapping=mapping,parent_phase=s.sx_parent,k=[str(Fraction(v.strip())) for v in s.sx_k.split(',')],sites=sites,
-                source_revision=f"PG3_{s.webmon_run}:"+receipt['content_sha256'],reference_revision=f"PG3_{source['run_number']}:"+material['source_sha256'],
+                source_revision=f"PG3_{launch[1]}:"+receipt['content_sha256'],reference_revision=f"PG3_{source['run_number']}:"+material['source_sha256'],
                 upper=float(s.sx_max_moment),lower=0.,refine_transfer=bool(s.webmon_refine_transfer),workers=min(4,max(1,int(s.sx_slots))),particles=256)
             s.webmon_busy=True;s.webmon_source_notice='Preparing the reviewed snapshot in a Galaxy worker…';s.flush()
             key=request_identity(req)[:24]
@@ -533,15 +535,14 @@ class WebmonMixin:
             choice=self._webmon.selected_checkpoint(s.powgen_ipts,s.webmon_target)
             if not choice or not choice.get('refinement_source'):raise ValueError('The original experiment source is unavailable')
             if choice['source_sha256']!=self._webmon_request['reference_revision'].split(':')[-1]:raise ValueError('Select the reference used by this posterior first')
-            source=copy.deepcopy(choice['refinement_source']);checksum=export['fitted_gpx_sha256']
-            for key in ('dataset_id','collection_id','collection_name','galaxy_job_id'):source.pop(key,None)
+            from .lineage import posterior_source
+            checksum=export['fitted_gpx_sha256']
             row=next(r for r in s.webmon_rows if r.get('posterior')==s.webmon_model)
             if not self._webmon_is_local() and not row.get('fitted_dataset_id'):
                 raise ValueError('The verified posterior GPX has not been mapped to a Galaxy collection element yet')
+            source=posterior_source(choice['refinement_source'],revision=self._webmon_request['source_revision'],
+                path=path,checksum=checksum,rwp=post['rwp'],scope=(getattr(self,'_webmon_plot_binding',None) or {}).get('source_scope'))
             if row.get('fitted_dataset_id'):source['dataset_id']=row['fitted_dataset_id']
-            source.update(id='live-posterior-'+checksum[:24],record_uid='live-posterior-'+checksum[:24],source_path=path,source_sha256=checksum,
-                internal_source_sha256=checksum,published_sha256=checksum,collection_name=Path(path).name,collection_id='',base_rwp=post['rwp'],
-                origin='conditional_live_posterior',parent_source_sha256=choice['source_sha256'],snapshot_revision=self._webmon_request['source_revision'])
             self._webmon_handoff_source(source,'Inspect this conditional magnetic checkpoint and its fixed nuclear reference. Preserve its phases, moment constraints, fit limits and instrument parameters. Propose refinements for review; do not infer native convergence or uncertainty from the saved starting state.')
         except Exception as exc:s.webmon_message=f'Posterior handoff unavailable: {exc}'
         s.flush()
@@ -832,7 +833,7 @@ class WebmonMixin:
         options=[dict(title=f"{a['name']} · {a['bns']} · {a['id'][-6:]}",value=a['posterior']) for a in r['rows'] if 'posterior' in a and a.get('artifacts')]
         options=[x for x in options if Path(x['value']).resolve().is_relative_to((out/'models').resolve())]
         progress=[dict(a,selectable='posterior' in a,status=STATUS.get(a['status'],a['status'].replace('_',' ')),setting=a['id'],**{k:round(a[k],3) for k in ['rwp','reduced_chi2'] if k in a}) for a in r['rows']]
-        if not options and s.webmon_has_result:
+        if not options and s.webmon_has_result and r.get('status') not in {'complete','failed','cancelled'}:
             s.webmon_pending_rows=progress
             return
         if out != self._webmon_out:
@@ -847,7 +848,12 @@ class WebmonMixin:
         self._webmon_model_paths={x['value'] for x in options};s.webmon_models=options;s.webmon_has_result=bool(options)
         sampled=len(options);omitted=sum(a['status']=='policy_omitted' for a in r['rows']);incompatible=sum(a['status']=='constraint_incompatible' for a in r['rows'])
         s.webmon_count_summary=f'{sampled} sampled · {incompatible} assumption · {omitted} policy'
+        s.webmon_pending_rows=[]
         self.webmon_filter_rows()
+        if not options:
+            s.webmon_moment_rows=[];s.webmon_sampler_summary='';s.webmon_details=''
+            s.webmon_validity='No sampled model for this snapshot'
+            self.webmon_render()
         if options and s.webmon_model not in self._webmon_model_paths:
             s.webmon_compared=[options[0]['value']];s.webmon_table_selected=s.webmon_compared;self.webmon_show_model(options[0]['value']);self.webmon_render()
 
