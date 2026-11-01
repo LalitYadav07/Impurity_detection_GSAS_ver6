@@ -82,11 +82,14 @@ def test_all_prepared_analysis_inputs_are_native_dependencies(tmp_path, monkeypa
         def add_input(self, name, value): self.values[name] = value
     monkeypatch.setattr(nova.galaxy, 'Parameters', Parameters)
     s = service(tmp_path)
+    reviews = []
+    s.inspect_library_review = lambda identifier: reviews.append(identifier) or {"requires_review": False}
     config = AnalysisConfig(sample_elements=['Al','Mg','O'])
     inputs = InputSelection(data_dataset_id='data', instrument_dataset_id='profile', main_cif_dataset_id='main', database_dataset_id='library')
     snapshot = s.create_submission_snapshot(config, inputs)
     prepared = dict(configuration='config', data='data', instrument='profile', main_cif='main', database_archive='library')
     params, _ = s._prepared_parameters(object(), snapshot, prepared)
+    assert reviews == ['library']
     refs = [value for value in params.values.values() if isinstance(value, dict)]
     assert sorted(item['id'] for item in refs) == sorted(prepared.values())
     assert all(item['src'] == 'hda' for item in refs)
