@@ -110,6 +110,31 @@ jobs:
             "${IMAGE_NAME}:nova-${NOVA_VERSION}" \
             /tmp/verify_sample_identity.py
 
+      - name: Verify packaged saved-watch recovery contracts
+        shell: bash
+        run: |
+          docker run --rm --entrypoint python \
+            "${IMAGE_NAME}:nova-${NOVA_VERSION}" -c '
+          import json
+          from pathlib import Path
+          from tempfile import TemporaryDirectory
+          from types import SimpleNamespace
+          from radar_pd_nova.live_restore import inspect_checkpoint_payload
+          from radar_pd_nova.powgen_controller import PowgenExperimentSettings, PowgenWatchController
+          with TemporaryDirectory() as root:
+              service = SimpleNamespace(history_id="history", output_root=Path(root))
+              controller = PowgenWatchController(service, PowgenExperimentSettings("IPTS-1", "history", "config", "auto"))
+              payload = json.loads(controller.capture_checkpoint().payload_json)
+              review = inspect_checkpoint_payload(payload, service, "checkpoint", document_sha256="a"*64)
+              assert not review.missing and not review.blocked
+              payload["watch"].pop("settings")
+              payload["watch"].pop("settings_schema")
+              legacy = inspect_checkpoint_payload(payload, service, "checkpoint", document_sha256="b"*64)
+              assert len(legacy.missing) == 7 and legacy.blocked
+              assert not legacy.controller.state.completed
+          print("Full and legacy stopped recovery contracts passed")
+          '
+
       - name: Verify packaged User guide and NDIP session routes
         shell: bash
         run: |
