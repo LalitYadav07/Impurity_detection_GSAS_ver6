@@ -17,7 +17,10 @@ from aniso_db_loader import _ORIG_DB_CACHE
 from database_catalog_builder import process_one_phase
 from db_pack import get_db_pack_layout
 from db_pack_builder import resolve_simulation_settings, _build_profile_from_phase_npz, _write_profiles_bundle
-from library_fingerprint_guard import validate_custom_neutron_library, LibraryFingerprintError, MAX_UNCACHED_ORIGINAL_BYTES
+from library_fingerprint_guard import (
+    validate_custom_neutron_library, LibraryFingerprintError,
+    MAX_UNCACHED_ORIGINAL_BYTES, _pipeline_path,
+)
 import ndip_runner
 
 
@@ -229,6 +232,46 @@ class LibraryFingerprintGuardContract(unittest.TestCase):
         self.assertIsNone(full['source_bindings'][0]['cif_map_json'])
         self.assertEqual(rapid['source_bindings'][0]['cif_map_json'],str(layout.cif_map_json.resolve()))
         self.assertEqual(full['isotopes'],rapid['isotopes'])
+
+    def test_full_implicit_data_root_resolves_legacy_natural_library(self):
+        project=self.root/'project';root=project/'scripts'/'data';layout=pack(root,'H',legacy=True)
+        config={'PROJECT_ROOT':str(project),'db':{
+            'catalog_csv':'${DATA_ROOT}/catalog_deduplicated.csv',
+            'profiles_dir':'${DATA_ROOT}/profiles64',
+            'cif_map_json':'${DATA_ROOT}/cif_map.json',
+            'original_json':'${DATA_ROOT}/highsymm_metadata.json'}}
+        with patch.dict(os.environ,{},clear=True):
+            before=dict(os.environ)
+            result=validate_custom_neutron_library(root,config,original_json=layout.original_json,
+                pipeline_mode='full',config_directory=self.root)
+            self.assertEqual(dict(os.environ),before)
+        self.assertEqual(result['checked_isotope_phase_ids'],[])
+        self.assertEqual(result['io']['cif_file_reads'],1)
+        self.assertEqual(result['io']['phase_npz_reads'],0)
+
+    def test_full_data_root_default_respects_inherited_presence(self):
+        for inherited in (str(self.root/'inherited'),''):
+            with self.subTest(inherited=inherited), patch.dict(os.environ,
+                    {'DATA_ROOT':inherited},clear=True):
+                before=dict(os.environ)
+                actual=_pipeline_path('${DATA_ROOT}/catalog.csv',
+                    {'PROJECT_ROOT':str(self.root/'configured')},'full',self.root)
+                self.assertEqual(actual,str((Path(inherited)/'catalog.csv').resolve())
+                    if inherited else '/catalog.csv')
+                self.assertEqual(dict(os.environ),before)
+        with patch.dict(os.environ,{'PROJECT_ROOT':str(self.root/'inherited')},clear=True):
+            before=dict(os.environ)
+            actual=_pipeline_path('${DATA_ROOT}/catalog.csv',{},'full',self.root)
+            self.assertEqual(actual,str((self.root/'inherited/scripts/data/catalog.csv').resolve()))
+            self.assertEqual(dict(os.environ),before)
+
+    def test_rapid_does_not_gain_full_implicit_data_root(self):
+        with patch.dict(os.environ,{},clear=True):
+            before=dict(os.environ)
+            actual=_pipeline_path('${DATA_ROOT}/catalog.csv',
+                {'PROJECT_ROOT':str(self.root),'CONFIG_DIR':str(self.root)},'rapid',self.root)
+            self.assertEqual(actual,str((self.root/'${DATA_ROOT}/catalog.csv').resolve()))
+            self.assertEqual(dict(os.environ),before)
 
     def test_legitimate_augmented_base_metadata_is_retained_without_relabeling(self):
         root=self.root/'augmented';layout=pack(root,'D')

@@ -68,6 +68,11 @@ def _pipeline_path(value, config, mode, config_directory):
             configured = config.get(key) or config.get(key.lower())
             if isinstance(configured, str) and configured:
                 environ[key] = _expand_variables(os.path.expanduser(configured), environ)
+        # Full load_config_file derives this default before resolving DB paths.
+        # Keep its presence semantics, including an explicitly empty value,
+        # without changing the process environment used by later work.
+        if 'DATA_ROOT' not in environ and 'PROJECT_ROOT' in environ:
+            environ['DATA_ROOT'] = str(Path(environ['PROJECT_ROOT']) / 'scripts' / 'data')
     text = _expand_variables(os.path.expanduser(str(value)), environ)
     if mode == 'rapid':
         for key in ('CONFIG_DIR', 'PROJECT_ROOT', 'DATA_ROOT', 'WORK_ROOT'):
