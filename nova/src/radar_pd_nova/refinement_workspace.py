@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import threading
+import time
 import uuid
 
 from gpx_recipe.compiler import approve as approve_plan
@@ -227,7 +228,7 @@ class RefinementWorkspace:
             self.save()
         return copy.deepcopy(edited)
 
-    def prepare(self,experiment,source_id,request,*,previous=None,reuse_recipe=None,template=None,guided=None):
+    def prepare(self,experiment,source_id,request,*,previous=None,reuse_recipe=None,template=None,guided=None,progress=None):
         if not request.strip():raise ValueError('Describe the refinement stages first')
         if template not in {None,'battery_baseline'} or sum(x is not None for x in (template,reuse_recipe,guided))>1:
             raise ValueError('Choose one supported recipe source')
@@ -242,14 +243,35 @@ class RefinementWorkspace:
             for recipe in self.state['recipes'].values():
                 if recipe['experiment']==experiment:recipe['armed']=False
             self.save()
+        started=time.monotonic();phase_started=started;phase='starting';durations=[]
+        def report(next_phase=None,*,status='running'):
+            nonlocal phase,phase_started
+            now=time.monotonic()
+            if next_phase and next_phase!=phase:
+                durations.append(dict(phase=phase,seconds=max(0.,now-phase_started)))
+                phase=next_phase;phase_started=now
+            event=dict(generation=generation,phase=phase,status=status,
+                source_sha256=source.get('source_sha256'),
+                elapsed_seconds=max(0.,now-started),phase_seconds=max(0.,now-phase_started),
+                phases=copy.deepcopy(durations))
+            with self.lock:
+                draft=self.state['drafts'].get(experiment)
+                if not draft or draft['generation']!=generation:return
+                draft['preparation']=copy.deepcopy(event);self.save()
+            if progress:
+                # A closed or superseded UI must not change the native work.
+                try:progress(dict(event,sampled_monotonic=now))
+                except Exception:pass
         planning=None
         try:
+            report()
             client=None
             if not reuse_recipe and not template and guided is None and not self._planner:
                 # Fail before dispatching an inspection job when this session
                 # was launched without the selected Galaxy credential context.
                 configure_provider(os.getenv('RADAR_GPX_PLANNER_PROVIDER','illumine-luna'),os.getenv('RADAR_PD_REFINEMENT_KEY_FILE') or None)
                 client=make_client()
+            report('inspect')
             source=self.inspect(source_id);context=source['context']
             planning_context=copy.deepcopy(context)
             planning_context['host_execution']={
@@ -274,6 +296,7 @@ class RefinementWorkspace:
                         'Do not infer measured conditions from GPX defaults or invent a missing mapping; '
                         'this capability does not change the diffraction fit.'}}
             if previous and previous.get('model_signature')!=context['model_signature']:previous=None
+            report('guided' if guided is not None else 'baseline' if template else 'saved' if reuse_recipe else 'planning')
             if guided is not None:
                 from gpx_recipe.guided import build_plan
                 plan=build_plan(context,guided)
@@ -303,6 +326,7 @@ class RefinementWorkspace:
             write_json(directory/'planning.json',planning)
             preview=None
             if not plan['questions'] and not plan['unsupported']:
+                report('preflight')
                 response=self.runtime.call('preview',source,directory/'preview',plan=plan,
                     dispatch_key=digest(['preview',source['source_sha256'],plan_hash(plan),source['inspection_revision']])[:24])
                 if response['status']!='preview_passed':raise ValueError(response.get('error') or 'Native parameter preflight failed')
@@ -314,7 +338,8 @@ class RefinementWorkspace:
                     context=context,source=source,preview=preview,directory=str(directory),planning_calls=len(planning.get('calls',[])),
                     model_usage=planning['usage_summary'],guided=planning.get('guided'),
                     origin=(planning.get('origin') or (planning['calls'][0]['label'] if planning.get('calls') else 'Deterministic clarification')))
-                self.save();return copy.deepcopy(draft)
+                report(status=draft['status'])
+                return copy.deepcopy(draft)
         except Exception as exc:
             with self.lock:
                 draft=self.state['drafts'].get(experiment)
@@ -325,7 +350,7 @@ class RefinementWorkspace:
                         draft['planning_provenance']=copy.deepcopy(exc.planning_provenance)
                     if calls is not None:
                         draft.update(planning_calls=len(calls),model_usage=summarize_calls(calls))
-                    self.save()
+                    report(status='error')
             raise
 
     def discard_draft(self,experiment):

@@ -1240,7 +1240,7 @@ def test_plan_click_uses_visible_request_when_text_update_is_still_pending():
         def _refinement_schedule(self, coroutine, name): tasks.append(asyncio.create_task(coroutine))
     app=App()
     app.server=SimpleNamespace(state=State(rf_busy=False,rf_experiment='exp',rf_source='source',rf_request='previous text'))
-    app._refinement_workspace=SimpleNamespace(prepare=lambda *args:calls.append(args))
+    app._refinement_workspace=SimpleNamespace(prepare=lambda *args,**kwargs:calls.append(args))
     async def run():
         app.generate_refinement_recipe(dict(experiment='exp',source='source',request='visible edited text'))
         await asyncio.gather(*tasks)

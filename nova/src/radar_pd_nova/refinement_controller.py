@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import re
 import tempfile
+import time
 from types import SimpleNamespace
 import uuid
 
@@ -26,6 +27,23 @@ from .guided_refinement_controller import GuidedRefinementMixin
 
 
 REFINEMENT_PROGRESS_SECONDS = 1.0
+
+
+def recipe_preparation_text(progress, *, elapsed_delta=0.):
+    labels={'starting':'Preparing recipe', 'inspect':'Preparing source and inspecting native model',
+        'planning':'Planning recipe with Luna', 'guided':'Building the reviewed guided recipe',
+        'baseline':'Building the baseline recipe', 'saved':'Checking saved recipe applicability',
+        'preflight':'Checking recipe with native worker'}
+    phase=labels.get(progress.get('phase'),'Preparing recipe')
+    status=progress.get('status')
+    def duration(value):
+        seconds=max(0,int(value));minutes,seconds=divmod(seconds,60)
+        return f'{minutes}:{seconds:02d}'
+    elapsed=duration(progress.get('elapsed_seconds',0.)+elapsed_delta)
+    if status=='ready':return f'Preparation complete · {elapsed} elapsed'
+    if status=='needs_input':return f'Preparation needs clarification · {elapsed} elapsed · native preflight has not run'
+    if status in {'error','interrupted'}:return f'Preparation stopped: {phase} · {elapsed} elapsed'
+    return f'{phase} · {elapsed} elapsed · current step {duration(progress.get("phase_seconds",0.)+elapsed_delta)}'
 
 
 @dataclass(frozen=True)
@@ -315,6 +333,7 @@ class RefinementMixin(GuidedRefinementMixin):
         self._refinement_checkpoint_task=None;self._refinement_checkpoint_dirty=False
         self._refinement_approving=False
         self._refinement_inspecting=False
+        self._refinement_preparations={}
         s=self.server.state
         for key,value in self._refinement_state_defaults().items():setattr(s,key,value)
         self._init_guided_refinement()
@@ -331,7 +350,7 @@ class RefinementMixin(GuidedRefinementMixin):
 
     @staticmethod
     def _refinement_state_defaults():
-        return dict(rf_mode='recipe',rf_busy=False,rf_loading=False,rf_catalog_message='',rf_message='',rf_error='',rf_transport='',rf_source_qualification='',rf_can_load_baseline=False,rf_provider='Guided rules · no model call required',
+        return dict(rf_mode='recipe',rf_busy=False,rf_loading=False,rf_catalog_message='',rf_message='',rf_preparation_progress='',rf_error='',rf_transport='',rf_source_qualification='',rf_can_load_baseline=False,rf_provider='Guided rules · no model call required',
             rf_experiment='',rf_experiments=[],rf_source='',rf_sources=[],rf_source_details=[],rf_context_atoms=[],rf_context_search='',rf_scope='all',rf_samples=[],rf_sample_options=[],rf_scans=[],rf_scan_options=[],rf_banks=[],rf_bank_options=[],
             rf_existing=True,rf_future=False,rf_scope_summary='No published GPXs available',rf_scope_token='',rf_request='',rf_draft_status='',rf_cards=[],rf_questions=[],rf_assumptions=[],rf_plan_calls='',rf_model_tokens='',rf_model_cost='',rf_model_has_luna_price=False,rf_plan_ready=False,
             rf_approved=False,rf_recipe_id='',rf_recipe_summary='',rf_active_summary='',rf_saved_recipe='',rf_recipe_versions=[],rf_recipe_filter='all',rf_metrics=[],rf_source_warnings=[],rf_future_armed=False,
@@ -574,6 +593,7 @@ class RefinementMixin(GuidedRefinementMixin):
     def _refinement_request_changed(self,**_):
         if self._refinement_internal:return
         self._refinement_sync_approval()
+        self._sync_recipe_preparation_progress()
 
     def _refinement_setup_changed(self,**_):
         if self._refinement_internal:return
@@ -646,6 +666,7 @@ class RefinementMixin(GuidedRefinementMixin):
 
     def _refinement_sync(self):
         w=self._refinement_workspace;s=self.server.state
+        self._sync_recipe_preparation_progress()
         if not w or not s.rf_experiment:
             self._clear_refinement_output(clear_trends=True)
             return
@@ -699,6 +720,70 @@ class RefinementMixin(GuidedRefinementMixin):
             s.flush()
         finally:self._refinement_internal=False;w.lock.release()
 
+    def _recipe_preparation_current(self,owner):
+        s=self.server.state;w=owner['workspace']
+        if self._refinement_workspace is not w:return False
+        if (s.rf_experiment,s.rf_source,s.rf_request,getattr(s,'rf_setup_mode',None))!=owner['selection']:return False
+        state=getattr(w,'state',{})
+        if owner['source_sha256']:
+            current=state.get('sources',{}).get(owner['selection'][1],{})
+            if current.get('source_sha256')!=owner['source_sha256']:return False
+        if owner.get('generation'):
+            draft=state.get('drafts',{}).get(owner['selection'][0],{})
+            if draft.get('generation')!=owner['generation']:return False
+        return True
+
+    def _sync_recipe_preparation_progress(self):
+        s=self.server.state;w=self._refinement_workspace
+        owners=getattr(self,'_refinement_preparations',{})
+        owner=next((o for o in reversed(list(owners.values())) if self._recipe_preparation_current(o)),None)
+        progress=owner.get('progress') if owner else None
+        if not progress and w:
+            draft=getattr(w,'state',{}).get('drafts',{}).get(s.rf_experiment,{})
+            if (draft.get('source_id')==s.rf_source and draft.get('request')==s.rf_request
+                    and draft.get('status')!='busy' and self._refinement_setup_matches(draft)):
+                progress=copy.deepcopy(draft.get('preparation'))
+                if progress and progress.get('generation')!=draft.get('generation'):progress=None
+                source=getattr(w,'state',{}).get('sources',{}).get(s.rf_source,{})
+                if progress and progress.get('source_sha256')!=source.get('source_sha256'):progress=None
+                if progress and draft.get('status')!='busy':progress['status']=draft.get('status')
+        delta=max(0.,time.monotonic()-progress['sampled_monotonic']) if owner and progress and progress.get('status')=='running' else 0.
+        s.rf_preparation_progress=recipe_preparation_text(progress,elapsed_delta=delta) if progress else ''
+
+    async def _prepare_recipe_with_progress(self,owner):
+        """Display host phases while preserving the existing one-call workflow."""
+        w=owner['workspace'];experiment,source,request,_=owner['selection']
+        loop=asyncio.get_running_loop();token=object()
+        owners=getattr(self,'_refinement_preparations',None)
+        if owners is None:owners={};self._refinement_preparations=owners
+        owners[token]=owner
+        owner['progress']=dict(phase='starting',status='running',elapsed_seconds=0.,phase_seconds=0.,sampled_monotonic=time.monotonic())
+        def publish(event):
+            if owners.get(token) is not owner:return
+            if owner.get('generation') not in {None,event['generation']}:return
+            owner['generation']=event['generation'];owner['progress']=event
+            if self._recipe_preparation_current(owner):
+                self._sync_recipe_preparation_progress();self.server.state.flush()
+        def progress(event):loop.call_soon_threadsafe(publish,event)
+        work=asyncio.create_task(asyncio.to_thread(w.prepare,experiment,source,request,progress=progress))
+        try:
+            if self._recipe_preparation_current(owner):
+                self._sync_recipe_preparation_progress();self.server.state.flush()
+            while True:
+                done,_=await asyncio.wait({work},timeout=REFINEMENT_PROGRESS_SECONDS)
+                if self._recipe_preparation_current(owner):
+                    self._sync_recipe_preparation_progress();self.server.state.flush()
+                if done:return work.result()
+        finally:
+            owners.pop(token,None)
+            # Cancelling this UI waiter cannot cancel an already accepted native
+            # inspection/preflight. Consume its eventual exception without
+            # letting it publish into a cleared or newer request.
+            if not work.done():
+                work.add_done_callback(lambda task:task.exception() if not task.cancelled() else None)
+            if self._recipe_preparation_current(owner) or self._refinement_workspace is None:
+                self._sync_recipe_preparation_progress();self.server.state.flush()
+
     def generate_refinement_recipe(self, submission_payload=None, **_):
         s=self.server.state
         if s.rf_busy:return
@@ -714,14 +799,22 @@ class RefinementMixin(GuidedRefinementMixin):
         s.rf_request=request
         if not source or not request.strip():s.rf_error='Choose a representative GPX and describe the refinement';return
         self._refinement_hold_enrollment()
-        s.rf_busy=True;s.rf_error='';s.rf_message='Inspecting the project, planning with Luna and checking native parameter releases…';s.flush()
+        w=self._refinement_workspace
+        owner=dict(workspace=w,selection=(experiment,source,request,getattr(s,'rf_setup_mode',None)),
+            source_sha256=getattr(w,'state',{}).get('sources',{}).get(source,{}).get('source_sha256'))
+        s.rf_busy=True;s.rf_error='';s.rf_message='';s.flush()
         async def work():
             try:
-                s.rf_message='Planning the recipe and checking native parameter releases…';s.flush()
-                await asyncio.to_thread(self._refinement_workspace.prepare,experiment,source,request)
-                s.rf_message='Review every stage and the execution scope before approving.'
-            except Exception as exc:s.rf_error=str(exc);s.rf_message='Planning did not complete; no new approval was issued.'
-            finally:self._refinement_sync();self._refinement_checkpoint();s.flush()
+                draft=await self._prepare_recipe_with_progress(owner)
+                if draft and self._recipe_preparation_current(owner):
+                    s.rf_message=('Review every stage and the execution scope before approving.' if draft.get('status')=='ready'
+                        else 'Resolve the recipe questions before native preflight and approval.')
+            except Exception as exc:
+                if self._recipe_preparation_current(owner):
+                    s.rf_error=str(exc);s.rf_message='Planning did not complete; no new approval was issued.'
+            finally:
+                if self._refinement_workspace is w:self._refinement_sync();self._refinement_checkpoint()
+                s.flush()
         self._refinement_schedule(work(),'radar-refinement-plan')
 
     def load_battery_baseline_recipe(self,**_):

@@ -105,6 +105,9 @@ def refinement_dashboard(app):
                     v.VBtn('Use saved recipe',click=app.reuse_refinement_recipe,disabled=('rf_busy || rf_guided_busy || !rf_saved_recipe || !rf_source',),variant='outlined',size='small')
                 html.P('{{ rf_active_summary }}',v_if='!!rf_active_summary',classes='rf-notice')
                 html.P('{{ rf_message }}',v_if='!!rf_message',classes='rf-muted')
+                html.P('{{ rf_preparation_progress }}',v_if='!!rf_preparation_progress',classes='rf-notice',role='status')
+                html.P('Recipe preparation is separate from polishing. This draft needs approval before it can start polishing jobs.',
+                    v_if='!!rf_preparation_progress && rf_busy',classes='rf-muted')
                 with html.Div(v_if='!rf_cards.length && !rf_busy && !rf_questions.length',classes='rf-empty mt-4'):
                     html.H3('Your staged plan will appear here')
                     html.P('Inspect the exact parameters released at each stage before any scan is polished.')
