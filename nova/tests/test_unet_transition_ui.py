@@ -18,11 +18,13 @@ from radar_pd_nova.unet_transition_ui import UnetTransitionMixin
 RadarPdNovaApp = BaseApp
 
 from radar_pd_nova.unet_transition_ui import (
-    _condition_label, _display_scale, _fit_figure_for_scan, _map_display_values,
+    _acquired_label, _condition_label, _display_scale, _fit_figure_for_scan, _map_display_values,
     _map_grid, _matched_display, _score_label, _series_color_limits,
 )
 from radar_pd_nova.unet_core.production import CHECKPOINT_SHA256
+from radar_pd_nova.powgen_watch import WatchedRun, WatchState
 from test_scan_interpretation import scan
+from test_transition_input import product
 from test_transition_tracking import sequence
 
 
@@ -132,6 +134,57 @@ def test_live_source_merge_retains_qualified_condition_for_ordering():
         records={})
     sources = app._unet_transition_sources([row], [])
     assert sources[0]["metadata"]["temperature"]["value"] == 300
+
+
+def test_pending_live_raw_banks_are_available_before_refinement(tmp_path):
+    app = RadarPdNovaApp()
+    watched = {}
+    for number, bank in enumerate((3, 2, 3, 2, 2), 1):
+        folder = tmp_path / str(number)
+        folder.mkdir()
+        source, _, _ = product(folder, banks=(2, 3))
+        run = WatchedRun(
+            run_number=number, bank=bank, instrument="PG3",
+            source_path=source["source_path"], fingerprint=f"fixture-{number}",
+            scan_metadata={
+                "sample_id": "synthetic-sample",
+                "start_time": f"2026-05-20T23:0{number}:35.100909667-04:00",
+                "temperature": {"value": 2.0 + number, "unit": "K"},
+            },
+        )
+        watched[run.run_id] = run
+    app._post_analysis_scope = f"watch:{tmp_path}"
+    app._powgen_controller = SimpleNamespace(
+        state=WatchState(history_id="test", discovered=watched),
+        settings=SimpleNamespace(ipts="IPTS-1"), source_directory=str(tmp_path),
+        records={},
+    )
+    # Match the application's pending rows, which do not yet have a receipt or
+    # source path; the watch adapter must restore the confined raw source.
+    pending = [{"run_id": run.run_id, "run_number": run.run_number,
+                "metadata": dict(run.scan_metadata), "bank": run.bank,
+                "instrument": run.instrument, "ipts": "IPTS-1"}
+               for run in watched.values()]
+    app._refresh_unet_transition_tracking([], pending)
+    report = app._unet_transition_report
+    assert sorted(len(group["run_ids"]) for group in report["groups"]) == [2, 3]
+    assert {group["scope"]["bank"] for group in report["groups"]} == {"2", "3"}
+    assert not app.server.state.unet_transition_unavailable
+    assert sum(row["previous"] is not None for row in report["records"]) == 3
+    assert all(row["source"]["source"] == "read-only reduced bank"
+               for row in report["records"])
+    assert app.server.state.unet_transition_map["data"]
+    assert "Acquisition time unavailable" not in app.server.state.unet_transition_pair_context
+
+
+@pytest.mark.parametrize("timestamp", [
+    "2026-05-20T23:03:35.100909667-04:00",
+    " 2026-05-20T23:03:35.100909667-04:00 ",
+])
+def test_acquisition_label_accepts_facility_nanosecond_timestamps(timestamp):
+    row = {"metadata": {"start_time": timestamp}}
+    assert _acquired_label(row) == "2026-05-20 23:03 -0400"
+    assert row["metadata"]["start_time"] == timestamp
 
 
 def test_missing_condition_on_new_scan_resets_order_before_showing_boxes():
@@ -307,6 +360,16 @@ def test_fit_panels_use_published_calculated_curve_and_bragg_ticks():
     missing, note = _fit_figure_for_scan(row)
     assert not any(trace.get("name") == "Calculated" for trace in missing["data"])
     assert "unavailable" in note
+
+
+def test_compact_fit_receipt_does_not_claim_bragg_ticks_were_not_published():
+    row = scans()[0]
+    row["pattern"].pop("phase_ticks", None)
+    row["pattern"].pop("phase_order", None)
+    figure, note = _fit_figure_for_scan(row)
+    assert any(trace["name"] == "Calculated" for trace in figure["data"])
+    assert "Bragg ticks are not included in this compact view" in note
+    assert "no Bragg ticks were published" not in note
 
 
 def test_fit_panel_reads_accepted_refinement_sidecar_for_its_scan(tmp_path):

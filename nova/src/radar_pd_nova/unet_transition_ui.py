@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 from collections import Counter
-from datetime import datetime
 from pathlib import Path
 import re
 
@@ -16,6 +15,7 @@ from trame.widgets import html, plotly, vuetify3 as vuetify
 from .scan_interpretation_ui import scan_label
 from .scan_interpretation import Pattern, load_pattern
 from .scan_conditions import qualified_metadata
+from .facility_metadata import parse_nexus_timestamp
 from .results import discover_plot_payloads, gsas_figure, read_plot_payload
 from .transition_input import digest
 from .transition_tracking_plot import COORDINATES, binned_intensity, display_grid, empty_figure
@@ -295,7 +295,7 @@ def _condition_label(scan, preferred=None):
 def _acquired_label(scan):
     text = str((scan.get("metadata") or {}).get("start_time") or "")
     try:
-        return datetime.fromisoformat(text.replace("Z", "+00:00")).strftime("%Y-%m-%d %H:%M %z")
+        return parse_nexus_timestamp(text).strftime("%Y-%m-%d %H:%M %z")
     except (ValueError, TypeError):
         return "Acquisition time unavailable"
 
@@ -412,9 +412,9 @@ def _fit_figure_for_scan(scan, measured=None):
                 }
                 source = "published measured-curve receipt"
     if not _usable_fit_payload(payload, measured):
-        fig = empty_figure("No RADAR-PD fit published for this scan")
+        fig = empty_figure("No RADAR-PD fit available in this view")
         fig.update_layout(height=440)
-        return plotly.Figure.to_data(fig), "Measured curve only; calculated fit and Bragg ticks unavailable."
+        return plotly.Figure.to_data(fig), "Measured curve only; calculated fit and Bragg ticks unavailable in this compact view."
     fig = gsas_figure(payload)
     fig.update_layout(height=440, margin={"l": 85, "r": 20, "t": 38, "b": 58},
                       legend={"orientation": "h", "y": 1.17, "font": {"size": 10}})
@@ -427,7 +427,7 @@ def _fit_figure_for_scan(scan, measured=None):
             tick_count += len(positions)
     note = f"{source}; {tick_count} Bragg tick{'s' if tick_count != 1 else ''} published."
     if not tick_count:
-        note = f"{source}; no Bragg ticks were published."
+        note = f"{source}; Bragg ticks are not included in this compact view."
     return plotly.Figure.to_data(fig), note
 
 
@@ -831,7 +831,7 @@ class UnetTransitionMixin:
                     fit.data = ("unet_transition_selected_fit.data",)
                     fit.layout = ("unet_transition_selected_fit.layout",)
                     html.P("{{ unet_transition_selected_fit_note }}", classes="radar-section-help")
-            html.P("Fit panels show published RADAR-PD calculated curves, residuals and Bragg ticks when available. A measured-only source has no calculated fit or ticks to display.",
+            html.P("Fit panels show RADAR-PD calculated curves, residuals and Bragg ticks available in this compact view.",
                    v_show="!unet_transition_loading",
                    classes="radar-section-help")
             with html.Details(classes="radar-tracker-provenance", v_show="!unet_transition_loading"):
@@ -873,7 +873,7 @@ class UnetTransitionMixin:
                     row.update(run_number=run.run_number, instrument=run.instrument,
                                ipts=getattr(settings, "ipts", row.get("ipts")),
                                bank=run.bank or meta.get("source_bank"), metadata=meta,
-                               source_path=run.source_path, unet_transition_source_root=root,
+                               source_path=run.source_path, transition_source_root=root,
                                analysis_status=stage)
                     record = getattr(controller, "records", {}).get(run.run_id)
                     if record is not None and record.local_output_dir is not None:
