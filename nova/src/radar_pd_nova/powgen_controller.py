@@ -8,7 +8,7 @@ instrument profile, and submits the same ``AnalysisConfig`` and
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -650,8 +650,16 @@ class PowgenWatchController:
         if restored is None:
             return False
 
+        self._adopt_restored_state(restored, restored_dataset_id, hydrate_metadata=True)
+        return True
+
+    def _adopt_restored_state(self, restored: WatchState, dataset_id: str, *, hydrate_metadata: bool) -> None:
+        """Adopt already validated state without starting or submitting work."""
+        if restored.history_id != self.settings.history_id or restored.instrument != self.settings.instrument:
+            raise ValueError("The checkpoint belongs to another History or beamline")
         self.state = restored
-        self._hydrate_missing_metadata()
+        if hydrate_metadata:
+            self._hydrate_missing_metadata()
         all_runs = [
             *restored.discovered.values(),
             *restored.submitted.values(),
@@ -663,13 +671,28 @@ class PowgenWatchController:
             self._startup_run_floor = self._last_seen_run_number
             self._primed = True
 
-        for run_id, run in {**restored.submitted, **restored.completed}.items():
+        self.records = {}
+        recoverable = {**restored.submitted, **restored.completed}
+        if not hydrate_metadata:
+            recoverable.update(restored.failed)
+        for run_id, run in recoverable.items():
             if run.galaxy_job_id:
-                self.records[run_id] = self._minimal_record(run)
+                record = self._minimal_record(run)
+                if not hydrate_metadata:
+                    # These are saved statuses, not a new Galaxy status query.
+                    if run_id in restored.completed:
+                        record.status = record.analysis_status = RunStatus.OK
+                        record.stage = "Saved completed job; refresh results to check Galaxy"
+                    elif run_id in restored.failed:
+                        record.status = record.analysis_status = RunStatus.ERROR
+                        record.message = run.error or "Saved failed job"
+                        record.stage = "Saved failed job; refresh results to check Galaxy"
+                    else:
+                        record.stage = "Saved in-flight job; refresh results to check Galaxy"
+                self.records[run_id] = record
 
-        self.state_dataset_ids = [restored_dataset_id]
+        self.state_dataset_ids = [dataset_id]
         self._last_persisted_state = self.state.to_json()
-        return True
 
     @property
     def source_directory(self) -> str:
@@ -1447,6 +1470,8 @@ class PowgenWatchController:
             serialized = self.state.to_json()
             payload = json.loads(serialized)
             payload["watch"] = {
+                "settings_schema": "radar-pd-live-settings/v1",
+                "settings": asdict(self.settings),
                 "facility": self.definition.facility,
                 "instrument": self.settings.instrument,
                 "ipts": self.settings.ipts,
@@ -1468,6 +1493,14 @@ class PowgenWatchController:
                 "checkpoint_key": self._checkpoint_key(),
                 **self._watch_extension(),
             }
+            # Refreshing an old read-only checkpoint must not turn defaults
+            # used for display into a claim that the original settings exist.
+            if getattr(self, "restore_missing_settings", ()):
+                payload["watch"].pop("settings", None)
+                payload["watch"].pop("settings_schema", None)
+                payload["watch"]["missing_settings"] = list(self.restore_missing_settings)
+            if getattr(self, "restore_resume_blocked_reasons", ()):
+                payload["watch"]["resume_blocked_reasons"] = list(self.restore_resume_blocked_reasons)
             self._checkpoint_generation += 1
             return WatchCheckpoint(self._checkpoint_generation, serialized, json.dumps(payload))
 

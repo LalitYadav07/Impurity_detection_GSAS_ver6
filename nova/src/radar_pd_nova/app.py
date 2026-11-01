@@ -31,6 +31,7 @@ from .run_timing import run_elapsed_label
 from .setup_forms import configuration_from_form, configuration_form_values, CONFIG_FORM_FIELDS
 from .setup_ui import SetupEditorMixin
 from .live_setup import LiveSetupMixin
+from .live_restore import LiveRestoreMixin
 from .live_assistant_controller import LiveAssistantMixin
 from .library_setup import (
     LIBRARY_FIELDS,
@@ -269,7 +270,7 @@ def _powgen_retry_time(value: Any) -> datetime | None:
 from .webmon.ui import WebmonMixin
 
 
-class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssistantMixin, LiveSetupMixin, LibraryReviewMixin, SetupEditorMixin, PostAnalysisMixin, RefinementMixin, SymmetryMixin, ThemedApp):
+class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssistantMixin, LiveRestoreMixin, LiveSetupMixin, LibraryReviewMixin, SetupEditorMixin, PostAnalysisMixin, RefinementMixin, SymmetryMixin, ThemedApp):
     """Interactive orchestration and results workspace backed by Galaxy."""
 
     def __init__(self) -> None:
@@ -807,6 +808,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
             {"title": "Choose archive from Galaxy History", "value": "galaxy"},
         ]
         self._init_live_setup()
+        self._init_live_restore()
         self._init_library_reviews()
         self._init_live_assistant()
         self._single_reset_values = {
@@ -1021,6 +1023,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         if getattr(state, 'session_closing', False):
             return
         self._invalidate_powgen_resume()
+        self._invalidate_live_restore()
         blocker = self._session_action_blocker()
         if blocker:
             state.end_session_dialog = False
@@ -1053,6 +1056,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         if getattr(state, "workspace_clearing", False):
             return
         self._invalidate_powgen_resume()
+        self._invalidate_live_restore()
         blocker = self._session_action_blocker()
         if blocker:
             state.clear_workspace_dialog = False
@@ -1649,6 +1653,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                         block=True,
                     )
 
+        self._live_restore_ui()
         vuetify.VSelect(
             v_show="workflow_mode === 'powgen'", label="Live beamline",
             v_model=("live_beamline",), items=("live_beamline_options",),
@@ -1954,14 +1959,14 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                         color="#15543c",
                         variant="flat",
                         size="small",
-                        disabled=("powgen_monitoring || !powgen_preflight_ready || live_launch_busy || powgen_sample_loading || live_library_builder_decision_pending",),
+                        disabled=("powgen_monitoring || !powgen_preflight_ready || live_launch_busy || live_restore_busy || powgen_sample_loading || live_library_builder_decision_pending || !!live_restored_checkpoint_id",),
                         loading=("live_launch_busy",),
                     )
                     vuetify.VBtn(
                         "Resume existing watch (previous settings)",
                         click=self.resume_existing_powgen_monitoring,
-                        v_if="live_library_builder_decision_pending && powgen_results_refresh_available",
-                        disabled=("powgen_monitoring || live_launch_busy",),
+                        v_if="(live_library_builder_decision_pending || !!live_restored_checkpoint_id) && powgen_results_refresh_available && !live_restore_resume_blocked",
+                        disabled=("powgen_monitoring || live_launch_busy || live_restore_busy",),
                         variant="outlined", size="small",
                     )
                     vuetify.VBtn(
@@ -2005,6 +2010,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                     v_if="powgen_failed_count > 0 && !powgen_monitoring", classes="radar-help-copy")
                 html.P("While stopped, Refresh results reads existing jobs and observations without discovering or submitting scans. Monitoring stays stopped.",
                     v_if="!powgen_monitoring && powgen_results_refresh_available", classes="radar-help-copy")
+                html.P("{{ live_restore_message }}", v_if="!!live_restored_checkpoint_id", classes="radar-help-copy")
                 vuetify.VBtn(
                     "Open experiment dashboard",
                     v_show="powgen_rows.length",
@@ -4320,12 +4326,14 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
             draft_ipts != ipts or draft_instrument != instrument or
             (getattr(state, "powgen_source_subfolder", None) or "shared/autoreduce") != getattr(settings, "subfolder", "shared/autoreduce")))
 
-    def _sync_powgen_rows(self, *, refresh_dependents=True) -> None:
+    def _sync_powgen_rows(self, *, refresh_dependents=True, load_patterns=True) -> None:
         """Project controller lifecycle state into compact user-facing rows."""
 
         self._sync_powgen_dashboard_provenance()
         controller = self._powgen_controller
         self.server.state.powgen_results_refresh_available = controller is not None
+        self.server.state.live_restored_checkpoint_id = str(getattr(controller, "restore_checkpoint_dataset_id", ""))
+        self.server.state.live_restore_resume_blocked = bool(getattr(controller, "restore_resume_blocked_reasons", ()))
         if str(getattr(self.server.state, "workspace_view", "")) == "experiment":
             self._activate_watch_post_analysis(controller)
         self.server.state.powgen_failed_count = len(controller.state.failed) if controller else 0
@@ -4746,9 +4754,12 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         if any(row.get("axis_overrides") for row in scientific_rows):
             state.powgen_dashboard_notice += " Explicit reviewed run mappings take precedence in the displayed conditions and axes. Original acquisition metadata is retained."
         self._interpretation_all_watch_scans = all_scientific_rows
-        self._update_powgen_dashboard_figures(scientific_rows)
+        if load_patterns:
+            self._update_powgen_dashboard_figures(scientific_rows)
+        else:
+            self._update_powgen_dashboard_figures(scientific_rows, load_patterns=False)
 
-    def _update_powgen_dashboard_figures(self, rows: list[dict[str, Any]]) -> None:
+    def _update_powgen_dashboard_figures(self, rows: list[dict[str, Any]], *, load_patterns=True) -> None:
         controller = getattr(self, "_powgen_controller", None)
         pending = (
             [
@@ -4768,7 +4779,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         clearing_watch = controller is None and str(
             getattr(self, "_post_analysis_scope", "")
         ).startswith("watch:")
-        if str(getattr(self.server.state, "workspace_view", "")) == "experiment" or clearing_watch:
+        if load_patterns and (str(getattr(self.server.state, "workspace_view", "")) == "experiment" or clearing_watch):
             self._activate_watch_post_analysis(controller)
             self._refresh_post_analysis(rows, pending=pending)
         x_key = str(self.server.state.powgen_x_axis or "run_number")
@@ -5662,7 +5673,11 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         """Start one session-scoped read-only POWGEN monitor."""
 
         state = self.server.state
-        if state.powgen_monitoring or getattr(state, "live_launch_busy", False):
+        if state.powgen_monitoring or getattr(state, "live_launch_busy", False) or getattr(state, "live_restore_busy", False):
+            return
+        if getattr(self._powgen_controller, "restore_checkpoint_dataset_id", ""):
+            state.error_message = "Use Resume existing watch to continue the saved settings, or Clear workspace before starting a separate watch."
+            state.flush()
             return
         state.live_launch_busy = True
         state.live_test_message = ""
@@ -5742,7 +5757,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         """Resume only the already approved controller, without rebuilding a form."""
         state = self.server.state
         controller = self._powgen_controller
-        if (state.powgen_monitoring or state.live_launch_busy
+        if (state.powgen_monitoring or state.live_launch_busy or getattr(state, "live_restore_busy", False)
                 or getattr(self, "_powgen_resume_owner", None) is not None
                 or state.workspace_clearing or state.session_closing):
             return
@@ -5765,6 +5780,9 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         try:
             if controller is None:
                 raise ValueError("There is no existing watch to resume. Resolve the library review before starting a new watch.")
+            blocked = getattr(controller, "restore_resume_blocked_reasons", ())
+            if blocked:
+                raise ValueError("This saved watch is read-only and cannot resume: " + "; ".join(blocked))
             if service.history_id != controller.settings.history_id:
                 raise ValueError("Return to the existing watch's History before resuming its previous settings.")
             task = self._powgen_monitor_task
