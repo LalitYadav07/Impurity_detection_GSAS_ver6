@@ -1,0 +1,96 @@
+{
+  "started_utc": "2026-10-30T01:50:14.580442+00:00",
+  "config_fingerprint": "6375175204cf099cef1597ab792b42854c033c9a1dca0aaab07252ae332fc0a7",
+  "config": {
+    "identity_version": "focus-unet-run/2",
+    "dataset_sha256": "c4c47f5f84b2fa94a55a44a3fb37e5024c083ba1f1b1fa914a6ae872077e6293",
+    "summary_sha256": "d41f93c0bbcf88cc109d5457c7e6af90d321097dc34a8cd813c59fd3c093933c",
+    "transform": "robust_linear",
+    "normalization_code_sha256": {
+      "focus_v2_normalization": "f0cfd88afae6b1a3926586a6a0ddc6ddc6080370abffbbfbd98191277dfaa3c0"
+    },
+    "split_name": "v2",
+    "split_manifest_sha256": "919e46f9240bc2823cc1ddade8b3e5636ce2b8e628643086bbe319c6e164261f",
+    "split_membership_sha256": "e9c4a8fb586b725c229c20274fbea3e9e192073908b717c026a4713363a8b4aa",
+    "split_counts": {
+      "train": 20690,
+      "validation": 801,
+      "test_reserved": 1675
+    },
+    "split_info": {
+      "name": "focus_ml_grouped_v2",
+      "purpose": "Use more Luna Focus Set examples while retaining disjoint IPTS evaluation groups. This is a separate modeling split; it does not redefine the original frozen reference split.",
+      "validation_ipts": [
+        "IPTS-36572",
+        "IPTS-38746",
+        "IPTS-23286",
+        "IPTS-37617"
+      ],
+      "test_ipts": [
+        "IPTS-38548",
+        "IPTS-38501",
+        "IPTS-28396",
+        "IPTS-37656"
+      ],
+      "train_rule": "all remaining IPTS groups",
+      "selection_note": "One validation and one test IPTS per instrument, with NOMAD positive examples represented in each split. Test groups were selected using Luna decision counts, before fitting this split. Silver-label agreement is not expert accuracy."
+    },
+    "model": {
+      "architecture": "FocusUNet",
+      "base_channels": 16,
+      "feature_types": 11,
+      "input_shape": [
+        2,
+        156
+      ],
+      "output_shape": [
+        12,
+        156
+      ],
+      "code_sha256": "433cce110b5d6e413899c19d85da11ef209c470c4931c9335ead0da90fe281d0"
+    },
+    "head": "joint",
+    "loss": {
+      "type_loss_weight": 0.5,
+      "window_loss_weight": 0.0,
+      "type_mask_mode": "all",
+      "attention_pos_weight": 8.0,
+      "type_pos_weights": [
+        27.599645614624023,
+        30.0,
+        7.455420017242432,
+        30.0,
+        30.0,
+        29.45250129699707,
+        30.0,
+        30.0,
+        4.529783725738525,
+        9.109848976135254,
+        13.450248718261719
+      ],
+      "type_pos_cap": 30.0
+    },
+    "optimizer": {
+      "name": "AdamW",
+      "lr": 0.001,
+      "weight_decay": 0.0001,
+      "gradient_clip_norm": 1.0
+    },
+    "batch_size": 64,
+    "seed": 42,
+    "visual_repeat": 1,
+    "train_code_sha256": "f0585bf04b4d4bcd5e44df20b5b64d1b8142faa46d672cd38f3bdf8f8ea0596f"
+  },
+  "dataset_path": "/Users/ly6/Documents/ChatGPT/NDIP_Radarpd/benchmarks/luna_pilot/focus_v2/data_pipeline/tensor_v2_definite_v1_v2_and_linked_ecb5dc633343/focus_156_robust_linear.npz",
+  "summary_path": "/Users/ly6/Documents/ChatGPT/NDIP_Radarpd/benchmarks/luna_pilot/focus_v2/data_pipeline/tensor_v2_definite_v1_v2_and_linked_ecb5dc633343/summary_robust_linear.json",
+  "run_path": "/Users/ly6/Documents/ChatGPT/NDIP_Radarpd/benchmarks/luna_pilot/local_unet/runs/focus_v2/mass_definite_v1_v2_and_linked_ecb5dc633343/robust_linear/joint/seed_42",
+  "device": "cpu",
+  "torch": "2.15.0",
+  "parameters": 216044,
+  "supported_outputs": [
+    "attention",
+    "feature_types"
+  ],
+  "feature_type_status": "trained",
+  "epochs_initially_requested": 20
+}
