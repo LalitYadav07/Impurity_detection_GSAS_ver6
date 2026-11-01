@@ -116,6 +116,18 @@ class LiveSetupMixin:
                     "Choose a reusable RADAR-PD configuration, or create settings here"
                 )
             config = self.service.load_configuration_dataset(dataset_id)
+            # The library belongs to this Live setup, not the History where
+            # a portable configuration was first saved. Only a current,
+            # explicit review may replace that saved source binding.
+            current_review = deepcopy(getattr(state, 'live_library_review', {}) or {})
+            from .library_setup import LibraryDraft, library_source_key
+            draft=LibraryDraft(state,'live')
+            if draft.database_source == 'builtin':
+                config = config.model_copy(update={'library_review': {}}, deep=True)
+            elif current_review:
+                if current_review.get('source_key') != library_source_key(draft):
+                    raise ValueError('The selected library changed; review its qualifications again')
+                config = AnalysisConfig.model_validate({**config.model_dump(), 'library_review':current_review})
         elif source == "inline":
             payload = {
                 name: deepcopy(getattr(state, "live_" + name))
@@ -495,7 +507,13 @@ class LiveSetupMixin:
         if (
             getattr(state, "live_configuration_source", None) or "history"
         ) == "history":
-            return str(state.powgen_configuration_dataset_id)
+            dataset_id = str(state.powgen_configuration_dataset_id)
+            saved = await asyncio.to_thread(self.service.load_configuration_dataset, dataset_id)
+            if configuration_digest(saved) == configuration_digest(config):
+                return dataset_id
+            # A new explicit library permission changes the portable contract.
+            # Persist a derived configuration; never submit the stale History
+            # document merely because its other analysis settings match.
         key = configuration_digest(config)
         cache = self._live_saved_configurations
         if key not in cache:

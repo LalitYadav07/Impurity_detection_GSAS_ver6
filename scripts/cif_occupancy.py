@@ -16,6 +16,7 @@ import warnings
 from decimal import Decimal
 from importlib.metadata import version
 from typing import Any
+from ndip_contracts import sha256_file
 
 import numpy as np
 
@@ -404,6 +405,24 @@ def policy_set_hash(reviews: dict[str, Any]) -> str:
                              sort_keys=True,separators=(',', ':')).encode())
 
 
+def canonical_activation(value: dict[str, Any] | None) -> dict[str, Any]:
+    """Portable permission fields; a UI selection key is not scientific consent."""
+    if value is None or value == {}:
+        return {}
+    fields={'acknowledged','archive_sha256','policy_set_sha256','allow_incomplete'}
+    if not isinstance(value,dict) or set(value)-fields-{'source_key'}:
+        raise ValueError('Invalid library review activation fields')
+    if value.get('acknowledged') is not True:
+        raise ValueError('Library review requires explicit acknowledgment')
+    for key in ('archive_sha256','policy_set_sha256'):
+        if not isinstance(value.get(key),str) or not re.fullmatch(r'[a-f0-9]{64}',value[key]):
+            raise ValueError('Library review requires exact archive and policy hashes')
+    incomplete=value.get('allow_incomplete',False)
+    if not isinstance(incomplete,bool):
+        raise ValueError('Incomplete-library permission must be boolean')
+    return {key:value[key] for key in fields if key!='allow_incomplete'} | {'allow_incomplete':incomplete}
+
+
 def library_failures_requiring_review(manifest: dict[str, Any]) -> list[dict[str, Any]]:
     """Only exact producer-declared duplicate outcomes are ordinary deduping."""
     failures = manifest.get('failures') or []
@@ -432,9 +451,10 @@ def activate_archive(archive: str | Path, database_root: str | Path, work_root: 
     failures=library_failures_requiring_review(manifest)
     if not reviews and not failures and not activation:
         return None
-    if not isinstance(activation,dict) or activation.get('acknowledged') is not True:
+    activation=canonical_activation(activation)
+    if not activation:
         raise ValueError('This library requires explicit review of its occupancy policy or incomplete build before analysis')
-    archive_sha=digest(Path(archive).read_bytes());set_sha=policy_set_hash(reviews)
+    archive_sha=sha256_file(archive);set_sha=policy_set_hash(reviews)
     if activation.get('archive_sha256') != archive_sha or activation.get('policy_set_sha256') != set_sha:
         raise ValueError('Library changed after review; review the selected archive again')
     if failures and activation.get('allow_incomplete') is not True:

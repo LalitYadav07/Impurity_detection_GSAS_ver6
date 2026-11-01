@@ -16,6 +16,7 @@ def test_builder_template_exposes_strict_default_and_quotes_review_note():
     rendered=str(Template(tree.find('command').text,searchList=[variables]))
     assert '--reviewed-occupancy-excess' in rendered
     assert '--occupancy-review-note '+shlex.quote(note) in rendered
+    assert rendered.index('cif_source_archive.py')<rendered.index('python -m zipfile -e')
     assert '<container' not in rendered
 
 

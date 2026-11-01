@@ -14,12 +14,13 @@
         trap "chmod a+r '$library_archive' '$library_manifest' '$console_output' >/dev/null 2>&1 || true" EXIT &&
         set -euo pipefail &&
         mkdir -p cif_inputs archive_inputs library_output &&
+        python /opt/radar-pd/scripts/cif_source_archive.py '$cif_archive' &&
         python -m zipfile -e '$cif_archive' archive_inputs &&
         find archive_inputs -type f -iname '*.cif' -exec cp -n {} cif_inputs/ \; &&
         python /opt/radar-pd/scripts/ndip_runner.py build-library --cif-dir cif_inputs --library-mode '$library_mode' --reviewed-occupancy-excess '$reviewed_occupancy_excess' --occupancy-review-note ${shlex.quote(str($occupancy_review_note))} --radiation '$radiation' --base-db-root "\${RADAR_PD_DB_ROOT}/database_${radiation}" --output-root library_output --manifest-output '$library_manifest' --archive '$library_archive' > >(tee -a '$console_output') 2> >(tee -a '$console_output' >&2)
     ]]></command>
     <inputs>
-        <param name="cif_archive" type="data" format="zip" label="Prepared CIF source bundle" help="A ZIP containing one or more CIF files. RADAR-PD Interactive prepares this bundle automatically from loose CIFs, ZIP archives, and reusable Galaxy CIF datasets."/>
+        <param name="cif_archive" type="data" format="zip" label="Prepared CIF source bundle" help="A ZIP containing one or more CIF files with distinct filenames, including files in different folders. Filename collisions are rejected before extraction. RADAR-PD Interactive prepares this bundle automatically from loose CIFs, ZIP archives, and reusable Galaxy CIF datasets."/>
         <param name="library_name" type="text" value="custom_candidate_library" label="Scientific library name" help="A short name that will identify this reusable library in Galaxy History and in later RADAR-PD runs.">
             <validator type="regex" message="Use letters, numbers, spaces, periods, underscores, or hyphens (80 characters maximum).">^[A-Za-z0-9][A-Za-z0-9_. -]{0,79}$</validator>
         </param>

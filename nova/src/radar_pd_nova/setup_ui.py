@@ -463,12 +463,21 @@ class SetupEditorMixin:
             html.P("{{ "+key('library_review_message')+" }}",classes='radar-help-copy')
             with html.Div(v_if=f"{key('library_review_preview')}.requires_review"):
                 html.P('These are unverified archive declarations. Actual affected sites remain unknown until native validation. Permit the bounded policy only after reviewing the original sources; permission applies to this configuration and its series.')
-                with html.Div(v_for=f"item in {key('library_review_preview')}.failures",key='item.id'):
-                    html.Strong('{{ item.source_name || item.id }}')
-                    html.Span('{{ item.error }}')
-                with html.Div(v_for=f"(item, index) in {key('library_review_preview')}.reviews",key='index'):
-                    html.Strong('{{ item.source_name }}: {{ item.labels.join(", ") }}')
-                    html.Span(' Declared site total {{ item.total }}; maximum excess {{ item.maximum_site_excess }}; declared components {{ JSON.stringify(item.components) }}')
+                vuetify.VTextField(label='Search declared sources and sites',v_model=value('library_review_filter'),clearable=True,density='compact',variant='outlined')
+                html.A('Download complete declared review',
+                    href=(f"'data:application/json;charset=utf-8,' + encodeURIComponent(JSON.stringify({key('library_review_preview')}))",),
+                    download='library-declared-review.json')
+                vuetify.VDataTable(
+                    items=(f"{key('library_review_preview')}.failures.map(item => ({{name: item.source_name || item.name || item.id || 'CIF', reason: item.error || item.reason || 'Unspecified omission'}}))",),
+                    search=value('library_review_filter'),
+                    headers=([{'title':'Declared failed source','key':'name'},{'title':'Reason','key':'reason'}],),
+                    items_per_page=20,items_per_page_options=([10,20,50,100],),density='compact')
+                vuetify.VDataTable(
+                    items=(f"{key('library_review_preview')}.reviews",),search=value('library_review_filter'),
+                    headers=([{'title':'Source','key':'source_name'},{'title':'Sites','key':'labels_display'},
+                              {'title':'Declared total','key':'total'},{'title':'Maximum excess','key':'maximum_site_excess'},
+                              {'title':'Declared components','key':'components_display'}],),
+                    items_per_page=20,items_per_page_options=([10,20,50,100],),density='compact')
                 vuetify.VBtn('Permit the declared bounded policy',click=(self.approve_candidate_library_review,f"['{context}']"),
                     disabled=(locked,),variant='outlined',block=True)
         with html.Fieldset(

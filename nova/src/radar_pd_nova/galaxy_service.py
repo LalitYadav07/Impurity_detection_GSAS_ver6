@@ -15,6 +15,7 @@ import uuid
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager, nullcontext
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator
@@ -392,7 +393,7 @@ class GalaxyService:
                     path=Path(directory)/'library.zip'
                     self._download_dataset(dataset_id,path)
                     self._library_review_cache[key]=inspect_library_review(path)
-            return dict(self._library_review_cache[key])
+            return deepcopy(self._library_review_cache[key])
 
     def validate_connection(self) -> None:
         if not self.galaxy_url or not self.galaxy_key or not self.history_id:

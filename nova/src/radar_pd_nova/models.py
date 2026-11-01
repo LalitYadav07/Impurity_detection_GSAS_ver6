@@ -273,7 +273,7 @@ class AnalysisConfig(BaseModel):
 
         return {
             "$schema": "radar-pd-config/v1",
-            "library_review": dict(self.library_review),
+            "library_review": {key:value for key,value in self.library_review.items() if key!='source_key'},
             "post_analysis": self.post_analysis.model_dump(mode="json"),
             "scan_interpretation": self.scan_interpretation.model_dump(mode="json"),
             "created_utc": datetime.now(timezone.utc).isoformat(),

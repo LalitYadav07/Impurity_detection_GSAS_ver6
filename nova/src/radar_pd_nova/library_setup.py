@@ -13,6 +13,7 @@ from typing import Any, Callable
 
 LIBRARY_FIELDS = (
     "library_review", "library_review_source", "library_review_preview", "library_review_loading", "library_review_message",
+    "library_review_filter",
     "library_builder_allow_rounding", "library_builder_rounding_note",
     "database_source",
     "library_archive_source",
@@ -48,6 +49,14 @@ def library_source_key(state: Any) -> str:
                        getattr(state,'history_database_id',None),getattr(state,'database_archive_path',None)])
 
 
+def file_sha256(path: str | Path) -> str:
+    result=hashlib.sha256()
+    with Path(path).open('rb') as stream:
+        for chunk in iter(lambda:stream.read(1024*1024),b''):
+            result.update(chunk)
+    return result.hexdigest()
+
+
 def inspect_library_review(path: str | Path) -> dict[str, Any]:
     """Inspect bounded manifest/CIF members; never trust a reviewed flag as consent."""
     path=Path(path)
@@ -56,14 +65,25 @@ def inspect_library_review(path: str | Path) -> dict[str, Any]:
             raise ValueError('Library archive contains duplicate member names')
         names=[name for name in archive.namelist() if name.rstrip('/').endswith('/manifest.json') or name=='manifest.json']
         if not names:
-            return {'archive_sha256':hashlib.sha256(path.read_bytes()).hexdigest(),
+            return {'archive_sha256':file_sha256(path),
                     'policy_set_sha256':hashlib.sha256(b'{}').hexdigest(),'phase_count':None,
                     'reviews':[],'failures':[],'requires_review':False,
                     'evidence_verification':'unverified archive declaration','actual_affected_site_count':None}
         if len(names)!=1 or archive.getinfo(names[0]).file_size>2_000_000:
             raise ValueError('Library must contain one bounded manifest')
         manifest=json.loads(archive.read(names[0]))
-        count=library_manifest_phase_count(manifest)
+        declared_counts={}
+        if not any(key in manifest for key in ('phase_count','n_phases')) and 'n_added_phases' in manifest:
+            # Historical augmented packs list only the added source IDs. They
+            # must not be checked against (or labelled as) the full base count.
+            added=library_manifest_phase_count({**manifest,'phase_count':manifest['n_added_phases']})
+            base=manifest.get('n_base_phases')
+            if base is not None and (isinstance(base,bool) or not isinstance(base,int) or base<0):
+                raise ValueError('Manifest n_base_phases must be a non-negative integer')
+            declared_counts={'added':added,'base':base,'total':base+added if base is not None else None}
+            count=None
+        else:
+            count=library_manifest_phase_count(manifest)
         reviews=manifest.get('occupancy_reviews') or {}
         if not isinstance(reviews,dict):raise ValueError('Invalid library occupancy reviews')
         root=names[0][:-len('manifest.json')]
@@ -110,6 +130,8 @@ def inspect_library_review(path: str | Path) -> dict[str, Any]:
                     raise ValueError('Inconsistent declared occupancy site evidence')
                 rows.append({'phase':phase,'source_name':review.get('source_name') or phase,
                              'labels':labels,'total':total,'components':components,
+                             'labels_display':', '.join(labels),
+                             'components_display':json.dumps(components,sort_keys=True),
                              'maximum_site_excess':excess,'evidence_verification':'unverified declaration'})
         set_hash=hashlib.sha256(json.dumps({k:v['policy_sha256'] for k,v in reviews.items()},sort_keys=True,separators=(',',':')).encode()).hexdigest()
         try:
@@ -119,8 +141,9 @@ def inspect_library_review(path: str | Path) -> dict[str, Any]:
         else:
             partial = partial_library_archive_review(manifest)
         incomplete = partial['requires_review'] if partial is not None else bool(manifest.get('failures'))
-    return {'archive_sha256':hashlib.sha256(path.read_bytes()).hexdigest(),'policy_set_sha256':set_hash,
+    return {'archive_sha256':file_sha256(path),'policy_set_sha256':set_hash,
             'phase_count':count,'reviews':rows,'failures':list(manifest.get('failures') or []),
+            'declared_augmented_counts':declared_counts,
             'requires_review':bool(reviews or incomplete),'requires_incomplete_review':incomplete,
             'manifest':manifest,'partial_review':partial,
             'evidence_verification':'unverified archive declaration',

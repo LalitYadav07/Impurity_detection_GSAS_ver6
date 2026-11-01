@@ -65,7 +65,7 @@ def test_exact_activation_survives_config_contract_and_library_change_invalidate
     permission={**activation_for_review(inspect_library_review(archive(tmp_path))), 'source_key':library_source_key(LibraryDraft(state))}
     state.library_review=permission
     config=configuration_from_form(state)
-    assert config_from_contract(config.portable_contract()).library_review==permission
+    assert config_from_contract(config.portable_contract()).library_review=={k:v for k,v in permission.items() if k!='source_key'}
     state.history_database_id='replacement'
     with pytest.raises(ValueError,match='changed'):configuration_from_form(state)
     app._invalidate_library_review()

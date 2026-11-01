@@ -572,6 +572,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         state.library_review_preview = {}
         state.library_review_loading = False
         state.library_review_message = ''
+        state.library_review_filter = ''
         state.library_builder_allow_rounding = False
         state.library_builder_rounding_note = ''
         state.sns_resolution = {}
@@ -8088,6 +8089,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
             draft.library_review_preview={}
             draft.library_review_source=''
             draft.library_review_message=''
+            draft.library_review_filter=''
             draft.library_review_loading=False
 
     def review_candidate_library(self, context: str = 'single', **_) -> None:

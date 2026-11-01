@@ -130,3 +130,27 @@ def test_mixed_valid_and_rounded_sources_only_declare_actual_excess(tmp_path,mon
     assert len(result.phase_ids)==2 and not result.failures
     assert len(manifest['occupancy_reviews'])==1
     assert next(iter(manifest['occupancy_reviews'].values()))['affected_sites']
+
+
+def test_reusable_config_activation_ignores_only_ui_key(tmp_path,monkeypatch):
+    import yaml
+    import ndip_runner
+    _,result,archive=pack(tmp_path)
+    permission=activation_for_review(inspect_library_review(archive))
+    config=tmp_path/'config.yaml'
+    assert ndip_runner.main(['configure','--mode','full','--radiation','neutron','--allowed-elements','C, Li','--output',str(config)])==0
+    saved=yaml.safe_load(config.read_text());saved['library_review']={**permission,'source_key':'other History UI key'}
+    config.write_text(yaml.safe_dump(saved))
+    explicit=tmp_path/'explicit.json';explicit.write_text(json.dumps(permission))
+    data=tmp_path/'pattern.gsa';data.write_text('BANK 1\n')
+    profile=tmp_path/'profile.instprm';profile.write_text('#GSAS-II instrument parameter file\nType:PNT\ndifC:10000\n')
+    args=['analyze','--config',str(config),'--data',str(data),'--instrument',str(profile),'--db-pack',str(archive),
+          '--db-root',str(tmp_path/'builtin'),'--work-dir',str(tmp_path/'work'),'--output-dir',str(tmp_path/'portal'),
+          '--library-review-activation',str(explicit),'--dry-run']
+    assert ndip_runner.main(args)==0
+    explicit.write_text(json.dumps({key:value for key,value in permission.items() if key!='allow_incomplete'}))
+    assert ndip_runner.main(args)==0  # Omitted false uses the same explicit policy.
+    for changed in ({'acknowledged':False},{'archive_sha256':'f'*64},{'policy_set_sha256':'f'*64},
+                    {'allow_incomplete':not permission['allow_incomplete']}):
+        explicit.write_text(json.dumps({**permission,**changed}))
+        assert ndip_runner.main(args)==1

@@ -37,6 +37,7 @@ from ndip_contracts import (  # noqa: E402
     initial_state,
     input_manifest,
     safe_name,
+    sha256_file,
     update_state,
     utc_now,
 )
@@ -746,9 +747,9 @@ def command_analyze(args: argparse.Namespace) -> int:
     review_path = getattr(args, 'library_review_activation', None)
     if review_path:
         explicit_review = json.loads(Path(review_path).read_text(encoding='utf-8'))
-        if not isinstance(explicit_review, dict):
-            raise ValueError('Library review activation must be a JSON object')
-        if raw_config.get('library_review') and raw_config['library_review'] != explicit_review:
+        from cif_occupancy import canonical_activation
+        explicit_review = canonical_activation(explicit_review)
+        if raw_config.get('library_review') and canonical_activation(raw_config['library_review']) != explicit_review:
             raise ValueError('Configuration and explicit library review activation disagree')
         raw_config['library_review'] = explicit_review
     instrument_mode, mode_source = _resolve_instrument_mode(
@@ -1091,7 +1092,7 @@ def command_build_library(args: argparse.Namespace) -> int:
     if args.archive:
         _archive_directory(result.pack_root, Path(args.archive).resolve())
         import hashlib
-        manifest['archive_sha256']=hashlib.sha256(Path(args.archive).read_bytes()).hexdigest()
+        manifest['archive_sha256']=sha256_file(args.archive)
         atomic_write_json(args.manifest_output,manifest)
     print(f"Built {args.library_mode} library with {len(result.phase_ids)} phase(s)")
     return 0

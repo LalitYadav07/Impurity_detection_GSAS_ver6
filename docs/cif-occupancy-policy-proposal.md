@@ -19,6 +19,13 @@ policy once for a configuration and its series. Permission binds both the
 archive SHA256 and source-policy hashes. Replacing the library invalidates it.
 A source-selection key prevents delayed UI reads approving a replacement.
 
+That UI key is not serialized as portable permission. Native consent compares
+only acknowledgment, archive hash, policy-set hash and incomplete-library
+decision. Re-reviewing identical content in a new History can reuse the portable
+configuration; changed hashes require a derived configuration. Explicitly
+choosing the built-in library clears inapplicable permission in a derived copy,
+without modifying the saved original.
+
 The configuration carries `library_review` with `acknowledged: true`,
 `archive_sha256`, `policy_set_sha256`, and optional `allow_incomplete`. Direct
 Galaxy use can provide that same explicit configuration field or the dedicated
@@ -31,6 +38,12 @@ archive inspector exposes the same manifest to its classifier. Exact
 producer-declared duplicates differ from all other failures; unrecognized
 failures require explicit incomplete-library review. This does not certify
 that a historical archive contains every originally intended source.
+
+Historical augmented manifests retain their declared base/added counts without
+mislabeling the added IDs as a verified total inventory. Archive hashes are
+streamed; cached review documents are copied before delivery. The direct Galaxy
+source-ZIP path rejects colliding CIF basenames before extraction rather than
+silently omitting a file when flattening folders. Review tables are paginated.
 
 ## Native checks and provenance
 
@@ -75,3 +88,9 @@ local development runtime.
 Preserving isotope labels does not qualify isotope diffraction fingerprints;
 that separate pre-existing calculator issue needs its own validation. A
 converged fit or accepted policy is never a calibration or composition certificate.
+
+An unchanged rounded mixed site can still fail the native recipe's independent
+capacity check. An explicitly proposed replacement model, reviewed through the
+existing phase-correction workflow, is a separate supported option. This is a
+scientific model change, not something automatically generated or authorized by
+the library occupancy allowance.
