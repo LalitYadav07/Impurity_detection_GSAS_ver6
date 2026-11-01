@@ -53,10 +53,19 @@ def test_prepare_worker_uses_shared_native_preparer_and_publishes_provenance(tmp
         return result
     monkeypatch.setattr(preparation,'prepare_model',prepare)
     monkeypatch.setattr(worker,'write_project_view',lambda source,target: target.write_text('{}'))
-    response=worker.work('prepare',source,tmp_path/'worker')
+    from gpx_recipe.battery.transport import implementation_signature
+    response=worker.work('prepare',source,tmp_path/'worker',plan={'implementation_sha256':implementation_signature()})
     assert response['status']=='model_prepared'
     assert response['final_gpx']=='verified_model.gpx'
     assert 'inputs/observed.gsa' in response['files']
     assert 'model/preparation.json' in response['files']
     from radar_pd_nova.refinement_runtime import verify_result_files
     verify_result_files(tmp_path/'worker',response,action='prepare')
+
+
+def test_prepare_rejects_other_implementation_before_unpacking(tmp_path):
+    from gpx_recipe import worker
+    source=packet(tmp_path/'inputs.zip', [('preparation.json', '{}')])
+    response=worker.work('prepare',source,tmp_path/'worker',plan={'implementation_sha256':'0'*64})
+    assert response['status']=='failed' and 'implementation differs' in response['error']
+    assert not (tmp_path/'worker/inputs').exists()

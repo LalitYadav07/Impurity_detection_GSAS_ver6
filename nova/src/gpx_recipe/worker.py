@@ -39,13 +39,13 @@ def work(action, source, directory, *, plan=None, approval=None, expected_source
         if expected_source_sha256 and before!=expected_source_sha256:raise ValueError('The supplied dataset is not the approved source GPX revision')
         if action=='prepare':
             from .battery.transport import prepare_packet
-            prepared=prepare_packet(source,directory)
+            prepared=prepare_packet(source,directory,plan)
             model=directory/'model/prepared.gpx'
             shutil.copy2(model,directory/'verified_model.gpx')
             view=write_project_view(model,directory/'baseline.view.json')
             response.update(status='model_prepared',context=json.loads((directory/'model/context.json').read_text()),
                 preparation=prepared,final_gpx='verified_model.gpx',output_sha256=prepared['project_sha256'],
-                view='baseline.view.json')
+                view='baseline.view.json',implementation_sha256=plan['implementation_sha256'])
         elif action=='inspect':
             response['context']=snapshot(source)
             write_project_view(source,directory/'baseline.view.json')

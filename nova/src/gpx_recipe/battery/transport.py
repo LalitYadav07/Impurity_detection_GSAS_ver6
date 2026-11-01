@@ -1,11 +1,29 @@
 """Bounded, credential-free preparation packet used by native workers."""
 import json
+import hashlib
 from pathlib import Path, PurePosixPath
 import stat
 import zipfile
 
 MAX_PACKET_BYTES = 512 * 1024 * 1024
 MAX_MEMBERS = 128
+
+
+def implementation_signature():
+    """Bind shared science plus the pure beamline adapters used in preparation."""
+    from ..symmetry.compiler import package_signature
+    import radar_pd_nova
+    root = Path(radar_pd_nova.__file__).parent
+    dependencies = ['__init__.py', 'nomad.py', 'nomad_products.py', 'tof_fxye.py',
+                    'powgen.py', 'powgen_setup.py', 'facility_metadata.py',
+                    'battery/powgen.py', 'battery/reduction_evidence.py',
+                    'battery/electrochemistry.py', 'battery/catalog.py']
+    files = {name: hashlib.sha256((root/name).read_bytes()).hexdigest() for name in dependencies}
+    for path in sorted((root/'data/powgen_calibrations').rglob('*')):
+        if path.is_file() and path.suffix.lower() in {'.json', '.prm', '.instprm', '.ins', '.inst'}:
+            files[path.relative_to(root).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return hashlib.sha256(json.dumps({'science':package_signature(), 'adapters':files},
+                                    sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
 def extract_preparation_packet(packet, destination):
@@ -45,8 +63,11 @@ def extract_preparation_packet(packet, destination):
     return json.loads((destination / 'preparation.json').read_text())
 
 
-def prepare_packet(packet, directory):
+def prepare_packet(packet, directory, request):
     from .preparation import prepare_model
+    if (not isinstance(request, dict) or set(request) != {'implementation_sha256'}
+            or request['implementation_sha256'] != implementation_signature()):
+        raise ValueError('Preparation implementation differs from the requested native worker; create a new reviewed dispatch')
     directory = Path(directory)
     inputs = directory / 'inputs'
     spec = extract_preparation_packet(packet, inputs)
