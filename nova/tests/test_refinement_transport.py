@@ -43,6 +43,16 @@ def test_capacity_refusal_does_not_claim_a_submitted_recipe(tmp_path,monkeypatch
  assert not (rt.root/'dispatches'/('d'*24+'.json')).exists()
 
 
+def test_source_lookup_failure_does_not_claim_recipe_post(tmp_path,monkeypatch):
+ rt,s,source=runtime(tmp_path)
+ def missing(source):raise ValueError('No exact collection member')
+ monkeypatch.setattr(rt,'dataset_id',missing)
+ with pytest.raises(ValueError,match='No exact collection'):
+  rt.call('inspect',source,tmp_path/'refused',dispatch_key='e'*24)
+ assert not (rt.root/'dispatches'/('e'*24+'.pending')).exists()
+ assert not s.submissions
+
+
 def test_fresh_dispatch_and_acknowledged_recovery_submit_exactly_once_without_crawling_history(tmp_path,monkeypatch):
  rt,s,source=runtime(tmp_path)
  monkeypatch.setattr(rt,'find_dispatch',lambda key:pytest.fail('Fresh or acknowledged work must not crawl every historical job'))

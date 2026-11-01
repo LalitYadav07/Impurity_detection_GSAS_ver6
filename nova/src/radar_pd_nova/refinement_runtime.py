@@ -86,7 +86,7 @@ class LocalRefinementRuntime:
         return source
 
     def call(self, action, source, directory, *, plan=None, approval=None, dispatch_key='',
-             on_submitted=None, resume=None, recover=False):
+             on_submitted=None, resume=None, recover=False, cancel_event=None):
         # A previously registered battery source can outlive a converter fix.
         # Retain inspection/recovery of historical artifacts, but recheck the
         # captured legacy coefficients before any new preview or execution.
@@ -163,7 +163,7 @@ class GalaxyRefinementRuntime(LocalRefinementRuntime):
         if len(matches)!=1:raise ValueError('The published GPX does not map to one exact Galaxy collection element')
         return matches[0]['id']
 
-    def call(self,action,source,directory,*,plan=None,approval=None,dispatch_key='',on_submitted=None,resume=None,recover=False):
+    def call(self,action,source,directory,*,plan=None,approval=None,dispatch_key='',on_submitted=None,resume=None,recover=False,cancel_event=None):
         from .models import UtilityActionRecord,RunStatus
         from .galaxy_service import _extract_results_archive
         source=self.resolve(source);directory=Path(directory);directory.mkdir(parents=True,exist_ok=True)
@@ -189,14 +189,15 @@ class GalaxyRefinementRuntime(LocalRefinementRuntime):
                 # Keep durable workspace claims/checkpoints separate: only the
                 # disposable request input can still be processing at dispatch.
                 request_id=self.service.upload_json_document(request,name='refinement-request.json',label='RADAR-PD refinement request '+dispatch_key,wait_ready=False)
+                source_dataset=self.dataset_id(source)
                 try:
                     with pending.open('x') as handle:handle.write(action+'\n')
                 except FileExistsError:
                     raise RuntimeUnavailable('Another worker already claimed this dispatch; recover its existing Galaxy job')
                 try:
                     job=self.service.submit_utility(tool_id=REFINEMENT_TOOL_ID,name='RADAR-PD refinement '+dispatch_key,
-                        associated_run_uid=source.get('record_uid'),inputs={'action':action,'dispatch_key':dispatch_key,
-                        'source_gpx':{'dataset_id':self.dataset_id(source)},'recipe_request':{'dataset_id':request_id}})
+                        associated_run_uid=source.get('record_uid'),cancel_event=cancel_event,inputs={'action':action,'dispatch_key':dispatch_key,
+                        'source_gpx':{'dataset_id':source_dataset},'recipe_request':{'dataset_id':request_id}})
                 except Exception as exc:
                     from .native_job_admission import AdmissionUnavailable
                     if isinstance(exc,AdmissionUnavailable):

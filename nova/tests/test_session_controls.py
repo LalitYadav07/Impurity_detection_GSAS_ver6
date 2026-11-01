@@ -24,6 +24,29 @@ class _Workspace:
         self.checkpoints += 1
 
 
+def test_cancelled_utility_wait_cannot_submit_later():
+    import threading
+    import pytest
+    from radar_pd_nova.native_job_admission import AdmissionUnavailable
+    entered=threading.Event();stopped=threading.Event();posted=[]
+    def submit(*,cancel_event,**kwargs):
+        entered.set()
+        if cancel_event.wait(2):
+            stopped.set()
+            raise AdmissionUnavailable('Cancelled before POST')
+        posted.append(kwargs)
+    app=SimpleNamespace(service=SimpleNamespace(submit_utility=submit))
+    async def scenario():
+        task=asyncio.create_task(RadarPdNovaApp._submit_utility_action(
+            app,tool_id='neutrons_radar_pd_configure_prototype',name='prepare',inputs={}))
+        assert await asyncio.to_thread(entered.wait,1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):await task
+        assert await asyncio.to_thread(stopped.wait,1)
+    asyncio.run(scenario())
+    assert not posted
+
+
 def test_clear_workspace_releases_run_memory_and_disarms_future_work():
     app = RadarPdNovaApp()
     state = app.server.state

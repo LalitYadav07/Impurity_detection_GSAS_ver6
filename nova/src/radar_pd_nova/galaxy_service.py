@@ -1987,6 +1987,9 @@ class GalaxyService:
         # admission point accounts for other RADAR-PD workflows sharing the
         # History and serializes the check+POST inside this viewer.
         with gate.slot(tool_id, family_limit=gate.total_limit, cancel=cancel_event) if gate else nullcontext():
+            if cancel_event is not None and cancel_event.is_set():
+                from .native_job_admission import AdmissionUnavailable
+                raise AdmissionUnavailable('Scientific submission paused before dispatch')
             response = requests.post(
                 f"{self.galaxy_url}/api/tools",
                 headers={**self._headers, "content-type": "application/json"},

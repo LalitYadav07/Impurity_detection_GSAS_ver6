@@ -44,8 +44,12 @@ class GalaxyLiveRuntime(GalaxyRefinementRuntime):
                 except FileExistsError:raise RuntimeUnavailable('Another caller owns this live dispatch; recover it') from None
                 try:
                     job=self.service.submit_utility(tool_id=self.tool_id,name='RADAR-PD live snapshot '+dispatch_key,
-                        associated_run_uid=request.get('source_revision'),inputs=inputs)
+                        associated_run_uid=request.get('source_revision'),inputs=inputs,cancel_event=cancel_event)
                 except Exception as exc:
+                    from ..native_job_admission import AdmissionUnavailable
+                    if isinstance(exc,AdmissionUnavailable):
+                        pending.unlink(missing_ok=True)
+                        raise RuntimeUnavailable(str(exc)) from exc
                     raise RuntimeUnavailable('Galaxy did not acknowledge the live submission. The dispatch key is retained for recovery.') from exc
         from gpx_recipe.live.io import atomic_json
         atomic_json(acknowledged,{'packet_id':packet_id,'job':job.model_dump(mode='json')})

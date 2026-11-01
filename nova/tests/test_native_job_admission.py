@@ -75,3 +75,14 @@ def test_failed_post_releases_lock_without_retrying():
             raise RuntimeError('ambiguous POST')
     assert gate.lock.acquire(blocking=False)
     gate.lock.release()
+
+
+def test_pause_during_capacity_request_never_admits_the_job():
+    event=threading.Event()
+    def fetch(*args,**kwargs):
+        event.set()
+        return Response([])
+    gate=HistoryJobAdmission(service(),fetch=fetch)
+    with pytest.raises(AdmissionUnavailable,match='paused'):
+        with gate.slot('neutrons_radar_pd_refine_recipe_prototype',family_limit=1,cancel=event):
+            pytest.fail('A paused job must not be submitted')

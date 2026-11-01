@@ -99,6 +99,8 @@ class HistoryJobAdmission:
                     jobs = self.active_jobs()
                     if (len(jobs) < self.total_limit and
                             sum(row['tool_id'] == tool_id for row in jobs) < family_limit):
+                        if cancel is not None and cancel.is_set():
+                            raise AdmissionUnavailable('Scientific submission paused before dispatch')
                         # The caller performs the POST before releasing the lock.
                         yield
                         return

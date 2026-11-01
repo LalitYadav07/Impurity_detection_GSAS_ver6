@@ -32,6 +32,7 @@ class RefinementWorkspace:
         self.root=Path(root).resolve();self.root.mkdir(parents=True,exist_ok=True)
         self.manifest=self.root/'workspace.json';self.runtime=runtime;self.history_id=str(history_id)
         self._planner=planner;self.lock=threading.RLock();self._checkpoint_lock=threading.Lock();self._inflight=set()
+        self._submission_cancels={}
         self._checkpoint_hash=None;self._checkpoint_dataset=None
         self._inspection_locks={}
         if self.manifest.exists():
@@ -379,6 +380,11 @@ class RefinementWorkspace:
 
     def pause(self,experiment,paused=True):
         with self.lock:
+            if paused and self.runtime.kind=='galaxy':
+                for uid,event in self._submission_cancels.items():
+                    job=self.state['jobs'][uid]
+                    if job['source']['experiment']==experiment and not job.get('remote_action'):
+                        event.set()
             for recipe in self.state['recipes'].values():
                 if recipe['experiment']==experiment:recipe['armed']=False
             for job in self.state['jobs'].values():
@@ -424,6 +430,7 @@ class RefinementWorkspace:
             job=next((j for j in self.state['jobs'].values() if j['status'] in {'queued','recovering'}),None)
             if job is None:return None
             self._inflight.add(job['id']);job.update(status='running',attempts=job['attempts']+1,message='Refining the approved stages')
+            cancel_event=threading.Event();self._submission_cancels[job['id']]=cancel_event
             recipe=copy.deepcopy(self.state['recipes'][job['recipe_id']]);source=copy.deepcopy(job['source'])
             directory=self.root/'jobs'/job['id']/('attempt-'+str(job['attempts']));job['directory']=str(directory);self.save()
         def submitted(action):
@@ -434,7 +441,8 @@ class RefinementWorkspace:
             # A restored interrupted claim searches/reuses that dispatch.
             if self.runtime.kind=='galaxy':self.checkpoint()
             result=self.runtime.call('run',source,directory,plan=recipe['plan'],approval=recipe['approval'],
-                dispatch_key=job['id'],on_submitted=submitted,resume=job.get('remote_action'),recover=job['attempts']>1)
+                dispatch_key=job['id'],on_submitted=submitted,resume=job.get('remote_action'),recover=job['attempts']>1,
+                cancel_event=cancel_event)
             with self.lock:
                 status=result['status']
                 if status=='needs_review' and 'match' in result.get('error','').lower() and 'model' in result.get('error','').lower():status='needs_recipe'
@@ -442,9 +450,12 @@ class RefinementWorkspace:
                 self.save()
         except Exception as exc:
             with self.lock:
-                job.update(status='interrupted' if isinstance(exc,RuntimeUnavailable) or job.get('remote_action') else 'failed',message=str(exc),finished_utc=utc());self.save()
+                status=('paused' if cancel_event.is_set() and not job.get('remote_action')
+                        else 'interrupted' if isinstance(exc,RuntimeUnavailable) or job.get('remote_action') else 'failed')
+                job.update(status=status,message=str(exc),finished_utc=utc());self.save()
         finally:
-            with self.lock:self._inflight.discard(job['id'])
+            with self.lock:
+                self._inflight.discard(job['id']);self._submission_cancels.pop(job['id'],None)
         with self.lock:return copy.deepcopy(job)
 
     def recover_job_artifacts(self,job_id):

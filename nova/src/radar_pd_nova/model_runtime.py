@@ -201,13 +201,17 @@ class GalaxyModelRuntime(GalaxyRefinementRuntime):
                 request_id=self.service.upload_json_document(request,name='model-request.json',
                     label='RADAR-PD Model request '+key,wait_ready=True)
             if cancel and cancel.is_set():raise RuntimeUnavailable('Model submission paused before dispatch')
+            # Complete lookups before declaring that a POST might have happened.
+            # A missing collection member is a pre-submission error, not an
+            # ambiguous acknowledgement requiring remote job recovery.
+            source_dataset=self.dataset_id(source)
+            inputs={'action':action,'dispatch_key':key,'source_gpx':{'dataset_id':source_dataset},
+                    'model_assets':{'dataset_id':asset_id}}
+            if inline:inputs['model_request_b64']=encoded
+            else:inputs['model_request']={'dataset_id':request_id}
             entry.update(pending=True,request_id=request_id,request_sha256=digest(request),
                          request_format='inline_base64' if inline else 'history_json');self._save()
             try:
-                inputs={'action':action,'dispatch_key':key,'source_gpx':{'dataset_id':self.dataset_id(source)},
-                        'model_assets':{'dataset_id':asset_id}}
-                if inline:inputs['model_request_b64']=encoded
-                else:inputs['model_request']={'dataset_id':request_id}
                 job=self.service.submit_utility(tool_id=self.tool_id,name='RADAR-PD model '+key,
                     associated_run_uid=source.get('record_uid'),inputs=inputs,cancel_event=cancel)
             except Exception as exc:
@@ -217,7 +221,7 @@ class GalaxyModelRuntime(GalaxyRefinementRuntime):
                     raise RuntimeUnavailable(str(exc)) from exc
                 raise RuntimeUnavailable('Galaxy did not acknowledge the model job. Its stable dispatch key was retained for recovery.') from exc
             entry['job']=job_record(job);self._save()
-            self._verified_jobs.add((str(job.galaxy_job_id),key))
+            self.verify_job(job,key)
             return job
 
     def verify_job(self,job,key):

@@ -169,6 +169,22 @@ def test_pause_parallel_polishing_keeps_active_jobs_and_holds_unstarted_scans(tm
     assert not w.state['recipes'][recipe['id']]['armed'] and w.run_next() is None
 
 
+def test_pause_stops_claimed_recipe_waiting_for_remote_capacity(tmp_path):
+    from radar_pd_nova.refinement_runtime import RuntimeUnavailable
+    w,rt=create(tmp_path);rt.kind='galaxy';w.observe([source('1')])
+    recipe=approved(w,RefinementScope('exp'));w.start(recipe['id'],recipe['selection_token'])
+    original=rt.call
+    def call(action,src,directory,**kwargs):
+        if action!='run':return original(action,src,directory,**kwargs)
+        w.pause('exp')
+        assert kwargs['cancel_event'].is_set()
+        raise RuntimeUnavailable('Scientific submission paused before dispatch')
+    rt.call=call
+    result=w.run_next()
+    assert result['status']=='paused' and not result.get('remote_action')
+    assert not w._inflight and not w._submission_cancels
+
+
 @pytest.mark.parametrize('value',[True,0,3,8,'2'])
 def test_polishing_concurrency_requires_a_bounded_integer(value,tmp_path):
     w,rt=create(tmp_path);rt.kind='galaxy'

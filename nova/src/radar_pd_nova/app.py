@@ -10,6 +10,7 @@ import io
 import os
 import re
 import tempfile
+import threading
 import uuid
 from dataclasses import asdict
 from copy import deepcopy
@@ -7289,6 +7290,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         associated_run_uid: str | None = None,
         library_context: dict[str, str] | None = None,
     ) -> UtilityActionRecord | None:
+        cancel_event = threading.Event()
         try:
             action = await asyncio.to_thread(
                 self.service.submit_utility,
@@ -7296,6 +7298,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                 name=name,
                 inputs=inputs,
                 associated_run_uid=associated_run_uid,
+                cancel_event=cancel_event,
             )
             if library_context is not None:
                 if not hasattr(self, "_library_action_contexts"):
@@ -7304,6 +7307,9 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
             self._register_utility(action)
             await self._monitor_utility(action)
             return action
+        except asyncio.CancelledError:
+            cancel_event.set()
+            raise
         except Exception as exc:
             failed = UtilityActionRecord(
                 uid=f"utility-{uuid.uuid4().hex}",

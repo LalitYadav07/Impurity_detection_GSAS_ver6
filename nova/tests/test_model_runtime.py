@@ -522,6 +522,16 @@ def test_admission_refusal_does_not_leave_an_ambiguous_dispatch(remote, monkeypa
     assert not runtime.state['dispatches']['b'*24].get('job')
 
 
+def test_source_lookup_failure_does_not_claim_model_post(remote, monkeypatch):
+    runtime, service, source=remote
+    def missing(source):raise ValueError('No exact collection member')
+    monkeypatch.setattr(runtime,'dataset_id',missing)
+    with pytest.raises(ValueError,match='No exact collection'):
+        runtime._submit('native',source,{},'packet','c'*24)
+    assert not runtime.state['dispatches']['c'*24]['pending']
+    assert not service.submissions
+
+
 def test_enrollment_counts_dispatched_batches_rather_than_their_member_trials():
     rows=[dict(id=str(i),state='running',handle=json.dumps({'dispatch_key':'first'})) for i in range(49)]
     assert active_batch_count(rows)==1
