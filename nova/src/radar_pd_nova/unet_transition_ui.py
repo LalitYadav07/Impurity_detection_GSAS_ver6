@@ -331,6 +331,18 @@ def _fit_output_stamp(scan):
         return "unavailable"
 
 
+def _fit_observation_stamp(scan):
+    """Refresh a pending compact fit even if the new container reuses a path."""
+    path = scan.get("pattern_path") or (scan.get("pattern_observation") or {}).get("local_path")
+    if not path:
+        return None
+    try:
+        stat = Path(path).stat()
+        return (stat.st_size, stat.st_mtime_ns, stat.st_ino)
+    except (OSError, RuntimeError):
+        return "unavailable"
+
+
 def _usable_fit_payload(payload, measured=None):
     """Reject empty, malformed, or disjoint fits before attaching them to a scan."""
     if not isinstance(payload, dict):
@@ -936,6 +948,7 @@ class UnetTransitionMixin:
             fit_signatures.append((row.get("run_id"), row.get("unet_transition_fit_root"),
                                    row.get("fit_payload"), fit_packet,
                                    row.get("pattern_path"), row.get("pattern_observation"),
+                                   _fit_observation_stamp(row),
                                    _fit_output_stamp(row)))
         signature = digest([scope, signatures, order, descending, gap])
         fit_signature = digest(fit_signatures)

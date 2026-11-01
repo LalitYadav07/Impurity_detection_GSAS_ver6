@@ -123,13 +123,19 @@ def test_empty_watch_does_not_refresh_or_publish_rows():
     app.server.state.flush.assert_not_called()
 
 
-def test_newly_cached_receipt_replaces_previously_empty_compact_fit(tmp_path):
+@pytest.mark.parametrize("same_cache_path", [False, True], ids=["new-cache-path", "reused-cache-path"])
+def test_newly_cached_receipt_replaces_previously_empty_compact_fit(tmp_path, same_cache_path):
     packet = pattern_packet()
     raw = json.dumps(packet).encode()
     descriptor = {"name": "Pattern_observation.json", "sha256": sha256(raw).hexdigest(),
                   "source_gpx_sha256": packet["source_gpx_sha256"], "dataset_id": "curve-hda"}
+    local = tmp_path / "curve.json"
+    if same_cache_path:
+        descriptor["local_path"] = str(local)
     scan = {"run_id": "PG3_1_BANK2", "source_path": str(tmp_path / "raw.gsa"),
             "pattern_observation": descriptor}
+    if same_cache_path:
+        scan["pattern_path"] = str(local)
     engine = SimpleNamespace(evaluate=Mock(return_value={}),
                              load=Mock(return_value=SimpleNamespace(pattern=Pattern.parse(packet))))
     state = SimpleNamespace(unet_transition_order="acquisition", unet_transition_direction="ascending",
@@ -142,14 +148,21 @@ def test_newly_cached_receipt_replaces_previously_empty_compact_fit(tmp_path):
 
     def apply(_report, sources, signature):
         harness._unet_transition_signature = signature
-        rendered.append(UnetTransitionMixin._cached_unet_transition_fit(harness, sources[0])[0])
+        try:
+            rendered.append(UnetTransitionMixin._cached_unet_transition_fit(harness, sources[0])[0])
+        except (OSError, ValueError, TypeError):
+            # The real renderer leaves the compact plot empty and reports the
+            # unavailable receipt until a later refresh can read it.
+            rendered.append(None)
 
     harness._apply_unet_transition_tracking = apply
+    harness._render_unet_transition_tracking = lambda: apply(
+        {}, list(harness._unet_transition_scans.values()), harness._unet_transition_signature)
     UnetTransitionMixin._schedule_unet_transition_tracking(harness, [scan])
-    assert not rendered[-1]["data"]
-    local = tmp_path / "curve.json"
+    assert not (rendered[-1] or {}).get("data")
     local.write_bytes(raw)
     recovered = {**scan, "pattern_path": str(local),
                  "pattern_observation": {**descriptor, "local_path": str(local)}}
     UnetTransitionMixin._schedule_unet_transition_tracking(harness, [recovered])
+    assert rendered[-1] is not None
     assert "Calculated" in {trace["name"] for trace in rendered[-1]["data"]}
