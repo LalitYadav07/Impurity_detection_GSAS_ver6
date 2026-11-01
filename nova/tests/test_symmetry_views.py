@@ -406,3 +406,15 @@ def test_invalid_error_values_are_not_rendered_as_scientific_uncertainties():
     row=dict(status='valid',refined_moments=[dict(label='Fe1',magnitude_esd=float('nan'),
         component_esd={'mx':float('inf'),'my':-1.,'mz':True})])
     assert [value['uncertainty'] for value in parameter_rows(row,view)]==['—']*4
+
+
+def test_known_native_kernel_review_is_visible_even_for_a_converged_moment():
+    row=dict(kind='magnetic',status='valid',
+        magnetic_function_sha256='82076dc0571cad6d6e2882c5f7ced9003f08af94449aa293b0fb4c5c2ae7b9f6',
+        refined_moments=[dict(label='Fe',moment=[0.,0.,3.7],component_esd={'mz':.02})])
+    assert 'Native calculation requires review' in moment_precision_note(row)
+    assert row['status']=='valid'  # Preserve the original immutable receipt.
+    row['magnetic_function_sha256']='a'*64
+    assert moment_precision_note(row)==''
+    row['kind']='structural'
+    assert moment_precision_note(row)==''

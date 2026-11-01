@@ -64,6 +64,7 @@ def _trial_identity(directory,job,metadata=None):
     return dict(id=job['id'],protocol=job['protocol_sha256'],candidate=job['candidate_id'],seed=job['seed_id'],directory=str(directory),
         name=candidate['magnetic_space_group'] or candidate['irrep'] or candidate['id'],bns=candidate.get('bns_number'),
         embedding=dict(basis=candidate['transformation_matrix'],origin=candidate['origin_shift']),kind=p['kind'],source=p.get('acquisition_id') or p['source']['sha256'],source_sha256=p['source']['sha256'],sites=p.get('sites',[]),
+        magnetic_function_sha256=p.get('magnetic_function_sha256'),
         metadata=metadata or {},parent=p['parent_phase'],histogram=p['histogram'],k=p['k'],worker_revision=job.get('package_sha256',''),status='pending',rwp=None,nvars=None,reason='',has_view=False,has_gpx=False,
         adequate_rwp_percent=(p.get('policy') or {}).get('adequate_rwp_percent'))
 
@@ -274,12 +275,16 @@ def moment_precision_note(row):
     combine correlated components, or assign a probability of magnetic order.
     """
     if row.get('kind') != 'magnetic':return ''
+    kernel_note=('Native calculation requires review: this build has verified moment-coordinate '
+        'and symmetry-dependent displacement defects for some magnetic models. '
+        'Moment directions and model ranking remain provisional. '
+        if row.get('magnetic_function_sha256')=='82076dc0571cad6d6e2882c5f7ced9003f08af94449aa293b0fb4c5c2ae7b9f6' else '')
     if unqualified_covariance(row):
-        return ('This refinement did not qualify for convergence and full rank. '
+        return kernel_note+('This refinement did not qualify for convergence and full rank. '
                 'Moment values are retained as a checkpoint; uncertainty estimates '
                 'from this attempt are not qualified and are hidden in the table.')
     estimates=row.get('refined_moments') or []
-    if not estimates:return 'Moment uncertainties are unavailable in this receipt. An audited fit alone does not establish magnetic order.'
+    if not estimates:return kernel_note+'Moment uncertainties are unavailable in this receipt. An audited fit alone does not establish magnetic order.'
     weak=[];missing=[]
     for item in estimates:
         ratios=[];sigmas=item.get('component_esd') or {};values=item.get('moment') or []
@@ -300,7 +305,7 @@ def moment_precision_note(row):
     if weak:messages.append('Weak conditional moment estimates: '+', '.join(weak)+'. No independently varied component exceeds 3 conditional standard uncertainties for these atoms.')
     if missing:messages.append('Moment uncertainty unavailable for '+', '.join(missing)+'.')
     if messages:messages.append('This component screen is not a joint significance test or proof of magnetic order; uncertainties depend on the selected model and fixed nuclear parameters.')
-    return ' '.join(messages)
+    return kernel_note+' '.join(messages)
 
 
 def parameter_rows(row,view):
