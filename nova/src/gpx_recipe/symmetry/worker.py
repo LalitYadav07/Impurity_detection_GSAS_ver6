@@ -22,7 +22,7 @@ class TrialDisposition(ValueError):
     def __init__(self,status,message):super().__init__(message);self.status=status
 
 
-VALIDATED_MAGNETIC_FUNCTIONS={'82076dc0571cad6d6e2882c5f7ced9003f08af94449aa293b0fb4c5c2ae7b9f6'}
+VALIDATED_MAGNETIC_FUNCTIONS={'1573105abefbf382d8f6e79ae4a294f4e6a761061f84385ce50dc850426831ba'}
 
 
 def require_runtime(runtime,declared):

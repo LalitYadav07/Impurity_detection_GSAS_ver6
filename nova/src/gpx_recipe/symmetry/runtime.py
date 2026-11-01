@@ -5,8 +5,10 @@ from pathlib import Path
 import sys
 from .contracts import digest
 
-# GSAS-II 5843 Linux image, including the independently checked BNS database.
-VALIDATED_STACKS={'8f99b251923f6086767dcc6f61fed257a1f815b479e1970a5ffc546b9ae69564'}
+# GSAS-II 5843 Linux image with the hash-pinned, independently checked magnetic
+# geometry/displacement correction. Legacy immutable workers keep their own
+# original identity; they must not be repinned under an existing protocol.
+VALIDATED_STACKS={'bc0e552f3b163884c89d9a9a7114d5e8477d030640edcde5a0e2fdc773660b92'}
 
 
 def native_stack():
