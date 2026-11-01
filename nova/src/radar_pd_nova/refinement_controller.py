@@ -960,6 +960,10 @@ class RefinementMixin(GuidedRefinementMixin):
                         except Exception as exc:s.battery_error=str(exc)
                     if job['source']['experiment']==s.rf_experiment and (s.rf_follow or not s.rf_selected_job or s.rf_selected_job==job['id']):
                         await self._select_refinement_job(job['id'])
+                    elif job['source']['experiment']==s.rf_experiment and job['status']=='completed':
+                        # Series trends follow completed arrivals independently
+                        # of which individual fit the user has pinned.
+                        self._refinement_trend_changed();s.flush()
             lanes=[asyncio.create_task(lane(),name='radar-refinement-lane') for _ in range(getattr(w,'parallel_jobs',1))]
             await asyncio.gather(*lanes)
         except Exception as exc:
@@ -1122,7 +1126,14 @@ class RefinementMixin(GuidedRefinementMixin):
             if s.rf_trend_metric not in options:s.rf_trend_metric='rwp'
             if s.rf_trend_metric in {'rwp','phase_fractions'}:s.rf_trend_display='absolute'
             if s.rf_trend_axis not in {v['value'] for v in s.rf_trend_axes}:s.rf_trend_axis='run_number'
-            s.rf_trend=figure_json(trend_figure(rows,metric=s.rf_trend_metric,x_key=s.rf_trend_axis,display=s.rf_trend_display))
+            figure=trend_figure(rows,metric=s.rf_trend_metric,x_key=s.rf_trend_axis,display=s.rf_trend_display)
+            references=(figure.layout.meta or {}).get('references',[])
+            if references:
+                s.rf_trend_notice+=' Reference by group: '+'; '.join(row['description'] for row in references)+'. '
+                s.rf_trend_notice+=('The reference follows the lowest available scan number and may change when an earlier result arrives.'
+                    if all(row['run_number'] is not None for row in references) else
+                    'The reference follows the available result ordering and may change when earlier results arrive.')
+            s.rf_trend=figure_json(figure)
         except Exception as exc:s.rf_error=str(exc);s.rf_trend=figure_json(empty_figure(str(exc)))
 
     def download_refinement_artifact(self,**_):

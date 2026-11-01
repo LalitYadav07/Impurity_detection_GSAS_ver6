@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import math
+from html import escape
 
 import numpy as np
 import plotly.graph_objects as go
@@ -176,7 +177,7 @@ def histogram_series_label(view, source, key):
 def trend_figure(rows,*,metric='rwp',x_key='run_number',display='absolute'):
     """Rows contain source metadata and native baseline/final views, never guessed conditions."""
     if not rows:return empty_figure('Completed refinements will populate this trend')
-    figure=go.Figure();groups={};changed_domain=False;fixed_inputs=False
+    figure=go.Figure();groups={};changed_domain=False;fixed_inputs=False;references=[]
     for row in sorted(rows,key=lambda r:(r['source'].get('run_number') or 0,r['id'])):groups.setdefault(_group(row),[]).append(row)
     title='Rwp (%)' if metric=='rwp' else 'Modeled crystalline weight (%)' if metric=='phase_fractions' else ''
     for index,group in enumerate(groups.values()):
@@ -222,21 +223,38 @@ def trend_figure(rows,*,metric='rwp',x_key='run_number',display='absolute'):
         valid=[value for value in values if value is not None]
         if not valid:continue
         reference=valid[0]
+        reference_description=None
+        if display in {'relative','difference'}:
+            reference_index=next(i for i,value in enumerate(values) if value is not None)
+            reference_row=group[reference_index]
+            run=reference_row['source'].get('run_number')
+            scan=f'scan {run}' if run is not None else 'result '+str(reference_row['id'])
+            coordinate=x[reference_index]
+            condition=(f'{x_title}: {coordinate:.8g}' if isinstance(coordinate,(int,float))
+                       else f'{x_title}: {coordinate}' if coordinate is not None else f'{x_title}: unavailable')
+            reference_description=f'{label} → {scan}, {condition}, reference {reference:.8g} {unit}'.strip()
+            references.append(dict(group=label,result_id=reference_row['id'],run_number=run,
+                coordinate_key=x_key,coordinate_label=x_title,coordinate_value=coordinate,
+                reference_value=reference,unit=unit,description=reference_description))
         if display=='relative':
             if not parameter or parameter['kind']!='cell' or parameter['parameter'] in {'alpha','beta','gamma'} or reference==0:
                 raise ValueError('Relative percent is available for nonzero cell lengths and volume; choose absolute values or differences for this parameter')
-            values=[100*(v/reference-1) if v is not None else None for v in values];errors=[100*e/abs(reference) if e is not None else None for e in errors];title='Change from first scan (%)'
+            values=[100*(v/reference-1) if v is not None else None for v in values];errors=[100*e/abs(reference) if e is not None else None for e in errors];title='Change from reference (%)'
         elif display=='difference':
             fractional=parameter and parameter['kind']=='atom' and parameter['parameter'] in {'x','y','z'}
-            values=[((v-reference+.5)%1-.5 if fractional else v-reference) if v is not None else None for v in values];title='Change from first scan'+(f' ({unit})' if unit else '')
+            values=[((v-reference+.5)%1-.5 if fractional else v-reference) if v is not None else None for v in values];title='Change from reference'+(f' ({unit})' if unit else '')
             # Reference covariance/cross-scan correlations are unknown; do not manufacture difference errors.
             errors=[None]*len(errors)
         figure.add_trace(go.Scatter(x=x,y=values,mode='lines+markers',name=label,line=dict(color=color,width=1.3),marker=dict(size=6),
             error_y=dict(type='data',array=errors,visible=display=='absolute' and any(e is not None for e in errors)),
-            customdata=[j['id'] for j in group],connectgaps=False))
+            customdata=[j['id'] for j in group],connectgaps=False,
+            **(dict(hovertext=[escape(reference_description)]*len(group),
+                    hovertemplate='%{x}<br>%{y}<br>Reference: %{hovertext}<extra>%{fullData.name}</extra>')
+               if reference_description else {})))
     figure.update_layout(template='plotly_white',height=430,margin=dict(l=75,r=25,t=55,b=60),legend=dict(orientation='h',y=1.18),
         xaxis=dict(title=x_title if groups else 'Scan number',type=x_type if groups else 'linear'),yaxis=dict(title=title),
-        uirevision='refinement-trend/'+metric+'/'+x_key+'/'+display)
+        uirevision='refinement-trend/'+metric+'/'+x_key+'/'+display,
+        meta=dict(references=references))
     if changed_domain:figure.add_annotation(text='Some Rwp pairs use different fit limits or exclusions and are not directly comparable.',xref='paper',yref='paper',x=0,y=1.03,xanchor='left',showarrow=False,font=dict(size=11,color='#9a601b'))
     if fixed_inputs:figure.add_annotation(text='Some plotted values are fixed or unestimated model inputs; they are not independent measurements.',
         xref='paper',yref='paper',x=0,y=1.03,xanchor='left',showarrow=False,font=dict(size=11,color='#9a601b'))

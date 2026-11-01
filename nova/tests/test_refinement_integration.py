@@ -1021,16 +1021,18 @@ def test_running_scan_details_refresh_on_completion_without_following_other_scan
     class State(SimpleNamespace):
         def flush(self):pass
     completed=dict(id='current',source=dict(experiment='exp'),status='completed')
-    queue=iter([completed,None]);seen=[]
+    queue=iter([completed,None]);seen=[];trend_updates=[]
     class App(RefinementMixin):
         def _refinement_sync(self):pass
         def _refinement_checkpoint(self):pass
         async def _select_refinement_job(self,uid):seen.append(uid)
+        def _refinement_trend_changed(self):trend_updates.append(True)
     app=App();app._refinement_workspace=SimpleNamespace(run_next=lambda:next(queue),
         lock=threading.RLock(),state={'jobs':{'current':completed}})
     app.server=SimpleNamespace(state=State(rf_experiment=experiment,rf_follow=follow,rf_selected_job=selected,rf_error=''))
     asyncio.run(app._refinement_pump())
     assert seen==expected
+    assert trend_updates==([True] if selected=='earlier' and not follow and experiment=='exp' else [])
     assert not app.server.state.rf_queue_running and not app.server.state.rf_error
 
 
