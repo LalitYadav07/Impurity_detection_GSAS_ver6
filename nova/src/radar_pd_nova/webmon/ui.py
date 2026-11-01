@@ -22,6 +22,7 @@ class WebmonMixin:
         production=bool(getattr(getattr(self,'service',None),'galaxy_url',None) and getattr(self.service,'history_id',None))
         self._webmon_configured=bool(manifest) or production;self._webmon_config_error=''
         s.webmon_calculation_status='Not started'
+        s.webmon_mapping_bank='';s.webmon_mapping_factor='';s.webmon_mapping_normalization='';s.webmon_mapping_producer='';s.webmon_mapping_evidence='';s.webmon_mapping_accepted=False
         s.webmon_published_sources=[];s.webmon_published_source='';s.webmon_source_notice='Select a published GPX; producer bank/export/normalization mapping and native model preparation are checked separately.'
         self._webmon_stream=None;self._webmon_queue=None
         s.webmon_stream_active=False;s.webmon_stream_message='Automatic updates are off.'
@@ -118,6 +119,16 @@ class WebmonMixin:
                             v.VSelect(label='Published source GPX',v_model=('webmon_published_source',),items=('webmon_published_sources',),update_modelValue=(self.webmon_published_source_changed,'[$event]'),density='compact')
                             html.P('{{ webmon_source_notice }}')
                             v.VBtn('Inspect selected GPX in Refinement',click=self.webmon_open_published_source,disabled=('!webmon_published_source || webmon_busy',),variant='text')
+                            with html.Details():
+                                html.Summary('Reviewed producer mapping')
+                                html.P('Use this only after checking the live producer calibration. The GPX instrument DIFC is not evidence for the live export conversion. Saving records your mapping; native preparation and model review are still required.')
+                                v.VTextField(label='Physical bank',v_model=('webmon_mapping_bank',),density='compact')
+                                v.VTextField(label='Export TOF/d factor (µs/Å)',v_model=('webmon_mapping_factor',),density='compact')
+                                v.VTextField(label='Normalization convention',v_model=('webmon_mapping_normalization',),density='compact')
+                                v.VTextField(label='Producer configuration SHA-256',v_model=('webmon_mapping_producer',),density='compact')
+                                v.VTextField(label='Where this mapping was verified',v_model=('webmon_mapping_evidence',),density='compact')
+                                v.VCheckbox(label='I checked this bank, conversion and normalization against the producer configuration',v_model=('webmon_mapping_accepted',),density='compact')
+                                v.VBtn('Save reviewed mapping',click=self.webmon_save_mapping,disabled=('!webmon_published_source || !webmon_mapping_accepted || webmon_busy',),variant='outlined')
                         v.VSelect(label='Starting nuclear checkpoint',v_model=('webmon_checkpoint',),items=('webmon_checkpoints',),update_modelValue=(self.webmon_checkpoint_changed,'[$event]'),disabled=('webmon_busy',),density='compact')
                         html.P('{{ webmon_reference }}')
                         v.VDataTable(headers=("[{title:'Input',key:'label'},{title:'Reviewed value',key:'value'}]",),items=('webmon_reference_rows',),items_per_page=-1,hide_default_footer=True,density='compact')
@@ -368,7 +379,27 @@ class WebmonMixin:
         s=self.server.state;s.webmon_published_source=value
         source=getattr(self,'_webmon_published_catalog',{}).get(value)
         if source:
+            s.webmon_mapping_bank=str(source.get('bank') or '');s.webmon_mapping_accepted=False
             s.webmon_source_notice=f"Selected {source['scan_label']}, {source['sample_label']}, bank {source.get('bank') or 'unresolved'}. The GPX's instrument calibration does not establish the live export conversion. Producer mapping and native preparation are still required."
+        s.flush()
+
+    def webmon_save_mapping(self,**_):
+        from .mapping import reviewed_mapping
+        from gpx_recipe.live.io import atomic_json
+        s=self.server.state
+        try:
+            source=getattr(self,'_webmon_published_catalog',{}).get(s.webmon_published_source)
+            if not source:raise ValueError('Select a published source GPX first')
+            _,receipt,_=self._webmon.capture(s.powgen_ipts,s.webmon_run)
+            mapping=reviewed_mapping(source=source,receipt=receipt,bank=s.webmon_mapping_bank,
+                export_difc=s.webmon_mapping_factor,normalization=s.webmon_mapping_normalization,
+                producer_sha256=s.webmon_mapping_producer,evidence=s.webmon_mapping_evidence,
+                accepted=s.webmon_mapping_accepted)
+            name=hashlib.sha256(json.dumps(mapping,sort_keys=True).encode()).hexdigest()
+            path=Path(self._webmon.config['jobs'])/'mappings'/(name+'.json');atomic_json(path,mapping)
+            self._webmon_reviewed_mapping=mapping
+            s.webmon_source_notice='Reviewed producer mapping saved. Native source preparation and a reviewed magnetic catalogue are still required; no fit or counting decision was launched.'
+        except Exception as exc:s.webmon_source_notice=str(exc)
         s.flush()
 
     def webmon_open_published_source(self,**_):
