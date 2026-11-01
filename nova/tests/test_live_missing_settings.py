@@ -308,4 +308,70 @@ def test_automatic_recovery_cannot_relabel_review_under_different_settings(legac
     assert same.restore_latest_state()
     assert same.restore_settings_review == controller.restore_settings_review
     different = type(controller)(legacy.service, replace(controller.settings, max_active_jobs=1))
-    assert not different.restore_latest_state()
+    with pytest.raises(ValueError, match="matching saved watch needs review"):
+        different.restore_latest_state()
+    assert different.restore_resume_blocked_reasons
+    assert lifecycle_sha256(different) == lifecycle_sha256(controller)
+
+
+@pytest.mark.parametrize("declaration", [
+    {"resume_blocked_reasons": ["Independent profile qualification remains unresolved"]},
+    {"missing_settings": ["max_active_jobs"]},
+    {"resume_blocked_reasons": "malformed restriction"},
+])
+def test_automatic_restore_retains_blocked_watch_instead_of_fresh_fallback(legacy, declaration):
+    open_review(legacy)
+    asyncio.run(legacy.confirm_missing_live_settings())
+    approved = legacy._powgen_controller
+    payload = json.loads(approved.capture_checkpoint().payload_json)
+    payload["watch"].update(declaration)
+    legacy.service.load_json_document = lambda _: deepcopy(payload)
+    restored = type(approved)(legacy.service, approved.settings)
+    with pytest.raises(ValueError, match="Restore a saved Live watch"):
+        restored.restore_latest_state()
+    assert restored.restore_resume_blocked_reasons and restored.restore_requires_explicit_inspection
+    assert lifecycle_sha256(restored) == lifecycle_sha256(approved)
+    assert restored.due_submissions() == []
+    with pytest.raises(ValueError, match="blocked from new analyses"):
+        restored._submit_live_snapshot(next(iter(restored.state.discovered.values())), object())
+
+
+def test_start_and_resume_cannot_fall_through_a_matching_blocked_checkpoint(legacy):
+    open_review(legacy)
+    asyncio.run(legacy.confirm_missing_live_settings())
+    approved = legacy._powgen_controller
+    payload = json.loads(approved.capture_checkpoint().payload_json)
+    payload["watch"]["resume_blocked_reasons"] = ["Independent source restriction"]
+    legacy.service.load_json_document = lambda _: deepcopy(payload)
+    legacy._powgen_controller = None
+    legacy._powgen_settings_signature = None
+    legacy.server.state.live_restored_checkpoint_id = ""
+    legacy._powgen_sample_index = lambda _: None
+    async def settings():
+        return approved.settings, legacy.service.config.model_copy(deep=True)
+    async def forbidden():
+        raise AssertionError("A blocked checkpoint cannot start a monitor loop")
+    legacy._prepare_live_settings = settings
+    legacy._powgen_monitor_loop = forbidden
+    asyncio.run(legacy.start_powgen_monitoring())
+    assert not legacy.server.state.powgen_monitoring
+    assert "Independent source restriction" in legacy.server.state.error_message
+    assert lifecycle_sha256(legacy._powgen_controller) == lifecycle_sha256(approved)
+    asyncio.run(legacy.start_powgen_monitoring())
+    asyncio.run(legacy.resume_existing_powgen_monitoring())
+    assert not legacy.server.state.powgen_monitoring and legacy._powgen_monitor_task is None
+
+
+def test_invalid_run_map_in_a_matching_restricted_checkpoint_does_not_fall_back(legacy):
+    open_review(legacy)
+    asyncio.run(legacy.confirm_missing_live_settings())
+    approved = legacy._powgen_controller
+    payload = json.loads(approved.capture_checkpoint().payload_json)
+    payload["watch"]["resume_blocked_reasons"] = ["Independent source restriction"]
+    payload["completed"] = {"wrong-key": next(iter(payload["completed"].values()))}
+    legacy.service.load_json_document = lambda _: deepcopy(payload)
+    restored = type(approved)(legacy.service, approved.settings)
+    with pytest.raises(ValueError, match="before any new analysis"):
+        restored.restore_latest_state()
+    assert restored.restore_resume_blocked_reasons
+    assert restored.due_submissions() == []

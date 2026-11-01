@@ -39,6 +39,8 @@ def lifecycle_sha256(controller):
 
 
 def reviewable_missing_settings(controller):
+    if getattr(controller, "restore_requires_explicit_inspection", False):
+        raise ValueError("Inspect this exact checkpoint with Restore a saved Live watch before reviewing missing settings")
     missing = tuple(getattr(controller, "restore_missing_settings", ()))
     if not missing:
         raise ValueError("This watch has no missing monitor settings to review")

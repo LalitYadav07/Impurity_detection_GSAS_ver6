@@ -566,6 +566,8 @@ class PowgenWatchController:
             raise RetrySourceChanged('The Live session or retry changed while checking; no fresh analysis was submitted')
 
     def _submit_live_snapshot(self, run, snapshot):
+        if getattr(self, "restore_resume_blocked_reasons", ()):
+            raise ValueError("This saved watch is blocked from new analyses until its saved restrictions are reviewed")
         if not run.scan_metadata.get('retry_source_proof'):
             return self.service.submit_snapshot(snapshot)
         return self.service.submit_snapshot(snapshot,before_submit=lambda:self._validate_retry_submission(run))
@@ -587,6 +589,7 @@ class PowgenWatchController:
             dataset_id = str(row.get("id") or "")
             if not dataset_id:
                 continue
+            restricted_match = False
             try:
                 payload = self.service.load_json_document(dataset_id)
                 watch = payload.get("watch") if isinstance(payload, Mapping) else None
@@ -638,14 +641,52 @@ class PowgenWatchController:
                     stored_samples = watch.get("selected_sample_ids")
                     if (tuple(sorted(stored_samples)) if stored_samples is not None else None) != self.settings.selected_sample_ids:
                         continue
-                    if watch.get("continuation_review"):
-                        from .live_settings_review import validate_continuation_receipt
-                        validate_continuation_receipt(watch["continuation_review"], self.settings)
+                    restricted_match = bool((watch.get("resume_blocked_reasons") or watch.get("missing_settings"))
+                        and payload.get("history_id") == self.settings.history_id
+                        and payload.get("instrument", "PG3") == self.settings.instrument)
                 candidate = WatchState.from_dict(payload)
                 if candidate.history_id != self.settings.history_id or candidate.instrument != self.settings.instrument:
                     continue
-            except (OSError, TypeError, ValueError):
+            except (OSError, TypeError, ValueError) as exc:
+                if restricted_match:
+                    self.restore_checkpoint_dataset_id = dataset_id
+                    self.restore_requires_explicit_inspection = True
+                    self.restore_resume_blocked_reasons = ("The matching restricted checkpoint could not be validated",)
+                    raise ValueError("The matching saved watch needs review before any new analysis. "
+                        "Use Restore a saved Live watch to inspect its invalid checkpoint.") from exc
                 continue
+            # A matching saved watch with unresolved restrictions is not an
+            # absent checkpoint. Returning False would let Start make a fresh
+            # controller and duplicate its work. Retain it read-only and stop.
+            blocked = []
+            missing = ()
+            if isinstance(watch, Mapping):
+                declared = watch.get("resume_blocked_reasons", [])
+                if not isinstance(declared, list) or any(not isinstance(v, str) or not v.strip() for v in declared):
+                    blocked.append("Invalid saved resume restriction")
+                else:
+                    blocked.extend(declared)
+                declared_missing = watch.get("missing_settings", [])
+                if not isinstance(declared_missing, list) or any(not isinstance(v, str) or not v.strip() for v in declared_missing):
+                    blocked.append("Invalid saved missing-settings declaration")
+                elif declared_missing:
+                    missing = tuple(declared_missing)
+                    blocked.append("Original settings are missing: " + ", ".join(missing))
+                if watch.get("continuation_review"):
+                    from .live_settings_review import validate_continuation_receipt
+                    try:
+                        validate_continuation_receipt(watch["continuation_review"], self.settings)
+                    except (TypeError, ValueError) as exc:
+                        blocked.append(str(exc))
+            if blocked:
+                self._adopt_restored_state(candidate, dataset_id, hydrate_metadata=False)
+                self.restore_checkpoint_dataset_id = dataset_id
+                self.restore_missing_settings = missing
+                self.restore_resume_blocked_reasons = tuple(dict.fromkeys(blocked))
+                self.restore_requires_explicit_inspection = True
+                self._last_persisted_payload_sha256 = sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+                raise ValueError("The matching saved watch needs review: " + "; ".join(self.restore_resume_blocked_reasons)
+                    + ". Use Restore a saved Live watch to inspect this checkpoint; monitoring remains stopped.")
             if isinstance(watch, Mapping) and watch.get("manual_setup_signature"):
                 self._manual_setup_signature = tuple(watch["manual_setup_signature"])
             restored = candidate
@@ -964,7 +1005,7 @@ class PowgenWatchController:
     def due_submissions(self, *, reserved_run_ids: set[str] | None = None) -> list[WatchedRun]:
         """Return ready runs without exceeding the active Galaxy-job cap."""
 
-        if self.interrupted_retries_pending:
+        if self.interrupted_retries_pending or getattr(self, "restore_resume_blocked_reasons", ()):
             return []
         reserved = set(reserved_run_ids or ())
         available = max(0, self.settings.max_active_jobs - len(self.state.submitted) - len(reserved))
