@@ -571,12 +571,17 @@ def _history_figure(rows, scans):
 
 class UnetTransitionMixin:
     def _init_unet_transition_tracking(self):
+        previous_generation = getattr(self, "_unet_transition_generation", -1)
+        previous_task = getattr(self, "_unet_transition_task", None)
+        if previous_task is not None and not previous_task.done():
+            previous_task.cancel()
+        self._optional_unet_sources = ([], [])
         self._unet_transition_engine = UnetTransitionEngine()
         self._unet_transition_report = {"records": [], "groups": []}
         self._unet_transition_scans = {}
         self._unet_transition_signature = None
         self._unet_transition_scope = None
-        self._unet_transition_generation = 0
+        self._unet_transition_generation = previous_generation + 1
         self._unet_transition_request = None
         self._unet_transition_task = None
         self._unet_transition_sources_cache = []
@@ -589,6 +594,7 @@ class UnetTransitionMixin:
         self._unet_transition_fit_signature = None
         state = self.server.state
         for name, value in {
+            "transition_evidence_mode": "indicators",
             "unet_transition_series": "", "unet_transition_series_options": [],
             "unet_transition_selected": "", "unet_transition_scans": [],
             "unet_transition_scan_cards": [], "unet_transition_series_summary": "No measured series yet",
@@ -674,6 +680,23 @@ class UnetTransitionMixin:
             "unet_transition_model_version": self._unet_transition_engine.predictor.metadata["version"],
         }.items():
             setattr(state, name, value)
+
+    def _optional_unet_view_changed(self, **_):
+        if not hasattr(self, "_unet_transition_engine"):
+            return
+        state = self.server.state
+        active = (state.transition_evidence_mode == "unet"
+                  and state.workspace_view == "experiment"
+                  and state.experiment_result_view == "transitions")
+        if not active:
+            if self._unet_transition_request is not None:
+                self._unet_transition_generation += 1
+                self._unet_transition_request = None
+            state.unet_transition_loading = False
+            state.unet_transition_loading_message = ""
+            return
+        scans, pending = self._optional_unet_sources
+        self._refresh_unet_transition_tracking(scans, pending)
 
     def _unet_transition_tracking_dashboard(self):
         with html.Section(classes="radar-result-card radar-transition-workspace my-3"):
@@ -954,6 +977,7 @@ class UnetTransitionMixin:
 
     async def _run_unet_transition_tracking(self):
         loop = asyncio.get_running_loop()
+        owner = asyncio.current_task()
         try:
             while self._unet_transition_request is not None:
                 signature, sources, generation, engine, order, descending, gap = self._unet_transition_request
@@ -987,10 +1011,13 @@ class UnetTransitionMixin:
                     continue
                 break
         finally:
-            self._unet_transition_task = None
-            self.server.state.unet_transition_loading = False
-            self.server.state.unet_transition_loading_message = ""
-            self.server.state.flush()
+            # A reset can start a fresh task before the cancelled task reaches
+            # finally. Only the current owner may clear the new task's state.
+            if self._unet_transition_task is owner:
+                self._unet_transition_task = None
+                self.server.state.unet_transition_loading = False
+                self.server.state.unet_transition_loading_message = ""
+                self.server.state.flush()
 
     def _set_unet_transition_progress(self, signature, done, total, label):
         if (self._unet_transition_request is None or

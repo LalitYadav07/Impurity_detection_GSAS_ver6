@@ -15,10 +15,8 @@ from unittest.mock import Mock
 from radar_pd_nova.app import RadarPdNovaApp as BaseApp
 from radar_pd_nova.unet_transition_ui import UnetTransitionMixin
 
-class RadarPdNovaApp(UnetTransitionMixin, BaseApp):
-    def __init__(self):
-        super().__init__()
-        self._init_unet_transition_tracking()
+RadarPdNovaApp = BaseApp
+
 from radar_pd_nova.unet_transition_ui import (
     _condition_label, _display_scale, _fit_figure_for_scan, _map_display_values,
     _map_grid, _matched_display, _score_label, _series_color_limits,
@@ -49,6 +47,8 @@ def test_optional_view_preserves_existing_indicator_policy():
     assert app._transition_engine is not app._unet_transition_engine
     assert app.server.state.unet_transition_model_version == CHECKPOINT_SHA256[:16]
     assert "Boundary indicators" in app.layout.html
+    assert "U-Net local features (experimental)" in app.layout.html
+    assert "U-Net feature review" in app.layout.html
 
 
 def test_scoped_series_and_selected_pair_overlay_use_model_events():
@@ -430,3 +430,73 @@ def test_long_series_map_uses_bounded_window_around_selected_scan():
     assert app._unet_transition_map_ids == [row["run_id"] for row in rows[:30]]
     assert state.unet_transition_map_scroll_label == "Rows 1–30 of 55"
     assert state.unet_transition_map_scroll_compact == "1–30 / 55"
+
+
+def test_app_computes_unet_only_when_optional_view_is_visible(monkeypatch):
+    app = RadarPdNovaApp()
+    rows = scans()[:3]
+    from radar_pd_nova.unet_transition_engine import UnetTransitionEngine
+    calls = []
+    evaluate = UnetTransitionEngine.evaluate
+    def observed(self, *args, **kwargs):
+        calls.append(1)
+        return evaluate(self, *args, **kwargs)
+    monkeypatch.setattr(UnetTransitionEngine, "evaluate", observed)
+    app._refresh_transition_tracking(rows)
+    assert app.server.state.transition_evidence_mode == "indicators"
+    assert len(calls) == 0
+    state = app.server.state
+    state.transition_evidence_mode = "unet"
+    app._optional_unet_view_changed()
+    assert len(calls) == 0
+    state.workspace_view = "experiment"
+    state.experiment_result_view = "transitions"
+    app._optional_unet_view_changed()
+    assert len(calls) == 1
+    assert app._unet_transition_report["records"]
+    state.transition_evidence_mode = "indicators"
+    app._optional_unet_view_changed()
+    app._refresh_transition_tracking(rows)
+    assert len(calls) == 1
+    assert app._transition_report["records"]
+
+
+def test_reset_discards_optional_observations_and_restores_default():
+    app = RadarPdNovaApp()
+    app._optional_unet_sources = (scans(), [])
+    app.server.state.transition_evidence_mode = "unet"
+    generation = app._unet_transition_generation
+    app._init_unet_transition_tracking()
+    assert app._optional_unet_sources == ([], [])
+    assert app._unet_transition_generation > generation
+    assert app.server.state.transition_evidence_mode == "indicators"
+    assert not app._unet_transition_report["records"]
+
+
+def test_cancelled_old_worker_cannot_clear_new_session_loading_state():
+    import threading
+    async def run():
+        app = RadarPdNovaApp()
+        started, release = threading.Event(), threading.Event()
+        class Engine:
+            def evaluate(self, *_args, **_kwargs):
+                started.set()
+                release.wait(2)
+                return {"records": [], "groups": []}
+        generation = app._unet_transition_generation
+        app._unet_transition_request = ("old", [], generation, Engine(), "acquired", False, 1)
+        old = asyncio.create_task(app._run_unet_transition_tracking())
+        app._unet_transition_task = old
+        assert await asyncio.to_thread(started.wait, 2)
+        try:
+            app._init_unet_transition_tracking()
+            replacement = asyncio.get_running_loop().create_future()
+            app._unet_transition_task = replacement
+            app.server.state.unet_transition_loading = True
+            await asyncio.gather(old, return_exceptions=True)
+            assert app._unet_transition_task is replacement
+            assert app.server.state.unet_transition_loading
+            replacement.cancel()
+        finally:
+            release.set()
+    asyncio.run(run())

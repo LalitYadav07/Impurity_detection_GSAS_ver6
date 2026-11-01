@@ -32,6 +32,7 @@ from .live_setup import LiveSetupMixin
 from .live_assistant_controller import LiveAssistantMixin
 from .library_setup import LIBRARY_FIELDS, LibraryDraft
 from .post_analysis_ui import PostAnalysisMixin
+from .unet_transition_ui import UnetTransitionMixin
 from .refinement_controller import RefinementMixin
 from .symmetry_controller import SymmetryMixin
 from .refinement_ui import refinement_dashboard
@@ -254,7 +255,7 @@ def _powgen_retry_time(value: Any) -> datetime | None:
     return retry_at.astimezone(timezone.utc)
 
 
-class RadarPdNovaApp(BatteryMixin, LiveAssistantMixin, LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, RefinementMixin, SymmetryMixin, ThemedApp):
+class RadarPdNovaApp(BatteryMixin, UnetTransitionMixin, LiveAssistantMixin, LiveSetupMixin, SetupEditorMixin, PostAnalysisMixin, RefinementMixin, SymmetryMixin, ThemedApp):
     """Interactive orchestration and results workspace backed by Galaxy."""
 
     def __init__(self) -> None:
@@ -428,6 +429,8 @@ class RadarPdNovaApp(BatteryMixin, LiveAssistantMixin, LiveSetupMixin, SetupEdit
         state.rapid_show_family_variants = True
         state.rapid_final_polish_enabled = False
         self._init_post_analysis()
+        self._init_unet_transition_tracking()
+        state.change("workspace_view", "experiment_result_view", "transition_evidence_mode")(self._optional_unet_view_changed)
         self._init_refinement()
         self._init_symmetry()
         self._init_battery()
@@ -1056,6 +1059,7 @@ class RadarPdNovaApp(BatteryMixin, LiveAssistantMixin, LiveSetupMixin, SetupEdit
         state.post_analysis_observation_rows = []
         state.post_analysis_status = "Waiting for completed scans"
         self._init_transition_tracking()
+        self._init_unet_transition_tracking()
         for task in tuple(self._refinement_tasks):
             if not task.done():
                 task.cancel()
@@ -2671,6 +2675,7 @@ class RadarPdNovaApp(BatteryMixin, LiveAssistantMixin, LiveSetupMixin, SetupEdit
                 refinement_dashboard(self)
         self._post_analysis_inspection_dialogs()
         self._transition_tracking_dialog()
+        self._unet_transition_tracking_dialog()
 
     def _powgen_experiment_dashboard(self) -> None:
         with html.Div(classes="radar-section-heading"):
@@ -2717,7 +2722,17 @@ class RadarPdNovaApp(BatteryMixin, LiveAssistantMixin, LiveSetupMixin, SetupEdit
         with html.Div(v_show="experiment_result_view === 'results'", classes="radar-experiment-results"):
             self._experiment_results_dashboard()
         with html.Div(v_if="workspace_view === 'experiment' && experiment_result_view === 'transitions'"):
-            self._transition_tracking_dashboard()
+            vuetify.VSelect(
+                label="Transition evidence", v_model=("transition_evidence_mode",),
+                items=("[{title:'Boundary indicators',value:'indicators'},{title:'U-Net local features (experimental)',value:'unet'}]",),
+                density="compact", variant="outlined", hide_details=True,
+                classes="mt-3 mb-2",
+            )
+            with html.Div(v_if="transition_evidence_mode === 'indicators'"):
+                self._transition_tracking_dashboard()
+            with html.Div(v_if="transition_evidence_mode === 'unet'"):
+                html.P("Local feature suggestions supplement the boundary indicators. They do not change pattern groups or identify the physical cause of a transition.", classes="radar-section-help")
+                self._unet_transition_tracking_dashboard()
         with html.Section(v_if="experiment_result_view !== 'refinement' && powgen_rows.some(row => row.status !== 'Completed')", classes="radar-result-card radar-experiment-queue-card"):
             with html.Div(classes="radar-card-heading"):
                 with html.Div():
@@ -4829,6 +4844,13 @@ class RadarPdNovaApp(BatteryMixin, LiveAssistantMixin, LiveSetupMixin, SetupEdit
             state.selected_run_loading = False
             self._opening_run_uid = None
             state.flush()
+
+    def _refresh_transition_tracking(self, scans, pending=()):
+        """Keep boundary tracking authoritative; U-Net runs only on request."""
+        super()._refresh_transition_tracking(scans, pending)
+        self._optional_unet_sources = (list(scans), list(pending))
+        if hasattr(self, "_unet_transition_engine"):
+            self._optional_unet_view_changed()
 
     def show_powgen_dashboard(self, **_: Any) -> None:
         self.server.state.workspace_view = "experiment"
@@ -8045,6 +8067,90 @@ class RadarPdNovaApp(BatteryMixin, LiveAssistantMixin, LiveSetupMixin, SetupEdit
         .radar-post-controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr)); gap: 12px; }
         .radar-experiment-result-tabs { border-bottom: 1px solid var(--radar-line); }
         .radar-experiment-result-tabs .v-tab, .radar-scan-evidence-tabs .v-tab { text-transform: none; letter-spacing: 0; }
+        .radar-transition-workspace { padding: 22px; scroll-margin-top: 120px; }
+        .radar-tracker-header, .radar-tracker-pair-heading, .radar-tracker-detail-heading { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; }
+        .radar-tracker-header { padding-bottom:16px; border-bottom:1px solid var(--radar-line); }
+        .radar-tracker-header h3 { margin:2px 0 5px; color:var(--radar-brand-900); font-size:23px; }
+        .radar-tracker-header p, .radar-tracker-pair-heading p, .radar-tracker-detail-heading p { margin:0; }
+        .radar-tracker-header-action { display:flex; align-items:center; gap:10px; flex-wrap:wrap; justify-content:flex-end; }
+        .radar-tracker-eyebrow { color:#58756a; font-size:10px; font-weight:800; letter-spacing:.11em; }
+        .radar-tracker-candidate-badge, .radar-tracker-attention, .radar-tracker-count { display:inline-flex; align-items:center; justify-content:center; border-radius:999px; padding:5px 11px; font-size:12px; font-weight:750; white-space:nowrap; }
+        .radar-tracker-candidate-badge { background:#eaf3ee; color:#15543c; }
+        .radar-tracker-attention.attention, .radar-tracker-scan-result.attention { background:#f9e9ec; color:#8b273d; }
+        .radar-tracker-attention.clear, .radar-tracker-scan-result.clear { background:#eaf5ee; color:#216943; }
+        .radar-tracker-attention.baseline, .radar-tracker-scan-result.baseline { background:#eef1f0; color:#485b54; }
+        .radar-tracker-attention.pending, .radar-tracker-scan-result.pending { background:#fff2d8; color:#805717; }
+        .radar-tracker-selectors { display:grid; grid-template-columns:minmax(230px,1.4fr) minmax(210px,1fr) auto; align-items:center; gap:12px; margin:18px 0 8px; }
+        .radar-tracker-order-controls { display:grid; grid-template-columns:repeat(3,minmax(170px,1fr)); gap:10px; margin:10px 0 14px; }
+        .radar-tracker-order-controls > .v-input { min-width:0; }
+        .radar-tracker-map-controls { display:grid; grid-template-columns:minmax(340px,2.1fr) minmax(175px,1fr) minmax(120px,.65fr) minmax(120px,.65fr); align-items:start; gap:10px; margin:16px 0 8px; }
+        .radar-tracker-map-controls > .v-input { min-width:0; }
+        .radar-tracker-overlay-select .v-field__input { max-height:96px; overflow-y:auto; }
+        .radar-tracker-map-actions { display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; margin:0 0 7px; }
+        .radar-tracker-map-frame { min-width:0; width:100%; border:1px solid var(--radar-line); border-radius:7px; background:#fff; overflow:hidden; }
+        .radar-tracker-map-shell { display:grid; grid-template-columns:76px minmax(0,1fr); align-items:start; gap:10px; }
+        .radar-tracker-map-scroll { box-sizing:border-box; display:flex; flex-direction:column; align-items:center; gap:5px; height:690px; min-width:0; padding:225px 3px 8px; border:1px solid var(--radar-line); border-radius:7px; background:#f8faf8; }
+        .radar-tracker-map-scroll .v-slider { flex:1 1 auto; min-height:0; width:42px; }
+        .radar-tracker-map-scroll .v-slider .v-label { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
+        .radar-tracker-map-scroll > span { width:100%; color:var(--radar-muted); font-size:10px; line-height:1.2; text-align:center; overflow-wrap:anywhere; }
+        .radar-tracker-fit-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin-top:18px; }
+        .radar-tracker-fit-card { min-width:0; border:1px solid var(--radar-line); border-radius:8px; padding:8px 10px; background:#fff; }
+        .radar-tracker-fit-card h4 { margin:3px 5px 4px; color:var(--radar-brand-900); font-size:14px; }
+        .radar-tracker-fit-card p { margin:2px 6px 5px; }
+        .radar-tracker-map-caption { margin:8px 0 0; }
+        .radar-tracker-selected-inline { margin:0 0 8px; padding:6px 9px; border-left:3px solid #15543c; background:#edf5ef; color:#214333; font-size:12px; }
+        .radar-tracker-scan-arrows, .radar-tracker-feature-arrows { display:flex; flex-wrap:wrap; gap:7px; }
+        .radar-tracker-series-summary { margin:0 0 9px; color:var(--radar-muted); font-size:12px; }
+        .radar-tracker-scan-rail { display:flex; gap:8px; overflow-x:auto; padding:2px 1px 13px; scrollbar-color:#aabeb3 #edf3ef; }
+        .radar-tracker-scan-card { position:relative; display:flex; flex:0 0 158px; flex-direction:column; align-items:flex-start; min-height:96px; padding:11px 12px; border:1px solid #d6e3da; border-radius:9px; background:#f9fbf9; color:var(--radar-ink); text-align:left; cursor:pointer; }
+        .radar-tracker-scan-card:hover { border-color:#6eaa89; background:#f1f8f3; }
+        .radar-tracker-scan-card.is-current { border:2px solid #15543c; background:#eaf5ed; padding:10px 11px; }
+        .radar-tracker-scan-card strong { margin:4px 0 2px; font-size:13px; }
+        .radar-tracker-scan-ordinal { color:#6a8175; font-size:10px; font-weight:800; letter-spacing:.08em; }
+        .radar-tracker-scan-condition { color:#52665d; font-size:11px; }
+        .radar-tracker-scan-result { margin-top:auto; border-radius:4px; padding:2px 6px; font-size:10px; font-weight:750; }
+        .radar-tracker-pair-heading { align-items:center; padding:17px 0 15px; border-top:1px solid var(--radar-line); }
+        .radar-tracker-pair-heading h4 { margin:3px 0 5px; color:var(--radar-brand-900); font-size:18px; }
+        .radar-tracker-notice { margin:0 0 12px; padding:8px 11px; border-left:3px solid #b17827; background:#fff8ea; color:#6f4d16; font-size:12px; }
+        .radar-tracker-main-grid { display:grid; grid-template-columns:minmax(0,1fr) minmax(270px,320px); align-items:start; gap:16px; }
+        .radar-tracker-overview, .radar-tracker-feature-panel, .radar-tracker-detail { min-width:0; border:1px solid var(--radar-line); border-radius:9px; background:#fff; }
+        .radar-tracker-overview { padding:14px 12px 8px; }
+        .radar-tracker-feature-panel { padding:14px; }
+        .radar-tracker-panel-title { display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:8px; }
+        .radar-tracker-panel-title h4 { margin:0; color:var(--radar-brand-900); font-size:15px; }
+        .radar-tracker-panel-title .v-input { flex:0 1 220px; }
+        .radar-tracker-overview > p { margin:0 0 6px; font-size:11px; }
+        .radar-tracker-plot-actions { display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap; }
+        .radar-tracker-count { background:#edf3ef; color:#15543c; min-width:30px; padding:3px 8px; }
+        .radar-tracker-feature-panel > .v-input { margin:7px 0 12px; }
+        .radar-tracker-score-note { margin:0 0 9px; color:#65786d; font-size:11px; }
+        .radar-tracker-feature-list { display:grid; gap:6px; max-height:370px; overflow-y:auto; padding-right:3px; }
+        .radar-tracker-feature { display:grid; grid-template-columns:24px minmax(0,1fr) auto; align-items:center; gap:8px; min-height:54px; padding:7px 9px; border:1px solid #e1e8e3; border-left:4px solid #778a80; border-radius:6px; background:#fff; text-align:left; color:var(--radar-ink); cursor:pointer; }
+        .radar-tracker-feature:hover { background:#f5f8f6; border-color:#aabfb2; }
+        .radar-tracker-feature.is-selected { background:#eaf4ed; outline:2px solid #15543c; outline-offset:-2px; }
+        .radar-tracker-feature.emergence { border-left-color:#137a55; }
+        .radar-tracker-feature.disappearance { border-left-color:#9d3747; }
+        .radar-tracker-feature.intensity { border-left-color:#925a12; }
+        .radar-tracker-feature.position { border-left-color:#315fa4; }
+        .radar-tracker-feature.shape { border-left-color:#4b6b9c; }
+        .radar-tracker-feature.background { border-left-color:#73634c; }
+        .radar-tracker-feature-number { color:#637a6f; font-size:11px; font-weight:800; }
+        .radar-tracker-feature-copy { display:flex; flex-direction:column; min-width:0; }
+        .radar-tracker-feature-copy strong { font-size:12px; line-height:1.25; }
+        .radar-tracker-feature-copy small { color:#5d7065; font-size:10px; }
+        .radar-tracker-feature-score { color:#425f50; font-size:11px; font-variant-numeric:tabular-nums; }
+        .radar-tracker-empty { margin:14px 0; color:var(--radar-muted); font-size:12px; }
+        .radar-tracker-detail { margin-top:16px; padding:15px 12px 6px; }
+        .radar-tracker-detail-heading { align-items:center; padding:0 5px 8px; }
+        .radar-tracker-detail-heading h4 { margin:3px 0 4px; color:var(--radar-brand-900); font-size:17px; }
+        .radar-tracker-detail > p { margin:3px 5px 0; font-size:11px; }
+        .radar-tracker-method-note { color:#61766a; }
+        .radar-tracker-provenance { margin-top:16px; padding:11px 13px; border:1px solid var(--radar-line); border-radius:8px; background:#f8faf8; font-size:12px; }
+        .radar-tracker-provenance summary { color:var(--radar-brand-900); font-weight:750; cursor:pointer; }
+        .radar-tracker-provenance p { margin:9px 0 0; overflow-wrap:anywhere; }
+        .radar-tracker-scan-card:focus-visible, .radar-tracker-feature:focus-visible { outline:3px solid #1b7151; outline-offset:2px; }
+        @media(max-width:1100px) { .radar-tracker-main-grid { grid-template-columns:minmax(0,1fr); } .radar-tracker-feature-list { max-height:250px; } .radar-tracker-map-controls { grid-template-columns:repeat(2,minmax(0,1fr)); } .radar-tracker-fit-grid { grid-template-columns:minmax(0,1fr); } }
+        @media(max-width:760px) { .radar-transition-workspace { padding:14px; } .radar-tracker-header,.radar-tracker-pair-heading,.radar-tracker-detail-heading { flex-wrap:wrap; } .radar-tracker-selectors,.radar-tracker-order-controls,.radar-tracker-map-controls { grid-template-columns:minmax(0,1fr); } .radar-tracker-map-shell { grid-template-columns:58px minmax(0,1fr); gap:5px; } .radar-tracker-map-scroll { padding-left:1px; padding-right:1px; } .radar-tracker-map-scroll .v-btn { min-width:0; padding:0 2px; font-size:10px; } .radar-tracker-panel-title { flex-wrap:wrap; } .radar-tracker-panel-title .v-input { flex:1 1 100%; } }
         .radar-transition-selectors { display:grid; grid-template-columns:2fr 1.3fr 130px; gap:12px; margin:14px 0; }
         .radar-transition-policy-controls { display:grid; grid-template-columns:minmax(0,2fr) minmax(120px,.45fr) minmax(230px,1fr); gap:12px; margin:14px 0; }
         .radar-transition-timeline { list-style:none; display:grid; grid-template-columns:repeat(auto-fit,minmax(66px,1fr)); gap:7px; padding:0; margin:15px 0 10px; }
