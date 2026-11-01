@@ -267,6 +267,8 @@ def test_every_companion_action_serializes_dataset_and_collection_references(
         return Response()
 
     monkeypatch.setattr("radar_pd_nova.galaxy_service.requests.post", post)
+    monkeypatch.setattr("radar_pd_nova.galaxy_service.requests.get", lambda *a, **k:
+        type('QueueResponse', (), {'raise_for_status':lambda self:None, 'json':lambda self:[]})())
 
     service = GalaxyService("https://example.invalid", "key", "history", output_root=tmp_path)
     def no_ingress():

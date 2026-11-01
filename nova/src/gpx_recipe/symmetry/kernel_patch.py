@@ -14,12 +14,28 @@ import inspect
 import json
 from pathlib import Path
 
-PATCH_VERSION = 'radar-gsas-moment-geometry/1'
+PATCH_VERSION = 'radar-gsas-powder-geometry/2'
 ORIGINAL_FILE_SHA256 = '2c9875e52546547b6ac565d1d0f25aabf5f06b1e1aba43fa8dd4cf359353f559'
 ORIGINAL_FUNCTION_SHA256 = {
     'MagStructureFactor2': '82076dc0571cad6d6e2882c5f7ced9003f08af94449aa293b0fb4c5c2ae7b9f6',
     'MagStructureFactorDerv': 'df959b6cb576c83efbea4117f2ad4b73768253310a6188254dd08033e07b72f7',
 }
+NUCLEAR_FUNCTION_SHA256 = 'bee9200e0751ec07a84d819a02a6ceff84f9a759a2f99d2725f17c997aca3385'
+
+
+def corrected_nuclear_function(original):
+    """Average Friedel intensities for unpolarized neutron powder only.
+
+    The imaginary scattering lengths can make F(h) and F(-h) different.
+    Their intensities are averaged; their amplitudes must not be added.
+    Single-crystal and X-ray paths retain the original behavior.
+    """
+    if sha256(original) != NUCLEAR_FUNCTION_SHA256:
+        raise ValueError('The pinned nuclear powder function changed')
+    return replace_once(original,
+        'refl.T[9] = np.sum(fas[:,:],axis=0)**2+np.sum(fbs[:,:],axis=0)**2',
+        "refl.T[9] = (np.sum(fas**2,axis=0)+np.sum(fbs**2,axis=0) if hType in ('PNC','PNT') "
+        "else np.sum(fas[:,:],axis=0)**2+np.sum(fbs[:,:],axis=0)**2)")
 
 
 def sha256(value):
@@ -78,13 +94,16 @@ def corrected_source(source):
             raise ValueError('The thermal-factor consumer layout changed')
         updated=updated.replace('TMcorr[nxs,:,nxs,:]','TMcorr[nxs,:,:,:]')
         patched=replace_once(patched,original,updated)
+    nuclear = function_source(source, 'StructureFactor2')
+    patched = replace_once(patched, nuclear, corrected_nuclear_function(nuclear))
     ast.parse(patched)
+    all_original = {**ORIGINAL_FUNCTION_SHA256, 'StructureFactor2': NUCLEAR_FUNCTION_SHA256}
     record=dict(version=PATCH_VERSION,original_file_sha256=ORIGINAL_FILE_SHA256,
         corrected_file_sha256=sha256(patched),
-        original_functions=ORIGINAL_FUNCTION_SHA256.copy(),
-        corrected_functions={name:sha256(function_source(patched,name)) for name in ORIGINAL_FUNCTION_SHA256},
-        scope='Commensurate PNC/PNT unit-axis magnetic moment coordinates and symmetry-rotated atomic displacement tensors',
-        rationale='Preserve the direct-axis metric and the same Cartesian transform in forward and nonmagnetic derivatives')
+        original_functions=all_original,
+        corrected_functions={name:sha256(function_source(patched,name)) for name in all_original},
+        scope='Commensurate PNC/PNT magnetic geometry, symmetry-rotated ADPs and nuclear Friedel intensity averaging',
+        rationale='Use consistent Cartesian transforms and average nuclear powder intensities over h and -h')
     return patched,record
 
 

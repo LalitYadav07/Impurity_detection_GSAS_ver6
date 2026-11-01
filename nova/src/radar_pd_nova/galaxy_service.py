@@ -14,7 +14,7 @@ import time
 import uuid
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator
@@ -1941,6 +1941,7 @@ class GalaxyService:
         name: str,
         inputs: dict[str, Any],
         associated_run_uid: str | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> UtilityActionRecord:
         """Submit existing History references without starting an ingress job.
 
@@ -1976,13 +1977,23 @@ class GalaxyService:
             else:
                 serialized_inputs[parameter_name] = value
             resolved_inputs[parameter_name] = resolved
-        response = requests.post(
-            f"{self.galaxy_url}/api/tools",
-            headers={**self._headers, "content-type": "application/json"},
-            json={"history_id": self.history_id, "tool_id": tool_id, "inputs": resolved_inputs},
-            timeout=60,
-            allow_redirects=False,
-        )
+        from .native_job_admission import HistoryJobAdmission
+        is_scientific = tool_id.startswith('neutrons_radar_pd_') and tool_id not in {
+            'neutrons_radar_pd_interactive_prototype',
+            'neutrons_radar_pd_gsasii_interactive_prototype',
+        }
+        gate = HistoryJobAdmission(self) if is_scientific else None
+        # Workflow-specific controls still bound their own queues. This final
+        # admission point accounts for other RADAR-PD workflows sharing the
+        # History and serializes the check+POST inside this viewer.
+        with gate.slot(tool_id, family_limit=gate.total_limit, cancel=cancel_event) if gate else nullcontext():
+            response = requests.post(
+                f"{self.galaxy_url}/api/tools",
+                headers={**self._headers, "content-type": "application/json"},
+                json={"history_id": self.history_id, "tool_id": tool_id, "inputs": resolved_inputs},
+                timeout=60,
+                allow_redirects=False,
+            )
         response.raise_for_status()
         payload = response.json()
         jobs = payload.get("jobs") if isinstance(payload, dict) else None

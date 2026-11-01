@@ -209,8 +209,12 @@ class GalaxyModelRuntime(GalaxyRefinementRuntime):
                 if inline:inputs['model_request_b64']=encoded
                 else:inputs['model_request']={'dataset_id':request_id}
                 job=self.service.submit_utility(tool_id=self.tool_id,name='RADAR-PD model '+key,
-                    associated_run_uid=source.get('record_uid'),inputs=inputs)
+                    associated_run_uid=source.get('record_uid'),inputs=inputs,cancel_event=cancel)
             except Exception as exc:
+                from .native_job_admission import AdmissionUnavailable
+                if isinstance(exc,AdmissionUnavailable):
+                    entry['pending']=False;self._save()
+                    raise RuntimeUnavailable(str(exc)) from exc
                 raise RuntimeUnavailable('Galaxy did not acknowledge the model job. Its stable dispatch key was retained for recovery.') from exc
             entry['job']=job_record(job);self._save()
             self._verified_jobs.add((str(job.galaxy_job_id),key))

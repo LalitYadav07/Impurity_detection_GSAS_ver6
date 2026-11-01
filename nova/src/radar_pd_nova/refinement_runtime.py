@@ -198,6 +198,10 @@ class GalaxyRefinementRuntime(LocalRefinementRuntime):
                         associated_run_uid=source.get('record_uid'),inputs={'action':action,'dispatch_key':dispatch_key,
                         'source_gpx':{'dataset_id':self.dataset_id(source)},'recipe_request':{'dataset_id':request_id}})
                 except Exception as exc:
+                    from .native_job_admission import AdmissionUnavailable
+                    if isinstance(exc,AdmissionUnavailable):
+                        pending.unlink(missing_ok=True)
+                        raise RuntimeUnavailable(str(exc)) from exc
                     raise RuntimeUnavailable('Galaxy did not acknowledge this refinement submission. Its dispatch key is retained; recover the existing job before retrying.') from exc
             write_json(acknowledged,job.model_dump(mode='json'))
             if on_submitted:on_submitted(job.model_dump(mode='json'))

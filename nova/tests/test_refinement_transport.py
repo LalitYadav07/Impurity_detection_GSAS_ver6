@@ -32,6 +32,17 @@ def runtime(tmp_path):
  return rt,service,source
 
 
+def test_capacity_refusal_does_not_claim_a_submitted_recipe(tmp_path,monkeypatch):
+ from radar_pd_nova.native_job_admission import AdmissionUnavailable
+ rt,s,source=runtime(tmp_path)
+ def refuse(**kwargs):raise AdmissionUnavailable('Scientific capacity unavailable; nothing submitted')
+ monkeypatch.setattr(s,'submit_utility',refuse)
+ with pytest.raises(RuntimeUnavailable,match='nothing submitted'):
+  rt.call('inspect',source,tmp_path/'refused',dispatch_key='d'*24)
+ assert not (rt.root/'dispatches'/('d'*24+'.pending')).exists()
+ assert not (rt.root/'dispatches'/('d'*24+'.json')).exists()
+
+
 def test_fresh_dispatch_and_acknowledged_recovery_submit_exactly_once_without_crawling_history(tmp_path,monkeypatch):
  rt,s,source=runtime(tmp_path)
  monkeypatch.setattr(rt,'find_dispatch',lambda key:pytest.fail('Fresh or acknowledged work must not crawl every historical job'))

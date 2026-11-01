@@ -510,6 +510,18 @@ def test_parallel_batch_budget_requires_a_supported_explicit_limit(tmp_path,limi
         GalaxyModelRuntime(tmp_path/'invalid',Service(tmp_path),max_active_jobs=limit)
 
 
+def test_admission_refusal_does_not_leave_an_ambiguous_dispatch(remote, monkeypatch):
+    from radar_pd_nova.native_job_admission import AdmissionUnavailable
+    runtime, service, source = remote
+    def refuse(**kwargs):
+        raise AdmissionUnavailable('Scientific submission paused before dispatch')
+    monkeypatch.setattr(service, 'submit_utility', refuse)
+    with pytest.raises(RuntimeUnavailable, match='paused before dispatch'):
+        runtime._submit('native', source, {}, 'packet', 'b'*24)
+    assert runtime.state['dispatches']['b'*24]['pending'] is False
+    assert not runtime.state['dispatches']['b'*24].get('job')
+
+
 def test_enrollment_counts_dispatched_batches_rather_than_their_member_trials():
     rows=[dict(id=str(i),state='running',handle=json.dumps({'dispatch_key':'first'})) for i in range(49)]
     assert active_batch_count(rows)==1

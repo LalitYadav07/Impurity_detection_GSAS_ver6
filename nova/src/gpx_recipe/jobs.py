@@ -24,10 +24,12 @@ def file_hash(path):
 def scientific_environment(gsasii_root=None):
     """The scientific worker never inherits any model credential."""
     allowed = {"PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "SYSTEMROOT", "WINDIR",
-               "RADAR_GPX_DOCKER_WORKDIR", "RADAR_GPX_DOCKER_IMAGE"}
+               "RADAR_GPX_DOCKER_WORKDIR", "RADAR_GPX_DOCKER_IMAGE",
+               "GALAXY_SLOTS", "GALAXY_MEMORY_MB", "GALAXY_MEMORY_MB_PER_SLOT"}
     env = {k: v for k, v in os.environ.items() if k in allowed}
     env.update(PYTHONPATH=str(Path(__file__).resolve().parents[1]), PYTHONDONTWRITEBYTECODE="1", MPLBACKEND="Agg",
-               OPENBLAS_NUM_THREADS="1", OMP_NUM_THREADS="1")
+               OPENBLAS_NUM_THREADS="1", OMP_NUM_THREADS="1", MKL_NUM_THREADS="1",
+               VECLIB_MAXIMUM_THREADS="1", NUMEXPR_NUM_THREADS="1")
     if gsasii_root:
         env["GSASII_ROOT"] = str(gsasii_root)
     return env
