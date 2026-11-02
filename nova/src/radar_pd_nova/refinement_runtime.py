@@ -200,27 +200,43 @@ class GalaxyRefinementRuntime(LocalRefinementRuntime):
             if existing:job=existing
             else:
                 request=dict(plan=plan,approval=approval,expected_source_sha256=source['source_sha256'],dispatch_key=dispatch_key)
-                # Galaxy owns this request HDA as an explicit job dependency.
-                # Keep durable workspace claims/checkpoints separate: only the
-                # disposable request input can still be processing at dispatch.
-                request_id=self.service.upload_json_document(request,name='refinement-request.json',label='RADAR-PD refinement request '+dispatch_key,wait_ready=False)
+                capability=getattr(self.service,'tool_has_input',None)
+                inline=bool(capability and capability(self.tool_id,'recipe_request_b64'))
+                inputs={'action':action,'dispatch_key':dispatch_key}
+                if inline:
+                    import base64
+                    # Match the legacy document bytes, including its final LF.
+                    # This changes only transport, not the reviewed request.
+                    raw=(json.dumps(request,indent=2,sort_keys=True,allow_nan=False)+'\n').encode('utf-8')
+                    if len(raw)>4*1024*1024:raise ValueError('Refinement request exceeds the 4 MiB transport bound')
+                    inputs['recipe_request_b64']=base64.b64encode(raw).decode('ascii')
+                else:
+                    # Older wrappers keep the request as a Galaxy dependency.
+                    # Durable workspace claims/checkpoints remain separate.
+                    request_id=self.service.upload_json_document(request,name='refinement-request.json',label='RADAR-PD refinement request '+dispatch_key,wait_ready=False)
+                    inputs['recipe_request']={'dataset_id':request_id}
                 source_dataset=self.dataset_id(source)
+                inputs['source_gpx']={'dataset_id':source_dataset}
+                if cancel_event is not None and cancel_event.is_set():
+                    raise RuntimeUnavailable('Scientific submission paused before dispatch')
                 try:
                     with pending.open('x') as handle:handle.write(action+'\n')
                 except FileExistsError:
                     raise RuntimeUnavailable('Another worker already claimed this dispatch; recover its existing Galaxy job')
                 try:
                     job=self.service.submit_utility(tool_id=REFINEMENT_TOOL_ID,name='RADAR-PD refinement '+dispatch_key,
-                        associated_run_uid=source.get('record_uid'),cancel_event=cancel_event,inputs={'action':action,'dispatch_key':dispatch_key,
-                        'source_gpx':{'dataset_id':source_dataset},'recipe_request':{'dataset_id':request_id}})
+                        associated_run_uid=source.get('record_uid'),cancel_event=cancel_event,inputs=inputs)
                 except Exception as exc:
                     from .native_job_admission import AdmissionUnavailable
                     if isinstance(exc,AdmissionUnavailable):
                         pending.unlink(missing_ok=True)
                         raise RuntimeUnavailable(str(exc)) from exc
                     raise RuntimeUnavailable('Galaxy did not acknowledge this refinement submission. Its dispatch key is retained; recover the existing job before retrying.') from exc
-            write_json(acknowledged,job.model_dump(mode='json'))
-            if on_submitted:on_submitted(job.model_dump(mode='json'))
+            # The workspace already retains the exact plan, approval and source.
+            # Do not duplicate the encoded request in every checkpoint/receipt.
+            record=job.model_dump(mode='json',exclude={'inputs':{'recipe_request_b64'}})
+            write_json(acknowledged,record)
+            if on_submitted:on_submitted(record)
         started=time.monotonic()
         while job.status not in {RunStatus.OK,RunStatus.ERROR}:
             if time.monotonic()-started>self.timeout:raise RuntimeUnavailable('Galaxy refinement is still pending; recover the existing job before retrying')

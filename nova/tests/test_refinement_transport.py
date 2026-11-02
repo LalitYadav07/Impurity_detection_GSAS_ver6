@@ -150,7 +150,8 @@ def test_utility_wrapper_has_no_model_or_secret_inputs_and_publishes_only_verifi
  import xml.etree.ElementTree as ET
  p=Path(__file__).resolve().parents[2]/'galaxy/radar_pd_refine_recipe.xml.in';root=ET.parse(p).getroot()
  inputs={e.attrib['name'] for e in root.findall('inputs/param')}
- assert inputs=={'action','source_gpx','recipe_request','dispatch_key'}
+ assert inputs=={'action','source_gpx','recipe_request','recipe_request_b64','dispatch_key'}
+ assert root.find("inputs/param[@name='recipe_request']").attrib['optional']=='true'
  collection=root.find('outputs/collection');assert 'verified_' in ET.tostring(collection,encoding='unicode')
  assert '@IMMUTABLE_BATCH_IMAGE@' in p.read_text()
 

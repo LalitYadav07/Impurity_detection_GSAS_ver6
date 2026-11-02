@@ -1,17 +1,51 @@
-<tool id="neutrons_radar_pd_refine_recipe_prototype" name="RADAR-PD Utility: Reviewed Refinement" version="0.3.0" profile="22.05">
+<tool id="neutrons_radar_pd_refine_recipe_prototype" name="RADAR-PD Utility: Reviewed Refinement" version="0.3.2" profile="22.05">
     <description>inspect, preflight or apply an approved recipe to one published GPX</description>
     <requirements><container type="docker">@IMMUTABLE_BATCH_IMAGE@</container></requirements>
     <command detect_errors="exit_code"><![CDATA[
         touch '$result_bundle' '$console_output' &&
         trap "chmod a+r '$result_bundle' '$console_output' >/dev/null 2>&1 || true" EXIT &&
-        python /opt/radar-pd/scripts/ndip_refinement.py '$action' '$source_gpx' '$recipe_request' worker '$result_bundle' > '$console_output' 2>&1
+        #if $recipe_request_b64 and $recipe_request
+            echo 'Supply exactly one reviewed request source' >&2; exit 1
+        #elif $recipe_request_b64
+            python '$request_decoder' '$inline_request' decoded-recipe-request.json &&
+            python /opt/radar-pd/scripts/ndip_refinement.py '$action' '$source_gpx' decoded-recipe-request.json worker '$result_bundle' > '$console_output' 2>&1
+        #elif $recipe_request
+            python /opt/radar-pd/scripts/ndip_refinement.py '$action' '$source_gpx' '$recipe_request' worker '$result_bundle' > '$console_output' 2>&1
+        #else
+            echo 'Supply one reviewed request source' >&2; exit 1
+        #end if
     ]]></command>
+    <configfiles>
+        <configfile name="inline_request">$recipe_request_b64</configfile>
+        <configfile name="request_decoder"><![CDATA[import base64, json, pathlib, sys
+source, target = map(pathlib.Path, sys.argv[1:])
+if source.stat().st_size > 6 * 1024 * 1024:
+    raise ValueError('Encoded recipe request exceeds its size bound')
+raw = source.read_bytes().strip()
+decoded = base64.b64decode(raw, validate=True)
+if len(decoded) > 4 * 1024 * 1024:
+    raise ValueError('Decoded recipe request exceeds its 4 MiB size bound')
+if not isinstance(json.loads(decoded), dict):
+    raise ValueError('A recipe request must be one JSON object')
+if target.is_symlink():
+    raise ValueError('The decoded request path must not be a symlink')
+if target.exists():
+    if target.read_bytes() != decoded:
+        raise ValueError('A different request already occupies the decoded path')
+else:
+    with target.open('xb') as stream:
+        stream.write(decoded)
+]]></configfile>
+    </configfiles>
     <inputs>
         <param name="action" type="select" label="Reviewed refinement operation">
             <option value="prepare">Prepare reviewed input packet</option><option value="inspect">Inspect project</option><option value="edit">Correct phase model</option><option value="preview">Native preflight</option><option value="run">Run approved recipe</option>
         </param>
         <param name="source_gpx" type="data" format="binary" label="Published RADAR-PD GPX or reviewed preparation packet"/>
-        <param name="recipe_request" type="data" format="json" label="Recipe, approval and source checksum"/>
+        <param name="recipe_request" type="data" format="json" optional="true" label="Recipe, approval and source checksum (legacy dataset)"/>
+        <param name="recipe_request_b64" type="text" value="" optional="true" label="NOVA encoded recipe request">
+            <validator type="regex" message="Use the NOVA-generated base64 request">^[A-Za-z0-9+/=]*$</validator>
+        </param>
         <param name="dispatch_key" type="text" label="NOVA dispatch identity">
             <validator type="regex" message="Use the NOVA-generated dispatch key">^[a-f0-9]{24}$</validator>
         </param>
@@ -29,5 +63,8 @@ No LLM key is accepted by this tool. NOVA plans and approves a recipe before sub
 The JSON result distinguishes completed, stopped and rejected projects. Only GPXs from
 completed, checked stages appear in the project collection. The original project is
 unchanged. Review scientific values, residuals and uncertainties before accepting a fit.
+NOVA may send a bounded, encoded request as a tool parameter; the wrapper decodes
+it into the same JSON input for the unchanged native worker. Existing JSON datasets
+remain supported. Supply exactly one request source.
     ]]></help>
 </tool>
