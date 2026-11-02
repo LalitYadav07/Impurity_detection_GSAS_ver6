@@ -138,7 +138,7 @@ def check_prepared_profiles(job, result):
                 'The previous GPX and fit results remain historical evidence.') from exc
 
 
-def prepared_source(workspace, job, result):
+def prepared_source(workspace, job, result, *, enroll_future=True):
     """Register one verified preparation without changing the visible selection."""
     from .refinement_sources import digest
     job=Path(job)
@@ -163,8 +163,24 @@ def prepared_source(workspace, job, result):
         if not publication.is_file():raise ValueError('Publish this prepared model through the native Galaxy worker first')
         record=json.loads(publication.read_text())
         if record.get('source_sha256')!=result['project_sha256']:raise ValueError('Published preparation changed')
+        if record.get('history_id') not in (None,workspace.history_id):raise ValueError('Published preparation belongs to another History')
         source['dataset_id']=record['dataset_id']
-    workspace.observe([workspace.runtime.resolve(source)])
+        # Keep the exact historical publication identity and approved scopes.
+        # Only the rehydrated local path and checked metadata need replacing.
+        matches=[s for s in workspace.state['sources'].values()
+                 if s.get('dataset_id')==source['dataset_id'] and s.get('source_sha256')==source['source_sha256']]
+        if len(matches)>1:raise ValueError('This published preparation has ambiguous saved identities')
+        if matches:
+            previous=matches[0]
+            if (any(previous.get(field)!=source[field] for field in ('run_id','run_number','bank','sample_key'))
+                    or any(previous.get('metadata',{}).get(field)!=a[field]
+                           for field in ('instrument','ipts','sample_id','cell_id'))):
+                raise ValueError('Saved preparation identity conflicts with the verified acquisition')
+            for field in ('id','experiment','experiment_label','scan_key','record_uid','sample_key','sample_label','scan_label'):
+                source[field]=previous[field]
+    resolved=workspace.runtime.resolve(source)
+    if enroll_future:workspace.observe([resolved])
+    else:workspace.observe([resolved],enroll_future=False)
     return source
 
 
@@ -174,8 +190,9 @@ class BatteryPreparationMixin:
         self._battery_model_revision=0; self._battery_model_sources={}; self._battery_bank_setup=None
         self._battery_model_phases=[]; self._battery_prepared=None; self._battery_profile_uploads={}; self._battery_model_sample=None
         self._battery_saved_models={}
+        self._battery_saved_owner=None
         self._battery_auto_profiles={}
-        s.battery_saved_models=[];s.battery_saved_model='';s.battery_saved_notice=''
+        s.battery_saved_models=[];s.battery_saved_model='';s.battery_saved_notice='';s.battery_saved_busy=False
         s.battery_model_run='';s.battery_model_runs=[];s.battery_model_data='';s.battery_model_sources=[]
         s.battery_model_banks=[];s.battery_model_bank_options=[];s.battery_model_bank_rows=[]
         s.battery_allow_invalid_edges=False
@@ -206,6 +223,11 @@ class BatteryPreparationMixin:
 
     def _battery_reset_preparation(self):
         if not hasattr(self,'_battery_model_revision'):return
+        self._battery_saved_owner=None
+        self.server.state.battery_saved_busy=False
+        self._battery_saved_models={}
+        self.server.state.battery_saved_models=[]
+        self.server.state.battery_saved_model=''
         s=self.server.state;self._battery_preparation_edited()
         self._battery_bank_setup=None;self._battery_model_sources={}
         self._battery_auto_profiles={};s.battery_model_mapping_notes=[]
@@ -485,6 +507,13 @@ class BatteryPreparationMixin:
 
     def refresh_saved_battery_models(self,**_):
         if self._battery_running():return
+        service=getattr(self,'service',None)
+        if getattr(service,'galaxy_url',None) and getattr(service,'history_id',None):
+            self._start_saved_model_read(open_selected=False)
+            return
+        self._refresh_local_saved_battery_models()
+
+    def _refresh_local_saved_battery_models(self):
         s=self.server.state;root=preparation_root();self._battery_saved_models={};rows=[];skipped=0
         try:
             if root.exists():
@@ -511,6 +540,10 @@ class BatteryPreparationMixin:
     def open_saved_battery_model(self,**_):
         if self._battery_running():return
         s=self.server.state
+        selected=self._battery_saved_models.get(s.battery_saved_model)
+        if isinstance(selected,dict) and selected.get('source')=='galaxy':
+            self._start_saved_model_read(open_selected=True)
+            return
         try:
             job=self._battery_saved_models.get(s.battery_saved_model)
             if not job or not job.resolve().is_relative_to(preparation_root()):
@@ -522,13 +555,88 @@ class BatteryPreparationMixin:
             self.open_battery_refinement()
         except (OSError,ValueError,KeyError) as exc:s.battery_error=str(exc);s.flush()
 
-    def open_battery_refinement(self,**_):
+    def _start_saved_model_read(self,*,open_selected):
+        from .battery_saved_models import service_identity
+        s=self.server.state;service=self.service
+        owner=object();self._battery_saved_owner=owner
+        context=(service,service_identity(service),self._battery_generation,self._battery_model_revision,
+                 getattr(self,'_result_context',None),getattr(self,'_refinement_workspace',None))
+        selected=s.battery_saved_model
+        publication=deepcopy(self._battery_saved_models.get(selected)) if open_selected else None
+        def current():
+            return (self._battery_saved_owner is owner and self.service is service
+                    and service_identity(service)==context[1]
+                    and self._battery_generation==context[2] and self._battery_model_revision==context[3]
+                    and getattr(self,'_result_context',None) is context[4]
+                    and getattr(self,'_refinement_workspace',None) is context[5]
+                    and (not open_selected or s.battery_saved_model==selected))
+        s.battery_saved_busy=True;s.battery_error=''
+        s.battery_saved_notice=('Opening the selected published model; checking original inputs, GPX and saved recipes. No work will resume.'
+            if open_selected else 'Finding published preparations in this History. Large bundles and GPXs are not downloaded until Open.')
+        s.flush()
+        self._battery_start(self._read_saved_models(service,current,publication,owner))
+
+    async def _read_saved_models(self,service,current,publication,owner):
+        from .battery_saved_models import SavedModelReader, recover_preparation, recover_review_workspace, StaleSavedModel
+        s=self.server.state
+        try:
+            reader=SavedModelReader(service,current=current)
+            if publication is None:
+                rows,skipped,truncated=await asyncio.to_thread(reader.list_models)
+                if not current():return
+                self._battery_saved_models={'galaxy:'+r['job_id']:dict(r,source='galaxy') for r in rows}
+                s.battery_saved_models=[dict(value='galaxy:'+r['job_id'],title=f"Published preparation · {r['created'] or 'time unavailable'} UTC · job {r['job_id'][:8]}") for r in rows]
+                if s.battery_saved_model not in self._battery_saved_models:s.battery_saved_model=''
+                s.battery_saved_notice=(f'{len(rows)} published preparations. Acquisition details, original inputs and GPX hashes are checked on Open.'
+                    +(f' {skipped} unreadable records were excluded.' if skipped else '')
+                    +(' Only the latest 200 recipe-worker jobs were searched; older preparations may be outside this bounded catalog.' if truncated else ''))
+                return
+            if publication.get('source')!='galaxy':raise ValueError('Choose a published model from the refreshed list')
+            previous=getattr(self,'_refinement_workspace',None)
+            if previous is not None:
+                with previous.lock:
+                    if (getattr(s,'rf_queue_running',False) or any(r.get('armed') for r in previous.state['recipes'].values())
+                            or any(j['status'] in {'queued','running','recovering'} for j in previous.state['jobs'].values())):
+                        raise ValueError('Pause the current refinement queue and future enrollment before opening a historical model')
+            prepared=await asyncio.to_thread(recover_preparation,reader,publication,preparation_root())
+            if not current():return
+            workspace=previous
+            if workspace is None:
+                workspace=await asyncio.to_thread(recover_review_workspace,reader,preparation_root()/'review-workspaces')
+                if not current():return
+            # No await below: the frozen selection still owns this publication.
+            reader.check()
+            acquisition=prepared[1]['specification']['acquisition']
+            parallel_jobs=workspace.parallel_jobs
+            old_prepared=self._battery_prepared
+            workspace.runtime.service=service
+            self._refinement_workspace=workspace
+            self._battery_prepared=prepared
+            try:self.open_battery_refinement(recovered=True,raise_errors=True)
+            except Exception:
+                self._battery_prepared=old_prepared;self._refinement_workspace=previous
+                raise
+            s.battery_model_ready=True
+            s.rf_parallel_jobs=parallel_jobs
+            s.battery_saved_notice=(f"Opened verified {acquisition['instrument']} {acquisition['ipts']} run {acquisition['run']}, "
+                f"sample {acquisition['sample_id']}. Saved recipes and results are retained; queued work and future enrollment remain stopped.")
+        except StaleSavedModel:
+            pass
+        except Exception as exc:
+            if current():s.battery_error=str(exc)
+        finally:
+            # Opening installs a newly recovered workspace, so ownership here
+            # is tested against the operation token rather than its old pointer.
+            if self._battery_saved_owner is owner:
+                s.battery_saved_busy=False;s.flush()
+
+    def open_battery_refinement(self,*,recovered=False,raise_errors=False,**_):
         if not self._battery_prepared:return
         from .refinement_controller import refinement_experiment_options, refinement_transport_label
         job,result=self._battery_prepared
         try:
             workspace=self._refinement_store()
-            source=prepared_source(workspace,job,result)
+            source=(prepared_source(workspace,job,result,enroll_future=False) if recovered else prepared_source(workspace,job,result))
             key,experiment=source['id'],source['experiment']
             s=self.server.state;s.battery_error='';s.rf_experiments=[dict(title=label,value=k) for k,label in refinement_experiment_options(workspace).items()]
             s.rf_transport=refinement_transport_label(workspace.runtime.kind)
@@ -537,7 +645,9 @@ class BatteryPreparationMixin:
             # tab. Opening a particular preparation must finish on that model,
             # with only that immutable revision selected for the next recipe.
             s.flush()
-            s.rf_scope='scans';s.rf_scans=[key];s.rf_samples=[];s.rf_banks=[]
+            s.rf_scope='scans';s.rf_scans=['source:'+key if recovered else key];s.rf_samples=[];s.rf_banks=[]
             s.rf_existing=True;s.rf_future=False;s.rf_mode='recipe';s.rf_source=key
             s.flush();self._refinement_sync();s.flush()
-        except Exception as exc:self.server.state.battery_error=str(exc);self.server.state.flush()
+        except Exception as exc:
+            if raise_errors:raise
+            self.server.state.battery_error=str(exc);self.server.state.flush()

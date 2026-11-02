@@ -102,7 +102,7 @@ class RefinementWorkspace:
             if len(groups)==1:source.update(next(iter(groups.values())))
             return source
 
-    def observe(self,sources,*,active_live_ids=None):
+    def observe(self,sources,*,active_live_ids=None,enroll_future=True):
         with self.lock:
             changed=False
             for value in sources:
@@ -149,7 +149,7 @@ class RefinementWorkspace:
                         source['live_watch']=watched;changed=True
             if changed:
                 for recipe in self.state['recipes'].values():
-                    if recipe.get('armed'):
+                    if enroll_future and recipe.get('armed'):
                         self._enroll_future(recipe)
                 self.save()
         return changed

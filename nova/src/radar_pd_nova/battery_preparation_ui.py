@@ -9,10 +9,11 @@ def preparation_panel(app):
         html.P('Choose one exposure, its complementary banks and a reviewed starting model. Preparation preserves the measurements and keeps every refinement parameter fixed.',classes='text-body-2')
         with html.Details(classes='my-3'):
             html.Summary('Reopen a saved prepared model',style='cursor:pointer')
-            v.VBtn('Find saved models',click=app.refresh_saved_battery_models,disabled=('battery_busy',),variant='text',size='small')
-            v.VSelect(label='Saved prepared model',v_model=('battery_saved_model',),items=('battery_saved_models',),disabled=('battery_busy',),density='compact',variant='outlined')
+            v.VBtn('Find saved models',click=app.refresh_saved_battery_models,disabled=('battery_busy || battery_saved_busy',),variant='text',size='small')
+            v.VSelect(label='Saved prepared model',v_model=('battery_saved_model',),items=('battery_saved_models',),disabled=('battery_busy || battery_saved_busy',),density='compact',variant='outlined')
             html.P('{{ battery_saved_notice }}',classes='text-body-2')
-            v.VBtn('Open saved model in refinement',click=app.open_saved_battery_model,disabled=('battery_busy || !battery_saved_model',),variant='outlined',size='small')
+            v.VProgressLinear(v_if='battery_saved_busy',indeterminate=True,classes='my-2')
+            v.VBtn('Open saved model in refinement',click=app.open_saved_battery_model,disabled=('battery_busy || battery_saved_busy || !battery_saved_model',),variant='outlined',size='small')
         v.VAlert(v_if="battery_instrument === 'PG3'",text='POWGEN profiles can be matched to each run’s recorded reduction settings. Preparation supports individual SLOG/FXYE products with recorded bin-width scaling. Legacy lookup-table profiles require a reviewed compatible profile.',type='info',variant='tonal',density='compact')
         with html.Div():
             with v.VRow(classes='mt-2'):
