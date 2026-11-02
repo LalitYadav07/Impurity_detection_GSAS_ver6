@@ -214,6 +214,44 @@ class SignedSnapImportTest(unittest.TestCase):
             for key in ['x','yobs','yweight']:
                 self.assertEqual(np.asarray(native.getdata(key)).tobytes(),np.asarray(manager.main_histogram.getdata(key)).tobytes())
 
+    def test_marked_hb2a_unbanked_xye_keeps_native_cw_import_and_masks(self):
+        from scripts.gsas_core_infrastructure import GSASProjectManager
+        from GSASII import GSASIIscriptable as G2
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);profile=self.profile(root,kind='PNC');data=root/'hb2a.xye'
+            marker={'schema':'radar-pd-input-provenance/v1','instrument':'HB2A',
+                    'reduction_family':'HB2A individual reduced XYE','source_bank':1}
+            data.write_text('# RADAR-PD input provenance: '+json.dumps(marker)+'\n# temperature = 2.5\n'+
+                ''.join(f'{10+i*.1:.3f} {0 if i==15 else 20+i} {0 if i==15 else 2}\n' for i in range(40)))
+            before=data.read_bytes()
+            native=G2.G2Project(newgpx=str(root/'native.gpx')).add_powder_histogram(str(data),str(profile))
+            manager=GSASProjectManager(str(root),'hb2a')
+            self.assertTrue(manager.create_project())
+            self.assertTrue(manager.add_histogram(str(data),str(profile),instrument_type='CW',fmthint='xye'))
+            for key in ['x','yobs','yweight']:
+                expected=native.getdata(key);actual=manager.main_histogram.getdata(key)
+                self.assertEqual(np.ma.getdata(expected).tobytes(),np.ma.getdata(actual).tobytes())
+                np.testing.assert_array_equal(np.ma.getmaskarray(expected),np.ma.getmaskarray(actual))
+            self.assertEqual(manager.main_histogram.data['Sample Parameters']['Temperature'],2.5)
+            self.assertEqual(data.read_bytes(),before)
+
+    def test_non_tof_marked_banked_cw_uses_its_native_profile(self):
+        from scripts.gsas_core_infrastructure import GSASProjectManager
+        from GSASII import GSASIIscriptable as G2
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);profile=self.profile(root,kind='PNC');data=root/'marked-cw.gsa'
+            marker={'schema':'radar-pd-input-provenance/v1','instrument':'other',
+                    'reduction_family':'constant wavelength'}
+            data.write_text('# RADAR-PD input provenance: '+json.dumps(marker)+
+                '\nBANK 001 40 40 CONST 0 10 0 0 FXYE\n'+
+                ''.join(f'{10*i} {20+i} 2\n' for i in range(40)))
+            native=G2.G2Project(newgpx=str(root/'native.gpx')).add_powder_histogram(str(data),str(profile))
+            manager=GSASProjectManager(str(root),'cw')
+            self.assertTrue(manager.create_project())
+            self.assertTrue(manager.add_histogram(str(data),str(profile),instrument_type='CW',fmthint='gsas'))
+            for key in ['x','yobs','yweight']:
+                self.assertEqual(np.asarray(native.getdata(key)).tobytes(),np.asarray(manager.main_histogram.getdata(key)).tobytes())
+
     def test_marked_tof_cannot_use_a_constant_wavelength_profile(self):
         from scripts.gsas_core_infrastructure import GSASProjectManager
         with tempfile.TemporaryDirectory() as directory:

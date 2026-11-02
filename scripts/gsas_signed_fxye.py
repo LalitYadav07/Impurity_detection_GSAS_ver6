@@ -18,14 +18,43 @@ import numpy as np
 _MAX_BYTES = 64 * 1024 * 1024
 _MAX_BANKS = 256
 _PROVENANCE_PREFIX = b'# RADAR-PD input provenance: '
+_LEGACY_TOF_FAMILIES = {
+    'NOM': {'NOMAD individual GSAS/SLOG', 'NOMAD IDL individual GSAS/SLOG'},
+    'PG3': {'POWGEN individual GSAS/FXYE'},
+    'SNAP': {'SNAP individual GSAS/SLOG'},
+}
+
+
+def _is_legacy_tof_provenance(provenance):
+    """Only the previously supported marker contracts assert a TOF source."""
+    if not isinstance(provenance, dict) or provenance.get('schema') != 'radar-pd-input-provenance/v1':
+        return False
+    instrument = provenance.get('instrument')
+    family = provenance.get('reduction_family')
+    return (isinstance(instrument, str) and instrument in _LEGACY_TOF_FAMILIES
+            and ((isinstance(family, str) and family in _LEGACY_TOF_FAMILIES[instrument])
+                 or (instrument == 'SNAP' and family is None)))
+
+
+def _has_legacy_tof_marker(lines):
+    for line in lines:
+        if line.startswith(b'BANK'):
+            break
+        if line.startswith(_PROVENANCE_PREFIX):
+            try:
+                if _is_legacy_tof_provenance(json.loads(line[len(_PROVENANCE_PREFIX):])):
+                    return True
+            except (ValueError, UnicodeError):
+                pass
+    return False
 
 
 def read_staged_tof_source(path, *, instruments=None, defer_unmarked_errors=False):
     """Defer unmarked FXYE validation until the native profile is known.
 
     A CW FXYE file can legitimately contain coordinates that are invalid for
-    TOF. Deferred errors are raised only if its loaded profile is PNT. Marked
-    sources retain their existing strict contract, and this never authorizes
+    TOF. Deferred errors are raised only if its loaded profile is PNT. Legacy
+    TOF markers retain their existing strict contract, and this never authorizes
     a different reader to bypass a malformed neutron TOF source.
     """
     try:
@@ -37,7 +66,7 @@ def read_staged_tof_source(path, *, instruments=None, defer_unmarked_errors=Fals
         with path.open('rb') as stream:
             probe = stream.read(min(path.stat().st_size, max(_MAX_BYTES, 512 * 1024)) + 1)
         lines = probe.splitlines()
-        if (any(line.startswith(_PROVENANCE_PREFIX) for line in lines)
+        if (_has_legacy_tof_marker(lines)
                 or not any(line.startswith(b'BANK') and line.split()[-1:] == [b'FXYE'] for line in lines)):
             raise
         return {'path': path.resolve(), 'marked': False, 'deferred_error': str(exc)}
@@ -57,15 +86,22 @@ def _read_tof_source(path, *, instruments=None):
     if size > _MAX_BYTES:
         with path.open('rb') as stream:
             probe = stream.read(512 * 1024)
-        if any(line.startswith(_PROVENANCE_PREFIX) or
-               (line.startswith(b'BANK') and line.split()[-1:] == [b'FXYE'])
-               for line in probe.splitlines()):
+        lines = probe.splitlines()
+        if (_has_legacy_tof_marker(lines) or any(
+                line.startswith(b'BANK') and line.split()[-1:] == [b'FXYE'] for line in lines)):
             raise ValueError('TOF file exceeds the import limit')
         return None
     with path.open('rb') as stream:
         raw = stream.read(_MAX_BYTES + 1)
     lines = raw.decode('latin-1').splitlines()  # Match the native text reader.
     first_bank = next((i for i,line in enumerate(lines) if line.startswith('BANK')), None)
+    has_fxye = any(line.startswith('BANK') and line.split()[-1:] == ['FXYE'] for line in lines)
+    if first_bank is None or not has_fxye:
+        # The same provenance schema is also emitted for HB2A XYE and other
+        # non-TOF sources. It does not make those sources eligible here.
+        if _has_legacy_tof_marker(raw.splitlines()):
+            raise ValueError('Marked TOF import requires SLOG/FXYE data')
+        return None
     header = lines if first_bank is None else lines[:first_bank]
     for i,line in enumerate(header):
         if not line.startswith(_PROVENANCE_PREFIX.decode('ascii')):
@@ -80,14 +116,6 @@ def _read_tof_source(path, *, instruments=None):
     instrument = (provenance or {}).get('instrument')
     if instruments is not None and instrument not in instruments:
         return None
-    if first_bank is None:
-        if provenance is not None:
-            raise ValueError('Marked TOF source has no GSAS bank header')
-        return None  # Unbanked XY/XYE/XML input retains its native reader.
-    if not any(line.startswith('BANK') and line.split()[-1:] == ['FXYE'] for line in lines):
-        if provenance is not None:
-            raise ValueError('Marked TOF import requires SLOG/FXYE data')
-        return None  # Do not validate or reinterpret unrelated native formats.
     if size > _MAX_BYTES or len(raw) > _MAX_BYTES:
         raise ValueError('TOF file exceeds the import limit')
     banks = {}
@@ -136,7 +164,8 @@ def _read_tof_source(path, *, instruments=None):
         if provenance is not None:
             raise ValueError('Marked TOF import requires SLOG/FXYE data')
         return None
-    if provenance is not None and any(b['kind'] != 'SLOG' for b in candidates):
+    legacy_tof = _is_legacy_tof_provenance(provenance)
+    if legacy_tof and any(b['kind'] != 'SLOG' for b in candidates):
         raise ValueError('Marked TOF import requires SLOG/FXYE data')
     for bank in candidates:
         rows = bank['rows']
@@ -156,7 +185,7 @@ def _read_tof_source(path, *, instruments=None):
             if sigma > 0 and i not in invalid and not math.isfinite(intensity):
                 raise ValueError('Nonfinite positive-weight TOF observation')
     return {'path': path.resolve(), 'banks': banks, 'invalid': invalid, 'instrument': instrument,
-            'marked': provenance is not None, 'sha256': sha256(raw).hexdigest()}
+            'marked': legacy_tof, 'sha256': sha256(raw).hexdigest()}
 
 
 def restore_staged_tof_observations(reader, source, instrument_parameters):

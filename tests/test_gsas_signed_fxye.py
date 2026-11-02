@@ -285,6 +285,42 @@ def test_unbanked_fxye_suffix_does_not_change_other_reader_contracts(tmp_path):
     assert module.read_staged_tof_source(path) is None
 
 
+@pytest.mark.parametrize('instrument,family', [
+    ('HB2A','HB2A individual reduced XYE'),('other','custom constant wavelength')])
+@pytest.mark.parametrize('body', ['10 2 1\n11 3 2\n12 0 0\n',
+    'BANK 001 40 4 CONST 1000 10 0 0 STD\nopaque native records\n'])
+def test_non_tof_provenance_does_not_reclassify_unrelated_formats(tmp_path,instrument,family,body,monkeypatch):
+    marker={'schema':'radar-pd-input-provenance/v1','instrument':instrument,'reduction_family':family}
+    path=tmp_path/'marked.xye'
+    path.write_text('# RADAR-PD input provenance: '+json.dumps(marker)+'\n'+body)
+    assert module.read_staged_tof_source(path) is None
+    monkeypatch.setattr(module,'_MAX_BYTES',20)
+    assert module.read_staged_tof_source(path) is None
+
+
+def test_only_known_legacy_tof_marker_requires_banked_fxye(tmp_path):
+    path=tmp_path/'legacy.xye'
+    marker={'schema':'radar-pd-input-provenance/v1','instrument':'SNAP'}
+    path.write_text('# RADAR-PD input provenance: '+json.dumps(marker)+'\n10 2 1\n11 3 2\n')
+    with pytest.raises(ValueError,match='requires SLOG/FXYE'):
+        module.read_staged_tof_source(path)
+
+
+@pytest.mark.parametrize('bad_coordinate', [False,True])
+def test_non_tof_marker_does_not_assert_pnt_on_banked_cw(tmp_path,bad_coordinate):
+    reader,path=unmarked_fixture(tmp_path)
+    marker={'schema':'radar-pd-input-provenance/v1','instrument':'HB2A',
+            'reduction_family':'HB2A individual reduced XYE'}
+    text=path.read_text()
+    if bad_coordinate:text=text.replace('1000 5 2','0 5 2')
+    path.write_text('# RADAR-PD input provenance: '+json.dumps(marker)+'\n'+text)
+    source=module.read_staged_tof_source(path,defer_unmarked_errors=True)
+    before=[a.copy() for a in reader.powderdata]
+    assert source['marked'] is False
+    assert module.restore_staged_tof_observations(reader,source,[{'Type':['PNC']},{}]) is False
+    assert all(np.array_equal(a,b) for a,b in zip(before,reader.powderdata))
+
+
 @pytest.mark.parametrize('header',['BANK 001 40 4 CONST 1000 10 0 0 STD',
                                   'BANK legacy 40 4 CONST 1000 10 0 0 ESD'])
 def test_non_fxye_native_formats_are_not_revalidated(tmp_path,header):
