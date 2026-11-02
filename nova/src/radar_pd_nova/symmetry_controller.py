@@ -1,6 +1,7 @@
 """Model exploration inside Refinement, sharing published RADAR-PD sources."""
 from __future__ import annotations
 import asyncio
+import copy
 from collections import Counter,OrderedDict
 import json
 import os
@@ -49,7 +50,7 @@ MODEL_FIELDS=('sx_kind','sx_moment_model','sx_refine_scale','sx_refine_backgroun
 class SymmetryMixin(KSearchMixin):
     def _init_symmetry(self):
         self._model_runtime_cache=None;self._models_restored=False;self._model_restored_scopes=set();self._model_following_active=False;self._model_stopping=False
-        self._model_active_campaigns={};self._model_owned_campaigns={};self._model_review_campaigns=OrderedDict();self._model_checkpoint_errors={};self._model_preparations={};self._model_enrollment_task=None;self._model_tick_task=None;self._model_pause_task=None
+        self._model_active_campaigns={};self._model_owned_campaigns={};self._model_review_campaigns=OrderedDict();self._model_checkpoint_errors={};self._model_preparations={};self._model_enrollment_task=None;self._model_tick_task=None;self._model_pause_task=None;self._model_start_cancel=None
         self._symmetry_rows=[];self._symmetry_all_rows=[];self._symmetry_groups=[];self._symmetry_draft=None;self._symmetry_approved='';self._symmetry_task=None;self._symmetry_loading=False;self._symmetry_refresh_pending=False;self._symmetry_explicit_selection=False;self._symmetry_display_identity=None;self._symmetry_loading_identity=None;self._symmetry_setup_details=None
         s=self.server.state
         defaults=dict(sx_campaign='',sx_campaigns=[],sx_source='',sx_source_options=[],sx_busy=False,sx_error='',sx_message='',sx_progress='',sx_groups=[],sx_group='',sx_members=[],sx_selected='',sx_search='',sx_status='all',
@@ -762,43 +763,86 @@ class SymmetryMixin(KSearchMixin):
     def start_symmetry_campaign(self,payload=None):
         if self._symmetry_task and not self._symmetry_task.done():return
         self._model_stopping=False
+        cancelled=threading.Event()
+        self._model_start_cancel=cancelled
         async def run():
             s=self.server.state;s.sx_error='';s.sx_busy=True
             s.sx_message='Preparing the approved campaign: checking the GPX revision and publishing shared inputs to Galaxy.';s.flush()
             try:
-                d=self._symmetry_draft
-                if isinstance(payload,dict) and d and payload.get('sx_plan_token')!=digest(d['template']):raise ValueError('The visible plan changed before Start')
-                if not d or not s.sx_plan_ready or not s.sx_approved or self._symmetry_approved!=digest(d['template']) or self._model_form(payload)!=d.get('form_signature'):raise ValueError('Approve the current finite plan first')
+                draft=self._symmetry_draft
+                if isinstance(payload,dict) and draft and payload.get('sx_plan_token')!=digest(draft['template']):raise ValueError('The visible plan changed before Start')
+                if not draft or not s.sx_plan_ready or not s.sx_approved or self._symmetry_approved!=digest(draft['template']) or self._model_form(payload)!=draft.get('form_signature'):raise ValueError('Approve the current finite plan first')
+                d=copy.deepcopy(draft)
                 if d['source_id']!=s.sx_start_source:raise ValueError('The source changed after approval')
-                current=await asyncio.to_thread(resolve_start,self._refinement_store(),s.rf_experiment,s.sx_start_source)
-                current=await asyncio.to_thread(self._refinement_store().runtime.resolve,current)
-                if d['source_id']!=s.sx_start_source or d.get('experiment',s.rf_experiment)!=s.rf_experiment:raise ValueError('The source selection changed while its revision was checked')
+                workspace=self._refinement_store();service=self.service
+                history=getattr(service,'history_id',None);experiment=s.rf_experiment
+                approved=self._symmetry_approved;root=self._symmetry_root()
+                def require_current():
+                    if self._model_stopping or cancelled.is_set():raise ValueError('Session paused or stopped before the model campaign could start')
+                    if (self._model_start_cancel is not cancelled or self.service is not service
+                            or getattr(service,'history_id',None)!=history or s.rf_experiment!=experiment
+                            or s.sx_start_source!=d['source_id'] or self._refinement_store() is not workspace
+                            or self._symmetry_draft is not draft or not s.sx_plan_ready or not s.sx_approved
+                            or self._symmetry_approved!=approved or digest(draft['template'])!=approved
+                            or draft.get('protocol')!=d['protocol']
+                            or self._model_form(payload)!=d.get('form_signature')):
+                        raise ValueError('The approved model scope or source context changed during preparation; review it before starting')
+                current=await asyncio.to_thread(resolve_start,workspace,experiment,d['source_id'])
+                current=copy.deepcopy(await asyncio.to_thread(workspace.runtime.resolve,current))
+                require_current()
                 if current.get('source_sha256') and current['source_sha256']!=d['protocol']['source']['sha256']:raise ValueError('The published GPX revision changed after approval; inspect it again')
-                # A crash or external cancellation must not strand queued
-                # acquisitions whose GPXs have not entered a native batch yet.
-                await asyncio.to_thread(self._refinement_store().checkpoint)
-                c=Campaign(self._symmetry_root()/('campaign-'+self._symmetry_approved[:12]),shared_inputs=True)
+                c=Campaign(root/('campaign-'+approved[:12]),shared_inputs=True)
                 if c.trials():raise ValueError('This campaign already exists. Use Continue to recover its work.')
-                ref=await asyncio.to_thread(prepare_shared_inputs,d['protocol'],d['root'],c.root)
-                if self._model_stopping:raise ValueError('Session stopped before the model campaign could start')
-                c.set_setting('template',d['template']);c.set_setting('reference_input_root',str(ref))
-                c.set_setting('following',d['template']['future']);c.set_setting('paused',False)
-                c.set_setting('enrollments',{key:dict(id=key,status='queued',
-                    scan=d['scope_sources'][key]['scan_label'],sample=d['scope_sources'][key]['sample_label'],
-                    bank=d['scope_sources'][key].get('bank'),source=portable_source(d['scope_sources'][key]),
-                    origin=d['scope_origins'][key]) for key in d['template']['existing_ids']})
                 transport=self._symmetry_transport(c)
-                if isinstance(transport,GalaxyChunkTransport):
-                    # The reviewed reference protocol and each acquisition's
-                    # rebound protocol have different hashes. Both thin input
-                    # packets need their own exact GPX/HDA binding for recovery.
-                    await asyncio.to_thread(transport.prepare_source,d['protocol'],ref,current)
-                await asyncio.to_thread(queue_sources,c,self._refinement_store())
+                async def stage():
+                    ref=await asyncio.to_thread(prepare_shared_inputs,d['protocol'],d['root'],c.root)
+                    require_current()
+                    c.set_setting('template',d['template']);c.set_setting('reference_input_root',str(ref))
+                    c.set_setting('following',d['template']['future']);c.set_setting('paused',False)
+                    c.set_setting('enrollments',{key:dict(id=key,status='queued',
+                        scan=d['scope_sources'][key]['scan_label'],sample=d['scope_sources'][key]['sample_label'],
+                        bank=d['scope_sources'][key].get('bank'),source=portable_source(d['scope_sources'][key]),
+                        origin=d['scope_origins'][key]) for key in d['template']['existing_ids']})
+                    if isinstance(transport,GalaxyChunkTransport):
+                        # Preserve distinct reference/rebound packets and their
+                        # existing acknowledged-HDA/dependency readiness rules.
+                        await asyncio.to_thread(transport.prepare_source,d['protocol'],ref,current)
+                # Staging cannot admit trials or submit science. It may overlap
+                # the source backup, but both existing operations must succeed
+                # before the original enrollment/claim/dispatch sequence starts.
+                await self._model_start_barrier(asyncio.to_thread(workspace.checkpoint),stage(),on_cancel=cancelled.set)
+                require_current()
+                await asyncio.to_thread(queue_sources,c,workspace)
+                require_current()
                 s.sx_campaign=c.root.name;s.sx_setup=False
                 await self._drive_symmetry_campaign(c,transport)
             except Exception as exc:s.sx_error=str(exc);s.sx_message='Campaign stopped; review the error above.'
-            finally:s.sx_busy=False;s.flush()
-        self._symmetry_task=self._refinement_schedule(run(),'radar-symmetry-campaign')
+            finally:
+                if self._model_start_cancel is cancelled:self._model_start_cancel=None
+                s.sx_busy=False;s.flush()
+        work=run()
+        try:self._symmetry_task=self._refinement_schedule(work,'radar-symmetry-campaign')
+        except BaseException:
+            cancelled.set();work.close()
+            if self._model_start_cancel is cancelled:self._model_start_cancel=None
+            raise
+        if self._symmetry_task is None:
+            cancelled.set();work.close()
+            if self._model_start_cancel is cancelled:self._model_start_cancel=None
+
+    async def _model_start_barrier(self,checkpoint,staging,*,on_cancel):
+        """Settle both owned operations, even when their caller is cancelled."""
+        pending=asyncio.gather(checkpoint,staging,return_exceptions=True)
+        cancelled=False
+        while True:
+            try:
+                results=await asyncio.shield(pending)
+                break
+            except asyncio.CancelledError:
+                cancelled=True;on_cancel()
+        if cancelled:raise asyncio.CancelledError
+        for result in results:
+            if isinstance(result,BaseException):raise result
 
     async def _await_model_checkpoint_work(self,task,campaign,transport):
         """Keep collecting accepted work while a durable upload/POST settles.
@@ -1055,6 +1099,8 @@ class SymmetryMixin(KSearchMixin):
     def pause_model_campaign(self):
         pending=getattr(self,'_model_pause_task',None)
         if pending and not pending.done():return
+        starting=getattr(self,'_model_start_cancel',None)
+        if starting is not None:starting.set()
         s=self.server.state
         s.sx_pause_pending=True
         s.sx_queue_notice='Pausing new submissions and saving recovery state. Already accepted native jobs are not cancelled.'
@@ -1118,7 +1164,7 @@ class SymmetryMixin(KSearchMixin):
         from copy import deepcopy
         for name,value in self._symmetry_defaults.items():setattr(self.server.state,name,deepcopy(value))
         self._symmetry_rows=[];self._symmetry_all_rows=[];self._symmetry_groups=[];self._symmetry_draft=None;self._symmetry_approved=''
-        self._model_runtime_cache=None;self._models_restored=False;self._model_active_campaigns={};self._model_owned_campaigns={};self._model_review_campaigns=OrderedDict();self._model_checkpoint_errors={};self._model_pause_task=None
+        self._model_runtime_cache=None;self._models_restored=False;self._model_active_campaigns={};self._model_owned_campaigns={};self._model_review_campaigns=OrderedDict();self._model_checkpoint_errors={};self._model_pause_task=None;self._model_start_cancel=None
         self._k_result=None;self._k_result_identity=None
         s=self.server.state;s.sx_k_rows=[];s.sx_k_choices=[];s.sx_k_notes=[];s.sx_k_has_result=False;s.sx_k_busy=False
         s.sx_k_plot=plots.empty('Run a k survey to compare magnetic templates')
