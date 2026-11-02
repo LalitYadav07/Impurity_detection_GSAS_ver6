@@ -205,6 +205,12 @@ def view_figure(view, settings: ViewSettings):
             if reference_tag:
                 name += f" · {reference_tag}"
             legend_key = (series["phase_key"], metric, series["sample"], _legend_branch(branch), reference_tag)
+            cooling = "decreas" in branch.lower() or "cool" in branch.lower()
+            symbol = {"a": "circle", "b": "square", "c": "triangle-up", "volume": "diamond"}.get(metric, "circle")
+            if cooling:
+                # Keep cell directions distinguishable in a cooling series.
+                # A single common diamond made a and c visually identical.
+                symbol = symbol + "-open" if view.get("metric") == "multiple" else "diamond"
             figure.add_trace(
                 go.Scatter(
                     x=xs,
@@ -218,17 +224,13 @@ def view_figure(view, settings: ViewSettings):
                         "color": color,
                         "dash": (
                             "dash"
-                            if "decreas" in branch.lower() or "cool" in branch.lower()
+                            if cooling
                             else "solid"
                         ),
                     },
                     marker={
                         "color": color,
-                        "symbol": (
-                            "diamond"
-                            if "decreas" in branch.lower() or "cool" in branch.lower()
-                            else {"a": "circle", "b": "square", "c": "triangle-up", "volume": "diamond"}.get(metric, "circle")
-                        ),
+                        "symbol": symbol,
                     },
                     error_y={
                         "type": "data",

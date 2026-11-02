@@ -70,6 +70,23 @@ def test_explicit_multiphase_multiaxis_lattice_signals_and_csv_keep_their_identi
         assert saved["settings"]["views"][0]["lattice_series"] == post.views[0].model_dump()["lattice_series"]
 
 
+def test_cooling_does_not_make_a_and_c_identical_symbols():
+    post = settings(representation="permille", axis="temperature", lattice_series=[
+        {"phase_key":"phase-a","metric":"a"},
+        {"phase_key":"phase-a","metric":"c"},
+    ])
+    scans = [scan(1,temperature=300.),scan(2,temperature=200.,a=3.99)]
+    result = calculate_views(scans,post)
+    panel=result['views'][0]
+    before=copy.deepcopy(panel)
+    fig=view_figure(panel,post.views[0])
+    assert len(fig.data)==2
+    assert {s.marker.symbol for s in fig.data}=={'circle-open','triangle-up-open'}
+    assert len({s.line.color for s in fig.data})==1  # retain the phase identity
+    assert all(s.line.dash=='dash' for s in fig.data)
+    assert panel==before  # marker styling cannot change values or uncertainties
+
+
 def paired_scan(run=1, *, cross=True):
     a, b = cell("one", a=4.), cell("two", a=5.)
     b["cell_covariance"][0][0] = 4e-6
