@@ -248,6 +248,43 @@ def test_configuration_scoped_recovery_does_not_load_unrelated_configs(monkeypat
     assert records[0].input_dataset_ids["configuration"] == "wanted-cfg"
 
 
+@pytest.mark.parametrize("exclude_known", [False, True])
+def test_recent_runs_skips_only_explicit_known_terminal_ids_before_hydration(monkeypatch, tmp_path, exclude_known):
+    from types import SimpleNamespace
+    states = {"known-ok":"ok", "known-error":"error", "known-running":"running",
+              "known-queued":"queued", "known-new":"new", "known-missing":None,
+              "unknown-ok":"ok", "unknown-error":"error"}
+    rows = [{"id":uid,"state":state} for uid,state in states.items()]
+    monkeypatch.setattr("radar_pd_nova.galaxy_service.requests.get", lambda *a, **kw:
+        SimpleNamespace(json=lambda:rows, raise_for_status=lambda:None))
+    service = GalaxyService("https://galaxy.example", "key", "history", output_root=tmp_path)
+    detailed, hydrated = [], []
+    def details(uid, fallback=None):
+        detailed.append(uid)
+        return {"id":uid,"state":states[uid],"params":{"run_name":uid},
+            "inputs":{"config_file":{"id":"cfg"}}}
+    service._job_details = details
+    service._config_from_job = lambda job, *args, **kwargs: hydrated.append(job["id"])
+    options = {"known_terminal_job_ids":{uid for uid in states if uid.startswith("known-")}} if exclude_known else {}
+    records = service.recent_runs(**options)
+    expected = set(states) - ({"known-ok","known-error"} if exclude_known else set())
+    assert set(detailed) == set(hydrated) == {r.uid for r in records} == expected
+
+
+@pytest.mark.parametrize("current_state", [None, "new", "queued", "running", "paused", "deleted", "stopped"])
+def test_known_terminal_hint_never_hides_unconfirmed_or_changed_server_state(monkeypatch, tmp_path, current_state):
+    from types import SimpleNamespace
+    monkeypatch.setattr("radar_pd_nova.galaxy_service.requests.get", lambda *a, **kw:
+        SimpleNamespace(json=lambda:[{"id":"known","state":current_state}], raise_for_status=lambda:None))
+    service = GalaxyService("https://galaxy.example", "key", "history", output_root=tmp_path)
+    read = []
+    service._job_details = lambda uid, fallback=None: read.append(uid) or {
+        "id":uid,"state":current_state,"params":{"run_name":"run"}}
+    service._config_from_job = lambda *a, **kw: None
+    records = service.recent_runs(known_terminal_job_ids={"known"})
+    assert read == ["known"] and [r.uid for r in records] == ["known"]
+
+
 def test_galaxy_status_normalization() -> None:
     assert normalize_status("queued") is RunStatus.QUEUED
     assert normalize_status("running") is RunStatus.RUNNING

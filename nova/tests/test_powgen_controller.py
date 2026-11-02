@@ -374,6 +374,85 @@ def test_job_reconciliation_supplies_configuration_scope_when_transport_supports
     assert seen == [(50, "config-hda")]
 
 
+def test_reconciliation_excludes_only_owned_consistent_terminal_records():
+    seen = []
+    class Service(FakeGalaxyService):
+        def recent_runs(self, *, limit, configuration_dataset_id=None, known_terminal_job_ids=None):
+            seen.append(set(known_terminal_job_ids or ()))
+            return []
+    service = Service()
+    controller = PowgenWatchController(service,
+        PowgenExperimentSettings("IPTS-38000", service.history_id, "config-hda", "1.5"))
+    for number,status in ((1,RunStatus.OK),(2,RunStatus.ERROR),(3,RunStatus.OK),
+                          (4,RunStatus.OK),(5,RunStatus.OK),(6,RunStatus.OK),(7,RunStatus.OK)):
+        run = WatchedRun(number, f"/input/PG3_{number}.gsa", f"fp-{number}", galaxy_job_id=f"job-{number}")
+        (controller.state.failed if status == RunStatus.ERROR else controller.state.completed)[run.run_id] = run
+        controller.records[run.run_id] = RunRecord(uid=f"record-{number}", galaxy_job_id=f"job-{number}",
+            name=run.run_id, history_id=service.history_id, mode=AnalysisMode.FULL,
+            status=status, analysis_status=status)
+    controller.records['PG3_3'].history_id = 'foreign-history'
+    controller.records.pop('PG3_4')
+    controller.records['PG3_5'].galaxy_job_id = 'different-job'
+    controller.records['PG3_7'].analysis_status = RunStatus.RUNNING
+    pending = WatchedRun(9,"/input/PG3_9.gsa","fp-9")
+    controller.state.discovered[pending.run_id] = pending
+    # An ID also present in an active map must not be excluded, even when a
+    # malformed/stale terminal row still refers to it.
+    controller.state.submitted['PG3_8'] = WatchedRun(8,"/input/PG3_8.gsa","fp-8",galaxy_job_id='job-6')
+    before = controller.state.as_dict()
+    assert controller.reconcile_recent_runs(checkpoint=False) == 0
+    assert seen == [{'job-1','job-2'}]
+    assert controller.state.as_dict() == before and service.snapshots == []
+
+
+@pytest.mark.parametrize("unknown_status", [RunStatus.OK, RunStatus.ERROR, RunStatus.QUEUED, RunStatus.RUNNING])
+def test_terminal_exclusion_preserves_unknown_ack_recovery_and_lifecycle_maps(unknown_status):
+    class ScopedService(FakeGalaxyService):
+        def recent_runs(self, *, limit=50, configuration_dataset_id=None, known_terminal_job_ids=None):
+            self.exclusions = set(known_terminal_job_ids or ())
+            return [r for r in self.recovered_runs if r.galaxy_job_id not in self.exclusions]
+    projections = []
+    for service in (FakeGalaxyService(), ScopedService()):
+        controller = PowgenWatchController(service, PowgenExperimentSettings(
+            "IPTS-38000",service.history_id,"config-hda","1.5",database_dataset_id="custom-library-hda"))
+        for number,status in ((63762,RunStatus.ERROR),(63763,RunStatus.OK)):
+            run=WatchedRun(number,f"/input/PG3_{number}.gsa",f"fp-{number}",galaxy_job_id=f"job-{number}")
+            (controller.state.failed if status == RunStatus.ERROR else controller.state.completed)[run.run_id]=run
+            controller.records[run.run_id]=_recovered_record(run_number=number,status=status)
+        pending=WatchedRun(63764,"/input/PG3_63764.gsa","fp-63764")
+        controller.state.discovered[pending.run_id]=pending
+        service.recovered_runs=[*controller.records.values(),_recovered_record(status=unknown_status)]
+        service.json_documents['summary-63764']={"status":"complete","analysis_mode":"rapid","final_rwp":8.2}
+        assert controller.reconcile_recent_runs(checkpoint=False)==1
+        if isinstance(service,ScopedService):assert service.exclusions=={'job-63762','job-63763'}
+        projections.append({phase:{key:(run.galaxy_job_id,run.scientific_summary,run.error)
+            for key,run in getattr(controller.state,phase).items()}
+            for phase in ('completed','failed','submitted','discovered')})
+        assert service.snapshots==[]
+    assert projections[0]==projections[1]
+
+
+def test_retry_previous_attempt_ids_are_not_terminal_exclusions():
+    class Service(FakeGalaxyService):
+        def recent_runs(self, *, limit=50, configuration_dataset_id=None, known_terminal_job_ids=None):
+            self.exclusions=set(known_terminal_job_ids or ())
+            return list(self.recovered_runs)
+    service=Service()
+    controller=PowgenWatchController(service,PowgenExperimentSettings(
+        "IPTS-38000",service.history_id,"config-hda","1.5",database_dataset_id="custom-library-hda"))
+    run=WatchedRun(63764,"/input/PG3_63764.gsa","fp",scan_metadata={
+        'retry_generation':1,'previous_attempts':[{'job_id':'old-error'}]})
+    controller.state.discovered[run.run_id]=run
+    old=_recovered_record(status=RunStatus.ERROR);old.galaxy_job_id='old-error'
+    current=_recovered_record(status=RunStatus.QUEUED)
+    current.name += '_retry1';current.galaxy_job_id='new-retry-job'
+    service.recovered_runs=[old,current]
+    assert controller.reconcile_recent_runs(checkpoint=False)==1
+    assert service.exclusions==set()
+    assert controller.state.submitted[run.run_id].galaxy_job_id=='new-retry-job'
+    assert controller.state.failed=={} and service.snapshots==[]
+
+
 def test_monitor_scientific_summary_resolves_direct_curve_output_without_tables():
     service = FakeGalaxyService()
     descriptor = {"name": "Pattern_observation.json", "sha256": "a" * 64, "source_gpx_sha256": "b" * 64}

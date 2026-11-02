@@ -1258,8 +1258,21 @@ class PowgenWatchController:
         # Local transports from older simulator versions may implement the
         # original unfiltered method. Production can avoid hydrating unrelated
         # configurations while retaining the full identity checks below.
-        if "configuration_dataset_id" in inspect.signature(self.service.recent_runs).parameters:
+        parameters = inspect.signature(self.service.recent_runs).parameters
+        if "configuration_dataset_id" in parameters:
             recovery_options["configuration_dataset_id"] = self.settings.configuration_dataset_id
+        if "known_terminal_job_ids" in parameters:
+            active_job_ids = {run.galaxy_job_id for run in active.values() if run.galaxy_job_id}
+            terminal_job_ids = set()
+            for phase, status in ((self.state.completed, RunStatus.OK), (self.state.failed, RunStatus.ERROR)):
+                for run_id, run in phase.items():
+                    record = self.records.get(run_id)
+                    if (run.galaxy_job_id and run.galaxy_job_id not in active_job_ids and record is not None
+                            and record.galaxy_job_id == run.galaxy_job_id
+                            and record.history_id == self.settings.history_id
+                            and record.status == status and record.analysis_status == status):
+                        terminal_job_ids.add(run.galaxy_job_id)
+            recovery_options["known_terminal_job_ids"] = terminal_job_ids
         recovered = self.service.recent_runs(**recovery_options)
         candidates: dict[str, RunRecord] = {}
         runs_by_name = {self._run_name(run).upper(): run_id for run_id, run in active.items()}
