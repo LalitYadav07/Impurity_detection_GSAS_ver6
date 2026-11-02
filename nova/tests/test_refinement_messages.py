@@ -1,6 +1,23 @@
 from radar_pd_nova.refinement_messages import sample_width_failure_message
 from radar_pd_nova.refinement_messages import convergence_notice
+from radar_pd_nova.refinement_messages import refinement_review_status
 from gpx_recipe.convergence import SCHEMA
+
+
+def test_stopped_recipe_card_shows_recorded_reason_without_claiming_missing_diagnostics():
+    error = 'Stage failed its required convergence screen: Final-cycle maximum shift/sigma 2.3925 exceeds 1.'
+    review = refinement_review_status(dict(status='needs_review', error=error, stages=[{'id': 'stage1'}]))
+    assert review['status'] == 'needs_review' and review['needs_review']
+    assert error in review['message']
+    assert 'No final GPX was accepted' in review['message']
+    assert 'retained stages' in review['message']
+    assert 'diagnostics unavailable' not in review['message']
+
+
+def test_stopped_recipe_without_error_still_does_not_claim_an_accepted_final():
+    review = refinement_review_status(dict(status='needs_review'))
+    assert review['needs_review'] and 'stopped' in review['message']
+    assert 'No final GPX was accepted' in review['message']
 
 
 def test_failed_width_uses_native_ids_and_physical_bank_not_list_order():
