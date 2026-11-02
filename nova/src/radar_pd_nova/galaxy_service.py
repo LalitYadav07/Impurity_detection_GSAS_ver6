@@ -56,6 +56,29 @@ SUBMISSION_ACK_TIMEOUT_SECONDS = float(os.getenv("RADAR_PD_SUBMISSION_ACK_TIMEOU
 _INTERACTIVE_TOOL_IDS = frozenset({RESULT_EXPLORER_TOOL_ID, GSASII_INTERACTIVE_TOOL_ID})
 
 
+def _job_failure_message(stdout: str, stderr: str, dependency_error: str = "", *,
+                         limit: int = 4000, fallback: str = "Galaxy reported an error") -> str:
+    """Prefer a native terminal cause without discarding runner diagnostics.
+
+    A failed native pipeline may write its structured FATAL line to stdout,
+    followed by generic Pulsar missing-output errors on stderr. The original
+    stdout/log remains available separately; this is a bounded display summary.
+    """
+    if dependency_error:
+        return dependency_error[-limit:]
+    fatal = None
+    for match in re.finditer(r"(?m)^[ \t]*(\[FATAL\][^\r\n]*)", stdout):
+        fatal = stdout[match.start(1):min(match.end(1), match.start(1) + limit)]
+    if fatal is None:
+        return (stderr or stdout or fallback)[-limit:]
+    if not stderr:
+        return fatal
+    primary = fatal[:min(2000, max(1, limit // 2))]
+    separator = "\n\nRunner stderr:\n"
+    available = limit - len(primary) - len(separator)
+    return primary + separator + stderr[-available:] if available > 0 else primary
+
+
 def _interactive_pending_message(tool_id: str) -> str:
     if tool_id == GSASII_INTERACTIVE_TOOL_ID:
         return (
@@ -2141,9 +2164,11 @@ class GalaxyService:
         if dependency_error:
             action.status = RunStatus.ERROR
         action.outputs.update(self._job_output_ids(job))
+        stdout = str(job.get("stdout") or job.get("tool_stdout") or job.get("job_stdout") or "")
         stderr = str(job.get("stderr") or job.get("tool_stderr") or job.get("job_stderr") or "")
         if action.status == RunStatus.ERROR:
-            action.message = dependency_error or stderr[-2000:] or "Galaxy reported a utility-tool error"
+            action.message = _job_failure_message(stdout, stderr, dependency_error, limit=2000,
+                                                  fallback="Galaxy reported a utility-tool error")
         if action.tool_id in _INTERACTIVE_TOOL_IDS and action.status in {RunStatus.RUNNING, RunStatus.OK}:
             try:
                 response = requests.get(
@@ -2483,7 +2508,7 @@ class GalaxyService:
         record.updated_utc = datetime.now(timezone.utc).isoformat()
         record.galaxy_terminal_utc = galaxy_terminal_timestamp(job) or record.galaxy_terminal_utc
         if status == RunStatus.ERROR:
-            record.message = (dependency_error or stderr or stdout or "Galaxy reported an error")[-4000:]
+            record.message = _job_failure_message(stdout, stderr, dependency_error)
         return record
 
     @staticmethod
