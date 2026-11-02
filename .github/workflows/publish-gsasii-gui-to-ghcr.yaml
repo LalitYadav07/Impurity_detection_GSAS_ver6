@@ -144,24 +144,24 @@ jobs:
           grep --quiet 'noVNC' /tmp/gsasii-vnc.html
           curl --silent --show-error --dump-header /tmp/gsasii-redirect.headers --output /dev/null \
             http://127.0.0.1:18080/gsasii
-          grep --quiet 'path=/gsasii/websockify' /tmp/gsasii-redirect.headers
+          grep --quiet 'path=gsasii/websockify' /tmp/gsasii-redirect.headers
           python - <<'PY'
           import socket
           from email import message_from_string
           from pathlib import Path
-          from urllib.parse import parse_qs, urljoin, urlsplit
+          from urllib.parse import parse_qs, urlsplit
 
           headers = Path('/tmp/gsasii-redirect.headers').read_text().split('\n', 1)[1]
           location = message_from_string(headers)['Location']
           path = parse_qs(urlsplit(location).query)['path'][0]
-          # Exercise the path emitted to noVNC's empty-Host, relative-URL mode.
-          # A manually hardcoded upgrade path missed this regression before.
-          websocket = urlsplit(urljoin('http://127.0.0.1:18080/gsasii/vnc.html', path))
-          assert websocket.netloc == '127.0.0.1:18080'
-          assert websocket.path == '/gsasii/websockify', websocket.path
+          # noVNC 1.7 appends '/' + path to the host. urljoin() does not
+          # reproduce that behavior and previously hid the doubled-slash bug.
+          assert not path.startswith('/'), path
+          websocket_path = '/' + path
+          assert websocket_path == '/gsasii/websockify', websocket_path
 
           request = (
-              f"GET {websocket.path} HTTP/1.1\r\n"
+              f"GET {websocket_path} HTTP/1.1\r\n"
               "Host: 127.0.0.1:18080\r\n"
               "Upgrade: websocket\r\n"
               "Connection: Upgrade\r\n"
@@ -175,6 +175,30 @@ jobs:
           status = response.split(b"\r\n", 1)[0]
           if b" 101 " not in status:
               raise SystemExit(f"WebSocket upgrade failed: {status!r}")
+          PY
+          # Exercise the actual pinned browser client as well as the socket.
+          # A successful HTTP page or hand-crafted upgrade cannot prove that
+          # noVNC constructs the correct URL and completes its RFB connection.
+          browser="$(command -v google-chrome || command -v chromium || command -v chromium-browser)"
+          test -n "${browser}"
+          timeout 45 "${browser}" --headless=new --no-sandbox --disable-gpu \
+            --disable-dev-shm-usage --user-data-dir="${smoke_dir}/browser" \
+            --virtual-time-budget=12000 --dump-dom \
+            http://127.0.0.1:18080/gsasii/ \
+            > /tmp/gsasii-client.html 2> /tmp/gsasii-client.log
+          python - <<'PY'
+          from html.parser import HTMLParser
+          from pathlib import Path
+          class ClientState(HTMLParser):
+              connected = False
+              def handle_starttag(self, tag, attrs):
+                  if tag == 'html':
+                      self.connected = 'noVNC_connected' in dict(attrs).get('class', '').split()
+          state = ClientState()
+          state.feed(Path('/tmp/gsasii-client.html').read_text())
+          if not state.connected:
+              raise SystemExit('The real noVNC browser client did not complete its RFB connection')
+          print('The pinned noVNC browser client connected to the prefixed desktop')
           PY
           docker stop --time 10 "${container_id}"
           test -s "${smoke_dir}/output.gpx"

@@ -5,6 +5,8 @@ import sys
 import zipfile
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 GUI = ROOT / "gsasii_gui"
@@ -50,13 +52,31 @@ def test_desktop_gateway_obeys_ndip_path_prefix() -> None:
     assert 'Cache-Control "no-cache"' in nginx
     assert "quality=6&compression=1" in nginx
     assert "RADAR-PD GSAS-II ${GUI_VERSION}" in nginx
-    assert 'export EP_WS_PATH="${EP_PATH}"' in launcher
+    assert 'export EP_WS_PATH="${EP_PATH#/}"' in launcher
     assert "envsubst '${EP_PATH} ${EP_WS_PATH} ${GUI_VERSION}'" in launcher
     assert "^(/[A-Za-z0-9._~-]+)+$" in launcher
     assert "wait_for_port 127.0.0.1 5900 x11vnc" in launcher
     assert "wait_for_port 127.0.0.1 6080 websockify" in launcher
     assert "exec nginx -c /tmp/gsasii-nginx.conf" in launcher
     assert "error_log /dev/stderr warn" in nginx
+
+
+@pytest.mark.parametrize('prefix,absolute,client_path', [
+    ('/gsasii', '/gsasii', 'gsasii'),
+    ('gsasii', '/gsasii', 'gsasii'),
+    ('/interactivetool/ep/abc/session/', '/interactivetool/ep/abc/session',
+     'interactivetool/ep/abc/session'),
+])
+def test_actual_launcher_separates_http_and_novnc_websocket_paths(prefix, absolute, client_path):
+    import os
+    # Execute the real path-validation/export section without starting nginx.
+    script = _read('scripts/run_nginx.sh').split('gui_version=', 1)[0]
+    result = subprocess.run(['bash', '-c', script + '\nprintf "%s\\n%s\\n" "$EP_PATH" "$EP_WS_PATH"'],
+                            env={**os.environ, 'EP_PATH': prefix}, text=True,
+                            capture_output=True, check=True)
+    assert result.stdout.splitlines() == [absolute, client_path]
+    # The pinned noVNC client supplies the separator after the host itself.
+    assert '/' + client_path + '/websockify' == absolute + '/websockify'
 
 
 def test_gpx_is_edited_as_a_copy_and_continuously_preserved() -> None:
@@ -157,8 +177,9 @@ def test_release_smoke_checks_http_redirect_and_websocket_upgrade() -> None:
     )
 
     assert "/gsasii/healthz" in workflow
-    assert "path=/gsasii/websockify" in workflow
-    assert "urljoin" in workflow and "parse_qs" in workflow
+    assert "path=gsasii/websockify" in workflow
+    assert "parse_qs" in workflow
+    assert '--dump-dom' in workflow and 'noVNC_connected' in workflow
     assert "Upgrade: websocket" in workflow
     assert 'b" 101 "' in workflow
     assert "docker inspect --format '{{.State.Running}}'" in workflow
