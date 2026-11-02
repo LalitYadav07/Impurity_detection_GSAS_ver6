@@ -5826,6 +5826,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
             state.error_message = "Use Resume existing watch to continue the saved settings, or Clear workspace before starting a separate watch."
             state.flush()
             return
+        launch_service, launch_context = self.service, self._result_context
         state.live_launch_busy = True
         state.live_test_message = ""
         state.powgen_message = "Preparing the Live analysis and checking the selected inputs..."
@@ -5886,16 +5887,19 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
             self._powgen_monitor_task = task
             self.webmon_attach_monitor()
         except Exception as exc:
-            state.powgen_monitoring = False
-            state.powgen_message = f"{self._live_adapter().name} monitor could not start: {exc}"
-            state.error_message = str(exc)
-            state.flush()
+            if self.service is launch_service and self._result_context is launch_context:
+                state.powgen_monitoring = False
+                state.powgen_message = f"{self._live_adapter().name} monitor could not start: {exc}"
+                state.error_message = str(exc)
+                state.flush()
         finally:
-            state.live_launch_busy = False
-            state.flush()
+            if self.service is launch_service and self._result_context is launch_context:
+                state.live_launch_busy = False
+                state.flush()
 
     def _invalidate_powgen_resume(self) -> None:
         """Release a read-only resume lease before clearing or ending the view."""
+        self._live_staging_owner = None
         if getattr(self, "_powgen_resume_owner", None) is not None:
             self._powgen_resume_owner = None
             self.server.state.live_launch_busy = False

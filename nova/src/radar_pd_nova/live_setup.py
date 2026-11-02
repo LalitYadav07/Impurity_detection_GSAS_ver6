@@ -41,6 +41,20 @@ def local_asset_signature(path: str) -> tuple[str, int, int]:
     return str(source.resolve()), stat.st_size, stat.st_mtime_ns
 
 
+def staging_connection_key(service):
+    """Keep cached HDA references within their endpoint, actor and History."""
+    actor = sha256(str(getattr(service, "galaxy_key", "") or "").encode()).hexdigest()
+    return (
+        str(getattr(service, "galaxy_url", "") or "").rstrip("/"),
+        str(getattr(service, "history_id", "") or ""),
+        actor,
+    )
+
+
+class _StagingCancelled(Exception):
+    pass
+
+
 class LiveSetupMixin:
     def _live_excluded_numbers(self,values):
         from .powgen_watch import normalize_exclusions
@@ -82,6 +96,8 @@ class LiveSetupMixin:
         state.library_builder_unknown_elements = 0
         self._live_saved_configurations = {}
         self._live_uploaded_assets = {}
+        self._live_staging_owner = None
+        self._live_staging_slots = None
         self._library_action_contexts = {}
         fields = ["live_" + f for f in CONFIG_FORM_FIELDS]
         fields += [
@@ -503,23 +519,30 @@ class LiveSetupMixin:
                 )
         return {"dataset_id": None, "path": str(path), "label": path.name}
 
-    async def _save_live_configuration(self, config):
+    async def _save_live_configuration(
+        self, config, *, client=None, check=lambda: None, source=None, dataset_id=None
+    ):
         self._require_library_decision("live")
         state = self.server.state
-        if (
-            getattr(state, "live_configuration_source", None) or "history"
-        ) == "history":
-            dataset_id = str(state.powgen_configuration_dataset_id)
-            saved = await asyncio.to_thread(self.service.load_configuration_dataset, dataset_id)
+        client = client or self.service
+        check()
+        source = source or getattr(state, "live_configuration_source", None) or "history"
+        if source == "history":
+            dataset_id = str(
+                dataset_id if dataset_id is not None else state.powgen_configuration_dataset_id
+            )
+            saved = await asyncio.to_thread(client.load_configuration_dataset, dataset_id)
+            check()
             if configuration_digest(saved) == configuration_digest(config):
                 return dataset_id
             # A new explicit library permission changes the portable contract.
             # Persist a derived configuration; never submit the stale History
             # document merely because its other analysis settings match.
-        key = configuration_digest(config)
+        key = (staging_connection_key(client), configuration_digest(config))
         cache = self._live_saved_configurations
         if key not in cache:
-            action = await asyncio.to_thread(self.service.save_configuration, config)
+            action = await asyncio.to_thread(client.save_configuration, config)
+            check()
             if action.status != RunStatus.OK or not action.outputs.get("config_output"):
                 raise RuntimeError(
                     action.message or "Galaxy did not save the Live configuration"
@@ -531,14 +554,21 @@ class LiveSetupMixin:
             )
         return cache[key]
 
-    async def _upload_live_asset(self, path, label):
+    async def _upload_live_asset(
+        self, path, label, *, client=None, check=lambda: None, expected_signature=None
+    ):
+        client = client or self.service
+        check()
         before = local_asset_signature(str(path))
-        key = (label, *before)
+        if expected_signature is not None and before != expected_signature:
+            raise ValueError(f"{Path(path).name} changed before upload; check the Live setup again")
+        key = (staging_connection_key(client), label, *before)
         cache = self._live_uploaded_assets
         if key not in cache:
             dataset_id = await asyncio.to_thread(
-                self.service.upload_document, Path(path), label=label
+                client.upload_document, Path(path), label=label
             )
+            check()
             if before != local_asset_signature(str(path)):
                 raise ValueError(
                     f"{Path(path).name} changed during upload; check the Live setup again"
@@ -551,7 +581,27 @@ class LiveSetupMixin:
     async def _prepare_live_settings(self, *, test=False):
         self._require_library_decision("live")
         state = self.server.state
+        service = self.service
+        connection = staging_connection_key(service)
+        context = getattr(self, "_result_context", None)
+        owner = object()
+        self._live_staging_owner = owner
+        cancelled = False
+
+        def owns():
+            return (
+                not cancelled
+                and self._live_staging_owner is owner
+                and self.service is service
+                and staging_connection_key(service) == connection
+                and getattr(self, "_result_context", None) is context
+                and not getattr(state, "workspace_clearing", False)
+                and not getattr(state, "session_closing", False)
+            )
+
         if not await self.check_powgen_experiment():
+            return None
+        if not owns():
             return None
         checked = self._powgen_preflight_signature()
         config = self._live_checked_configuration.model_copy(deep=True)
@@ -596,11 +646,13 @@ class LiveSetupMixin:
             if bank is None or isinstance(bank, bool) or int(bank) not in allowed:
                 raise ValueError("Choose a diffraction bank for the one-scan test")
             selected_banks = (int(bank),)
-        if not self.service.history_id:
+        if not connection[1]:
             raise RuntimeError(
                 "The active Galaxy History is not available to this NOVA session"
             )
         def progress(message):
+            if not owns():
+                return
             state.powgen_message = message
             if test:
                 # The workspace remains visible when the setup rail is hidden.
@@ -608,38 +660,124 @@ class LiveSetupMixin:
                 state.live_test_message = message
             state.flush()
 
-        progress("Inputs verified. Saving the reproducible Live configuration...")
-        config_id = await self._save_live_configuration(config)
+        def check():
+            if not owns():
+                raise _StagingCancelled()
+            if checked != self._powgen_preflight_signature():
+                raise ValueError(
+                    "Live setup changed while inputs were saved. Check the current settings before starting."
+                )
+
+        client_factory = getattr(service, "staging_client", None)
+        client = client_factory() if client_factory is not None else service
+        check()
+        config_source = getattr(state, "live_configuration_source", None) or "history"
+        config_dataset = str(getattr(state, "powgen_configuration_dataset_id", "") or "")
+        operations = [("configuration", lambda: self._save_live_configuration(
+            config, client=client, check=check, source=config_source, dataset_id=config_dataset
+        ))]
         main_id = (
             str(values["powgen_main_cif_dataset_id"] or "") or None
             if values["powgen_main_cif_source"] == "galaxy"
             else None
         )
         if values["powgen_main_cif_source"] == "computer":
-            progress("Saving the selected main-phase CIF to Galaxy...")
-            main_id = await self._upload_live_asset(
-                values["powgen_main_cif_path"], f"{adapter.name} main phase CIF"
-            )
+            path = values["powgen_main_cif_path"]
+            signature = local_asset_signature(str(path))
+            operations.append(("main-phase CIF", lambda path=path, signature=signature:
+                self._upload_live_asset(
+                    path, f"{adapter.name} main phase CIF", client=client,
+                    check=check, expected_signature=signature
+                )))
         profile_id = (
             str(values["powgen_instrument_dataset_id"] or "") or None
             if values["powgen_instrument_source"] == "galaxy"
             else None
         )
         if values["powgen_instrument_source"] == "computer":
-            progress("Saving the selected instrument profile to Galaxy...")
-            profile_id = await self._upload_live_asset(
-                values["powgen_instrument_path"], f"{adapter.name} instrument profile"
-            )
+            path = values["powgen_instrument_path"]
+            signature = local_asset_signature(str(path))
+            operations.append(("instrument profile", lambda path=path, signature=signature:
+                self._upload_live_asset(
+                    path, f"{adapter.name} instrument profile", client=client,
+                    check=check, expected_signature=signature
+                )))
         library_id = library["dataset_id"]
         if library["path"]:
-            progress("Saving the selected candidate library to Galaxy...")
-            library_id = await self._upload_live_asset(
-                library["path"], "Live candidate library"
+            path = library["path"]
+            signature = local_asset_signature(str(path))
+            operations.append(("candidate library", lambda path=path, signature=signature:
+                self._upload_live_asset(
+                    path, "Live candidate library", client=client,
+                    check=check, expected_signature=signature
+                )))
+        # A cleared workspace may start another batch while old uploads drain.
+        # Keep the same cap across both generations, not just within one batch.
+        if self._live_staging_slots is None:
+            self._live_staging_slots = asyncio.Semaphore(2)
+        active = []
+        completed = 0
+        failed = False
+
+        def report():
+            progress(
+                "Saving Live inputs to Galaxy: " + (", ".join(active) or "finishing")
+                + f". {completed}/{len(operations)} ready."
             )
-        if checked != self._powgen_preflight_signature():
-            raise ValueError(
-                "Live setup changed while inputs were saved. Check the current settings before starting."
-            )
+
+        async def stage(label, operation):
+            nonlocal completed, failed
+            async with self._live_staging_slots:
+                check()
+                if failed:
+                    raise _StagingCancelled()
+                active.append(label)
+                report()
+                try:
+                    value = await operation()
+                    completed += 1
+                    return label, value
+                except BaseException:
+                    failed = True
+                    raise
+                finally:
+                    active.remove(label)
+                    report()
+
+        group = asyncio.gather(
+            *(stage(label, operation) for label, operation in operations),
+            return_exceptions=True,
+        )
+        try:
+            try:
+                results = await asyncio.shield(group)
+            except asyncio.CancelledError:
+                # Cancelling a coroutine cannot cancel an upload in a thread.
+                # Stop waiting items, drain acknowledgements, then propagate.
+                cancelled = True
+                while not group.done():
+                    try:
+                        await asyncio.shield(group)
+                    except asyncio.CancelledError:
+                        pass
+                raise
+            errors = [result for result in results if isinstance(result, BaseException)]
+            error = next((error for error in errors if not isinstance(error, _StagingCancelled)), None)
+            if error is not None:
+                raise error
+            if errors:
+                return None
+            check()
+            staged = dict(results)
+            config_id = staged["configuration"]
+            main_id = staged.get("main-phase CIF", main_id)
+            profile_id = staged.get("instrument profile", profile_id)
+            library_id = staged.get("candidate library", library_id)
+        except _StagingCancelled:
+            return None
+        finally:
+            if self._live_staging_owner is owner:
+                self._live_staging_owner = None
         # All adapter inputs below were captured before the first upload. Later
         # Single-pattern edits cannot affect a queued or running Live analysis.
         backfill = {
@@ -668,7 +806,7 @@ class LiveSetupMixin:
             extra['condition_bindings_json'] = json.dumps(self._snap_condition_bindings(values),sort_keys=True)
         settings = adapter.settings(
             ipts=self._normalize_powgen_ipts(values["powgen_ipts"]),
-            history_id=self.service.history_id,
+            history_id=connection[1],
             configuration_dataset_id=config_id,
             wavelength_angstrom=str(values["powgen_wavelength"] or ""),
             instrument_profile_dataset_id=profile_id,
@@ -717,6 +855,7 @@ class LiveSetupMixin:
         state = self.server.state
         if state.powgen_monitoring or state.live_launch_busy:
             return
+        launch_service, launch_context = self.service, getattr(self,'_result_context',None)
         state.live_launch_busy = True
         state.live_test_message = "Checking and preparing one scan..."
         state.flush()
@@ -765,11 +904,13 @@ class LiveSetupMixin:
             state.error_message = ""
             self._start_monitor(record)
         except Exception as exc:  # noqa: BLE001 - leave monitoring stopped after any launch failure
-            state.live_test_message = f"One-scan test could not start: {exc}"
-            state.error_message = state.live_test_message
+            if self.service is launch_service and getattr(self,'_result_context',None) is launch_context:
+                state.live_test_message = f"One-scan test could not start: {exc}"
+                state.error_message = state.live_test_message
         finally:
-            state.live_launch_busy = False
-            state.flush()
+            if self.service is launch_service and getattr(self,'_result_context',None) is launch_context:
+                state.live_launch_busy = False
+                state.flush()
 
     def _live_beamline_review_controls(self):
         """Share calibration and condition controls with guided Live setup."""

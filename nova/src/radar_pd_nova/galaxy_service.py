@@ -404,6 +404,15 @@ class GalaxyService:
         self._library_review_lock = threading.RLock()
         self._library_review_cache: dict[str,dict[str,Any]] = {}
 
+    def staging_client(self):
+        """Capture one actor/History for independent initial-input uploads.
+
+        Each upload still opens its own short-lived nova-galaxy connection.
+        Later edits to the application's service cannot redirect this batch.
+        """
+        return GalaxyService(self.galaxy_url, self.galaxy_key, self.history_id,
+                             output_root=self.output_root)
+
     def inspect_library_review(self, dataset_id: str) -> dict[str,Any]:
         from .library_setup import inspect_library_review
         with self._library_review_lock:

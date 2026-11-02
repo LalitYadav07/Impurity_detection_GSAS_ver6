@@ -302,11 +302,10 @@ def test_one_scan_workspace_reports_active_staging_step(live, tmp_path, monkeypa
     live.service.upload_document = uploading
     monkeypatch.setattr(TrialController, "launch_submission", launching)
     asyncio.run(live.test_live_scan())
-    assert observed == [
-        "Inputs verified. Saving the reproducible Live configuration...",
-        "Saving the selected main-phase CIF to Galaxy...",
-        "Staging inputs and submitting scan-100-bank2 to Galaxy...",
-    ]
+    assert len(observed) == 3
+    assert all(message.startswith('Saving Live inputs to Galaxy:') for message in observed[:2])
+    assert 'configuration' in ' '.join(observed[:2]) and 'main-phase CIF' in ' '.join(observed[:2])
+    assert observed[-1] == 'Staging inputs and submitting scan-100-bank2 to Galaxy...'
     assert len(live.service.jobs) == 1
     assert not state.powgen_monitoring
     assert state.live_test_message.startswith("One-scan test submitted:")
