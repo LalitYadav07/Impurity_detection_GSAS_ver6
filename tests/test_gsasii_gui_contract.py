@@ -42,18 +42,20 @@ def test_desktop_gateway_obeys_ndip_path_prefix() -> None:
     launcher = _read("scripts/run_nginx.sh")
 
     assert "location = ${EP_PATH}/websockify" in nginx
-    assert "path=${EP_WS_PATH}/websockify" in nginx
-    assert "path=${EP_PATH}/websockify" not in nginx
+    assert "return 302 ${EP_PATH}/radar-launch.html" in nginx
     assert "alias /opt/noVNC/" in nginx
     assert "location = ${EP_PATH}/healthz" in nginx
     assert "location = ${EP_PATH}/websockify" in nginx
     assert "proxy_buffering off" in nginx
     assert "proxy_socket_keepalive on" in nginx
     assert 'Cache-Control "no-cache"' in nginx
-    assert "quality=6&compression=1" in nginx
+    assert '<script src="./radar-launch.js" defer>' in _read('novnc_launch.html')
+    bootstrap = _read('novnc_launch.js')
+    assert "quality: '6', compression: '1'" in bootstrap
+    assert 'host: page.hostname' in bootstrap
+    assert "page.port || (page.protocol === 'https:' ? '443' : '80')" in bootstrap
     assert "RADAR-PD GSAS-II ${GUI_VERSION}" in nginx
-    assert 'export EP_WS_PATH="${EP_PATH#/}"' in launcher
-    assert "envsubst '${EP_PATH} ${EP_WS_PATH} ${GUI_VERSION}'" in launcher
+    assert "envsubst '${EP_PATH} ${GUI_VERSION}'" in launcher
     assert "^(/[A-Za-z0-9._~-]+)+$" in launcher
     assert "wait_for_port 127.0.0.1 5900 x11vnc" in launcher
     assert "wait_for_port 127.0.0.1 6080 websockify" in launcher
@@ -61,22 +63,19 @@ def test_desktop_gateway_obeys_ndip_path_prefix() -> None:
     assert "error_log /dev/stderr warn" in nginx
 
 
-@pytest.mark.parametrize('prefix,absolute,client_path', [
-    ('/gsasii', '/gsasii', 'gsasii'),
-    ('gsasii', '/gsasii', 'gsasii'),
-    ('/interactivetool/ep/abc/session/', '/interactivetool/ep/abc/session',
-     'interactivetool/ep/abc/session'),
+@pytest.mark.parametrize('prefix,absolute', [
+    ('/gsasii', '/gsasii'),
+    ('gsasii', '/gsasii'),
+    ('/interactivetool/ep/abc/session/', '/interactivetool/ep/abc/session'),
 ])
-def test_actual_launcher_separates_http_and_novnc_websocket_paths(prefix, absolute, client_path):
+def test_actual_launcher_validates_and_normalizes_http_prefix(prefix, absolute):
     import os
     # Execute the real path-validation/export section without starting nginx.
     script = _read('scripts/run_nginx.sh').split('gui_version=', 1)[0]
-    result = subprocess.run(['bash', '-c', script + '\nprintf "%s\\n%s\\n" "$EP_PATH" "$EP_WS_PATH"'],
+    result = subprocess.run(['bash', '-c', script + '\nprintf "%s\\n" "$EP_PATH"'],
                             env={**os.environ, 'EP_PATH': prefix}, text=True,
                             capture_output=True, check=True)
-    assert result.stdout.splitlines() == [absolute, client_path]
-    # The pinned noVNC client supplies the separator after the host itself.
-    assert '/' + client_path + '/websockify' == absolute + '/websockify'
+    assert result.stdout.splitlines() == [absolute]
 
 
 def test_gpx_is_edited_as_a_copy_and_continuously_preserved() -> None:
@@ -177,8 +176,7 @@ def test_release_smoke_checks_http_redirect_and_websocket_upgrade() -> None:
     )
 
     assert "/gsasii/healthz" in workflow
-    assert "path=gsasii/websockify" in workflow
-    assert "parse_qs" in workflow
+    assert "/gsasii/radar-launch.html" in workflow
     assert 'smoke_novnc_client.mjs' in workflow
     browser_check = _read('scripts/smoke_novnc_client.mjs')
     assert 'noVNC_connected' in browser_check

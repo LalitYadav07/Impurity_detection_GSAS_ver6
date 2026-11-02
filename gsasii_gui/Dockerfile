@@ -87,6 +87,8 @@ RUN groupadd --gid "${GSASII_GID}" gsasii \
     && chown -R gsasii:gsasii /workspace /tmp/runtime-gsasii /home/gsasii
 
 COPY gsasii_gui/nginx.conf.template /etc/nginx/gsasii.conf.template
+COPY gsasii_gui/novnc_launch.html /opt/noVNC/radar-launch.html
+COPY gsasii_gui/novnc_launch.js /opt/noVNC/radar-launch.js
 COPY gsasii_gui/supervisord.conf /etc/supervisor/conf.d/gsasii.conf
 COPY gsasii_gui/scripts/ /opt/gsasii-gui/
 RUN chmod 0755 /opt/gsasii-gui/*.sh

@@ -25,11 +25,11 @@ http {
         add_header X-Content-Type-Options "nosniff" always;
 
         location = ${EP_PATH} {
-            return 302 ${EP_PATH}/vnc.html?autoconnect=1&resize=scale&reconnect=1&quality=6&compression=1&path=${EP_WS_PATH}/websockify;
+            return 302 ${EP_PATH}/radar-launch.html;
         }
 
         location = ${EP_PATH}/ {
-            return 302 ${EP_PATH}/vnc.html?autoconnect=1&resize=scale&reconnect=1&quality=6&compression=1&path=${EP_WS_PATH}/websockify;
+            return 302 ${EP_PATH}/radar-launch.html;
         }
 
         location = ${EP_PATH}/healthz {

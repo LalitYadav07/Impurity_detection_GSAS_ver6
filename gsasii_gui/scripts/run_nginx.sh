@@ -11,10 +11,6 @@ if [[ -z "${ep_path}" || ! "${ep_path}" =~ ^(/[A-Za-z0-9._~-]+)+$ ]]; then
     exit 64
 fi
 export EP_PATH="${ep_path}"
-# noVNC 1.7 prepends '/' to its configured WebSocket path. A leading slash
-# here creates wss://host//interactivetool/... and fails the NDIP upgrade.
-# Keep the HTTP locations absolute but supply the client a slash-free prefix.
-export EP_WS_PATH="${EP_PATH#/}"
 gui_version="${GSASII_GUI_VERSION:-unknown}"
 if [[ ! "${gui_version}" =~ ^[A-Za-z0-9._-]+$ ]]; then
     gui_version="unknown"
@@ -49,7 +45,7 @@ wait_for_port() {
 wait_for_port 127.0.0.1 5900 x11vnc
 wait_for_port 127.0.0.1 6080 websockify
 
-envsubst '${EP_PATH} ${EP_WS_PATH} ${GUI_VERSION}' \
+envsubst '${EP_PATH} ${GUI_VERSION}' \
     < /etc/nginx/gsasii.conf.template \
     > /tmp/gsasii-nginx.conf
 

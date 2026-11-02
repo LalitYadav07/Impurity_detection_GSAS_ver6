@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { runInNewContext } from 'node:vm';
 
 const [browser, url] = process.argv.slice(2);
 if (!browser || !url || typeof WebSocket !== 'function') {
@@ -11,6 +12,25 @@ if (!browser || !url || typeof WebSocket !== 'function') {
 const target = new URL(url);
 if (target.hostname !== '127.0.0.1' || target.protocol !== 'http:') {
   throw new Error('The noVNC smoke test accepts only its local HTTP fixture');
+}
+// Execute the same bootstrap shipped to the browser; do not reimplement it in
+// the test. Protect origin, TLS, port and prefix behavior across deployments.
+const bootstrap = await readFile(new URL('../novnc_launch.js', import.meta.url), 'utf8');
+for (const [href, expectedPath] of [
+  ['https://ndip-test.ornl.gov/interactivetool/ep/a/b/radar-launch.html?host=evil#x', 'interactivetool/ep/a/b/websockify'],
+  ['http://127.0.0.1:18080/gsasii/radar-launch.html', 'gsasii/websockify'],
+  ['https://example.invalid/radar-launch.html', 'websockify'],
+  ['https://example.invalid//evil.invalid/radar-launch.html', 'evil.invalid/websockify'],
+]) {
+  let redirect;
+  runInNewContext(bootstrap, { URL, window: { location: { href, replace: value => { redirect = value; } } } }, { timeout: 1000 });
+  const before = new URL(href), after = new URL(redirect);
+  if (after.origin !== before.origin || after.searchParams.get('host') !== before.hostname ||
+      after.searchParams.get('path') !== expectedPath || after.hash ||
+      after.searchParams.get('port') !== (before.port || (before.protocol === 'https:' ? '443' : '80')) ||
+      after.searchParams.get('encrypt') !== (before.protocol === 'https:' ? '1' : '0')) {
+    throw new Error(`The noVNC bootstrap changed its origin or connection contract for ${href}`);
+  }
 }
 const profile = await mkdtemp(join(tmpdir(), 'gsasii-browser-'));
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
