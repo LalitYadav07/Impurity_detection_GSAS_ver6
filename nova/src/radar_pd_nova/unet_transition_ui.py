@@ -438,6 +438,20 @@ def _fit_figure_for_scan(scan, measured=None):
         positions = (value.get("all") or value.get("positions") or []) if isinstance(value, dict) else value
         if isinstance(positions, (list, tuple)):
             tick_count += len(positions)
+    if not tick_count:
+        # GSAS plots put the shared x labels on the phase-tick row. Without
+        # published ticks that row has no traces, so Plotly hides its axes.
+        # Reuse the two populated rows and leave every scientific array intact.
+        axis_title = fig.layout.xaxis3.title.text
+        fig.data = tuple(trace for trace in fig.data if trace.xaxis != "x3")
+        fig.layout.xaxis3 = None
+        fig.layout.yaxis3 = None
+        fig.layout.yaxis.domain = [.28, 1.]
+        fig.layout.yaxis2.domain = [0., .22]
+        fig.layout.xaxis.matches = "x2"
+        fig.layout.xaxis2.update(matches=None, showticklabels=True,
+                                title={"text": axis_title}, automargin=True)
+        fig.update_layout(margin={"l": 85, "r": 20, "t": 38, "b": 65})
     note = f"{source}; {tick_count} Bragg tick{'s' if tick_count != 1 else ''} published."
     if not tick_count:
         note = f"{source}; Bragg ticks are not included in this compact view."
