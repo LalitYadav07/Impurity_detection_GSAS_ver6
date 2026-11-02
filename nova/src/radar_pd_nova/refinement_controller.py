@@ -351,7 +351,12 @@ def recipe_cards(plan, context, *, physical_banks=None):
     for number,(stage,row) in enumerate(zip(plan['stages'],stage_table(plan,context)),1):
         changes=[]
         if stage.get('background'):changes.append('Background: '+stage['background']['function']+f" · {stage['background']['coefficients']} coefficients")
-        for key in ['phase_normalization','constraints','bounds','exclusions','fit_ranges','texture']:
+        for bound in stage.get('bounds') or []:
+            parameter = {'U': 'Uiso', 'F': 'occupancy'}.get(bound['parameter'], bound['parameter'])
+            unit = ' Å²' if bound['parameter'] == 'U' else ''
+            changes.append(f"{phases.get(bound['phase'], bound['phase'])} / {bound['atom']}: "
+                           f"{bound['lower']:g} ≤ {parameter} ≤ {bound['upper']:g}{unit}")
+        for key in ['phase_normalization','constraints','exclusions','fit_ranges','texture']:
             if stage.get(key):changes.append(key.replace('_',' ').capitalize()+': '+json.dumps(stage[key],ensure_ascii=False))
         if stage.get('convergence'):
             changes.append(f"Require native convergence, no abort, and complete final-cycle |shift/sigma| ≤ {stage['convergence']['max_shift_over_sigma']:g}.")
