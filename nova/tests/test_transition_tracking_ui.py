@@ -484,6 +484,27 @@ def test_series_selector_identifies_the_calibration_and_measured_acquisition_dat
     assert any('to 2021-08-05' in title for title in titles)
 
 
+def test_same_named_specimens_remain_distinguishable_without_changing_groups():
+    rows = scans()[:4]
+    sample_ids = ('120479', '120480', '120481', '120482')
+    for row, sample_id in zip(rows, sample_ids):
+        row['metadata'].update(sample_id=sample_id,
+            sample_name='Indium copper vanadate',
+            start_time='2026-10-12T12:00:00-04:00',
+            powgen_setup={'cycle': '2026-2_11A_CAL'})
+    app = RadarPdNovaApp()
+    app._refresh_transition_tracking(rows)
+    options = app.server.state.transition_series_options
+    assert len(options) == 4
+    assert len({option['title'] for option in options}) == 4
+    for sample_id in sample_ids:
+        matching = [option for option in options if f'Sample {sample_id} ·' in option['title']]
+        assert len(matching) == 1
+        assert 'Indium copper vanadate' in matching[0]['title']
+        group = next(group for group in app._transition_report['groups'] if group['id'] == matching[0]['value'])
+        assert group['run_ids'] == [rows[sample_ids.index(sample_id)]['run_id']]
+
+
 def test_inline_fit_reuses_bragg_rows_only_when_the_published_curve_matches(tmp_path):
     from radar_pd_nova.scan_interpretation import Pattern
     row = scans()[0]

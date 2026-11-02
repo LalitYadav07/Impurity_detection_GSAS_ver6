@@ -992,7 +992,14 @@ class TransitionTrackingMixin:
             scope = group["scope"]
             first = self._transition_scans[group["run_ids"][0]]
             meta = first.get("metadata") or {}
-            title = f"{meta.get('sample_name') or meta.get('sample_id')} · {scope['instrument']} bank {scope['bank']}"
+            sample_id = str(meta.get('sample_id') or '').strip()
+            sample_name = str(meta.get('sample_name') or '').strip()
+            # Different specimens can share a name and calibration. Keep the
+            # recorded identity visible; the grouping itself is unchanged.
+            sample_title = f'Sample {sample_id}' if sample_id else sample_name or 'Sample identity unavailable'
+            if sample_name and sample_name != sample_id and sample_id:
+                sample_title += ' · ' + sample_name
+            title = f"{sample_title} · {scope['instrument']} bank {scope['bank']}"
             setup = meta.get('powgen_setup') or meta.get('nomad_setup') or {}
             calibration = setup.get('cycle') or setup.get('calibration')
             if isinstance(calibration, str) and calibration:
