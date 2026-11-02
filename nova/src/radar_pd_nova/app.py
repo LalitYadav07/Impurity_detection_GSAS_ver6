@@ -30,7 +30,7 @@ from .configuration import config_from_contract, load_configuration
 from .run_timing import run_elapsed_label
 from .setup_forms import configuration_from_form, configuration_form_values, CONFIG_FORM_FIELDS
 from .setup_ui import SetupEditorMixin
-from .live_setup import LiveSetupMixin
+from .live_setup import LiveSetupMixin, _StagingCancelled
 from .live_restore import LiveRestoreMixin
 from .live_settings_review import LiveSettingsReviewMixin
 from .live_assistant_controller import LiveAssistantMixin
@@ -5826,7 +5826,8 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
             state.error_message = "Use Resume existing watch to continue the saved settings, or Clear workspace before starting a separate watch."
             state.flush()
             return
-        launch_service, launch_context = self.service, self._result_context
+        launch_service = self.service
+        owns_view, check, finish = self._begin_live_launch()
         state.live_launch_busy = True
         state.live_test_message = ""
         state.powgen_message = "Preparing the Live analysis and checking the selected inputs..."
@@ -5835,32 +5836,38 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
             prepared = await self._prepare_live_settings()
             if prepared is None:
                 return
+            check()
             settings, configuration = prepared
+            checked = self._powgen_preflight_signature()
             ipts = settings.ipts
             database_id = settings.database_dataset_id
             adapter = self._live_adapter()
             signature = (adapter.instrument, json.dumps(asdict(settings), sort_keys=True))
+            controller = self._powgen_controller
             if self._powgen_controller is None or self._powgen_settings_signature != signature:
                 state.powgen_retry_requested=False;state.powgen_retry_busy=False
                 controller_class = PowgenWatchController if adapter.instrument == "PG3" else adapter.controller
-                self._powgen_controller = controller_class(self.service, settings, sample_index=self._powgen_sample_index(ipts))
+                controller = controller_class(launch_service, settings, sample_index=self._powgen_sample_index(ipts))
                 state.powgen_message = "Inputs saved. Checking for a previous watch with the same settings..."
                 state.flush()
-                restored = await asyncio.to_thread(self._powgen_controller.restore_latest_state)
-                if restored and self._powgen_controller.state.post_analysis:
+                restored = await asyncio.to_thread(controller.restore_latest_state)
+                check(checked)
+                if restored and controller.state.post_analysis:
                     self._set_post_settings(
-                        PostAnalysisSettings.model_validate(self._powgen_controller.state.post_analysis)
+                        PostAnalysisSettings.model_validate(controller.state.post_analysis)
                     )
                 else:
                     self._set_post_settings(configuration.post_analysis)
-                    self._powgen_controller.state.post_analysis = configuration.post_analysis.model_dump(mode="json")
-                if not (restored and self._powgen_controller.state.scan_interpretation):
-                    self._powgen_controller.state.scan_interpretation = configuration.scan_interpretation.model_dump(mode="json")
+                    controller.state.post_analysis = configuration.post_analysis.model_dump(mode="json")
+                if not (restored and controller.state.scan_interpretation):
+                    controller.state.scan_interpretation = configuration.scan_interpretation.model_dump(mode="json")
+                self._powgen_controller = controller
                 self._powgen_settings_signature = signature
 
             else:
                 restored = False
 
+            check(checked)
             self._powgen_controller_configuration = (self._powgen_controller, configuration.model_copy(deep=True))
             state.powgen_ipts = ipts
             state.powgen_source_directory = self._powgen_controller.source_directory
@@ -5886,20 +5893,24 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
             )
             self._powgen_monitor_task = task
             self.webmon_attach_monitor()
+        except _StagingCancelled:
+            pass
         except Exception as exc:
-            if self.service is launch_service and self._result_context is launch_context:
-                state.powgen_monitoring = False
-                state.powgen_message = f"{self._live_adapter().name} monitor could not start: {exc}"
-                state.error_message = str(exc)
-                state.flush()
+            try:
+                check()
+            except _StagingCancelled:
+                return
+            state.powgen_monitoring = False
+            state.powgen_message = f"{self._live_adapter().name} monitor could not start: {exc}"
+            state.error_message = str(exc)
+            state.flush()
         finally:
-            if self.service is launch_service and self._result_context is launch_context:
-                state.live_launch_busy = False
-                state.flush()
+            finish()
 
     def _invalidate_powgen_resume(self) -> None:
         """Release a read-only resume lease before clearing or ending the view."""
         self._live_staging_owner = None
+        self._live_launch_owner = None
         if getattr(self, "_powgen_resume_owner", None) is not None:
             self._powgen_resume_owner = None
             self.server.state.live_launch_busy = False

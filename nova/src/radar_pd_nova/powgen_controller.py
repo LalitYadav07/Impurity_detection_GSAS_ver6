@@ -411,6 +411,7 @@ class PowgenWatchController:
         self.refresh_errors: dict[str, str] = {}
         self._retry_checkpoint_pending = False
         self._retry_submission_allowed = lambda: True
+        self._before_live_submit = None
 
     @property
     def interrupted_retries_pending(self):
@@ -568,9 +569,18 @@ class PowgenWatchController:
     def _submit_live_snapshot(self, run, snapshot):
         if getattr(self, "restore_resume_blocked_reasons", ()):
             raise ValueError("This saved watch is blocked from new analyses until its saved restrictions are reviewed")
-        if not run.scan_metadata.get('retry_source_proof'):
+        launch_check = getattr(self, "_before_live_submit", None)
+        retry = bool(run.scan_metadata.get('retry_source_proof'))
+        if launch_check is None and not retry:
             return self.service.submit_snapshot(snapshot)
-        return self.service.submit_snapshot(snapshot,before_submit=lambda:self._validate_retry_submission(run))
+
+        def before_submit():
+            if launch_check is not None:
+                launch_check()
+            if retry:
+                self._validate_retry_submission(run)
+
+        return self.service.submit_snapshot(snapshot, before_submit=before_submit)
 
     def restore_latest_state(self) -> bool:
         """Recover the newest matching checkpoint and acknowledged Galaxy jobs.

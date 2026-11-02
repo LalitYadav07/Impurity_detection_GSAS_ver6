@@ -98,6 +98,7 @@ class LiveSetupMixin:
         self._live_uploaded_assets = {}
         self._live_staging_owner = None
         self._live_staging_slots = None
+        self._live_launch_owner = None
         self._library_action_contexts = {}
         fields = ["live_" + f for f in CONFIG_FORM_FIELDS]
         fields += [
@@ -851,11 +852,45 @@ class LiveSetupMixin:
         from .snap_conditions import validate_bindings_json
         return validate_bindings_json(json.dumps(binding,sort_keys=True))
 
+    def _begin_live_launch(self):
+        """Keep one launch owned through discovery and the final submit guard."""
+        state = self.server.state
+        owner = object()
+        service, context = self.service, getattr(self, "_result_context", None)
+        connection = staging_connection_key(service)
+        self._live_launch_owner = owner
+
+        def owns_view():
+            return (
+                self.service is service
+                and getattr(self, "_result_context", None) is context
+                and staging_connection_key(service) == connection
+                and not getattr(state, "workspace_clearing", False)
+                and not getattr(state, "session_closing", False)
+            )
+
+        def check(signature=None):
+            if self._live_launch_owner is not owner or not owns_view():
+                raise _StagingCancelled()
+            if signature is not None and signature != self._powgen_preflight_signature():
+                raise ValueError("Live setup changed while preparing the launch; check it again")
+
+        def finish():
+            if self._live_launch_owner is owner:
+                self._live_launch_owner = None
+            if (self._live_launch_owner is None and self.service is service
+                    and getattr(self, "_result_context", None) is context):
+                state.live_launch_busy = False
+                state.flush()
+
+        return owns_view, check, finish
+
     async def test_live_scan(self, **_):
         state = self.server.state
         if state.powgen_monitoring or state.live_launch_busy:
             return
-        launch_service, launch_context = self.service, getattr(self,'_result_context',None)
+        launch_service = self.service
+        owns_view, check, finish = self._begin_live_launch()
         state.live_launch_busy = True
         state.live_test_message = "Checking and preparing one scan..."
         state.flush()
@@ -863,26 +898,25 @@ class LiveSetupMixin:
             prepared = await self._prepare_live_settings(test=True)
             if prepared is None:
                 return
+            check()
             settings, _config = prepared
             controller = self._live_adapter().controller(
-                self.service,
+                launch_service,
                 settings,
                 sample_index=self._powgen_sample_index(settings.ipts),
             )
             checked = self._powgen_preflight_signature()
+            controller._before_live_submit = lambda: check(checked)
             # The disposable discovery never writes a watch checkpoint or
             # schedules the remaining banks. Exactly one analysis is launched.
             state.live_test_message = "Finding the selected completed scan..."
             state.flush()
             await asyncio.to_thread(controller.discover, checkpoint=False)
+            check(checked)
             runs = controller.due_submissions()
             if not runs:
                 raise ValueError(
                     "No completed matching scan is ready for the one-scan test"
-                )
-            if checked != self._powgen_preflight_signature():
-                raise ValueError(
-                    "Live setup changed during scan discovery; check it again"
                 )
             run = runs[-1]
             state.live_test_message = f"Staging inputs and submitting {run.run_id} to Galaxy..."
@@ -893,8 +927,15 @@ class LiveSetupMixin:
                 "bank": run.bank,
                 "configuration_dataset_id": settings.configuration_dataset_id,
             }
+            # A POST may already be accepted when Stop/Clear arrives. Keep its
+            # receipt in the submission service/History, without reopening a new
+            # workspace. In the same view, retain and monitor the accepted job.
+            if not owns_view():
+                return
             self.records[record.uid] = record
             self._sync_runs()
+            self._start_monitor(record)
+            check()
             self._select_record(record)
             state.workspace_view = "monitor"
             state.active_page = "runs"
@@ -902,15 +943,17 @@ class LiveSetupMixin:
             state.live_test_message = f"One-scan test submitted: {run.run_id}. Continuous monitoring is stopped."
             state.notice = state.live_test_message
             state.error_message = ""
-            self._start_monitor(record)
+        except _StagingCancelled:
+            pass
         except Exception as exc:  # noqa: BLE001 - leave monitoring stopped after any launch failure
-            if self.service is launch_service and getattr(self,'_result_context',None) is launch_context:
-                state.live_test_message = f"One-scan test could not start: {exc}"
-                state.error_message = state.live_test_message
+            try:
+                check()
+            except _StagingCancelled:
+                return
+            state.live_test_message = f"One-scan test could not start: {exc}"
+            state.error_message = state.live_test_message
         finally:
-            if self.service is launch_service and getattr(self,'_result_context',None) is launch_context:
-                state.live_launch_busy = False
-                state.flush()
+            finish()
 
     def _live_beamline_review_controls(self):
         """Share calibration and condition controls with guided Live setup."""

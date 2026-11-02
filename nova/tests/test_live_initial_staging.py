@@ -8,10 +8,11 @@ import zipfile
 
 import pytest
 
-from test_live_setup import live, LocalGalaxy, CIF
+from test_live_setup import live, LocalGalaxy, CIF, TrialController
 from radar_pd_nova.live_setup import configuration_digest
 from radar_pd_nova.galaxy_service import GalaxyService
 from radar_pd_nova.models import AnalysisConfig
+from radar_pd_nova.powgen_controller import PowgenWatchController
 
 
 LABELS=('configuration','main-phase CIF','instrument profile','candidate library')
@@ -216,5 +217,175 @@ def test_old_staging_finally_does_not_release_new_context_busy_flag(live,tmp_pat
         assert live.server.state.live_test_message=='New workspace owns this progress'
     asyncio.run(run())
     assert not service.jobs
+
+
+def revoke_launch(live, kind):
+    if kind == 'stop':
+        live.stop_powgen_monitoring()
+    elif kind == 'clear':
+        live._result_context = object()
+        live._powgen_controller = None
+        live.records.clear()
+    elif kind == 'end':
+        live._invalidate_powgen_resume()
+        live.server.state.session_closing = True
+    elif kind == 'history':
+        live.service.history_id = 'replacement-history'
+    elif kind == 'origin':
+        live.service.galaxy_url = 'https://replacement.invalid'
+    elif kind == 'actor':
+        live.service.galaxy_key = 'replacement-actor'
+    else:
+        live.server.state.live_sample_elements = 'Fe'
+        live.server.state.flush()
+
+
+@pytest.mark.parametrize('kind', ['stop', 'clear', 'end', 'history', 'origin', 'actor', 'draft'])
+def test_trial_discovery_cannot_submit_after_launch_is_revoked(live, monkeypatch, kind):
+    entered, release = threading.Event(), threading.Event()
+    original = TrialController.discover
+    def discover(controller, **kwargs):
+        entered.set()
+        assert release.wait(5)
+        original(controller, **kwargs)
+    monkeypatch.setattr(TrialController, 'discover', discover)
+    async def run():
+        task = asyncio.create_task(live.test_live_scan())
+        await wait(entered)
+        revoke_launch(live, kind)
+        release.set()
+        await task
+    asyncio.run(run())
+    assert not live.service.jobs
+
+
+@pytest.mark.parametrize('kind', ['stop', 'clear', 'end', 'history', 'origin', 'actor', 'draft'])
+def test_watch_restore_cannot_publish_or_start_after_launch_is_revoked(live, monkeypatch, kind):
+    entered, release = threading.Event(), threading.Event()
+    def restore(controller):
+        entered.set()
+        assert release.wait(5)
+        return False
+    monkeypatch.setattr(TrialController, 'restore_latest_state', restore)
+    async def run():
+        task = asyncio.create_task(live.start_powgen_monitoring())
+        await wait(entered)
+        revoke_launch(live, kind)
+        release.set()
+        await task
+    asyncio.run(run())
+    assert not live.service.jobs
+    assert not live.server.state.powgen_monitoring
+    assert live._powgen_monitor_task is None
+    assert live._powgen_controller is None
+
+
+@pytest.mark.parametrize('kind', ['stop', 'clear', 'end', 'history', 'origin', 'actor', 'draft'])
+def test_trial_guard_is_rechecked_after_submission_input_preparation(live, monkeypatch, kind):
+    entered, release = threading.Event(), threading.Event()
+    original = TrialController.launch_submission
+    context = {}
+    def submit(snapshot, *, before_submit):
+        entered.set()
+        assert release.wait(5)
+        before_submit()
+        return original(context['controller'], context['run'])
+    def launch(controller, run):
+        context.update(controller=controller, run=run)
+        return PowgenWatchController._submit_live_snapshot(
+            controller, SimpleNamespace(scan_metadata={}), object()
+        )
+    live.service.submit_snapshot = submit
+    monkeypatch.setattr(TrialController, 'launch_submission', launch)
+    async def run():
+        task = asyncio.create_task(live.test_live_scan())
+        await wait(entered)
+        revoke_launch(live, kind)
+        release.set()
+        await task
+    asyncio.run(run())
+    assert not live.service.jobs
+
+
+@pytest.mark.parametrize('retry', [False, True])
+def test_final_post_hook_composes_existing_retry_guard(retry):
+    calls = []
+    controller = object.__new__(PowgenWatchController)
+    controller._before_live_submit = lambda: calls.append('launch')
+    controller._validate_retry_submission = lambda run: calls.append('retry')
+    def submit(snapshot, *, before_submit):
+        before_submit()
+        calls.append('post')
+        return 'accepted'
+    controller.service = SimpleNamespace(submit_snapshot=submit)
+    run = SimpleNamespace(scan_metadata={'retry_source_proof': {'job': 'old'}} if retry else {})
+    assert controller._submit_live_snapshot(run, object()) == 'accepted'
+    assert calls == (['launch', 'retry', 'post'] if retry else ['launch', 'post'])
+
+
+def test_normal_watch_has_no_initial_launch_guard_lifetime():
+    controller = object.__new__(PowgenWatchController)
+    calls = []
+    controller.service = SimpleNamespace(submit_snapshot=lambda snapshot: calls.append(snapshot))
+    token = object()
+    controller._submit_live_snapshot(SimpleNamespace(scan_metadata={}), token)
+    assert calls == [token]
+
+
+@pytest.mark.parametrize('kind', ['stop', 'clear'])
+def test_accepted_trial_receipt_survives_owner_loss_without_reopening_workspace(live, monkeypatch, kind):
+    entered, release = threading.Event(), threading.Event()
+    original = TrialController.launch_submission
+    def launch(controller, run):
+        record = original(controller, run)  # Galaxy accepted before revocation.
+        entered.set()
+        assert release.wait(5)
+        return record
+    monkeypatch.setattr(TrialController, 'launch_submission', launch)
+    async def run():
+        task = asyncio.create_task(live.test_live_scan())
+        await wait(entered)
+        revoke_launch(live, kind)
+        live.server.state.workspace_view = 'refinement'
+        release.set()
+        await task
+    asyncio.run(run())
+    assert len(live.service.jobs) == 1
+    record = live.service.jobs[0]
+    assert record.galaxy_job_id == 'job-1' and record.provenance['live_trial']['run'] == 100
+    assert live.server.state.workspace_view == 'refinement'
+    assert live.server.state.selected_run_uid != record.uid
+    assert (record.uid in live.records) is (kind == 'stop')
+
+
+def test_trial_retains_existing_submission_service_and_acknowledgement_cache(live, tmp_path):
+    service = setup(live, tmp_path)
+    asyncio.run(live.test_live_scan())
+    assert TrialController.instances[0].service is service
+    assert len(service.jobs) == 1
+
+
+@pytest.mark.parametrize('mode', ['trial', 'watch'])
+def test_late_launch_error_does_not_replace_stop_feedback(live, monkeypatch, mode):
+    entered, release = threading.Event(), threading.Event()
+    def delayed_failure(*args, **kwargs):
+        entered.set()
+        assert release.wait(5)
+        raise RuntimeError('late error from old launch')
+    monkeypatch.setattr(TrialController,
+        'discover' if mode == 'trial' else 'restore_latest_state', delayed_failure)
+    async def run():
+        action = live.test_live_scan if mode == 'trial' else live.start_powgen_monitoring
+        task = asyncio.create_task(action())
+        await wait(entered)
+        live.stop_powgen_monitoring()
+        stopped = live.server.state.powgen_message
+        release.set()
+        await task
+        assert live.server.state.powgen_message == stopped
+        assert 'late error' not in live.server.state.error_message
+        assert not live.server.state.live_launch_busy
+    asyncio.run(run())
+    assert not live.service.jobs
 
 
