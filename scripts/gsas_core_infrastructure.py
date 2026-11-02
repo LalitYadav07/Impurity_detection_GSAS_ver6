@@ -152,6 +152,8 @@ class GSASProjectManager:
         sniff = self._sniff_powder_file(data_file)
         proxy_data_file = self._maybe_prepare_numeric_proxy(data_file, sniff)
         read_data_file = proxy_data_file or data_file
+        from gsas_signed_fxye import read_staged_tof_source, restore_staged_tof_observations
+        staged_tof_source = read_staged_tof_source(read_data_file)
         hint_order = self._build_powder_hint_order(data_file, fmthint, sniff)
         existing_names = [h.name for h in self.project.histograms()]
         errors: List[str] = []
@@ -171,6 +173,8 @@ class GSASProjectManager:
                 reader = copy.deepcopy(template_reader)
                 fmt = getattr(reader, "formatName", reader.__class__.__name__)
                 hint_label = "auto-detect" if hint is None else hint
+                if staged_tof_source is not None and fmt != 'GSAS powder data':
+                    continue
 
                 reader_ok, reader_err = self._read_with_reader(
                     reader,
@@ -182,12 +186,18 @@ class GSASProjectManager:
                     logger.info("Rejected reader %s for %s: %s", fmt, data_file, reader_err)
                     continue
 
-                from gsas_signed_fxye import restore_snap_signed_observations
-                restore_snap_signed_observations(reader, read_data_file)
-
                 try:
+                    parameters = instprm_file
+                    if staged_tof_source is not None:
+                        # Read the actual native profile once before changing
+                        # any observation. The loader accepts the same pair.
+                        parameters = (G2sc.load_iprms(instprm_file, reader)
+                                      if isinstance(instprm_file, str) else instprm_file)
+                        if parameters is None:
+                            parameters = reader.pwdparms.get('Instrument Parameters')
+                        restore_staged_tof_observations(reader, staged_tof_source, parameters)
                     histname, new_names, pwdrdata = G2sc.load_pwd_from_reader(
-                        reader, instprm_file, existingnames=existing_names
+                        reader, parameters, existingnames=existing_names
                     )
                 except Exception as exc:
                     errors.append(f"{fmt} [{hint_label}] load failed: {exc}")
