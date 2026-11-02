@@ -5154,12 +5154,13 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                     # Completion may have arrived while Refinement or Battery
                     # owned the workspace. Refresh this selected run's header
                     # and verified cache on return, without another download.
-                    self._select_record(record)
-                    if ((record.analysis_status or record.status) == RunStatus.OK
-                            and record.result_status == ResultStatus.READY and record.local_output_dir
-                            and self._opening_run_uid != record.uid
-                            and not self._rendered_result_current(record)):
-                        self._load_results(record, local_only=True)
+                    cache_ready = ((record.analysis_status or record.status) == RunStatus.OK
+                                   and record.result_status == ResultStatus.READY
+                                   and record.local_output_dir)
+                    if not (cache_ready and self._rendered_result_current(record)):
+                        self._select_record(record)
+                        if cache_ready and self._opening_run_uid != record.uid:
+                            self._load_results(record, local_only=True)
             self.server.state.flush()
 
     @staticmethod
@@ -7740,7 +7741,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         binding = getattr(self, "_result_display_binding", None)
         return (self.server.state.result_owner_uid == record.uid
                 and binding is not None and binding[0] is self.service
-                and binding[1] is self._result_context
+                and binding[1] is getattr(self, "_result_context", None)
                 and binding[2:] == self._result_display_state(record))
 
     def _load_results(self, record: RunRecord, *, local_only: bool = False) -> None:
@@ -7835,7 +7836,8 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
             )
         self._sync_workspace_options(view["mode"])
         state.result_owner_uid = record.uid
-        self._result_display_binding = (self.service, self._result_context, *self._result_display_state(record))
+        self._result_display_binding = (self.service, getattr(self, "_result_context", None),
+                                        *self._result_display_state(record))
         state.flush()
 
     def _launchable_checkpoint_rows(

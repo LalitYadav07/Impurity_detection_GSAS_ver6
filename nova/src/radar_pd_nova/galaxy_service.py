@@ -2923,11 +2923,16 @@ class GalaxyService:
                     break
                 except (OSError, ValueError, TypeError):
                     continue
+            dataset_id = record.output_dataset_ids.get("pattern_observation")
+            identity = {"job_id": binding["job_id"], "sha256": checksum,
+                        "source_gpx_sha256": project_hash, "source_product_sha256": source_hash,
+                        "dataset_id": dataset_id, "collection_id": record.output_dataset_ids.get("tables")}
+            if (selected is None and previous.get("download_attempted")
+                    and previous.get("fetch_identity") == identity):
+                # Local navigation must not erase the bounded failed-fetch
+                # memory and make the next ordinary open retry implicitly.
+                binding.update(fetch_identity=identity, download_attempted=True)
             if selected is None and fetch is not None:
-                dataset_id = record.output_dataset_ids.get("pattern_observation")
-                identity = {"job_id": binding["job_id"], "sha256": checksum,
-                            "source_gpx_sha256": project_hash, "source_product_sha256": source_hash,
-                            "dataset_id": dataset_id, "collection_id": record.output_dataset_ids.get("tables")}
                 binding.update(fetch_identity=identity, download_attempted=True)
                 if previous.get("download_attempted") and previous.get("fetch_identity") == identity:
                     raise ValueError("Observation fetch already attempted; refresh results to retry")

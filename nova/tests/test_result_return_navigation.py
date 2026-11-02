@@ -169,6 +169,7 @@ def test_cached_navigation_does_not_fetch_missing_observation_or_refresh_catalog
     summary = {'analysis_mode':'full', 'status':'complete', 'best_rwp':1.25, 'phases':[],
                'pattern_observation':{'name':'Pattern_observation.json','sha256':'a'*64,
                                       'source_gpx_sha256':'b'*64},
+               'observables':{'source_gpx_sha256':'b'*64},
                'provenance':{'input':{'source_sha256':'c'*64}}}
     (root/'summary.json').write_text(json.dumps(summary))
     app = RadarPdNovaApp()
@@ -277,3 +278,60 @@ def test_rendered_binding_rejects_changed_context_or_publication(tmp_path,change
     app._load_results=lambda current,**kwargs:loaded.append((current.uid,kwargs))
     app.select_workspace_view('results')
     assert loaded == [('selected',{'local_only':True})]
+
+
+@pytest.mark.parametrize('changed', [None,'dataset','collection','checksum','project','source','job'])
+def test_local_reader_preserves_failed_fetch_memory_only_for_same_identity(tmp_path,changed):
+    summary = {'analysis_mode':'full','phases':[],
+        'pattern_observation':{'sha256':'a'*64,'source_gpx_sha256':'b'*64},
+        'observables':{'source_gpx_sha256':'b'*64},
+        'provenance':{'input':{'source_sha256':'c'*64}}}
+    path=tmp_path/'summary.json';path.write_text(json.dumps(summary))
+    service=GalaxyService('https://example.invalid','unused','history',output_root=tmp_path/'local')
+    row=RunRecord(uid='selected',galaxy_job_id='job',history_id='history',name='Selected run',
+        mode=AnalysisMode.FULL,status=RunStatus.OK,result_status=ResultStatus.READY,
+        output_dir=str(tmp_path),output_dataset_ids={'pattern_observation':'packet','tables':'tables'})
+    calls=[]
+    def fail_fetch(*args,**kwargs):
+        calls.append((args,kwargs))
+        raise OSError('offline')
+    service.cache_pattern_observation=fail_fetch
+    service.result_payload(row)
+    before=json.loads((tmp_path/'plot_observation_binding.json').read_text())
+    assert len(calls)==1 and before['download_attempted'] is True
+    if changed=='dataset':row.output_dataset_ids['pattern_observation']='new-packet'
+    elif changed=='collection':row.output_dataset_ids['tables']='new-tables'
+    elif changed=='checksum':summary['pattern_observation']['sha256']='d'*64
+    elif changed=='project':
+        summary['pattern_observation']['source_gpx_sha256']='d'*64
+        summary['observables']['source_gpx_sha256']='d'*64
+    elif changed=='source':summary['provenance']['input']['source_sha256']='d'*64
+    elif changed=='job':row.galaxy_job_id='new-job'
+    path.write_text(json.dumps(summary))
+    service.cached_result_payload(row)
+    after=json.loads((tmp_path/'plot_observation_binding.json').read_text())
+    assert len(calls)==1, 'The local reader must never fetch a packet'
+    assert bool(after.get('download_attempted')) is (changed is None)
+    if changed is None:assert after['fetch_identity']==before['fetch_identity']
+    service.result_payload(row)
+    assert len(calls)==(1 if changed is None else 2)
+
+
+@pytest.mark.parametrize('submitted,reported', [(AnalysisMode.FULL,'rapid'),(AnalysisMode.RAPID,'full')])
+def test_warm_navigation_preserves_result_summary_mode_and_panels(tmp_path,submitted,reported):
+    (tmp_path/'summary.json').write_text(json.dumps({'analysis_mode':reported,'status':'complete','phases':[]}))
+    app=RadarPdNovaApp()
+    app.service=SimpleNamespace(result_payload=lambda _:pytest.fail('Use local files'))
+    row=RunRecord(uid='selected',galaxy_job_id='job',history_id='history',name='Selected run',
+        mode=submitted,status=RunStatus.OK,result_status=ResultStatus.READY,output_dir=str(tmp_path))
+    app.records={row.uid:row}
+    app._select_record(row)
+    app.select_workspace_view('results')
+    assert app.server.state.viewed_run_mode==reported
+    expected_options=list(app.server.state.workspace_options)
+    for view in ('files','results'):
+        app.select_workspace_view(view)
+        assert app.server.state.viewed_run_mode==reported
+        assert app.server.state.workspace_options==expected_options
+        assert app.server.state.workspace_view==view
+    assert row.mode==submitted
