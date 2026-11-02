@@ -5,6 +5,7 @@ import asyncio
 import json
 import os
 from pathlib import Path
+import re
 import zipfile
 
 from .battery.discovery import discover_proposal, family_runs, inspect_run
@@ -12,7 +13,7 @@ from .battery.electrochemistry import CyclerBinding, MAX_BYTES, read_cycler, sum
 from .battery.timeline import timeline_figure
 from .battery.catalog import catalog_client, compare_acquisition, unavailable_context
 from .facility_metadata import ExperimentMetadataIndex
-from .battery_preparation import BatteryPreparationMixin
+from .battery_preparation import BatteryPreparationMixin, run_sources
 from .battery_campaign_controller import BatteryCampaignMixin
 
 
@@ -64,6 +65,40 @@ def read_candidate(inventory, candidate):
     return raw
 
 
+def exact_run_number(value):
+    """An optional literal run number, never a path, range or title query."""
+    if isinstance(value, str) and not value.strip():
+        return None
+    if isinstance(value, bool) or not isinstance(value, (str, int)):
+        raise ValueError("Exact run number must be a positive whole number, or blank for representative sampling")
+    text = str(value).strip()
+    if not re.fullmatch(r"[0-9]{1,10}", text) or not 1 <= int(text) <= 2_147_483_647:
+        raise ValueError("Exact run number must be a positive whole number, or blank for representative sampling")
+    return int(text)
+
+
+def require_exact_run_source(inventory, family, run):
+    """Check eligible names in this one indexed folder before reading NeXus."""
+    from .nomad_products import SLICED_FOLDER, SUMMED_FOLDER, product_from_path
+    if family not in {row['folder'] for row in inventory.get('product_families', [])}:
+        raise ValueError('Choose a reduction folder from the current proposal inventory')
+    if inventory['instrument'] == 'NOM' and family in {SLICED_FOLDER, SUMMED_FOLDER}:
+        raise ValueError('Exact acquisition lookup requires an individual reduction folder; derived products do not inherit a parent exposure')
+    root = Path(inventory['root']).resolve()
+    folder = (root / family).resolve()
+    if not folder.is_relative_to(root):
+        raise ValueError('Choose a reduction folder inside the selected proposal')
+    candidates = run_sources(folder, run, instrument=inventory['instrument'])
+    if inventory['instrument'] == 'NOM':
+        candidates = [row for row in candidates
+                      if (product := product_from_path(row['path'])) is not None and product.kind == 'individual']
+    elif inventory['instrument'] == 'PG3':
+        candidates = [row for row in candidates
+                      if re.fullmatch(r'PG3_[0-9]+(?:-[1-6])?\.(?:gsa|gss)', Path(row['path']).name, re.I)]
+    if not candidates:
+        raise ValueError(f'Run {run} has no individual reduced observation in the selected folder; choose a different folder or run')
+
+
 class BatteryMixin(BatteryPreparationMixin, BatteryCampaignMixin):
     def _init_battery(self):
         state = self.server.state
@@ -96,6 +131,7 @@ class BatteryMixin(BatteryPreparationMixin, BatteryCampaignMixin):
         state.battery_echem_summary = ""
         state.battery_timeline = {"data": [], "layout": {}}
         state.battery_inspection_limit = 12
+        state.battery_exact_run = ''
         state.battery_total_runs = 0
         state.battery_export_ready = False
         state.battery_catalog_message = 'Catalog context is read with the selected proposal and acquisitions.'
@@ -117,6 +153,7 @@ class BatteryMixin(BatteryPreparationMixin, BatteryCampaignMixin):
         self._init_battery_portfolio()
         self.server.state.change("battery_instrument", "battery_ipts")(self._battery_context_changed)
         self.server.state.change("battery_family")(self._battery_family_changed)
+        self.server.state.change("battery_exact_run")(self._battery_exact_run_changed)
         self.server.state.change("battery_sample", "battery_cell", "battery_channel", "battery_positive", "battery_origin",
             "battery_offset", "battery_clock_uncertainty", "battery_gap", "battery_cycler", "battery_cycler_path", "battery_echem_source", "battery_date_format", "battery_timezone")(self._battery_binding_changed)
 
@@ -150,7 +187,7 @@ class BatteryMixin(BatteryPreparationMixin, BatteryCampaignMixin):
         state.battery_message = "Discover this proposal to refresh its sources."
         self._battery_family_changed()
 
-    def _battery_family_changed(self, **_):
+    def _battery_family_changed(self, *, preserve_exact=False, **_):
         self._battery_generation += 1
         self._battery_acquisitions = []
         state = self.server.state
@@ -159,12 +196,19 @@ class BatteryMixin(BatteryPreparationMixin, BatteryCampaignMixin):
         state.battery_catalog_message = ('Select a reduction family and inspect its acquisition context.'
             if self._battery_inventory else 'Discover the proposal to retrieve its catalog context.')
         state.battery_total_runs = 0
+        if not preserve_exact:
+            state.battery_exact_run = ''
         self._battery_reset_preparation()
         self._battery_binding_changed()
         if self._battery_inventory:
             state.battery_error = ""
             state.battery_message = ("Inspect acquisition metadata for the selected reduction family."
                 if state.battery_family else "Select a reduction family, then inspect its acquisition metadata.")
+
+    def _battery_exact_run_changed(self, **_):
+        # Editing the requested run invalidates prior samples, joins and model
+        # preparation, but does not start discovery or any scientific work.
+        self._battery_family_changed(preserve_exact=True)
 
     def _battery_binding_changed(self, **_):
         self._battery_binding_revision += 1
@@ -264,30 +308,45 @@ class BatteryMixin(BatteryPreparationMixin, BatteryCampaignMixin):
             self.server.state.battery_error = "Discover a proposal first"; self.server.state.flush(); return
         family = self.server.state.battery_family
         try:
+            exact = exact_run_number(self.server.state.battery_exact_run)
             value = self.server.state.battery_inspection_limit
-            if isinstance(value, bool) or not str(value).isdigit():
+            if exact is None and (isinstance(value, bool) or not str(value).isdigit()):
                 raise ValueError("Whole number required")
-            limit = int(value)
-        except (ValueError, TypeError):
-            self.server.state.battery_error = "Choose a whole number of runs between 1 and 200"
+            limit = int(value) if exact is None else 1
+        except (ValueError, TypeError) as exc:
+            self.server.state.battery_error = str(exc) if str(exc).startswith('Exact run') else "Choose a whole number of runs between 1 and 200"
             self.server.state.flush(); return
         if not 1 <= limit <= 200:
             self.server.state.battery_error = "Choose between 1 and 200 representative runs"
             self.server.state.flush(); return
-        self._battery_family_changed()
+        self._battery_family_changed(preserve_exact=True)
         self.server.state.flush()
-        self._battery_start(self._inspect_battery_async(inventory, family, max(1, min(limit, 200)), self._battery_generation))
+        selection = (self.server.state.battery_instrument, self.server.state.battery_ipts,
+                     family, self.server.state.battery_exact_run)
+        self._battery_start(self._inspect_battery_async(inventory, family, max(1, min(limit, 200)),
+            self._battery_generation, exact_run=exact, selection=selection))
 
-    async def _inspect_battery_async(self, inventory, family, limit, generation):
+    async def _inspect_battery_async(self, inventory, family, limit, generation, *, exact_run=None, selection=None):
         state = self.server.state
+        def current():
+            return generation == self._battery_generation and (selection is None or selection == (
+                state.battery_instrument, state.battery_ipts, state.battery_family, state.battery_exact_run))
         state.battery_busy = True; state.battery_error = ""; state.battery_operation = "inspect"
-        state.battery_message = f"Listing runs in {family} before sampling up to {limit} acquisitions… Detector events are not loaded."
+        state.battery_message = (f"Checking exact run {exact_run} in {family} before reading its acquisition metadata…"
+            if exact_run is not None else f"Listing runs in {family} before sampling up to {limit} acquisitions… Detector events are not loaded.")
         state.battery_catalog_message = "Waiting for the run list before reading acquisition catalog context."
         state.flush()
         try:
             runs = await asyncio.to_thread(family_runs, inventory, family)
-            chosen = runs if len(runs) <= limit else [runs[round(i*(len(runs)-1)/(limit-1))] for i in range(limit)] if limit>1 else runs[-1:]
-            if generation != self._battery_generation: return
+            if not current(): return
+            if exact_run is not None:
+                if exact_run not in runs:
+                    raise ValueError(f'Run {exact_run} is not in the selected reduction folder; no acquisition metadata was read')
+                await asyncio.to_thread(require_exact_run_source, inventory, family, exact_run)
+                if not current(): return
+                chosen = [exact_run]
+            else:
+                chosen = runs if len(runs) <= limit else [runs[round(i*(len(runs)-1)/(limit-1))] for i in range(limit)] if limit>1 else runs[-1:]
             if not chosen:
                 state.battery_message = "No runs remain in the selected reduction family. Discover the proposal again to refresh its sources."
                 state.battery_catalog_message = "No acquisition catalog context requested: the selected family has no runs."
@@ -296,20 +355,20 @@ class BatteryMixin(BatteryPreparationMixin, BatteryCampaignMixin):
             self._battery_catalog_client.begin_batch()
             metadata = ExperimentMetadataIndex(inventory["instrument"], inventory["ipts"], root=Path(inventory["root"]))
             for index, run in enumerate(chosen):
-                if generation != self._battery_generation: return
+                if not current(): return
                 state.battery_message = f"Reading NeXus metadata {index+1}/{len(chosen)} · run {run}. Detector events are not loaded."; state.flush()
                 try:
                     record = await asyncio.to_thread(inspect_run, inventory["instrument"], inventory["ipts"], run, facility_root=self._battery_root())
                 except (OSError,ValueError) as exc:
                     record=dict(run=run,status='unavailable',fields={},issues=[dict(code='acquisition_unavailable',message=str(exc))])
-                if generation != self._battery_generation: return
+                if not current(): return
                 state.battery_message = f"Checking sample tables and run-info XML {index+1}/{len(chosen)} · run {run}."; state.flush()
                 try:
                     record['identity'] = await asyncio.to_thread(metadata.enrich, run, record.get('identity',{}))
                 except (OSError,ValueError) as exc:
                     record.setdefault('issues',[]).append(dict(code='sample_metadata_unavailable',message=str(exc)))
                     if record['status']=='available':record['status']='partial'
-                if generation != self._battery_generation: return
+                if not current(): return
                 location = None
                 if record.get('path') and record.get('source_signature'):
                     try:
@@ -321,10 +380,11 @@ class BatteryMixin(BatteryPreparationMixin, BatteryCampaignMixin):
                 state.flush()
                 catalog = await self._battery_read_catalog('run',
                     inventory['instrument'],inventory['ipts'],run=run,location=location)
+                if not current(): return
                 record['catalog'] = catalog
                 record['catalog_comparison'] = compare_acquisition(record,catalog,self._battery_catalog_proposal)
                 records.append(record)
-            if generation != self._battery_generation: return
+            if not current(): return
             self._battery_acquisitions = records
             self._battery_model_acquisitions()
             state.battery_rows = [acquisition_row(r) for r in records]
@@ -346,10 +406,11 @@ class BatteryMixin(BatteryPreparationMixin, BatteryCampaignMixin):
                 str(r.get("fields", {}).get("run_title", {}).get("value", ""))
                 for r in records if r.get("identity", {}).get("sample_id") == value})[:2]), "value": value} for value in samples]
             state.battery_total_runs = len(runs)
-            state.battery_message = f"Inspected {len(records)} of {len(runs)} runs across this family. Review sample IDs and titles: references and other cells may share the same folder."
+            state.battery_message = (f"Inspected exact run {exact_run} from {len(runs)} runs in this folder. Review its sample identity and exposure before preparing a model."
+                if exact_run is not None else f"Inspected {len(records)} of {len(runs)} runs across this family. Review sample IDs and titles: references and other cells may share the same folder.")
             state.battery_export_ready = True
         except Exception as exc:
-            if generation == self._battery_generation:
+            if current():
                 state.battery_error = str(exc)
                 state.battery_message = "Acquisition inspection stopped. Correct the reported error and inspect the family again."
                 state.battery_catalog_message = "Acquisition catalog inspection did not finish."
