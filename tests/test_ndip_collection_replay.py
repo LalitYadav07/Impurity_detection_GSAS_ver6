@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+import zipfile
 
 import numpy as np
 import pytest
@@ -65,3 +66,42 @@ def test_distinct_sources_with_same_friendly_name_have_stable_outputs(tmp_path):
     assert len({r["path"] for r in first}) == 2
     assert [r["path"] for r in first] == [r["path"] for r in second]
     assert len(list((portal / "tables").iterdir())) == 2
+
+
+def test_bootstrap_cif_is_archived_but_not_a_scientific_phase_output(tmp_path):
+    run, portal = tmp_path / "run", tmp_path / "portal"
+    sources = {
+        "Technical/bootstrap/NaCl_dummy.cif": "data_bootstrap\n",
+        "Models/Refined_CIFs/NaCl_dummy.cif": "data_real_sample\n",
+        "Models/Refined_CIFs/other_phase.cif": "data_other_phase\n",
+    }
+    for name, content in sources.items():
+        target = run / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content)
+    # Replaying an older result must remove its obsolete published copy too.
+    stale = portal / "phases/Technical__bootstrap__NaCl_dummy.cif"
+    stale.parent.mkdir(parents=True)
+    stale.write_text(sources["Technical/bootstrap/NaCl_dummy.cif"])
+    result = collect_outputs(run, portal, mode="full")
+    phases = result["artifacts"]["phases"]
+    assert {p["source_path"] for p in phases} == set(sources) - {
+        "Technical/bootstrap/NaCl_dummy.cif"
+    }
+    assert not stale.exists()
+    with zipfile.ZipFile(portal / "results.zip") as archive:
+        for name, content in sources.items():
+            assert archive.read(name).decode() == content
+
+
+def test_bootstrap_cleanup_does_not_remove_a_current_same_name_phase(tmp_path):
+    run, portal = tmp_path / "run", tmp_path / "portal"
+    internal = run / "Technical/bootstrap/NaCl_dummy.cif"
+    internal.parent.mkdir(parents=True)
+    internal.write_text("data_bootstrap\n")
+    real = run / "Technical__bootstrap__NaCl_dummy.cif"
+    real.write_text("data_real_phase\n")
+    phases = _copy_collections(run, portal)["phases"]
+    assert len(phases) == 1 and phases[0]["source_path"] == real.name
+    assert (portal / phases[0]["path"]).read_text() == real.read_text()
+    assert internal.read_text() == "data_bootstrap\n"

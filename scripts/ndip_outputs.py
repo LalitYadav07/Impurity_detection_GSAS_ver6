@@ -112,6 +112,12 @@ def _publish_artifact(path: Path, run_dir: Path, collection: str) -> bool:
     relative = path.relative_to(run_dir).as_posix().lower()
     if collection == "gpx":
         return _publish_gpx(path, run_dir)
+    if collection == "phases":
+        # Bootstrap structures initialize a native project; they are not
+        # candidates or fitted phases. Retain them in the complete run archive,
+        # but do not advertise them as scientific phase outputs. Use the
+        # reserved directory, not a chemical name: NaCl can be a real sample.
+        return not relative.startswith("technical/bootstrap/")
     if collection == "plots":
         return not any(token in relative for token in ("screening_histograms", "trial_blend", "technical__"))
     if collection == "tables":
@@ -394,12 +400,17 @@ def _copy_collections(
 ) -> dict[str, list[dict[str, Any]]]:
     records: dict[str, list[dict[str, Any]]] = {name: [] for name in COLLECTION_RULES}
     destinations: set[Path] = set()
+    suppressed_phase_copies: list[tuple[Path, Path]] = []
     for source in _iter_artifacts(run_dir):
         suffix = source.suffix.lower()
         collection = next((name for name, suffixes in COLLECTION_RULES.items() if suffix in suffixes), None)
         if collection is None:
             continue
         if not _publish_artifact(source, run_dir, collection):
+            if collection == "phases":
+                suppressed_phase_copies.append(
+                    (portal / collection / _published_name(source, run_dir, collection), source)
+                )
             continue
         destination_dir = portal / collection
         destination_dir.mkdir(parents=True, exist_ok=True)
@@ -429,6 +440,14 @@ def _copy_collections(
             record['acquisition_handoff'] = acquisition_receipt
         record["source_path"] = source.relative_to(run_dir).as_posix()
         records[collection].append(record)
+    for stale, source in suppressed_phase_copies:
+        # A reused output folder may contain an earlier published copy.
+        # Never remove the original or another current artifact whose flattened
+        # name happens to collide with this internal source.
+        if stale not in destinations and stale.resolve() != source.resolve():
+            if not stale.parent.resolve().is_relative_to(portal.resolve()):
+                raise ValueError("Refusing to remove a phase output outside the output folder")
+            stale.unlink(missing_ok=True)
     return records
 
 
