@@ -101,13 +101,21 @@ class WebmonMixin:
         self._webmon_binding=None;self._webmon_reviewed_mapping=None;self._webmon_last_preview=None
         self._webmon_pattern=None;self._webmon_plot_binding=None;self._webmon_request={}
         self._webmon_payloads={};self._webmon_model_paths=set();self._webmon_out=None
+        self._webmon_pending_binding=None;self._webmon_pending_request=None;self._webmon_response_cache=None
+        self._webmon_saved_paths={}
         self._webmon_published_catalog={}
         for name,value in dict(webmon_run='',webmon_target='',webmon_revision='',webmon_analysis_revision='',
                 webmon_accepted=False,webmon_prepare_accepted=False,webmon_mapping_accepted=False,
                 webmon_context_ready=False,webmon_scope_allowed=False,webmon_has_result=False,
                 webmon_rows=[],webmon_models=[],webmon_model='',webmon_checkpoint='',webmon_checkpoints=[],
                 webmon_reference='',webmon_reference_rows=[],webmon_published_source='',webmon_published_sources=[],
-                webmon_compared=[],webmon_table_selected=[],webmon_pending_rows=[]).items():setattr(s,name,value)
+                webmon_compared=[],webmon_table_selected=[],webmon_pending_rows=[],webmon_saved=[],webmon_saved_job='',
+                webmon_calculation_status='Not started',webmon_count_summary='No candidates analyzed',
+                webmon_validity='No fit assessed',webmon_boundary='Not assessed',webmon_sampling='Not assessed',
+                webmon_fit_metrics=[],webmon_moment_rows=[],webmon_sampler_summary='',webmon_details='',
+                webmon_checkpoint_summary='',webmon_width_rows=[],webmon_latency='',webmon_health='No inference yet',
+                webmon_source_notice='Select a published GPX matching this acquisition and review its producer mapping.',
+                webmon_lower_used=None,webmon_upper_used=None).items():setattr(s,name,value)
         for name in ('_webmon_observed','_webmon_checkpoint_plot','_webmon_fit','_webmon_moments','_webmon_correlation','_webmon_sampler'):
             widget=getattr(self,name,None)
             if widget is not None:widget.update(plots.go.Figure())

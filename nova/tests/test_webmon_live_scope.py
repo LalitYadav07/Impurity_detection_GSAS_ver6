@@ -119,12 +119,24 @@ def test_new_saved_sample_scope_clears_old_result_but_preserves_artifact(view,tm
     view.webmon_refresh()
     receipt=tmp_path/'accepted-job.json';receipt.write_text('{"job":"accepted-old"}')
     view.server.state.webmon_has_result=True;view.server.state.webmon_target='8'
+    view.server.state.webmon_calculation_status='Completed'
+    view.server.state.webmon_validity='Old sample fit assessed'
+    view.server.state.webmon_count_summary='5 sampled'
+    view.server.state.webmon_fit_metrics=[{'label':'Old sample Rwp','value':'1.0%'}]
+    view._webmon_response_cache='old-response-hda'
+    view._webmon_pending_binding={'old':'binding'};view._webmon_pending_request={'old':'request'}
     view._webmon_controller_old=view._powgen_controller
     view._powgen_controller=SimpleNamespace(settings=SimpleNamespace(**{
         **vars(view._powgen_controller.settings),'selected_sample_ids':('200',)}))
     view.webmon_refresh()
     assert view.server.state.webmon_run=='9'
     assert not view.server.state.webmon_has_result and not view.server.state.webmon_target
+    assert view.server.state.webmon_calculation_status=='Not started'
+    assert view.server.state.webmon_validity=='No fit assessed'
+    assert view.server.state.webmon_count_summary=='No candidates analyzed'
+    assert not view.server.state.webmon_fit_metrics
+    assert view._webmon_response_cache is None and view._webmon_pending_binding is None
+    assert view._webmon_pending_request is None
     assert receipt.read_text()=='{"job":"accepted-old"}'
 
 
