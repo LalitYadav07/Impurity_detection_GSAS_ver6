@@ -83,4 +83,3 @@ def test_below_rule_doublet_is_not_presented_as_a_detected_change():
     assert _component_evidence_status(event) == "Existing doublet; below change rule"
     assert "unavailable" in _component_evidence_status({"passes_rule": True})
     assert BoundaryPolicy().minimum_signals == 1
-
