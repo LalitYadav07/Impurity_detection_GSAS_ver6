@@ -2476,7 +2476,10 @@ def build_result_view(
 
     metrics = [
         {"label": "Analysis", "value": "Rapid Hypothesis" if mode == "rapid" else "Full RADAR-PD"},
-        {"label": "Status", "value": status},
+        {"label": "Status", "value": (
+            f"{status} · scientific review required"
+            if result.get("scientific_status") == "needs_review" else status
+        )},
         {"label": "Best Rwp", "value": f"{best_rwp:.3f}%" if best_rwp is not None else "-"},
         {"label": "Reported phases", "value": str(len(phase_rows)) if phase_rows else "-"},
         {"label": "Analysis time", "value": f"{elapsed:.1f} s" if elapsed is not None else "-"},

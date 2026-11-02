@@ -61,6 +61,18 @@ def test_experiment_scan_summary_uses_best_refined_rapid_hypothesis() -> None:
     assert summary["final_rwp"] is None
 
 
+def test_result_status_retains_explicit_scientific_review_requirement(tmp_path):
+    view = build_result_view({
+        "status": "complete", "analysis_mode": "full",
+        "scientific_status": "needs_review", "final_rwp": 0.105,
+    }, tmp_path)
+    assert view.status == "Complete"
+    assert view.metrics[1] == {
+        "label": "Status", "value": "Complete · scientific review required",
+    }
+    assert view.metrics[2]["value"] == "0.105%"
+
+
 def test_experiment_summary_preserves_explicit_final_rwp_separately_from_candidate_metrics():
     result=experiment_scan_summary({"status":"complete","analysis_mode":"full","final_rwp":12.5,
         "hypotheses":[{"rwp":8,"status":"ok"}]})
