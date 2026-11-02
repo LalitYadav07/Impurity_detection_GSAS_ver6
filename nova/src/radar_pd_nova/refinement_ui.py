@@ -217,6 +217,8 @@ def refinement_dashboard(app):
         with html.Div(v_if='rf_expanded',classes='rf-overlay'):
             v.VBtn('Close expanded plot',click='rf_expanded = false',variant='text',prepend_icon='mdi-arrow-collapse')
             html.H3('{{ rf_selected_title }}',classes='mt-2')
+            html.P("Histogram: {{ (rf_histograms.find(item => item.value === rf_histogram) || {}).title || rf_histogram }}",
+                v_if='!!rf_histogram',classes='rf-notice',style='overflow-wrap:anywhere')
             html.P('{{ rf_rwp_summary }}',classes='rf-notice')
             with html.Div(style='height:calc(100vh - 300px);min-height:260px'):
                 fig=plotly.Figure(display_mode_bar=True,responsive=True,style='height:100%;width:100%');fig.data=('rf_fit.data',);fig.layout=('rf_fit.layout',)
