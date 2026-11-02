@@ -153,7 +153,7 @@ class GSASProjectManager:
         proxy_data_file = self._maybe_prepare_numeric_proxy(data_file, sniff)
         read_data_file = proxy_data_file or data_file
         from gsas_signed_fxye import read_staged_tof_source, restore_staged_tof_observations
-        staged_tof_source = read_staged_tof_source(read_data_file)
+        staged_tof_source = read_staged_tof_source(read_data_file, defer_unmarked_errors=True)
         hint_order = self._build_powder_hint_order(data_file, fmthint, sniff)
         existing_names = [h.name for h in self.project.histograms()]
         errors: List[str] = []

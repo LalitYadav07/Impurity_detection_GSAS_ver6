@@ -20,7 +20,30 @@ _MAX_BANKS = 256
 _PROVENANCE_PREFIX = b'# RADAR-PD input provenance: '
 
 
-def read_staged_tof_source(path, *, instruments=None):
+def read_staged_tof_source(path, *, instruments=None, defer_unmarked_errors=False):
+    """Defer unmarked FXYE validation until the native profile is known.
+
+    A CW FXYE file can legitimately contain coordinates that are invalid for
+    TOF. Deferred errors are raised only if its loaded profile is PNT. Marked
+    sources retain their existing strict contract, and this never authorizes
+    a different reader to bypass a malformed neutron TOF source.
+    """
+    try:
+        return _read_tof_source(path, instruments=instruments)
+    except ValueError as exc:
+        if not defer_unmarked_errors:
+            raise
+        path = Path(path)
+        with path.open('rb') as stream:
+            probe = stream.read(min(path.stat().st_size, max(_MAX_BYTES, 512 * 1024)) + 1)
+        lines = probe.splitlines()
+        if (any(line.startswith(_PROVENANCE_PREFIX) for line in lines)
+                or not any(line.startswith(b'BANK') and line.split()[-1:] == [b'FXYE'] for line in lines)):
+            raise
+        return {'path': path.resolve(), 'marked': False, 'deferred_error': str(exc)}
+
+
+def _read_tof_source(path, *, instruments=None):
     """Read bounded GSAS banks without deriving any acquisition metadata.
 
     The historical name is retained for callers. ``instruments`` is used only
@@ -140,10 +163,6 @@ def restore_staged_tof_observations(reader, source, instrument_parameters):
     """Bind the selected native bank, then restore only nonpositive-y suppression."""
     if source is None:
         return False
-    with source['path'].open('rb') as stream:
-        current = stream.read(_MAX_BYTES + 1)
-    if len(current) > _MAX_BYTES or sha256(current).hexdigest() != source['sha256']:
-        raise ValueError('TOF source changed during native import')
     parameters = instrument_parameters[0] if isinstance(instrument_parameters, (list, tuple)) else instrument_parameters
     token = parameters.get('Type') if isinstance(parameters, dict) else None
     if isinstance(token, (list, tuple, np.ndarray)):
@@ -152,6 +171,12 @@ def restore_staged_tof_observations(reader, source, instrument_parameters):
         if source['marked']:
             raise ValueError('Marked TOF observations require native PNT instrument parameters')
         return False  # Leave all non-neutron-TOF reader semantics unchanged.
+    if source.get('deferred_error'):
+        raise ValueError(source['deferred_error'])
+    with source['path'].open('rb') as stream:
+        current = stream.read(_MAX_BYTES + 1)
+    if len(current) > _MAX_BYTES or sha256(current).hexdigest() != source['sha256']:
+        raise ValueError('TOF source changed during native import')
     entry = getattr(reader, 'powderentry', [])
     if (getattr(reader, 'formatName', '') != 'GSAS powder data'
             or not getattr(reader, 'GSAS', False) or getattr(reader, 'clockWd', {})

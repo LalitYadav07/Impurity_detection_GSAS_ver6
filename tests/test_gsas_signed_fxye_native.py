@@ -199,6 +199,21 @@ class SignedSnapImportTest(unittest.TestCase):
             for key in ['x','yobs','yweight']:
                 self.assertEqual(np.asarray(native.getdata(key)).tobytes(),np.asarray(manager.main_histogram.getdata(key)).tobytes())
 
+    def test_actual_cw_zero_negative_coordinates_and_native_counts_remain_unchanged(self):
+        from scripts.gsas_core_infrastructure import GSASProjectManager
+        from GSASII import GSASIIscriptable as G2
+        for first,declared in [(0,40),(-100,40),(-100,999)]:
+          with self.subTest(first=first,declared=declared), tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);profile=self.profile(root,kind='PXC');data=root/'cw.gsa'
+            data.write_text(f'Native CW\nBANK 001 {declared} {declared} CONST {first} 10 0 0 FXYE\n'+
+                            ''.join(f'{first+10*i} {(-3 if i==15 else 5)} 2\n' for i in range(40)))
+            native=G2.G2Project(newgpx=str(root/'native.gpx')).add_powder_histogram(str(data),str(profile))
+            manager=GSASProjectManager(str(root),'cw')
+            self.assertTrue(manager.create_project())
+            self.assertTrue(manager.add_histogram(str(data),str(profile),instrument_type='CW',fmthint='gsas'))
+            for key in ['x','yobs','yweight']:
+                self.assertEqual(np.asarray(native.getdata(key)).tobytes(),np.asarray(manager.main_histogram.getdata(key)).tobytes())
+
     def test_marked_tof_cannot_use_a_constant_wavelength_profile(self):
         from scripts.gsas_core_infrastructure import GSASProjectManager
         with tempfile.TemporaryDirectory() as directory:

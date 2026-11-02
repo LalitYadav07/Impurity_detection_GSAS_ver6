@@ -197,6 +197,20 @@ def test_unmarked_non_neutron_tof_input_retains_native_arrays(tmp_path,kind):
     assert all(np.array_equal(a,b) for a,b in zip(before,reader.powderdata))
 
 
+@pytest.mark.parametrize('change',[('1000 5 2','0 5 2'),('1000 5 2','-100 5 2'),
+                                 ('4 4 SLOG','999 999 CONST'),('1100 -3 0.5','1100 -3 -1')])
+def test_unmarked_tof_parse_error_waits_for_loaded_native_type(tmp_path,change):
+    reader,path=unmarked_fixture(tmp_path)
+    path.write_text(path.read_text().replace(*change))
+    source=module.read_staged_tof_source(path,defer_unmarked_errors=True)
+    assert source['deferred_error']
+    before=[a.copy() for a in reader.powderdata]
+    assert not module.restore_staged_tof_observations(reader,source,[{'Type':['PXC']},{}])
+    assert all(np.array_equal(a,b) for a,b in zip(before,reader.powderdata))
+    with pytest.raises(ValueError):module.restore_staged_tof_observations(reader,source,PARAMETERS)
+    assert all(np.array_equal(a,b) for a,b in zip(before,reader.powderdata))
+
+
 @pytest.mark.parametrize('claim',[None,{}, {'temperature':10,'status':'recorded'},
                                 {'instrument':'PG3','sample_id':'made-up','channels':[]}])
 def test_acquisition_claim_cannot_change_or_certify_supplied_sigma(tmp_path,claim):
