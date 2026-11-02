@@ -8,6 +8,7 @@ on:
       - Dockerfile.ndip
       - requirements.txt
       - scripts/**
+      - tests/test_image_scientific_contract.py
       - nova/src/gpx_recipe/**
       - nova/src/radar_pd_nova/signal_quality.py
       - schemas/**

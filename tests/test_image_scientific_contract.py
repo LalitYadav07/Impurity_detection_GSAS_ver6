@@ -78,7 +78,17 @@ class BuiltImageScientificContract(unittest.TestCase):
         calc=NeutronFingerprintCalculator(wavelength=1.54)
         h=calc.get_pattern(a,scaled=False,two_theta_range=(5,100))
         d=calc.get_pattern(b,scaled=False,two_theta_range=(5,100))
-        self.assertTrue(np.array_equal(h.x,d.x))
+        self.assertEqual(len(h.x),len(d.x))
+        families=lambda pattern: [sorted((tuple(row['hkl']),row['multiplicity']) for row in peak) for peak in pattern.hkls]
+        self.assertEqual(families(h),families(d))
+        np.testing.assert_array_equal(h.d_hkls,d.d_hkls)
+        # Upstream natural-species angles use NumPy vectorized trig; the
+        # isotope-preserving path uses scalar math. Their final bits can
+        # differ across CPU/libm implementations. Require the same physical
+        # reflections at far below the calculator's peak-merging tolerance.
+        maximum_offset=float(np.max(np.abs(h.x-d.x))) if len(h.x) else 0.
+        print(f'H/D geometry contract: {len(h.x)} identical reflection families; maximum angle offset {maximum_offset:.17g} degrees')
+        np.testing.assert_allclose(h.x,d.x,rtol=0,atol=1e-10)
         self.assertFalse(np.allclose(h.y,d.y))
 
     def test_mixed_loader_reaches_actual_builder_and_nudger_hooks(self):
