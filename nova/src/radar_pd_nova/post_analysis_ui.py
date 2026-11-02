@@ -982,7 +982,7 @@ class PostAnalysisMixin(TransitionTrackingMixin, ScanInterpretationMixin):
             self.server.state.post_analysis_error = str(exc)
             self.server.state.flush()
 
-    def _refresh_post_analysis(self, scans=None, pending=None):
+    def _refresh_post_analysis(self, scans=None, pending=None, *, refresh_tracking=True):
         if not hasattr(self, "_post_analysis_scans"):
             return
         if scans is not None:
@@ -994,7 +994,8 @@ class PostAnalysisMixin(TransitionTrackingMixin, ScanInterpretationMixin):
             interpretation_scans = self._post_analysis_scans
         # The calibrated tracker replaces the former live heuristic comparison.
         # Saved comparison readers remain available for old report replay.
-        self._refresh_transition_tracking(interpretation_scans, getattr(self, "_post_analysis_pending", []))
+        if refresh_tracking:
+            self._refresh_transition_tracking(interpretation_scans, getattr(self, "_post_analysis_pending", []))
         settings = self._post_settings()
         result = calculate_views(
             self._post_analysis_scans, settings, pending=getattr(self, "_post_analysis_pending", [])

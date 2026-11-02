@@ -4797,7 +4797,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         else:
             self._update_powgen_dashboard_figures(scientific_rows, load_patterns=False)
 
-    def _update_powgen_dashboard_figures(self, rows: list[dict[str, Any]], *, load_patterns=True) -> None:
+    def _update_powgen_dashboard_figures(self, rows: list[dict[str, Any]], *, load_patterns=True, refresh_tracking=True) -> None:
         controller = getattr(self, "_powgen_controller", None)
         pending = (
             [
@@ -4819,7 +4819,10 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         ).startswith("watch:")
         if load_patterns and (str(getattr(self.server.state, "workspace_view", "")) == "experiment" or clearing_watch):
             self._activate_watch_post_analysis(controller)
-            self._refresh_post_analysis(rows, pending=pending)
+            if refresh_tracking:
+                self._refresh_post_analysis(rows, pending=pending)
+            else:
+                self._refresh_post_analysis(rows, pending=pending, refresh_tracking=False)
         x_key = str(self.server.state.powgen_x_axis or "run_number")
         selected_labels = [str(label) for label in (self.server.state.powgen_selected_phase_labels or [])]
         if self._powgen_phase_widget is not None:
@@ -4882,7 +4885,9 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
             if self.server.state.powgen_x_axis in AXES:
                 settings.axis = self.server.state.powgen_x_axis
             self.server.state.post_analysis = settings.model_dump(mode="json")
-        self._update_powgen_dashboard_figures(list(self.server.state.powgen_scientific_rows or []))
+        # A display-axis choice cannot change pattern membership or evidence.
+        # Redraw derived quantities without reading/comparing the raw patterns.
+        self._update_powgen_dashboard_figures(list(self.server.state.powgen_scientific_rows or []), refresh_tracking=False)
         self.server.state.flush()
 
     def update_powgen_phase_selection(self, values: Any = None, **_: Any) -> None:
@@ -4896,7 +4901,9 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         valid = set(ordered_valid)
         selected = [value for value in requested if value in valid]
         self.server.state.powgen_selected_phase_labels = selected or ordered_valid[:5]
-        self._update_powgen_dashboard_figures(list(self.server.state.powgen_scientific_rows or []))
+        # This selector changes only the main phase chart, not the tracker or
+        # the independently configured post-analysis views.
+        self._update_powgen_dashboard_figures(list(self.server.state.powgen_scientific_rows or []), load_patterns=False)
         self.server.state.flush()
 
     def update_powgen_sample_selection(self, values: Any = None, **_: Any) -> None:

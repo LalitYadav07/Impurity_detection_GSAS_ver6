@@ -103,6 +103,34 @@ def test_main_dashboard_axes_cannot_break_post_analysis_configuration(axis):
     assert not app.server.state.post_analysis_error
 
 
+def test_display_controls_redraw_trends_without_reprocessing_transition_patterns(monkeypatch):
+    from types import SimpleNamespace
+    from radar_pd_nova.powgen_watch import WatchState
+    app = app_with_data()
+    rows = [scan(1, temperature=100.), scan(2, temperature=300., a=4.1)]
+    controller = SimpleNamespace(state=WatchState(history_id='test'), source_directory='/fixture')
+    app._powgen_controller = controller
+    app._activate_watch_post_analysis(controller)
+    app._refresh_post_analysis(rows)
+    app.server.state.workspace_view = 'experiment'
+    app.server.state.powgen_scientific_rows = rows
+    app.server.state.powgen_x_axis_options = experiment_axis_options(rows)
+    calls = []
+    monkeypatch.setattr(app, '_refresh_transition_tracking', lambda *args, **kwargs: calls.append(args))
+    app.update_powgen_dashboard_axis('temperature')
+    assert calls == []
+    assert app._post_settings().axis == 'temperature'
+    assert app._post_analysis_result['settings']['axis'] == 'temperature'
+    assert app.server.state.post_analysis_panels
+    saved = copy.deepcopy(app._post_analysis_result)
+    app.server.state.powgen_phase_options = [{'value': 'phase-a', 'title': 'phase-a'}]
+    app.update_powgen_phase_selection(['phase-a'])
+    assert calls == [] and app._post_analysis_result == saved
+    # Actual scan/condition updates still use the complete tracking path.
+    app._refresh_post_analysis(rows)
+    assert len(calls) == 1
+
+
 def test_equivalent_celsius_and_kelvin_conditions_have_the_same_plot_coordinate():
     scans=[{'run_number':1,'metadata':{'temperature':{'value':300.,'unit':'K'}}},
         {'run_number':2,'metadata':{'temperature':{'value':26.85,'unit':'C'}}}]
