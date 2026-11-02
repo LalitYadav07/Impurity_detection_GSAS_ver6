@@ -387,5 +387,3 @@ def test_late_launch_error_does_not_replace_stop_feedback(live, monkeypatch, mod
         assert not live.server.state.live_launch_busy
     asyncio.run(run())
     assert not live.service.jobs
-
-
