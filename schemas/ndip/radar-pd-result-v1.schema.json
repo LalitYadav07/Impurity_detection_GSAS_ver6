@@ -15,6 +15,7 @@
     "observables": {"type": "object"},
     "pattern_observation": {"type": "object"},
     "final_rwp": {"type": ["number", "null"]},
+    "native_convergence": {"type": "object", "description": "Optional radar-baseline-convergence/v1 record bound to the retained source and published GPX hashes; absent in older results."},
     "scientific_status": {"enum": ["checks_passed", "needs_review", "not_assessed"]},
     "hypotheses": {"type": "array"},
     "gpx_projects": {"type": "array"},

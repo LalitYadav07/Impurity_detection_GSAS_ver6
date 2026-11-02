@@ -88,6 +88,7 @@ from .results import (
     build_result_view,
     complete_experiment_space_groups,
     experiment_axis_options,
+    experiment_convergence_notice,
     experiment_fit_diagnostics,
     experiment_fit_quality_figure,
     experiment_phase_labels,
@@ -756,6 +757,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         state.powgen_sample_message = "Enter an IPTS to discover its sample IDs and names."
         state.powgen_rows = []
         state.powgen_scientific_rows = []
+        state.powgen_convergence_notice = ""
         state.powgen_lattice_parameter = "a"
         state.powgen_selected_lattice = []
         state.powgen_all_scientific_rows = []
@@ -2861,6 +2863,8 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                             html.Div("{{ metric.label }}", classes="radar-metric-label")
                             html.Div("{{ metric.value }}", classes="radar-metric-value")
                             html.Div("{{ metric.detail }}", classes="radar-run-list-meta")
+        vuetify.VAlert(v_if="!!powgen_convergence_notice", text=("powgen_convergence_notice",),
+            type="warning", variant="tonal", density="compact", classes="mb-3")
         with vuetify.VTabs(v_model=("experiment_result_view",), color="#15543c", classes="radar-experiment-result-tabs"):
             for title, value in (("Results", "results"), ("Transition tracking", "transitions"), ("In-progress scans", "webmon"), ("Refinement", "refinement")):
                 if value == "webmon" and not self._webmon_configured:
@@ -3299,6 +3303,8 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                 with html.Div(v_for="metric in result_metrics", key="metric.label", classes="radar-metric-card"):
                     html.Div("{{ metric.label }}", classes="radar-metric-label")
                     html.Div("{{ metric.value }}", classes="radar-metric-value")
+            html.P("Covariance-derived uncertainties are conditional on the fitted model and recorded convergence; they do not establish model adequacy or calibration accuracy.",
+                v_if="viewed_run_mode === 'full'", classes="radar-section-help")
             with vuetify.VAlert(v_for="warning in result_warnings", key="warning", text=("warning",), type="warning", variant="tonal", density="compact", classes="mb-2"):
                 pass
             with html.Div(classes="radar-result-overview-grid"):
@@ -3379,8 +3385,8 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                             html.Span("{{ item.status }}")
                 html.Div("No GPX progression was published for this run.", v_if="!full_progression.length", classes="radar-empty-compact")
                 with html.Div(classes="radar-result-card mt-3"):
-                    html.H3("Accepted and reviewed models")
-                    html.P("Published model decisions from the Full pipeline, without internal filenames or paths.", classes="radar-section-help")
+                    html.H3("Pipeline model decisions")
+                    html.P("Pipeline acceptance records model selection; native convergence and scientific qualification require separate review.", classes="radar-section-help")
                     vuetify.VDataTable(
                         headers=("[{title:'Model',key:'model'},{title:'Stage',key:'stage'},{title:'Rwp',key:'rwp'},{title:'Decision',key:'decision'},{title:'Note',key:'note'}]",),
                         items=("full_model_rows",),
@@ -4377,6 +4383,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
             self._interpretation_all_watch_scans = []
             self.server.state.powgen_rows = []
             self.server.state.powgen_scientific_rows = []
+            self.server.state.powgen_convergence_notice = ""
             self.server.state.powgen_all_scientific_rows = []
             state = self.server.state
             for field in ("powgen_dashboard_metrics", "powgen_latest_phases", "powgen_scan_options",
@@ -4630,6 +4637,8 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                 "candidate_library_id": getattr(controller.settings, "database_dataset_id", ""),
                 "scientific_status": str(summary.get("scientific_status") or "not_assessed"),
                 "scientific_warnings": list(summary.get("scientific_warnings") or []),
+                "native_convergence": (dict(summary["native_convergence"])
+                    if isinstance(summary.get("native_convergence"), dict) else {}),
             }
             sample_identity = experiment_sample_identity(row)
             row["sample_key"] = sample_identity["key"]
@@ -4683,6 +4692,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                 row["quality_color"] = "#b45309"
 
         state.powgen_scientific_rows = scientific_rows
+        state.powgen_convergence_notice = experiment_convergence_notice(all_scientific_rows)
         ranked_phase_labels = experiment_phase_labels(scientific_rows)
         state.powgen_phase_options = [
             {"title": label, "value": label}

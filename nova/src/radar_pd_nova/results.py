@@ -23,6 +23,92 @@ from .scan_conditions import qualified_metadata, condition_display
 _EASTERN_TIME = tzstr("EST5EDT,M3.2.0/2,M11.1.0/2")
 
 
+def baseline_convergence_summary(result: dict[str, Any]) -> dict[str, Any]:
+    """Present only convergence evidence bound to a published source GPX."""
+    unknown = dict(schema="radar-baseline-convergence-summary/v1", status="unknown", label="Unknown", maximum=None,
+        native_converged=None, aborted=None, covariance_fresh=False, last_cycle_complete=False,
+        message="Native convergence is unknown: complete evidence bound to the retained GPX was not published.")
+    evidence = result.get("native_convergence")
+    if not isinstance(evidence, dict) or evidence.get("schema") != "radar-baseline-convergence/v1":
+        return unknown
+    source_hash, published_hash = evidence.get("source_sha256"), evidence.get("published_sha256")
+    if not all(isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value)
+               for value in (source_hash, published_hash)):
+        return unknown
+    matches = [row for row in result.get("gpx_projects") or [] if isinstance(row, dict)
+        and (row.get("source_path") or row.get("path")) == evidence.get("source_gpx")
+        and row.get("sha256") == source_hash and row.get("published_sha256") == published_hash]
+    if len(matches) != 1:
+        return unknown
+    finite = lambda value: isinstance(value, (int, float)) and not isinstance(value, bool) and np.isfinite(value)
+    count = evidence.get("independent_parameters")
+    ratios = evidence.get("last_cycle_ratios")
+    complete = (evidence.get("last_cycle_complete") is True and type(count) is int and count > 0
+        and isinstance(ratios, dict) and len(ratios) == count
+        and evidence.get("missing_last_cycle_parameters") == []
+        and all(isinstance(name, str) and name and finite(value) for name, value in ratios.items()))
+    maximum = max((abs(value) for value in ratios.values()), default=None) if complete else None
+    claimed = evidence.get("last_cycle_max_shift_over_sigma")
+    if complete and (not finite(claimed) or not np.isclose(claimed, maximum, rtol=1e-12, atol=1e-12)):
+        return unknown
+    native = evidence.get("native_converged")
+    native = native if type(native) is bool else None
+    aborted = evidence.get("aborted") is True
+    fresh = evidence.get("covariance_fresh") is True
+    if aborted:
+        status, label, message = "needs_review", "Aborted", "The native refinement reported an abort. The retained candidate requires scientific review."
+    elif native is False:
+        status, label, message = "needs_review", "Not reached", "The native refinement did not reach convergence. The retained candidate requires scientific review."
+    elif native is True and fresh and complete:
+        status, label, message = "converged", "Reported", "The native solver reported convergence."
+    elif native is True:
+        status, label, message = "needs_review", "Unverified", "Native convergence is unverified for the retained candidate."
+    else:
+        status, label, message = "unknown", "Unknown", "Native convergence is unverified for the retained candidate."
+    if not fresh:
+        message += " A current covariance is unavailable."
+    if not complete:
+        message += " Final-cycle shifts and positive sigmas do not cover every independent parameter."
+    if complete:
+        message += f" Largest final-cycle shift / conditional s.u.: {maximum:.5g}."
+    return dict(schema="radar-baseline-convergence-summary/v1", status=status, label=label,
+        maximum=maximum, message=message, native_converged=native, aborted=aborted,
+        covariance_fresh=fresh, last_cycle_complete=complete)
+
+
+def experiment_convergence_notice(rows: list[dict[str, Any]]) -> str:
+    """Flag the loaded baseline cohort without excluding any trend points."""
+    fits = [row for row in rows if str(row.get("analysis_mode") or "").lower() != "rapid"
+            and (row.get("lattice_parameters") or _as_float(row.get("rwp")) is not None
+                 or _as_float(row.get("final_rwp")) is not None)]
+    failed = unknown = 0
+    for row in fits:
+        value = row.get("native_convergence") or {}
+        if not isinstance(value, dict) or value.get("schema") != "radar-baseline-convergence-summary/v1":
+            unknown += 1
+        elif value.get("native_converged") is False or value.get("aborted") is True:
+            failed += 1
+        elif not (value.get("native_converged") is True and value.get("aborted") is False
+                  and value.get("covariance_fresh") is True and value.get("last_cycle_complete") is True
+                  and isinstance(value.get("maximum"), (int, float)) and not isinstance(value.get("maximum"), bool)
+                  and _as_float(value.get("maximum")) is not None and value["maximum"] >= 0):
+            unknown += 1
+    if not failed and not unknown:
+        return ""
+    return (f"Loaded baseline fits in this experiment: {failed} not converged or aborted; {unknown} with unknown or incomplete "
+            f"convergence; {len(fits)} total. Trends and covariance uncertainties remain conditional. All values remain displayed.")
+
+
+def _pipeline_decision(value: Any) -> str:
+    return "Pipeline accepted" if str(value).strip().lower() == "accepted" else _humanize(str(value))
+
+
+def _has_baseline(result: dict[str, Any]) -> bool:
+    return (str(result.get("analysis_mode") or "full").lower() == "full"
+        and bool(result.get("native_convergence") or result.get("gpx_projects")
+                 or result.get("lattice_parameters") or _as_float(result.get("final_rwp")) is not None))
+
+
 _FORMULA_TOKEN = r"[A-Z][a-z]?(?:\d+(?:\.\d*)?|\.\d+)?"
 
 
@@ -1549,6 +1635,15 @@ def experiment_scan_summary(result: dict[str, Any]) -> dict[str, Any]:
     phases.sort(key=lambda row: (-float(row["weight_percent"]), row["phase"]))
     elapsed = total_elapsed_seconds(result)
     best_rwp = _best_rwp(result)
+    convergence = baseline_convergence_summary(result) if _has_baseline(result) else {}
+    scientific_warnings = [str(w.get("message") or w) if isinstance(w, dict) else str(w)
+        for w in result.get("warnings", []) if not (convergence and isinstance(w, dict)
+            and w.get("code") in {"native_convergence_review", "native_convergence_unavailable"})]
+    scientific_status = str(result.get("scientific_status") or "not_assessed")
+    if convergence and convergence["status"] != "converged":
+        scientific_status = "needs_review"
+        if convergence["message"] not in scientific_warnings:
+            scientific_warnings.append(convergence["message"])
     return {
         "status": str(result.get("status") or "complete"),
         "analysis_mode": str(result.get("analysis_mode") or ""),
@@ -1561,13 +1656,14 @@ def experiment_scan_summary(result: dict[str, Any]) -> dict[str, Any]:
         "observables": dict(result.get("observables") or {}),
         "runtime": dict(result.get("runtime") or {}),
         "pattern_observation": dict(result.get("pattern_observation") or {}),
-        "scientific_status": str(result.get("scientific_status") or "not_assessed"),
-        "scientific_warnings": [str(w.get("message") or w) if isinstance(w, dict) else str(w) for w in result.get("warnings", [])],
+        "native_convergence": convergence,
+        "scientific_status": scientific_status,
+        "scientific_warnings": scientific_warnings,
         "hypothesis": " + ".join(
             f"{row['phase']} (SG {row['space_group']})" if row["space_group"] != "-" else row["phase"]
             for row in phases
         ),
-        "warning_count": len(result.get("warnings") or []),
+        "warning_count": len(scientific_warnings),
         "error_count": len(result.get("errors") or []),
     }
 
@@ -2346,7 +2442,7 @@ def _checkpoint_descriptors(result: dict[str, Any], root: Path) -> list[Checkpoi
                 name=display_name,
                 path=str(path) if path else "",
                 stage=_humanize(str(item.get("stage") or "Refinement checkpoint")),
-                status=_humanize(str(item.get("status") or "Available")),
+                status=_pipeline_decision(item.get("status") or "Available"),
                 handoff_available=bool(collection_name or path),
                 local_available=path is not None,
                 galaxy_element_name=Path(collection_name).stem if collection_name else (path.stem if path else ""),
@@ -2362,7 +2458,7 @@ def _full_model_rows(result: dict[str, Any]) -> list[dict[str, str]]:
     for item in result.get("hypotheses") or []:
         if not isinstance(item, dict):
             continue
-        status = _humanize(str(_first_value(item, "decision", "status") or "Reported"))
+        status = _pipeline_decision(_first_value(item, "decision", "status") or "Reported")
         stage = _humanize(str(_first_value(item, "stage", "hypothesis_stage", "pipeline_pass") or "Refinement"))
         warning = str(_first_value(item, "warning", "message") or "").strip()
         rows.append(
@@ -2394,7 +2490,7 @@ def _full_model_rows(result: dict[str, Any]) -> list[dict[str, str]]:
                 "model": _humanize(str(item.get("label") or "Published model")),
                 "stage": _humanize(str(item.get("stage") or "Refinement")),
                 "rwp": _number_text(rwp),
-                "decision": _humanize(str(item.get("status") or "Published")),
+                "decision": _pipeline_decision(item.get("status") or "Published"),
                 "note": str(item.get("warning") or "-") or "-",
             }
         )
@@ -2450,7 +2546,13 @@ def build_result_view(
         "final_refinement": curate_rapid_rows("final_refinement", final_source),
     }
 
-    warnings = [_message_text(item) for item in [*(result.get("warnings") or []), *(result.get("errors") or [])] if _message_text(item)]
+    convergence = baseline_convergence_summary(result) if _has_baseline(result) else None
+    warning_items = [*(result.get("warnings") or []), *(result.get("errors") or [])]
+    warnings = [_message_text(item) for item in warning_items if _message_text(item)
+        and not (mode == "full" and isinstance(item, dict)
+                 and item.get("code") in {"native_convergence_review", "native_convergence_unavailable"})]
+    if convergence and convergence["status"] != "converged":
+        warnings.insert(0, convergence["message"])
     if submitted_mode and submitted_mode.lower() != mode:
         warnings.insert(
             0,
@@ -2468,7 +2570,7 @@ def build_result_view(
         if not isinstance(item, dict):
             continue
         stage = _humanize(str(item.get("stage") or "Refinement"))
-        state = _humanize(str(item.get("status") or "Checkpoint"))
+        state = _pipeline_decision(item.get("status") or "Checkpoint")
         key = (stage, state)
         if key not in seen_progression:
             seen_progression.add(key)
@@ -2478,13 +2580,20 @@ def build_result_view(
         {"label": "Analysis", "value": "Rapid Hypothesis" if mode == "rapid" else "Full RADAR-PD"},
         {"label": "Status", "value": (
             f"{status} · scientific review required"
-            if result.get("scientific_status") == "needs_review" else status
+            if result.get("scientific_status") == "needs_review" or (convergence and convergence["status"] == "needs_review")
+            else f"{status} · convergence unknown" if convergence and convergence["status"] == "unknown" else status
         )},
         {"label": "Best Rwp", "value": f"{best_rwp:.3f}%" if best_rwp is not None else "-"},
         {"label": "Reported phases", "value": str(len(phase_rows)) if phase_rows else "-"},
         {"label": "Analysis time", "value": f"{elapsed:.1f} s" if elapsed is not None else "-"},
         {"label": "Result stage", "value": _humanize(result_stage)},
     ]
+    if convergence:
+        metrics.extend([
+            {"label": "Native convergence", "value": convergence["label"]},
+            {"label": "Final-cycle max shift / s.u.", "value": (
+                f"{convergence['maximum']:.5g}" if convergence["maximum"] is not None else "Unavailable")},
+        ])
     primary_path = plots[primary_index].path if primary_index is not None else ""
     return ResultView(
         mode=mode,

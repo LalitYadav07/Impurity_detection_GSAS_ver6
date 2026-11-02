@@ -1236,6 +1236,7 @@ def test_powgen_completed_scan_projects_scientific_summary_into_dashboard() -> N
     phase = state.powgen_scientific_rows[0]["phases"][0]
     assert phase["phase"] == "AlFe2V"
     assert phase["label"] == "AlFe2V (SG Fm-3m (225))"
+    assert "1 with unknown or incomplete" in state.powgen_convergence_notice
     # A finished server job can still be waiting for its first artifact read.
     # Keep that distinction visible without changing its scientific job state.
     completed_run.scientific_summary = {}
@@ -1243,6 +1244,7 @@ def test_powgen_completed_scan_projects_scientific_summary_into_dashboard() -> N
     assert state.powgen_rows[0]["status"] == "Loading results"
     assert "No new refinement is needed" in state.powgen_rows[0]["detail"]
     assert not state.powgen_scientific_rows
+    assert state.powgen_convergence_notice == ""
 
 
 def test_powgen_axis_toggle_replaces_scan_map_with_temperature_tiles() -> None:

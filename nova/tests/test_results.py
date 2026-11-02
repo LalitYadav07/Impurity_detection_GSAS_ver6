@@ -1432,13 +1432,13 @@ def test_builds_full_result_and_prioritizes_latest_accepted_fit(tmp_path: Path) 
         "Best refinement - Pass 2 accepted model / Rwp 8.50%",
         "Pass 2 trial model / Rwp 10.20%",
     }
-    assert view.full_progression == [{"stage": "Full pipeline pass", "status": "Accepted"}]
+    assert view.full_progression == [{"stage": "Full pipeline pass", "status": "Pipeline accepted"}]
     assert view.full_models == [
         {
             "model": "Accepted model",
             "stage": "Full pipeline pass",
             "rwp": "-",
-            "decision": "Accepted",
+            "decision": "Pipeline accepted",
             "note": "-",
         }
     ]
@@ -1574,7 +1574,7 @@ def test_fixed_result_contract_fixtures_cover_rapid_full_partial_and_failure(tmp
 
     assert rapid.phase_total == "100.00% total"
     assert full.phase_total == "100.00% total"
-    assert [row["decision"] for row in full.full_models] == ["Accepted", "Rejected"]
+    assert [row["decision"] for row in full.full_models] == ["Pipeline accepted", "Rejected"]
     assert "not quantitative phase fractions" in partial.warnings[0]
     assert failed.status == "Failed"
     assert failed.warnings == ["No candidate model converged"]

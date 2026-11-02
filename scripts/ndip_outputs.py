@@ -761,6 +761,13 @@ def _write_overview(path: Path, result: dict[str, Any]) -> None:
         ("Phase CIF files", len(artifacts.get("phases") or [])),
         ("GSAS-II handoff projects", len(result.get("gpx_projects") or [])),
     ]
+    if result.get("analysis_mode") == "full":
+        convergence = result.get("native_convergence") or {}
+        rows.extend([
+            ("Native convergence", str(convergence.get("status") or "unknown").replace("_", " ")),
+            ("Final-cycle max shift / conditional s.u.", _fmt_number(convergence.get("last_cycle_max_shift_over_sigma"), 5)),
+            ("Historical total-run max shift / s.u.", _fmt_number(convergence.get("total_run_max_shift_over_sigma"), 5)),
+        ])
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle, delimiter="\t", lineterminator="\n")
@@ -778,7 +785,7 @@ def _render_report(result: dict[str, Any]) -> str:
         f"<td>{html.escape(str(item.get('index', '')))}</td>"
         f"<td><a href='{html.escape(str(item.get('collection_path') or '#'), quote=True)}' target='_blank' rel='noopener'>{html.escape(str(item.get('label', '')))}</a></td>"
         f"<td>{html.escape(str(item.get('stage', '')))}</td>"
-        f"<td>{html.escape(str(item.get('status', '')))}</td>"
+        f"<td>{html.escape('Pipeline accepted' if item.get('status') == 'accepted' else str(item.get('status', '')))}</td>"
         "</tr>"
         for item in projects
     ) or "<tr><td colspan='4'>No GPX project was produced.</td></tr>"
@@ -807,6 +814,18 @@ def _render_report(result: dict[str, Any]) -> str:
         ("Reported phases", str(len(phases_summary)) if phases_summary else "-"),
         ("Best Rwp", _fmt_number(best_rwp, 3)),
     ]
+    convergence_note = ""
+    if result.get("analysis_mode") == "full":
+        convergence = result.get("native_convergence") or {}
+        cards.extend([
+            ("Native convergence", str(convergence.get("status") or "unknown").replace("_", " ").title()),
+            ("Final-cycle max shift / s.u.", _fmt_number(convergence.get("last_cycle_max_shift_over_sigma"), 5)),
+        ])
+        convergence_note = (
+            "<p class='notice'>Pipeline acceptance records model selection. Covariance-derived uncertainties "
+            "are conditional on the fitted model and recorded convergence; they do not establish model "
+            "adequacy or calibration accuracy. Historical total-run shifts are not final-cycle convergence evidence.</p>"
+        )
     timing_cards = "".join(
         f"<div class='metric'><span>{html.escape(label)}</span><strong>{value:.1f} s</strong></div>"
         for label, value in timings
@@ -840,6 +859,7 @@ details{{border:1px solid var(--line);padding:.7rem .9rem;margin:.8rem 0}} summa
 <div class="eyebrow">RADAR-PD scientific analysis</div><h1>{html.escape(str(result.get('run_name')))}</h1>
 <p class="lede">Candidate phases, lattice-aware pattern matching, and GSAS-II refinement outputs collected into one inspectable NDIP result.</p>
 <div class="metrics">{overview_cards}</div>
+{convergence_note}
 {f'<h2>Stage timing</h2><div class="metrics">{timing_cards}</div>' if timing_cards else ''}
 {f'<div class="notice"><strong>Run messages</strong><ul>{messages}</ul></div>' if messages else ''}
 <h2>Scientific result</h2>
@@ -928,6 +948,7 @@ def collect_outputs(
     atomic_write_json(portal / "gpx_index.json", gpx_index)
     summary, hypotheses, phases, hypothesis_stage = _summary_sources(run_root, mode)
     lattice, final_rwp, scientific_warnings = [], None, []
+    convergence = {}
     final_gpx = None
     if mode == "full" and published_gpx_sources:
         try:
@@ -936,11 +957,31 @@ def collect_outputs(
             except ImportError:
                 from ndip_lattice import extract_lattice, final_project_key, lattice_quality
             final_gpx = declared_final or max(published_gpx_sources, key=final_project_key)
-            lattice, final_rwp = extract_lattice(final_gpx, _read_gpx_records(final_gpx),
+            final_records = _read_gpx_records(final_gpx)
+            lattice, final_rwp = extract_lattice(final_gpx, final_records,
                 source=final_gpx.relative_to(run_root).as_posix(), labels=gpx_phase_labels)
             scientific_warnings = lattice_quality(lattice)
         except Exception as exc:
             scientific_warnings.append({"code": "lattice_unavailable", "message": f"Could not inspect final lattice parameters: {exc}"})
+    if final_gpx is not None:
+        try:
+            try:
+                from .ndip_convergence import native_convergence, convergence_warnings
+            except ImportError:
+                from ndip_convergence import native_convergence, convergence_warnings
+            relative = final_gpx.relative_to(run_root).as_posix()
+            project = next(item for item in gpx_index["projects"] if item["source_path"] == relative)
+            published = portal / project["collection_path"]
+            records = _read_gpx_records(published)
+            if (hashlib.sha256(final_gpx.read_bytes()).hexdigest() != project["sha256"]
+                    or hashlib.sha256(published.read_bytes()).hexdigest() != project["published_sha256"]):
+                raise ValueError("Retained or published GPX changed during result publication")
+            convergence = native_convergence(records, source_gpx=relative,
+                source_sha256=project["sha256"], published_sha256=project.get("published_sha256"))
+            scientific_warnings.extend(convergence_warnings(convergence))
+        except Exception as exc:
+            scientific_warnings.append({"code": "native_convergence_unavailable",
+                "message": f"Could not inspect native convergence for the retained candidate: {exc}"})
     if lattice:
         lattice_path = portal / "tables" / "Final_lattice_parameters.csv"
         lattice_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1015,6 +1056,7 @@ def collect_outputs(
         "acquisition": acquisition or {},
         "runtime": read_json(run_root/'Technical'/'Logs'/'runtime_resources.json') if (run_root/'Technical'/'Logs'/'runtime_resources.json').is_file() else {},
         "final_rwp": final_rwp,
+        "native_convergence": convergence,
         "scientific_status": "needs_review" if scientific_warnings else "not_assessed" if not lattice else "checks_passed",
         "hypotheses": hypotheses,
         "hypothesis_stage": hypothesis_stage,
