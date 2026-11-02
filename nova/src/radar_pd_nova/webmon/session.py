@@ -4,13 +4,14 @@ A deployment supplies a context manifest after checkpoint review; it is never
 accepted as an arbitrary browser path. Local acceptance uses the same adapter
 against a bounded mirror. Source files are never modified.
 """
-import csv,hashlib,json,re,copy,time,threading
+import csv,hashlib,json,re,copy,time,threading,io
 from pathlib import Path
 from .snapshot import stable_read,parse_live_ascii,SnapshotArchive
 from .contracts import validate_request
 from .registry import CheckpointRegistry
 from .doctor import validate_config
 from ..facility import FacilityBrowser
+from ..facility_metadata import MAX_TABLE_BYTES, MAX_TABLE_ROWS, resolve_identity
 
 def digest(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
@@ -50,13 +51,37 @@ class WebmonSession:
                 return copy.deepcopy(cached[2])
         metadata={}
         if summary.exists():
-            with summary.open() as f:metadata={r['RUN']:r for r in csv.DictReader(f)}
+            with summary.open('rb') as f:raw=f.read(MAX_TABLE_BYTES+1)
+            if len(raw)>MAX_TABLE_BYTES:raise ValueError('WebMON run summary exceeds the bounded metadata limit')
+            summary_sha256=hashlib.sha256(raw).hexdigest()
+            reader=csv.DictReader(io.StringIO(raw.decode('utf-8-sig'),newline=''),strict=True)
+            headers=[str(value).strip().upper() for value in (reader.fieldnames or [])]
+            if 'RUN' not in headers or headers.count('RUN')!=1:raise ValueError('WebMON summary needs one RUN column')
+            duplicate_id=headers.count('ITEMS-ID')!=1
+            reader.fieldnames=headers
+            grouped={}
+            for count,row in enumerate(reader,1):
+                if count>MAX_TABLE_ROWS:raise ValueError('WebMON run summary exceeds the row limit')
+                run=str(row.get('RUN') or '').strip()
+                if not run.isdigit() or int(run)<1:continue
+                grouped.setdefault(str(int(run)),[]).append(row)
+            for run,records in grouped.items():
+                identity=resolve_identity([{'value':r.get('ITEMS-ID'),'source':str(summary)} for r in records])
+                foreign=any(str(r.get('IPTS#') or r.get('IPTS') or '').strip().upper().removeprefix('IPTS-') not in {'',str(ipts).removeprefix('IPTS-')} for r in records)
+                malformed=any(None in r or any(value is None for value in r.values()) for r in records)
+                if duplicate_id or foreign or malformed:
+                    identity.update(sample_id='',identity_status='conflict')
+                fields={}
+                for name in ('SAMPLE','TEMP','WAVELENGTH','DURATION','TITLE'):
+                    values={str(r.get(name) or '').strip() for r in records}-{''}
+                    fields[name]=next(iter(values)) if len(values)==1 else 'Unknown'
+                metadata[run]={**fields,**identity,'summary_sha256':summary_sha256}
         rows=[]
         for p in folder.glob('PG3_*.dat'):
             m=re.fullmatch(r'PG3_(\d+)\.dat',p.name)
             if not m or not p.resolve().is_relative_to(scope):continue
             run=m[1];r=metadata.get(run,{})
-            rows.append(dict(run=run,path=str(p),sample_id=r.get('ITEMS-ID',''),sample=r.get('SAMPLE','Unknown'),temperature=r.get('TEMP','Unknown'),wavelength=r.get('WAVELENGTH','Unknown'),final_duration=r.get('DURATION','Unknown'),title=r.get('TITLE',''),value=run,
+            rows.append(dict(run=run,path=str(p),sample_id=r.get('sample_id',''),identity_status=r.get('identity_status','unidentified'),summary_sha256=r.get('summary_sha256',''),sample=r.get('SAMPLE','Unknown'),temperature=r.get('TEMP','Unknown'),wavelength=r.get('WAVELENGTH','Unknown'),final_duration=r.get('DURATION','Unknown'),title=r.get('TITLE',''),value=run,
                 label=f"{run} · {r.get('SAMPLE','Unknown')} · {r.get('TEMP','?')} K · {r.get('WAVELENGTH','?')} Å"))
         rows.sort(key=lambda r:int(r['run']),reverse=True)
         with self._inventory_lock:self._inventory_cache[key]=(fingerprint,time.monotonic(),rows)

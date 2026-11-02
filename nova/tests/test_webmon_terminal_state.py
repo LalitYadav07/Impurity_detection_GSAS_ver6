@@ -34,6 +34,7 @@ def test_changing_live_run_during_reference_resolution_never_dispatches(tmp_path
     view._webmon_reviewed_mapping={'source_id':'source','snapshot_sha256':'a'*64}
     view._discovery_identity=lambda:'reviewed';view._model_form=lambda:{}
     view._webmon=SimpleNamespace(config={'jobs':str(tmp_path)},archive=SimpleNamespace(read=lambda r:b'captured'))
+    view._webmon.runs=lambda *_:[{'run':'2','path':'old.dat'}]
     view._webmon.capture=lambda *a:({'path':'old.dat'},{'content_sha256':'a'*64},None)
     def resolve(source):
         state.webmon_run='3'

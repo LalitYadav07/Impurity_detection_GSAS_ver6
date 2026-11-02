@@ -18,6 +18,8 @@ class GalaxyLiveRuntime(GalaxyRefinementRuntime):
              cache_dataset_id=None,recover=False,cancel_event=None):
         from ..models import UtilityActionRecord,RunStatus
         if not re.fullmatch('[a-f0-9]{24}',dispatch_key):raise ValueError('A stable live dispatch key is required')
+        if cancel_event is not None and cancel_event.is_set():
+            raise RuntimeUnavailable('Live request is no longer active; existing dispatch receipts are retained')
         directory=Path(directory).resolve();directory.mkdir(parents=True,exist_ok=True)
         packet=directory/'request-packet.zip';packet_id=create_packet(request,packet)
         ledger=self.root/'dispatches';ledger.mkdir(exist_ok=True)
@@ -35,7 +37,11 @@ class GalaxyLiveRuntime(GalaxyRefinementRuntime):
             if job is None and pending.exists():
                 raise RuntimeUnavailable('Live submission acknowledgement is missing; recover before retrying. No duplicate was submitted.')
             if job is None:
+                if cancel_event is not None and cancel_event.is_set():
+                    raise RuntimeUnavailable('Live request stopped before upload; no new job was submitted')
                 packet_dataset=self.service.upload_document(packet,label='RADAR-PD live packet '+dispatch_key,wait_ready=False)
+                if cancel_event is not None and cancel_event.is_set():
+                    raise RuntimeUnavailable('Live request stopped after upload; no new job was submitted')
                 inputs={'dispatch_key':dispatch_key,'packet':{'dataset_id':packet_dataset}}
                 if cache_dataset_id:inputs['response_cache']={'dataset_id':cache_dataset_id}
                 try:

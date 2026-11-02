@@ -2866,7 +2866,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         vuetify.VAlert(v_if="!!powgen_convergence_notice", text=("powgen_convergence_notice",),
             type="warning", variant="tonal", density="compact", classes="mb-3")
         with vuetify.VTabs(v_model=("experiment_result_view",), color="#15543c", classes="radar-experiment-result-tabs"):
-            for title, value in (("Results", "results"), ("Transition tracking", "transitions"), ("In-progress scans", "webmon"), ("Refinement", "refinement")):
+            for title, value in (("Results", "results"), ("Transition tracking", "transitions"), ("Live acquisition", "webmon"), ("Refinement", "refinement")):
                 if value == "webmon" and not self._webmon_configured:
                     continue
                 vuetify.VTab(

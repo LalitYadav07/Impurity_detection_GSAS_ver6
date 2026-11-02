@@ -14,6 +14,7 @@ from .contracts import verify_result,verify_posterior,validate_request
 from .processes import stop_process,wait_process,spawn_process
 from .viewdata import sampler_summary, full_posterior, moment_rows, STATUS
 from ..facility import FacilityPathError
+from .scope import WatchScope, ScopeCancellation
 from datetime import datetime
 
 def request_identity(request):
@@ -47,11 +48,121 @@ class WebmonMixin:
             self._webmon=None;self._webmon_config_error=f'WebMON configuration unavailable: {exc}'
             logging.getLogger(__name__).error(self._webmon_config_error)
         self._webmon_colors={};self._webmon_pattern=None;self._webmon_payloads={};self._webmon_out=None;self._webmon_plot_binding=None;self._webmon_saved_paths={};self._webmon_request={};self._webmon_last_preview=None;self._webmon_model_paths=set();self._webmon_process=None;self._webmon_cancelled=False;self._webmon_task=None;self._webmon_poll_task=None;self._webmon_binding=None;self._webmon_start_scope=None
+        self._webmon_display_scope=None;self._webmon_scope_generation=0
+        s.webmon_scope_notice='';s.webmon_scope_allowed=False
         s.update(dict(webmon_follow_latest=True,webmon_stale=False,webmon_analysis_revision='',webmon_local=bool(self._webmon and self._webmon.config.get('local_replay')),webmon_runs=[],webmon_run='',webmon_target='',webmon_message='Start the experiment monitor, then select a stored or current WebMON scan.',webmon_reference='',webmon_accepted=False,webmon_k='0, 0, 0',webmon_ion='',webmon_lower=.1,webmon_upper=9.,webmon_busy=False,webmon_rows=[],webmon_model='',webmon_models=[],webmon_details='',webmon_has_result=False,webmon_context_ready=False,webmon_revision='',webmon_latency='',webmon_latest='',webmon_health='No inference yet',webmon_reference_rows=[],webmon_poll_seconds=30))
         s.update(dict(webmon_table_selected=[],webmon_compared=[],webmon_axis='tof',webmon_axes=[{'title':'TOF (µs)','value':'tof'}],webmon_errors=False,webmon_band=True,webmon_ticks=True,webmon_sampler_summary="",webmon_fit_metrics=[],webmon_component=False,webmon_region='full',webmon_filter='All',webmon_search='',webmon_display_rows=[],webmon_moment_rows=[],webmon_pair_a=0,webmon_pair_b=1,webmon_site_options=[],webmon_saved=[],webmon_saved_job='',webmon_checked='Not checked',webmon_connection='Not connected',webmon_count_summary='No candidates analyzed',webmon_validity='No fit assessed',webmon_boundary='Not assessed',webmon_sampling='Not assessed',webmon_fit_caption='',webmon_lower_used=None,webmon_upper_used=None))
+        s.change('powgen_processing_scope','powgen_processing_sample_ids','powgen_bank_scope',
+                 'powgen_processing_banks','powgen_ipts','live_beamline')(self.webmon_scope_changed)
         if self._webmon_config_error:s.webmon_message=self._webmon_config_error
     def _webmon_is_local(self):
         return getattr(getattr(self,'_webmon',None),'config',{}).get('local_replay') is True
+
+    def _webmon_live_scope(self):
+        if str(getattr(self.server.state,'live_beamline','PG3'))!='PG3':
+            raise ValueError('Live acquisition is currently available for the saved POWGEN watch only')
+        controller=getattr(self,'_powgen_controller',None)
+        service=getattr(self,'service',None)
+        if controller is None:
+            if not self._webmon_is_local() and getattr(service,'galaxy_url',None):
+                raise ValueError('Start or restore a saved Live watch before using live acquisition actions')
+            return None  # Explicit local replay and standalone diagnostic adapters.
+        scope=WatchScope.from_settings(controller.settings)
+        ipts='IPTS-'+str(self.server.state.powgen_ipts).upper().removeprefix('IPTS-')
+        if ipts!=scope.ipts or (service is not None and str(service.history_id)!=scope.history_id):
+            raise ValueError('The saved Live watch belongs to another History or IPTS')
+        return scope
+
+    def _webmon_scope_snapshot(self):
+        s=self.server.state;service=getattr(self,'service',None)
+        return dict(controller=getattr(self,'_powgen_controller',None),service=service,
+            context=getattr(self,'_result_context',None),scope=self._webmon_live_scope(),
+            generation=getattr(self,'_webmon_scope_generation',0),
+            connection=(getattr(service,'galaxy_url',None),getattr(service,'history_id',None),
+                hashlib.sha256(str(getattr(service,'galaxy_key','')).encode()).hexdigest()),
+            form=json.dumps([getattr(s,key,None) for key in ('powgen_processing_scope',
+                'powgen_processing_sample_ids','powgen_bank_scope','powgen_processing_banks')],sort_keys=True))
+
+    def _webmon_scope_current(self,owner):
+        try:
+            current=self._webmon_scope_snapshot()
+            return (current['controller'] is owner['controller'] and current['service'] is owner['service']
+                and current['context'] is owner['context'] and current['scope']==owner['scope']
+                and current['generation']==owner['generation']
+                and current['connection']==owner['connection'] and current['form']==owner['form'])
+        except (ValueError,TypeError,AttributeError):return False
+
+    def _webmon_clear_scope(self):
+        s=self.server.state
+        self._webmon_scope_generation=getattr(self,'_webmon_scope_generation',0)+1
+        self.webmon_pause_stream()
+        cancel=getattr(self,'_webmon_remote_cancel',None)
+        if cancel:cancel.set()  # Stops pending admission/waiting, never deletes an accepted job.
+        self._webmon_binding=None;self._webmon_reviewed_mapping=None;self._webmon_last_preview=None
+        self._webmon_pattern=None;self._webmon_plot_binding=None;self._webmon_request={}
+        self._webmon_payloads={};self._webmon_model_paths=set();self._webmon_out=None
+        self._webmon_published_catalog={}
+        for name,value in dict(webmon_run='',webmon_target='',webmon_revision='',webmon_analysis_revision='',
+                webmon_accepted=False,webmon_prepare_accepted=False,webmon_mapping_accepted=False,
+                webmon_context_ready=False,webmon_scope_allowed=False,webmon_has_result=False,
+                webmon_rows=[],webmon_models=[],webmon_model='',webmon_checkpoint='',webmon_checkpoints=[],
+                webmon_reference='',webmon_reference_rows=[],webmon_published_source='',webmon_published_sources=[],
+                webmon_compared=[],webmon_table_selected=[],webmon_pending_rows=[]).items():setattr(s,name,value)
+        for name in ('_webmon_observed','_webmon_checkpoint_plot','_webmon_fit','_webmon_moments','_webmon_correlation','_webmon_sampler'):
+            widget=getattr(self,name,None)
+            if widget is not None:widget.update(plots.go.Figure())
+
+    def _webmon_adopt_scope(self):
+        owner=self._webmon_scope_snapshot()
+        previous=getattr(self,'_webmon_display_scope',None)
+        if previous is not None and not self._webmon_scope_current(previous):
+            self._webmon_clear_scope();owner=self._webmon_scope_snapshot()
+        self._webmon_display_scope=owner
+        scope=owner['scope']
+        self.server.state.webmon_scope_notice=((scope.label+' ' if scope else 'Local/standalone IPTS preview. ')
+            +'The WebMON export does not identify its physical bank; verify the producer mapping before analysis. '
+            'This is acquisition preview, not the Galaxy analysis queue.')
+        return owner
+
+    def webmon_scope_changed(self,**_):
+        previous=getattr(self,'_webmon_display_scope',None)
+        if previous is not None and not self._webmon_scope_current(previous):
+            self._webmon_clear_scope()
+            self.server.state.webmon_message='Live selection changed. Refresh acquisition for the saved watch before reviewing a new snapshot.'
+
+    def _webmon_retire_stale_scope(self,owner):
+        if owner is None:return
+        if (getattr(self,'service',None) is owner['service']
+                and getattr(self,'_result_context',None) is owner['context']):
+            previous=getattr(self,'_webmon_display_scope',None)
+            if previous is not None and not self._webmon_scope_current(previous):
+                self._webmon_clear_scope()
+                self.server.state.webmon_message='Live selection changed. Earlier job receipts remain in History; refresh acquisition before continuing.'
+
+    def _webmon_require_target(self,run=None,*,row=None):
+        s=self.server.state;scope=self._webmon_live_scope()
+        run=str(s.webmon_run if run is None else run)
+        if row is None:
+            row=next((r for r in self._webmon.runs(s.powgen_ipts) if str(r['run'])==run),None)
+        if row is None:raise ValueError('Choose an acquisition from the saved Live scope')
+        error=scope.row_error(row) if scope else ''
+        if error:raise ValueError(error)
+        return row
+
+    def _webmon_require_reference(self,source,row=None):
+        scope=self._webmon_live_scope()
+        if scope:
+            row=self._webmon_require_target() if row is None else row
+            error=scope.source_error(source,row)
+            if error:raise ValueError(error)
+
+    def _webmon_require_checkpoint(self,row=None):
+        choice=self._webmon.selected_checkpoint(self.server.state.powgen_ipts,self.server.state.webmon_run)
+        if self._webmon_live_scope():
+            if not choice or not choice.get('refinement_source'):
+                raise ValueError('A same-sample published GPX with an identified physical bank is required')
+            self._webmon_require_reference(choice['refinement_source'],row)
+        return choice
 
     def webmon_attach_monitor(self):
         # Called after the normal Live monitor starts; capture is independent of
@@ -106,14 +217,15 @@ class WebmonMixin:
             """)
             with html.Div(classes='wm-top'):
                 with html.Div():
-                    html.H2('In-progress scans')
+                    html.H2('Live acquisition')
                     html.P('POWGEN WebMON source · inspect provisional patterns and conditional magnetic fits.')
                 v.VChip('Archived-data replay',v_if='webmon_local',size='small',variant='outlined')
             with html.Div(classes='wm-controls'):
                 v.VSelect(label='Viewed scan',v_model=('webmon_run',),items=('webmon_runs',),item_title='label',item_value='value',update_modelValue=(self.webmon_select,'[$event]'),density='compact',hide_details=True)
-                v.VCheckbox(label='Follow latest scan',v_model=('webmon_follow_latest',),update_modelValue=(self.webmon_follow_changed,'[$event]'),density='compact',hide_details=True)
+                v.VCheckbox(label='Follow latest matching scan',v_model=('webmon_follow_latest',),update_modelValue=(self.webmon_follow_changed,'[$event]'),density='compact',hide_details=True)
                 v.VBtn('Refresh source',click=self.webmon_refresh,disabled=('!powgen_monitoring',),variant='outlined',size='small')
             html.P('Source: {{ webmon_connection }} · Last checked {{ webmon_checked }} · Latest {{ webmon_latest }} · Viewed {{ webmon_run }} · Analyzed {{ webmon_target || "none" }}')
+            html.P('{{ webmon_scope_notice }}')
             v.VAlert(v_if='webmon_target && webmon_target !== webmon_run',text=("'You are browsing a different scan. Analysis remains pinned to run ' + webmon_target",),type='info',variant='tonal',density='compact')
             v.VAlert(v_if='webmon_stale',text='Input revision changed. Displayed results are stale; prepare and review the new inputs before reuse.',type='warning',variant='tonal',density='compact')
             with html.Div(classes='wm-stats'):
@@ -167,10 +279,10 @@ class WebmonMixin:
                             v.VTextField(label='Minimum moment (µB)',type='text',inputmode='decimal',v_model=('webmon_lower',),disabled=('webmon_busy',),density='compact')
                             v.VTextField(label='Maximum moment (µB)',type='text',inputmode='decimal',v_model=('webmon_upper',),disabled=('webmon_busy',),density='compact')
                         html.P('Site inclusion, moment bounds and candidate omissions follow the explicitly reviewed model assumptions; unresolved settings are not exclusions from the data.')
-                        v.VBtn('Start magnetic analysis',click=self.webmon_start,disabled=('!webmon_accepted || !webmon_context_ready || webmon_busy',),color='#15543c')
+                        v.VBtn('Start magnetic analysis',click=self.webmon_start,disabled=('!webmon_scope_allowed || !webmon_accepted || !webmon_context_ready || webmon_busy',),color='#15543c')
                         v.VBtn('{{ webmon_local ? "Cancel calculation" : "Stop waiting for job" }}',click=self.webmon_cancel,disabled=('!webmon_busy',),variant='text')
                     with html.Div(classes='wm-toolbar'):
-                        v.VBtn('Analyze updates for this run',click=self.webmon_enable_stream,disabled=('webmon_busy || webmon_stream_active || !webmon_accepted',),variant='outlined')
+                        v.VBtn('Analyze updates for this run',click=self.webmon_enable_stream,disabled=('!webmon_scope_allowed || webmon_busy || webmon_stream_active || !webmon_accepted',),variant='outlined')
                         v.VBtn('Pause automatic analysis',click=self.webmon_pause_stream,disabled=('!webmon_stream_active',),variant='text')
                     html.P('{{ webmon_stream_message }}')
                 with v.VExpansionPanel(title='Review completed analyses in this workspace'):
@@ -270,10 +382,21 @@ class WebmonMixin:
             if str(s.live_beamline)!='PG3':raise ValueError('WebMON is currently available for POWGEN only')
             if not self._webmon:raise ValueError('No source/checkpoint adapter configured for this server')
             if self._webmon_start_scope and str(s.powgen_ipts)!=self._webmon_start_scope:raise ValueError('IPTS changed; stop and restart the experiment monitor')
-            s.webmon_checked=datetime.now().astimezone().strftime('%H:%M:%S %Z');s.webmon_connection=f"Archive reachable · checking every {float(self._webmon.config.get('poll_seconds',30)):g} s";s.webmon_runs=self._webmon.runs(s.powgen_ipts);s.webmon_latest=s.webmon_runs[0]['run'] if s.webmon_runs else 'none'
+            owner=self._webmon_adopt_scope();scope=owner['scope']
+            rows=self._webmon.runs(s.powgen_ipts)
+            if not self._webmon_scope_current(owner):raise ValueError('Live acquisition scope changed while reading metadata')
+            selected=[row for row in rows if not scope or not scope.row_error(row)]
+            s.webmon_checked=datetime.now().astimezone().strftime('%H:%M:%S %Z');s.webmon_connection=f"Archive reachable · checking every {float(self._webmon.config.get('poll_seconds',30)):g} s";s.webmon_runs=selected;s.webmon_latest=selected[0]['run'] if selected else 'none'
+            if scope:s.webmon_scope_notice+=f' {len(selected)} matching; {len(rows)-len(selected)} outside the selection or missing unambiguous identity.'
             if s.webmon_runs:
                 if s.webmon_follow_latest:self.webmon_select(s.webmon_runs[0]['run'],follow=True)
+                elif s.webmon_run and str(s.webmon_run) not in {str(row['run']) for row in selected}:
+                    self._webmon_clear_scope();self._webmon_display_scope=self._webmon_scope_snapshot()
+                    s.webmon_message='The previous acquisition is outside the saved Live selection. Choose a matching scan.'
                 elif not quiet:self.webmon_select(s.webmon_run or s.webmon_runs[0]['run'])
+            else:
+                self._webmon_clear_scope()
+                s.webmon_message='No acquisition with an unambiguous sample ID matches the saved Live selection.'
             if quiet and s.webmon_target and not getattr(self,'_webmon_stream',None):
                 try:self._webmon.restore_binding(s.powgen_ipts,s.webmon_target,getattr(self,'_webmon_request',{}) or {})
                 except (ValueError,OSError,KeyError):
@@ -286,7 +409,7 @@ class WebmonMixin:
             s.webmon_accepted=False;s.webmon_context_ready=False;s.webmon_stale=bool(s.webmon_has_result)
         except Exception as e:
             s.webmon_message=str(e);s.webmon_connection='Source unavailable — retry Refresh source'
-            s.webmon_accepted=False;s.webmon_context_ready=False;s.webmon_stale=bool(s.webmon_has_result)
+            s.webmon_accepted=False;s.webmon_context_ready=False;s.webmon_scope_allowed=False;s.webmon_stale=bool(s.webmon_has_result)
         s.flush()
     def webmon_follow_changed(self,value,**_):
         self.server.state.webmon_follow_latest=bool(value)
@@ -295,24 +418,35 @@ class WebmonMixin:
     def webmon_select(self,value,follow=False,**_):
         s=self.server.state
         if not follow:s.webmon_follow_latest=False
-        s.webmon_run=str(value)
+        previous=None
         try:
+            self._webmon_adopt_scope()
+            previous=getattr(self,'_webmon_last_preview',None)
+            self._webmon_require_target(value)
             row,receipt,pattern=self._webmon.capture(s.powgen_ipts,value)
+            self._webmon_require_target(value,row=row)
+            s.webmon_run=str(value);s.webmon_scope_allowed=True
             preview=(str(s.powgen_ipts),str(value),receipt['content_sha256'])
             if follow and preview==self._webmon_last_preview:
                 if self._webmon_binding:self._webmon.binding(s.powgen_ipts,value)
                 return
             self._webmon_last_preview=preview;s.webmon_accepted=False;s.webmon_context_ready=False
+            s.webmon_prepare_accepted=False;s.webmon_mapping_accepted=False
+            self._webmon_reviewed_mapping=None
             s.webmon_polished_jobs=[];s.webmon_polished_job=''
             if s.webmon_target==str(value) and s.webmon_analysis_revision!=receipt['content_sha256'][:12]:s.webmon_stale=True
             self._webmon_pattern=pattern;self._webmon_observed.update(plots.observed(pattern));s.webmon_revision=receipt['content_sha256'][:12]
             s.webmon_message=f"Stored scan {value}: {row['sample']}, {row['temperature']} K. Final run duration {row['final_duration']} s; last live snapshot exposure is unverified."
+            selected=getattr(self,'_webmon_published_catalog',{}).get(s.webmon_published_source)
+            scope=self._webmon_live_scope()
+            if selected and scope and scope.source_error(selected,row):s.webmon_published_source=''
             options=self._webmon.checkpoints(s.powgen_ipts,value)
             s.webmon_checkpoints=[dict(title=c['title'],value=c['id']) for c in options]
             s.webmon_checkpoint=''
             try:
                 choice=self._webmon.selected_checkpoint(s.powgen_ipts,value)
                 if choice:
+                    self._webmon_require_reference(choice.get('refinement_source') or {},row)
                     s.webmon_checkpoint=choice['id'];self._webmon_review_checkpoint(choice)
                 b=self._webmon.binding(s.powgen_ipts,value);self._webmon_binding=b;s.webmon_context_ready=True
                 s.webmon_reference=b['description'];s.webmon_reference_rows=b['review']
@@ -320,8 +454,9 @@ class WebmonMixin:
             except (ValueError,OSError,KeyError) as e:self._webmon_binding=None;s.webmon_reference=str(e);s.webmon_reference_rows=[]
             self.webmon_saved_list()
         except Exception as e:
+            s.webmon_run=str(previous[1]) if previous else ''
             s.webmon_message=str(e);s.webmon_connection='Source unavailable — retry Refresh source'
-            s.webmon_accepted=False;s.webmon_context_ready=False;s.webmon_stale=bool(s.webmon_has_result)
+            s.webmon_accepted=False;s.webmon_context_ready=False;s.webmon_scope_allowed=False;s.webmon_stale=bool(s.webmon_has_result)
         s.flush()
     def _webmon_review_checkpoint(self,choice):
         import numpy as np
@@ -359,6 +494,10 @@ class WebmonMixin:
         s.webmon_polished_jobs=[];s.webmon_polished_job=''
         self._webmon_payloads={};self._webmon_binding=None;self._webmon_model_paths=set();self._webmon_plot_binding=None
         try:
+            row=self._webmon_require_target() if self._webmon_live_scope() else None
+            candidate=next((c for c in self._webmon.checkpoints(s.powgen_ipts,s.webmon_run) if c['id']==value),None)
+            if candidate is None:raise ValueError('Choose a checkpoint for this acquisition')
+            self._webmon_require_reference(candidate.get('refinement_source') or {},row)
             choice=self._webmon.select_checkpoint(s.powgen_ipts,s.webmon_run,value)
             s.webmon_checkpoint=choice['id'];self._webmon_review_checkpoint(choice)
             b=self._webmon.binding(s.powgen_ipts,s.webmon_run);self._webmon_binding=b
@@ -373,7 +512,8 @@ class WebmonMixin:
         if s.webmon_busy:return
         try:
             from ..refinement_controller import refinement_experiment_options
-            choice=self._webmon.selected_checkpoint(s.powgen_ipts,s.webmon_run)
+            choice=(self._webmon_require_checkpoint(self._webmon_require_target()) if self._webmon_live_scope()
+                else self._webmon.selected_checkpoint(s.powgen_ipts,s.webmon_run))
             if not choice or not choice.get('refinement_source'):raise ValueError('No published refinement source is attached to this checkpoint')
             source=choice['refinement_source']
             if source['source_sha256']!=choice['source_sha256']:raise ValueError('Refinement source differs from the selected checkpoint')
@@ -383,26 +523,39 @@ class WebmonMixin:
 
     async def webmon_load_published_sources(self,**_):
         s=self.server.state
+        owner=None
         try:
+            owner=self._webmon_scope_snapshot();scope=owner['scope'];run=str(s.webmon_run)
+            row=self._webmon_require_target() if run else None
             task=getattr(self,'_refinement_refresh_task',None)
             if task and not task.done():await task
             else:await self._refresh_refinement_sources()
+            if not self._webmon_scope_current(owner) or str(s.webmon_run)!=run:
+                self._webmon_retire_stale_scope(owner)
+                return
             from ..refinement_sources import experiment_key
             experiment=experiment_key(str(self.service.history_id),'PG3','IPTS-'+str(s.powgen_ipts).removeprefix('IPTS-'))
             w=self._refinement_store()
-            self._webmon_published_catalog={key:dict(value) for key,value in w.state['sources'].items() if value['experiment']==experiment}
+            self._webmon_published_catalog={key:dict(value) for key,value in w.state['sources'].items()
+                if value['experiment']==experiment and (not scope or not scope.source_error(value,row))}
             s.webmon_published_sources=[dict(title=f"{v['scan_label']} · {v['sample_label']}",value=key) for key,v in self._webmon_published_catalog.items()]
             if s.webmon_published_source not in self._webmon_published_catalog:s.webmon_published_source=''
-            s.webmon_source_notice=f'{len(s.webmon_published_sources)} published GPX sources in this IPTS. Inspect a reference, then resolve the live producer mapping before analysis.'
-        except Exception as exc:s.webmon_source_notice='Published source lookup failed: '+str(exc)
+            s.webmon_source_notice=f'{len(s.webmon_published_sources)} published GPX sources match this sample/bank selection. Inspect a reference, then resolve the live producer mapping before analysis.'
+        except Exception as exc:
+            if owner is None or self._webmon_scope_current(owner):s.webmon_source_notice='Published source lookup failed: '+str(exc)
         s.flush()
 
     def webmon_published_source_changed(self,value,**_):
         s=self.server.state;s.webmon_published_source=value
         source=getattr(self,'_webmon_published_catalog',{}).get(value)
         if source:
-            s.webmon_mapping_bank=str(source.get('bank') or '');s.webmon_mapping_accepted=False
-            s.webmon_source_notice=f"Selected {source['scan_label']}, {source['sample_label']}, bank {source.get('bank') or 'unresolved'}. The GPX's instrument calibration does not establish the live export conversion. Producer mapping and native preparation are still required."
+            try:
+                self._webmon_require_reference(source)
+                s.webmon_mapping_bank=str(source.get('bank') or '');s.webmon_mapping_accepted=False
+                s.webmon_source_notice=f"Selected {source['scan_label']}, {source['sample_label']}, bank {source.get('bank') or 'unresolved'}. The GPX's instrument calibration does not establish the live export conversion. Producer mapping and native preparation are still required."
+            except ValueError as exc:
+                s.webmon_published_source='';s.webmon_prepare_accepted=False;s.webmon_mapping_accepted=False
+                s.webmon_source_notice=str(exc)
         s.flush()
 
     def webmon_open_model_setup(self,**_):
@@ -410,6 +563,7 @@ class WebmonMixin:
         try:
             source=getattr(self,'_webmon_published_catalog',{}).get(s.webmon_published_source)
             if not source:raise ValueError('Select a published GPX first')
+            self._webmon_require_reference(source)
             self._webmon_handoff_source(source,'Prepare commensurate magnetic candidates for a provisional live snapshot. Inspect this exact nuclear parent and choose the magnetic sites, form factors and k before discovery. No completed-scan campaign is requested.')
             s.rf_mode='models';s.sx_kind='magnetic';s.sx_moment_model='symmetry_allowed'
             s.sx_start_source=source['id'];s.sx_source=source['id'];s.sx_follow_new=False;s.sx_existing='selected'
@@ -426,7 +580,9 @@ class WebmonMixin:
         from .stream import scope_of
         s=self.server.state
         if s.webmon_busy:return
+        owner=None
         try:
+            owner=self._webmon_scope_snapshot()
             if not s.webmon_prepare_accepted:raise ValueError('Review the magnetic setup before preparation')
             source=getattr(self,'_webmon_published_catalog',{}).get(s.webmon_published_source)
             d=getattr(self,'_symmetry_draft',None);mapping=getattr(self,'_webmon_reviewed_mapping',None)
@@ -434,15 +590,25 @@ class WebmonMixin:
                 raise ValueError('Inspect and discover magnetic candidates for this exact source in Model exploration first')
             launch=(str(s.powgen_ipts),str(s.webmon_run),source['id'])
             reviewed_form=self._model_form()
+            self._webmon_require_target()
             row,receipt,_=self._webmon.capture(s.powgen_ipts,s.webmon_run)
+            self._webmon_require_target(row=row);self._webmon_require_reference(source,row)
+            reference=(source['id'],source.get('source_sha256'),source.get('experiment'),source.get('sample_key'),source.get('bank'))
+            def current():
+                selected=getattr(self,'_webmon_published_catalog',{}).get(launch[2],{})
+                return (self._webmon_scope_current(owner) and self._model_form()==reviewed_form
+                    and (str(s.powgen_ipts),str(s.webmon_run),s.webmon_published_source)==launch
+                    and (selected.get('id'),selected.get('source_sha256'),selected.get('experiment'),selected.get('sample_key'),selected.get('bank'))==reference)
             if not mapping or mapping['source_id']!=source['id'] or mapping['snapshot_sha256']!=receipt['content_sha256']:
                 raise ValueError('Review the producer mapping for the current source snapshot first')
             import threading
             s.webmon_busy=True;self._webmon_cancelled=False
-            self._webmon_task=asyncio.current_task();self._webmon_remote_cancel=threading.Event()
+            self._webmon_task=asyncio.current_task();self._webmon_remote_cancel=ScopeCancellation(current)
             root=Path(self._webmon.config['jobs'])/'preparations'/uuid.uuid4().hex;root.mkdir(parents=True)
             captured=root/'snapshot.dat';captured.write_bytes(self._webmon.archive.read(receipt))
             material=await asyncio.to_thread(self._refinement_store().runtime.resolve,source)
+            if not current():raise ValueError('Live sample/bank or reference selection changed before preparation')
+            if self._webmon_remote_cancel.is_set():raise ValueError('The earlier preparation scope was withdrawn')
             if self._webmon_cancelled:raise ValueError('Preparation stopped before dispatch')
             if (str(s.powgen_ipts),str(s.webmon_run),s.webmon_published_source)!=launch:
                 raise ValueError('Live source selection changed while resolving the reference; review it again')
@@ -459,9 +625,12 @@ class WebmonMixin:
                 upper=float(s.sx_max_moment),lower=0.,refine_transfer=bool(s.webmon_refine_transfer),workers=min(4,max(1,int(s.sx_slots))),particles=256)
             s.webmon_busy=True;s.webmon_source_notice='Preparing the reviewed snapshot in a Galaxy worker…';s.flush()
             key=request_identity(req)[:24]
-            runtime=GalaxyLiveRuntime(Path(self._webmon.config['jobs'])/'galaxy',self.service)
+            service=owner['service'];factory=getattr(service,'staging_client',None)
+            runtime=GalaxyLiveRuntime(Path(self._webmon.config['jobs'])/'galaxy',factory() if factory else service)
             import threading
             result=await asyncio.to_thread(runtime.call,req,root/'dispatch',dispatch_key=key,cancel_event=self._webmon_remote_cancel)
+            if not current():raise ValueError('Live selection changed; the earlier preparation output remains in History and was not adopted')
+            if self._webmon_remote_cancel.is_set():raise ValueError('The earlier preparation scope was withdrawn; outputs remain in History')
             if self._webmon_cancelled:raise ValueError('Stopped waiting; the prepared Galaxy result was not adopted')
             if self._model_form()!=reviewed_form:raise ValueError('Magnetic setup changed during preparation; the archived result was not adopted')
             if (str(s.powgen_ipts),str(s.webmon_run),s.webmon_published_source)!=launch:
@@ -485,10 +654,12 @@ class WebmonMixin:
             self._webmon.selected_checkpoints[scope]=choice['id']
             self.webmon_select(s.webmon_run)
             s.webmon_source_notice='Prepared in Galaxy. Inspect the reference and assumptions, then accept this revision to start conditional live analysis.'
-        except Exception as exc:s.webmon_source_notice='Live preparation stopped: '+str(exc)
+        except Exception as exc:
+            if owner is None or self._webmon_scope_current(owner):s.webmon_source_notice='Live preparation stopped: '+str(exc)
+            else:self._webmon_retire_stale_scope(owner)
         finally:
-            if self._webmon_task is asyncio.current_task():self._webmon_task=None
-            s.webmon_busy=False;s.flush()
+            if getattr(self,'_webmon_task',None) is asyncio.current_task():
+                self._webmon_task=None;s.webmon_busy=False;s.flush()
 
     def webmon_save_mapping(self,**_):
         from .mapping import reviewed_mapping
@@ -497,7 +668,9 @@ class WebmonMixin:
         try:
             source=getattr(self,'_webmon_published_catalog',{}).get(s.webmon_published_source)
             if not source:raise ValueError('Select a published source GPX first')
-            _,receipt,_=self._webmon.capture(s.powgen_ipts,s.webmon_run)
+            self._webmon_require_target()
+            row,receipt,_=self._webmon.capture(s.powgen_ipts,s.webmon_run)
+            self._webmon_require_target(row=row);self._webmon_require_reference(source,row)
             mapping=reviewed_mapping(source=source,receipt=receipt,bank=s.webmon_mapping_bank,
                 export_difc=s.webmon_mapping_factor,normalization=s.webmon_mapping_normalization,
                 producer_sha256=s.webmon_mapping_producer,evidence=s.webmon_mapping_evidence,
@@ -514,6 +687,7 @@ class WebmonMixin:
         try:
             source=getattr(self,'_webmon_published_catalog',{}).get(s.webmon_published_source)
             if not source:raise ValueError('Select a published source first')
+            self._webmon_require_reference(source)
             self._webmon_handoff_source(source,'Inspect this published GPX as a possible nuclear reference for an in-progress POWGEN scan. Preserve the recorded bank, calibration, fit limits and phases. Do not assume its TOF calibration is the live d-spacing export convention.')
         except Exception as exc:s.webmon_source_notice=str(exc)
         s.flush()
@@ -541,6 +715,8 @@ class WebmonMixin:
             choice=self._webmon.selected_checkpoint(s.powgen_ipts,s.webmon_target)
             if not choice or not choice.get('refinement_source'):raise ValueError('The original experiment source is unavailable')
             if choice['source_sha256']!=self._webmon_request['reference_revision'].split(':')[-1]:raise ValueError('Select the reference used by this posterior first')
+            if self._webmon_live_scope():
+                self._webmon_require_reference(choice['refinement_source'],self._webmon_require_target(s.webmon_target))
             from .lineage import posterior_source
             checksum=export['fitted_gpx_sha256']
             row=next(r for r in s.webmon_rows if r.get('posterior')==s.webmon_model)
@@ -662,12 +838,15 @@ class WebmonMixin:
         s=self.server.state
         if s.webmon_busy:return
         try:
+            owner=self._webmon_scope_snapshot()
+            self._webmon_require_checkpoint(self._webmon_require_target())
             if self._webmon.config.get('allow_conditional_stream') is not True:
                 raise ValueError('This server has not enabled conditional stream analysis')
             k=[str(Fraction(x.strip())) for x in str(s.webmon_k).split(',')]
             b,req=self._webmon.request(s.powgen_ipts,s.webmon_run,k=k,ion=s.webmon_ion,lower=float(s.webmon_lower),upper=float(s.webmon_upper),accepted=s.webmon_accepted)
             directory=Path(self._webmon.config['jobs'])/'streams'/uuid.uuid4().hex
             self._webmon_stream=ObservationStream(self._webmon,s.powgen_ipts,s.webmon_run,b,req,directory)
+            self._webmon_stream_scope=owner
             self._webmon_queue=LatestQueue(directory/'queue.json');s.webmon_stream_active=True
             s.webmon_stream_message=f'Following run {s.webmon_run} only. Each cumulative snapshot replaces the previous likelihood; nuclear/profile/normalization assumptions stay fixed. No counting advice.'
             self.webmon_stream_tick()
@@ -679,6 +858,9 @@ class WebmonMixin:
         s=self.server.state;stream=self._webmon_stream;queue=self._webmon_queue
         if not stream or not queue or queue.closed:return
         try:
+            owner=getattr(self,'_webmon_stream_scope',None)
+            if owner is not None and not self._webmon_scope_current(owner):
+                raise ReviewRequired('Live sample/bank selection changed; review a new acquisition context')
             if str(s.powgen_ipts).removeprefix('IPTS-')!=stream.ipts.removeprefix('IPTS-'):
                 raise ReviewRequired('Experiment changed; review a new stream')
             item=stream.capture();queue.offer(item)
@@ -695,7 +877,7 @@ class WebmonMixin:
             if queue.pending and not s.webmon_busy and (not self._webmon_task or self._webmon_task.done()):
                 self._webmon_cancelled=False
                 async def execute(update):
-                    await self._webmon_execute(dict(sealed=(update['binding'],update['request']),webmon_run=stream.run))
+                    await self._webmon_execute(dict(sealed=(update['binding'],update['request']),webmon_run=stream.run,scope_owner=owner))
                     if s.webmon_calculation_status!='Completed':raise RuntimeError(s.webmon_message)
                     lag=time.monotonic()-update['captured_monotonic']
                     s.webmon_stream_message=f'Run {stream.run}: latest completed analysis took {lag:.1f} s from capture. {queue.state["coalesced"]} superseded queued snapshots skipped. Fixed response; counting advice unavailable.'
@@ -721,6 +903,8 @@ class WebmonMixin:
         launch={key:getattr(s,key) for key in ['powgen_ipts','webmon_run','webmon_k','webmon_ion','webmon_lower','webmon_upper','webmon_accepted']}
         if getattr(self,'_webmon',None):
             try:
+                launch['scope_owner']=self._webmon_scope_snapshot()
+                self._webmon_require_checkpoint(self._webmon_require_target())
                 from fractions import Fraction
                 k=[str(Fraction(x.strip())) for x in str(launch['webmon_k']).split(',')]
                 launch['sealed']=self._webmon.request(launch['powgen_ipts'],launch['webmon_run'],k=k,ion=str(launch['webmon_ion']).strip(),lower=float(launch['webmon_lower']),upper=float(launch['webmon_upper']),accepted=launch['webmon_accepted'])
@@ -741,6 +925,8 @@ class WebmonMixin:
             return await self._webmon_execute_galaxy(launch)
         s=self.server.state;lease=None
         try:
+            if launch.get('scope_owner') is not None and not self._webmon_scope_current(launch['scope_owner']):
+                raise ValueError('Live sample/bank selection changed before launch')
             b,req=launch['sealed'];validate_request(req,b)
             if self._webmon_cancelled:raise ValueError('Analysis cancelled before launch')
             identity=request_identity(req)
@@ -766,6 +952,8 @@ class WebmonMixin:
             s.webmon_pending_target=str(launch['webmon_run']);s.webmon_busy=True
             s.webmon_message='Preparing native subgroup kernels and conditional Monte Carlo analysis…';s.flush();started=time.monotonic()
             lease=await self._webmon_native_slot()
+            if launch.get('scope_owner') is not None and not self._webmon_scope_current(launch['scope_owner']):
+                raise ValueError('Live sample/bank selection changed while waiting for capacity')
             if self._webmon_cancelled:raise ValueError('Analysis cancelled while waiting for capacity')
             with (out/'worker.log').open('ab') as log:
                 self._webmon_process=await spawn_process(*self._webmon_local_command('worker_command'),str(request),stdout=log,stderr=log)
@@ -793,23 +981,32 @@ class WebmonMixin:
         from gpx_recipe.live.io import atomic_json
         import threading
         s=self.server.state
+        owner=launch.get('scope_owner')
+        def current():
+            return not self._webmon_cancelled and (owner is None or self._webmon_scope_current(owner))
         try:
+            if not current():raise ValueError('Live sample/bank selection changed before launch')
             b,req=launch['sealed'];validate_request(req,b)
             identity=request_identity(req)
             root=Path(self._webmon.config['jobs'])/'galaxy';root.mkdir(parents=True,exist_ok=True)
-            runtime=GalaxyLiveRuntime(root,self.service)
-            self._webmon_remote_cancel=threading.Event()
+            service=owner['service'] if owner is not None else self.service
+            factory=getattr(service,'staging_client',None)
+            runtime=GalaxyLiveRuntime(root,factory() if factory else service)
+            self._webmon_remote_cancel=ScopeCancellation(current)
             self._webmon_pending_binding=b;self._webmon_pending_request=req
             s.webmon_busy=True;s.webmon_stale=bool(s.webmon_has_result)
             s.webmon_message='Submitting this snapshot to the Galaxy scientific worker. New snapshots will replace only pending work.';s.flush()
             loop=asyncio.get_running_loop()
             def submitted(job):
                 def update():
-                    s.webmon_message='Galaxy job '+str(job.get('galaxy_job_id',''))+' is queued or running.';s.flush()
+                    if current():
+                        s.webmon_message='Galaxy job '+str(job.get('galaxy_job_id',''))+' is queued or running.';s.flush()
                 loop.call_soon_threadsafe(update)
             result=await asyncio.to_thread(runtime.call,req,root/identity[:24],dispatch_key=identity[:24],
                 cache_dataset_id=getattr(self,'_webmon_response_cache',None),on_submitted=submitted,cancel_event=self._webmon_remote_cancel)
-            if self._webmon_cancelled:return
+            if not current() or self._webmon_remote_cancel.is_set():
+                self._webmon_retire_stale_scope(owner)
+                return
             self._webmon_response_cache=result.get('response_cache_dataset_id')
             # Keep the original checked bundle intact. The UI view contains
             # hard-linked immutable models and explicitly rebased presentation
@@ -827,9 +1024,13 @@ class WebmonMixin:
             self._webmon_load_result(view)
             s.webmon_calculation_status='Completed';s.webmon_message='Galaxy snapshot analysis completed. Results remain conditional on the reviewed fixed nuclear response.'
         except Exception as exc:
-            s.webmon_calculation_status='Stopped waiting' if self._webmon_cancelled else 'Failed'
-            s.webmon_message=str(exc)
-        finally:s.webmon_busy=False;s.flush()
+            if current():
+                s.webmon_calculation_status='Stopped waiting' if self._webmon_cancelled else 'Failed'
+                s.webmon_message=str(exc)
+            else:self._webmon_retire_stale_scope(owner)
+        finally:
+            if owner is None or current() or getattr(self,'_webmon_task',None) is asyncio.current_task():
+                s.webmon_busy=False;s.flush()
 
     def _webmon_load_result(self,out):
         s=self.server.state;p=out/'result.json'
