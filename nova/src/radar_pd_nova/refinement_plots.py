@@ -124,7 +124,8 @@ def fit_figure(baseline,polished,*,histogram=None,axis='d',display='compare',res
         else:
             positions=np.asarray(ticks['native'],dtype=float)
         label=ticks['phase']
-        figure.add_trace(go.Scattergl(x=positions,y=[index]*len(positions),mode='markers',marker=dict(symbol='line-ns',size=8,color=COLORS[index%len(COLORS)]),name=label,legendgroup='phase-'+str(index),hovertemplate=label+'<br>%{x:.6g}<extra></extra>'),row=3,col=1)
+        color=COLORS[index%len(COLORS)]
+        figure.add_trace(go.Scattergl(x=positions,y=[index]*len(positions),mode='markers',marker=dict(symbol='line-ns',size=11,color=color,line=dict(color=color,width=2)),name=label,legendgroup='phase-'+str(index),hovertemplate=label+'<br>%{x:.6g}<extra></extra>'),row=3,col=1)
     figure.update_layout(template='plotly_white',height=620,margin=dict(l=75,r=22,t=32,b=55),
         legend=dict(orientation='h',y=1.13,x=0,font=dict(size=11)),hovermode='closest',
         uirevision=f'refinement-fit/{name}/{axis}/{reset}',
