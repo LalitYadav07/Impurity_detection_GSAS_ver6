@@ -4,7 +4,7 @@ from trame.widgets import client,html,plotly,vuetify3 as v
 
 FIT_PRESENTATION_CSS='''
 .sx-source-caveats{flex:0 0 auto;font-size:13px;line-height:1.5}.sx-source-caveats ul{margin:6px 0;padding-left:20px}.sx-source-caveats li+li{margin-top:4px}.sx-source-caveats summary{cursor:pointer;font-size:12px}
-.sx-expanded-fit{display:flex;flex-direction:column}.sx-expanded-fit>.v-btn{align-self:flex-start;flex:0 0 auto}.sx-expanded-fit h3{font-size:16px;line-height:1.5}.sx-expanded-chart{flex:1;min-height:320px}
+.sx-expanded-fit{display:flex;flex-direction:column}.sx-expanded-fit>.v-btn{align-self:flex-start;flex:0 0 auto}.sx-expanded-fit h3{flex:0 0 auto;font-size:16px;line-height:1.5}.sx-expanded-fit .sx-source-caveats{max-height:min(30vh,220px);overflow-y:auto}.sx-expanded-chart{flex:1;min-height:320px}
 '''
 
 
@@ -19,7 +19,7 @@ def scan_select(label,field,items,**kwargs):
 
 
 def source_caveats():
-    with v.VAlert(v_if='sx_source_display_notices.length',type='warning',color='#6b4b12',variant='tonal',density='compact',classes='sx-source-caveats my-2',role='note'):
+    with v.VAlert(v_if='sx_source_display_notices.length',type='warning',color='#6b4b12',variant='tonal',density='compact',classes='sx-source-caveats my-2',role='note',tabindex=0):
         html.Strong('Source requires review')
         with html.Ul():
             html.Li('{{ notice }}',v_for='notice in sx_source_display_notices',key='notice')

@@ -115,7 +115,8 @@ def acquisition_temperature(workspace,experiment,source_id,source_sha256):
     value=metric.get('value');unit=metric.get('unit')
     if not isinstance(unit,str):return ''
     if (not isinstance(value,(int,float)) or isinstance(value,bool) or not isfinite(value)
-            or metric.get('role','measured')!='measured' or metric.get('status','recorded')!='recorded'):
+            or metric.get('role')!='measured' or metric.get('status')!='recorded'
+            or metric.get('quality') not in (None,'recorded','changing')):
         return ''
     # Use recorded units, never a filename/title or a magnitude-based guess.
     # Absolute-zero placeholders are not usable acquisition temperatures.

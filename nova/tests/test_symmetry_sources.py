@@ -126,6 +126,7 @@ def test_expanded_temperature_uses_exact_original_or_recipe_identity_without_gpx
     {'value':'0.7'},{'unit':''},{'unit':'unknown'},{'unit':[]},
     {'role':'setpoint'},{'role':'requested'},{'status':'unqualified_units'},
     {'status':'needs_mapping'},{'status':'conflict'},
+    {'quality':'needs_review'},{'quality':'unqualified'},{'quality':False},{'quality':{}},
 ])
 def test_expanded_temperature_never_promotes_invalid_or_unqualified_metadata(tmp_path,change):
     w=workspace(tmp_path);source=w.state['sources']['raw']
@@ -136,12 +137,24 @@ def test_expanded_temperature_never_promotes_invalid_or_unqualified_metadata(tmp
 
 def test_expanded_temperature_keeps_mean_semantics_and_never_uses_a_title_as_temperature(tmp_path):
     w=workspace(tmp_path);source=w.state['sources']['raw']
-    source['metadata']={'temperature':dict(value=166.5,unit='K',statistic='time_weighted_step_hold')}
+    source['metadata']={'temperature':dict(value=166.5,unit='K',statistic='time_weighted_step_hold',
+                                         role='measured',status='recorded',quality='changing')}
     assert acquisition_temperature(w,'IPTS-1','raw',source['source_sha256'])=='mean 166.5 K'
     source['metadata']={'title':'sample at 0K','condition':0.,'condition_unit':'K'}
     assert acquisition_temperature(w,'IPTS-1','raw',source['source_sha256'])==''
     source['metadata']={'temperature':dict(value=0.,unit='°C',role='measured',status='recorded')}
     assert acquisition_temperature(w,'IPTS-1','raw',source['source_sha256'])=='0 °C'
+
+
+@pytest.mark.parametrize('legacy',[
+    {},{'quality':'recorded'},{'quality':'needs_review'},{'quality':'unqualified'},
+    {'role':'measured'},{'status':'recorded'},{'role':'measured','quality':'recorded'},
+    {'status':'recorded','quality':'recorded'},
+])
+def test_expanded_temperature_requires_explicit_qualified_flags_on_legacy_metrics(tmp_path,legacy):
+    w=workspace(tmp_path);source=w.state['sources']['raw']
+    source['metadata']={'temperature':dict(value=166.5,unit='K',**legacy)}
+    assert acquisition_temperature(w,'IPTS-1','raw',source['source_sha256'])==''
 
 
 def test_expanded_caption_clears_temperature_after_source_change_without_changing_status(tmp_path,monkeypatch):
