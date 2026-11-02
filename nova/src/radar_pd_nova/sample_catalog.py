@@ -30,7 +30,9 @@ def catalog_created_at(instrument: str, ipts: str, rows) -> float:
         cached = _CACHE.get(key)
         if cached and cached[1] is rows:
             return cached[0]
-    return time.monotonic()
+    # A concurrent refresh/eviction can retire the returned object before
+    # this lookup. Its age is then unknown; never grant it a fresh TTL.
+    return time.monotonic() - TTL_SECONDS
 
 
 def _values(value):

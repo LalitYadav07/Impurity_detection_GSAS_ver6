@@ -1,5 +1,6 @@
 from copy import deepcopy
 from types import SimpleNamespace
+import time
 
 import pytest
 
@@ -17,6 +18,10 @@ def record(run=42, identifier="00123", **extra):
 
 def parse(rows):
     return sample_catalog.parse_sample_catalog(rows, "PG3", "IPTS-1")
+
+
+def cache_catalog(monkeypatch, rows):
+    monkeypatch.setitem(sample_catalog._CACHE, ("PG3", "IPTS-1"), (time.monotonic(), rows))
 
 
 def test_catalog_is_scoped_to_matching_raw_run_proposal_and_instrument():
@@ -52,7 +57,7 @@ def test_known_unidentified_catalog_run_is_not_inferred_from_its_title():
 
 def test_large_inventory_does_not_open_thousands_of_raw_or_reduced_files(tmp_path, monkeypatch):
     rows = parse([record(run=n, identifier="A" if n % 2 else "B") for n in range(1, 3230)])
-    monkeypatch.setattr(powgen_samples, "load_sample_catalog", lambda *args: rows)
+    cache_catalog(monkeypatch, rows)
     monkeypatch.setattr(powgen_samples, "run_role", lambda *args: pytest.fail("Browsing opened a GSA"))
     index = PowgenSampleIndex("IPTS-1", metadata_index=ExperimentMetadataIndex("PG3", "IPTS-1", root=tmp_path))
     monkeypatch.setattr(index, "identity", lambda *args: pytest.fail("Browsing opened a raw file"))
@@ -65,7 +70,7 @@ def test_large_inventory_does_not_open_thousands_of_raw_or_reduced_files(tmp_pat
 
 def test_only_selected_latest_runs_get_raw_verified_and_mismatches_are_excluded(tmp_path, monkeypatch):
     rows = parse([record(run=n, identifier="A" if n % 2 else "B") for n in range(1, 1001)])
-    monkeypatch.setattr(powgen_samples, "load_sample_catalog", lambda *args: rows)
+    cache_catalog(monkeypatch, rows)
     index = PowgenSampleIndex("IPTS-1", metadata_index=ExperimentMetadataIndex("PG3", "IPTS-1", root=tmp_path))
     runs = [WatchedRun(n, f"PG3_{n}.gsa", str(n)) for n in range(1, 1001)]
     index.inventory(runs, catalog=True)
@@ -105,7 +110,7 @@ def test_verified_source_identity_is_not_overwritten_by_a_catalog_preview(tmp_pa
         metadata_index=ExperimentMetadataIndex("PG3", "IPTS-1", root=tmp_path))
     run = WatchedRun(42, "PG3_42.gsa", "unchanged")
     assert index.identity(run)["sample_id"] == "B"
-    monkeypatch.setattr(powgen_samples, "load_sample_catalog", lambda *args: parse([record(identifier="A")]))
+    cache_catalog(monkeypatch, parse([record(identifier="A")]))
     result = index.inventory([run], catalog=True)
     assert [o["value"] for o in result["options"]] == ["B"]
     assert not result["catalog_preview_count"]
