@@ -141,8 +141,12 @@ def _native_fit_plot_payload(instrument="TOF"):
 
 
 @pytest.mark.parametrize("instrument", ["TOF", "CW"])
-def test_native_plot_includes_upper_bin_and_masks_excluded_or_invalid_points(instrument):
+@pytest.mark.parametrize("numeric_strings", [False, True])
+def test_native_plot_includes_upper_bin_and_masks_excluded_or_invalid_points(instrument, numeric_strings):
     payload = _native_fit_plot_payload(instrument)
+    if numeric_strings:
+        payload["fit_limits"] = list(map(str, payload["fit_limits"]))
+        payload["excluded_ranges"] = [list(map(str, pair)) for pair in payload["excluded_ranges"]]
     before = deepcopy(payload)
     figure = figure_for_payload(payload)
     arrays = payload["arrays"]
@@ -154,7 +158,7 @@ def test_native_plot_includes_upper_bin_and_masks_excluded_or_invalid_points(ins
         assert (difference[x] is not None) is expected
         if expected:
             assert calculated[x] == arrays["ycalc"][index]
-    assert arrays["x"][16] > payload["fit_limits"][1]
+    assert arrays["x"][16] > float(payload["fit_limits"][1])
     assert figure.layout.xaxis.range[1] == arrays["x"][16]
     assert "N (fit) 8" in figure.layout.title.text
     assert figure.data[0].y[4] == -3 and figure.data[0].y[5] == 0

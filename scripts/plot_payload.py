@@ -40,11 +40,13 @@ def histogram_fit_region(histogram):
 
 def native_plot_mask(arrays, limits, exclusions):
     """Validate a complete native-grid plot mask, without inferring from ycalc."""
+    intervals = []
     for interval, allow_point in [(limits, False), *((value, True) for value in exclusions)]:
         pair = np.asarray(interval, dtype=float)
         if (pair.shape != (2,) or not np.all(np.isfinite(pair))
                 or (pair[0] > pair[1] if allow_point else pair[0] >= pair[1])):
             raise ValueError("Native plot fit limits or exclusions are invalid")
+        intervals.append(pair.tolist())
     x = np.asarray(arrays["x"], dtype=float)
     if x.ndim != 1 or not len(x) or not np.all(np.isfinite(x)) or np.any(np.diff(x) <= 0):
         raise ValueError("A native plot needs finite, increasing histogram coordinates")
@@ -63,7 +65,7 @@ def native_plot_mask(arrays, limits, exclusions):
         raise ValueError("Native plot arrays do not share the histogram grid")
     if np.any(valid & (~np.isfinite(weights) | (weights <= 0) | ~np.isfinite(observed))):
         raise ValueError("Native plot validity conflicts with observed values or weights")
-    if not np.array_equal(fitted, valid & native_powder_fit_mask(x, limits, exclusions)):
+    if not np.array_equal(fitted, valid & native_powder_fit_mask(x, intervals[0], intervals[1:])):
         raise ValueError("Native plot fit mask differs from the declared fit domain")
     if np.any(fitted & ~np.isfinite(calculated)):
         raise ValueError("Native plot has missing calculated values in its fitted domain")

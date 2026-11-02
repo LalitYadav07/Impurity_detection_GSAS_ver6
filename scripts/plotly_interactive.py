@@ -378,8 +378,8 @@ def _fig_gsas_fit(payload: Dict[str, Any]) -> Optional[go.Figure]:
         title += f" / N (fit) {int(fitted.sum()):,}"
         if np.any(fitted):
             limits = payload["fit_limits"]
-            fig.update_xaxes(range=[min(limits[0], float(x[fitted][0])),
-                                    max(limits[1], float(x[fitted][-1]))], autorange=False)
+            fig.update_xaxes(range=[min(float(limits[0]), float(x[fitted][0])),
+                                    max(float(limits[1]), float(x[fitted][-1]))], autorange=False)
     fig.update_layout(
         height=max(700, 630 + 30 * max(0, len(phase_order) - 2)),
         title=dict(text=_short_label(title, 96), font=dict(size=17, color="#111827"), x=0.01),

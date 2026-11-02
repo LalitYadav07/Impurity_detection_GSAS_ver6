@@ -106,6 +106,18 @@ def test_script_viewer_binds_residual_and_allows_only_invalid_bin_nan(monkeypatc
     assert np.isfinite(figure.data[2].y).sum() == 8
 
 
+def test_script_viewer_normalizes_validated_numeric_interval_strings(monkeypatch):
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "scripts"))
+    from scripts.plotly_interactive import _fig_gsas_fit
+    payload = native_payload()
+    payload["fit_limits"] = list(map(str, payload["fit_limits"]))
+    payload["excluded_ranges"] = [list(map(str, pair)) for pair in payload["excluded_ranges"]]
+    figure = _fig_gsas_fit(payload)
+    assert figure is not None
+    assert np.isfinite(figure.data[2].y).sum() == 8
+    assert figure.layout.xaxis.range[1] == payload["arrays"]["x"][16]
+
+
 def test_single_bin_exclusion_and_masked_upper_endpoint_do_not_shift_native_slice():
     histogram, expected = synthetic_histogram("TOF")
     x = histogram.data["data"][1][0].data
