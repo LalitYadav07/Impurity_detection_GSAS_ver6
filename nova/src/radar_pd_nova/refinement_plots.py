@@ -38,7 +38,9 @@ def refinement_parameter_label(parameter, source):
     histogram=parameter.get('histogram')
     if histogram:
         bank=source.get('metadata',{}).get('physical_banks',{}).get(histogram)
-        label+=f' · physical bank {bank}' if bank is not None else ' · '+histogram
+        context=f'physical bank {bank}' if bank is not None else histogram
+        if context not in label.split(' · '):
+            label+=' · '+context
     return label
 
 
