@@ -1158,10 +1158,13 @@ class RefinementMixin(GuidedRefinementMixin):
             if result.get('execution'):
                 try:
                     recipe=w.state.get('recipes',{}).get(job.get('recipe_id'),{})
+                    expected_plan=plan_hash(recipe['plan']) if recipe.get('plan') else None
+                    if not expected_plan or (recipe.get('approval') or {}).get('approved_plan_sha256')!=expected_plan:
+                        raise ValueError('The saved recipe has no matching approval for these execution parameters')
                     execution=self._read_refinement_view(job,result['execution'])
                     extra,parameter_notice=execution_parameters(view,result,execution,s.rf_stage,
                         source_sha=job['source'].get('source_sha256'),
-                        plan_sha=plan_hash(recipe['plan']) if recipe.get('plan') else None,
+                        plan_sha=expected_plan,
                         context=job['source'].get('context') or recipe.get('context'))
                     rows=parameter_table(view,extra)
                 except (OSError,ValueError,KeyError,TypeError) as exc:

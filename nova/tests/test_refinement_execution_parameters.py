@@ -199,3 +199,24 @@ def test_changed_publication_during_read_cannot_publish_old_rows():
                         _read_refinement_view=read)
     RefinementMixin._refinement_plot_changed(app)
     assert s.rf_parameters==[{'label':'new publication owns these rows'}]
+
+
+@pytest.mark.parametrize('approval',[{}, {'approved_plan_sha256':'f'*64}])
+def test_unapproved_recipe_cannot_supply_execution_parameters(approval):
+    from radar_pd_nova.refinement_controller import RefinementMixin
+    from test_refinement_plots import view
+    s=SimpleNamespace(**RefinementMixin._refinement_state_defaults())
+    s.rf_has_output=True;s.rf_selected_job='job';s.rf_experiment='exp';s.rf_stage='stage1';s.rf_histogram='bank2'
+    v,r,e=fixture();data=view();data['source_sha256']=FIRST
+    for p in data['parameters']:p['status']='refined'
+    r.update(baseline_view='base',execution='polished.execution.json')
+    def read(job,name):
+        assert name!='polished.execution.json'
+        return data
+    job=dict(source={'experiment':'exp','source_sha256':SOURCE},result=r,recipe_id='recipe')
+    workspace=SimpleNamespace(state={'jobs':{'job':job},'recipes':{'recipe':{'plan':{'stages':[]},'approval':approval}}})
+    app=SimpleNamespace(server=SimpleNamespace(state=s),_refinement_workspace=workspace,_read_refinement_view=read)
+    RefinementMixin._refinement_plot_changed(app)
+    assert not s.rf_error
+    assert s.rf_parameters and all(not p.get('native_variable') for p in s.rf_parameters)
+    assert 'no matching approval' in s.rf_parameter_notice
