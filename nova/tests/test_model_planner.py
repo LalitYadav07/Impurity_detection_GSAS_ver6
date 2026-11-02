@@ -230,6 +230,197 @@ def test_an_invalid_geometry_or_changed_declared_geometry_is_rejected(source,int
         validate_intent(intent,source,request='request',declared={'moment_model':'collinear'})
 
 
+@pytest.mark.parametrize('user_request',[
+    'Allow canting.',
+    'Please permit canted magnetic moments.',
+    'The magnetic moments may cant.',
+    'Refine every site-symmetry-allowed moment component.',
+    'Refine all magnetic degrees of freedom.',
+    'Refine all symmetry-allowed magnetic degrees of freedom.',
+    'Refine all symmetry-allowed DOFs.',
+    'Use the symmetry-allowed moment model.',
+    'moment_model=symmetry_allowed',
+    'Do not impose collinearity.',
+    "Don't constrain the moments to be collinear.",
+    'No collinearity.',
+    'Use Fe1=Fe+3, g=2 and k=(0,0,0). Refine every site-symmetry-allowed moment component, '
+    'allow canting, and do not impose collinearity. Use 20 cycles per start.',
+])
+@pytest.mark.parametrize('model',[None,'collinear'])
+def test_explicit_canting_cannot_accept_an_omitted_or_collinear_reply(source,intent,user_request,model):
+    if model is not None:intent['settings']['moment_model']=model
+    assert payload(user_request,source)['declared']['moment_model']=='symmetry_allowed'
+    with pytest.raises(ValueError,match='declared moment_model'):
+        validate_intent(intent,source,request=user_request)
+    intent['settings']['moment_model']='symmetry_allowed'
+    assert validate_intent(intent,source,request=user_request)['settings']['moment_model']=='symmetry_allowed'
+
+
+@pytest.mark.parametrize('user_request',[
+    'Do not allow canting.',
+    "Don't permit noncollinear moments.",
+    'The moments must not cant.',
+    'No canting.',
+    'Collinear only.',
+    'Only collinear moments.',
+    'Keep all magnetic moments collinear.',
+    'Use a collinear model.',
+    'moment_model=collinear',
+])
+def test_explicit_collinear_and_negated_canting_stay_collinear(source,intent,user_request):
+    assert payload(user_request,source)['declared']['moment_model']=='collinear'
+    assert validate_intent(intent,source,request=user_request)['settings']['moment_model']=='collinear'
+    intent['settings']['moment_model']='symmetry_allowed'
+    with pytest.raises(ValueError,match='declared moment_model'):
+        validate_intent(intent,source,request=user_request)
+
+
+@pytest.mark.parametrize('user_request',[
+    'Refine Fe1 moments with 20 cycles.',
+    'Refine the magnetic moments.',
+    'Refine Fe moments across the series.',
+    'The previous model was collinear. Refine the magnetic moments.',
+    'Is canting possible?',
+    'Use the supplied model, which was collinear.',
+])
+def test_unspecified_or_incidental_geometry_keeps_the_legacy_default(source,intent,user_request):
+    assert 'moment_model' not in payload(user_request,source)['declared']
+    assert validate_intent(intent,source,request=user_request)['settings']['moment_model']=='collinear'
+
+
+def test_canting_mismatch_gets_only_the_existing_bounded_repair(source,intent):
+    request='Allow canting and do not impose collinearity.'
+    good=copy.deepcopy(intent);good['settings']['moment_model']='symmetry_allowed'
+    client=Client([intent,good])
+    result=make_intent(request,source,client=client)
+    assert len(client.calls)==2 and result['intent']['settings']['moment_model']=='symmetry_allowed'
+    assert json.loads(client.calls[0][0][1]['content'])['declared']['moment_model']=='symmetry_allowed'
+    assert 'declared moment_model' in client.calls[1][0][-1]['content']
+    with pytest.raises(ValueError,match='declared moment_model') as exc:
+        make_intent(request,source,client=Client([intent,intent]))
+    assert len(exc.value.planning_calls)==2
+
+
+@pytest.mark.parametrize('user_request',[
+    'Allow canting; keep all moments collinear.',
+    'Do not allow canting; use the symmetry-allowed moment model.',
+])
+def test_conflicting_geometry_requests_fail_before_calling_a_model(source,user_request):
+    client=Client([])
+    with pytest.raises(ValueError,match='conflicting moment models'):
+        make_intent(user_request,source,client=client)
+    assert client.calls==[]
+
+
+def test_reviewed_geometry_is_never_overwritten_by_request_extraction(source,intent):
+    assert payload('Refine the moments',source,declared={'moment_model':'symmetry_allowed'})['declared']['moment_model']=='symmetry_allowed'
+    assert payload('Allow canting',source,declared={'moment_model':'symmetry_allowed'})['declared']['moment_model']=='symmetry_allowed'
+    with pytest.raises(ValueError,match='conflicts with the reviewed moment_model'):
+        payload('Allow canting',source,declared={'moment_model':'collinear'})
+    with pytest.raises(ValueError,match='conflicts with the reviewed moment_model'):
+        payload('Collinear only',source,declared={'moment_model':'symmetry_allowed'})
+
+
+@pytest.mark.parametrize('user_request,expected',[
+    ('Allow all symmetry-allowed magnetic degrees of freedom.', 'symmetry_allowed'),
+    ('Allow all symmetry-allowed moment components.', 'symmetry_allowed'),
+    ('Allow all magnetic moments to cant.', 'symmetry_allowed'),
+    ('Permit every magnetic moment to cant.', 'symmetry_allowed'),
+    ('Use a noncollinear magnetic model.', 'symmetry_allowed'),
+    ('Do not use moment_model=symmetry_allowed.', 'collinear'),
+    ('Do not reuse moment_model=collinear; allow canting.', 'symmetry_allowed'),
+    ('The previous run used moment_model=collinear. Allow canting.', 'symmetry_allowed'),
+    ('Previously, moment_model=collinear. Allow canting.', 'symmetry_allowed'),
+    ('The previous run used moment_model=symmetry_allowed. Collinear only.', 'collinear'),
+    ('The previous run used moment_model=collinear. Refine the magnetic moments.', None),
+    ('Previously, moment_model=collinear. Refine the magnetic moments.', None),
+    ('Set moment model to symmetry_allowed.', 'symmetry_allowed'),
+    ('Select symmetry_allowed.', 'symmetry_allowed'),
+    ('Allow all symmetry-allowed magnetic moment degrees of freedom.', 'symmetry_allowed'),
+    ('Allow all symmetry\u2011allowed magnetic degrees of freedom.', 'symmetry_allowed'),
+    ('Use collinear interpolation for the plot.', None),
+    ('Use all degrees of freedom of the background polynomial.', None),
+    ('Refine all background components.', None),
+])
+def test_geometry_paraphrases_assignments_and_history_validate_every_reply(source,intent,user_request,expected):
+    assert payload(user_request,source)['declared'].get('moment_model')==expected
+    for model in [None,'collinear','symmetry_allowed']:
+        reply=copy.deepcopy(intent)
+        if model is not None:reply['settings']['moment_model']=model
+        if expected is not None and (model or 'collinear')!=expected:
+            with pytest.raises(ValueError,match='declared moment_model'):
+                validate_intent(reply,source,request=user_request)
+        else:
+            assert validate_intent(reply,source,request=user_request)['settings']['moment_model']==(model or 'collinear')
+
+
+@pytest.mark.parametrize('user_request',[
+    'Use moment_model=collinear. Allow canting.',
+    'Do not use moment_model=symmetry_allowed. Allow canting.',
+])
+def test_current_assignment_conflicts_remain_blocked(source,user_request):
+    with pytest.raises(ValueError,match='conflicting moment models'):
+        payload(user_request,source)
+
+
+@pytest.mark.parametrize('user_request',[
+    'Compare a canted model with a collinear model.',
+    'Do not refine all moment components.',
+    'Do not allow all symmetry-allowed moment components.',
+    'Let the magnetic moments tilt freely.',
+    'Allow all components.',
+    'Use a full moment vector.',
+    'Allow canting, but never vary the moment orientation.',
+    'Use moment_model=collinear or moment_model=symmetry_allowed.',
+    'Do not use moment_model=collinear or moment_model=symmetry_allowed.',
+    'Allow canting or keep the moments collinear.',
+    'The moments may cant or may remain collinear.',
+    'Allow canting only for the previous model.',
+    'Keep all moments parallel.',
+    'Keep the spins along the c axis.',
+    'Do allow canting.',
+    'Allow all symmetry degrees of freedom.',
+    'Allow all symmetry DOFs.',
+    'Allow all symmetry-permitted degrees of freedom.',
+    'Allow nonparallel magnetic moments.',
+    'Keep all spins nonparallel.',
+    'Make all moments form a helix.',
+])
+def test_ambiguous_current_geometry_cannot_fall_back_to_collinear(source,intent,user_request):
+    client=Client([intent])
+    with pytest.raises(ValueError,match='geometry instruction needs an explicit choice'):
+        make_intent(user_request,source,client=client)
+    assert client.calls==[]
+    with pytest.raises(ValueError,match='geometry instruction needs an explicit choice'):
+        validate_intent(intent,source,request=user_request)
+
+
+@pytest.mark.parametrize('user_request,expected',[
+    ('Keep nuclear geometry fixed, and the magnetic moments may cant.', 'symmetry_allowed'),
+    ('Keep nuclear geometry fixed and moment_model=symmetry_allowed.', 'symmetry_allowed'),
+    ('moment_model=collinear was used in the previous fit. Allow canting.', 'symmetry_allowed'),
+    ('moment_model=symmetry_allowed was used in the previous fit. Collinear only.', 'collinear'),
+])
+def test_modal_conjunctions_and_assignment_first_history_are_scoped(source,intent,user_request,expected):
+    assert payload(user_request,source)['declared']['moment_model']==expected
+    intent['settings']['moment_model']=expected
+    assert validate_intent(intent,source,request=user_request)['settings']['moment_model']==expected
+    intent['settings']['moment_model']='collinear' if expected=='symmetry_allowed' else 'symmetry_allowed'
+    with pytest.raises(ValueError,match='declared moment_model'):
+        validate_intent(intent,source,request=user_request)
+
+
+@pytest.mark.parametrize('user_request',[
+    'Allow canting, but the moments must not cant.',
+    'Allow canting and moment_model=collinear.',
+    'Allow canting, but moment_model=collinear.',
+    'Do not use moment_model=collinear and moment_model=symmetry_allowed.',
+])
+def test_all_current_geometry_conjuncts_must_agree(source,user_request):
+    with pytest.raises(ValueError,match='conflicting moment models'):
+        payload(user_request,source)
+
+
 @pytest.mark.parametrize('field,value',[
     ('parent','Another parent'),('histogram','Another bank'),('k',[1.,0.,1.]),
     ('k',['0.33333','0','0']),('k',[['0','0','0'],['1','0','1']]),

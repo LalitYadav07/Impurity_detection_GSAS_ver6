@@ -1,4 +1,6 @@
 """A native fatal cause must survive later generic runner stderr."""
+import pytest
+
 from radar_pd_nova.galaxy_service import GalaxyService
 from radar_pd_nova.models import AnalysisMode, RunRecord, RunStatus, UtilityActionRecord
 
@@ -82,3 +84,53 @@ def test_long_utility_fatal_still_retains_runner_context(tmp_path, monkeypatch):
     assert result.message.startswith('[FATAL]')
     assert result.message.endswith('Runner missing output')
     assert len(result.message) <= 2000
+
+
+@pytest.fixture
+def refresh_library_error(tmp_path, monkeypatch):
+    service = GalaxyService('https://galaxy.example', 'key', 'history', output_root=tmp_path)
+    monkeypatch.setattr(service, '_job_output_ids', lambda _job: {})
+
+    def refresh(**diagnostics):
+        job = {'id': 'failed-library-job', 'state': 'error', **diagnostics}
+        monkeypatch.setattr(service, '_job_details', lambda _uid: job)
+        action = UtilityActionRecord(uid='library', galaxy_job_id=job['id'],
+                                     tool_id='neutrons_radar_pd_library_builder_prototype', name='Build library')
+        return service.refresh_utility(action)
+
+    return refresh
+
+
+@pytest.mark.parametrize('diagnostics', [
+    {},
+    {'stdout': '', 'stderr': '', 'exit_code': None},
+    {'stdout': ' \n', 'stderr': '\t', 'exit_code': None},
+    {'tool_stdout': None, 'job_stderr': '', 'exit_code': None},
+])
+def test_library_failure_without_diagnostics_names_job_and_missing_evidence(refresh_library_error, diagnostics):
+    result = refresh_library_error(**diagnostics)
+    assert result.status is RunStatus.ERROR
+    assert result.message == (
+        'Galaxy job failed-library-job ended with an error. '
+        'No stdout, stderr, or exit code was available. Open the job details in Galaxy.'
+    )
+
+
+@pytest.mark.parametrize('exit_code', [0, 1, -9])
+def test_library_failure_reports_available_exit_code_without_guessing_cause(refresh_library_error, exit_code):
+    result = refresh_library_error(exit_code=exit_code)
+    assert result.message == (
+        f'Galaxy job failed-library-job ended with an error (exit code {exit_code}). '
+        'No stdout or stderr was available. Open the job details in Galaxy.'
+    )
+
+
+@pytest.mark.parametrize('diagnostics, expected', [
+    ({'stderr': 'CIF validation failed\n'}, 'CIF validation failed\n'),
+    ({'tool_stderr': 'Native builder detail'}, 'Native builder detail'),
+    ({'stderr': ' \n', 'tool_stderr': 'Native builder detail'}, 'Native builder detail'),
+    ({'stdout': '\t', 'job_stdout': 'Useful builder failure'}, 'Useful builder failure'),
+    ({'stdout': 'Useful builder failure'}, 'Useful builder failure'),
+])
+def test_library_failure_preserves_available_diagnostics(refresh_library_error, diagnostics, expected):
+    assert refresh_library_error(**diagnostics).message == expected

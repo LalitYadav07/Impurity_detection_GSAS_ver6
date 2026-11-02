@@ -2173,11 +2173,19 @@ class GalaxyService:
         if dependency_error:
             action.status = RunStatus.ERROR
         action.outputs.update(self._job_output_ids(job))
-        stdout = str(job.get("stdout") or job.get("tool_stdout") or job.get("job_stdout") or "")
-        stderr = str(job.get("stderr") or job.get("tool_stderr") or job.get("job_stderr") or "")
+        stdout = next((str(job[key]) for key in ("stdout", "tool_stdout", "job_stdout")
+                       if job.get(key) and str(job[key]).strip()), "")
+        stderr = next((str(job[key]) for key in ("stderr", "tool_stderr", "job_stderr")
+                       if job.get(key) and str(job[key]).strip()), "")
         if action.status == RunStatus.ERROR:
-            action.message = _job_failure_message(stdout, stderr, dependency_error, limit=2000,
-                                                  fallback="Galaxy reported a utility-tool error")
+            exit_code = job.get("exit_code")
+            exit_note = "" if exit_code is None else f" (exit code {exit_code})"
+            missing = ("No stdout, stderr, or exit code was available." if exit_code is None
+                       else "No stdout or stderr was available.")
+            fallback = (f"Galaxy job {action.galaxy_job_id} ended with an error{exit_note}. "
+                        f"{missing} Open the job details in Galaxy.")
+            action.message = _job_failure_message(stdout, stderr, dependency_error,
+                                                  limit=2000, fallback=fallback)
         if action.tool_id in _INTERACTIVE_TOOL_IDS and action.status in {RunStatus.RUNNING, RunStatus.OK}:
             try:
                 response = requests.get(

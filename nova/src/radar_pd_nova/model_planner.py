@@ -102,6 +102,144 @@ def _declared_budget(request, declared):
     return declared
 
 
+def _requested_moment_model(request):
+    """Recognize direct geometry instructions, not incidental model mentions.
+
+    This bounded check complements the setup model. Unspecified geometry keeps
+    its existing behavior; a recognized choice uses the native declared-field
+    validator rather than rewriting an inconsistent model reply. A current
+    geometry instruction outside this grammar requires clarification, so a
+    missed paraphrase cannot silently select the legacy collinear default.
+    """
+    text = request.lower().translate(str.maketrans({'\u2019': "'", '\u2011': '-', '\u2013': '-'}))
+    verbs = r'use|reuse|select|choose|apply|set|assume|impose|enforce|require|keep|constrain|force|restrict|allow|permit|refine|vary|release|fit'
+    # All coordinated clauses participate, including modal statements and bare
+    # settings. Keep the connector so a negated list of settings stays negated.
+    clauses = []
+    connector = r'(,\s*(?:(?:and|but|then)\s+)?|\s+(?:and|but|then)\s+)'
+    for sentence in re.split(r'[;.!?\n]', text):
+        parts = re.split(connector, ' '.join(sentence.split()))
+        first = True
+        for index in range(0, len(parts), 2):
+            if parts[index].strip():
+                clauses.append((parts[index].strip(), parts[index-1].strip() if index else '', first))
+                first = False
+    requested = set()
+    ambiguous = []
+    opposite = {'collinear': 'symmetry_allowed', 'symmetry_allowed': 'collinear'}
+    assignment = r'moment[_ ]model\s*(?:[:=]\s*|\s+(?:to|as)\s+)(symmetry_allowed|collinear)\b'
+    components = (r'(?:all|every)\s+(?:the\s+)?'
+                  r'(?:(?:site[- ]+)?symmetry[- ]+allowed\s+(?:magnetic\s+)?'
+                  r'(?:(?:moment\s+)?components?|(?:moment\s+)?degrees?\s+of\s+freedom|dofs?)|'
+                  r'(?:magnetic\s+)?moment\s+components?|magnetic\s+(?:degrees?\s+of\s+freedom|dofs?))\b')
+    historical = (r'\b(?:previous(?:ly)?|prior|earlier|formerly|last\s+(?:run|fit)|historical)\b|'
+                  r'^(?:which|that|it)\s+(?:was|were|had been)\b|'
+                  r'^moment[_ ]model\b.*\b(?:was|were|had been)\s+(?:used|selected|assumed|set)\b')
+    geometry = (r'\bmoment[_ ]model\b|\b(?:non[- ]?collinear|collinear|collinearity|canting|canted)\b|'
+                r'\b(?:moments?|spins?)\b.*\b(?:cant|components?|directions?|orientation|rotate|tilt|freedom|vector|parallel|antiparallel|along|axis|axes)\b|'
+                r'\bsymmetry[- _]allowed\b|\bmagnetic\s+(?:degrees?\s+of\s+freedom|dofs?)\b|'
+                r'\b(?:all|every)\s+components?\b|\b(?:degrees?\s+of\s+freedom|dofs?)\b')
+    magnetic_scope = r'\b(?:moments?|spins?|magnetic|collinear|non[- ]?collinear|collinearity|canting|canted)\b|\bsymmetry[- _]allowed\b'
+    for clause, separator, first in clauses:
+        if first:
+            active_instruction = False
+            historical_context = False
+            previous_negative = False
+        original = clause
+        clause = re.sub(r'^[-*\u2022]\s+', '', clause)
+        clause = re.sub(r'^(?:please\s+|now\s+)+', '', clause)
+        clause = re.sub(r'^(?:i|we)\s+(?:want|would like)\s+(?:you\s+)?to\s+', '', clause)
+        negation = re.match(r"(?:(?:do|must|should)\s+not|don't|never)\s+", clause)
+        negative = bool(negation)
+        if negation:
+            clause = clause[negation.end():]
+        model = None
+        # Every executable geometry primitive consumes its full clause. A
+        # prefix match must not select the first arm of an "A or B" request;
+        # unparsed current geometry falls through to clarification below.
+        command = re.match(r'(' + verbs + r')\s+(.+)', clause)
+        modal_head = re.match(r'(?:the\s+)?(?:magnetic\s+)?moments?\s+(?:may|can|must|should)\b', clause)
+        modal = re.fullmatch(r'(?:the\s+)?(?:magnetic\s+)?moments?\s+(?:may|can|must|should)\s+(not\s+)?cant\b', clause)
+        direct = re.fullmatch(assignment, clause)
+        narrative = not command and not modal_head and bool(re.search(historical, clause))
+        if narrative:
+            historical_context = True
+            previous_negative = False
+            continue
+        if direct and (first or active_instruction or negation) and not historical_context:
+            if not negation and previous_negative and separator in {'and', ',', ', and'}:
+                negative = True
+            model = direct.group(1)
+        elif re.fullmatch(r'(?:(?:strictly\s+)?collinear\s+only|only\s+collinear(?:\s+moments?)?|no\s+canting)\b', clause):
+            model = 'collinear'
+        elif re.fullmatch(r'no\s+collinearity\b', clause):
+            model = 'symmetry_allowed'
+        else:
+            if modal:
+                model = 'collinear' if modal.group(1) else 'symmetry_allowed'
+            elif command:
+                verb, argument = command.groups()
+                argument = re.sub(r'^(?:(?:a|the|any|only)\s+)+', '', argument)
+                setting = re.fullmatch(assignment, argument)
+                if setting:
+                    model = setting.group(1)
+                elif re.fullmatch(components, argument):
+                    # Not releasing *all* components does not require a
+                    # collinear model; leave a negated quantified scope open.
+                    if not negative:
+                        model = 'symmetry_allowed'
+                elif verb in {'allow', 'permit'} and re.fullmatch(
+                        r'(?:canting|(?:canted|non[- ]?collinear)\s+(?:magnetic\s+)?moments?|'
+                        r'(?:(?:all|every)\s+)?(?:magnetic\s+)?moments?\s+to\s+cant)\b', argument):
+                    model = 'symmetry_allowed'
+                elif verb not in {'allow', 'permit'}:
+                    if argument == 'symmetry_allowed' or re.fullmatch(r'(?:symmetry[- _]allowed(?:\s+(?:magnetic\s+)?moment)?\s+model|'
+                                r'(?:canted|non[- ]?collinear)\s+(?:magnetic\s+)?(?:moments?|model))\b', argument):
+                        model = 'symmetry_allowed'
+                    elif re.fullmatch(r'(?:strictly\s+)?(?:collinear(?:\s+(?:magnetic\s+)?(?:moments?|model)|\s+only|$)|collinearity)\b|'
+                                  r'(?:(?:all|every)\s+)?(?:magnetic\s+)?moments?\s+'
+                                  r'(?:to(?:\s+be)?\s+)?(?:strictly\s+)?collinear\b', argument):
+                        model = 'collinear'
+        if model is not None:
+            requested.add(opposite[model] if negative else model)
+        else:
+            # Bare requests to refine moments do not choose a geometry. Any
+            # other current instruction about those objects needs either a
+            # fully understood geometry or an explicit clarification, however
+            # its orientation adjective is spelled or positioned.
+            generic_moments = re.fullmatch(
+                r'(?:refine|fit)\s+(?:(?:the|all|selected)\s+)?(?:[a-z]{1,2}\d*\s+)?'
+                r'(?:magnetic\s+)?moments?(?:\s+(?:with\s+\d+\s+(?:refinement\s+)?cycles'
+                r'(?:\s+per\s+start)?|(?:across|for)\s+(?:the\s+)?(?:series|scans)))?', clause)
+            moment_instruction = re.search(r'\b(?:moments?|spins?)\b', clause) and not generic_moments
+            question = re.fullmatch(r'(?:is|are)\s+(?:canting|(?:non[- ]?collinear|canted)\s+moments?)\s+(?:possible|supported|allowed)', clause)
+            nonmagnetic = (re.search(r'\bcollinear\s+(?:interpolation|points|regression)\b', clause) or
+                           (re.search(r'\b(?:background|instrument|profile|nuclear)\b', clause) and
+                            not re.search(magnetic_scope, clause)))
+            if ((re.search(geometry, clause) or moment_instruction) and not (direct and historical_context)
+                    and not question and not nonmagnetic):
+                ambiguous.append(original)
+        if command or modal_head or model is not None:
+            active_instruction = True
+            historical_context = False
+        previous_negative = negative if model is not None else False
+    if len(requested) > 1:
+        raise ValueError('The request specifies conflicting moment models; clarify whether moments may cant or must remain collinear')
+    if ambiguous:
+        raise ValueError('The magnetic geometry instruction needs an explicit choice: use moment_model=symmetry_allowed or moment_model=collinear, and remove conflicting or ambiguous geometry instructions')
+    return next(iter(requested), None)
+
+
+def _declared_settings(request, declared):
+    result = _declared_budget(request, declared)
+    moment_model = _requested_moment_model(request)
+    if moment_model is not None:
+        if 'moment_model' in result and result['moment_model'] != moment_model:
+            raise ValueError('The requested moment model conflicts with the reviewed moment_model; clarify the geometry choice')
+        result['moment_model'] = moment_model
+    return result
+
+
 def response_schema(context):
     schema = native.response_schema(context)
     schema['properties']['enrollment'] = {'anyOf': [dict(type='object', additionalProperties=False,
@@ -114,7 +252,7 @@ def response_schema(context):
 
 
 def payload(request, context, declared=None):
-    data = native.payload(request, context, _declared_budget(request, declared))
+    data = native.payload(request, context, _declared_settings(request, declared))
     data['rules'].extend([ENROLLMENT_RULE, CYCLE_RULE])
     requirements = _requested_enrollment(request)
     if requirements:
@@ -199,9 +337,9 @@ def _check_requested_enrollment(request, enrollment):
 def validate_intent(value, context, *, request, declared=None):
     value = copy.deepcopy(value)
     enrollment = value.pop('enrollment', None)
-    budget = _declared_budget(request, declared)
+    declared_settings = _declared_settings(request, declared)
     try:
-        plan = native.validate_intent(value, context, request=request, declared=budget)
+        plan = native.validate_intent(value, context, request=request, declared=declared_settings)
     except ValueError as exc:
         if str(exc) == 'Nonfinite, mistyped or out-of-budget contract number':
             _explain_numeric_failure(value)

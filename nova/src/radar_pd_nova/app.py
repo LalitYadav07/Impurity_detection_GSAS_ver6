@@ -8328,9 +8328,19 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
 
         self._schedule_utility(save(), "radar-save-configuration")
 
+    def _clear_inactive_library_build_error(self, draft: LibraryDraft) -> None:
+        if (draft.database_source in {'archive', 'builtin'} and not draft.library_builder_active
+                and draft.library_builder_status == 'error'):
+            # The failed job remains in Activities; it does not describe the
+            # selected archive or built-in library.
+            draft.library_builder_status = 'idle'
+            draft.library_builder_message = ''
+            draft.library_builder_progress = 0
+
     def _invalidate_library_review(self, context: str = 'single') -> None:
         from .library_setup import library_source_key
         draft=LibraryDraft(self.server.state,context)
+        self._clear_inactive_library_build_error(draft)
         current=library_source_key(draft)
         if getattr(draft,'library_review_source','') != current:
             getattr(self,'_library_review_tokens',{}).pop(context,None)
@@ -8367,6 +8377,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                     preview=await asyncio.to_thread(inspect_library_review,local)
                 if tokens.get(context) is not token or library_source_key(draft)!=signature:return
                 draft.library_review_preview={**preview,'source_key':signature}
+                self._clear_inactive_library_build_error(draft)
                 draft.library_review_message=(
                     'Unverified archive declaration: review the listed source failures and bounded occupancy allowance. Actual affected sites remain unknown until native source validation. Values must remain unchanged; this does not certify specimen composition.'
                     if preview['requires_review'] else 'The archive declares no source failures or occupancy allowance. This is not a crystallographic validation.')
