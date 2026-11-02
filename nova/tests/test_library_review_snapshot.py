@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+from uuid import uuid4
 import zipfile
 
 import pytest
@@ -103,9 +104,21 @@ def failed_build(app, context):
     return draft, action
 
 
+@pytest.fixture
+def isolated_app_server(monkeypatch):
+    from trame.app import get_server
+
+    default_state = get_server().state
+    was_ready = default_state.is_ready
+    server = get_server('library-review-' + uuid4().hex, client_type='vue3')
+    monkeypatch.setattr('radar_pd_nova.app.get_server', lambda *_args, **_kwargs: server)
+    yield server
+    assert default_state.is_ready == was_ready
+
+
 @pytest.mark.parametrize('context', ['single', 'live'])
 @pytest.mark.parametrize('mode', ['archive', 'builtin'])
-def test_selecting_existing_library_clears_only_its_inactive_builder_error(context, mode):
+def test_selecting_existing_library_clears_only_its_inactive_builder_error(context, mode, isolated_app_server):
     app = RadarPdNovaApp()
     app.server.state.ready()
     draft = LibraryDraft(app.server.state, context)
@@ -127,7 +140,7 @@ def test_selecting_existing_library_clears_only_its_inactive_builder_error(conte
 
 
 @pytest.mark.parametrize('context', ['single', 'live'])
-def test_successful_archive_review_drops_stale_build_error_and_keeps_job_diagnostic(tmp_path, context):
+def test_successful_archive_review_drops_stale_build_error_and_keeps_job_diagnostic(tmp_path, context, isolated_app_server):
     path = tmp_path / 'portable-library.zip'
     with zipfile.ZipFile(path, 'w') as output:
         output.writestr('pack/manifest.json', json.dumps({'n_phases': 1, 'phase_ids': ['kept'], 'failures': []}))
@@ -152,7 +165,7 @@ def test_successful_archive_review_drops_stale_build_error_and_keeps_job_diagnos
     assert app.utility_actions[action.uid].message == 'Earlier Galaxy library build failed'
 
 
-def test_mode_change_does_not_clear_a_build_that_is_still_active():
+def test_mode_change_does_not_clear_a_build_that_is_still_active(isolated_app_server):
     app = RadarPdNovaApp()
     app.server.state.ready()
     draft = LibraryDraft(app.server.state)
