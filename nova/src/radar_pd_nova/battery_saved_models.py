@@ -209,12 +209,13 @@ def _checked_archive(archive):
         for member in members:
             name = member.filename
             path = PurePosixPath(name)
+            canonical = path.as_posix() + ('/' if member.is_dir() else '')
             mode = stat.S_IFMT(member.external_attr >> 16)
-            if (not name or name in seen or path.is_absolute() or '..' in path.parts or '\\' in name
+            if (not name or name != canonical or canonical in seen or path.is_absolute() or '..' in path.parts or '\\' in name
                     or ':' in name or member.flag_bits & 1 or mode not in {0, stat.S_IFREG, stat.S_IFDIR}
                     or member.file_size > MAX_BUNDLE):
                 raise ValueError('Prepared-model bundle contains an unsafe or duplicate member')
-            seen.add(name)
+            seen.add(canonical)
 
 
 def recover_preparation(reader, publication, root):

@@ -180,6 +180,39 @@ def test_incorrect_publication_fails_closed(transport,tmp_path,change):
     assert not list((tmp_path/'recovered').glob('*'))
 
 
+@pytest.mark.parametrize('activation',['armed','queued','running','recovering','pump'])
+def test_queue_activation_during_download_blocks_install(monkeypatch,tmp_path,activation):
+    app=app_instance(Service());s=app.server.state
+    app._battery_saved_models={'choice':dict(source='galaxy',job_id='job')};s.battery_saved_model='choice'
+    w=SimpleNamespace(lock=threading.RLock(),state={'recipes':{},'jobs':{}},parallel_jobs=1)
+    app._refinement_workspace=w
+    prior=(tmp_path/'prior',{'previous':True});app._battery_prepared=prior
+    def recover(*args):
+        with w.lock:
+            if activation=='armed':w.state['recipes']['r']={'armed':True}
+            elif activation=='pump':s.rf_queue_running=True
+            else:w.state['jobs']['j']={'status':activation}
+        return tmp_path,{'new':True}
+    monkeypatch.setattr(saved,'recover_preparation',recover)
+    app.open_battery_refinement=lambda **_:pytest.fail('Active workspace was overwritten')
+    async def run():
+        app.open_saved_battery_model();await app._battery_task
+    asyncio.run(run())
+    assert app._refinement_workspace is w and app._battery_prepared==prior
+    assert 'Pause the current' in s.battery_error and not s.battery_saved_busy
+    assert s.battery_saved_model=='choice'
+
+
+@pytest.mark.parametrize('alias',['./response.json','dir//file.json','dir/./file.json'])
+def test_noncanonical_archive_paths_rejected(tmp_path,alias):
+    path=tmp_path/'alias.zip'
+    with zipfile.ZipFile(path,'w') as z:
+        z.writestr('response.json',b'{}')
+        z.writestr(alias,b'{}')
+    with pytest.raises(ValueError,match='unsafe or duplicate'):saved._checked_archive(path)
+
+
+
 @pytest.mark.parametrize('name',['../escape','/escape','model\\escape','response.json'])
 def test_unsafe_or_duplicate_archive(tmp_path,name):
     path=tmp_path/'bad.zip'
@@ -250,7 +283,8 @@ def test_inflight_open_does_not_replace_new_context(monkeypatch,tmp_path,change)
 def test_successful_open_installs_review_workspace_only(monkeypatch,tmp_path):
     app=app_instance(Service());s=app.server.state
     app._battery_saved_models={'choice':dict(source='galaxy',job_id='job')};s.battery_saved_model='choice'
-    w=SimpleNamespace(runtime=SimpleNamespace(service=None),parallel_jobs=1)
+    w=SimpleNamespace(runtime=SimpleNamespace(service=None),parallel_jobs=1,
+        lock=threading.RLock(),state={'recipes':{},'jobs':{}})
     result={'specification':{'acquisition':dict(instrument='NOM',ipts='IPTS-1',run=2,sample_id='sample')}}
     monkeypatch.setattr(saved,'recover_preparation',lambda *a:(tmp_path,result))
     monkeypatch.setattr(saved,'recover_review_workspace',lambda *a:w)

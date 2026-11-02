@@ -604,18 +604,24 @@ class BatteryPreparationMixin:
             if workspace is None:
                 workspace=await asyncio.to_thread(recover_review_workspace,reader,preparation_root()/'review-workspaces')
                 if not current():return
-            # No await below: the frozen selection still owns this publication.
-            reader.check()
-            acquisition=prepared[1]['specification']['acquisition']
-            parallel_jobs=workspace.parallel_jobs
-            old_prepared=self._battery_prepared
-            workspace.runtime.service=service
-            self._refinement_workspace=workspace
-            self._battery_prepared=prepared
-            try:self.open_battery_refinement(recovered=True,raise_errors=True)
-            except Exception:
-                self._battery_prepared=old_prepared;self._refinement_workspace=previous
-                raise
+            # Queue workers may change the same workspace while the download
+            # waits. Recheck under its lock and keep the final application in
+            # that critical section; a pointer match alone is insufficient.
+            with workspace.lock:
+                reader.check()
+                if (getattr(s,'rf_queue_running',False) or any(r.get('armed') for r in workspace.state['recipes'].values())
+                        or any(j['status'] in {'queued','running','recovering'} for j in workspace.state['jobs'].values())):
+                    raise ValueError('Pause the current refinement queue and future enrollment before opening a historical model')
+                acquisition=prepared[1]['specification']['acquisition']
+                parallel_jobs=workspace.parallel_jobs
+                old_prepared=self._battery_prepared
+                workspace.runtime.service=service
+                self._refinement_workspace=workspace
+                self._battery_prepared=prepared
+                try:self.open_battery_refinement(recovered=True,raise_errors=True)
+                except Exception:
+                    self._battery_prepared=old_prepared;self._refinement_workspace=previous
+                    raise
             s.battery_model_ready=True
             s.rf_parallel_jobs=parallel_jobs
             s.battery_saved_notice=(f"Opened verified {acquisition['instrument']} {acquisition['ipts']} run {acquisition['run']}, "
