@@ -738,13 +738,16 @@ class RefinementMixin(GuidedRefinementMixin):
                 draft={}  # A preflight for a different model is not this model's plan.
             s.rf_provider=draft.get('origin') or ('Guided rules · no model call required' if getattr(s,'rf_setup_mode','guided')=='guided' else 'Illumine Luna · lowest reasoning')
             s.rf_draft_status=draft.get('status','');s.rf_busy=draft.get('status')=='busy' or self._refinement_approving or self._refinement_inspecting
-            s.rf_cards=recipe_cards(draft['plan'],draft['context'],
-                physical_banks=w.state['sources'].get(s.rf_source,{}).get('metadata',{}).get('physical_banks')) if draft.get('plan') else []
-            s.rf_questions=(draft.get('plan') or {}).get('questions',[])+(draft.get('plan') or {}).get('unsupported',[])
-            s.rf_assumptions=(draft.get('plan') or {}).get('assumptions',[])
-            s.rf_plan_calls=f"{draft.get('planning_calls',0)} model call(s) · native preflight passed" if draft.get('preview') else ''
-            s.rf_model_tokens,s.rf_model_cost=usage_labels(draft.get('model_usage'))
-            s.rf_model_has_luna_price=bool((draft.get('model_usage') or {}).get('price_basis'))
+            # An edited or still-preparing request must not display a former
+            # plan as though it were the checked interpretation of this text.
+            displayed = draft if draft.get('request') == s.rf_request and draft.get('status') != 'busy' else {}
+            s.rf_cards=recipe_cards(displayed['plan'],displayed['context'],
+                physical_banks=w.state['sources'].get(s.rf_source,{}).get('metadata',{}).get('physical_banks')) if displayed.get('plan') else []
+            s.rf_questions=(displayed.get('plan') or {}).get('questions',[])+(displayed.get('plan') or {}).get('unsupported',[])
+            s.rf_assumptions=(displayed.get('plan') or {}).get('assumptions',[])
+            s.rf_plan_calls=f"{displayed.get('planning_calls',0)} model call(s) · native preflight passed" if displayed.get('preview') else ''
+            s.rf_model_tokens,s.rf_model_cost=usage_labels(displayed.get('model_usage'))
+            s.rf_model_has_luna_price=bool((displayed.get('model_usage') or {}).get('price_basis'))
             if draft.get('error'):s.rf_error=draft['error']
             recipes=[r for r in w.state['recipes'].values() if r['experiment']==s.rf_experiment]
             s.rf_recipe_versions=[dict(title=f"Recipe {r['version']} · {r['plan']['request'][:65]}",value=r['id']) for r in recipes]
@@ -780,10 +783,12 @@ class RefinementMixin(GuidedRefinementMixin):
             s.flush()
         finally:self._refinement_internal=False;w.lock.release()
 
-    def _recipe_preparation_current(self,owner):
+    def _recipe_preparation_current(self,owner,*,include_request=True):
         s=self.server.state;w=owner['workspace']
         if self._refinement_workspace is not w:return False
-        if (s.rf_experiment,s.rf_source,s.rf_request,getattr(s,'rf_setup_mode',None))!=owner['selection']:return False
+        selection=(s.rf_experiment,s.rf_source,s.rf_request,getattr(s,'rf_setup_mode',None))
+        if include_request and selection!=owner['selection']:return False
+        if not include_request and (selection[:2],selection[3])!=(owner['selection'][:2],owner['selection'][3]):return False
         state=getattr(w,'state',{})
         if owner['source_sha256']:
             current=state.get('sources',{}).get(owner['selection'][1],{})
@@ -798,6 +803,15 @@ class RefinementMixin(GuidedRefinementMixin):
         owners=getattr(self,'_refinement_preparations',{})
         owner=next((o for o in reversed(list(owners.values())) if self._recipe_preparation_current(o)),None)
         progress=owner.get('progress') if owner else None
+        if not progress and any(
+                self._recipe_preparation_current(o,include_request=False)
+                and o['selection'][2]!=s.rf_request
+                and (o.get('progress') or {}).get('status')=='running'
+                for o in owners.values()):
+            s.rf_preparation_progress=(
+                'Finishing preparation of the previous request. Your edited request has not been submitted; '
+                'generate it when preparation finishes. No new refinement has been approved.')
+            return
         if not progress and w:
             draft=getattr(w,'state',{}).get('drafts',{}).get(s.rf_experiment,{})
             if (draft.get('source_id')==s.rf_source and draft.get('request')==s.rf_request

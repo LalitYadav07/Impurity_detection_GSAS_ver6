@@ -217,7 +217,12 @@ def test_late_progress_and_completion_cannot_replace_new_context(tmp_path,monkey
             elif change=='replace_workspace':app._refinement_workspace=copy.copy(w)
             elif change=='clear':app._refinement_workspace=None
             elif change=='generation':w.state['drafts']['exp']={'generation':'new','source_id':'1','request':'background','status':'ready'}
-            app._refinement_sync();assert not s.rf_preparation_progress
+            app._refinement_sync()
+            if change=='request':
+                assert s.rf_preparation_progress.startswith('Finishing preparation of the previous request.')
+                assert 'edited request has not been submitted' in s.rf_preparation_progress
+            else:
+                assert not s.rf_preparation_progress
         finally:gates.finish()
         await asyncio.gather(*app.tasks)
         assert s.rf_message=='Current selection' and s.rf_error=='Current error'
@@ -294,3 +299,21 @@ def test_preparation_is_labelled_separately_from_real_polishing_counts():
     assert 'Recipe preparation is separate from polishing.' in html
     assert '{{ rf_preparation_progress }}' in html
     assert 'metric in rf_metrics' in html
+
+
+@pytest.mark.parametrize('changed',['request','busy'])
+def test_form_does_not_show_an_old_checked_plan_for_an_edited_or_busy_draft(tmp_path,changed):
+    w,rt=create(tmp_path);w.observe([source('1')]);w.prepare('exp','1','background')
+    app=RefinementMixin()
+    s=State(**app._refinement_state_defaults());app.server=SimpleNamespace(state=s)
+    app._refinement_workspace=w;app._refinement_internal=False
+    app._refinement_approving=False;app._refinement_inspecting=False;app._refinement_preparations={}
+    app._init_guided_refinement()
+    s.rf_experiment='exp';s.rf_source='1';s.rf_setup_mode='expert';s.rf_request='background'
+    app._refinement_sync()
+    assert s.rf_cards and s.rf_plan_calls
+    if changed=='request':s.rf_request='Only the new text should be planned'
+    else:w.state['drafts']['exp']['status']='busy'
+    app._refinement_sync()
+    assert not s.rf_cards and not s.rf_assumptions and not s.rf_plan_calls
+    assert not s.rf_plan_ready and not s.rf_approved
