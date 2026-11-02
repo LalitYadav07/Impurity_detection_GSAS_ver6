@@ -15,7 +15,7 @@ import time
 from types import SimpleNamespace
 import uuid
 
-from gpx_recipe.contracts import stage_table
+from gpx_recipe.contracts import stage_table, plan_hash
 from gpx_recipe.usage import usage_labels
 from .refinement_plots import empty_figure, fit_figure, trend_figure, electrical_exposure, refinement_axis_options, refinement_parameter_label
 from .refinement_runtime import configured_runtime, verify_result_files
@@ -24,6 +24,8 @@ from .refinement_workspace import RefinementWorkspace
 from .refinement_messages import convergence_notice, refinement_review_status, retain_review_evidence
 from .results import experiment_axis_options
 from .guided_refinement_controller import GuidedRefinementMixin
+from .refinement_parameters import execution_parameters, parameter_table
+from .recipe_presentation import explicit_edit_lines
 
 
 REFINEMENT_PROGRESS_SECONDS = 1.0
@@ -362,8 +364,7 @@ def recipe_cards(plan, context, *, physical_banks=None):
             unit = ' Å²' if bound['parameter'] == 'U' else ''
             changes.append(f"{phases.get(bound['phase'], bound['phase'])} / {bound['atom']}: "
                            f"{bound['lower']:g} ≤ {parameter} ≤ {bound['upper']:g}{unit}")
-        for key in ['phase_normalization','constraints','exclusions','fit_ranges','texture']:
-            if stage.get(key):changes.append(key.replace('_',' ').capitalize()+': '+json.dumps(stage[key],ensure_ascii=False))
+        changes.extend(explicit_edit_lines(stage, context, physical_banks=physical_banks))
         if stage.get('convergence'):
             changes.append(f"Require native convergence, no abort, and complete final-cycle |shift/sigma| ≤ {stage['convergence']['max_shift_over_sigma']:g}.")
         cards.append(dict(id=stage['id'],number=number,title=stage['title'],cycles=stage['cycles'],free=[label(t) for t in stage['free']],
@@ -403,7 +404,7 @@ class RefinementMixin(GuidedRefinementMixin):
             rf_jobs=[],rf_job_search='',rf_job_status='all',rf_progress_text='No refinements started',rf_progress_percent=0,rf_selected_job='',rf_selected_title='',rf_selected_message='',rf_has_output=False,rf_output_provenance='',
             rf_result_tab='fit',rf_stage='final',rf_stages=[],rf_histogram='',rf_histograms=[],rf_axis='d',rf_display='compare',rf_fit=figure_json(empty_figure()),rf_fit_notice='',rf_rwp_summary='',rf_parameter_warnings=[],rf_convergence_notice='',rf_exposure_notice='',rf_zoom=0,rf_parallel_jobs=1,
             rf_trend=figure_json(empty_figure('Completed refinements will populate this trend')),rf_trend_notice='',rf_trend_metric='rwp',rf_trend_metrics=[dict(title='Rwp · original and polished',value='rwp')],rf_trend_axis='run_number',rf_trend_axes=[dict(title='Scan number',value='run_number')],rf_trend_display='absolute',
-            rf_parameters=[],rf_parameter_search='',rf_downloads=[],rf_download='',rf_can_open_gsas=False,rf_open_gsas_label='Open selected verified GPX in GSAS-II',rf_queue_running=False,rf_follow=True,rf_expanded=False)
+            rf_parameters=[],rf_parameter_search='',rf_parameter_notice='',rf_downloads=[],rf_download='',rf_can_open_gsas=False,rf_open_gsas_label='Open selected verified GPX in GSAS-II',rf_queue_running=False,rf_follow=True,rf_expanded=False)
 
     def _refinement_schedule(self,coroutine,name):
         try:loop=asyncio.get_running_loop()
@@ -597,7 +598,7 @@ class RefinementMixin(GuidedRefinementMixin):
         """Release visible output ownership, retaining saved jobs and view caches."""
         defaults=self._refinement_state_defaults()
         fields=('rf_selected_job','rf_selected_title','rf_selected_message','rf_has_output',
-            'rf_output_provenance','rf_parameters','rf_parameter_warnings','rf_convergence_notice',
+            'rf_output_provenance','rf_parameters','rf_parameter_notice','rf_parameter_warnings','rf_convergence_notice',
             'rf_exposure_notice','rf_stages','rf_stage','rf_histograms','rf_histogram',
             'rf_downloads','rf_download','rf_rwp_summary','rf_fit_notice','rf_fit',
             'rf_can_open_gsas','rf_open_gsas_label','rf_expanded')
@@ -1091,7 +1092,7 @@ class RefinementMixin(GuidedRefinementMixin):
         s.rf_selected_message=job['message'];s.rf_error='';s.rf_stage='final';s.rf_has_output=False;s.rf_output_provenance='';s.rf_parameter_warnings=[]
         # A running scan or a slow artifact recovery must not inherit another
         # scan's parameter table or downloads under its new heading.
-        s.rf_parameters=[];s.rf_stages=[];s.rf_histograms=[];s.rf_histogram=''
+        s.rf_parameters=[];s.rf_parameter_notice='';s.rf_stages=[];s.rf_histograms=[];s.rf_histogram=''
         s.rf_downloads=[];s.rf_download='';s.rf_rwp_summary='';s.rf_fit_notice=''
         s.rf_convergence_notice='';s.rf_exposure_notice=refinement_exposure_notice(job['source'])
         s.rf_expanded=False
@@ -1139,10 +1140,33 @@ class RefinementMixin(GuidedRefinementMixin):
         job=w.state['jobs'].get(s.rf_selected_job)
         if not job or job['source']['experiment']!=s.rf_experiment:
             self._clear_refinement_output();return
+        fields=('rf_selected_job','rf_experiment','rf_stage','rf_histogram','rf_axis','rf_display','rf_zoom')
+        selected=tuple(getattr(s,key,None) for key in fields)
+        published_result=job.get('result');result=published_result or {}
+        publication={key:copy.deepcopy(result.get(key)) for key in
+                     ('source_sha256','status','execution','files','stages','final_gpx','final_view','output_sha256')}
+        def current():
+            return (self._refinement_workspace is w and w.state['jobs'].get(selected[0]) is job
+                    and job.get('result') is published_result
+                    and all(result.get(key)==value for key,value in publication.items())
+                    and selected==tuple(getattr(s,key,None) for key in fields))
         try:
-            result=job['result'];name=result.get('final_view') if s.rf_stage=='final' else next((v['view'] for v in result.get('stages',[]) if v['id']==s.rf_stage),None)
-            if not name:return
+            name=result.get('final_view') if s.rf_stage=='final' else next((v['view'] for v in result.get('stages',[]) if v['id']==s.rf_stage),None)
+            if not name:raise ValueError('Choose a verified completed stage to inspect its parameters')
             baseline=self._read_refinement_view(job,result['baseline_view']);view=self._read_refinement_view(job,name)
+            rows=parameter_table(view);parameter_notice=''
+            if result.get('execution'):
+                try:
+                    recipe=w.state.get('recipes',{}).get(job.get('recipe_id'),{})
+                    execution=self._read_refinement_view(job,result['execution'])
+                    extra,parameter_notice=execution_parameters(view,result,execution,s.rf_stage,
+                        source_sha=job['source'].get('source_sha256'),
+                        plan_sha=plan_hash(recipe['plan']) if recipe.get('plan') else None,
+                        context=job['source'].get('context') or recipe.get('context'))
+                    rows=parameter_table(view,extra)
+                except (OSError,ValueError,KeyError,TypeError) as exc:
+                    parameter_notice='Additional execution parameters unavailable: '+str(exc)
+            if not current():return
             histogram=s.rf_histogram
             histogram_label=next((item['title'] for item in s.rf_histograms if item['value']==histogram),None)
             fig,notice=fit_figure(baseline,view,histogram=histogram,axis=s.rf_axis,display=s.rf_display,reset=s.rf_zoom,
@@ -1161,10 +1185,12 @@ class RefinementMixin(GuidedRefinementMixin):
             s.rf_can_open_gsas=bool(selected_refinement_dataset(result,s.rf_stage))
             s.rf_open_gsas_label=('Open final refined GPX in GSAS-II' if s.rf_stage=='final' else 'Open selected verified stage in GSAS-II')
             labels={'refined':'Refined','refined_in_prior_stage':'Refined earlier; held now','fixed':'Held','fixed_by_model':'Fixed by model','derived':'Derived','configured':'Released; not estimated','unknown':'Not estimated'}
-            s.rf_parameters=[dict(p,label=refinement_parameter_label(p,job['source']),value_display=f"{p['value']:.8g}",sigma_display=f"{p['sigma']:.3g}" if p.get('sigma') is not None else '—',status_display=labels.get(p['status'],p['status'].replace('_',' ')),stage=p.get('refined_stage') or s.rf_stage) for p in view.get('parameters',[])]
+            s.rf_parameter_notice=parameter_notice
+            s.rf_parameters=[dict(p,label=refinement_parameter_label(p,job['source']),value_display=f"{p['value']:.8g}",sigma_display=f"{p['sigma']:.3g}" if p.get('sigma') is not None else '—',status_display=labels.get(p['status'],p['status'].replace('_',' ')),stage=p.get('refined_stage') or s.rf_stage) for p in rows]
         except Exception as exc:
+            if not current():return
             s.rf_error=str(exc);s.rf_fit=figure_json(empty_figure('The verified fit view is unavailable'))
-            s.rf_convergence_notice='';s.rf_parameter_warnings=[];s.rf_parameters=[]
+            s.rf_convergence_notice='';s.rf_parameter_warnings=[];s.rf_parameters=[];s.rf_parameter_notice=''
             s.rf_rwp_summary='';s.rf_fit_notice='';s.rf_output_provenance='';s.rf_can_open_gsas=False
 
     def _refinement_trend_changed(self,**_):
