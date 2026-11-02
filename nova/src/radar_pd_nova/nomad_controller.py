@@ -3,6 +3,8 @@ from dataclasses import dataclass, replace
 from hashlib import sha256
 import json
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
+import threading
 
 from . import nomad
 from .acquisition import acquisition_context
@@ -55,7 +57,10 @@ def discover_nomad_samples(ipts, sample_index, subfolder=nomad.MODERN_FOLDER, *,
 def preflight_nomad_experiment(ipts, *, selected_sample_ids=None, selected_banks=None,
         sample_index=None,subfolder=nomad.MODERN_FOLDER,initial_backfill_limit=None,
         profile_path=None,profile_bank=None,profile_acknowledged=False,allow_exploratory=False,
-        excluded_run_numbers=(),include_background_runs=False,include_ramp_runs=False):
+        excluded_run_numbers=(),include_background_runs=False,include_ramp_runs=False,
+        max_workers=4):
+    if type(max_workers) is not int or not 1<=max_workers<=4:
+        raise ValueError('NOMAD preflight workers must be an integer from 1 to 4')
     definition=WatchDefinition(ipts,subfolder,'preflight','preflight','profile-required',instrument='NOM')
     runs=discover_from_listing(definition,nomad.directory_listing(definition.source_directory))
     total=len(runs);index=sample_index or NomadSampleIndex(ipts)
@@ -64,25 +69,53 @@ def preflight_nomad_experiment(ipts, *, selected_sample_ids=None, selected_banks
         excluded_run_numbers=excluded_run_numbers,include_background_runs=include_background_runs,
         include_ramp_runs=include_ramp_runs,selection_stats=stats)
     excluded=stats.get('excluded_count',0)
-    errors=[];setups=[];available=set();notices=[];mapping=[];bank_quality={}
-    for run in runs:
+    # Keep this cache local to one check. A new check (including Start) rereads
+    # the profile; no prior preflight becomes authority for a later source.
+    profile_lock=threading.Lock();profile_state={}
+    def profile_once(path):
+        with profile_lock:
+            if not profile_state:
+                try:profile_state['snapshot']=nomad.read_profile_snapshot(path)
+                except (OSError,ValueError,UnicodeError) as exc:profile_state['error']=str(exc)
+            if 'error' in profile_state:raise ValueError(profile_state['error'])
+            return profile_state['snapshot']
+    def inspect(run):
+        setup=None;receipt=None
         try:
             # Enumerate structure even when the selected bank is invalid, so
             # the user can still choose a valid alternative. validate_profile
             # below enforces the selected bank's numerical checks.
-            setup=nomad.inspect_reduced_setup(run.source_path, inventory_only=True);setups.append(setup)
-            available.update(b.bank for b in setup.banks);notices.extend(setup.warnings)
-            for bank in setup.banks:
-                bank_quality.setdefault(bank.bank,set()).update(bank.quality_errors)
+            setup=nomad.inspect_reduced_setup(run.source_path, inventory_only=True)
             if selected_banks is None or len(selected_banks)!=1:
                 raise ValueError('Choose one NOMAD source histogram; each needs its own verified profile mapping')
             if not profile_path or profile_bank is None:
                 raise ValueError('Supply a matching .instprm and its Bank label; automatic NOMAD profiles are not yet validated')
-            _,receipt=nomad.validate_profile(setup,selected_banks[0],profile_path,profile_bank,acknowledged=profile_acknowledged)
-            mapping.append(receipt)
+            _,receipt=nomad.validate_profile(setup,selected_banks[0],profile_path,profile_bank,
+                acknowledged=profile_acknowledged,_profile_loader=profile_once)
             if setup.warnings and not allow_exploratory:
                 raise ValueError('Reduction-quality notices require explicit exploratory-analysis acknowledgement')
-        except (OSError,ValueError,UnicodeError) as exc:errors.append(f'{run.run_id}: {exc}')
+            return setup,receipt,None
+        except (OSError,ValueError,UnicodeError) as exc:
+            # A valid profile mapping was counted before the exploratory gate
+            # in the original sequential path. Preserve that exact outcome.
+            return setup,receipt,f'{run.run_id}: {exc}'
+    errors=[];setups=[];available=set();notices=[];mapping=[];bank_quality={}
+    if runs:
+        pool=ThreadPoolExecutor(max_workers=min(max_workers,len(runs)))
+        try:
+            results=list(pool.map(inspect,runs))
+        except BaseException:
+            pool.shutdown(wait=True,cancel_futures=True)
+            raise
+        else:pool.shutdown(wait=True)
+        # executor.map retains input order even when file reads finish out of
+        # order, keeping the first errors, latest bank details and notices stable.
+        for setup,receipt,error in results:
+            if setup is not None:
+                setups.append(setup);available.update(b.bank for b in setup.banks);notices.extend(setup.warnings)
+                for bank in setup.banks:bank_quality.setdefault(bank.bank,set()).update(bank.quality_errors)
+            if receipt is not None:mapping.append(receipt)
+            if error is not None:errors.append(error)
     if len({(s.calibration,s.environment) for s in setups})>1:
         errors.append('The selected runs use different detector calibrations or sample environments; split them before reusing one supplied profile')
     if not runs:errors.append('No completed normalized Bragg products match this selection; raw, unnormalized, S(Q) and PDF products do not trigger analysis')
@@ -91,6 +124,10 @@ def preflight_nomad_experiment(ipts, *, selected_sample_ids=None, selected_banks
                   else read_nomad_scan_metadata(ipts,latest.run_number) if latest else {})
     except (OSError,ValueError,KeyError,TypeError) as exc:
         metadata={};errors.append(f'Product conditions need review: {exc}')
+    resolution=identity_readiness(index,runs)
+    if 'snapshot' in profile_state:
+        try:nomad.require_profile_unchanged(profile_state['snapshot'])
+        except (OSError,ValueError) as exc:errors.append(str(exc))
     notices.insert(0,'Supplied NOMAD profile is not automatically scientifically validated; outputs require scientific review')
     return {'ready':not errors,'source_directory':definition.source_directory,'scan_count':len(runs),
         'total_scan_count':total,'excluded_count':excluded,'analysis_count':len(mapping),
@@ -105,7 +142,7 @@ def preflight_nomad_experiment(ipts, *, selected_sample_ids=None, selected_banks
         'profile_filename':Path(profile_path).name if profile_path else '',
         'profile_source':'Explicit user-supplied physical/profile bank mapping; not automatically validated',
         'profile_error':'; '.join(errors[:5]),'quality_notices':list(dict.fromkeys(notices)),
-        'metadata_resolution':identity_readiness(index,runs),
+        'metadata_resolution':resolution,
         'metadata_notices':metadata.get('metadata_notices',[]),
         'message':('; '.join(errors[:5]) if errors else f'Ready for exploratory analysis: {len(runs)} individual runs, physical bank {selected_banks[0]}. Review reduction and profile notices.')}
 

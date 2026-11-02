@@ -166,11 +166,7 @@ def inspect_reduced_setup(path, *, selected_bank=None, inventory_only=False):
                       calibration,environment,title,tuple(notices),family,product.kind,product.product_id,product.members,product_metadata)
 
 
-def profile_blocks(path):
-    path=Path(path)
-    if path.suffix.lower()!='.instprm' or path.stat().st_size>1048576:
-        raise ValueError('Peak-profile inspection requires a bounded GSAS-II .instprm file')
-    text=path.read_text(encoding='utf-8-sig')
+def _profile_blocks(text):
     chunks=re.split(r'(?mi)^(?=#\s*Bank\s+\d+)',text)
     blocks={}
     for chunk in chunks:
@@ -196,14 +192,60 @@ def profile_blocks(path):
     return blocks
 
 
-def validate_profile(setup, bank, path, profile_bank, *, acknowledged=False, allow_invalid_counts=False):
+@dataclass(frozen=True)
+class ProfileSnapshot:
+    path: str
+    signature: tuple[int, int]
+    sha256: str
+    blocks: tuple
+
+
+def read_profile_snapshot(path):
+    """Parse one bounded, byte-identified profile for this invocation only."""
+    path=Path(path)
+    if path.suffix.lower()!='.instprm':
+        raise ValueError('Peak-profile inspection requires a bounded GSAS-II .instprm file')
+    before=signature(path)
+    if before[0]>1048576:
+        raise ValueError('Peak-profile inspection requires a bounded GSAS-II .instprm file')
+    with path.open('rb') as stream:raw=stream.read(1048577)
+    if len(raw)>1048576:
+        raise ValueError('Peak-profile inspection requires a bounded GSAS-II .instprm file')
+    if signature(path)!=before or len(raw)!=before[0]:
+        raise ValueError('NOMAD profile changed during inspection; check again')
+    text=raw.decode('utf-8-sig').replace('\r\n','\n').replace('\r','\n')
+    blocks=_profile_blocks(text)
+    frozen=tuple((bank,chunk,tuple(coeff.items())) for bank,(chunk,coeff) in blocks.items())
+    return ProfileSnapshot(str(path.absolute()),before,sha256(raw).hexdigest(),frozen)
+
+
+def require_profile_unchanged(snapshot):
+    path=Path(snapshot.path)
+    before=signature(path)
+    if before!=snapshot.signature:
+        raise ValueError('NOMAD profile changed during the experiment check; check again')
+    with path.open('rb') as stream:raw=stream.read(1048577)
+    if len(raw)>1048576 or signature(path)!=before or sha256(raw).hexdigest()!=snapshot.sha256:
+        raise ValueError('NOMAD profile changed during the experiment check; check again')
+
+
+def profile_blocks(path):
+    snapshot=read_profile_snapshot(path)
+    return {bank:(chunk,dict(coeff)) for bank,chunk,coeff in snapshot.blocks}
+
+
+def validate_profile(setup, bank, path, profile_bank, *, acknowledged=False, allow_invalid_counts=False,
+                     _profile_loader=None):
     if not acknowledged:
         raise ValueError('Confirm the supplied profile and its physical-bank mapping; automatic NOMAD profiles are not yet validated')
     selected=next((b for b in setup.banks if b.bank==bank),None)
     if not selected:raise ValueError('Selected physical bank is absent from this run')
     if selected.quality_errors and not (allow_invalid_counts and all(error=='Nonfinite data or nonpositive uncertainty/TOF in NOMAD bank' for error in selected.quality_errors)):
         raise ValueError('Selected NOMAD bank has invalid numerical records; choose a usable bank or obtain a corrected reduction')
-    blocks=profile_blocks(path)
+    snapshot=(_profile_loader or read_profile_snapshot)(path)
+    if snapshot.path!=str(Path(path).absolute()):
+        raise ValueError('NOMAD profile snapshot belongs to a different path')
+    blocks={label:(chunk,dict(coeff)) for label,chunk,coeff in snapshot.blocks}
     if profile_bank not in blocks:raise ValueError('Selected profile Bank label is absent; ordinal block numbers are not bank labels')
     text,coeff=blocks[profile_bank]
     # Export DIFC describes nominal geometry, not the calibrated TOF polynomial.
@@ -217,7 +259,7 @@ def validate_profile(setup, bank, path, profile_bank, *, acknowledged=False, all
         raise ValueError('Profile scattering angle conflicts with the selected physical bank')
     return text,{'resolver':VERSION,'verification':'user_supplied_not_automatically_validated',
         'source_bank':bank,'profile_bank':profile_bank,'profile_filename':Path(path).name,
-        'profile_sha256':sha256(Path(path).read_bytes()).hexdigest(),'calibration':setup.calibration,
+        'profile_sha256':snapshot.sha256,'calibration':setup.calibration,
         'environment':setup.environment,'export_difc':selected.difc,'profile_difc':coeff['difC'],
         'nominal_difc_relative_difference':difference,
         'nominal_geometry_notice':('Calibrated profile DIFC differs from nominal export geometry by more than 0.5%; verify the calibration and physical-bank mapping' if difference>.005 else '')}
