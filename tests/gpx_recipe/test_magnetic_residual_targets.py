@@ -117,6 +117,21 @@ def test_no_supported_weighted_bins_reports_no_targets():
     assert result['weighted_residual_improvement'] is None
 
 
+@pytest.mark.parametrize('count', [1, 2])
+def test_too_few_supported_window_bins_are_not_reported_as_coverage(count):
+    x = np.arange(201.)
+    weights = np.zeros_like(x)
+    weights[99:99+count] = 1.
+    h = Histogram(x, 10.+bump(x, 100.), limits=(20.,180.), weights=weights)
+    baseline = find_positive_residual_targets(h)
+    assert baseline['targets']
+    result = audit_target_peak_windows(h, baseline)
+    assert result['fitted_point_count'] == count
+    assert result['peaks'] == [] and result['target_count'] == 0
+    assert result['weighted_coverage_error'] is None
+    assert result['weighted_residual_improvement'] is None
+
+
 def test_supported_window_retains_original_signal_and_residual_definitions():
     x = np.arange(201.)
     y = np.full_like(x, 10.)
