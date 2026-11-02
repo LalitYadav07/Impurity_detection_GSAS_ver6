@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from radar_pd_nova.refinement_controller import RefinementMixin
+from radar_pd_nova.checkpoint_uploads import CheckpointUploadPending
 from radar_pd_nova.refinement_sources import RefinementScope
 from test_refinement_integration import create, source, approved
 
@@ -94,6 +95,55 @@ def test_required_claim_upload_failure_prevents_native_post(tmp_path):
     assert not posts
     assert next(iter(w.state['jobs'].values()))['status'] == 'failed'
     assert 'backup failed' in app.server.state.rf_error
+
+
+def test_pending_checkpoint_pauses_untouched_queue_and_resumes_same_claim(tmp_path):
+    w, rt, snapshots, posts = queued(tmp_path)
+    ready_save = rt.save_workspace
+    rt.save_workspace = lambda _: (_ for _ in ()).throw(CheckpointUploadPending('existing-upload', 'queued'))
+    first = w.run_next()
+    assert first['status'] == 'paused' and not posts
+    assert {j['status'] for j in w.state['jobs'].values()} == {'paused'}
+    assert sum(j['attempts'] for j in w.state['jobs'].values()) == 1
+    assert w.run_next() is None  # No cascade of failures or replacement submissions.
+    assert all(not r['armed'] for r in w.state['recipes'].values())
+    rt.save_workspace = ready_save
+    def resumed(action, src, directory, **kwargs):
+        claim = snapshots[-1]['jobs'][kwargs['dispatch_key']]
+        assert claim['id'] == first['id'] and claim['attempts'] == 2
+        posts.append(claim['id'])
+        kwargs['on_submitted']({'galaxy_job_id': 'one-accepted-job'})
+        return {'status': 'completed', 'directory': str(directory)}
+    rt.call = resumed
+    w.resume_queue('exp')
+    result = w.run_next()
+    assert result['id'] == first['id'] and result['status'] == 'completed'
+    assert posts == [first['id']]
+    assert sum(j['status'] == 'queued' for j in w.state['jobs'].values()) == 2
+
+
+def test_pending_ack_backup_preserves_accepted_job_and_pauses_remaining_work(tmp_path):
+    w, rt, snapshots, posts = queued(tmp_path)
+    ready_save = rt.save_workspace
+    def save(document):
+        if any(j.get('remote_action') for j in document['jobs'].values()):
+            raise CheckpointUploadPending('ack-upload', 'running')
+        return ready_save(document)
+    rt.save_workspace = save
+    first = w.run_next()
+    assert first['status'] == 'interrupted'
+    remote = first['remote_action']
+    assert remote['galaxy_job_id'] and posts == [first['id']]
+    assert all(j['status'] == 'paused' for j in w.state['jobs'].values() if j['id'] != first['id'])
+    assert w.run_next() is None
+    rt.save_workspace = ready_save
+    def recover(action, src, directory, **kwargs):
+        assert kwargs['resume'] == remote and kwargs['dispatch_key'] == first['id']
+        return {'status': 'completed', 'directory': str(directory)}
+    rt.call = recover
+    w.retry(first['id'])
+    recovered = w.run_next()
+    assert recovered['status'] == 'completed' and posts == [first['id']]
 
 
 def test_old_checkpoint_failure_cannot_overwrite_a_replacement_workspace():

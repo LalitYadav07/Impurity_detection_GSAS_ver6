@@ -17,6 +17,7 @@ from .refinement_planner import make_plan
 from gpx_recipe.providers import configure_provider, provider_info, make_client
 from gpx_recipe.usage import summarize_calls
 from .refinement_runtime import RuntimeUnavailable
+from .checkpoint_uploads import CheckpointUploadPending
 from .refinement_sources import RefinementScope, digest
 
 
@@ -495,6 +496,18 @@ class RefinementWorkspace:
                 status=result['status']
                 if status=='needs_review' and 'match' in result.get('error','').lower() and 'model' in result.get('error','').lower():status='needs_recipe'
                 job.update(status=status,result=result,message=result.get('error') or 'Verified output ready for scientific review',finished_utc=utc())
+                self.save()
+        except CheckpointUploadPending as exc:
+            with self.lock:
+                # The upload is already acknowledged and must not be posted
+                # again. Pause the scope before another lane claims untouched
+                # work; accepted scientific jobs remain independently alive.
+                self.pause(source['experiment'])
+                job.update(status='interrupted' if job.get('remote_action') else 'paused',
+                    message=(str(exc) + ' New submissions for this experiment are paused. '
+                             + ('Recover this accepted Galaxy job before resuming.' if job.get('remote_action')
+                                else 'No scientific job was submitted for this scan; resume the queue after the checkpoint is ready.')),
+                    finished_utc=utc())
                 self.save()
         except Exception as exc:
             with self.lock:
