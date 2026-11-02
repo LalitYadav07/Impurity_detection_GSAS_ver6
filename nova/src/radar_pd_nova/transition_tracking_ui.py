@@ -126,6 +126,9 @@ class TransitionTrackingMixin:
             "transition_error": "",
             "transition_loading": False,
             "transition_loading_message": '',
+            "transition_hydration_loading": False,
+            "transition_hydration_message": '',
+            "transition_hydration_error": '',
             "transition_loaded_count": 0,
             "transition_load_total": 0,
             "transition_comparison_notice": '',
@@ -232,13 +235,14 @@ class TransitionTrackingMixin:
                     click=self.follow_transition_latest,
                 )
             vuetify.VProgressLinear(
-                v_if="transition_loading", indeterminate=True, color="#15543c", height=3
+                v_if="transition_loading || transition_hydration_loading", indeterminate=True, color="#15543c", height=3
             )
-            html.P("{{ transition_loading_message }}", v_if="transition_loading", classes="radar-section-help",
+            html.P("{{ transition_hydration_loading ? transition_hydration_message : transition_loading_message }}",
+                v_if="transition_loading || transition_hydration_loading", classes="radar-section-help",
                 raw_attrs=['role="status"', 'aria-live="polite"'])
             vuetify.VAlert(
-                v_if="!!transition_error",
-                text=("transition_error",),
+                v_if="!!transition_error || !!transition_hydration_error",
+                text=("transition_error || transition_hydration_error",),
                 type="error",
                 variant="tonal",
                 density="compact",
@@ -768,13 +772,12 @@ class TransitionTrackingMixin:
             key=acquisition_key,
         )
 
-    def _refresh_transition_tracking(self, scans, pending=()):
-        if not hasattr(self, "_transition_engine"):
-            return
-        scope = str(getattr(self, "_post_analysis_scope", ""))
-        if scope != self._transition_watch_scope:
+    def _prepare_transition_scope(self, scope):
+        owner = getattr(self, "_powgen_controller", None) if scope.startswith("watch:") else None
+        if scope != self._transition_watch_scope or owner is not getattr(self, "_transition_scope_owner", None):
             self._cancel_transition_cursor()
             self._transition_watch_scope = scope
+            self._transition_scope_owner = owner
             self._transition_generation += 1
             controller = getattr(self, "_powgen_controller", None)
             saved = (
@@ -794,6 +797,7 @@ class TransitionTrackingMixin:
                 styles=self._transition_saved["styles"], policy=restored_policy,
             )
             self._transition_signature = None
+            self._transition_read_only_signatures = set()
             self.server.state.transition_series = ""
             self.server.state.transition_follow = True
             # A new watch's heading is published immediately. Retire the prior
@@ -803,6 +807,12 @@ class TransitionTrackingMixin:
             self.server.state.transition_series_options = []
             self.server.state.transition_history_notice = ""
             self._render_transition_tracking()
+
+    def _refresh_transition_tracking(self, scans, pending=()):
+        if not hasattr(self, "_transition_engine"):
+            return
+        scope = str(getattr(self, "_post_analysis_scope", ""))
+        self._prepare_transition_scope(scope)
         sources = self._transition_sources(scans, pending)
         signatures = []
         for row in sources:
@@ -818,6 +828,12 @@ class TransitionTrackingMixin:
         signature = digest([scope, signatures, policy.fingerprint])
         if signature == self._transition_signature:
             return
+        read_only = getattr(self, '_transition_read_only_signatures', set())
+        self._transition_read_only_signatures = read_only
+        if getattr(self, '_transition_read_only_refresh', False):
+            read_only.add(signature)
+        else:
+            read_only.discard(signature)
         self._transition_request = (
             signature,
             sources,
@@ -981,7 +997,12 @@ class TransitionTrackingMixin:
         ]
         state.transition_error = ""
         self._render_transition_tracking()
-        self._checkpoint_transition_tracking()
+        read_only = getattr(self, '_transition_read_only_signatures', set())
+        if signature in read_only:
+            read_only.discard(signature)
+            self._checkpoint_transition_tracking(persist=False)
+        else:
+            self._checkpoint_transition_tracking()
 
     def _series_rows(self):
         return [
@@ -2367,7 +2388,7 @@ class TransitionTrackingMixin:
             }
         state.transition_dialog_figure = figure
 
-    def _checkpoint_transition_tracking(self):
+    def _checkpoint_transition_tracking(self, *, persist=True):
         controller = getattr(self, "_powgen_controller", None)
         if controller is None or not str(
             getattr(self, "_post_analysis_scope", "")
@@ -2377,6 +2398,8 @@ class TransitionTrackingMixin:
             self._transition_report.get("styles", {})
         )
         controller.state.transition_tracking = checkpoint(self._transition_saved)
+        if not persist:
+            return
         # Persist references and color identities without curve arrays. The
         # snapshot is replaced as a whole so background JSON writes cannot
         # observe a dictionary being mutated by a later UI action.

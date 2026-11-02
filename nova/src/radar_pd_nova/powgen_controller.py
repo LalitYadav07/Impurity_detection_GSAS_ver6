@@ -1340,10 +1340,15 @@ class PowgenWatchController:
 
         return self.acknowledge_submission(run, self.launch_submission(run))
 
-    def refresh(self, *, checkpoint: bool = True) -> dict[str, RunRecord]:
-        """Read all statuses first, then resolve a bounded metadata batch."""
+    def refresh(self, *, checkpoint: bool = True, observations_only: bool = False) -> dict[str, RunRecord]:
+        """Refresh metadata, or hydrate missing completed observations for a view.
+
+        View activation skips submitted-job polling and resolves the completed
+        batch with the same two-worker bound. Ordinary ticks still read only
+        two older pending receipts for fairness.
+        """
         with self._refresh_lock:
-            return self._refresh_metadata_batch(checkpoint=checkpoint)
+            return self._refresh_metadata_batch(checkpoint=checkpoint, observations_only=observations_only)
 
     @staticmethod
     def _same_run(run: WatchedRun | None, request: _MetadataRead) -> bool:
@@ -1374,14 +1379,14 @@ class PowgenWatchController:
         except Exception as exc:
             return _MetadataResult(request, error=str(exc))
 
-    def _refresh_metadata_batch(self, *, checkpoint: bool) -> dict[str, RunRecord]:
+    def _refresh_metadata_batch(self, *, checkpoint: bool, observations_only: bool = False) -> dict[str, RunRecord]:
         state_changed = False
         self.refresh_errors = {}
         new_reads: list[_MetadataRead] = []
         old_reads: list[_MetadataRead] = []
         # Status refresh is intentionally separate from slow summary/curve
         # downloads, so one unreadable result cannot hide later job states.
-        for run_id, run in list(self.state.submitted.items()):
+        for run_id, run in (() if observations_only else list(self.state.submitted.items())):
             record = self.records.get(run_id)
             if run.galaxy_job_id and (record is None or record.galaxy_job_id != run.galaxy_job_id):
                 record = self._minimal_record(run)
@@ -1439,9 +1444,10 @@ class PowgenWatchController:
             except Exception as exc:
                 self.refresh_errors.setdefault(run_id, f"Scientific summary pending: {exc}")
         # New completions take priority. Only two older pending receipts are
-        # read per tick, rotating fairly even if one is permanently unavailable.
+        # read per ordinary tick. Explicit view hydration reads the missing
+        # completed batch once, still using just two I/O workers below.
         old_reads.sort(key=lambda item: item.run_id)
-        if old_reads:
+        if old_reads and not observations_only:
             split = next((i for i, item in enumerate(old_reads) if item.run_id > self._metadata_refresh_cursor), 0)
             old_reads = old_reads[split:] + old_reads[:split]
             old_reads = old_reads[:2]

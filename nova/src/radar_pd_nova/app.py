@@ -463,6 +463,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         self._init_post_analysis()
         self._init_unet_transition_tracking()
         state.change("workspace_view", "experiment_result_view", "transition_evidence_mode")(self._optional_unet_view_changed)
+        state.change("workspace_view", "experiment_result_view")(self._watch_transition_view_changed)
         self._init_refinement()
         self._init_symmetry()
         self._init_battery()
@@ -4361,7 +4362,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
             draft_ipts != ipts or draft_instrument != instrument or
             (getattr(state, "powgen_source_subfolder", None) or "shared/autoreduce") != getattr(settings, "subfolder", "shared/autoreduce")))
 
-    def _sync_powgen_rows(self, *, refresh_dependents=True, load_patterns=True) -> None:
+    def _sync_powgen_rows(self, *, refresh_dependents=True, load_patterns=True, persist_tracking=True) -> None:
         """Project controller lifecycle state into compact user-facing rows."""
 
         self._sync_powgen_dashboard_provenance()
@@ -4790,10 +4791,15 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         if any(row.get("axis_overrides") for row in scientific_rows):
             state.powgen_dashboard_notice += " Explicit reviewed run mappings take precedence in the displayed conditions and axes. Original acquisition metadata is retained."
         self._interpretation_all_watch_scans = all_scientific_rows
-        if load_patterns:
-            self._update_powgen_dashboard_figures(scientific_rows)
-        else:
-            self._update_powgen_dashboard_figures(scientific_rows, load_patterns=False)
+        previous = getattr(self, '_transition_read_only_refresh', False)
+        self._transition_read_only_refresh = not persist_tracking
+        try:
+            if load_patterns:
+                self._update_powgen_dashboard_figures(scientific_rows)
+            else:
+                self._update_powgen_dashboard_figures(scientific_rows, load_patterns=False)
+        finally:
+            self._transition_read_only_refresh = previous
 
     def _update_powgen_dashboard_figures(self, rows: list[dict[str, Any]], *, load_patterns=True, refresh_tracking=True) -> None:
         controller = getattr(self, "_powgen_controller", None)
@@ -5058,6 +5064,81 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         self.server.state.setup_collapsed = True
         self._sync_powgen_rows()
         self.server.state.flush()
+
+    def _watch_transition_view_changed(self, **_: Any) -> None:
+        """Lazily hydrate a restored watch when its measured-history view opens."""
+        state = self.server.state
+        controller = getattr(self, '_powgen_controller', None)
+        if (controller is None or state.workspace_view != 'experiment'
+                or state.experiment_result_view != 'transitions'
+                or getattr(state, 'workspace_clearing', False)
+                or getattr(state, 'session_closing', False)):
+            return
+        service, context = self.service, self._result_context
+        owner = (controller, service, context)
+        completed = controller.state.completed
+        receipts, missing = [], False
+        for run_id, run in sorted(completed.items()):
+            summary = run.scientific_summary or {}
+            receipt = summary.get('pattern_observation') or {}
+            receipts.append((run_id, run.galaxy_job_id, run.fingerprint,
+                             receipt.get('sha256'), receipt.get('source_gpx_sha256')))
+            if not summary:
+                missing = True
+            elif receipt.get('sha256'):
+                stamp = controller._curve_cache_stamp(receipt)
+                missing |= stamp is None or controller._curve_cache_stamps.get(
+                    (run_id, str(run.galaxy_job_id or ''))) != stamp
+        key = (tuple(map(id, owner)), tuple(receipts))
+        self._activate_watch_post_analysis(controller)
+        self._prepare_transition_scope(str(self._post_analysis_scope))
+        post_scope = self._post_analysis_scope
+        if not missing:
+            self._watch_transition_hydration_key = None
+            state.transition_hydration_loading = False
+            state.transition_hydration_message = ''
+            state.transition_hydration_error = ''
+            # The tracker checks its content signature; a warm tab switch does
+            # not re-read Galaxy or recompute unchanged pattern evidence.
+            self._sync_powgen_rows(refresh_dependents=False, persist_tracking=False)
+            return
+        if getattr(self, '_watch_transition_hydration_key', None) == key:
+            return
+        self._watch_transition_hydration_key = key
+        self._watch_transition_hydration_owner = owner  # Keep identities alive.
+        state.transition_hydration_loading = True
+        state.transition_hydration_message = f'Loading saved measured patterns for {len(completed)} completed scans. Existing refinements are reused.'
+        state.transition_hydration_error = ''
+        state.flush()
+
+        async def hydrate():
+            def current():
+                return (controller is self._powgen_controller and service is self.service
+                        and context is self._result_context
+                        and self._post_analysis_scope == post_scope
+                        and self._post_analysis_scope_owner is controller
+                        and not getattr(state, 'workspace_clearing', False)
+                        and not getattr(state, 'session_closing', False))
+            warnings = []
+            try:
+                await self._refresh_powgen_jobs(controller, warnings, is_current=current,
+                                                refresh_dependents=False, observations_only=True,
+                                                persist_tracking=False)
+                if current() and warnings:
+                    state.transition_hydration_error = 'Saved measured patterns need attention. Use Refresh saved results to retry. ' + ' '.join(warnings)
+                elif current():
+                    self._watch_transition_hydration_key = None
+            except Exception as exc:
+                if current():
+                    state.transition_hydration_error = 'Could not load saved measured patterns. Use Refresh saved results to retry: ' + _powgen_submission_error_summary(exc)
+            finally:
+                if getattr(self, '_watch_transition_hydration_owner', None) is owner:
+                    state.transition_hydration_loading = False
+                    state.transition_hydration_message = ''
+                    state.flush()
+                if getattr(self, '_watch_transition_hydration_task', None) is asyncio.current_task():
+                    self._watch_transition_hydration_task = None
+        self._watch_transition_hydration_task = asyncio.create_task(hydrate())
 
     def select_workspace_view(self, value: Any, **_: Any) -> None:
         """Restore the live scope even when returning to a stopped watch."""
@@ -5968,6 +6049,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         """Wake an active monitor, or only refresh existing results while stopped."""
 
         state = self.server.state
+        state.transition_hydration_error = ''
         if state.powgen_monitoring:
             state.powgen_next_check = "Now"
             state.powgen_message = f"Refresh requested; checking the {self._live_adapter().name} source and Galaxy jobs now."
@@ -6041,7 +6123,9 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         self._powgen_wake_event.set()
         state.flush()
 
-    async def _refresh_powgen_jobs(self, controller, warnings, *, is_current=None, refresh_dependents=True) -> None:
+    async def _refresh_powgen_jobs(self, controller, warnings, *, is_current=None,
+                                   refresh_dependents=True, observations_only=False,
+                                   persist_tracking=True) -> None:
         """Publish job progress before any slow recovery-checkpoint upload."""
         # A restored watch may contain only completed runs. Its immutable
         # observation receipts still need to be cached in this container before
@@ -6052,7 +6136,10 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
             return
         context, service = self._result_context, self.service
         try:
-            refreshed = await asyncio.to_thread(controller.refresh, checkpoint=False)
+            kwargs = {'checkpoint': False}
+            if observations_only:
+                kwargs['observations_only'] = True
+            refreshed = await asyncio.to_thread(controller.refresh, **kwargs)
             if (controller is not self._powgen_controller or service is not self.service
                     or context is not self._result_context or (is_current is not None and not is_current())):
                 return
@@ -6069,7 +6156,9 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
             warnings.append(f"Galaxy status refresh failed: {_powgen_submission_error_summary(exc)}")
         if is_current is not None and not is_current():
             return
-        if refresh_dependents:
+        if not persist_tracking:
+            self._sync_powgen_rows(refresh_dependents=refresh_dependents, persist_tracking=False)
+        elif refresh_dependents:
             self._sync_powgen_rows()
         else:
             self._sync_powgen_rows(refresh_dependents=False)
