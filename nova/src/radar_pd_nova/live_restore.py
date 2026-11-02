@@ -463,7 +463,7 @@ class LiveRestoreMixin:
         self._sync_runs()
         self._sync_workspace_options("full")
         state.powgen_message = (f"Restored {settings.instrument} {settings.ipts} from checkpoint {review.dataset_id}. "
-            f"State recorded: {state_recorded_display(review.saved_utc)}. Monitoring is stopped. "
+            f"State recorded: {state_recorded_display(review.saved_utc)}. Restored in the stopped state. "
             "This is the recorded state time, not the dataset upload time. "
             "Refresh results checks existing jobs only. The editable setup draft is separate.")
         state.live_restore_message = (state.powgen_message + (" Read-only: " + restore_restriction_display(review.blocked, review.missing) if review.blocked else

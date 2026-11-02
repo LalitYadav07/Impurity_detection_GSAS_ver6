@@ -287,8 +287,9 @@ class LiveSettingsReviewMixin:
             self._powgen_settings_signature = (settings.instrument, json.dumps(asdict(settings), sort_keys=True))
             state.live_restore_resume_blocked = False
             self._invalidate_live_settings_review()
-            state.live_restore_message = ("User-reviewed continuation settings are ready locally. Monitoring stays stopped. "
-                "Resume existing watch will first save their checkpoint and provenance, then continue the same run maps.")
+            state.live_restore_message = ("Continuation settings were explicitly reviewed for this saved watch. "
+                "Resuming requires saving their checkpoint and provenance before continuing the same run maps. "
+                "The monitor status above shows whether the watch is currently running or stopped.")
             state.flush()
         except (TypeError, ValueError, OSError) as exc:
             if self._live_missing_owner is owner:
