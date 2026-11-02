@@ -948,7 +948,7 @@ class RefinementMixin(GuidedRefinementMixin):
             self._refinement_sync_approval()
             if not s.rf_approved:raise ValueError('Review and approve the current recipe and execution scope')
             self._refinement_workspace.start(s.rf_recipe_id,self._refinement_selection_token)
-            s.rf_mode='results';s.rf_error='';s.rf_message='Running the approved recipe. Original RADAR-PD results are preserved.'
+            s.rf_mode='results';s.rf_error='';s.rf_message='Recipe submitted. See Results for progress and verified outputs. Original RADAR-PD results are preserved.'
             self._refinement_sync();self._refinement_checkpoint();self._refinement_start_pump()
         except Exception as exc:s.rf_error=str(exc)
         s.flush()
