@@ -413,6 +413,72 @@ def test_aborted_warm_checkpoint_does_not_present_covariance_as_qualified_errors
     assert row==before  # Sealed evidence and attempted values remain intact.
 
 
+def test_physical_rejection_reports_convergence_and_the_actual_rank_deficiency_separately():
+    # Minimal serialized fields from Tb trial bb6fd845: convergence is true,
+    # but the native Hessian reports one deficient direction and a moment is over its ceiling.
+    row=dict(kind='magnetic',status='physical_rejection',
+        reason='Tb1_m2: 10.0828 µB exceeds the reviewed 9 µB ceiling.',
+        native_convergence={'converged':True,'Aborted':None,'SVD0':1},
+        refined_moments=[dict(label='Tb1_m2',moment=[1.,2.,3.],component_esd={'mx':.1})])
+    before=json.loads(json.dumps(row))
+    note=moment_precision_note(row)
+    assert 'The native solver reported convergence.' in note
+    assert '1 rank deficiency remains.' in note
+    assert 'Physical rejection: '+row['reason'] in note
+    assert 'uncertainty estimates from this attempt are not qualified' in note
+    assert 'did not converge' not in note
+    assert 'did not qualify for convergence and full rank' not in note
+    assert row==before
+
+
+def test_converged_full_rank_physical_rejection_preserves_conditional_errors_and_reason():
+    row=dict(kind='magnetic',status='physical_rejection',reason='Moment exceeds the reviewed ceiling.',
+        native_convergence={'converged':True,'Aborted':False,'SVD0':0},
+        refined_moments=[dict(label='Tb1',magnitude_esd=.2,component_esd={'mz':.2},moment=[0.,0.,10.])])
+    view=dict(phases=[dict(name='Magnetic',moments=[dict(label='Tb1',magnitude=10.)])])
+    note=moment_precision_note(row)
+    assert 'reported convergence' in note and 'No rank deficiencies were reported.' in note
+    assert row['reason'] in note and 'physically rejected model' in note
+    assert 'not qualified and are hidden' not in note
+    assert parameter_rows(row,view)[0]['uncertainty']==.2
+    assert row['status']=='physical_rejection' and row['native_convergence']['converged'] is True
+
+
+def test_nonconverged_checkpoint_does_not_invent_a_rank_problem():
+    row=dict(kind='magnetic',status='optimization_unresolved',
+             native_convergence={'converged':False,'Aborted':False,'SVD0':0})
+    note=moment_precision_note(row)
+    assert 'The native solver did not converge.' in note
+    assert 'No rank deficiencies were reported.' in note
+    assert 'refinement was aborted' not in note and 'Physical rejection:' not in note
+    assert 'not qualified and are hidden' in note
+
+
+def test_missing_rank_is_unavailable_instead_of_failed_or_full_rank():
+    row=dict(kind='magnetic',status='optimization_unresolved',
+             native_convergence={'converged':True,'Aborted':None,'SVD0':None})
+    note=moment_precision_note(row)
+    assert 'reported convergence' in note and 'Rank evidence is unavailable.' in note
+    assert 'rank deficiencies were reported' not in note and 'deficiency remains' not in note
+    assert 'did not converge' not in note
+    for invalid in (True, 1.5, -1, float('nan'), 'unknown'):
+        assert 'Rank evidence is unavailable.' in moment_precision_note(
+            dict(row,native_convergence={'converged':True,'SVD0':invalid}))
+    unknown=moment_precision_note(dict(kind='magnetic',status='optimization_unresolved'))
+    assert 'Native convergence evidence is unavailable.' in unknown
+    assert 'Rank evidence is unavailable.' in unknown
+
+
+def test_combined_abort_nonconvergence_rank_and_physical_reasons_are_all_preserved():
+    row=dict(kind='magnetic',status='physical_rejection',reason='Moment exceeds the declared bound.',
+             native_convergence={'converged':False,'Aborted':True,'SVD0':2})
+    before=json.loads(json.dumps(row));note=moment_precision_note(row)
+    assert 'did not converge' in note and 'The refinement was aborted.' in note
+    assert '2 rank deficiencies remain.' in note
+    assert 'Physical rejection: '+row['reason'] in note
+    assert 'not qualified and are hidden' in note and row==before
+
+
 def test_rank_deficiency_also_suppresses_errors_for_structural_modes():
     row=dict(kind='structural',native_convergence={'converged':True,'SVD0':2})
     view=dict(phases=[dict(name='Child',modes=[dict(label='mode1',value=.04,esd=.001)])])

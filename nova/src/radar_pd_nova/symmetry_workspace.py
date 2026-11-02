@@ -268,6 +268,25 @@ def unqualified_covariance(row):
             (isinstance(rank,(int,float)) and np.isfinite(rank) and rank>0))
 
 
+def _native_qualification_note(row):
+    """Describe recorded optimization and physicality as separate evidence."""
+    native=row.get('native_convergence') or {}
+    converged=native.get('converged')
+    parts=[('The native solver reported convergence.' if converged is True else
+            'The native solver did not converge.' if converged is False else
+            'Native convergence evidence is unavailable.')]
+    if native.get('Aborted') is True:parts.append('The refinement was aborted.')
+    rank=native.get('SVD0')
+    if (isinstance(rank,(int,float)) and not isinstance(rank,bool)
+            and np.isfinite(rank) and rank>=0 and float(rank).is_integer()):
+        if rank>0:parts.append(f'{rank:g} rank '+('deficiency remains.' if rank==1 else 'deficiencies remain.'))
+        else:parts.append('No rank deficiencies were reported.')
+    else:parts.append('Rank evidence is unavailable.')
+    if row.get('status')=='physical_rejection':
+        parts.append('Physical rejection: '+disposition_reason(row))
+    return ' '.join(parts)+' '
+
+
 def moment_precision_note(row):
     """Flag weak conditional estimates without turning a screen into a test.
 
@@ -279,12 +298,15 @@ def moment_precision_note(row):
         'and symmetry-dependent displacement defects for some magnetic models. '
         'Moment directions and model ranking remain provisional. '
         if row.get('magnetic_function_sha256')=='82076dc0571cad6d6e2882c5f7ced9003f08af94449aa293b0fb4c5c2ae7b9f6' else '')
-    if unqualified_covariance(row):
-        return kernel_note+('This refinement did not qualify for convergence and full rank. '
+    unqualified=unqualified_covariance(row)
+    qualification_note=(_native_qualification_note(row)
+        if unqualified or row.get('status')=='physical_rejection' else '')
+    if unqualified:
+        return kernel_note+qualification_note+(
                 'Moment values are retained as a checkpoint; uncertainty estimates '
                 'from this attempt are not qualified and are hidden in the table.')
     estimates=row.get('refined_moments') or []
-    if not estimates:return kernel_note+'Moment uncertainties are unavailable in this receipt. An audited fit alone does not establish magnetic order.'
+    if not estimates:return kernel_note+qualification_note+'Moment uncertainties are unavailable in this receipt. An audited fit alone does not establish magnetic order.'
     weak=[];missing=[]
     for item in estimates:
         ratios=[];sigmas=item.get('component_esd') or {};values=item.get('moment') or []
@@ -305,7 +327,9 @@ def moment_precision_note(row):
     if weak:messages.append('Weak conditional moment estimates: '+', '.join(weak)+'. No independently varied component exceeds 3 conditional standard uncertainties for these atoms.')
     if missing:messages.append('Moment uncertainty unavailable for '+', '.join(missing)+'.')
     if messages:messages.append('This component screen is not a joint significance test or proof of magnetic order; uncertainties depend on the selected model and fixed nuclear parameters.')
-    return kernel_note+' '.join(messages)
+    if row.get('status')=='physical_rejection':
+        messages.append('Conditional uncertainties do not qualify a physically rejected model.')
+    return kernel_note+qualification_note+' '.join(messages)
 
 
 def parameter_rows(row,view):
