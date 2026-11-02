@@ -1212,6 +1212,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         state.clear_workspace_dialog = False
         self._reset_model_view()
         self._reset_live_assistant()
+        self._clear_live_restore_selection()
         state.workspace_notice = (
             "Workspace cleared. Galaxy jobs, saved results and refinement receipts remain in History. "
             "Enter another IPTS or show earlier recent runs when needed."

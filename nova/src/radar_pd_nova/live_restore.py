@@ -307,6 +307,15 @@ class LiveRestoreMixin:
         if hasattr(self, "_live_missing_owner"):
             self._invalidate_live_settings_review()
 
+    def _clear_live_restore_selection(self):
+        """Forget the displayed restoration after a successful workspace clear."""
+        self._invalidate_live_restore()
+        state = self.server.state
+        state.live_restore_dataset_id = ""
+        state.live_restore_message = "Choose a saved Live checkpoint in this History to review it before restoring."
+        state.live_restored_checkpoint_id = ""
+        state.live_restore_resume_blocked = False
+
     def _live_restore_selection_changed(self, **_):
         self._invalidate_live_restore()
 
