@@ -472,9 +472,12 @@ class SetupEditorMixin:
                     search=value('library_review_filter'),
                     headers=([{'title':'Declared failed source','key':'name'},{'title':'Reason','key':'reason'}],),
                     items_per_page=20,items_per_page_options=([10,20,50,100],),density='compact')
+                html.P('Coordinates are fractional positions in the source cell. Separate rows can be symmetry-equivalent expanded positions with the same atom labels and occupancy total.',
+                    v_if=f"{key('library_review_preview')}.reviews.length",classes='radar-help-copy')
                 vuetify.VDataTable(
                     items=(f"{key('library_review_preview')}.reviews",),search=value('library_review_filter'),
                     headers=([{'title':'Source','key':'source_name'},{'title':'Sites','key':'labels_display'},
+                              {'title':'Fractional position (x, y, z)','key':'fractional_coordinates_display'},
                               {'title':'Declared total','key':'total'},{'title':'Maximum excess','key':'maximum_site_excess'},
                               {'title':'Declared components','key':'components_display'}],),
                     items_per_page=20,items_per_page_options=([10,20,50,100],),density='compact')

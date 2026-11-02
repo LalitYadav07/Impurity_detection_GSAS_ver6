@@ -228,6 +228,8 @@ def _inspect_library_review_contents(source) -> dict[str, Any]:
                 rows.append({'phase':phase,'source_name':review.get('source_name') or phase,
                              'labels':labels,'total':total,'components':components,
                              'labels_display':', '.join(labels),
+                             'fractional_coordinates':list(xyz),
+                             'fractional_coordinates_display':'('+', '.join(f'{value:.8g}' for value in xyz)+')',
                              'components_display':json.dumps(components,sort_keys=True),
                              'maximum_site_excess':excess,'evidence_verification':'unverified declaration'})
         set_hash=hashlib.sha256(json.dumps({k:v['policy_sha256'] for k,v in reviews.items()},sort_keys=True,separators=(',',':')).encode()).hexdigest()

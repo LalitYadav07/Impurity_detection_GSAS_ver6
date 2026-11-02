@@ -20,7 +20,7 @@ from radar_pd_nova.models import AnalysisConfig, InputSelection, SubmissionSnaps
 from radar_pd_nova.setup_forms import configuration_from_form
 
 
-def archive(tmp_path, *, empty_sites=False):
+def archive(tmp_path, *, empty_sites=False, coordinates=None):
     raw=b'data_synthetic\n# synthetic host declaration; runtime must validate\n'
     review={
         'schema':'radar-cif-occupancy-review/v1','reviewed':True,
@@ -30,8 +30,9 @@ def archive(tmp_path, *, empty_sites=False):
         'review_note':'Synthetic reviewed input',
         'composition':{'C':.6,'Li':.40066},
         'affected_sites':[] if empty_sites else [{
-            'labels':['C1','Li1'],'fractional_coordinates':[0,0,0],
-            'total':1.00066,'components':{'C':.6,'Li':.40066}}],
+            'labels':['C1','Li1'],'fractional_coordinates':xyz,
+            'total':1.00066,'components':{'C':.6,'Li':.40066}}
+            for xyz in ([[0,0,0]] if coordinates is None else coordinates)],
     }
     review['policy_sha256']=hashlib.sha256(json.dumps(review,sort_keys=True,separators=(',',':')).encode()).hexdigest()
     path=tmp_path/'library.zip'
@@ -56,6 +57,29 @@ def test_imported_review_flag_is_not_permission_and_display_is_unverified(tmp_pa
 
 def test_empty_affected_declaration_does_not_masquerade_as_zero(tmp_path):
     with pytest.raises(ValueError,match='empty declaration'):inspect_library_review(archive(tmp_path,empty_sites=True))
+
+
+def test_distinct_expanded_site_coordinates_remain_separate_and_permission_is_unchanged(tmp_path):
+    coordinates=[[0,0,.5],[2/3,1/3,5/6],[1/3,2/3,1/6]]
+    path=archive(tmp_path,coordinates=coordinates);original=path.read_bytes()
+    with zipfile.ZipFile(path) as handle:
+        manifest=json.loads(handle.read('pack/manifest.json'))
+    preview=inspect_library_review(path)
+    rows=preview['reviews']
+    assert len(rows)==preview['declared_affected_site_count']==3
+    assert [r['fractional_coordinates'] for r in rows]==coordinates
+    assert [r['fractional_coordinates_display'] for r in rows]==[
+        '(0, 0, 0.5)','(0.66666667, 0.33333333, 0.83333333)',
+        '(0.33333333, 0.66666667, 0.16666667)']
+    assert all(r['labels']==['C1','Li1'] and r['total']==1.00066 for r in rows)
+    assert preview['manifest']==manifest and path.read_bytes()==original
+    expected_policy=hashlib.sha256(json.dumps(
+        {'test':manifest['occupancy_reviews']['test']['policy_sha256']},
+        sort_keys=True,separators=(',',':')).encode()).hexdigest()
+    assert activation_for_review(preview)=={
+        'acknowledged':True,'archive_sha256':hashlib.sha256(original).hexdigest(),
+        'policy_set_sha256':expected_policy,'allow_incomplete':False}
+    assert preview['actual_affected_site_count'] is None
 
 
 def test_exact_activation_survives_config_contract_and_library_change_invalidates_form(tmp_path):
