@@ -15,6 +15,7 @@ from trame.widgets import html, plotly, vuetify3 as vuetify
 from .scan_interpretation_ui import scan_label
 from .scan_interpretation import Pattern, load_pattern
 from .scan_conditions import qualified_metadata
+from .sample_labels import recorded_sample_title
 from .facility_metadata import parse_nexus_timestamp
 from .results import discover_plot_payloads, gsas_figure, read_plot_payload
 from .transition_input import digest
@@ -1063,7 +1064,7 @@ class UnetTransitionMixin:
             scope = group["scope"]
             first = self._unet_transition_scans[group["run_ids"][0]]
             meta = first.get("metadata") or {}
-            title = (f"{meta.get('sample_name') or meta.get('sample_id') or scope['specimen']} · "
+            title = (f"{recorded_sample_title(meta)} · "
                      f"{scope['instrument']} bank {scope['bank']} · {len(group['run_ids'])} scans")
             options.append({"title": title, "value": group["id"]})
         state.unet_transition_series_options = options

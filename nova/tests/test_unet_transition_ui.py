@@ -72,6 +72,22 @@ def test_scoped_series_and_selected_pair_overlay_use_model_events():
     assert app.server.state.unet_transition_selected == rows[-1]["run_id"]
 
 
+def test_same_named_unet_specimens_have_distinct_recorded_labels():
+    app = RadarPdNovaApp()
+    rows = scans()[:4]
+    sample_ids = ('120479', '120480', '120481', '120482')
+    for row, sample_id in zip(rows, sample_ids):
+        row['metadata'].update(sample_id=sample_id, sample_name='Indium copper vanadate')
+    app._refresh_unet_transition_tracking(rows)
+    options = app.server.state.unet_transition_series_options
+    assert len(options) == 4
+    assert len({option['title'] for option in options}) == 4
+    for sample_id in sample_ids:
+        choice = next(option for option in options if f'Sample {sample_id} ·' in option['title'])
+        group = next(group for group in app._unet_transition_report['groups'] if group['id'] == choice['value'])
+        assert group['run_ids'] == [rows[sample_ids.index(sample_id)]['run_id']]
+
+
 def test_revised_measured_curve_replays_without_using_fitted_curve():
     app = RadarPdNovaApp()
     rows = scans()[:3]
