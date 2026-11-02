@@ -1575,6 +1575,25 @@ def candidate_cell_rejection(before, after, r_before, r_after,
     return ""
 
 
+def _screening_fixed_model(phase) -> tuple:
+    """Snapshot held physical atom fields and the imported symmetry setting."""
+    def freeze(value):
+        if isinstance(value, dict):
+            return tuple(sorted((key, freeze(item)) for key, item in value.items()))
+        if isinstance(value, (list, tuple, np.ndarray)):
+            return tuple(freeze(item) for item in value)
+        return value.item() if isinstance(value, np.generic) else value
+    general = phase.data['General']
+    cx, ct, _, cia = general['AtomPtrs']
+    atoms = []
+    for row in phase.data['Atoms']:
+        values = [*row[cx:cx+4], *(row[cia+2:cia+8] if row[cia] == 'A' else row[cia+1:cia+2])]
+        if not all(math.isfinite(float(value)) for value in values):
+            raise ValueError('Screening has nonfinite held atom values')
+        atoms.append((str(row[ct-1]), str(row[ct]), str(row[cia]), tuple(float(value) for value in values)))
+    return tuple(atoms), freeze(general['SGData'])
+
+
 def compute_gsas_pearson_for_cif(
     data_path: str,
     instprm_path: str,
@@ -1605,8 +1624,7 @@ def compute_gsas_pearson_for_cif(
     """
     Build a tiny GSAS-II project, run staged refinement (Pass-1: Scale; optional
     Pass-2: Scale+Cell), return Pearson(Yobs, Ycalc), and optionally write a
-    refined CIF for the candidate phase using GSAS-II's exporter
-    (export_CIF(..., quickmode=True)).
+    a cell-only CIF derivative retaining the source atomic model and review.
 
     Notes:
     - This patched version never overwrites the input CIF. The refined file is written to
@@ -1614,7 +1632,6 @@ def compute_gsas_pearson_for_cif(
     - After writing, the first 'data_' header is sanitized to a short, GSAS-II-friendly label.
     """
     _init_gsas_process()
-    import re
     from pathlib import Path as _Path
     try:
         from gsas_core_infrastructure import GSASProjectManager
@@ -1623,31 +1640,6 @@ def compute_gsas_pearson_for_cif(
 
     timings: Dict[str, float] = {}
     t_total = perf_counter()
-
-    def _sanitize_cif_data_block(cif_file: str, label_base: str, suffix: str = "refined", maxlen: int = 40) -> None:
-        """
-        Force a short, parser-friendly CIF 'data_' label on the first data block.
-        Example: data_mp_30_refined
-        """
-        p = _Path(cif_file)
-        try:
-            lines = p.read_text(encoding="utf-8", errors="ignore").splitlines()
-        except Exception:
-            return
-        base = f"{label_base}_{suffix}".replace("-", "_")
-        base = re.sub(r"[^A-Za-z0-9_]+", "_", base)[:maxlen]
-        safe = f"data_{base}" if not base.startswith("data_") else base
-        for i, l in enumerate(lines):
-            if l.strip().startswith("data_"):
-                if l.strip() != safe:
-                    lines[i] = safe
-                break
-        else:
-            lines.insert(0, safe)
-        try:
-            p.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        except Exception:
-            pass
 
     t_setup = perf_counter()
     pm = GSASProjectManager(work_dir, f"{_Path(cif_path).stem}_{tmp_tag}")
@@ -1717,6 +1709,7 @@ def compute_gsas_pearson_for_cif(
         phase = getattr(pm, 'main_phase', None)
     if phase is None:
         raise RuntimeError(f"Could not locate phase '{ph_name}' after add_phase_from_cif")
+    fixed_model = _screening_fixed_model(phase)
     timings["setup_s"] = perf_counter() - t_setup
 
     # Background model: keep residual-as-Yobs jobs background-free, but allow the
@@ -1840,7 +1833,10 @@ def compute_gsas_pearson_for_cif(
         timings["pass2_cell_s"] = pass2_s
         used_cell_refinement = not bool(cell_skip_reason)
 
-    # ---- Export refined CIF via GSAS-II (always to a separate file) ----
+    if _screening_fixed_model(phase) != fixed_model:
+        raise ValueError('Screening changed held atom coordinates, occupancies, ADPs or symmetry')
+
+    # ---- Export only the verified cell (always to a separate file) ----
     stem = _Path(cif_path).stem
     target_write = out_refined_cif or str(_Path(cif_path).with_name(stem + "_refined.cif"))
     timings["export_cif_s"] = 0.0
@@ -1848,16 +1844,9 @@ def compute_gsas_pearson_for_cif(
     if export_refined_cif:
         t_export = perf_counter()
         try:
-            # Export from the refined phase object
-            phase.export_CIF(target_write, quickmode=True)
-
-            # Basic sanity
-            txt = open(target_write, "r", encoding="utf-8", errors="ignore").read()
-            if ("_cell_length_a" not in txt) or ("_atom_site_" not in txt):
-                raise RuntimeError("export_CIF wrote an incomplete file (missing cell and/or atom loop)")
-
-            # Sanitize the first data_ header to something short & stable
-            _sanitize_cif_data_block(target_write, label_base=ph_name, suffix="refined", maxlen=40)
+            from cif_occupancy import write_cell_derivative
+            write_cell_derivative(cif_path, target_write, phase.data['General']['Cell'][1:7],
+                                  data_name=ph_name + '_refined')
             logger.info(f"[PEARSON] wrote refined CIF -> {target_write}")
 
         except Exception as ex:

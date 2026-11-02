@@ -400,6 +400,90 @@ def same_site_values(left, right) -> bool:
     return values(left) == values(right)
 
 
+def write_cell_derivative(source: str | Path, destination: str | Path, cell, *,
+                          data_name: str | None = None, neutral_elements: bool = False,
+                          expected_structure=None) -> dict[str, Any]:
+    """Change only a verified cell, retaining the source atom/symmetry fields.
+
+    GSAS quick CIF export rounds atom coordinates, occupancies and ADPs. A
+    scale/cell-only screening fit must not create a different atomic model or
+    lose an explicitly activated occupancy review on its next import.
+    """
+    import CifFile
+    import tempfile
+    from pymatgen.core import Lattice
+
+    source, destination = Path(source).resolve(strict=True), Path(destination).resolve()
+    if source == destination:
+        raise ValueError('A cell derivative must not overwrite its source CIF')
+    raw = source.read_bytes()
+    review = authorized_review(source)
+    original = load_structure(source, review)
+    if expected_structure is not None and not same_site_values(original, expected_structure):
+        raise ValueError('Cell derivative changed source atom sites or occupancies')
+    parameters = list(cell)
+    if len(parameters) != 6 or any(isinstance(value, bool) for value in parameters):
+        raise ValueError('A cell derivative needs six finite cell parameters')
+    parameters = [float(value) for value in parameters]
+    if (not all(math.isfinite(value) for value in parameters)
+            or any(value <= 0 for value in parameters[:3])
+            or any(not 0 < value < 180 for value in parameters[3:])):
+        raise ValueError('A cell derivative needs a finite positive cell')
+    lattice = Lattice.from_parameters(*parameters)
+    if not math.isfinite(lattice.volume) or lattice.volume <= 0:
+        raise ValueError('A cell derivative needs a nonsingular cell')
+
+    document = CifFile.ReadCif(io.StringIO(raw.decode('utf-8-sig')))
+    block = next(document[key] for key in document.keys() if '_atom_site_fract_x' in document[key])
+    for name, value in zip(('a', 'b', 'c', 'alpha', 'beta', 'gamma'), parameters):
+        block[('_cell_length_' if len(name) == 1 else '_cell_angle_') + name] = f'{value:.12g}'
+    block['_cell_volume'] = f'{lattice.volume:.12g}'
+    if neutral_elements:
+        for tag in ('_atom_site_type_symbol', '_atom_type_symbol'):
+            if tag in block:
+                block[tag] = [re.sub(r'^([A-Z][a-z]?)[0-9.+-]*$', r'\1', str(value))
+                              for value in block[tag]]
+        if '_atom_type_oxidation_number' in block:
+            block['_atom_type_oxidation_number'] = ['0'] * len(block['_atom_type_oxidation_number'])
+    text = document.WriteOut()
+    if data_name is not None:
+        label = re.sub(r'[^A-Za-z0-9_]+', '_', str(data_name))[:40] or 'cell_derivative'
+        text = re.sub(r'(?m)^data_\S+', 'data_' + label, text, count=1)
+    derived_raw = text.encode('utf-8')
+    if model_signature(raw, neutral_elements=neutral_elements) != model_signature(derived_raw, neutral_elements=neutral_elements):
+        raise ValueError('Cell derivative changed source non-cell fields or symmetry')
+    if raw_sites(raw)[1] != raw_sites(derived_raw)[1]:
+        raise ValueError('Cell derivative changed source atom sites or occupancies')
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix='cell-derivative-', dir=destination.parent) as temporary:
+        candidate = Path(temporary) / 'candidate.cif'
+        candidate.write_bytes(derived_raw)
+        derive_review(source, candidate, neutral_elements=neutral_elements)
+        derived_review = json.loads(sidecar(candidate).read_text()) if sidecar(candidate).exists() else None
+        rebuilt = load_structure(candidate, derived_review)
+        if not same_site_values(original, rebuilt):
+            raise ValueError('Cell derivative changed expanded source atom sites or occupancies')
+        receipt = {'schema': 'radar-cif-cell-derivative/v1',
+                   'source_sha256': digest(raw), 'derived_sha256': digest(derived_raw),
+                   'source_model_signature': model_signature(raw, neutral_elements=neutral_elements),
+                   'derived_model_signature': model_signature(derived_raw, neutral_elements=neutral_elements),
+                   'source_policy_sha256': review['policy_sha256'] if review else None,
+                   'derived_policy_sha256': derived_review['policy_sha256'] if derived_review else None,
+                   'operation': 'verified cell-only derivative', 'atomic_sites_preserved': True,
+                   'non_cell_fields_preserved': True, 'neutral_elements': neutral_elements,
+                   'cell': parameters}
+        proof = Path(temporary) / 'receipt.json'
+        proof.write_text(json.dumps(receipt, sort_keys=True, indent=2) + '\n')
+        candidate.replace(destination)
+        if derived_review is not None:
+            sidecar(candidate).replace(sidecar(destination))
+        else:
+            sidecar(destination).unlink(missing_ok=True)
+        proof.replace(Path(str(destination) + '.cell-derivation.json'))
+    return receipt
+
+
 def policy_set_hash(reviews: dict[str, Any]) -> str:
     return digest(json.dumps({key:value['policy_sha256'] for key,value in reviews.items()},
                              sort_keys=True,separators=(',', ':')).encode())

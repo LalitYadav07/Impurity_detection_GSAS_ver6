@@ -1342,44 +1342,18 @@ class LatticeNudger:
         if source is None and hasattr(getattr(self, "db", None), "ensure_cif_on_disk"):
             source = self.db.ensure_cif_on_disk(pid, out_dir=os.path.join(out_dir, "source_cifs"))
         if source is not None:
-            import CifFile
-            import hashlib
             import json
-
-            if Path(source).resolve() == Path(path).resolve():
-                raise ValueError("Nudged output must not overwrite its source CIF")
-            from cif_occupancy import authorized_review, load_authorized_structure, same_site_values
-            original = load_authorized_structure(source)
-            review = authorized_review(source)
-            if (review is not None or structure.properties.get("radar_occupancy_review")) and not same_site_values(original, structure):
-                raise ValueError("Lattice nudging changed source atom sites or occupancies")
-            source_sha256 = hashlib.sha256(Path(source).read_bytes()).hexdigest()
-            document = CifFile.ReadCif(str(source))
-            blocks = [document[key] for key in document.keys()
-                      if "_atom_site_fract_x" in document[key]]
-            if len(blocks) != 1:
-                raise ValueError("Lattice nudging requires exactly one structural CIF block")
-            block = blocks[0]
-            for name, value in zip(
-                ("a", "b", "c", "alpha", "beta", "gamma"),
-                structure.lattice.parameters,
-            ):
-                tag = "_cell_length_" + name if len(name) == 1 else "_cell_angle_" + name
-                block[tag] = f"{value:.12g}"
-            block["_cell_volume"] = f"{structure.lattice.volume:.12g}"
-            if self.radiation == "neutron":
-                for tag in ("_atom_site_type_symbol", "_atom_type_symbol"):
-                    if tag in block:
-                        block[tag] = [re.sub(r"^([A-Z][a-z]?)[0-9.+-]*$", r"\1", str(s))
-                                      for s in block[tag]]
-                if "_atom_type_oxidation_number" in block:
-                    block["_atom_type_oxidation_number"] = ["0"] * len(block["_atom_type_oxidation_number"])
-            Path(path).write_text(document.WriteOut(), encoding="utf-8")
-            _sanitize_cif_data_block(path, pid, suffix="nudged", maxlen=5)
-            from cif_occupancy import derive_review
-            derive_review(source,path,neutral_elements=self.radiation == "neutron")
+            from cif_occupancy import authorized_review, write_cell_derivative
+            # Preserve the existing reviewed-model check. Ordinary structures
+            # may be held in an equivalent conventional setting by the nudger;
+            # the writer always copies their authoritative raw source sites.
+            check_structure = (structure if authorized_review(source) is not None
+                               or structure.properties.get('radar_occupancy_review') else None)
+            proof = write_cell_derivative(source, path, structure.lattice.parameters,
+                data_name=(pid + '_nudged')[:5], neutral_elements=self.radiation == 'neutron',
+                expected_structure=check_structure)
             Path(path + ".nudge.json").write_text(json.dumps({
-                "source_sha256": source_sha256,
+                "source_sha256": proof['source_sha256'],
                 "operation": "lattice only; source symmetry, fractional sites and occupancies retained",
                 "cell": list(structure.lattice.parameters),
             }, indent=2) + "\n")
