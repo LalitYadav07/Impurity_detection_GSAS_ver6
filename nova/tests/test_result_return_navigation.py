@@ -335,3 +335,28 @@ def test_warm_navigation_preserves_result_summary_mode_and_panels(tmp_path,submi
         assert app.server.state.workspace_options==expected_options
         assert app.server.state.workspace_view==view
     assert row.mode==submitted
+
+
+@pytest.mark.parametrize('new_mode,expected_panel', [('full','plots'),('rapid','monitor')])
+def test_changed_cache_honors_requested_panel_only_if_result_mode_supports_it(tmp_path,new_mode,expected_panel):
+    from radar_pd_nova.models import CacheManifest
+    path=tmp_path/'summary.json'
+    path.write_text(json.dumps({'analysis_mode':'full','status':'complete','phases':[]}))
+    app=RadarPdNovaApp()
+    app.service=SimpleNamespace(result_payload=lambda _:pytest.fail('Use local files'))
+    row=RunRecord(uid='selected',galaxy_job_id='job',history_id='history',name='Selected run',
+        mode=AnalysisMode.RAPID if new_mode=='full' else AnalysisMode.FULL,
+        status=RunStatus.OK,result_status=ResultStatus.READY,output_dir=str(tmp_path),
+        output_dataset_ids={'results_archive':'archive'},
+        cache_manifest=CacheManifest(job_id='job',archive_dataset_id='archive'))
+    app.records={row.uid:row};app._select_record(row);app.select_workspace_view('results')
+    assert app.server.state.viewed_run_mode=='full'
+    app.select_workspace_view('refinement')
+    path.write_text(json.dumps({'analysis_mode':new_mode,'status':'complete','phases':[]}))
+    row.cache_manifest.archive_size=1
+
+    app.select_workspace_view('plots')
+
+    assert app.server.state.viewed_run_mode==new_mode
+    assert app.server.state.workspace_view==expected_panel
+    assert ('plots' in {item['value'] for item in app.server.state.workspace_options}) is (new_mode=='full')

@@ -5161,6 +5161,11 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                         self._select_record(record)
                         if cache_ready and self._opening_run_uid != record.uid:
                             self._load_results(record, local_only=True)
+                            # The result may establish a different mode from
+                            # the submitted configuration; honor this click
+                            # only when the loaded result offers that panel.
+                            if value in {item["value"] for item in self.server.state.workspace_options}:
+                                self.server.state.workspace_view = value
             self.server.state.flush()
 
     @staticmethod
