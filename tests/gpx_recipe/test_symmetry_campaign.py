@@ -148,6 +148,38 @@ def test_queue_continuation_uses_the_original_sealed_protocol(setup):
     assert c.verify_continuation('c'*64)==ids[1:]
 
 
+def test_completed_old_receipt_stays_readable_without_upgrading_or_dispatching(setup, monkeypatch):
+    root, protocol, campaign, transport = setup
+    ids = campaign.enroll(protocol, root/'inputs', approved_hash=digest(protocol))
+    finish(campaign, transport, ids[0])
+    directory = campaign.trial_directory(campaign.trials()[0])
+    native_path = directory/'results/native-receipt.json'
+    native_path.write_text(json.dumps(dict(
+        schema_version='structural-transition-magnetic-refinement-receipt-v1',
+        target_peak_audit=dict(target_count=12, underfit_peak_count=2))))
+    receipt_path = directory/'result.json'
+    receipt = json.loads(receipt_path.read_text())
+    receipt['native_receipt'] = native_path.name
+    receipt['files']['results/'+native_path.name] = file_sha(native_path)
+    receipt_path.write_text(json.dumps(receipt))
+    campaign.collect(campaign.trials()[0])
+    original_receipt = receipt_path.read_bytes()
+    original_native = native_path.read_bytes()
+    monkeypatch.setattr('gpx_recipe.symmetry.compiler.package_signature', lambda:'d'*64)
+    reader = Campaign(campaign.root)
+    reader.collect(reader.trials()[0])
+    assert reader.trials()[0]['state'] == 'terminal'
+    assert json.loads(reader.trials()[0]['receipt'])['rwp'] == 8.
+    assert reader.summaries()[0]['received_count'] == 1
+    assert reader.summaries()[0]['declared_count'] == 3
+    assert receipt_path.read_bytes() == original_receipt
+    assert native_path.read_bytes() == original_native
+    assert transport.submissions == []
+    # Reading evidence is allowed; new execution under a different kernel is not.
+    with pytest.raises(ValueError, match='older scientific implementation'):
+        reader.verify_continuation('d'*64)
+
+
 def test_distinct_acquisitions_with_identical_gpx_bytes_remain_distinct(setup):
     root,p,c,t=setup
     a=dict(p,acquisition_id='run-1-bank-2');b=dict(p,acquisition_id='run-2-bank-2')

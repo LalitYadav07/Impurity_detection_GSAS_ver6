@@ -5,6 +5,144 @@ no reference-project imports, services, paths, or dynamically generated code.
 See ../STUDIO-LICENSE and symmetry/provenance.json.
 """
 
+def powder_profile_arrays(histogram, *, masked=False):
+    """Read native arrays; diagnostics retain masks before selecting fit bins."""
+    import numpy as np
+    raw_data = histogram.data.get('data')
+    arrays = raw_data[1] if isinstance(raw_data, (list, tuple)) and raw_data and isinstance(raw_data[0], dict) else raw_data
+    if isinstance(arrays, (list, tuple)) and arrays and isinstance(arrays[0], dict):
+        arrays = arrays[1:]
+    if isinstance(arrays, np.ndarray) or np.ma.isMaskedArray(arrays):
+        matrix = np.ma.asarray(arrays, dtype=float) if masked else np.asarray(np.ma.filled(arrays, np.nan), dtype=float)
+        if matrix.ndim == 2 and matrix.shape[0] >= 6:
+            return tuple(matrix[index] for index in range(6))
+    if not isinstance(arrays, (list, tuple)) or len(arrays) < 6:
+        raise ValueError(f'Histogram {histogram.name!r} does not expose a powder profile')
+    convert = np.ma.asarray if masked else np.asarray
+    return tuple(convert(value, dtype=float) for value in arrays[:6])
+
+
+def _diagnostic_profile(histogram):
+    import numpy as np
+    from ..fit_domain import native_powder_fit_mask
+    native = powder_profile_arrays(histogram, masked=True)
+    # The native refinement can replace or edit histogram arrays afterward.
+    arrays = tuple(np.array(np.ma.getdata(value), dtype=float, copy=True) for value in native)
+    if any(value.shape != arrays[0].shape for value in arrays) or arrays[0].ndim != 1:
+        raise ValueError('Powder profile arrays must have matching one-dimensional shapes')
+    limits = list(map(float, histogram.data['Limits'][1]))
+    exclusions = [list(map(float, region)) for region in histogram.Excluded()]
+    valid = native_powder_fit_mask(arrays[0], limits, exclusions)
+    for original, values in zip(native[:5], arrays[:5]):
+        valid &= ~np.ma.getmaskarray(original) & np.isfinite(values)
+    valid &= arrays[2] > 0
+    return dict(arrays=arrays[:5], valid=valid, limits=limits, excluded_regions=exclusions)
+
+
+def find_positive_residual_targets(histogram, maximum_targets=12):
+    """Locate fixed baseline windows inside the native weighted fit domain."""
+    import numpy as np
+    profile = _diagnostic_profile(histogram)
+    x, yobs, weights, ycalc, background = profile['arrays']
+    valid = profile['valid']
+    significance = np.where(valid, np.maximum(yobs-ycalc, 0.0)*np.sqrt(np.maximum(weights, 0.0)), 0.0)
+    if significance.size >= 7:
+        significance = np.convolve(significance, np.ones(7, dtype=float)/7.0, mode='same')
+    # Smoothing must not create targets in excluded, masked or out-of-range bins.
+    significance = np.where(valid, significance, 0.0)
+    candidates = []
+    for index in range(20, max(20, len(x)-20)):
+        if not valid[index] or significance[index] < 5.0:
+            continue
+        if significance[index] < significance[index-1] or significance[index] < significance[index+1]:
+            continue
+        if yobs[index] <= background[index]:
+            continue
+        candidates.append((float(significance[index]), int(index)))
+    selected = []
+    for score, index in sorted(candidates, reverse=True):
+        if any(abs(index-kept_index) < 24 for _, kept_index in selected):
+            continue
+        selected.append((score, index))
+        if len(selected) >= int(maximum_targets):
+            break
+    profile['targets'] = [dict(index=index, x=float(x[index]), baseline_significance=score)
+                          for score, index in sorted(selected, key=lambda value:value[1])]
+    return profile
+
+
+def _align_supported_profile(profile, target_x):
+    """Interpolate within contiguous supported runs, never across a data gap."""
+    import numpy as np
+    x, *values = profile['arrays']
+    aligned = [np.full_like(target_x, np.nan, dtype=float) for _ in values]
+    supported = np.zeros(len(target_x), dtype=bool)
+    indices = np.flatnonzero(profile['valid'])
+    for run in np.split(indices, np.flatnonzero(np.diff(indices) != 1)+1):
+        if not len(run):
+            continue
+        source_x = x[run]
+        if len(run) == 1:
+            use = np.isclose(target_x, source_x[0], rtol=0.0, atol=1e-8)
+            for result, source in zip(aligned, values):
+                result[use] = source[run[0]]
+        else:
+            if not np.all(np.diff(source_x) > 0):
+                raise ValueError('Supported powder coordinates must increase for diagnostic interpolation')
+            use = (target_x >= source_x[0]) & (target_x <= source_x[-1])
+            for result, source in zip(aligned, values):
+                result[use] = np.interp(target_x[use], source_x, source[run])
+        supported |= use
+    return aligned, supported
+
+
+def audit_target_peak_windows(histogram, baseline, half_width=12):
+    """Compare identical baseline targets using only contiguous fitted support."""
+    import numpy as np
+    final = _diagnostic_profile(histogram)
+    x, by, bw, bc, bb = baseline['arrays']
+    final_x, fy, fw, fc, fb = final['arrays']
+    grid_matches = len(final_x) == len(x) and np.allclose(final_x, x, rtol=0.0, atol=1e-8)
+    if grid_matches:
+        valid = baseline['valid'] & final['valid']
+    else:
+        (fy, fw, fc, fb), supported = _align_supported_profile(final, x)
+        valid = baseline['valid'] & supported
+    rows = []
+    for target in baseline['targets']:
+        index = int(target['index'])
+        if not valid[index]:
+            continue
+        left, right = index, index+1
+        while left > max(0, index-int(half_width)) and valid[left-1]:
+            left -= 1
+        while right < min(len(x), index+int(half_width)+1) and valid[right]:
+            right += 1
+        if right-left < 3:
+            continue
+        window = slice(left, right)
+        dx = np.abs(np.gradient(x[window]))
+        observed = float(np.sum(np.maximum(fy[window]-fb[window], 0.0)*dx))
+        before = float(np.sum(np.maximum(bc[window]-bb[window], 0.0)*dx))
+        after = float(np.sum(np.maximum(fc[window]-fb[window], 0.0)*dx))
+        before_error = float(np.sum(np.abs(by[window]-bc[window])*np.sqrt(bw[window])))
+        after_error = float(np.sum(np.abs(fy[window]-fc[window])*np.sqrt(fw[window])))
+        coverage = after/max(observed, 1e-12)
+        rows.append(dict(x=float(x[index]), index=index, left_x=float(x[left]), right_x=float(x[right-1]),
+            baseline_significance=float(target['baseline_significance']), observed_signal_above_background=observed,
+            baseline_calculated_signal_above_background=before, final_calculated_signal_above_background=after,
+            baseline_coverage=before/max(observed, 1e-12), final_coverage=coverage, coverage_error=abs(1.0-coverage),
+            baseline_weighted_absolute_residual=before_error, final_weighted_absolute_residual=after_error,
+            weighted_residual_improvement=(before_error-after_error)/max(before_error, 1e-12), underfit=bool(coverage < .5)))
+    signal_weight = sum(max(row['observed_signal_above_background'], 1e-12) for row in rows)
+    residual_weight = sum(max(row['baseline_weighted_absolute_residual'], 1e-12) for row in rows)
+    return dict(grid_alignment='native' if grid_matches else 'final_interpolated_to_baseline',
+        baseline_point_count=len(x), final_native_point_count=len(final_x), fitted_point_count=int(np.count_nonzero(valid)),
+        fit_limits=baseline['limits'], target_count=len(rows), underfit_peak_count=sum(row['underfit'] for row in rows),
+        weighted_coverage_error=sum(row['coverage_error']*max(row['observed_signal_above_background'],1e-12) for row in rows)/signal_weight if rows else None,
+        weighted_residual_improvement=sum(row['weighted_residual_improvement']*max(row['baseline_weighted_absolute_residual'],1e-12) for row in rows)/residual_weight if rows else None,
+        peaks=rows)
+
 def run(source_gpx,ctx,protocol,candidate_record,seed):
     return _run(source_gpx,ctx,protocol,candidate_record,seed,forward_only=False)
 
@@ -91,62 +229,6 @@ def _run(source_gpx,ctx,protocol,candidate_record,seed,*,forward_only):
                 hap['Use'] = name in selected_histograms
     baseline_residuals = {name: dict(available_histograms[name].residuals) for name in selected_histograms}
 
-    def powder_profile_arrays(histogram):
-        """Return the six native GSAS-II powder-profile arrays."""
-        raw_data = histogram.data.get('data')
-        arrays = raw_data[1] if isinstance(raw_data, (list, tuple)) and raw_data and isinstance(raw_data[0], dict) else raw_data
-        if isinstance(arrays, (list, tuple)) and arrays and isinstance(arrays[0], dict):
-            arrays = arrays[1:]
-        if isinstance(arrays, np.ndarray) or np.ma.isMaskedArray(arrays):
-            matrix = np.asarray(np.ma.filled(arrays, np.nan), dtype=float)
-            if matrix.ndim == 2 and matrix.shape[0] >= 6:
-                return tuple((matrix[index] for index in range(6)))
-        if not isinstance(arrays, (list, tuple)) or len(arrays) < 6:
-            raise ValueError(f'Histogram {histogram.name!r} does not expose a powder profile')
-        return tuple((np.asarray(value, dtype=float) for value in arrays[:6]))
-
-    def find_positive_residual_targets(histogram, maximum_targets=12):
-        """Locate strong underfit peak windows in the nuclear-only baseline.
-
-        These are evidence targets, not a peak-search replacement. The portfolio
-        uses the same deterministic windows for every magnetic subgroup so that a
-        small global-Rwp change cannot hide failure at the reflections that
-        motivated magnetic modelling.
-        """
-        x, yobs, weights, ycalc, background, _residual = powder_profile_arrays(histogram)
-        finite = np.isfinite(x) & np.isfinite(yobs) & np.isfinite(weights) & np.isfinite(ycalc) & np.isfinite(background)
-        configured_exclusions = []
-        try:
-            configured_exclusions = [[float(region[0]), float(region[1])] for region in histogram.Excluded() if isinstance(region, (list, tuple)) and len(region) >= 2]
-        except Exception:
-            configured_exclusions = []
-        for lower, upper in configured_exclusions:
-            if np.isfinite(lower) and np.isfinite(upper):
-                lo, hi = sorted((lower, upper))
-                finite &= ~((x >= lo) & (x <= hi))
-        positive_residual = np.where(finite, np.maximum(yobs - ycalc, 0.0), 0.0)
-        significance = positive_residual * np.sqrt(np.maximum(weights, 0.0))
-        if significance.size >= 7:
-            significance = np.convolve(significance, np.ones(7, dtype=float) / 7.0, mode='same')
-        candidates = []
-        for index in range(20, max(20, len(x) - 20)):
-            if significance[index] < 5.0:
-                continue
-            if significance[index] < significance[index - 1]:
-                continue
-            if significance[index] < significance[index + 1]:
-                continue
-            if yobs[index] <= background[index]:
-                continue
-            candidates.append((float(significance[index]), int(index)))
-        selected = []
-        for score, index in sorted(candidates, reverse=True):
-            if any((abs(index - kept_index) < 24 for _kept_score, kept_index in selected)):
-                continue
-            selected.append((score, index))
-            if len(selected) >= int(maximum_targets):
-                break
-        return {'arrays': (x, yobs, weights, ycalc, background), 'excluded_regions': configured_exclusions, 'targets': [{'index': int(index), 'x': float(x[index]), 'baseline_significance': float(score)} for score, index in sorted(selected, key=lambda value: value[1])]}
     from GSASII import GSASIIstrMain as _G2strMain
     gpx.save()
     baseline_refresh = []
@@ -642,69 +724,11 @@ def _run(source_gpx,ctx,protocol,candidate_record,seed,*,forward_only):
         final_moments.append({'label': atom[ct - 1], 'element': atom[ct], 'moment': list(moment), 'magnitude': magnitude, 'component_variables': component_variables, 'component_esd': component_esd, 'magnitude_esd': magnitude_esd, 'uncertainty_basis': 'GSAS-II covariance standard uncertainties; null components are fixed, dependent, or unavailable in the independent covariance basis'})
     final_residuals = {name: dict(gpx.histogram(name).residuals) for name in selected_histograms}
 
-    def audit_target_peak_windows(histogram_name, half_width=12):
-        baseline = baseline_target_profiles[histogram_name]
-        baseline_x, baseline_yobs, baseline_weights, baseline_ycalc, baseline_background = baseline['arrays']
-        final_x, final_yobs, final_weights, final_ycalc, final_background, _final_residual = powder_profile_arrays(gpx.histogram(histogram_name))
-        native_grid_matches = len(final_x) == len(baseline_x) and np.allclose(final_x, baseline_x, rtol=0.0, atol=1e-08)
-        final_native_point_count = int(len(final_x))
-        if not native_grid_matches:
-            finite_x = np.isfinite(final_x)
-            if np.count_nonzero(finite_x) < 3:
-                raise ValueError(f'Histogram {histogram_name!r} has too few finite profile points for magnetic target auditing')
-            order = np.argsort(final_x[finite_x])
-            source_x = final_x[finite_x][order]
-            unique_x, unique_indices = np.unique(source_x, return_index=True)
-            if len(unique_x) < 3:
-                raise ValueError(f'Histogram {histogram_name!r} has too few unique profile points for magnetic target auditing')
-
-            def align_to_baseline(values):
-                source_values = np.asarray(values, dtype=float)[finite_x][order][unique_indices]
-                valid = np.isfinite(source_values)
-                if np.count_nonzero(valid) < 3:
-                    return np.full_like(baseline_x, np.nan, dtype=float)
-                return np.interp(baseline_x, unique_x[valid], source_values[valid], left=np.nan, right=np.nan)
-            final_yobs = align_to_baseline(final_yobs)
-            final_weights = align_to_baseline(final_weights)
-            final_ycalc = align_to_baseline(final_ycalc)
-            final_background = align_to_baseline(final_background)
-            final_x = baseline_x.copy()
-        rows = []
-        for target in baseline['targets']:
-            index = int(target['index'])
-            left = max(0, index - int(half_width))
-            right = min(len(final_x), index + int(half_width) + 1)
-            if right - left < 3:
-                continue
-            valid = np.isfinite(baseline_x[left:right]) & np.isfinite(baseline_yobs[left:right]) & np.isfinite(baseline_weights[left:right]) & np.isfinite(baseline_ycalc[left:right]) & np.isfinite(baseline_background[left:right]) & np.isfinite(final_yobs[left:right]) & np.isfinite(final_weights[left:right]) & np.isfinite(final_ycalc[left:right]) & np.isfinite(final_background[left:right])
-            if np.count_nonzero(valid) < 3:
-                continue
-            window_x = final_x[left:right][valid]
-            dx = np.abs(np.gradient(window_x))
-            window_final_yobs = final_yobs[left:right][valid]
-            window_final_weights = final_weights[left:right][valid]
-            window_final_ycalc = final_ycalc[left:right][valid]
-            window_final_background = final_background[left:right][valid]
-            window_baseline_yobs = baseline_yobs[left:right][valid]
-            window_baseline_weights = baseline_weights[left:right][valid]
-            window_baseline_ycalc = baseline_ycalc[left:right][valid]
-            window_baseline_background = baseline_background[left:right][valid]
-            observed_signal = float(np.sum(np.maximum(window_final_yobs - window_final_background, 0.0) * dx))
-            baseline_calculated_signal = float(np.sum(np.maximum(window_baseline_ycalc - window_baseline_background, 0.0) * dx))
-            final_calculated_signal = float(np.sum(np.maximum(window_final_ycalc - window_final_background, 0.0) * dx))
-            baseline_error = float(np.sum(np.abs(window_baseline_yobs - window_baseline_ycalc) * np.sqrt(np.maximum(window_baseline_weights, 0.0))))
-            final_error = float(np.sum(np.abs(window_final_yobs - window_final_ycalc) * np.sqrt(np.maximum(window_final_weights, 0.0))))
-            denominator = max(observed_signal, 1e-12)
-            final_coverage = final_calculated_signal / denominator
-            rows.append({'x': float(target['x']), 'index': index, 'left_x': float(final_x[left]), 'right_x': float(final_x[right - 1]), 'baseline_significance': float(target['baseline_significance']), 'observed_signal_above_background': observed_signal, 'baseline_calculated_signal_above_background': baseline_calculated_signal, 'final_calculated_signal_above_background': final_calculated_signal, 'baseline_coverage': baseline_calculated_signal / denominator, 'final_coverage': final_coverage, 'coverage_error': abs(1.0 - final_coverage), 'baseline_weighted_absolute_residual': baseline_error, 'final_weighted_absolute_residual': final_error, 'weighted_residual_improvement': (baseline_error - final_error) / max(baseline_error, 1e-12), 'underfit': bool(final_coverage < 0.5)})
-        signal_weight = sum((max(float(row['observed_signal_above_background']), 1e-12) for row in rows))
-        residual_weight = sum((max(float(row['baseline_weighted_absolute_residual']), 1e-12) for row in rows))
-        return {'grid_alignment': 'native' if native_grid_matches else 'final_interpolated_to_baseline', 'baseline_point_count': int(len(baseline_x)), 'final_native_point_count': final_native_point_count, 'target_count': len(rows), 'underfit_peak_count': sum((bool(row['underfit']) for row in rows)), 'weighted_coverage_error': sum((float(row['coverage_error']) * max(float(row['observed_signal_above_background']), 1e-12) for row in rows)) / signal_weight if rows else None, 'weighted_residual_improvement': sum((float(row['weighted_residual_improvement']) * max(float(row['baseline_weighted_absolute_residual']), 1e-12) for row in rows)) / residual_weight if rows else None, 'peaks': rows}
-    target_peak_histograms = {name: audit_target_peak_windows(name) for name in selected_histograms}
+    target_peak_histograms = {name: audit_target_peak_windows(gpx.histogram(name), baseline_target_profiles[name]) for name in selected_histograms}
     all_target_peaks = [row for histogram_audit in target_peak_histograms.values() for row in histogram_audit['peaks']]
     target_signal_weight = sum((max(float(row['observed_signal_above_background']), 1e-12) for row in all_target_peaks))
     target_residual_weight = sum((max(float(row['baseline_weighted_absolute_residual']), 1e-12) for row in all_target_peaks))
-    target_peak_audit = {'selection_basis': 'strong positive residual maxima from the fixed nuclear-only baseline; configured GSAS-II excluded intervals omitted; identical windows for every magnetic subgroup trial', 'target_count': len(all_target_peaks), 'excluded_regions': {name: list(baseline_target_profiles[name].get('excluded_regions') or []) for name in selected_histograms}, 'underfit_peak_count': sum((bool(row['underfit']) for row in all_target_peaks)), 'weighted_coverage_error': sum((float(row['coverage_error']) * max(float(row['observed_signal_above_background']), 1e-12) for row in all_target_peaks)) / target_signal_weight if all_target_peaks else None, 'weighted_residual_improvement': sum((float(row['weighted_residual_improvement']) * max(float(row['baseline_weighted_absolute_residual']), 1e-12) for row in all_target_peaks)) / target_residual_weight if all_target_peaks else None, 'histograms': target_peak_histograms}
+    target_peak_audit = {'selection_basis': 'strong positive residual maxima from the fixed nuclear-only baseline; native weighted fit domain, masks and excluded intervals honored; identical supported windows for every magnetic subgroup trial', 'target_count': len(all_target_peaks), 'excluded_regions': {name: list(baseline_target_profiles[name].get('excluded_regions') or []) for name in selected_histograms}, 'underfit_peak_count': sum((bool(row['underfit']) for row in all_target_peaks)), 'weighted_coverage_error': sum((float(row['coverage_error']) * max(float(row['observed_signal_above_background']), 1e-12) for row in all_target_peaks)) / target_signal_weight if all_target_peaks else None, 'weighted_residual_improvement': sum((float(row['weighted_residual_improvement']) * max(float(row['baseline_weighted_absolute_residual']), 1e-12) for row in all_target_peaks)) / target_residual_weight if all_target_peaks else None, 'histograms': target_peak_histograms}
     rwp_values = [float(values['wR']) for values in final_residuals.values() if values.get('wR') is not None and math.isfinite(float(values['wR']))]
     if not rwp_values:
         raise RuntimeError('Magnetic refinement produced no finite weighted-profile R factor')
