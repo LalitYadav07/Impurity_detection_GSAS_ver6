@@ -961,7 +961,9 @@ class UnifiedPipeline:
         try:
             from cif_occupancy import load_authorized_structure
             ref_structure = load_authorized_structure(main_cif)
-            ref_elements = sorted({str(el) for el in ref_structure.composition.as_dict().keys()})
+            # Chemistry masks use base elements; ionic labels such as Fe3+
+            # are not element symbols. D/T retain H chemistry in this prefilter.
+            ref_elements = sorted({sp.symbol for site in ref_structure for sp in site.species})
             ref_hi, ref_lo = build_mask(ref_elements)
 
             ref_sg: Optional[int] = None
@@ -991,13 +993,15 @@ class UnifiedPipeline:
                 return set()
 
             matcher = StructureMatcher(primitive_cell=True, scale=True, attempt_supercell=False)  # type: ignore[operator]
+            from main_phase_identity import main_phase_comparison_pair
             for pid in candidate_ids:
                 try:
                     cand_structure = self.db_loader.load_structure(pid)
                 except Exception:
                     continue
                 try:
-                    if matcher.fit(ref_structure, cand_structure):
+                    pair = main_phase_comparison_pair(ref_structure, cand_structure)
+                    if pair is not None and matcher.fit(*pair):
                         matches.add(pid)
                 except Exception:
                     continue
