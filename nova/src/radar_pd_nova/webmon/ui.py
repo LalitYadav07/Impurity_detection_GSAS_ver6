@@ -1,8 +1,8 @@
 """WebMON workspace in the normal RADAR-PD experiment tabs.
 
 The local replay backend is explicitly opt-in. It does not impersonate Galaxy
-or submit processing jobs. Production source browsing works after the usual
-monitor start; scientific jobs require a sealed reviewed context manifest.
+or submit processing jobs. Production source browsing works after starting or
+restoring a saved watch; scientific jobs require a sealed reviewed context manifest.
 """
 import asyncio,hashlib,json,os,shutil,time,uuid,logging
 from pathlib import Path
@@ -50,7 +50,7 @@ class WebmonMixin:
         self._webmon_colors={};self._webmon_pattern=None;self._webmon_payloads={};self._webmon_out=None;self._webmon_plot_binding=None;self._webmon_saved_paths={};self._webmon_request={};self._webmon_last_preview=None;self._webmon_model_paths=set();self._webmon_process=None;self._webmon_cancelled=False;self._webmon_task=None;self._webmon_poll_task=None;self._webmon_binding=None;self._webmon_start_scope=None
         self._webmon_display_scope=None;self._webmon_scope_generation=0
         s.webmon_scope_notice='';s.webmon_scope_allowed=False
-        s.update(dict(webmon_follow_latest=True,webmon_stale=False,webmon_analysis_revision='',webmon_local=bool(self._webmon and self._webmon.config.get('local_replay')),webmon_runs=[],webmon_run='',webmon_target='',webmon_message='Start the experiment monitor, then select a stored or current WebMON scan.',webmon_reference='',webmon_accepted=False,webmon_k='0, 0, 0',webmon_ion='',webmon_lower=.1,webmon_upper=9.,webmon_busy=False,webmon_rows=[],webmon_model='',webmon_models=[],webmon_details='',webmon_has_result=False,webmon_context_ready=False,webmon_revision='',webmon_latency='',webmon_latest='',webmon_health='No inference yet',webmon_reference_rows=[],webmon_poll_seconds=30))
+        s.update(dict(webmon_follow_latest=True,webmon_stale=False,webmon_analysis_revision='',webmon_local=bool(self._webmon and self._webmon.config.get('local_replay')),webmon_runs=[],webmon_run='',webmon_target='',webmon_message='Start or restore a saved Live watch, then refresh to select a stored or current WebMON scan.',webmon_reference='',webmon_accepted=False,webmon_k='0, 0, 0',webmon_ion='',webmon_lower=.1,webmon_upper=9.,webmon_busy=False,webmon_rows=[],webmon_model='',webmon_models=[],webmon_details='',webmon_has_result=False,webmon_context_ready=False,webmon_revision='',webmon_latency='',webmon_latest='',webmon_health='No inference yet',webmon_reference_rows=[],webmon_poll_seconds=30))
         s.update(dict(webmon_table_selected=[],webmon_compared=[],webmon_axis='tof',webmon_axes=[{'title':'TOF (µs)','value':'tof'}],webmon_errors=False,webmon_band=True,webmon_ticks=True,webmon_sampler_summary="",webmon_fit_metrics=[],webmon_component=False,webmon_region='full',webmon_filter='All',webmon_search='',webmon_display_rows=[],webmon_moment_rows=[],webmon_pair_a=0,webmon_pair_b=1,webmon_site_options=[],webmon_saved=[],webmon_saved_job='',webmon_checked='Not checked',webmon_connection='Not connected',webmon_count_summary='No candidates analyzed',webmon_validity='No fit assessed',webmon_boundary='Not assessed',webmon_sampling='Not assessed',webmon_fit_caption='',webmon_lower_used=None,webmon_upper_used=None))
         s.change('powgen_processing_scope','powgen_processing_sample_ids','powgen_bank_scope',
                  'powgen_processing_banks','powgen_ipts','live_beamline')(self.webmon_scope_changed)
@@ -231,7 +231,8 @@ class WebmonMixin:
             with html.Div(classes='wm-controls'):
                 v.VSelect(label='Viewed scan',v_model=('webmon_run',),items=('webmon_runs',),item_title='label',item_value='value',update_modelValue=(self.webmon_select,'[$event]'),density='compact',hide_details=True)
                 v.VCheckbox(label='Follow latest matching scan',v_model=('webmon_follow_latest',),update_modelValue=(self.webmon_follow_changed,'[$event]'),density='compact',hide_details=True)
-                v.VBtn('Refresh source',click=self.webmon_refresh,disabled=('!powgen_monitoring',),variant='outlined',size='small')
+                v.VBtn('Refresh source',click=self.webmon_refresh,disabled=('webmon_busy || (!powgen_monitoring && !powgen_results_refresh_available && !webmon_local)',),variant='outlined',size='small')
+            html.P('Refresh reads acquisition snapshots for the saved watch. It does not resume monitoring or start analyses.',v_if='!powgen_monitoring')
             html.P('Source: {{ webmon_connection }} · Last checked {{ webmon_checked }} · Latest {{ webmon_latest }} · Viewed {{ webmon_run }} · Analyzed {{ webmon_target || "none" }}')
             html.P('{{ webmon_scope_notice }}')
             v.VAlert(v_if='webmon_target && webmon_target !== webmon_run',text=("'You are browsing a different scan. Analysis remains pinned to run ' + webmon_target",),type='info',variant='tonal',density='compact')
@@ -394,7 +395,10 @@ class WebmonMixin:
             rows=self._webmon.runs(s.powgen_ipts)
             if not self._webmon_scope_current(owner):raise ValueError('Live acquisition scope changed while reading metadata')
             selected=[row for row in rows if not scope or not scope.row_error(row)]
-            s.webmon_checked=datetime.now().astimezone().strftime('%H:%M:%S %Z');s.webmon_connection=f"Archive reachable · checking every {float(self._webmon.config.get('poll_seconds',30)):g} s";s.webmon_runs=selected;s.webmon_latest=selected[0]['run'] if selected else 'none'
+            s.webmon_checked=datetime.now().astimezone().strftime('%H:%M:%S %Z')
+            s.webmon_connection=(f"Archive reachable · checking every {float(self._webmon.config.get('poll_seconds',30)):g} s"
+                if getattr(s,'powgen_monitoring',False) else 'Archive reachable · monitoring remains stopped')
+            s.webmon_runs=selected;s.webmon_latest=selected[0]['run'] if selected else 'none'
             if scope:s.webmon_scope_notice+=f' {len(selected)} matching; {len(rows)-len(selected)} outside the selection or missing unambiguous identity.'
             if s.webmon_runs:
                 if s.webmon_follow_latest:self.webmon_select(s.webmon_runs[0]['run'],follow=True)
