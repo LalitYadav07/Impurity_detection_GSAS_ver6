@@ -50,7 +50,7 @@ MODEL_FIELDS=('sx_kind','sx_moment_model','sx_refine_scale','sx_refine_backgroun
 
 class SymmetryMixin(KSearchMixin):
     def _init_symmetry(self):
-        self._model_runtime_cache=None;self._models_restored=False;self._model_restored_scopes=set();self._model_following_active=False;self._model_stopping=False
+        self._model_runtime_cache=None;self._models_restored=False;self._model_restored_scopes=set();self._model_restore_requests=set();self._model_following_active=False;self._model_stopping=False
         self._model_active_campaigns={};self._model_owned_campaigns={};self._model_review_campaigns=OrderedDict();self._model_checkpoint_errors={};self._model_preparations={};self._model_enrollment_task=None;self._model_tick_task=None;self._model_pause_task=None;self._model_start_cancel=None
         self._symmetry_rows=[];self._symmetry_all_rows=[];self._symmetry_groups=[];self._symmetry_draft=None;self._symmetry_approved='';self._symmetry_task=None;self._symmetry_loading=False;self._symmetry_refresh_pending=False;self._symmetry_explicit_selection=False;self._symmetry_display_identity=None;self._symmetry_loading_identity=None;self._symmetry_setup_details=None
         s=self.server.state
@@ -245,6 +245,18 @@ class SymmetryMixin(KSearchMixin):
             self._symmetry_explicit_selection=False
         self.refresh_symmetry()
 
+    def restore_saved_symmetry_campaigns(self):
+        """Restore prior work only after an explicit request, never on tab entry."""
+        s=self.server.state
+        if self._symmetry_loading or s.sx_busy or getattr(s,'sx_pause_pending',False):return
+        scope=s.rf_experiment if s.sx_result_scope=='experiment' else None
+        requests=getattr(self,'_model_restore_requests',set())
+        self._model_restore_requests=requests|{scope}
+        # Also discover campaigns completed by another viewer since our last
+        # explicit load. Existing local ledgers are not overwritten by restore.
+        self._model_restored_scopes=getattr(self,'_model_restored_scopes',set())-{scope,None}
+        self.refresh_symmetry()
+
     def refresh_symmetry(self):
         if self._symmetry_loading:
             s=self.server.state
@@ -274,7 +286,12 @@ class SymmetryMixin(KSearchMixin):
                 s.sx_backend=backend
                 scope=s.rf_experiment if s.sx_result_scope=='experiment' else None
                 restored=getattr(self,'_model_restored_scopes',set())
-                if remote and scope not in restored and None not in restored:
+                requested=getattr(self,'_model_restore_requests',set())
+                # Consume this user action even if the load fails or selection
+                # changed before the coroutine started. Polling must not retry
+                # an expensive historical restore without another request.
+                self._model_restore_requests=set()
+                if remote and scope in requested and scope not in restored and None not in restored:
                     loop=asyncio.get_running_loop()
                     identity=self._symmetry_loading_identity
                     def publish_progress(message):
@@ -284,6 +301,8 @@ class SymmetryMixin(KSearchMixin):
                     await asyncio.to_thread(restore_history,self._symmetry_root(),remote,experiment=scope,progress=progress)
                     self._model_restored_scopes=restored|{scope}
                     self._models_restored=True
+                    if identity!=(s.sx_campaign,s.rf_experiment,s.sx_result_scope):
+                        self._symmetry_refresh_pending=True;return
                 choices=start_choices(self._refinement_store(),s.rf_experiment)
                 s.sx_start_sources=[dict(title=entry['title'],value=entry['id']) for entry in choices]
                 if s.sx_start_source not in {entry['id'] for entry in choices}:
@@ -1180,7 +1199,7 @@ class SymmetryMixin(KSearchMixin):
         from copy import deepcopy
         for name,value in self._symmetry_defaults.items():setattr(self.server.state,name,deepcopy(value))
         self._symmetry_rows=[];self._symmetry_all_rows=[];self._symmetry_groups=[];self._symmetry_draft=None;self._symmetry_approved=''
-        self._model_runtime_cache=None;self._models_restored=False;self._model_active_campaigns={};self._model_owned_campaigns={};self._model_review_campaigns=OrderedDict();self._model_checkpoint_errors={};self._model_pause_task=None;self._model_start_cancel=None
+        self._model_runtime_cache=None;self._models_restored=False;self._model_restored_scopes=set();self._model_restore_requests=set();self._model_active_campaigns={};self._model_owned_campaigns={};self._model_review_campaigns=OrderedDict();self._model_checkpoint_errors={};self._model_pause_task=None;self._model_start_cancel=None
         self._k_result=None;self._k_result_identity=None
         s=self.server.state;s.sx_k_rows=[];s.sx_k_choices=[];s.sx_k_notes=[];s.sx_k_has_result=False;s.sx_k_busy=False
         s.sx_k_plot=plots.empty('Run a k survey to compare magnetic templates')
