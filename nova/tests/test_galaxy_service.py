@@ -265,7 +265,8 @@ def test_recent_runs_skips_only_explicit_known_terminal_ids_before_hydration(mon
             "inputs":{"config_file":{"id":"cfg"}}}
     service._job_details = details
     service._config_from_job = lambda job, *args, **kwargs: hydrated.append(job["id"])
-    options = {"known_terminal_job_ids":{uid for uid in states if uid.startswith("known-")}} if exclude_known else {}
+    options = {"known_terminal_job_states":{uid:("error" if uid=="known-error" else "ok")
+               for uid in states if uid.startswith("known-")}} if exclude_known else {}
     records = service.recent_runs(**options)
     expected = set(states) - ({"known-ok","known-error"} if exclude_known else set())
     assert set(detailed) == set(hydrated) == {r.uid for r in records} == expected
@@ -281,8 +282,23 @@ def test_known_terminal_hint_never_hides_unconfirmed_or_changed_server_state(mon
     service._job_details = lambda uid, fallback=None: read.append(uid) or {
         "id":uid,"state":current_state,"params":{"run_name":"run"}}
     service._config_from_job = lambda *a, **kw: None
-    records = service.recent_runs(known_terminal_job_ids={"known"})
+    records = service.recent_runs(known_terminal_job_states={"known":"ok"})
     assert read == ["known"] and [r.uid for r in records] == ["known"]
+
+
+@pytest.mark.parametrize("expected,current", [("ok","error"),("error","ok")])
+def test_known_terminal_state_mismatch_uses_full_recovery(monkeypatch, tmp_path, expected, current):
+    from types import SimpleNamespace
+    monkeypatch.setattr("radar_pd_nova.galaxy_service.requests.get", lambda *a, **kw:
+        SimpleNamespace(json=lambda:[{"id":"known","state":current}], raise_for_status=lambda:None))
+    service=GalaxyService("https://galaxy.example","key","history",output_root=tmp_path)
+    detailed,hydrated=[],[]
+    service._job_details=lambda uid,fallback=None:detailed.append(uid) or {
+        "id":uid,"state":current,"params":{"run_name":"run"}}
+    service._config_from_job=lambda *a,**kw:hydrated.append("known")
+    records=service.recent_runs(known_terminal_job_states={"known":expected})
+    assert detailed==hydrated==["known"]
+    assert len(records)==1 and records[0].status.value==current
 
 
 def test_galaxy_status_normalization() -> None:

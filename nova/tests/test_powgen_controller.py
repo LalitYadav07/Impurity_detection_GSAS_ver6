@@ -377,8 +377,8 @@ def test_job_reconciliation_supplies_configuration_scope_when_transport_supports
 def test_reconciliation_excludes_only_owned_consistent_terminal_records():
     seen = []
     class Service(FakeGalaxyService):
-        def recent_runs(self, *, limit, configuration_dataset_id=None, known_terminal_job_ids=None):
-            seen.append(set(known_terminal_job_ids or ()))
+        def recent_runs(self, *, limit, configuration_dataset_id=None, known_terminal_job_states=None):
+            seen.append(dict(known_terminal_job_states or {}))
             return []
     service = Service()
     controller = PowgenWatchController(service,
@@ -401,16 +401,16 @@ def test_reconciliation_excludes_only_owned_consistent_terminal_records():
     controller.state.submitted['PG3_8'] = WatchedRun(8,"/input/PG3_8.gsa","fp-8",galaxy_job_id='job-6')
     before = controller.state.as_dict()
     assert controller.reconcile_recent_runs(checkpoint=False) == 0
-    assert seen == [{'job-1','job-2'}]
+    assert seen == [{'job-1':'ok','job-2':'error'}]
     assert controller.state.as_dict() == before and service.snapshots == []
 
 
 @pytest.mark.parametrize("unknown_status", [RunStatus.OK, RunStatus.ERROR, RunStatus.QUEUED, RunStatus.RUNNING])
 def test_terminal_exclusion_preserves_unknown_ack_recovery_and_lifecycle_maps(unknown_status):
     class ScopedService(FakeGalaxyService):
-        def recent_runs(self, *, limit=50, configuration_dataset_id=None, known_terminal_job_ids=None):
-            self.exclusions = set(known_terminal_job_ids or ())
-            return [r for r in self.recovered_runs if r.galaxy_job_id not in self.exclusions]
+        def recent_runs(self, *, limit=50, configuration_dataset_id=None, known_terminal_job_states=None):
+            self.exclusions = dict(known_terminal_job_states or {})
+            return [r for r in self.recovered_runs if self.exclusions.get(r.galaxy_job_id)!=r.status.value]
     projections = []
     for service in (FakeGalaxyService(), ScopedService()):
         controller = PowgenWatchController(service, PowgenExperimentSettings(
@@ -424,7 +424,7 @@ def test_terminal_exclusion_preserves_unknown_ack_recovery_and_lifecycle_maps(un
         service.recovered_runs=[*controller.records.values(),_recovered_record(status=unknown_status)]
         service.json_documents['summary-63764']={"status":"complete","analysis_mode":"rapid","final_rwp":8.2}
         assert controller.reconcile_recent_runs(checkpoint=False)==1
-        if isinstance(service,ScopedService):assert service.exclusions=={'job-63762','job-63763'}
+        if isinstance(service,ScopedService):assert service.exclusions=={'job-63762':'error','job-63763':'ok'}
         projections.append({phase:{key:(run.galaxy_job_id,run.scientific_summary,run.error)
             for key,run in getattr(controller.state,phase).items()}
             for phase in ('completed','failed','submitted','discovered')})
@@ -434,8 +434,8 @@ def test_terminal_exclusion_preserves_unknown_ack_recovery_and_lifecycle_maps(un
 
 def test_retry_previous_attempt_ids_are_not_terminal_exclusions():
     class Service(FakeGalaxyService):
-        def recent_runs(self, *, limit=50, configuration_dataset_id=None, known_terminal_job_ids=None):
-            self.exclusions=set(known_terminal_job_ids or ())
+        def recent_runs(self, *, limit=50, configuration_dataset_id=None, known_terminal_job_states=None):
+            self.exclusions=dict(known_terminal_job_states or {})
             return list(self.recovered_runs)
     service=Service()
     controller=PowgenWatchController(service,PowgenExperimentSettings(
@@ -448,7 +448,7 @@ def test_retry_previous_attempt_ids_are_not_terminal_exclusions():
     current.name += '_retry1';current.galaxy_job_id='new-retry-job'
     service.recovered_runs=[old,current]
     assert controller.reconcile_recent_runs(checkpoint=False)==1
-    assert service.exclusions==set()
+    assert service.exclusions=={}
     assert controller.state.submitted[run.run_id].galaxy_job_id=='new-retry-job'
     assert controller.state.failed=={} and service.snapshots==[]
 

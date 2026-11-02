@@ -1261,9 +1261,9 @@ class PowgenWatchController:
         parameters = inspect.signature(self.service.recent_runs).parameters
         if "configuration_dataset_id" in parameters:
             recovery_options["configuration_dataset_id"] = self.settings.configuration_dataset_id
-        if "known_terminal_job_ids" in parameters:
+        if "known_terminal_job_states" in parameters:
             active_job_ids = {run.galaxy_job_id for run in active.values() if run.galaxy_job_id}
-            terminal_job_ids = set()
+            terminal_job_states = {}
             for phase, status in ((self.state.completed, RunStatus.OK), (self.state.failed, RunStatus.ERROR)):
                 for run_id, run in phase.items():
                     record = self.records.get(run_id)
@@ -1271,8 +1271,8 @@ class PowgenWatchController:
                             and record.galaxy_job_id == run.galaxy_job_id
                             and record.history_id == self.settings.history_id
                             and record.status == status and record.analysis_status == status):
-                        terminal_job_ids.add(run.galaxy_job_id)
-            recovery_options["known_terminal_job_ids"] = terminal_job_ids
+                        terminal_job_states[run.galaxy_job_id] = status.value
+            recovery_options["known_terminal_job_states"] = terminal_job_states
         recovered = self.service.recent_runs(**recovery_options)
         candidates: dict[str, RunRecord] = {}
         runs_by_name = {self._run_name(run).upper(): run_id for run_id, run in active.items()}

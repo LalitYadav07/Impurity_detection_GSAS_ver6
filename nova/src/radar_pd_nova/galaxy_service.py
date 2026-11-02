@@ -18,7 +18,7 @@ from contextlib import contextmanager, nullcontext
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterable, Iterator
+from typing import Any, Callable, Iterator, Mapping
 from urllib.parse import urlsplit, urlunsplit
 
 import requests
@@ -2537,10 +2537,10 @@ class GalaxyService:
         self._recover_tool(uid).stop()
 
     def recent_runs(self, *, limit: int = 50, configuration_dataset_id: str | None = None,
-                    known_terminal_job_ids: Iterable[str] | None = None) -> list[RunRecord]:
+                    known_terminal_job_states: Mapping[str, str] | None = None) -> list[RunRecord]:
         """Recover RADAR-PD Analyze jobs directly from the active Galaxy history."""
 
-        known_terminal = set(known_terminal_job_ids or ())
+        known_terminal = dict(known_terminal_job_states or {})
         response = requests.get(
             f"{self.galaxy_url}/api/jobs",
             headers=self._headers,
@@ -2557,7 +2557,8 @@ class GalaxyService:
             # current terminal state in this fresh listing before avoiding
             # per-job/config hydration; active or unreported states
             # still take the full recovery path.
-            if uid in known_terminal and str(summary.get("state") or "").lower() in {"ok", "error"}:
+            expected_state = known_terminal.get(uid)
+            if expected_state in {"ok", "error"} and str(summary.get("state") or "").lower() == expected_state:
                 continue
             try:
                 job = self._job_details(uid, summary)
