@@ -41,8 +41,9 @@ def cif_element_suggestion(text: str, *, require_atom_types: bool = False) -> li
     Unreadable/unknown atom types make the loop unavailable rather than silently
     producing an incomplete element filter.
 
-    ``require_atom_types`` is the stricter archive-preview mode: every explicit
-    atom-type loop must be readable, and formula-only fallback is unavailable.
+    ``require_atom_types`` is the stricter archive-preview mode: atom-site
+    loops must declare readable types. Standalone type tables and formulae
+    cannot prove which species actually occupy the sites.
     """
     found: set[str] = set()
     atom_elements: set[str] = set()
@@ -72,7 +73,12 @@ def cif_element_suggestion(text: str, *, require_atom_types: bool = False) -> li
                 break
             headers.append(line.split()[0].lower())
             index += 1
-        target = next((headers.index(h) for h in ("_atom_site_type_symbol", "_atom_type_symbol") if h in headers), None)
+        if (require_atom_types and "_atom_site_type_symbol" not in headers
+                and any(h == "_atom_site_label" or h.startswith(("_atom_site_fract_", "_atom_site_cartn_"))
+                        for h in headers)):
+            raise ValueError("A CIF atom-site loop has no explicit atom types")
+        type_headers = ("_atom_site_type_symbol",) if require_atom_types else ("_atom_site_type_symbol", "_atom_type_symbol")
+        target = next((headers.index(h) for h in type_headers if h in headers), None)
         if target is None:
             continue
         values = []

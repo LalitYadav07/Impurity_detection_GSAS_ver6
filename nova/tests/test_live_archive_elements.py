@@ -61,6 +61,29 @@ def test_archive_uses_atom_types_not_formula_manifest_or_filename(tmp_path):
     assert path.read_bytes() == original
 
 
+def test_unused_type_table_does_not_identify_actual_sites(tmp_path):
+    raw = (b"data_candidate\nloop_\n_atom_type_symbol\nFe\n"
+           b"loop_\n_atom_site_label\n_atom_site_fract_x\n_atom_site_fract_y\n_atom_site_fract_z\nCu1 0 0 0\n")
+    suggestion = inspect_library_review(library(tmp_path, raw=raw))['element_suggestion']
+    assert suggestion['available'] is False
+    assert suggestion['elements'] == []
+
+
+def test_unused_type_table_cannot_add_species_to_explicit_sites(tmp_path):
+    raw = source_cif(('Cu',)) + b"loop_\n_atom_type_symbol\nFe\n"
+    suggestion = inspect_library_review(library(tmp_path, raw=raw))['element_suggestion']
+    assert suggestion['available'] is True
+    assert suggestion['elements'] == ['Cu']
+
+
+def test_one_readable_site_loop_does_not_hide_an_untyped_site_loop(tmp_path):
+    raw = source_cif(('O',)) + (b"loop_\n_atom_site_label\n_atom_site_fract_x\n"
+                                  b"_atom_site_fract_y\n_atom_site_fract_z\nCu1 0 0 0\n")
+    suggestion = inspect_library_review(library(tmp_path, raw=raw))['element_suggestion']
+    assert suggestion['available'] is False
+    assert suggestion['elements'] == []
+
+
 @pytest.mark.parametrize('raw', [
     b"data_bad\n_chemical_formula_sum 'Fe O'\n",
     source_cif(('D', 'Xx')),
