@@ -12,6 +12,31 @@ from gpx_recipe.symmetry.templates import matches,rebind,validate_template,trial
 from gpx_recipe.execution import write_json
 from .symmetry_sources import start_choices,resolve_start,recipe_source
 
+START_BARRIER_SCHEMA='radar-model-start-barrier/v1'
+START_BARRIER_MESSAGE='Initial model preparation did not finish. Review the same model setup and use Start again; Continue cannot skip its source checkpoint.'
+
+
+def start_barrier_ready(campaign):
+    """Legacy campaigns predate this marker; new staged campaigns need proof."""
+    marker=campaign.setting('start_barrier')
+    if marker is None:return True
+    return (isinstance(marker,dict) and marker.get('schema')==START_BARRIER_SCHEMA
+            and marker.get('state')=='complete'
+            and marker.get('template_sha256')==digest(campaign.setting('template')))
+
+
+def store_start_barrier(campaign,marker,*,complete=False,following=False,current_only=False):
+    """Atomically arm or disarm one owned initial Start, including on restore."""
+    with campaign.connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        row=db.execute("SELECT body FROM settings WHERE key='start_barrier'").fetchone()
+        current=json.loads(row['body']) if row else None
+        if current_only and (not isinstance(current,dict) or current.get('attempt')!=marker['attempt']):return False
+        _set_setting(db,'start_barrier',dict(marker,state='complete' if complete else 'incomplete'))
+        _set_setting(db,'paused',not complete)
+        _set_setting(db,'following',bool(complete and following))
+    return True
+
 
 def scope_progress(template,entries):
     """Keep the reviewed total visible while individual scans enter the ledger."""
@@ -95,6 +120,7 @@ def _choices(workspace,experiment):
 
 
 def queue_sources(campaign,workspace):
+    if not start_barrier_ready(campaign):return campaign.setting('enrollments',{})
     template=validate_template(campaign.setting('template'))
     available=choices(workspace,template['scope']['experiment'])
     # Input inspection can finish while a newly arriving acquisition is being
@@ -176,6 +202,7 @@ def next_acquisition(campaign, entries):
 
 def enroll_source(campaign,workspace,key,inspect,*,transport=None):
     """Recheck an exact source and native setting before a per-scan protocol."""
+    if not start_barrier_ready(campaign):raise ValueError(START_BARRIER_MESSAGE)
     template=validate_template(campaign.setting('template'));entries=campaign.setting('enrollments',{})
     entry=entries[key];entry['status']='preparing';_set_enrollment(campaign,key,entry)
     try:

@@ -38,6 +38,7 @@ from .checkpoint_uploads import CheckpointUploadPending, CheckpointUploadInterru
 from .model_review_recovery import SelectionRecovery, ReviewSelectionChanged, campaign_recency,acquisition_index,AcquisitionReview
 from .model_navigation import scan_options
 from .model_campaigns import choices as model_choices,origin as model_origin,queue_sources,enroll_source,restore_history,portable_source,restore_captured_sources,scope_progress,next_acquisition,prioritize_acquisition,acquisition_rows
+from .model_campaigns import START_BARRIER_SCHEMA,START_BARRIER_MESSAGE,start_barrier_ready,store_start_barrier
 from gpx_recipe.symmetry.compiler import prepare_shared_inputs
 from gpx_recipe.symmetry.templates import make_template,trial_count
 
@@ -768,6 +769,7 @@ class SymmetryMixin(KSearchMixin):
         async def run():
             s=self.server.state;s.sx_error='';s.sx_busy=True
             s.sx_message='Preparing the approved campaign: checking the GPX revision and publishing shared inputs to Galaxy.';s.flush()
+            staged=None;driver_entered=False
             try:
                 draft=self._symmetry_draft
                 if isinstance(payload,dict) and draft and payload.get('sx_plan_token')!=digest(draft['template']):raise ValueError('The visible plan changed before Start')
@@ -793,12 +795,15 @@ class SymmetryMixin(KSearchMixin):
                 if current.get('source_sha256') and current['source_sha256']!=d['protocol']['source']['sha256']:raise ValueError('The published GPX revision changed after approval; inspect it again')
                 c=Campaign(root/('campaign-'+approved[:12]),shared_inputs=True)
                 if c.trials():raise ValueError('This campaign already exists. Use Continue to recover its work.')
+                marker=dict(schema=START_BARRIER_SCHEMA,attempt=uuid.uuid4().hex,
+                    template_sha256=approved,source_sha256=current.get('source_sha256'))
+                store_start_barrier(c,marker)
+                staged=(c,marker)
                 transport=self._symmetry_transport(c)
                 async def stage():
                     ref=await asyncio.to_thread(prepare_shared_inputs,d['protocol'],d['root'],c.root)
                     require_current()
                     c.set_setting('template',d['template']);c.set_setting('reference_input_root',str(ref))
-                    c.set_setting('following',d['template']['future']);c.set_setting('paused',False)
                     c.set_setting('enrollments',{key:dict(id=key,status='queued',
                         scan=d['scope_sources'][key]['scan_label'],sample=d['scope_sources'][key]['sample_label'],
                         bank=d['scope_sources'][key].get('bank'),source=portable_source(d['scope_sources'][key]),
@@ -812,14 +817,23 @@ class SymmetryMixin(KSearchMixin):
                 # before the original enrollment/claim/dispatch sequence starts.
                 await self._model_start_barrier(asyncio.to_thread(workspace.checkpoint),stage(),on_cancel=cancelled.set)
                 require_current()
+                # Keep the captured entries unarmed through the final await.
+                # The first active driver tick may then discover future scans.
                 await asyncio.to_thread(queue_sources,c,workspace)
                 require_current()
+                if not store_start_barrier(c,marker,complete=True,following=d['template']['future'],current_only=True):
+                    raise ValueError('Another Start replaced this preparation; review the current campaign')
                 s.sx_campaign=c.root.name;s.sx_setup=False
+                driver_entered=True
                 await self._drive_symmetry_campaign(c,transport)
             except Exception as exc:s.sx_error=str(exc);s.sx_message='Campaign stopped; review the error above.'
             finally:
-                if self._model_start_cancel is cancelled:self._model_start_cancel=None
-                s.sx_busy=False;s.flush()
+                try:
+                    if staged and not driver_entered:
+                        store_start_barrier(*staged,current_only=True)
+                finally:
+                    if self._model_start_cancel is cancelled:self._model_start_cancel=None
+                    s.sx_busy=False;s.flush()
         work=run()
         try:self._symmetry_task=self._refinement_schedule(work,'radar-symmetry-campaign')
         except BaseException:
@@ -891,6 +905,7 @@ class SymmetryMixin(KSearchMixin):
                 await asyncio.sleep(3)
 
     async def _drive_symmetry_campaign(self,campaign,transport):
+        if not start_barrier_ready(campaign):raise ValueError(START_BARRIER_MESSAGE)
         preparation=None
         campaign.set_setting('viewer_parallel_jobs',self.server.state.sx_parallel_jobs)
         owner=(campaign,transport)
@@ -1042,6 +1057,7 @@ class SymmetryMixin(KSearchMixin):
                 root=(self._symmetry_root()/s.sx_campaign).resolve()
                 if root.parent!=self._symmetry_root() or not (root/'campaign.sqlite').is_file():raise ValueError('Select an existing campaign')
                 campaign=Campaign(root,shared_inputs=True)
+                if not start_barrier_ready(campaign):raise ValueError(START_BARRIER_MESSAGE)
                 saved_budget=campaign.setting('viewer_parallel_jobs')
                 if type(saved_budget) is int and saved_budget in MODEL_BATCH_LIMITS:
                     s.sx_parallel_jobs=saved_budget

@@ -8,6 +8,7 @@ import pytest
 
 import radar_pd_nova.symmetry_controller as module
 from gpx_recipe.symmetry.contracts import digest
+from gpx_recipe.symmetry.campaign import Campaign as SqliteCampaign
 from radar_pd_nova.checkpoint_uploads import CheckpointUploadPending
 from radar_pd_nova.model_runtime import GalaxyChunkTransport
 
@@ -52,18 +53,21 @@ def start_app(tmp_path, monkeypatch):
     workspace = SimpleNamespace(checkpoint=checkpoint, runtime=SimpleNamespace(resolve=lambda row: copy.deepcopy(row)))
     campaigns = {}
 
-    class Campaign:
+    class Campaign(SqliteCampaign):
         def __init__(self, root, **kwargs):
-            self.root, self.settings, self.enrolled = root, {}, False
+            super().__init__(root,**kwargs)
+            self.settings, self.enrolled = {}, False
 
         def trials(self):
-            return ['existing-trial'] if self.enrolled else []
+            return ['existing-trial'] if self.enrolled else super().trials()
 
         def set_setting(self, key, value):
             self.settings[key] = copy.deepcopy(value)
+            super().set_setting(key,value)
 
     def campaign(root, **kwargs):
-        return campaigns.setdefault(root, Campaign(root, **kwargs))
+        if root not in campaigns:campaigns[root]=Campaign(root,**kwargs)
+        return campaigns[root]
 
     monkeypatch.setattr(module, 'Campaign', campaign)
     monkeypatch.setattr(module, 'resolve_start', lambda *_: copy.deepcopy(source))
