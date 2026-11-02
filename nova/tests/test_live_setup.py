@@ -275,6 +275,43 @@ def test_test_latest_submits_exactly_one_and_never_starts_monitor(live):
     )
 
 
+def test_one_scan_workspace_reports_active_staging_step(live, tmp_path, monkeypatch):
+    state = live.server.state
+    cif = tmp_path / "main.cif"
+    cif.write_text(CIF)
+    state.powgen_main_cif_source = "computer"
+    state.powgen_main_cif_path = str(cif)
+    observed = []
+    save = live.service.save_configuration
+    upload = live.service.upload_document
+    launch = TrialController.launch_submission
+
+    def saving(config):
+        observed.append(state.live_test_message)
+        return save(config)
+
+    def uploading(path, *, label):
+        observed.append(state.live_test_message)
+        return upload(path, label=label)
+
+    def launching(controller, run):
+        observed.append(state.live_test_message)
+        return launch(controller, run)
+
+    live.service.save_configuration = saving
+    live.service.upload_document = uploading
+    monkeypatch.setattr(TrialController, "launch_submission", launching)
+    asyncio.run(live.test_live_scan())
+    assert observed == [
+        "Inputs verified. Saving the reproducible Live configuration...",
+        "Saving the selected main-phase CIF to Galaxy...",
+        "Staging inputs and submitting scan-100-bank2 to Galaxy...",
+    ]
+    assert len(live.service.jobs) == 1
+    assert not state.powgen_monitoring
+    assert state.live_test_message.startswith("One-scan test submitted:")
+
+
 def test_trial_then_monitor_reuses_saved_configuration(live):
     async def run():
         await live.test_live_scan()

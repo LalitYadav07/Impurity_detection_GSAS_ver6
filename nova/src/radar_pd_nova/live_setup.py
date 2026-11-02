@@ -600,8 +600,15 @@ class LiveSetupMixin:
             raise RuntimeError(
                 "The active Galaxy History is not available to this NOVA session"
             )
-        state.powgen_message = "Inputs verified. Saving the reproducible Live configuration..."
-        state.flush()
+        def progress(message):
+            state.powgen_message = message
+            if test:
+                # The workspace remains visible when the setup rail is hidden.
+                # Do not let the initial one-scan message mask active staging.
+                state.live_test_message = message
+            state.flush()
+
+        progress("Inputs verified. Saving the reproducible Live configuration...")
         config_id = await self._save_live_configuration(config)
         main_id = (
             str(values["powgen_main_cif_dataset_id"] or "") or None
@@ -609,8 +616,7 @@ class LiveSetupMixin:
             else None
         )
         if values["powgen_main_cif_source"] == "computer":
-            state.powgen_message = "Saving the selected main-phase CIF to Galaxy..."
-            state.flush()
+            progress("Saving the selected main-phase CIF to Galaxy...")
             main_id = await self._upload_live_asset(
                 values["powgen_main_cif_path"], f"{adapter.name} main phase CIF"
             )
@@ -620,15 +626,13 @@ class LiveSetupMixin:
             else None
         )
         if values["powgen_instrument_source"] == "computer":
-            state.powgen_message = "Saving the selected instrument profile to Galaxy..."
-            state.flush()
+            progress("Saving the selected instrument profile to Galaxy...")
             profile_id = await self._upload_live_asset(
                 values["powgen_instrument_path"], f"{adapter.name} instrument profile"
             )
         library_id = library["dataset_id"]
         if library["path"]:
-            state.powgen_message = "Saving the selected candidate library to Galaxy..."
-            state.flush()
+            progress("Saving the selected candidate library to Galaxy...")
             library_id = await self._upload_live_asset(
                 library["path"], "Live candidate library"
             )
@@ -729,6 +733,8 @@ class LiveSetupMixin:
             checked = self._powgen_preflight_signature()
             # The disposable discovery never writes a watch checkpoint or
             # schedules the remaining banks. Exactly one analysis is launched.
+            state.live_test_message = "Finding the selected completed scan..."
+            state.flush()
             await asyncio.to_thread(controller.discover, checkpoint=False)
             runs = controller.due_submissions()
             if not runs:
@@ -740,6 +746,8 @@ class LiveSetupMixin:
                     "Live setup changed during scan discovery; check it again"
                 )
             run = runs[-1]
+            state.live_test_message = f"Staging inputs and submitting {run.run_id} to Galaxy..."
+            state.flush()
             record = await asyncio.to_thread(controller.launch_submission, run)
             record.provenance["live_trial"] = {
                 "run": run.run_number,
