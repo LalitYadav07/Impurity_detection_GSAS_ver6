@@ -5141,13 +5141,25 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         self._watch_transition_hydration_task = asyncio.create_task(hydrate())
 
     def select_workspace_view(self, value: Any, **_: Any) -> None:
-        """Restore the live scope even when returning to a stopped watch."""
+        """Restore the selected cached result or the stopped Live scope."""
         if value not in {item["value"] for item in self.server.state.workspace_options}:
             return
         if value == "experiment":
             self.show_powgen_dashboard()
         else:
             self.server.state.workspace_view = value
+            if value in {"results", "plots", "files"}:
+                record = self.records.get(self.server.state.selected_run_uid)
+                if record is not None:
+                    # Completion may have arrived while Refinement or Battery
+                    # owned the workspace. Refresh this selected run's header
+                    # and verified cache on return, without another download.
+                    self._select_record(record)
+                    if ((record.analysis_status or record.status) == RunStatus.OK
+                            and record.result_status == ResultStatus.READY and record.local_output_dir
+                            and self._opening_run_uid != record.uid
+                            and not self._rendered_result_current(record)):
+                        self._load_results(record, local_only=True)
             self.server.state.flush()
 
     @staticmethod
@@ -6480,7 +6492,8 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                 self._load_results(record)
                 if record.uid not in self._auto_opened_uids:
                     self._auto_opened_uids.add(record.uid)
-                    self.server.state.workspace_view = "results"
+                    if self.server.state.workspace_view == "monitor":
+                        self.server.state.workspace_view = "results"
             elif record.status == RunStatus.ERROR:
                 self.server.state.workspace_view = "monitor"
         self.server.state.flush()
@@ -7700,7 +7713,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                 identity = self._result_source_identity(record)
                 self._sync_runs()
                 # Cache a completed read without replacing a newer workspace.
-                if state.workspace_view != "results":
+                if state.workspace_view not in {"results", "plots", "files"}:
                     return
                 self._select_record(record)
                 self._load_results(record)
@@ -7718,14 +7731,30 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         finally:
             self._finish_result_open(owner, original.uid)
 
-    def _load_results(self, record: RunRecord) -> None:
+    @staticmethod
+    def _result_display_state(record: RunRecord) -> tuple:
+        return (RadarPdNovaApp._result_source_identity(record), record.output_dir,
+                record.cache_manifest.model_dump(mode="json") if record.cache_manifest else None)
+
+    def _rendered_result_current(self, record: RunRecord) -> bool:
+        binding = getattr(self, "_result_display_binding", None)
+        return (self.server.state.result_owner_uid == record.uid
+                and binding is not None and binding[0] is self.service
+                and binding[1] is self._result_context
+                and binding[2:] == self._result_display_state(record))
+
+    def _load_results(self, record: RunRecord, *, local_only: bool = False) -> None:
         state = self.server.state
         selected_uid = str(getattr(state, "selected_run_uid", "") or "")
         if selected_uid and selected_uid != record.uid:
             return
         self._reset_result_state()
-        payload = self.service.result_payload(record)
-        self._refinement_maybe_refresh()
+        if local_only:
+            reader = getattr(self.service, "cached_result_payload", None)
+            payload = (reader if callable(reader) else GalaxyService.cached_result_payload)(record)
+        else:
+            payload = self.service.result_payload(record)
+            self._refinement_maybe_refresh()
         result_document = payload.get("summary") or {}
         self._activate_post_analysis_scope(
             "single:" + record.uid, record.config.post_analysis if record.config is not None else None)
@@ -7806,6 +7835,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
             )
         self._sync_workspace_options(view["mode"])
         state.result_owner_uid = record.uid
+        self._result_display_binding = (self.service, self._result_context, *self._result_display_state(record))
         state.flush()
 
     def _launchable_checkpoint_rows(
@@ -7841,6 +7871,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
 
     def _reset_result_state(self) -> None:
         state = self.server.state
+        self._result_display_binding = None
         state.result_owner_uid = ""
         state.summary_cards = []
         state.result_metrics = []

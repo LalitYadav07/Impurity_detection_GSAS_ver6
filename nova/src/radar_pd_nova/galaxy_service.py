@@ -2858,6 +2858,11 @@ class GalaxyService:
         return record
 
     def _ensure_plot_observation(self, record: RunRecord, root: Path, *, allow_download: bool = True) -> None:
+        self._bind_plot_observation(
+            record, root, fetch=self.cache_pattern_observation if allow_download else None)
+
+    @staticmethod
+    def _bind_plot_observation(record: RunRecord, root: Path, *, fetch: Callable | None = None) -> None:
         """Bind optional display masks to this job without re-running analysis.
 
         New collections prefetch the direct observation with their other small
@@ -2918,7 +2923,7 @@ class GalaxyService:
                     break
                 except (OSError, ValueError, TypeError):
                     continue
-            if selected is None and allow_download:
+            if selected is None and fetch is not None:
                 dataset_id = record.output_dataset_ids.get("pattern_observation")
                 identity = {"job_id": binding["job_id"], "sha256": checksum,
                             "source_gpx_sha256": project_hash, "source_product_sha256": source_hash,
@@ -2927,7 +2932,7 @@ class GalaxyService:
                 if previous.get("download_attempted") and previous.get("fetch_identity") == identity:
                     raise ValueError("Observation fetch already attempted; refresh results to retry")
                 receipt = {**descriptor, **({"dataset_id": dataset_id} if dataset_id else {})}
-                cached = self.cache_pattern_observation(receipt, collection_id=record.output_dataset_ids.get("tables"))
+                cached = fetch(receipt, collection_id=record.output_dataset_ids.get("tables"))
                 cached_path = Path(cached["local_path"])
                 verified(cached_path)
                 selected = root / "pattern_observation.json"
@@ -2955,6 +2960,19 @@ class GalaxyService:
         if root is None:
             return {}
         self._ensure_plot_observation(record, root)
+        return self._cached_result_files(root)
+
+    @staticmethod
+    def cached_result_payload(record: RunRecord) -> dict[str, Any]:
+        """Read only this local cache, including fail-closed mask validation."""
+        root = record.local_output_dir
+        if root is None:
+            return {}
+        GalaxyService._bind_plot_observation(record, root)
+        return GalaxyService._cached_result_files(root)
+
+    @staticmethod
+    def _cached_result_files(root: Path) -> dict[str, Any]:
         payload: dict[str, Any] = {"artifacts": []}
         for key in ("summary", "state", "gpx_index", "input_manifest"):
             candidates = (root / f"{key}.json", root / "ndip" / f"{key}.json")
