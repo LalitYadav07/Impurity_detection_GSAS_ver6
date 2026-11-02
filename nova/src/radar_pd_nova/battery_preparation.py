@@ -524,14 +524,14 @@ class BatteryPreparationMixin:
 
     def open_battery_refinement(self,**_):
         if not self._battery_prepared:return
-        from .refinement_controller import refinement_experiment_options
+        from .refinement_controller import refinement_experiment_options, refinement_transport_label
         job,result=self._battery_prepared
         try:
             workspace=self._refinement_store()
             source=prepared_source(workspace,job,result)
             key,experiment=source['id'],source['experiment']
             s=self.server.state;s.battery_error='';s.rf_experiments=[dict(title=label,value=k) for k,label in refinement_experiment_options(workspace).items()]
-            s.rf_transport='Local scientific worker'
+            s.rf_transport=refinement_transport_label(workspace.runtime.kind)
             s.rf_experiment=experiment;s.workspace_view='refinement';s.setup_collapsed=True
             # Restoring an experiment may restore its older recipe and result
             # tab. Opening a particular preparation must finish on that model,

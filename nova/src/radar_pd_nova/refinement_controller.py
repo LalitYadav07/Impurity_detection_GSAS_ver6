@@ -29,6 +29,10 @@ from .guided_refinement_controller import GuidedRefinementMixin
 REFINEMENT_PROGRESS_SECONDS = 1.0
 
 
+def refinement_transport_label(runtime_kind):
+    return 'Local scientific worker' if runtime_kind == 'local' else 'Galaxy scientific jobs'
+
+
 def refinement_activity_label(job, runtime_kind):
     """A local dispatch claim is not evidence that a Galaxy worker is running."""
     status = job['status']
@@ -469,7 +473,7 @@ class RefinementMixin(GuidedRefinementMixin):
         try:
             workspace=await asyncio.to_thread(self._refinement_store)
             if not owns_workspace():return
-            s.rf_transport='Local scientific worker' if workspace.runtime.kind=='local' else 'Galaxy scientific jobs'
+            s.rf_transport=refinement_transport_label(workspace.runtime.kind)
             recovery_warnings=[]
             if controller:
                 # Recovery also receives private records. Apply its results only

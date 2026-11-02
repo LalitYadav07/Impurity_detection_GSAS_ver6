@@ -342,7 +342,7 @@ class BatteryCampaignMixin:
         except Exception as exc: self.server.state.battery_error=str(exc); self.server.state.flush()
 
     def open_battery_trial_result(self, uid, **_):
-        from .refinement_controller import refinement_experiment_options
+        from .refinement_controller import refinement_experiment_options, refinement_transport_label
         s=self.server.state
         try:
             workspace=self._refinement_store()
@@ -351,7 +351,7 @@ class BatteryCampaignMixin:
             job=workspace.state['jobs'][uid]
             s.rf_experiments=[dict(title=label,value=key) for key,label in refinement_experiment_options(workspace).items()]
             s.rf_experiment=job['source']['experiment']; s.workspace_view='refinement'
-            s.rf_transport='Local scientific worker'; s.setup_collapsed=True; s.flush()
+            s.rf_transport=refinement_transport_label(workspace.runtime.kind); s.setup_collapsed=True; s.flush()
             s.rf_mode='results'; self._refinement_sync()
             self._refinement_schedule(self._select_refinement_job(uid),'battery-trial-result')
         except Exception as exc:s.battery_error=str(exc)
