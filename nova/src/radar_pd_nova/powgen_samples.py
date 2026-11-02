@@ -234,7 +234,7 @@ class PowgenSampleIndex:
                 role = {"run_title": title, "run_role": title_role(title)}
             else:
                 role = run_role(run)
-            title = role["run_title"] or "Title not reported"
+            title = role["run_title"] or "Title unavailable in preview"
             run_options.append({"value": run.run_number, "sample_id": metadata.get("sample_id", ""),
                                 "title": f"{run.run_id} — {role['run_role']}: {title}",
                                 "identity_status": metadata.get('identity_status','unidentified'),

@@ -52,7 +52,7 @@ class SnapSampleIndex(PowgenSampleIndex):
             metadata = cached[1] if cached else {}
             title = metadata.get('run_title') or (metadata.get('table_fields') or {}).get('run_title') or ''
             row.update(run_title=title,run_role=title_role(title),
-                       title=f"{by_number[number].run_id} — {title_role(title)}: {title or 'Title not reported'}")
+                       title=f"{by_number[number].run_id} — {title_role(title)}: {title or 'Title unavailable in preview'}")
         return result
 
 
