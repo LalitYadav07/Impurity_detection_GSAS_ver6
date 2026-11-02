@@ -355,9 +355,16 @@ class LiveAssistantMixin(LiveAssistantUi):
             self._assistant_ingest(payload)
             if step == "experiment":
                 state.powgen_ipts = self._normalize_powgen_ipts(state.powgen_ipts)
-                await self.refresh_powgen_samples(state.powgen_ipts)
+                discovery = await self.refresh_powgen_samples(state.powgen_ipts)
                 if state.powgen_sample_discovery_ipts != state.powgen_ipts:
                     raise ValueError(state.powgen_sample_message)
+                if discovery and discovery.get("source_unavailable"):
+                    # The default family is only a starting choice. Archived
+                    # experiments may have other valid families; let the user
+                    # choose one without claiming that the experiment failed.
+                    self._assistant_say("assistant", state.powgen_sample_message)
+                    self._assistant_step("experiment")
+                    return
                 # Inventory before chemistry or a candidate library is required.
                 await self._assistant_inspect()
                 self._assistant_confirm(step, f"{state.live_beamline_label} · {state.powgen_ipts} · {state.powgen_source_subfolder}")

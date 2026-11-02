@@ -23,6 +23,16 @@ _CACHE: dict[tuple[str, str], tuple[float, dict[int, dict[str, Any]]]] = {}
 _LOCK = threading.Lock()
 
 
+def catalog_created_at(instrument: str, ipts: str, rows) -> float:
+    """Keep preview expiry tied to the response, not a later cache consumer."""
+    key = context(instrument, ipts)
+    with _LOCK:
+        cached = _CACHE.get(key)
+        if cached and cached[1] is rows:
+            return cached[0]
+    return time.monotonic()
+
+
 def _values(value):
     if isinstance(value, list):
         if len(value) > MAX_ID_VALUES:
@@ -57,6 +67,12 @@ def parse_sample_catalog(rows, instrument: str, ipts: str) -> dict[int, dict[str
         run = int(match[2])
         if run < 1:
             continue
+        indexed = row.get("indexed") or {}
+        if not isinstance(indexed, dict):
+            continue
+        indexed_run = indexed.get("run_number")
+        if indexed_run is not None and str(indexed_run).strip() != str(run):
+            continue
         metadata = row.get("metadata") or {}
         if not isinstance(metadata, dict):
             continue
@@ -87,6 +103,15 @@ def parse_sample_catalog(rows, instrument: str, ipts: str) -> dict[int, dict[str
                 log = logs.get(field) or {}
                 evidence.extend({"value": v, "path": path, "kind": "oncat_catalog", "field": "/entry/DASlogs/" + field + "/value"}
                                 for v in _values(log.get("value")))
+            # Public responses can withhold the raw metadata while retaining
+            # the indexed identifiers. These remain browsing hints, bound to
+            # this exact raw-file path and independently checked run number.
+            if indexed_run is not None:
+                values = _values(indexed.get("sample_id"))
+                if any(isinstance(v, bool) or not isinstance(v, (str, int)) for v in values):
+                    continue  # Never round a floating-point identifier.
+                evidence.extend({"value": v, "path": path, "kind": "oncat_index",
+                                 "field": "indexed.sample_id"} for v in values)
         except (ValueError, AttributeError):
             continue  # This run needs the bounded source-file reader instead.
         if instrument == "SNAP":
@@ -112,7 +137,8 @@ def load_sample_catalog(instrument: str, ipts: str) -> dict[int, dict[str, Any]]
         cached = _CACHE.get(key)
         if cached and time.monotonic() - cached[0] < TTL_SECONDS:
             return cached[1]
-    projection = ["location", "metadata.entry.sample", "metadata.entry.title", "metadata.entry.run_number",
+    projection = ["location", "indexed.run_number", "indexed.sample_id",
+                  "metadata.entry.sample", "metadata.entry.title", "metadata.entry.run_number",
                   "metadata.entry.experiment_identifier", "metadata.entry.instrument.name",
                   "metadata.entry.DASlogs.SampleId.value", "metadata.entry.DASlogs.BL11A:SE:SampleId.value"]
     params = [("facility", "SNS"), ("instrument", instrument), ("experiment", ipts)]

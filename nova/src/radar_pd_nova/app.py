@@ -5334,7 +5334,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         self._powgen_sample_tasks.add(task)
         task.add_done_callback(self._powgen_sample_tasks.discard)
 
-    async def refresh_powgen_samples(self, current_ipts: Any = None, **_: Any) -> None:
+    async def refresh_powgen_samples(self, current_ipts: Any = None, **_: Any) -> dict[str, Any] | None:
         """Discover identities off-thread; stale IPTS responses never update the form."""
         state = self.server.state
         if state.powgen_monitoring:
@@ -5407,6 +5407,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
             )
             if result.get('source_unavailable'):
                 state.powgen_sample_message='The selected reduction folder is unavailable. Choose one of the available reduction families, then refresh sample IDs.'
+            return result
         except Exception as exc:
             if self._powgen_sample_request is token:
                 state.powgen_sample_message = f"Sample discovery failed: {exc}. You can still check All samples."

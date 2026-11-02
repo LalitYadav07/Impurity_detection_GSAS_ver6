@@ -50,7 +50,8 @@ class NomadSampleIndex(PowgenSampleIndex):
         runs=list(runs)
         # A catalog row for the last member cannot qualify an entire sum.
         derived=any(r.product_id for r in runs)
-        result=super().inventory(runs,catalog=catalog and not derived,progress=progress)
+        result=super().inventory(runs,catalog=catalog and not derived,progress=progress,
+                                 representative_names=catalog and not derived)
         if derived:
             for option,run in zip(result['run_options'],runs):
                 option['value']=run.run_id

@@ -47,7 +47,7 @@ def discover_nomad_samples(ipts, sample_index, subfolder=nomad.MODERN_FOLDER, *,
     root=Path(definition.source_directory)
     runs=discover_from_listing(definition,nomad.directory_listing(root)) if root.is_dir() else []
     kwargs={'progress':progress} if progress is not None else {}
-    result=sample_index.inventory(runs,**kwargs) if root.is_dir() else dict(options=[],run_options=[],scan_count=0,unidentified_count=0,source_unavailable=True)
+    result=sample_index.inventory(runs,catalog=True,**kwargs) if root.is_dir() else dict(options=[],run_options=[],scan_count=0,unidentified_count=0,source_unavailable=True)
     result['source_options']=options
     return result
 

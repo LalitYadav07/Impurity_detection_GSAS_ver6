@@ -11,7 +11,9 @@ from typing import Any, Iterable
 from .powgen_metadata import powgen_nexus_path, read_powgen_sample_identity
 from .powgen_watch import WatchedRun
 from .facility_metadata import ExperimentMetadataIndex, title_role, metadata_actions
-from .sample_catalog import load_sample_catalog, TTL_SECONDS
+from .sample_catalog import catalog_created_at, load_sample_catalog, TTL_SECONDS
+
+MAX_CATALOG_NAME_REPRESENTATIVES = 128
 
 
 def run_role(run: WatchedRun) -> dict[str, str]:
@@ -126,20 +128,60 @@ class PowgenSampleIndex:
             result.append(run)
         return result
 
-    def inventory(self, runs: Iterable[WatchedRun], *, catalog: bool = False, progress=None) -> dict[str, Any]:
+    def inventory(self, runs: Iterable[WatchedRun], *, catalog: bool = False, progress=None,
+                  representative_names: bool = False) -> dict[str, Any]:
         runs = list(runs)
         self.metadata_index.refresh(force=True)
         catalog_rows, catalog_notice = {}, ""
+        created = time.monotonic()
         if catalog:
             try:
                 catalog_rows = load_sample_catalog(self.metadata_index.instrument, self.ipts)
+                created = catalog_created_at(self.metadata_index.instrument, self.ipts, catalog_rows)
             except (OSError, ValueError):
                 catalog_notice = "The sample catalog is unavailable; reading source-file identities."
+        representatives, disputed_groups = {}, set()
+        groups = {}
+        if catalog and representative_names:
+            for run in runs:
+                preview = catalog_rows.get(run.run_number) or {}
+                sample_id = preview.get("sample_id")
+                if (sample_id and preview.get("identity_status") == "resolved"
+                        and sample_id not in {"4294967295", "18446744073709551615"}):
+                    groups.setdefault(sample_id, []).append(run)
+            groups = {key: sorted(value, key=lambda r: (r.run_number, r.source_path))
+                      for key, value in groups.items()
+                      if any(not catalog_rows[r.run_number].get("sample_name") for r in value)}
+            chosen, paths = [], set()
+            # One name per group before spending the remaining bound on a
+            # second endpoint. Repeated source paths are read only once.
+            for endpoint in (0, -1):
+                for sample_id in sorted(groups):
+                    run = groups[sample_id][endpoint]
+                    if run.source_path not in paths and len(chosen) < MAX_CATALOG_NAME_REPRESENTATIVES:
+                        chosen.append((run, sample_id))
+                        paths.add(run.source_path)
+            if chosen:
+                if progress is not None:
+                    progress(0, len(runs))
+                with ThreadPoolExecutor(max_workers=4) as pool:
+                    for (run, expected), metadata in zip(chosen, pool.map(self.identity, [r for r, _ in chosen])):
+                        representatives[run.run_number] = metadata
+                        if metadata.get("identity_status") != "resolved" or metadata.get("sample_id") != expected:
+                            disputed_groups.add(expected)
         def read_identity(run):
+            if run.run_number in representatives:
+                return representatives[run.run_number]
             if run.run_number in self._cache:
                 return self.identity(run)  # Retain already-observed source conflicts.
             preview = catalog_rows.get(run.run_number)
-            if preview is None:
+            if (preview is None or preview.get("identity_status") != "resolved"
+                    or not preview.get("sample_id")
+                    or preview.get("sample_id") in disputed_groups
+                    or preview.get("sample_id") in {"4294967295", "18446744073709551615"}):
+                # Missing/conflicting catalog evidence and unset facility IDs
+                # require source inspection. In particular, retain a recorded
+                # NoSample name rather than inventing one from an index token.
                 return self.identity(run)
             metadata = self.metadata_index.enrich(run.run_number, preview, include_xml=False)
             metadata.update(identity_verification="catalog_preview", run_title=preview.get("run_title", ""))
@@ -153,9 +195,11 @@ class PowgenSampleIndex:
                 if progress is not None and (count==1 or count%25==0 or count==len(runs)):
                     progress(count,len(runs))
         if catalog:
-            created = time.monotonic()
+            observed = time.monotonic()
             self._preview_cache = {r.run_number: ((r.fingerprint, self.metadata_index.revision,
-                self.metadata_index.generation, created), dict(m)) for r, m in zip(runs, identities)}
+                self.metadata_index.generation,
+                created if m.get("identity_verification") == "catalog_preview" else observed), dict(m))
+                for r, m in zip(runs, identities)}
         grouped: dict[str, dict[str, Any]] = {}
         unidentified = 0
         for run, metadata in zip(runs, identities):
@@ -163,15 +207,26 @@ class PowgenSampleIndex:
             if not sample_id:
                 unidentified += 1
                 continue
-            group = grouped.setdefault(sample_id, {"names": set(), "count": 0})
+            group = grouped.setdefault(sample_id, {"names": set(), "count": 0, "name_runs": set(), "previews": 0})
             if metadata.get("sample_name"):
                 group["names"].add(metadata["sample_name"])
+                if metadata.get("identity_verification") != "catalog_preview":
+                    group["name_runs"].add(run.run_number)
+            group["previews"] += metadata.get("identity_verification") == "catalog_preview"
             group["count"] += 1
         options = []
         for sample_id, group in sorted(grouped.items(), key=lambda item: item[0].casefold()):
             names = " / ".join(sorted(group["names"])) or "Name not reported"
             options.append({"value": sample_id, "title": f"{sample_id} — {names} ({group['count']} scans)",
                             "scan_count": group["count"]})
+            if groups:
+                scope = ("source-checked representatives" if group["previews"] and group["name_runs"] else
+                         "source files" if group["name_runs"] else "catalog metadata" if group["names"] else "not reported")
+                options[-1].update(name_scope=scope, name_run_numbers=sorted(group["name_runs"]),
+                                   name_variation_observed=len(group["names"]) > 1)
+                if scope == "source-checked representatives":
+                    detail = "sampled names differ" if len(group["names"]) > 1 else "representative name"
+                    options[-1]["title"] = f"{sample_id} — {names} ({group['count']} scans; {detail})"
         run_options = []
         for run, metadata in zip(runs, identities):
             if metadata.get("identity_verification") == "catalog_preview":
@@ -184,9 +239,16 @@ class PowgenSampleIndex:
                                 "title": f"{run.run_id} — {role['run_role']}: {title}",
                                 "identity_status": metadata.get('identity_status','unidentified'),
                                 "metadata_actions": metadata.get('metadata_actions',[]), **role})
+        notices = [*self.metadata_index.notices, *([catalog_notice] if catalog_notice else [])]
+        if groups:
+            notices.append("Up to two representative runs per ID are checked; cached checked names are retained. Other scan names may differ. Every selected run is source-checked before analysis.")
+            if len(representatives) >= MAX_CATALOG_NAME_REPRESENTATIVES:
+                notices.append(f"Representative name checks are bounded to {MAX_CATALOG_NAME_REPRESENTATIVES} files; the sample-ID inventory still includes every discovered scan.")
+        if disputed_groups:
+            notices.append(f"Catalog identities disagreed with source metadata for {len(disputed_groups)} sample group(s); those groups use per-run source checks.")
         return {"options": options, "run_options": run_options,
                 "scan_count": len(runs), "unidentified_count": unidentified,
-                "metadata_notices": [*self.metadata_index.notices, *([catalog_notice] if catalog_notice else [])],
+                "metadata_notices": notices,
                 "catalog_preview_count": sum(m.get("identity_verification") == "catalog_preview" for m in identities),
                 "identity_conflict_count": sum(m.get('identity_status')=='conflict' for m in identities),
                 "metadata_resolution": [{"run_number": r.run_number, "status": m.get('identity_status','unidentified'),
