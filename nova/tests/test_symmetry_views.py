@@ -13,6 +13,8 @@ def test_expanded_fit_caption_retains_scan_model_residual_and_disposition():
     assert 'native checks passed' in fit_caption(dict(r,status='valid'))
     assert fit_caption(None)==''
     assert 'Rwp' not in fit_caption(dict(r,rwp=float('nan')))
+    assert fit_caption(r,temperature='mean 0.7001 K')=='Run123 · Bank2 · mean 0.7001 K · R-3c · BNS 167.103 · Rwp 23.171% · inadequate fit'
+    assert fit_caption(dict(r,metadata={'scan':'Run123 · Bank2','condition':0.,'condition_unit':'K'}))==fit_caption(r)
 
 
 def test_native_diagnostics_keep_declared_fit_screen_rank_and_residual_targets_distinct():

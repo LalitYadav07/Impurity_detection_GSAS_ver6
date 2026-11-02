@@ -91,11 +91,62 @@ def start_choices(workspace, experiment):
     return entries
 
 
-def _recorded_source(workspace,experiment,source_id):
+def _recorded_source(workspace,experiment,source_id,*,expected_sha256=None):
     if workspace is None:return None
     entry=next((e for e in start_choices(workspace,experiment) if e['id']==source_id),None)
     if not entry:return None
+    if expected_sha256 is not None:
+        source=entry.get('source')
+        checksum=(source.get('source_sha256') if source else
+                  (workspace.state['jobs'][entry['job_id']].get('result') or {}).get('files',{}).get(entry['name']))
+        if checksum!=expected_sha256:return None
     return entry.get('source') or recipe_source(workspace,workspace.state['jobs'][entry['job_id']])
+
+
+def acquisition_temperature(workspace,experiment,source_id,source_sha256):
+    """A compact recorded temperature for this exact selected GPX only."""
+    if (not isinstance(source_sha256,str) or len(source_sha256)!=64
+            or any(c not in '0123456789abcdef' for c in source_sha256)):
+        return ''
+    source=_recorded_source(workspace,experiment,source_id,expected_sha256=source_sha256)
+    if not source:return ''
+    metric=qualified_metadata(source.get('metadata') or {}).get('temperature')
+    if not isinstance(metric,dict):return ''
+    value=metric.get('value');unit=metric.get('unit')
+    if not isinstance(unit,str):return ''
+    if (not isinstance(value,(int,float)) or isinstance(value,bool) or not isfinite(value)
+            or metric.get('role','measured')!='measured' or metric.get('status','recorded')!='recorded'):
+        return ''
+    # Use recorded units, never a filename/title or a magnitude-based guess.
+    # Absolute-zero placeholders are not usable acquisition temperatures.
+    if unit=='K':
+        if value<=0:return ''
+    elif unit in {'C','°C','degC'}:
+        if value<=-273.15:return ''
+    else:return ''
+    text=f'{value:.4g} {unit}'
+    if metric.get('statistic')=='time_weighted_step_hold':
+        text='mean '+text
+    return text
+
+
+def display_acquisition_notices(notices):
+    """Consolidate known equivalent display messages, preserving raw notices."""
+    calibration='HB-2A profile requires independent calibration acceptance.'
+    equivalents={
+        calibration.casefold().rstrip('.'):(calibration,),
+        'hb-2a profile supplied by user; independent calibration acceptance is pending':(calibration,),
+        'hb-2a profile requires independent calibration acceptance; magnetic-only peaks are outside nuclear phase identification':
+            (calibration,'Magnetic-only peaks are outside nuclear phase identification.'),
+    }
+    displayed=[];seen=set()
+    for notice in notices:
+        if not isinstance(notice,str) or not notice.strip():continue
+        text=notice.strip();key=' '.join(text.casefold().split()).rstrip('.')
+        for item in equivalents.get(key,(text,)):
+            if item not in seen:
+                seen.add(item);displayed.append(item)
+    return displayed
 
 
 def acquisition_notices(workspace,experiment,source_id):

@@ -173,11 +173,13 @@ def display_status(status):
             'submitting':'submission pending'}.get(status,status.replace('_',' '))
 
 
-def fit_caption(row):
+def fit_caption(row,*,temperature=''):
     """Keep the selected acquisition/model identifiable in a full-screen fit."""
     if not row:return ''
     metadata=row.get('metadata') or {}
-    parts=[str(metadata.get('scan') or 'Selected scan'),str(row.get('name') or 'Selected model')]
+    parts=[str(metadata.get('scan') or 'Selected scan')]
+    if temperature:parts.append(temperature)
+    parts.append(str(row.get('name') or 'Selected model'))
     if row.get('bns'):parts.append('BNS '+str(row['bns']))
     rwp=row.get('rwp')
     if isinstance(rwp,(int,float)) and not isinstance(rwp,bool) and np.isfinite(rwp):

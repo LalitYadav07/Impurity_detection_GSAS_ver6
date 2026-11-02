@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from radar_pd_nova.refinement_sources import file_sha
-from radar_pd_nova.symmetry_sources import start_choices,resolve_start,acquisition_details,recipe_source,acquisition_notices
+from radar_pd_nova.symmetry_sources import start_choices,resolve_start,acquisition_details,recipe_source,acquisition_notices,acquisition_temperature,display_acquisition_notices
 
 
 def workspace(tmp_path):
@@ -80,6 +80,98 @@ def test_source_notices_follow_the_exact_original_and_recipe_checkpoint_without_
             'Supplied profile needs scientific review','Calibration provenance unconfirmed','Review specimen identity']
     assert acquisition_notices(w,'other-experiment',derived['id'])==[]
     assert acquisition_notices(w,'IPTS-1','missing')==[]
+
+
+def test_equivalent_calibration_display_retains_distinct_cautions_and_original_wording():
+    notices=[
+        'HB-2A profile supplied by user; independent calibration acceptance is pending.',
+        'HB-2A profile requires independent calibration acceptance; magnetic-only peaks are outside nuclear phase identification.',
+        'SPICE sample names are labels, not globally unique acquisition IDs.',
+        '  HB-2A PROFILE REQUIRES INDEPENDENT CALIBRATION ACCEPTANCE.  ',
+        'Independent calibration accepted for a different profile; do not use it here.',
+        'Review Co scattering.',
+        'Review CO scattering.',
+    ]
+    before=copy.deepcopy(notices)
+    assert display_acquisition_notices(notices)==[
+        'HB-2A profile requires independent calibration acceptance.',
+        'Magnetic-only peaks are outside nuclear phase identification.',
+        'SPICE sample names are labels, not globally unique acquisition IDs.',
+        'Independent calibration accepted for a different profile; do not use it here.',
+        'Review Co scattering.',
+        'Review CO scattering.',
+    ]
+    assert notices==before
+
+
+def test_expanded_temperature_uses_exact_original_or_recipe_identity_without_gpx_reads(tmp_path):
+    w=workspace(tmp_path);source=w.state['sources']['raw']
+    source['metadata']={'conditions':{'channels':[dict(quantity='temperature',value=.70009596,
+        unit='K',role='measured',status='recorded',channel='He3')]}}
+    w.state['jobs']['job1']['source']=copy.deepcopy(source)
+    before=copy.deepcopy(w.state)
+    final=next(e for e in start_choices(w,'IPTS-1') if e.get('stage')=='final')
+    checksum=w.state['jobs']['job1']['result']['files'][final['name']]
+    w.recover_job_artifacts=lambda *_:pytest.fail('Caption cannot recover or read a GPX')
+    assert acquisition_temperature(w,'IPTS-1','raw',source['source_sha256'])=='0.7001 K'
+    assert acquisition_temperature(w,'IPTS-1',final['id'],checksum)=='0.7001 K'
+    assert acquisition_temperature(w,'IPTS-1','raw',checksum)==''
+    assert acquisition_temperature(w,'IPTS-1',final['id'],source['source_sha256'])==''
+    assert acquisition_temperature(w,'IPTS-2','raw',source['source_sha256'])==''
+    assert w.state==before
+
+
+@pytest.mark.parametrize('change',[
+    {'value':0.},{'value':-1.},{'value':True},{'value':float('nan')},{'value':float('inf')},
+    {'value':'0.7'},{'unit':''},{'unit':'unknown'},{'unit':[]},
+    {'role':'setpoint'},{'role':'requested'},{'status':'unqualified_units'},
+    {'status':'needs_mapping'},{'status':'conflict'},
+])
+def test_expanded_temperature_never_promotes_invalid_or_unqualified_metadata(tmp_path,change):
+    w=workspace(tmp_path);source=w.state['sources']['raw']
+    source['metadata']={'temperature':dict(value=.7,unit='K',role='measured',status='recorded')}
+    source['metadata']['temperature'].update(change)
+    assert acquisition_temperature(w,'IPTS-1','raw',source['source_sha256'])==''
+
+
+def test_expanded_temperature_keeps_mean_semantics_and_never_uses_a_title_as_temperature(tmp_path):
+    w=workspace(tmp_path);source=w.state['sources']['raw']
+    source['metadata']={'temperature':dict(value=166.5,unit='K',statistic='time_weighted_step_hold')}
+    assert acquisition_temperature(w,'IPTS-1','raw',source['source_sha256'])=='mean 166.5 K'
+    source['metadata']={'title':'sample at 0K','condition':0.,'condition_unit':'K'}
+    assert acquisition_temperature(w,'IPTS-1','raw',source['source_sha256'])==''
+    source['metadata']={'temperature':dict(value=0.,unit='°C',role='measured',status='recorded')}
+    assert acquisition_temperature(w,'IPTS-1','raw',source['source_sha256'])=='0 °C'
+
+
+def test_expanded_caption_clears_temperature_after_source_change_without_changing_status(tmp_path,monkeypatch):
+    import radar_pd_nova.symmetry_controller as controller
+    w=workspace(tmp_path);source=w.state['sources']['raw']
+    source['metadata']={'temperature':dict(value=.7,unit='K',role='measured',status='recorded')}
+    source['scientific_warnings']=[
+        'HB-2A profile supplied by user; independent calibration acceptance is pending.',
+        'HB-2A profile requires independent calibration acceptance; magnetic-only peaks are outside nuclear phase identification.']
+    row=dict(id='trial',source='raw',source_sha256=source['source_sha256'],metadata={'scan':'Scan22'},
+        name='P2121\u20322\u2032',bns='18.19',rwp=8.06069,status='optimization_unresolved',has_gpx=False,
+        has_view=False,kind='magnetic',embedding={},seed='z',worker_revision='a'*64,k=['0','0','0'])
+    before=copy.deepcopy(row)
+    state=SimpleNamespace(sx_selected='trial',sx_pins=[],sx_axis='d',sx_reset=0,
+        sx_intensity_scale='linear',rf_experiment='IPTS-1',sx_error='')
+    app=controller.SymmetryMixin();app.server=SimpleNamespace(state=state)
+    app._symmetry_rows=[row];app._refinement_store=lambda:w
+    monkeypatch.setattr(controller.plots,'overview',lambda *_:{} )
+    monkeypatch.setattr(controller.plots,'fit',lambda *a,**kw:{'layout':{},'data':[]})
+    monkeypatch.setattr(controller,'embedding_evidence',lambda *_:([],''))
+    app._symmetry_plot_changed()
+    assert '0.7 K' in state.sx_expanded_title and '0.7 K' not in state.sx_fit_title
+    assert state.sx_expanded_title.endswith('optimization unresolved')
+    assert len(state.sx_source_notices)==2 and len(state.sx_source_display_notices)==2
+    assert row==before and not state.sx_error
+    source['source_sha256']='b'*64
+    app._symmetry_plot_changed()
+    assert '0.7 K' not in state.sx_expanded_title
+    app._symmetry_rows=[];app._symmetry_plot_changed()
+    assert state.sx_expanded_title=='' and state.sx_source_display_notices==[]
 
 
 @pytest.mark.parametrize('state',['running','failed','interrupted'])

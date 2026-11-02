@@ -2,6 +2,12 @@
 from trame.widgets import client,html,plotly,vuetify3 as v
 
 
+FIT_PRESENTATION_CSS='''
+.sx-source-caveats{flex:0 0 auto;font-size:13px;line-height:1.5}.sx-source-caveats ul{margin:6px 0;padding-left:20px}.sx-source-caveats li+li{margin-top:4px}.sx-source-caveats summary{cursor:pointer;font-size:12px}
+.sx-expanded-fit{display:flex;flex-direction:column}.sx-expanded-fit>.v-btn{align-self:flex-start;flex:0 0 auto}.sx-expanded-fit h3{font-size:16px;line-height:1.5}.sx-expanded-chart{flex:1;min-height:320px}
+'''
+
+
 def select(label,field,items,**kwargs):
     return v.VSelect(label=label,v_model=(field,),items=(items,),density='compact',variant='outlined',hide_details=True,**kwargs)
 
@@ -10,6 +16,26 @@ def scan_select(label,field,items,**kwargs):
     return v.VAutocomplete(label=label,v_model=(field,),items=(items,),
         density='compact',variant='outlined',hide_details=True,
         no_data_text='No matching scan or project',**kwargs)
+
+
+def source_caveats():
+    with v.VAlert(v_if='sx_source_display_notices.length',type='warning',color='#6b4b12',variant='tonal',density='compact',classes='sx-source-caveats my-2',role='note'):
+        html.Strong('Source requires review')
+        with html.Ul():
+            html.Li('{{ notice }}',v_for='notice in sx_source_display_notices',key='notice')
+        with html.Details():
+            html.Summary('Original source notices')
+            with html.Ul():
+                html.Li('{{ notice }}',v_for='notice in sx_source_notices',key='notice')
+
+
+def expanded_fit():
+    with html.Div(v_if='sx_expanded',classes='rf-overlay sx-expanded-fit'):
+        v.VBtn('Close expanded fit',click='sx_expanded = false',variant='text',prepend_icon='mdi-arrow-collapse')
+        html.H3('{{ sx_expanded_title }}',v_if='sx_expanded_title',classes='mt-2 mb-2')
+        source_caveats()
+        with html.Div(classes='sx-expanded-chart'):
+            fig=plotly.Figure(display_mode_bar=True,responsive=True,display_logo=False,scroll_zoom=True,style='height:100%;width:100%');fig.data=('sx_fit.data',);fig.layout=('sx_expanded_layout',)
 
 
 def model_exploration(app):
@@ -25,6 +51,7 @@ def model_exploration(app):
         .sx-choices .v-field__input{max-height:92px;overflow-y:auto}.sx-choices .v-chip{max-width:95%}
         @media(max-width:850px){.sx-layout,.sx-evidence,.sx-settings{grid-template-columns:1fr}.sx-models{max-height:260px}}
         ''')
+        client.Style(FIT_PRESENTATION_CSS)
         with html.Div(classes='rf-toolbar'):
             select('Model campaign','sx_campaign','sx_campaigns')
             select('Results to show','sx_result_scope',"[{title:'Selected experiment',value:'experiment'},{title:'Whole campaign',value:'campaign'}]")
@@ -174,9 +201,7 @@ def model_exploration(app):
             with html.Div(classes='rf-card'):
                 html.H3('Selected model fit')
                 html.P('{{ sx_fit_title }}',v_if='sx_fit_title',classes='rf-notice')
-                with v.VAlert(v_if='sx_source_notices.length',type='warning',variant='tonal',density='compact',classes='my-2'):
-                    html.Strong('Source requires review')
-                    html.Div('{{ notice }}',v_for='notice in sx_source_notices',key='notice')
+                source_caveats()
                 with html.Div(classes='rf-toolbar'):
                     v.VAutocomplete(label='Model / start in selected group',v_model=('sx_selected',),items=('sx_members',),density='compact',variant='outlined',hide_details=True,update_modelValue=app._symmetry_user_selected)
                 with html.Div(classes='rf-toolbar'):
@@ -219,9 +244,4 @@ def model_exploration(app):
                 with html.Div(classes='sx-overview'):
                     fig=plotly.Figure(display_mode_bar=True,responsive=True,display_logo=False,style='height:100%;width:100%',click=(app.symmetry_overview_click,'[$event]'));fig.data=('sx_overview.data',);fig.layout=('sx_overview.layout',)
                 html.P('Open diamonds are inadequate or unresolved fits. A lower residual is evidence to inspect, not a confirmed structure. Log intensity hides nonpositive values for display; the residual stays linear.',classes='rf-notice')
-        with html.Div(v_if='sx_expanded',classes='rf-overlay'):
-            v.VBtn('Close expanded fit',click='sx_expanded = false',variant='text',prepend_icon='mdi-arrow-collapse')
-            html.H3('{{ sx_fit_title }}',v_if='sx_fit_title',classes='mt-2 mb-2')
-            html.P('{{ sx_source_notices.join("; ") }}',v_if='sx_source_notices.length',classes='rf-notice')
-            with html.Div(style='height:calc(100vh - 260px)'):
-                fig=plotly.Figure(display_mode_bar=True,responsive=True,display_logo=False,scroll_zoom=True,style='height:100%;width:100%');fig.data=('sx_fit.data',);fig.layout=('sx_expanded_layout',)
+        expanded_fit()
