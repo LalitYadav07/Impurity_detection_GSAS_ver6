@@ -75,8 +75,8 @@ def refinement_scan_options(sources: list[dict], selected=()) -> list[dict]:
         matches = [s for s in sources if s.get('scan_key') == key]
         if matches:
             options.append(dict(value=key, title=(
-                f"{matches[0]['scan_label']} · recorded logical-run selection "
-                f"({len(matches)} saved result(s))")))
+                f"{matches[0]['scan_label']} · saved scan selection "
+                f"({len(matches)} {'result' if len(matches) == 1 else 'results'})")))
     return options
 
 

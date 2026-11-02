@@ -40,7 +40,7 @@ def test_saved_logical_scope_is_readable_and_explicitly_labelled():
     assert scope.matches(a) and scope.matches(b)
     options = refinement_scan_options([a, b], scope.scans)
     assert options[-1]['value'] == a['scan_key']
-    assert 'recorded logical-run selection (2 saved result(s))' in options[-1]['title']
+    assert 'saved scan selection (2 results)' in options[-1]['title']
     assert scope.to_dict() == before
 
 
