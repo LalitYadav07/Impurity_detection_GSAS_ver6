@@ -107,6 +107,23 @@ def test_no_future_negation_does_not_remove_a_positive_cap(source,intent,user_re
 
 
 @pytest.mark.parametrize('user_request',[
+    'Use all existing scans, not limited to 4 acquisitions.',
+    'Use all existing scans; no maximum of 4 acquisitions.',
+])
+def test_negated_cap_is_not_enforced(source,user_request):
+    assert 'maximum_scans' not in payload(user_request,source)['enrollment_requirements']
+
+
+@pytest.mark.parametrize('user_request',[
+    'Use all existing scans, but do not exceed a maximum of 4 acquisitions.',
+    'Use all existing scans; do not exceed 4 acquisitions.',
+    'Use all existing scans; no more than 4 acquisitions.',
+])
+def test_positive_upper_bound_phrased_with_negation(source,user_request):
+    assert payload(user_request,source)['enrollment_requirements']['maximum_scans']==4
+
+
+@pytest.mark.parametrize('user_request',[
     'Use only these three existing scans and do not follow future scans.',
     'Refine all 57 published matching scans; historical replay only',
     'Process all existing scans',
