@@ -116,11 +116,20 @@ def response_schema(context):
 def payload(request, context, declared=None):
     data = native.payload(request, context, _declared_budget(request, declared))
     data['rules'].extend([ENROLLMENT_RULE, CYCLE_RULE])
+    requirements = _requested_enrollment(request)
+    if requirements:
+        data['enrollment_requirements'] = requirements
+        data['rules'].append(
+            'The host has extracted explicit enrollment requirements from this request. '
+            'Use them in the enrollment object: existing is the required scope, '
+            'minimum_scans is a lower bound, and maximum_scans (when present) is the exact requested cap. '
+            'The inspected GPX is a representative model; it does not restrict a requested sample-wide scope to that one scan. '
+            'Do not copy minimum_scans into the response schema. If requirements cannot be met, ask a concrete question with settings=null.')
     return data
 
 
-def _check_requested_enrollment(request, enrollment):
-    """Reject clear scope contradictions; never infer or apply a wider scope."""
+def _requested_enrollment(request):
+    """Expose only explicit scope clauses; this never applies model settings."""
     text = ' '.join(request.lower().split())
     counts = {name: number for number, name in enumerate(
         ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten'])}
@@ -133,17 +142,52 @@ def _check_requested_enrollment(request, enrollment):
     all_matching = bool(re.search(command + r'all\s+(?:(?:existing|published|matching)\s+)*(?:scans|runs)\b', text))
     only_selected = bool(re.search(command + r'only\s+(?:this|the selected)\s+(?:scan|run)\b', text))
     no_future = bool(re.search(r'\b(?:do not|don\x27t|without)\s+follow(?:ing)?\s+(?:new|future)\s+(?:scans|runs)\b|\bno\s+future\s+(?:scans|runs|enrollment)\b', text))
-    if not (minimum > 1 or all_matching or only_selected or no_future):
+    caps = []
+    for clause in re.split(r'[;!?]|(?<!\d)\.(?!\d)', text):
+        # A negated maximum is not positive permission or an authoritative cap.
+        if re.search(r'\b(?:do not|don\x27t|never)\b', clause):
+            continue
+        for literal in re.findall(r'\b(?:maximum(?: of)?|at most|capped at|limit(?:ed)? to)\s+'
+                r'([+-]?\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight|nine|ten)\s+'
+                r'(?:(?:existing|published|matching|selected)\s+)*(?:acquisitions|scans|runs)\b', clause):
+            caps.append(float(literal) if '.' in literal else int(literal) if re.fullmatch(r'[+-]?\d+', literal) else counts[literal])
+    if len(set(caps)) > 1:
+        raise ValueError('Specify one acquisition cap; the request contains conflicting scan limits')
+    if (minimum > 1 or all_matching) and only_selected:
+        raise ValueError('The request specifies both multiple scans and only the selected scan; clarify the acquisition scope')
+    result = {}
+    if minimum > 1 or all_matching:
+        result.update(existing='sample', minimum_scans=minimum or 1)
+    elif only_selected:
+        result['existing'] = 'selected'
+    if caps:
+        result['maximum_scans'] = _number(caps[0], 1, 2000, field='Requested acquisition cap', integer=True)
+        if minimum > result['maximum_scans']:
+            raise ValueError('The requested acquisition cap is smaller than the explicitly included scan count')
+        if only_selected and result['maximum_scans'] != 1:
+            raise ValueError('Only the selected scan requires an acquisition cap of one')
+    if no_future:
+        result['follow_new'] = False
+    return result
+
+
+def _check_requested_enrollment(request, enrollment):
+    """Reject clear scope contradictions; never infer or apply a wider scope."""
+    requirements = _requested_enrollment(request)
+    if not requirements:
         return
     if enrollment is None:
         raise ValueError('Encode the explicitly requested scan scope in enrollment, or ask a concrete scope question')
-    if (minimum > 1 or all_matching) and enrollment['existing'] != 'sample':
+    if requirements.get('existing') == 'sample' and enrollment['existing'] != 'sample':
         raise ValueError('The request includes multiple existing scans, but enrollment selects only one; use matching-sample scope or ask which scans to include')
+    minimum = requirements.get('minimum_scans', 0)
     if minimum > enrollment['maximum_scans']:
         raise ValueError(f'The request explicitly includes {minimum} scans, but enrollment.maximum_scans is smaller')
-    if only_selected and enrollment['existing'] != 'selected':
+    if requirements.get('existing') == 'selected' and enrollment['existing'] != 'selected':
         raise ValueError('The request permits only the selected scan; enrollment must not include the whole sample')
-    if no_future and enrollment['follow_new']:
+    if 'maximum_scans' in requirements and enrollment['maximum_scans'] != requirements['maximum_scans']:
+        raise ValueError('The setup plan changed the explicitly requested acquisition cap')
+    if requirements.get('follow_new') is False and enrollment['follow_new']:
         raise ValueError('The request excludes future scans; enrollment.follow_new must be false')
 
 
@@ -208,5 +252,8 @@ def make_intent(request, context, *, declared=None, client=None, max_calls=2):
                 error = ValueError('Magnetic setup failed bounded validation: ' + str(exc))
                 error.planning_calls = calls
                 raise error from None
-            messages.extend([dict(role='assistant', content=raw), dict(role='user', content='Repair the exact JSON using this validation error; preserve all explicitly declared choices. If genuinely unsupported or ambiguous, return concrete questions/unsupported and settings=null. Error: ' + str(exc))])
+            scope = _requested_enrollment(request)
+            detail = (' Required enrollment constraints: ' + json.dumps(scope, sort_keys=True) +
+                      '. The inspected parent is representative, not a selected-only scope.') if scope else ''
+            messages.extend([dict(role='assistant', content=raw), dict(role='user', content='Repair the exact JSON using this validation error; preserve all explicitly declared choices. If genuinely unsupported or ambiguous, return concrete questions/unsupported and settings=null. Error: ' + str(exc) + detail)])
     raise AssertionError('Unreachable')

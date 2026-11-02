@@ -51,6 +51,50 @@ def test_all_scan_replay_has_validated_enrollment_separate_from_native_refinemen
     assert any('Encode a requested scan scope' in rule for rule in payload('all scans',source)['rules'])
 
 
+def test_explicit_multi_scan_cap_is_shown_to_the_model_as_structured_requirements(source,intent):
+    request='Use all four existing scans 1, 2, 3 and 4. Use all four matching nuclear GPXs, maximum 4 acquisitions, and no future scans.'
+    requirements=payload(request,source)['enrollment_requirements']
+    assert requirements==dict(existing='sample',minimum_scans=4,maximum_scans=4,follow_new=False)
+    intent['enrollment']=dict(existing='sample',maximum_scans=4,follow_new=False)
+    assert validate_intent(intent,source,request=request)['enrollment']==intent['enrollment']
+    intent['enrollment']['maximum_scans']=5
+    with pytest.raises(ValueError,match='explicitly requested acquisition cap'):
+        validate_intent(intent,source,request=request)
+
+
+def test_multi_scan_repair_gives_scope_values_but_does_not_correct_a_bad_reply(source,intent):
+    bad=copy.deepcopy(intent);bad['enrollment']=dict(existing='selected',maximum_scans=1,follow_new=False)
+    good=copy.deepcopy(intent);good['enrollment']=dict(existing='sample',maximum_scans=4,follow_new=False)
+    client=Client([bad,good])
+    request='Use all four existing scans. Set a maximum of 4 acquisitions; no future scans.'
+    result=make_intent(request,source,client=client)
+    assert len(result['calls'])==2 and result['intent']['enrollment']==good['enrollment']
+    repair=client.calls[1][0][-1]['content']
+    assert '"existing": "sample"' in repair and '"maximum_scans": 4' in repair
+    assert 'representative' in repair
+    with pytest.raises(ValueError,match='multiple existing scans'):
+        make_intent(request,source,client=Client([bad,bad]))
+
+
+@pytest.mark.parametrize('user_request',[
+    'Use all four existing scans. Refine only this scan.',
+    'Use all four existing scans, maximum 3 acquisitions.',
+    'Use all scans, maximum 4 acquisitions. Limit to 5 acquisitions.',
+    'Use all scans, maximum 2001 acquisitions.',
+    'Use all scans, maximum -1 acquisitions.',
+    'Use all scans, maximum 1.5 acquisitions.',
+    'Refine only this scan, maximum 4 acquisitions.',
+])
+def test_contradictory_or_invalid_caps_fail_before_a_model_call(source,user_request):
+    with pytest.raises(ValueError):payload(user_request,source)
+
+
+def test_negated_scope_cap_is_not_promoted_to_a_positive_requirement(source):
+    request='Do not use all scans with a maximum of 4 acquisitions. Refine only this scan.'
+    assert payload(request,source)['enrollment_requirements']=={'existing':'selected'}
+    assert 'enrollment_requirements' not in payload('Refine the magnetic moments.',source)
+
+
 @pytest.mark.parametrize('user_request',[
     'Use only these three existing scans and do not follow future scans.',
     'Refine all 57 published matching scans; historical replay only',
