@@ -18,7 +18,7 @@ from gpx_recipe.providers import configure_provider, provider_info, make_client
 from gpx_recipe.usage import summarize_calls
 from .refinement_runtime import RuntimeUnavailable
 from .checkpoint_uploads import CheckpointUploadPending
-from .refinement_sources import RefinementScope, digest
+from .refinement_sources import RefinementScope, digest, retained_fallback_group
 
 
 def utc():
@@ -84,11 +84,29 @@ class RefinementWorkspace:
             self._checkpoint_hash=fingerprint;self._checkpoint_dataset=dataset
             return dataset
 
+    def canonical_source(self,source):
+        """Resolve only proven pending-handle drift, preserving saved scopes."""
+        with self.lock:
+            source=copy.deepcopy(source)
+            prior=[self.state['sources'].get(source['id'])]
+            prior.extend(job.get('source') for job in self.state['jobs'].values())
+            prior.extend(draft.get('source') for draft in self.state['drafts'].values())
+            groups={}
+            for candidate in prior:
+                group=retained_fallback_group(source,candidate,self.history_id) if isinstance(candidate,dict) else None
+                if group:
+                    identity=tuple(group[key] for key in ('experiment','scan_key','sample_key'))
+                    groups.setdefault(identity,group)
+            # Conflicting saved scopes stay separate; do not guess which owns
+            # the current publication or alter immutable recipe approvals.
+            if len(groups)==1:source.update(next(iter(groups.values())))
+            return source
+
     def observe(self,sources,*,active_live_ids=None):
         with self.lock:
             changed=False
             for value in sources:
-                source=copy.deepcopy(value);old=self.state['sources'].get(source['id'])
+                source=self.canonical_source(value);old=self.state['sources'].get(source['id'])
                 # A summary-only recovery lacks the reviewed Live condition
                 # channels and experiment/sample mapping. It must not erase
                 # that provenance for the same exact published checkpoint.

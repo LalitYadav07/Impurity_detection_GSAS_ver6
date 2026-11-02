@@ -86,6 +86,40 @@ def experiment_key(history: str, instrument: str, ipts: str, *, record_uid='') -
     return digest([history, 'single', record_uid])[:24]
 
 
+def retained_fallback_group(source: dict, prior: dict, history: str) -> dict | None:
+    """Retain a legacy pending-handle group only for its exact publication.
+
+    Recipe scopes refer to the original group and scan keys. Acknowledging a
+    Galaxy job does not change that science, and must not rewrite those scopes.
+    This does not join publications by run name, sample, or similar metadata.
+    """
+    pending = prior.get('fallback_record_uid') or prior.get('record_uid')
+    job = source.get('galaxy_job_id')
+    if (not isinstance(pending, str) or not pending.startswith('pending-')
+            or not job or prior.get('galaxy_job_id') != job
+            or source.get('id') != prior.get('id')
+            or prior.get('experiment') != experiment_key(history, '', '', record_uid=pending)
+            or source.get('experiment') != experiment_key(history, '', '', record_uid=job)):
+        return None
+    for key in ('collection_id', 'collection_name', 'internal_source_sha256',
+                'published_sha256', 'source_sha256'):
+        if not source.get(key) or source[key] != prior.get(key):
+            return None
+    if (not re.fullmatch(r'[a-f0-9]{64}', str(source['published_sha256']))
+            or source['source_sha256'] != source['published_sha256']
+            or source.get('run_number') != prior.get('run_number')
+            or source.get('bank') != prior.get('bank')
+            or (source.get('metadata') or {}).get('product_id') != (prior.get('metadata') or {}).get('product_id')):
+        return None
+    old_sample, new_sample = prior.get('sample_key'), source.get('sample_key')
+    if old_sample != new_sample and (old_sample, new_sample) != ('scan:' + pending, 'scan:' + job):
+        return None
+    if not prior.get('scan_key'):
+        return None
+    return dict(experiment=prior['experiment'], experiment_label=prior.get('experiment_label') or source['experiment_label'],
+                scan_key=prior['scan_key'], sample_key=old_sample, fallback_record_uid=pending)
+
+
 def _inside(root: Path, value: Any) -> Path | None:
     if not value:
         return None
@@ -219,10 +253,11 @@ def source_from_record(record, payload: dict, scan: dict | None, history: str,
             ipts=match.group(1)
             if match.group(5):metadata.setdefault('source_bank',int(match.group(5)))
             if match.group(4):metadata.setdefault('product_id',match.group(4))
-    exp = experiment_key(history, instrument, ipts, record_uid=record.uid)
+    job_identity=str(getattr(record,'galaxy_job_id',None) or record.uid)
+    exp = experiment_key(history, instrument, ipts, record_uid=job_identity)
     sample_id = str(metadata.get('sample_id') or '').strip()
     sample_name = str(metadata.get('sample_name') or '').strip()
-    sample_key = str((scan.get('sample_key') if scan.get('sample_key')!='unassigned' else None) or (('id:' + sample_id) if sample_id else 'scan:' + record.uid))
+    sample_key = str((scan.get('sample_key') if scan.get('sample_key')!='unassigned' else None) or (('id:' + sample_id) if sample_id else 'scan:' + job_identity))
     scan_sample_label = str(scan.get('sample_label') or '').strip()
     if scan_sample_label.lower() in {'unassigned sample', 'sample not identified'}:
         scan_sample_label = ''
@@ -230,15 +265,14 @@ def source_from_record(record, payload: dict, scan: dict | None, history: str,
     if product_id and (instrument!='NOM' or not isinstance(product_id,str) or
             not re.fullmatch(r'SLICE_[0-9]+(?:P[0-9]+)?|SUM_[A-F0-9]{12}',product_id)):
         raise ValueError('Unsupported or conflicting derived-product identity')
-    run_id = str(scan.get('run_id') or (f'{instrument}_{run_number}'+('_'+product_id if product_id else '') if run_number else record.uid))
+    run_id = str(scan.get('run_id') or (f'{instrument}_{run_number}'+('_'+product_id if product_id else '') if run_number else job_identity))
     bank = str(scan.get('bank') or metadata.get('source_bank') or metadata.get('bank') or '')
-    scan_key = digest([exp,scan.get('experiment_number'),run_number or record.uid,bank,*([product_id] if product_id else [])])[:24]
+    scan_key = digest([exp,scan.get('experiment_number'),run_number or job_identity,bank,*([product_id] if product_id else [])])[:24]
     publication = str(project.get('collection_name') or Path(str(project.get('collection_path') or project.get('path') or '')).name)
     # Watch metadata can arrive after the archive. It must not create a second
     # source identity or enroll the same published result a second time.
     # A submitted Live record retains its local pending-* UI handle. Recovery
     # uses the acknowledged Galaxy job ID; both must identify the same GPX.
-    job_identity=str(getattr(record,'galaxy_job_id',None) or record.uid)
     uid = digest([history, job_identity, project.get('sha256'), project.get('published_sha256'), publication])[:24]
     scan_label=str(scan.get('scan_label') or record.name)
     if bank and 'bank' not in scan_label.lower():scan_label+=' · bank '+bank
@@ -261,4 +295,4 @@ def source_from_record(record, payload: dict, scan: dict | None, history: str,
                 base_rwp=scan.get('rwp', result.get('final_rwp', result.get('rwp'))),
                 scientific_status=scan.get('scientific_status') or result.get('scientific_status'),
                 scientific_warnings=list(dict.fromkeys(warnings)),
-                project=project)
+                project=project, **({'fallback_record_uid':job_identity} if not ipts else {}))

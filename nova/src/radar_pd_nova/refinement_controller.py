@@ -301,7 +301,9 @@ def published_refinement_source(service, workspace, record, scan, sha_cache):
     for name in ['summary','gpx_index']:
         p=next((p for p in [root/(name+'.json'),root/'ndip'/(name+'.json')] if p.is_file()),None)
         if p:payload[name]=json.loads(p.read_text())
-    return source_from_record(record,payload,scan,workspace.history_id,sha_cache=sha_cache,root_override=root)
+    source=source_from_record(record,payload,scan,workspace.history_id,sha_cache=sha_cache,root_override=root)
+    canonical=getattr(workspace,'canonical_source',None)
+    return canonical(source) if canonical else source
 
 
 def recover_completed_refinement_records(service, controller):
