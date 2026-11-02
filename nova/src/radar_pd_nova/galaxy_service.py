@@ -56,6 +56,31 @@ SUBMISSION_ACK_TIMEOUT_SECONDS = float(os.getenv("RADAR_PD_SUBMISSION_ACK_TIMEOU
 _INTERACTIVE_TOOL_IDS = frozenset({RESULT_EXPLORER_TOOL_ID, GSASII_INTERACTIVE_TOOL_ID})
 
 
+class SubmissionDeferred(RuntimeError):
+    """A live owner paused before a new POST; prepared inputs remain reusable."""
+
+
+class SubmissionReceiptPending(SubmissionDeferred):
+    """A previous POST may have succeeded; reconcile instead of posting again."""
+
+
+class _AdmissionSignals:
+    def __init__(self, cancelled, paused):
+        self.cancelled, self.paused = cancelled, paused
+
+    def is_set(self):
+        return self.cancelled.is_set() or self.paused.is_set()
+
+    def wait(self, timeout):
+        deadline = time.monotonic() + timeout
+        while not self.is_set():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            self.paused.wait(min(remaining, .1))
+        return self.is_set()
+
+
 def _job_failure_message(stdout: str, stderr: str, dependency_error: str = "", *,
                          limit: int = 4000, fallback: str = "Galaxy reported an error") -> str:
     """Prefer a native terminal cause without discarding runner diagnostics.
@@ -1900,11 +1925,14 @@ class GalaxyService:
         *,
         callback: Callable[[RunRecord], None] | None = None,
         before_submit: Callable[[], None] | None = None,
+        admission_pause: threading.Event | None = None,
     ) -> RunRecord:
         """Prepare inputs concurrently and launch Analyze exactly once."""
 
         record = self.pending_record(snapshot)
         with self._lock:
+            if record.provenance.get('submission_receipt_pending'):
+                raise SubmissionReceiptPending("A prior Analyze request needs acknowledgement recovery")
             if record.galaxy_job_id or record.analysis_status in {RunStatus.QUEUED, RunStatus.RUNNING, RunStatus.OK}:
                 return record
             if snapshot.idempotency_token in self._active_submission_tokens:
@@ -1919,6 +1947,8 @@ class GalaxyService:
         submission_started = time.monotonic()
         self._emit_submission_progress(record, SubmissionPhase.VALIDATING, "Validating", 0, 1, callback)
         try:
+            if admission_pause is not None and admission_pause.is_set():
+                raise SubmissionDeferred("Live admission paused before Analyze")
             if inputs.use_builtin_cuka and (config.radiation.value != "xray" or config.instrument_mode == "tof"):
                 raise ValueError("The built-in Cu K-alpha profile is only valid for X-ray CW data")
             work_dir = self.output_root / "submissions" / snapshot.idempotency_token
@@ -1946,13 +1976,24 @@ class GalaxyService:
                 params, submitted_inputs = self._prepared_parameters(store, snapshot, prepared)
                 from .native_job_admission import HistoryJobAdmission
                 gate=HistoryJobAdmission(self)
-                with gate.slot(ANALYZE_TOOL_ID,family_limit=gate.total_limit,cancel=cancel_event):
+                signal = _AdmissionSignals(cancel_event, admission_pause) if admission_pause is not None else cancel_event
+
+                def check_dispatch():
+                    if admission_pause is not None and admission_pause.is_set():
+                        raise SubmissionDeferred("Live admission paused before Analyze")
+                    if before_submit is not None:
+                        before_submit()
+                    if admission_pause is not None and admission_pause.is_set():
+                        raise SubmissionDeferred("Live admission paused before Analyze")
+
+                with gate.slot(ANALYZE_TOOL_ID,family_limit=gate.total_limit,cancel=signal):
                     uid, tool = self._submit_with_retry(
                         store,
                         params,
                         run_name=config.run_name,
                         config_dataset_id=prepared.get("configuration"),
-                        **({"before_submit": before_submit} if before_submit is not None else {}),
+                        **({"before_submit": check_dispatch} if before_submit is not None or admission_pause is not None else {}),
+                        **({"hold_unacknowledged": True} if admission_pause is not None else {}),
                     )
             with self._lock:
                 self._tools[uid] = tool
@@ -1980,6 +2021,20 @@ class GalaxyService:
             return record
         except Exception as exc:
             from .native_job_admission import AdmissionUnavailable
+            if isinstance(exc, SubmissionReceiptPending):
+                record.provenance['submission_receipt_pending'] = True
+                record.status = RunStatus.UPLOADING
+                record.analysis_status = RunStatus.UPLOADING
+                record.stage = "Waiting for Galaxy acknowledgement recovery"
+                record.message = str(exc)
+                raise
+            if (isinstance(exc, SubmissionDeferred) or
+                    isinstance(exc, AdmissionUnavailable) and admission_pause is not None and admission_pause.is_set()) and not cancel_event.is_set():
+                record.status = RunStatus.UPLOADING
+                record.analysis_status = RunStatus.UPLOADING
+                record.stage = "Waiting for live admission to resume"
+                record.message = ""
+                raise SubmissionDeferred("Live admission paused before Analyze") from None
             if isinstance(exc,AdmissionUnavailable) and cancel_event.is_set():
                 record.status=RunStatus.CANCELLED;record.analysis_status=RunStatus.CANCELLED
                 self._emit_submission_progress(record,SubmissionPhase.CANCELLED,
@@ -2342,6 +2397,7 @@ class GalaxyService:
         run_name: str | None = None,
         config_dataset_id: str | None = None,
         before_submit: Callable[[], None] | None = None,
+        hold_unacknowledged: bool = False,
     ) -> tuple[str, Any]:
         """Start the Analyze tool run, retrying on transient Galaxy submission failures.
 
@@ -2376,13 +2432,15 @@ class GalaxyService:
                 # any lost-acknowledgement retry delay, before each new POST.
                 try:
                     before_submit()
-                except Exception:
+                except Exception as exc:
                     if attempt > 1:
                         # The guard itself can await metadata reads. The
                         # acknowledgement may have appeared during that wait.
                         receipt = acknowledged()
                         if receipt is not None:
                             return receipt
+                        if isinstance(exc, SubmissionDeferred):
+                            raise SubmissionReceiptPending("A prior Analyze request needs acknowledgement recovery") from None
                     raise
             try:
                 uid, tool = self._submit_analysis(store, params)
@@ -2391,6 +2449,8 @@ class GalaxyService:
                 receipt = acknowledged()
                 if receipt is not None:
                     return receipt
+                if hold_unacknowledged:
+                    raise SubmissionReceiptPending("A prior Analyze request needs acknowledgement recovery") from None
                 if attempt < attempts:
                     time.sleep(2.0 * attempt)
                     continue

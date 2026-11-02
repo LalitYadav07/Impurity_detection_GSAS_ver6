@@ -12,7 +12,7 @@ import re
 import tempfile
 import threading
 import uuid
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from copy import deepcopy
 from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime, timedelta, timezone
@@ -61,6 +61,8 @@ from .galaxy_service import (
     RESULT_EXPLORER_TOOL_ID,
     SNS_RESOLVER_TOOL_ID,
     GalaxyService,
+    SubmissionDeferred,
+    SubmissionReceiptPending,
     stage_progress_is_known,
 )
 from .models import (
@@ -6090,6 +6092,9 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         state = self.server.state
         state.powgen_monitoring = False
         state.powgen_retry_requested = False
+        pause = getattr(self._powgen_controller, '_submission_pause_event', None)
+        if pause is not None:
+            pause.set()
         self.webmon_pause_stream()
         task = self._powgen_monitor_task
         if task is not None and not task.done():
@@ -6178,6 +6183,9 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                 or state.powgen_retry_busy or state.powgen_retry_requested):
             return
         state.powgen_retry_requested=True
+        pause = getattr(self._powgen_controller, '_submission_pause_event', None)
+        if pause is not None:
+            pause.set()
         state.powgen_message='Retry requested: verifying terminal failures and saving fresh-analysis intent; earlier work remains in History.'
         self._powgen_wake_event.set()
         state.flush()
@@ -6233,12 +6241,19 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
             return
         checkpoints = CoalescedCheckpoint(controller.capture_checkpoint, controller.persist_state)
         retry_context, retry_service = self._result_context, self.service
+        admission_pause = threading.Event()
+        controller._submission_pause_event = admission_pause
+
+        def owns_monitor():
+            return (controller is self._powgen_controller and retry_context is self._result_context
+                    and retry_service is self.service)
+
         controller._retry_submission_allowed = lambda: (
-            state.powgen_monitoring and controller is self._powgen_controller
-            and retry_context is self._result_context and retry_service is self.service)
+            state.powgen_monitoring and owns_monitor())
         self._powgen_checkpoint_error = None
         try:
-            while state.powgen_monitoring and controller is self._powgen_controller:
+            while state.powgen_monitoring and owns_monitor():
+                admission_pause.clear()  # No prior launch workers remain at this boundary.
                 state.powgen_last_checked = _format_eastern_time(datetime.now(timezone.utc))
                 warnings: list[str] = []
                 state.powgen_message = "Checking completed reduced files and scan metadata..."
@@ -6255,11 +6270,16 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                     except Exception as exc:
                         warnings.append(f'Failed-run retry is held for recovery: {_powgen_submission_error_summary(exc)}')
                     finally:
-                        state.powgen_retry_busy=False
+                        if owns_monitor():
+                            state.powgen_retry_busy=False
+                if not owns_monitor() or not state.powgen_monitoring:
+                    break
                 try:
                     await asyncio.to_thread(controller.discover, checkpoint=False)
                 except Exception as exc:
                     warnings.append(f"Source check failed: {_powgen_submission_error_summary(exc)}")
+                if not owns_monitor() or not state.powgen_monitoring:
+                    break
 
                 try:
                     state.powgen_message = "Recovering any previously accepted Galaxy jobs for this configuration..."
@@ -6272,6 +6292,8 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                         "Galaxy job reconciliation will be retried: "
                         f"{_powgen_submission_error_summary(exc)}"
                     )
+                if not owns_monitor() or not state.powgen_monitoring:
+                    break
 
                 self._sync_powgen_rows()
                 checkpoints.offer()
@@ -6282,7 +6304,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                 await self._refresh_powgen_jobs(controller, warnings)
 
                 due_runs = controller.due_submissions()
-                if due_runs and state.powgen_monitoring:
+                if due_runs and state.powgen_monitoring and owns_monitor():
                     state.powgen_message = f"Preparing and submitting {len(due_runs)} selected bank analyses..."
                     state.flush()
                     submission_lanes = asyncio.Semaphore(_POWGEN_SUBMISSION_CONCURRENCY)
@@ -6298,7 +6320,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                             # concurrency boundary.
                             await asyncio.sleep(min(position, 4) * 0.75)
                             async with submission_lanes:
-                                if not state.powgen_monitoring:
+                                if not state.powgen_monitoring or not owns_monitor() or admission_pause.is_set():
                                     return run, None, None
                                 record = await asyncio.to_thread(controller.launch_submission, run)
                             return run, record, None
@@ -6313,6 +6335,10 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                     acknowledged_since_checkpoint = 0
                     self._powgen_submissions_in_flight = len(pending)
                     while pending:
+                        if state.powgen_retry_requested or not state.powgen_monitoring or not owns_monitor():
+                            # Yield only pre-POST admission waits. Workers already
+                            # posting still finish and are acknowledged below.
+                            admission_pause.set()
                         # A cancelled asyncio task cannot stop work already
                         # running in ``to_thread``. Always acknowledge this
                         # batch so every Galaxy job remains recoverable; the
@@ -6324,7 +6350,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                                 if launch_error is not None:
                                     raise launch_error
                                 if launched is None:
-                                    if not state.powgen_monitoring:
+                                    if admission_pause.is_set() or not state.powgen_monitoring or not owns_monitor():
                                         continue
                                     raise RuntimeError(f"Galaxy did not return a record for {run.run_id}")
                                 record = await asyncio.to_thread(
@@ -6333,12 +6359,22 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                                     launched,
                                     persist=False,
                                 )
-                                self.records[record.uid] = record
-                                self._sync_runs()
+                                if owns_monitor():
+                                    self.records[record.uid] = record
+                                    self._sync_runs()
                                 acknowledged_since_checkpoint += 1
                             except Exception as exc:
                                 from .live_recovery import RetrySourceChanged
-                                if isinstance(exc, RetrySourceChanged):
+                                if isinstance(exc, SubmissionReceiptPending):
+                                    current = controller.state.discovered.get(run.run_id)
+                                    if current is not None:
+                                        controller.state.discovered[run.run_id] = replace(current, scan_metadata={
+                                            **current.scan_metadata, 'submission_receipt_pending': True})
+                                        controller._recent_runs_reconciled = False
+                                    warnings.append(f"{run.run_id} is waiting for acknowledgement recovery; no replacement was submitted")
+                                elif isinstance(exc, SubmissionDeferred):
+                                    pass  # Same generation/token and prepared inputs remain reusable.
+                                elif isinstance(exc, RetrySourceChanged):
                                     controller.hold_failed_retry(run,str(exc))
                                     warnings.append(f"{run.run_id} explicit retry was held: {exc}")
                                 elif run.run_id in controller.state.discovered:
@@ -6358,16 +6394,18 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                                 reserved.discard(run.run_id)
                         # A later multipart upload must not hide an earlier
                         # scan's completed result until the whole batch ends.
-                        await self._refresh_powgen_jobs(controller, warnings)
+                        if owns_monitor():
+                            await self._refresh_powgen_jobs(controller, warnings)
                         # Fill freed slots without waiting for the slowest
                         # upload in the original batch. Pending uploads reserve
                         # capacity just like acknowledged active Galaxy jobs.
-                        if state.powgen_monitoring:
+                        if state.powgen_monitoring and owns_monitor() and not admission_pause.is_set():
                             refill = controller.due_submissions(reserved_run_ids=reserved)
                             for position, run in enumerate(refill):
                                 reserved.add(run.run_id)
                                 pending.add(asyncio.create_task(launch(position, run)))
-                        self._powgen_submissions_in_flight = len(pending)
+                        if owns_monitor():
+                            self._powgen_submissions_in_flight = len(pending)
                         # A rolling backfill can last hours. Offer the newest
                         # job IDs at least once per active-job window.
                         if acknowledged_since_checkpoint >= controller.settings.max_active_jobs or (done and not pending):
@@ -6376,8 +6414,16 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                                 acknowledged_since_checkpoint = 0
                             except Exception as exc:
                                 warnings.append(f"Acknowledged jobs will be checkpointed again: {_powgen_submission_error_summary(exc)}")
-                        self._sync_powgen_rows()
-                        state.flush()
+                        if owns_monitor():
+                            self._sync_powgen_rows()
+                            state.flush()
+
+                if not owns_monitor():
+                    break
+                if state.powgen_monitoring and state.powgen_retry_requested:
+                    # Service the request serially, only after every launch
+                    # thread has returned and accepted jobs are checkpointed.
+                    continue
 
                 self._sync_powgen_rows()
                 state.powgen_message = "Scan and job results updated. Recovery checkpoint saving in the background..."
@@ -6426,19 +6472,25 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         except asyncio.CancelledError:
             pass
         finally:
-            state.powgen_message = "Monitoring stopped. Finishing the latest recovery checkpoint..."
-            state.flush()
+            admission_pause.set()
+            if owns_monitor():
+                state.powgen_message = "Monitoring stopped. Finishing the latest recovery checkpoint..."
+                state.flush()
             try:
                 if getattr(controller,'pause_failed_run_retries',lambda:False)():
                     checkpoints.offer()
                 await checkpoints.drain()
             except Exception as exc:
-                self._powgen_checkpoint_error = exc
-                state.powgen_message = "Monitoring stopped; Galaxy jobs remain in History. Recovery checkpoint needs retry: " + _powgen_submission_error_summary(exc)
+                if owns_monitor():
+                    self._powgen_checkpoint_error = exc
+                    state.powgen_message = "Monitoring stopped; Galaxy jobs remain in History. Recovery checkpoint needs retry: " + _powgen_submission_error_summary(exc)
             else:
-                state.powgen_message = "Monitoring stopped. The latest recovery checkpoint is saved in Galaxy History."
-            self._powgen_submissions_in_flight = 0
-            if controller is self._powgen_controller:
+                if owns_monitor():
+                    state.powgen_message = "Monitoring stopped. The latest recovery checkpoint is saved in Galaxy History."
+            if getattr(controller, '_submission_pause_event', None) is admission_pause:
+                controller._submission_pause_event = None
+            if owns_monitor():
+                self._powgen_submissions_in_flight = 0
                 state.powgen_monitoring = False
                 state.live_launch_busy = False
                 if self._powgen_monitor_task is asyncio.current_task():

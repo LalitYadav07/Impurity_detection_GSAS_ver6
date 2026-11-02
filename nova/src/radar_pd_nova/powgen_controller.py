@@ -488,6 +488,7 @@ class PowgenWatchController:
             metadata=dict(run.scan_metadata)
             metadata.pop('input_retry_intent',None);metadata.pop('run_retry_intent',None)
             metadata.pop('retry_hold',None)
+            metadata.pop('submission_receipt_pending', None)
             metadata['retry_generation']=metadata.get('retry_generation',0)+1
             metadata['previous_attempts']=[*metadata.get('previous_attempts',[]),proof]
             metadata['retry_source_proof']=proof
@@ -570,17 +571,23 @@ class PowgenWatchController:
         if getattr(self, "restore_resume_blocked_reasons", ()):
             raise ValueError("This saved watch is blocked from new analyses until its saved restrictions are reviewed")
         launch_check = getattr(self, "_before_live_submit", None)
+        admission_pause = getattr(self, "_submission_pause_event", None)
+        admission_allowed = self._retry_submission_allowed
         retry = bool(run.scan_metadata.get('retry_source_proof'))
-        if launch_check is None and not retry:
+        if launch_check is None and not retry and admission_pause is None:
             return self.service.submit_snapshot(snapshot)
 
         def before_submit():
+            if admission_pause is not None and (admission_pause.is_set() or not admission_allowed()):
+                from .galaxy_service import SubmissionDeferred
+                raise SubmissionDeferred("Live owner no longer admits a new Analyze job")
             if launch_check is not None:
                 launch_check()
             if retry:
                 self._validate_retry_submission(run)
 
-        return self.service.submit_snapshot(snapshot, before_submit=before_submit)
+        return self.service.submit_snapshot(snapshot, before_submit=before_submit,
+            **({'admission_pause': admission_pause} if admission_pause is not None else {}))
 
     def restore_latest_state(self) -> bool:
         """Recover the newest matching checkpoint and acknowledged Galaxy jobs.
@@ -1022,6 +1029,7 @@ class PowgenWatchController:
         ready = [run for run in self.state.retryable_runs()
                  if run.run_id not in reserved
                  and not run.scan_metadata.get('retry_deferred_by_stop')
+                 and not run.scan_metadata.get('submission_receipt_pending')
                  and not run.scan_metadata.get("setup_error")
                  and not run.scan_metadata.get("source_revision_warning")
                  and not (run.scan_metadata.get('retry_source_proof',{}).get('kind')=='terminal_error'
@@ -1257,7 +1265,9 @@ class PowgenWatchController:
         must never make a completed scan disappear from the experiment view.
         """
 
-        if self._recent_runs_reconciled:
+        if self._recent_runs_reconciled and not any(
+            run.scan_metadata.get('submission_receipt_pending') for run in self.state.discovered.values()
+        ):
             return 0
         active = {**self.state.discovered, **self.state.submitted}
         if not active:
