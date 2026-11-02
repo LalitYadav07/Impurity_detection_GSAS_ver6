@@ -53,7 +53,8 @@ def test_plot_arrays_keep_native_grid_endpoint_weights_and_masks(instrument):
     np.testing.assert_array_equal(histogram.data["data"][1].mask, before["data"][1].mask)
 
 
-@pytest.mark.parametrize("change", ["reordered", "nonfinite_x", "nonfinite_fit", "bad_mask", "missing_bin"])
+@pytest.mark.parametrize("change", ["reordered", "nonfinite_x", "nonfinite_fit", "bad_mask", "missing_bin",
+                                    "missing_residual", "nonfinite_residual", "forged_residual"])
 def test_native_plot_contract_rejects_corrupt_grid_or_masks(change):
     histogram, _ = synthetic_histogram("TOF")
     arrays = histogram_plot_arrays(histogram)
@@ -61,9 +62,48 @@ def test_native_plot_contract_rejects_corrupt_grid_or_masks(change):
     elif change == "nonfinite_x": arrays["x"][0] = np.nan
     elif change == "nonfinite_fit": arrays["ycalc"][4] = np.inf
     elif change == "bad_mask": arrays["fit_valid"] = arrays["fit_valid"].astype(int)
+    elif change == "missing_residual": arrays.pop("resid")
+    elif change == "nonfinite_residual": arrays["resid"][4] = np.nan
+    elif change == "forged_residual": arrays["resid"][4] = 1e6
     else: arrays["fit_valid"][16] = False
-    with pytest.raises(ValueError):
+    with pytest.raises((KeyError, ValueError)):
         native_plot_mask(arrays, *histogram_fit_region(histogram))
+
+
+def native_payload():
+    histogram, _ = synthetic_histogram("TOF")
+    limits, exclusions = histogram_fit_region(histogram)
+    return {"schema_version": "1.1", "fit_range_convention": NATIVE_FIT_CONVENTION,
+            "fit_limits": limits, "excluded_ranges": exclusions,
+            "arrays": histogram_plot_arrays(histogram)}
+
+
+@pytest.mark.parametrize("field", ["fit_range_convention", "fit_limits", "excluded_ranges",
+                                   "valid", "fit_valid", "weights", "resid"])
+def test_script_viewer_requires_native_schema_fields_even_without_convention(monkeypatch, field):
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "scripts"))
+    from scripts.plotly_interactive import _fig_gsas_fit
+    payload = native_payload()
+    (payload if field in payload else payload["arrays"]).pop(field)
+    assert _fig_gsas_fit(payload) is None
+    payload.pop("fit_range_convention", None)
+    payload["arrays"].pop("valid", None)
+    payload["arrays"].pop("fit_valid", None)
+    assert _fig_gsas_fit(payload) is None
+
+
+def test_script_viewer_binds_residual_and_allows_only_invalid_bin_nan(monkeypatch):
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "scripts"))
+    from scripts.plotly_interactive import _fig_gsas_fit
+    payload = native_payload()
+    payload["arrays"]["resid"][4] = 1e6
+    assert _fig_gsas_fit(payload) is None
+    payload["arrays"]["resid"][4] = .25 + 1e-13
+    payload["arrays"]["resid"][[0, 6, 10]] = np.nan
+    payload["arrays"]["yobs"][10] = payload["arrays"]["ycalc"][10] = np.nan
+    figure = _fig_gsas_fit(payload)
+    assert figure is not None
+    assert np.isfinite(figure.data[2].y).sum() == 8
 
 
 def test_single_bin_exclusion_and_masked_upper_endpoint_do_not_shift_native_slice():

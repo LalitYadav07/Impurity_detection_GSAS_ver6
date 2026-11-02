@@ -881,17 +881,22 @@ def gsas_figure(payload: dict[str, Any]) -> go.Figure:
     """Build an observed/calculated/difference plot with separated phase tick rows."""
 
     arrays = payload.get("arrays") if isinstance(payload.get("arrays"), dict) else payload
-    x = _array(arrays, "x", "two_theta", "tof")
-    yobs = _array(arrays, "yobs", "observed")
-    ycalc = _array(arrays, "ycalc", "calculated")
-    residual = _array(arrays, "resid", "difference")
+    convention = payload.get("fit_range_convention")
+    native_required = payload.get("schema_version") not in (None, "1.0") or convention is not None
+    if native_required:
+        # Canonical 1.1 fields cannot be rescued by a contradictory legacy alias.
+        x, yobs, ycalc, residual = [_array(arrays, key) for key in ("x", "yobs", "ycalc", "resid")]
+    else:
+        x = _array(arrays, "x", "two_theta", "tof")
+        yobs = _array(arrays, "yobs", "observed")
+        ycalc = _array(arrays, "ycalc", "calculated")
+        residual = _array(arrays, "resid", "difference")
     def interval(value, *, allow_point=False):
         if not isinstance(value, (list, tuple)) or len(value) != 2:
             return None
         pair = [_as_float(v) for v in value]
         return pair if all(v is not None and np.isfinite(v) for v in pair) and (pair[0] <= pair[1] if allow_point else pair[0] < pair[1]) else None
     fit_limits = interval(payload.get("fit_limits"))
-    convention = payload.get("fit_range_convention")
     native_domain = payload.get("schema_version") == "1.1" and convention == NATIVE_FIT_CONVENTION
     raw_exclusions = payload.get("excluded_ranges", [])
     exclusion_values = raw_exclusions if isinstance(raw_exclusions, (list, tuple)) else []
@@ -899,7 +904,9 @@ def gsas_figure(payload: dict[str, Any]) -> go.Figure:
                        if (pair := interval(value, allow_point=native_domain)) is not None]
     domain_metadata_valid = isinstance(raw_exclusions, (list, tuple)) and len(excluded_ranges) == len(raw_exclusions)
     domain_metadata_valid &= payload.get("fit_limits") is None or fit_limits is not None
-    domain_metadata_valid &= convention is None or native_domain
+    domain_metadata_valid &= not native_required or (
+        native_domain and all(key in payload for key in ("fit_limits", "excluded_ranges"))
+        and all(key in arrays for key in ("x", "yobs", "ycalc", "resid", "weights", "valid", "fit_valid")))
     def boolean_mask(value):
         try:
             if (isinstance(value, (list, tuple, np.ndarray)) and len(value) == len(x)
@@ -941,7 +948,7 @@ def gsas_figure(payload: dict[str, Any]) -> go.Figure:
         if native_grid:
             domain = native_powder_fit_mask(grid, fit_limits, excluded_ranges)
     stage_fit = boolean_mask(arrays.get("fit_valid"))
-    if native_domain:
+    if native_required:
         # A native declaration must carry its complete mask and weights.
         # Do not accept missing bins, reordered grids or conflicting metadata.
         fitted = None
@@ -952,7 +959,10 @@ def gsas_figure(payload: dict[str, Any]) -> go.Figure:
                     and not np.any(valid & (~np.isfinite(weight_values) | (weight_values <= 0)))
                     and np.array_equal(stage_fit, valid & domain)
                     and len(ycalc) == len(x) and np.all(np.isfinite(np.asarray(ycalc)[stage_fit]))
-                    and len(residual) == len(x) and np.all(np.isfinite(np.asarray(residual)[stage_fit]))):
+                    and len(residual) == len(x) and np.all(np.isfinite(np.asarray(residual)[stage_fit]))
+                    and np.allclose(np.asarray(residual)[stage_fit],
+                                    np.asarray(yobs)[stage_fit] - np.asarray(ycalc)[stage_fit],
+                                    rtol=1e-10, atol=1e-12)):
                 fitted = stage_fit
         except (TypeError, ValueError):
             pass
@@ -965,6 +975,8 @@ def gsas_figure(payload: dict[str, Any]) -> go.Figure:
         fitted = None
     observed = [value if valid is None or (valid[index] and (fitted is None or fitted[index])) else None
                 for index, value in enumerate(yobs)]
+    if native_required and fitted is None:
+        observed = [None] * len(yobs)
     excluded_observed = [value if valid is not None and fitted is not None and valid[index] and not fitted[index] else None
                          for index, value in enumerate(yobs)]
     model_x, model_y, model_residual = [], [], []
@@ -973,7 +985,7 @@ def gsas_figure(payload: dict[str, Any]) -> go.Figure:
         if previous is not None and any(previous < high and value > low
                                         for low, high in excluded_ranges):
             model_x.append(None); model_y.append(None); model_residual.append(None)
-        eligible = (fitted is not None and fitted[index]) if convention is not None else domain[index]
+        eligible = (fitted is not None and fitted[index]) if native_required else domain[index]
         model_x.append(value)
         model_y.append(ycalc[index] if eligible and index < len(ycalc) else None)
         model_residual.append(residual[index] if fitted is not None and fitted[index] and index < len(residual) else None)

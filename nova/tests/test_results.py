@@ -164,7 +164,10 @@ def test_native_plot_includes_upper_bin_and_masks_excluded_or_invalid_points(ins
 
 @pytest.mark.parametrize("defect", ["missing_valid", "missing_fit", "numeric_mask", "missing_bin", "extra_bin",
                                    "nonfinite_x", "reordered_x", "nonfinite_observation", "zero_weight",
-                                   "nonfinite_calculation", "nonfinite_residual", "unknown_convention", "legacy_schema"])
+                                   "nonfinite_calculation", "nonfinite_residual", "unknown_convention", "legacy_schema",
+                                   "missing_convention", "null_convention", "missing_convention_and_masks",
+                                   "missing_limits", "missing_exclusions", "missing_weights", "missing_residual",
+                                   "forged_residual"])
 def test_native_plot_rejects_bad_masks_and_nonfinite_or_reordered_evidence(defect):
     payload = _native_fit_plot_payload()
     arrays = payload["arrays"]
@@ -180,6 +183,15 @@ def test_native_plot_rejects_bad_masks_and_nonfinite_or_reordered_evidence(defec
     elif defect == "nonfinite_calculation": arrays["ycalc"][4] = float("nan")
     elif defect == "nonfinite_residual": arrays["resid"][4] = float("nan")
     elif defect == "legacy_schema": payload["schema_version"] = "1.0"
+    elif defect == "missing_convention": payload.pop("fit_range_convention")
+    elif defect == "null_convention": payload["fit_range_convention"] = None
+    elif defect == "missing_convention_and_masks":
+        payload.pop("fit_range_convention"); arrays.pop("valid"); arrays.pop("fit_valid")
+    elif defect == "missing_limits": payload.pop("fit_limits")
+    elif defect == "missing_exclusions": payload.pop("excluded_ranges")
+    elif defect == "missing_weights": arrays.pop("weights")
+    elif defect == "missing_residual": arrays.pop("resid")
+    elif defect == "forged_residual": arrays["resid"][4] = 1e6
     else: payload["fit_range_convention"] = "unreviewed convention"
     figure = figure_for_payload(payload)
     assert all(value is None for value in figure.data[1].y)
@@ -187,12 +199,50 @@ def test_native_plot_rejects_bad_masks_and_nonfinite_or_reordered_evidence(defec
     assert any("unavailable" in annotation.text for annotation in figure.layout.annotations)
 
 
-def test_legacy_plot_does_not_adopt_native_mask_without_explicit_convention():
+def test_native_schema_does_not_fall_back_to_legacy_without_explicit_convention():
     payload = _native_fit_plot_payload()
+    payload.pop("fit_range_convention")
+    figure = figure_for_payload(payload)
+    assert all(value is None for value in figure.data[0].y)
+    assert all(value is None for value in figure.data[1].y)
+    assert all(value is None for value in figure.data[2].y)
+    assert figure.layout.xaxis.range[1] == payload["fit_limits"][1]
+
+
+def test_legacy_schema_keeps_its_closed_bounds_and_mask_validation():
+    payload = _native_fit_plot_payload()
+    payload["schema_version"] = "1.0"
     payload.pop("fit_range_convention")
     figure = figure_for_payload(payload)
     assert all(value is None for value in figure.data[2].y)
     assert figure.layout.xaxis.range[1] == payload["fit_limits"][1]
+
+
+def test_native_residual_allows_roundoff_and_invalid_bin_nan_only():
+    payload = _native_fit_plot_payload()
+    arrays = payload["arrays"]
+    arrays["resid"][4] += 1e-13
+    for index in (0, 6, 10):
+        arrays["resid"][index] = float("nan")  # Outside, excluded, and invalid bins.
+    arrays["yobs"][10] = arrays["ycalc"][10] = float("nan")
+    figure = figure_for_payload(payload)
+    difference = dict(zip(figure.data[2].x, figure.data[2].y))
+    assert difference[arrays["x"][4]] == pytest.approx(.25)
+    assert all(difference[arrays["x"][index]] is None for index in (0, 6, 10))
+    assert "N (fit) 8" in figure.layout.title.text
+
+
+@pytest.mark.parametrize("canonical,alias", [("x", "two_theta"), ("yobs", "observed"),
+                                             ("ycalc", "calculated"), ("resid", "difference")])
+def test_native_canonical_array_cannot_be_rescued_by_a_legacy_alias(canonical, alias):
+    payload = _native_fit_plot_payload()
+    arrays = payload["arrays"]
+    arrays[alias] = arrays[canonical]
+    arrays[canonical] = ["corrupt"]
+    figure = figure_for_payload(payload)
+    assert all(value is None for value in figure.data[1].y)
+    assert all(value is None for value in figure.data[2].y)
+    assert any("unavailable" in annotation.text for annotation in figure.layout.annotations)
 
 
 def _bound_plot_fixture(tmp_path):

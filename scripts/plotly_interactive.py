@@ -160,12 +160,16 @@ def _fig_gsas_fit(payload: Dict[str, Any]) -> Optional[go.Figure]:
         return None
 
     fitted = None
-    if payload.get("fit_range_convention") is not None:
-        if payload.get("schema_version") != "1.1" or payload["fit_range_convention"] != NATIVE_FIT_CONVENTION:
+    native_required = (payload.get("schema_version") not in (None, "1.0")
+                       or payload.get("fit_range_convention") is not None)
+    if native_required:
+        if (payload.get("schema_version") != "1.1"
+                or payload.get("fit_range_convention") != NATIVE_FIT_CONVENTION
+                or "excluded_ranges" not in payload):
             return None
         try:
             fitted = native_plot_mask(payload.get("arrays", payload),
-                                     payload["fit_limits"], payload.get("excluded_ranges", []))
+                                     payload["fit_limits"], payload["excluded_ranges"])
             yobs = np.where(fitted, yobs, np.nan)
             ycalc = np.where(fitted, ycalc, np.nan)
             if resid is not None:

@@ -58,7 +58,8 @@ def native_plot_mask(arrays, limits, exclusions):
     weights = np.asarray(arrays["weights"], dtype=float)
     observed = np.asarray(arrays["yobs"], dtype=float)
     calculated = np.asarray(arrays["ycalc"], dtype=float)
-    if any(value.shape != x.shape for value in (weights, observed, calculated)):
+    residual = np.asarray(arrays["resid"], dtype=float)
+    if any(value.shape != x.shape for value in (weights, observed, calculated, residual)):
         raise ValueError("Native plot arrays do not share the histogram grid")
     if np.any(valid & (~np.isfinite(weights) | (weights <= 0) | ~np.isfinite(observed))):
         raise ValueError("Native plot validity conflicts with observed values or weights")
@@ -66,6 +67,13 @@ def native_plot_mask(arrays, limits, exclusions):
         raise ValueError("Native plot fit mask differs from the declared fit domain")
     if np.any(fitted & ~np.isfinite(calculated)):
         raise ValueError("Native plot has missing calculated values in its fitted domain")
+    # Check only fitted bins: invalid/out-of-fit placeholders may be NaN.
+    # This tolerance permits numerical serialization roundoff, not a separate
+    # or stale residual trace unrelated to the displayed model.
+    if (np.any(fitted & ~np.isfinite(residual))
+            or not np.allclose(residual[fitted], observed[fitted] - calculated[fitted],
+                               rtol=1e-10, atol=1e-12)):
+        raise ValueError("Native plot difference does not match observed minus calculated")
     return fitted
 
 
