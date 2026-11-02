@@ -29,6 +29,7 @@ def refinement_dashboard(app):
         .rf-result-title{display:flex;align-items:start;justify-content:space-between;gap:12px}.rf-result-title h3{margin:0 0 6px}.rf-plot{height:620px;width:100%}.rf-trend{height:450px;width:100%}
         .rf-empty{padding:54px 25px;text-align:center;border:1px dashed #c7d8cb;border-radius:8px;color:#667e6d;line-height:1.8}
         .rf-workspace .v-btn{letter-spacing:.3px}.rf-notice{font-size:12px;color:#62766a;line-height:1.6;margin:8px 0}.rf-tabs{margin:15px 0;border-bottom:1px solid #dce6df}
+        .rf-parameter-caveats{font-size:13px;line-height:1.5}.rf-parameter-caveats ul{margin:4px 0;padding-left:20px}.rf-parameter-caveats li+li{margin-top:4px}
         .rf-overlay{position:fixed;inset:80px 18px 28px;z-index:2400;background:white;padding:22px;box-shadow:0 0 0 25px #102e2988;border-radius:10px;overflow:auto}
         @media(max-width:1100px){.rf-grid{grid-template-columns:1fr}.rf-results{grid-template-columns:240px minmax(0,1fr)}.rf-card{padding:17px}}
         @media(max-width:760px){.rf-results{grid-template-columns:1fr}.rf-list{max-height:220px}.rf-heading h2{font-size:23px}.rf-toolbar{gap:16px}}
@@ -166,7 +167,10 @@ def refinement_dashboard(app):
                     v.VTab('Fit',value='fit');v.VTab('Trends',value='trends');v.VTab('Parameters',value='parameters')
                 with html.Div(v_if="rf_has_output && rf_result_tab !== 'trends'"):
                     html.P('{{ rf_convergence_notice }}',v_if='!!rf_convergence_notice',classes='rf-notice',role='status')
-                    v.VAlert(v_for='warning in rf_parameter_warnings',key='warning',text=('warning',),type='warning',variant='tonal',density='compact',classes='mb-3')
+                    with v.VAlert(v_if='rf_parameter_warnings.length',type='warning',variant='tonal',density='compact',classes='rf-parameter-caveats mb-3'):
+                        html.Strong('Parameter caveats')
+                        with html.Ul():
+                            html.Li('{{ warning }}',v_for='warning in rf_parameter_warnings',key='warning')
                 with html.Div(v_show="rf_result_tab === 'fit'"):
                     with html.Div(v_if='rf_has_output'):
                         with html.Div(classes='rf-toolbar'):
