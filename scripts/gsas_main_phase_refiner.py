@@ -3229,36 +3229,35 @@ def plot_gpx_fit_with_ticks(
         logger.warning(f"[plot] No histogram in {gpx_path}")
         return
     hist = hists[0]
-    from plot_payload import histogram_fit_region
+    from plot_payload import histogram_fit_region, histogram_plot_arrays, NATIVE_FIT_CONVENTION
     fit_limits, excluded_ranges = histogram_fit_region(hist)
 
     # ---------------------------
     # Data arrays
     # ---------------------------
-    data = GSASDataExtractor.get_all_arrays(hist)
-    x = np.asarray(data.get('x_native', np.array([], float)), float)
-    yobs = np.asarray(data.get('yobs', np.array([], float)), float)
-    ycalc = np.asarray(data.get('ycalc', np.array([], float)), float)
-    if x.size == 0 or yobs.size == 0 or ycalc.size == 0:
-        logger.info("[plot] Missing x/yobs/ycalc; skipped.")
+    try:
+        plot_data = histogram_plot_arrays(hist)
+    except (KeyError, IndexError, TypeError, ValueError) as exc:
+        logger.warning("[plot] Cannot verify native fitted observations: %s", exc)
         return
-
-    resid = yobs - ycalc
-
-    # The reported Rwp describes the active refinement range. Do not plot
-    # uncalculated GSAS-II zeros outside that range as a failed model fit.
-    if fit_limits is not None:
-        fitted = (x >= fit_limits[0]) & (x <= fit_limits[1])
-        x, yobs, ycalc, resid = (v[fitted] for v in (x, yobs, ycalc, resid))
-        if not x.size:
-            logger.warning("[plot] No observations inside the explicit refinement limits")
-            return
-
-    if downsample and downsample > 1:
-        x = x[::downsample]
-        yobs = yobs[::downsample]
-        ycalc = ycalc[::downsample]
-        resid = resid[::downsample]
+    fitted = plot_data['fit_valid']
+    fitted_indices = np.flatnonzero(fitted)
+    n_points = int(fitted.sum())
+    if not n_points:
+        logger.warning("[plot] No valid observations in the native fitted domain")
+        return
+    # Keep the original grid in the payload. Decimation is display-only and
+    # retains a masked separator at every gap, plus the native endpoint bin.
+    first, last = fitted_indices[0], fitted_indices[-1]
+    step = max(1, int(downsample or 1))
+    gaps = np.flatnonzero(fitted[:-1] & ~fitted[1:]) + 1
+    indices = np.unique(np.r_[np.arange(first, last + 1, step),
+                              gaps[(gaps > first) & (gaps < last)], last])
+    display_fit = fitted[indices]
+    x = plot_data['x'][indices]
+    yobs, ycalc, resid = [np.where(display_fit, plot_data[key][indices], np.nan)
+                         for key in ('yobs', 'ycalc', 'resid')]
+    displayed_points = int(display_fit.sum())
 
     # ---------------------------
     # Coordinate / axis labeling
@@ -3386,7 +3385,6 @@ def plot_gpx_fit_with_ticks(
         chi2 = None
     
     # Calculate additional metrics
-    n_points = len(yobs)
     n_phases = len(phase_order)
     
     # ---------------------------
@@ -3511,7 +3509,9 @@ def plot_gpx_fit_with_ticks(
             title_parts.append(f"R$_{{wp}}$ = {rwp:.2f}%")
         if chi2 and chi2 > 0:
             title_parts.append(f"χ² = {chi2:.2f}")
-        title_parts.append(f"N = {n_points:,}")
+        title_parts.append(f"N (fit) = {n_points:,}")
+        if displayed_points != n_points:
+            title_parts.append(f"Shown = {displayed_points:,}")
         
         metrics_str = "  •  ".join(title_parts)
         file_name = out_png.rsplit('/', 1)[-1].replace('_', ' ').replace('.png', '')
@@ -3699,6 +3699,7 @@ def plot_gpx_fit_with_ticks(
             save_plot_payload(
                 out_png,
                 payload={
+                    "schema_version": "1.1",
                     "plot_kind": "gsas_fit_with_ticks_v1",
                     "title": file_name,
                     "x_label": xlabel,
@@ -3706,6 +3707,9 @@ def plot_gpx_fit_with_ticks(
                     "rwp": float(rwp) if rwp is not None else None,
                     "fit_limits": fit_limits,
                     "excluded_ranges": excluded_ranges,
+                    "fit_range_convention": NATIVE_FIT_CONVENTION,
+                    "fit_points": n_points,
+                    "display_points": displayed_points,
                     "phase_order": [str(p) for p in phase_order],
                     "phase_labels": {
                         str(k): phase_display_label(k, v)
@@ -3716,13 +3720,8 @@ def plot_gpx_fit_with_ticks(
                     "phase_major_ticks": phase_major_ticks_json,
                     "phase_major_tick_details": major_tick_details_by_phase,
                 },
-                arrays={
-                    "x": x,
-                    "yobs": yobs,
-                    "ycalc": ycalc,
-                    "resid": resid,
-                    "resid_scaled": (base + resid * scale),
-                },
+                arrays={**plot_data, "resid_scaled": np.where(
+                    fitted, base + plot_data['resid'] * scale, np.nan)},
             )
         except Exception as payload_err:
             logger.warning(f"[plot] Could not save plot payload for {out_png}: {payload_err}")

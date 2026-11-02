@@ -16,6 +16,7 @@ import numpy as np
 import plotly.graph_objects as go
 from dateutil.tz import tzstr
 from plotly.subplots import make_subplots
+from gpx_recipe.fit_domain import NATIVE_FIT_CONVENTION, native_powder_fit_mask
 from .scan_conditions import qualified_metadata, condition_display
 
 
@@ -884,18 +885,21 @@ def gsas_figure(payload: dict[str, Any]) -> go.Figure:
     yobs = _array(arrays, "yobs", "observed")
     ycalc = _array(arrays, "ycalc", "calculated")
     residual = _array(arrays, "resid", "difference")
-    def interval(value):
+    def interval(value, *, allow_point=False):
         if not isinstance(value, (list, tuple)) or len(value) != 2:
             return None
         pair = [_as_float(v) for v in value]
-        return pair if all(v is not None and np.isfinite(v) for v in pair) and pair[0] < pair[1] else None
+        return pair if all(v is not None and np.isfinite(v) for v in pair) and (pair[0] <= pair[1] if allow_point else pair[0] < pair[1]) else None
     fit_limits = interval(payload.get("fit_limits"))
+    convention = payload.get("fit_range_convention")
+    native_domain = payload.get("schema_version") == "1.1" and convention == NATIVE_FIT_CONVENTION
     raw_exclusions = payload.get("excluded_ranges", [])
     exclusion_values = raw_exclusions if isinstance(raw_exclusions, (list, tuple)) else []
     excluded_ranges = [pair for value in exclusion_values
-                       if (pair := interval(value)) is not None]
+                       if (pair := interval(value, allow_point=native_domain)) is not None]
     domain_metadata_valid = isinstance(raw_exclusions, (list, tuple)) and len(excluded_ranges) == len(raw_exclusions)
     domain_metadata_valid &= payload.get("fit_limits") is None or fit_limits is not None
+    domain_metadata_valid &= convention is None or native_domain
     def boolean_mask(value):
         try:
             if (isinstance(value, (list, tuple, np.ndarray)) and len(value) == len(x)
@@ -906,9 +910,9 @@ def gsas_figure(payload: dict[str, Any]) -> go.Figure:
         return None
 
     validity = payload.get("_observation_validity") or {}
+    weights = arrays.get("weights", arrays.get("weight"))
     valid = boolean_mask(arrays.get("valid"))
     if "valid" not in arrays and valid is None:
-        weights = arrays.get("weights", arrays.get("weight"))
         if isinstance(weights, (list, tuple, np.ndarray)):
             try:
                 weights = np.asarray(weights, dtype=float)
@@ -927,8 +931,32 @@ def gsas_figure(payload: dict[str, Any]) -> go.Figure:
         and not any(low <= value <= high for low, high in excluded_ranges)
         for value in x
     ], dtype=bool)
+    if native_domain:
+        # New payloads retain the complete native grid. Apply the same index
+        # convention as GSAS-II, before any invalid bins are removed.
+        grid = np.asarray(x, dtype=float)
+        native_grid = (len(grid) > 0 and np.all(np.isfinite(grid))
+                       and np.all(np.diff(grid) > 0) and fit_limits is not None)
+        domain_metadata_valid &= native_grid
+        if native_grid:
+            domain = native_powder_fit_mask(grid, fit_limits, excluded_ranges)
     stage_fit = boolean_mask(arrays.get("fit_valid"))
-    if (domain_metadata_valid and stage_fit is not None and valid is not None
+    if native_domain:
+        # A native declaration must carry its complete mask and weights.
+        # Do not accept missing bins, reordered grids or conflicting metadata.
+        fitted = None
+        try:
+            weight_values = np.asarray(weights, dtype=float)
+            if (domain_metadata_valid and "valid" in arrays and stage_fit is not None and valid is not None
+                    and weight_values.shape == (len(x),)
+                    and not np.any(valid & (~np.isfinite(weight_values) | (weight_values <= 0)))
+                    and np.array_equal(stage_fit, valid & domain)
+                    and len(ycalc) == len(x) and np.all(np.isfinite(np.asarray(ycalc)[stage_fit]))
+                    and len(residual) == len(x) and np.all(np.isfinite(np.asarray(residual)[stage_fit]))):
+                fitted = stage_fit
+        except (TypeError, ValueError):
+            pass
+    elif (domain_metadata_valid and stage_fit is not None and valid is not None
             and not np.any(stage_fit & ~valid) and not np.any(stage_fit & ~domain)):
         fitted = stage_fit & domain
     elif domain_metadata_valid and "fit_valid" not in arrays and valid is not None and fit_limits is not None:
@@ -945,8 +973,7 @@ def gsas_figure(payload: dict[str, Any]) -> go.Figure:
         if previous is not None and any(previous < high and value > low
                                         for low, high in excluded_ranges):
             model_x.append(None); model_y.append(None); model_residual.append(None)
-        eligible = (fit_limits is None or fit_limits[0] <= value <= fit_limits[1]) and not any(
-            low <= value <= high for low, high in excluded_ranges)
+        eligible = (fitted is not None and fitted[index]) if convention is not None else domain[index]
         model_x.append(value)
         model_y.append(ycalc[index] if eligible and index < len(ycalc) else None)
         model_residual.append(residual[index] if fitted is not None and fitted[index] and index < len(residual) else None)
@@ -1043,7 +1070,10 @@ def gsas_figure(payload: dict[str, Any]) -> go.Figure:
     figure.update_yaxes(title_text="Phases", tickmode="array", tickvals=list(range(len(axis_labels))), ticktext=axis_labels, row=3, col=1)
     figure.update_xaxes(title_text=axis_title, row=3, col=1)
     if fit_limits is not None:
-        figure.update_xaxes(range=fit_limits, autorange=False)
+        display_limits = list(fit_limits)
+        if native_domain and fitted is not None and np.any(fitted):
+            display_limits[1] = max(display_limits[1], float(np.asarray(x)[fitted][-1]))
+        figure.update_xaxes(range=display_limits, autorange=False)
     if any(value is not None for value in excluded_observed):
         figure.add_trace(go.Scatter(
             x=x, y=excluded_observed, mode="markers", name="Outside fit (valid observations)",
@@ -1057,6 +1087,8 @@ def gsas_figure(payload: dict[str, Any]) -> go.Figure:
                               showarrow=False, xanchor="left", font={"size": 11, "color": "#a66a00"})
     rwp = payload.get("rwp")
     title = "Refinement fit" + (f" / Rwp {float(rwp):.2f}%" if rwp is not None else "")
+    if native_domain and fitted is not None:
+        title += f" / N (fit) {int(fitted.sum()):,}"
     longest_label = max((len(label) for label in axis_labels), default=0)
     left_margin = min(250, max(110, 45 + longest_label * 7))
     return _finish_figure(figure, title, height=720, left_margin=left_margin)

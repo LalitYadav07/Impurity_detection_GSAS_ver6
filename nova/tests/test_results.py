@@ -1,6 +1,8 @@
 import json
 import zipfile
 from copy import deepcopy
+
+import pytest
 from hashlib import sha256
 from pathlib import Path
 
@@ -119,6 +121,78 @@ def test_refinement_plot_accepts_explicit_weights_and_withholds_unknown_differen
     assert list(legacy.data[0].y) == [0, -2, 0]
     assert all(y is None for y in legacy.data[2].y)
     assert any("validity unavailable" in a.text for a in legacy.layout.annotations)
+
+
+def _native_fit_plot_payload(instrument="TOF"):
+    from gpx_recipe.fit_domain import NATIVE_FIT_CONVENTION
+    step, origin = (20., 1000.) if instrument == "TOF" else (.05, 10.)
+    x = [origin + step * index for index in range(20)]
+    valid = [index not in (10, 11, 12, 13) for index in range(20)]
+    fitted = [valid[index] and 3 <= index <= 16 and index not in (6, 7) for index in range(20)]
+    observed = [float(index + 20) for index in range(20)]
+    observed[4:6] = [-3., 0.]
+    return {"schema_version": "1.1", "plot_kind": "gsas_fit_with_ticks_v1",
+            "fit_range_convention": NATIVE_FIT_CONVENTION,
+            "fit_limits": [x[2] + .2 * step, x[15] + .2 * step],
+            "excluded_ranges": [[x[6], x[7]]], "arrays": {
+                "x": x, "yobs": observed, "ycalc": [value - .25 for value in observed],
+                "resid": [.25] * 20, "weights": [0. if index == 12 else 4. for index in range(20)],
+                "valid": valid, "fit_valid": fitted}}
+
+
+@pytest.mark.parametrize("instrument", ["TOF", "CW"])
+def test_native_plot_includes_upper_bin_and_masks_excluded_or_invalid_points(instrument):
+    payload = _native_fit_plot_payload(instrument)
+    before = deepcopy(payload)
+    figure = figure_for_payload(payload)
+    arrays = payload["arrays"]
+    calculated = dict(zip(figure.data[1].x, figure.data[1].y))
+    difference = dict(zip(figure.data[2].x, figure.data[2].y))
+    for index, x in enumerate(arrays["x"]):
+        expected = arrays["fit_valid"][index]
+        assert (calculated[x] is not None) is expected
+        assert (difference[x] is not None) is expected
+        if expected:
+            assert calculated[x] == arrays["ycalc"][index]
+    assert arrays["x"][16] > payload["fit_limits"][1]
+    assert figure.layout.xaxis.range[1] == arrays["x"][16]
+    assert "N (fit) 8" in figure.layout.title.text
+    assert figure.data[0].y[4] == -3 and figure.data[0].y[5] == 0
+    assert None in figure.data[1].x and figure.data[1].connectgaps is False
+    assert payload == before
+
+
+@pytest.mark.parametrize("defect", ["missing_valid", "missing_fit", "numeric_mask", "missing_bin", "extra_bin",
+                                   "nonfinite_x", "reordered_x", "nonfinite_observation", "zero_weight",
+                                   "nonfinite_calculation", "nonfinite_residual", "unknown_convention", "legacy_schema"])
+def test_native_plot_rejects_bad_masks_and_nonfinite_or_reordered_evidence(defect):
+    payload = _native_fit_plot_payload()
+    arrays = payload["arrays"]
+    if defect == "missing_valid": arrays.pop("valid")
+    elif defect == "missing_fit": arrays.pop("fit_valid")
+    elif defect == "numeric_mask": arrays["fit_valid"] = list(map(int, arrays["fit_valid"]))
+    elif defect == "missing_bin": arrays["fit_valid"][16] = False
+    elif defect == "extra_bin": arrays["fit_valid"][17] = True
+    elif defect == "nonfinite_x": arrays["x"][0] = float("nan")
+    elif defect == "reordered_x": arrays["x"] = arrays["x"][::-1]
+    elif defect == "nonfinite_observation": arrays["yobs"][4] = float("inf")
+    elif defect == "zero_weight": arrays["weights"][4] = 0.
+    elif defect == "nonfinite_calculation": arrays["ycalc"][4] = float("nan")
+    elif defect == "nonfinite_residual": arrays["resid"][4] = float("nan")
+    elif defect == "legacy_schema": payload["schema_version"] = "1.0"
+    else: payload["fit_range_convention"] = "unreviewed convention"
+    figure = figure_for_payload(payload)
+    assert all(value is None for value in figure.data[1].y)
+    assert all(value is None for value in figure.data[2].y)
+    assert any("unavailable" in annotation.text for annotation in figure.layout.annotations)
+
+
+def test_legacy_plot_does_not_adopt_native_mask_without_explicit_convention():
+    payload = _native_fit_plot_payload()
+    payload.pop("fit_range_convention")
+    figure = figure_for_payload(payload)
+    assert all(value is None for value in figure.data[2].y)
+    assert figure.layout.xaxis.range[1] == payload["fit_limits"][1]
 
 
 def _bound_plot_fixture(tmp_path):

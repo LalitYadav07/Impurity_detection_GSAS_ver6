@@ -6,7 +6,7 @@ import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-from plot_payload import load_plot_payload
+from plot_payload import load_plot_payload, native_plot_mask, NATIVE_FIT_CONVENTION
 
 
 def discover_plot_payload_files(run_dir: Path) -> List[Path]:
@@ -158,6 +158,26 @@ def _fig_gsas_fit(payload: Dict[str, Any]) -> Optional[go.Figure]:
 
     if x is None or yobs is None or ycalc is None:
         return None
+
+    fitted = None
+    if payload.get("fit_range_convention") is not None:
+        if payload.get("schema_version") != "1.1" or payload["fit_range_convention"] != NATIVE_FIT_CONVENTION:
+            return None
+        try:
+            fitted = native_plot_mask(payload.get("arrays", payload),
+                                     payload["fit_limits"], payload.get("excluded_ranges", []))
+            yobs = np.where(fitted, yobs, np.nan)
+            ycalc = np.where(fitted, ycalc, np.nan)
+            if resid is not None:
+                if resid.shape != x.shape or not np.all(np.isfinite(resid[fitted])):
+                    return None
+                resid = np.where(fitted, resid, np.nan)
+            if resid_scaled is not None:
+                if resid_scaled.shape != x.shape or not np.all(np.isfinite(resid_scaled[fitted])):
+                    return None
+                resid_scaled = np.where(fitted, resid_scaled, np.nan)
+        except (KeyError, TypeError, ValueError, IndexError):
+            return None
 
     fig = make_subplots(
         rows=3,
@@ -350,6 +370,12 @@ def _fig_gsas_fit(payload: Dict[str, Any]) -> Optional[go.Figure]:
     fig.update_xaxes(showticklabels=False, row=2, col=1, showspikes=True, spikemode="across", spikecolor="#64748b")
 
     title = _clean_plot_title(payload.get("title") or payload.get("source_plot"), "Interactive fit")
+    if fitted is not None:
+        title += f" / N (fit) {int(fitted.sum()):,}"
+        if np.any(fitted):
+            limits = payload["fit_limits"]
+            fig.update_xaxes(range=[min(limits[0], float(x[fitted][0])),
+                                    max(limits[1], float(x[fitted][-1]))], autorange=False)
     fig.update_layout(
         height=max(700, 630 + 30 * max(0, len(phase_order) - 2)),
         title=dict(text=_short_label(title, 96), font=dict(size=17, color="#111827"), x=0.01),
