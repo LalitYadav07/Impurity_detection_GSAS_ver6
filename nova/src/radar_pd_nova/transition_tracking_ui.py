@@ -86,6 +86,44 @@ FINDINGS = {
 }
 
 
+def _component_change_kind(region):
+    kind = region.get("kind")
+    if kind == "local_component_separation_change":
+        return "separation"
+    if kind in {"local_resolved_component_count_change", "resolved_component_count_change"} or "resolved_component_count_change" in (region.get("kinds") or []):
+        return "count"
+    return "unknown"
+
+
+def _splitting_evidence_detail(indicator):
+    """Describe the recorded subtype without changing a boundary decision."""
+    counts = {kind: 0 for kind in ("separation", "count", "unknown")}
+    for region in indicator.get("regions") or []:
+        counts[_component_change_kind(region)] += 1
+    parts = []
+    for kind, wording in (
+        ("separation", "Existing doublet separation changed"),
+        ("count", "Resolved component count changed"),
+        ("unknown", "Component subtype is unavailable"),
+    ):
+        count = counts[kind]
+        if count:
+            parts.append(f"{wording} in {count} region{'s' if count != 1 else ''}.")
+    if parts:
+        parts.append("The physical cause is unresolved; local components can be overlapping reflections.")
+    return " ".join(parts)
+
+
+def _component_evidence_status(diagnostic):
+    kind = _component_change_kind(diagnostic)
+    if kind == "separation":
+        return ("Existing doublet separation changed; cause unresolved" if diagnostic.get("passes_rule")
+                else "Existing doublet; below change rule")
+    if kind == "count":
+        return "Resolved component count changed; cause unresolved"
+    return "Component subtype unavailable"
+
+
 class _TransitionRequestSuperseded(Exception):
     """A newer edit/watch owns the next replay; never publish the old result."""
 
@@ -575,6 +613,8 @@ class TransitionTrackingMixin:
                         headers=([{"title":"Indicator","key":"indicator"},{"title":"Result","key":"result"},
                                  {"title":"Support","key":"support"}],),
                         density="compact",items_per_page=-1,hide_default_footer=True)
+                    html.P("{{ item.detail }}", v_for="item in transition_signal_rows.filter(row => row.detail)",
+                        key="item.indicator", classes="radar-section-help")
                     html.P("{{ transition_rwp_notice }}",v_if="transition_rwp_notice",classes="radar-section-help")
                     with html.Div(v_if="transition_mode === 'observed'", classes="mt-3"):
                         html.H4("Curve overlay evidence")
@@ -1218,7 +1258,8 @@ class TransitionTrackingMixin:
         state.transition_signal_rows = [{"indicator":v["title"] + (" · selected" if v.get("selected") else ""),
             "result":"Select to compare" if k=="rwp" and not v.get("selected") else
                 "Triggered" if v["detected"] else "Below setting" if v["available"] else "Unavailable",
-            "support":"Whole pattern" if not v.get("localizable",True) else f"{v['support']} / {v['required_features']}"}
+            "support":"Whole pattern" if not v.get("localizable",True) else f"{v['support']} / {v['required_features']}",
+            "detail":_splitting_evidence_detail(v) if k=="splitting" else ""}
             for k,v in decision.get("indicators",{}).items()]
         rwp=(decision.get("indicators") or {}).get("rwp") or {}
         details=rwp.get("details") or {}
@@ -1582,7 +1623,7 @@ class TransitionTrackingMixin:
                         if profile["two_component_qualified"] else "Single component")
                 result["evidence"].append({
                     "region":f"{region['interval'][0]:.5g}–{region['interval'][1]:.5g} {COORDINATES[target]}",
-                    "status":"Local change" if diagnostic.get("passes_rule") else "Recognized split; below change rule",
+                    "status":_component_evidence_status(diagnostic),
                     "before":separations[0],"after":separations[1],
                     "effect":f"{diagnostic['separation_change_fwhm']:.3g}" if "separation_change_fwhm" in diagnostic else "Component count changed",
                     "error":f"{diagnostic.get('error_ratio',0):.3g}"})
