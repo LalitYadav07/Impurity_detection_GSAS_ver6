@@ -11,6 +11,54 @@ from radar_pd_nova.galaxy_service import GalaxyService
 from radar_pd_nova.models import AnalysisMode, ResultStatus, RunRecord, RunStatus
 
 
+@pytest.mark.parametrize('workspace', ['refinement', 'battery', 'experiment'])
+def test_selected_status_updates_without_taking_over_another_workspace(workspace):
+    app = RadarPdNovaApp()
+    app._sync_runs = lambda: None
+    original = RunRecord(uid='selected', galaxy_job_id='job-selected', history_id='history',
+                         name='Selected run', mode=AnalysisMode.FULL, status=RunStatus.QUEUED)
+    app.records = {original.uid: original}
+    app._select_record(original)
+    app.server.state.workspace_view = workspace
+    app._load_results = lambda *_a, **_k: pytest.fail('Do not render another workspace')
+    completed = original.model_copy(deep=True, update={
+        'status': RunStatus.OK, 'analysis_status': RunStatus.OK,
+        'result_status': ResultStatus.COLLECTING, 'stage': 'Collecting results', 'progress': 100,
+    })
+
+    app._monitor_update(completed)
+
+    assert app.server.state.workspace_view == workspace
+    assert app.server.state.selected_run_status == 'Ok'
+    assert app.server.state.selected_analysis_status == 'Ok'
+    assert app.server.state.selected_run_progress == 100
+    assert app.server.state.selected_run_stage == 'Analysis complete; loading results'
+    assert app.server.state.result_owner_uid != completed.uid
+
+
+def test_return_to_monitor_uses_current_record_without_download():
+    app = RadarPdNovaApp()
+    original = RunRecord(uid='selected', galaxy_job_id='job-selected', history_id='history',
+                         name='Selected run', mode=AnalysisMode.FULL, status=RunStatus.QUEUED)
+    app.records = {original.uid: original}
+    app._select_record(original)
+    app.server.state.workspace_view = 'refinement'
+    # Model a completion already in the cache while the rendered header still
+    # contains the queued state, as observed in the actual two-scan NDIP test.
+    app.records[original.uid] = original.model_copy(deep=True, update={
+        'status': RunStatus.OK, 'analysis_status': RunStatus.OK,
+        'result_status': ResultStatus.READY, 'stage': 'Results ready', 'progress': 100,
+    })
+    app._load_results = lambda *_a, **_k: pytest.fail('Monitor navigation needs no result download')
+
+    app.select_workspace_view('monitor')
+
+    assert app.server.state.workspace_view == 'monitor'
+    assert app.server.state.selected_run_status == 'Ok'
+    assert app.server.state.selected_result_status == 'Ready'
+    assert app.server.state.selected_run_stage == 'Results ready'
+
+
 @pytest.mark.parametrize('view', ['results', 'plots', 'files'])
 def test_return_from_refinement_loads_selected_completed_cache_without_download(tmp_path, view):
     app = RadarPdNovaApp()

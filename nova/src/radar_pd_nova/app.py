@@ -5148,7 +5148,11 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
             self.show_powgen_dashboard()
         else:
             self.server.state.workspace_view = value
-            if value in {"results", "plots", "files"}:
+            if value == "monitor":
+                record = self.records.get(self.server.state.selected_run_uid)
+                if record is not None:
+                    self._sync_selected_run_status(record)
+            elif value in {"results", "plots", "files"}:
                 record = self.records.get(self.server.state.selected_run_uid)
                 if record is not None:
                     # Completion may have arrived while Refinement or Battery
@@ -6490,6 +6494,11 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
     def _monitor_update(self, record: RunRecord) -> None:
         self.records[record.uid] = record
         self._sync_runs()
+        if self.server.state.selected_run_uid == record.uid:
+            # Status remains relevant while a different workspace owns its
+            # own plots and selection. Updating it must not render a result or
+            # take the user away from Refinement, Battery or the experiment.
+            self._sync_selected_run_status(record)
         if (self.server.state.selected_run_uid == record.uid
                 and self.server.state.workspace_view in {"monitor", "results", "plots", "files"}):
             self._select_record(record)
@@ -7143,6 +7152,21 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         state.selected_run_uid = record.uid
         state.run_selection = [record.uid]
         state.selected_run_name = record.name
+        self._sync_selected_run_status(record)
+        state.viewed_run_mode = record.mode.value
+        state.viewed_output_profile = record.output_profile
+        if previous_run_uid != record.uid or (previous_result_uid and previous_result_uid != record.uid):
+            state.gsasii_launch_url = ""
+            state.gsasii_session_status = ""
+            state.gsasii_status_message = ""
+            state.selected_result_load_error = ""
+        self._sync_workspace_options(record.mode)
+        state.viewed_configuration = self._record_configuration_yaml(record)
+        state.run_provenance_rows = self._run_provenance(record)
+
+    def _sync_selected_run_status(self, record: RunRecord) -> None:
+        """Refresh the selected run's status without changing workspace content."""
+        state = self.server.state
         state.selected_run_status = record.status.value.title()
         state.selected_analysis_status = (record.analysis_status or record.status).value.title()
         state.selected_result_status = record.result_status.value.replace("_", " ").title()
@@ -7164,18 +7188,8 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         state.selected_run_progress_known = stage_progress_is_known(record.stage, record.status)
         state.selected_run_message = record.message
         state.selected_run_console = record.console_tail
-        state.viewed_run_mode = record.mode.value
-        state.viewed_output_profile = record.output_profile
         state.monitor_stages = self._monitor_stage_rows(record)
-        if previous_run_uid != record.uid or (previous_result_uid and previous_result_uid != record.uid):
-            state.gsasii_launch_url = ""
-            state.gsasii_session_status = ""
-            state.gsasii_status_message = ""
-            state.selected_result_load_error = ""
         state.selected_run_elapsed = run_elapsed_label(record)
-        self._sync_workspace_options(record.mode)
-        state.viewed_configuration = self._record_configuration_yaml(record)
-        state.run_provenance_rows = self._run_provenance(record)
 
     def use_selected_configuration(self, **_: Any) -> None:
         uid = self.server.state.selected_run_uid
