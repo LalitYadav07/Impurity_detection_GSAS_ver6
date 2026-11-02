@@ -95,6 +95,12 @@ jobs:
             /opt/conda/bin/python /opt/gsasii-gui/smoke_save_as.py /tmp/public-save-as-smoke
           '
 
+      - name: Set up Node for the real noVNC client check
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          package-manager-cache: false
+
       - name: Smoke test the noVNC gateway
         shell: bash
         run: |
@@ -181,25 +187,8 @@ jobs:
           # noVNC constructs the correct URL and completes its RFB connection.
           browser="$(command -v google-chrome || command -v chromium || command -v chromium-browser)"
           test -n "${browser}"
-          timeout 45 "${browser}" --headless=new --no-sandbox --disable-gpu \
-            --disable-dev-shm-usage --user-data-dir="${smoke_dir}/browser" \
-            --virtual-time-budget=12000 --dump-dom \
-            http://127.0.0.1:18080/gsasii/ \
-            > /tmp/gsasii-client.html 2> /tmp/gsasii-client.log
-          python - <<'PY'
-          from html.parser import HTMLParser
-          from pathlib import Path
-          class ClientState(HTMLParser):
-              connected = False
-              def handle_starttag(self, tag, attrs):
-                  if tag == 'html':
-                      self.connected = 'noVNC_connected' in dict(attrs).get('class', '').split()
-          state = ClientState()
-          state.feed(Path('/tmp/gsasii-client.html').read_text())
-          if not state.connected:
-              raise SystemExit('The real noVNC browser client did not complete its RFB connection')
-          print('The pinned noVNC browser client connected to the prefixed desktop')
-          PY
+          timeout 45 node gsasii_gui/scripts/smoke_novnc_client.mjs \
+            "${browser}" http://127.0.0.1:18080/gsasii/
           docker stop --time 10 "${container_id}"
           test -s "${smoke_dir}/output.gpx"
           docker rm "${container_id}"

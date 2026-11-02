@@ -179,7 +179,11 @@ def test_release_smoke_checks_http_redirect_and_websocket_upgrade() -> None:
     assert "/gsasii/healthz" in workflow
     assert "path=gsasii/websockify" in workflow
     assert "parse_qs" in workflow
-    assert '--dump-dom' in workflow and 'noVNC_connected' in workflow
+    assert 'smoke_novnc_client.mjs' in workflow
+    browser_check = _read('scripts/smoke_novnc_client.mjs')
+    assert 'noVNC_connected' in browser_check
+    assert 'Network.webSocketHandshakeResponseReceived' in browser_check
+    assert '--virtual-time-budget' not in browser_check
     assert "Upgrade: websocket" in workflow
     assert 'b" 101 "' in workflow
     assert "docker inspect --format '{{.State.Running}}'" in workflow
