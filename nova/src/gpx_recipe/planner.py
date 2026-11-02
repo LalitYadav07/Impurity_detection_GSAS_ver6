@@ -13,6 +13,7 @@ from .schema import response_schema, normalize_optional_nulls
 from .intent import literal_stage_cards,check_literal_free,natural_atom_only_cards
 from .usage import summarize_calls
 from .setup_context import setup_context
+from .occupancy_review import reviewed_labels
 
 ROOT = Path(__file__).resolve().parent
 
@@ -90,6 +91,16 @@ def build_payload(request, context, previous=None):
          "allowed_flags": ("F" + ("X" if (a.get("position_dof") or 0) > 0 else "") + ("U" if a.get("adp_type") == "I" else "")) if p["histograms"] else ""}
         for a in p["atoms"]]} for p in context["phases"]]
     for capability, phase in zip(capabilities, context['phases']):
+        retained = reviewed_labels(phase.get('occupancy_review') or
+            context.get('binding', {}).get('occupancy_reviews', {}).get(phase['key']))
+        if retained:
+            reason = 'Reviewed source rounding is retained unchanged; these site occupancies and positions must stay held. Uiso availability follows the native ADP type.'
+            capability['reviewed_occupancy_retention'] = {'labels': sorted(retained), 'reason': reason}
+            for atom in capability['atoms']:
+                if atom['label'] in retained:
+                    atom.update(can_refine_occupancy=False, can_refine_positions=False,
+                                allowed_flags=atom['allowed_flags'].replace('F', '').replace('X', ''),
+                                held_site_reason=reason)
         capability['sample_widths'] = {key: {
             kind: {'supported': bool(hap.get(family)) and hap[family][0] == 'isotropic', 'unit': unit,
                    'scope': 'Existing isotropic HAP coefficient only; mixing and instrument held fixed'}

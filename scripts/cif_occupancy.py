@@ -79,8 +79,8 @@ def _structural_block(raw: bytes):
     return blocks[0]
 
 
-def model_signature(raw: bytes, *, neutral_elements: bool = False) -> str:
-    """Bind all non-cell fields, including symmetry, in a lattice derivative.
+def model_fields(raw: bytes, *, neutral_elements: bool = False) -> dict[str, Any]:
+    """Canonical non-cell fields used by the existing model signature.
 
     A neutron export may replace charged atom names with the same elements.
     No other atom, symmetry, displacement or constraint field is ignored.
@@ -103,7 +103,12 @@ def model_signature(raw: bytes, *, neutral_elements: bool = False) -> str:
                 return species_key(_species(text))
             return text
         result[tag] = [normalized(item) for item in value] if isinstance(value, (list, tuple)) else normalized(value)
-    return digest(json.dumps(result, sort_keys=True, separators=(',', ':'), allow_nan=False).encode())
+    return result
+
+
+def model_signature(raw: bytes, *, neutral_elements: bool = False) -> str:
+    return digest(json.dumps(model_fields(raw, neutral_elements=neutral_elements),
+                             sort_keys=True, separators=(',', ':'), allow_nan=False).encode())
 
 
 def raw_sites(raw: bytes) -> tuple[list[dict[str, Any]], str]:

@@ -13,12 +13,14 @@ from gpx_recipe import occupancy_review as review
 from gpx_recipe.advanced import check_site_totals, validate_stage
 
 
-def fixture(attach=True):
+def fixture(attach=True, second_oxygen=False):
     source = [
         dict(label="C1", symbol="C", occupancy=.6, xyz=[0., 0., 0.]),
         dict(label="Li1", symbol="Li", occupancy=.40066, xyz=[0., 0., 0.]),
         dict(label="O1", symbol="O", occupancy=1., xyz=[.3, .4, .5]),
     ]
+    if second_oxygen:
+        source.append(dict(label='O2', symbol='O', occupancy=1., xyz=[.7, .6, .5]))
     phase = SimpleNamespace(name="reviewed", data={
         "General": {"Type": "nuclear", "AtomPtrs": [3, 1, 7, 9],
             "SGData": {"SpGrp": "P 1", "SGInv": False, "SGCen": [[0., 0., 0.]],
@@ -28,17 +30,22 @@ def fixture(attach=True):
     })
     phase.atom = lambda label: SimpleNamespace(occupancy=next(a[6] for a in phase.data["Atoms"] if a[0] == label),
         refinement_flags=next(a[2] for a in phase.data["Atoms"] if a[0] == label))
+    model = {'_space_group_name_h-m_alt': 'P 1', '_space_group_symop_operation_xyz': ['x,y,z'],
+             '_atom_site_label': [a['label'] for a in source],
+             '_atom_site_type_symbol': [a['symbol'] for a in source],
+             '_atom_site_occupancy': [str(a['occupancy']) for a in source]}
+    phase.data['General']['SGData'] = copy.deepcopy(review._source_space_group(model))
     policy = {"schema": review.POLICY_SCHEMA, "reviewed": True, "normalization_applied": False,
         "maximum_site_excess": .001, "review_note": "Retain reviewed source rounding; no normalization",
         "source_sha256": "a" * 64, "canonical_sha256": "a" * 64,
         "atom_signature": review._digest(source), "model_signature": "b" * 64,
-        "nuclear_model_signature": "c" * 64,
+        "nuclear_model_signature": review._digest(model),
         "affected_sites": [{"labels": ["C1", "Li1"], "fractional_coordinates": [0., 0., 0.],
             "total": 1.00066, "components": {"C": .6, "Li": .40066}}]}
     policy["policy_sha256"] = review._digest(policy)
     if attach:
         phase.data[review.DATA_KEY] = review.make_receipt(phase, policy,
-            source_sha256="a" * 64, imported_cif_sha256="a" * 64, source_atoms=source)
+            source_sha256="a" * 64, imported_cif_sha256="a" * 64, source_atoms=source, source_model=model)
     atoms = [{"label": row[0], "native_id": i, "coordinates": row[3:6], "occupancy": row[6], "multiplicity": row[8]}
              for i, row in enumerate(phase.data["Atoms"])]
     context = {"phases": [{"key": "p0", "native_id": 7, "name": phase.name,
@@ -72,7 +79,8 @@ def test_semantic_binding_ignores_lattice_derivative_receipts_and_unrelated_atom
                   derived_sha256='d' * 64)
     policy['policy_sha256'] = review._digest({k: v for k, v in policy.items() if k != 'policy_sha256'})
     phase.data[review.DATA_KEY] = review.make_receipt(phase, policy,
-        source_sha256='d' * 64, imported_cif_sha256='d' * 64, source_atoms=source)
+        source_sha256='d' * 64, imported_cif_sha256='d' * 64, source_atoms=source,
+        source_model=phase.data[review.DATA_KEY]['source_model'])
     phase.data['Atoms'][2][3] += .01
     phase.data['Atoms'][2][10] += .02
     phase.data['General']['Cell'] = [False, 4.1, 4., 4., 90., 90., 90., 65.6]
@@ -211,6 +219,49 @@ def test_malformed_rehashed_inventory_is_not_native_evidence(mutation):
     with pytest.raises(ValueError): review.validate_receipt(phase)
 
 
+@pytest.mark.parametrize('change', ['inversion', 'operator', 'origin_0123', 'origin_quarter', 'source_model'])
+def test_receipt_rehash_cannot_change_policy_bound_symmetry_or_origin(change):
+    phase, _, _, _ = fixture()
+    receipt = phase.data[review.DATA_KEY]
+    if change == 'inversion':
+        phase.data['General']['SGData']['SGInv'] = True
+        receipt['symmetry']['SGInv'] = True
+    elif change == 'operator':
+        phase.data['General']['SGData']['SGOps'][0][1][0] = .5
+        receipt['symmetry']['SGOps'][0][1][0] = .5
+    elif change == 'source_model':
+        receipt['source_model']['_space_group_name_h-m_alt'] = 'P -1'
+    else:
+        shift = .123 if change == 'origin_0123' else .25
+        for row in phase.data['Atoms']:
+            row[3] += shift
+        for row in receipt['native_atoms']:
+            row['coordinates'][0] += shift
+    receipt['receipt_sha256'] = review._digest({k: v for k, v in receipt.items() if k != 'receipt_sha256'})
+    with pytest.raises(ValueError):
+        review.validate_receipt(phase)
+
+
+@pytest.mark.parametrize('with_receipt', [False, True])
+def test_unreviewed_singleton_cannot_borrow_reviewed_site_allowance(with_receipt):
+    phase, context, _, _ = fixture(with_receipt)
+    phase.data['Atoms'][2][6] = 1.0005
+    if with_receipt:
+        with pytest.raises(ValueError, match='unreviewed current site'):
+            review.validate_receipt(phase)
+    with pytest.raises(ValueError):
+        check_site_totals(project(phase), context)
+
+
+def test_unrelated_new_colocation_cannot_create_an_unreviewed_overfilled_site():
+    phase, context, _, _ = fixture(second_oxygen=True)
+    phase.data['Atoms'][3][3:6] = phase.data['Atoms'][2][3:6]
+    with pytest.raises(ValueError, match='unreviewed current site'):
+        review.validate_receipt(phase)
+    with pytest.raises(ValueError):
+        check_site_totals(project(phase), context)
+
+
 def test_periodic_coordinate_identity_is_allowed_but_current_native_flags_are_held():
     phase, context, _, _ = fixture()
     phase.data["Atoms"][0][3] += 1
@@ -226,7 +277,7 @@ def test_local_scientific_import_fallback_needs_no_nova_web_package():
 sys.path.insert(0, sys.argv[1])
 import gsas_cif_import
 module = gsas_cif_import._occupancy_review_module()
-assert module.SCHEMA == "radar-gpx-occupancy-review/v1"
+assert module.SCHEMA == "radar-gpx-occupancy-review/v2"
 assert "radar_pd_nova" not in sys.modules
 print(module.__file__)
 '''

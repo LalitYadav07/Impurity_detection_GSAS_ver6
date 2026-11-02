@@ -58,3 +58,24 @@ def test_phase_histogram_model_retains_configuration_not_new_results(context):
     projected = setup_context(context)
     assert "Size" in projected["phases"][0]["histogram_phase_models"]["h0"]
     assert "PRIVATE_RESULT" not in json.dumps(projected)
+
+
+def test_planner_retention_capabilities_match_native_guards_without_source_payload(context):
+    phase = context['phases'][0]
+    phase['atoms'][1]['position_dof'] = 3
+    phase['occupancy_review'] = {'reviewed_groups': [['Mg1']], 'source_model': {'_private_source_text': 'NOT_FOR_MODEL'}}
+    context['binding'] = {'occupancy_reviews': {'p0': {'held_sites': [[{'label': 'Mg1'}]]}}}
+    original = copy.deepcopy(context)
+    for supplied in (context, setup_context(context)):
+        payload = build_payload('Refine allowed oxygen positions and Uiso; retain reviewed site values', supplied)
+        atoms = {a['label']: a for a in payload['target_capabilities'][0]['atoms']}
+        assert atoms['Mg1']['can_refine_occupancy'] is False
+        assert atoms['Mg1']['can_refine_positions'] is False
+        assert atoms['Mg1']['can_refine_Uiso'] is True
+        assert atoms['Mg1']['allowed_flags'] == 'U'
+        assert atoms['Mg1']['held_site_reason']
+        assert atoms['O1']['can_refine_positions'] is True
+        assert atoms['O1']['allowed_flags'] == 'FXU'
+        assert 'NOT_FOR_MODEL' not in json.dumps(payload)
+        assert 'source_model' not in json.dumps(payload)
+    assert context == original

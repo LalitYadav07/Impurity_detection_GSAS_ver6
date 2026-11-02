@@ -158,3 +158,56 @@ def test_final_gpx_snapshot_retains_recipe_identity_after_allowed_oxygen_and_cel
     assert after['phases'][0]['occupancy_review'] == before['phases'][0]['occupancy_review']
     assert after['phases'][0]['atoms'][2]['coordinates'] != before['phases'][0]['atoms'][2]['coordinates']
     assert cif.read_bytes() == raw
+
+
+def test_reviewed_native_origin_conversion_is_reproved_from_the_source_model(tmp_path, monkeypatch):
+    pytest.importorskip('pymatgen')
+    G2 = pytest.importorskip('GSASII.GSASIIscriptable')
+    from GSASII import GSASIIspc
+    from pymatgen.core.operations import SymmOp
+    from cif_occupancy import AUTH_ENV, make_review, write_review
+    import gsas_cif_import
+    import json
+
+    target = gsas_cif_import._gsas_operations(GSASIIspc.SpcGroup('P 21/c')[1])
+    shift = np.array([.25, 0., 0.])
+    operations = [SymmOp.from_rotation_and_translation(r, t - shift + np.asarray(r) @ shift).as_xyz_str()
+                  for r, t in target]
+    text = """data_origin
+_cell_length_a 5
+_cell_length_b 6
+_cell_length_c 7
+_cell_angle_alpha 90
+_cell_angle_beta 105
+_cell_angle_gamma 90
+_space_group_name_H-M_alt 'P 21/c'
+_space_group_IT_number 14
+loop_
+_space_group_symop_operation_xyz
+""" + ''.join("'" + operation + "'\n" for operation in operations) + """loop_
+_atom_site_label
+_atom_site_type_symbol
+_atom_site_fract_x
+_atom_site_fract_y
+_atom_site_fract_z
+_atom_site_occupancy
+C1 C .1 .2 .3 .6
+Li1 Li .1 .2 .3 .40066
+O1 O .2 .3 .4 1
+"""
+    source = tmp_path / 'origin.cif'
+    source.write_text(text)
+    policy = make_review(source.read_bytes(), .001, 'Retain reviewed source in its proved origin setting')
+    write_review(source, policy)
+    ledger = tmp_path / 'authorization.json'
+    ledger.write_text(json.dumps({'root':str(tmp_path),'approved_policies':{policy['policy_sha256']:policy}}))
+    monkeypatch.setenv(AUTH_ENV,str(ledger))
+    project = G2.G2Project(newgpx=str(tmp_path / 'origin.gpx'))
+    phase = gsas_cif_import.add_verified_phase(project, source, phasename='origin', histograms=[])
+    module = gsas_cif_import._occupancy_review_module()
+    assert module.validate_receipt(phase)
+    assert list((tmp_path / 'verified_cif_settings').glob('*.origin.json'))
+    project.save()
+    reopened = G2.G2Project(gpxfile=str(tmp_path / 'origin.gpx')).phase('origin')
+    assert module.validate_receipt(reopened)
+    assert source.read_text() == text

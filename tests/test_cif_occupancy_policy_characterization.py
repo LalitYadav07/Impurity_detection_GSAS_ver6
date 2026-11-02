@@ -177,14 +177,14 @@ def test_reviewed_policy_must_reach_native_guard_before_gsas(tmp_path,monkeypatc
     activate_test_review(tmp_path,path,monkeypatch)
     import gsas_cif_import
     monkeypatch.setattr(gsas_cif_import,'prepare_cif_for_gsas',lambda source,cache:source)
+    sg = gsas_cif_import._occupancy_review_module()._source_space_group({'_space_group_name_h-m_alt':'P 1'})
     class Project:
         filename=str(tmp_path/'work.gpx')
         def add_phase(self,p,**kwargs):
             assert Path(p).read_bytes()==raw
             return SimpleNamespace(name='synthetic',data={
                 'General':{'NoAtoms':{'C':0.6,'Li':0.40066},'AtomPtrs':[3,1,7,9],
-                    'SGData':{'SpGrp':'P 1','SGInv':False,'SGCen':[[0,0,0]],
-                              'SGOps':[([[1,0,0],[0,1,0],[0,0,1]],[0,0,0])]}},
+                    'SGData':sg},
                 'Atoms':[['C1','C','',0,0,0,.6,'1',1],['Li1','Li','',0,0,0,.40066,'1',1]]})
     phase=add_verified_phase(Project(),path,phasename='synthetic')
     assert phase.name=='synthetic'

@@ -56,58 +56,12 @@ def elemental_counts(atom_types):
 
 
 def _operator_sets(operations):
-    groups = defaultdict(set)
-    for rotation, translation in operations:
-        rotation = np.asarray(rotation, dtype=float)
-        translation = np.asarray(translation, dtype=float)
-        if rotation.shape != (3, 3) or translation.shape != (3,):
-            raise ValueError("A crystallographic operation needs a 3x3 rotation and three translations")
-        if not np.all(np.isfinite(rotation)) or not np.all(np.isfinite(translation)):
-            raise ValueError("Non-finite crystallographic operation")
-        rounded_rotation = np.rint(rotation).astype(int)
-        rounded_translation = np.rint(translation * DENOMINATOR).astype(int)
-        if not np.allclose(rotation, rounded_rotation, atol=1e-8, rtol=0) or not np.allclose(
-            translation * DENOMINATOR, rounded_translation, atol=1e-6, rtol=0
-        ):
-            raise ValueError("Unsupported crystallographic operation precision; manual setting review required")
-        groups[tuple(rounded_rotation.flat)].add(tuple(rounded_translation % DENOMINATOR))
-    if not groups:
-        raise ValueError("No explicit crystallographic symmetry operations")
-    return dict(groups)
+    return _occupancy_review_module().operator_sets(operations)
 
 
 def matching_origin_shift(source_operations, target_operations):
-    """Find a verified fractional origin translation, without changing the basis.
-
-The finite grid covers conventional rational origin choices. Every supplied
-operator must match after conjugation, not just one generator or atom count.
-Unrepresentable settings fail for review instead of using a near match.
-"""
-    source, target = _operator_sets(source_operations), _operator_sets(target_operations)
-    if set(source) != set(target) or any(len(source[k]) != len(target[k]) for k in source):
-        raise ValueError("CIF and GSAS-II require a basis/setting transformation, not a verified origin translation")
-    if source == target:
-        return np.zeros(3)
-    candidates = np.indices((DENOMINATOR,) * 3).reshape(3, -1).T
-    keys = sorted(source, key=lambda k: -np.linalg.matrix_rank(np.eye(3) - np.array(k).reshape(3, 3)))
-    for key in keys:
-        rotation = np.array(key).reshape(3, 3)
-        offsets = candidates - candidates @ rotation.T
-        keep = np.ones(len(candidates), dtype=bool)
-        targets = np.array(sorted(target[key]))
-        for translation in source[key]:
-            transformed = (offsets + np.array(translation)) % DENOMINATOR
-            keep &= np.any(np.all(transformed[:, None, :] == targets[None, :, :], axis=2), axis=1)
-        candidates = candidates[keep]
-        if not len(candidates):
-            raise ValueError("No exact supported origin translation maps the supplied CIF operators to GSAS-II")
-    signed = (candidates + DENOMINATOR // 2) % DENOMINATOR - DENOMINATOR // 2
-    order = sorted(range(len(candidates)), key=lambda i: (int(np.dot(signed[i], signed[i])), tuple(signed[i])))
-    shift = signed[order[0]] / DENOMINATOR
-    translated = [(r, np.asarray(t) + shift - np.asarray(r) @ shift) for r, t in source_operations]
-    if _operator_sets(translated) != target:
-        raise ValueError("Origin transformation failed its complete symmetry-operator check")
-    return shift
+    """Use the same complete origin proof at import and native receipt readback."""
+    return _occupancy_review_module().matching_origin_shift(source_operations, target_operations)
 
 
 def _gsas_operations(sgdata):
@@ -259,13 +213,15 @@ def add_verified_phase(project, cif_file, **kwargs):
                "expected_elemental_counts": expected, "imported_elemental_counts": actual,
                "relative_elemental_inventory_preserved": True, "phase": phase.name}
     if review is not None:
+        from cif_occupancy import model_fields
         receipt['occupancy_review']=review
         receipt['absolute_counts_and_site_values_preserved']=True
         native_review = _occupancy_review_module()
         source_rows, _ = raw_sites(source_bytes)
         phase.data[native_review.DATA_KEY] = native_review.make_receipt(
             phase, review, source_sha256=receipt['source_sha256'],
-            imported_cif_sha256=receipt['imported_cif_sha256'], source_atoms=source_rows)
+            imported_cif_sha256=receipt['imported_cif_sha256'], source_atoms=source_rows,
+            source_model=model_fields(source_bytes, neutral_elements=True))
         native_review.validate_receipt(phase)
     target = cache / (source.stem + '__' + receipt['source_sha256'][:12] + '.import.json')
     temporary = target.with_suffix('.tmp')

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 import hashlib
+import importlib.util
 import json
 import math
 from pathlib import Path
@@ -21,6 +22,24 @@ VERSION = "gsas-cif-origin/1"
 DENOMINATOR = 24
 
 
+def _occupancy_review_module():
+    """Load the shared pure validator in batch images and source checkouts."""
+    try:
+        from gpx_recipe import occupancy_review
+        return occupancy_review
+    except ModuleNotFoundError as exc:
+        if exc.name != 'gpx_recipe':
+            raise
+        # Local scientific scripts need no installed NOVA web dependencies.
+        path = Path(__file__).resolve().parents[1] / 'nova/src/gpx_recipe/occupancy_review.py'
+        spec = importlib.util.spec_from_file_location('radar_native_occupancy_review', path)
+        if spec is None or spec.loader is None:
+            raise ValueError('The shared native occupancy-review validator is unavailable') from exc
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+
 def elemental_counts(atom_types):
     """Aggregate charged GSAS-II species without changing the stored atom types."""
     result = defaultdict(float)
@@ -28,63 +47,21 @@ def elemental_counts(atom_types):
         match = re.fullmatch(r"([A-Z][a-z]?)(?:(?:[+-]\d*)|(?:\d+[+-]))?", species)
         if not match:
             raise ValueError("Unrecognized atom type in imported CIF; structure review required")
-        result[match[1]] += float(count)
+        amount = float(count)
+        if not math.isfinite(amount) or amount < 0:
+            raise ValueError("Invalid atom count in imported CIF; structure review required")
+        if amount:
+            result[match[1]] += amount
     return dict(result)
 
 
 def _operator_sets(operations):
-    groups = defaultdict(set)
-    for rotation, translation in operations:
-        rotation = np.asarray(rotation, dtype=float)
-        translation = np.asarray(translation, dtype=float)
-        if rotation.shape != (3, 3) or translation.shape != (3,):
-            raise ValueError("A crystallographic operation needs a 3x3 rotation and three translations")
-        if not np.all(np.isfinite(rotation)) or not np.all(np.isfinite(translation)):
-            raise ValueError("Non-finite crystallographic operation")
-        rounded_rotation = np.rint(rotation).astype(int)
-        rounded_translation = np.rint(translation * DENOMINATOR).astype(int)
-        if not np.allclose(rotation, rounded_rotation, atol=1e-8, rtol=0) or not np.allclose(
-            translation * DENOMINATOR, rounded_translation, atol=1e-6, rtol=0
-        ):
-            raise ValueError("Unsupported crystallographic operation precision; manual setting review required")
-        groups[tuple(rounded_rotation.flat)].add(tuple(rounded_translation % DENOMINATOR))
-    if not groups:
-        raise ValueError("No explicit crystallographic symmetry operations")
-    return dict(groups)
+    return _occupancy_review_module().operator_sets(operations)
 
 
 def matching_origin_shift(source_operations, target_operations):
-    """Find a verified fractional origin translation, without changing the basis.
-
-The finite grid covers conventional rational origin choices. Every supplied
-operator must match after conjugation, not just one generator or atom count.
-Unrepresentable settings fail for review instead of using a near match.
-"""
-    source, target = _operator_sets(source_operations), _operator_sets(target_operations)
-    if set(source) != set(target) or any(len(source[k]) != len(target[k]) for k in source):
-        raise ValueError("CIF and GSAS-II require a basis/setting transformation, not a verified origin translation")
-    if source == target:
-        return np.zeros(3)
-    candidates = np.indices((DENOMINATOR,) * 3).reshape(3, -1).T
-    keys = sorted(source, key=lambda k: -np.linalg.matrix_rank(np.eye(3) - np.array(k).reshape(3, 3)))
-    for key in keys:
-        rotation = np.array(key).reshape(3, 3)
-        offsets = candidates - candidates @ rotation.T
-        keep = np.ones(len(candidates), dtype=bool)
-        targets = np.array(sorted(target[key]))
-        for translation in source[key]:
-            transformed = (offsets + np.array(translation)) % DENOMINATOR
-            keep &= np.any(np.all(transformed[:, None, :] == targets[None, :, :], axis=2), axis=1)
-        candidates = candidates[keep]
-        if not len(candidates):
-            raise ValueError("No exact supported origin translation maps the supplied CIF operators to GSAS-II")
-    signed = (candidates + DENOMINATOR // 2) % DENOMINATOR - DENOMINATOR // 2
-    order = sorted(range(len(candidates)), key=lambda i: (int(np.dot(signed[i], signed[i])), tuple(signed[i])))
-    shift = signed[order[0]] / DENOMINATOR
-    translated = [(r, np.asarray(t) + shift - np.asarray(r) @ shift) for r, t in source_operations]
-    if _operator_sets(translated) != target:
-        raise ValueError("Origin transformation failed its complete symmetry-operator check")
-    return shift
+    """Use the same complete origin proof at import and native receipt readback."""
+    return _occupancy_review_module().matching_origin_shift(source_operations, target_operations)
 
 
 def _gsas_operations(sgdata):
@@ -185,26 +162,67 @@ def add_verified_phase(project, cif_file, **kwargs):
     from pymatgen.core import Structure
 
     source = Path(cif_file).resolve(strict=True)
+    source_bytes = source.read_bytes()
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        original = Structure.from_file(source)
-    original.remove_oxidation_states()
-    expected = original.composition.get_el_amt_dict()
+        from cif_occupancy import load_authorized_structure
+        original = load_authorized_structure(source)
+    # Elemental aggregation already ignores oxidation states. Mutating each
+    # species through pymatgen's setter would reject an explicitly reviewed
+    # small excess, even though its unchanged values are the import reference.
+    from cif_occupancy import authorized_review, raw_sites, species_inventory, species_key, _species
+    expected = species_inventory(original)
+    review = authorized_review(source)
     cache = Path(project.filename).resolve().parent / "verified_cif_settings"
     prepared = prepare_cif_for_gsas(source, cache)
+    prepared_bytes = prepared.read_bytes()
     phase = project.add_phase(str(prepared), **kwargs)
+    if source.read_bytes() != source_bytes or prepared.read_bytes() != prepared_bytes:
+        raise ValueError("CIF changed during verified import; retry from an immutable reviewed source")
     actual = elemental_counts(phase.data['General']['NoAtoms'])
     e_sum, a_sum = sum(expected.values()), sum(actual.values())
     if not e_sum > 0 or not a_sum > 0 or set(expected) != set(actual) or any(
         not math.isclose(expected[k] / e_sum, actual[k] / a_sum, abs_tol=1e-6, rel_tol=1e-6) for k in expected
     ):
         raise ValueError("CIF import changed the relative elemental atom counts; refinement withheld for structure-setting review")
+    if review is not None:
+        if any(not math.isclose(expected[key],actual[key],rel_tol=0,abs_tol=1e-8) for key in expected):
+            raise ValueError("CIF import changed absolute reviewed atom counts; refinement withheld")
+        # Equal totals alone can hide redistribution or uniform normalization.
+        # Compare the imported asymmetric rows with the proven prepared CIF.
+        rows,_ = raw_sites(prepared_bytes)
+        general = phase.data['General']
+        if 'AtomPtrs' not in general or 'Atoms' not in phase.data:
+            raise ValueError("Reviewed CIF import has no auditable atom-site inventory")
+        cx,ct,_,_ = general['AtomPtrs']
+        atoms = phase.data['Atoms']
+        by_label = {str(atom[ct-1]):atom for atom in atoms}
+        if len(by_label) != len(atoms) or set(by_label) != {row['label'] for row in rows}:
+            raise ValueError("Reviewed CIF import changed the atom-site labels")
+        for row in rows:
+            atom = by_label[row['label']]
+            element = species_key(_species(str(atom[ct])))
+            if (element != species_key(_species(row['symbol']))
+                or not math.isclose(float(atom[cx+3]),row['occupancy'],rel_tol=0,abs_tol=1e-10)
+                or not np.allclose((np.asarray(atom[cx:cx+3],float)-row['xyz']+.5)%1-.5,0,rtol=0,atol=1e-8)):
+                raise ValueError("CIF import changed reviewed site occupancies or positions; refinement withheld")
     cache.mkdir(parents=True, exist_ok=True)
     receipt = {"schema": VERSION, "source": str(source),
-               "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
-               "imported_cif": str(prepared), "imported_cif_sha256": hashlib.sha256(prepared.read_bytes()).hexdigest(),
+               "source_sha256": hashlib.sha256(source_bytes).hexdigest(),
+               "imported_cif": str(prepared), "imported_cif_sha256": hashlib.sha256(prepared_bytes).hexdigest(),
                "expected_elemental_counts": expected, "imported_elemental_counts": actual,
                "relative_elemental_inventory_preserved": True, "phase": phase.name}
+    if review is not None:
+        from cif_occupancy import model_fields
+        receipt['occupancy_review']=review
+        receipt['absolute_counts_and_site_values_preserved']=True
+        native_review = _occupancy_review_module()
+        source_rows, _ = raw_sites(source_bytes)
+        phase.data[native_review.DATA_KEY] = native_review.make_receipt(
+            phase, review, source_sha256=receipt['source_sha256'],
+            imported_cif_sha256=receipt['imported_cif_sha256'], source_atoms=source_rows,
+            source_model=model_fields(source_bytes, neutral_elements=True))
+        native_review.validate_receipt(phase)
     target = cache / (source.stem + '__' + receipt['source_sha256'][:12] + '.import.json')
     temporary = target.with_suffix('.tmp')
     temporary.write_text(json.dumps(receipt, indent=2) + '\n')

@@ -2,7 +2,7 @@
 import importlib
 import math
 import copy
-from .occupancy_review import occupancy_groups, validate_receipt, reviewed_labels, check_stage, REBUILD
+from .occupancy_review import occupancy_groups, validate_receipt, reviewed_labels, current_site_totals, check_stage, REBUILD
 
 STAGE_FIELDS = {"fit_ranges", "exclusions", "bounds", "phase_normalization", "texture"}
 UNITS = {"native", "tof", "d", "Q", "two_theta"}
@@ -29,8 +29,7 @@ def check_site_totals(project, context):
         for label in reviewed_labels(review):
             if set(phase.atom(label).refinement_flags) & {"F", "X"}:
                 raise ValueError("Reviewed CIF rounding requires held site occupancies and positions; refinement withheld.")
-        for group in p.get("occupancy_groups", occupancy_groups(p["atoms"])):
-            total = sum(phase.atom(name).occupancy for name in group)
+        for group, total in current_site_totals(phase):
             if total > 1 + 1e-6 or total < -1e-6:
                 if total > 1 and tuple(sorted(group)) in retained_groups:
                     continue  # Exact held values and the bounded source review were validated above.

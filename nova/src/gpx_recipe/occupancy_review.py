@@ -6,16 +6,156 @@ and positions, can retain the source's explicitly reviewed small excess.
 """
 from copy import deepcopy
 import hashlib
+import importlib
 import json
 import math
 from numbers import Real
 import re
 
 DATA_KEY = "RADAR-PD occupancy review"
-SCHEMA = "radar-gpx-occupancy-review/v1"
+SCHEMA = "radar-gpx-occupancy-review/v2"
 POLICY_SCHEMA = "radar-cif-occupancy-review/v1"
 MAX_EXCESS = 0.001
+DENOMINATOR = 24
 REBUILD = "Rebuild this GPX from the exact reviewed CIF library before polishing; an old summary or generic warning is not an occupancy authorization."
+
+
+def operator_sets(operations):
+    """Canonical exact crystallographic operations shared with CIF import."""
+    import numpy as np
+    groups = {}
+    for rotation, translation in operations:
+        rotation, translation = np.asarray(rotation, dtype=float), np.asarray(translation, dtype=float)
+        if rotation.shape != (3, 3) or translation.shape != (3,):
+            raise ValueError("A crystallographic operation needs a 3x3 rotation and three translations")
+        if not np.all(np.isfinite(rotation)) or not np.all(np.isfinite(translation)):
+            raise ValueError("Non-finite crystallographic operation")
+        rounded_rotation = np.rint(rotation).astype(int)
+        rounded_translation = np.rint(translation * DENOMINATOR).astype(int)
+        if not np.allclose(rotation, rounded_rotation, atol=1e-8, rtol=0) or not np.allclose(
+                translation * DENOMINATOR, rounded_translation, atol=1e-6, rtol=0):
+            raise ValueError("Unsupported crystallographic operation precision; manual setting review required")
+        groups.setdefault(tuple(rounded_rotation.flat), set()).add(tuple(rounded_translation % DENOMINATOR))
+    if not groups:
+        raise ValueError("No explicit crystallographic symmetry operations")
+    return groups
+
+
+def matching_origin_shift(source_operations, target_operations):
+    """The importer's deterministic, complete origin-equivalence proof."""
+    import numpy as np
+    source, target = operator_sets(source_operations), operator_sets(target_operations)
+    if set(source) != set(target) or any(len(source[k]) != len(target[k]) for k in source):
+        raise ValueError("CIF and GSAS-II require a basis/setting transformation, not a verified origin translation")
+    if source == target:
+        return np.zeros(3)
+    candidates = np.indices((DENOMINATOR,) * 3).reshape(3, -1).T
+    keys = sorted(source, key=lambda k: -np.linalg.matrix_rank(np.eye(3) - np.array(k).reshape(3, 3)))
+    for key in keys:
+        rotation = np.array(key).reshape(3, 3)
+        offsets = candidates - candidates @ rotation.T
+        keep = np.ones(len(candidates), dtype=bool)
+        targets = np.array(sorted(target[key]))
+        for translation in source[key]:
+            transformed = (offsets + np.array(translation)) % DENOMINATOR
+            keep &= np.any(np.all(transformed[:, None, :] == targets[None, :, :], axis=2), axis=1)
+        candidates = candidates[keep]
+        if not len(candidates):
+            raise ValueError("No exact supported origin translation maps the supplied CIF operators to GSAS-II")
+    signed = (candidates + DENOMINATOR // 2) % DENOMINATOR - DENOMINATOR // 2
+    order = sorted(range(len(candidates)), key=lambda i: (int(np.dot(signed[i], signed[i])), tuple(signed[i])))
+    shift = signed[order[0]] / DENOMINATOR
+    translated = [(r, np.asarray(t) + shift - np.asarray(r) @ shift) for r, t in source_operations]
+    if operator_sets(translated) != target:
+        raise ValueError("Origin transformation failed its complete symmetry-operator check")
+    return shift
+
+
+def _native_operations(sg):
+    import numpy as np
+    return [(sign * np.asarray(rotation), sign * np.asarray(translation) + np.asarray(center))
+            for center in sg["SGCen"] for sign in ([1, -1] if sg["SGInv"] else [1])
+            for rotation, translation in sg["SGOps"]]
+
+
+def _source_space_group(model):
+    symbols = [model[key] for key in ("_space_group_name_h-m_alt", "_symmetry_space_group_name_h-m") if key in model]
+    if symbols and (not isinstance(symbols[0], str) or len(symbols[0]) > 200):
+        raise ValueError("Invalid source space-group label")
+    try:
+        spc = importlib.import_module("GSASII.GSASIIspc")
+    except ModuleNotFoundError as exc:
+        if exc.name not in {"GSASII", "GSASII.GSASIIspc"}:
+            raise
+        try:
+            spc = importlib.import_module("GSASIIspc")
+        except ModuleNotFoundError:
+            # Basic contract tests need no native installation. P1 has only
+            # the identity operation; production uses GSAS's complete record.
+            if symbols and re.sub(r"\s", "", symbols[0]).upper() == "P1":
+                return {"SpGrp": "P 1", "SGInv": False, "SGCen": [[0, 0, 0]],
+                        "SGOps": [([[1, 0, 0], [0, 1, 0], [0, 0, 1]], [0, 0, 0])]}
+            raise
+    error, sg = spc.SpcGroup(symbols[0]) if symbols else (1, None)
+    if error:
+        value = next((model[k] for k in ("_space_group_it_number", "_symmetry_int_tables_number") if k in model), None)
+        try:
+            number = int(value)
+        except (ValueError, TypeError):
+            raise ValueError("Source CIF space group cannot be resolved") from None
+        if not 1 <= number <= 230:
+            raise ValueError("Source CIF space group cannot be resolved")
+        error, sg = spc.SpcGroup(spc.spgbyNum[number])
+    if error:
+        raise ValueError("Source CIF space group is unsupported")
+    return sg
+
+
+def _source_operations(model, canonical):
+    expressions = next((model[key] for key in ("_space_group_symop_operation_xyz", "_symmetry_equiv_pos_as_xyz") if key in model), None)
+    if expressions is None:
+        return _native_operations(canonical)
+    if isinstance(expressions, str):
+        expressions = [expressions]
+    if (not isinstance(expressions, list) or not 1 <= len(expressions) <= 384
+            or any(not isinstance(value, str) or not 0 < len(value) <= 500 for value in expressions)):
+        raise ValueError("Source symmetry operators must be a bounded explicit list")
+    if expressions == ["x,y,z"]:
+        return [([[1, 0, 0], [0, 1, 0], [0, 0, 1]], [0, 0, 0])]
+    from pymatgen.core.operations import SymmOp
+    return [(op.rotation_matrix, op.translation_vector) for op in
+            (SymmOp.from_xyz_str(value) for value in expressions)]
+
+
+def _source_origin(review, model, native_symmetry):
+    """Re-derive native setting from evidence covered by the original policy."""
+    import numpy as np
+    if (not isinstance(model, dict) or not model or len(model) > 2000
+            or any(not isinstance(k, str) or not k.startswith("_")
+                   or not (isinstance(v, str) or isinstance(v, list) and all(isinstance(x, str) for x in v))
+                   for k, v in model.items())
+            or len(json.dumps(model).encode()) > 2_000_000
+            or _digest(model) != review["nuclear_model_signature"]):
+        raise ValueError("Source non-cell CIF proof does not match the reviewed model signature")
+    canonical = _source_space_group(model)
+    target = _native_operations(canonical)
+    actual = _native_operations(native_symmetry)
+    if (not isinstance(native_symmetry["SGInv"], bool)
+            or native_symmetry["SGInv"] != bool(canonical["SGInv"])
+            or re.sub(r"\s", "", native_symmetry["SpGrp"]) != re.sub(r"\s", "", canonical["SpGrp"])
+            or len(actual) != len(target)
+            or operator_sets(actual) != operator_sets(target)):
+        raise ValueError("Native symmetry does not match the reviewed source setting")
+    for key in ("SGLaue", "SGUniq", "SGLatt", "SGSys", "SGFixed"):
+        if key in canonical and native_symmetry.get(key) != _plain(canonical[key]):
+            raise ValueError("Native symmetry metadata does not match the reviewed source setting")
+    source = _source_operations(model, canonical)
+    shift = matching_origin_shift(source, target)
+    forward = [(r, np.asarray(t) + shift - np.asarray(r) @ shift) for r, t in source]
+    reverse = [(r, np.asarray(t) - shift + np.asarray(r) @ shift) for r, t in target]
+    if operator_sets(forward) != operator_sets(target) or operator_sets(reverse) != operator_sets(source):
+        raise ValueError("Reviewed CIF origin conversion lacks complete operator equivalence")
+    return shift.tolist()
 
 
 def _plain(value):
@@ -76,15 +216,27 @@ def _checked_inventory(rows):
     return sorted(result, key=lambda row: row["label"])
 
 
-def occupancy_groups(atoms):
-    """Keep the existing conservative co-location rule, without orbit guessing."""
+def site_groups(atoms):
+    """Current co-located sites, including unshared singleton sites."""
     groups = {}
     for atom in atoms:
         if "coordinates" not in atom or "multiplicity" not in atom:
             continue
         point = tuple(round(float(x) % 1, 7) % 1 for x in atom["coordinates"])
         groups.setdefault((point, atom["multiplicity"]), []).append(atom["label"])
-    return [labels for labels in groups.values() if len(labels) > 1]
+    return list(groups.values())
+
+
+def occupancy_groups(atoms):
+    """Keep the existing conservative co-location rule, without orbit guessing."""
+    return [labels for labels in site_groups(atoms) if len(labels) > 1]
+
+
+def current_site_totals(phase):
+    atoms = _inventory(phase)
+    by_label = {a["label"]: a for a in atoms}
+    return [(labels, math.fsum(by_label[label]["occupancy"] for label in labels))
+            for labels in site_groups(atoms)]
 
 
 def _inventory(phase):
@@ -148,8 +300,7 @@ def _policy(review, source_sha256):
 def _reviewed_groups(review, atoms):
     limit = _number(review["maximum_site_excess"])
     by_label = {row["label"]: row for row in atoms}
-    groups = {tuple(sorted(group)) for group in occupancy_groups(atoms)}
-    groups.update((row["label"],) for row in atoms)
+    groups = {tuple(sorted(group)) for group in site_groups(atoms)}
     expected = set()
     for site in review["affected_sites"]:
         labels = site.get("labels") if isinstance(site, dict) else None
@@ -201,14 +352,12 @@ def _source_atoms(rows):
     return atoms
 
 
-def _check_source_atoms(review, source_atoms, native_atoms):
+def _check_source_atoms(review, source_atoms, native_atoms, shift):
     if _digest(source_atoms) != review["atom_signature"]:
         raise ValueError("Native occupancy receipt changed the reviewed source atom signature")
     by_label = {row["label"]: row for row in native_atoms}
     if set(by_label) != {row["label"] for row in source_atoms}:
         raise ValueError("Native occupancy receipt changed the source atom labels")
-    first = source_atoms[0]
-    shift = [(a - b + .5) % 1 - .5 for a, b in zip(by_label[first["label"]]["coordinates"], first["xyz"])]
     for source in source_atoms:
         native = by_label[source["label"]]
         delta = [abs((a - b - s + .5) % 1 - .5)
@@ -219,17 +368,20 @@ def _check_source_atoms(review, source_atoms, native_atoms):
             raise ValueError("Native occupancy receipt does not preserve the reviewed source sites")
 
 
-def make_receipt(phase, review, *, source_sha256, imported_cif_sha256, source_atoms):
+def make_receipt(phase, review, *, source_sha256, imported_cif_sha256, source_atoms, source_model):
     """Called only after authorized CIF parsing and exact native import checks."""
     _policy(review, source_sha256)
     if not _sha(imported_cif_sha256):
         raise ValueError("Missing imported-CIF identity for occupancy review")
     atoms = _inventory(phase)
     source_atoms = _source_atoms(source_atoms)
-    _check_source_atoms(review, source_atoms, atoms)
+    symmetry = _symmetry(phase)
+    shift = _source_origin(review, source_model, symmetry)
+    _check_source_atoms(review, source_atoms, atoms, shift)
     receipt = {"schema": SCHEMA, "source_sha256": source_sha256,
         "imported_cif_sha256": imported_cif_sha256, "review": deepcopy(review),
-        "symmetry": _symmetry(phase), "native_atoms": atoms, "source_atoms": source_atoms,
+        "symmetry": symmetry, "native_atoms": atoms, "source_atoms": source_atoms,
+        "source_model": deepcopy(source_model),
         "reviewed_groups": _reviewed_groups(review, atoms)}
     receipt["receipt_sha256"] = _digest(receipt)
     return receipt
@@ -241,7 +393,7 @@ def validate_receipt(phase):
         return None
     receipt = phase.data[DATA_KEY]
     required = {"schema", "source_sha256", "imported_cif_sha256", "review",
-                "symmetry", "native_atoms", "source_atoms", "reviewed_groups", "receipt_sha256"}
+                "symmetry", "native_atoms", "source_atoms", "source_model", "reviewed_groups", "receipt_sha256"}
     if (not isinstance(receipt, dict) or set(receipt) != required or receipt.get("schema") != SCHEMA
             or not _sha(receipt.get("receipt_sha256"))
             or receipt["receipt_sha256"] != _digest({k: v for k, v in receipt.items() if k != "receipt_sha256"})):
@@ -251,7 +403,8 @@ def validate_receipt(phase):
         raise ValueError("Native CIF occupancy receipt symmetry changed. " + REBUILD)
     original = _checked_inventory(receipt["native_atoms"])
     source_atoms = _source_atoms(receipt["source_atoms"])
-    _check_source_atoms(receipt["review"], source_atoms, original)
+    shift = _source_origin(receipt["review"], receipt["source_model"], receipt["symmetry"])
+    _check_source_atoms(receipt["review"], source_atoms, original, shift)
     if receipt["reviewed_groups"] != _reviewed_groups(receipt["review"], original):
         raise ValueError("Native reviewed-site membership changed. " + REBUILD)
     current = _inventory(phase)
@@ -268,15 +421,21 @@ def validate_receipt(phase):
             delta = [abs((a - b + .5) % 1 - .5) for a, b in zip(new["coordinates"], old["coordinates"])]
             if new["occupancy"] != old["occupancy"] or any(v > 1e-10 for v in delta):
                 raise ValueError("Reviewed occupancy/position must remain exactly held. " + REBUILD)
-    actual_groups = {tuple(sorted(group)) for group in occupancy_groups(current)}
-    actual_groups.update((row["label"],) for row in current)
+    actual_groups = {tuple(sorted(group)) for group in site_groups(current)}
     if any(tuple(group) not in actual_groups for group in receipt["reviewed_groups"]):
         raise ValueError("A new or moved atom changed the reviewed native site. " + REBUILD)
+    retained = {tuple(group) for group in receipt["reviewed_groups"]}
+    for group in actual_groups - retained:
+        if math.fsum(after[label]["occupancy"] for label in group) > 1 + 1e-6:
+            raise ValueError("An unreviewed current site exceeds physical occupancy capacity. " + REBUILD)
     return deepcopy(receipt)
 
 
 def reviewed_labels(receipt):
-    return {label for group in (receipt or {}).get("reviewed_groups", []) for label in group}
+    receipt = receipt or {}
+    if "reviewed_groups" in receipt:
+        return {label for group in receipt["reviewed_groups"] for label in group}
+    return {atom["label"] for group in receipt.get("held_sites", []) for atom in group}
 
 
 def retention_binding(receipt):
