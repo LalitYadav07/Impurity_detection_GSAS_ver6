@@ -5,10 +5,12 @@ from __future__ import annotations
 import asyncio
 import json
 import hashlib
+import io
 import math
 import os
 from pathlib import Path
 import re
+import stat
 import zipfile
 from typing import Any, Callable
 
@@ -86,6 +88,72 @@ def inspect_library_review(path: str | Path) -> dict[str, Any]:
             raise ValueError('The library archive changed during review; select and review it again')
         result['archive_sha256'] = digest
         return result
+
+
+def inspect_library_review_bytes(contents: bytes) -> dict[str, Any]:
+    """Inspect an already authorized upload without reopening a client path."""
+    with io.BytesIO(contents) as stream:
+        result = _inspect_library_review_contents(stream)
+    return {**result, 'archive_sha256': hashlib.sha256(contents).hexdigest()}
+
+
+def _library_element_suggestion(archive, root, manifest) -> dict[str, Any]:
+    """Read only the mapped, bounded CIF sources; manifest chemistry is not evidence."""
+    from .uploads import cif_element_suggestion
+
+    def safe_member(name):
+        if (not isinstance(name, str) or not name or '\\' in name or '\x00' in name
+                or ':' in name or any(part in {'', '.', '..'} for part in name.split('/'))):
+            raise ValueError('Invalid mapped CIF member path')
+        member = archive.getinfo(name)
+        if member.is_dir() or stat.S_ISLNK(member.external_attr >> 16):
+            raise ValueError('Mapped CIF source is not a regular archive member')
+        return member
+
+    def unique_pairs(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError('Duplicate phase in the library CIF map')
+            result[key] = value
+        return result
+
+    try:
+        if manifest.get('failures'):
+            raise ValueError('Some candidate sources failed; enter the complete sample element set explicitly')
+        count = library_manifest_phase_count(manifest)
+        phases = manifest.get('phase_ids')
+        if count < 1 or count > 5000 or not isinstance(phases, list):
+            raise ValueError('The archive does not declare a bounded, complete source phase list')
+        member = safe_member(root + 'cif_map.json')
+        if member.file_size > 2_000_000:
+            raise ValueError('The library CIF map exceeds the preview limit')
+        mapping = json.loads(archive.read(member), object_pairs_hook=unique_pairs)
+        if not isinstance(mapping, dict) or set(mapping) != set(phases):
+            raise ValueError('The library CIF map does not cover its declared phases')
+        members = []
+        for phase in phases:
+            path = mapping[phase]
+            # Validate the relative value separately: an absolute value must
+            # not become apparently relative after adding the archive root.
+            if not isinstance(path, str) or path.startswith('/') or not path.lower().endswith('.cif'):
+                raise ValueError('Invalid mapped CIF source')
+            member = safe_member(root + path)
+            if member.file_size > 2_000_000:
+                raise ValueError('A mapped CIF exceeds the preview limit')
+            members.append(member)
+        if sum(member.file_size for member in members) > 50 * 1024 * 1024:
+            raise ValueError('Mapped CIF sources exceed the total preview limit')
+        elements = set()
+        for member in members:
+            elements.update(cif_element_suggestion(
+                archive.read(member).decode('utf-8-sig'), require_atom_types=True))
+        return {'available': True, 'elements': sorted(elements), 'source_count': count,
+                'evidence': 'mapped CIF atom-type loops'}
+    except (KeyError, ValueError, UnicodeError, zipfile.BadZipFile, RuntimeError) as exc:
+        # A chemistry preview must not alter existing archive-review policy
+        # or turn an incomplete element union into a restrictive filter.
+        return {'available': False, 'elements': [], 'reason': str(exc)}
 
 
 def _inspect_library_review_contents(source) -> dict[str, Any]:
@@ -170,11 +238,13 @@ def _inspect_library_review_contents(source) -> dict[str, Any]:
         else:
             partial = partial_library_archive_review(manifest)
         incomplete = partial['requires_review'] if partial is not None else bool(manifest.get('failures'))
+        element_suggestion = _library_element_suggestion(archive, root, manifest)
     return {'policy_set_sha256':set_hash,
             'phase_count':count,'reviews':rows,'failures':list(manifest.get('failures') or []),
             'declared_augmented_counts':declared_counts,
             'requires_review':bool(reviews or incomplete),'requires_incomplete_review':incomplete,
             'manifest':manifest,'partial_review':partial,
+            'element_suggestion':element_suggestion,
             'evidence_verification':'unverified archive declaration',
             'actual_affected_site_count':None,'declared_affected_site_count':len(rows)}
 

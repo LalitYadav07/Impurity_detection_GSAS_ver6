@@ -34,6 +34,7 @@ from .live_setup import LiveSetupMixin
 from .live_restore import LiveRestoreMixin
 from .live_settings_review import LiveSettingsReviewMixin
 from .live_assistant_controller import LiveAssistantMixin
+from .live_run_selection import run_exclusions_control
 from .library_setup import (
     LIBRARY_FIELDS,
     LibraryDraft,
@@ -1746,13 +1747,10 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                     label="Include scans labeled ramp or cooling", v_model=("powgen_include_ramps",),
                     disabled=("powgen_monitoring || live_launch_busy",), density="compact", hide_details=True,
                 )
-                vuetify.VAutocomplete(
-                    label="Review titles / exclude runs or reduced products", v_model=("powgen_excluded_runs",),
-                    items=("powgen_run_options.filter(r => powgen_processing_scope === 'all' || powgen_processing_sample_ids.includes(r.sample_id))",),
-                    item_title="title", item_value="value", multiple=True, chips=True, closable_chips=True,
-                    density="compact", variant="outlined", disabled=("powgen_monitoring || live_launch_busy",),
+                run_exclusions_control(
+                    label="Review titles / exclude runs or reduced products",
+                    disabled="powgen_monitoring || live_launch_busy", closable_chips=True,
                     hint="Selected entries are excluded. Role hints use run titles only; unclassified scans stay included. Review titles before starting.",
-                    persistent_hint=True,
                 )
                 vuetify.VSelect(
                     v_show="live_beamline === 'PG3'",

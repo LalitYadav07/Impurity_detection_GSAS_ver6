@@ -174,6 +174,9 @@ class LiveAssistantMixin(LiveAssistantUi):
     def start_live_assistant_inventory(self, **kwargs):
         self._queue_live_assistant_action(self.live_assistant_inventory, **kwargs)
 
+    def start_live_assistant_suggest_elements(self, **kwargs):
+        self._queue_live_assistant_action(self.live_assistant_suggest_elements, **kwargs)
+
     async def live_assistant_inventory(self, **_):
         state = self.server.state
         if self._assistant_locked() or state.live_assistant_busy:
@@ -447,13 +450,57 @@ class LiveAssistantMixin(LiveAssistantUi):
         self.server.state.flush()
 
     async def live_assistant_suggest_elements(self, **_):
+        from .library_setup import (
+            LibraryDraft, inspect_library_review_bytes, require_library_activation,
+        )
+        from .uploads import read_browser_upload
+
         state = self.server.state
         if self._assistant_locked() or state.live_assistant_busy:
             return
+        service = self.service
+        fields = STEP_FIELDS['structures'] + STEP_FIELDS['chemistry'] + ('live_library_review',)
+        def current_scope():
+            return signature({**{name: getattr(state, name, None) for name in fields},
+                              'history': getattr(self.service, 'history_id', None),
+                              'galaxy': getattr(self.service, 'galaxy_url', None)})
+        scope = current_scope()
+        generation = self._assistant_generation
+        state.live_assistant_busy = True
+        state.live_assistant_error = ""
+        state.flush()
         try:
             if state.live_configuration_source != "inline":
                 raise ValueError("Edit a copy of the saved configuration to change its chemistry.")
-            elements = set(state.live_library_builder_elements or [])
+            self._require_library_decision('live')
+            draft = LibraryDraft(state, 'live')
+            if draft.database_source == 'archive':
+                if draft.library_archive_source == 'galaxy':
+                    identifier = str(draft.history_database_id or '')
+                    if not identifier:
+                        raise ValueError('Choose a candidate library archive first.')
+                    # Use the server's read/hash inspection, never editable
+                    # preview fields copied back from the browser.
+                    preview = await asyncio.to_thread(service.inspect_library_review, identifier)
+                elif draft.library_archive_source == 'computer':
+                    contents = await asyncio.to_thread(read_browser_upload,
+                        str(draft.database_archive_path or ''), max_bytes=500 * 1024 * 1024, suffix='.zip')
+                    preview = await asyncio.to_thread(inspect_library_review_bytes, contents)
+                else:
+                    raise ValueError('Choose a library archive from Galaxy History or upload it here.')
+                if generation is not self._assistant_generation:
+                    return
+                if self._assistant_locked() or self.service is not service or current_scope() != scope:
+                    raise ValueError('The selected structures or chemistry changed. Request the element suggestion again.')
+                require_library_activation(preview, draft.library_review or {})
+                suggestion = preview.get('element_suggestion') or {}
+                if not suggestion.get('available'):
+                    raise ValueError('The selected library has no complete CIF element suggestion: '
+                                     + str(suggestion.get('reason') or 'readable mapped source CIFs are unavailable.')
+                                     + ' Review the source CIFs or enter the sample elements directly.')
+                elements = set(suggestion['elements'])
+            else:
+                elements = set(state.live_library_builder_elements or [])
             if state.powgen_main_cif_source == "computer" and state.powgen_main_cif_path:
                 path = Path(state.powgen_main_cif_path)
                 if path.stat().st_size > 20 * 1024 * 1024:
@@ -466,8 +513,12 @@ class LiveAssistantMixin(LiveAssistantUi):
             self._assistant_say("assistant", "Copied the CIF element suggestion. Review it for missing impurity elements and assign environment contributions separately.")
             state.live_assistant_error = ""
         except (OSError, ValueError) as exc:
-            state.live_assistant_error = str(exc)
-        state.flush()
+            if generation is self._assistant_generation:
+                state.live_assistant_error = str(exc)
+        finally:
+            if generation is self._assistant_generation:
+                state.live_assistant_busy = False
+                state.flush()
 
     def _preview_scope(self):
         state = self.server.state

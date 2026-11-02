@@ -33,15 +33,19 @@ _FORMULA_TOKEN = r"[A-Z][a-z]?(?:\d+(?:\.\d*)?|\.\d+)?"
 _ELEMENT_SYMBOLS = set("H He Li Be B C N O F Ne Na Mg Al Si P S Cl Ar K Ca Sc Ti V Cr Mn Fe Co Ni Cu Zn Ga Ge As Se Br Kr Rb Sr Y Zr Nb Mo Tc Ru Rh Pd Ag Cd In Sn Sb Te I Xe Cs Ba La Ce Pr Nd Pm Sm Eu Gd Tb Dy Ho Er Tm Yb Lu Hf Ta W Re Os Ir Pt Au Hg Tl Pb Bi Po At Rn Fr Ra Ac Th Pa U Np Pu Am Cm Bk Cf Es Fm Md No Lr Rf Db Sg Bh Hs Mt Ds Rg Cn Nh Fl Mc Lv Ts Og D T".split())
 
 
-def cif_element_suggestion(text: str) -> list[str]:
+def cif_element_suggestion(text: str, *, require_atom_types: bool = False) -> list[str]:
     """Suggest CIF chemistry without guessing from filenames or sample titles.
 
     Explicit atom-type loops and declared formulae are the evidence. This is a
     setup aid; CIF interpretation and phase generation remain with GSAS-II.
     Unreadable/unknown atom types make the loop unavailable rather than silently
     producing an incomplete element filter.
+
+    ``require_atom_types`` is the stricter archive-preview mode: every explicit
+    atom-type loop must be readable, and formula-only fallback is unavailable.
     """
     found: set[str] = set()
+    atom_elements: set[str] = set()
     for match in re.finditer(r"(?im)^\s*_chemical_formula_(?:sum|structural)\s+([^\r\n]+)", text):
         try:
             formula = shlex.split(match[1], comments=True)[0]
@@ -85,15 +89,31 @@ def cif_element_suggestion(text: str) -> list[str]:
                 values = []
                 break
         if not headers or not values or len(values) % len(headers):
+            if require_atom_types:
+                raise ValueError("A CIF atom-type loop is incomplete or unreadable")
             continue
         symbols = set()
         for value in values[target::len(headers)]:
-            match = re.fullmatch(r"([A-Z][a-z]?)(?:\d*(?:[+\-])?)?", value)
+            # CIF atom types use both Fe3+ and Fe+3 (the latter occurs in
+            # COD source CIFs). This only selects the chemical symbol; no
+            # charge or isotope label is changed in the underlying source.
+            pattern = (r"([A-Z][a-z]?)(?:(?:\d+(?:\.\d+)?)?[+\-]|[+\-]\d+(?:\.\d+)?|\d+)?"
+                       if require_atom_types else r"([A-Z][a-z]?)(?:\d*(?:[+\-])?)?")
+            match = re.fullmatch(pattern, value)
             if match is None or match[1] not in _ELEMENT_SYMBOLS:
+                if require_atom_types:
+                    raise ValueError("A CIF atom type is unavailable or unsupported")
                 symbols = set()
                 break
             symbols.add(match[1])
+        atom_elements.update(symbols)
         found.update(symbols)
+    if require_atom_types:
+        if not atom_elements:
+            raise ValueError("The CIF has no readable atom-type loop")
+        # Archive suggestions must cover the actual mapped source atoms. A
+        # formula/name elsewhere in the file cannot repair a corrupt loop.
+        return sorted(atom_elements)
     return sorted(found)
 
 

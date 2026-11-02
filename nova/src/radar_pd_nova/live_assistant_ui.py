@@ -3,6 +3,7 @@
 from trame.widgets import html, plotly, vuetify3 as vuetify
 
 from .live_assistant import HELP, STEP_FIELDS
+from .live_run_selection import run_exclusions_control
 from .uploads import NamedFileUpload
 
 
@@ -162,10 +163,7 @@ class LiveAssistantUi:
                 self._assistant_select("When monitoring starts", "powgen_backfill_mode", "powgen_backfill_options")
                 vuetify.VCheckbox(label="Include background / empty scans", v_model=("powgen_include_background",), density="compact", disabled=(LOCK,))
                 vuetify.VCheckbox(label="Include ramp / cooling scans", v_model=("powgen_include_ramps",), density="compact", disabled=(LOCK,))
-                vuetify.VAutocomplete(label="Exclude runs or reduced products", v_model=("powgen_excluded_runs",),
-                                      items=("powgen_run_options.filter(r => powgen_processing_scope === 'all' || powgen_processing_sample_ids.includes(r.sample_id))",),
-                                      item_title="title", item_value="value", multiple=True, chips=True,
-                                      density="compact", variant="outlined", disabled=(LOCK,))
+                run_exclusions_control(label="Exclude runs or reduced products", disabled=LOCK)
                 html.P("Sample IDs do not prove sample presence. Review run titles. Later matching scans use the same selection.", classes="radar-help-copy")
             self._assistant_next("selection", "Use these samples and banks")
 
@@ -195,7 +193,7 @@ class LiveAssistantUi:
                                        placeholder="Fe, O", density="compact", variant="outlined", disabled=(LOCK,))
                     vuetify.VTextField(label="Can / environment symbols", v_model=("live_environment_elements",),
                                        placeholder="Al, V (optional)", density="compact", variant="outlined", disabled=(LOCK,))
-                vuetify.VBtn("Use CIF element suggestion", click=self.live_assistant_suggest_elements,
+                vuetify.VBtn("Use CIF element suggestion", click=self.start_live_assistant_suggest_elements,
                              variant="outlined", size="small", disabled=(LOCK,))
                 html.P("CIF suggestions use the built candidate library or an uploaded main-phase CIF. Review them for missing impurity elements. This list is an allowed element set, not a formula; environment filtering does not automatically mask peaks.", classes="radar-help-copy")
             self._assistant_next("chemistry", "Confirm chemistry")
