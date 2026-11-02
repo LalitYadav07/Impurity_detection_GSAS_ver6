@@ -1097,6 +1097,17 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         self._monitored_uids.clear()
         self._result_open_owner = None
         self._result_context = object()
+        # A restored watch may leave every editable draft field at its default,
+        # so form-change callbacks cannot be relied on to retire its WebMON data.
+        # Recovery was saved above; only successful Clear discards this view.
+        self._webmon_clear_scope()
+        self._webmon_display_scope = None
+        self._webmon_stream_scope = None
+        state.webmon_runs = []
+        state.webmon_latest = ""
+        state.webmon_checked = "Not checked"
+        state.webmon_connection = "Not connected"
+        state.webmon_message = "Start or restore a saved Live watch, then refresh to select a stored or current WebMON scan."
         self._result_publications = {}
         self._opening_run_uid = None
         getattr(self, "_history_result_requests", {}).clear()

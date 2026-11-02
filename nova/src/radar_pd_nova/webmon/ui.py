@@ -156,6 +156,11 @@ class WebmonMixin:
                 self._webmon_clear_scope()
                 self.server.state.webmon_message='Live selection changed. Earlier job receipts remain in History; refresh acquisition before continuing.'
 
+    def _webmon_can_publish(self,owner):
+        if self._webmon_scope_current(owner):return True
+        self._webmon_retire_stale_scope(owner)
+        return False
+
     def _webmon_require_target(self,run=None,*,row=None):
         s=self.server.state;owner=self._webmon_scope_snapshot();scope=owner['scope']
         run=str(s.webmon_run if run is None else run)
@@ -175,7 +180,9 @@ class WebmonMixin:
             if error:raise ValueError(error)
 
     def _webmon_require_checkpoint(self,row=None):
+        owner=self._webmon_scope_snapshot()
         choice=self._webmon.selected_checkpoint(self._webmon_effective_ipts(),self.server.state.webmon_run)
+        if not self._webmon_scope_current(owner):raise ValueError('Live acquisition scope changed while reading the checkpoint')
         if self._webmon_live_scope():
             if not choice or not choice.get('refinement_source'):
                 raise ValueError('A same-sample published GPX with an identified physical bank is required')
@@ -414,14 +421,20 @@ class WebmonMixin:
                 if s.webmon_follow_latest:self.webmon_select(s.webmon_runs[0]['run'],follow=True)
                 elif s.webmon_run and str(s.webmon_run) not in {str(row['run']) for row in selected}:
                     self._webmon_clear_scope();self._webmon_display_scope=self._webmon_scope_snapshot()
+                    owner=self._webmon_display_scope
                     s.webmon_message='The previous acquisition is outside the saved Live selection. Choose a matching scan.'
                 elif not quiet:self.webmon_select(s.webmon_run or s.webmon_runs[0]['run'])
             else:
                 self._webmon_clear_scope()
+                owner=self._webmon_scope_snapshot()
                 s.webmon_message='No acquisition with an unambiguous sample ID matches the saved Live selection.'
+            if not self._webmon_can_publish(owner):return
             if quiet and s.webmon_target and not getattr(self,'_webmon_stream',None):
-                try:self._webmon.restore_binding(self._webmon_effective_ipts(),s.webmon_target,getattr(self,'_webmon_request',{}) or {})
+                try:
+                    self._webmon.restore_binding(self._webmon_effective_ipts(),s.webmon_target,getattr(self,'_webmon_request',{}) or {})
+                    if not self._webmon_can_publish(owner):return
                 except (ValueError,OSError,KeyError):
+                    if not self._webmon_can_publish(owner):return
                     s.webmon_stale=True;s.webmon_accepted=False;s.webmon_context_ready=False
                     s.webmon_message='Source revision changed. Displayed inference belongs to the previous snapshot; a new prepared context is required.'
         except FacilityPathError as exc:
@@ -456,6 +469,7 @@ class WebmonMixin:
             preview=(str(self._webmon_effective_ipts()),str(value),receipt['content_sha256'])
             if follow and preview==self._webmon_last_preview:
                 if self._webmon_binding:self._webmon.binding(self._webmon_effective_ipts(),value)
+                if not self._webmon_can_publish(owner):return
                 return
             self._webmon_last_preview=preview;s.webmon_accepted=False;s.webmon_context_ready=False
             s.webmon_prepare_accepted=False;s.webmon_mapping_accepted=False
@@ -468,17 +482,24 @@ class WebmonMixin:
             scope=self._webmon_live_scope()
             if selected and scope and scope.source_error(selected,row):s.webmon_published_source=''
             options=self._webmon.checkpoints(self._webmon_effective_ipts(),value)
+            if not self._webmon_can_publish(owner):return
             s.webmon_checkpoints=[dict(title=c['title'],value=c['id']) for c in options]
             s.webmon_checkpoint=''
             try:
                 choice=self._webmon.selected_checkpoint(self._webmon_effective_ipts(),value)
+                if not self._webmon_can_publish(owner):return
                 if choice:
                     self._webmon_require_reference(choice.get('refinement_source') or {},row)
-                    s.webmon_checkpoint=choice['id'];self._webmon_review_checkpoint(choice)
-                b=self._webmon.binding(self._webmon_effective_ipts(),value);self._webmon_binding=b;s.webmon_context_ready=True
+                    if not self._webmon_review_checkpoint(choice,owner=owner):return
+                    s.webmon_checkpoint=choice['id']
+                b=self._webmon.binding(self._webmon_effective_ipts(),value)
+                if not self._webmon_can_publish(owner):return
+                self._webmon_binding=b;s.webmon_context_ready=True
                 s.webmon_reference=b['description'];s.webmon_reference_rows=b['review']
                 s.webmon_k=', '.join(str(v) for v in b['k']);s.webmon_ion=b['ion'];s.webmon_upper=b['maximum_moment'];s.webmon_lower=0.
-            except (ValueError,OSError,KeyError) as e:self._webmon_binding=None;s.webmon_reference=str(e);s.webmon_reference_rows=[]
+            except (ValueError,OSError,KeyError) as e:
+                if not self._webmon_can_publish(owner):return
+                self._webmon_binding=None;s.webmon_reference=str(e);s.webmon_reference_rows=[]
             self.webmon_saved_list()
         except Exception as e:
             if owner is not None and not self._webmon_scope_current(owner):
@@ -487,34 +508,49 @@ class WebmonMixin:
             s.webmon_message=str(e);s.webmon_connection='Source unavailable — retry Refresh source'
             s.webmon_accepted=False;s.webmon_context_ready=False;s.webmon_scope_allowed=False;s.webmon_stale=bool(s.webmon_has_result)
         s.flush()
-    def _webmon_review_checkpoint(self,choice):
+    def _webmon_review_checkpoint(self,choice,*,owner=None):
         import numpy as np
         s=self.server.state
         if digest(choice['view_path'])!=choice['view_sha256']:raise ValueError('Checkpoint review arrays changed; regenerate the verification')
         vfy=choice['verification'];b=choice.get('binding') or {}
         with np.load(choice['view_path'],allow_pickle=False) as data:
-            self._webmon_checkpoint_plot.update(plots.checkpoint_review(data,axis=s.webmon_checkpoint_axis,difc=b.get('display_export_difc'),revision=choice['source_sha256']))
+            figure=plots.checkpoint_review(data,axis=s.webmon_checkpoint_axis,difc=b.get('display_export_difc'),revision=choice['source_sha256'])
         error=vfy.get('native_saved_curve_relative_error')
         comparison=f'Saved curve relative difference from recomputed native model: {error:.2g}.' if isinstance(error,(int,float)) else 'Saved-curve consistency has not been measured.'
-        s.webmon_checkpoint_summary=f"Original run {choice['run']} · {choice['role']} · Rwp {vfy['rwp_recomputed']:.3f}%. Target WebMON run {s.webmon_run}. {comparison} Inspect the reference residuals."
+        summary=f"Original run {choice['run']} · {choice['role']} · Rwp {vfy['rwp_recomputed']:.3f}%. Target WebMON run {s.webmon_run}. {comparison} Inspect the reference residuals."
         def width(peak,key):
             value=peak.get(key)
             return f"{value['fwhm_A']:.5f}" if value else 'Unavailable'
-        s.webmon_width_rows=[dict(d=p['d_A'],observed=width(p,'final_observed'),calculated=width(p,'radar_calculated'),webmon=width(p,'webmon_observed')) for p in vfy.get('peaks',[])]
+        rows=[dict(d=p['d_A'],observed=width(p,'final_observed'),calculated=width(p,'radar_calculated'),webmon=width(p,'webmon_observed')) for p in vfy.get('peaks',[])]
+        if owner is not None and not self._webmon_can_publish(owner):return False
+        self._webmon_checkpoint_plot.update(figure)
+        s.webmon_checkpoint_summary=summary;s.webmon_width_rows=rows
+        return True
 
     def webmon_checkpoint_axis_changed(self,value,**_):
-        s=self.server.state;s.webmon_checkpoint_axis=value
+        s=self.server.state;s.webmon_checkpoint_axis=value;owner=None
         try:
+            owner=self._webmon_scope_snapshot()
             choice=self._webmon.selected_checkpoint(self._webmon_effective_ipts(),s.webmon_run)
-            if choice:self._webmon_review_checkpoint(choice)
-        except Exception as exc:s.webmon_message=str(exc)
+            if not self._webmon_can_publish(owner):return
+            if choice:self._webmon_review_checkpoint(choice,owner=owner)
+        except Exception as exc:
+            if owner is not None and not self._webmon_can_publish(owner):return
+            s.webmon_message=str(exc)
         s.flush()
 
     def webmon_checkpoint_changed(self,value,**_):
-        s=self.server.state
+        s=self.server.state;owner=None
         if s.webmon_busy:
-            current=self._webmon.selected_checkpoint(self._webmon_effective_ipts(),s.webmon_run)
-            s.webmon_checkpoint=current['id'] if current else '';s.flush();return
+            try:
+                owner=self._webmon_scope_snapshot()
+                current=self._webmon.selected_checkpoint(self._webmon_effective_ipts(),s.webmon_run)
+                if not self._webmon_can_publish(owner):return
+                s.webmon_checkpoint=current['id'] if current else ''
+            except (ValueError,OSError,KeyError) as exc:
+                if owner is not None and not self._webmon_can_publish(owner):return
+                s.webmon_checkpoint='';s.webmon_accepted=False;s.webmon_context_ready=False;s.webmon_message=str(exc)
+            s.flush();return
         self.webmon_pause_stream()
         # Acceptance and analysis belong to a checkpoint revision, not just a run.
         s.webmon_accepted=False;s.webmon_context_ready=False;s.webmon_has_result=False
@@ -523,17 +559,25 @@ class WebmonMixin:
         s.webmon_polished_jobs=[];s.webmon_polished_job=''
         self._webmon_payloads={};self._webmon_binding=None;self._webmon_model_paths=set();self._webmon_plot_binding=None
         try:
+            owner=self._webmon_scope_snapshot()
             row=self._webmon_require_target() if self._webmon_live_scope() else None
             candidate=next((c for c in self._webmon.checkpoints(self._webmon_effective_ipts(),s.webmon_run) if c['id']==value),None)
+            if not self._webmon_can_publish(owner):return
             if candidate is None:raise ValueError('Choose a checkpoint for this acquisition')
             self._webmon_require_reference(candidate.get('refinement_source') or {},row)
             choice=self._webmon.select_checkpoint(self._webmon_effective_ipts(),s.webmon_run,value)
-            s.webmon_checkpoint=choice['id'];self._webmon_review_checkpoint(choice)
-            b=self._webmon.binding(self._webmon_effective_ipts(),s.webmon_run);self._webmon_binding=b
+            if not self._webmon_can_publish(owner):return
+            if not self._webmon_review_checkpoint(choice,owner=owner):return
+            s.webmon_checkpoint=choice['id']
+            b=self._webmon.binding(self._webmon_effective_ipts(),s.webmon_run)
+            if not self._webmon_can_publish(owner):return
+            self._webmon_binding=b
             s.webmon_reference=b['description'];s.webmon_reference_rows=b['review']
             s.webmon_k=', '.join(str(v) for v in b['k']);s.webmon_ion=b['ion'];s.webmon_upper=b['maximum_moment'];s.webmon_lower=0.;s.webmon_context_ready=True
             s.webmon_message='Starting checkpoint changed. Review its original fit and explicitly accept this revision before conditional magnetic analysis.'
-        except Exception as exc:s.webmon_reference=str(exc);s.webmon_reference_rows=[];s.webmon_message=str(exc)
+        except Exception as exc:
+            if owner is not None and not self._webmon_can_publish(owner):return
+            s.webmon_reference=str(exc);s.webmon_reference_rows=[];s.webmon_message=str(exc)
         self.webmon_saved_list();s.flush()
 
     def webmon_open_refinement(self,**_):
@@ -892,7 +936,10 @@ class WebmonMixin:
                 raise ReviewRequired('Live sample/bank selection changed; review a new acquisition context')
             if str(self._webmon_effective_ipts()).removeprefix('IPTS-')!=stream.ipts.removeprefix('IPTS-'):
                 raise ReviewRequired('Experiment changed; review a new stream')
-            item=stream.capture();queue.offer(item)
+            item=stream.capture()
+            if owner is not None and not self._webmon_can_publish(owner):return
+            if queue.closed or self._webmon_stream is not stream or self._webmon_queue is not queue:return
+            queue.offer(item)
             if item is None and not queue.pending and not queue.active and s.webmon_has_result:
                 s.webmon_stale=(str(s.webmon_run)!=stream.run or s.webmon_revision!=s.webmon_analysis_revision)
             if item:
@@ -900,6 +947,8 @@ class WebmonMixin:
                 if str(s.webmon_run)==stream.run:
                     from .snapshot import parse_live_ascii
                     pattern=parse_live_ascii(Path(item['binding']['source_dat']).read_bytes())
+                    if owner is not None and not self._webmon_can_publish(owner):return
+                    if queue.closed or self._webmon_stream is not stream:return
                     self._webmon_pattern=pattern;self._webmon_observed.update(plots.observed(pattern))
                     s.webmon_revision=item['receipt']['content_sha256'][:12]
                     self._webmon_last_preview=(str(self._webmon_effective_ipts()),stream.run,item['receipt']['content_sha256'])
@@ -907,6 +956,8 @@ class WebmonMixin:
                 self._webmon_cancelled=False
                 async def execute(update):
                     await self._webmon_execute(dict(sealed=(update['binding'],update['request']),webmon_run=stream.run,scope_owner=owner))
+                    if owner is not None and not self._webmon_can_publish(owner):return
+                    if queue.closed or self._webmon_stream is not stream:return
                     if s.webmon_calculation_status!='Completed':raise RuntimeError(s.webmon_message)
                     lag=time.monotonic()-update['captured_monotonic']
                     s.webmon_stream_message=f'Run {stream.run}: latest completed analysis took {lag:.1f} s from capture. {queue.state["coalesced"]} superseded queued snapshots skipped. Fixed response; counting advice unavailable.'
@@ -914,11 +965,16 @@ class WebmonMixin:
                 async def drain():
                     try:await queue.drain(execute)
                     except Exception as exc:
+                        if owner is not None and not self._webmon_can_publish(owner):return
+                        if self._webmon_stream is not stream or self._webmon_queue is not queue:return
                         self.webmon_pause_stream();s.webmon_stream_message=f'Automatic analysis paused: {exc}';s.flush()
                 self._webmon_task=asyncio.create_task(drain())
         except ReviewRequired as exc:
+            if owner is not None and not self._webmon_can_publish(owner):return
             self.webmon_pause_stream();s.webmon_stream_message=str(exc);s.webmon_accepted=False;s.webmon_stale=True
         except (ValueError,OSError,RuntimeError) as exc:
+            if owner is not None and not self._webmon_can_publish(owner):return
+            if queue.closed or self._webmon_stream is not stream:return
             s.webmon_stream_message=f'Waiting for a complete compatible snapshot: {exc}. Last completed result retained.'
             s.webmon_stale=bool(s.webmon_has_result)
         s.flush()
@@ -1062,7 +1118,7 @@ class WebmonMixin:
             if owner is None or current() or getattr(self,'_webmon_task',None) is asyncio.current_task():
                 s.webmon_busy=False;s.flush()
 
-    def _webmon_load_result(self,out):
+    def _webmon_load_result(self,out,*,owner=None):
         s=self.server.state;p=out/'result.json'
         if not p.exists():return
         req=json.loads((out/'request.json').read_text());r=json.loads(p.read_text())
@@ -1070,6 +1126,7 @@ class WebmonMixin:
         options=[dict(title=f"{a['name']} · {a['bns']} · {a['id'][-6:]}",value=a['posterior']) for a in r['rows'] if 'posterior' in a and a.get('artifacts')]
         options=[x for x in options if Path(x['value']).resolve().is_relative_to((out/'models').resolve())]
         progress=[dict(a,selectable='posterior' in a,status=STATUS.get(a['status'],a['status'].replace('_',' ')),setting=a['id'],**{k:round(a[k],3) for k in ['rwp','reduced_chi2'] if k in a}) for a in r['rows']]
+        if owner is not None and not self._webmon_can_publish(owner):return False
         if not options and s.webmon_has_result and r.get('status') not in {'complete','failed','cancelled'}:
             s.webmon_pending_rows=progress
             return
@@ -1093,6 +1150,7 @@ class WebmonMixin:
             self.webmon_render()
         if options and s.webmon_model not in self._webmon_model_paths:
             s.webmon_compared=[options[0]['value']];s.webmon_table_selected=s.webmon_compared;self.webmon_show_model(options[0]['value']);self.webmon_render()
+        return True
 
     def webmon_control(self,name,value):
         allowed={'webmon_axis','webmon_region','webmon_errors','webmon_band','webmon_component','webmon_ticks','webmon_filter','webmon_pair_a','webmon_pair_b'}
@@ -1167,47 +1225,61 @@ class WebmonMixin:
         if s.webmon_model in self._webmon_model_paths:self._webmon_correlation.update(plots.correlation(self._webmon_post(s.webmon_model),(s.webmon_pair_a,s.webmon_pair_b)))
 
     def webmon_saved_list(self):
-        s=self.server.state;self._webmon_saved_paths={};options=[]
+        s=self.server.state;paths={};options=[]
+        try:
+            owner=self._webmon_scope_snapshot();ipts=self._webmon_effective_ipts();run=str(s.webmon_run)
+        except (ValueError,OSError,KeyError):return
         if self._webmon and s.webmon_run:
             for path in sorted(Path(self._webmon.config['jobs']).glob('*/result.json'),key=lambda p:p.stat().st_mtime_ns,reverse=True):
                 if not path.resolve().is_relative_to(Path(self._webmon.config['jobs']).resolve()):continue
                 try:
                     candidate_request=json.loads((path.parent/'request.json').read_text())
-                    b=self._webmon.restore_binding(self._webmon_effective_ipts(),s.webmon_run,candidate_request,allow_archived=True)
+                    b=self._webmon.restore_binding(ipts,run,candidate_request,allow_archived=True)
                     req,r=verify_result(path.parent,binding=b,complete=True)
                     if any(row.get('posterior') and not row.get('artifacts') for row in r['rows']):continue
-                    if r.get('status')!='complete' or req.get('source_revision')!=f"PG3_{s.webmon_run}:"+b['source_dat_sha256']:continue
+                    if r.get('status')!='complete' or req.get('source_revision')!=f"PG3_{run}:"+b['source_dat_sha256']:continue
                     if req.get('source_sha256')!=b['source_sha256'] or req.get('reference_revision','').split(':')[-1]!=b['reference_sha256']:continue
                     if r.get('request_sha256')!=digest(path.parent/'request.json'):continue
-                    key=path.parent.name;self._webmon_saved_paths[key]=path.parent
+                    key=path.parent.name;paths[key]=path.parent
                     options.append(dict(title=f"{req['lower']:g}–{req['upper']:g} µB · {len(r['rows'])} settings · {r['elapsed_seconds']:.0f} s",value=key))
                 except (OSError,ValueError,KeyError,TypeError):continue
+        if not self._webmon_can_publish(owner) or str(s.webmon_run)!=run:return
+        self._webmon_saved_paths=paths
         s.webmon_saved=options;s.webmon_saved_job=options[0]['value'] if options else '';s.flush()
 
     def webmon_restore(self,**_):
         s=self.server.state
         if s.webmon_busy:return
+        owner=None
         try:
+            owner=self._webmon_scope_snapshot();run=str(s.webmon_run)
             out=self._webmon_saved_paths[s.webmon_saved_job]
-            b=self._webmon.restore_binding(self._webmon_effective_ipts(),s.webmon_run,json.loads((out/'request.json').read_text()),allow_archived=True)
+            b=self._webmon.restore_binding(self._webmon_effective_ipts(),run,json.loads((out/'request.json').read_text()),allow_archived=True)
             req,r=verify_result(out,binding=b,complete=True)
             for row in r['rows']:
                 if row.get('posterior'):
                     if not Path(row['posterior']).resolve().is_relative_to((out/'models').resolve()):raise ValueError('Saved model path escapes the analysis')
                     verify_posterior(row['posterior'],row.get('artifacts'))
-            if r['request_sha256']!=digest(out/'request.json') or req['source_sha256']!=b['source_sha256'] or req['source_revision']!=f"PG3_{s.webmon_run}:"+b['source_dat_sha256']:raise ValueError('Saved result no longer matches reviewed source')
-            self._webmon_plot_binding=b;self._webmon_request=req;self._webmon_payloads={};s.webmon_model='';s.webmon_compared=[];s.webmon_table_selected=[];s.webmon_target=s.webmon_run;s.webmon_analysis_revision=req['source_revision'].split(':')[-1][:12]
+            if r['request_sha256']!=digest(out/'request.json') or req['source_sha256']!=b['source_sha256'] or req['source_revision']!=f"PG3_{run}:"+b['source_dat_sha256']:raise ValueError('Saved result no longer matches reviewed source')
+            if not self._webmon_can_publish(owner) or str(s.webmon_run)!=run:return
             try:
-                _,current,_=self._webmon.capture(self._webmon_effective_ipts(),s.webmon_run)
-                s.webmon_stale=current['content_sha256'] != req['source_revision'].split(':')[-1]
+                _,current,_=self._webmon.capture(self._webmon_effective_ipts(),run)
+                stale=current['content_sha256'] != req['source_revision'].split(':')[-1]
             except (OSError,ValueError,RuntimeError):
-                s.webmon_stale=True
+                stale=True
+            if not self._webmon_can_publish(owner) or str(s.webmon_run)!=run:return
+            self._webmon_plot_binding=b;self._webmon_request=req;self._webmon_payloads={};s.webmon_model='';s.webmon_compared=[];s.webmon_table_selected=[];s.webmon_target=run;s.webmon_analysis_revision=req['source_revision'].split(':')[-1][:12]
+            s.webmon_stale=stale
             s.webmon_axis='d' if b.get('display_export_difc') else 'tof'
             s.webmon_latency=f"Saved calculation: {r['elapsed_seconds']:.1f} s; no new inference"
             s.webmon_calculation_status='Restored'
             self._webmon_response_cache=r.get('response_cache_dataset_id')
-            self._webmon_load_result(out);s.webmon_message='Saved analysis restored. Results remain conditional; no counting recommendation is authorized.'
-        except (OSError,ValueError,KeyError) as e:s.webmon_message='Cannot restore saved analysis: '+str(e)
+            if self._webmon_load_result(out,owner=owner) is False:return
+            if not self._webmon_can_publish(owner):return
+            s.webmon_message='Saved analysis restored. Results remain conditional; no counting recommendation is authorized.'
+        except (OSError,ValueError,KeyError) as e:
+            if owner is not None and not self._webmon_can_publish(owner):return
+            s.webmon_message='Cannot restore saved analysis: '+str(e)
         s.flush()
 
     async def webmon_cancel(self,**_):
