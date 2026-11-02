@@ -117,8 +117,8 @@ def test_no_supported_weighted_bins_reports_no_targets():
     assert result['weighted_residual_improvement'] is None
 
 
-@pytest.mark.parametrize('count', [1, 2])
-def test_too_few_supported_window_bins_are_not_reported_as_coverage(count):
+@pytest.mark.parametrize('count', [1, 2, 3])
+def test_short_segments_preserve_shape_and_require_three_window_bins(count):
     x = np.arange(201.)
     weights = np.zeros_like(x)
     weights[99:99+count] = 1.
@@ -127,9 +127,14 @@ def test_too_few_supported_window_bins_are_not_reported_as_coverage(count):
     assert baseline['targets']
     result = audit_target_peak_windows(h, baseline)
     assert result['fitted_point_count'] == count
-    assert result['peaks'] == [] and result['target_count'] == 0
-    assert result['weighted_coverage_error'] is None
-    assert result['weighted_residual_improvement'] is None
+    assert baseline['valid'].shape == x.shape
+    if count < 3:
+        assert result['peaks'] == [] and result['target_count'] == 0
+        assert result['weighted_coverage_error'] is None
+        assert result['weighted_residual_improvement'] is None
+    else:
+        assert result['target_count'] == 1
+        assert result['peaks'][0]['native_point_count'] == 3
 
 
 def test_supported_window_retains_original_signal_and_residual_definitions():
@@ -160,3 +165,87 @@ def test_baseline_snapshot_survives_native_in_place_profile_update():
     result = audit_target_peak_windows(histogram, baseline)
     assert result['weighted_residual_improvement'] == pytest.approx(1.)
     assert result['peaks'][0]['baseline_calculated_signal_above_background'] == 0.
+
+
+def test_smoothing_cannot_move_a_peak_across_one_invalid_bin():
+    x = np.arange(101.)
+    observed = np.full_like(x, 20.)
+    observed[49] = 1000.
+    calculated = np.full_like(x, 20.)
+    weights = np.ones_like(x)
+    weights[50] = 0.
+    baseline = find_positive_residual_targets(
+        Histogram(x, observed, calculated=calculated, weights=weights, limits=(20.,80.)))
+    assert [row['index'] for row in baseline['targets']] == [49]
+    assert all(observed[row['index']] > calculated[row['index']] for row in baseline['targets'])
+
+
+@pytest.mark.parametrize('extra_native_support', [False, True])
+def test_interpolation_cannot_invent_three_native_points_in_a_window(extra_native_support):
+    x = np.arange(101.)
+    observed = np.full_like(x, 20.)
+    observed[48:53] = 100.
+    baseline = find_positive_residual_targets(
+        Histogram(x, observed, calculated=np.full_like(x, 20.), limits=(20.,80.)))
+    baseline['targets'] = [dict(index=50, x=50., baseline_significance=80.)]
+    final_x = np.array([0.,30.,45.,55.,70.,100.]) if extra_native_support else np.array([0.,45.,55.,100.])
+    final_y = np.full_like(final_x, 100.)
+    final_y[[0,-1]] = 20.
+    weights = np.ones_like(final_x)
+    weights[[0,-1]] = 0.
+    final = Histogram(final_x, final_y, calculated=final_y, weights=weights, limits=(20.,80.))
+    result = audit_target_peak_windows(final, baseline)
+    # Even a longer valid native run has only45 and55 within the38..62 window.
+    assert result['fitted_point_count'] == (41 if extra_native_support else 0)
+    assert result['target_count'] == 0 and result['peaks'] == []
+    assert result['weighted_coverage_error'] is None
+    assert result['weighted_residual_improvement'] is None
+
+
+def test_coarse_baseline_cannot_hide_a_gap_between_native_segments():
+    x = np.arange(0.,101.,10.)
+    observed = np.full_like(x, 20.)
+    observed[5] = 100.
+    baseline = find_positive_residual_targets(
+        Histogram(x, observed, calculated=np.full_like(x, 20.), limits=(20.,80.)))
+    baseline['targets'] = [dict(index=5, x=50., baseline_significance=80.)]
+    final_x = np.arange(101.)
+    final_y = np.full_like(final_x, 20.)
+    final_y[50] = 100.
+    weights = np.ones_like(final_x)
+    weights[55] = 0.
+    final = Histogram(final_x, final_y, weights=weights, limits=(20.,80.))
+    result = audit_target_peak_windows(final, baseline, half_width=2)
+    assert result['target_count'] == 1
+    assert result['peaks'][0]['left_x'] == 30.
+    assert result['peaks'][0]['right_x'] == 50.
+    assert result['peaks'][0]['native_point_count'] == 21
+
+
+def test_three_actual_native_points_can_support_an_interpolated_window():
+    x = np.arange(101.)
+    baseline = find_positive_residual_targets(
+        Histogram(x, 20.+bump(x, 50.), calculated=np.full_like(x, 20.), limits=(20.,80.)))
+    baseline['targets'] = [dict(index=50, x=50., baseline_significance=80.)]
+    final = Histogram([0.,45.,50.,55.,100.], [20.,100.,100.,100.,20.],
+                      calculated=[20.,100.,100.,100.,20.], weights=[0.,1.,1.,1.,0.], limits=(20.,80.))
+    result = audit_target_peak_windows(final, baseline)
+    assert result['target_count'] == 1
+    assert result['peaks'][0]['native_point_count'] == 3
+    assert result['peaks'][0]['final_coverage'] == pytest.approx(1.)
+
+
+def test_subgrid_exclusion_still_splits_adjacent_baseline_points():
+    x = np.arange(101.)
+    observed = np.full_like(x, 20.)
+    observed[48:53] = 100.
+    baseline = find_positive_residual_targets(
+        Histogram(x, observed, calculated=np.full_like(x, 20.), limits=(20.,80.)))
+    baseline['targets'] = [dict(index=50, x=50., baseline_significance=80.)]
+    final_x = np.arange(0.,100.25,.25)
+    final_y = np.where(np.abs(final_x-50.) <= 2., 100., 20.)
+    final = Histogram(final_x, final_y, calculated=final_y, limits=(20.,80.), exclusions=[(49.25,49.75)])
+    result = audit_target_peak_windows(final, baseline)
+    assert result['target_count'] == 1
+    assert result['peaks'][0]['left_x'] >= 50.
+    assert result['peaks'][0]['native_point_count'] >= 3

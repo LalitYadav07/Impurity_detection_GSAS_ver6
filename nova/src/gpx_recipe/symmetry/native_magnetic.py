@@ -39,6 +39,12 @@ def _diagnostic_profile(histogram):
     return dict(arrays=arrays[:5], valid=valid, limits=limits, excluded_regions=exclusions)
 
 
+def _contiguous_valid_runs(valid):
+    import numpy as np
+    indices = np.flatnonzero(valid)
+    return [run for run in np.split(indices, np.flatnonzero(np.diff(indices) != 1)+1) if len(run)]
+
+
 def find_positive_residual_targets(histogram, maximum_targets=12):
     """Locate fixed baseline windows inside the native weighted fit domain."""
     import numpy as np
@@ -47,9 +53,12 @@ def find_positive_residual_targets(histogram, maximum_targets=12):
     valid = profile['valid']
     significance = np.where(valid, np.maximum(yobs-ycalc, 0.0)*np.sqrt(np.maximum(weights, 0.0)), 0.0)
     if significance.size >= 7:
-        significance = np.convolve(significance, np.ones(7, dtype=float)/7.0, mode='same')
-    # Smoothing must not create targets in excluded, masked or out-of-range bins.
-    significance = np.where(valid, significance, 0.0)
+        smoothed = np.zeros_like(significance)
+        for run in _contiguous_valid_runs(valid):
+            # Full convolution and a centered slice also handle runs shorter
+            # than seven bins without crossing an unsupported boundary.
+            smoothed[run] = np.convolve(significance[run], np.ones(7)/7., mode='full')[3:3+len(run)]
+        significance = smoothed
     candidates = []
     for index in range(20, max(20, len(x)-20)):
         if not valid[index] or significance[index] < 5.0:
@@ -71,29 +80,25 @@ def find_positive_residual_targets(histogram, maximum_targets=12):
     return profile
 
 
-def _align_supported_profile(profile, target_x):
+def _align_supported_profile(profile, target_x, runs):
     """Interpolate within contiguous supported runs, never across a data gap."""
     import numpy as np
     x, *values = profile['arrays']
     aligned = [np.full_like(target_x, np.nan, dtype=float) for _ in values]
-    supported = np.zeros(len(target_x), dtype=bool)
-    indices = np.flatnonzero(profile['valid'])
-    for run in np.split(indices, np.flatnonzero(np.diff(indices) != 1)+1):
-        if not len(run):
+    segments = np.full(len(target_x), -1, dtype=int)
+    for segment, run in enumerate(runs):
+        # Interpolation cannot turn one or two native measurements into a
+        # supported diagnostic window with three or more observations.
+        if len(run) < 3:
             continue
         source_x = x[run]
-        if len(run) == 1:
-            use = np.isclose(target_x, source_x[0], rtol=0.0, atol=1e-8)
-            for result, source in zip(aligned, values):
-                result[use] = source[run[0]]
-        else:
-            if not np.all(np.diff(source_x) > 0):
-                raise ValueError('Supported powder coordinates must increase for diagnostic interpolation')
-            use = (target_x >= source_x[0]) & (target_x <= source_x[-1])
-            for result, source in zip(aligned, values):
-                result[use] = np.interp(target_x[use], source_x, source[run])
-        supported |= use
-    return aligned, supported
+        if not np.all(np.diff(source_x) > 0):
+            raise ValueError('Supported powder coordinates must increase for diagnostic interpolation')
+        use = (target_x >= source_x[0]) & (target_x <= source_x[-1])
+        for result, source in zip(aligned, values):
+            result[use] = np.interp(target_x[use], source_x, source[run])
+        segments[use] = segment
+    return aligned, segments
 
 
 def audit_target_peak_windows(histogram, baseline, half_width=12):
@@ -102,23 +107,32 @@ def audit_target_peak_windows(histogram, baseline, half_width=12):
     final = _diagnostic_profile(histogram)
     x, by, bw, bc, bb = baseline['arrays']
     final_x, fy, fw, fc, fb = final['arrays']
+    native_runs = _contiguous_valid_runs(final['valid'])
     grid_matches = len(final_x) == len(x) and np.allclose(final_x, x, rtol=0.0, atol=1e-8)
     if grid_matches:
+        segments = np.full(len(x), -1, dtype=int)
+        for segment, run in enumerate(native_runs):
+            segments[run] = segment
         valid = baseline['valid'] & final['valid']
     else:
-        (fy, fw, fc, fb), supported = _align_supported_profile(final, x)
-        valid = baseline['valid'] & supported
+        (fy, fw, fc, fb), segments = _align_supported_profile(final, x, native_runs)
+        valid = baseline['valid'] & (segments >= 0)
     rows = []
     for target in baseline['targets']:
         index = int(target['index'])
         if not valid[index]:
             continue
+        segment = segments[index]
         left, right = index, index+1
-        while left > max(0, index-int(half_width)) and valid[left-1]:
+        while left > max(0, index-int(half_width)) and valid[left-1] and segments[left-1] == segment:
             left -= 1
-        while right < min(len(x), index+int(half_width)+1) and valid[right]:
+        while right < min(len(x), index+int(half_width)+1) and valid[right] and segments[right] == segment:
             right += 1
         if right-left < 3:
+            continue
+        native_x = final_x[native_runs[segment]]
+        native_count = int(np.count_nonzero((native_x >= x[left]) & (native_x <= x[right-1])))
+        if native_count < 3:
             continue
         window = slice(left, right)
         dx = np.abs(np.gradient(x[window]))
@@ -129,6 +143,7 @@ def audit_target_peak_windows(histogram, baseline, half_width=12):
         after_error = float(np.sum(np.abs(fy[window]-fc[window])*np.sqrt(fw[window])))
         coverage = after/max(observed, 1e-12)
         rows.append(dict(x=float(x[index]), index=index, left_x=float(x[left]), right_x=float(x[right-1]),
+            native_point_count=native_count,
             baseline_significance=float(target['baseline_significance']), observed_signal_above_background=observed,
             baseline_calculated_signal_above_background=before, final_calculated_signal_above_background=after,
             baseline_coverage=before/max(observed, 1e-12), final_coverage=coverage, coverage_error=abs(1.0-coverage),
