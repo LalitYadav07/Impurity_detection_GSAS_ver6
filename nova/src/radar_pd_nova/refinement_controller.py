@@ -710,7 +710,8 @@ class RefinementMixin(GuidedRefinementMixin):
         try:
             sources=w.sources(s.rf_experiment)
             s.rf_sample_options=[dict(title=label,value=key) for key,label in sorted({v['sample_key']:v['sample_label'] for v in sources}.items(),key=lambda x:x[1])]
-            s.rf_scan_options=[dict(title=f"{v['scan_label']} · {v['sample_label']}",value=v['scan_key']) for v in sources]
+            from .refinement_sources import refinement_scan_options
+            s.rf_scan_options=refinement_scan_options(sources, s.rf_scans or [])
             s.rf_bank_options=[dict(title='Bank '+b,value=b) for b in sorted({v['bank'] for v in sources if v['bank']})]
             try:
                 scope=self._refinement_scope();snapshot,token=w.selection(scope,existing=s.rf_existing,future=s.rf_future)

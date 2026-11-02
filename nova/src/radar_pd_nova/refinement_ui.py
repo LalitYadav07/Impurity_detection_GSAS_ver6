@@ -73,12 +73,14 @@ def refinement_dashboard(app):
             with html.Div(classes='rf-card'):
                 html.Div('1 · Choose projects',classes='rf-subtitle');html.H3('Execution scope')
                 with html.Div(classes='rf-fields'):
-                    select('Apply recipe to','rf_scope',"[{title:'All available run results',value:'all'},{title:'Selected samples',value:'samples'},{title:'Selected scans',value:'scans'}]",update_modelValue=app.refinement_policy_edited)
+                    select('Apply recipe to','rf_scope',"[{title:'All available run results',value:'all'},{title:'Selected samples',value:'samples'},{title:'Selected saved results',value:'scans'}]",update_modelValue=app.refinement_policy_edited)
                     select('Samples','rf_samples','rf_sample_options',v_if="rf_scope === 'samples'",multiple=True,chips=True,closable_chips=True,update_modelValue=app.refinement_policy_edited)
                     v.VAutocomplete(label='Scans',v_model=('rf_scans',),items=('rf_scan_options',),v_if="rf_scope === 'scans'",multiple=True,chips=True,closable_chips=True,density='compact',variant='outlined',hide_details=True,update_modelValue=app.refinement_policy_edited)
                     select('Banks · empty means all','rf_banks','rf_bank_options',multiple=True,chips=True,closable_chips=True,clearable=True,update_modelValue=app.refinement_policy_edited)
                 v.VCheckbox(label='Include available scans at approval',v_model=('rf_existing',),density='compact',hide_details=True,classes='mt-3',update_modelValue=app.refinement_policy_edited)
                 v.VCheckbox(label='Enroll future matching scans',v_model=('rf_future',),density='compact',hide_details=True,update_modelValue=app.refinement_policy_edited)
+                html.P('Selected saved results are pinned to their exact GPXs. Choose samples or all results to include new scans.',
+                       v_if="rf_scope === 'scans'", classes='rf-help')
                 html.P("{{ rf_transport === 'Local scientific worker' ? 'Local jobs run in this development session.' : 'Enrollment follows this NOVA session. Submitted Galaxy jobs continue independently.' }}",classes='rf-notice')
                 html.P('{{ rf_scope_summary }}',classes='rf-notice')
                 html.Hr(style='border:0;border-top:1px solid #e0e9e2;margin:20px 0')

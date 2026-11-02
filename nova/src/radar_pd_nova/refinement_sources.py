@@ -46,7 +46,8 @@ class RefinementScope:
         return (source['experiment'] == self.experiment
                 and (not self.banks or str(source.get('bank', '')) in self.banks)
                 and (self.mode != 'samples' or source.get('sample_key') in self.samples)
-                and (self.mode != 'scans' or source.get('scan_key') in self.scans))
+                and (self.mode != 'scans' or published_selection_key(source) in self.scans
+                     or source.get('scan_key') in self.scans))
 
     def to_dict(self):
         return asdict(self)
@@ -54,6 +55,29 @@ class RefinementScope:
     @property
     def signature(self):
         return digest(self.to_dict())
+
+
+def published_selection_key(source: dict) -> str:
+    """Pin new UI selections to one publication, not every reduction of a run.
+
+    Unprefixed logical scan keys remain readable for already saved recipes.
+    Their representation and signatures are deliberately unchanged.
+    """
+    return 'source:' + str(source['id'])
+
+
+def refinement_scan_options(sources: list[dict], selected=()) -> list[dict]:
+    options = [dict(title=f"{s['scan_label']} · {s['sample_label']}",
+                    value=published_selection_key(s)) for s in sources]
+    for key in dict.fromkeys(selected):
+        if str(key).startswith('source:'):
+            continue
+        matches = [s for s in sources if s.get('scan_key') == key]
+        if matches:
+            options.append(dict(value=key, title=(
+                f"{matches[0]['scan_label']} · recorded logical-run selection "
+                f"({len(matches)} saved result(s))")))
+    return options
 
 
 def experiment_key(history: str, instrument: str, ipts: str, *, record_uid='') -> str:
