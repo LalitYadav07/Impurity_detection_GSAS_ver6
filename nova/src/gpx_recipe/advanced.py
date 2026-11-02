@@ -2,19 +2,10 @@
 import importlib
 import math
 import copy
+from .occupancy_review import occupancy_groups, validate_receipt, reviewed_labels, check_stage, REBUILD
 
 STAGE_FIELDS = {"fit_ranges", "exclusions", "bounds", "phase_normalization", "texture"}
 UNITS = {"native", "tof", "d", "Q", "two_theta"}
-
-
-def occupancy_groups(atoms):
-    """Conservative co-located sites only; do not guess symmetry-orbit equivalence."""
-    groups = {}
-    for atom in atoms:
-        if "coordinates" not in atom or "multiplicity" not in atom: continue
-        point = tuple(round(float(x) % 1, 7) % 1 for x in atom["coordinates"])
-        groups.setdefault((point, atom["multiplicity"]), []).append(atom["label"])
-    return [labels for labels in groups.values() if len(labels) > 1]
 
 
 def site_capacity(context, phase_key, atom_label, phase, free):
@@ -30,10 +21,20 @@ def site_capacity(context, phase_key, atom_label, phase, free):
 def check_site_totals(project, context):
     for p in context["phases"]:
         phase = project.phase(p["name"])
+        review = validate_receipt(phase)
+        expected = p.get("occupancy_review")
+        if bool(review) != bool(expected) or (review and review["receipt_sha256"] != expected.get("receipt_sha256")):
+            raise ValueError("Native occupancy review changed after inspection. " + REBUILD)
+        retained_groups = {tuple(sorted(group)) for group in (review or {}).get("reviewed_groups", [])}
+        for label in reviewed_labels(review):
+            if set(phase.atom(label).refinement_flags) & {"F", "X"}:
+                raise ValueError("Reviewed CIF rounding requires held site occupancies and positions; refinement withheld.")
         for group in p.get("occupancy_groups", occupancy_groups(p["atoms"])):
             total = sum(phase.atom(name).occupancy for name in group)
             if total > 1 + 1e-6 or total < -1e-6:
-                raise ValueError("Mixed-site occupancy exceeds its physical capacity: " + p["key"] + " " + str(group) + " total=" + str(total))
+                if total > 1 and tuple(sorted(group)) in retained_groups:
+                    continue  # Exact held values and the bounded source review were validated above.
+                raise ValueError("Mixed-site occupancy exceeds its physical capacity: " + p["key"] + " " + str(group) + " total=" + str(total) + ". " + REBUILD)
         for name, hap in phase.data["Histograms"].items():
             if not hap.get("Use", True): continue
             if hap["Scale"][0] < -1e-9:
@@ -48,6 +49,7 @@ def finite(value):
 
 def validate_stage(stage, context, normalized):
     from .contracts import exact_keys
+    check_stage(stage, context)
     phases = {p["key"]: p for p in context["phases"]}
     hists = {h["key"]: h for h in context["histograms"]}
     free = stage["free"]

@@ -182,10 +182,15 @@ def test_reviewed_policy_must_reach_native_guard_before_gsas(tmp_path,monkeypatc
         def add_phase(self,p,**kwargs):
             assert Path(p).read_bytes()==raw
             return SimpleNamespace(name='synthetic',data={
-                'General':{'NoAtoms':{'C':0.6,'Li':0.40066},'AtomPtrs':[3,1,7,9]},
-                'Atoms':[['C1','C','',0,0,0,.6],['Li1','Li','',0,0,0,.40066]]})
+                'General':{'NoAtoms':{'C':0.6,'Li':0.40066},'AtomPtrs':[3,1,7,9],
+                    'SGData':{'SpGrp':'P 1','SGInv':False,'SGCen':[[0,0,0]],
+                              'SGOps':[([[1,0,0],[0,1,0],[0,0,1]],[0,0,0])]}},
+                'Atoms':[['C1','C','',0,0,0,.6,'1',1],['Li1','Li','',0,0,0,.40066,'1',1]]})
     phase=add_verified_phase(Project(),path,phasename='synthetic')
     assert phase.name=='synthetic'
+    native_review=gsas_cif_import._occupancy_review_module()
+    assert phase.data[native_review.DATA_KEY]['review']['policy_sha256']
+    assert native_review.validate_receipt(phase)['reviewed_groups']==[['C1','Li1']]
 
 
 def test_strict_default_must_reject_negative_raw_component(tmp_path):
@@ -210,3 +215,17 @@ def test_native_review_rejects_equal_ratio_or_equal_total_occupancy_changes(tmp_
             return SimpleNamespace(name='synthetic',data={'General':{'NoAtoms':counts,'AtomPtrs':[3,1,7,9]},'Atoms':atoms})
     with pytest.raises(ValueError,match='reviewed atom counts|reviewed site occupancies'):
         add_verified_phase(Project(),path,phasename='synthetic')
+
+
+def test_reviewed_import_receipt_cannot_bind_changed_source_bytes(tmp_path, monkeypatch):
+    path, raw = source(tmp_path, '0.40066')
+    activate_test_review(tmp_path, path, monkeypatch)
+    import gsas_cif_import
+    monkeypatch.setattr(gsas_cif_import, 'prepare_cif_for_gsas', lambda source, cache: source)
+    class Project:
+        filename = str(tmp_path / 'work.gpx')
+        def add_phase(self, *args, **kwargs):
+            path.write_bytes(raw + b'\n# changed during import\n')
+            return SimpleNamespace()
+    with pytest.raises(ValueError, match='CIF changed during verified import'):
+        add_verified_phase(Project(), path, phasename='synthetic')

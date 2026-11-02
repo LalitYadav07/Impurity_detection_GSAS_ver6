@@ -13,6 +13,7 @@ from . import advanced
 from .effects import parameter_changes, require_fixed_values_unchanged,require_native_covariance,constraint_bound_audit,require_constraint_bounds,blocking_frozen_variables
 from .effects import native_storage_audit, require_native_storage
 from .convergence import convergence_evidence
+from .occupancy_review import check_active_parameters
 
 
 def write_json(path, value):
@@ -183,6 +184,10 @@ def check_preflight(state, stage, context):
         raise ValueError('Requested variables are already frozen by preserved source bounds/history: '+str(sorted(blocked))+'. Review an explicit reset in the source project; this recipe never silently clears holds.')
     if not space["effective_vary"]:
         raise ValueError("The requested stage has no effective independent refinement variables")
+    if any(p.get("occupancy_review") for p in context.get("phases", [])):
+        G2 = gsas()
+        native_maps = importlib.import_module((G2.__package__ + "." if G2.__package__ else "") + "GSASIImapvars")
+        check_active_parameters(state, context, dependent=native_maps.GetDependentVars(), inverse=native_maps.getInvConstraintEq)
     # A rigid-body or custom variable must not bypass our closed active set.
     allowed = {"background", "phase_fraction", "histogram_scale", "preferred_orientation", "crystallite_size", "microstrain", "lattice", "atomic_coordinates", "atomic_displacement", "occupancy"}
     permitted = lambda row: row["configured_now"] and any(parameter_matches_target(row, target, context) for target in stage["free"])
@@ -297,6 +302,7 @@ def run_plan(source, output, plan, *, approved=None, preview=False):
             started = time.monotonic()
             introduced=[c for c in stage['constraints'] if advanced.relation_key(c) not in declared_relations]
             configure(project, stage, context, added_constraints)
+            advanced.check_site_totals(project, context)
             normalized_histograms.update(stage.get("phase_normalization",[]))
             advanced.check_requested_relations(project,context,introduced,free=stage['free'])
             for constraint in introduced:declared_relations[advanced.relation_key(constraint)]=constraint

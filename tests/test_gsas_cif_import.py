@@ -68,3 +68,93 @@ def test_bootstrap_cif_passes_the_installed_gsas_import_guard(tmp_path):
     project = G2sc.G2Project(newgpx=str(tmp_path / "bootstrap.gpx"))
     phase = add_verified_phase(project, source, phasename="bootstrap", histograms=[])
     assert elemental_counts(phase.data["General"]["NoAtoms"]) == {"Na": 4.0, "Cl": 4.0}
+
+
+def test_reviewed_occupancy_receipt_survives_native_gpx_save_and_reload(tmp_path, monkeypatch):
+    pytest.importorskip("pymatgen")
+    G2 = pytest.importorskip("GSASII.GSASIIscriptable")
+    import json
+    import gsas_cif_import
+    from cif_occupancy import AUTH_ENV, make_review, write_review
+    from test_cif_occupancy_policy_characterization import HEADER
+
+    raw = (HEADER + 'C1 C 0 0 0 0.6\nLi1 Li 0 0 0 0.40066\nO1 O .3 .4 .5 1\n').encode()
+    source = tmp_path / 'reviewed.cif'
+    source.write_bytes(raw)
+    review = make_review(raw, .001, 'Reviewed synthetic source rounding, retain unchanged')
+    write_review(source, review)
+    ledger = tmp_path / 'authorization.json'
+    ledger.write_text(json.dumps({'root': str(tmp_path), 'approved_policies': {review['policy_sha256']: review}}))
+    monkeypatch.setenv(AUTH_ENV, str(ledger))
+    project = G2.G2Project(newgpx=str(tmp_path / 'reviewed.gpx'))
+    phase = gsas_cif_import.add_verified_phase(project, source, phasename='reviewed', histograms=[])
+    native_review = gsas_cif_import._occupancy_review_module()
+    receipt = phase.data[native_review.DATA_KEY]
+    project.save()
+    saved = (tmp_path / 'reviewed.gpx').read_bytes()
+    reopened = G2.G2Project(gpxfile=str(tmp_path / 'reviewed.gpx')).phase('reviewed')
+    assert native_review.validate_receipt(reopened) == receipt
+    assert reopened.atom('C1').occupancy == .6
+    assert reopened.atom('Li1').occupancy == .40066
+    cx, ct, _, _ = reopened.data['General']['AtomPtrs']
+    oxygen = next(row for row in reopened.data['Atoms'] if row[ct-1] == 'O1')
+    oxygen[cx] += .01
+    native_review.validate_receipt(reopened)  # Unrelated oxygen motion is allowed.
+    lithium = next(row for row in reopened.data['Atoms'] if row[ct-1] == 'Li1')
+    lithium[cx+3] += 1e-8
+    with pytest.raises(ValueError, match='exactly held'):
+        native_review.validate_receipt(reopened)
+    assert source.read_bytes() == raw
+    assert (tmp_path / 'reviewed.gpx').read_bytes() == saved
+
+
+def test_final_gpx_snapshot_retains_recipe_identity_after_allowed_oxygen_and_cell_changes(tmp_path, monkeypatch):
+    pytest.importorskip('pymatgen')
+    G2 = pytest.importorskip('GSASII.GSASIIscriptable')
+    import json
+    from cif_occupancy import AUTH_ENV, make_review, write_review
+    from gsas_cif_import import add_verified_phase
+    from gpx_recipe.snapshot import snapshot
+    from test_cif_occupancy_policy_characterization import HEADER
+
+    raw = (HEADER + 'C1 C 0 0 0 0.6\nLi1 Li 0 0 0 0.40066\nO1 O .3 .4 .5 1\n').encode()
+    cif = tmp_path / 'reviewed.cif'
+    cif.write_bytes(raw)
+    policy = make_review(raw, .001, 'Retain source rounding in the fixed shared site')
+    write_review(cif, policy)
+    ledger = tmp_path / 'activation.json'
+    ledger.write_text(json.dumps({'root':str(tmp_path),'approved_policies':{policy['policy_sha256']:policy}}))
+    monkeypatch.setenv(AUTH_ENV,str(ledger))
+    profile = tmp_path / 'cw.instprm'
+    profile.write_text('#Bank 1: GSAS-II instrument parameter file\nType:PXC\nBank:1\n'
+                       'Lam:1.54\nU:.1\nV:0\nW:.1\nZero:0\nX:0\nY:0\n'
+                       'SH/L:.002\nPolariz:.99\nAzimuth:0\n')
+    first = tmp_path / 'first.gpx'
+    project = G2.G2Project(newgpx=str(first))
+    phase = add_verified_phase(project,cif,phasename='reviewed',histograms=[])
+    histogram = project.add_simulated_powder_histogram('synthetic',str(profile),10.,80.,Npoints=32,phases=[phase])
+    histogram.data['data'][1][1][:] = 100.
+    project.save()
+    # Production publication uses this exact cosmetic renamer after import.
+    from ndip_outputs import _rewrite_gpx_phase_names
+    pretty = 'C0.6 Li0.40066 O (SG P1, 1)'
+    assert _rewrite_gpx_phase_names(first, {'reviewed': pretty})
+    project = G2.G2Project(gpxfile=str(first))
+    phase = project.phase(pretty)
+    before = snapshot(first)
+    # Stand in for a completed allowed refinement, then really save and read
+    # the resulting GPX through the complete native snapshot path.
+    cx, ct, _, cia = phase.data['General']['AtomPtrs']
+    oxygen = next(row for row in phase.data['Atoms'] if row[ct-1] == 'O1')
+    oxygen[cx] += .01
+    oxygen[cia+1] += .005
+    phase.data['General']['Cell'][1] = 4.1
+    phase.data['General']['Cell'][7] = 65.6
+    final = tmp_path / 'final.gpx'
+    project.save(str(final))
+    after = snapshot(final)
+    assert before['model_signature'] == after['model_signature']
+    assert before['source']['sha256'] != after['source']['sha256']
+    assert after['phases'][0]['occupancy_review'] == before['phases'][0]['occupancy_review']
+    assert after['phases'][0]['atoms'][2]['coordinates'] != before['phases'][0]['atoms'][2]['coordinates']
+    assert cif.read_bytes() == raw

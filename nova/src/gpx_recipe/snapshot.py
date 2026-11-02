@@ -9,6 +9,7 @@ import sys
 
 from .studio_state import extract_gsasii_refinement_state
 from .advanced import occupancy_groups, _scale_sum_exists
+from .occupancy_review import validate_receipt, retention_binding
 from .identity import model_topology,bound_binding,explicit_constraints, constraint_binding, uiso_groups
 
 
@@ -117,6 +118,9 @@ def snapshot(path):
                                         for name, hap in phase.data["Histograms"].items() if name in histogram_keys and hap.get("Use", True)],
                        "histogram_phase_models": {histogram_keys[name]: json_safe(hap) for name, hap in phase.data["Histograms"].items() if name in histogram_keys},
                        "histograms": sorted(name for name, hap in phase.data["Histograms"].items() if name in histogram_keys and hap.get("Use", True))})
+        reviewed_occupancy = validate_receipt(phase)
+        if reviewed_occupancy is not None:
+            phases[-1]["occupancy_review"] = reviewed_occupancy
     histograms = []
     for index, hist in enumerate(sorted(project.histograms(), key=lambda h: h.name)):
         bg = hist.data["Background"]
@@ -155,6 +159,9 @@ def snapshot(path):
                "phase_histogram_links": {p['key']:[h['key'] for h in histograms if h['name'] in p['histograms']] for p in phases},
                "histograms": [{"key": h["key"], "instrument": h["instrument"],
                                "background": {k: h["background"][k] for k in ("function", "coefficients")}} for h in histograms]}
+    if any(p.get("occupancy_review") for p in phases):
+        binding["occupancy_reviews"] = {p["key"]: retention_binding(p["occupancy_review"])
+                                        for p in phases if p.get("occupancy_review")}
     covariance = {k: v for k, v in state["covariance"].items() if k not in {"matrix", "correlation_matrix"}}
     result = {"schema": "radar-gpx-context/v1", "source": {"name": path.name, "sha256": state["source"]["sha256"]},
               "model_signature": digest(binding), "binding": binding, "normalized_histograms": normalized_histograms,

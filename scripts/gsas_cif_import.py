@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 import hashlib
+import importlib.util
 import json
 import math
 from pathlib import Path
@@ -19,6 +20,24 @@ import numpy as np
 
 VERSION = "gsas-cif-origin/1"
 DENOMINATOR = 24
+
+
+def _occupancy_review_module():
+    """Load the shared pure validator in batch images and source checkouts."""
+    try:
+        from gpx_recipe import occupancy_review
+        return occupancy_review
+    except ModuleNotFoundError as exc:
+        if exc.name != 'gpx_recipe':
+            raise
+        # Local scientific scripts need no installed NOVA web dependencies.
+        path = Path(__file__).resolve().parents[1] / 'nova/src/gpx_recipe/occupancy_review.py'
+        spec = importlib.util.spec_from_file_location('radar_native_occupancy_review', path)
+        if spec is None or spec.loader is None:
+            raise ValueError('The shared native occupancy-review validator is unavailable') from exc
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
 
 
 def elemental_counts(atom_types):
@@ -189,6 +208,7 @@ def add_verified_phase(project, cif_file, **kwargs):
     from pymatgen.core import Structure
 
     source = Path(cif_file).resolve(strict=True)
+    source_bytes = source.read_bytes()
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         from cif_occupancy import load_authorized_structure
@@ -201,7 +221,10 @@ def add_verified_phase(project, cif_file, **kwargs):
     review = authorized_review(source)
     cache = Path(project.filename).resolve().parent / "verified_cif_settings"
     prepared = prepare_cif_for_gsas(source, cache)
+    prepared_bytes = prepared.read_bytes()
     phase = project.add_phase(str(prepared), **kwargs)
+    if source.read_bytes() != source_bytes or prepared.read_bytes() != prepared_bytes:
+        raise ValueError("CIF changed during verified import; retry from an immutable reviewed source")
     actual = elemental_counts(phase.data['General']['NoAtoms'])
     e_sum, a_sum = sum(expected.values()), sum(actual.values())
     if not e_sum > 0 or not a_sum > 0 or set(expected) != set(actual) or any(
@@ -213,7 +236,7 @@ def add_verified_phase(project, cif_file, **kwargs):
             raise ValueError("CIF import changed absolute reviewed atom counts; refinement withheld")
         # Equal totals alone can hide redistribution or uniform normalization.
         # Compare the imported asymmetric rows with the proven prepared CIF.
-        rows,_ = raw_sites(prepared.read_bytes())
+        rows,_ = raw_sites(prepared_bytes)
         general = phase.data['General']
         if 'AtomPtrs' not in general or 'Atoms' not in phase.data:
             raise ValueError("Reviewed CIF import has no auditable atom-site inventory")
@@ -231,13 +254,19 @@ def add_verified_phase(project, cif_file, **kwargs):
                 raise ValueError("CIF import changed reviewed site occupancies or positions; refinement withheld")
     cache.mkdir(parents=True, exist_ok=True)
     receipt = {"schema": VERSION, "source": str(source),
-               "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
-               "imported_cif": str(prepared), "imported_cif_sha256": hashlib.sha256(prepared.read_bytes()).hexdigest(),
+               "source_sha256": hashlib.sha256(source_bytes).hexdigest(),
+               "imported_cif": str(prepared), "imported_cif_sha256": hashlib.sha256(prepared_bytes).hexdigest(),
                "expected_elemental_counts": expected, "imported_elemental_counts": actual,
                "relative_elemental_inventory_preserved": True, "phase": phase.name}
     if review is not None:
         receipt['occupancy_review']=review
         receipt['absolute_counts_and_site_values_preserved']=True
+        native_review = _occupancy_review_module()
+        source_rows, _ = raw_sites(source_bytes)
+        phase.data[native_review.DATA_KEY] = native_review.make_receipt(
+            phase, review, source_sha256=receipt['source_sha256'],
+            imported_cif_sha256=receipt['imported_cif_sha256'], source_atoms=source_rows)
+        native_review.validate_receipt(phase)
     target = cache / (source.stem + '__' + receipt['source_sha256'][:12] + '.import.json')
     temporary = target.with_suffix('.tmp')
     temporary.write_text(json.dumps(receipt, indent=2) + '\n')
