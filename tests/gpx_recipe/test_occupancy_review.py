@@ -1,6 +1,7 @@
 """Source-bound retained rounding is not permission to refine or overfill sites."""
 import copy
 import hashlib
+import importlib.util
 import json
 from pathlib import Path
 import subprocess
@@ -284,3 +285,27 @@ print(module.__file__)
     result = subprocess.run([sys.executable, '-I', '-c', code, str(root / 'scripts')],
                             capture_output=True, text=True, check=True, timeout=20)
     assert Path(result.stdout.strip()) == root / 'nova/src/gpx_recipe/occupancy_review.py'
+
+
+def test_source_group_helper_first_keeps_native_phase_initialization_valid(tmp_path):
+    native = importlib.util.find_spec('GSASII')
+    if native is None:
+        pytest.skip('requires native GSAS-II runtime')
+    root = Path(__file__).resolve().parents[2]
+    code = '''import sys
+sys.path.insert(0, sys.argv[1])
+sys.path.insert(0, sys.argv[2])
+assert "GSASII.GSASIIscriptable" not in sys.modules
+from gpx_recipe.occupancy_review import _source_space_group
+group = _source_space_group({"_space_group_name_h-m_alt": "P 1"})
+assert group["SGInv"] is False
+from GSASII import GSASIIscriptable as G2
+project = G2.G2Project(newgpx=sys.argv[3])
+phase = project.add_phase(phasename="after helper", spacegroup="P 1", cell=[4,4,4,90,90,90])
+assert phase.name == "after helper"
+'''
+    native_root = Path(native.origin).resolve().parent.parent
+    result = subprocess.run([sys.executable, '-I', '-c', code, str(root / 'nova/src'),
+                             str(native_root), str(tmp_path / 'after-helper.gpx')],
+                            cwd=tmp_path, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr + result.stdout

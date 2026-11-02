@@ -83,13 +83,20 @@ def _source_space_group(model):
     if symbols and (not isinstance(symbols[0], str) or len(symbols[0]) > 200):
         raise ValueError("Invalid source space-group label")
     try:
+        # GSASIIspc imports GSASIIobj, which initializes P1SGData from spc.
+        # Enter through the supported scripting API to avoid partially
+        # initializing that circular dependency when this helper runs first.
+        importlib.import_module("GSASII.GSASIIscriptable")
         spc = importlib.import_module("GSASII.GSASIIspc")
     except ModuleNotFoundError as exc:
-        if exc.name not in {"GSASII", "GSASII.GSASIIspc"}:
+        if exc.name not in {"GSASII", "GSASII.GSASIIscriptable", "GSASII.GSASIIspc"}:
             raise
         try:
+            importlib.import_module("GSASIIscriptable")
             spc = importlib.import_module("GSASIIspc")
-        except ModuleNotFoundError:
+        except ModuleNotFoundError as fallback:
+            if fallback.name not in {"GSASIIscriptable", "GSASIIspc"}:
+                raise
             # Basic contract tests need no native installation. P1 has only
             # the identity operation; production uses GSAS's complete record.
             if symbols and re.sub(r"\s", "", symbols[0]).upper() == "P1":
