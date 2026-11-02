@@ -239,6 +239,12 @@ def _powgen_queue_sort_key(row: dict[str, Any]) -> tuple:
     return (priority.get(row['status'],4),-(row.get('experiment_number') or 0),-row['run_number'])
 
 
+def _powgen_activity_summary(value: Any) -> str:
+    """Bound the queue preview without interpreting or discarding its full text."""
+    text = " ".join(str(value or "").split())
+    return text if len(text) <= 180 else text[:177].rstrip() + "..."
+
+
 def _powgen_submission_error_summary(value: Any) -> str:
     """Return a concise, non-HTML explanation for a watcher submission error."""
 
@@ -2886,13 +2892,22 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                     html.Div("LIVE QUEUE", classes="radar-micro-label")
                     html.H3("Queued, running and failed scans")
                     html.P("Last status check: {{ powgen_last_checked }}", classes="radar-section-help")
-            vuetify.VDataTable(
+            with vuetify.VDataTable(
                 headers=("[{title:'Scan / bank',key:'scan_label'},{title:'File',key:'file'},{title:'Status',key:'status'},{title:'Current activity',key:'detail'}]",),
                 items=("powgen_rows.filter(row => row.status !== 'Completed')",),
+                item_value="run_id",
                 density="compact",
                 items_per_page=10,
                 no_data_text="No live scans have been discovered yet.",
-            )
+            ):
+                with html.Template(raw_attrs=['v-slot:item.detail="{ item }"']):
+                    with html.Div(classes="radar-queue-activity"):
+                        html.Span("{{ item.detail_summary }}")
+                        with html.Details(v_if="item.detail !== item.detail_summary", key="item.run_id"):
+                            html.Summary("Show full activity",
+                                raw_attrs=[":aria-label=\"'Show full activity for scan ' + item.scan_label\""])
+                            html.Pre("{{ item.detail }}", classes="radar-console mt-2", tabindex="0",
+                                raw_attrs=[":aria-label=\"'Full activity for scan ' + item.scan_label\""])
 
     def _experiment_results_dashboard(self) -> None:
         """The familiar experiment overview is the primary result view."""
@@ -4480,6 +4495,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                         "status": status,
                         "color": color,
                         "detail": detail,
+                        "detail_summary": _powgen_activity_summary(detail),
                     }
                 )
         state = self.server.state
@@ -8792,6 +8808,9 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         .radar-stage-item.is-complete { color: var(--radar-brand-600); background: #f0f8f4; }
         .radar-console, .radar-config-preview { max-height: 440px; overflow: auto; margin: 0; padding: 14px; border-radius: 7px; font: 12px/1.45 Consolas, "Courier New", monospace; white-space: pre-wrap; }
         .radar-console { background: #17251f; color: #e7f2ed; }
+        .radar-queue-activity { max-width: 44rem; padding: 4px 0; white-space: normal; overflow-wrap: anywhere; }
+        .radar-queue-activity summary { margin-top: 4px; color: var(--radar-brand-700); cursor: pointer; font-size: 12px; }
+        .radar-queue-activity .radar-console { max-height: 320px; }
         .radar-config-preview { background: #f5f8f7; color: #263a32; border: 1px solid var(--radar-line); }
         .radar-run-provenance { padding: 12px; background: #fff; border: 1px solid var(--radar-line); border-radius: 8px; }
         .radar-run-provenance-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(185px, 1fr)); gap: 8px; }
