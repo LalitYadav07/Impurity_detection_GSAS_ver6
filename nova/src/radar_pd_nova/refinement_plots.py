@@ -84,7 +84,7 @@ def _coordinate(hist,axis):
     raise ValueError('Choose native coordinates, d-spacing or Q')
 
 
-def fit_figure(baseline,polished,*,histogram=None,axis='d',display='compare',reset=0):
+def fit_figure(baseline,polished,*,histogram=None,axis='d',display='compare',reset=0,histogram_label=None):
     if not baseline or not polished:return empty_figure(),{}
     name=histogram or polished['histograms'][0]['name']
     current=next((h for h in polished['histograms'] if h['name']==name),None)
@@ -127,7 +127,8 @@ def fit_figure(baseline,polished,*,histogram=None,axis='d',display='compare',res
         figure.add_trace(go.Scattergl(x=positions,y=[index]*len(positions),mode='markers',marker=dict(symbol='line-ns',size=8,color=COLORS[index%len(COLORS)]),name=label,legendgroup='phase-'+str(index),hovertemplate=label+'<br>%{x:.6g}<extra></extra>'),row=3,col=1)
     figure.update_layout(template='plotly_white',height=620,margin=dict(l=75,r=22,t=32,b=55),
         legend=dict(orientation='h',y=1.13,x=0,font=dict(size=11)),hovermode='closest',
-        uirevision=f'refinement-fit/{name}/{axis}/{reset}')
+        uirevision=f'refinement-fit/{name}/{axis}/{reset}',
+        meta=dict(refinement_histogram=dict(name=name,title=histogram_label or name)))
     figure.update_yaxes(title_text='Intensity',row=1,col=1)
     figure.update_yaxes(title_text='Weighted residual' if standardized else 'Obs − calc',zeroline=True,zerolinecolor='#b7c4bd',row=2,col=1)
     figure.update_yaxes(title_text='Bragg ticks',showticklabels=False,showgrid=False,zeroline=False,row=3,col=1)

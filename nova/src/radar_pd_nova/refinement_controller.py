@@ -1143,7 +1143,10 @@ class RefinementMixin(GuidedRefinementMixin):
             result=job['result'];name=result.get('final_view') if s.rf_stage=='final' else next((v['view'] for v in result.get('stages',[]) if v['id']==s.rf_stage),None)
             if not name:return
             baseline=self._read_refinement_view(job,result['baseline_view']);view=self._read_refinement_view(job,name)
-            fig,notice=fit_figure(baseline,view,histogram=s.rf_histogram,axis=s.rf_axis,display=s.rf_display,reset=s.rf_zoom)
+            histogram=s.rf_histogram
+            histogram_label=next((item['title'] for item in s.rf_histograms if item['value']==histogram),None)
+            fig,notice=fit_figure(baseline,view,histogram=histogram,axis=s.rf_axis,display=s.rf_display,reset=s.rf_zoom,
+                                 histogram_label=histogram_label)
             s.rf_fit=figure_json(fig);s.rf_fit_notice=notice.get('notice','')
             s.rf_rwp_summary=refinement_rwp_summary(notice)
             s.rf_parameter_warnings=refinement_parameter_warnings(view)
