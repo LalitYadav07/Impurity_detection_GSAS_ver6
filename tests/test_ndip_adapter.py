@@ -423,7 +423,7 @@ def test_normalized_outputs_publish_handoff_projects_and_archive_all_checkpoints
     assert any(name.startswith("ndip/plots/") for name in names)
 
 
-def test_full_main_only_project_is_published_as_the_main_phase_anchor(tmp_path: Path) -> None:
+def test_working_project_does_not_claim_to_be_a_main_only_anchor(tmp_path: Path) -> None:
     run = tmp_path / "run"
     projects = run / "Technical" / "GSAS_Projects"
     projects.mkdir(parents=True)
@@ -433,9 +433,9 @@ def test_full_main_only_project_is_published_as_the_main_phase_anchor(tmp_path: 
     result = collect_outputs(run, tmp_path / "portal", mode="full", run_name="main-only")
 
     assert [item["collection_name"] for item in result["gpx_projects"]] == [
-        "02_Main_phase_anchor.gpx"
+        "02_Refinement_snapshot.gpx"
     ]
-    assert result["gpx_projects"][0]["stage"] == "main_phase_anchor"
+    assert result["gpx_projects"][0]["stage"] == "refinement_checkpoint"
     assert result["gpx_projects"][0]["status"] == "accepted"
 
 
@@ -465,7 +465,8 @@ def test_full_polished_main_anchor_supersedes_the_fallback_project(tmp_path: Pat
     result = collect_outputs(run, tmp_path / "portal", mode="full", run_name="polished-main")
 
     assert len(result["gpx_projects"]) == 1
-    assert result["gpx_projects"][0]["collection_name"] == "02_Main_phase_anchor.gpx"
+    assert result["gpx_projects"][0]["collection_name"] == "02_Refinement_snapshot.gpx"
+    assert result["gpx_projects"][0]["stage"] == "refinement_checkpoint"
     assert result["gpx_projects"][0]["source_path"].endswith("seq_final_main_polished.gpx")
 
 

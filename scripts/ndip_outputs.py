@@ -146,9 +146,9 @@ def _published_name(path: Path, run_dir: Path, collection: str) -> str:
         elif "pattern_project" in relative:
             stem = "01_Imported_pattern_and_main_phase"
         elif "seq_final_main_polished" in relative:
-            stem = "02_Main_phase_anchor"
+            stem = "02_Refinement_snapshot"
         elif path.name.lower().endswith("_project.gpx"):
-            stem = "02_Main_phase_anchor"
+            stem = "02_Refinement_snapshot"
         else:
             pass_match = re.search(r"seq_pass(\d+)_kept_polished", relative)
             if pass_match:
@@ -324,8 +324,12 @@ def _gpx_stage(relative: str) -> str:
     lowered = relative.lower()
     if "seq_final_accepted_model" in lowered or "seq_final_joint_polished" in lowered:
         return "final_refinement"
+    if "seq_final_main_polished" in lowered:
+        # This is a later working snapshot and can include accepted secondary
+        # phases. Its filename does not prove a single-parent anchor model.
+        return "refinement_checkpoint"
     if "gsas_projects" in lowered and lowered.endswith("_project.gpx"):
-        return "main_phase_anchor"
+        return "refinement_checkpoint"
     if "main" in lowered and ("anchor" in lowered or "phase" in lowered):
         return "main_phase_anchor"
     if "target" in lowered:
