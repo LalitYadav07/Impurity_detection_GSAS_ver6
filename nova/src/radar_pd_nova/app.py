@@ -3406,7 +3406,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         with html.Div(classes="radar-section-heading"):
             with html.Div():
                 html.H2("Interactive Plots")
-                html.P("Accepted Full-mode fits and diagnostic plots, grouped by scientific role.")
+                html.P("Full-mode fit results and diagnostic plots, grouped by scientific role.")
         with html.Section(classes="radar-result-card"):
             with html.Div(classes="radar-plot-category-row"):
                 with vuetify.VChip(v_for="group in plot_groups", key="group.name", size="small", variant="outlined", color="#15543c"):
