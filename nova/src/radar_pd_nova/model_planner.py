@@ -144,12 +144,15 @@ def _requested_enrollment(request):
     no_future = bool(re.search(r'\b(?:do not|don\x27t|without)\s+follow(?:ing)?\s+(?:new|future)\s+(?:scans|runs)\b|\bno\s+future\s+(?:scans|runs|enrollment)\b', text))
     caps = []
     for clause in re.split(r'[;!?]|(?<!\d)\.(?!\d)', text):
-        # A negated maximum is not positive permission or an authoritative cap.
-        if re.search(r'\b(?:do not|don\x27t|never)\b', clause):
-            continue
-        for literal in re.findall(r'\b(?:maximum(?: of)?|at most|capped at|limit(?:ed)? to)\s+'
+        for match in re.finditer(r'\b(?:maximum(?: of)?|at most|capped at|limit(?:ed)? to)\s+'
                 r'([+-]?\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight|nine|ten)\s+'
                 r'(?:(?:existing|published|matching|selected)\s+)*(?:acquisitions|scans|runs)\b', clause):
+            # Negation belongs to this cap's preceding phrase. A later
+            # "do not follow future scans" must not erase a positive cap.
+            prefix = re.split(r'[,;:]|\band\b|\bbut\b', clause[:match.start()])[-1]
+            if re.search(r'\b(?:do not|don\x27t|never)\b', prefix):
+                continue
+            literal = match.group(1)
             caps.append(float(literal) if '.' in literal else int(literal) if re.fullmatch(r'[+-]?\d+', literal) else counts[literal])
     if len(set(caps)) > 1:
         raise ValueError('Specify one acquisition cap; the request contains conflicting scan limits')

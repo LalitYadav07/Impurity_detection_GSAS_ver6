@@ -96,6 +96,17 @@ def test_negated_scope_cap_is_not_promoted_to_a_positive_requirement(source):
 
 
 @pytest.mark.parametrize('user_request',[
+    'Use all four existing scans, maximum 4 acquisitions, and do not follow future scans.',
+    'Do not follow future scans, but use all four existing scans with a maximum of 4 acquisitions.',
+])
+def test_no_future_negation_does_not_remove_a_positive_cap(source,intent,user_request):
+    assert payload(user_request,source)['enrollment_requirements']['maximum_scans']==4
+    intent['enrollment']=dict(existing='sample',maximum_scans=2000,follow_new=False)
+    with pytest.raises(ValueError,match='acquisition cap'):
+        validate_intent(intent,source,request=user_request)
+
+
+@pytest.mark.parametrize('user_request',[
     'Use only these three existing scans and do not follow future scans.',
     'Refine all 57 published matching scans; historical replay only',
     'Process all existing scans',
