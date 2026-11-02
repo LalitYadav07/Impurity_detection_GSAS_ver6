@@ -317,3 +317,43 @@ def test_form_does_not_show_an_old_checked_plan_for_an_edited_or_busy_draft(tmp_
     app._refinement_sync()
     assert not s.rf_cards and not s.rf_assumptions and not s.rf_plan_calls
     assert not s.rf_plan_ready and not s.rf_approved
+def ready_app(tmp_path):
+    workspace, runtime = create(tmp_path)
+    workspace.observe([source('1')])
+    workspace.prepare('exp', '1', 'background')
+    app = RefinementMixin()
+    state = State(**app._refinement_state_defaults())
+    app.server = SimpleNamespace(state=state)
+    app._refinement_workspace = workspace
+    app._refinement_internal = False
+    app._refinement_approving = False
+    app._refinement_inspecting = False
+    app._refinement_preparations = {}
+    app._init_guided_refinement()
+    state.rf_experiment = 'exp'
+    state.rf_source = '1'
+    state.rf_setup_mode = 'expert'
+    state.rf_request = 'background'
+    app._refinement_sync()
+    assert state.rf_cards and state.rf_plan_calls
+    return app, workspace, runtime
+
+
+def test_actual_request_change_handler_clears_old_preview_without_full_sync(tmp_path):
+    app, workspace, runtime = ready_app(tmp_path)
+    app.server.state.rf_request = 'different explicit request'
+    app._refinement_request_changed()
+    assert not app.server.state.rf_plan_ready
+    assert not app.server.state.rf_cards
+    assert not app.server.state.rf_plan_calls
+
+
+def test_actual_generate_clears_old_preview_before_worker_starts(tmp_path):
+    app, workspace, runtime = ready_app(tmp_path)
+    def schedule(coroutine, name):
+        coroutine.close()  # Observe only the synchronous user-click state.
+    app._refinement_schedule = schedule
+    app.generate_refinement_recipe()
+    assert app.server.state.rf_busy
+    assert not app.server.state.rf_cards
+    assert not app.server.state.rf_plan_calls

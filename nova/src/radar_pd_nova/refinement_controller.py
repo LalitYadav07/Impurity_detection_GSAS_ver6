@@ -640,6 +640,7 @@ class RefinementMixin(GuidedRefinementMixin):
     def _refinement_request_changed(self,**_):
         if self._refinement_internal:return
         self._refinement_sync_approval()
+        self._refinement_sync_preview()
         self._sync_recipe_preparation_progress()
 
     def _refinement_setup_changed(self,**_):
@@ -651,6 +652,22 @@ class RefinementMixin(GuidedRefinementMixin):
     def _refinement_setup_matches(self,draft):
         mode=getattr(self.server.state,'rf_setup_mode',None)
         return not mode or mode==('guided' if draft.get('guided') else 'expert')
+
+    def _refinement_sync_preview(self,draft=None):
+        """Only show a checked plan for the visible request; never change busy state."""
+        s=self.server.state;w=self._refinement_workspace
+        if draft is None:
+            draft=(w.state.get('drafts',{}).get(s.rf_experiment,{}) if w else {})
+        displayed=draft if (draft.get('source_id')==s.rf_source
+            and self._refinement_setup_matches(draft)
+            and draft.get('request')==s.rf_request and draft.get('status')!='busy') else {}
+        s.rf_cards=recipe_cards(displayed['plan'],displayed['context'],
+            physical_banks=w.state['sources'].get(s.rf_source,{}).get('metadata',{}).get('physical_banks')) if displayed.get('plan') else []
+        s.rf_questions=(displayed.get('plan') or {}).get('questions',[])+(displayed.get('plan') or {}).get('unsupported',[])
+        s.rf_assumptions=(displayed.get('plan') or {}).get('assumptions',[])
+        s.rf_plan_calls=f"{displayed.get('planning_calls',0)} model call(s) · native preflight passed" if displayed.get('preview') else ''
+        s.rf_model_tokens,s.rf_model_cost=usage_labels(displayed.get('model_usage'))
+        s.rf_model_has_luna_price=bool((displayed.get('model_usage') or {}).get('price_basis'))
 
     def _refinement_source_changed(self,**_):
         if self._refinement_internal:return
@@ -738,17 +755,8 @@ class RefinementMixin(GuidedRefinementMixin):
                 draft={}  # A preflight for a different model is not this model's plan.
             s.rf_provider=draft.get('origin') or ('Guided rules · no model call required' if getattr(s,'rf_setup_mode','guided')=='guided' else 'Illumine Luna · lowest reasoning')
             s.rf_draft_status=draft.get('status','');s.rf_busy=draft.get('status')=='busy' or self._refinement_approving or self._refinement_inspecting
-            # An edited or still-preparing request must not display a former
-            # plan as though it were the checked interpretation of this text.
-            displayed = draft if draft.get('request') == s.rf_request and draft.get('status') != 'busy' else {}
-            s.rf_cards=recipe_cards(displayed['plan'],displayed['context'],
-                physical_banks=w.state['sources'].get(s.rf_source,{}).get('metadata',{}).get('physical_banks')) if displayed.get('plan') else []
-            s.rf_questions=(displayed.get('plan') or {}).get('questions',[])+(displayed.get('plan') or {}).get('unsupported',[])
-            s.rf_assumptions=(displayed.get('plan') or {}).get('assumptions',[])
-            s.rf_plan_calls=f"{displayed.get('planning_calls',0)} model call(s) · native preflight passed" if displayed.get('preview') else ''
-            s.rf_model_tokens,s.rf_model_cost=usage_labels(displayed.get('model_usage'))
-            s.rf_model_has_luna_price=bool((displayed.get('model_usage') or {}).get('price_basis'))
-            if draft.get('error'):s.rf_error=draft['error']
+            self._refinement_sync_preview(draft)
+            if draft.get('request')==s.rf_request and draft.get('error'):s.rf_error=draft['error']
             recipes=[r for r in w.state['recipes'].values() if r['experiment']==s.rf_experiment]
             s.rf_recipe_versions=[dict(title=f"Recipe {r['version']} · {r['plan']['request'][:65]}",value=r['id']) for r in recipes]
             s.rf_future_armed=any(r.get('armed') for r in recipes)
@@ -876,7 +884,7 @@ class RefinementMixin(GuidedRefinementMixin):
         w=self._refinement_workspace
         owner=dict(workspace=w,selection=(experiment,source,request,getattr(s,'rf_setup_mode',None)),
             source_sha256=getattr(w,'state',{}).get('sources',{}).get(source,{}).get('source_sha256'))
-        s.rf_busy=True;s.rf_error='';s.rf_message='';s.flush()
+        s.rf_busy=True;s.rf_error='';s.rf_message='';self._refinement_sync_preview({});s.flush()
         async def work():
             try:
                 draft=await self._prepare_recipe_with_progress(owner)
