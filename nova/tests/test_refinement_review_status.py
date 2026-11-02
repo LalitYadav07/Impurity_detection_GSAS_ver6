@@ -11,7 +11,7 @@ import zipfile
 import pytest
 
 from gpx_recipe.convergence import SCHEMA
-from radar_pd_nova.refinement_controller import RefinementMixin
+from radar_pd_nova.refinement_controller import RefinementMixin, refinement_activity_label
 from radar_pd_nova.refinement_messages import refinement_review_status,retain_review_evidence
 from radar_pd_nova.refinement_plots import trend_figure
 from radar_pd_nova.refinement_runtime import retain_result_review,verify_result_files,LocalRefinementRuntime,GalaxyRefinementRuntime
@@ -49,6 +49,47 @@ def test_explicit_nonconvergence_marks_review_without_changing_completed_status(
     assert review['needs_review'] and review['status']=='needs_review'
     assert 'did not report convergence' in review['message'] and '10.156' in review['message']
     assert output==before and output['status']=='completed'
+
+
+def test_galaxy_dispatch_labels_do_not_claim_a_worker_is_running():
+    pending = {'status': 'running', 'remote_action': None}
+    assert refinement_activity_label(pending, 'galaxy') == 'Preparing submission'
+    acknowledged = dict(pending, remote_action={'galaxy_job_id': 'accepted', 'status': 'new'})
+    assert refinement_activity_label(acknowledged, 'galaxy') == 'Submitted to Galaxy'
+    assert refinement_activity_label(pending, 'local') == 'Running'
+    assert pending == {'status': 'running', 'remote_action': None}
+
+
+def test_selected_dispatch_message_refreshes_without_reselecting_or_loading_old_result(tmp_path):
+    w, _ = create(tmp_path)
+    w.observe([source('1')])
+    recipe = approved(w, RefinementScope('exp'))
+    entry = w.start(recipe['id'], recipe['selection_token'])[0]
+    w.runtime.kind = 'galaxy'
+    value = w.state['jobs'][entry['id']]
+    value.update(status='running', remote_action=None, message='Saving the dispatch checkpoint before submission')
+
+    class App(RefinementMixin):
+        def _refinement_sync_source(self): pass
+        def _refinement_sync_approval(self): pass
+        def _sync_recipe_preparation_progress(self): pass
+        def _refinement_setup_matches(self, *args): return False
+
+    app = App()
+    app._refinement_workspace = w
+    app._refinement_approving = app._refinement_inspecting = False
+    state = SimpleNamespace(**app._refinement_state_defaults(), flush=lambda: None)
+    app.server = SimpleNamespace(state=state)
+    state.rf_experiment = 'exp'
+    state.rf_selected_job = entry['id']
+    app._refinement_sync()
+    assert state.rf_jobs[0]['status_label'] == 'Preparing submission'
+    assert state.rf_selected_message == value['message']
+    assert '1 active' in state.rf_progress_text and 'running' not in state.rf_progress_text
+    value.update(remote_action={'galaxy_job_id': 'accepted'}, message='Submitted to Galaxy; waiting for the verified result')
+    app._refinement_sync()
+    assert state.rf_jobs[0]['status_label'] == 'Submitted to Galaxy'
+    assert state.rf_selected_message == value['message'] and not state.rf_has_output
 
 
 def test_native_true_large_shift_is_reported_without_inventing_a_cutoff():

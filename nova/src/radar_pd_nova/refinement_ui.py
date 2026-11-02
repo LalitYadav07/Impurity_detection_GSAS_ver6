@@ -143,7 +143,7 @@ def refinement_dashboard(app):
                 html.Div('Scan queue',classes='rf-subtitle')
                 v.VTextField(label='Find scan or sample',v_model=('rf_job_search',),density='compact',variant='outlined',hide_details=True,prepend_inner_icon='mdi-magnify')
                 select('Recipe','rf_recipe_filter',"[{title:'All recipes',value:'all'}, ...rf_recipe_versions]",classes='mt-3')
-                select('Status','rf_job_status',"[{title:'All statuses',value:'all'},{title:'Completed jobs',value:'completed'},{title:'Queued',value:'queued'},{title:'Running',value:'running'},{title:'Needs review',value:'needs_review'},{title:'Different model',value:'needs_recipe'},{title:'Paused',value:'paused'},{title:'Interrupted',value:'interrupted'},{title:'Failed',value:'failed'}]",classes='mt-3')
+                select('Status','rf_job_status',"[{title:'All statuses',value:'all'},{title:'Completed jobs',value:'completed'},{title:'Queued',value:'queued'},{title:'Active / submitting',value:'running'},{title:'Needs review',value:'needs_review'},{title:'Different model',value:'needs_recipe'},{title:'Paused',value:'paused'},{title:'Interrupted',value:'interrupted'},{title:'Failed',value:'failed'}]",classes='mt-3')
                 v.VCheckbox(label='Follow newly completed results',v_model=('rf_follow',),density='compact',hide_details=True,classes='mt-2')
                 with html.Div(classes='rf-actions'):
                     v.VBtn('Pause',click=app.pause_refinement_queue,variant='text',size='small',prepend_icon='mdi-pause')

@@ -29,6 +29,17 @@ from .guided_refinement_controller import GuidedRefinementMixin
 REFINEMENT_PROGRESS_SECONDS = 1.0
 
 
+def refinement_activity_label(job, runtime_kind):
+    """A local dispatch claim is not evidence that a Galaxy worker is running."""
+    status = job['status']
+    if runtime_kind == 'galaxy':
+        if status == 'running':
+            return 'Submitted to Galaxy' if job.get('remote_action') else 'Preparing submission'
+        if status == 'recovering':
+            return 'Recovering Galaxy job' if job.get('remote_action') else 'Checking prior submission'
+    return status.replace('_', ' ').capitalize()
+
+
 def recipe_preparation_text(progress, *, elapsed_delta=0.):
     labels={'starting':'Preparing recipe', 'inspect':'Preparing source and inspecting native model',
         'planning':'Planning recipe with Luna', 'guided':'Building the reviewed guided recipe',
@@ -735,7 +746,7 @@ class RefinementMixin(GuidedRefinementMixin):
             s.rf_jobs=[dict(id=j['id'],scan=j['source']['scan_label'],sample=j['source']['sample_label'],bank=j['source'].get('bank'),status=j['status'],
                 status_label=('Completed · needs review' if reviews[j['id']]['needs_review'] else
                     'Completed · diagnostics unavailable' if reviews[j['id']]['status']=='unavailable' else 'Completed')
-                    if j['status']=='completed' else j['status'].replace('_',' ').capitalize(),
+                    if j['status']=='completed' else refinement_activity_label(j,w.runtime.kind),
                 needs_review=j['status']=='completed' and reviews[j['id']]['needs_review'],review_message=reviews[j['id']]['message'],
                 filter_statuses=[j['status']]+(['needs_review'] if j['status']=='completed' and reviews[j['id']]['needs_review'] else []),
                 message=j['message'],recipe=', '.join(str(version.get(rid,'?')) for rid in j['recipes']),recipe_id=j['recipe_id'],recipe_ids=j['recipes'],has_output=bool((j.get('result') or {}).get('final_view') or (j.get('result') or {}).get('stages'))) for j in jobs]
@@ -745,9 +756,12 @@ class RefinementMixin(GuidedRefinementMixin):
             processed=sum(j['status'] in terminal for j in jobs)
             running=sum(j['status'] in {'running','recovering'} for j in jobs)
             queued=sum(j['status']=='queued' for j in jobs)
-            s.rf_progress_text=(f'{processed} of {len(jobs)} processed · {running} running · {queued} queued · {completed} completed jobs · {attention} need attention' if jobs else 'No refinements started')
+            s.rf_progress_text=(f'{processed} of {len(jobs)} processed · {running} active · {queued} queued · {completed} completed jobs · {attention} need attention' if jobs else 'No refinements started')
             s.rf_progress_percent=round(100*processed/len(jobs)) if jobs else 0
-            s.rf_metrics=[dict(label='Available GPXs',value=len(sources)),dict(label='Queued / running',value=queued+running),dict(label='Completed jobs',value=completed),dict(label='Needs attention',value=attention)]
+            s.rf_metrics=[dict(label='Available GPXs',value=len(sources)),dict(label='Queued / active',value=queued+running),dict(label='Completed jobs',value=completed),dict(label='Needs attention',value=attention)]
+            selected_job = next((j for j in jobs if j['id'] == s.rf_selected_job), None)
+            if selected_job and selected_job['status'] in {'queued','running','recovering','paused','interrupted','failed'}:
+                s.rf_selected_message = selected_job['message']
             self._refinement_sync_approval()
             self._sync_recipe_preparation_progress()
             s.flush()
