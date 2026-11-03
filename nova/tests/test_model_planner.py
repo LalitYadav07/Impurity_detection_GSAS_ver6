@@ -515,6 +515,37 @@ class Client:
         return json.dumps(next(self.plans)),dict(model='fake',finish_reason='stop')
 
 
+@pytest.mark.parametrize('inline', [False, True])
+def test_profiled_optimizer_is_present_in_the_actual_host_structured_schema(source, intent, inline):
+    reviewed=dict(magnetic_optimizer='profiled_quadratic',optimizer_iterations=60)
+    request='Find k from the data. Allow canting.'
+    if inline:request+=' magnetic_optimizer=profiled_quadratic; optimizer_iterations=60'
+    intent['enrollment']=None
+    intent['settings'].update(k=None,moment_model='symmetry_allowed',
+        refine_histogram_scale=False,refine_background=False,**reviewed)
+    class StrictClient:
+        def complete_structured(self,messages,schema,name):
+            settings=schema['properties']['settings']['anyOf'][0]
+            assert set(reviewed)<=set(settings['required'])
+            for key,value in reviewed.items():
+                assert settings['properties'][key]['enum']==[value]
+            assert set(intent['settings'])==set(settings['properties'])
+            data=json.loads(messages[1]['content'])
+            assert all(data['declared'][key]==value for key,value in reviewed.items())
+            assert any('does not run the GSAS-II refinement cycle loop' in rule for rule in data['rules'])
+            return json.dumps(intent),dict(model='fake',finish_reason='stop')
+    result=make_intent(request,source,declared=None if inline else reviewed,client=StrictClient())
+    assert all(result['intent']['settings'][key]==value for key,value in reviewed.items())
+    assert result['status']=='ready_for_k_survey'
+
+
+def test_legacy_structured_schema_does_not_gain_unrequested_optimizer_fields(source, intent):
+    client=Client([intent])
+    make_intent('Use the reviewed k.',source,client=client)
+    properties=client.calls[0][1]['properties']['settings']['anyOf'][0]['properties']
+    assert 'magnetic_optimizer' not in properties and 'optimizer_iterations' not in properties
+
+
 def test_single_setup_call_produces_settings_without_subgroups_or_python(source,intent):
     c=Client([intent]);r=make_intent('Use k=(1,0,1), Fe1=Fe+2, g=2.',source,client=c)
     assert r['status']=='ready_for_discovery' and len(r['calls'])==1
