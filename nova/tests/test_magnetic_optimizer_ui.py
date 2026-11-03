@@ -9,7 +9,7 @@ import pytest
 from radar_pd_nova.magnetic_optimizer import selected_optimizer_settings, optimizer_budget_label
 from radar_pd_nova.model_campaigns import scope_progress
 from radar_pd_nova.symmetry_controller import MODEL_FIELDS, SymmetryMixin
-from radar_pd_nova.symmetry_workspace import fit_caption, fit_diagnostics, moment_precision_note, parameter_rows, validated_profiled_evidence
+from radar_pd_nova.symmetry_workspace import fit_caption, fit_diagnostics, moment_precision_note, parameter_rows, validated_profiled_evidence, PROFILED_QUALIFICATION_CHECKS
 
 
 def test_legacy_and_structural_choices_do_not_add_protocol_keys():
@@ -122,7 +122,7 @@ def profiled_row(**changes):
                native_convergence={'converged': None, 'Aborted': None, 'SVD0': None},
                optimizer=dict(schema='radar-profiled-magnetic-optimizer/v1', name='profiled_quadratic',
                               success=True, iterations=32, maximum_iterations=60,
-                              qualification={'passed': True, 'checks': {'native_identity': True}, 'reasons': []},
+                              qualification={'passed': True, 'checks': {key:True for key in PROFILED_QUALIFICATION_CHECKS}, 'reasons': []},
                               uncertainty_available=False, native_convergence_declared=False))
     row.update(changes)
     return row
@@ -163,6 +163,7 @@ def test_profiled_parameters_do_not_reuse_stale_native_error_bars():
     ('maximum_iterations', 30), ('iterations', 61), ('iterations', True),
     ('success', 'true'), ('uncertainty_available', True), ('native_convergence_declared', True),
     ('qualification', {'passed': True}), ('qualification', {'passed': False, 'checks': {}, 'reasons': []}),
+    ('qualification', {'passed': True, 'checks': {}, 'reasons': []}),
 ])
 def test_profiled_receipt_must_match_budget_and_support_its_valid_status(field, value):
     optimizer = copy.deepcopy(profiled_row()['optimizer'])

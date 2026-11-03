@@ -287,6 +287,13 @@ def campaign_can_resume(summaries,enrollments,*,following=False):
             any(e['status'] in {'queued','preparing'} for e in enrollments))
 
 
+PROFILED_QUALIFICATION_CHECKS=(
+    'raw_optimizer_success','independent_stationarity','no_local_descent',
+    'curvature_nonnegative','interior_solution','improves_nuclear_baseline',
+    'nuclear_null_identity','serialized_basis_preserved',
+    'serialized_native_stationarity','serialized_native_identity')
+
+
 def validated_profiled_evidence(evidence,policy,status):
     value=evidence.get('optimizer')
     if not isinstance(value,dict) or value.get('schema')!='radar-profiled-magnetic-optimizer/v1' or value.get('name')!='profiled_quadratic':
@@ -296,6 +303,9 @@ def validated_profiled_evidence(evidence,policy,status):
             or not isinstance(qualification.get('checks'),dict) or not isinstance(qualification.get('reasons'),list)
             or not all(isinstance(reason,str) for reason in qualification['reasons'])):
         raise ValueError('The profiled optimizer qualification evidence is incomplete')
+    checks=qualification['checks']
+    if any(type(checks.get(key)) is not bool for key in PROFILED_QUALIFICATION_CHECKS):
+        raise ValueError('The profiled optimizer qualification checks are incomplete')
     maximum=value.get('maximum_iterations');iterations=value.get('iterations')
     if (type(maximum) is not int or maximum!=policy.get('optimizer_iterations')
             or type(iterations) is not int or not 0<=iterations<=maximum
@@ -303,7 +313,7 @@ def validated_profiled_evidence(evidence,policy,status):
         raise ValueError('The profiled optimizer budget differs from its reviewed protocol')
     if value.get('uncertainty_available') is not False or value.get('native_convergence_declared') is not False:
         raise ValueError('The profiled optimizer cannot claim native covariance or convergence')
-    if status=='valid' and not (qualification['passed'] and value['success']):
+    if status=='valid' and not (qualification['passed'] and value['success'] and all(checks[key] for key in PROFILED_QUALIFICATION_CHECKS)):
         raise ValueError('The profiled result is marked valid without its required optimizer checks')
     return {key:value.get(key) for key in
         ['schema','name','iterations','maximum_iterations','success','status','message','qualification','uncertainty_available','native_convergence_declared','tolerances']}
