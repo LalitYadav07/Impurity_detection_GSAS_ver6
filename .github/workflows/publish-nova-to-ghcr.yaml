@@ -102,6 +102,17 @@ jobs:
           ' > "${RUNNER_TEMP}/nova-upload-handlers.json"
           node nova/tests/client_upload.test.js "${RUNNER_TEMP}/nova-upload-handlers.json"
 
+      - name: Verify packaged magnetic optimizer setup and evidence
+        shell: bash
+        run: |
+          docker run --rm --entrypoint sh -v "$PWD/nova/tests:/validation-tests:ro" \
+            "${IMAGE_NAME}:nova-${NOVA_VERSION}" -c '
+          python -m pip install --quiet pytest &&
+          mkdir -p /tmp/magnetic-tests &&
+          cp /validation-tests/test_magnetic_optimizer_ui.py /validation-tests/test_model_planner.py /tmp/magnetic-tests/ &&
+          cd /tmp/magnetic-tests &&
+          PYTHONPATH=/src/src python -m pytest -q test_magnetic_optimizer_ui.py test_model_planner.py'
+
       - name: Verify packaged native and CLI sample-identity readers
         shell: bash
         run: |

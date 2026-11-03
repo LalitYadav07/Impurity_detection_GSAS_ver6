@@ -110,6 +110,17 @@ jobs:
           print("Scientific and refinement contract checks passed", refinement_work.__name__)
           '
 
+      - name: Verify packaged reviewed-preparation implementation
+        shell: bash
+        run: |
+          docker run --rm --entrypoint python "${IMAGE_NAME}:ndip-${GITHUB_SHA}" -c '
+          from gpx_recipe.symmetry.compiler import package_signature
+          from gpx_recipe.battery.transport import implementation_signature
+          from gpx_recipe.worker import work
+          assert len(package_signature()) == 64
+          assert len(implementation_signature()) == 64
+          print("Reviewed preparation package and adapter identities available", work.__name__)'
+
       - name: Check phase discovery regressions in the scientific runtime
         shell: bash
         run: |

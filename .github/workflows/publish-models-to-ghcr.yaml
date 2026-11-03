@@ -66,12 +66,17 @@ jobs:
         run: |
           docker run --rm --entrypoint sh -v "$PWD:/validation:ro" "$IMAGE" -c '
           python -m pip install --quiet pytest &&
+          python -c "import GSASII.GSASIIscriptable" &&
           PYTHONPATH=/opt/radar-symmetry:/validation/tests/gpx_recipe python -m pytest -q -o cache_dir=/tmp/pytest-cache \
             /validation/tests/gpx_recipe/test_model_campaign_worker.py \
             /validation/tests/gpx_recipe/test_symmetry_moment_models.py \
             /validation/tests/gpx_recipe/test_symmetry_campaign.py \
             /validation/tests/gpx_recipe/test_symmetry_runtime.py \
             /validation/tests/gpx_recipe/test_fixed_displacements.py \
-            /validation/tests/gpx_recipe/test_project_view.py'
+            /validation/tests/gpx_recipe/test_project_view.py \
+            /validation/tests/gpx_recipe/test_native_profiled.py \
+            /validation/tests/gpx_recipe/test_profiled_magnetic.py \
+            /validation/tests/gpx_recipe/test_profiled_optimizer_contract.py \
+            /validation/tests/gpx_recipe/test_profiled_solver_native.py'
       - name: Publish verified immutable image
         run: docker push "$IMAGE"
