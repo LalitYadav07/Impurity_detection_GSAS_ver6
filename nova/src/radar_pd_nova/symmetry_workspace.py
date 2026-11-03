@@ -321,7 +321,7 @@ def validated_profiled_evidence(evidence,policy,status):
     if status=='valid' and not (qualification['passed'] and value['success'] and all(checks[key] for key in PROFILED_QUALIFICATION_CHECKS)):
         raise ValueError('The profiled result is marked valid without its required optimizer checks')
     return {key:value.get(key) for key in
-        ['schema','name','iterations','maximum_iterations','success','status','message','qualification','uncertainty_available','native_convergence_declared','tolerances','nuclear_baseline']}
+        ['schema','name','iterations','maximum_iterations','success','status','message','qualification','uncertainty_available','native_convergence_declared','tolerances','nuclear_baseline','candidate_applied']}
 
 
 def profiled_optimizer_evidence(row):
@@ -373,6 +373,8 @@ def moment_precision_note(row):
     if optimizer:
         passed=profiled_optimizer_qualified(row)
         statement='The profiled optimizer and its independent native-objective checks passed.' if passed else 'The profiled optimizer did not pass its declared checks; this is an unqualified checkpoint.'
+        if optimizer.get('candidate_applied') is False:
+            statement+=' Initial candidate retained; the last optimizer attempt is in the diagnostics.'
         if row.get('status')=='physical_rejection':statement+=' Physical rejection: '+disposition_reason(row)
         elif row.get('status')=='inadequate_fit':statement+=' The declared fit criterion was not met.'
         return (statement+' GSAS-II convergence and covariance were not claimed. '

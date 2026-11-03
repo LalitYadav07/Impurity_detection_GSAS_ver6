@@ -149,6 +149,15 @@ def test_profiled_solver_failure_is_not_hidden_by_a_low_residual():
     assert 'Independent checks did not pass' in ' '.join(item['value'] for item in fit_diagnostics(row))
 
 
+def test_failed_solver_labels_an_unapplied_candidate_explicitly():
+    row = profiled_row(status='optimization_unresolved')
+    row['optimizer'].update(success=False,candidate_applied=False)
+    row['optimizer']['qualification']['passed']=False
+    assert 'Initial candidate retained' in moment_precision_note(row)
+    row['optimizer']['candidate_applied']=True
+    assert 'Initial candidate retained' not in moment_precision_note(row)
+
+
 def test_profiled_parameters_do_not_reuse_stale_native_error_bars():
     row = profiled_row(refined_moments=[dict(label='Fe', magnitude_esd=.1,
                        component_esd={'mx': .1, 'my': .1, 'mz': .1})])
