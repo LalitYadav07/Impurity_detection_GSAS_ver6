@@ -102,14 +102,30 @@ def policy(value):
     defaults=dict(site_policy='all',refine_cell=False,refine_background=False,refine_histogram_scale=False,maximum_cell_relative_change=.02,maximum_angle_change_degrees=3.)
     if isinstance(value,dict) and 'moment_model' in value:defaults['moment_model']='collinear'
     if isinstance(value,dict) and 'magnetic_d_min' in value:defaults['magnetic_d_min']=None
+    if isinstance(value,dict) and 'magnetic_optimizer' in value:defaults['magnetic_optimizer']=None
+    if isinstance(value,dict) and 'optimizer_iterations' in value:defaults['optimizer_iterations']=None
     p=fields(value,['cycles','timeout_seconds','maximum_trials','maximum_cell_multiplier','maximum_moment','fit_band_percent','maximum_mode','adequate_rwp_percent'],defaults)
     if 'moment_model' in p:p['moment_model']=choices(p['moment_model'],['collinear','symmetry_allowed'])
     if 'magnetic_d_min' in p:p['magnetic_d_min']=number(p['magnetic_d_min'],0,10)
+    validate_optimizer(p)
     for k,lo,hi in [('cycles',1,100),('timeout_seconds',1,3600),('maximum_trials',1,2000),('maximum_cell_multiplier',1,64)]:p[k]=number(p[k],lo,hi,integer=True)
     for k,hi in [('maximum_moment',20),('maximum_mode',2),('adequate_rwp_percent',100),('maximum_cell_relative_change',.1),('maximum_angle_change_degrees',10)]:p[k]=number(p[k],0,hi,positive=True)
     p['fit_band_percent']=number(p['fit_band_percent'],0,10);p['site_policy']=choices(p['site_policy'],['all','any'])
     for k in ['refine_cell','refine_background','refine_histogram_scale']:p[k]=boolean(p[k])
     return p
+
+
+def validate_optimizer(settings):
+    """Validate optional solver fields without inserting legacy defaults."""
+    optimizer=settings.get('magnetic_optimizer','gsas_hessian')
+    choices(optimizer,['gsas_hessian','profiled_quadratic'])
+    if optimizer=='profiled_quadratic':
+        if 'optimizer_iterations' not in settings:raise ValueError('Profiled optimizer requires an explicit iteration budget')
+        settings['optimizer_iterations']=number(settings['optimizer_iterations'],1,200,integer=True)
+        if settings.get('moment_model')!='symmetry_allowed':raise ValueError('Profiled optimizer requires symmetry_allowed moments')
+    elif 'optimizer_iterations' in settings:
+        raise ValueError('Optimizer iterations apply only to the profiled optimizer; GSAS uses cycles')
+    return settings
 
 
 def validate_protocol(value):
@@ -133,6 +149,11 @@ def validate_protocol(value):
     seed_limit=2000 if p['kind']=='structural' or normalized_policy.get('moment_model')=='symmetry_allowed' else 64
     if not isinstance(p['seeds'],list) or not 1<=len(p['seeds'])<=seed_limit:raise ValueError('Invalid finite start set')
     p['candidates']=[validate_candidate(c) for c in p['candidates']];p['seeds']=[seed(s) for s in p['seeds']];p['policy']=normalized_policy
+    if p['kind']!='magnetic' and any(key in p['policy'] for key in ('magnetic_optimizer','optimizer_iterations')):
+        raise ValueError('Magnetic optimizer fields cannot apply to structural protocols')
+    if p['policy'].get('magnetic_optimizer')=='profiled_quadratic':
+        if p['kind']!='magnetic' or p['k']!=['0','0','0']:
+            raise ValueError('Profiled optimizer currently supports magnetic k=0 protocols only')
     if len({c['id'] for c in p['candidates']})!=len(p['candidates']) or len({s['id'] for s in p['seeds']})!=len(p['seeds']):raise ValueError('Candidate and seed IDs must be unique')
     candidate_ids={c['id'] for c in p['candidates']}
     if any(set(s.get('candidate_ids',candidate_ids))-candidate_ids for s in p['seeds']):raise ValueError('A start references an undiscovered candidate')

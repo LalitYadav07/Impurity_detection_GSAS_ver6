@@ -55,6 +55,8 @@ def build_plan(context,catalog,root,settings):
         refine_cell=kind=='structural',refine_background=kind=='structural',refine_histogram_scale=kind=='structural')
     if kind=='magnetic' and 'magnetic_d_min' in settings:policy['magnetic_d_min']=settings['magnetic_d_min']
     if kind=='magnetic' and 'moment_model' in settings:policy['moment_model']=settings['moment_model']
+    for key in ('magnetic_optimizer','optimizer_iterations'):
+        if key in settings:policy[key]=settings[key]
     if kind=='magnetic':
         policy['refine_histogram_scale']=settings.get('refine_histogram_scale',False)
         policy['refine_background']=settings.get('refine_background',False)

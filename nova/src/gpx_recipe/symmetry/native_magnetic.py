@@ -664,6 +664,7 @@ def _run(source_gpx,ctx,protocol,candidate_record,seed,*,forward_only):
     if not isinstance(controls, dict):
         raise RuntimeError('GSAS-II project does not expose Controls data for magnetic convergence')
     controls['min dM/M'] = minimum_relative_chi2_change
+    if protocol['policy'].get('magnetic_optimizer')=='gsas_hessian':controls['deriv type']='analytic Hessian'
     gpx.save(str(output_gpx))
     gpx.index_ids()
     if forward_only:
@@ -689,7 +690,16 @@ def _run(source_gpx,ctx,protocol,candidate_record,seed,*,forward_only):
                     audit=audit,periodicity=periodicity,no_refinement=True,initial_maximum_moment=audit['maximum_moment'],magnetic_atoms=len(new_phase['Atoms']))
     construction_seconds=time.monotonic()-stage_started
     refinement_started=time.monotonic()
-    gpx.do_refinements([{}])
+    optimizer=None
+    if protocol['policy'].get('magnetic_optimizer','gsas_hessian')=='profiled_quadratic':
+        from .profiled_solver import refine,ProfiledScopeError
+        try:optimizer=refine(gpx,output_gpx,protocol)
+        except ProfiledScopeError as exc:
+            ctx.save_json('optimizer-receipt.json',dict(name='profiled_quadratic',qualification=dict(passed=False),reason=str(exc)))
+            raise TrialDisposition('unsupported',str(exc)) from exc
+        ctx.save_json('optimizer-receipt.json',optimizer)
+    else:
+        gpx.do_refinements([{}])
     refinement_seconds=time.monotonic()-refinement_started
     gpx.save(str(output_gpx))
     magnetic = gpx.phase(magnetic_name)
@@ -755,6 +765,7 @@ def _run(source_gpx,ctx,protocol,candidate_record,seed,*,forward_only):
         existing_background_coefficients_refined=bool(allowed_background_variables),
         fixed_families=([] if allowed_background_variables else ['background'])+['background_basis_and_peak_terms','instrument','sample_except_declared_common_scale','nuclear_cell',
                         'nuclear_atomic_coordinates','nuclear_atomic_displacements','relative_phase_amounts','profile_broadening'])
+    if optimizer is not None:receipt['optimizer']=optimizer
     ctx.register_file(source_path=output_gpx, relative_path='magnetic-refinement.gpx', artifact_type='magnetic_refinement_gpx', title=f'Magnetic refinement checkpoint: {magnetic_name}')
     listing = output_gpx.with_suffix('.lst')
     if listing.is_file():
@@ -770,12 +781,18 @@ def _run(source_gpx,ctx,protocol,candidate_record,seed,*,forward_only):
         ctx.log_metric('maximum_refined_moment_magnitude', max(finite_magnitudes))
     ctx.finish(f'Refined {magnetic_name} with the coupled nuclear phase, but retained {len(physicality_violations)} physicality rejection(s); best Rwp={min(rwp_values):.5g}%.' if physicality_violations else f'Refined {magnetic_name} with the coupled nuclear phase; best Rwp={min(rwp_values):.5g}%.')
 
-    status='physical_rejection' if physicality_violations else 'optimization_unresolved' if not rvals.get('converged') or rvals.get('Aborted') or rvals.get('SVD0',0) else 'valid'
+    qualified=optimizer['qualification']['passed'] if optimizer is not None else bool(rvals.get('converged') and not rvals.get('Aborted') and not rvals.get('SVD0',0))
+    status='physical_rejection' if physicality_violations else 'valid' if qualified else 'optimization_unresolved'
     if unexpected_refined_variables:
         raise TrialDisposition('technical_failure','Unexpected parameters varied: '+str(unexpected_refined_variables))
     reason=''
     if physicality_violations:
         reason='; '.join(f"{v['label']}: {v['magnitude']:.6g} µB exceeds the reviewed {maximum_moment_magnitude:g} µB ceiling" if math.isfinite(v['magnitude']) else v['label']+': nonfinite moment' for v in physicality_violations)+'. The bound was not relaxed; review the model and calibration.'
     elif status=='optimization_unresolved':
-        reason=f"Native optimization did not qualify: converged={bool(rvals.get('converged'))}, aborted={bool(rvals.get('Aborted'))}, rank deficiencies={rvals.get('SVD0',0)}. The attempted fit is retained for inspection."
-    return dict(status=status,reason=reason,gpx=output_gpx.name,rwp=min(rwp_values),nvars=int(rvals.get('Nvars',len(vary_list))),moments=final_moments,native_receipt='magnetic-refinement-receipt.json')
+        reason=('Profiled optimization did not qualify: '+', '.join(optimizer['qualification']['reasons'])+'. The attempted GPX and optimizer receipt are retained.' if optimizer is not None else
+                f"Native optimization did not qualify: converged={bool(rvals.get('converged'))}, aborted={bool(rvals.get('Aborted'))}, rank deficiencies={rvals.get('SVD0',0)}. The attempted fit is retained for inspection.")
+    elif optimizer is not None:
+        reason='Profiled optimizer and independent native objective checks passed; GSAS-II convergence and covariance are not supplied.'
+    result=dict(status=status,reason=reason,gpx=output_gpx.name,rwp=min(rwp_values),nvars=int(rvals.get('Nvars',len(vary_list))),moments=final_moments,native_receipt='magnetic-refinement-receipt.json')
+    if optimizer is not None:result['optimizer']=optimizer
+    return result
