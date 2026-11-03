@@ -936,6 +936,22 @@ class SymmetryMixin(KSearchMixin):
                     return
                 await asyncio.sleep(3)
 
+    def _model_checkpoint_due(self,campaign,preparation):
+        """Coalesce an interim backup into the next mandatory dispatch intent.
+
+        Every accepted job already has a ready, remote pre-POST checkpoint
+        naming its exact dispatch key and members. Its acknowledgment can be
+        recovered by that key after a lost viewer. While approved work remains
+        unsubmitted, the next such checkpoint also backs up preceding results
+        and acknowledgments. Do not put a second upload wait between them.
+        The last wave and explicit pauses still require their own backup.
+        """
+        if self._model_stopping or campaign.setting('paused',False):return True
+        if preparation is not None:return False
+        if any(entry['status'] in {'queued','preparing'}
+               for entry in campaign.setting('enrollments',{}).values()):return False
+        return not any(row['state']=='prepared' for row in campaign.trials())
+
     async def _drive_symmetry_campaign(self,campaign,transport):
         if not start_barrier_ready(campaign):raise ValueError(START_BARRIER_MESSAGE)
         preparation=None
@@ -1043,11 +1059,13 @@ class SymmetryMixin(KSearchMixin):
                     if campaign.setting('paused',False):break
                     await asyncio.sleep(3)
                     continue
-                if isinstance(transport,GalaxyChunkTransport):
+                if isinstance(transport,GalaxyChunkTransport) and self._model_checkpoint_due(campaign,preparation):
                     try:
                         self._model_tick_task=asyncio.create_task(asyncio.to_thread(transport.checkpoint))
                         await self._await_model_checkpoint_work(self._model_tick_task,campaign,transport)
-                    except (CheckpointUploadPending,CheckpointUploadInterrupted) as exc:self._model_checkpoint_pending(campaign,exc)
+                    except (CheckpointUploadPending,CheckpointUploadInterrupted) as exc:
+                        self._model_checkpoint_pending(campaign,exc)
+                        checkpoint_pending=True
                     else:
                         self._model_checkpoint_errors.pop(campaign.root.name,None)
                         campaign.set_setting('checkpoint_notice','')
@@ -1056,6 +1074,12 @@ class SymmetryMixin(KSearchMixin):
                 pending=any(r['state'] not in {'terminal','cancelled','needs_recovery'} for r in trials)
                 active=any(r['state'] in {'running','submitting','cancelling'} for r in trials)
                 if campaign.setting('paused',False):break
+                if checkpoint_pending:
+                    # A finite campaign is not fully saved until its final
+                    # acknowledged checkpoint is ready. Retry that same upload;
+                    # CheckpointUploads never replaces an unsettled HDA.
+                    await asyncio.sleep(3)
+                    continue
                 # An inspection can commit new trials after this tick's local
                 # snapshot. Consume that task and poll the new ledger on the
                 # next pass before declaring the finite campaign complete.
