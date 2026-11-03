@@ -258,7 +258,8 @@ class PowgenSampleIndex:
 
 
 def select_runs(runs, index, selected_ids, *, limit=None, excluded_run_numbers=(),
-                include_background_runs=False, include_ramp_runs=False, selection_stats=None):
+                include_background_runs=False, include_ramp_runs=False, selection_stats=None,
+                candidate_filter=None):
     """Choose newest eligible runs before expensive per-run scientific checks."""
     runs = list(runs)
     if selected_ids is not None and hasattr(index, "candidate_runs"):
@@ -280,6 +281,8 @@ def select_runs(runs, index, selected_ids, *, limit=None, excluded_run_numbers=(
             include_background_runs=include_background_runs, include_ramp_runs=include_ramp_runs)
         if not ok:
             excluded.add(run.run_id if run.product_id else run.run_number)
+        if ok and candidate_filter is not None:
+            return candidate_filter(run)
         return ok
     if limit is not None:
         selected = []

@@ -194,6 +194,18 @@ def discover_powgen_samples(ipts: str, sample_index: PowgenSampleIndex,
 _POWGEN_PROFILE_SUFFIXES = {".instprm", ".prm", ".inst", ".ins"}
 
 
+def _matches_initial_bank(run, selected_banks, inspect_setup):
+    """Filter before the newest-acquisition limit, without scanning all metadata.
+
+    Invalid reductions remain candidates so a malformed latest file is
+    reported rather than silently replaced with an older successful test.
+    """
+    try:
+        return any(bank.bank in selected_banks for bank in inspect_setup(run).banks)
+    except (OSError, ValueError, UnicodeError):
+        return True
+
+
 def preflight_powgen_experiment(
     ipts: str, *, requested_wavelength: str | None = None,
     instrument_profile_name: str | None = None,
@@ -215,9 +227,16 @@ def preflight_powgen_experiment(
     total = len(runs)
     index = sample_index or PowgenSampleIndex(definition.ipts)
     selection_stats = {}
+    inspected_setups = {}
+    def initial_setup(run):
+        setup = inspect_reduced_setup(run.source_path)
+        inspected_setups[run.source_path] = setup
+        return setup
+    candidate_filter = (lambda run: _matches_initial_bank(run, selected_banks, initial_setup)) if (
+        selected_banks and initial_backfill_limit is not None) else None
     runs = select_runs(runs, index, selected_sample_ids, limit=initial_backfill_limit,
         excluded_run_numbers=excluded_run_numbers, include_background_runs=include_background_runs,
-        include_ramp_runs=include_ramp_runs, selection_stats=selection_stats)
+        include_ramp_runs=include_ramp_runs, selection_stats=selection_stats, candidate_filter=candidate_filter)
     excluded_count = selection_stats.get("excluded_count", 0)
     if not runs:
         review = selection_stats.get("identity_review") or {}
@@ -232,11 +251,13 @@ def preflight_powgen_experiment(
     errors, setups, profiles, available_banks = [], [], [], set()
     def inspect(run):
         try:
-            return run, inspect_reduced_setup(run.source_path), ""
+            setup = inspected_setups.get(run.source_path)
+            return run, setup if setup is not None else inspect_reduced_setup(run.source_path), ""
         except (OSError, ValueError, UnicodeError) as exc:
             return run, None, str(exc)
     with ThreadPoolExecutor(max_workers=4) as pool:
         inspected = list(pool.map(inspect, runs))
+    available_banks.update(bank.bank for setup in inspected_setups.values() for bank in setup.banks)
     analysis_count = 0
     for run, setup, error in inspected:
         if error:
@@ -797,7 +818,13 @@ class PowgenWatchController:
             if limit == 0:
                 discovered = []
             else:
-                discovered = self._matching_samples(available, limit=limit)
+                # Other beamlines have their own reduced-product selection
+                # contracts. POWGEN's limit counts matching physical banks.
+                if self.settings.instrument == "PG3" and self.settings.selected_banks and limit is not None:
+                    discovered = self._matching_samples(available, limit=limit,
+                        candidate_filter=lambda run: _matches_initial_bank(run, self.settings.selected_banks, self._setup))
+                else:
+                    discovered = self._matching_samples(available, limit=limit)
             discovered = self._remember_discoveries(self._expand_banks(discovered))
             discovered = self._attach_scan_metadata(discovered)
             known_runs = [
@@ -960,14 +987,40 @@ class PowgenWatchController:
                 expanded.append(replace(run, scan_metadata={**run.scan_metadata, "setup_error": str(exc)}))
         return expanded
 
-    def _matching_samples(self, runs: list[WatchedRun], *, limit=None) -> list[WatchedRun]:
+    def _matching_samples(self, runs: list[WatchedRun], *, limit=None, candidate_filter=None) -> list[WatchedRun]:
         return select_runs(runs, self.sample_index, self.settings.selected_sample_ids, limit=limit,
             excluded_run_numbers=self.settings.excluded_run_numbers,
             include_background_runs=self.settings.include_background_runs,
-            include_ramp_runs=self.settings.include_ramp_runs)
+            include_ramp_runs=self.settings.include_ramp_runs, candidate_filter=candidate_filter)
 
     def _remember_discoveries(self, runs: list[WatchedRun]) -> list[WatchedRun]:
-        new = [run for run in runs if not self.state.contains(run)]
+        known = [run for phase in (self.state.discovered, self.state.submitted,
+                                  self.state.completed, self.state.failed) for run in phase.values()]
+        def physical_bank(run):
+            bank = run.bank or run.scan_metadata.get("source_bank")
+            if bank is None:
+                banks = (run.scan_metadata.get(self.setup_metadata_key) or {}).get("banks") or []
+                if len(banks) == 1:
+                    bank = banks[0]["bank"]
+            return (run.source_path, run.run_number, int(bank) if bank is not None else None)
+        identities = {physical_bank(run) for run in known} if self.settings.instrument == "PG3" else set()
+        revision_holds = {run.source_path: run.scan_metadata for run in known
+                          if run.scan_metadata.get("source_revision_warning")}
+        new = []
+        for run in runs:
+            identity = physical_bank(run)
+            if self.state.contains(run) or identity in identities:
+                continue
+            if self.settings.instrument == "PG3":
+                # A legacy single-bank ID and a multibank ID can name the
+                # same physical bank. Keep the original lifecycle/receipt,
+                # and hold any newly appearing banks of a revised source.
+                identities.add(identity)
+                hold = revision_holds.get(run.source_path)
+                if hold:
+                    run = replace(run, scan_metadata={**run.scan_metadata,
+                        **{key: hold[key] for key in ("source_revision_warning", "replacement_revision") if key in hold}})
+            new.append(run)
         self.state.discovered.update({run.run_id: run for run in new})
         return new
 
@@ -1135,6 +1188,7 @@ class PowgenWatchController:
             raise ValueError("POWGEN requires a neutron time-of-flight configuration")
         config = config.model_copy(update={"run_name": self._run_name(run)})
         setup = self._setup(run)
+        self._check_discovered_setup(run, setup)
         data_path = run.source_path
         acquisition = acquisition_context(run.scan_metadata, instrument='PG3', run_number=run.run_number,
             source=run.source_path, script_sha256=setup.reduction_script_sha256)
@@ -1151,15 +1205,21 @@ class PowgenWatchController:
                 self._manual_setup_signature = signature
             profile_dataset_id = self.settings.instrument_profile_dataset_id
             bank_provenance["manual_profile_dataset_id"] = profile_dataset_id
+            destination = Path(self._staging.name) / run.fingerprint / run.run_id / Path(run.source_path).name
+            original = Path(run.source_path).read_bytes()
+            original_hash = sha256(original).hexdigest()
             if acquisition is not None:
-                destination = Path(self._staging.name) / run.fingerprint / run.run_id / Path(run.source_path).name
-                original_hash = sha256(Path(run.source_path).read_bytes()).hexdigest()
                 data_path = str(stage_manual_acquisition(run.source_path, destination, acquisition,
                     {'schema':'radar-pd-input-provenance/v1', 'instrument':'PG3',
                      'source_bank':bank_provenance['source_bank'], 'source_sha256':original_hash,
                      'warnings':[]}))
-                bank_provenance.update(source_sha256=original_hash,
-                    data_sha256=sha256(Path(data_path).read_bytes()).hexdigest())
+            else:
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(original)
+                data_path = str(destination)
+            self._check_discovered_setup(run, self._setup(run))
+            bank_provenance.update(source_sha256=original_hash,
+                data_sha256=sha256(Path(data_path).read_bytes()).hexdigest())
         else:
             resolution, _ = self.resolve_profile(run)
             destination = Path(self._staging.name) / run.fingerprint / run.run_id
@@ -1196,6 +1256,19 @@ class PowgenWatchController:
             raise RuntimeError(f"Galaxy did not acknowledge {run.run_id}")
         record.provenance["powgen_bank"] = bank_provenance
         return record
+
+    def _check_discovered_setup(self, run, setup):
+        """Never rebind a queued discovery to a later reduction or receipt."""
+        expected = run.scan_metadata.get(self.setup_metadata_key) or {}
+        current = setup.as_dict()
+        for key in ("source_signature", "reduction_script_signature", "reduction_xml_signature"):
+            if key in expected and expected[key] != current[key]:
+                # Checkpoint JSON stores tuples as lists.
+                if tuple(expected[key] or ()) != tuple(current[key] or ()):
+                    raise ValueError("POWGEN input changed after discovery; check a new watch before reprocessing")
+        for key in ("reduction_script_sha256", "reduction_xml_sha256"):
+            if key in expected and expected[key] != current[key]:
+                raise ValueError("POWGEN reduction receipt changed after discovery; check a new watch before reprocessing")
 
     def acknowledge_submission(
         self,

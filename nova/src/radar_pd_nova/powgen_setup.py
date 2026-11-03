@@ -333,6 +333,8 @@ def stage_bank(source: Path, setup: ReducedSetup, bank: int, profile: BankProfil
         signature = (stat.st_size, stat.st_mtime_ns) if stat else None
         if signature != setup.reduction_script_signature:
             raise PowgenResolutionError("POWGEN reduction script changed after preflight")
+        if stat and sha256(script.read_bytes()).hexdigest() != setup.reduction_script_sha256:
+            raise PowgenResolutionError("POWGEN reduction script content changed after preflight")
         xml = source.with_suffix('.xml')
         stat = xml.stat() if xml.is_file() else None
         xml_signature = (stat.st_size,stat.st_mtime_ns) if stat else None

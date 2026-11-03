@@ -662,7 +662,11 @@ def test_controller_reuses_one_packaged_profile_dataset_across_scans() -> None:
     assert next(iter(profile_ids)).startswith("document-")
 
 
-def test_controller_reuses_selected_history_profile_without_packaged_resolution() -> None:
+def test_controller_reuses_selected_history_profile_without_packaged_resolution(tmp_path, monkeypatch) -> None:
+    from radar_pd_nova.powgen_watch import WatchDefinition
+    monkeypatch.setattr(WatchDefinition, "source_directory", property(lambda _: str(tmp_path)))
+    source = tmp_path / "PG3_10000.gsa"
+    source.write_text("synthetic frozen manual-profile input")
     service = FakeGalaxyService()
     controller = PowgenWatchController(
         service,
@@ -676,7 +680,7 @@ def test_controller_reuses_selected_history_profile_without_packaged_resolution(
         ),
     )
     run = controller.discover(
-        [{"path": "/SNS/PG3/IPTS-12000/shared/autoreduce/PG3_10000.gsa"}]
+        [{"path": str(source)}]
     )[0]
 
     record = controller.launch_submission(run)

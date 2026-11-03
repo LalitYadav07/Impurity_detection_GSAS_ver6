@@ -60,12 +60,14 @@ class GalaxyLiveRuntime(GalaxyRefinementRuntime):
         atomic_json(acknowledged,{'packet_id':packet_id,'job':job.model_dump(mode='json')})
         if on_submitted:on_submitted(job.model_dump(mode='json'))
         start=time.monotonic()
-        while job.status not in {RunStatus.OK,RunStatus.ERROR}:
+        while job.status not in {RunStatus.OK,RunStatus.ERROR,RunStatus.CANCELLED}:
             if cancel_event is not None and cancel_event.is_set():
                 raise RuntimeUnavailable('Stopped waiting for the live job; its immutable Galaxy dispatch remains recoverable')
             if time.monotonic()-start>self.timeout:raise RuntimeUnavailable('The live job is still queued/running; recover it without resubmitting')
             time.sleep(self.poll_seconds);self.service.refresh_utility(job)
         if job.status==RunStatus.ERROR:raise RuntimeError(job.message or 'The live snapshot worker failed')
+        if job.status==RunStatus.CANCELLED:
+            raise RuntimeUnavailable('The live snapshot job was cancelled; its immutable dispatch receipt is retained and no result was accepted')
         if not job.outputs.get('result_bundle'):raise RuntimeError('The live snapshot worker has no result bundle')
         archive=directory/'result.zip';self.service._download_dataset(job.outputs['result_bundle'],archive)
         output=extract_result_archive(archive,directory/('result-'+uuid.uuid4().hex))
