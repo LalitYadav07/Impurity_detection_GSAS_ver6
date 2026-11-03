@@ -69,5 +69,3 @@ def test_active_admission_is_rechecked_after_input_preparation(revocation):
     with pytest.raises(SubmissionDeferred, match='no longer admits'):
         controller._submit_live_snapshot(SimpleNamespace(scan_metadata={}), object())
     assert not posts
-
-
