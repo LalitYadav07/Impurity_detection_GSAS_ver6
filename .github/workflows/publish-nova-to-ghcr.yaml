@@ -121,19 +121,25 @@ jobs:
             "${IMAGE_NAME}:nova-${NOVA_VERSION}" \
             /tmp/verify_sample_identity.py
 
-      - name: Verify packaged preparation retry and dispatch recovery
+      - name: Verify packaged preparation, profile and dispatch recovery
         shell: bash
         run: |
           docker run --rm --entrypoint sh -v "$PWD/nova/tests:/validation-tests:ro" \
             "${IMAGE_NAME}:nova-${NOVA_VERSION}" -c '
-          python -m pip install --quiet pytest &&
+          python -m pip install --quiet pytest==8.4.2 &&
           mkdir -p /tmp/model-recovery-tests &&
           cp /validation-tests/test_model_preparation_retry.py /validation-tests/test_model_runtime.py \
              /validation-tests/test_model_checkpoint_coalescing.py /validation-tests/test_model_enrollment.py \
              /validation-tests/test_checkpoint_uploads.py /validation-tests/test_model_checkpoint.py \
-             /validation-tests/test_native_job_admission.py /tmp/model-recovery-tests/ &&
+             /validation-tests/test_native_job_admission.py /validation-tests/test_restored_display_inputs.py \
+             /validation-tests/test_live_admission_guard.py /validation-tests/test_restricted_watch_retention.py \
+             /validation-tests/test_live_restore.py /validation-tests/test_nomad.py /validation-tests/test_snap.py \
+             /validation-tests/test_powgen_controller.py /tmp/model-recovery-tests/ &&
           cd /tmp/model-recovery-tests &&
-          PYTHONPATH=/src/src python -m pytest -q .'
+          PYTHONPATH=/src/src python -m pytest -q test_model_preparation_retry.py test_model_runtime.py \
+            test_model_checkpoint_coalescing.py test_model_enrollment.py test_checkpoint_uploads.py \
+            test_model_checkpoint.py test_native_job_admission.py test_restored_display_inputs.py \
+            test_live_admission_guard.py test_restricted_watch_retention.py'
 
       - name: Verify packaged saved-watch recovery contracts
         shell: bash
