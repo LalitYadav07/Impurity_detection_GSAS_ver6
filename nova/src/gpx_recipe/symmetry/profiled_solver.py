@@ -7,6 +7,7 @@ profiled out. Every retained candidate is forward evaluated from its GPX.
 from __future__ import annotations
 
 import dataclasses
+import copy
 import time
 import numpy as np
 
@@ -71,6 +72,9 @@ def _retain_forward_profile(project,path,context):
     histogram=project.histogram(context.histogram_name)
     arrays=histogram.data['data'][1]
     for i in (3,4,5):arrays[i]=np.ma.asarray(context.histogram['Data'][i]).copy()
+    # Native evaluation has its own histogram dictionary. Persist its final
+    # nuclear and magnetic reflection tables as well as the calculated curve.
+    histogram.data['Reflection Lists']=copy.deepcopy(context.histogram['Reflection Lists'])
     metrics=profile_residual_metrics(arrays[:3],arrays[3],histogram.data['Limits'])
     histogram.data['data'][0]['wR']=metrics['rwp_native']
     project.data['Covariance']['data']=dict(varyList=list(context.vary),variables=context.initial.tolist(),

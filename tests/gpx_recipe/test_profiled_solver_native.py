@@ -6,7 +6,7 @@ import pytest
 G=pytest.importorskip('GSASII.GSASIIscriptable')
 from test_native_profiled import artificial_project
 from gpx_recipe.symmetry.profiled_solver import refine,ProfiledScopeError
-from gpx_recipe.symmetry.native_audit import profile_residual_metrics
+from gpx_recipe.symmetry.native_audit import profile_residual_metrics,write_view
 from GSASII import GSASIIstrMain as MAIN
 
 
@@ -17,7 +17,7 @@ def protocol(*,free=True,iterations=100):
 
 
 @pytest.mark.parametrize('free,masked',[(True,True),(False,False)])
-def test_serialized_native_oracle_and_arrays_preserve_scientific_inputs(tmp_path,free,masked):
+def test_serialized_native_oracle_and_arrays_preserve_scientific_inputs(tmp_path,free,masked,monkeypatch):
     project,path=artificial_project(tmp_path,masked=masked,scale_free=free,background_free=free)
     histogram=project.histograms()[0]
     fixed=copy.deepcopy([*histogram.data['data'][1][:3],histogram.data['Limits'],histogram.data['Instrument Parameters']])
@@ -32,11 +32,37 @@ def test_serialized_native_oracle_and_arrays_preserve_scientific_inputs(tmp_path
         assert np.array_equal(np.ma.getdata(before),np.ma.getdata(after))
         assert np.array_equal(np.ma.getmaskarray(before),np.ma.getmaskarray(after))
     assert fixed[3:]==[histogram.data['Limits'],histogram.data['Instrument Parameters']]
+    captured={};original=MAIN.G2stIO.GetUsedHistogramsAndPhases
+    def capture(*args,**kwargs):
+        value=original(*args,**kwargs);captured['histograms']=value[0];return value
+    monkeypatch.setattr(MAIN.G2stIO,'GetUsedHistogramsAndPhases',capture)
+    original_residual=MAIN.G2stMth.errRefine
+    def capture_forward(*args,**kwargs):
+        captured['forward_args']=args
+        return original_residual(*args,**kwargs)
+    monkeypatch.setattr(MAIN.G2stMth,'errRefine',capture_forward)
     native=MAIN.DoNoFit(str(path),histogram.name)
+    # DoNoFit computes Fc but leaves the observed-F² extraction column zero.
+    # Use GSAS-II's own extraction on that independent fresh forward state,
+    # matching the final derivative evaluation that supplied the saved table.
+    args=captured['forward_args']
+    MAIN.G2stMth.GetFobsSq(args[1][0],args[1][1],args[2],args[5])
     metrics=profile_residual_metrics(histogram.data['data'][1][:3],native,histogram.data['Limits'])
     assert metrics['rwp_native']==pytest.approx(result['final_profile']['rwp_native'],rel=1e-10)
     assert result['diagnostics']['physical_gradient_norm']<=1e-7
     assert result['serialized_native_identity_error']<=1e-8
+    reloaded=G.G2Project(gpxfile=str(path));stored=reloaded.histogram(histogram.name).data['Reflection Lists']
+    expected=captured['histograms'][histogram.name]['Reflection Lists']
+    active={phase.name for phase in reloaded.phases() if phase.data['Histograms'][histogram.name]['Use']}
+    assert active.issubset(stored)
+    for phase in active:
+        assert len(stored[phase]['RefList'])>0
+        np.testing.assert_allclose(stored[phase]['RefList'],expected[phase]['RefList'],rtol=1e-10,atol=1e-10)
+    view=write_view(reloaded,histogram.name,tmp_path/'view.json')
+    assert {tick['phase'] for tick in view['ticks']}==active
+    for tick in view['ticks']:
+        assert tick['native']==pytest.approx(np.asarray(stored[tick['phase']]['RefList'])[:,5])
+        assert tick['d']==pytest.approx(np.asarray(stored[tick['phase']]['RefList'])[:,4])
 
 
 def test_budget_failure_stays_unqualified_and_does_not_borrow_parent_covariance(tmp_path):
