@@ -159,6 +159,16 @@ def test_profiled_parameters_do_not_reuse_stale_native_error_bars():
     assert values[0]['value'] == 3.7
 
 
+def test_matched_nuclear_control_remains_distinct_from_the_original_gpx_baseline():
+    row = profiled_row(baseline_rwp=33.8)
+    row['optimizer']['nuclear_baseline'] = {'rwp': 29.5, 'same_nuisance_scope': True}
+    details = fit_diagnostics(row)
+    control = next(item for item in details if item['label']=='Matched nuclear-only control')
+    assert '29.500%' in control['value']
+    assert 'same allowed scale/background scope' in control['value']
+    assert row['baseline_rwp'] == 33.8
+
+
 @pytest.mark.parametrize('field,value', [
     ('maximum_iterations', 30), ('iterations', 61), ('iterations', True),
     ('success', 'true'), ('uncertainty_available', True), ('native_convergence_declared', True),

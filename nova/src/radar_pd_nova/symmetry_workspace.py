@@ -227,6 +227,11 @@ def fit_diagnostics(row):
         details.append(dict(label='Profiled quadratic optimizer',value=
             f"{'Independent checks passed' if passed else 'Independent checks did not pass'} · {iterations} / {maximum} iterations. "
             'GSAS-II convergence and covariance are not claimed.'))
+        null_rwp=(optimizer.get('nuclear_baseline') or {}).get('rwp')
+        if finite(null_rwp):
+            details.append(dict(label='Matched nuclear-only control',value=
+                f'Rwp {null_rwp:.3f}% after optimizing the same allowed scale/background scope, '
+                'with identical fixed nuclear geometry, instrument and fit domain.'))
     native=row.get('native_convergence') or {}
     parts=[]
     if type(native.get('converged')) is bool:parts.append('converged' if native['converged'] else 'not converged')
@@ -316,7 +321,7 @@ def validated_profiled_evidence(evidence,policy,status):
     if status=='valid' and not (qualification['passed'] and value['success'] and all(checks[key] for key in PROFILED_QUALIFICATION_CHECKS)):
         raise ValueError('The profiled result is marked valid without its required optimizer checks')
     return {key:value.get(key) for key in
-        ['schema','name','iterations','maximum_iterations','success','status','message','qualification','uncertainty_available','native_convergence_declared','tolerances']}
+        ['schema','name','iterations','maximum_iterations','success','status','message','qualification','uncertainty_available','native_convergence_declared','tolerances','nuclear_baseline']}
 
 
 def profiled_optimizer_evidence(row):
