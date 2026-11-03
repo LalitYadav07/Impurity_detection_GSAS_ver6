@@ -38,9 +38,11 @@ def test_replacement_between_discovery_and_launch_cannot_submit(monkeypatch, tmp
     assert not view.due_submissions()
 
 
-def test_script_content_change_with_preserved_stat_is_rejected(monkeypatch, tmp_path):
+@pytest.mark.parametrize("manual", [False, True])
+def test_script_content_change_with_preserved_stat_is_rejected(monkeypatch, tmp_path, manual):
     path = source(tmp_path)
-    view = controller(monkeypatch, tmp_path)
+    view = controller(monkeypatch, tmp_path,
+        **({"instrument_profile_dataset_id": "manual-profile"} if manual else {}))
     run = view.discover(checkpoint=False)[0]
     script = path.with_suffix(".py")
     stat = script.stat()

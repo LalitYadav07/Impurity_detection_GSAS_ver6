@@ -1269,6 +1269,20 @@ class PowgenWatchController:
         for key in ("reduction_script_sha256", "reduction_xml_sha256"):
             if key in expected and expected[key] != current[key]:
                 raise ValueError("POWGEN reduction receipt changed after discovery; check a new watch before reprocessing")
+        # A receipt writer can preserve both its size and timestamp. Validate
+        # bytes independently of the setup cache, including manual profiles.
+        for suffix, key, label, limit in (
+                (".py", "reduction_script_sha256", "script", 262144),
+                (".xml", "reduction_xml_sha256", "XML", 1024 * 1024)):
+            if not expected.get(key):
+                continue
+            try:
+                with Path(run.source_path).with_suffix(suffix).open("rb") as stream:
+                    raw = stream.read(limit + 1)
+            except OSError as exc:
+                raise ValueError("POWGEN reduction receipt changed after discovery; check a new watch before reprocessing") from exc
+            if len(raw) > limit or sha256(raw).hexdigest() != expected[key]:
+                raise ValueError(f"POWGEN reduction {label} content changed after discovery; check a new watch before reprocessing")
 
     def acknowledge_submission(
         self,
