@@ -59,7 +59,8 @@ def test_scoped_series_and_selected_pair_overlay_use_model_events():
     app._refresh_unet_transition_tracking(rows)
     report = app._unet_transition_report
     assert len(report["groups"]) == 1
-    assert [r["status"] for r in report["records"][:2]] == ["initial", "valid"]
+    assert [r["status"] for r in report["records"][:2]] == ["initial", "uncertain"]
+    assert report["records"][1]["reason"] == "local_model_proposals_rejected_by_measured_evidence"
     assert report["model"]["checkpoint_sha256"] == CHECKPOINT_SHA256
     assert app.server.state.unet_transition_selected == rows[-1]["run_id"]
     assert len(app.server.state.unet_transition_profile["data"]) == 2
@@ -322,14 +323,19 @@ def test_overlay_filter_and_map_navigation_retain_shared_zoom():
     app.show_all_unet_transition_overlays()
     selected_row = app._unet_transition_report["records"][-1]
     named = 0
+    overlays = next(trace for trace in app.server.state.unet_transition_map["data"]
+                    if trace["name"] == "U-Net overlays")
     app.select_unet_transition_map_click(
-        "U-Net overlays", None, None, f"{selected_row['run_id']}|{named}"
+        "U-Net overlays", None, None, f"{selected_row['run_id']}|{named}", overlays["meta"]
     )
     state = app.server.state
     assert state.unet_transition_selected_event == named
     assert state.unet_transition_map["layout"]["xaxis"]["range"]
     zoom = list(state.unet_transition_map["layout"]["xaxis"]["range"])
-    app.select_unet_transition_map_click("Measured heat map", None, 1, None)
+    raster = next(trace for trace in state.unet_transition_map["data"]
+                  if trace["name"] == "Measured heat map")
+    app.select_unet_transition_map_click("Measured heat map", None, 1,
+                                         rows[1]["run_id"], raster["meta"])
     assert state.unet_transition_selected == rows[1]["run_id"]
     assert state.unet_transition_map["layout"]["xaxis"]["range"] == zoom
     app.clear_unet_transition_overlays()

@@ -21,7 +21,7 @@ from .results import discover_plot_payloads, gsas_figure, read_plot_payload
 from .transition_input import digest
 from .transition_tracking_plot import COORDINATES, binned_intensity, display_grid, empty_figure
 from .unet_transition_engine import (ComparisonSuperseded, UnetTransitionEngine, acquisition_key,
-                                     available_orders, condition_order_value)
+                                     available_orders, condition_order_value, source_signature)
 
 
 def _display_points(pattern, limit=6000):
@@ -61,6 +61,15 @@ _FEATURE_COLORS = {
 }
 
 _DEFAULT_OVERLAYS = ["peak_emergence", "peak_disappearance", "peak_shift"]
+
+# Resolve a heat-map row using the figure that emitted the browser event.
+# Trace metadata avoids repeating long acquisition IDs in every raster cell.
+_MAP_CLICK_ARGUMENTS = (
+    "((point) => point ? [point.data.name, point.x, point.y, "
+    "point.data.name === 'Measured heat map' ? "
+    "((point.data.meta || {}).run_ids || [])[Math.round(point.y)] : point.customdata, "
+    "point.data.meta] : ['', null, null, null, null])(($event.points || [])[0])"
+)
 
 
 def _event_visible(event, selected_types):
@@ -133,7 +142,7 @@ def _evolution_figure(view_rows, patterns, scans, selected_id, current, earlier,
                       selected_types, selected_event=-1, scale="linear",
                       palette="Turbo", zoom=None, revision=0, series="",
                       color_limits=None, order_label="Acquisition order",
-                      order_by="acquired"):
+                      order_by="acquired", identity=None, reference_id=None):
     """One shared-x view: native pair curves over a globally scaled heat map."""
     if not patterns:
         return plotly.Figure.to_data(empty_figure("Waiting for measured scans")), 0, 0
@@ -148,6 +157,7 @@ def _evolution_figure(view_rows, patterns, scans, selected_id, current, earlier,
     count = len(view_rows)
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
                         row_heights=[.32, .68], vertical_spacing=.045)
+    identity = identity or {}
     for pattern, label, tone in ((earlier, "Reference scan", "#87958d"),
                                  (current, "Selected scan", "#183f78")):
         if pattern is None:
@@ -155,6 +165,7 @@ def _evolution_figure(view_rows, patterns, scans, selected_id, current, earlier,
         x, y = _display_points(pattern)
         fig.add_trace(go.Scattergl(
             x=x, y=y, mode="lines", name=label, connectgaps=False,
+            meta={**identity, "run_id": selected_id if label == "Selected scan" else reference_id},
             line={"color": tone, "width": 1.6 if label == "Selected scan" else 1.2},
             hovertemplate=f"{label}<br>x=%{{x:.5g}}<br>Measured intensity=%{{y:.5g}}<extra></extra>"
         ), row=1, col=1)
@@ -164,6 +175,7 @@ def _evolution_figure(view_rows, patterns, scans, selected_id, current, earlier,
         text=raw_hover,
         zmin=low, zmax=high, colorscale=palette, name="Measured heat map",
         hoverongaps=False, showscale=True,
+        meta={**identity, "run_ids": [row["run_id"] for row in view_rows]},
         hovertemplate="Sorted row %{y}<br>x=%{x:.5g}<br>Measured intensity=%{text}<extra></extra>",
         colorbar={"orientation": "h", "x": .53, "y": -.18, "len": .77,
                   "thickness": 12, "tickvals": tickvals,
@@ -204,6 +216,7 @@ def _evolution_figure(view_rows, patterns, scans, selected_id, current, earlier,
             x=bars["x"], base=bars["base"], y=bars["y"], width=bars["width"],
             orientation="h", marker={"color": bars["colors"]},
             customdata=bars["tokens"], hovertext=bars["hover"],
+            meta=identity,
             name="U-Net overlays", showlegend=False,
             hovertemplate="%{hovertext}<extra></extra>"
         ), row=2, col=1)
@@ -342,6 +355,17 @@ def _fit_observation_stamp(scan):
         return (stat.st_size, stat.st_mtime_ns, stat.st_ino)
     except (OSError, RuntimeError):
         return "unavailable"
+
+
+def _fit_cache_key(scan):
+    packet = scan.get("pattern")
+    fields = ("ycalc", "fit_valid", "phase_ticks", "phase_order")
+    fit_packet = ({key: packet[key] for key in fields if key in packet}
+                  if isinstance(packet, dict) else None)
+    return str(scan["run_id"]), digest([
+        source_signature(scan), scan.get("unet_transition_fit_root"),
+        scan.get("fit_payload"), fit_packet, _fit_observation_stamp(scan),
+        _fit_output_stamp(scan)])
 
 
 def _usable_fit_payload(payload, measured=None):
@@ -614,8 +638,11 @@ class UnetTransitionMixin:
         self._unet_transition_task = None
         self._unet_transition_sources_cache = []
         self._unet_transition_map_ids = []
+        self._unet_transition_map_revision = getattr(self, "_unet_transition_map_revision", 0) + 1
+        self._unet_transition_map_identity = None
+        self._unet_transition_view_identity = None
         self._unet_transition_x_range = None
-        self._unet_transition_zoom_revision = 0
+        self._unet_transition_zoom_revision = getattr(self, "_unet_transition_zoom_revision", -1) + 1
         self._unet_transition_color_limits = None
         self._unet_transition_color_signature = None
         self._unet_transition_fit_cache = {}
@@ -673,6 +700,8 @@ class UnetTransitionMixin:
             "unet_transition_map_window_options": [30, 60, 100],
             "unet_transition_map_start": 1,
             "unet_transition_map_scroll_max": 1,
+            "unet_transition_map_scan_position": 1,
+            "unet_transition_map_scan_max": 1,
             "unet_transition_map_scroll_label": "All scans visible",
             "unet_transition_map_scroll_compact": "0 scans",
             "unet_transition_map_manual_scroll": False,
@@ -821,11 +850,11 @@ class UnetTransitionMixin:
                     vuetify.VBtn("↑ Page", click=self.previous_unet_transition_map_page,
                                  disabled=("unet_transition_map_start <= 1",),
                                  variant="text", size="x-small")
-                    vuetify.VSlider(label="Scroll scans", v_model=("unet_transition_map_start",),
+                    vuetify.VSlider(label="Inspect scan", v_model=("unet_transition_map_scan_position",),
                                     direction="vertical", reverse=True,
-                                    min=1, max=("unet_transition_map_scroll_max",), step=1,
-                                    disabled=("unet_transition_map_scroll_max <= 1",),
-                                    update_modelValue=(self.select_unet_transition_map_start, "[$event]"),
+                                    min=1, max=("unet_transition_map_scan_max",), step=1,
+                                    disabled=("unet_transition_map_scan_max <= 1",),
+                                    update_modelValue=(self.select_unet_transition_map_scan, "[$event]"),
                                     hide_details=True, density="compact", thumb_label=True)
                     vuetify.VBtn("↓ Page", click=self.next_unet_transition_map_page,
                                  disabled=("unet_transition_map_start >= unet_transition_map_scroll_max",),
@@ -836,10 +865,10 @@ class UnetTransitionMixin:
                     figure = plotly.Figure(display_mode_bar=True, responsive=True,
                                            style="height:690px;width:100%",
                                            click=(self.select_unet_transition_map_click,
-                                                  "[($event.points || []).length ? $event.points[0].data.name : '', ($event.points || []).length ? $event.points[0].x : null, ($event.points || []).length ? $event.points[0].y : null, ($event.points || []).length ? $event.points[0].customdata : null]"))
+                                                  _MAP_CLICK_ARGUMENTS))
                     figure.data = ("unet_transition_map.data",)
                     figure.layout = ("unet_transition_map.layout",)
-            html.P("Top: native measured reference and selected curves. Bottom: compatible scans in the chosen order. Colored marks are U-Net suggestions for the selected comparison spacing. A wider comparison can reveal a cumulative change, but adjacent scans are needed to locate its onset. Heat-map colors use one global intensity range for the series; line curves remain raw.",
+            html.P("Top: native measured reference and selected curves. Bottom: compatible scans in the chosen order. Use the slider to inspect a scan; use Page to browse map rows. Colored marks are U-Net suggestions for the selected comparison spacing. A wider comparison can reveal a cumulative change, but adjacent scans are needed to locate its onset. Heat-map colors use one global intensity range for the series; line curves remain raw.",
                    v_show="!unet_transition_loading",
                    classes="radar-section-help radar-tracker-map-caption")
             with html.Div(classes="radar-tracker-fit-grid", v_show="!unet_transition_loading"):
@@ -879,7 +908,7 @@ class UnetTransitionMixin:
                     figure = plotly.Figure(display_mode_bar=True, responsive=True,
                                            style="height:100%;width:100%",
                                            click=(self.select_unet_transition_map_click,
-                                                  "[($event.points || []).length ? $event.points[0].data.name : '', ($event.points || []).length ? $event.points[0].x : null, ($event.points || []).length ? $event.points[0].y : null, ($event.points || []).length ? $event.points[0].customdata : null]"))
+                                                  _MAP_CLICK_ARGUMENTS))
                     figure.data = ("unet_transition_dialog_figure.data",)
                     figure.layout = ("unet_transition_dialog_figure.layout",)
 
@@ -917,17 +946,22 @@ class UnetTransitionMixin:
             return
         scope = str(getattr(self, "_post_analysis_scope", ""))
         if scope != self._unet_transition_scope:
+            retain = getattr(self._unet_transition_engine, "retain_sources", None)
+            if retain is not None:
+                retain([])
             self._unet_transition_scope = scope
             self._unet_transition_generation += 1
+            self._unet_transition_request = None
             self._unet_transition_signature = None
             self._unet_transition_engine = UnetTransitionEngine()
-            self._unet_transition_report = {"records": [], "groups": []}
-            self._unet_transition_scans = {}
-            self.server.state.unet_transition_series = ""
             self.server.state.unet_transition_follow = True
+            self._unet_transition_x_range = None
+            self._unet_transition_zoom_revision += 1
+            self._unet_transition_view_identity = None
             self._unet_transition_color_limits = None
             self._unet_transition_fit_cache.clear()
             self._unet_transition_fit_signature = None
+            self._clear_unet_transition_report()
         sources = self._unet_transition_sources(scans, pending)
         self._unet_transition_sources_cache = sources
         self._schedule_unet_transition_tracking(sources)
@@ -939,7 +973,7 @@ class UnetTransitionMixin:
         descending = state.unet_transition_direction == "descending"
         gap = state.unet_transition_reference_gap
         signatures = []
-        fit_signatures = []
+        fit_keys = {}
         for row in sources:
             path = row.get("source_path") or row.get("pattern_path")
             try:
@@ -951,30 +985,28 @@ class UnetTransitionMixin:
                              if key not in {"fit_payload", "unet_transition_fit_root",
                                             "analysis_status", "rwp", "final_rwp"}}
             packet = inference_row.get("pattern")
-            fit_packet = None
             if isinstance(packet, dict):
                 fit_fields = {"ycalc", "fit_valid", "phase_ticks", "phase_order"}
-                fit_packet = {key: packet.get(key) for key in fit_fields if key in packet}
                 inference_row["pattern"] = {key: value for key, value in packet.items()
                                             if key not in fit_fields}
             signatures.append((inference_row, stamp))
-            fit_signatures.append((row.get("run_id"), row.get("unet_transition_fit_root"),
-                                   row.get("fit_payload"), fit_packet,
-                                   row.get("pattern_path"), row.get("pattern_observation"),
-                                   _fit_observation_stamp(row),
-                                   _fit_output_stamp(row)))
+            run_id = str(row["run_id"])
+            fit_keys[run_id] = _fit_cache_key(row)
         signature = digest([scope, signatures, order, descending, gap])
-        fit_signature = digest(fit_signatures)
+        fit_signature = digest(fit_keys)
         fit_changed = fit_signature != self._unet_transition_fit_signature
         if fit_changed:
-            self._unet_transition_fit_cache.clear()
+            valid_fit_keys = set(fit_keys.values())
+            self._unet_transition_fit_cache = {
+                key: value for key, value in self._unet_transition_fit_cache.items()
+                if key in valid_fit_keys}
             self._unet_transition_fit_signature = fit_signature
         if signature == self._unet_transition_signature:
             if self._unet_transition_task is not None:
                 # A user can change the order and then change it back while
                 # inference is running. Supersede that pending request.
                 self._unet_transition_request = None
-                state.unet_transition_loading = False
+                self._update_unet_transition_loading()
             if fit_changed:
                 self._unet_transition_scans = {str(row["run_id"]): row for row in sources}
                 self._render_unet_transition_tracking()
@@ -984,6 +1016,7 @@ class UnetTransitionMixin:
         self._unet_transition_color_signature = None
         self._unet_transition_request = (signature, sources, self._unet_transition_generation,
                                     self._unet_transition_engine, order, descending, gap)
+        self._update_unet_transition_loading()
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -993,14 +1026,42 @@ class UnetTransitionMixin:
                 report = self._unet_transition_engine.evaluate(
                     sources, order_by=order, descending=descending, reference_gap=gap)
             except Exception as error:
+                self._unet_transition_request = None
+                self._unet_transition_signature = None
+                self._clear_unet_transition_report()
+                self._update_unet_transition_loading()
                 state.unet_transition_error = str(error)
                 state.flush()
                 return
             self._apply_unet_transition_tracking(report, sources, signature)
+            if self._unet_transition_request is not None and self._unet_transition_request[0] == signature:
+                self._unet_transition_request = None
+            self._update_unet_transition_loading()
+            state.flush()
         elif self._unet_transition_task is None:
-            self.server.state.unet_transition_loading = True
-            self.server.state.unet_transition_loading_message = "Recomputing ordered scan pairs with Focus U-Net…"
             self._unet_transition_task = loop.create_task(self._run_unet_transition_tracking())
+
+    def _update_unet_transition_loading(self):
+        state = self.server.state
+        request = self._unet_transition_request
+        state.unet_transition_loading = bool(
+            request is not None and request[2] == self._unet_transition_generation)
+        state.unet_transition_loading_message = (
+            "Recomputing ordered scan pairs with Focus U-Net…"
+            if state.unet_transition_loading else "")
+
+    def _clear_unet_transition_report(self):
+        """Remove displayed scientific data before a new scope or failed request."""
+        self._unet_transition_report = {"records": [], "groups": []}
+        self._unet_transition_scans = {}
+        state = self.server.state
+        state.unet_transition_series = ""
+        state.unet_transition_series_options = []
+        state.unet_transition_selected = ""
+        state.unet_transition_selected_event = -1
+        state.unet_transition_unavailable = []
+        state.unet_transition_error = ""
+        self._render_unet_transition_tracking()
 
     async def _run_unet_transition_tracking(self):
         loop = asyncio.get_running_loop()
@@ -1012,7 +1073,7 @@ class UnetTransitionMixin:
                     stride = max(1, total // 40)
                     if done in {1, total} or done % stride == 0:
                         loop.call_soon_threadsafe(self._set_unet_transition_progress,
-                                                  signature, done, total, label)
+                                                  signature, done, total, label, generation)
                 try:
                     report = await asyncio.to_thread(
                         engine.evaluate, sources, order_by=order,
@@ -1025,30 +1086,38 @@ class UnetTransitionMixin:
                 except ComparisonSuperseded:
                     continue
                 except Exception as error:
-                    if self._unet_transition_request is None or signature != self._unet_transition_request[0]:
+                    if (self._unet_transition_request is None or
+                            signature != self._unet_transition_request[0] or
+                            generation != self._unet_transition_request[2]):
                         continue
                     if generation == self._unet_transition_generation:
+                        self._unet_transition_request = None
+                        self._unet_transition_signature = None
+                        self._clear_unet_transition_report()
                         self.server.state.unet_transition_error = str(error)
                     break
-                if self._unet_transition_request is None or signature != self._unet_transition_request[0]:
+                if (self._unet_transition_request is None or
+                        signature != self._unet_transition_request[0] or
+                        generation != self._unet_transition_request[2]):
                     continue
                 if generation == self._unet_transition_generation:
                     self._apply_unet_transition_tracking(report, self._unet_transition_request[1], signature)
                 if self._unet_transition_request is not None and self._unet_transition_request[0] != signature:
                     continue
+                self._unet_transition_request = None
                 break
         finally:
             # A reset can start a fresh task before the cancelled task reaches
             # finally. Only the current owner may clear the new task's state.
             if self._unet_transition_task is owner:
                 self._unet_transition_task = None
-                self.server.state.unet_transition_loading = False
-                self.server.state.unet_transition_loading_message = ""
+                self._update_unet_transition_loading()
                 self.server.state.flush()
 
-    def _set_unet_transition_progress(self, signature, done, total, label):
+    def _set_unet_transition_progress(self, signature, done, total, label, generation=None):
         if (self._unet_transition_request is None or
                 self._unet_transition_request[0] != signature or
+                (generation is not None and generation != self._unet_transition_request[2]) or
                 not self.server.state.unet_transition_loading):
             return
         self.server.state.unet_transition_loading_message = f"{label} · {done}/{total} steps"
@@ -1090,6 +1159,15 @@ class UnetTransitionMixin:
 
     def _render_unet_transition_tracking(self):
         state = self.server.state
+        group = next((item for item in self._unet_transition_report["groups"]
+                      if item["id"] == state.unet_transition_series), None)
+        if group is not None:
+            identity = (self._unet_transition_scope, state.unet_transition_series,
+                        digest(group.get("scope")))
+            if identity != self._unet_transition_view_identity:
+                self._unet_transition_view_identity = identity
+                self._unet_transition_x_range = None
+                self._unet_transition_zoom_revision += 1
         rows = [row for row in self._unet_transition_report["records"]
                 if row["group"] == state.unet_transition_series]
         state.unet_transition_scans = [
@@ -1301,7 +1379,9 @@ class UnetTransitionMixin:
         self._update_unet_transition_map(rows, position)
 
     def _cached_unet_transition_fit(self, scan):
-        key = str(scan["run_id"])
+        # A delayed redraw may still hold the previous scan while its revised
+        # comparison is pending. Cache under the actual scan being rendered.
+        key = _fit_cache_key(scan)
         if key not in self._unet_transition_fit_cache:
             try:
                 measured = self._unet_transition_engine.load(scan).pattern
@@ -1312,11 +1392,8 @@ class UnetTransitionMixin:
 
     def _update_unet_transition_map(self, rows, position):
         state = self.server.state
-        self._unet_transition_map_ids = []
         if not rows or position < 0:
-            state.unet_transition_map = plotly.Figure.to_data(empty_figure("Waiting for measured scans"))
-            state.unet_transition_overlay_summary = "No compatible measured series yet."
-            state.unet_transition_map_scroll_compact = "0 scans"
+            self._clear_unet_transition_map("Waiting for measured scans")
             return
         color_key = (self._unet_transition_signature, state.unet_transition_series,
                      state.unet_transition_color_scale)
@@ -1324,12 +1401,17 @@ class UnetTransitionMixin:
             self._unet_transition_color_limits = None
             self._unet_transition_color_signature = color_key
         if self._unet_transition_color_limits is None:
-            self._unet_transition_color_limits = _reported_color_limits(
-                rows, state.unet_transition_color_scale)
-            if self._unet_transition_color_limits is None:
-                self._unet_transition_color_limits = _series_color_limits(
-                    (self._unet_transition_engine.load(self._unet_transition_scans[row["run_id"]]).pattern
-                     for row in rows), state.unet_transition_color_scale)
+            try:
+                self._unet_transition_color_limits = _reported_color_limits(
+                    rows, state.unet_transition_color_scale)
+                if self._unet_transition_color_limits is None:
+                    self._unet_transition_color_limits = _series_color_limits(
+                        (self._unet_transition_engine.load(self._unet_transition_scans[row["run_id"]]).pattern
+                         for row in rows), state.unet_transition_color_scale)
+            except (OSError, ValueError, TypeError, KeyError) as error:
+                self._clear_unet_transition_map("Measured heat map unavailable")
+                state.unet_transition_notice = f"Heat-map display unavailable: {error}"
+                return
         counts = Counter(
             name for row in rows for event in (row.get("events") or [])
             for name in (event.get("feature_types") or ["uncertain"])
@@ -1347,17 +1429,25 @@ class UnetTransitionMixin:
         view_rows = rows[start:start + width]
         state.unet_transition_map_start = start + 1
         state.unet_transition_map_scroll_max = max_start + 1
+        state.unet_transition_map_scan_position = position + 1
+        state.unet_transition_map_scan_max = len(rows)
         state.unet_transition_map_scroll_label = (
             f"Rows {start + 1}–{start + len(view_rows)} of {len(rows)}"
             if max_start else f"All {len(rows)} scans visible")
         state.unet_transition_map_scroll_compact = (
             f"{start + 1}–{start + len(view_rows)} / {len(rows)}"
             if max_start else f"{len(rows)} scans")
-        self._unet_transition_map_ids = [row["run_id"] for row in view_rows]
         try:
+            selected = rows[position]
+            retain = getattr(self._unet_transition_engine, "retain_sources", None)
+            if retain is not None:
+                retained_ids = [selected["run_id"]]
+                if selected.get("previous") in self._unet_transition_scans:
+                    retained_ids.append(selected["previous"])
+                retained_ids.extend(row["run_id"] for row in view_rows)
+                retain([self._unet_transition_scans[run_id] for run_id in dict.fromkeys(retained_ids)])
             patterns = [self._unet_transition_engine.load(self._unet_transition_scans[row["run_id"]]).pattern
                         for row in view_rows]
-            selected = rows[position]
             current = self._unet_transition_engine.load(
                 self._unet_transition_scans[selected["run_id"]]).pattern
             earlier = (self._unet_transition_engine.load(
@@ -1365,7 +1455,11 @@ class UnetTransitionMixin:
                 if selected.get("previous") in self._unet_transition_scans else None)
             order_title = next((item["title"] for item in state.unet_transition_order_options
                                 if item["value"] == state.unet_transition_order), "Scan order")
-            state.unet_transition_map, shown, saturated = _evolution_figure(
+            self._unet_transition_map_revision += 1
+            identity = {"scope": self._unet_transition_scope,
+                        "series": state.unet_transition_series,
+                        "revision": self._unet_transition_map_revision}
+            figure, shown, saturated = _evolution_figure(
                 view_rows, patterns, self._unet_transition_scans,
                 selected["run_id"], current, earlier,
                 selected_types=set(state.unet_transition_overlay_types or []),
@@ -1377,7 +1471,12 @@ class UnetTransitionMixin:
                 color_limits=self._unet_transition_color_limits,
                 order_label=order_title,
                 order_by=state.unet_transition_order,
+                identity=identity, reference_id=selected.get("previous"),
             )
+            self._unet_transition_map_ids = [row["run_id"] for row in view_rows]
+            self._unet_transition_map_identity = identity
+            state.unet_transition_map = figure
+            state.unet_transition_dialog_figure = figure
             total = sum(len(row.get("events") or []) for row in rows)
             span = (f" · map rows {start + 1}–{start + len(view_rows)} of {len(rows)}"
                     if len(view_rows) < len(rows) else "")
@@ -1387,12 +1486,30 @@ class UnetTransitionMixin:
                 + (f" {saturated} heat-map cells exceed the locked color range."
                    if saturated else "")
             )
-            if state.unet_transition_dialog:
-                state.unet_transition_dialog_figure = state.unet_transition_map
         except (OSError, ValueError, TypeError, KeyError) as error:
-            state.unet_transition_map = plotly.Figure.to_data(
-                empty_figure("Measured heat map unavailable"))
+            self._clear_unet_transition_map("Measured heat map unavailable")
             state.unet_transition_notice = f"Heat-map display unavailable: {error}"
+
+    def _clear_unet_transition_map(self, message):
+        state = self.server.state
+        self._unet_transition_map_revision += 1
+        self._unet_transition_map_identity = None
+        self._unet_transition_map_ids = []
+        retain = getattr(self._unet_transition_engine, "retain_sources", None)
+        if retain is not None:
+            retain([])
+        figure = plotly.Figure.to_data(empty_figure(message))
+        state.unet_transition_map = figure
+        state.unet_transition_dialog_figure = figure
+        state.unet_transition_overlay_summary = "No compatible measured series yet."
+        state.unet_transition_overlay_options = []
+        state.unet_transition_map_start = 1
+        state.unet_transition_map_scroll_max = 1
+        state.unet_transition_map_scan_position = 1
+        state.unet_transition_map_scan_max = 1
+        state.unet_transition_map_scroll_label = "No scans available"
+        state.unet_transition_map_scroll_compact = "0 scans"
+        state.unet_transition_map_manual_scroll = False
 
     def select_unet_transition_series(self, value, **_):
         state = self.server.state
@@ -1487,14 +1604,20 @@ class UnetTransitionMixin:
             selected = min(inside, key=lambda index: events[index]["x1"] - events[index]["x0"])
             self.select_unet_transition_event(selected)
 
-    def select_unet_transition_map_click(self, name, x, y, token, **_):
+    def select_unet_transition_map_click(self, name, x, y, token, identity=None, **_):
+        current_identity = self._unet_transition_map_identity
+        if (self.server.state.unet_transition_loading or
+                not isinstance(identity, dict) or current_identity is None or
+                any(identity.get(key) != value for key, value in current_identity.items())):
+            return
         if name == "Measured heat map":
             try:
                 index = round(float(y))
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 return
-            if 0 <= index < len(self._unet_transition_map_ids):
-                self.select_unet_transition_scan(self._unet_transition_map_ids[index])
+            if (0 <= index < len(self._unet_transition_map_ids) and
+                    token == self._unet_transition_map_ids[index]):
+                self.select_unet_transition_scan(token)
             return
         if name == "U-Net overlays":
             try:
@@ -1503,9 +1626,10 @@ class UnetTransitionMixin:
             except (TypeError, ValueError):
                 return
             row = next((item for item in self._unet_transition_report["records"]
-                        if item["run_id"] == run_id), None)
+                        if item["run_id"] == run_id and
+                        item["group"] == self.server.state.unet_transition_series), None)
             events = (row or {}).get("events") or []
-            if not 0 <= event_index < len(events):
+            if run_id not in self._unet_transition_map_ids or not 0 <= event_index < len(events):
                 return
             event = events[event_index]
             self.server.state.unet_transition_selected = run_id
@@ -1520,7 +1644,13 @@ class UnetTransitionMixin:
             self._render_unet_transition_tracking()
             return
         if name in {"Selected scan", "Reference scan"}:
-            self.select_unet_transition_plot_point(x)
+            selected = self.server.state.unet_transition_selected
+            row = next((item for item in self._unet_transition_report["records"]
+                        if item["run_id"] == selected and
+                        item["group"] == self.server.state.unet_transition_series), None)
+            expected = selected if name == "Selected scan" else (row or {}).get("previous")
+            if expected is not None and identity.get("run_id") == expected:
+                self.select_unet_transition_plot_point(x)
 
     def select_unet_transition_overlay_types(self, values, **_):
         allowed = {*_FEATURE_COLORS, "uncertain"}
@@ -1570,6 +1700,17 @@ class UnetTransitionMixin:
         position = ids.index(state.unet_transition_selected) if state.unet_transition_selected in ids else -1
         self._update_unet_transition_map(rows, position)
 
+    def select_unet_transition_map_scan(self, value, **_):
+        try:
+            position = int(value) - 1
+        except (TypeError, ValueError, OverflowError):
+            return
+        rows = [row for row in self._unet_transition_report["records"]
+                if row["group"] == self.server.state.unet_transition_series]
+        if rows:
+            position = max(0, min(position, len(rows) - 1))
+            self.select_unet_transition_scan(rows[position]["run_id"])
+
     def previous_unet_transition_map_page(self, **_):
         self.select_unet_transition_map_start(
             self.server.state.unet_transition_map_start - self.server.state.unet_transition_map_window)
@@ -1607,6 +1748,9 @@ class UnetTransitionMixin:
 
     def follow_unet_transition_latest(self, **_):
         self.server.state.unet_transition_follow = True
+        self.server.state.unet_transition_map_manual_scroll = False
+        self.server.state.unet_transition_selected_event = -1
+        self.server.state.unet_transition_feature_filter = "all"
         self._render_unet_transition_tracking()
 
     def expand_unet_transition_plot(self, **_):
