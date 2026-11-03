@@ -572,13 +572,15 @@ class PowgenWatchController:
             raise ValueError("This saved watch is blocked from new analyses until its saved restrictions are reviewed")
         launch_check = getattr(self, "_before_live_submit", None)
         admission_pause = getattr(self, "_submission_pause_event", None)
-        admission_allowed = self._retry_submission_allowed
+        admission_allowed = (getattr(self, "_retry_submission_allowed", None)
+                             if admission_pause is not None else None)
         retry = bool(run.scan_metadata.get('retry_source_proof'))
         if launch_check is None and not retry and admission_pause is None:
             return self.service.submit_snapshot(snapshot)
 
         def before_submit():
-            if admission_pause is not None and (admission_pause.is_set() or not admission_allowed()):
+            if admission_pause is not None and (admission_pause.is_set()
+                    or not callable(admission_allowed) or not admission_allowed()):
                 from .galaxy_service import SubmissionDeferred
                 raise SubmissionDeferred("Live owner no longer admits a new Analyze job")
             if launch_check is not None:
