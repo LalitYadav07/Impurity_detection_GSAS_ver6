@@ -14,10 +14,23 @@ def _smooth(values: np.ndarray) -> np.ndarray:
 
 
 def _corr(a: np.ndarray, b: np.ndarray) -> float:
-    a = a - np.mean(a)
-    b = b - np.mean(b)
-    norm = float(np.linalg.norm(a)*np.linalg.norm(b))
-    return float(np.dot(a, b)/norm) if norm > 1e-10 else 0.
+    vectors = []
+    for values in (a, b):
+        values = np.asarray(values, dtype=float)
+        if not len(values) or not np.isfinite(values).all():
+            return 0.
+        scale = float(np.max(np.abs(values)))
+        if scale == 0:
+            return 0.
+        # Normalize before centering or squaring, so intensity units cannot
+        # underflow/overflow the norm or determine whether a curve is flat.
+        centered = values / scale
+        centered -= np.mean(centered)
+        norm = float(np.linalg.norm(centered))
+        if norm <= np.finfo(float).eps * np.sqrt(len(centered)):
+            return 0.
+        vectors.append(centered / norm)
+    return float(np.clip(np.dot(*vectors), -1., 1.))
 
 
 def lag_signature(event: dict, matched: dict) -> dict:

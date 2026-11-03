@@ -27,14 +27,8 @@ def native_grid(before: dict, target: tuple[float, float]) -> np.ndarray:
     return result
 
 
-def stitch(windows: list[dict], x: np.ndarray, type_names: tuple[str, ...]) -> list[dict]:
-    """Center-weighted mean on native x, followed by one global threshold.
-
-    Missing tile support is not interpolated. The caller preserves the original
-    runner's incomplete-coverage status and source-support checks.
-    """
-    if not windows or len(type_names) == 0:
-        return []
+def fuse(windows: list[dict], x: np.ndarray, type_names: tuple[str, ...]) -> dict:
+    """Share the exact center-weighted scores between boxes and uncertainty."""
     x = np.asarray(x, dtype=np.float64)
     sums = np.zeros((1 + len(type_names), len(x)), dtype=np.float64)
     weights = np.zeros(len(x), dtype=np.float64)
@@ -65,6 +59,21 @@ def stitch(windows: list[dict], x: np.ndarray, type_names: tuple[str, ...]) -> l
     # Match the existing five-bin zero-padded smoothing policy on this grid.
     smoothed = np.convolve(fused[0], np.ones(SMOOTH_BINS) / SMOOTH_BINS,
                            mode="same")
+    return {"scores": fused, "attention": smoothed, "covered": covered}
+
+
+def stitch(windows: list[dict], x: np.ndarray, type_names: tuple[str, ...], *,
+           fused: dict | None = None) -> list[dict]:
+    """Center-weighted mean on native x, followed by one global threshold.
+
+    Missing tile support is not interpolated. The caller preserves the original
+    runner's incomplete-coverage status and source-support checks.
+    """
+    if not windows or len(type_names) == 0:
+        return []
+    x = np.asarray(x, dtype=np.float64)
+    result = fuse(windows, x, type_names) if fused is None else fused
+    fused, smoothed, covered = result["scores"], result["attention"], result["covered"]
     active = covered & (smoothed >= ATTENTION_THRESHOLD)
     starts = np.flatnonzero(active & ~np.r_[False, active[:-1]])
     stops = np.flatnonzero(active & ~np.r_[active[1:], False]) + 1

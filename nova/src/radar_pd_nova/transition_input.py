@@ -54,6 +54,29 @@ def identity(scan):
     return f"{instrument}/{ipts}/{specimen}/{metadata.get('sample_role', 'sample')}"
 
 
+def _comparison_notices(scan, *contexts):
+    """Preserve declared reduction qualifications independently of normalization."""
+    metadata = scan.get("metadata") or {}
+    sources = [scan, metadata, *contexts]
+    sources.extend(metadata.get(name) or {} for name in (
+        "snap_setup", "nomad_setup", "powgen_setup", "hb2a_setup"))
+    notices = []
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        for field in ("warnings", "scientific_warnings", "notices"):
+            values = source.get(field) or []
+            if isinstance(values, (str, dict)):
+                values = [values]
+            if not isinstance(values, (list, tuple)):
+                continue
+            for value in values:
+                message = value.get("message") if isinstance(value, dict) else value
+                if isinstance(message, str) and message.strip():
+                    notices.append(message.strip())
+    return list(dict.fromkeys(notices))
+
+
 def packet_observation(scan):
     """Adapt the existing portable measured-curve receipt, ignoring ycalc/model."""
     packet = scan.get("pattern")
@@ -118,14 +141,15 @@ def packet_observation(scan):
     pattern = ObservedPattern(
         scope, parsed.x, parsed.y, parsed.sigma, parsed.valid, str(scan["run_id"])
     )
+    notices = _comparison_notices(scan, packet, context, context.get("reduction_setup"))
+    if "not independently" in normalization:
+        notices.append(
+            "Reduction normalization is not independently qualified by the project extractor."
+        )
     return observation(
         pattern,
         {"source": "published measured histogram", "receipt": parsed.key},
-        [
-            "Reduction normalization is not independently qualified by the project extractor."
-        ]
-        if "not independently" in normalization
-        else [],
+        list(dict.fromkeys(notices)),
     )
 
 
@@ -210,7 +234,7 @@ def reduced_observation(scan):
             raise ValueError("SNAP source differs from the checked reduction receipt")
         if np.any(~np.isfinite(sigma) | (sigma < 0) | ((sigma > 0) & ~np.isfinite(y))):
             raise ValueError("SNAP curve contains invalid positive-weight observations")
-    notices = []
+    notices = _comparison_notices(scan)
     semantics = "native_FXYE_unspecified"
     if snap_integrals:
         # Match GSAS-II load_pwd_from_reader exactly: GSA x values are bin
@@ -344,4 +368,4 @@ def hb2a_observation(scan,path,root):
         'native_XYE_density_with_supplied_sigma')
     pattern=ObservedPattern(scope,x,y,sigma,sigma>0,str(scan['run_id']))
     return observation(pattern,{'source':'read-only reduced HB-2A XYE','sha256':setup['source_sha256']},
-        ['HB-2A profile acceptance and magnetic interpretation require scientific review.'])
+        [*_comparison_notices(scan), 'HB-2A profile acceptance and magnetic interpretation require scientific review.'])

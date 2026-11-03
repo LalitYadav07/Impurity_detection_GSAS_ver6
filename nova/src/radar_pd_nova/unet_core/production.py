@@ -20,7 +20,7 @@ from . import morphology_type_fallback, native_match, native_type_policy
 from . import peak_fate_policy, source_support
 from .normalization import transform_pair
 from .runner import run_pair
-from .stitch import native_grid, stitch
+from .stitch import fuse, native_grid, stitch
 
 
 HERE = Path(__file__).resolve().parent
@@ -77,15 +77,23 @@ def _paired_native(before: dict, after: dict, target: tuple[float, float]) -> di
     treats interpolated values as one coarser native bin for evidence counts.
     """
     exact = native_match.directly_matched(before, after)
-    a = np.asarray(before["valid"], dtype=bool)
-    b = np.asarray(after["valid"], dtype=bool)
+    def usable(curve):
+        x = np.asarray(curve["x"], dtype=float)
+        y = np.asarray(curve["y"], dtype=float)
+        sigma = np.asarray(curve["sigma"], dtype=float)
+        return (np.asarray(curve["valid"], dtype=bool) &
+                (x >= target[0]) & (x <= target[1]) &
+                np.isfinite(y) & np.isfinite(sigma) & (sigma > 0))
+
+    a, b = usable(before), usable(after)
+    inside = (exact["x"] >= target[0]) & (exact["x"] <= target[1])
+    exact = {name: values[inside] for name, values in exact.items()}
     minimum = min(int(a.sum()), int(b.sum()))
-    if len(exact["x"]) >= max(32, int(.8 * minimum)):
+    if int(np.sum(exact["good"])) >= max(32, int(.8 * minimum)):
         return exact
-    first, second = (before, after) if int(a.sum()) <= int(b.sum()) else (after, before)
+    first, valid = (before, a) if int(a.sum()) <= int(b.sum()) else (after, b)
     x = np.asarray(first["x"], dtype=float)
-    valid = np.asarray(first["valid"], dtype=bool)
-    x = x[valid & (x >= target[0]) & (x <= target[1])]
+    x = x[valid]
     if len(x) < 2:
         return {"x": np.array([]), "good": np.array([], dtype=bool),
                 "direct_z": np.array([])}
@@ -102,7 +110,8 @@ def _paired_native(before: dict, after: dict, target: tuple[float, float]) -> di
 
     ay, by = interp(before, "y"), interp(after, "y")
     ae, be = interp(before, "sigma"), interp(after, "sigma")
-    good &= np.isfinite(ay) & np.isfinite(by) & (ae > 0) & (be > 0)
+    good &= (np.isfinite(ay) & np.isfinite(by) & np.isfinite(ae) &
+             np.isfinite(be) & (ae > 0) & (be > 0))
     z = np.zeros(len(x), dtype=float)
     z[good] = (by[good] - ay[good]) / np.hypot(ae[good], be[good])
     return {"x": x, "good": good, "before_y": ay, "after_y": by,
@@ -218,22 +227,27 @@ class FocusTransitionPredictor:
             return {**base, "schema": SCHEMA}
         target = tuple(base["target_interval"])
         windows = capture.windows(base["inference"]["inferred_windows"])
-        raw = stitch(windows, native_grid(a, target), FEATURE_TYPES)
+        grid = native_grid(a, target)
+        fused = fuse(windows, grid, FEATURE_TYPES)
+        raw = stitch(windows, grid, FEATURE_TYPES, fused=fused)
         inferred = [row["focus_interval"] for row in
                     base["inference"]["inferred_windows"]]
         source = source_support.measured_support(a, b, target)
         supported = source_support.intersect_intervals(inferred, source["supported_intervals"])
         matched = _paired_native(a, b, target)
         kept = []
+        rejected = {"missing_source_support": 0, "insufficient_native_evidence": 0}
         for event in raw:
             lo, hi = float(event["x0"]), float(event["x1"])
             if _covered_fraction((lo, hi), supported) < 1 - 1e-6:
+                rejected["missing_source_support"] += 1
                 continue
             inside = (matched["good"] & (matched["x"] >= lo) &
                       (matched["x"] <= hi))
             z = np.abs(matched["direct_z"][inside])
             if (len(z) < 2 or int(np.sum(z >= 2)) < 2 or
                     float(np.sqrt(np.mean(np.minimum(z, 5)**2))) < 2.5):
+                rejected["insufficient_native_evidence"] += 1
                 continue
             tagged, _ = native_type_policy.tag_event(event, matched)
             tagged, _ = morphology_type_fallback.tag_unresolved_event(tagged, matched)
@@ -244,7 +258,18 @@ class FocusTransitionPredictor:
             kept = tagged["prediction"]["events"]
         coverage = sum(hi - lo for lo, hi in supported) / (target[1] - target[0])
         native_error_bins = int(np.sum(matched["good"]))
-        reasons = list(base.get("reasons") or [])
+        # The runner's borderline decision describes individual tiles. The
+        # displayed decision must use the same fused scores as its final boxes.
+        reasons = [reason for reason in (base.get("reasons") or [])
+                   if reason != "borderline_attention_score"]
+        qualified = np.zeros(len(grid), dtype=bool)
+        for lo, hi in supported:
+            qualified |= (grid >= lo) & (grid <= hi)
+        qualified &= fused["covered"]
+        maximum = float(np.max(fused["attention"][qualified])) if np.any(qualified) else 0.
+        if not kept and maximum >= base["model"]["uncertainty_floor"]:
+            reasons.append("borderline_attention_score" if not raw else
+                           "local_model_proposals_rejected_by_measured_evidence")
         normalization = str(a.get("scope", {}).get("normalization", "")).lower()
         if normalization.startswith("not_") or "not independently" in normalization:
             reasons.append("normalization_unqualified: counting or monitor changes can mimic intensity changes")
@@ -252,7 +277,7 @@ class FocusTransitionPredictor:
             reasons.append("insufficient_joint_native_point_errors")
         if coverage < .98:
             reasons.append("incomplete_measured_source_support")
-        status = "uncertain" if reasons or base["status"] != "valid" else "valid"
+        status = "uncertain" if reasons else "valid"
         attention = "yes" if kept else "no" if status == "valid" else "uncertain"
         return {**base, "schema": SCHEMA, "status": status, "reasons": reasons,
                 "attention": attention, "events": kept,
@@ -260,5 +285,7 @@ class FocusTransitionPredictor:
                 "supported_intervals": supported,
                 "postprocessing": {"raw_stitched_boxes": len(raw),
                                    "retained_local_boxes": len(kept),
+                                   "rejected_local_boxes": rejected,
+                                   "maximum_supported_fused_attention": round(maximum, 6),
                                    "native_evidence": "reported_sigma_source_support_v1",
                                    "model_created_all_local_proposals": True}}

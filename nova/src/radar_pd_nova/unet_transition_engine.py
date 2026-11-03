@@ -17,10 +17,35 @@ from threading import RLock
 import numpy as np
 
 from .scan_interpretation import _time
+from .scan_conditions import _unit
 from .transition_input import digest, load_observation
 from .unet_core.production import FocusTransitionPredictor
 
 SCHEMA = "radar-pd-unet-transition-history/v1"
+RAW_CACHE_BYTES = 96 * 1024 * 1024
+RAW_CACHE_ENTRIES = 16
+DISPLAY_CACHE_SOURCES = 102  # Largest map (100) plus selection and reference.
+
+
+def source_signature(scan):
+    """Identity of measured inputs and the provenance used by the adapter."""
+    stamps = []
+    for field in ("source_path", "pattern_path"):
+        path = scan.get(field)
+        try:
+            stat = Path(path).stat() if path else None
+            stamps.append((stat.st_size, stat.st_mtime_ns, stat.st_ino) if stat else None)
+        except OSError:
+            stamps.append("unavailable")
+    packet = scan.get("pattern")
+    if isinstance(packet, dict):
+        packet = {key: value for key, value in packet.items()
+                  if key not in {"ycalc", "fit_valid", "phase_ticks", "phase_order"}}
+    fields = ("run_id", "source_path", "pattern_path", "pattern_observation",
+              "metadata", "bank", "instrument", "ipts", "source_family",
+              "comparison_setup_id", "transition_source_root", "scientific_warnings",
+              "warnings", "notices")
+    return digest([{field: scan.get(field) for field in fields}, packet, stamps])
 
 
 def acquisition_key(scan):
@@ -61,15 +86,23 @@ def condition_order_value(scan, field):
             number = float(value.get("value"))
         except (TypeError, ValueError):
             number = math.nan
-        unit = str(value.get("unit") or "").strip().lower()
+        source_unit = str(value.get("unit") or "").strip()
+        unit = source_unit.lower()
         conversions = {
             "temperature": {"k": (1, 0), "kelvin": (1, 0), "c": (1, 273.15),
                             "°c": (1, 273.15), "mk": (.001, 0)},
             "magnetic_field": {"t": (1, 0), "mt": (.001, 0)},
-            "pressure": {"gpa": (1, 0), "mpa": (.001, 0), "kbar": (.1, 0)},
             "wavelength": {"å": (1, 0), "a": (1, 0), "angstrom": (1, 0), "nm": (10, 0)},
         }
         if math.isfinite(number):
+            if field == "pressure":
+                conversion = _unit(field, source_unit)
+                if conversion is not None:
+                    canonical, scale, offset = conversion
+                    if canonical == "Pa":
+                        return (number * scale + offset) / 1e9, field, (
+                            "reviewed mapping" if reviewed else "measured")
+                return None
             if field in conversions:
                 if unit in conversions[field]:
                     scale, offset = conversions[field][unit]
@@ -132,32 +165,57 @@ class ComparisonSuperseded(RuntimeError):
 
 
 class UnetTransitionEngine:
-    def __init__(self, *, loader=None, predictor=None):
+    def __init__(self, *, loader=None, predictor=None,
+                 raw_cache_bytes=RAW_CACHE_BYTES):
+        if not isinstance(raw_cache_bytes, int) or raw_cache_bytes < 0:
+            raise ValueError("Raw-pattern cache budget must be a nonnegative integer")
         self.loader = loader or load_observation
         self.predictor = predictor or FocusTransitionPredictor()
         self._loaded = OrderedDict()
+        self._loaded_sizes = {}
+        self._loaded_bytes = 0
+        self._raw_cache_bytes = raw_cache_bytes
+        self._retained_sources = {}
         self._pairs = OrderedDict()
         self._summaries = OrderedDict()
         self._cache_lock = RLock()
 
-    @staticmethod
-    def _source_key(scan):
-        path = scan.get("source_path") or scan.get("pattern_path")
-        try:
-            stat = Path(path).stat() if path else None
-            stamp = (stat.st_size, stat.st_mtime_ns, stat.st_ino) if stat else None
-        except OSError:
-            stamp = "unavailable"
-        packet = scan.get("pattern")
-        if isinstance(packet, dict):
-            packet = {key: value for key, value in packet.items()
-                      if key not in {"ycalc", "fit_valid", "phase_ticks", "phase_order"}}
-        return digest([scan.get("run_id"), scan.get("source_path"),
-                       scan.get("pattern_path"), scan.get("pattern_observation"),
-                       packet, scan.get("metadata"), scan.get("bank"), stamp])
+    source_signature = staticmethod(source_signature)
+    _source_key = source_signature
+
+    def retain_sources(self, scans):
+        """Prioritize this display's selection, reference and measured window.
+
+        This does not load or copy arrays. The byte budget always takes
+        precedence; earlier sources have priority if a large window exceeds it.
+        Ordinary inference keeps its independent 16-entry working cache.
+        """
+        retained = {}
+        for index, scan in enumerate(scans):
+            if index >= DISPLAY_CACHE_SOURCES:
+                break
+            retained.setdefault(self._source_key(scan), index)
+        with self._cache_lock:
+            self._retained_sources = retained
+            self._prune_loaded()
+
+    def _drop_loaded(self, key):
+        del self._loaded[key]
+        self._loaded_bytes -= self._loaded_sizes.pop(key)
+
+    def _prune_loaded(self):
+        ordinary = [key for key in self._loaded if key not in self._retained_sources]
+        for key in ordinary[:-RAW_CACHE_ENTRIES]:
+            self._drop_loaded(key)
+        # Evict ordinary LRU entries first, then the lowest display priority.
+        while self._loaded_bytes > self._raw_cache_bytes:
+            key = next((key for key in self._loaded if key not in self._retained_sources), None)
+            if key is None:
+                key = max(self._loaded, key=self._retained_sources.__getitem__)
+            self._drop_loaded(key)
 
     def load(self, scan):
-        """Cache only a small number of raw observations for plot inspection."""
+        """Reuse observations within the display priority and raw-byte budget."""
         key = self._source_key(scan)
         with self._cache_lock:
             if key in self._loaded:
@@ -166,16 +224,21 @@ class UnetTransitionEngine:
         item = self.loader(scan)
         with self._cache_lock:
             if key not in self._loaded:
-                self._loaded[key] = item
+                size = sum(values.nbytes for values in (
+                    item.pattern.x, item.pattern.intensity,
+                    item.pattern.sigma, item.pattern.valid))
+                if size <= self._raw_cache_bytes:
+                    self._loaded[key] = item
+                    self._loaded_sizes[key] = size
+                    self._loaded_bytes += size
+                    self._prune_loaded()
             else:
                 item = self._loaded[key]
-            while len(self._loaded) > 16:
-                self._loaded.popitem(last=False)
-            self._loaded.move_to_end(key)
+                self._loaded.move_to_end(key)
         return item
 
     def _summary(self, scan):
-        # Compact source receipts outlive the 16-pattern raw-array cache. A new
+        # Compact source receipts outlive the bounded raw-array cache. A new
         # scan must not reread every earlier file merely to reconstruct scope.
         key = self._source_key(scan)
         with self._cache_lock:
@@ -283,6 +346,8 @@ class UnetTransitionEngine:
             entries.sort(key=lambda entry: _order_key(entry[0], order_by,
                                                        descending=descending), reverse=descending)
             groups[group]["run_ids"] = [entry[1]["run_id"] for entry in entries]
+            source_notices = {row["run_id"]: list(row.get("notices") or [])
+                              for _, row in entries}
             for index, (_scan, row) in enumerate(entries):
                 check_current()
                 if index == 0:
@@ -309,6 +374,9 @@ class UnetTransitionEngine:
                                    attention=comparison["attention"],
                                    events=comparison["events"],
                                    comparison=comparison,
+                                   notices=list(dict.fromkeys([
+                                       *source_notices[before_id],
+                                       *source_notices[row["run_id"]]])),
                                    reason="; ".join(comparison.get("reasons") or []))
                     except (OSError, ValueError, TypeError, UnicodeError, RuntimeError) as error:
                         row.update(previous=before_id, reason=str(error))
