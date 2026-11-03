@@ -485,7 +485,11 @@ class SymmetryMixin(KSearchMixin):
         self._symmetry_plot_changed()
 
     def _symmetry_plot_changed(self,**_):
-        s=self.server.state;row=next((r for r in self._symmetry_rows if r['id']==s.sx_selected),None)
+        s=self.server.state
+        # A newly selected view may fail before plotting or receipt reads finish.
+        # Never leave another trial's derived direction under that selection.
+        s.sx_parent_moments=[];s.sx_parent_moment_note=''
+        row=next((r for r in self._symmetry_rows if r['id']==s.sx_selected),None)
         s.sx_fit_title=fit_caption(row)
         s.sx_expanded_title=s.sx_fit_title
         s.sx_source_notices=[];s.sx_source_display_notices=[]
@@ -495,7 +499,7 @@ class SymmetryMixin(KSearchMixin):
             s.sx_overview=plots.overview(self._symmetry_rows,s.sx_selected)
             s.sx_fit=plots.fit(row,pins,axis=s.sx_axis,reset=s.sx_reset,intensity_scale=s.sx_intensity_scale)
             s.sx_expanded_layout={**{k:v for k,v in s.sx_fit['layout'].items() if k!='height'},'autosize':True}
-            s.sx_details=[];s.sx_parameters=[];s.sx_parent_moments=[];s.sx_parent_moment_note='';s.sx_moment_note='';s.sx_has_gpx=bool(row and row.get('has_gpx') and row['has_view'])
+            s.sx_details=[];s.sx_parameters=[];s.sx_moment_note='';s.sx_has_gpx=bool(row and row.get('has_gpx') and row['has_view'])
             s.sx_fit_diagnostics=fit_diagnostics(row)
             s.sx_embedding_evidence,s.sx_embedding_summary=embedding_evidence(self._symmetry_rows,row)
             s.sx_has_receipt=bool(row and row.get('receipt_sha256'))

@@ -189,3 +189,18 @@ def test_selection_change_clears_parent_directions_and_keeps_the_raw_table(monke
     app._symmetry_rows = []
     app._symmetry_plot_changed()
     assert state.sx_parent_moments == [] and state.sx_parent_moment_note == ''
+
+
+def test_unreadable_selected_view_cannot_retain_previous_parent_directions(monkeypatch):
+    import radar_pd_nova.symmetry_controller as controller
+    state=SimpleNamespace(sx_selected='unreadable',sx_pins=[],sx_axis='d',sx_reset=0,
+        sx_intensity_scale='linear',rf_experiment='experiment',sx_error='',
+        sx_parent_moments=[dict(label='previous trial',parallel_c=4.)],sx_parent_moment_note='previous note')
+    row=dict(id='unreadable',name='C2/c',status='optimization_unresolved',rwp=10.84,has_view=True)
+    app=controller.SymmetryMixin();app.server=SimpleNamespace(state=state);app._symmetry_rows=[row]
+    monkeypatch.setattr(controller.plots,'overview',lambda *_:{})
+    def unreadable(*args,**kwargs):raise OSError('Selected view is unreadable')
+    monkeypatch.setattr(controller.plots,'fit',unreadable)
+    app._symmetry_plot_changed()
+    assert state.sx_error=='Selected view is unreadable'
+    assert state.sx_parent_moments==[] and state.sx_parent_moment_note==''
