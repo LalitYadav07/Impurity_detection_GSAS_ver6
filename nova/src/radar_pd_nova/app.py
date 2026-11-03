@@ -5858,7 +5858,10 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         if state.powgen_monitoring or getattr(state, "live_launch_busy", False) or getattr(state, "live_restore_busy", False):
             return
         if getattr(self._powgen_controller, "restore_checkpoint_dataset_id", ""):
-            state.error_message = "Use Resume existing watch to continue the saved settings, or Clear workspace before starting a separate watch."
+            if getattr(self._powgen_controller, "restore_requires_explicit_inspection", False):
+                state.error_message = "This saved watch remains read-only. Use Restore a saved Live watch to inspect its restrictions before resuming."
+            else:
+                state.error_message = "Use Resume existing watch to continue the saved settings, or Clear workspace before starting a separate watch."
             state.flush()
             return
         launch_service = self.service
@@ -5885,7 +5888,25 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                 controller = controller_class(launch_service, settings, sample_index=self._powgen_sample_index(ipts))
                 state.powgen_message = "Inputs saved. Checking for a previous watch with the same settings..."
                 state.flush()
-                restored = await asyncio.to_thread(controller.restore_latest_state)
+                try:
+                    restored = await asyncio.to_thread(controller.restore_latest_state)
+                except Exception:
+                    check(checked)
+                    checkpoint_id = getattr(controller, "restore_checkpoint_dataset_id", "")
+                    if (checkpoint_id and getattr(controller, "restore_requires_explicit_inspection", False)
+                            and getattr(controller, "restore_resume_blocked_reasons", ())
+                            and getattr(controller, "state_dataset_ids", ()) == [checkpoint_id]):
+                        # Only an adopted, validated checkpoint can remain visible
+                        # after restore refuses it. Unparsed checkpoints stay errors.
+                        self._powgen_controller = controller
+                        self._powgen_settings_signature = signature
+                        self._powgen_controller_configuration = None
+                        state.powgen_next_check = "Stopped"
+                        state.live_restored_checkpoint_id = checkpoint_id
+                        state.live_restore_resume_blocked = True
+                        state.live_restore_message = "This matching checkpoint remains read-only. Use Restore a saved Live watch to inspect its restrictions before resuming."
+                        self._sync_powgen_rows(refresh_dependents=False, load_patterns=False, persist_tracking=False)
+                    raise
                 check(checked)
                 if restored and controller.state.post_analysis:
                     self._set_post_settings(
