@@ -29,7 +29,7 @@ from gpx_recipe.usage import summarize_calls,usage_labels
 from gpx_recipe.symmetry.isodistort_discovery import discover_structural
 from gpx_recipe.symmetry.plans import build_plan
 from gpx_recipe.symmetry.contracts import iter_trials
-from .symmetry_workspace import campaign_rows,group_models,display_groups,view_for,choose_group,choose_member,disposition_reason,coverage_rows,scope_rows,parameter_rows,moment_precision_note,campaign_can_resume,display_status,embedding_evidence,fit_caption,fit_diagnostics
+from .symmetry_workspace import campaign_rows,group_models,display_groups,view_for,choose_group,choose_member,disposition_reason,coverage_rows,scope_rows,parameter_rows,moment_precision_note,campaign_can_resume,display_status,embedding_evidence,fit_caption,fit_diagnostics,pin_label
 from . import symmetry_plots as plots
 from .parent_moments import parent_frame_moments
 from .symmetry_sources import start_choices,resolve_start,acquisition_details,acquisition_notices,acquisition_temperature,display_acquisition_notices
@@ -443,7 +443,7 @@ class SymmetryMixin(KSearchMixin):
         s=self.server.state;groups=self._symmetry_groups;rows=self._symmetry_rows
         s.sx_groups=[dict(id=g['id'],title=g['representative']['name'] if g['representative']['has_view'] else display_status(g['representative']['status']).capitalize(),count=len(g['members']),rwp=(f"{g['representative']['rwp']:.3f}%" if g['representative']['rwp'] is not None else '—'),status=display_status(g['representative']['status'])) for g in groups]
         s.sx_overview=plots.overview(rows,s.sx_selected)
-        s.sx_pin_options=[dict(title=r['name']+' · '+r['candidate'][-6:]+' · '+r['seed'],value=r['id']) for r in rows if r['has_view']]
+        s.sx_pin_options=[dict(title=pin_label(r,include_start=True),value=r['id']) for r in rows if r['has_view']]
         pinnable={r['id'] for r in rows if r['has_view']}
         s.sx_pins=[uid for uid in s.sx_pins if uid in pinnable][-2:]
         s.sx_group=choose_group(groups,s.sx_selected,explicit=self._symmetry_explicit_selection)

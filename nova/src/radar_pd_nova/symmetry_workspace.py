@@ -175,6 +175,19 @@ def display_status(status):
             'submitting':'submission pending'}.get(status,status.replace('_',' '))
 
 
+def pin_label(row,*,include_start=False):
+    """Keep checkpoint quality visible when a curve leaves the main selection."""
+    parts=[str(row.get('name') or 'Model')]
+    if include_start:
+        if row.get('candidate'):parts.append(str(row['candidate'])[-6:])
+        if row.get('seed'):parts.append(str(row['seed']))
+    rwp=row.get('rwp')
+    finite=isinstance(rwp,(int,float)) and not isinstance(rwp,bool) and np.isfinite(rwp) and rwp>=0
+    parts.append(f'Rwp {rwp:.3f}%' if finite else 'Rwp unavailable')
+    parts.append(display_status(row.get('status') or 'status unavailable'))
+    return ' · '.join(parts)
+
+
 def fit_caption(row,*,temperature=''):
     """Keep the selected acquisition/model identifiable in a full-screen fit."""
     if not row:return ''

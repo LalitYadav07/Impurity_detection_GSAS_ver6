@@ -4,7 +4,7 @@ import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-from .symmetry_workspace import view_for
+from .symmetry_workspace import view_for,pin_label
 
 COLORS={'valid':'#16744f','optimization_unresolved':'#b26b12','inadequate_fit':'#8d4961','physical_rejection':'#a1483a'}
 
@@ -57,7 +57,9 @@ def fit(selected,pins=(),*,axis='d',reset=0,intensity_scale='linear'):
         if pin['source']!=selected['source'] or not pin['has_view'] or pin['id']==selected['id']:continue
         pv=view_for(pin)
         if pv['x']!=v['x'] or pv['fitted']!=v['fitted'] or pv['observed']!=v['observed']:continue
-        fig.add_trace(go.Scattergl(x=xx,y=intensity(pv['calculated']),mode='lines',connectgaps=False,line=dict(color=['#c2701b','#884fba'][index],dash='dot'),name='Pinned · '+pin['name']),row=1,col=1)
+        fig.add_trace(go.Scattergl(x=xx,y=intensity(pv['calculated']),mode='lines',connectgaps=False,line=dict(color=['#c2701b','#884fba'][index],dash='dot'),
+            name='Pinned · '+pin_label(pin),text=pin_label(pin,include_start=True),
+            hovertemplate='%{text}<br>x %{x:.5g}<br>Intensity %{y:.5g}<extra></extra>'),row=1,col=1)
     for index,tick in enumerate(v['ticks']):
         native=np.asarray(tick['native'],dtype=float);d=np.asarray(tick['d'],dtype=float)
         tx=native if axis=='native' else d if axis=='d' else 2*np.pi/d
