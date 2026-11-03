@@ -1,9 +1,10 @@
-"""Native constrained quadratic-profile adapter for magnetic starting points.
+"""Native constrained quadratic-profile oracle for fixed-geometry magnetism.
 
 No observation, uncertainty, exclusion, profile, nuclear parameter or native
-refinement status is changed here. The resulting starting point still needs
-the executor's native refinement and output audit. GSAS-II's constraint maps
-are process-global; concurrent adapters in one process are forbidden.
+refinement status is changed here. The caller must independently qualify any
+optimizer result and audit the serialized output. This adapter itself declares
+neither GSAS-II convergence nor covariance. GSAS-II's constraint maps are
+process-global; concurrent adapters in one process are forbidden.
 """
 from __future__ import annotations
 

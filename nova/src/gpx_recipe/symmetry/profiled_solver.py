@@ -131,6 +131,7 @@ def refine(project,path,protocol):
         proof['candidate_applied']=True
     else:
         proof['candidate_applied']=False
+        checks['serialized_basis_preserved']=False
         checks['serialized_native_stationarity']=False
         checks['serialized_native_identity']=False
     proof['final_profile']=_retain_forward_profile(project,path,context)

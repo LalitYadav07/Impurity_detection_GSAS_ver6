@@ -46,6 +46,12 @@ def test_budget_failure_stays_unqualified_and_does_not_borrow_parent_covariance(
     result=refine(project,path,protocol(iterations=1))
     assert not result['success'] and result['status']==9
     assert not result['qualification']['passed'] and not result['candidate_applied']
+    checks=result['qualification']['checks']
+    assert set(checks)=={'raw_optimizer_success','independent_stationarity','no_local_descent',
+        'curvature_nonnegative','interior_solution','improves_nuclear_baseline','nuclear_null_identity',
+        'serialized_basis_preserved','serialized_native_stationarity','serialized_native_identity'}
+    assert all(type(value) is bool for value in checks.values())
+    assert checks['serialized_basis_preserved'] is False
     assert project.data['Covariance']['data']['Rvals']['converged'] is None
     assert not project.data['Covariance']['data']['covMatrix']
 
