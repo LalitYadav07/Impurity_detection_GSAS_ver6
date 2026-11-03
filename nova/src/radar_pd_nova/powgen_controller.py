@@ -758,6 +758,16 @@ class PowgenWatchController:
 
         self.state_dataset_ids = [dataset_id]
         self._last_persisted_state = self.state.to_json()
+        self._restore_display_inputs()
+
+    def _restore_display_inputs(self) -> None:
+        """Load selected display inputs after either saved-state adoption path.
+
+        Both latest-checkpoint and explicit-checkpoint restoration run outside
+        display callbacks. Beamline implementations may read only their saved
+        profile here; this hook must not discover facility data or submit work.
+        """
+        pass
 
     @property
     def source_directory(self) -> str:

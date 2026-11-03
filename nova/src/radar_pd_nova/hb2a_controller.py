@@ -220,15 +220,17 @@ class Hb2aWatchController(PowgenWatchController):
         self._supplied_profile=None
         self.display_profile_error=''
 
-    def restore_latest_state(self):
-        restored=super().restore_latest_state()
-        if restored:
-            try:
-                self._profile_path()
-                self.display_profile_error=''
-            except (OSError,ValueError,RuntimeError) as exc:
-                self.display_profile_error=f'Saved HB-2A profile unavailable: {exc}'
-        return restored
+    def _restore_display_inputs(self):
+        self._supplied_profile=None
+        try:
+            path=self._profile_path()
+            from .diffraction_coordinates import CwCalibration
+            CwCalibration.from_profile(path,source_bank=1,profile_bank=1,
+                expected_sha256=sha256(path.read_bytes()).hexdigest())
+            self.display_profile_error=''
+        except (OSError,ValueError,RuntimeError,KeyError) as exc:
+            self._supplied_profile=None
+            self.display_profile_error=f'Saved HB-2A profile unavailable: {exc}'
 
     def _catalog_digest(self):
         content = hb2a.VERSION + (hb2a_profiles.catalog_digest() if not self.settings.instrument_profile_dataset_id else '')

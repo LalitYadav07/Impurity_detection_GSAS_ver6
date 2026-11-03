@@ -159,17 +159,15 @@ class NomadWatchController(PowgenWatchController):
         self._supplied_profile=None
         self.display_profile_error=''
 
-    def restore_latest_state(self):
-        restored=super().restore_latest_state()
-        if restored:
-            # Completed-only watches never prepare a new submission. Restore
-            # their exact saved profile once, outside display-control callbacks.
-            try:
-                self._profile_path()
-                self.display_profile_error=''
-            except (OSError,ValueError,RuntimeError) as exc:
-                self.display_profile_error=f'Saved NOMAD profile unavailable: {exc}'
-        return restored
+    def _restore_display_inputs(self):
+        # A restored controller must use its saved selection, never a cached
+        # profile belonging to an earlier draft or another watch.
+        self._supplied_profile=None
+        try:
+            self._profile_path()
+            self.display_profile_error=''
+        except (OSError,ValueError,RuntimeError) as exc:
+            self.display_profile_error=f'Saved NOMAD profile unavailable: {exc}'
 
     def _catalog_digest(self):
         # No automatic registry is advertised before scientific acceptance.

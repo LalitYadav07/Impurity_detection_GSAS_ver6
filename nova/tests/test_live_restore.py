@@ -29,8 +29,9 @@ class SavedHistory:
         return {"id": identifier, "history_id": self.history_id, "state": "ok",
                 "history_content_type": "dataset", "file_size": len(json.dumps(self.payloads[identifier]))}
 
-    def load_text_document(self, identifier, *, max_bytes):
+    def load_text_document(self, identifier, *, max_bytes=None):
         self.reads.append(("checkpoint", identifier))
+        if identifier not in self.payloads:raise OSError('Synthetic saved profile is unavailable')
         return json.dumps(self.payloads[identifier])
 
     def search_history_datasets(self, **kwargs):
@@ -102,16 +103,17 @@ def restore(app):
 
 
 @pytest.mark.parametrize("instrument", ["PG3", "NOM", "SNAP", "HB2A"])
-def test_complete_settings_roundtrip_without_source_or_profile_reads(instrument, monkeypatch):
+def test_complete_settings_roundtrip_without_source_reads(instrument, monkeypatch):
     service = SavedHistory()
     original, payload = checkpoint(service, instrument)
     def forbidden(*_, **__):
-        raise AssertionError("Restoration may not read profile, facility metadata, or submit")
+        raise AssertionError("Restoration may not read facility metadata or submit")
     monkeypatch.setattr(type(original), "_hydrate_missing_metadata", forbidden)
     monkeypatch.setattr(type(original), "discover", forbidden)
     monkeypatch.setattr(type(original), "persist_state", forbidden)
-    if hasattr(type(original), "_profile_path"):
-        monkeypatch.setattr(type(original), "_profile_path", forbidden)
+    # Dedicated display-input tests cover the one saved-profile read. Keep
+    # this state-adoption test independent of any profile fixture.
+    monkeypatch.setattr(type(original), "_restore_display_inputs", lambda self:None)
     review = read_saved_watch(service, "checkpoint-1")
     restored = review.controller
     assert not review.missing and not review.blocked

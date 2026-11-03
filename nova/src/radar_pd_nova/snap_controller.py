@@ -183,15 +183,13 @@ class SnapWatchController(PowgenWatchController):
         self._supplied_profile = None
         self.display_profile_error = ''
 
-    def restore_latest_state(self):
-        restored = super().restore_latest_state()
-        if restored:
-            try:
-                self._profile_path()
-                self.display_profile_error = ''
-            except (OSError, ValueError, RuntimeError) as exc:
-                self.display_profile_error = f'Saved SNAP profile unavailable: {exc}'
-        return restored
+    def _restore_display_inputs(self):
+        self._supplied_profile = None
+        try:
+            self._profile_path()
+            self.display_profile_error = ''
+        except (OSError, ValueError, RuntimeError) as exc:
+            self.display_profile_error = f'Saved SNAP profile unavailable: {exc}'
 
     def _catalog_digest(self):
         return sha256(snap.VERSION.encode()).hexdigest()
