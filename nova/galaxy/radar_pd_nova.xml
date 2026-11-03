@@ -1,4 +1,4 @@
-<tool id="neutrons_radar_pd_interactive_prototype" tool_type="interactive" name="RADAR-PD Interactive" version="0.6.32" profile="22.01">
+<tool id="neutrons_radar_pd_interactive_prototype" tool_type="interactive" name="RADAR-PD Interactive" version="0.6.33" profile="22.01">
     <description>from IPTS data to phase analysis, transition tracking and guided refinement</description>
     <creator>
         <person name="Lalit Yadav"/>
@@ -94,10 +94,11 @@ POWGEN and NOMAD Live workflows are available. HB-2A and SNAP retain preview
 status. Available data depend on facility authorization and storage access.
 
 LLM-assisted refinement requires Illumine access. Online magnetic subgroup
-discovery requires Bilbao access. Currently, select your optional credential
-groups in this form before starting a new session. Shared default access
-requires separate NDIP administrator configuration. Standard phase analysis
-does not require either service.
+discovery requires Bilbao access. If the site provides shared service access,
+no personal credential group is needed. Otherwise, select your optional
+credential groups in this form before starting a new session. Shared defaults
+are configured by NDIP administrators. Standard phase analysis does not require
+either service.
 
 Use **User guide** inside the application for screenshots and example
 configurations. The analysis uses reduced diffraction data; its interpretation
