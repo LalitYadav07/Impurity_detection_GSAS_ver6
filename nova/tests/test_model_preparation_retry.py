@@ -87,7 +87,7 @@ def test_explicit_retry_changes_only_dispatch_identity_after_ready_checkpoint(fa
     assert f.runtime.state['dispatches'][f.key]==before
     calls=[]
     result,_=f.runtime.native('inspect',{'source':str(f.root/'source.gpx')},f.root,source=f.source,
-        preparation_attempt=attempt,before_submit=lambda:calls.append('checkpoint-ready'))
+        preparation_attempt=attempt,preparation_guard=lambda:True,before_submit=lambda:calls.append('checkpoint-ready'))
     assert result=={'checked':True} and calls==['checkpoint-ready']
     assert len(f.service.submissions)==2 and f.key in f.runtime.state['dispatches']
     actual=json.loads(base64.b64decode(f.service.submissions[-1]['inputs']['model_request_b64']))
@@ -95,7 +95,7 @@ def test_explicit_retry_changes_only_dispatch_identity_after_ready_checkpoint(fa
     assert actual['dispatch_key']==attempt['dispatch_key']
     # A second call collects the same accepted attempt; it does not POST again.
     result,_=f.runtime.native('inspect',{'source':str(f.root/'source.gpx')},f.root,source=f.source,
-        preparation_attempt=attempt,before_submit=lambda:pytest.fail('No new checkpoint for existing job'))
+        preparation_attempt=attempt,preparation_guard=lambda:True,before_submit=lambda:pytest.fail('No new checkpoint for existing job'))
     assert result=={'checked':True} and len(f.service.submissions)==2
 
 
@@ -134,12 +134,12 @@ def test_checkpoint_timeout_never_posts_and_same_owner_can_resume_exact_attempt(
     def pending():raise CheckpointUploadPending('owned-hda','queued')
     with pytest.raises(CheckpointUploadPending):
         f.runtime.native('inspect',{'source':str(f.root/'source.gpx')},f.root,source=f.source,
-            preparation_attempt=attempt,before_submit=pending)
+            preparation_attempt=attempt,preparation_guard=lambda:True,before_submit=pending)
     assert len(f.service.submissions)==1
     resumed,fresh=prepare_attempt(f.runtime,f.source,'campaign-aaaaaaaaaaaa','a'*64,attempt)
     assert resumed==attempt and not fresh
     f.runtime.native('inspect',{'source':str(f.root/'source.gpx')},f.root,source=f.source,
-        preparation_attempt=attempt,before_submit=lambda:None)
+        preparation_attempt=attempt,preparation_guard=lambda:True,before_submit=lambda:None)
     assert len(f.service.submissions)==2
 
 
@@ -147,7 +147,7 @@ def test_prior_job_becoming_active_during_checkpoint_blocks_retry(failed_inspect
     f=failed_inspection;attempt,_=prepare_attempt(f.runtime,f.source,'campaign-aaaaaaaaaaaa','a'*64)
     with pytest.raises(RuntimeUnavailable,match='terminal'):
         f.runtime.native('inspect',{'source':str(f.root/'source.gpx')},f.root,source=f.source,
-            preparation_attempt=attempt,before_submit=lambda:f.details.update(state='running'))
+            preparation_attempt=attempt,preparation_guard=lambda:True,before_submit=lambda:f.details.update(state='running'))
     assert len(f.service.submissions)==1
 
 
@@ -158,21 +158,21 @@ def test_lost_ack_is_held_then_reconciled_without_second_post(failed_inspection,
     monkeypatch.setattr(f.service,'submit_utility',lost)
     with pytest.raises(RuntimeUnavailable,match='acknowledge'):
         f.runtime.native('inspect',{'source':str(f.root/'source.gpx')},f.root,source=f.source,
-            preparation_attempt=attempt,before_submit=lambda:None)
+            preparation_attempt=attempt,preparation_guard=lambda:True,before_submit=lambda:None)
     assert len(f.service.submissions)==2
     old_find=f.runtime.find_dispatch
     monkeypatch.setattr(f.runtime,'find_dispatch',lambda key:None)
     with pytest.raises(RuntimeUnavailable,match='unresolved'):
         f.runtime.native('inspect',{'source':str(f.root/'source.gpx')},f.root,source=f.source,
-            preparation_attempt=attempt,before_submit=lambda:pytest.fail('No blind checkpoint/POST'))
+            preparation_attempt=attempt,preparation_guard=lambda:True,before_submit=lambda:pytest.fail('No blind checkpoint/POST'))
     fresh=GalaxyModelRuntime(tmp_path/'new-viewer',f.service,poll_seconds=.001)
     monkeypatch.setattr(fresh,'find_dispatch',lambda key:None)
     with pytest.raises(RuntimeUnavailable,match='unresolved'):
         fresh.native('inspect',{'source':str(f.root/'source.gpx')},f.root,source=f.source,
-            preparation_attempt=attempt,before_submit=lambda:pytest.fail('No restored blind POST'))
+            preparation_attempt=attempt,preparation_guard=lambda:True,before_submit=lambda:pytest.fail('No restored blind POST'))
     monkeypatch.setattr(fresh,'find_dispatch',old_find)
     fresh.native('inspect',{'source':str(f.root/'source.gpx')},f.root,source=f.source,
-        preparation_attempt=attempt,before_submit=lambda:pytest.fail('Existing job needs no POST'))
+        preparation_attempt=attempt,preparation_guard=lambda:True,before_submit=lambda:pytest.fail('Existing job needs no POST'))
     assert len(f.service.submissions)==2
 
 
@@ -201,7 +201,7 @@ def test_new_active_inspection_during_checkpoint_blocks_post(failed_inspection,m
         monkeypatch.setattr(HistoryJobAdmission,'active_jobs',lambda self:[dict(id=f.old_job.galaxy_job_id,tool_id=f.runtime.tool_id)])
     with pytest.raises(RuntimeUnavailable,match='already active'):
         f.runtime.native('inspect',{'source':str(f.root/'source.gpx')},f.root,source=f.source,
-            preparation_attempt=attempt,before_submit=checkpoint)
+            preparation_attempt=attempt,preparation_guard=lambda:True,before_submit=checkpoint)
     assert len(f.service.submissions)==1
 
 
@@ -227,10 +227,10 @@ def test_two_runtime_instances_cannot_overlap_same_source_retries(failed_inspect
     def start_second():
         second_started.set()
         return submit_attempt(other,f.source,dict(f.body,dispatch_key=second['dispatch_key']),
-            'assets',second,second_checkpoint.set,threading.Event())
+            'assets',second,second_checkpoint.set,threading.Event(),lambda:True)
     with ThreadPoolExecutor(max_workers=2) as pool:
         one=pool.submit(submit_attempt,f.runtime,f.source,dict(f.body,dispatch_key=first['dispatch_key']),
-            'assets',first,hold,threading.Event())
+            'assets',first,hold,threading.Event(),lambda:True)
         assert entered.wait(3)
         two=pool.submit(start_second)
         try:
@@ -327,7 +327,8 @@ def test_retry_ui_checkpoint_pending_is_not_reported_as_ready(retry_app,monkeypa
     assert len(f.f.service.submissions)==1
 
 
-@pytest.mark.parametrize('interruption',[None,'pause','owner','template','pending'])
+@pytest.mark.parametrize('interruption',[None,'pause','owner','template','pending',
+    'capacity_owner','capacity_pause','capacity_template','capacity_attempt','capacity_prior'])
 def test_enrollment_retry_has_durable_identity_before_post_and_rechecks_scope(retry_app,monkeypatch,tmp_path,interruption):
     import radar_pd_nova.model_campaigns as campaigns
     f=retry_app
@@ -360,6 +361,15 @@ def test_enrollment_retry_has_durable_identity_before_post_and_rechecks_scope(re
         elif interruption=='template':f.c.set_setting('template',dict(template,changed=True))
         elif interruption=='pending':raise CheckpointUploadPending('same-hda','queued')
     monkeypatch.setattr(f.t,'checkpoint',checkpoint)
+    def wait_capacity(cancel=None):
+        if interruption=='capacity_owner':f.t.dispatch_guard=lambda:False
+        elif interruption=='capacity_pause':f.c.set_setting('paused',True)
+        elif interruption=='capacity_template':f.c.set_setting('template',dict(template,changed=True))
+        elif interruption=='capacity_attempt':
+            rows=f.c.setting('enrollments');rows[f.original['id']]['preparation_attempt']['generation']+=1
+            f.c.set_setting('enrollments',rows)
+        elif interruption=='capacity_prior':f.f.details['state']='running'
+    monkeypatch.setattr(f.f.runtime,'wait_capacity',wait_capacity)
     def inspect(source,root,**kwargs):
         value,_=f.f.runtime.native('inspect',{'source':str(root/'source.gpx')},root,source=source,**kwargs)
         return value
@@ -373,7 +383,8 @@ def test_enrollment_retry_has_durable_identity_before_post_and_rechecks_scope(re
         assert not enrolled and len(f.f.service.submissions)==1
 
 
-def test_successful_prepost_checkpoint_clears_stale_notice_but_pending_keeps_it(tmp_path,monkeypatch):
+@pytest.mark.parametrize('post_fails',[False,True])
+def test_successful_prepost_checkpoint_clears_stale_notice_but_pending_keeps_it(tmp_path,monkeypatch,post_fails):
     from test_model_runtime import staged_wave
     from radar_pd_nova.checkpoint_uploads import CheckpointUploadPending
     # The real transport increments readiness only after save_workspace returns.
@@ -401,8 +412,56 @@ def test_successful_prepost_checkpoint_clears_stale_notice_but_pending_keeps_it(
         assert t.campaign.setting('checkpoint_notice')
         monkeypatch.setattr(t.checkpointer,'save_workspace',lambda document:saved.append(copy.deepcopy(document)))
     monkeypatch.setattr('radar_pd_nova.symmetry_controller.asyncio.sleep',retry_delay)
-    asyncio.run(app._flush_model_dispatch_wave(t.campaign,t))
+    if post_fails:
+        def fail_post(*args,**kwargs):raise RuntimeError('POST failed after ready checkpoint')
+        monkeypatch.setattr(runtime,'_submit',fail_post)
+        with pytest.raises(RuntimeError,match='POST failed'):
+            asyncio.run(app._flush_model_dispatch_wave(t.campaign,t))
+    else:
+        asyncio.run(app._flush_model_dispatch_wave(t.campaign,t))
     assert t.ready_checkpoint_revision==before+1
     assert t.campaign.setting('checkpoint_notice')==''
     assert t.campaign.root.name not in app._model_checkpoint_errors
-    assert len(service.submissions)==1 and saved[0]==saved[1]
+    assert len(service.submissions)==(0 if post_fails else 1) and saved[0]==saved[1]
+
+
+@pytest.mark.parametrize('change',['owner','prior','output'])
+def test_final_global_admission_rechecks_live_scope_and_failure_proof(failed_inspection,monkeypatch,change):
+    from contextlib import contextmanager
+    from types import MethodType
+    from radar_pd_nova.galaxy_service import GalaxyService
+    from radar_pd_nova.native_job_admission import HistoryJobAdmission
+    f=failed_inspection;attempt,_=prepare_attempt(f.runtime,f.source,'campaign-aaaaaaaaaaaa','a'*64)
+    owner={'valid':True};checkpoint=[]
+    @contextmanager
+    def slot(self,*args,**kwargs):
+        assert checkpoint==['ready']
+        if change=='owner':owner['valid']=False
+        elif change=='prior':f.details['state']='running'
+        else:f.metadata['failed-bundle']['file_size']=1
+        yield
+    monkeypatch.setattr(HistoryJobAdmission,'slot',slot)
+    monkeypatch.setattr(f.service,'submit_utility',MethodType(GalaxyService.submit_utility,f.service))
+    monkeypatch.setattr('requests.post',lambda *args,**kwargs:pytest.fail('No POST after failed final admission check'))
+    with pytest.raises(RuntimeUnavailable):
+        f.runtime.native('inspect',{'source':str(f.root/'source.gpx')},f.root,source=f.source,
+            preparation_attempt=attempt,preparation_guard=lambda:owner['valid'],
+            before_submit=lambda:checkpoint.append('ready'))
+    assert len(f.service.submissions)==1
+    assert f.runtime.state['dispatches'][attempt['dispatch_key']]['pending'] is False
+
+
+def test_owner_change_after_accepted_post_does_not_cancel_that_job(failed_inspection,monkeypatch):
+    f=failed_inspection;attempt,_=prepare_attempt(f.runtime,f.source,'campaign-aaaaaaaaaaaa','a'*64)
+    owner={'valid':True};submit=f.service.submit_utility
+    def accepted(**kwargs):
+        job=submit(**kwargs);job.status=RunStatus.RUNNING;owner['valid']=False;return job
+    def complete(job):
+        job.status=RunStatus.OK;f.service.jobs[attempt['dispatch_key']].status=RunStatus.OK
+        return job
+    monkeypatch.setattr(f.service,'submit_utility',accepted)
+    monkeypatch.setattr(f.service,'refresh_utility',complete)
+    monkeypatch.setattr(f.runtime,'cancel_job',lambda *args:pytest.fail('Owner loss cannot cancel an accepted job'))
+    result,_=f.runtime.native('inspect',{'source':str(f.root/'source.gpx')},f.root,source=f.source,
+        preparation_attempt=attempt,preparation_guard=lambda:owner['valid'],before_submit=lambda:None)
+    assert result=={'checked':True} and len(f.service.submissions)==2

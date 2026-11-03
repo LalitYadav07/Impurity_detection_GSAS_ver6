@@ -332,7 +332,7 @@ class GalaxyModelRuntime(GalaxyRefinementRuntime):
         return directory/'unpacked'
 
     def native(self,operation,payload,root,*,source,timeout=120,cancel=None,
-               preparation_attempt=None,before_submit=None):
+               preparation_attempt=None,before_submit=None,preparation_guard=None):
         """Only named scientific files are staged, never backend environments."""
         started=time.monotonic();root=Path(root).resolve();root.mkdir(parents=True,exist_ok=True)
         event=cancel or threading.Event();token=(event,str(root))
@@ -383,7 +383,7 @@ class GalaxyModelRuntime(GalaxyRefinementRuntime):
             if event.is_set():raise RuntimeUnavailable('Model preparation cancelled before dispatch')
             if preparation_attempt is not None:
                 from .model_preparation_retry import submit_attempt
-                job=submit_attempt(self,source,request,asset_id,preparation_attempt,before_submit,event)
+                job=submit_attempt(self,source,request,asset_id,preparation_attempt,before_submit,event,preparation_guard)
             else:
                 job=self._submit('native',source,request,asset_id,key,cancel=event)
             self.wait_job(job,key=key,cancel=event)

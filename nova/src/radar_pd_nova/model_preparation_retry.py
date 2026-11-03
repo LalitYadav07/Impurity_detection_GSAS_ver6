@@ -188,17 +188,39 @@ def prepare_attempt(runtime, source, campaign, template_sha256, previous=None):
     return record,True
 
 
-def submit_attempt(runtime, source, request, asset_id, attempt, before_submit, cancel):
+class _RetryAdmission:
+    """Recheck mutable guards at every existing pre-POST admission boundary."""
+    def __init__(self,cancel,guard,proof):
+        self.cancel,self.guard,self.proof=cancel,guard,proof
+        self.reason=''
+
+    def is_set(self):
+        if self.reason or self.cancel.is_set():return True
+        try:
+            if self.guard() is not True:
+                raise RuntimeUnavailable('The campaign owner, scope, or preparation attempt changed before dispatch')
+            self.proof()
+        except Exception as error:
+            self.reason=str(error) or 'Preparation retry admission could not be verified'
+            return True
+        return False
+
+    def wait(self,seconds):
+        self.cancel.wait(seconds)
+        return self.is_set()
+
+
+def submit_attempt(runtime, source, request, asset_id, attempt, before_submit, cancel, guard=None):
     # Coordinate retries of the same scientific input across runtime instances
     # in this viewer. The live active-job check still runs immediately before
     # POST; a second viewer must use the existing single-coordinator contract.
     identity=(runtime.service.galaxy_url,runtime.service.history_id,source['source_sha256'])
     with _SOURCE_LOCKS_GUARD:lock=_SOURCE_LOCKS.setdefault(identity,threading.Lock())
     with lock:
-        return _submit_attempt(runtime,source,request,asset_id,attempt,before_submit,cancel)
+        return _submit_attempt(runtime,source,request,asset_id,attempt,before_submit,cancel,guard)
 
 
-def _submit_attempt(runtime, source, request, asset_id, attempt, before_submit, cancel):
+def _submit_attempt(runtime, source, request, asset_id, attempt, before_submit, cancel, guard):
     key=attempt['dispatch_key']
     body={k:v for k,v in request.items() if k!='dispatch_key'}
     validate_attempt(runtime,source,body,attempt)
@@ -207,12 +229,18 @@ def _submit_attempt(runtime, source, request, asset_id, attempt, before_submit, 
     if (key not in runtime._preparation_retry_permits
             or runtime.state['dispatches'].get(key,{}).get('pending')):
         raise RuntimeUnavailable('The saved retry has an unresolved acknowledgment; no duplicate inspection was submitted')
-    if not callable(before_submit):raise RuntimeUnavailable('A preparation retry requires a durable campaign checkpoint')
-    if digest(failure_proof(runtime,source,body,attempt['previous_dispatch_key']))!=attempt['failure_proof_sha256']:
-        raise RuntimeUnavailable('The failed inspection changed before retry')
-    no_active_inspection(runtime,source)
+    if not callable(before_submit) or not callable(guard):
+        raise RuntimeUnavailable('A preparation retry requires a durable checkpoint and live admission guard')
+    def proof():
+        if digest(failure_proof(runtime,source,body,attempt['previous_dispatch_key']))!=attempt['failure_proof_sha256']:
+            raise RuntimeUnavailable('The failed inspection changed before retry dispatch')
+        no_active_inspection(runtime,source)
+    signals=_RetryAdmission(cancel,guard,proof)
+    if signals.is_set():raise RuntimeUnavailable(signals.reason or 'Preparation retry cancelled before checkpoint')
     before_submit()
-    if digest(failure_proof(runtime,source,body,attempt['previous_dispatch_key']))!=attempt['failure_proof_sha256']:
-        raise RuntimeUnavailable('The failed inspection changed while its retry checkpoint was saved')
-    no_active_inspection(runtime,source)
-    return runtime._submit('native',source,request,asset_id,key,cancel=cancel)
+    if signals.is_set():raise RuntimeUnavailable(signals.reason or 'Preparation retry cancelled after checkpoint')
+    try:
+        return runtime._submit('native',source,request,asset_id,key,cancel=signals)
+    except Exception:
+        if signals.reason:raise RuntimeUnavailable(signals.reason) from None
+        raise

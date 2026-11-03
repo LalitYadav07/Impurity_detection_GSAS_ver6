@@ -219,7 +219,7 @@ class SymmetryMixin(KSearchMixin):
         if result.returncode or not output.is_file():raise ValueError('Native preparation failed; retained log '+uid+'-native.log')
         return json.loads(output.read_text())
 
-    def _inspect_model_input(self,source,root,*,preparation_attempt=None,before_submit=None):
+    def _inspect_model_input(self,source,root,*,preparation_attempt=None,before_submit=None,preparation_guard=None):
         import threading
         root=Path(root);root.mkdir(parents=True,exist_ok=True)
         target=root/'source.gpx'
@@ -229,7 +229,8 @@ class SymmetryMixin(KSearchMixin):
         if event.is_set():raise ValueError('Model inspection cancelled')
         remote=self._model_remote()
         if remote:
-            extra=(dict(preparation_attempt=preparation_attempt,before_submit=before_submit)
+            extra=(dict(preparation_attempt=preparation_attempt,before_submit=before_submit,
+                        preparation_guard=preparation_guard)
                    if preparation_attempt is not None else {})
             context,_=remote.native('inspect',dict(source=str(target)),root,source=source,cancel=event,**extra)
         else:
@@ -897,15 +898,21 @@ class SymmetryMixin(KSearchMixin):
         for result in results:
             if isinstance(result,BaseException):raise result
 
-    async def _await_model_checkpoint_work(self,task,campaign,transport):
+    async def _await_model_checkpoint_work(self,task,campaign,transport,*,ready_before=None):
         """Keep collecting accepted work while a durable upload/POST settles.
 
         This pass cannot dispatch. A slow recovery checkpoint must hold new
         admission, rather than hiding already finished scientific results.
         The shielded owner still settles before cancellation can abort a wave.
         """
+        ready=(getattr(transport,'ready_checkpoint_revision',0) if ready_before is None else ready_before)
         while True:
             done,_=await asyncio.wait({task},timeout=getattr(self,'_model_checkpoint_poll_seconds',3.))
+            current=getattr(transport,'ready_checkpoint_revision',0)
+            if current>ready:
+                getattr(self,'_model_checkpoint_errors',{}).pop(campaign.root.name,None)
+                campaign.set_setting('checkpoint_notice','')
+                ready=current
             if done:return await asyncio.shield(task)
             await asyncio.to_thread(tick_model_campaign,campaign,CollectOnlyTransport(transport),slots=int(self.server.state.sx_slots))
             self.refresh_symmetry()
@@ -933,10 +940,7 @@ class SymmetryMixin(KSearchMixin):
             ready_before=getattr(transport,'ready_checkpoint_revision',0)
             self._model_tick_task=asyncio.create_task(asyncio.to_thread(transport.flush_dispatch_wave))
             try:
-                await self._await_model_checkpoint_work(self._model_tick_task,campaign,transport)
-                if getattr(transport,'ready_checkpoint_revision',0)>ready_before:
-                    self._model_checkpoint_errors.pop(campaign.root.name,None)
-                    campaign.set_setting('checkpoint_notice','')
+                await self._await_model_checkpoint_work(self._model_tick_task,campaign,transport,ready_before=ready_before)
                 return
             except CheckpointUploadPending as exc:
                 self._model_checkpoint_pending(campaign,exc)
@@ -1072,8 +1076,9 @@ class SymmetryMixin(KSearchMixin):
                     continue
                 if isinstance(transport,GalaxyChunkTransport) and self._model_checkpoint_due(campaign,preparation):
                     try:
+                        ready_before=getattr(transport,'ready_checkpoint_revision',0)
                         self._model_tick_task=asyncio.create_task(asyncio.to_thread(transport.checkpoint))
-                        await self._await_model_checkpoint_work(self._model_tick_task,campaign,transport)
+                        await self._await_model_checkpoint_work(self._model_tick_task,campaign,transport,ready_before=ready_before)
                     except (CheckpointUploadPending,CheckpointUploadInterrupted) as exc:
                         self._model_checkpoint_pending(campaign,exc)
                         checkpoint_pending=True

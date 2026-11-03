@@ -237,18 +237,19 @@ def enroll_source(campaign,workspace,key,inspect,*,transport=None):
         attempt=entry.get('preparation_attempt')
         if attempt is not None:
             if transport is None:raise ValueError('A saved Galaxy preparation retry needs its original remote transport')
+            def allowed():
+                return (not campaign.setting('paused',False)
+                    and digest(campaign.setting('template'))==attempt['template_sha256']
+                    and campaign.setting('enrollments',{}).get(key,{}).get('preparation_attempt')==attempt
+                    and transport._can_dispatch())
             def before_submit():
-                current=campaign.setting('enrollments',{}).get(key,{})
-                if (campaign.setting('paused',False) or digest(campaign.setting('template'))!=attempt['template_sha256']
-                        or current.get('preparation_attempt')!=attempt):
+                if not allowed():
                     raise ValueError('The campaign or preparation attempt changed before dispatch')
-                if not transport._can_dispatch():raise ValueError('The campaign owner stopped before preparation dispatch')
                 transport.checkpoint(force=True)
-                if (campaign.setting('paused',False) or digest(campaign.setting('template'))!=attempt['template_sha256']
-                        or campaign.setting('enrollments',{}).get(key,{}).get('preparation_attempt')!=attempt
-                        or not transport._can_dispatch()):
+                if not allowed():
                     raise ValueError('The campaign or preparation attempt changed while its checkpoint was saved')
-            context=inspect(source,root,preparation_attempt=attempt,before_submit=before_submit)
+            context=inspect(source,root,preparation_attempt=attempt,before_submit=before_submit,
+                preparation_guard=allowed)
         else:
             context=(template['context'] if key==reference.get('acquisition_id') and source['source_sha256']==reference['source']['sha256']
                      else inspect(source,root))
