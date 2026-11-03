@@ -205,6 +205,7 @@ def enroll_source(campaign,workspace,key,inspect,*,transport=None):
     if not start_barrier_ready(campaign):raise ValueError(START_BARRIER_MESSAGE)
     template=validate_template(campaign.setting('template'));entries=campaign.setting('enrollments',{})
     entry=entries[key];entry['status']='preparing';_set_enrollment(campaign,key,entry)
+    stage='source'
     try:
         try:source=resolve_start(workspace,template['scope']['experiment'],key)
         except ValueError:
@@ -232,8 +233,26 @@ def enroll_source(campaign,workspace,key,inspect,*,transport=None):
             if not target.exists():shutil.copyfile(original,target)
             if file_sha(target)!=(source['source_sha256'] if asset is reference['source'] else asset['sha256']):
                 raise ValueError('A captured model input changed')
-        context=(template['context'] if key==reference.get('acquisition_id') and source['source_sha256']==reference['source']['sha256']
-                 else inspect(source,root))
+        stage='inspection'
+        attempt=entry.get('preparation_attempt')
+        if attempt is not None:
+            if transport is None:raise ValueError('A saved Galaxy preparation retry needs its original remote transport')
+            def before_submit():
+                current=campaign.setting('enrollments',{}).get(key,{})
+                if (campaign.setting('paused',False) or digest(campaign.setting('template'))!=attempt['template_sha256']
+                        or current.get('preparation_attempt')!=attempt):
+                    raise ValueError('The campaign or preparation attempt changed before dispatch')
+                if not transport._can_dispatch():raise ValueError('The campaign owner stopped before preparation dispatch')
+                transport.checkpoint(force=True)
+                if (campaign.setting('paused',False) or digest(campaign.setting('template'))!=attempt['template_sha256']
+                        or campaign.setting('enrollments',{}).get(key,{}).get('preparation_attempt')!=attempt
+                        or not transport._can_dispatch()):
+                    raise ValueError('The campaign or preparation attempt changed while its checkpoint was saved')
+            context=inspect(source,root,preparation_attempt=attempt,before_submit=before_submit)
+        else:
+            context=(template['context'] if key==reference.get('acquisition_id') and source['source_sha256']==reference['source']['sha256']
+                     else inspect(source,root))
+        stage='compatibility'
         protocol=rebind(template,context,source,origin(source,workspace))
         metadata=dict(scan=source['scan_label'],sample=source['sample_label'],bank=source.get('bank'),series=source['experiment'])
         # Use the same qualified condition metadata as ordinary Refinement trends.
@@ -241,6 +260,7 @@ def enroll_source(campaign,workspace,key,inspect,*,transport=None):
         condition=qualified_metadata(source.get('metadata') or {}).get('temperature') or {}
         if isinstance(condition,dict) and condition.get('value') is not None and condition.get('unit'):
             metadata.update(condition=condition['value'],condition_unit=condition['unit'])
+        stage='publication'
         if transport:
             # A simultaneous checkpoint must never contain a new protocol
             # without the Galaxy inputs required to restore its trials.
@@ -248,8 +268,9 @@ def enroll_source(campaign,workspace,key,inspect,*,transport=None):
         if campaign.setting('paused',False):raise ValueError('Campaign paused while its input was inspected')
         campaign.enroll(protocol,root,approved_hash=digest(protocol),metadata=metadata)
         entry.update(status='enrolled',protocol=digest(protocol),source_sha256=source['source_sha256'])
+        entry.pop('reason',None);entry.pop('failure_stage',None)
     except Exception as exc:
-        entry.update(status='queued' if campaign.setting('paused',False) else 'needs_review',reason=str(exc))
+        entry.update(status='queued' if campaign.setting('paused',False) else 'needs_review',reason=str(exc),failure_stage=stage)
     _set_enrollment(campaign,key,entry)
     return entry
 

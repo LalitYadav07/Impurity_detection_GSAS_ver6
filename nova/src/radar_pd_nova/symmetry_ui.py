@@ -182,6 +182,13 @@ def model_exploration(app):
                 select('Prepare this captured scan next','sx_priority_acquisition','sx_priority_options')
                 v.VBtn('Prioritize scan',click=app.prioritize_symmetry_acquisition,disabled=('!sx_priority_acquisition',),variant='outlined',size='small')
             html.P('{{ sx_priority_notice }}',v_if='!!sx_priority_notice',classes='rf-notice',raw_attrs=['aria-live="polite"'])
+            with html.Div(v_if='sx_results_current && sx_retry_options.length',classes='rf-toolbar mt-3'):
+                select('Failed preparation to review','sx_retry_acquisition','sx_retry_options')
+                v.VBtn('Retry preparation',click=app.retry_symmetry_preparation,
+                    disabled=('!sx_retry_acquisition || sx_busy || sx_campaign_running',),variant='outlined',size='small')
+            html.P('Retry is available only after a verified transport publication failure. It preserves the earlier attempt and queues this scan in the same approved campaign. Continue starts the queued work.',
+                v_if='sx_retry_options.length',classes='rf-notice')
+            html.P('{{ sx_retry_notice }}',v_if='!!sx_retry_notice',classes='rf-notice',raw_attrs=['aria-live="polite"'])
             v.VDataTable(items=('sx_enrollments',),headers=("[{title:'Scan',key:'scan'},{title:'Bank',key:'bank'},{title:'State',key:'status'},{title:'Review needed',key:'reason'}]",),items_per_page=8,density='compact')
         with html.Details(v_if='!sx_setup && sx_results_current && sx_coverage.length > 1',classes='rf-card mb-4'):
             html.Summary('Scans and search coverage ({{ sx_coverage.length }})')

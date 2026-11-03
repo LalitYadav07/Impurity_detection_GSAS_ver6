@@ -89,6 +89,7 @@ class GalaxyModelRuntime(GalaxyRefinementRuntime):
         super().__init__(root,service,timeout=timeout,poll_seconds=poll_seconds)
         self.max_active_jobs=max_active_jobs
         self._lock=threading.RLock();self._event_lock=threading.Lock();self._events=set();self._cancelled_roots=set();self._verified_jobs=set()
+        self._preparation_retry_permits=set()
         self.state_path=self.root/'model-dispatches.json'
         self.state=json.loads(self.state_path.read_text()) if self.state_path.exists() else {'assets':{},'dispatches':{}}
 
@@ -330,7 +331,8 @@ class GalaxyModelRuntime(GalaxyRefinementRuntime):
         unpack(archive,directory/'unpacked')
         return directory/'unpacked'
 
-    def native(self,operation,payload,root,*,source,timeout=120,cancel=None):
+    def native(self,operation,payload,root,*,source,timeout=120,cancel=None,
+               preparation_attempt=None,before_submit=None):
         """Only named scientific files are staged, never backend environments."""
         started=time.monotonic();root=Path(root).resolve();root.mkdir(parents=True,exist_ok=True)
         event=cancel or threading.Event();token=(event,str(root))
@@ -370,10 +372,20 @@ class GalaxyModelRuntime(GalaxyRefinementRuntime):
                 # zero-member-packet dispatches, without retrying those jobs.
                 request['input_hashes'][EMPTY_PACKET_NAME]=EMPTY_PACKET_SHA256
             key=digest([self.service.history_id,source['id'],request])[:24]
+            if preparation_attempt is not None:
+                from .model_preparation_retry import inspection_request,validate_attempt
+                if operation!='inspect' or request!=inspection_request(source):
+                    raise RuntimeUnavailable('Preparation retries only support the unchanged captured source inspection')
+                validate_attempt(self,source,request,preparation_attempt)
+                key=preparation_attempt['dispatch_key']
             request['dispatch_key']=key
             asset_id=self.packet(root,files,source_sha256=source['source_sha256'])
             if event.is_set():raise RuntimeUnavailable('Model preparation cancelled before dispatch')
-            job=self._submit('native',source,request,asset_id,key,cancel=event)
+            if preparation_attempt is not None:
+                from .model_preparation_retry import submit_attempt
+                job=submit_attempt(self,source,request,asset_id,preparation_attempt,before_submit,event)
+            else:
+                job=self._submit('native',source,request,asset_id,key,cancel=event)
             self.wait_job(job,key=key,cancel=event)
             received=self.result(job,self.root/'native-results'/(key+'-'+uuid.uuid4().hex))
             response=json.loads((received/'response.json').read_text())
@@ -425,6 +437,7 @@ class GalaxyChunkTransport:
         self.state=json.loads(self.path.read_text()) if self.path.exists() else {'sources':{},'inputs':{},'chunks':{},'members':{}}
         self._state_lock=threading.RLock();self._checkpoint_lock=threading.Lock()
         self._checkpoint_hash=None
+        self.ready_checkpoint_revision=0
         self.checkpointer=GalaxyRefinementRuntime(campaign.root/'checkpoints',runtime.service)
         self.checkpointer.workspace_label=CAMPAIGN_LABEL+campaign.root.name
         self._paused=threading.Event()
@@ -571,6 +584,7 @@ class GalaxyChunkTransport:
             sha=digest(stable)
             if not force and sha==self._checkpoint_hash:return
             self.checkpointer.save_workspace(document);self._checkpoint_hash=sha
+            self.ready_checkpoint_revision+=1
 
     def chunk_size_for(self,protocol):
         root=self.campaign.root/'inputs'/protocol

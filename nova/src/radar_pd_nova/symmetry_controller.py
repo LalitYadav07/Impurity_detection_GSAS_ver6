@@ -42,7 +42,7 @@ from .model_navigation import scan_options
 from .model_campaigns import choices as model_choices,origin as model_origin,queue_sources,enroll_source,restore_history,portable_source,restore_captured_sources,scope_progress,next_acquisition,prioritize_acquisition,acquisition_rows
 from .model_campaigns import START_BARRIER_SCHEMA,START_BARRIER_MESSAGE,start_barrier_ready,store_start_barrier
 from gpx_recipe.symmetry.compiler import prepare_shared_inputs
-from gpx_recipe.symmetry.templates import make_template,trial_count
+from gpx_recipe.symmetry.templates import make_template,trial_count,validate_template,matches
 
 MODEL_FIELDS=('sx_kind','sx_moment_model','sx_magnetic_optimizer','sx_optimizer_iterations','sx_refine_scale','sx_refine_background','sx_parent','sx_histogram','sx_k','sx_sites','sx_form_factors','sx_lande',
     'sx_directions','sx_adequate','sx_max_moment','sx_mag_d_min','sx_max_mode','sx_start_mode','sx_cycles',
@@ -63,7 +63,7 @@ class SymmetryMixin(KSearchMixin):
             sx_plan_ready=False,sx_approved=False,sx_plan_summary='',sx_plan_candidates=[],sx_setup=False,sx_expanded=False,sx_expanded_layout={},sx_has_context=False,sx_has_gpx=False,sx_has_receipt=False,sx_resumable=False,
             sx_request='',sx_planning_summary='',sx_planning_notes=[],sx_planning_usage='',sx_planning_cost='',sx_has_setup_details=False,sx_sign_starts=True,sx_coverage=[],sx_group_limit=12,sx_result_scope='experiment',sx_start_source='',sx_start_sources=[],sx_results_current=False,sx_scope_progress='')
         for key,value in defaults.items():setattr(s,key,value)
-        extra=dict(sx_existing='selected',sx_follow_new=False,sx_max_scans=200,sx_enrollments=[],sx_priority_acquisition='',sx_priority_options=[],sx_priority_notice='',sx_following=False,sx_campaign_running=False,sx_pause_pending=False,sx_parallel_jobs=1,
+        extra=dict(sx_existing='selected',sx_follow_new=False,sx_max_scans=200,sx_enrollments=[],sx_priority_acquisition='',sx_priority_options=[],sx_priority_notice='',sx_retry_acquisition='',sx_retry_options=[],sx_retry_notice='',sx_following=False,sx_campaign_running=False,sx_pause_pending=False,sx_parallel_jobs=1,
             sx_queue_notice='',sx_backend='',sx_plan_token='',sx_cancel_notice='Cancelling a Galaxy chunk stops all starts in that job.',
             sx_opd_policy='highest-symmetry-per-irrep',sx_construct_limit=100)
         for key,value in extra.items():setattr(s,key,value)
@@ -219,7 +219,7 @@ class SymmetryMixin(KSearchMixin):
         if result.returncode or not output.is_file():raise ValueError('Native preparation failed; retained log '+uid+'-native.log')
         return json.loads(output.read_text())
 
-    def _inspect_model_input(self,source,root):
+    def _inspect_model_input(self,source,root,*,preparation_attempt=None,before_submit=None):
         import threading
         root=Path(root);root.mkdir(parents=True,exist_ok=True)
         target=root/'source.gpx'
@@ -229,8 +229,11 @@ class SymmetryMixin(KSearchMixin):
         if event.is_set():raise ValueError('Model inspection cancelled')
         remote=self._model_remote()
         if remote:
-            context,_=remote.native('inspect',dict(source=str(target)),root,source=source,cancel=event)
+            extra=(dict(preparation_attempt=preparation_attempt,before_submit=before_submit)
+                   if preparation_attempt is not None else {})
+            context,_=remote.native('inspect',dict(source=str(target)),root,source=source,cancel=event,**extra)
         else:
+            if preparation_attempt is not None:raise ValueError('A Galaxy inspection retry requires the original remote transport')
             transport=self._symmetry_transport()
             env={**scientific_environment(),**transport.environment,'RADAR_GPX_DOCKER_WORKDIR':str(root)}
             with (root/'inspect.log').open('w') as log:
@@ -278,6 +281,7 @@ class SymmetryMixin(KSearchMixin):
         self._symmetry_loading_identity=(s.sx_campaign,s.rf_experiment,s.sx_result_scope)
         if getattr(self,'_symmetry_navigation_identity',None)!=self._symmetry_loading_identity:
             s.sx_source_options=[]
+            s.sx_retry_acquisition='';s.sx_retry_notice=''
             self._symmetry_navigation_identity=self._symmetry_loading_identity
         async def load():
             s=self.server.state;s.sx_busy=True;s.sx_error=''
@@ -366,6 +370,9 @@ class SymmetryMixin(KSearchMixin):
                 template=campaign.setting('template') or {}
                 visible=s.sx_result_scope!='experiment' or template.get('scope',{}).get('experiment')==s.rf_experiment
                 s.sx_enrollments=acquisition_rows(template,campaign.setting('enrollments',{})) if visible else []
+                s.sx_retry_options=[dict(title=entry['scan'],value=entry['id']) for entry in s.sx_enrollments
+                    if entry['status']=='needs_review' and entry.get('failure_stage') in {None,'inspection'}]
+                if s.sx_retry_acquisition not in {entry['value'] for entry in s.sx_retry_options}:s.sx_retry_acquisition=''
                 s.sx_priority_options=[dict(title=entry['scan'],value=entry['id']) for entry in s.sx_enrollments if entry['status']=='queued']
                 eligible_priorities={option['value'] for option in s.sx_priority_options}
                 if getattr(s,'sx_priority_acquisition','') not in eligible_priorities:s.sx_priority_acquisition=''
@@ -923,9 +930,13 @@ class SymmetryMixin(KSearchMixin):
                 transport.pause()
                 transport.abort_dispatch_wave()
                 return
+            ready_before=getattr(transport,'ready_checkpoint_revision',0)
             self._model_tick_task=asyncio.create_task(asyncio.to_thread(transport.flush_dispatch_wave))
             try:
                 await self._await_model_checkpoint_work(self._model_tick_task,campaign,transport)
+                if getattr(transport,'ready_checkpoint_revision',0)>ready_before:
+                    self._model_checkpoint_errors.pop(campaign.root.name,None)
+                    campaign.set_setting('checkpoint_notice','')
                 return
             except CheckpointUploadPending as exc:
                 self._model_checkpoint_pending(campaign,exc)
@@ -1159,6 +1170,73 @@ class SymmetryMixin(KSearchMixin):
             s.sx_error=''
             s.sx_priority_notice='Priority: '+entry['scan']+'. Already accepted work finishes normally; the remaining captured scans stay queued.'
         except (OSError,ValueError,TypeError) as exc:s.sx_error=str(exc)
+
+    def retry_symmetry_preparation(self):
+        """Queue one explicit, witnessed transport retry; Continue dispatches it."""
+        if self._symmetry_task and not self._symmetry_task.done():return
+        s=self.server.state
+        selected=(s.sx_campaign,s.rf_experiment,s.sx_retry_acquisition)
+        async def retry():
+            from .model_preparation_retry import prepare_attempt
+            from .model_campaigns import captured_source,_set_setting
+            s.sx_busy=True;s.sx_error='';s.sx_retry_notice='Verifying the failed preparation and its exact captured source.';s.flush()
+            remote=None;attempt=None;fresh=False;committed=False
+            try:
+                root=(self._symmetry_root()/selected[0]).resolve()
+                if root.parent!=self._symmetry_root() or not (root/'campaign.sqlite').is_file():raise ValueError('Select an existing campaign')
+                campaign=self._symmetry_campaign(root)
+                if campaign.root.name in self._model_active_campaigns:raise ValueError('Pause this campaign and wait for its driver to settle before retrying preparation')
+                template=validate_template(campaign.setting('template'));template_sha=digest(template)
+                if not start_barrier_ready(campaign) or template['scope']['experiment']!=selected[1]:raise ValueError('The campaign or experiment does not match this retry')
+                original=copy.deepcopy(campaign.setting('enrollments',{}).get(selected[2]))
+                if (not original or original['status']!='needs_review'
+                        or original.get('failure_stage') not in {None,'inspection'}):
+                    raise ValueError('Only a failed transport inspection can be retried; incompatible inputs need a new reviewed setup')
+                source=captured_source(original,template)
+                with campaign.connect() as db:
+                    protocols=[json.loads(row['body']) for row in db.execute('SELECT body FROM protocols')]
+                if any(p.get('acquisition_id')==selected[2] for p in protocols):
+                    raise ValueError('This acquisition already has declared starts; recover them instead of retrying preparation')
+                workspace=self._refinement_store()
+                resolved=await asyncio.to_thread(workspace.runtime.resolve,source)
+                if resolved['source_sha256']!=source.get('source_sha256'):raise ValueError('The captured source revision changed')
+                if not matches(template,resolved,'radar'):raise ValueError('The captured source is outside the approved scope')
+                remote=self._model_remote()
+                if remote is None:raise ValueError('Preparation publication retries require Galaxy')
+                attempt,fresh=await asyncio.to_thread(prepare_attempt,remote,resolved,campaign.root.name,
+                    template_sha,original.get('preparation_attempt'))
+                if selected!=(s.sx_campaign,s.rf_experiment,s.sx_retry_acquisition):raise ValueError('The retry selection changed during verification')
+                with campaign.exclusive(),campaign.connect() as db:
+                    db.execute('BEGIN IMMEDIATE')
+                    stored=db.execute("SELECT body FROM settings WHERE key='enrollments'").fetchone()
+                    entries=json.loads(stored['body'])
+                    current_template=json.loads(db.execute("SELECT body FROM settings WHERE key='template'").fetchone()['body'])
+                    if (entries.get(selected[2])!=original or digest(current_template)!=template_sha
+                            or campaign.root.name in self._model_active_campaigns):
+                        raise ValueError('The campaign changed during retry verification')
+                    entry=copy.deepcopy(original)
+                    if fresh:
+                        old={k:v for k,v in original.items() if k!='previous_preparation_attempts'}
+                        entry.setdefault('previous_preparation_attempts',[]).append(dict(
+                            enrollment=old,failure_proof=attempt['failure_proof'],next_dispatch_key=attempt['dispatch_key']))
+                    entry.update(status='queued',preparation_attempt=attempt)
+                    entry.pop('reason',None);entry.pop('failure_stage',None)
+                    entries[selected[2]]=entry
+                    _set_setting(db,'enrollments',entries);_set_setting(db,'paused',True)
+                committed=True
+                transport=self._symmetry_transport(campaign)
+                self._model_owned_campaigns[campaign.root.name]=(campaign,transport)
+                await asyncio.to_thread(transport.checkpoint,force=True)
+                s.sx_retry_notice='Preparation retry queued for this captured scan. Its previous attempt is retained. Use Continue to resume the unchanged campaign.'
+            except Exception as exc:
+                if fresh and not committed and remote is not None and attempt is not None:
+                    remote._preparation_retry_permits.discard(attempt['dispatch_key'])
+                s.sx_error=str(exc)
+                s.sx_retry_notice=('Retry is queued locally; its checkpoint must finish before any new inspection can be submitted.'
+                                   if committed else 'No preparation retry was queued.')
+            finally:
+                s.sx_busy=False;s.flush();self.refresh_symmetry()
+        self._symmetry_task=self._refinement_schedule(retry(),'radar-model-preparation-retry')
 
     def cancel_symmetry_selected(self):
         async def cancel():

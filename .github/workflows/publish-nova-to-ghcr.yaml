@@ -121,6 +121,20 @@ jobs:
             "${IMAGE_NAME}:nova-${NOVA_VERSION}" \
             /tmp/verify_sample_identity.py
 
+      - name: Verify packaged preparation retry and dispatch recovery
+        shell: bash
+        run: |
+          docker run --rm --entrypoint sh -v "$PWD/nova/tests:/validation-tests:ro" \
+            "${IMAGE_NAME}:nova-${NOVA_VERSION}" -c '
+          python -m pip install --quiet pytest &&
+          mkdir -p /tmp/model-recovery-tests &&
+          cp /validation-tests/test_model_preparation_retry.py /validation-tests/test_model_runtime.py \
+             /validation-tests/test_model_checkpoint_coalescing.py /validation-tests/test_model_enrollment.py \
+             /validation-tests/test_checkpoint_uploads.py /validation-tests/test_model_checkpoint.py \
+             /validation-tests/test_native_job_admission.py /tmp/model-recovery-tests/ &&
+          cd /tmp/model-recovery-tests &&
+          PYTHONPATH=/src/src python -m pytest -q .'
+
       - name: Verify packaged saved-watch recovery contracts
         shell: bash
         run: |
