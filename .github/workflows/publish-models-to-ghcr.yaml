@@ -66,8 +66,9 @@ jobs:
         run: |
           docker run --rm --entrypoint sh -v "$PWD:/validation:ro" "$IMAGE" -c '
           python -m pip install --quiet pytest &&
+          export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}/validation/tests/gpx_recipe" &&
           python -c "import GSASII.GSASIIscriptable" &&
-          PYTHONPATH=/opt/radar-symmetry:/validation/tests/gpx_recipe python -m pytest -q -o cache_dir=/tmp/pytest-cache \
+          python -m pytest -q -o cache_dir=/tmp/pytest-cache \
             /validation/tests/gpx_recipe/test_model_campaign_worker.py \
             /validation/tests/gpx_recipe/test_symmetry_moment_models.py \
             /validation/tests/gpx_recipe/test_symmetry_campaign.py \
