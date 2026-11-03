@@ -35,7 +35,7 @@ from . import symmetry_plots as plots
 from .parent_moments import parent_frame_moments
 from .symmetry_sources import start_choices,resolve_start,acquisition_details,acquisition_notices,acquisition_temperature,display_acquisition_notices
 from .k_search_controller import KSearchMixin
-from .model_runtime import GalaxyModelRuntime,GalaxyChunkTransport,CollectOnlyTransport,PreparationSlotTransport,active_batch_count,MODEL_BATCH_LIMITS
+from .model_runtime import GalaxyModelRuntime,GalaxyChunkTransport,CollectOnlyTransport,PreparationSlotTransport,active_batch_count,MODEL_BATCH_LIMITS,tick_model_campaign
 from .checkpoint_uploads import CheckpointUploadPending, CheckpointUploadInterrupted
 from .model_review_recovery import SelectionRecovery, ReviewSelectionChanged, campaign_recency,acquisition_index,AcquisitionReview
 from .model_navigation import scan_options
@@ -900,7 +900,7 @@ class SymmetryMixin(KSearchMixin):
         while True:
             done,_=await asyncio.wait({task},timeout=getattr(self,'_model_checkpoint_poll_seconds',3.))
             if done:return await asyncio.shield(task)
-            await asyncio.to_thread(campaign.tick,CollectOnlyTransport(transport),slots=int(self.server.state.sx_slots))
+            await asyncio.to_thread(tick_model_campaign,campaign,CollectOnlyTransport(transport),slots=int(self.server.state.sx_slots))
             self.refresh_symmetry()
 
     def _model_checkpoint_pending(self,campaign,error):
@@ -973,7 +973,7 @@ class SymmetryMixin(KSearchMixin):
                     if pending and not preparation and not campaign.setting('paused',False):
                         # Collect first. A normal tick can refill a newly freed
                         # slot before the next acquisition ever gets a turn.
-                        await asyncio.to_thread(campaign.tick,CollectOnlyTransport(transport),slots=int(self.server.state.sx_slots))
+                        await asyncio.to_thread(tick_model_campaign,campaign,CollectOnlyTransport(transport),slots=int(self.server.state.sx_slots))
                     active=active_batch_count(campaign.trials())
                     if not preparation and active<getattr(transport,'max_active_jobs',1) and not campaign.setting('paused',False):
                         if pending:
@@ -1007,7 +1007,7 @@ class SymmetryMixin(KSearchMixin):
                 checkpoint_pending=False
                 try:
                     for _ in range(wave):
-                        self._model_tick_task=asyncio.create_task(asyncio.to_thread(campaign.tick,tick_transport,slots=int(self.server.state.sx_slots)))
+                        self._model_tick_task=asyncio.create_task(asyncio.to_thread(tick_model_campaign,campaign,tick_transport,slots=int(self.server.state.sx_slots)))
                         trials=await asyncio.shield(self._model_tick_task)
                         self.refresh_symmetry()
                         if (campaign.setting('paused',False)

@@ -1,6 +1,7 @@
 """Galaxy model preparation and chunk transport; credentials stay in NOVA."""
 from __future__ import annotations
 import copy
+from contextlib import contextmanager, nullcontext
 import hashlib
 import json
 from pathlib import Path
@@ -24,6 +25,13 @@ MODEL_BATCH_LIMITS=(1,2,4,8)
 EMPTY_PACKET_NAME='radar-model-packet.json'
 EMPTY_PACKET_BYTES=b'{"schema":"radar-model-packet/v1","files":{}}\n'
 EMPTY_PACKET_SHA256=hashlib.sha256(EMPTY_PACKET_BYTES).hexdigest()
+
+
+def tick_model_campaign(campaign,transport,*,slots):
+    """Use one successful job-metadata read per chunk in this scheduler pass."""
+    scope=getattr(transport,'collection_pass',None)
+    with scope() if callable(scope) else nullcontext():
+        return campaign.tick(transport,slots=slots)
 
 
 class CollectOnlyTransport:
@@ -426,6 +434,24 @@ class GalaxyChunkTransport:
         self._buffered_dispatches=set()
         self._wave_flushing=False
         self._attempted_dispatches=set()
+        self._collection_metadata=threading.local()
+
+    @contextmanager
+    def collection_pass(self):
+        """Scope metadata snapshots to one owner-thread collection pass.
+
+        A one-second TTL alone can expire repeatedly while interleaved members
+        of the same eight chunks are polled. Successful reads may be reused in
+        this pass; failed metadata reads are not cached. A later pass reads fresh job
+        metadata, and a cancellation request changes the snapshot identity.
+        """
+        local=getattr(self,'_collection_metadata',None)
+        if local is None:
+            local=self._collection_metadata=threading.local()
+        previous=getattr(local,'jobs',None)
+        local.jobs=previous if previous is not None else {}
+        try:yield
+        finally:local.jobs=previous
 
     def pause(self):self._paused.set()
     def resume(self):self._paused.clear()
@@ -636,10 +662,21 @@ class GalaxyChunkTransport:
             if dispatch in self._buffered_dispatches and not chunk.get('job'):
                 return dict(state='running',handle=handle)
         current=self.cache.get(dispatch)
-        if current is None or (current[1]['state']!='complete' and time.monotonic()-current[0]>1):
-            job=self._job(chunk)
-            if job is None:return dict(state='unknown',reason='The model chunk has no acknowledged Galaxy job')
-            self.runtime.service.refresh_utility(job)
+        snapshots=getattr(getattr(self,'_collection_metadata',None),'jobs',None)
+        snapshot_key=(dispatch,bool(chunk.get('cancel_requested')))
+        refresh_due=(snapshot_key not in snapshots if snapshots is not None
+                     else current is None or time.monotonic()-current[0]>1)
+        if current is None or (current[1]['state']!='complete' and refresh_due):
+            if snapshots is not None and snapshot_key in snapshots:
+                job=copy.deepcopy(snapshots[snapshot_key])
+            else:
+                job=self._job(chunk)
+                if job is None:return dict(state='unknown',reason='The model chunk has no acknowledged Galaxy job')
+                self.runtime.service.refresh_utility(job)
+                # New metadata supersedes a prior running-state cache even if
+                # downloading its now-finished result subsequently fails.
+                self.cache.pop(dispatch,None)
+                if snapshots is not None:snapshots[snapshot_key]=copy.deepcopy(job)
             with self._state_lock:chunk['job']=job_record(job);self.save()
             intent=chunk.get('staging_retirement')
             prior=sum(bool(c.get('staging_retirement')) for c in self.state['chunks'].values())
