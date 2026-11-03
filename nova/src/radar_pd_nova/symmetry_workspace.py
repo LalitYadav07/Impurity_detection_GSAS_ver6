@@ -87,6 +87,7 @@ def read_trial(directory,metadata=None,*,expected_receipt=None):
             row['has_view']=len(views)==1
             if row['has_view']:row['view_path']=str(confined(directory,views[0]))
             native='results/'+str(result.get('native_receipt') or '')
+            evidence={}
             if native in result.get('files',{}):
                 evidence=json.loads(confined(directory,native).read_text())
                 row['moment_phase_names']={key:evidence.get(field) for key,field in
@@ -94,14 +95,11 @@ def read_trial(directory,metadata=None,*,expected_receipt=None):
                 row['baseline_rwp']=(evidence.get('baseline_residuals',{}).get(p['histogram']) or {}).get('wR')
                 row['native_convergence']={key:(evidence.get('refinement_rvals') or {}).get(key)
                                            for key in ['converged','Aborted','SVD0']}
-                if p.get('policy',{}).get('magnetic_optimizer')=='profiled_quadratic':
-                    optimizer=evidence.get('optimizer')
-                    if not isinstance(optimizer,dict) or optimizer.get('schema')!='radar-profiled-magnetic-optimizer/v1' or optimizer.get('name')!='profiled_quadratic':
-                        raise ValueError('The profiled optimizer receipt is missing or does not match its reviewed protocol')
-                    row['optimizer']={key:optimizer.get(key) for key in
-                        ['schema','name','iterations','maximum_iterations','success','status','message','qualification','uncertainty_available','native_convergence_declared','tolerances']}
                 row['residual_targets']={key:evidence.get('target_peak_audit',{}).get(key)
                                          for key in ['target_count','underfit_peak_count','weighted_residual_improvement']}
+            fitted_output=row['status']=='valid' or row['has_view'] or row['has_gpx'] or bool(row['refined_moments'])
+            if p.get('policy',{}).get('magnetic_optimizer')=='profiled_quadratic' and fitted_output:
+                row['optimizer']=validated_profiled_evidence(evidence,p['policy'],row['status'])
         except Exception as exc:
             row.update(status='integrity_failure',reason=str(exc),has_view=False,has_gpx=False,rwp=None,nvars=None)
             for key in ['receipt_sha256','view_path','gpx_relative','moment_phase_names','baseline_rwp','native_convergence','residual_targets','optimizer']:row.pop(key,None)
@@ -287,6 +285,28 @@ def campaign_can_resume(summaries,enrollments,*,following=False):
     """A queued acquisition is recoverable even before its first trial exists."""
     return (any(s['pending_count'] for s in summaries) or following or
             any(e['status'] in {'queued','preparing'} for e in enrollments))
+
+
+def validated_profiled_evidence(evidence,policy,status):
+    value=evidence.get('optimizer')
+    if not isinstance(value,dict) or value.get('schema')!='radar-profiled-magnetic-optimizer/v1' or value.get('name')!='profiled_quadratic':
+        raise ValueError('The profiled optimizer receipt is missing or does not match its reviewed protocol')
+    qualification=value.get('qualification')
+    if (not isinstance(qualification,dict) or type(qualification.get('passed')) is not bool
+            or not isinstance(qualification.get('checks'),dict) or not isinstance(qualification.get('reasons'),list)
+            or not all(isinstance(reason,str) for reason in qualification['reasons'])):
+        raise ValueError('The profiled optimizer qualification evidence is incomplete')
+    maximum=value.get('maximum_iterations');iterations=value.get('iterations')
+    if (type(maximum) is not int or maximum!=policy.get('optimizer_iterations')
+            or type(iterations) is not int or not 0<=iterations<=maximum
+            or type(value.get('success')) is not bool):
+        raise ValueError('The profiled optimizer budget differs from its reviewed protocol')
+    if value.get('uncertainty_available') is not False or value.get('native_convergence_declared') is not False:
+        raise ValueError('The profiled optimizer cannot claim native covariance or convergence')
+    if status=='valid' and not (qualification['passed'] and value['success']):
+        raise ValueError('The profiled result is marked valid without its required optimizer checks')
+    return {key:value.get(key) for key in
+        ['schema','name','iterations','maximum_iterations','success','status','message','qualification','uncertainty_available','native_convergence_declared','tolerances']}
 
 
 def profiled_optimizer_evidence(row):

@@ -1,5 +1,7 @@
 """A new optimizer is an explicit scientific choice, not a hidden retry."""
 import asyncio
+import copy
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -7,7 +9,7 @@ import pytest
 from radar_pd_nova.magnetic_optimizer import selected_optimizer_settings, optimizer_budget_label
 from radar_pd_nova.model_campaigns import scope_progress
 from radar_pd_nova.symmetry_controller import MODEL_FIELDS, SymmetryMixin
-from radar_pd_nova.symmetry_workspace import fit_caption, fit_diagnostics, moment_precision_note, parameter_rows
+from radar_pd_nova.symmetry_workspace import fit_caption, fit_diagnostics, moment_precision_note, parameter_rows, validated_profiled_evidence
 
 
 def test_legacy_and_structural_choices_do_not_add_protocol_keys():
@@ -120,7 +122,8 @@ def profiled_row(**changes):
                native_convergence={'converged': None, 'Aborted': None, 'SVD0': None},
                optimizer=dict(schema='radar-profiled-magnetic-optimizer/v1', name='profiled_quadratic',
                               success=True, iterations=32, maximum_iterations=60,
-                              qualification={'passed': True}, uncertainty_available=False))
+                              qualification={'passed': True, 'checks': {'native_identity': True}, 'reasons': []},
+                              uncertainty_available=False, native_convergence_declared=False))
     row.update(changes)
     return row
 
@@ -154,3 +157,46 @@ def test_profiled_parameters_do_not_reuse_stale_native_error_bars():
     values = parameter_rows(row, view)
     assert len(values) == 4 and all(item['uncertainty'] == '—' for item in values)
     assert values[0]['value'] == 3.7
+
+
+@pytest.mark.parametrize('field,value', [
+    ('maximum_iterations', 30), ('iterations', 61), ('iterations', True),
+    ('success', 'true'), ('uncertainty_available', True), ('native_convergence_declared', True),
+    ('qualification', {'passed': True}), ('qualification', {'passed': False, 'checks': {}, 'reasons': []}),
+])
+def test_profiled_receipt_must_match_budget_and_support_its_valid_status(field, value):
+    optimizer = copy.deepcopy(profiled_row()['optimizer'])
+    optimizer[field] = value
+    with pytest.raises(ValueError):
+        validated_profiled_evidence({'optimizer': optimizer}, {'optimizer_iterations': 60}, 'valid')
+
+
+def test_profiled_receipt_does_not_expose_large_optimizer_internals():
+    optimizer = profiled_row()['optimizer']
+    optimizer['diagnostics'] = {'large_hessian': [[1.]]}
+    value = validated_profiled_evidence({'optimizer': optimizer}, {'optimizer_iterations': 60}, 'valid')
+    assert 'diagnostics' not in value
+    assert value['qualification']['passed'] is True
+
+
+@pytest.mark.parametrize('status,has_view', [('valid', False), ('optimization_unresolved', True)])
+def test_fitted_profiled_output_without_optimizer_receipt_is_not_presented_as_native(tmp_path, monkeypatch, status, has_view):
+    from radar_pd_nova import symmetry_workspace as workspace
+    protocol = dict(kind='magnetic', acquisition_id='scan', source={'sha256': 'a'*64},
+                    parent_phase='parent', histogram='histogram', k=['0','0','0'],
+                    policy={'magnetic_optimizer': 'profiled_quadratic', 'optimizer_iterations': 60},
+                    candidates=[dict(id='candidate', magnetic_space_group='C2/c', bns_number='15',
+                                     transformation_matrix=[[1,0,0],[0,1,0],[0,0,1]], origin_shift=[0,0,0])])
+    job = dict(id='trial', protocol=protocol, protocol_sha256='protocol', candidate_id='candidate', seed_id='seed')
+    (tmp_path/'job.json').write_text(json.dumps(job))
+    (tmp_path/'result.json').write_text('{}')
+    result = dict(status=status, rwp=10., nvars=3, moments=[], files={})
+    if has_view:
+        (tmp_path/'results').mkdir()
+        (tmp_path/'results'/'fit.view.json').write_text('{}')
+        result['files']['results/fit.view.json'] = 'hash'
+    monkeypatch.setattr(workspace, 'checked_receipt', lambda *args: result)
+    row = workspace.read_trial(tmp_path)
+    assert row['status'] == 'integrity_failure'
+    assert 'optimizer receipt is missing' in row['reason']
+    assert not row['has_view'] and row['rwp'] is None
