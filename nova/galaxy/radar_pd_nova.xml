@@ -1,5 +1,5 @@
-<tool id="neutrons_radar_pd_interactive_prototype" tool_type="interactive" name="RADAR-PD Interactive" version="0.6.30" profile="22.01">
-    <description>configure, run, monitor, recover, and inspect Full or Rapid RADAR-PD analyses</description>
+<tool id="neutrons_radar_pd_interactive_prototype" tool_type="interactive" name="RADAR-PD Interactive" version="0.6.31" profile="22.01">
+    <description>from IPTS data to phase analysis, transition tracking and guided refinement</description>
     <creator>
         <person name="Lalit Yadav"/>
         <organization url="https://www.ornl.gov/" name="ORNL"/>
@@ -37,23 +37,73 @@
     <command><![CDATA[
         supervisord -c /etc/supervisord.conf > >(tee -a $output) 2> >(tee -a $output >&2)
     ]]></command>
-    <inputs/>
+    <inputs>
+        <section name="experiment_overview" title="1. Start with your IPTS" expanded="true" help="Connect to the SNS or HFIR experiment data available in NDIP. Find recorded samples, run numbers, reduced patterns and measurement conditions. Resolve supported instrument profiles or review the required bank/profile choice. Use chat to prepare the analysis configuration and choose a built-in or custom CIF library."/>
+        <section name="analysis_overview" title="2. Analyze the scans and follow what changes" expanded="true" help="Run preliminary Rietveld analysis across selected scans and new arrivals: identify candidate crystalline phases and refine phase contributions, background and lattice parameters. Plot fractions and cell changes against temperature, time or other available conditions. Explore linked diffraction maps and optional ML-assisted feature suggestions for peaks appearing, disappearing, splitting or changing shape."/>
+        <section name="advanced_overview" title="3. Refine further and explore structural or magnetic models" expanded="true" help="Describe a custom GSAS-II refinement through chat, review its stages and apply it across the series. Search commensurate magnetic k-vector candidates and compare compatible subgroups; generate and refine supported structural distortion models. For POWGEN, inspect WebMON snapshots and update reviewed, fixed-reference magnetic fits while data are collected."/>
+    </inputs>
     <outputs>
         <data format="txt" name="output" label="RADAR-PD Interactive console output"/>
     </outputs>
     <help><![CDATA[
-RADAR-PD Interactive provides one shared setup experience for Full RADAR-PD and Rapid Hypothesis Mode. It can upload local files, reuse datasets in the current Galaxy history, resolve SNS IPTS inputs, submit the existing batch Analyze tool, show progress, recover earlier runs, render interactive results, and expose reproducible artifacts.
+Open the RADAR-PD workspace
+===========================
 
-Recovered runs can reopen their published GPX checkpoints directly in the hosted GSAS-II desktop.
+Click **Run Tool** to start the interactive application. Select your experiment,
+data and analysis settings inside RADAR-PD. You can also analyze an uploaded
+pattern or reopen saved work.
 
-Use the User guide button in the application header to open the screenshot walkthrough and example configuration downloads in a separate tab.
+What you can do
+===============
 
-For optional reviewed refinement recipes, add your personal ORNL Illumine key to the ORNL Illumine credential group in NDIP. Galaxy injects the selected credential into your NOVA session; regular RADAR-PD analysis does not require it.
+* **Find an experiment from its IPTS.** Discover samples and scans from the
+  facility data mounted in NDIP, read recorded conditions, and review the
+  instrument setup. POWGEN supports automatic profile matching for registered
+  configurations. Other cases may require a supplied profile and bank mapping.
+* **Configure the analysis through chat.** Select samples, scans, banks,
+  structures and analysis settings, then check the inputs or test one scan.
+* **Run preliminary Rietveld analysis.** Search the selected CIF library and
+  refine a multiphase model with phase contributions, background and cell
+  parameters. Inspect each scan's fit, residuals and Bragg ticks.
+* **Follow an experimental series.** Process existing scans or monitor new
+  reduced scans while the session is running. Plot phase fractions, lattice
+  parameters, relative expansion, ratios and other supported derived quantities
+  against qualified acquisition conditions.
+* **Locate diffraction changes.** Use linked timelines, intensity maps and
+  optional, experimental ML-assisted local feature review to inspect peak
+  emergence, disappearance, splitting, broadening and intensity changes.
+* **Request custom GSAS-II refinements.** Describe supported parameter releases,
+  constraints and stages in plain language. Review the recipe, apply it to
+  compatible scans and compare the new GPXs with the original results.
+* **Explore magnetic and structural hypotheses.** Screen commensurate k vectors,
+  obtain compatible magnetic subgroups from Bilbao, or generate supported
+  displacement-mode candidates with ISODISTORT. Run selected models with
+  multiple starts and inspect the alternatives. These are bounded research
+  comparisons, not guaranteed unique structure solutions.
+* **Inspect an acquisition in progress.** The POWGEN Live acquisition workspace
+  reads WebMON reduced snapshots, shows the evolving pattern and supports
+  conditional magnetic fitting against a reviewed nuclear reference. It does
+  not currently recommend when to stop counting.
+* **Save and continue.** Preserve configurations, results and recovery records
+  in Galaxy; download scientific outputs or open verified GPXs in hosted GSAS-II.
 
-For optional magnetic model exploration, select your personal Bilbao credential group. Galaxy injects its key as BCS_API_KEY into NOVA for authenticated subgroup discovery. Candidate catalogs are then passed to the scientific worker without the key. The headless launcher accepts --with-bilbao together with --with-illumine.
+Access and getting started
+==========================
 
-Credential selection belongs to the exact Galaxy tool version. Check it after an upgrade and start a new session to apply it. Headless launches must include the selected credentials_context; the packaged radar_pd_nova.launch helper sends vault references without reading the Illumine secret.
+POWGEN and NOMAD Live workflows are available. HB-2A and SNAP retain preview
+status. Available data depend on facility authorization and storage access.
 
-The scientific calculation runs as a normal Galaxy job. Closing this interactive session does not cancel that job or remove its history outputs.
+LLM-assisted refinement requires Illumine access. Online magnetic subgroup
+discovery requires Bilbao access. Currently, select your optional credential
+groups in this form before starting a new session. Shared default access
+requires separate NDIP administrator configuration. Standard phase analysis
+does not require either service.
+
+Use **User guide** inside the application for screenshots and example
+configurations. The analysis uses reduced diffraction data; its interpretation
+depends on the chosen candidate structures, calibration and fit quality.
+
+Submitted scientific jobs and published History outputs remain in Galaxy when
+an interactive session ends.
     ]]></help>
 </tool>
