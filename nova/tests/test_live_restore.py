@@ -18,6 +18,7 @@ from radar_pd_nova.powgen_watch import WatchedRun
 class SavedHistory:
     history_id = "history-1"
     galaxy_url = "https://local.invalid"
+    galaxy_key = "synthetic-key"
 
     def __init__(self):
         self.payloads = {}
