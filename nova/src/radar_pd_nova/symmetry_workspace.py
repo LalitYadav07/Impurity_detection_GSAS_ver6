@@ -89,6 +89,8 @@ def read_trial(directory,metadata=None,*,expected_receipt=None):
             native='results/'+str(result.get('native_receipt') or '')
             if native in result.get('files',{}):
                 evidence=json.loads(confined(directory,native).read_text())
+                row['moment_phase_names']={key:evidence.get(field) for key,field in
+                    [('parent','nuclear_phase_name'),('magnetic','magnetic_phase_name')]}
                 row['baseline_rwp']=(evidence.get('baseline_residuals',{}).get(p['histogram']) or {}).get('wR')
                 row['native_convergence']={key:evidence.get('refinement_rvals',{}).get(key)
                                            for key in ['converged','Aborted','SVD0']}
@@ -96,7 +98,7 @@ def read_trial(directory,metadata=None,*,expected_receipt=None):
                                          for key in ['target_count','underfit_peak_count','weighted_residual_improvement']}
         except Exception as exc:
             row.update(status='integrity_failure',reason=str(exc),has_view=False,has_gpx=False,rwp=None,nvars=None)
-            for key in ['receipt_sha256','view_path','gpx_relative','baseline_rwp','native_convergence','residual_targets']:row.pop(key,None)
+            for key in ['receipt_sha256','view_path','gpx_relative','moment_phase_names','baseline_rwp','native_convergence','residual_targets']:row.pop(key,None)
     elif expected_receipt:
         row.update(status='integrity_failure',reason='The collected terminal receipt is missing')
     return row
