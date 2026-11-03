@@ -598,3 +598,73 @@ def test_existing_background_choice_cannot_override_a_reviewed_fixed_background(
         validate_intent(intent,source,request='Keep background fixed',declared={'refine_background':False})
     intent['settings']['refine_background']='true'
     with pytest.raises(ValueError):validate_intent(intent,source,request='request')
+
+
+@pytest.mark.parametrize('user_request', [
+    'Find magnetic order in Fe2O3. The propagation vector is unknown; prepare a data-based k survey, '
+    'do not assume k=0. Fe sites only: Fe+3, g=2. Use symmetry_allowed moments including canting, '
+    'x,y,z start directions and relative-sign multistarts. Maximum moment 6 microbohr magnetons. '
+    '30 cycles per start. Refine one shared nuclear/magnetic intensity scale and the existing '
+    'background coefficients. Hold nuclear coordinates, cell, ADPs, occupancy and instrument '
+    'parameters fixed. Magnetic d cutoff 0: use the full fit range. Adequate Rwp 15% is only a '
+    'review threshold. For now use the selected scan only; do not follow new scans.',
+    'Find magnetic order in Fe2O3. The propagation vector is unknown; prepare a data-based k survey. '
+    'Fe sites only: Fe+3, g=2. Use moment_model=symmetry_allowed. Allow every magnetic component '
+    'permitted by each subgroup, including canting. Use x, y and z multistart directions and '
+    'relative-sign starts. Maximum moment 6.0 muB. 30 cycles per start. Refine a shared '
+    'nuclear/magnetic intensity scale and the existing background coefficients. Hold the nuclear '
+    'positions, cell, ADPs, occupancies and instrument parameters fixed. Magnetic d cutoff 0. '
+    'Adequate Rwp 15%. Use the selected scan only. Do not follow new scans.',
+])
+def test_real_magnetic_setup_requests_reach_one_bounded_model_call(source, intent, user_request):
+    reply=copy.deepcopy(intent)
+    reply['settings'].update(moment_model='symmetry_allowed', cycles=30, k=None)
+    reply['enrollment']=dict(existing='selected',maximum_scans=1,follow_new=False)
+    client=Client([reply])
+    result=make_intent(user_request,source,client=client)
+    assert len(client.calls)==1 and result['status']=='ready_for_k_survey'
+    assert result['intent']['settings']['moment_model']=='symmetry_allowed'
+    assert result['intent']['settings']['cycles']==30
+    for model in (None,'collinear'):
+        bad=copy.deepcopy(reply)
+        if model is None:bad['settings'].pop('moment_model')
+        else:bad['settings']['moment_model']=model
+        with pytest.raises(ValueError,match='declared moment_model'):
+            validate_intent(bad,source,request=user_request)
+
+
+@pytest.mark.parametrize('user_request,expected', [
+    ('Use symmetry_allowed moments including canting.', 'symmetry_allowed'),
+    ('Use symmetry-allowed magnetic moments, including canting.', 'symmetry_allowed'),
+    ('Allow every magnetic component permitted by each subgroup, including canting.', 'symmetry_allowed'),
+    ('Refine all moment components allowed by the subgroup including canting.', 'symmetry_allowed'),
+    ('Do not use symmetry_allowed moments, including canting.', 'collinear'),
+    ('Do not use symmetry_allowed moments including canting.', 'collinear'),
+])
+def test_complete_symmetry_choices_and_attached_canting_qualifier(source, user_request, expected):
+    assert payload(user_request,source)['declared']['moment_model']==expected
+
+
+@pytest.mark.parametrize('user_request', [
+    'Maximum moment 6.0 muB.',
+    'Maximum moment 0.5 Bohr magnetons.',
+    'Maximum moment .5 muB.',
+    'Set maximum moment = 6 Bohr magnetons.',
+    'Maximum moment 6 microbohr magnetons. Refine Fe1 moments.',
+])
+def test_numeric_moment_bounds_do_not_choose_geometry(source, user_request):
+    assert 'moment_model' not in payload(user_request,source)['declared']
+
+
+@pytest.mark.parametrize('user_request', [
+    'Use symmetry_allowed moments including canting or collinear moments.',
+    'Use symmetry_allowed moments, including canting or collinear order.',
+    'Use symmetry_allowed moments, including canting, but keep the moments collinear.',
+    'Use symmetry_allowed moments, including canting, do not allow canting.',
+    'Do not refine every magnetic component permitted by each subgroup.',
+    'Maximum moment 6.0 muB or collinear moments.',
+    'Maximum moment 6.0 muB, but keep the moments parallel.',
+])
+def test_geometry_qualifiers_and_bounds_do_not_hide_conflicts_or_ambiguity(source, user_request):
+    with pytest.raises(ValueError,match='conflicting moment models|geometry instruction needs an explicit choice'):
+        payload(user_request,source)

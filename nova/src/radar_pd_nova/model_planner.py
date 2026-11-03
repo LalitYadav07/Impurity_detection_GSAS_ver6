@@ -117,7 +117,8 @@ def _requested_moment_model(request):
     # settings. Keep the connector so a negated list of settings stays negated.
     clauses = []
     connector = r'(,\s*(?:(?:and|but|then)\s+)?|\s+(?:and|but|then)\s+)'
-    for sentence in re.split(r'[;.!?\n]', text):
+    # Decimal amplitude bounds belong to one clause, not two sentences.
+    for sentence in re.split(r'[;!?\n]|\.(?!\d)', text):
         parts = re.split(connector, ' '.join(sentence.split()))
         first = True
         for index in range(0, len(parts), 2):
@@ -132,12 +133,21 @@ def _requested_moment_model(request):
                   r'(?:(?:site[- ]+)?symmetry[- ]+allowed\s+(?:magnetic\s+)?'
                   r'(?:(?:moment\s+)?components?|(?:moment\s+)?degrees?\s+of\s+freedom|dofs?)|'
                   r'(?:magnetic\s+)?moment\s+components?|magnetic\s+(?:degrees?\s+of\s+freedom|dofs?))\b')
+    subgroup_components = (r'(?:all|every)\s+(?:the\s+)?(?:magnetic\s+)?(?:moment\s+)?components?\s+'
+                           r'(?:allowed|permitted)\s+by\s+(?:each|the)\s+(?:magnetic\s+)?subgroup'
+                           r'(?:\s+including\s+canting)?')
+    symmetry_choice = (r'symmetry[- _]allowed(?:\s+(?:magnetic\s+)?(?:moments?|components?|moment\s+components?))?'
+                       r'(?:\s+model)?(?:\s+(?:including|with|allowing)\s+canting)?')
+    # A numeric ceiling alone does not choose collinear or free geometry.
+    numeric_moment_bound = (r'(?:(?:set|use|keep)\s+)?(?:the\s+)?(?:maximum|max)\s+(?:magnetic\s+)?moment\s*'
+                            r'(?:(?:to|of|=|:)\s*)?[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?\s*'
+                            r'(?:mu[_ -]?b|[\u00b5\u03bc]b|bohr(?:\s+magnetons?)?|microbohr\s+magnetons?)?')
     historical = (r'\b(?:previous(?:ly)?|prior|earlier|formerly|last\s+(?:run|fit)|historical)\b|'
                   r'^(?:which|that|it)\s+(?:was|were|had been)\b|'
                   r'^moment[_ ]model\b.*\b(?:was|were|had been)\s+(?:used|selected|assumed|set)\b')
     geometry = (r'\bmoment[_ ]model\b|\b(?:non[- ]?collinear|collinear|collinearity|canting|canted)\b|'
                 r'\b(?:moments?|spins?)\b.*\b(?:cant|components?|directions?|orientation|rotate|tilt|freedom|vector|parallel|antiparallel|along|axis|axes)\b|'
-                r'\bsymmetry[- _]allowed\b|\bmagnetic\s+(?:degrees?\s+of\s+freedom|dofs?)\b|'
+                r'\bsymmetry[- _]allowed\b|\bmagnetic\s+(?:components?|degrees?\s+of\s+freedom|dofs?)\b|'
                 r'\b(?:all|every)\s+components?\b|\b(?:degrees?\s+of\s+freedom|dofs?)\b')
     magnetic_scope = r'\b(?:moments?|spins?|magnetic|collinear|non[- ]?collinear|collinearity|canting|canted)\b|\bsymmetry[- _]allowed\b'
     for clause, separator, first in clauses:
@@ -145,6 +155,7 @@ def _requested_moment_model(request):
             active_instruction = False
             historical_context = False
             previous_negative = False
+            previous_model = None
         original = clause
         clause = re.sub(r'^[-*\u2022]\s+', '', clause)
         clause = re.sub(r'^(?:please\s+|now\s+)+', '', clause)
@@ -165,11 +176,18 @@ def _requested_moment_model(request):
         if narrative:
             historical_context = True
             previous_negative = False
+            previous_model = None
             continue
         if direct and (first or active_instruction or negation) and not historical_context:
             if not negation and previous_negative and separator in {'and', ',', ', and'}:
                 negative = True
             model = direct.group(1)
+        elif (separator in {',', ', and'} and previous_model == 'symmetry_allowed'
+              and re.fullmatch(r'(?:including|with|allowing)\s+canting', clause)):
+            # An immediately attached explanatory clause shares the complete
+            # preceding geometry choice and its negation, never just a keyword.
+            model = 'symmetry_allowed'
+            negative = negative or previous_negative
         elif re.fullmatch(r'(?:(?:strictly\s+)?collinear\s+only|only\s+collinear(?:\s+moments?)?|no\s+canting)\b', clause):
             model = 'collinear'
         elif re.fullmatch(r'no\s+collinearity\b', clause):
@@ -183,18 +201,19 @@ def _requested_moment_model(request):
                 setting = re.fullmatch(assignment, argument)
                 if setting:
                     model = setting.group(1)
-                elif re.fullmatch(components, argument):
+                elif re.fullmatch(components, argument) or re.fullmatch(subgroup_components, argument):
                     # Not releasing *all* components does not require a
                     # collinear model; leave a negated quantified scope open.
                     if not negative:
                         model = 'symmetry_allowed'
+                elif re.fullmatch(symmetry_choice, argument):
+                    model = 'symmetry_allowed'
                 elif verb in {'allow', 'permit'} and re.fullmatch(
                         r'(?:canting|(?:canted|non[- ]?collinear)\s+(?:magnetic\s+)?moments?|'
                         r'(?:(?:all|every)\s+)?(?:magnetic\s+)?moments?\s+to\s+cant)\b', argument):
                     model = 'symmetry_allowed'
                 elif verb not in {'allow', 'permit'}:
-                    if argument == 'symmetry_allowed' or re.fullmatch(r'(?:symmetry[- _]allowed(?:\s+(?:magnetic\s+)?moment)?\s+model|'
-                                r'(?:canted|non[- ]?collinear)\s+(?:magnetic\s+)?(?:moments?|model))\b', argument):
+                    if re.fullmatch(r'(?:canted|non[- ]?collinear)\s+(?:magnetic\s+)?(?:moments?|model)\b', argument):
                         model = 'symmetry_allowed'
                     elif re.fullmatch(r'(?:strictly\s+)?(?:collinear(?:\s+(?:magnetic\s+)?(?:moments?|model)|\s+only|$)|collinearity)\b|'
                                   r'(?:(?:all|every)\s+)?(?:magnetic\s+)?moments?\s+'
@@ -217,11 +236,12 @@ def _requested_moment_model(request):
                            (re.search(r'\b(?:background|instrument|profile|nuclear)\b', clause) and
                             not re.search(magnetic_scope, clause)))
             if ((re.search(geometry, clause) or moment_instruction) and not (direct and historical_context)
-                    and not question and not nonmagnetic):
+                    and not question and not nonmagnetic and not re.fullmatch(numeric_moment_bound, clause)):
                 ambiguous.append(original)
         if command or modal_head or model is not None:
             active_instruction = True
             historical_context = False
+        previous_model = model
         previous_negative = negative if model is not None else False
     if len(requested) > 1:
         raise ValueError('The request specifies conflicting moment models; clarify whether moments may cant or must remain collinear')
