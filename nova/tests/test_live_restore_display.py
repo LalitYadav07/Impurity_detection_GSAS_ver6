@@ -1,6 +1,7 @@
 """Restore copy, timestamps and server-owned continuation field edits."""
 import asyncio
 from html.parser import HTMLParser
+from types import SimpleNamespace
 
 import pytest
 
@@ -9,6 +10,38 @@ from test_live_missing_settings import legacy, open_review
 from test_live_paused_refresh import harness
 from radar_pd_nova.live_restore import state_recorded_display
 from radar_pd_nova.live_settings_review import FIELDS, missing_setting_labels
+from radar_pd_nova.app import RadarPdNovaApp
+
+
+@pytest.mark.parametrize("instrument,conditions,name", [
+    ("NOM", "NOM NeXus file", "NOMAD"),
+    ("SNAP", "SNAP NeXus file", "SNAP"),
+    ("HB2A", "HB2A SPICE acquisition and reviewed channel mapping", "HB-2A"),
+])
+def test_restored_watch_caption_and_actions_use_saved_beamline(app, instrument, conditions, name):
+    checkpoint(app.service, instrument, partial=False)
+    asyncio.run(inspect(app))
+    restore(app)
+    state = app.server.state
+    assert state.live_beamline == "PG3"
+    assert conditions in state.powgen_dashboard_notice
+    assert state.powgen_dashboard_title.startswith(name + " ·")
+    assert state.powgen_scan_options[0]["value"].startswith(instrument + "_")
+    app.stop_powgen_monitoring()
+    assert state.powgen_message.startswith(name + " monitoring stopped.")
+    state.powgen_monitoring = True
+    app.refresh_powgen_monitor_now()
+    assert f"checking the {name} source" in state.powgen_message
+    state.powgen_monitoring = False
+
+
+def test_watch_adapter_uses_legacy_state_then_draft_fallback():
+    app = RadarPdNovaApp.__new__(RadarPdNovaApp)
+    app.server = SimpleNamespace(state=SimpleNamespace(live_beamline="PG3"))
+    app._powgen_controller = SimpleNamespace(state=SimpleNamespace(instrument="NOM"))
+    assert app._watch_adapter().instrument == "NOM"
+    app._powgen_controller = None
+    assert app._watch_adapter().instrument == "PG3"
 
 
 @pytest.mark.parametrize("stamp,expected", [

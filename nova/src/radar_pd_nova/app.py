@@ -4368,7 +4368,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
             state.powgen_dashboard_scope_changed = False
             return
         settings = controller.settings
-        instrument = getattr(settings, "instrument", "PG3")
+        instrument = self._watch_adapter(controller).instrument
         ipts = str(getattr(settings, "ipts", "") or "")
         state.powgen_dashboard_title = f"{beamline_adapter(instrument).name} · {ipts or 'Live experiment'}"
         state.powgen_dashboard_configuration = self._dataset_display_label(
@@ -4804,10 +4804,11 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                 ),
             },
         ]
+        watch_adapter = self._watch_adapter(controller)
         state.powgen_dashboard_notice = (
             f"Showing {len(scientific_rows)} of {len(all_scientific_rows)} completed scan summaries "
             f"from {controller.source_directory}. "
-            f"Conditions are read from each matching {self._live_adapter().instrument} {'SPICE acquisition and reviewed channel mapping' if self._live_adapter().instrument=='HB2A' else 'NeXus file'}. Missing phase points mean that a phase "
+            f"Conditions are read from each matching {watch_adapter.instrument} {'SPICE acquisition and reviewed channel mapping' if watch_adapter.instrument=='HB2A' else 'NeXus file'}. Missing phase points mean that a phase "
             "was not reported for that scan, not a forced zero fraction."
             if scientific_rows
             else "Completed scans will populate this experiment view as their normalized Galaxy summaries become available."
@@ -5210,6 +5211,16 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
 
     def _live_adapter(self):
         return beamline_adapter(getattr(self.server.state, "live_beamline", None) or "PG3")
+
+    def _watch_adapter(self, controller=None):
+        """Prefer the displayed watch's beamline over the editable setup draft."""
+        if controller is None:
+            controller = getattr(self, "_powgen_controller", None)
+        for owner in (getattr(controller, "settings", None), getattr(controller, "state", None)):
+            instrument = getattr(owner, "instrument", None)
+            if isinstance(instrument, str) and instrument in BEAMLINES:
+                return beamline_adapter(instrument)
+        return self._live_adapter()
 
     def _live_beamline_changed(self, **_: Any) -> None:
         state = self.server.state
@@ -6104,7 +6115,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         self._powgen_wake_event.set()
         state.powgen_next_check = "Stopped"
         state.powgen_message = (
-            f"{self._live_adapter().name} monitoring stopped. Already-submitted RADAR-PD jobs continue in Galaxy and remain recoverable. "
+            f"{self._watch_adapter().name} monitoring stopped. Already-submitted RADAR-PD jobs continue in Galaxy and remain recoverable. "
             "Use NDIP Ingress for unattended triggering."
         )
         state.flush()
@@ -6116,7 +6127,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         state.transition_hydration_error = ''
         if state.powgen_monitoring:
             state.powgen_next_check = "Now"
-            state.powgen_message = f"Refresh requested; checking the {self._live_adapter().name} source and Galaxy jobs now."
+            state.powgen_message = f"Refresh requested; checking the {self._watch_adapter().name} source and Galaxy jobs now."
             self._powgen_wake_event.set()
             state.flush()
             return
