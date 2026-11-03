@@ -6,6 +6,8 @@ import asyncio
 import base64
 from copy import deepcopy
 from dataclasses import asdict
+import json
+import os
 from types import SimpleNamespace
 import threading
 
@@ -150,6 +152,27 @@ def test_fit_only_revision_preserves_other_cached_fits_and_skips_inference(app):
     assert first_y(app.server.state.unet_transition_selected_fit, "Calculated") == 4.
     assert app._unet_transition_engine.calls == old_calls
     assert app._cached_unet_transition_fit(revised[0]) is untouched_fit
+
+
+def test_revised_packet_path_with_stable_source_path_refreshes_comparison_and_fit(app, tmp_path):
+    row = scan(1)
+    packet = row.pop("pattern")
+    path = tmp_path / "pattern.json"
+    path.write_text(json.dumps(packet))
+    source = tmp_path / "source.dat"
+    source.write_text("unchanged source receipt")
+    row.update(pattern_path=str(path), source_path=str(source))
+    app.refresh([row])
+    calls = app._unet_transition_engine.calls
+    packet["y"] = (np.asarray(packet["y"]) + 7.).tolist()
+    path.write_text(json.dumps(packet))
+    stat = path.stat()
+    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000))
+    app.refresh([row])
+    state = app.server.state
+    assert app._unet_transition_engine.calls == calls + 1
+    assert first_y(state.unet_transition_selected_fit, "Observed") == packet["y"][0]
+    assert first_y(state.unet_transition_map, "Selected scan") == packet["y"][0]
 
 
 @pytest.mark.parametrize("change_scope,coordinate", [(True, "d"), (True, "two_theta"),

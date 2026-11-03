@@ -357,13 +357,13 @@ def _fit_observation_stamp(scan):
         return "unavailable"
 
 
-def _fit_cache_key(scan):
+def _fit_cache_key(scan, measured_signature=None):
     packet = scan.get("pattern")
     fields = ("ycalc", "fit_valid", "phase_ticks", "phase_order")
     fit_packet = ({key: packet[key] for key in fields if key in packet}
                   if isinstance(packet, dict) else None)
     return str(scan["run_id"]), digest([
-        source_signature(scan), scan.get("unet_transition_fit_root"),
+        measured_signature or source_signature(scan), scan.get("unet_transition_fit_root"),
         scan.get("fit_payload"), fit_packet, _fit_observation_stamp(scan),
         _fit_output_stamp(scan)])
 
@@ -975,12 +975,7 @@ class UnetTransitionMixin:
         signatures = []
         fit_keys = {}
         for row in sources:
-            path = row.get("source_path") or row.get("pattern_path")
-            try:
-                stat = Path(path).stat() if path else None
-                stamp = (stat.st_size, stat.st_mtime_ns, stat.st_ino) if stat else None
-            except OSError:
-                stamp = "unavailable"
+            measured_signature = source_signature(row)
             inference_row = {key: value for key, value in row.items()
                              if key not in {"fit_payload", "unet_transition_fit_root",
                                             "analysis_status", "rwp", "final_rwp"}}
@@ -989,9 +984,9 @@ class UnetTransitionMixin:
                 fit_fields = {"ycalc", "fit_valid", "phase_ticks", "phase_order"}
                 inference_row["pattern"] = {key: value for key, value in packet.items()
                                             if key not in fit_fields}
-            signatures.append((inference_row, stamp))
+            signatures.append((inference_row, measured_signature))
             run_id = str(row["run_id"])
-            fit_keys[run_id] = _fit_cache_key(row)
+            fit_keys[run_id] = _fit_cache_key(row, measured_signature)
         signature = digest([scope, signatures, order, descending, gap])
         fit_signature = digest(fit_keys)
         fit_changed = fit_signature != self._unet_transition_fit_signature
