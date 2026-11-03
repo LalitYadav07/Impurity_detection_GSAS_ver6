@@ -48,8 +48,8 @@ def scope_progress(template,entries):
         label+=f" Reviewed budget: {len(entries)*trial_count(template):,} starts before per-scan compatibility checks."
         policy=template['protocol'].get('policy',{})
         if 'cycles' in policy:
-            label+=f" Up to {policy['cycles']} refinement cycles per start."
-            if policy['cycles']==1:label+=' Preliminary one-cycle screening.'
+            from .magnetic_optimizer import optimizer_budget_label
+            label+=' '+optimizer_budget_label(policy)
     return label
 
 

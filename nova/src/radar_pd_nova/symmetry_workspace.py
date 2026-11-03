@@ -92,13 +92,19 @@ def read_trial(directory,metadata=None,*,expected_receipt=None):
                 row['moment_phase_names']={key:evidence.get(field) for key,field in
                     [('parent','nuclear_phase_name'),('magnetic','magnetic_phase_name')]}
                 row['baseline_rwp']=(evidence.get('baseline_residuals',{}).get(p['histogram']) or {}).get('wR')
-                row['native_convergence']={key:evidence.get('refinement_rvals',{}).get(key)
+                row['native_convergence']={key:(evidence.get('refinement_rvals') or {}).get(key)
                                            for key in ['converged','Aborted','SVD0']}
+                if p.get('policy',{}).get('magnetic_optimizer')=='profiled_quadratic':
+                    optimizer=evidence.get('optimizer')
+                    if not isinstance(optimizer,dict) or optimizer.get('schema')!='radar-profiled-magnetic-optimizer/v1' or optimizer.get('name')!='profiled_quadratic':
+                        raise ValueError('The profiled optimizer receipt is missing or does not match its reviewed protocol')
+                    row['optimizer']={key:optimizer.get(key) for key in
+                        ['schema','name','iterations','maximum_iterations','success','status','message','qualification','uncertainty_available','native_convergence_declared','tolerances']}
                 row['residual_targets']={key:evidence.get('target_peak_audit',{}).get(key)
                                          for key in ['target_count','underfit_peak_count','weighted_residual_improvement']}
         except Exception as exc:
             row.update(status='integrity_failure',reason=str(exc),has_view=False,has_gpx=False,rwp=None,nvars=None)
-            for key in ['receipt_sha256','view_path','gpx_relative','moment_phase_names','baseline_rwp','native_convergence','residual_targets']:row.pop(key,None)
+            for key in ['receipt_sha256','view_path','gpx_relative','moment_phase_names','baseline_rwp','native_convergence','residual_targets','optimizer']:row.pop(key,None)
     elif expected_receipt:
         row.update(status='integrity_failure',reason='The collected terminal receipt is missing')
     return row
@@ -200,7 +206,7 @@ def fit_caption(row,*,temperature=''):
     if isinstance(rwp,(int,float)) and not isinstance(rwp,bool) and np.isfinite(rwp):
         parts.append(f'Rwp {rwp:.3f}%')
     status=row.get('status')
-    if status:parts.append('native checks passed' if status=='valid' else display_status(status))
+    if status:parts.append((('profiled optimization checks passed' if profiled_optimizer_qualified(row) else 'profiled optimization needs review') if profiled_optimizer_evidence(row) else 'native checks passed') if status=='valid' else display_status(status))
     return ' · '.join(parts)
 
 
@@ -213,9 +219,16 @@ def fit_diagnostics(row):
     if not row:return []
     def finite(value):
         return isinstance(value,(int,float)) and not isinstance(value,bool) and np.isfinite(value)
-    details=[];criterion=row.get('adequate_rwp_percent')
+    details=[];criterion=row.get('adequate_rwp_percent');optimizer=profiled_optimizer_evidence(row)
     if finite(criterion):
-        details.append(dict(label='Declared fit criterion',value=f'Rwp ≤ {criterion:g}% after native convergence, parameter and physicality checks.'))
+        checks='profiled convergence, native-objective, parameter and physicality checks' if optimizer else 'native convergence, parameter and physicality checks'
+        details.append(dict(label='Declared fit criterion',value=f'Rwp ≤ {criterion:g}% after {checks}.'))
+    if optimizer:
+        passed=profiled_optimizer_qualified(row)
+        iterations=optimizer.get('iterations');maximum=optimizer.get('maximum_iterations')
+        details.append(dict(label='Profiled quadratic optimizer',value=
+            f"{'Independent checks passed' if passed else 'Independent checks did not pass'} · {iterations} / {maximum} iterations. "
+            'GSAS-II convergence and covariance are not claimed.'))
     native=row.get('native_convergence') or {}
     parts=[]
     if type(native.get('converged')) is bool:parts.append('converged' if native['converged'] else 'not converged')
@@ -276,11 +289,21 @@ def campaign_can_resume(summaries,enrollments,*,following=False):
             any(e['status'] in {'queued','preparing'} for e in enrollments))
 
 
+def profiled_optimizer_evidence(row):
+    value=row.get('optimizer')
+    return value if isinstance(value,dict) and value.get('name')=='profiled_quadratic' and value.get('schema')=='radar-profiled-magnetic-optimizer/v1' else None
+
+
+def profiled_optimizer_qualified(row):
+    value=profiled_optimizer_evidence(row)
+    return value is not None and value.get('success') is True and (value.get('qualification') or {}).get('passed') is True
+
+
 def unqualified_covariance(row):
     """An aborted or rank-deficient checkpoint has no qualified error bars."""
     native=row.get('native_convergence') or {}
     rank=native.get('SVD0')
-    return (row.get('status')=='optimization_unresolved' or
+    return (profiled_optimizer_evidence(row) is not None or row.get('status')=='optimization_unresolved' or
             native.get('converged') is False or native.get('Aborted') is True or
             (isinstance(rank,(int,float)) and np.isfinite(rank) and rank>0))
 
@@ -311,6 +334,15 @@ def moment_precision_note(row):
     combine correlated components, or assign a probability of magnetic order.
     """
     if row.get('kind') != 'magnetic':return ''
+    optimizer=profiled_optimizer_evidence(row)
+    if optimizer:
+        passed=profiled_optimizer_qualified(row)
+        statement='The profiled optimizer and its independent native-objective checks passed.' if passed else 'The profiled optimizer did not pass its declared checks; this is an unqualified checkpoint.'
+        if row.get('status')=='physical_rejection':statement+=' Physical rejection: '+disposition_reason(row)
+        elif row.get('status')=='inadequate_fit':statement+=' The declared fit criterion was not met.'
+        return (statement+' GSAS-II convergence and covariance were not claimed. '
+            'Component, magnitude and direction uncertainties are unavailable and are hidden. '
+            'A fitted direction is conditional on this model and does not establish canting or a unique magnetic structure.')
     kernel_note=('Native calculation requires review: this build has verified moment-coordinate '
         'and symmetry-dependent displacement defects for some magnetic models. '
         'Moment directions and model ranking remain provisional. '

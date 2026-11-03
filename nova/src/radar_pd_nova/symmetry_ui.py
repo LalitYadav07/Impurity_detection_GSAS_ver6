@@ -94,6 +94,8 @@ def model_exploration(app):
             with html.Div(v_if='sx_has_context',classes='sx-settings'):
                 select('Exploration','sx_kind',"[{title:'Magnetic models',value:'magnetic'},{title:'Structural displacement modes',value:'structural'}]")
                 select('Moment model','sx_moment_model',"[{title:'Collinear moments',value:'collinear'},{title:'Symmetry-allowed components · can cant',value:'symmetry_allowed'}]",v_if="sx_kind === 'magnetic'")
+                select('Magnetic optimizer','sx_magnetic_optimizer',"[{title:'GSAS-II Hessian',value:'gsas_hessian'},{title:'Profiled quadratic · fixed nuclear model',value:'profiled_quadratic'}]",v_if="sx_kind === 'magnetic'")
+                html.P('Profiled optimization varies the allowed magnetic components and the selected common scale/background against the same GSAS-II model. It requires k = 0, symmetry-allowed components and one neutron histogram. Unsupported inputs stop with a reason.',v_if="sx_kind === 'magnetic' && sx_magnetic_optimizer === 'profiled_quadratic'",classes='rf-notice')
                 select('Nuclear parent','sx_parent','sx_parents')
                 select('Histogram / bank','sx_histogram','sx_histograms')
                 with html.Div():
@@ -116,7 +118,8 @@ def model_exploration(app):
                 v.VTextField(v_if="sx_kind === 'structural'",label='Signed mode start · ± amplitude (Å)',v_model=('sx_start_mode',),type='text',inputmode='decimal',density='compact',variant='outlined',hide_details=True)
                 select('Structural candidate scope','sx_opd_policy',"[{title:'Highest symmetry per irrep',value:'highest-symmetry-per-irrep'},{title:'All discovered OPDs',value:'all'}]",v_if="sx_kind === 'structural'")
                 select('Maximum children to construct','sx_construct_limit','[16,50,100,250,500]',v_if="sx_kind === 'structural'")
-                v.VTextField(label='Cycles per start',v_model=('sx_cycles',),type='text',inputmode='numeric',density='compact',variant='outlined',hide_details=True)
+                v.VTextField(v_if="sx_kind !== 'magnetic' || sx_magnetic_optimizer === 'gsas_hessian'",label='GSAS-II cycles per start',v_model=('sx_cycles',),type='text',inputmode='numeric',density='compact',variant='outlined',hide_details=True)
+                v.VTextField(v_if="sx_kind === 'magnetic' && sx_magnetic_optimizer === 'profiled_quadratic'",label='Profiled optimizer iterations per start · 1–200',v_model=('sx_optimizer_iterations',),type='text',inputmode='numeric',density='compact',variant='outlined',hide_details=True)
             with html.Details(v_if="sx_has_context && sx_kind === 'magnetic'",classes='mt-3'):
                 html.Summary('K-survey scope and time budget')
                 html.P('Select magnetic sites and ionic form factors first. The survey tests rational high-symmetry k points and a finite sample of supported collinear templates. Other commensurate vectors or structures can remain untested.',classes='rf-notice')

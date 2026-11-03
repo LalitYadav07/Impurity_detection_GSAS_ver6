@@ -25,6 +25,7 @@ from gpx_recipe.symmetry.local_transport import LocalTransport
 from gpx_recipe.symmetry.worker import require_runtime
 from gpx_recipe.symmetry.chemistry import validate_sites,sites_from_inputs
 from .model_planner import make_intent,planning_failure_receipt
+from .magnetic_optimizer import selected_optimizer_settings, optimizer_budget_label
 from gpx_recipe.usage import summarize_calls,usage_labels
 from gpx_recipe.symmetry.isodistort_discovery import discover_structural
 from gpx_recipe.symmetry.plans import build_plan
@@ -43,7 +44,7 @@ from .model_campaigns import START_BARRIER_SCHEMA,START_BARRIER_MESSAGE,start_ba
 from gpx_recipe.symmetry.compiler import prepare_shared_inputs
 from gpx_recipe.symmetry.templates import make_template,trial_count
 
-MODEL_FIELDS=('sx_kind','sx_moment_model','sx_refine_scale','sx_refine_background','sx_parent','sx_histogram','sx_k','sx_sites','sx_form_factors','sx_lande',
+MODEL_FIELDS=('sx_kind','sx_moment_model','sx_magnetic_optimizer','sx_optimizer_iterations','sx_refine_scale','sx_refine_background','sx_parent','sx_histogram','sx_k','sx_sites','sx_form_factors','sx_lande',
     'sx_directions','sx_adequate','sx_max_moment','sx_mag_d_min','sx_max_mode','sx_start_mode','sx_cycles',
     'sx_sign_starts','sx_candidates','sx_modes','sx_existing','sx_follow_new','sx_max_scans','sx_request',
     'sx_opd_policy','sx_construct_limit')
@@ -58,7 +59,7 @@ class SymmetryMixin(KSearchMixin):
         defaults=dict(sx_campaign='',sx_campaigns=[],sx_source='',sx_source_options=[],sx_busy=False,sx_error='',sx_message='',sx_progress='',sx_groups=[],sx_group='',sx_members=[],sx_selected='',sx_search='',sx_status='all',
             sx_overview=plots.empty('Open a campaign to inspect its coverage'),sx_fit=plots.empty('Select an audited checkpoint'),sx_fit_title='',sx_expanded_title='',sx_source_notices=[],sx_source_display_notices=[],sx_axis='d',sx_reset=0,sx_pins=[],sx_pin_options=[],sx_parameters=[],sx_parent_moments=[],sx_parent_moment_note='',sx_details=[],sx_fit_diagnostics=[],sx_moment_note='',sx_embedding_evidence=[],sx_embedding_summary='',sx_gsas_model='',sx_intensity_scale='linear',
             sx_parent='',sx_parents=[],sx_histogram='',sx_histograms=[],sx_k='',sx_sites=[],sx_site_options=[],sx_form_factors='',sx_lande='',sx_directions=['x','y','z'],sx_adequate=None,sx_max_moment='',sx_cycles=20,sx_slots=2,sx_moment_model='collinear',sx_refine_scale=False,sx_refine_background=False,
-            sx_kind='magnetic',sx_mag_d_min=0.,sx_max_mode=.5,sx_start_mode=.1,sx_candidate_options=[],sx_candidates=[],sx_mode_options=[],sx_modes=[],sx_discovered=False,sx_discovery_scope='',
+            sx_kind='magnetic',sx_magnetic_optimizer='gsas_hessian',sx_optimizer_iterations=60,sx_mag_d_min=0.,sx_max_mode=.5,sx_start_mode=.1,sx_candidate_options=[],sx_candidates=[],sx_mode_options=[],sx_modes=[],sx_discovered=False,sx_discovery_scope='',
             sx_plan_ready=False,sx_approved=False,sx_plan_summary='',sx_plan_candidates=[],sx_setup=False,sx_expanded=False,sx_expanded_layout={},sx_has_context=False,sx_has_gpx=False,sx_has_receipt=False,sx_resumable=False,
             sx_request='',sx_planning_summary='',sx_planning_notes=[],sx_planning_usage='',sx_planning_cost='',sx_has_setup_details=False,sx_sign_starts=True,sx_coverage=[],sx_group_limit=12,sx_result_scope='experiment',sx_start_source='',sx_start_sources=[],sx_results_current=False,sx_scope_progress='')
         for key,value in defaults.items():setattr(s,key,value)
@@ -77,10 +78,11 @@ class SymmetryMixin(KSearchMixin):
         s.change('sx_parent')(self._symmetry_parent_changed)
         s.change('sx_existing','sx_follow_new','sx_max_scans')(self._symmetry_unapprove)
         s.change('sx_moment_model','sx_refine_scale','sx_refine_background')(self._symmetry_unapprove)
+        s.change('sx_magnetic_optimizer','sx_optimizer_iterations')(self._symmetry_unapprove)
         s.change('sx_candidates','sx_modes')(self._symmetry_unapprove)
         s.change('sx_opd_policy','sx_construct_limit')(self._symmetry_unapprove)
         s.change('sx_start_source')(self._symmetry_start_changed)
-        s.change('rf_experiment','sx_start_source','sx_request')(self._clear_symmetry_setup_details)
+        s.change('rf_experiment','sx_start_source','sx_request','sx_magnetic_optimizer','sx_optimizer_iterations')(self._clear_symmetry_setup_details)
         s.change('sx_parallel_jobs')(self._symmetry_resource_changed)
         self._init_k_search()
 
@@ -162,7 +164,8 @@ class SymmetryMixin(KSearchMixin):
 
     def _symmetry_setup_identity(self):
         s=self.server.state;d=getattr(self,'_symmetry_draft',None) or {}
-        return (getattr(s,'rf_experiment',''),s.sx_start_source,s.sx_request,d.get('context',{}).get('sha256'))
+        return (getattr(s,'rf_experiment',''),s.sx_start_source,s.sx_request,d.get('context',{}).get('sha256'),
+                getattr(s,'sx_magnetic_optimizer','gsas_hessian'),getattr(s,'sx_optimizer_iterations',60))
 
     def _clear_symmetry_setup_details(self,**_):
         self._symmetry_setup_details=None;self.server.state.sx_has_setup_details=False
@@ -624,7 +627,9 @@ class SymmetryMixin(KSearchMixin):
                 d=self._symmetry_draft
                 if not d or d['source_id']!=s.sx_start_source:raise ValueError('Inspect this exact source GPX first')
                 identity=self._symmetry_setup_identity()
-                declared={}
+                declared=selected_optimizer_settings(getattr(s,'sx_kind','magnetic'),
+                    getattr(s,'sx_magnetic_optimizer','gsas_hessian'),
+                    getattr(s,'sx_optimizer_iterations',60))
                 if str(s.sx_k or '').strip():
                     k=[str(Fraction(v.strip())) for v in s.sx_k.split(',')]
                     if len(k)!=3:raise ValueError('Review three rational k components, or clear k to prepare a data-based survey')
@@ -654,6 +659,8 @@ class SymmetryMixin(KSearchMixin):
                         s.sx_kind=settings['kind'];s.sx_parent=settings['parent'];s.sx_histogram=settings['histogram']
                         s.sx_k=', '.join(settings['k']) if settings['k'] is not None else '';s.sx_sites=[site['label'] for site in settings['sites']]
                         s.sx_moment_model=settings.get('moment_model','collinear')
+                        s.sx_magnetic_optimizer=settings.get('magnetic_optimizer','gsas_hessian')
+                        s.sx_optimizer_iterations=settings.get('optimizer_iterations',60)
                         s.sx_refine_scale=settings.get('refine_histogram_scale',False)
                         s.sx_refine_background=settings.get('refine_background',False)
                         s.sx_form_factors='; '.join(site['label']+'='+site['form_factor'] for site in settings['sites'])
@@ -759,6 +766,7 @@ class SymmetryMixin(KSearchMixin):
                 sites=sites_from_inputs(s.sx_sites,s.sx_form_factors,s.sx_lande)
             settings=dict(acquisition_id=d['source_id'],kind=s.sx_kind,parent=s.sx_parent,histogram=s.sx_histogram,k=[str(Fraction(v.strip())) for v in s.sx_k.split(',')],candidates=list(s.sx_candidates),modes=list(s.sx_modes),sites=sites,directions=list(s.sx_directions),adequate_rwp=float(s.sx_adequate),maximum_moment=float(s.sx_max_moment),magnetic_d_min=float(s.sx_mag_d_min),maximum_mode=float(s.sx_max_mode),start_mode=float(s.sx_start_mode),cycles=int(s.sx_cycles),relative_sign_starts=s.sx_sign_starts)
             if s.sx_kind=='magnetic':settings.update(moment_model=s.sx_moment_model,refine_histogram_scale=s.sx_refine_scale,refine_background=s.sx_refine_background)
+            settings.update(selected_optimizer_settings(s.sx_kind,s.sx_magnetic_optimizer,s.sx_optimizer_iterations))
             p=build_plan(d['context'],d['catalog'],d['root'],settings);verify_inputs(p,d['root']);d.update(protocol=p,settings=settings)
             w=self._refinement_store()
             template=make_template(p,d['context'],d['source'],model_choices(w,s.rf_experiment),
@@ -770,8 +778,7 @@ class SymmetryMixin(KSearchMixin):
             s.sx_plan_candidates=[dict(name=c['magnetic_space_group'] or c['irrep'],bns=c['bns_number'] or '—',basis=str(c['transformation_matrix']),origin=str(c['origin_shift']),modes=', '.join(c['modes']) or magnetic_scope) for c in p['candidates']]
             free='Selected modes, cell, background and global scale' if s.sx_kind=='structural' else magnetic_scope+('; shared nuclear/magnetic histogram scale varied' if s.sx_refine_scale else '; all scales fixed')+('; existing background coefficients varied' if s.sx_refine_background else '; background fixed')+'; nuclear geometry fixed'
             if s.sx_kind=='magnetic':free+=('; all fitted d spacings' if settings['magnetic_d_min']==0 else f"; magnetic d ≥ {settings['magnetic_d_min']} Å")
-            s.sx_plan_summary=f"{len(p['candidates'])} embeddings · {sum(1 for _ in iter_trials(p))} finite trials · up to {settings['cycles']} refinement cycles per start. {free}. Instrument, occupancy and displacement parameters fixed. Adequacy: Rwp ≤ {s.sx_adequate}%."
-            if settings['cycles']==1:s.sx_plan_summary+=' One-cycle preliminary screening; not a completed convergence search.'
+            s.sx_plan_summary=f"{len(p['candidates'])} embeddings · {sum(1 for _ in iter_trials(p))} finite trials. {optimizer_budget_label(p['policy'])} {free}. Instrument, occupancy and displacement parameters fixed. Adequacy: Rwp ≤ {s.sx_adequate}%."
             s.sx_plan_summary+=f" {len(template['existing_ids'])} existing acquisitions · {trial_count(template)} starts per acquisition · maximum {template['maximum_scans']} acquisitions. Following new scans: {'on' if template['future'] else 'off'}."
             s.sx_plan_summary+=f" Existing-cohort budget: {len(template['existing_ids'])*trial_count(template):,} starts before per-scan compatibility checks."
             s.sx_plan_ready=True;s.sx_approved=False
