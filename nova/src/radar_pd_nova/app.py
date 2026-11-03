@@ -5184,7 +5184,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                     # owned the workspace. Refresh this selected run's header
                     # and verified cache on return, without another download.
                     cache_ready = ((record.analysis_status or record.status) == RunStatus.OK
-                                   and record.result_status == ResultStatus.READY
+                                   and record.result_status in {ResultStatus.READY, ResultStatus.STALE}
                                    and record.local_output_dir)
                     if not (cache_ready and self._rendered_result_current(record)):
                         self._select_record(record)
@@ -7300,7 +7300,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         state.result_explorer_available = bool(record.output_dataset_ids.get("results_archive"))
         state.selected_galaxy_job_id = record.galaxy_job_id or "Pending"
         state.selected_run_stage = record.stage
-        if record.status == RunStatus.OK and record.result_status != ResultStatus.READY:
+        if record.status == RunStatus.OK and record.result_status not in {ResultStatus.READY, ResultStatus.STALE}:
             state.selected_run_stage = (
                 "Analysis complete; results unavailable" if record.result_status == ResultStatus.ERROR
                 else "Analysis complete; loading results"
@@ -7789,6 +7789,10 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                             private = await asyncio.to_thread(service.collect_results, private, force=True)
                         elif not private.output_dir:
                             private = await asyncio.to_thread(service.collect_results, private)
+                        else:
+                            repair = getattr(service, "repair_result_cache", None)
+                            if callable(repair):
+                                private = await asyncio.to_thread(repair, private)
                         if not private.output_dir or (force and private.result_status == ResultStatus.ERROR):
                             raise RuntimeError(private.message or "Galaxy result collection is not ready; try opening this run again")
                     if not self._result_source_current(original, service, source, context=context):
@@ -7859,8 +7863,9 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                 self._select_record(record)
                 self._load_results(record)
                 state.active_page = "results"
-                state.notice = (f"Reloaded the canonical result archive for {record.name}." if force
-                                else f"Showing results for {record.name}.")
+                state.notice = (record.message if record.result_status == ResultStatus.STALE else
+                                f"Reloaded the canonical result archive for {record.name}." if force else
+                                f"Showing results for {record.name}.")
         except Exception as exc:
             if owns_selection() and state.workspace_view == "results":
                 message = f"Could not load results for {original.name}: {exc}"
@@ -7890,11 +7895,11 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         if selected_uid and selected_uid != record.uid:
             return
         self._reset_result_state()
-        if local_only:
-            reader = getattr(self.service, "cached_result_payload", None)
-            payload = (reader if callable(reader) else GalaxyService.cached_result_payload)(record)
-        else:
-            payload = self.service.result_payload(record)
+        # Every synchronous render reads local files. Missing observations and
+        # declared collections are repaired by the shared background read.
+        reader = getattr(self.service, "cached_result_payload", None)
+        payload = (reader if callable(reader) else GalaxyService.cached_result_payload)(record)
+        if not local_only:
             self._refinement_maybe_refresh()
         result_document = payload.get("summary") or {}
         self._activate_post_analysis_scope(

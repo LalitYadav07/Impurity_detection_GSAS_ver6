@@ -103,3 +103,30 @@ def test_plot_callback_rejects_selection_owned_by_a_different_experiment(tmp_pat
     RefinementMixin._refinement_plot_changed(app)
     assert_output_cleared(state)
     assert 'old' in app._refinement_workspace.state['jobs']
+
+
+def test_new_selection_hides_and_clears_old_fit_through_pending_baseline(tmp_path,monkeypatch):
+    app,state=setup(tmp_path);state.rf_experiment='populated'
+    job=copy.deepcopy(app._refinement_workspace.state['jobs']['old'])
+    job['id']='new';job['source']['scan_label']='New scan'
+    app._refinement_workspace.state['jobs']['new']=job
+    snapshots=[]
+    state.flush=lambda:snapshots.append(dict(job=state.rf_selected_job,heading=state.rf_selected_title,
+        visible=state.rf_has_output,fit=copy.deepcopy(state.rf_fit)))
+    async def run():
+        entered=asyncio.Event();release=asyncio.Event()
+        async def delayed(function,*args):
+            entered.set();await release.wait();return function(*args)
+        monkeypatch.setattr(asyncio,'to_thread',delayed)
+        pending=asyncio.create_task(app._select_refinement_job('new'))
+        await entered.wait()
+        # An unrelated progress flush while the executor is occupied cannot
+        # expose the previous scan's fit under this scan's new title.
+        state.flush()
+        assert state.rf_selected_job=='new' and state.rf_selected_title.startswith('New scan ·')
+        assert not state.rf_has_output and 'old' not in state.rf_fit
+        assert state.rf_parameters==[] and state.rf_downloads==[]
+        release.set();await pending
+    asyncio.run(run())
+    assert state.rf_has_output and state.rf_fit=={'restored':'own fit'}
+    assert all(not row['visible'] or row['fit']=={'restored':'own fit'} for row in snapshots)

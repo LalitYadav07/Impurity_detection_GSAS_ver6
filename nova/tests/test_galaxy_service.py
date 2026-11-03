@@ -866,8 +866,8 @@ def test_result_collector_recovers_archive_when_collections_are_unavailable(tmp_
     payload = service.result_payload(result)
 
     assert result.status is RunStatus.OK
-    assert result.result_status is ResultStatus.READY
-    assert result.message == ""
+    assert result.result_status is ResultStatus.STALE
+    assert "downloads incomplete" in result.message and "gpx_projects" in result.message
     assert payload["summary"]["analysis_mode"] == "full"
     assert (Path(result.output_dir) / "ndip" / "tables" / "Final_phase_fractions.csv").is_file()
 

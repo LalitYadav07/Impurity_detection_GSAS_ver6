@@ -133,6 +133,51 @@ def test_full_imported_range_is_an_explicit_native_edit_not_the_current_fit():
     assert 'preserve' in payload['fit_range_instruction'].lower()
 
 
+def test_starting_result_qualifications_reach_final_outbound_workspace_messages(tmp_path,monkeypatch):
+    context=native_context();request='Use exactly four stages over the full imported range.'
+    client=CapturingClient(four_stage_plan(context,request));runtime=Runtime(context)
+    monkeypatch.setattr('radar_pd_nova.refinement_workspace.configure_provider',lambda *a:None)
+    monkeypatch.setattr('radar_pd_nova.refinement_workspace.make_client',lambda:client)
+    warning='Measured signal unresolved; phase identification has not been accepted.'
+    workspace=RefinementWorkspace(tmp_path,history_id='test-history',runtime=runtime)
+    workspace.observe([dict(id='source',experiment='exp',scan_key='scan',source_sha256='test-source',
+        sample_key='sample',bank='2',scan_label='scan',run_number=1,
+        scientific_status='needs_review',scientific_warnings=[warning])])
+
+    draft=workspace.prepare('exp','source',request)
+
+    assert draft['status']=='ready' and len(client.calls)==1
+    payload=json.loads(client.calls[0][1]['content'])
+    review=expand_context(payload['project'])['host_execution']['starting_result_review']
+    assert review['status']=='needs_review' and review['warnings']==[warning]
+    assert 'does not resolve or remove' in review['scope']
+    assert review['warnings_omitted']==0 and review['warnings_truncated'] is False
+    assert 'starting_result_review' in client.calls[0][0]['content']
+
+
+def test_starting_review_is_bounded_allowlisted_and_retained_in_repair_messages():
+    from radar_pd_nova.refinement_planner import MAX_REVIEW_WARNINGS,MAX_REVIEW_WARNING_CHARS
+    context=native_context();request='Use exactly four stages over the full imported range.'
+    context['host_execution']=dict(starting_result_review=dict(status='needs_review',
+        warnings=['x'*(MAX_REVIEW_WARNING_CHARS+1)]*(MAX_REVIEW_WARNINGS+2),scope='Qualifications remain.',
+        unrelated='PRIVATE_REVIEW_FIELD'))
+    plan=four_stage_plan(context,request)
+    client=ContractClient(['not valid json',json.dumps(plan)])
+
+    make_plan(request,context,client=client)
+
+    assert len(client.calls)==2
+    for messages in client.calls:
+        payload=json.loads(messages[1]['content'])
+        review=expand_context(payload['project'])['host_execution']['starting_result_review']
+        assert review['status']=='needs_review' and len(review['warnings'])==MAX_REVIEW_WARNINGS
+        assert max(map(len,review['warnings']))==MAX_REVIEW_WARNING_CHARS
+        assert review['warnings_omitted']==2 and review['warnings_truncated'] is True
+        assert 'PRIVATE_REVIEW_FIELD' not in json.dumps(messages)
+    repair=json.loads(client.calls[-1][-1]['content'].split('\n')[-1])
+    assert repair['host_execution']['starting_result_review']==review
+
+
 def test_equal_or_missing_ranges_do_not_invent_a_wider_domain():
     context=native_context();context['histograms'][0]['limits'][1]=[100.25,12000.75]
     cap=build_payload('Keep the current fit range.',context)['histogram_capabilities'][0]

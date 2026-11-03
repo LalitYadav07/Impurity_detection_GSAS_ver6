@@ -8,11 +8,14 @@ from gpx_recipe.snapshot import digest
 
 ADAPTER_VERSION = "nova-refinement-planner/v1"
 MAX_PAYLOAD_BYTES = 350000
+MAX_REVIEW_WARNINGS = 20
+MAX_REVIEW_WARNING_CHARS = 1000
 HOST_INSTRUCTION = (
     "Capabilities explicitly listed in project.host_execution are managed by the host, outside "
     "the per-GPX recipe. Do not mark those listed capabilities unsupported or invent refinement "
     "targets for them; host approval and compatibility checks still apply. Do not assume unlisted "
-    "host capabilities. Follow fit_range_instruction and the explicit imported versus current "
+    "host capabilities. Retain the qualifications in starting_result_review; generating or executing "
+    "a recipe does not resolve them. Follow fit_range_instruction and the explicit imported versus current "
     "histogram bounds. Keep genuinely unsupported operations and missing decisions blocked."
 )
 FIT_RANGE_INSTRUCTION = (
@@ -35,6 +38,19 @@ def _host_execution(value, histogram_keys):
               if isinstance(value.get(key), str)}
     if isinstance(value.get("histogram_keys"), list):
         result["histogram_keys"] = [key for key in histogram_keys if key in value["histogram_keys"]]
+    review = value.get("starting_result_review")
+    if isinstance(review, dict):
+        warnings = review.get("warnings")
+        warnings = [item for item in warnings if isinstance(item, str)] if isinstance(warnings, list) else []
+        status = review.get("status")
+        projected = dict(status=status[:80] if isinstance(status, str) and status else "not_assessed",
+                         warnings=[item[:MAX_REVIEW_WARNING_CHARS] for item in warnings[:MAX_REVIEW_WARNINGS]])
+        if isinstance(review.get("scope"), str):
+            projected["scope"] = review["scope"][:600]
+        projected["warnings_omitted"] = max(0, len(warnings) - MAX_REVIEW_WARNINGS)
+        projected["warnings_truncated"] = any(len(item) > MAX_REVIEW_WARNING_CHARS
+                                               for item in warnings[:MAX_REVIEW_WARNINGS])
+        result["starting_result_review"] = projected
     for name, fields in {
         "future_enrollment": ("supported", "requires_approval"),
         "output_artifacts": ("stage_gpx", "final_gpx", "source_plan_lineage"),

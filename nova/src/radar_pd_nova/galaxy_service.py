@@ -52,6 +52,14 @@ GSASII_INTERACTIVE_TOOL_ID = "neutrons_radar_pd_gsasii_interactive_prototype"
 EXPORT_DATASETS_TOOL_ID = "neutrons_export"
 RUN_NAME_PREFIX = "RADAR-PD NOVA"
 SUBMISSION_ACK_TIMEOUT_SECONDS = float(os.getenv("RADAR_PD_SUBMISSION_ACK_TIMEOUT", "60"))
+_RESULT_SUFFIXES = {
+    "report": ".html", "summary": ".json", "pattern_observation": ".json", "state": ".json",
+    "resolved_config": ".yaml", "input_manifest": ".json", "gpx_index": ".json",
+    "results_archive": ".zip", "input_resolution_metadata": ".json", "console_output": ".txt",
+}
+_RESULT_COLLECTIONS = ("plots", "tables", "phases", "gpx_projects", "diagnostics")
+_ARTIFACT_RECEIPT = ".radar-pd-artifacts.json"
+_REFRESH_RECEIPT = ".radar-pd-refresh.json"
 
 _INTERACTIVE_TOOL_IDS = frozenset({RESULT_EXPLORER_TOOL_ID, GSASII_INTERACTIVE_TOOL_ID})
 
@@ -235,6 +243,24 @@ def _publish_staging_directory(staging: Path, destination: Path) -> None:
         raise last_error
     shutil.copytree(staging, destination)
     shutil.rmtree(staging, ignore_errors=True)
+
+
+def _replace_result_directory(staging: Path, destination: Path) -> None:
+    """Retain the prior publication until a replacement succeeds, with rollback."""
+    backup = destination.with_name(f".{destination.name}-{uuid.uuid4().hex}.backup")
+    previous = destination.exists()
+    if previous:
+        destination.replace(backup)
+    try:
+        _publish_staging_directory(staging, destination)
+    except Exception:
+        shutil.rmtree(destination, ignore_errors=True)
+        if previous:
+            backup.replace(destination)
+        raise
+    else:
+        if previous:
+            shutil.rmtree(backup, ignore_errors=True)
 
 
 def _decode_parameter(value: Any) -> Any:
@@ -2741,20 +2767,79 @@ class GalaxyService:
             and cached.archive_dataset_id == current.archive_dataset_id
             and (current.archive_size is None or cached.archive_size == current.archive_size)
             and (not current.archive_update_time or cached.archive_update_time == current.archive_update_time)
-            and any(destination.rglob("*.plotdata.json"))
+            and (any(destination.rglob("*.plotdata.json"))
+                 or bool(GalaxyService._read_artifact_receipt(destination)))
         )
+
+    @staticmethod
+    def _read_artifact_receipt(root: Path) -> dict[str, Any]:
+        try:
+            value = json.loads((root / _ARTIFACT_RECEIPT).read_text(encoding="utf-8"))
+            if (value.get("schema") == "radar-pd-cache-artifacts/v1"
+                    and isinstance(value.get("complete"), dict)
+                    and isinstance(value.get("members"), dict)
+                    and isinstance(value.get("failures"), dict)):
+                return value
+        except (OSError, ValueError, AttributeError):
+            pass
+        return {}
+
+    @staticmethod
+    def _artifact_available(receipt: dict, name: str, identifier: str, root: Path) -> bool:
+        if receipt.get("complete", {}).get(name) != identifier:
+            return False
+        members = receipt.get("members", {}).get(name)
+        if not isinstance(members, list) or any(not isinstance(path, str) for path in members):
+            return False
+        base = root.resolve()
+        if any(not (base / path).resolve().is_relative_to(base) or not (base / path).is_file()
+               for path in members):
+            return False
+        return (root / name).is_dir() if name in _RESULT_COLLECTIONS else bool(members)
+
+    @staticmethod
+    def _has_result_artifacts(root: Path) -> bool:
+        return ((root / "summary.json").is_file() or (root / "ndip/summary.json").is_file()
+                or any(root.rglob("*.plotdata.json")) or any(root.rglob("*.gpx")))
+
+    def _result_cache_needs_collection(self, record: RunRecord, root: Path) -> bool:
+        if (root / _REFRESH_RECEIPT).is_file():
+            return True
+        receipt = self._read_artifact_receipt(root)
+        if receipt.get("failures"):
+            return True
+        if not receipt:
+            # Older caches lack per-output receipts. Recover missing unique
+            # published collections without doing any I/O in the renderer.
+            return any(record.output_dataset_ids.get(name) and not (root / name).is_dir()
+                       for name in ("tables", "phases", "gpx_projects"))
+        archive = record.output_dataset_ids.get("results_archive")
+        archive_ready = bool(archive and self._artifact_available(receipt, "results_archive", archive, root))
+        return any(not self._artifact_available(receipt, name, identifier, root)
+                   for name, identifier in record.output_dataset_ids.items()
+                   if name in (*_RESULT_SUFFIXES, *_RESULT_COLLECTIONS)
+                   and not (archive_ready and name in ("plots", "diagnostics")))
+
+    def repair_result_cache(self, record: RunRecord) -> RunRecord:
+        """Background-only repair of missing declared outputs and display masks."""
+        root = record.local_output_dir
+        if root is None or self._result_cache_needs_collection(record, root):
+            return self.collect_results(record)
+        self._ensure_plot_observation(record, root)
+        return record
 
     def collect_results(self, record: RunRecord, *, force: bool = False) -> RunRecord:
         """Collect the canonical archive without changing scientific job state on failure."""
 
         job_id = record.galaxy_job_id or record.uid
         destination = self.output_root / "runs" / job_id
-        staging = destination.parent / f".{job_id}-{threading.get_ident()}.partial"
+        staging = destination.parent / f".{job_id}-{uuid.uuid4().hex}.partial"
         # Result collection only begins after Galaxy has completed Analyze.
         # Old recovered records may not carry the new analysis_status field.
         record.analysis_status = RunStatus.OK
         record.status = RunStatus.OK
         record.result_status = ResultStatus.COLLECTING
+        current_manifest = None
         try:
             try:
                 job = self._job_details(job_id)
@@ -2769,9 +2854,15 @@ class GalaxyService:
             except Exception:
                 pass
 
-            current_manifest = self._current_cache_manifest(record)
+            current_manifest = self._current_cache_manifest(record) or CacheManifest(
+                job_id=job_id, archive_dataset_id=record.output_dataset_ids.get("results_archive", "legacy-no-archive"))
             cached_manifest = self._read_cache_manifest(destination)
-            if not force and self._cache_is_current(cached_manifest, current_manifest, destination):
+            receipt = self._read_artifact_receipt(destination)
+            same_cache = self._cache_is_current(cached_manifest, current_manifest, destination)
+            changed_output = any(record.output_dataset_ids.get(name) not in (None, identifier)
+                                 for name, identifier in receipt.get("complete", {}).items())
+            reuse = not (force or changed_output or (destination / _REFRESH_RECEIPT).exists()) and same_cache
+            if reuse and receipt and not self._result_cache_needs_collection(record, destination):
                 self._ensure_plot_observation(record, destination)
                 record.cache_manifest = cached_manifest
                 record.output_dir = str(destination)
@@ -2794,32 +2885,35 @@ class GalaxyService:
                 # Recovered sessions should use durable dataset IDs. The Tool
                 # object is retained only as a fallback for older Galaxy jobs.
                 outputs = None
-            if staging.exists():
-                shutil.rmtree(staging)
-            staging.mkdir(parents=True)
+            if reuse:
+                shutil.copytree(destination, staging)
+            else:
+                staging.mkdir(parents=True)
+            complete = {name: identifier for name, identifier in receipt.get("complete", {}).items()
+                        if reuse and self._artifact_available(receipt, name, identifier, staging)
+                        and record.output_dataset_ids.get(name) == identifier}
+            members = {name: receipt["members"][name] for name in complete}
+            # Upgrade legacy caches without redownloading their canonical plots
+            # merely to recover a missing separately published GPX collection.
+            if reuse and not receipt and (staging / "results_archive.zip").is_file():
+                with zipfile.ZipFile(staging / "results_archive.zip") as archive:
+                    paths = [member.filename for member in archive.infolist() if not member.is_dir()]
+                if all((staging / path).is_file() for path in paths):
+                    complete["results_archive"] = current_manifest.archive_dataset_id
+                    members["results_archive"] = ["results_archive.zip", *paths]
             output_ids: dict[str, str] = {}
-            downloaded = 0
-            usable_downloads = 0
-            failures: list[str] = []
+            usable_downloads = len(complete)
+            failures: dict[str, str] = {}
             archive_path: Path | None = None
-            archive_extracted = False
-            suffixes = {
-                    "report": ".html",
-                    "summary": ".json",
-                    "pattern_observation": ".json",
-                    "state": ".json",
-                    "resolved_config": ".yaml",
-                    "input_manifest": ".json",
-                    "gpx_index": ".json",
-                    "results_archive": ".zip",
-                    "input_resolution_metadata": ".json",
-                    "console_output": ".txt",
-                }
+            archive_extracted = "results_archive" in complete
+            suffixes = _RESULT_SUFFIXES
             prefetched = self._prefetch_results({
                 name: (record.output_dataset_ids[name], staging / f"{name}{suffix}")
-                for name, suffix in suffixes.items() if record.output_dataset_ids.get(name)
+                for name, suffix in suffixes.items() if record.output_dataset_ids.get(name) and name not in complete
             })
             for name, suffix in suffixes.items():
+                if name in complete:
+                    continue
                 target = staging / f"{name}{suffix}"
                 dataset_id = record.output_dataset_ids.get(name)
                 dataset = None
@@ -2840,20 +2934,25 @@ class GalaxyService:
                         continue
                 except Exception as exc:
                     target.unlink(missing_ok=True)
-                    failures.append(f"{name}: {exc}")
+                    failures[name] = str(exc)
                     continue
-                downloaded += 1
                 if name == "results_archive":
                     archive_path = target
                 else:
                     usable_downloads += 1
+                    complete[name] = output_ids[name]
+                    members[name] = [target.relative_to(staging).as_posix()]
             if archive_path is not None:
                 try:
                     _extract_results_archive(archive_path, staging)
                     usable_downloads += 1
                     archive_extracted = True
+                    complete["results_archive"] = output_ids["results_archive"]
+                    with zipfile.ZipFile(archive_path) as archive:
+                        members["results_archive"] = [archive_path.relative_to(staging).as_posix(), *(
+                            member.filename for member in archive.infolist() if not member.is_dir())]
                 except Exception as exc:
-                    failures.append(f"results_archive extraction: {exc}")
+                    failures["results_archive"] = f"extraction: {exc}"
             # The archive is canonical for plots and diagnostics because it
             # preserves JSON/NPZ pairs. Galaxy's table, CIF, and GPX
             # collections are separate published outputs, so retain them even
@@ -2861,13 +2960,15 @@ class GalaxyService:
             collection_names = (
                 ("tables", "phases", "gpx_projects")
                 if archive_extracted
-                else ("plots", "tables", "phases", "gpx_projects", "diagnostics")
+                else _RESULT_COLLECTIONS
             )
             prefetched_collections = self._prefetch_results({
                 name: (record.output_dataset_ids[name], staging / name)
-                for name in collection_names if record.output_dataset_ids.get(name)
+                for name in collection_names if record.output_dataset_ids.get(name) and name not in complete
             }, collections=True)
             for name in collection_names:
+                if name in complete:
+                    continue
                 collection_id = record.output_dataset_ids.get(name)
                 collection = None
                 if not collection_id:
@@ -2886,40 +2987,50 @@ class GalaxyService:
                         _download_collection_archive(collection, target)
                 except Exception as exc:
                     shutil.rmtree(target, ignore_errors=True)
-                    if not archive_extracted:
-                        failures.append(f"{name}: {exc}")
+                    failures[name] = str(exc)
+                    if collection is not None and getattr(collection, "id", None):
+                        output_ids[name] = str(collection.id)
                     continue
-                downloaded += 1
                 usable_downloads += 1
                 output_ids[name] = collection_id or str(getattr(collection, "id", ""))
-            if not downloaded or not usable_downloads:
-                details = "; ".join(failures)
+                complete[name] = output_ids[name]
+                members[name] = [path.relative_to(staging).as_posix() for path in target.rglob("*") if path.is_file()]
+            record.output_dataset_ids.update(output_ids)
+            if failures and self._has_result_artifacts(destination) and (
+                    not reuse or not receipt or not receipt.get("failures")):
+                # Never mix a newly downloaded summary with previous fits or
+                # projects after an incomplete replacement attempt.
+                (destination / _REFRESH_RECEIPT).write_text(json.dumps(dict(
+                    attempted_manifest=current_manifest.model_dump(mode="json"), failures=failures)), encoding="utf-8")
+                raise RuntimeError("Incomplete result downloads: " + "; ".join(f"{name}: {error}" for name, error in failures.items()))
+            if not usable_downloads:
+                details = "; ".join(f"{name}: {error}" for name, error in failures.items())
                 message = (
                     "Galaxy did not return the declared result outputs"
                     if outputs is None and not record.output_dataset_ids
                     else "Galaxy returned no downloadable RADAR-PD result artifacts"
                 )
                 raise RuntimeError(f"{message}: {details}" if details else message)
-            manifest = current_manifest or CacheManifest(
-                job_id=job_id,
-                archive_dataset_id=record.output_dataset_ids.get("results_archive", "legacy-no-archive"),
-            )
+            manifest = current_manifest
+            if manifest.archive_dataset_id == "legacy-no-archive" and record.output_dataset_ids.get("results_archive"):
+                manifest = manifest.model_copy(update={"archive_dataset_id": record.output_dataset_ids["results_archive"]})
             (staging / ".radar-pd-cache.json").write_text(manifest.model_dump_json(indent=2), encoding="utf-8")
+            (staging / _ARTIFACT_RECEIPT).write_text(json.dumps(dict(
+                schema="radar-pd-cache-artifacts/v1", complete=complete, members=members, failures=failures)), encoding="utf-8")
+            (staging / _REFRESH_RECEIPT).unlink(missing_ok=True)
             self._ensure_plot_observation(record, staging, allow_download=False)
             with self._lock:
-                if destination.exists():
-                    shutil.rmtree(destination)
-                _publish_staging_directory(staging, destination)
+                _replace_result_directory(staging, destination)
             record.output_dataset_ids.update(output_ids)
             record.output_dir = str(destination)
             record.status = record.analysis_status or RunStatus.OK
             record.analysis_status = record.status
-            record.result_status = ResultStatus.READY
+            record.result_status = ResultStatus.STALE if failures else ResultStatus.READY
             record.cache_manifest = manifest
-            record.stage = "Results ready"
+            record.stage = "Results available; downloads incomplete" if failures else "Results ready"
             record.progress = 100
             record.message = (
-                f"Results loaded; {len(failures)} duplicate or optional Galaxy output(s) were unavailable."
+                "Results available; downloads incomplete for " + ", ".join(sorted(failures)) + ". Reopen results to retry missing outputs."
                 if failures
                 else ""
             )
@@ -2927,10 +3038,22 @@ class GalaxyService:
             if staging.exists():
                 shutil.rmtree(staging, ignore_errors=True)
             record.status = record.analysis_status or RunStatus.OK
-            record.result_status = ResultStatus.ERROR
-            record.stage = "Analysis complete; results unavailable"
+            retained = self._has_result_artifacts(destination)
+            record.result_status = ResultStatus.STALE if retained else ResultStatus.ERROR
+            record.stage = "Results retained; refresh incomplete" if retained else "Analysis complete; results unavailable"
             record.progress = 100
-            record.message = f"Analysis finished, but result download failed: {exc}"
+            record.message = (f"Result refresh incomplete: {exc}. Showing the previous local cache; current downloads are incomplete."
+                              if retained else f"Analysis finished, but result download failed: {exc}")
+            if retained:
+                record.output_dir = str(destination)
+                record.cache_manifest = self._read_cache_manifest(destination)
+                if not (destination / _REFRESH_RECEIPT).exists():
+                    try:
+                        (destination / _REFRESH_RECEIPT).write_text(json.dumps(dict(
+                            attempted_manifest=current_manifest.model_dump(mode="json") if current_manifest else None,
+                            failures={"refresh": str(exc)})), encoding="utf-8")
+                    except OSError:
+                        pass
         record.updated_utc = datetime.now(timezone.utc).isoformat()
         return record
 

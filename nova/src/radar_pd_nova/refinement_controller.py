@@ -1103,13 +1103,19 @@ class RefinementMixin(GuidedRefinementMixin):
 
     async def _select_refinement_job(self,uid):
         s=self.server.state;w=self._refinement_workspace
+        owner=object();self._refinement_selection_owner=owner
         if not uid:
             self._clear_refinement_output();s.flush();return
         if w is None:return
         job=w.state['jobs'].get(uid)
         if not job or job['source']['experiment']!=s.rf_experiment:return
         experiment=s.rf_experiment
-        def current():return self._refinement_workspace is w and s.rf_selected_job==uid and s.rf_experiment==experiment
+        def current():return (self._refinement_workspace is w and s.rf_selected_job==uid
+            and s.rf_experiment==experiment and self._refinement_selection_owner is owner
+            and w.state['jobs'].get(uid) is job)
+        # Release the old curve before assigning a new scan's heading. Keep
+        # visibility false across every awaited recovery or baseline read.
+        s.rf_has_output=False;s.rf_fit=figure_json(empty_figure('Loading the selected verified fit'))
         s.rf_selected_job=uid;s.rf_selected_title=refinement_result_title(job,w.state.get('recipes',{}))
         s.rf_selected_message=job['message'];s.rf_error='';s.rf_stage='final';s.rf_has_output=False;s.rf_output_provenance='';s.rf_parameter_warnings=[]
         # A running scan or a slow artifact recovery must not inherit another
@@ -1132,7 +1138,6 @@ class RefinementMixin(GuidedRefinementMixin):
         s.rf_stages=([dict(title='Final refined result',value='final')] if result.get('final_view') else [])+[dict(title=f"{i+1}. {v['title']}",value=v['id']) for i,v in enumerate(stages)]
         baseline=None
         if s.rf_stages:
-            s.rf_has_output=True
             if not result.get('final_view'):s.rf_stage=s.rf_stages[-1]['value']
             try:
                 baseline=await asyncio.to_thread(self._read_refinement_view,job,result['baseline_view'])
@@ -1147,13 +1152,15 @@ class RefinementMixin(GuidedRefinementMixin):
                     s.rf_display='polished'
             except Exception as exc:
                 if not current():return
-                s.rf_error=str(exc);s.rf_has_output=False
+                s.rf_error=str(exc);s.rf_has_output=False;baseline=None
         stage_labels={v['gpx']:f"Stage {i+1} GPX · {v['title']}" for i,v in enumerate(stages)}
         s.rf_downloads=[dict(title=('Final refined GPX' if name==result.get('final_gpx') else stage_labels.get(name,name)),value=name,
             filename=refinement_artifact_filename(job,name,w.state.get('recipes',{})))
             for name in sorted(result.get('files',{})) if name.endswith('.gpx') or name in ['refine.py','polished.execution.json','plan.json','approval.json']]
         s.rf_download=(result.get('final_gpx') or (stages[-1]['gpx'] if stages else (s.rf_downloads[0]['value'] if s.rf_downloads else '')))
         if result:s.rf_selected_message=refinement_status_message(result,baseline,source=job['source'])
+        if not current():return
+        s.rf_has_output=baseline is not None
         self._refinement_plot_changed();self._refinement_trend_changed();s.flush()
 
     def _refinement_plot_changed(self,**_):
