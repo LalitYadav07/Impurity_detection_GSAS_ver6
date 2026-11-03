@@ -699,3 +699,56 @@ def test_numeric_moment_bounds_do_not_choose_geometry(source, user_request):
 def test_geometry_qualifiers_and_bounds_do_not_hide_conflicts_or_ambiguity(source, user_request):
     with pytest.raises(ValueError,match='conflicting moment models|geometry instruction needs an explicit choice'):
         payload(user_request,source)
+
+
+@pytest.mark.parametrize('bound',[
+    'Bound each magnetic moment to 6 Bohr magnetons.',
+    'Bound every magnetic moment to 6.0 muB.',
+    'Bound the magnetic moment to .5 µB.',
+    'Bound all magnetic moments to 6e0 Bohr magnetons.',
+    'Bound magnetic moments to 6 μB.',
+])
+def test_explicit_numeric_moment_bound_does_not_choose_geometry(source,bound):
+    assert 'moment_model' not in payload(bound,source)['declared']
+    for model in ('symmetry_allowed','collinear'):
+        assert payload(f'Use moment_model={model}. '+bound,source)['declared']['moment_model']==model
+
+
+@pytest.mark.parametrize('model',['symmetry_allowed','collinear'])
+def test_real_bound_and_x_dominated_start_request_reaches_one_model_call(source,intent,model):
+    request=(f'Use moment_model={model}. Bound each magnetic moment to 6 Bohr magnetons. '
+             'Use x-dominated mixed starts.')
+    intent['settings'].update(moment_model=model,maximum_moment=6.,directions=['x'])
+    client=Client([intent]);result=make_intent(request,source,client=client)
+    assert len(client.calls)==1
+    assert result['intent']['settings']['moment_model']==model
+    assert result['intent']['settings']['maximum_moment']==6.
+    assert result['intent']['settings']['directions']==['x']
+
+
+@pytest.mark.parametrize('wording',[
+    'Use x-dominated mixed starts.',
+    'Use x-dominant mixed starts.',
+    'Bound the magnetic amplitude to 6 Bohr magnetons. Use x-dominated mixed starts.',
+])
+def test_mixed_start_wording_does_not_introduce_a_geometry_choice(source,wording):
+    assert 'moment_model' not in payload(wording,source)['declared']
+
+
+def test_negated_numeric_bound_does_not_negate_geometry(source):
+    request='Use moment_model=symmetry_allowed. Do not bound each magnetic moment to 6 Bohr magnetons.'
+    assert payload(request,source)['declared']['moment_model']=='symmetry_allowed'
+
+
+@pytest.mark.parametrize('wording',[
+    'Use moment_model=symmetry_allowed. Bound each magnetic moment to 6 Bohr magnetons, but keep moments collinear.',
+    'Use moment_model=symmetry_allowed. Bound each magnetic moment to 6 Bohr magnetons. Do not allow canting.',
+    'Use moment_model=symmetry_allowed. Bound each magnetic moment to 6 Bohr magnetons along x.',
+    'Use moment_model=symmetry_allowed. Bound each magnetic moment to 6 Bohr magnetons or keep moments collinear.',
+    'Bound each magnetic moment between 0 and 6 Bohr magnetons.',
+    'Bound each magnetic moment component to 6 Bohr magnetons.',
+    'Bound each magnetic moment to a fixed direction.',
+])
+def test_numeric_bound_exemption_does_not_hide_geometry_or_unsupported_scope(source,wording):
+    with pytest.raises(ValueError,match='conflicting moment models|geometry instruction needs an explicit choice'):
+        payload(wording,source)

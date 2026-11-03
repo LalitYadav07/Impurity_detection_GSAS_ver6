@@ -147,8 +147,11 @@ def _requested_moment_model(request):
     symmetry_choice = (r'symmetry[- _]allowed(?:\s+(?:magnetic\s+)?(?:moments?|components?|moment\s+components?))?'
                        r'(?:\s+model)?(?:\s+(?:including|with|allowing)\s+canting)?')
     # A numeric ceiling alone does not choose collinear or free geometry.
-    numeric_moment_bound = (r'(?:(?:set|use|keep)\s+)?(?:the\s+)?(?:maximum|max)\s+(?:magnetic\s+)?moment\s*'
-                            r'(?:(?:to|of|=|:)\s*)?[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?\s*'
+    numeric_moment_bound = (r'(?:'
+                            r'(?:(?:set|use|keep)\s+)?(?:the\s+)?(?:maximum|max)\s+(?:magnetic\s+)?moment\s*'
+                            r'(?:(?:to|of|=|:)\s*)?|'
+                            r'bound\s+(?:(?:each|every|all|the)\s+)?(?:magnetic\s+)?moments?\s+to\s+)'
+                            r'[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?\s*'
                             r'(?:mu[_ -]?b|[\u00b5\u03bc]b|bohr(?:\s+magnetons?)?|microbohr\s+magnetons?)?')
     historical = (r'\b(?:previous(?:ly)?|prior|earlier|formerly|last\s+(?:run|fit)|historical)\b|'
                   r'^(?:which|that|it)\s+(?:was|were|had been)\b|'
