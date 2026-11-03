@@ -1,9 +1,444 @@
 {
-  "schema": "radar-pd-user-guide/v1",
-  "application_version": "0.4.36",
-  "screenshot_version": "0.4.34",
-  "screenshots": 52,
+  "schema": "radar-pd-user-guide/v2",
+  "application_version": "0.6.32",
+  "pages": [
+    "index.html",
+    "reference-0.4.34.html"
+  ],
+  "reference_version": "0.4.34",
+  "reference_statistics": {
+    "lessons": 17,
+    "options": 253,
+    "rendered_options": 254,
+    "screenshot_templates": 53
+  },
+  "tasks": [
+    "start",
+    "live-setup",
+    "inputs",
+    "check",
+    "monitor",
+    "fit",
+    "trends",
+    "transitions",
+    "refine",
+    "refined-results",
+    "models",
+    "live-acquisition",
+    "recover",
+    "finish"
+  ],
+  "screenshots": 57,
+  "captures": {
+    "03-fresh-workspace": {
+      "path": "assets/6650a61bd720b5436b81.jpg",
+      "application_version": "0.4.34",
+      "captured": "2026-10-29",
+      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "role": "historical_example"
+    },
+    "01-new-history": {
+      "path": "assets/b9d5139cafdeb600b591.jpg",
+      "application_version": "0.4.34",
+      "captured": "2026-10-29",
+      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "role": "historical_example"
+    },
+    "02-launch-tool": {
+      "path": "assets/fd2dbb4afe01d19cb485.jpg",
+      "application_version": "0.4.34",
+      "captured": "2026-10-29",
+      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "role": "historical_example"
+    },
+    "04-discover-ipts": {
+      "path": "assets/fc53d6c04c37109bb31a.jpg",
+      "application_version": "0.4.34",
+      "captured": "2026-10-29",
+      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "role": "historical_example"
+    },
+    "06-scan-bank-options": {
+      "path": "assets/3dd4838a6d56417388ab.jpg",
+      "application_version": "0.4.34",
+      "captured": "2026-10-29",
+      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "role": "historical_example"
+    },
+    "05-select-sample": {
+      "path": "assets/1b2b34d6981845c8ae19.jpg",
+      "application_version": "0.4.34",
+      "captured": "2026-10-29",
+      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "role": "historical_example"
+    },
+    "07-two-cif-input": {
+      "path": "assets/5c18a7298231e540daf2.jpg",
+      "application_version": "0.4.34",
+      "captured": "2026-10-29",
+      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "role": "historical_example"
+    },
+    "08-library-build": {
+      "path": "assets/98970a49a43428401f1c.jpg",
+      "application_version": "0.4.34",
+      "captured": "2026-10-29",
+      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "role": "historical_example"
+    },
+    "09-library-ready": {
+      "path": "assets/9764e7d5abd366a653f3.jpg",
+      "application_version": "0.4.34",
+      "captured": "2026-10-29",
+      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "role": "historical_example"
+    },
+    "13-review-analysis-contract": {
+      "path": "assets/a8be02ea5f7eed336979.jpg",
+      "application_version": "0.4.34",
+      "captured": "2026-10-29",
+      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "role": "historical_example"
+    },
+    "10-import-analysis-settings": {
+      "path": "assets/7741ffe667bdd9539ee5.jpg",
+      "application_version": "0.4.34",
+      "captured": "2026-10-29",
+      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "role": "historical_example"
+    },
+    "12-auto-profile": {
+      "path": "assets/4305560ad358389ecad9.jpg",
+      "application_version": "0.4.34",
+      "captured": "2026-10-29",
+      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "role": "historical_example"
+    },
+    "06b-bank-wavelength": {
+      "path": "assets/fe125ef98e627cd6c801.jpg",
+      "application_version": "0.4.34",
+      "captured": "2026-10-29",
+      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "role": "historical_example"
+    },
+    "11-preflight-cohort": {
+      "path": "assets/89d9703a5937f81477c3.jpg",
+      "application_version": "0.4.34",
+      "captured": "2026-10-29",
+      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "role": "historical_example"
+    },
+    "15-watch-live-queue": {
+      "path": "assets/17e4e3303247b640a97a.jpg",
+      "application_version": "0.4.34",
+      "captured": "2026-10-29",
+      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "role": "historical_example"
+    },
+    "14-start-series": {
+      "path": "assets/c1b5c472d1b8351a038a.jpg",
+      "application_version": "0.4.34",
+      "captured": "2026-10-29",
+      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "role": "historical_example"
+    },
+    "16-first-results": {
+      "path": "assets/ae70aefbbc3075138ab2.jpg",
+      "application_version": "0.4.34",
+      "captured": "2026-10-29",
+      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "role": "historical_example"
+    },
+    "30-base-series-complete": {
+      "path": "assets/eb7cf8c60c6c54e39c2b.jpg",
+      "application_version": "0.4.34",
+      "captured": "2026-10-29",
+      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "role": "historical_example"
+    },
+    "37-original-radar-fit": {
+      "path": "assets/03b1328a2f20a2b46f93.jpg",
+      "application_version": "0.4.34",
+      "captured": "2026-10-29",
+      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "role": "historical_example"
+    },
+    "36-open-original-scan": {
+      "path": "assets/33eb2a9a60ea6dadefd5.jpg",
+      "application_version": "0.4.34",
+      "captured": "2026-10-29",
+      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "role": "historical_example"
+    },
+    "34b-relative-lattice-temperature": {
+      "path": "assets/cadf7daf3d426236699f.jpg",
+      "application_version": "0.4.34",
+      "captured": "2026-10-29",
+      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "role": "historical_example"
+    },
+    "31a-results-axis-controls": {
+      "path": "assets/3421960fe7eb051a4f35.jpg",
+      "application_version": "0.4.34",
+      "captured": "2026-10-29",
+      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "role": "historical_example"
+    },
+    "31b-fractions-temperature": {
+      "path": "assets/7a7f0c52c822fc9314e3.jpg",
+      "application_version": "0.4.34",
+      "captured": "2026-10-29",
+      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "role": "historical_example"
+    },
+    "32-lattice-controls": {
+      "path": "assets/7962ac75b361c7d4c7a1.jpg",
+      "application_version": "0.4.34",
+      "captured": "2026-10-29",
+      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "role": "historical_example"
+    },
+    "33-mgo-lattice-temperature": {
+      "path": "assets/88c49d12b25947928d71.jpg",
+      "application_version": "0.4.34",
+      "captured": "2026-10-29",
+      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "role": "historical_example"
+    },
+    "34a-multiple-lattice-controls": {
+      "path": "assets/ff2125e34a54ca4330be.jpg",
+      "application_version": "0.4.34",
+      "captured": "2026-10-29",
+      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "role": "historical_example"
+    },
+    "35-export-observations": {
+      "path": "assets/e6266f6779d9029ae886.jpg",
+      "application_version": "0.4.34",
+      "captured": "2026-10-29",
+      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "role": "historical_example"
+    },
+    "39-pattern-map-ribbon": {
+      "path": "assets/ee3fa8c2fbcccd8fda6e.jpg",
+      "application_version": "0.4.34",
+      "captured": "2026-10-29",
+      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "role": "historical_example"
+    },
+    "38-pattern-map-controls": {
+      "path": "assets/772c358eb2e4663fbf1f.jpg",
+      "application_version": "0.4.34",
+      "captured": "2026-10-29",
+      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "role": "historical_example"
+    },
+    "39b-select-map-scan": {
+      "path": "assets/ee3fa8c2fbcccd8fda6e.jpg",
+      "application_version": "0.4.34",
+      "captured": "2026-10-29",
+      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "role": "historical_example"
+    },
+    "21-inspect-atoms": {
+      "path": "assets/9660db40099ceb7408ee.jpg",
+      "application_version": "0.4.34",
+      "captured": "2026-10-29",
+      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "role": "historical_example"
+    },
+    "20-refinement-scope": {
+      "path": "assets/4838948c3e07db7167a5.jpg",
+      "application_version": "0.4.34",
+      "captured": "2026-10-29",
+      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "role": "historical_example"
+    },
+    "23-review-stages": {
+      "path": "assets/3a61c91b59d934b85b8c.jpg",
+      "application_version": "0.4.34",
+      "captured": "2026-10-29",
+      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "role": "historical_example"
+    },
+    "22-enter-recipe-request": {
+      "path": "assets/bd1a2791739d55199a73.jpg",
+      "application_version": "0.4.34",
+      "captured": "2026-10-29",
+      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "role": "historical_example"
+    },
+    "24-review-bound-usage": {
+      "path": "assets/9b65aa9d98430c35eea0.jpg",
+      "application_version": "0.4.34",
+      "captured": "2026-10-29",
+      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "role": "historical_example"
+    },
+    "24b-model-usage": {
+      "path": "assets/b6f9268209b0f23f8751.jpg",
+      "application_version": "0.4.34",
+      "captured": "2026-10-29",
+      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "role": "historical_example"
+    },
+    "25-approved-scope": {
+      "path": "assets/35806fef83309d390c90.jpg",
+      "application_version": "0.4.34",
+      "captured": "2026-10-29",
+      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "role": "historical_example"
+    },
+    "40-refinement-complete": {
+      "path": "assets/847a5ad890e915715a5c.jpg",
+      "application_version": "0.4.34",
+      "captured": "2026-10-29",
+      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "role": "historical_example"
+    },
+    "26-refinement-queue": {
+      "path": "assets/f1a1c0b79d71871cefcc.jpg",
+      "application_version": "0.4.34",
+      "captured": "2026-10-29",
+      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "role": "historical_example"
+    },
+    "27-refinement-progress": {
+      "path": "assets/673f93e7ae4dfc6e883c.jpg",
+      "application_version": "0.4.34",
+      "captured": "2026-10-29",
+      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "role": "historical_example"
+    },
+    "42b-refined-fit-peaks": {
+      "path": "assets/8fec7422c39cafe31908.jpg",
+      "application_version": "0.4.34",
+      "captured": "2026-10-29",
+      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "role": "historical_example"
+    },
+    "41-select-refinement-stage": {
+      "path": "assets/f21dbfb09f5fc3bfe783.jpg",
+      "application_version": "0.4.34",
+      "captured": "2026-10-29",
+      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "role": "historical_example"
+    },
+    "42-refined-fit": {
+      "path": "assets/50301fe20591e9dde30f.jpg",
+      "application_version": "0.4.34",
+      "captured": "2026-10-29",
+      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "role": "historical_example"
+    },
+    "43-parameter-uncertainties": {
+      "path": "assets/262d4b796f15a6c0299f.jpg",
+      "application_version": "0.4.34",
+      "captured": "2026-10-29",
+      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "role": "historical_example"
+    },
+    "44-refined-temperature-trend": {
+      "path": "assets/d8be3b5c767d0f1cf7a3.jpg",
+      "application_version": "0.4.34",
+      "captured": "2026-10-29",
+      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "role": "historical_example"
+    },
+    "48-native-gsasii-project": {
+      "path": "assets/ae3dff66fd85ca9cdb1f.jpg",
+      "application_version": "0.4.34",
+      "captured": "2026-10-29",
+      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "role": "historical_example"
+    },
+    "45-select-download": {
+      "path": "assets/e653afeb193ee5c33bc7.jpg",
+      "application_version": "0.4.34",
+      "captured": "2026-10-29",
+      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "role": "historical_example"
+    },
+    "46-direct-gsasii-launch": {
+      "path": "assets/ab5ba06c85ec5ac4f67a.jpg",
+      "application_version": "0.4.34",
+      "captured": "2026-10-29",
+      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "role": "historical_example"
+    },
+    "47-open-hosted-desktop": {
+      "path": "assets/0a8a407c05b3b6bbf214.jpg",
+      "application_version": "0.4.34",
+      "captured": "2026-10-29",
+      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "role": "historical_example"
+    },
+    "49-returned-gsasii-output": {
+      "path": "assets/90ef7a0752d39f08b0da.jpg",
+      "application_version": "0.4.34",
+      "captured": "2026-10-29",
+      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "role": "historical_example"
+    },
+    "51-end-session-dialog": {
+      "path": "assets/2e140c949aec17afc529.jpg",
+      "application_version": "0.4.34",
+      "captured": "2026-10-29",
+      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "role": "historical_example"
+    },
+    "50-pause-finite-replay": {
+      "path": "assets/a532e7184c4ba042a0a4.jpg",
+      "application_version": "0.4.34",
+      "captured": "2026-10-29",
+      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "role": "historical_example"
+    },
+    "52-clear-workspace-dialog": {
+      "path": "assets/bbb9dd957a1265ebb5cb.jpg",
+      "application_version": "0.4.34",
+      "captured": "2026-10-29",
+      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "role": "historical_example"
+    },
+    "launch-031": {
+      "path": "assets/361502b39babaebe0800.jpg",
+      "application_version": "0.6.31",
+      "captured": "2026-11-03",
+      "context": "NDIP-test launch form; no scientific analysis submitted.",
+      "role": "interface"
+    },
+    "workspace-031": {
+      "path": "assets/f4c192ed46d2513559be.jpg",
+      "application_version": "0.6.31",
+      "captured": "2026-11-03",
+      "context": "Empty connected 0.6.31 workspace; no scientific analysis submitted.",
+      "role": "interface"
+    },
+    "current-start": {
+      "path": "assets/9bf4bedcf48877ccf4de.jpg",
+      "application_version": "0.6.31",
+      "captured": "2026-11-03",
+      "context": "Fresh 0.6.31 NDIP-test session; empty setup and no scientific analyses.",
+      "role": "interface"
+    },
+    "current-live-setup": {
+      "path": "assets/02d7dae857bfce79553f.jpg",
+      "application_version": "0.6.31",
+      "captured": "2026-11-03",
+      "context": "Fresh 0.6.31 NDIP-test session; empty setup and no scientific analyses.",
+      "role": "interface"
+    },
+    "live-panel-031": {
+      "path": "assets/d1d74e33728454434632.jpg",
+      "application_version": "0.6.31",
+      "captured": "2026-11-03",
+      "context": "Fresh 0.6.31 NDIP-test session; empty setup and no scientific analyses.",
+      "role": "interface"
+    }
+  },
   "files": {
+    "assets/02d7dae857bfce79553f.jpg": "02d7dae857bfce79553f67cddc8d20ba704a5306558e4908367310557cc864d4",
     "assets/03b1328a2f20a2b46f93.jpg": "03b1328a2f20a2b46f93355d959f2719c1755ada39ffce63812a8306c7497cca",
     "assets/0a8a407c05b3b6bbf214.jpg": "0a8a407c05b3b6bbf2143228ae8f16ad7d12b04f07618fe25d27495dc2ea8afa",
     "assets/17e4e3303247b640a97a.jpg": "17e4e3303247b640a97ab9fd0e2e77b1bc0c11b0020a56eefe4f26d7de7d1532",
@@ -13,6 +448,7 @@
     "assets/33eb2a9a60ea6dadefd5.jpg": "33eb2a9a60ea6dadefd589b53a42ac4a3bff226683feb5457ebd47cead9395d1",
     "assets/3421960fe7eb051a4f35.jpg": "3421960fe7eb051a4f35d98985730eea4a73448ecb48e333d8cf2ca13f926b8d",
     "assets/35806fef83309d390c90.jpg": "35806fef83309d390c90e02ea90ff1e2818dc0cbdda7801223cee711cbcfca29",
+    "assets/361502b39babaebe0800.jpg": "361502b39babaebe0800a7e13992621c23d927abca696fc866bcea427b27a8f1",
     "assets/3a61c91b59d934b85b8c.jpg": "3a61c91b59d934b85b8c80e70bcb30fdb20e40d6477dbb2387c95319174fa2f6",
     "assets/3dd4838a6d56417388ab.jpg": "3dd4838a6d56417388ab09a53870fbeeafec9cddc6d10b9274456f25e9dbaece",
     "assets/4305560ad358389ecad9.jpg": "4305560ad358389ecad91b387d7275f0031bae27f242491adc2b9550970b57d5",
@@ -34,6 +470,7 @@
     "assets/9764e7d5abd366a653f3.jpg": "9764e7d5abd366a653f36b771aa1df67bde212a425c937800a689b2aa6c825a0",
     "assets/98970a49a43428401f1c.jpg": "98970a49a43428401f1c01dc5baebe01c1b51ff563eb56dcb4a97d5547c4923a",
     "assets/9b65aa9d98430c35eea0.jpg": "9b65aa9d98430c35eea0e8cd58d2a34fe76e1694c67524a7e75f9b134d4f99d7",
+    "assets/9bf4bedcf48877ccf4de.jpg": "9bf4bedcf48877ccf4de218d44e3d8cf20f7e75b7ab2564114588ed0efe39c4d",
     "assets/a532e7184c4ba042a0a4.jpg": "a532e7184c4ba042a0a4d9135669a0c7a41478df6ea54b6a40a9c6114a1cc68e",
     "assets/a8be02ea5f7eed336979.jpg": "a8be02ea5f7eed33697969da1e1fe37c36b8617ab5c65e89d9da6eac95e75aaf",
     "assets/ab5ba06c85ec5ac4f67a.jpg": "ab5ba06c85ec5ac4f67a11ff99af68f046fe02d0bbb656af00b8730fc65bcfe4",
@@ -45,6 +482,7 @@
     "assets/bd1a2791739d55199a73.jpg": "bd1a2791739d55199a731e4504ce61de59c49aa832ee6fc5caaf644d33ec7fb1",
     "assets/c1b5c472d1b8351a038a.jpg": "c1b5c472d1b8351a038af9232f60d6518aa2917971a9936da37971598047a00d",
     "assets/cadf7daf3d426236699f.jpg": "cadf7daf3d426236699f943353f845eca67fd08b5dbea0eae7a09b48ee511953",
+    "assets/d1d74e33728454434632.jpg": "d1d74e33728454434632ab83c0819462860670e7869f9fd8e2e57abbf376d070",
     "assets/d8be3b5c767d0f1cf7a3.jpg": "d8be3b5c767d0f1cf7a37c603488d8baedc10dea5bafdc6f1de43a9077cd9ea2",
     "assets/e6266f6779d9029ae886.jpg": "e6266f6779d9029ae88616999e2102f89836adbbed1663448df992a09b546294",
     "assets/e653afeb193ee5c33bc7.jpg": "e653afeb193ee5c33bc7c6e13ed39dec311ab5ca9e4621b42b13557215334968",
@@ -52,15 +490,20 @@
     "assets/ee3fa8c2fbcccd8fda6e.jpg": "ee3fa8c2fbcccd8fda6e46821510707f1bc4eb7ded32ff9d2ad03a2e43dde6d2",
     "assets/f1a1c0b79d71871cefcc.jpg": "f1a1c0b79d71871cefccd92a9d2fdbaf0a7c6d43dc173c666e173c6a9b448fa6",
     "assets/f21dbfb09f5fc3bfe783.jpg": "f21dbfb09f5fc3bfe78376a98e6f4c34b220577cefba339de7f79f6f91290bd8",
+    "assets/f4c192ed46d2513559be.jpg": "f4c192ed46d2513559be27d982e145f3b293882783de5672446acb5385fce261",
     "assets/fc53d6c04c37109bb31a.jpg": "fc53d6c04c37109bb31ab3d5229105c39b6ee75eab7325d8397b0932110f3a9c",
     "assets/fd2dbb4afe01d19cb485.jpg": "fd2dbb4afe01d19cb48518d6c30a192c45c3c2af8560638d27a791b548d2c1f1",
     "assets/fe125ef98e627cd6c801.jpg": "fe125ef98e627cd6c801d7ee43c340537394df5b483555ba70b11d9fc8e476cf",
     "assets/ff2125e34a54ca4330be.jpg": "ff2125e34a54ca4330be10216af2b81c44e4bc4ed2ed09fe7ef801d7bc53795d",
-    "index.html": "5e2579337551b23ae175733aa59c8e9e2d6917c10f8f05a64d7c7911d4559e6d",
+    "guide.css": "5c42c1e1efb87a99c78d01e726a5856492245faff6eae738f116da679777ce1a",
+    "guide.js": "4ab14ce0c86f67a2d8b3f8cbe29a2f49e62ca1e03bd6d1bcd9aba264c118930e",
+    "index.html": "af86279118011dc8175802af1a3f168ee7ae132604b7d233f45cd18271ea915f",
     "inputs/ages-analysis-settings.yaml": "fbbff1d875b7b38f963c7edfe55ef019bdc01acc5e649c2918b3ae8e428656fc",
     "inputs/approved-refinement-recipe.json": "4e8e9d6365a47df527566ad20caaa4eb3a53b87e6d34bd7360ff0aeca94855fd",
     "inputs/llm-refinement-request.txt": "8bb6e275e5e675c32442279b246b1eaf38632fd6689b07133ce2c06139291283",
-    "inputs/reviewed-temperature-axis.csv": "b52ed7df279fb3676096f5ad778ade85078e4dd171f020095155746b1c657de5"
+    "inputs/reviewed-temperature-axis.csv": "b52ed7df279fb3676096f5ad778ade85078e4dd171f020095155746b1c657de5",
+    "reference-0.4.34.html": "444249c384b5620e5da4b87c0cea39756809e708156126d6c4babeca0b0dd7e6",
+    "screenshot-sources.json": "db1ad5306df199f1b6491a57b95f832c665e6f33673698cdf5ba2c8e996eaa1b"
   },
   "inputs": [
     "ages-analysis-settings.yaml",
@@ -68,5 +511,6 @@
     "llm-refinement-request.txt",
     "approved-refinement-recipe.json"
   ],
-  "licensed_cif_files_redistributed": false
+  "licensed_cif_files_redistributed": false,
+  "scientific_jobs_submitted": 0
 }
