@@ -757,16 +757,19 @@ def test_browsing_other_results_during_pending_ack_keeps_same_approved_wave(tmp_
     app._refinement_store=lambda:None
     state=SimpleNamespace(sx_slots=2,sx_parallel_jobs=1,sx_campaign='approved-campaign',rf_experiment='experiment-a',flush=lambda:None)
     app.server=SimpleNamespace(state=state)
-    def refresh():
+    refreshed=[]
+    app.refresh_symmetry=lambda:refreshed.append(state.sx_campaign)
+    original_sleep=asyncio.sleep
+    async def short_sleep(seconds):
+        # User navigation is independent of the background driver's refresh.
         if t.attempts==1:state.sx_campaign='viewed-campaign';state.rf_experiment='experiment-b'
         elif t.attempts==2:state.sx_campaign='approved-campaign';state.rf_experiment='experiment-a'
-    app.refresh_symmetry=refresh
-    original_sleep=asyncio.sleep
-    async def short_sleep(seconds):await original_sleep(0)
+        await original_sleep(0)
     monkeypatch.setattr(controller.asyncio,'sleep',short_sleep)
     asyncio.run(app._drive_symmetry_campaign(C(),t))
     assert events==['begin','reserve','POST fixed intent','current state saved']
     assert t.attempts==3 and state.rf_experiment=='experiment-a'
+    assert refreshed and 'viewed-campaign' not in refreshed
 
 
 def test_canceling_driver_waits_for_its_shielded_flush_before_aborting(tmp_path):

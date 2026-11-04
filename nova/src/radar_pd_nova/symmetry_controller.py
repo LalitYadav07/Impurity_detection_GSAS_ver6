@@ -918,6 +918,18 @@ class SymmetryMixin(KSearchMixin):
         for result in results:
             if isinstance(result,BaseException):raise result
 
+    def _refresh_campaign_view(self,campaign):
+        """Refresh only when this driver's campaign is being inspected.
+
+        A different, restored campaign has its own read-only recovery pass.
+        Reopening that pass on every background scheduler tick repeatedly
+        hides its controls and rereads all of its saved result archives.
+        Selection changes and explicit Refresh evidence still audit that view.
+        """
+        selected=getattr(self.server.state,'sx_campaign','')
+        if selected and selected!=campaign.root.name:return
+        self.refresh_symmetry()
+
     async def _await_model_checkpoint_work(self,task,campaign,transport,*,ready_before=None):
         """Keep collecting accepted work while a durable upload/POST settles.
 
@@ -935,7 +947,7 @@ class SymmetryMixin(KSearchMixin):
                 ready=current
             if done:return await asyncio.shield(task)
             await asyncio.to_thread(tick_model_campaign,campaign,CollectOnlyTransport(transport),slots=int(self.server.state.sx_slots))
-            self.refresh_symmetry()
+            self._refresh_campaign_view(campaign)
 
     def _model_checkpoint_pending(self,campaign,error):
         self._model_checkpoint_errors[campaign.root.name]=error
@@ -945,7 +957,7 @@ class SymmetryMixin(KSearchMixin):
             f'Recovery checkpoint {error.dataset_id} is still {error.state}. '
             'Accepted jobs continue and their results are collected. New batches wait for the existing upload; no replacement is posted while it is pending.')
         campaign.set_setting('checkpoint_notice',notice)
-        self.refresh_symmetry()
+        self._refresh_campaign_view(campaign)
 
     async def _flush_model_dispatch_wave(self,campaign,transport):
         """Retry one frozen intent, without another scheduler admission pass."""
@@ -1060,14 +1072,14 @@ class SymmetryMixin(KSearchMixin):
                     for _ in range(wave):
                         self._model_tick_task=asyncio.create_task(asyncio.to_thread(tick_model_campaign,campaign,tick_transport,slots=int(self.server.state.sx_slots)))
                         trials=await asyncio.shield(self._model_tick_task)
-                        self.refresh_symmetry()
+                        self._refresh_campaign_view(campaign)
                         if (campaign.setting('paused',False)
                                 or active_batch_count(trials)>=getattr(tick_transport,'max_active_jobs',1)
                                 or not any(r['state']=='prepared'for r in trials)):
                             break
                     if buffered:
                         campaign.set_setting('dispatch_notice','Saving queued batch recovery state before submitting new Galaxy jobs.')
-                        self.refresh_symmetry()
+                        self._refresh_campaign_view(campaign)
                         await self._flush_model_dispatch_wave(campaign,transport)
                 except (CheckpointUploadPending,CheckpointUploadInterrupted) as exc:
                     # The inner flush retries its frozen pending intent. A
@@ -1105,7 +1117,7 @@ class SymmetryMixin(KSearchMixin):
                     else:
                         self._model_checkpoint_errors.pop(campaign.root.name,None)
                         campaign.set_setting('checkpoint_notice','')
-                self.refresh_symmetry()
+                self._refresh_campaign_view(campaign)
                 queued=any(r['status'] in {'queued','preparing'} for r in campaign.setting('enrollments',{}).values())
                 pending=any(r['state'] not in {'terminal','cancelled','needs_recovery'} for r in trials)
                 active=any(r['state'] in {'running','submitting','cancelling'} for r in trials)

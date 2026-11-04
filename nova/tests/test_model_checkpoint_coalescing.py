@@ -129,6 +129,25 @@ def test_interim_ack_backup_is_coalesced_with_next_ready_intent(remote, tmp_path
     assert all(row['state'] == 'terminal' for row in fixture.campaign.trials())
 
 
+@pytest.mark.parametrize('view_other_campaign', [False, True])
+def test_background_driver_does_not_restart_another_campaign_review(remote, tmp_path, monkeypatch, view_other_campaign):
+    fixture = running_campaign(remote, tmp_path, monkeypatch)
+    selected = 'saved-campaign-under-review' if view_other_campaign else fixture.campaign.root.name
+    fixture.app.server.state.sx_campaign = selected
+    refreshes = []
+    fixture.app.refresh_symmetry = lambda: refreshes.append(selected)
+
+    asyncio.run(fixture.app._drive_symmetry_campaign(fixture.campaign, fixture.transport))
+
+    # Navigation must not pause/cancel the independent scientific driver or
+    # prevent its exact recovery checkpoints from being published.
+    assert len(fixture.service.submissions) == 12
+    assert all(row['state'] == 'terminal' for row in fixture.campaign.trials())
+    assert len(fixture.checkpoints[-1]['transport']['receipt_hashes']) == 12
+    assert bool(refreshes) is not view_other_campaign
+    assert fixture.app.server.state.sx_campaign == selected
+
+
 @pytest.mark.parametrize('lost_ack', [False, True])
 def test_lost_viewer_without_interim_backup_recovers_keys_and_never_reposts(remote, tmp_path, monkeypatch, lost_ack):
     import radar_pd_nova.symmetry_controller as controller
