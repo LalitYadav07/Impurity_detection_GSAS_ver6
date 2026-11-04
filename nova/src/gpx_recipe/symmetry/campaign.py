@@ -20,8 +20,9 @@ from .contracts import digest, trial_id, validate_protocol,iter_trials
 from ..symmetry_results import TERMINAL, summarize_portfolio
 
 
-def balanced_trial_order(rows):
+def balanced_trial_order(rows,*,per_candidate=1):
     """Interleave declared candidates/seed families without omitting starts."""
+    if type(per_candidate) is not int or not 1<=per_candidate<=4:raise ValueError('Use one to four paired starts per candidate')
     from collections import deque
     candidates={}
     for row in rows:candidates.setdefault(row['candidate'],{}).setdefault(row['seed'].split('-',1)[0],[]).append(row)
@@ -36,7 +37,8 @@ def balanced_trial_order(rows):
     result=[]
     while any(queues):
         for queue in queues:
-            if queue:result.append(queue.popleft())
+            for _ in range(per_candidate):
+                if queue:result.append(queue.popleft())
     return result
 
 
@@ -291,7 +293,13 @@ class Campaign:
                         size=transport.chunk_size_for(prepared[0]['protocol']) if hasattr(transport,'chunk_size_for') else transport.chunk_size
                         # A pilot must sample different candidates and starts,
                         # not exhaust one cheap/unsupported model first.
-                        group=balanced_trial_order(prepared)[:size]
+                        with self.connect() as db:
+                            protocol=json.loads(db.execute('SELECT body FROM protocols WHERE hash=?',(selected,)).fetchone()['body'])
+                        # Paired starts share a checked quadratic model inside
+                        # a profiled batch. All candidates still receive early
+                        # coverage; no start is removed from the finite plan.
+                        paired=protocol.get('policy',{}).get('magnetic_optimizer')=='profiled_quadratic'
+                        group=balanced_trial_order(prepared,per_candidate=2 if paired else 1)[:size]
                         for row in group:self.set_state(row['id'],'submitting')
                         try:
                             handles=transport.submit_many([(r['id'],self.trial_directory(r)) for r in group],workers=slots)

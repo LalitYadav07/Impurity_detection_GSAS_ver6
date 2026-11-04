@@ -58,7 +58,8 @@ def prepare(request,root):
     structure=(L.cell2AB(parent['cell'])[0].T,np.asarray(positions),numbers)
     points=recover_points(structure,parent['operations'],maximum_denominator=int(request.get('maximum_denominator',8)))
     x,observed,weights=[np.ma.asarray(v,dtype=float) for v in h.data['data'][1][:3]]
-    nuclear=np.asarray(M.DoNoFit(str(source),h.name),dtype=float)
+    from ..native_forward import forward_profile,tick_arrays
+    nuclear,ticks=forward_profile(source,h.name)
     ds=np.asarray(L.Pos2dsp(h.InstrumentParameters,np.ma.getdata(x)),dtype=float)
     lo,hi=h.data['Limits'][1]
     mask=(np.ma.getdata(x)>=lo)&(np.ma.getdata(x)<=hi)&np.isfinite(ds)&(ds>0)
@@ -68,7 +69,7 @@ def prepare(request,root):
     if not mask.any():raise ValueError('No calibrated fitted bins are available')
     profile=root/'baseline.npz'
     np.savez_compressed(profile,x=np.ma.getdata(x),q=2*np.pi/ds,observed=np.ma.getdata(observed),
-                        nuclear=nuclear,weights=np.ma.getdata(weights),mask=mask)
+                        nuclear=nuclear,weights=np.ma.getdata(weights),mask=mask,**tick_arrays(ticks))
     if file_sha(source)!=before:raise ValueError('Native preparation changed the original GPX')
     return dict(schema='radar-k-native-prepare/v1',source_sha256=before,context=context,
                 points=points,profile=profile.name,profile_sha256=file_sha(profile),
@@ -109,8 +110,9 @@ def inventory(request,root):
                 for axis in axes:
                     try:
                         direction=np.eye(3)['xyz'.index(axis)]
-                        require_collinear_line([m for m,_ in S.AllOps(definition['SGData'])[2]],L.cell2AB(cell[:6])[0],cell[:3],direction)
-                        if not all(direction_in_basis(site['basis'],direction) for site in report['sites']):raise ValueError('Selected sites do not support this subgroup/direction')
+                        if request.get('moment_model','collinear')=='collinear':
+                            require_collinear_line([m for m,_ in S.AllOps(definition['SGData'])[2]],L.cell2AB(cell[:6])[0],cell[:3],direction)
+                            if not all(direction_in_basis(site['basis'],direction) for site in report['sites']):raise ValueError('Selected sites do not support this subgroup/direction')
                         compatible.append(dict(candidate_id=candidate['id'],axis=axis,
                             family=candidate.get('bns_number') or candidate['magnetic_space_group'],
                             operation_count=len(authority),cell_multiplier=float(abs(np.linalg.det(candidate['transformation_matrix'])))))

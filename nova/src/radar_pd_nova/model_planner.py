@@ -34,7 +34,7 @@ PROFILED_BUDGET_RULE = (
     'Preserve them exactly. Profiled quadratic optimization uses optimizer_iterations as '
     'its per-start numerical budget; it does not run the GSAS-II refinement cycle loop. '
     'Preserve the declared cycles compatibility field without treating it as this budget. '
-    'This optimizer requires symmetry_allowed components and magnetic k=0. If k is unknown, '
+    'This optimizer requires symmetry_allowed components and commensurate magnetic order. If k is unknown, '
     'the host first runs its separate data-based survey; never invent a propagation vector.'
 )
 
@@ -194,7 +194,7 @@ def _requested_moment_model(request):
                 negative = True
             model = direct.group(1)
         elif (separator in {',', ', and'} and previous_model == 'symmetry_allowed'
-              and re.fullmatch(r'(?:including|with|allowing)\s+canting', clause)):
+              and re.fullmatch(r'(?:including|with|allowing)\s+canting(?:\s+where\s+symmetry\s+permits)?', clause)):
             # An immediately attached explanatory clause shares the complete
             # preceding geometry choice and its negation, never just a keyword.
             model = 'symmetry_allowed'
@@ -212,13 +212,16 @@ def _requested_moment_model(request):
                 setting = re.fullmatch(assignment, argument)
                 if setting:
                     model = setting.group(1)
-                elif re.fullmatch(components, argument) or re.fullmatch(subgroup_components, argument):
+                elif (re.fullmatch(components, argument) or re.fullmatch(subgroup_components, argument)
+                      or re.fullmatch(r'(?:all\s+)?symmetry[- ]permitted\s+(?:magnetic\s+)?moment\s+components', argument)):
                     # Not releasing *all* components does not require a
                     # collinear model; leave a negated quantified scope open.
                     if not negative:
                         model = 'symmetry_allowed'
                 elif re.fullmatch(symmetry_choice, argument):
                     model = 'symmetry_allowed'
+                elif verb == 'restrict' and re.fullmatch(r'(?:the\s+)?search\s+to\s+collinear\s+models?', argument):
+                    model = 'collinear'
                 elif verb in {'allow', 'permit'} and re.fullmatch(
                         r'(?:canting|(?:canted|non[- ]?collinear)\s+(?:magnetic\s+)?moments?|'
                         r'(?:(?:all|every)\s+)?(?:magnetic\s+)?moments?\s+to\s+cant)\b', argument):

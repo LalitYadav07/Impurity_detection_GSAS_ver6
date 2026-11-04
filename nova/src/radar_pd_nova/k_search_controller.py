@@ -26,23 +26,23 @@ def survey_status_message(result):
                 else f'Partial survey; {failures} native simulations failed. Review the coverage details')
     return {'shortlist':'Candidate shortlist','ambiguous':'Several k families remain competitive',
             'no_support':'No supported magnetic template in this sample',
-            'incomplete':'Partial survey; review untested families and the time budget'}[result['status']]
+            'incomplete':'Partial survey; review untested families and failure details'}[result['status']]
 
 
 class KSearchMixin:
     def _init_k_search(self):
         self._k_task=None;self._k_cancel=None;self._k_result=None;self._k_result_identity=None
         s=self.server.state
-        for name,value in dict(sx_k_budget=60,sx_k_limit=6,sx_k_workers=4,sx_k_busy=False,sx_k_message='',sx_k_rows=[],
-            sx_k_choices=[],sx_k_selected='',sx_k_axis='q',sx_k_reset=0,sx_k_detail='',sx_k_notes=[],sx_k_plot=empty('Run a k survey to compare magnetic templates'),sx_k_has_result=False).items():setattr(s,name,value)
-        s.change('sx_kind','sx_parent','sx_histogram','sx_sites','sx_form_factors','sx_lande','sx_directions','sx_mag_d_min','sx_max_moment','sx_sign_starts','sx_start_source','rf_experiment','sx_k_budget','sx_k_limit','sx_k_workers')(self._k_inputs_changed)
-        s.change('sx_k_selected','sx_k_axis','sx_k_reset')(self._k_plot_changed)
+        for name,value in dict(sx_k_budget=None,sx_k_limit=6,sx_k_workers=4,sx_k_busy=False,sx_k_message='',sx_k_rows=[],
+            sx_k_choices=[],sx_k_selected='',sx_k_axis='q',sx_k_display='full',sx_k_reset=0,sx_k_detail='',sx_k_notes=[],sx_k_plot=empty('Run a k survey to compare magnetic templates'),sx_k_has_result=False).items():setattr(s,name,value)
+        s.change('sx_kind','sx_moment_model','sx_parent','sx_histogram','sx_sites','sx_form_factors','sx_lande','sx_directions','sx_mag_d_min','sx_max_moment','sx_sign_starts','sx_start_source','rf_experiment','sx_k_budget','sx_k_limit','sx_k_workers')(self._k_inputs_changed)
+        s.change('sx_k_selected','sx_k_axis','sx_k_reset','sx_k_display')(self._k_plot_changed)
 
     def _k_identity(self):
         s=self.server.state;d=self._symmetry_draft or {}
         return digest(dict(source=s.sx_start_source,experiment=s.rf_experiment,sha=d.get('context',{}).get('sha256'),
             kind=s.sx_kind,parent=s.sx_parent,histogram=s.sx_histogram,sites=list(s.sx_sites),ions=s.sx_form_factors,g=s.sx_lande,
-            directions=list(s.sx_directions),cutoff=s.sx_mag_d_min,maximum=s.sx_max_moment,signs=s.sx_sign_starts,budget=s.sx_k_budget,limit=s.sx_k_limit,workers=getattr(s,'sx_k_workers',4)))
+            directions=list(s.sx_directions),cutoff=s.sx_mag_d_min,maximum=s.sx_max_moment,signs=s.sx_sign_starts,budget=s.sx_k_budget,limit=s.sx_k_limit,workers=getattr(s,'sx_k_workers',4),moment_model=getattr(s,'sx_moment_model','collinear')))
 
     def _k_inputs_changed(self,**_):
         if getattr(self,'_k_cancel',None):self._k_cancel.set()
@@ -56,7 +56,7 @@ class KSearchMixin:
         try:
             f=next(r for r in self._k_result['families'] if ','.join(r['k'])==s.sx_k_selected)
             s.sx_k_detail=(f"{f['simulated']} simulated / {f.get('available_starts',0)} eligible starts · {f['discovered']} catalog embeddings. "+f.get('reason',''))
-            s.sx_k_plot=evidence(self._k_result,s.sx_k_selected,axis=s.sx_k_axis,reset=s.sx_k_reset)
+            s.sx_k_plot=evidence(self._k_result,s.sx_k_selected,axis=s.sx_k_axis,reset=s.sx_k_reset,display_mode=getattr(s,'sx_k_display','full'))
         except Exception as exc:s.sx_k_plot=empty(str(exc))
 
     def reset_k_search_zoom(self):self.server.state.sx_k_reset+=1
@@ -87,8 +87,8 @@ class KSearchMixin:
                 mailbox=queue.Queue();root=self._symmetry_root()/'k-surveys'/uuid.uuid4().hex
                 work=asyncio.create_task(asyncio.to_thread(search.run,source,root,parent=s.sx_parent,histogram=s.sx_histogram,
                     sites=sites,directions=list(s.sx_directions),maximum_moment=float(s.sx_max_moment),magnetic_d_min=float(s.sx_mag_d_min),
-                    relative_signs=bool(s.sx_sign_starts),templates_per_k=int(s.sx_k_limit),budget_seconds=int(s.sx_k_budget),
-                    workers=min(4,max(1,int(s.sx_k_workers))),progress=mailbox.put,cancel=cancel))
+                    relative_signs=bool(s.sx_sign_starts),templates_per_k=int(s.sx_k_limit),budget_seconds=None,
+                    workers=min(4,max(1,int(s.sx_k_workers))),progress=mailbox.put,cancel=cancel,moment_model=getattr(s,'sx_moment_model','collinear')))
                 while not work.done():
                     if identity!=self._k_identity():cancel.set()
                     latest=None
@@ -110,8 +110,8 @@ class KSearchMixin:
                 summary=survey_status_message(result)
                 wall_seconds=time.monotonic()-wall_started
                 timing=f'{wall_seconds:.1f} s total'
-                if remote:timing+=f' · {result["elapsed_seconds"]:.1f} s budgeted work; remainder includes staging and queueing'
-                s.sx_k_message=f'{summary} · {timing} · {sum(f["simulated"] for f in result["families"])} native profiles. Scores are not probabilities.'
+                if remote:timing+=f' · {result["elapsed_seconds"]:.1f} s scientific work; remainder includes staging and queueing'
+                s.sx_k_message=f'{summary} · {timing} · {sum(f["simulated"] for f in result["families"])} profiles tested across {sum(f["simulated"]>0 for f in result["families"])}/{len(result["families"])} k families. Scores are not probabilities.'
                 s.sx_k_has_result=True;self._k_plot_changed()
             except Exception as exc:
                 if cancel.is_set():s.sx_k_message='K survey stopped; no refinement plan was changed.'
@@ -127,7 +127,7 @@ class KSearchMixin:
             family=next(f for f in result['families'] if ','.join(f['k'])==s.sx_k_selected)
             catalog=result['catalogs'].get(s.sx_k_selected)
             if not catalog:raise ValueError('This k has no complete subgroup catalog. Enter it manually and discover candidates when the service is available.')
-            if 'compatible_candidate_ids' not in family:raise ValueError('The native compatibility inventory is unfinished. Increase the survey budget, or discover candidates manually.')
+            if 'compatible_candidate_ids' not in family:raise ValueError('The native compatibility inventory is unfinished. Review its failure details and rerun the survey, or discover candidates manually.')
             if catalog['parent_setting_sha256']!=next(p for p in d['context']['phases'] if p['name']==s.sx_parent)['setting_sha256']:raise ValueError('The selected catalog belongs to another parent setting')
             s.sx_k=', '.join(family['k']);self._symmetry_unapprove()
             d.pop('protocol',None);write_json(d['root']/'catalog.json',catalog)
@@ -136,7 +136,8 @@ class KSearchMixin:
             compatible=set(family['compatible_candidate_ids'])
             canted=getattr(s,'sx_moment_model','collinear')=='symmetry_allowed'
             s.sx_candidates=[c['id'] for c in catalog['candidates'] if canted or c['id'] in compatible];s.sx_mode_options=[];s.sx_modes=[]
-            s.sx_discovery_scope=f'{len(catalog["candidates"])} magnetic embeddings in the cached catalog; {len(compatible)} support the sampled collinear sites, directions and k translations. The k survey sampled only a subset.'
+            scope=(result.get('settings') or {}).get('moment_model','collinear')
+            s.sx_discovery_scope=f'{len(catalog["candidates"])} magnetic embeddings in the cached catalog; {len(compatible)} support the sampled {scope.replace("_"," ")} sites, directions and k translations. The k survey sampled only a subset.'
             if canted:s.sx_discovery_scope+=' All catalog embeddings remain selected for the canted search; its site symmetry and propagation translations are checked per trial.'
             s.sx_discovered=True;s.sx_plan_ready=False;s.sx_approved=False
             s.sx_k_message='Selected k and its complete subgroup catalog are ready. Review candidates and build the finite refinement plan.'

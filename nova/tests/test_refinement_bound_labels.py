@@ -14,3 +14,14 @@ def test_oxygen_displacement_bounds_show_phase_atom_and_physical_units():
     card = recipe_cards(plan, context)[0]
     assert card['edits'] == ['NMC333 / O1: 0 ≤ Uiso ≤ 0.05 Å²']
     assert 'p5' not in ' '.join(card['edits'])
+
+
+def test_stage_dependencies_are_visible_before_approval():
+    context={'phases':[], 'histograms':[{'key':'h0','name':'pattern'}]}
+    stages=[dict(id='background',title='Background fit',cycles=5,
+                 free=[{'kind':'background','histogram':'h0'}],constraints=[]),
+            dict(id='later',title='Dependent fit',cycles=5,
+                 free=[{'kind':'background','histogram':'h0'}],constraints=[],
+                 depends_on=['BACKGROUND'])]
+    cards=recipe_cards({'stages':stages},context)
+    assert cards[1]['edits']==['Requires successful stages: Background fit']

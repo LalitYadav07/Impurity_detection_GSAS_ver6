@@ -76,6 +76,7 @@ jobs:
             /validation/tests/gpx_recipe/test_fixed_displacements.py \
             /validation/tests/gpx_recipe/test_project_view.py \
             /validation/tests/gpx_recipe/test_native_profiled.py \
+            /validation/tests/gpx_recipe/test_native_forward.py \
             /validation/tests/gpx_recipe/test_profiled_magnetic.py \
             /validation/tests/gpx_recipe/test_profiled_optimizer_contract.py \
             /validation/tests/gpx_recipe/test_profiled_solver_native.py'

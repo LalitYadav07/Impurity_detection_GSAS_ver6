@@ -5,6 +5,14 @@ from pathlib import Path
 import pytest
 
 from gpx_recipe.symmetry.campaign import Campaign,balanced_trial_order
+
+
+def test_profiled_pairing_preserves_denominator_and_early_candidate_coverage():
+    rows=[dict(id=f'{c}{s}',candidate=c,seed=s) for c in ['a','b','c'] for s in ['x-1','x-2','y-1','y-2']]
+    ordered=balanced_trial_order(rows,per_candidate=2)
+    assert {r['id'] for r in ordered}=={r['id'] for r in rows}
+    assert len(ordered)==len(rows)
+    assert [r['candidate'] for r in ordered[:6]]==['a','a','b','b','c','c']
 from gpx_recipe.symmetry.compiler import file_sha
 from gpx_recipe.symmetry.contracts import digest
 from test_symmetry_contracts import make_protocol

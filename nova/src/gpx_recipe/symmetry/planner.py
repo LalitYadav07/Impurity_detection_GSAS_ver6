@@ -152,8 +152,6 @@ def validate_intent(value, context, *, request, declared=None):
         raise ValueError('Use exact rational k components, not rounded decimal guesses')
     s['k'] = [str(Fraction(x)) for x in s['k']] if s['k'] is not None else None
     validate_optimizer(s)
-    if s.get('magnetic_optimizer')=='profiled_quadratic' and s['k'] not in (None,['0','0','0']):
-        raise ValueError('Profiled optimizer currently supports magnetic k=0 only')
     for key,value in optimizer.items():
         if s.get(key)!=value:raise ValueError('The setup plan changed the declared '+key)
     if s['k'] is not None and any(Fraction(x).denominator > 96 for x in s['k']):

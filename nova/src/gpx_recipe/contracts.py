@@ -17,7 +17,7 @@ def exact_keys(value, allowed, required=()):
 
 
 def validate_plan(plan, context):
-    exact_keys(plan, {"schema", "model_signature", "source_sha256", "reference_policy", "request", "assumptions", "questions", "unsupported", "stages"},
+    exact_keys(plan, {"schema", "model_signature", "source_sha256", "reference_policy", "failure_policy", "request", "assumptions", "questions", "unsupported", "stages"},
                {"schema", "model_signature", "request", "assumptions", "questions", "unsupported", "stages"})
     if plan["schema"] != SCHEMA or plan["model_signature"] != context["model_signature"]:
         raise ValueError("Plan does not match the inspected GPX model")
@@ -31,6 +31,8 @@ def validate_plan(plan, context):
     if (not isinstance(plan["stages"], list) or len(plan["stages"]) > 20
             or (not plan["stages"] and not (plan["questions"] or plan["unsupported"]))):
         raise ValueError("Use 1–20 explicit stages, or no stages when clarification/unsupported operations prevent a plan")
+    if plan.get('failure_policy','stop') not in {'stop','continue_independent'}:
+        raise ValueError('Choose stop or continue_independent for failed stages')
     phases = {p["key"]: p for p in context["phases"]}
     hists = {h["key"]: h for h in context["histograms"]}
     stage_ids = set()
@@ -38,11 +40,14 @@ def validate_plan(plan, context):
     uiso_groups = copy.deepcopy(context.get('uiso_equivalence_groups',[]))
     for stage in plan["stages"]:
         from .advanced import STAGE_FIELDS, validate_stage
-        exact_keys(stage, {"id", "title", "cycles", "free", "background", "constraints", "convergence"} | STAGE_FIELDS, {"id", "title", "cycles", "free", "constraints"})
+        exact_keys(stage, {"id", "title", "cycles", "free", "background", "constraints", "convergence", "depends_on"} | STAGE_FIELDS, {"id", "title", "cycles", "free", "constraints"})
         if not isinstance(stage["id"], str) or not re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_-]{0,40}", stage["id"]) or stage["id"].casefold() in stage_ids:
             raise ValueError("Stage IDs must be unique safe identifiers")
         if stage['id'].casefold() in {'baseline','final'}:
             raise ValueError('Stage IDs baseline and final are reserved for the original and final result artifacts')
+        dependencies=stage.get('depends_on',[])
+        if not isinstance(dependencies,list) or any(not isinstance(d,str) or d.casefold() not in stage_ids for d in dependencies):
+            raise ValueError('Stage dependencies must name earlier stages')
         stage_ids.add(stage["id"].casefold())
         if not isinstance(stage["title"], str) or not 0 < len(stage["title"]) <= 500:
             raise ValueError("Stage title required")
@@ -202,7 +207,7 @@ def stage_table(plan, context=None):
         rows.append({"id": stage["id"], "title": stage["title"], "free": sorted(current),
                      "newly_free": sorted(current - previous), "newly_fixed": sorted(previous - current),
                      "fixed_policy": "Every other ordinary refinement parameter is fixed; original constraints/restraints remain.",
-                     "cycles": stage["cycles"], "background": stage.get("background"), "new_constraints": stage["constraints"],
+                     "cycles": stage["cycles"], "depends_on": list(stage.get("depends_on", [])), "background": stage.get("background"), "new_constraints": stage["constraints"],
                      "edits": {k: stage[k] for k in ("fit_ranges", "exclusions", "bounds", "phase_normalization", "texture", "convergence") if stage.get(k)}})
         previous = current
     return rows

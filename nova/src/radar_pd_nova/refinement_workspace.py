@@ -247,7 +247,7 @@ class RefinementWorkspace:
             self.save()
         return copy.deepcopy(edited)
 
-    def prepare(self,experiment,source_id,request,*,previous=None,reuse_recipe=None,template=None,guided=None,progress=None):
+    def prepare(self,experiment,source_id,request,*,previous=None,reuse_recipe=None,template=None,guided=None,progress=None,failure_policy=None):
         if not request.strip():raise ValueError('Describe the refinement stages first')
         if template not in {None,'battery_baseline'} or sum(x is not None for x in (template,reuse_recipe,guided))>1:
             raise ValueError('Choose one supported recipe source')
@@ -341,7 +341,11 @@ class RefinementWorkspace:
                 planning=make_plan(request,planning_context,previous=previous,client=client)
             planning=dict(planning)
             planning['usage_summary']=summarize_calls(planning.get('calls',[]))
-            plan=planning['plan'];directory=self.root/'drafts'/generation;directory.mkdir(parents=True,exist_ok=True)
+            plan=planning['plan']
+            if failure_policy is not None:
+                if failure_policy not in {'stop','continue_independent'}:raise ValueError('Invalid stage failure policy')
+                plan=copy.deepcopy(plan);plan['failure_policy']=failure_policy;planning['plan']=plan
+            directory=self.root/'drafts'/generation;directory.mkdir(parents=True,exist_ok=True)
             write_json(directory/'planning.json',planning)
             preview=None
             if not plan['questions'] and not plan['unsupported']:

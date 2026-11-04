@@ -25,6 +25,21 @@ def model(tmp_path):
     return root,validate_protocol(p)
 
 
+def test_custom_scan_selection_is_exact_and_source_scoped(model):
+    _,p=model
+    context={'sha256':p['source']['sha256']}
+    first=dict(id='first',experiment='exp',sample_key='sample',bank='3')
+    second={**first,'id':'second'};other={**first,'id':'other','bank':'2'}
+    options=[(first,'radar'),(second,'radar'),(other,'radar')]
+    template=make_template(p,context,first,options,origin='radar',existing='custom',selected_ids=['second','first'])
+    assert template['existing_ids']==['second','first']
+    assert set(template['seen_ids'])=={'first','second'}
+    with pytest.raises(ValueError,match='sample, bank'):
+        make_template(p,context,first,options,origin='radar',existing='custom',selected_ids=['first','other'])
+    with pytest.raises(ValueError,match='starting scan'):
+        make_template(p,context,first,options,origin='radar',existing='custom',selected_ids=['second'])
+
+
 def test_shared_capture_is_once_thin_portable_and_tamper_checked(model,tmp_path):
     source,p=model;c=Campaign(tmp_path/'campaign',shared_inputs=True)
     ids=c.enroll(p,source,approved_hash=digest(p))

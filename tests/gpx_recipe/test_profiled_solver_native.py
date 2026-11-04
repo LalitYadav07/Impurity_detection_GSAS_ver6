@@ -102,3 +102,27 @@ def test_boundary_solution_does_not_acquire_unreviewed_qualification(tmp_path):
     result=refine(project,path,p)
     assert not result['qualification']['passed']
     assert not result['qualification']['checks']['interior_solution']
+
+
+def test_commensurate_antitranslation_full_basis_matches_native(tmp_path):
+    """Half-order reflections in a doubled cell exercise nonzero-k magnetism."""
+    project,path=artificial_project(tmp_path,sites=1)
+    mag=project.phases()[1]
+    sg=mag.data['General']['SGData']
+    sg.update(SGCen=np.array([[0.,0.,0.],[.5,0.,0.]]),SGFixed=True,
+              SpnFlp=np.array([1.,-1.]),MagMom=np.array([1.,-1.]))
+    project.save()
+    hist=project.histograms()[0]
+    truth=np.asarray(MAIN.DoNoFit(str(path),hist.name),float)
+    hist.data['data'][1][1]=truth+np.random.default_rng(912).normal(0.,.01,len(truth))
+    hist.data['data'][1][2][:]=10000.
+    for atom in mag.data['Atoms']:
+        atom[7:10]=[v*.6 for v in atom[7:10]]
+    project.save()
+    request=protocol(iterations=200);request['k']=['1/2','0','0']
+    result=refine(project,path,request)
+    assert result['objective_identity']['linear_identity_error']<1e-8
+    assert max(result['objective_identity']['heldout_relative_errors'])<1e-8
+    assert result['candidate_applied'],result['qualification']
+    assert result['serialized_native_identity_error']<1e-8
+    assert result['final_profile']['rwp_native']<.5

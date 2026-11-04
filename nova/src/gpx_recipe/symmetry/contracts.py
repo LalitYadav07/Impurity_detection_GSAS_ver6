@@ -152,8 +152,8 @@ def validate_protocol(value):
     if p['kind']!='magnetic' and any(key in p['policy'] for key in ('magnetic_optimizer','optimizer_iterations')):
         raise ValueError('Magnetic optimizer fields cannot apply to structural protocols')
     if p['policy'].get('magnetic_optimizer')=='profiled_quadratic':
-        if p['kind']!='magnetic' or p['k']!=['0','0','0']:
-            raise ValueError('Profiled optimizer currently supports magnetic k=0 protocols only')
+        if p['kind']!='magnetic':
+            raise ValueError('Profiled optimizer supports magnetic protocols only')
     if len({c['id'] for c in p['candidates']})!=len(p['candidates']) or len({s['id'] for s in p['seeds']})!=len(p['seeds']):raise ValueError('Candidate and seed IDs must be unique')
     candidate_ids={c['id'] for c in p['candidates']}
     if any(set(s.get('candidate_ids',candidate_ids))-candidate_ids for s in p['seeds']):raise ValueError('A start references an undiscovered candidate')

@@ -183,3 +183,16 @@ def test_real_subprocess_cancel_kills_its_process_group(tmp_path):
     with pytest.raises(ScientificCancelled):run_scientific([sys.executable,'-c',parent],timeout=10,cancel_event=event,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
     timer.join();time.sleep(.85)
     assert ready.exists() and not marker.exists()
+
+
+def test_finite_coverage_runs_without_whole_survey_deadline(tmp_path):
+    search,native,_,source,values=setup(tmp_path)
+    values['budget_seconds']=None
+    native.supports_portfolio=True
+    events=[]
+    result=search.run(source,tmp_path/'search',progress=events.append,**values)
+    assert result['complete'] and result['budget_seconds'] is None
+    assert all(f['simulated'] for f in result['families'])
+    measured=[e for e in events if e.get('provisional_leader')]
+    assert measured and measured[-1]['families_evaluated']==2
+    assert measured[-1]['completed']==measured[-1]['total']

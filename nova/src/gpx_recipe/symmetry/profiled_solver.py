@@ -17,7 +17,7 @@ from ..snapshot import json_safe
 
 
 SCHEMA='radar-profiled-magnetic-optimizer/v1'
-TOLERANCES=dict(normalized_objective_ftol=1e-12,native_identity_rtol=1e-8,
+TOLERANCES=dict(normalized_objective_ftol=1e-14,native_identity_rtol=1e-8,
                 physical_stationarity=1e-7,curvature_relative=1e-10,
                 nuclear_improvement_relative=1e-8)
 
@@ -28,9 +28,9 @@ class ProfiledScopeError(ValueError):
 
 def validate_scope(protocol):
     p=protocol['policy']
-    if (protocol['kind']!='magnetic' or protocol['k']!=['0','0','0'] or
+    if (protocol['kind']!='magnetic' or
             p.get('moment_model')!='symmetry_allowed' or p.get('refine_cell')):
-        raise ProfiledScopeError('Profiled optimizer requires fixed-geometry symmetry_allowed magnetic k=0')
+        raise ProfiledScopeError('Profiled optimizer requires fixed-geometry symmetry_allowed commensurate magnetism')
 
 
 def _native_diagnostics(context,model):
@@ -85,14 +85,24 @@ def _retain_forward_profile(project,path,context):
     return metrics
 
 
-def refine(project,path,protocol):
+def refine(project,path,protocol,*,cache_root=None,candidate=None):
     """Return separate optimizer qualification; leave native flags unavailable."""
     validate_scope(protocol)
     p=protocol['policy'];started=time.monotonic();deadline=started+p['timeout_seconds']
     try:
         context=NativeMagneticStartingPoint(path,refine_scale=p['refine_histogram_scale'],
             refine_background=p['refine_background'],maximum_moment=p['maximum_moment'],deadline=deadline)
-        model,identity=context.build(heldouts=4)
+        cache_identity=None;cache_path=None
+        if cache_root is not None and candidate is not None:
+            from .contracts import digest
+            from pathlib import Path
+            # The full protocol binds source, calibration, masks, runtime,
+            # implementation, nuisance scope and the candidate catalog. Native
+            # variable names/maps additionally bind the constructed basis.
+            cache_identity=digest(dict(protocol=protocol,candidate=candidate,
+                variables=context.moment_names,maps=context.cartesian_maps.tolist()))
+            cache_path=Path(cache_root)/(cache_identity+'.npz')
+        model,identity=context.build(heldouts=4,cache_path=cache_path,cache_identity=cache_identity)
     except ValueError as exc:
         raise ProfiledScopeError(str(exc)) from exc
     null_cost,_,null_scale=model._evaluate(np.zeros(model.dimension))

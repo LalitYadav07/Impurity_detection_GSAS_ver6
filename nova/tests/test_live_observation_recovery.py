@@ -158,6 +158,7 @@ def test_newly_cached_receipt_replaces_previously_empty_compact_fit(tmp_path, sa
             rendered.append(None)
 
     harness._apply_unet_transition_tracking = apply
+    harness._update_unet_transition_loading = lambda: UnetTransitionMixin._update_unet_transition_loading(harness)
     harness._render_unet_transition_tracking = lambda: apply(
         {}, list(harness._unet_transition_scans.values()), harness._unet_transition_signature)
     UnetTransitionMixin._schedule_unet_transition_tracking(harness, [scan])

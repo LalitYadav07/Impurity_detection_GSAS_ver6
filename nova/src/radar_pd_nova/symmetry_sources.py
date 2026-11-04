@@ -74,18 +74,21 @@ def start_choices(workspace, experiment):
         entries.append(dict(id=source['id'],title='RADAR-PD · '+_scan_title(source),source=source))
     for job_id,job in workspace.state.get('jobs',{}).items():
         result=job.get('result') or {};source=recipe_source(workspace,job)
-        if job.get('status')!='completed' or result.get('status')!='completed' or source.get('experiment')!=experiment:
+        if (job.get('status') not in {'completed','needs_review'}
+                or result.get('status') not in {'completed','needs_review'} or source.get('experiment')!=experiment):
             continue
         recipe_id=job.get('recipe_id') or next(iter(job.get('recipes') or []),'')
         version=(workspace.state.get('recipes',{}).get(recipe_id) or {}).get('version')
         recipe_label='Recipe '+str(version) if version is not None else 'Recipe checkpoint'
-        checkpoints=[('final','Final recipe output',result.get('final_gpx'))]
+        checkpoints=([('final','Final recipe output',result.get('final_gpx'))]
+                     if result.get('status')=='completed' else [])
         checkpoints.extend((stage['id'],stage.get('title') or stage['id'],stage.get('gpx'))
                            for stage in result.get('stages',[]))
         for stage,label,name in checkpoints:
             if not name or name not in result.get('files',{}) or Path(name).suffix.lower()!='.gpx':continue
             identifier='recipe:'+digest([job_id,stage,name,result['files'][name]])[:24]
-            entries.append(dict(id=identifier,title=recipe_label+' · '+_scan_title(source)+' · '+label+' · '+result['files'][name][:8],
+            caution=' · retained stage; recipe stopped' if result.get('status')!='completed' else ''
+            entries.append(dict(id=identifier,title=recipe_label+' · '+_scan_title(source)+' · '+label+caution+' · '+result['files'][name][:8],
                                 recipe_label=recipe_label,
                                 job_id=job_id,stage=stage,name=name))
     return entries
@@ -212,5 +215,10 @@ def resolve_start(workspace, experiment, identifier):
                   scan_label=source['scan_label']+' · '+entry['recipe_label']+' · '+('final' if entry['stage']=='final' else entry['stage']),
                   origin_source_id=job['source']['id'],recipe_job_id=entry['job_id'],recipe_stage=entry['stage'],
                   project=dict(stage='verified_recipe_checkpoint',status='completed'))
+    if result.get('status')!='completed' or result.get('rejected_stages'):
+        source['scientific_status']='needs_review'
+        source['scientific_warnings']=list(source.get('scientific_warnings') or [])+[
+            'This retained recipe checkpoint is not a fully accepted refinement. '+str(result.get('error') or
+            'Rejected stages were restored: '+', '.join(result.get('rejected_stages') or []))]
     if dataset:source['dataset_id']=dataset
     return source

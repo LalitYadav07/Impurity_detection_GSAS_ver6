@@ -93,6 +93,8 @@ def work(action, source, directory, *, plan=None, approval=None, expected_source
             response.update(status='completed',execution='polished.execution.json',baseline_view='baseline.view.json',
                 final_view='final.view.json',final_gpx='verified_final.gpx',stages=stages,
                 output_sha256=hashlib.sha256((directory/'verified_final.gpx').read_bytes()).hexdigest())
+            response['stage_outcomes']=receipt['stages']
+            response['rejected_stages']=receipt.get('rejected_stages',[])
             response['trend_views']=trends
         else:raise ValueError('Unknown refinement worker action')
     except Exception as exc:

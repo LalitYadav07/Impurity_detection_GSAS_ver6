@@ -10,6 +10,9 @@ from __future__ import annotations
 
 import io
 import time
+import uuid
+from pathlib import Path
+from contextlib import contextmanager
 import numpy as np
 from .profiled_magnetic import ProfiledMagneticObjective
 
@@ -143,32 +146,76 @@ class NativeMagneticStartingPoint:
         self.calls+=1
         return values.copy()
 
-    def build(self,*,heldouts=4):
+    @contextmanager
+    def _cache_lock(self, path):
+        """Coordinate disposable workers without reusing native globals."""
+        try:import fcntl
+        except ImportError:
+            yield;return  # Atomic cache publication remains safe without locking.
+        target=Path(path)
+        try:
+            target.parent.mkdir(parents=True,exist_ok=True)
+            stream=target.with_suffix('.lock').open('a+b')
+        except OSError:
+            yield;return
+        try:
+            while True:
+                self._check()
+                try:fcntl.flock(stream,fcntl.LOCK_EX|fcntl.LOCK_NB);break
+                except BlockingIOError:time.sleep(.05)
+            yield
+        finally:
+            fcntl.flock(stream,fcntl.LOCK_UN);stream.close()
+
+    def build(self,*,heldouts=4,cache_path=None,cache_identity=None):
+        if cache_path is not None and cache_identity:
+            with self._cache_lock(cache_path):
+                return self._build(heldouts=heldouts,cache_path=cache_path,cache_identity=cache_identity)
+        return self._build(heldouts=heldouts)
+
+    def _build(self,*,heldouts=4,cache_path=None,cache_identity=None):
         started=time.monotonic();dimension=len(self.moment_indices);nb=len(self.background_indices)
         # GetAtomFXU replaces exact zero components with 1e-8. An evenly
         # spaced anchor can contain 1.0, so a minus-unit interpolation probe
         # would cross that artificial discontinuity. Avoid integral anchors.
         anchor=np.random.default_rng(77831).uniform(.6,1.6,dimension);zero_bg=np.zeros(nb)
         offset=self.residual(anchor,0.,zero_bg)
-        f0=self.residual(anchor,1.,zero_bg)-offset
-        quadratic=np.zeros((len(f0),dimension,dimension));linear=np.zeros((len(f0),dimension));plus=[]
-        for i in range(dimension):
-            step=np.eye(dimension)[i]
-            fp=self.residual(anchor+step,1.,zero_bg)-offset
-            fm=self.residual(anchor-step,1.,zero_bg)-offset
-            plus.append(fp);quadratic[:,i,i]=(fp+fm-2*f0)/2;linear[:,i]=(fp-fm)/2
-        for i in range(dimension):
-            for j in range(i+1,dimension):
-                value=self.residual(anchor+np.eye(dimension)[i]+np.eye(dimension)[j],1.,zero_bg)-offset
-                quadratic[:,i,j]=quadratic[:,j,i]=(value-plus[i]-plus[j]+f0)/2
-        nuclear=f0-np.einsum('i,nij,j->n',anchor,quadratic,anchor)
-        columns=[self.residual(anchor,0.,np.eye(nb)[i])-offset for i in range(nb)]
-        background=np.column_stack(columns) if columns else np.empty((len(f0),0))
+        cached=None;cache_note=''
+        if cache_path is not None and cache_identity:
+            try:
+                target=Path(cache_path)
+                if target.is_file() and target.stat().st_size<128*1024**2:
+                    with np.load(target,allow_pickle=False) as data:
+                        if (str(data['identity'])==cache_identity and
+                                np.array_equal(data['offset'],offset) and
+                                np.array_equal(data['maps'],self.cartesian_maps) and
+                                data['quadratic'].shape==(len(offset),dimension,dimension) and
+                                data['background'].shape==(len(offset),nb)):
+                            cached={key:data[key].copy() for key in ('nuclear','quadratic','background','linear_error')}
+            except (OSError,ValueError,KeyError) as exc:cache_note=type(exc).__name__
+        if cached is None:
+            f0=self.residual(anchor,1.,zero_bg)-offset
+            quadratic=np.zeros((len(f0),dimension,dimension));linear=np.zeros((len(f0),dimension));plus=[]
+            for i in range(dimension):
+                step=np.eye(dimension)[i]
+                fp=self.residual(anchor+step,1.,zero_bg)-offset
+                fm=self.residual(anchor-step,1.,zero_bg)-offset
+                plus.append(fp);quadratic[:,i,i]=(fp+fm-2*f0)/2;linear[:,i]=(fp-fm)/2
+            for i in range(dimension):
+                for j in range(i+1,dimension):
+                    value=self.residual(anchor+np.eye(dimension)[i]+np.eye(dimension)[j],1.,zero_bg)-offset
+                    quadratic[:,i,j]=quadratic[:,j,i]=(value-plus[i]-plus[j]+f0)/2
+            nuclear=f0-np.einsum('i,nij,j->n',anchor,quadratic,anchor)
+            columns=[self.residual(anchor,0.,np.eye(nb)[i])-offset for i in range(nb)]
+            background=np.column_stack(columns) if columns else np.empty((len(f0),0))
+            linear_error=float(np.max(np.abs(linear-2*np.einsum('nij,j->ni',quadratic,anchor)))/max(1.,float(np.max(np.abs(f0)))))
+        else:
+            nuclear,quadratic,background=(cached[k] for k in ('nuclear','quadratic','background'))
+            linear_error=float(cached['linear_error'])
         normalization=float(self.histogram['Residuals']['sumwYo'])
         model=ProfiledMagneticObjective(offset=offset,nuclear=nuclear,quadratic=quadratic,
             background=background,moment_maps=self.cartesian_maps,maximum_moment=self.maximum_moment,
             normalization=normalization,fixed_scale=self.fixed_scale)
-        linear_error=float(np.max(np.abs(linear-2*np.einsum('nij,j->ni',quadratic,anchor)))/max(1.,float(np.max(np.abs(f0)))))
         rng=np.random.default_rng(18019);errors=[]
         for _ in range(heldouts):
             moments=rng.normal(size=dimension)
@@ -181,11 +228,22 @@ class NativeMagneticStartingPoint:
         if not errors or max(errors+[linear_error])>1e-8:
             raise ValueError('The native profile failed held-out quadratic identity checks: '+
                 str(dict(heldouts=errors,linear_identity_error=linear_error)))
+        if cached is None and cache_path is not None and cache_identity:
+            target=Path(cache_path);temporary=target.with_name(target.name+'.'+uuid.uuid4().hex)
+            try:
+                target.parent.mkdir(parents=True,exist_ok=True)
+                with temporary.open('wb') as stream:
+                    np.savez_compressed(stream,identity=cache_identity,offset=offset,maps=self.cartesian_maps,
+                        nuclear=nuclear,quadratic=quadratic,background=background,linear_error=linear_error)
+                temporary.replace(target)
+            except OSError as exc:cache_note=type(exc).__name__
+            finally:temporary.unlink(missing_ok=True)
         self.model=model
         self.build_receipt=dict(schema='radar-native-profiled-start/v1',
             independent_variables=self.moment_names,magnetic_atoms=len(self.atoms),
             free_background_coefficients=nb,common_scale_free=self.fixed_scale is None,
             native_calls=self.calls,heldout_relative_errors=errors,linear_identity_error=linear_error,
+            cache_hit=cached is not None,cache_identity=cache_identity,cache_note=cache_note,
             interpolation_anchor_seed=77831,
             seconds=time.monotonic()-started,weighted_residual_points=len(offset),
             native_convergence_declared=False,covariance_supplied=False)

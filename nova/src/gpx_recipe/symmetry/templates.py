@@ -32,15 +32,21 @@ def matches(template,source,origin):
         and str(source.get('bank') or '')==scope['bank'] and origin==template['origin'])
 
 
-def make_template(protocol,context,reference,candidates,*,origin,existing='selected',future=False,maximum_scans=200):
-    if existing not in {'selected','sample'}:raise ValueError('Choose selected scan or matching sample/bank')
+def make_template(protocol,context,reference,candidates,*,origin,existing='selected',future=False,maximum_scans=200,selected_ids=None):
+    if existing not in {'selected','sample','custom'}:raise ValueError('Choose the current scan, selected scans or matching sample/bank')
     template=dict(schema='radar-model-template/v1',protocol=deepcopy(validate_protocol(protocol)),context=deepcopy(context),
         scope=dict(experiment=reference['experiment'],sample_key=reference['sample_key'],bank=str(reference.get('bank') or '')),
         origin=origin,existing_ids=[],seen_ids=[],future=future,maximum_scans=maximum_scans)
     seen=[s['id'] for s,o in candidates if matches(template,s,o)]
     if reference['id'] not in seen:raise ValueError('The reference scan is outside the current model scope')
     template['seen_ids']=list(dict.fromkeys(seen))
-    template['existing_ids']=template['seen_ids'] if existing=='sample' else [reference['id']]
+    if existing=='custom':
+        if not isinstance(selected_ids,list) or not selected_ids or len(selected_ids)!=len(set(selected_ids)):
+            raise ValueError('Select at least one unique scan')
+        if set(selected_ids)-set(seen):raise ValueError('Selected scans must match the starting sample, bank and recipe checkpoint')
+        if reference['id'] not in selected_ids:raise ValueError('Include the starting scan, or choose a selected scan as the starting GPX')
+        template['existing_ids']=list(selected_ids)
+    else:template['existing_ids']=template['seen_ids'] if existing=='sample' else [reference['id']]
     return validate_template(template)
 
 

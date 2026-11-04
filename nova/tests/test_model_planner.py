@@ -752,3 +752,11 @@ def test_negated_numeric_bound_does_not_negate_geometry(source):
 def test_numeric_bound_exemption_does_not_hide_geometry_or_unsupported_scope(source,wording):
     with pytest.raises(ValueError,match='conflicting moment models|geometry instruction needs an explicit choice'):
         payload(wording,source)
+
+@pytest.mark.parametrize('user_request',[
+    'Allow all symmetry-permitted moment components, including canting, with multiple orientations and relative-sign starts.',
+    'Use moment_model=symmetry_allowed. Refine all magnetic components permitted by each subgroup, allowing canting where symmetry permits. Use multiple starting orientations; do not restrict the search to collinear models.',
+])
+def test_presentation_canting_requests_do_not_conflict_with_explicit_geometry(user_request):
+    from radar_pd_nova.model_planner import _requested_moment_model
+    assert _requested_moment_model(user_request)=='symmetry_allowed'

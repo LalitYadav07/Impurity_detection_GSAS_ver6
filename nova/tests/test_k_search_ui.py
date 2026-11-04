@@ -51,6 +51,8 @@ def test_k_handoff_defaults_to_translation_and_site_compatible_embeddings(tmp_pa
 
 def test_canted_search_does_not_drop_models_that_only_lack_a_collinear_survey_start(tmp_path):
     app,result=app_and_result(tmp_path);app.server.state.sx_moment_model='symmetry_allowed'
+    # The selected result was prepared under the same declared canted scope.
+    app._k_result_identity=app._k_identity()
     result['catalogs']['0,0,1/2']['candidates'].append(dict(id='mag:canted',magnetic_space_group='P1',irrep=None))
     result['families'][0]['compatible_candidate_ids']=['mag:one']
     app.use_candidate_k()
@@ -92,7 +94,7 @@ def test_missing_or_foreign_catalog_does_not_become_an_executable_plan(tmp_path)
 @pytest.mark.parametrize('axis,label',[('q','Q (Å⁻¹)'),('d','d (Å)'),('native','Time of flight (µs)')])
 def test_native_calibrated_evidence_axes_and_masked_gaps(tmp_path,axis,label):
     _,result=app_and_result(tmp_path);plot=evidence(result,'0,0,1/2',axis=axis)
-    assert plot['layout']['xaxis2']['title']['text']==label
+    assert plot['layout']['xaxis3']['title']['text']==label
     assert any(t['name']=='Added magnetic template' for t in plot['data'])
     assert all(t['connectgaps'] is False for t in plot['data'])
     assert all(None in t['y'] for t in plot['data'])
@@ -117,7 +119,7 @@ def test_actual_app_exposes_survey_inside_existing_model_view():
     assert 'Find candidate k-vectors' in html and 'Use selected k' in html
     assert 'Candidate propagation vectors' in html and 'No Rietveld refinement runs in this survey' in html
     assert 'radar-user-guide' in html
-    assert app.server.state.sx_k_budget==60 and app.server.state.sx_k_limit==6
+    assert app.server.state.sx_k_budget is None and app.server.state.sx_k_limit==6
     assert app.server.state.sx_k=='' and app.server.state.sx_lande=='' and app.server.state.sx_max_moment==''
     assert app.server.state.sx_refine_scale is False
     assert app.server.state.sx_refine_background is False

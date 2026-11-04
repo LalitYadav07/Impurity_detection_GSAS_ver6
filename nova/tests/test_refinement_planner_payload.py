@@ -22,6 +22,14 @@ def native_context():
         covariance_summary={'private':'PRIVATE_COVARIANCE'},future_diagnostic='PRIVATE_DIAGNOSTIC')
 
 
+def test_planner_schema_exposes_explicit_stage_dependencies():
+    payload=native_planner.build_payload('Refine the background, then an independent stage.',native_context())
+    stage=payload['response_schema']['properties']['stages']['items']
+    assert stage['properties']['depends_on']['type']=='array'
+    assert 'depends_on' in stage['required']
+    assert 'execution order alone' in payload['response_contract']
+
+
 def four_stage_plan(context, request):
     return dict(schema='radar-gpx-recipe/v1',model_signature=context['model_signature'],
         request=request,assumptions=[],questions=[],unsupported=[],stages=[

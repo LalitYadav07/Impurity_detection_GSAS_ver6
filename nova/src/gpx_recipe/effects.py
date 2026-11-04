@@ -125,7 +125,7 @@ def constraint_bound_audit(before,covariance,reconstruct):
 
 def require_constraint_bounds(audit):
     if audit['violations']:
-        raise ValueError('Native dependent parameters violated physical/requested bounds before save-time clipping: '+str([(r['variable'],r['solver_value_before_native_clipping']) for r in audit['violations']])+'. Later stages were not executed; no phases were silently removed or fixed.')
+        raise ValueError('Native dependent parameters violated physical/requested bounds before save-time clipping: '+str([(r['variable'],r['solver_value_before_native_clipping']) for r in audit['violations']])+'.')
 
 
 def native_storage_audit(solver_audit, after):

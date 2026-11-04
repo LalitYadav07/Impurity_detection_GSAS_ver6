@@ -679,13 +679,14 @@ def _run(source_gpx,ctx,protocol,candidate_record,seed,*,forward_only):
         if not periodicity['passed']:raise TrialDisposition('k_periodicity_mismatch',periodicity['reason'])
         histogram=gpx.histogram(protocol['histogram'])
         baseline=baseline_target_profiles[protocol['histogram']]['arrays'][3]
-        total=np.asarray(_G2strMain.DoNoFit(str(output_gpx),protocol['histogram']),dtype=float)
+        from ..native_forward import forward_profile,tick_arrays
+        total,ticks=forward_profile(output_gpx,protocol['histogram'])
         difference=total-np.asarray(baseline,dtype=float)
         tolerance=1e-8*max(1.,float(np.max(np.abs(total))))
         if not np.isfinite(difference).all() or np.min(difference)<-tolerance:
             raise TrialDisposition('effect_mismatch','The magnetic-only forward profile contains an unexpected negative/nonfinite contribution')
         target=ctx.run_dir/'magnetic-profile.npz'
-        np.savez_compressed(target,intensity=np.maximum(difference,0.))
+        np.savez_compressed(target,intensity=np.maximum(difference,0.),**tick_arrays(ticks))
         return dict(status='simulated',profile=target.name,gpx=output_gpx.name,
                     audit=audit,periodicity=periodicity,no_refinement=True,initial_maximum_moment=audit['maximum_moment'],magnetic_atoms=len(new_phase['Atoms']))
     construction_seconds=time.monotonic()-stage_started
@@ -693,7 +694,7 @@ def _run(source_gpx,ctx,protocol,candidate_record,seed,*,forward_only):
     optimizer=None
     if protocol['policy'].get('magnetic_optimizer','gsas_hessian')=='profiled_quadratic':
         from .profiled_solver import refine,ProfiledScopeError
-        try:optimizer=refine(gpx,output_gpx,protocol)
+        try:optimizer=refine(gpx,output_gpx,protocol,cache_root=ctx.input_root/'_profiled_cache',candidate=candidate_record)
         except ProfiledScopeError as exc:
             ctx.save_json('optimizer-receipt.json',dict(name='profiled_quadratic',qualification=dict(passed=False),reason=str(exc)))
             raise TrialDisposition('unsupported',str(exc)) from exc

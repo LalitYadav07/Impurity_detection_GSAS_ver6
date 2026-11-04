@@ -83,15 +83,16 @@ class KSearch:
 
     def run(self,source,root,*,parent,histogram,sites,directions=('x','y','z'),
             maximum_moment=6.,magnetic_d_min=0.,relative_signs=True,templates_per_k=6,
-            budget_seconds=60,workers=2,progress=None,cancel=None):
-        if type(budget_seconds) is not int or not 10<=budget_seconds<=600:raise ValueError('Choose a 10–600 second survey budget')
+            budget_seconds=None,workers=2,progress=None,cancel=None,moment_model='collinear'):
+        if budget_seconds is not None and (type(budget_seconds) is not int or not 10<=budget_seconds<=600):raise ValueError('Choose a 10–600 second survey budget')
         if type(workers) is not int or not 1<=workers<=4:raise ValueError('Choose 1–4 native workers')
         if type(templates_per_k) is not int or not 1<=templates_per_k<=48:raise ValueError('Choose 1–48 templates per k')
+        if moment_model not in {'collinear','symmetry_allowed'}:raise ValueError('Choose a supported magnetic moment model')
         root=Path(root).resolve();root.mkdir(parents=True,exist_ok=True)
-        cancel=cancel or threading.Event();started=self.clock();deadline=started+budget_seconds
+        cancel=cancel or threading.Event();started=self.clock();deadline=started+budget_seconds if budget_seconds is not None else None
         def remaining():
             if cancel.is_set():raise SearchStopped('K search cancelled')
-            return max(0.,deadline-self.clock())
+            return 600. if deadline is None else max(0.,deadline-self.clock())
         def announce(stage,message,**extra):
             if progress:progress(dict(stage=stage,message=message,**extra))
         def native(action,payload,directory,cap=60):
@@ -160,7 +161,7 @@ class KSearch:
             announce('inventory','Checking magnetic sites, allowed directions and subgroup settings')
             try:
                 inventory_request=dict(source=str(captured),source_sha256=expected,parent=parent,
-                    parent_setting_sha256=parent_context['setting_sha256'],sites=sites,directions=list(directions),
+                    parent_setting_sha256=parent_context['setting_sha256'],sites=sites,directions=list(directions),moment_model=moment_model,
                     catalogs=[catalogs[i] for i in sorted(catalogs)])
                 identity={k:v for k,v in inventory_request.items() if k!='source'}
                 key=digest(dict(inputs=identity,implementation=package_signature(),runtime=context['runtime']['native_stack_sha256']))
@@ -180,22 +181,23 @@ class KSearch:
                 family=families[i];record=by_k[tuple(family['k'])]
                 family['eligible']=len(record['eligible']);family['dispositions']=record['dispositions']
                 family['compatible_candidate_ids']=sorted({r['candidate_id'] for r in record['eligible']})
-                family['available_starts']=len(record['eligible'])*(2**(len(sites)-1) if relative_signs else 1)
+                family['available_starts']=len(record['eligible'])*(2**(len(sites)-1) if relative_signs else 1)*(8 if moment_model=='symmetry_allowed' else 1)
                 choices=representative_starts(record['eligible'],sites,limit=templates_per_k,relative_signs=relative_signs)
                 family.update(planned=len(choices),status='pending' if choices else 'outside_supported_scope')
-                if not choices:family['reason']='No supported collinear start for these selected sites and directions; this is not a physical rejection of the k family.'
+                if not choices:family['reason']='No supported '+moment_model+' start for these selected sites and directions; this is not a physical rejection of the k family.'
                 if not choices:continue
                 inputs=root/('k-'+str(i));inputs.mkdir();shutil.copyfile(captured,inputs/'source.gpx')
                 write_json(inputs/'catalog.json',catalog)
                 settings=dict(parent=parent,histogram=histogram,kind='magnetic',k=family['k'],sites=sites,directions=list(directions),
                     candidates=sorted({choice['candidate_id'] for choice in choices}),relative_sign_starts=relative_signs,
                     cycles=1,adequate_rwp=100.,maximum_moment=float(maximum_moment),magnetic_d_min=float(magnetic_d_min),
-                    maximum_mode=.5,modes=[],start_mode=.1)
+                    maximum_mode=.5,modes=[],start_mode=.1,moment_model=moment_model)
                 protocol=build_plan(context,catalog,inputs,settings)
                 # The simulation path fits no parameters. A single declared
                 # nonzero moment supplies a shape; intensity is scored later.
-                for choice in choices:
-                    seed=next(s for s in protocol['seeds'] if s['axis']==choice['axis'] and s.get('site_signs',dict.fromkeys([v['label'] for v in sites],1))==choice['site_signs'])
+                for index,choice in enumerate(choices):
+                    matching=[s for s in protocol['seeds'] if s['axis']==choice['axis'] and s.get('site_signs',dict.fromkeys([v['label'] for v in sites],1))==choice['site_signs']]
+                    seed=matching[index%len(matching)]
                     tasks.append((i,protocol,inputs,choice['candidate_id'],seed['id']))
         # Interleave families so a short deadline does not spend its entire
         # budget on Gamma before trying any nonzero propagation vector.
@@ -249,6 +251,14 @@ class KSearch:
                 maximum_amplitude=(float(maximum_moment)/response['initial_maximum_moment'])**2))
             template_records[uid]=dict(path=str(path),sha256=file_sha(path),response=response,cached=cached)
             families[i]['simulated']+=1
+            with np.load(baseline,allow_pickle=False) as data:
+                provisional=rank_profiles(data['observed'],data['nuclear'],data['weights'],profiles,mask=data['mask'],complete=False)
+            ranked=provisional.get('families') or []
+            leader=ranked[0] if ranked else None
+            detail=(f" · provisional leader ({', '.join(leader['k'])}), score {leader['score']:.4g}" if leader else '')
+            announce('simulate',f"{sum(f['simulated']>0 for f in families)}/{len(families)} k families evaluated · {len(profiles)}/{len(tasks)} planned profiles tested"+detail,
+                completed=len(profiles),total=len(tasks),families_total=len(families),
+                families_evaluated=sum(f['simulated']>0 for f in families),provisional_leader=leader)
         announce('simulate',f'Simulating up to {len(tasks)} representative native profiles')
         pending={};todo=deque(tasks)
         if getattr(self.native,'supports_portfolio',False):
@@ -260,17 +270,29 @@ class KSearch:
                     if 'cached' in staged:publish(staged['cached'])
                     else:staged_jobs[str(staged['directory'].relative_to(self.cache))]=staged
                 except Exception as exc:families[task[0]].setdefault('simulation_failures',[]).append(dict(candidate_id=task[3],seed=task[4],reason=str(exc)))
-            if staged_jobs and remaining()>2:
-                announce('simulate',f'{len(profiles)} cached profiles · {len(staged_jobs)} fresh native starts in {workers} workers')
+            while staged_jobs and remaining()>2:
+                # Keep an ordered, interleaved finite queue. Each short portfolio
+                # publishes progress; no arbitrary whole-survey time cap is used.
+                batch=list(staged_jobs)[:max(1,workers*2)] if deadline is None else list(staged_jobs)
+                announce('simulate',f'{len(profiles)} profiles complete · {len(staged_jobs)} pending · {workers} requested workers',
+                    completed=len(profiles),total=len(tasks),families_total=len(families),
+                    families_evaluated=sum(f['simulated']>0 for f in families))
                 try:
-                    response=native('portfolio',dict(directories=list(staged_jobs),workers=workers,seconds=max(.1,remaining()-2)),self.cache,cap=600)
+                    response=native('portfolio',dict(directories=batch,workers=workers,seconds=max(.1,remaining()-2)),self.cache,cap=600)
+                    completed=set()
                     for item in response['results']:
-                        if item['directory'] not in staged_jobs:raise ValueError('Portfolio returned an unknown or duplicate trial')
+                        if item['directory'] not in batch or item['directory'] in completed:raise ValueError('Portfolio returned an unknown or duplicate trial')
+                        completed.add(item['directory'])
                         staged=staged_jobs.pop(item['directory'])
                         try:publish(collect(staged,item['response']))
                         except Exception as exc:
                             task=staged['task'];families[task[0]].setdefault('simulation_failures',[]).append(dict(candidate_id=task[3],seed=task[4],reason=str(exc)))
-                except (ValueError,RuntimeError,subprocess.SubprocessError) as exc:errors.append(str(exc))
+                    if deadline is not None:break
+                    for name in set(batch)-completed:
+                        staged=staged_jobs.pop(name);task=staged['task']
+                        families[task[0]].setdefault('simulation_failures',[]).append(dict(candidate_id=task[3],seed=task[4],reason='Native operation exceeded its execution limit'))
+                except (ValueError,RuntimeError,subprocess.SubprocessError) as exc:
+                    errors.append(str(exc));break
             pending=staged_jobs
         else:
             pool=ThreadPoolExecutor(max_workers=workers)
@@ -303,11 +325,11 @@ class KSearch:
         families.sort(key=lambda f:(f.get('score') is None,-f.get('score',0),f['k']))
         result=dict(schema='radar-k-search/v1',status=ranking['status'],complete=complete,
             source_sha256=expected,parent=parent,histogram=histogram,settings=dict(sites=sites,directions=list(directions),
-                maximum_moment=maximum_moment,magnetic_d_min=magnetic_d_min,relative_signs=relative_signs,templates_per_k=templates_per_k),
+                maximum_moment=maximum_moment,magnetic_d_min=magnetic_d_min,relative_signs=relative_signs,templates_per_k=templates_per_k,moment_model=moment_model),
             elapsed_seconds=self.clock()-started,budget_seconds=budget_seconds,points=prepared['points'],
             baseline=str(baseline),baseline_sha256=file_sha(baseline),ranking=ranking,families=families,
             templates=template_records,catalogs={','.join(v['k']):v for v in catalogs.values()},errors=errors,
             coordinate='tof' if 'T' in str(next(h for h in context['histograms'] if h['name']==histogram)['instrument']['Type']) else 'two_theta',
-            source_unchanged=file_sha(captured)==expected,llm_calls=0,scope='Finite high-symmetry, collinear template survey; not exhaustive magnetic identification')
+            source_unchanged=file_sha(captured)==expected,llm_calls=0,scope='Finite high-symmetry, '+moment_model+' template survey; not exhaustive magnetic identification')
         write_json(root/'survey.json',result);announce('finished','K survey ready to inspect')
         return result

@@ -186,6 +186,9 @@ def refinement_status_message(result, baseline, *, source=None):
     from .refinement_messages import sample_width_failure_message
     width_message=sample_width_failure_message(result,source)
     if width_message:return width_message
+    if result.get('rejected_stages'):
+        return ('Recipe finished with restored checkpoints. Rejected/skipped stages: '+', '.join(result['rejected_stages'])+
+                '. Their parameter changes were discarded; inspect the retained stage history before scientific use.')
     completed=len(result.get('stages') or [])
     ready=(f"{completed} verified stage{'s' if completed!=1 else ''} completed. Final GPX ready for scientific review."
            if result.get('status')=='completed' and result.get('final_gpx')
@@ -356,8 +359,11 @@ def recipe_cards(plan, context, *, physical_banks=None):
         if parts[0] in phases:return f"{phases[parts[0]]} / {':'.join(parts[1:-1])}: {flags.get(parts[-1],parts[-1])}"
         return ' / '.join(phases.get(x,histograms.get(x,{'background':'background','phase_scale':'phase scale','histogram_scale':'histogram scale','cell':'cell'}.get(x,x))) for x in parts if x)
     cards=[]
+    titles={stage['id'].casefold():stage['title'] for stage in plan['stages']}
     for number,(stage,row) in enumerate(zip(plan['stages'],stage_table(plan,context)),1):
         changes=[]
+        if stage.get('depends_on'):
+            changes.append('Requires successful stages: '+', '.join(titles.get(key.casefold(),key) for key in stage['depends_on']))
         if stage.get('background'):changes.append('Background: '+stage['background']['function']+f" · {stage['background']['coefficients']} coefficients")
         for bound in stage.get('bounds') or []:
             parameter = {'U': 'Uiso', 'F': 'occupancy'}.get(bound['parameter'], bound['parameter'])
@@ -392,18 +398,18 @@ class RefinementMixin(GuidedRefinementMixin):
         self.server.state.change('rf_request')(self._refinement_request_changed)
         self.server.state.change('rf_setup_mode')(self._refinement_setup_changed)
         self.server.state.change('rf_stage','rf_histogram','rf_axis','rf_display','rf_zoom')(self._refinement_plot_changed)
-        self.server.state.change('rf_trend_metric','rf_trend_axis','rf_trend_display','rf_recipe_filter')(self._refinement_trend_changed)
+        self.server.state.change('rf_trend_stage','rf_trend_metric','rf_trend_axis','rf_trend_display','rf_recipe_filter')(self._refinement_trend_changed)
         self.server.state.change('rf_parallel_jobs')(self._refinement_parallel_changed)
 
     @staticmethod
     def _refinement_state_defaults():
         return dict(rf_mode='recipe',rf_busy=False,rf_loading=False,rf_catalog_message='',rf_message='',rf_preparation_progress='',rf_error='',rf_transport='',rf_source_qualification='',rf_can_load_baseline=False,rf_provider='Guided rules · no model call required',
             rf_experiment='',rf_experiments=[],rf_source='',rf_sources=[],rf_source_details=[],rf_context_atoms=[],rf_context_search='',rf_scope='all',rf_samples=[],rf_sample_options=[],rf_scans=[],rf_scan_options=[],rf_banks=[],rf_bank_options=[],
-            rf_existing=True,rf_future=False,rf_scope_summary='No published GPXs available',rf_scope_token='',rf_request='',rf_draft_status='',rf_cards=[],rf_questions=[],rf_assumptions=[],rf_plan_calls='',rf_model_tokens='',rf_model_cost='',rf_model_has_luna_price=False,rf_plan_ready=False,
+            rf_failure_policy='stop',rf_existing=True,rf_future=False,rf_scope_summary='No published GPXs available',rf_scope_token='',rf_request='',rf_draft_status='',rf_cards=[],rf_questions=[],rf_assumptions=[],rf_plan_calls='',rf_model_tokens='',rf_model_cost='',rf_model_has_luna_price=False,rf_plan_ready=False,
             rf_approved=False,rf_recipe_id='',rf_recipe_summary='',rf_active_summary='',rf_saved_recipe='',rf_recipe_versions=[],rf_recipe_filter='all',rf_metrics=[],rf_source_warnings=[],rf_future_armed=False,
             rf_jobs=[],rf_job_search='',rf_job_status='all',rf_progress_text='No refinements started',rf_progress_percent=0,rf_selected_job='',rf_selected_title='',rf_selected_message='',rf_has_output=False,rf_output_provenance='',
             rf_result_tab='fit',rf_stage='final',rf_stages=[],rf_histogram='',rf_histograms=[],rf_axis='d',rf_display='compare',rf_fit=figure_json(empty_figure()),rf_fit_notice='',rf_rwp_summary='',rf_parameter_warnings=[],rf_convergence_notice='',rf_exposure_notice='',rf_zoom=0,rf_parallel_jobs=1,
-            rf_trend=figure_json(empty_figure('Completed refinements will populate this trend')),rf_trend_notice='',rf_trend_metric='rwp',rf_trend_metrics=[dict(title='Rwp · original and polished',value='rwp')],rf_trend_axis='run_number',rf_trend_axes=[dict(title='Scan number',value='run_number')],rf_trend_display='absolute',
+            rf_trend=figure_json(empty_figure('Completed refinements will populate this trend')),rf_trend_notice='',rf_trend_stage='final',rf_trend_stage_options=[],rf_trend_metric='rwp',rf_trend_metrics=[dict(title='Rwp · original and polished',value='rwp')],rf_trend_axis='run_number',rf_trend_axes=[dict(title='Scan number',value='run_number')],rf_trend_display='absolute',
             rf_parameters=[],rf_parameter_search='',rf_parameter_notice='',rf_downloads=[],rf_download='',rf_can_open_gsas=False,rf_open_gsas_label='Open selected verified GPX in GSAS-II',rf_queue_running=False,rf_follow=True,rf_expanded=False)
 
     def _refinement_schedule(self,coroutine,name):
@@ -589,6 +595,7 @@ class RefinementMixin(GuidedRefinementMixin):
         if draft:s.rf_setup_mode='guided' if draft.get('guided') else 'expert'
         scope=recipe.get('scope') or {}
         s.rf_source=draft.get('source_id','');s.rf_request=draft.get('request','')
+        s.rf_failure_policy=(draft.get('plan') or {}).get('failure_policy','stop')
         s.rf_scope=scope.get('mode','all');s.rf_samples=list(scope.get('samples',[]));s.rf_scans=list(scope.get('scans',[]));s.rf_banks=list(scope.get('banks',[]))
         s.rf_existing=recipe.get('existing',True);s.rf_future=recipe.get('future',False);s.rf_selected_job='';s.rf_recipe_filter='all'
         if s.rf_mode!='models' and w and any(j['source']['experiment']==s.rf_experiment for j in w.state['jobs'].values()):s.rf_mode='results'
@@ -650,6 +657,8 @@ class RefinementMixin(GuidedRefinementMixin):
         self._refinement_sync()
 
     def _refinement_setup_matches(self,draft):
+        if (getattr(self.server.state,'rf_setup_mode','expert')=='expert' and hasattr(self.server.state,'rf_failure_policy')
+                and (draft.get('plan') or {}).get('failure_policy','stop')!=self.server.state.rf_failure_policy):return False
         mode=getattr(self.server.state,'rf_setup_mode',None)
         return not mode or mode==('guided' if draft.get('guided') else 'expert')
 
@@ -847,7 +856,8 @@ class RefinementMixin(GuidedRefinementMixin):
             if self._recipe_preparation_current(owner):
                 self._sync_recipe_preparation_progress();self.server.state.flush()
         def progress(event):loop.call_soon_threadsafe(publish,event)
-        work=asyncio.create_task(asyncio.to_thread(w.prepare,experiment,source,request,progress=progress))
+        work=asyncio.create_task(asyncio.to_thread(w.prepare,experiment,source,request,progress=progress,
+            failure_policy=getattr(self.server.state,'rf_failure_policy',None)))
         try:
             if self._recipe_preparation_current(owner):
                 self._sync_recipe_preparation_progress();self.server.state.flush()
@@ -1230,8 +1240,15 @@ class RefinementMixin(GuidedRefinementMixin):
         if not w:return
         try:
             rows=[];eligible=0
+            stage_options={'final':'Final recipe output'}
+            for candidate_job in w.state['jobs'].values():
+                if candidate_job['source']['experiment']!=s.rf_experiment:continue
+                for stage in (candidate_job.get('result') or {}).get('stages',[]):
+                    stage_options.setdefault(stage['id'],stage.get('title') or stage['id'])
+            s.rf_trend_stage_options=[dict(value=k,title=v) for k,v in stage_options.items()]
+            selected_stage=getattr(s,'rf_trend_stage','final')
             for job in w.state['jobs'].values():
-                if job['source']['experiment']!=s.rf_experiment or job['status']!='completed':continue
+                if job['source']['experiment']!=s.rf_experiment or job['status'] not in {'completed','needs_review'}:continue
                 if s.rf_recipe_filter!='all' and s.rf_recipe_filter not in job['recipes']:continue
                 eligible+=1
                 result=job['result']
@@ -1239,11 +1256,17 @@ class RefinementMixin(GuidedRefinementMixin):
                 try:
                     compact=result.get('trend_views') or {}
                     baseline=compact.get('baseline') or self._read_refinement_view(job,result['baseline_view'])
-                    final=compact.get('final') or self._read_refinement_view(job,result['final_view'])
+                    if selected_stage=='final':
+                        if not result.get('final_view') and not compact.get('final'):continue
+                        final=compact.get('final') or self._read_refinement_view(job,result['final_view'])
+                    else:
+                        stage=next((r for r in result.get('stages',[]) if r['id']==selected_stage),None)
+                        if not stage:continue
+                        final=self._read_refinement_view(job,stage['view'])
                     rows.append(dict(id=job['id'],source=job['source'],recipe_id=rid,recipe_label='Recipe '+str(w.state['recipes'][rid]['version']),baseline=baseline,final=final,
                         review=refinement_review_status(result)))
                 except (OSError,ValueError):continue
-            s.rf_trend_notice=f'{len(rows)} of {eligible} completed results shown.'+(' Recover missing saved artifacts to complete this trend.' if len(rows)<eligible else '')
+            s.rf_trend_notice=f'{len(rows)} of {eligible} processed results shown for {stage_options.get(selected_stage,selected_stage)}. Retained stages are intermediate checkpoints, not accepted final refinements.'+(' Recover missing saved artifacts to complete this trend.' if len(rows)<eligible else '')
             options={'rwp':'Rwp · original and polished'}
             for row in rows:
                 for p in row['final'].get('parameters',[]):

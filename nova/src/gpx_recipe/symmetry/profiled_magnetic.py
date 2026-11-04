@@ -32,6 +32,7 @@ class StartingPoint:
     objective_ftol: float
     curvature_eigenvalues: np.ndarray
     bound_active: bool
+    optimizer_objective_scale: float
 
 
 class ProfiledMagneticObjective:
@@ -122,6 +123,13 @@ class ProfiledMagneticObjective:
         return -2*np.einsum('aki,ak->ai',self.physical_maps,
             np.einsum('aki,i->ak',self.physical_maps,z))
 
+    def _hessian(self, z):
+        step=1e-4*max(1.,float(np.linalg.norm(z)))
+        hessian=np.column_stack([(self.value_gradient(z+np.eye(self.dimension)[j]*step)[1]-
+                                  self.value_gradient(z-np.eye(self.dimension)[j]*step)[1])/(2*step)
+                                 for j in range(self.dimension)])
+        return (hessian+hessian.T)/2
+
     def fit(self,seed,*,max_iterations=200,objective_ftol=1e-14,callback=None):
         seed=np.asarray(seed,dtype=float)
         if seed.shape!=(self.dimension,) or not np.isfinite(seed).all():
@@ -134,7 +142,16 @@ class ProfiledMagneticObjective:
         maximum=float(np.max(np.linalg.norm(self.moment_maps@seed,axis=1)))
         if maximum>self.maximum_moment:
             z*=self.maximum_moment/maximum
-        result=minimize(self.value_gradient,z,method='SLSQP',jac=True,
+        # Nuclear intensity can dominate the normalization by many orders of
+        # magnitude. SLSQP otherwise accepts a tiny first step while a magnetic
+        # descent direction remains. Rescale only its numerical objective; all
+        # physical checks below use the original weighted objective/tolerances.
+        curvature_scale=float(np.max(np.abs(np.linalg.eigvalsh(self._hessian(z)))))
+        optimizer_scale=max(1.,1./max(curvature_scale,1e-12))
+        def optimizer_objective(point):
+            value,gradient=self.value_gradient(point)
+            return value*optimizer_scale,gradient*optimizer_scale
+        result=minimize(optimizer_objective,z,method='SLSQP',jac=True,
             constraints=[dict(type='ineq',fun=self._constraint,jac=self._constraint_jacobian)],
             bounds=[(-self.maximum_moment,self.maximum_moment)]*self.dimension,
             options=dict(maxiter=max_iterations,ftol=objective_ftol),callback=callback)
@@ -156,10 +173,7 @@ class ProfiledMagneticObjective:
         # Quadratic intensities have zero first derivatives at zero moments.
         # A native or SciPy "success" at a maximum is not a useful start.
         step=1e-4*max(1.,float(np.linalg.norm(result.x)))
-        hessian=np.column_stack([(self.value_gradient(result.x+np.eye(self.dimension)[j]*step)[1]-
-                                  self.value_gradient(result.x-np.eye(self.dimension)[j]*step)[1])/(2*step)
-                                 for j in range(self.dimension)])
-        curvature,directions=np.linalg.eigh((hessian+hessian.T)/2)
+        curvature,directions=np.linalg.eigh(self._hessian(result.x))
         local_descent=False
         for direction in directions.T:
             for sign in [-1.,1.]:
@@ -174,7 +188,8 @@ class ProfiledMagneticObjective:
             maximum_moment=maximum,scaled_gradient_norm=float(np.linalg.norm(gradient)/self.normalization),
             scaled_stationarity_norm=stationarity,local_descent_found=local_descent,
             optimizer_status=int(result.status),optimizer_success=bool(result.success),objective_ftol=float(objective_ftol),
-            curvature_eigenvalues=curvature,bound_active=bool(active.any()))
+            curvature_eigenvalues=curvature,bound_active=bool(active.any()),
+            optimizer_objective_scale=optimizer_scale)
 
     def heldout_error(self,coefficients,scale,background,native_residual):
         """Compare with a separate native evaluation, never its interpolants."""

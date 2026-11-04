@@ -41,7 +41,11 @@ def coordinate(view,axis):
 
 
 def fit(selected,pins=(),*,axis='d',reset=0,intensity_scale='linear'):
-    if not selected or not selected['has_view']:return empty('Select a model with a native fitted checkpoint')
+    if not selected:return empty('Select a model to inspect its fit and current state')
+    if not selected['has_view']:
+        from .symmetry_workspace import display_status
+        state=display_status(selected.get('status','pending'))
+        return empty(f'{state.capitalize()} — no fitted curve has returned for this start yet.<br>Completed fits appear as their batches return; you can inspect earlier results while work continues.')
     v=view_for(selected);x,label=coordinate(v,axis);obs=np.asarray(v['observed'],dtype=float);calc=np.asarray(v['calculated'],dtype=float)
     native=np.asarray(v['x'],dtype=float);mask=np.isfinite(x)&(native>=v['limits'][0])&(native<=v['limits'][1])
     if not mask.any():return empty('This instrument calibration provides no usable positive d spacing here; select the native coordinate')

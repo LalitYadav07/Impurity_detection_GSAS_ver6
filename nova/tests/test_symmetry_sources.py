@@ -41,6 +41,23 @@ def test_recipe_checkpoints_are_explicit_and_never_enroll_as_new_radar_sources(t
     assert w.state['sources']==before
 
 
+def test_failed_recipe_exposes_only_verified_retained_stage_with_review_notice(tmp_path):
+    w=workspace(tmp_path);job=w.state['jobs']['job1']
+    job['status']='needs_review';job['result']['status']='needs_review'
+    for field in ('final_gpx','final_view','output_sha256','trend_views'):job['result'].pop(field,None)
+    job['result']['error']='Oxygen Uiso rejected'
+    entries=start_choices(w,'IPTS-1')
+    assert not any(e.get('stage')=='final' for e in entries)
+    stage=next(e for e in entries if e.get('stage')=='s1')
+    assert 'retained stage' in stage['title']
+    selected=resolve_start(w,'IPTS-1',stage['id'])
+    assert selected['dataset_id']=='STAGE_DATASET'
+    assert selected['scientific_status']=='needs_review'
+    assert 'Oxygen Uiso rejected' in selected['scientific_warnings'][-1]
+    (Path(job['result']['directory'])/'stage1.gpx').write_bytes(b'changed')
+    with pytest.raises(ValueError):resolve_start(w,'IPTS-1',stage['id'])
+
+
 def test_magnetic_model_conditions_show_the_scan_range_without_downloading_a_gpx(tmp_path):
     w=workspace(tmp_path)
     w.state['sources']['raw']['metadata']={'temperature':dict(value=166.5,minimum=163.,maximum=170.,unit='K',statistic='time_weighted_step_hold')}

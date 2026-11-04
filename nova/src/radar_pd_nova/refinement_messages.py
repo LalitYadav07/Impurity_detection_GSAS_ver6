@@ -22,6 +22,10 @@ def retain_review_evidence(result, view, criteria=None):
 
 def refinement_review_status(result):
     """Flag recorded diagnostic failures without inventing a scientific cutoff."""
+    if result.get('rejected_stages'):
+        return dict(status='needs_review',needs_review=True,
+            message='Recovered recipe: rejected or skipped stages '+', '.join(result['rejected_stages'])+
+            '. Previous parameter values were retained. Final output requires scientific review.')
     if result.get('status') == 'needs_review':
         reason = str(result.get('error') or 'The recipe stopped before accepting a final project.').strip()
         return dict(status='needs_review', needs_review=True,

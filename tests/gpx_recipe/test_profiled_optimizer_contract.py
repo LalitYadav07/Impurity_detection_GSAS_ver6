@@ -34,7 +34,7 @@ def test_bad_optimizer_contracts_fail_closed(value):
     with pytest.raises(ValueError):policy(dict(legacy_policy(),**value))
 
 
-@pytest.mark.parametrize('kind,k',[('structural',['0','0','0']),('magnetic',['1','0','0']),('magnetic',['1/2','0','0'])])
+@pytest.mark.parametrize('kind,k',[('structural',['0','0','0'])])
 def test_profiled_optimizer_scope_is_explicit(tmp_path,kind,k):
     p=make_protocol(tmp_path);p.update(kind=kind,k=k)
     p['policy'].update(magnetic_optimizer='profiled_quadratic',optimizer_iterations=60,moment_model='symmetry_allowed')
@@ -97,3 +97,10 @@ def test_legacy_response_schema_does_not_offer_an_optimizer(source):
     props=response_schema(source,selected)['properties']['settings']['anyOf'][0]['properties']
     assert props['magnetic_optimizer']['enum']==['profiled_quadratic']
     assert props['optimizer_iterations']['enum']==[60]
+
+
+@pytest.mark.parametrize('k',[['1/2','0','0'],['1/2','1/2','1/2']])
+def test_profiled_optimizer_accepts_commensurate_supercell_protocol(tmp_path,k):
+    p=make_protocol(tmp_path);p['k']=k
+    p['policy'].update(magnetic_optimizer='profiled_quadratic',optimizer_iterations=60,moment_model='symmetry_allowed')
+    assert validate_protocol(p)['k']==k

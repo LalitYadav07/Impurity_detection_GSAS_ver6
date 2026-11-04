@@ -1,5 +1,7 @@
 """Deterministic GSAS-II execution of an explicitly approved active-set plan."""
 import hashlib
+import copy
+import shutil
 import json
 from pathlib import Path
 import time
@@ -14,6 +16,17 @@ from .effects import parameter_changes, require_fixed_values_unchanged,require_n
 from .effects import native_storage_audit, require_native_storage
 from .convergence import convergence_evidence
 from .occupancy_review import check_active_parameters
+
+
+class StageRejected(ValueError):
+    """A checked scientific outcome that can be rolled back safely."""
+
+
+def scientific_check(check, *args):
+    try:
+        return check(*args)
+    except ValueError as exc:
+        raise StageRejected(str(exc)) from exc
 
 
 def write_json(path, value):
@@ -296,75 +309,106 @@ def run_plan(source, output, plan, *, approved=None, preview=False):
     result_path = output.with_suffix(".execution.json")
     added_constraints = set()
     declared_relations = {}
+    rejected = set()
     normalized_histograms = set(context.get("normalized_histograms",[]))
     try:
         for stage, display in zip(plan["stages"], stage_table(plan, context)):
             started = time.monotonic()
-            introduced=[c for c in stage['constraints'] if advanced.relation_key(c) not in declared_relations]
-            configure(project, stage, context, added_constraints)
-            advanced.check_site_totals(project, context)
-            normalized_histograms.update(stage.get("phase_normalization",[]))
-            advanced.check_requested_relations(project,context,introduced,free=stage['free'])
-            for constraint in introduced:declared_relations[advanced.relation_key(constraint)]=constraint
-            configured = advanced.audit(project, context)
-            project.save()
-            state = extract_gsasii_refinement_state(output, project, G2, max_correlations=10)
-            constraint_resolution = check_preflight(state, stage, context)
-            row = {**display, "status": "preflight_passed", "effective_vary": state["parameter_space"]["effective_vary"],
-                   "constraint_warning": state["constraints"].get("warning", ""), "constraint_parameter_provenance": constraint_resolution, "configured_state": configured}
-            result["stages"].append(row)
-            write_json(result_path, result)
-            if not preview:
-                # The input GPX can already contain a fresh covariance. Require
-                # this particular refinement call to replace it explicitly.
-                project.data.setdefault("Covariance", {}).setdefault("data", {})["freshCOV"] = False
-                project.save()
-                project.do_refinements([{}])
-                row["status"] = "refined_needs_review"
-                cov_native=project.data.get("Covariance",{}).get("data",{})
-                if not cov_native.get("freshCOV"):raise ValueError("Stage did not produce fresh refinement covariance")
-                native_maps=importlib.import_module((G2.__package__+"." if G2.__package__ else "")+"GSASIImapvars")
-                # Capture while the actual last solver's map is still active;
-                # the read-only extractor reconstructs its own maps afterward.
-                native_bounds=constraint_bound_audit(state,cov_native,native_maps.Dict2Map)
-                project.save()
-                after = extract_gsasii_refinement_state(output, project, G2, max_correlations=10)
-                cov = project.data.get("Covariance", {}).get("data", {})
-                if not cov.get("freshCOV"):
-                    raise ValueError("Stage did not produce fresh refinement covariance")
-                row.update(status="refined_needs_review", rwp={h.name: h.get_wR() for h in project.histograms()},
-                           actual_vary=after["parameter_space"]["last_vary"], covariance={k: v for k, v in after["covariance"].items() if k not in {"matrix", "correlation_matrix"}},
-                           metric_rows=[p for p in after["parameter_space"]["parameters"] if p["group"] in {"lattice", "atomic_coordinates", "atomic_displacement", "occupancy"}],
-                           frozen_variables=after["parameter_space"]["frozen_variables"])
-                row["constraint_bound_audit"] = native_bounds
-                row["native_storage_audit"] = native_storage_audit(native_bounds,after)
-                row["convergence"] = convergence_evidence(after)
-                row["blocking_frozen_variables"] = blocking_frozen_variables(state,after)
-                row["final_state"] = advanced.audit(project, context)
-                row["parameter_changes"] = parameter_changes(state, after)
-                require_fixed_values_unchanged(row["parameter_changes"])
-                require_native_covariance(cov,len(row['actual_vary']),row['covariance'])
-                require_constraint_bounds(native_bounds)
-                require_native_storage(row["native_storage_audit"])
+            rejected_names={name.casefold() for name in rejected}
+            dependency_failures=[name for name in stage.get('depends_on',[]) if name.casefold() in rejected_names]
+            if dependency_failures:
+                result['stages'].append({**display,'status':'skipped','reason':'Required stages were rejected: '+', '.join(dependency_failures)})
+                rejected.add(stage['id']);continue
+            rollback=output.with_name(output.stem+'_before_stage.gpx')
+            project.save(str(output));shutil.copy2(output,rollback)
+            prior_constraints=copy.deepcopy(added_constraints)
+            prior_relations=copy.deepcopy(declared_relations)
+            prior_normalized=set(normalized_histograms)
+            count_before=len(result['stages'])
+            try:
+                introduced=[c for c in stage['constraints'] if advanced.relation_key(c) not in declared_relations]
+                configure(project, stage, context, added_constraints)
                 advanced.check_site_totals(project, context)
-                row["normalization_checks"] = advanced.check_normalization(project,context,normalized_histograms)
-                advanced.check_requested_relations(project,context,list(declared_relations.values()))
-                if set(row["actual_vary"]) != set(row["effective_vary"]):
-                    row["status"] = "needs_review"
-                    raise ValueError("Actual independent vary list differs from the approved stage preflight")
-                if row["blocking_frozen_variables"]:
-                    row["status"] = "needs_review"
-                    raise ValueError("GSAS-II froze a variable at its bound; remaining stages were not executed")
-                if stage.get('convergence'):
-                    from .convergence import require_convergence,assess_convergence
-                    row['convergence_screen']=assess_convergence(row['convergence'],stage['convergence']['max_shift_over_sigma'])
-                    require_convergence(row['convergence'],stage['convergence'])
-                row["status"] = "completed"
-                checkpoint = output.with_name(output.stem + "_" + stage["id"] + ".gpx")
-                project.save(str(checkpoint))
-                project.save(str(output))
-            row["elapsed_seconds"] = time.monotonic() - started
+                normalized_histograms.update(stage.get("phase_normalization",[]))
+                advanced.check_requested_relations(project,context,introduced,free=stage['free'])
+                for constraint in introduced:declared_relations[advanced.relation_key(constraint)]=constraint
+                configured = advanced.audit(project, context)
+                project.save()
+                state = extract_gsasii_refinement_state(output, project, G2, max_correlations=10)
+                constraint_resolution = check_preflight(state, stage, context)
+                row = {**display, "status": "preflight_passed", "effective_vary": state["parameter_space"]["effective_vary"],
+                       "constraint_warning": state["constraints"].get("warning", ""), "constraint_parameter_provenance": constraint_resolution, "configured_state": configured}
+                result["stages"].append(row)
+                write_json(result_path, result)
+                if not preview:
+                    # The input GPX can already contain a fresh covariance. Require
+                    # this particular refinement call to replace it explicitly.
+                    project.data.setdefault("Covariance", {}).setdefault("data", {})["freshCOV"] = False
+                    project.save()
+                    project.do_refinements([{}])
+                    row["status"] = "refined_needs_review"
+                    cov_native=project.data.get("Covariance",{}).get("data",{})
+                    if not cov_native.get("freshCOV"):raise StageRejected("Stage did not produce fresh refinement covariance")
+                    native_maps=importlib.import_module((G2.__package__+"." if G2.__package__ else "")+"GSASIImapvars")
+                    # Capture while the actual last solver's map is still active;
+                    # the read-only extractor reconstructs its own maps afterward.
+                    native_bounds=constraint_bound_audit(state,cov_native,native_maps.Dict2Map)
+                    project.save()
+                    after = extract_gsasii_refinement_state(output, project, G2, max_correlations=10)
+                    cov = project.data.get("Covariance", {}).get("data", {})
+                    if not cov.get("freshCOV"):
+                        raise StageRejected("Stage did not produce fresh refinement covariance")
+                    row.update(status="refined_needs_review", rwp={h.name: h.get_wR() for h in project.histograms()},
+                               actual_vary=after["parameter_space"]["last_vary"], covariance={k: v for k, v in after["covariance"].items() if k not in {"matrix", "correlation_matrix"}},
+                               metric_rows=[p for p in after["parameter_space"]["parameters"] if p["group"] in {"lattice", "atomic_coordinates", "atomic_displacement", "occupancy"}],
+                               frozen_variables=after["parameter_space"]["frozen_variables"])
+                    row["constraint_bound_audit"] = native_bounds
+                    row["native_storage_audit"] = native_storage_audit(native_bounds,after)
+                    row["convergence"] = convergence_evidence(after)
+                    row["blocking_frozen_variables"] = blocking_frozen_variables(state,after)
+                    row["final_state"] = advanced.audit(project, context)
+                    row["parameter_changes"] = parameter_changes(state, after)
+                    require_fixed_values_unchanged(row["parameter_changes"])
+                    scientific_check(require_native_covariance,cov,len(row['actual_vary']),row['covariance'])
+                    scientific_check(require_constraint_bounds,native_bounds)
+                    scientific_check(require_native_storage,row["native_storage_audit"])
+                    scientific_check(advanced.check_site_totals,project,context)
+                    row["normalization_checks"] = scientific_check(advanced.check_normalization,project,context,normalized_histograms)
+                    scientific_check(advanced.check_requested_relations,project,context,list(declared_relations.values()))
+                    if set(row["actual_vary"]) != set(row["effective_vary"]):
+                        row["status"] = "needs_review"
+                        raise ValueError("Actual independent vary list differs from the approved stage preflight")
+                    if row["blocking_frozen_variables"]:
+                        row["status"] = "needs_review"
+                        raise StageRejected("GSAS-II froze a variable at its bound")
+                    if stage.get('convergence'):
+                        from .convergence import require_convergence,assess_convergence
+                        row['convergence_screen']=assess_convergence(row['convergence'],stage['convergence']['max_shift_over_sigma'])
+                        scientific_check(require_convergence,row['convergence'],stage['convergence'])
+                    row["status"] = "completed"
+                    checkpoint = output.with_name(output.stem + "_" + stage["id"] + ".gpx")
+                    project.save(str(checkpoint))
+                    project.save(str(output))
+                row["elapsed_seconds"] = time.monotonic() - started
+            except StageRejected as exc:
+                if preview or plan.get('failure_policy','stop')!='continue_independent':raise
+                # Restore the complete pre-stage project, including constraints,
+                # native bounds and frozen flags. Never retain rejected values.
+                if len(result['stages'])==count_before:
+                    result['stages'].append({**display})
+                result['stages'][-1].update(status='rejected',reason=str(exc),
+                    elapsed_seconds=time.monotonic()-started,rollback='previous_checkpoint_restored')
+                rejected.add(stage['id'])
+                shutil.copy2(rollback,output);project=G2.G2Project(gpxfile=str(output))
+                added_constraints=prior_constraints;declared_relations=prior_relations
+                normalized_histograms=prior_normalized
+                write_json(result_path,result)
+            finally:
+                rollback.unlink(missing_ok=True)
         result["status"] = "preview_passed" if preview else "completed_needs_scientific_review"
+        result['rejected_stages']=sorted(rejected)
+        if rejected and not any(row.get('status')=='completed' for row in result['stages']):
+            raise ValueError('No stage produced an accepted checkpoint')
         result["final_phases"] = [{"name": p.name, "cell": p.get_cell(),
             "atoms": [{"label": a.label, "coordinates": list(a.coordinates), "occupancy": a.occupancy, "adp": a.ADP} for a in p.atoms()]}
             for p in project.phases()]

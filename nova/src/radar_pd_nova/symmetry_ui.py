@@ -94,13 +94,12 @@ def model_exploration(app):
             with html.Div(v_if='sx_has_context',classes='sx-settings'):
                 select('Exploration','sx_kind',"[{title:'Magnetic models',value:'magnetic'},{title:'Structural displacement modes',value:'structural'}]")
                 select('Moment model','sx_moment_model',"[{title:'Collinear moments',value:'collinear'},{title:'Symmetry-allowed components · can cant',value:'symmetry_allowed'}]",v_if="sx_kind === 'magnetic'")
-                select('Magnetic optimizer','sx_magnetic_optimizer',"[{title:'GSAS-II Hessian',value:'gsas_hessian'},{title:'Profiled quadratic · fixed nuclear model',value:'profiled_quadratic'}]",v_if="sx_kind === 'magnetic'")
-                html.P('Profiled optimization varies the allowed magnetic components and the selected common scale/background against the same GSAS-II model. It requires k = 0, symmetry-allowed components and one neutron histogram. Unsupported inputs stop with a reason.',v_if="sx_kind === 'magnetic' && sx_magnetic_optimizer === 'profiled_quadratic'",classes='rf-notice')
+                select('Magnetic optimizer','sx_magnetic_optimizer',"[{title:'Fast checked optimizer · fixed nuclear model',value:'profiled_quadratic'},{title:'GSAS-II Hessian',value:'gsas_hessian'}]",v_if="sx_kind === 'magnetic'")
+                html.P('Profiled optimization varies the allowed magnetic components and the selected common scale/background against the same GSAS-II model. It requires a commensurate constructed model, symmetry-allowed components and one neutron histogram. Unsupported inputs stop with a reason.',v_if="sx_kind === 'magnetic' && sx_magnetic_optimizer === 'profiled_quadratic'",classes='rf-notice')
                 select('Nuclear parent','sx_parent','sx_parents')
                 select('Histogram / bank','sx_histogram','sx_histograms')
                 with html.Div():
                     v.VTextField(label='k in this parent basis · rational components',v_model=('sx_k',),placeholder='0, 0, 1/2',density='compact',variant='outlined',hide_details=True)
-                    v.VBtn('Find candidate k-vectors',v_if="sx_kind === 'magnetic'",click=app.find_candidate_k,disabled=('sx_busy || !sx_sites.length',),variant='text',size='small',classes='mt-1',prepend_icon='mdi-magnify')
                 select('Magnetic parent sites','sx_sites','sx_site_options',v_if="sx_kind === 'magnetic'",multiple=True,chips=True)
                 v.VTextField(v_if="sx_kind === 'magnetic'",label='Ionic form factors · atom=ion; atom=ion',v_model=('sx_form_factors',),placeholder='Cr1=Cr+3',density='compact',variant='outlined',hide_details=True)
                 v.VTextField(v_if="sx_kind === 'magnetic'",label='Landé g · number or atom=value; atom=value',v_model=('sx_lande',),type='text',density='compact',variant='outlined',hide_details=True)
@@ -121,13 +120,13 @@ def model_exploration(app):
                 v.VTextField(v_if="sx_kind !== 'magnetic' || sx_magnetic_optimizer === 'gsas_hessian'",label='GSAS-II cycles per start',v_model=('sx_cycles',),type='text',inputmode='numeric',density='compact',variant='outlined',hide_details=True)
                 v.VTextField(v_if="sx_kind === 'magnetic' && sx_magnetic_optimizer === 'profiled_quadratic'",label='Profiled optimizer iterations per start · 1–200',v_model=('sx_optimizer_iterations',),type='text',inputmode='numeric',density='compact',variant='outlined',hide_details=True)
             with html.Details(v_if="sx_has_context && sx_kind === 'magnetic'",classes='mt-3'):
-                html.Summary('K-survey scope and time budget')
-                html.P('Select magnetic sites and ionic form factors first. The survey tests rational high-symmetry k points and a finite sample of supported collinear templates. Other commensurate vectors or structures can remain untested.',classes='rf-notice')
+                html.Summary('K-survey coverage and workers')
+                html.P('Select magnetic sites and ionic form factors first. The survey tests rational high-symmetry k points and a finite template sample using the selected moment model. Other commensurate vectors or structures can remain untested.',classes='rf-notice')
                 with html.Div(classes='sx-settings'):
-                    select('Survey budget · seconds','sx_k_budget','[30,60,120,300]')
                     select('Native templates per k','sx_k_limit','[3,6,12,24,48]')
                     select('K-survey requested workers','sx_k_workers','[1,2,4]')
-                html.P('The time budget stops new work; cleanup of a running native process can add a few seconds. Catalogs are reused; profiles are bound to the exact GPX revision and settings.',classes='rf-notice')
+                html.P('The survey runs the finite selected coverage across all eligible k families. Stop cancels pending work. Individual native operations retain execution limits. Cached profiles are bound to the exact GPX and settings.',classes='rf-notice')
+                v.VBtn('Find candidate k-vectors',click=app.find_candidate_k,disabled=('sx_busy || !sx_sites.length',),variant='outlined',prepend_icon='mdi-magnify')
             html.P('{{ sx_k_message }}',v_if='!!sx_k_message',classes='rf-notice mt-3')
             v.VBtn('Stop k survey',v_if='sx_k_busy',click=app.cancel_k_search,variant='outlined',size='small')
             with html.Div(v_if='sx_k_has_result',classes='mt-3'):
@@ -139,12 +138,14 @@ def model_exploration(app):
                 with html.Div(classes='rf-toolbar mt-3'):
                     select('Inspect k family','sx_k_selected','sx_k_choices')
                     select('Pattern coordinate','sx_k_axis',"[{title:'Q (Å⁻¹)',value:'q'},{title:'d (Å)',value:'d'},{title:'Native coordinate',value:'native'}]")
+                    select('Evidence view','sx_k_display',"[{title:'Full pattern and residual',value:'full'},{title:'Magnetic contribution and residual',value:'residual'}]")
                     v.VBtn('Reset zoom',click=app.reset_k_search_zoom,variant='text',size='small')
                     v.VBtn('Use selected k',click=app.use_candidate_k,disabled=('sx_busy || !sx_k_selected',),variant='outlined',color='#15543c')
-                with html.Div(style='height:440px;width:100%;min-width:0'):
+                with html.Div(style='height:520px;width:100%;min-width:0'):
                     fig=plotly.Figure(display_mode_bar=True,responsive=True,display_logo=False,scroll_zoom=True,style='height:100%;width:100%');fig.data=('sx_k_plot.data',);fig.layout=('sx_k_plot.layout',)
                 html.P('{{ sx_k_detail }}',classes='rf-notice')
                 html.P('Screening overlay: the nuclear model is fixed and only one magnetic intensity amplitude is fitted. No Rietveld refinement runs in this survey. A leading k, a tie or a missing template does not establish magnetic order. Use a candidate to review a full refinement plan.',classes='rf-notice')
+                html.P('Hover over Bragg ticks for the exact template reflection and indexing basis. Observed-minus-nuclear includes errors in the nuclear model; it is not a list of confirmed magnetic peaks.',classes='rf-notice')
             html.P("{{ sx_kind === 'structural' ? 'Discovery sends the selected parent structure, without pattern arrays, to ISODISTORT. The selected OPD scope and construction budget are explicit; deferred or failed models remain visible. A budget smaller than the selected tier requires a narrower scope.' : 'Discovery sends parent symmetry operations and k to Bilbao. Refinement consumes the cached catalog offline.' }}",v_if='sx_has_context',classes='rf-notice')
             html.P('Review and use a k-survey candidate, or enter an exact rational k, before discovering models.',v_if="sx_has_context && !sx_k.trim()",classes='rf-notice')
             v.VBtn('Discover finite candidates',v_if='sx_has_context',click=app.discover_symmetry_candidates,disabled=('sx_busy || !sx_k.trim()',),variant='outlined',color='#15543c')
@@ -157,10 +158,12 @@ def model_exploration(app):
                     html.Summary('Select native displacement modes')
                     v.VAutocomplete(label='Modes · every selected mode gets both start signs',v_model=('sx_modes',),items=('sx_mode_options',),multiple=True,chips=True,closable_chips=True,density='compact',variant='outlined',hide_details=True,classes='mt-3 sx-choices',update_modelValue=app._symmetry_unapprove)
                 with html.Div(classes='rf-toolbar mt-3'):
-                    select('Acquisitions to enroll','sx_existing',"[{title:'Selected scan only',value:'selected'},{title:'Published scans for this sample and bank',value:'sample'}]")
-                    app._number_field(label='Maximum acquisitions',v_model=('sx_max_scans',),min=1,max=2000,density='compact',variant='outlined')
+                    select('Scans to refine','sx_existing',"[{title:'Current scan only',value:'selected'},{title:'Select scans',value:'custom'},{title:'All matching scans',value:'sample'}]")
+                    app._number_field(label='Maximum scans',v_model=('sx_max_scans',),min=1,max=2000,density='compact',variant='outlined')
+                scan_select('Select scans · search by run or temperature','sx_selected_scans','sx_selectable_scans',v_if="sx_existing === 'custom'",multiple=True,chips=True,closable_chips=True,classes='mt-3')
+                html.P('Only the same sample, bank and starting recipe stage are listed. The plan includes the exact scan selection; other samples and checkpoints remain separate.',classes='rf-notice')
                 v.VCheckbox(label='Follow new matching GPXs while this session is open',v_model=('sx_follow_new',),density='compact')
-                html.P('Every new acquisition is checked against the reviewed parent, sample, bank and recipe. Incompatible inputs wait for review.',classes='rf-notice')
+                html.P('Each new scan is checked against the reviewed parent, sample, bank and recipe. Incompatible inputs wait for review.',classes='rf-notice')
                 v.VBtn('Build finite plan',click=(app.build_symmetry_plan,form),disabled=('sx_busy || sx_campaign_running || !sx_candidates.length || !sx_adequate',),variant='outlined',color='#15543c',classes='mt-3')
             with html.Div(v_if='sx_plan_ready',classes='mt-4'):
                 html.P('{{ sx_plan_summary }}',classes='rf-notice')
@@ -174,10 +177,14 @@ def model_exploration(app):
                 html.P('Structural fit comparisons require a matched parent/nuisance refinement. A lower Rwp alone does not establish a transition.',v_if="sx_kind === 'structural'",classes='rf-notice')
         html.P('{{ sx_scope_progress }}',v_if='!sx_setup && sx_results_current && !!sx_scope_progress',classes='rf-notice')
         html.Div('{{ sx_progress }}',v_if='!sx_setup && sx_results_current && !!sx_progress',classes='sx-status')
+        with html.Details(v_if='!sx_setup && sx_results_current && sx_batches.length',classes='rf-card mb-4'):
+            html.Summary('Galaxy batch status ({{ sx_batches.length }})')
+            html.P('Elapsed time starts at submission and includes queueing. Last status check is in UTC. Assigned starts may still be waiting for a worker.',classes='rf-notice')
+            v.VDataTable(items=('sx_batches',),headers=("[{title:'Batch',key:'batch'},{title:'Galaxy job',key:'job'},{title:'State',key:'state'},{title:'Starts',key:'starts'},{title:'Since submission',key:'elapsed'},{title:'Last status check (UTC)',key:'checked'}]",),items_per_page=8,density='compact')
         html.P('Starts assigned to a batch share a Galaxy job after its recovery checkpoint is ready. Jobs can be queued or running. The native worker count is reported after the first batch; it is separate from the number of starts.',
             v_if='!sx_setup && sx_results_current && sx_campaign_running',classes='rf-notice')
         with html.Details(v_if='!sx_setup && sx_enrollments.length',classes='rf-card mb-4'):
-            html.Summary('Acquisition queue ({{ sx_enrollments.length }}) · {{ sx_following ? "following new scans" : "captured scans" }}')
+            html.Summary('Scan queue ({{ sx_enrollments.length }}) · {{ sx_following ? "following new scans" : "captured scans" }}')
             with html.Div(v_if='sx_results_current && sx_priority_options.length',classes='rf-toolbar mt-3'):
                 select('Prepare this captured scan next','sx_priority_acquisition','sx_priority_options')
                 v.VBtn('Prioritize scan',click=app.prioritize_symmetry_acquisition,disabled=('!sx_priority_acquisition',),variant='outlined',size='small')

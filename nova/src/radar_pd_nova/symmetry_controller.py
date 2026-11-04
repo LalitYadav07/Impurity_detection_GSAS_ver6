@@ -39,6 +39,7 @@ from .model_runtime import GalaxyModelRuntime,GalaxyChunkTransport,CollectOnlyTr
 from .checkpoint_uploads import CheckpointUploadPending, CheckpointUploadInterrupted
 from .model_review_recovery import SelectionRecovery, ReviewSelectionChanged, campaign_recency,acquisition_index,AcquisitionReview
 from .model_navigation import scan_options
+from .model_batch_presentation import batch_rows
 from .model_campaigns import choices as model_choices,origin as model_origin,queue_sources,enroll_source,restore_history,portable_source,restore_captured_sources,scope_progress,next_acquisition,prioritize_acquisition,acquisition_rows
 from .model_campaigns import START_BARRIER_SCHEMA,START_BARRIER_MESSAGE,start_barrier_ready,store_start_barrier
 from gpx_recipe.symmetry.compiler import prepare_shared_inputs
@@ -47,7 +48,7 @@ from gpx_recipe.symmetry.templates import make_template,trial_count,validate_tem
 MODEL_FIELDS=('sx_kind','sx_moment_model','sx_magnetic_optimizer','sx_optimizer_iterations','sx_refine_scale','sx_refine_background','sx_parent','sx_histogram','sx_k','sx_sites','sx_form_factors','sx_lande',
     'sx_directions','sx_adequate','sx_max_moment','sx_mag_d_min','sx_max_mode','sx_start_mode','sx_cycles',
     'sx_sign_starts','sx_candidates','sx_modes','sx_existing','sx_follow_new','sx_max_scans','sx_request',
-    'sx_opd_policy','sx_construct_limit')
+    'sx_opd_policy','sx_construct_limit','sx_selected_scans')
 
 
 class SymmetryMixin(KSearchMixin):
@@ -58,13 +59,13 @@ class SymmetryMixin(KSearchMixin):
         s=self.server.state
         defaults=dict(sx_campaign='',sx_campaigns=[],sx_source='',sx_source_options=[],sx_busy=False,sx_error='',sx_message='',sx_progress='',sx_groups=[],sx_group='',sx_members=[],sx_selected='',sx_search='',sx_status='all',
             sx_overview=plots.empty('Open a campaign to inspect its coverage'),sx_fit=plots.empty('Select an audited checkpoint'),sx_fit_title='',sx_expanded_title='',sx_source_notices=[],sx_source_display_notices=[],sx_axis='d',sx_reset=0,sx_pins=[],sx_pin_options=[],sx_parameters=[],sx_parent_moments=[],sx_parent_moment_note='',sx_details=[],sx_fit_diagnostics=[],sx_moment_note='',sx_embedding_evidence=[],sx_embedding_summary='',sx_gsas_model='',sx_intensity_scale='linear',
-            sx_parent='',sx_parents=[],sx_histogram='',sx_histograms=[],sx_k='',sx_sites=[],sx_site_options=[],sx_form_factors='',sx_lande='',sx_directions=['x','y','z'],sx_adequate=None,sx_max_moment='',sx_cycles=20,sx_slots=2,sx_moment_model='collinear',sx_refine_scale=False,sx_refine_background=False,
-            sx_kind='magnetic',sx_magnetic_optimizer='gsas_hessian',sx_optimizer_iterations=60,sx_mag_d_min=0.,sx_max_mode=.5,sx_start_mode=.1,sx_candidate_options=[],sx_candidates=[],sx_mode_options=[],sx_modes=[],sx_discovered=False,sx_discovery_scope='',
+            sx_parent='',sx_parents=[],sx_histogram='',sx_histograms=[],sx_k='',sx_sites=[],sx_site_options=[],sx_form_factors='',sx_lande='',sx_directions=['x','y','z'],sx_adequate=None,sx_max_moment='',sx_cycles=20,sx_slots=4,sx_moment_model='symmetry_allowed',sx_refine_scale=False,sx_refine_background=False,
+            sx_kind='magnetic',sx_magnetic_optimizer='profiled_quadratic',sx_optimizer_iterations=120,sx_mag_d_min=0.,sx_max_mode=.5,sx_start_mode=.1,sx_candidate_options=[],sx_candidates=[],sx_mode_options=[],sx_modes=[],sx_discovered=False,sx_discovery_scope='',
             sx_plan_ready=False,sx_approved=False,sx_plan_summary='',sx_plan_candidates=[],sx_setup=False,sx_expanded=False,sx_expanded_layout={},sx_has_context=False,sx_has_gpx=False,sx_has_receipt=False,sx_resumable=False,
             sx_request='',sx_planning_summary='',sx_planning_notes=[],sx_planning_usage='',sx_planning_cost='',sx_has_setup_details=False,sx_sign_starts=True,sx_coverage=[],sx_group_limit=12,sx_result_scope='experiment',sx_start_source='',sx_start_sources=[],sx_results_current=False,sx_scope_progress='')
         for key,value in defaults.items():setattr(s,key,value)
-        extra=dict(sx_existing='selected',sx_follow_new=False,sx_max_scans=200,sx_enrollments=[],sx_priority_acquisition='',sx_priority_options=[],sx_priority_notice='',sx_retry_acquisition='',sx_retry_options=[],sx_retry_notice='',sx_following=False,sx_campaign_running=False,sx_pause_pending=False,sx_parallel_jobs=1,
-            sx_queue_notice='',sx_backend='',sx_plan_token='',sx_cancel_notice='Cancelling a Galaxy chunk stops all starts in that job.',
+        extra=dict(sx_existing='selected',sx_selected_scans=[],sx_selectable_scans=[],sx_follow_new=False,sx_max_scans=200,sx_enrollments=[],sx_priority_acquisition='',sx_priority_options=[],sx_priority_notice='',sx_retry_acquisition='',sx_retry_options=[],sx_retry_notice='',sx_following=False,sx_campaign_running=False,sx_pause_pending=False,sx_parallel_jobs=4,
+            sx_queue_notice='',sx_backend='',sx_batches=[],sx_plan_token='',sx_cancel_notice='Cancelling a Galaxy chunk stops all starts in that job.',
             sx_opd_policy='highest-symmetry-per-irrep',sx_construct_limit=100)
         for key,value in extra.items():setattr(s,key,value)
         self._symmetry_defaults={**defaults,**extra}
@@ -76,7 +77,7 @@ class SymmetryMixin(KSearchMixin):
         s.change('sx_selected','sx_axis','sx_pins','sx_reset','sx_intensity_scale')(self._symmetry_plot_changed)
         s.change('sx_kind','sx_parent','sx_histogram','sx_k','sx_sites','sx_form_factors','sx_lande','sx_directions','sx_adequate','sx_max_moment','sx_mag_d_min','sx_max_mode','sx_start_mode','sx_cycles','sx_request','sx_sign_starts','rf_source','sx_start_source')(self._symmetry_unapprove)
         s.change('sx_parent')(self._symmetry_parent_changed)
-        s.change('sx_existing','sx_follow_new','sx_max_scans')(self._symmetry_unapprove)
+        s.change('sx_existing','sx_follow_new','sx_max_scans','sx_selected_scans')(self._symmetry_unapprove)
         s.change('sx_moment_model','sx_refine_scale','sx_refine_background')(self._symmetry_unapprove)
         s.change('sx_magnetic_optimizer','sx_optimizer_iterations')(self._symmetry_unapprove)
         s.change('sx_candidates','sx_modes')(self._symmetry_unapprove)
@@ -161,6 +162,22 @@ class SymmetryMixin(KSearchMixin):
         self._symmetry_draft=None
         s=self.server.state;s.sx_has_context=False;s.sx_discovered=False;s.sx_planning_summary='';s.sx_planning_notes=[];s.sx_planning_usage='';s.sx_planning_cost=''
         s.sx_sites=[];s.sx_form_factors='';s.sx_lande=''
+        self._symmetry_scan_choices()
+
+    def _symmetry_scan_choices(self):
+        s=self.server.state;w=getattr(self,'_refinement_store',lambda:None)()
+        if not w:return
+        candidates=model_choices(w,s.rf_experiment)
+        reference=next(((v,origin) for v,origin in candidates if v['id']==s.sx_start_source),None)
+        if not reference:
+            s.sx_selectable_scans=[];s.sx_selected_scans=[];return
+        source,origin=reference
+        labels={entry['id']:entry['title'] for entry in start_choices(w,s.rf_experiment)}
+        scope=dict(scope=dict(experiment=source['experiment'],sample_key=source['sample_key'],bank=str(source.get('bank') or '')),origin=origin)
+        s.sx_selectable_scans=[dict(value=v['id'],title=labels[v['id']]) for v,kind in candidates if matches(scope,v,kind)]
+        allowed={v['value'] for v in s.sx_selectable_scans}
+        selected=[v for v in getattr(s,'sx_selected_scans',[]) if v in allowed]
+        s.sx_selected_scans=selected or [source['id']]
 
     def _symmetry_setup_identity(self):
         s=self.server.state;d=getattr(self,'_symmetry_draft',None) or {}
@@ -316,6 +333,7 @@ class SymmetryMixin(KSearchMixin):
                 s.sx_start_sources=[dict(title=entry['title'],value=entry['id']) for entry in choices]
                 if s.sx_start_source not in {entry['id'] for entry in choices}:
                     s.sx_start_source=s.rf_source if s.rf_source in {entry['id'] for entry in choices} else (choices[0]['id'] if choices else '')
+                self._symmetry_scan_choices()
                 roots=list(self._symmetry_root().glob('*/campaign.sqlite'))
                 if scope is not None:
                     roots=[p for p in roots if (Campaign(p.parent).setting('template',{}) or {}).get('scope',{}).get('experiment')==scope]
@@ -368,6 +386,8 @@ class SymmetryMixin(KSearchMixin):
                 allocated=campaign.setting('allocation')
                 if allocated:backend+=f" · last chunk: {allocated['workers']} native workers · {allocated.get('memory_mb') or 'unreported'} MiB memory"
                 s.sx_backend=backend
+                current_transport=self._symmetry_transport(campaign) if remote else None
+                s.sx_batches=batch_rows(getattr(current_transport,'state',{}).get('chunks',{})) if current_transport else []
                 template=campaign.setting('template') or {}
                 visible=s.sx_result_scope!='experiment' or template.get('scope',{}).get('experiment')==s.rf_experiment
                 s.sx_enrollments=acquisition_rows(template,campaign.setting('enrollments',{})) if visible else []
@@ -778,7 +798,7 @@ class SymmetryMixin(KSearchMixin):
             p=build_plan(d['context'],d['catalog'],d['root'],settings);verify_inputs(p,d['root']);d.update(protocol=p,settings=settings)
             w=self._refinement_store()
             template=make_template(p,d['context'],d['source'],model_choices(w,s.rf_experiment),
-                origin=model_origin(d['source'],w),existing=s.sx_existing,future=bool(s.sx_follow_new),maximum_scans=int(s.sx_max_scans))
+                origin=model_origin(d['source'],w),existing=s.sx_existing,future=bool(s.sx_follow_new),maximum_scans=int(s.sx_max_scans),selected_ids=list(s.sx_selected_scans))
             d.update(template=template,form_signature=form);s.sx_plan_token=digest(template)
             d['scope_sources']={v['id']:v for v,_ in model_choices(w,s.rf_experiment)}
             d['scope_origins']={v['id']:kind for v,kind in model_choices(w,s.rf_experiment)}
@@ -787,7 +807,7 @@ class SymmetryMixin(KSearchMixin):
             free='Selected modes, cell, background and global scale' if s.sx_kind=='structural' else magnetic_scope+('; shared nuclear/magnetic histogram scale varied' if s.sx_refine_scale else '; all scales fixed')+('; existing background coefficients varied' if s.sx_refine_background else '; background fixed')+'; nuclear geometry fixed'
             if s.sx_kind=='magnetic':free+=('; all fitted d spacings' if settings['magnetic_d_min']==0 else f"; magnetic d ≥ {settings['magnetic_d_min']} Å")
             s.sx_plan_summary=f"{len(p['candidates'])} embeddings · {sum(1 for _ in iter_trials(p))} finite trials. {optimizer_budget_label(p['policy'])} {free}. Instrument, occupancy and displacement parameters fixed. Adequacy: Rwp ≤ {s.sx_adequate}%."
-            s.sx_plan_summary+=f" {len(template['existing_ids'])} existing acquisitions · {trial_count(template)} starts per acquisition · maximum {template['maximum_scans']} acquisitions. Following new scans: {'on' if template['future'] else 'off'}."
+            s.sx_plan_summary+=f" {len(template['existing_ids'])} selected scans · {trial_count(template)} starts per scan · maximum {template['maximum_scans']} scans. Following new scans: {'on' if template['future'] else 'off'}."
             s.sx_plan_summary+=f" Existing-cohort budget: {len(template['existing_ids'])*trial_count(template):,} starts before per-scan compatibility checks."
             s.sx_plan_ready=True;s.sx_approved=False
         except Exception as exc:s.sx_error=str(exc)

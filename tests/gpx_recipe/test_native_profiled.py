@@ -10,6 +10,25 @@ from gpx_recipe.execution import freeze
 from gpx_recipe.symmetry.native_profiled import NativeMagneticStartingPoint
 
 
+def test_reuses_only_checked_objective_and_rechecks_native_on_each_load(tmp_path):
+    project,path=artificial_project(tmp_path,sites=1)
+    cache=tmp_path/'objective.npz'
+    first=NativeMagneticStartingPoint(path,refine_scale=True,refine_background=True,maximum_moment=6.)
+    model,proof=first.build(cache_path=cache,cache_identity='same-sealed-protocol')
+    assert not proof['cache_hit'] and cache.is_file()
+    fresh=NativeMagneticStartingPoint(path,refine_scale=True,refine_background=True,maximum_moment=6.)
+    reused,check=fresh.build(cache_path=cache,cache_identity='same-sealed-protocol')
+    assert check['cache_hit'] and check['native_calls']>=5
+    assert check['native_calls']<proof['native_calls']
+    np.testing.assert_array_equal(reused.quadratic,model.quadratic)
+    assert max(check['heldout_relative_errors'])<1e-8
+    hist=project.histograms()[0]
+    hist.data['data'][1][1][10]+=1.;project.save()
+    changed=NativeMagneticStartingPoint(path,refine_scale=True,refine_background=True,maximum_moment=6.)
+    _,changed_proof=changed.build(cache_path=cache,cache_identity='same-sealed-protocol')
+    assert not changed_proof['cache_hit']
+
+
 def artificial_project(tmp_path,*,sites=1,constrained=False,masked=False,scale_free=True,background_free=True):
     path=tmp_path/'artificial.gpx'
     inst=tmp_path/'artificial.instprm'
