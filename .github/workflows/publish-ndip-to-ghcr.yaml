@@ -121,6 +121,15 @@ jobs:
           assert len(implementation_signature()) == 64
           print("Reviewed preparation package and adapter identities available", work.__name__)'
 
+      - name: Verify recovered-stage publication in the built worker
+        shell: bash
+        run: |
+          docker run --rm --entrypoint sh \
+            -v "$PWD/tests/gpx_recipe/test_stage_recovery.py:/validation/test_stage_recovery.py:ro" \
+            "${IMAGE_NAME}:ndip-${GITHUB_SHA}" -c '
+            python -m pip install --quiet pytest &&
+            python -m pytest -q -o cache_dir=/tmp/pytest-cache /validation/test_stage_recovery.py'
+
       - name: Check phase discovery regressions in the scientific runtime
         shell: bash
         run: |
