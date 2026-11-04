@@ -8,6 +8,7 @@ Identifiers and numbers are never spell-corrected.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal
 from itertools import product
 import re
 import unicodedata
@@ -41,6 +42,7 @@ class ReplyContext:
     focus: str = ""
     reference_presets: tuple[str, ...] = ()
     defer_sample_bank_membership: bool = False
+    wavelengths: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -548,8 +550,17 @@ def _reference_masks(body: str, context: ReplyContext) -> ParsedReply | None:
 def _run_policy(text: str, context: ReplyContext) -> ParsedReply | None:
     """Translate explicit scope policies without certifying acquisition roles."""
     body = _body(text)
+    if re.match(r"wavelength\b", body):
+        wave = re.fullmatch(r"wavelength\s*(?:is\b|:|=)?\s*([0-9]+(?:\.[0-9]+)?)\s*(?:a|å|angstroms?|ångströms?)?", body)
+        if context.beamline != 'PG3':
+            return _clarify("Choose this beamline's wavelength or profile mapping with its displayed controls; POWGEN wavelength policies do not apply here.")
+        allowed = {Decimal(value): value for value in context.wavelengths if value}
+        if not wave or Decimal(wave[1]) not in allowed:
+            return _clarify("Choose an exact wavelength from the displayed Wavelength policy list, or request automatic wavelength detection. No setup values changed.")
+        value = allowed[Decimal(wave[1])]
+        return _patch({"powgen_wavelength": value}, f"Require {value} A for every selected run; the experiment check must verify each reduction")
     existing = re.fullmatch(
-        r"(?:process\s+)?(?:all|every)\s+existing\s+(isothermal\s+)?(?:scans?|runs?)"
+        r"(?:process\s+)?(?:all|every)\s+existing\s+(isothermal\s+)?(?:matching\s+)?(?:scans?|runs?)"
         r"(?:\s+only|\s+(?:and|then)\s+(?:all\s+)?(?:future|new)\s+(?:scans?|runs?))?", body)
     if existing:
         values = {"powgen_backfill_mode": "all"}
@@ -712,7 +723,7 @@ def _interpret_single_reply(text: str, context: ReplyContext | None = None, *, d
 _CLAUSE_START = re.compile(
     r"(?:please\s+)?(?:use|select|choose)\s+(?:the\s+)?(?:official\s+)?(?:cycle\s+)?(?:instrument\s+)?profile\b|"
     r"(?:(?:please|use|select|choose|apply)\s+)*(?:only\s+)?"
-    r"(?:samples?\b|(?:source\s+|physical\s+)?banks?\b|histograms?\b|(?:process\s+)?(?:all|every)\s+existing\b|"
+    r"(?:samples?\b|(?:source\s+|physical\s+)?banks?\b|histograms?\b|wavelength\b|(?:process\s+)?(?:all|every)\s+existing\b|"
     r"(?:full|rapid)\s+(?:analysis|mode)\b|(?:up to\s+)?" + _COUNT + r"\s+(?:impurity\s+)?discovery\b|"
     r"exclude\b|omit\b|ignore\b|include\b|allow\b|auto[- ]detect\b|automatic(?:ally)?\b|"
     r"environment\b|can\b|elements\b|IPTS\b|POWGEN\b|HB2A\b|NOMAD\b|SNAP\b)", re.I)

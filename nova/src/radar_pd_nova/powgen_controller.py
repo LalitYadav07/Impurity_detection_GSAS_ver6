@@ -259,13 +259,18 @@ def preflight_powgen_experiment(
         inspected = list(pool.map(inspect, runs))
     available_banks.update(bank.bank for setup in inspected_setups.values() for bank in setup.banks)
     analysis_count = 0
+    selected_runs = []
     for run, setup, error in inspected:
         if error:
+            selected_runs.append(run)  # Keep malformed candidates visible for review.
             errors.append(f"{run.run_id}: {error}")
             continue
-        setups.append(setup)
         available_banks.update(b.bank for b in setup.banks)
         banks = [b.bank for b in setup.banks if selected_banks is None or b.bank in selected_banks]
+        if not banks:
+            continue
+        selected_runs.append(run)
+        setups.append(setup)
         for bank in banks:
             analysis_count += 1
             try:
@@ -287,8 +292,10 @@ def preflight_powgen_experiment(
         errors.append("One manual profile cannot be reused across mixed calibration, mode, wavelength, frequency or bank settings")
     if not analysis_count and not errors:
         errors.append("None of the selected banks occurs in the selected scans")
-    latest = runs[-1]
-    metadata = read_powgen_scan_metadata(definition.ipts, latest.run_number)
+    bank_excluded_count = len(runs) - len(selected_runs)
+    runs = selected_runs
+    latest = runs[-1] if runs else None
+    metadata = read_powgen_scan_metadata(definition.ipts, latest.run_number) if latest else {}
     identity_rows = identity_readiness(index, runs)
     wave_values = sorted({v.wavelength for v in setups})
     wave = f"{wave_values[0]:g}" if len(wave_values) == 1 else ""
@@ -300,8 +307,10 @@ def preflight_powgen_experiment(
         "ready": not errors, "source_directory": definition.source_directory,
         "scan_count": len(runs), "analysis_count": analysis_count, "total_scan_count": total,
         "excluded_count": excluded_count,
+        "bank_excluded_count": bank_excluded_count,
         "review_runs": [{"run_number": r.run_number, **run_role(r)} for r in runs],
-        "first_run": runs[0].run_id, "latest_run": latest.run_id, "latest_file": Path(latest.source_path).name,
+        "first_run": runs[0].run_id if runs else "", "latest_run": latest.run_id if latest else "",
+        "latest_file": Path(latest.source_path).name if latest else "",
         "latest_start_time": str(metadata.get("start_time") or ""), "sample_display": sample,
         "temperature_display": f"{temperature.get('value', '')} {temperature.get('unit', '')}".strip() or "Not reported",
         "metadata_available": bool(metadata.get("available")), "detected_wavelength": wave,

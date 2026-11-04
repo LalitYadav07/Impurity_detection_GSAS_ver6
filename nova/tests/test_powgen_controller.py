@@ -830,6 +830,41 @@ def test_preflight_detects_latest_scan_wavelength_and_packaged_profile(monkeypat
     assert result["profile_filename"].endswith("60HzB2_CWL1p5.instprm")
 
 
+def test_preflight_summary_only_describes_runs_with_selected_banks(monkeypatch):
+    original_inspect = powgen_controller.inspect_reduced_setup
+    def inspect(path):
+        setup = original_inspect(path)
+        if setup.run_number == 63764:
+            return replace(setup, wavelength=2.665,
+                           banks=(replace(setup.banks[0], bank=3),))
+        return setup
+    monkeypatch.setattr(powgen_controller, 'inspect_reduced_setup', inspect)
+    monkeypatch.setattr(powgen_controller, 'bounded_directory_listing', lambda _: [
+        {'path': '/SNS/PG3/IPTS-38000/shared/autoreduce/PG3_63763.gsa'},
+        {'path': '/SNS/PG3/IPTS-38000/shared/autoreduce/PG3_63764.gsa'},
+    ])
+    monkeypatch.setattr(powgen_controller, 'read_powgen_scan_metadata', lambda *_: {})
+    result = preflight_powgen_experiment('IPTS-38000', selected_banks=(2,), requested_wavelength='1.5')
+    assert result['ready']
+    assert result['scan_count'] == result['analysis_count'] == 1
+    assert result['total_scan_count'] == 2
+    assert result['bank_excluded_count'] == 1
+    assert result['first_run'] == result['latest_run'] == 'PG3_63763'
+    assert result['selected_wavelength'] == '1.5'
+    assert [r['run_number'] for r in result['review_runs']] == [63763]
+
+
+def test_preflight_no_selected_bank_does_not_describe_an_unselected_run(monkeypatch):
+    monkeypatch.setattr(powgen_controller, 'bounded_directory_listing', lambda _: [
+        {'path': '/SNS/PG3/IPTS-38000/shared/autoreduce/PG3_63763.gsa'}])
+    monkeypatch.setattr(powgen_controller, 'read_powgen_scan_metadata', lambda *_: pytest.fail('No selected run'))
+    result = preflight_powgen_experiment('IPTS-38000', selected_banks=(3,))
+    assert not result['ready']
+    assert result['scan_count'] == result['analysis_count'] == 0
+    assert result['first_run'] == result['latest_run'] == ''
+    assert 'None of the selected banks' in result['profile_error']
+
+
 def test_preflight_accepts_user_profile_when_cycle_is_not_packaged(monkeypatch) -> None:
     monkeypatch.setattr(
         powgen_controller,

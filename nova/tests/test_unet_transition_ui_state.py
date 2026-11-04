@@ -123,6 +123,52 @@ def with_events(rows):
     return rows
 
 
+def test_shared_zoom_rescales_weak_ribbon_without_recomputing_inference(app):
+    rows = [scan(i) for i in (1, 2, 3)]
+    for row in rows:
+        row['pattern']['y'][0] = 10000.
+    app.refresh(rows)
+    state = app.server.state
+    calls = app._unet_transition_engine.calls
+    raster = trace(state.unet_transition_map, 'Measured heat map')
+    before = deepcopy(raster)
+    app.relayout_unet_transition_map({'xaxis2.range[0]': 3., 'xaxis2.range[1]': 5.})
+    figure = state.unet_transition_map
+    assert app._unet_transition_engine.calls == calls
+    assert app._unet_transition_x_range == [3., 5.]
+    assert figure['layout']['xaxis']['range'] == figure['layout']['xaxis2']['range'] == [3., 5.]
+    assert figure['layout']['yaxis']['range'][1] < 30.
+    assert trace(figure, 'Measured heat map') == before
+    app.previous_unet_transition_scan()
+    assert state.unet_transition_map['layout']['xaxis']['range'] == [3., 5.]
+    assert state.unet_transition_map['layout']['yaxis']['range'][1] < 30.
+    assert app._unet_transition_engine.calls == calls
+    app.relayout_unet_transition_map({'xaxis.autorange': True})
+    assert app._unet_transition_x_range is None
+    assert 'range' not in state.unet_transition_map['layout']['yaxis']
+
+
+@pytest.mark.parametrize('event', [None, {'xaxis.range': [1., 1.]},
+                                  {'xaxis.range': [float('nan'), 2.]},
+                                  {'xaxis.range': ['bad', 2.]}])
+def test_invalid_zoom_never_changes_measured_data_or_view(app, event):
+    app.refresh([scan(i) for i in (1, 2)])
+    before = deepcopy(app.server.state.unet_transition_map)
+    app.relayout_unet_transition_map(event)
+    assert app.server.state.unet_transition_map == before
+
+
+def test_temperature_sorted_rows_are_labelled_as_order_not_physical_spacing(app):
+    rows = [scan(i) for i in (1, 2, 3)]
+    app.refresh(rows)
+    patterns = [app._unet_transition_engine.load(row).pattern for row in rows]
+    report = app._unet_transition_report['records']
+    figure, _, _ = ui._evolution_figure(report, patterns, {r['run_id']: r for r in rows},
+        rows[-1]['run_id'], patterns[-1], patterns[-2], selected_types=set(),
+        order_label='Temperature (K)', order_by='temperature')
+    assert figure['layout']['yaxis2']['title']['text'] == 'Temperature order'
+
+
 def test_revised_inline_measurement_refreshes_only_affected_linked_fit(app):
     rows = [scan(i) for i in (1, 2, 3)]
     app.refresh(rows)

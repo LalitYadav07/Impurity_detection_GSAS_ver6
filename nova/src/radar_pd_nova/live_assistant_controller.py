@@ -629,6 +629,7 @@ class LiveAssistantMixin(LiveAssistantUi):
             focus=state.live_assistant_focus,
             reference_presets=tuple(state.live_reference_mask_presets or []),
             defer_sample_bank_membership=True,
+            wavelengths=tuple(str(option['value']) for option in (getattr(state, 'powgen_wavelength_options', None) or []) if option.get('value')),
         )
 
     def _assistant_language_signature(self):
@@ -728,6 +729,10 @@ class LiveAssistantMixin(LiveAssistantUi):
             # requested limit; do not silently switch to a smaller preset.
             values = {**{"live_" + key: value for key, value in full_profile_settings(profile).items()},
                       **values, "live_full_profile": "custom"}
+        if "powgen_wavelength" in values and values["powgen_wavelength"]:
+            if state.live_beamline != 'PG3' or values["powgen_wavelength"] not in {
+                    str(option['value']) for option in (getattr(state, 'powgen_wavelength_options', None) or [])}:
+                raise ValueError("Choose an exact wavelength from the current POWGEN wavelength policy list. No setup values changed.")
         for key in ("live_sample_elements", "live_environment_elements"):
             if key in values:
                 parse_elements(values[key], optional=key == "live_environment_elements")

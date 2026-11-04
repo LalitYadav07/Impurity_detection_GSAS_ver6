@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import Counter
+import math
 from pathlib import Path
 import re
 
@@ -138,6 +139,24 @@ def _map_grid(patterns):
     return centers, edges
 
 
+def _visible_ribbon_range(traces, limits):
+    """Display bounds from the measured curves in the visible x window only."""
+    values = []
+    for trace in traces:
+        if trace.get('name') not in {'Reference scan', 'Selected scan'}:
+            continue
+        x = np.asarray(trace['x'], dtype=float)
+        y = np.asarray(trace['y'], dtype=float)
+        valid = np.isfinite(x) & np.isfinite(y) & (x >= limits[0]) & (x <= limits[1])
+        if valid.any():
+            values.extend((float(np.min(y[valid])), float(np.max(y[valid]))))
+    if not values:
+        return None
+    low, high = min(values), max(values)
+    padding = .07 * max(high - low, abs(high) * .01, 1e-9)
+    return [low - padding, high + padding]
+
+
 def _evolution_figure(view_rows, patterns, scans, selected_id, current, earlier, *,
                       selected_types, selected_event=-1, scale="linear",
                       palette="Turbo", zoom=None, revision=0, series="",
@@ -238,7 +257,8 @@ def _evolution_figure(view_rows, patterns, scans, selected_id, current, earlier,
         condition = _condition_label(scan, order_by)
         tick_labels.append(f"{scan_label(scan)} · {condition}")
     fig.update_yaxes(title_text="Measured intensity", row=1, col=1)
-    fig.update_yaxes(title_text=order_label, tickmode="array",
+    row_axis = 'Temperature order' if order_by == 'temperature' else order_label
+    fig.update_yaxes(title_text=row_axis, tickmode="array",
                      tickvals=tick_indices, ticktext=tick_labels,
                      range=[count - .5, -.5], fixedrange=True, row=2, col=1)
     fig.update_xaxes(title_text=COORDINATES.get(current.scope.coordinate,
@@ -250,6 +270,9 @@ def _evolution_figure(view_rows, patterns, scans, selected_id, current, earlier,
                       uirevision=f"{series}:{revision}")
     if zoom is not None:
         fig.update_xaxes(range=list(zoom))
+        bounds = _visible_ribbon_range([trace.to_plotly_json() for trace in fig.data], zoom)
+        if bounds is not None:
+            fig.update_yaxes(range=bounds, autorange=False, row=1, col=1)
     return plotly.Figure.to_data(fig), len(bars["x"]), saturated
 
 
@@ -864,6 +887,7 @@ class UnetTransitionMixin:
                 with html.Div(classes="radar-tracker-map-frame"):
                     figure = plotly.Figure(display_mode_bar=True, responsive=True,
                                            style="height:690px;width:100%",
+                                           relayout=(self.relayout_unet_transition_map, "[$event]"),
                                            click=(self.select_unet_transition_map_click,
                                                   _MAP_CLICK_ARGUMENTS))
                     figure.data = ("unet_transition_map.data",)
@@ -907,6 +931,7 @@ class UnetTransitionMixin:
                 with html.Div(classes="radar-inspector-frame"):
                     figure = plotly.Figure(display_mode_bar=True, responsive=True,
                                            style="height:100%;width:100%",
+                                           relayout=(self.relayout_unet_transition_map, "[$event]"),
                                            click=(self.select_unet_transition_map_click,
                                                   _MAP_CLICK_ARGUMENTS))
                     figure.data = ("unet_transition_dialog_figure.data",)
@@ -1711,6 +1736,41 @@ class UnetTransitionMixin:
     def next_unet_transition_map_page(self, **_):
         self.select_unet_transition_map_start(
             self.server.state.unet_transition_map_start + self.server.state.unet_transition_map_window)
+
+    def relayout_unet_transition_map(self, event, **_):
+        """Retain shared x zoom and rescale the ribbon without inference or raster work."""
+        if not isinstance(event, dict) or self.server.state.unet_transition_loading:
+            return
+        for axis in ('xaxis2', 'xaxis'):
+            if event.get(axis + '.autorange') is True:
+                self.reset_unet_transition_map_zoom()
+                return
+            limits = event.get(axis + '.range')
+            if axis + '.range[0]' in event and axis + '.range[1]' in event:
+                limits = [event[axis + '.range[0]'], event[axis + '.range[1]']]
+            if not isinstance(limits, (list, tuple)) or len(limits) != 2:
+                continue
+            try:
+                limits = sorted(float(v) for v in limits)
+            except (TypeError, ValueError, OverflowError):
+                return
+            if not all(math.isfinite(v) for v in limits) or limits[0] == limits[1]:
+                return
+            if limits == self._unet_transition_x_range:
+                return
+            self._unet_transition_x_range = limits
+            state = self.server.state
+            figure = dict(state.unet_transition_map)
+            figure['layout'] = dict(figure['layout'])
+            for name in ('xaxis', 'xaxis2'):
+                figure['layout'][name] = {**figure['layout'].get(name, {}), 'range': limits, 'autorange': False}
+            bounds = _visible_ribbon_range(figure.get('data', []), limits)
+            if bounds is not None:
+                figure['layout']['yaxis'] = {**figure['layout'].get('yaxis', {}), 'range': bounds, 'autorange': False}
+            state.unet_transition_map = figure
+            state.unet_transition_dialog_figure = figure
+            state.flush()
+            return
 
     def reset_unet_transition_map_zoom(self, **_):
         self._unet_transition_x_range = None

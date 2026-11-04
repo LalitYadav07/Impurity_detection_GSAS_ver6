@@ -225,6 +225,34 @@ def user_selection_context(banks=(1, 2)):
                    defer_sample_bank_membership=True)
 
 
+def test_combined_selection_wavelength_and_matching_scope_remains_atomic():
+    context = replace(user_selection_context(banks=(1,)), wavelengths=('0.8', '1.5', '2.665'))
+    reply = interpret_reply('Use sample 21213, bank 2, wavelength 2.665 angstrom, and all existing matching scans.', context)
+    assert reply.action == 'patch'
+    assert reply.value == {
+        'powgen_processing_scope': 'selected', 'powgen_processing_sample_ids': ['21213'],
+        'powgen_bank_scope': 'selected', 'powgen_processing_banks': [2],
+        'powgen_wavelength': '2.665', 'powgen_backfill_mode': 'all',
+    }
+    assert 'verify each reduction' in reply.message
+
+
+@pytest.mark.parametrize('wave', ['2.664', 'NaN', '-2.665', '2.665 nm', '2.665 or 1.5'])
+def test_wavelength_policy_never_rounds_or_partially_applies(wave):
+    context = replace(user_selection_context(), wavelengths=('1.5', '2.665'))
+    reply = interpret_reply('sample 21213; bank 2; wavelength ' + wave, context)
+    assert reply.action == 'clarify'
+    assert reply.value is None
+    assert 'displayed Wavelength policy' in reply.message
+
+
+def test_wavelength_policy_uses_available_options_and_beamline():
+    context = replace(user_selection_context(), wavelengths=('1.500',))
+    assert interpret_reply('wavelength 1.5 Å', context).value == {'powgen_wavelength': '1.500'}
+    assert interpret_reply('wavelength 2.665 A', context).action == 'clarify'
+    assert interpret_reply('wavelength 1.5 A', replace(context, beamline='NOM')).action == 'clarify'
+
+
 @pytest.mark.parametrize("prefix", [
     "sample ID 21213 only", "Use sample ID 21213 only", "Select only sample ID 21213",
     "Choose the sample ID: 21213 only", "Please use only the sample ID 21213",
