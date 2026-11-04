@@ -156,6 +156,48 @@ def test_native_inspections_reuse_a_manifest_only_packet_without_copying_gpx(rem
     assert third!=first
 
 
+@pytest.mark.parametrize('cache_limit,expected_count',[(1024,2),(4,1)])
+def test_different_model_batches_share_one_bounded_cache_packet(remote,tmp_path,monkeypatch,cache_limit,expected_count):
+    """Different candidate subsets must not spawn redundant Galaxy uploads."""
+    from gpx_recipe.symmetry import profiled_cache
+    runtime,service,source=remote
+    protocol=dict(source=dict(path='source.gpx',sha256=source['source_sha256']),
+        catalog=dict(path='catalog.json'),candidates=[dict(id=k,child=None) for k in ['a','b']],
+        policy=dict(magnetic_optimizer='profiled_quadratic'))
+    sha=digest(protocol);campaign=Campaign(tmp_path/'shared-packets')
+    transport=GalaxyChunkTransport(runtime,campaign)
+    transport.state['inputs'][sha]='base-assets';transport.state['sources'][sha]=source
+    monkeypatch.setattr(transport,'checkpoint',lambda **_:None)
+    monkeypatch.setattr(profiled_cache,'MAX_BYTES',cache_limit)
+    def known_hints(p,root,candidates):
+        assert p==protocol and candidates=={'a','b'}
+        # The helper already validates the bytes; here exercise packet identity
+        # and its total byte bound independently of that native-cache contract.
+        rows=[]
+        for candidate in reversed(sorted(candidates)):
+            path='_profiled_cache/'+candidate+'.npz'
+            target=root/path;target.parent.mkdir(exist_ok=True)
+            target.write_bytes((candidate*4).encode())
+            rows.append(dict(candidate=candidate,path=path,sha256=file_sha(target)))
+        return dict(schema=profiled_cache.SCHEMA,protocol_sha256=sha,entries=rows)
+    monkeypatch.setattr(transport,'_profiled_inputs',known_hints)
+    chunks=[]
+    for candidate in ['a','b']:
+        directory=tmp_path/('trial-'+candidate);directory.mkdir()
+        (directory/'source.gpx').write_bytes(Path(source['source_path']).read_bytes())
+        (directory/'catalog.json').write_text('{}')
+        (directory/'protocol.json').write_text(json.dumps(protocol))
+        (directory/'job.json').write_text(json.dumps(dict(schema='radar-symmetry-job/v1',
+            protocol=protocol,protocol_sha256=sha,candidate_id=candidate)))
+        handle=transport.submit_many([(candidate,directory)],workers=1)[candidate]
+        chunks.append(transport.state['chunks'][handle['dispatch_key']])
+    assert chunks[0]['asset_id']==chunks[1]['asset_id']
+    assert chunks[0]['request']['profiled_cache']==chunks[1]['request']['profiled_cache']
+    assert len(chunks[0]['request']['profiled_cache']['entries'])==expected_count
+    assert len([label for label in service.labels.values() if 'Model inputs ' in label])==1
+    assert len(service.submissions)==2
+
+
 def test_invalid_native_packet_is_rejected_before_upload_or_dispatch(remote,tmp_path):
     runtime,service,source=remote
     with pytest.raises(ValueError,match='Unexpected native operation fields'):

@@ -652,8 +652,19 @@ class GalaxyChunkTransport:
             workers=workers,dispatch_key=key,seconds=240)
         asset_id=self.state['inputs'][sha]
         if protocol.get('policy',{}).get('magnetic_optimizer')=='profiled_quadratic':
-            candidates={json.loads((directory/'job.json').read_text())['candidate_id'] for _,directory in entries}
+            # Every batch of this exact protocol can share one immutable input
+            # packet. Candidate-specific subsets otherwise create a separate
+            # Galaxy upload/staging job for almost every batch. Unused hints do
+            # not change a trial, and each used hint is rechecked by the worker.
+            from gpx_recipe.symmetry.profiled_cache import MAX_BYTES
+            candidates={candidate['id'] for candidate in protocol['candidates']}
             cached=self._profiled_inputs(protocol,input_root,candidates)
+            bounded=[];cache_bytes=0
+            for row in sorted(cached['entries'],key=lambda r:r['candidate']):
+                size=confined(input_root,row['path']).stat().st_size
+                if cache_bytes+size>MAX_BYTES:continue
+                bounded.append(row);cache_bytes+=size
+            cached['entries']=bounded
             if cached['entries']:
                 request['profiled_cache']=cached
                 paths=['protocol.json']+[a['path'] for a in assets(protocol)]+[r['path'] for r in cached['entries']]
