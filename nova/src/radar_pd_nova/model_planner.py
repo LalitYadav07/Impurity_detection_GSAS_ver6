@@ -220,7 +220,7 @@ def _requested_moment_model(request):
                     model = setting.group(1)
                 elif (re.fullmatch(components, argument) or re.fullmatch(subgroup_components, argument)
                       or re.fullmatch(subgroup_adjective, argument)
-                      or re.fullmatch(r'(?:all\s+)?symmetry[- ]permitted\s+(?:magnetic\s+)?moment\s+components', argument)):
+                      or re.fullmatch(r'(?:(?:all|every)\s+)?(?:site[- ]+)?symmetry[- ]permitted\s+(?:magnetic\s+)?moment\s+components?', argument)):
                     # Not releasing *all* components does not require a
                     # collinear model; leave a negated quantified scope open.
                     if not negative:

@@ -765,6 +765,8 @@ def test_numeric_bound_exemption_does_not_hide_geometry_or_unsupported_scope(sou
 
 @pytest.mark.parametrize('user_request',[
     'Allow all symmetry-permitted moment components, including canting, with multiple orientations and relative-sign starts.',
+    'Use moment_model=symmetry_allowed. Allow every symmetry-permitted moment component and multiple orientation and relative-sign starts.',
+    'Allow every site-symmetry-permitted magnetic moment component.',
     'Use moment_model=symmetry_allowed. Refine all magnetic components permitted by each subgroup, allowing canting where symmetry permits. Use multiple starting orientations; do not restrict the search to collinear models.',
 ])
 def test_presentation_canting_requests_do_not_conflict_with_explicit_geometry(user_request):
