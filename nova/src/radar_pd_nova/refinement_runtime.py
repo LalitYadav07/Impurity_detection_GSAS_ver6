@@ -20,6 +20,31 @@ REFINEMENT_TOOL_ID = 'neutrons_radar_pd_refine_recipe_prototype'
 WORKSPACE_LABEL = 'RADAR-PD Refinement workspace'
 
 
+def portable_refinement_workspace(manifest):
+    """Reference repeated native diagnostic tables in their verified artifact.
+
+    The full execution receipt remains in the immutable result bundle. Retain
+    the inline tables for older outputs that do not have that recoverable file.
+    Do not mutate live job state or any scientific result receipt.
+    """
+    document=dict(manifest);document['jobs']=dict(manifest.get('jobs') or {})
+    for uid,job in document['jobs'].items():
+        result=job.get('result') or {}
+        execution=result.get('execution');sha=(result.get('files') or {}).get(execution)
+        if not isinstance(execution,str) or not isinstance(sha,str) or len(sha)!=64:continue
+        rows=result.get('stage_outcomes')
+        if not isinstance(rows,list):continue
+        compact=[]
+        for row in rows:
+            if not isinstance(row,dict) or 'metric_rows' not in row:
+                compact.append(row);continue
+            summary={k:v for k,v in row.items() if k!='metric_rows'}
+            summary['metric_rows_source']=dict(artifact=execution,sha256=sha,stage_id=row['id'])
+            compact.append(summary)
+        document['jobs'][uid]={**job,'result':{**result,'stage_outcomes':compact}}
+    return document
+
+
 def retain_result_review(directory,result,plan=None):
     """Called only after artifact verification, once when results are collected."""
     name=result.get('final_view')
@@ -288,6 +313,7 @@ class GalaxyRefinementRuntime(LocalRefinementRuntime):
 
     def save_workspace(self,manifest):
         import gzip,uuid
+        manifest=portable_refinement_workspace(manifest)
         path=self.root/('workspace-'+uuid.uuid4().hex+'.json.gz')
         payload=json.dumps(manifest,allow_nan=False,separators=(',',':'),sort_keys=True).encode()
         path.write_bytes(gzip.compress(payload,mtime=0))
