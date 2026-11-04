@@ -127,7 +127,7 @@ TASKS = [
                   ("Choose a finite scope first",
                    "<b>Selected saved results</b> pins exact GPXs. Samples/all-results scopes can enroll future compatible arrivals if <b>Enroll future matching scans</b> is enabled. Recipe revisions replace approval and pause future enrollment. <b>Pause</b> stops new enrollment while active jobs finish; <b>Resume queued</b> runs queued scans. Future enrollment requires <b>Start refinement</b>."),
                   ("If a stage stops or needs attention",
-                   "Read the convergence, bounds and native-check notices in <b>Results</b>. Earlier verified stages may remain usable even when the final requested stage is unavailable. Select the stage explicitly; never describe an earlier retained GPX as a successful final refinement. Use <b>Retry transport</b> only for an indicated transport problem.")]),
+                   "In Expert request, <b>If a stage fails scientific checks</b> lets you stop or restore the preceding checkpoint and continue independent stages. Review declared dependencies before approval. Rejected values are discarded; dependent stages are skipped. Earlier verified GPXs remain selectable in Model exploration and <b>Stage for trends</b>. Retained stages carry their review notices. Use <b>Retry transport</b> only for an indicated transport problem.")]),
     dict(id="refined-results", group="Optional: refine further", title="Compare stages and preserve the native project",
          purpose="Assess what changed, including parameters that remain weakly determined.",
          shot="43-parameter-uncertainties", alt="Historical AGES parameter table showing refined values and conditional uncertainties.",
@@ -145,15 +145,15 @@ TASKS = [
          steps=[
              "Open <b>Refinement → Model exploration</b>. Select <b>Starting GPX · original or recipe checkpoint</b> and <b>Inspect exact parent</b>. Choose <b>Exploration</b>: <b>Magnetic models</b> or <b>Structural displacement modes</b>.",
              "For magnetism, review the parent sites, ionic form factors, moment model, bounds and rational k vector. If k is unknown, use <b>Find candidate k-vectors</b>, inspect its coverage, and <b>Use selected k</b>. For structure, review candidate scope and supported native displacement modes.",
-             "Click <b>Discover finite candidates</b>, choose models/modes and acquisitions, then <b>Build finite plan</b>. Review its actual counts, <b>Approve finite plan</b>, and <b>Start approved campaign</b>. Inspect competing fits and search repeatability."
+             "Click <b>Discover finite candidates</b>, choose models/modes and <b>Scans to refine</b>. Choose the current scan, a searchable selection, or all compatible scans. Then <b>Build finite plan</b>, review its counts, <b>Approve finite plan</b>, and <b>Start approved campaign</b>. Future matching scans are a separate option."
          ],
          expected="A finite campaign records the tested models, starts and exact scan/bank. Inspectable alternatives and unresolved trials remain visible alongside successful fits.",
          details=[("What the search does and does not establish",
-                   "Commensurate k surveys have bounded time/template coverage. Constructed structural candidates depend on supported parent/mode mappings. No candidate or one best candidate is not proof that no other structure exists. Calculated-pattern groups can contain indistinguishable models. Retain the trial receipt, source GPX and scientific qualifications."),
+                   "Commensurate k surveys run their finite declared template set. Inspect tested/planned coverage and the provisional leader. The residual view includes nuclear-model errors; magnetic Bragg markers show calculated reflection positions, not proof that measured peaks have been indexed. Constructed structural candidates depend on supported parent/mode mappings. Calculated-pattern groups can contain indistinguishable models. Retain the receipt, source GPX and scientific qualifications."),
                   ("Choose compute without confusing it with search quality",
                    "<b>Compute budget</b> controls concurrent Galaxy batches and requested workers; the scheduler controls actual resources. Polishing jobs have a separate budget. <b>Pause campaign</b> and <b>Load saved campaigns</b>/<b>Continue saved campaign</b> support recovery. Increasing concurrency does not expand the approved scientific model set."),
                   ("Advanced magnetic optimizer choice",
-                   "<b>GSAS-II Hessian</b> and <b>Profiled quadratic · fixed nuclear model</b> have different supported contracts. Profiled optimization requires k = 0, symmetry-allowed components and one neutron histogram; unsupported inputs stop with a reason. Review the fixed nuclear model before using this conditional path.")]),
+                   "<b>Fast checked optimizer · fixed nuclear model</b> supports commensurate k, symmetry-allowed components and one neutron histogram. It reuses a checked native quadratic model across starts and verifies results against GSAS-II. It does not supply native covariance error bars. <b>GSAS-II Hessian</b> remains available. Both require a scientifically reviewed nuclear baseline; unsupported inputs stop with a reason.")]),
     dict(id="live-acquisition", group="Optional: model research", title="Inspect a POWGEN acquisition in progress",
          purpose="Use provisional WebMON snapshots with explicit reference assumptions.",
          diagram="webmon",
