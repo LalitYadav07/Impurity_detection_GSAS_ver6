@@ -89,6 +89,13 @@ class _AdmissionSignals:
         return self.is_set()
 
 
+def _redact_runner_secrets(text: str) -> str:
+    # Some runner errors echo authenticated staging URLs. Retain the host,
+    # status and useful path, but never persist their credential query values.
+    return re.sub(r'(?i)([?&](?:job_key|api_key|access_token|token|key)=)[^\s&\'"<>]+',
+                  r'\1[redacted]', text)
+
+
 def _job_failure_message(stdout: str, stderr: str, dependency_error: str = "", *,
                          limit: int = 4000, fallback: str = "Galaxy reported an error") -> str:
     """Prefer a native terminal cause without discarding runner diagnostics.
@@ -97,6 +104,7 @@ def _job_failure_message(stdout: str, stderr: str, dependency_error: str = "", *
     followed by generic Pulsar missing-output errors on stderr. The original
     stdout/log remains available separately; this is a bounded display summary.
     """
+    stdout,stderr,dependency_error=map(_redact_runner_secrets,(stdout,stderr,dependency_error))
     if dependency_error:
         return dependency_error[-limit:]
     fatal = None
@@ -2615,7 +2623,7 @@ class GalaxyService:
         record.analysis_status = status
         record.stage = stage
         record.progress = progress
-        record.console_tail = stdout[-12000:]
+        record.console_tail = _redact_runner_secrets(stdout)[-12000:]
         record.updated_utc = datetime.now(timezone.utc).isoformat()
         record.galaxy_terminal_utc = galaxy_terminal_timestamp(job) or record.galaxy_terminal_utc
         if status == RunStatus.ERROR:

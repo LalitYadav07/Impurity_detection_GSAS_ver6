@@ -29,6 +29,21 @@ def test_reuses_only_checked_objective_and_rechecks_native_on_each_load(tmp_path
     assert not changed_proof['cache_hit']
 
 
+def test_wrong_quadratic_hint_rebuilds_from_native_instead_of_rejecting_model(tmp_path):
+    _,path=artificial_project(tmp_path,sites=1)
+    cache=tmp_path/'objective.npz'
+    context=NativeMagneticStartingPoint(path,refine_scale=True,refine_background=True,maximum_moment=6.)
+    correct,_=context.build(cache_path=cache,cache_identity='same-protocol')
+    with np.load(cache,allow_pickle=False) as data:values={k:data[k] for k in data.files}
+    values['quadratic']=values['quadratic']*2.
+    np.savez_compressed(cache,**values)
+    fresh=NativeMagneticStartingPoint(path,refine_scale=True,refine_background=True,maximum_moment=6.)
+    rebuilt,proof=fresh.build(cache_path=cache,cache_identity='same-protocol')
+    assert not proof['cache_hit']
+    np.testing.assert_array_equal(rebuilt.quadratic,correct.quadratic)
+    assert max(proof['heldout_relative_errors'])<1e-8
+
+
 def artificial_project(tmp_path,*,sites=1,constrained=False,masked=False,scale_free=True,background_free=True):
     path=tmp_path/'artificial.gpx'
     inst=tmp_path/'artificial.instprm'

@@ -173,7 +173,7 @@ class NativeMagneticStartingPoint:
                 return self._build(heldouts=heldouts,cache_path=cache_path,cache_identity=cache_identity)
         return self._build(heldouts=heldouts)
 
-    def _build(self,*,heldouts=4,cache_path=None,cache_identity=None):
+    def _build(self,*,heldouts=4,cache_path=None,cache_identity=None,skip_cache=False):
         started=time.monotonic();dimension=len(self.moment_indices);nb=len(self.background_indices)
         # GetAtomFXU replaces exact zero components with 1e-8. An evenly
         # spaced anchor can contain 1.0, so a minus-unit interpolation probe
@@ -181,18 +181,21 @@ class NativeMagneticStartingPoint:
         anchor=np.random.default_rng(77831).uniform(.6,1.6,dimension);zero_bg=np.zeros(nb)
         offset=self.residual(anchor,0.,zero_bg)
         cached=None;cache_note=''
-        if cache_path is not None and cache_identity:
+        if cache_path is not None and cache_identity and not skip_cache:
             try:
                 target=Path(cache_path)
-                if target.is_file() and target.stat().st_size<128*1024**2:
+                from .profiled_cache import bounded_npz
+                if bounded_npz(target, cache_identity):
                     with np.load(target,allow_pickle=False) as data:
                         if (str(data['identity'])==cache_identity and
                                 np.array_equal(data['offset'],offset) and
                                 np.array_equal(data['maps'],self.cartesian_maps) and
                                 data['quadratic'].shape==(len(offset),dimension,dimension) and
-                                data['background'].shape==(len(offset),nb)):
+                                data['background'].shape==(len(offset),nb) and
+                                data['nuclear'].shape==(len(offset),) and data['linear_error'].shape==() and
+                                all(np.isfinite(data[k]).all() for k in ('nuclear','quadratic','background','linear_error'))):
                             cached={key:data[key].copy() for key in ('nuclear','quadratic','background','linear_error')}
-            except (OSError,ValueError,KeyError) as exc:cache_note=type(exc).__name__
+            except (OSError,ValueError,KeyError,EOFError) as exc:cache_note=type(exc).__name__
         if cached is None:
             f0=self.residual(anchor,1.,zero_bg)-offset
             quadratic=np.zeros((len(f0),dimension,dimension));linear=np.zeros((len(f0),dimension));plus=[]
@@ -226,6 +229,11 @@ class NativeMagneticStartingPoint:
             native=self.residual(moments,scale,bg)
             errors.append(model.heldout_error(moments,scale,bg,native))
         if not errors or max(errors+[linear_error])>1e-8:
+            if cached is not None:
+                # A hint can never turn a recoverable cache mismatch into a
+                # rejected scientific model. Rebuild once from native calls.
+                return self._build(heldouts=heldouts,cache_path=cache_path,
+                                   cache_identity=cache_identity,skip_cache=True)
             raise ValueError('The native profile failed held-out quadratic identity checks: '+
                 str(dict(heldouts=errors,linear_identity_error=linear_error)))
         if cached is None and cache_path is not None and cache_identity:

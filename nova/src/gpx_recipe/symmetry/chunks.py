@@ -22,7 +22,7 @@ from .resources import allocation
 
 def validate_request(request):
     required={'schema','protocol','protocol_sha256','trials','workers','dispatch_key','seconds'}
-    optional={'template','source_identity','origin'}
+    optional={'template','source_identity','origin','profiled_cache'}
     if not isinstance(request,dict) or set(request)-required-optional or required-set(request) or request['schema']!='radar-model-chunk/v1':
         raise ValueError('Invalid model chunk request')
     protocol=validate_protocol(request['protocol'])
@@ -30,8 +30,11 @@ def validate_request(request):
         raise ValueError('The chunk does not bind this approved protocol and worker image')
     if 'template_sha256' in protocol:
         from .templates import validate_template
-        if optional-set(request) or digest(validate_template(request['template']))!=protocol['template_sha256']:
+        if {'template','source_identity','origin'}-set(request) or digest(validate_template(request['template']))!=protocol['template_sha256']:
             raise ValueError('The chunk lost its reviewed acquisition template')
+    if 'profiled_cache' in request:
+        from .profiled_cache import validate_manifest
+        validate_manifest(request['profiled_cache'], protocol)
     if not isinstance(request['trials'],list) or not 1<=len(request['trials'])<=256 or len(set(request['trials']))!=len(request['trials']):
         raise ValueError('Declare one to 256 unique starts in a chunk')
     expected={trial_id(protocol,c['id'],s['id']):(c['id'],s['id']) for c,s in iter_trials(protocol)}
@@ -62,8 +65,15 @@ def run_trial(directory, *, cancel):
                 status='timed_out' if process is None else 'technical_failure',
                 reason='Native start exceeded its declared deadline' if process is None else 'Native start exited without a terminal receipt'))
     result=verify_receipt(directory,dict(id=job['id'],protocol_sha256=job['protocol_sha256']))
-    return dict(state='finished',status=result['status'],wall_seconds=time.monotonic()-started,
+    row=dict(state='finished',status=result['status'],wall_seconds=time.monotonic()-started,
         rwp=result.get('rwp'))
+    proof=directory/'results'/'optimizer-receipt.json'
+    if proof.is_file():
+        try:
+            identity=json.loads(proof.read_text())['objective_identity']
+            row['profiled_setup']=dict(cache_hit=identity['cache_hit'],seconds=identity['seconds'])
+        except (ValueError,KeyError,TypeError):pass
+    return row
 
 
 def execute_chunk(request, input_root, directory, *, cancel=None, runner=run_trial, clock=time.monotonic, environ=None):
@@ -71,6 +81,10 @@ def execute_chunk(request, input_root, directory, *, cancel=None, runner=run_tri
     budget=allocation(request['workers'],environ=environ)
     directory=Path(directory).resolve();directory.mkdir(parents=True,exist_ok=True)
     captured=prepare_shared_inputs(protocol,input_root,directory)
+    from .profiled_cache import restore, export
+    cache_discarded=[]
+    if 'profiled_cache' in request:
+        _,cache_discarded=restore(request['profiled_cache'],protocol,input_root,captured)
     if 'template_sha256' in protocol:
         from .native_audit import inspect_source
         from .templates import rebind
@@ -101,5 +115,8 @@ def execute_chunk(request, input_root, directory, *, cancel=None, runner=run_tri
     response=dict(schema='radar-model-chunk-result/v1',dispatch_key=request['dispatch_key'],
         protocol_sha256=digest(protocol),trials=done,pending=remaining,cancelled=cancelled,
         allocation=budget,wall_seconds=clock()-started,llm_calls=0)
+    if protocol.get('policy',{}).get('magnetic_optimizer')=='profiled_quadratic':
+        response['profiled_cache']=export(protocol,expected,done,captured,directory)
+        response['discarded_cache_candidates']=cache_discarded
     write_json(directory/'response.json',response)
     return response

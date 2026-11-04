@@ -37,6 +37,15 @@ def test_long_native_error_remains_bounded_without_losing_fatal_prefix(tmp_path,
     assert record.console_tail == stdout[-12000:]
 
 
+def test_runner_url_credentials_are_not_shown_or_saved_in_console_tail(tmp_path,monkeypatch):
+    stdout='Failed GET https://worker.example/staging?job_key=secret-one&file=results.zip'
+    stderr='502 from https://worker.example/output?access_token=secret-two'
+    record=refresh_error(tmp_path,monkeypatch,stdout,stderr)
+    assert 'secret-one' not in record.console_tail and 'secret-two' not in record.message
+    assert 'file=results.zip' in record.console_tail and '502' in record.message
+    assert '[redacted]' in record.message
+
+
 def test_only_a_line_start_fatal_marker_overrides_stderr(tmp_path, monkeypatch):
     record = refresh_error(tmp_path, monkeypatch, 'Example text containing [FATAL] in a quotation', 'actual runner failure')
     assert record.message == 'actual runner failure'

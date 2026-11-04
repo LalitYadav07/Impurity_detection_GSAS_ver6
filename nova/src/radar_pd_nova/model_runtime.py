@@ -594,8 +594,42 @@ class GalaxyChunkTransport:
         size=confined(root,p['source']['path']).stat().st_size
         from .model_batch_budget import batch_size,concurrency_batch_limit
         measured=[c for c in self.state['chunks'].values() if c.get('protocol')==protocol]
-        return min(batch_size(size,measured,maximum=self.chunk_size),
+        return min(batch_size(size,measured,maximum=self.chunk_size,
+                       profiled=p.get('policy',{}).get('magnetic_optimizer')=='profiled_quadratic'),
                    concurrency_batch_limit(self.campaign,protocol,self.max_active_jobs))
+
+    def _collect_profiled_cache(self,protocol,received,response,dispatch):
+        document=response.get('profiled_cache')
+        if not document:return
+        from gpx_recipe.symmetry.profiled_cache import restore
+        sha=digest(protocol)
+        good,discarded=restore(document,protocol,received,self.campaign.root/'inputs'/sha)
+        with self._state_lock:
+            cache=self.state.setdefault('profiled_caches',{}).setdefault(sha,{})
+            for row in good:cache[row['candidate']]=dict(row,dispatch=dispatch)
+            if discarded:self.state['chunks'][dispatch]['discarded_cache_candidates']=discarded
+            self.save()
+
+    def _profiled_inputs(self,protocol,root,candidates):
+        """Rehydrate hints from their immutable result archive after viewer loss."""
+        from gpx_recipe.symmetry.profiled_cache import available
+        sha=digest(protocol)
+        rows=list(self.state.get('profiled_caches',{}).get(sha,{}).values())
+        rows=[r for r in rows if r['candidate'] in candidates]
+        needed={r['dispatch'] for r in rows if not (root/r['path']).is_file()}
+        for key in sorted(needed):
+            chunk=self.state['chunks'][key]
+            job=self._job(chunk)
+            if job is None:continue
+            received=self.runtime.result(job,self.campaign.root/'remote-results'/('cache-'+key+'-'+uuid.uuid4().hex))
+            response=json.loads((received/'response.json').read_text())
+            if (response.get('dispatch_key')!=key or response.get('protocol_sha256')!=sha
+                    or response.get('schema')!='radar-model-chunk-result/v1'):
+                raise ValueError('Recovered quadratic cache archive belongs to another search')
+            self._collect_profiled_cache(protocol,received,response,key)
+        rows=list(self.state.get('profiled_caches',{}).get(sha,{}).values())
+        clean=[{k:r[k] for k in ('identity','candidate','path','sha256')} for r in rows]
+        return available(protocol,clean,root,candidates)
 
     def submit_many(self,entries,*,workers):
         if self._paused.is_set() or self.campaign.setting('paused',False):raise RuntimeUnavailable('Model campaign is paused before dispatch')
@@ -616,11 +650,19 @@ class GalaxyChunkTransport:
             with self._state_lock:self.state['inputs'][sha]=packet
         request=dict(schema='radar-model-chunk/v1',protocol=protocol,protocol_sha256=sha,trials=ids,
             workers=workers,dispatch_key=key,seconds=240)
+        asset_id=self.state['inputs'][sha]
+        if protocol.get('policy',{}).get('magnetic_optimizer')=='profiled_quadratic':
+            candidates={json.loads((directory/'job.json').read_text())['candidate_id'] for _,directory in entries}
+            cached=self._profiled_inputs(protocol,input_root,candidates)
+            if cached['entries']:
+                request['profiled_cache']=cached
+                paths=['protocol.json']+[a['path'] for a in assets(protocol)]+[r['path'] for r in cached['entries']]
+                asset_id=self.runtime.packet(input_root,paths,source_sha256=protocol['source']['sha256'])
         if protocol.get('template_sha256'):
             template=self.campaign.setting('template');source=self.state['sources'][sha]
             request.update(template=template,origin=template['origin'],source_identity={k:source.get(k)
                 for k in ['id','experiment','sample_key','bank','source_sha256']})
-        chunk=dict(key=key,members=ids,protocol=sha,request=request,job=None,pending=True)
+        chunk=dict(key=key,members=ids,protocol=sha,request=request,asset_id=asset_id,job=None,pending=True)
         with self._state_lock:
             self.state['chunks'][key]=chunk
             self.state['members'].update({uid:key for uid in ids});self.save()
@@ -639,7 +681,7 @@ class GalaxyChunkTransport:
 
     def _dispatch_chunk(self,chunk):
         key,sha=chunk['key'],chunk['protocol']
-        try:job=self.runtime._submit('chunk',self.state['sources'][sha],chunk['request'],self.state['inputs'][sha],key,cancel=_DispatchCancellation(self))
+        try:job=self.runtime._submit('chunk',self.state['sources'][sha],chunk['request'],chunk.get('asset_id',self.state['inputs'][sha]),key,cancel=_DispatchCancellation(self))
         except Exception:
             dispatch=self.runtime.state['dispatches'].get(key,{})
             if dispatch.get('absence_verified') and not dispatch.get('pending'):
@@ -723,6 +765,9 @@ class GalaxyChunkTransport:
                 terminal={r['id']:r for r in response['trials']};pending=response['pending']
                 if len(terminal)!=len(response['trials']) or len(set(pending))!=len(pending) or set(terminal)|set(pending)!=set(chunk['members']) or set(terminal)&set(pending):raise ValueError('Model chunk coverage changed')
                 verify_archived_receipts(self.state,terminal,received)
+                if response.get('profiled_cache'):
+                    protocol=json.loads((self.campaign.root/'inputs'/chunk['protocol']/'protocol.json').read_text())
+                    self._collect_profiled_cache(protocol,received,response,dispatch)
                 for uid,row in terminal.items():
                     if row['state']=='finished':
                         source=received/'trials'/uid;target=self.campaign.root/'trials'/uid

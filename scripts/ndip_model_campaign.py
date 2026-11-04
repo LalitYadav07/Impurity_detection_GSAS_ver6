@@ -88,6 +88,7 @@ def work(action,source,assets,request_file,directory,archive):
             base=directory/'chunk'
             paths=['response.json','progress.json']+[str(p.relative_to(base)) for p in (base/'trials').rglob('*')
                 if p.is_file() and p.suffix.lower() in {'.gpx','.json','.log','.npz'} and p.name!='job.json']
+            paths += [row['path'] for row in result.get('profiled_cache',{}).get('entries',[])]
             from gpx_recipe.symmetry.campaign import verify_receipt
             for row in result['trials']:
                 if row['state']!='finished' or row.get('status')!='valid':continue

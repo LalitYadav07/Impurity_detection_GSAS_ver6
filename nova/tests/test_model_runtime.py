@@ -93,6 +93,58 @@ def test_native_packet_result_roundtrip_and_credentials_stay_in_nova(remote,tmp_
     assert request['dispatch_key']!=digest([service.history_id,source['id'],old])[:24]
 
 
+def test_profiled_cache_follows_result_archive_and_rehydrates_after_viewer_loss(remote,tmp_path,monkeypatch):
+    import io
+    import numpy as np
+    from gpx_recipe.symmetry.bundle import pack
+    from gpx_recipe.symmetry.contracts import validate_protocol
+    from gpx_recipe.symmetry.profiled_cache import SCHEMA
+    runtime,service,source=remote
+    inputs=tmp_path/'captured';inputs.mkdir();shutil.copyfile(source['source_path'],inputs/'source.gpx')
+    candidate=dict(id='mag:fixture',magnetic_space_group="Pn'ma'",transformation_matrix=[[1,0,0],[0,1,0],[0,0,1]],origin_shift=[0,0,0])
+    (inputs/'catalog.json').write_text(json.dumps(dict(schema='radar-symmetry-catalog/v1',parent_setting_sha256='a'*64,k=['0','0','0'],candidates=[candidate])))
+    p=validate_protocol(dict(kind='magnetic',source=dict(path='source.gpx',sha256=file_sha(inputs/'source.gpx')),
+        catalog=dict(path='catalog.json',sha256=file_sha(inputs/'catalog.json')),parent_phase='Parent',histogram='Bank',
+        parent_setting_sha256='a'*64,magnetic_function_sha256='b'*64,implementation_sha256=package_signature(),
+        k=['0','0','0'],candidates=[candidate],seeds=[dict(id='start'+str(i),axis='x',magnitude=3.) for i in range(3)],
+        sites=[dict(label='Mn',form_factor='Mn',lande_g=2.)],policy=dict(cycles=12,timeout_seconds=60,
+        maximum_trials=3,maximum_cell_multiplier=8,maximum_moment=6.,fit_band_percent=.25,maximum_mode=.5,
+        adequate_rwp_percent=12.,magnetic_optimizer='profiled_quadratic',optimizer_iterations=100,moment_model='symmetry_allowed')))
+    c=Campaign(tmp_path/'campaign',shared_inputs=True);ids=c.enroll(p,inputs,approved_hash=digest(p))
+    t=GalaxyChunkTransport(runtime,c);t.prepare_source(p,inputs,source)
+    monkeypatch.setattr(t,'checkpoint',lambda **_:None)
+    first=t.submit_many([(ids[0],c.root/'trials'/ids[0])],workers=1)[ids[0]]
+    key=first['dispatch_key'];chunk=t.state['chunks'][key];job=service.jobs[key]
+    received=tmp_path/'server-result';received.mkdir();relative='_profiled_cache/'+'d'*64+'.npz'
+    target=received/relative;target.parent.mkdir()
+    np.savez_compressed(target,identity='d'*64,offset=np.zeros(5),maps=np.ones((1,3,1)),
+        nuclear=np.ones(5),quadratic=np.ones((5,1,1)),background=np.ones((5,1)),linear_error=0.)
+    manifest=dict(schema=SCHEMA,protocol_sha256=digest(p),entries=[dict(identity='d'*64,
+        candidate='mag:fixture',path=relative,sha256=file_sha(target))])
+    response=dict(schema='radar-model-chunk-result/v1',dispatch_key=key,protocol_sha256=digest(p),
+        trials=[dict(id=ids[0],state='finished',status='unsupported')],pending=[],allocation=dict(workers=1),profiled_cache=manifest)
+    (received/'response.json').write_text(json.dumps(response))
+    trial=received/'trials'/ids[0];trial.mkdir(parents=True)
+    (trial/'result.json').write_text(json.dumps(dict(schema='radar-symmetry-trial/v1',id=ids[0],
+        protocol_sha256=digest(p),status='unsupported',reason='retained control')))
+    archive=tmp_path/'reply.zip';pack(received,archive,['response.json',relative,'trials/'+ids[0]+'/result.json'])
+    job.outputs={'result_bundle':service._put(archive.read_bytes(),'result')}
+    assert t.poll(first,c.root/'trials'/ids[0])['state']=='finished'
+    local=c.root/'inputs'/digest(p)/relative
+    assert local.read_bytes()==target.read_bytes()
+    local.unlink()  # The immutable Galaxy artifact outlives a viewer's local cache.
+    t=GalaxyChunkTransport(runtime,c);monkeypatch.setattr(t,'checkpoint',lambda **_:None)
+    second=t.submit_many([(ids[1],c.root/'trials'/ids[1])],workers=1)[ids[1]]
+    second_chunk=t.state['chunks'][second['dispatch_key']]
+    assert second_chunk['request']['profiled_cache']==manifest
+    assert local.read_bytes()==target.read_bytes()
+    packet=service.data[second_chunk['asset_id']]
+    with zipfile.ZipFile(io.BytesIO(packet)) as bundle:assert relative in bundle.namelist()
+    assert chunk['asset_id']!=second_chunk['asset_id']
+    assert 'profiled_cache' not in chunk.get('request',{})
+    assert len(service.submissions)==2 and len(c.trials())==3
+
+
 def test_native_inspections_reuse_a_manifest_only_packet_without_copying_gpx(remote,tmp_path):
     runtime,service,source=remote
     first=runtime.packet(tmp_path,['source.gpx'],source_sha256=source['source_sha256'])

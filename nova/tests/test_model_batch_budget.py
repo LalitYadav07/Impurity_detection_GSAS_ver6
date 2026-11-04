@@ -19,6 +19,16 @@ def test_small_pilot_then_measured_batch_amortizes_dispatch_without_increasing_w
     assert batch_size(source,[measured(seconds=900.)])==1
 
 
+def test_reusable_quadratic_uses_measured_warm_cost_not_repeated_cold_assembly():
+    sample=measured(seconds=120.)
+    sample['result']['trials'] += [dict(state='finished',status='inadequate_fit',wall_seconds=12.,
+        profiled_setup=dict(cache_hit=True,seconds=4.))]*3
+    assert batch_size(2600000,[sample])==1
+    assert batch_size(2600000,[sample],profiled=True)==15
+    sample['output_measurements']['max_trial_files']=5000
+    assert batch_size(2600000,[sample],profiled=True)==1
+
+
 def test_unsupported_only_pilot_and_legacy_receipts_do_not_claim_smaller_native_outputs():
     source=2600000
     assert batch_size(source,[measured(native_artifacts=False)])==6

@@ -53,7 +53,7 @@ def output_measurements(root, members):
         fixed_bytes=fixed_bytes, fixed_files=fixed_files, native_artifacts=native)
 
 
-def batch_size(source_bytes, chunks, *, maximum=128):
+def batch_size(source_bytes, chunks, *, maximum=128, profiled=False):
     """Keep the initial pilot small; learn only from this exact source protocol.
 
     A fourfold output reserve and a two-source-file floor leave room for other
@@ -78,6 +78,17 @@ def batch_size(source_bytes, chunks, *, maximum=128):
         if isinstance(row.get('wall_seconds'), (int, float))
         and not isinstance(row['wall_seconds'], bool)
         and math.isfinite(row['wall_seconds']) and row['wall_seconds'] > 0]
+    if profiled:
+        # A checked quadratic is transferred into later chunks. Its cold
+        # assembly time is not paid again for every subsequent starting point.
+        # Learn only from measured warm native runs, retaining output-size and
+        # process-allocation limits and the chunk's independent soft deadline.
+        warm=[float(row['wall_seconds']) for c in results for row in c['result']['trials']
+            if row.get('profiled_setup',{}).get('cache_hit') is True
+            and row.get('state')=='finished' and row.get('status')!='timed_out'
+            and isinstance(row.get('wall_seconds'),(int,float)) and not isinstance(row['wall_seconds'],bool)
+            and math.isfinite(row['wall_seconds']) and row['wall_seconds']>0]
+        if warm:durations=warm
     if not durations:
         return limit
     durations.sort()
