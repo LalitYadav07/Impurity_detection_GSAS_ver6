@@ -19,7 +19,7 @@ import re
 from user_guide_content import DOWNLOADS, TASKS, TROUBLESHOOTING
 
 NOVA = Path(__file__).resolve().parents[1]
-DATE = "2026-11-03"
+DATE = "2026-11-04"
 
 CSS = r"""
 :root{color-scheme:light;--ink:#203b32;--green:#195a40;--muted:#62776d;--line:#d4e2d9;--wash:#f2f6f3;--amber:#87541e;--soft:#edf5ee}
