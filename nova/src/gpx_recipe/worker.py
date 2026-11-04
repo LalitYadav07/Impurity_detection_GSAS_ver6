@@ -74,7 +74,10 @@ def work(action, source, directory, *, plan=None, approval=None, expected_source
                 raise ValueError('The worker did not complete every approved stage')
             write_project_view(source,directory/'baseline.view.json')
             stages=[]; last_refined={}
+            completed_ids={row['id'] for row in receipt['stages'] if row.get('status')=='completed'}
             for stage in plan['stages']:
+                if stage['id'] not in completed_ids:
+                    continue
                 project=directory/('polished_'+stage['id']+'.gpx')
                 target=directory/('verified_'+stage['id']+'.gpx')
                 view=directory/(stage['id']+'.view.json');stage_view=write_project_view(project,view)

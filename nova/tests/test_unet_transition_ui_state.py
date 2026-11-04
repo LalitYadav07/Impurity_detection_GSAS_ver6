@@ -154,6 +154,48 @@ def test_fit_only_revision_preserves_other_cached_fits_and_skips_inference(app):
     assert app._cached_unet_transition_fit(revised[0]) is untouched_fit
 
 
+def test_arriving_fit_summary_does_not_restart_measured_comparisons(app):
+    rows = [scan(i) for i in (1, 2, 3)]
+    app.refresh(rows)
+    calls = app._unet_transition_engine.calls
+    revised = deepcopy(rows)
+    revised[-1].update(
+        analysis_status="completed", final_rwp=12.,
+        scientific_summary={"phases": [{"name": "new fitted candidate"}]},
+        output_files=["final.gpx", "summary.json"],
+        convergence={"status": "not_converged"},
+    )
+    app.refresh(revised)
+    assert app._unet_transition_engine.calls == calls
+    # Physical ordering and revised measured arrays must still be invalidated.
+    revised[-1]["axis_overrides"] = {
+        "temperature": {"value": 200., "unit": "K", "reviewed_mapping": True}}
+    app.refresh(revised)
+    assert app._unet_transition_engine.calls == calls + 1
+
+
+def test_live_raw_pattern_keeps_comparisons_when_fit_receipt_arrives(app, tmp_path):
+    from test_transition_input import product
+    row, _, _ = product(tmp_path)
+    app.refresh([row])
+    calls = app._unet_transition_engine.calls
+    measured = deepcopy(app.server.state.unet_transition_map)
+    revised = deepcopy(row)
+    revised.update(pattern=scan(1)["pattern"], pattern_path=str(tmp_path / "later-fit.json"),
+                   pattern_observation={"sha256": "later-fit"},
+                   unet_transition_fit_root=str(tmp_path / "fit"))
+    app.refresh([revised])
+    assert app._unet_transition_engine.calls == calls
+    for name, axis in (("Selected scan", "y"), ("Measured heat map", "z")):
+        assert json.dumps(trace(app.server.state.unet_transition_map, name)[axis]) == \
+            json.dumps(trace(measured, name)[axis])
+    # Removing the facility source switches to the available published receipt.
+    os.unlink(row["source_path"])
+    app.refresh([revised])
+    assert app._unet_transition_engine.calls == calls + 1
+    assert first_y(app.server.state.unet_transition_map, "Selected scan") == revised["pattern"]["y"][0]
+
+
 def test_revised_packet_path_with_stable_source_path_refreshes_comparison_and_fit(app, tmp_path):
     row = scan(1)
     packet = row.pop("pattern")

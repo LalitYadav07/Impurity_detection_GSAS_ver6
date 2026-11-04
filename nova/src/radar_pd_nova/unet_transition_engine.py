@@ -30,21 +30,31 @@ DISPLAY_CACHE_SOURCES = 102  # Largest map (100) plus selection and reference.
 def source_signature(scan):
     """Identity of measured inputs and the provenance used by the adapter."""
     stamps = []
+    raw_available = False
     for field in ("source_path", "pattern_path"):
         path = scan.get(field)
         try:
             stat = Path(path).stat() if path else None
             stamps.append((stat.st_size, stat.st_mtime_ns, stat.st_ino) if stat else None)
+            if field == "source_path":
+                raw_available = stat is not None and bool(scan.get("transition_source_root"))
         except OSError:
             stamps.append("unavailable")
-    packet = scan.get("pattern")
+    # load_observation prefers the confined raw product. A later refinement
+    # adds a portable observed/fit receipt, but does not replace that input.
+    # Invalidate on the receipt only when it is actually the input, including
+    # recovery after the original facility mount disappears.
+    packet = None if raw_available else scan.get("pattern")
     if isinstance(packet, dict):
         packet = {key: value for key, value in packet.items()
                   if key not in {"ycalc", "fit_valid", "phase_ticks", "phase_order"}}
-    fields = ("run_id", "source_path", "pattern_path", "pattern_observation",
-              "metadata", "bank", "instrument", "ipts", "source_family",
+    fields = ("run_id", "source_path", "metadata", "bank", "instrument", "ipts", "source_family",
               "comparison_setup_id", "transition_source_root", "scientific_warnings",
               "warnings", "notices")
+    if raw_available:
+        stamps[1] = None
+    else:
+        fields += ("pattern_path", "pattern_observation")
     return digest([{field: scan.get(field) for field in fields}, packet, stamps])
 
 

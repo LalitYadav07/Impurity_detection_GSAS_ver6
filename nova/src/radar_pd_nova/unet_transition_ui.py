@@ -976,15 +976,13 @@ class UnetTransitionMixin:
         fit_keys = {}
         for row in sources:
             measured_signature = source_signature(row)
-            inference_row = {key: value for key, value in row.items()
-                             if key not in {"fit_payload", "unet_transition_fit_root",
-                                            "analysis_status", "rwp", "final_rwp"}}
-            packet = inference_row.get("pattern")
-            if isinstance(packet, dict):
-                fit_fields = {"ycalc", "fit_valid", "phase_ticks", "phase_order"}
-                inference_row["pattern"] = {key: value for key, value in packet.items()
-                                            if key not in fit_fields}
-            signatures.append((inference_row, measured_signature))
+            # Scientific-result rows gain summaries, artifacts and convergence
+            # fields as jobs finish. Those are not observed-pattern inputs.
+            # Keep ordering overrides, but let the adapter own measured-input
+            # identity rather than hashing the entire evolving result row.
+            ordering = {key: row.get(key) for key in (
+                "run_id", "run_number", "axis_overrides", "nominal_temperature_K")}
+            signatures.append((ordering, measured_signature))
             run_id = str(row["run_id"])
             fit_keys[run_id] = _fit_cache_key(row, measured_signature)
         signature = digest([scope, signatures, order, descending, gap])

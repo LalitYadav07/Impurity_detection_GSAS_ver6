@@ -62,6 +62,31 @@ def test_rejected_stage_restores_values_and_continues(setup,tmp_path):
     assert not (tmp_path/'out_bad.gpx').exists()
     assert json.loads(source.read_text())['value']==0
 
+def test_worker_exports_completed_checkpoints_after_recovery(setup,tmp_path,monkeypatch):
+    from gpx_recipe import compiler,worker
+    source,context,seen,plan=setup
+    approval={'approved_plan_sha256':'plan','model_signature':'model'}
+    def script(*args):
+        return ("from gpx_recipe.execution import run_plan\n"
+                "import sys\n"
+                f"run_plan(sys.argv[2],sys.argv[4],{plan!r},approved={approval!r})\n")
+    monkeypatch.setattr(compiler,'compile_script',script)
+    def view(path,destination):
+        # Read the actual checkpoint: rejected and skipped paths do not exist.
+        payload=json.loads(path.read_text())
+        result={'histograms':[],'parameters':[], 'value':payload['value']}
+        destination.write_text(json.dumps(result))
+        return result
+    monkeypatch.setattr(worker,'write_project_view',view)
+    result=worker.work('run',source,tmp_path/'worker',plan=plan,approval=approval)
+    assert result['status']=='completed'
+    assert result['rejected_stages']==['bad']
+    assert [row['id'] for row in result['stages']]==['first','last']
+    assert result['final_gpx']=='verified_final.gpx'
+    assert json.loads((tmp_path/'worker'/result['final_gpx']).read_text())['value']==2
+    assert [row['status'] for row in result['stage_outcomes']]==['completed','rejected','completed']
+
+
 def test_dependent_stage_is_skipped(setup,tmp_path):
     source,ctx,seen,plan=setup;plan['stages'][-1]['depends_on']=['BAD']
     result=E.run_plan(source,tmp_path/'out.gpx',plan,approved={'approved_plan_sha256':'plan','model_signature':'model'})
