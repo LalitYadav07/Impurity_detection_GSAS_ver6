@@ -70,6 +70,28 @@ def test_monoclinic_child_mx_and_mz_can_describe_a_parent_c_moment():
     assert values[0]['parallel_c'] == 4 and values[0]['transverse_c'] == 0 and values[0]['angle_c'] == 0
 
 
+@pytest.mark.parametrize('axis,index',[('a',0),('b',1),('c',2)])
+def test_selected_parent_axis_is_a_geometric_projection(axis,index):
+    cell=[4.,5.,6.,76.,103.,117.]
+    moment=np.array([1.,-2.,3.]);axes=direct_axes(cell)
+    row,view=fixture(cell,[[0,1,0],[0,0,-1],[-1,0,0]],moment)
+    before=copy.deepcopy((row,view))
+    values,note=parent_frame_moments(row,view,axis)
+    assert not note and (row,view)==before
+    cartesian=axes@(moment/cell[:3]);direction=axes[:,index]/cell[index]
+    parallel=float(cartesian@direction)
+    transverse=float(np.linalg.norm(cartesian-parallel*direction))
+    assert values[0]['parallel_'+axis]==pytest.approx(parallel,abs=1e-6)
+    assert values[0]['transverse_'+axis]==pytest.approx(transverse,abs=1e-6)
+    assert values[0]['angle_'+axis]==pytest.approx(math.degrees(math.atan2(transverse,abs(parallel))),abs=1e-6)
+
+
+def test_invalid_display_axis_does_not_guess():
+    row,view=fixture()
+    values,note=parent_frame_moments(row,view,'Q')
+    assert not values and 'select parent axis a, b or c' in note
+
+
 def test_120_forward_inverse_cases_preserve_magnitude_direction_and_time_reversal():
     cells = [[5.,5.,14.,90.,90.,120.], [4.,5.,6.,90.,103.,90.], [4.,5.,6.,76.,103.,117.]]
     transforms = [np.eye(3), np.diag([-1.,1.,1.]), np.diag([2.,1.,1.]),

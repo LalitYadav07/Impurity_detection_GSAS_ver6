@@ -58,22 +58,25 @@ def _parent_frame(row, view):
     parent_axes = np.linalg.cholesky(parent_metric).T
     child_lengths = np.sqrt(np.diag(expected))
     convert = np.sign(determinant) * parent_axes @ transform.T @ np.diag(1 / child_lengths)
-    c_axis = parent_axes[:, 2] / np.linalg.norm(parent_axes[:, 2])
-    return magnetic[0], convert, c_axis
+    unit_axes = parent_axes / np.linalg.norm(parent_axes, axis=0)
+    return magnetic[0], convert, unit_axes
 
 
-def parent_frame_moments(row, view):
+def parent_frame_moments(row, view, axis='c'):
     """Return display rows and an availability note; inputs remain untouched.
 
     ``moment_phase_names`` and ``refined_moments`` come from the verified
     native receipt; the view and embedding belong to that same sealed trial.
-    Angle means the acute angle to the parent c-axis, so a global magnetic
+    Angle means the acute angle to the selected parent direct axis, so a global magnetic
     time reversal changes the signed projection but not this angle.
     """
     if not row or row.get('kind') != 'magnetic':
         return [], ''
     try:
-        magnetic, convert, c_axis = _parent_frame(row, view)
+        if axis not in ('a','b','c'):
+            raise ValueError('select parent axis a, b or c')
+        magnetic, convert, unit_axes = _parent_frame(row, view)
+        reference_axis = unit_axes[:,('a','b','c').index(axis)]
         moments = magnetic.get('moments') or []
         estimates = row.get('refined_moments') or []
         labels = [value.get('label') for value in moments]
@@ -101,11 +104,12 @@ def parent_frame_moments(row, view):
                     raise ValueError('view, receipt and converted magnitudes disagree')
             if magnitude <= 1e-12:
                 raise ValueError('a zero moment has no direction')
-            parallel = float(np.dot(cartesian, c_axis))
-            transverse = float(np.linalg.norm(cartesian - parallel * c_axis))
+            parallel = float(np.dot(cartesian, reference_axis))
+            transverse = float(np.linalg.norm(cartesian - parallel * reference_axis))
             angle = float(np.rad2deg(np.arctan2(transverse, abs(parallel))))
-            rows.append(dict(label=label, magnitude=round(magnitude, 6), parallel_c=round(parallel, 6),
-                             transverse_c=round(transverse, 6), angle_c=round(angle, 6)))
+            rows.append(dict(label=label, magnitude=round(magnitude, 6),
+                **{'parallel_'+axis:round(parallel, 6),'transverse_'+axis:round(transverse, 6),
+                   'angle_'+axis:round(angle, 6)}))
         except (ValueError, TypeError, KeyError) as exc:
             unavailable.append(label + ': ' + str(exc))
     note = ('Unavailable for ' + '; '.join(unavailable) + '.') if unavailable else ''

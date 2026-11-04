@@ -59,7 +59,7 @@ class SymmetryMixin(KSearchMixin):
         s=self.server.state
         defaults=dict(sx_campaign='',sx_campaigns=[],sx_source='',sx_source_options=[],sx_busy=False,sx_error='',sx_message='',sx_progress='',sx_groups=[],sx_group='',sx_members=[],sx_selected='',sx_search='',sx_status='all',
             sx_overview=plots.empty('Open a campaign to inspect its coverage'),sx_fit=plots.empty('Select an audited checkpoint'),sx_fit_title='',sx_expanded_title='',sx_source_notices=[],sx_source_display_notices=[],sx_axis='d',sx_reset=0,sx_pins=[],sx_pin_options=[],sx_parameters=[],sx_parent_moments=[],sx_parent_moment_note='',sx_details=[],sx_fit_diagnostics=[],sx_moment_note='',sx_embedding_evidence=[],sx_embedding_summary='',sx_gsas_model='',sx_intensity_scale='linear',
-            sx_parent='',sx_parents=[],sx_histogram='',sx_histograms=[],sx_k='',sx_sites=[],sx_site_options=[],sx_form_factors='',sx_lande='',sx_directions=['x','y','z'],sx_adequate=None,sx_max_moment='',sx_cycles=20,sx_slots=4,sx_moment_model='symmetry_allowed',sx_refine_scale=False,sx_refine_background=False,
+            sx_parent_axis='c',sx_parent='',sx_parents=[],sx_histogram='',sx_histograms=[],sx_k='',sx_sites=[],sx_site_options=[],sx_form_factors='',sx_lande='',sx_directions=['x','y','z'],sx_adequate=None,sx_max_moment='',sx_cycles=20,sx_slots=4,sx_moment_model='symmetry_allowed',sx_refine_scale=False,sx_refine_background=False,
             sx_kind='magnetic',sx_magnetic_optimizer='profiled_quadratic',sx_optimizer_iterations=120,sx_mag_d_min=0.,sx_max_mode=.5,sx_start_mode=.1,sx_candidate_options=[],sx_candidates=[],sx_mode_options=[],sx_modes=[],sx_discovered=False,sx_discovery_scope='',
             sx_plan_ready=False,sx_approved=False,sx_plan_summary='',sx_plan_candidates=[],sx_setup=False,sx_expanded=False,sx_expanded_layout={},sx_has_context=False,sx_has_gpx=False,sx_has_receipt=False,sx_resumable=False,
             sx_request='',sx_planning_summary='',sx_planning_notes=[],sx_planning_usage='',sx_planning_cost='',sx_has_setup_details=False,sx_sign_starts=True,sx_coverage=[],sx_group_limit=12,sx_result_scope='experiment',sx_start_source='',sx_start_sources=[],sx_results_current=False,sx_scope_progress='')
@@ -74,7 +74,7 @@ class SymmetryMixin(KSearchMixin):
         s.change('sx_campaign')(self._symmetry_campaign_changed)
         s.change('sx_group')(self._symmetry_group_changed)
         s.change('sx_source')(self._symmetry_source_changed)
-        s.change('sx_selected','sx_axis','sx_pins','sx_reset','sx_intensity_scale')(self._symmetry_plot_changed)
+        s.change('sx_selected','sx_axis','sx_pins','sx_reset','sx_intensity_scale','sx_parent_axis')(self._symmetry_plot_changed)
         s.change('sx_kind','sx_parent','sx_histogram','sx_k','sx_sites','sx_form_factors','sx_lande','sx_directions','sx_adequate','sx_max_moment','sx_mag_d_min','sx_max_mode','sx_start_mode','sx_cycles','sx_request','sx_sign_starts','rf_source','sx_start_source')(self._symmetry_unapprove)
         s.change('sx_parent')(self._symmetry_parent_changed)
         s.change('sx_existing','sx_follow_new','sx_max_scans','sx_selected_scans')(self._symmetry_unapprove)
@@ -561,7 +561,7 @@ class SymmetryMixin(KSearchMixin):
                 if row['has_view']:
                     view=view_for(row)
                     s.sx_parameters=parameter_rows(row,view)
-                    s.sx_parent_moments,s.sx_parent_moment_note=parent_frame_moments(row,view)
+                    s.sx_parent_moments,s.sx_parent_moment_note=parent_frame_moments(row,view,getattr(s,'sx_parent_axis','c'))
                     s.sx_moment_note=moment_precision_note(row)
         except Exception as exc:s.sx_error=str(exc)
 
