@@ -668,12 +668,22 @@ def test_real_magnetic_setup_requests_reach_one_bounded_model_call(source, inten
     ('Use symmetry_allowed moments including canting.', 'symmetry_allowed'),
     ('Use symmetry-allowed magnetic moments, including canting.', 'symmetry_allowed'),
     ('Allow every magnetic component permitted by each subgroup, including canting.', 'symmetry_allowed'),
+    ('Allow every subgroup-permitted magnetic component including canting.', 'symmetry_allowed'),
+    ('For the subsequent model search use moment_model=symmetry_allowed.', 'symmetry_allowed'),
+    ('For the magnetic refinement, use moment_model=collinear.', 'collinear'),
+    ('Use moment_model=symmetry_allowed. Use a maximum moment of 3.5 micro-Bohr magnetons per Ni.', 'symmetry_allowed'),
     ('Refine all moment components allowed by the subgroup including canting.', 'symmetry_allowed'),
     ('Do not use symmetry_allowed moments, including canting.', 'collinear'),
     ('Do not use symmetry_allowed moments including canting.', 'collinear'),
 ])
 def test_complete_symmetry_choices_and_attached_canting_qualifier(source, user_request, expected):
     assert payload(user_request,source)['declared']['moment_model']==expected
+
+
+def test_contextual_geometry_choices_still_detect_conflicts(source):
+    with pytest.raises(ValueError,match='conflicting moment models'):
+        payload('For the subsequent model search use moment_model=symmetry_allowed. '
+                'Keep the moments collinear.',source)
 
 
 @pytest.mark.parametrize('user_request', [

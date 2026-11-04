@@ -207,6 +207,42 @@ def test_queue_counts_and_filters_do_not_double_count_completed_review_jobs(tmp_
     assert all('completed' in r['filter_statuses'] for r in state.rf_jobs)
 
 
+def test_recipe_filter_scopes_progress_and_clears_another_recipes_visible_fit(tmp_path):
+    w,_=create(tmp_path);w.observe([source(str(i)) for i in (1,2,3)])
+    recipe=approved(w,RefinementScope('exp'));w.start(recipe['id'],recipe['selection_token'])
+    values=list(w.state['jobs'].values())
+    second=deepcopy(recipe);second.update(id='second',version=2)
+    w.state['recipes']['second']=second
+    # One reused job belongs to both recipes. It is one result, not two.
+    values[0].update(status='completed',result=result(diagnostics(native_converged=True)))
+    values[0]['recipes'].append('second')
+    values[1].update(status='running',recipes=['second'],recipe_id='second')
+    values[2].update(status='failed',message='An unrelated old recipe failed')
+
+    class App(RefinementMixin):
+        def _refinement_sync_source(self):pass
+        def _refinement_sync_approval(self):pass
+        def _sync_recipe_preparation_progress(self):pass
+        def _refinement_setup_matches(self,*args):return False
+        def _refinement_trend_changed(self,**_):self.trend_refreshed=True
+
+    app=App();app._refinement_workspace=w;app._refinement_approving=False;app._refinement_inspecting=False
+    app._refinement_internal=False;app.trend_refreshed=False
+    state=SimpleNamespace(**app._refinement_state_defaults(),flush=lambda:None)
+    app.server=SimpleNamespace(state=state);state.rf_experiment='exp'
+    state.rf_selected_job=values[2]['id'];state.rf_has_output=True
+    state.rf_selected_title='Old result';state.rf_parameters=[{'value':123}]
+    state.rf_recipe_filter='second';app._refinement_recipe_filter_changed()
+    assert {j['id'] for j in state.rf_jobs}=={v['id'] for v in values[:2]}
+    assert state.rf_progress_text.startswith('1 of 2 processed · 1 active')
+    assert state.rf_progress_percent==50
+    assert {r['label']:r['value'] for r in state.rf_metrics}['Needs attention']==0
+    assert state.rf_selected_job=='' and not state.rf_has_output
+    assert state.rf_selected_title=='' and state.rf_parameters==[] and app.trend_refreshed
+    state.rf_recipe_filter='all';app._refinement_recipe_filter_changed()
+    assert len(state.rf_jobs)==3 and state.rf_progress_text.startswith('2 of 3 processed')
+
+
 def test_old_completed_row_hydrates_once_and_retains_review_on_restore(tmp_path):
     w,rt=create(tmp_path);w.observe([source('1')]);recipe=approved(w,RefinementScope('exp'))
     entry=w.start(recipe['id'],recipe['selection_token'])[0];key=entry['id']

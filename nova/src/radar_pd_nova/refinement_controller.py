@@ -398,7 +398,8 @@ class RefinementMixin(GuidedRefinementMixin):
         self.server.state.change('rf_request')(self._refinement_request_changed)
         self.server.state.change('rf_setup_mode')(self._refinement_setup_changed)
         self.server.state.change('rf_stage','rf_histogram','rf_axis','rf_display','rf_zoom')(self._refinement_plot_changed)
-        self.server.state.change('rf_trend_stage','rf_trend_metric','rf_trend_axis','rf_trend_display','rf_recipe_filter')(self._refinement_trend_changed)
+        self.server.state.change('rf_trend_stage','rf_trend_metric','rf_trend_axis','rf_trend_display')(self._refinement_trend_changed)
+        self.server.state.change('rf_recipe_filter')(self._refinement_recipe_filter_changed)
         self.server.state.change('rf_parallel_jobs')(self._refinement_parallel_changed)
 
     @staticmethod
@@ -616,6 +617,11 @@ class RefinementMixin(GuidedRefinementMixin):
     def _refinement_selection_changed(self,**_):
         if not self.server.state.rf_selected_job:self._clear_refinement_output()
 
+    def _refinement_recipe_filter_changed(self,**_):
+        if self._refinement_internal:return
+        self._refinement_sync()
+        self._refinement_trend_changed()
+
     def _refinement_scope(self):
         s=self.server.state
         return RefinementScope(s.rf_experiment,s.rf_scope,tuple(s.rf_samples or []),tuple(s.rf_scans or []),tuple(s.rf_banks or []))
@@ -768,10 +774,13 @@ class RefinementMixin(GuidedRefinementMixin):
             if draft.get('request')==s.rf_request and draft.get('error'):s.rf_error=draft['error']
             recipes=[r for r in w.state['recipes'].values() if r['experiment']==s.rf_experiment]
             s.rf_recipe_versions=[dict(title=f"Recipe {r['version']} · {r['plan']['request'][:65]}",value=r['id']) for r in recipes]
+            if s.rf_recipe_filter!='all' and s.rf_recipe_filter not in {r['id'] for r in recipes}:
+                s.rf_recipe_filter='all'
             s.rf_future_armed=any(r.get('armed') for r in recipes)
             active=[r for r in recipes if r.get('armed')]
             s.rf_active_summary=('Active recipe '+', '.join(str(r['version']) for r in active)+' continues to enroll matching future results. Approving the current form captures its available scans separately.') if active else ''
-            jobs=[j for j in w.state['jobs'].values() if j['source']['experiment']==s.rf_experiment]
+            jobs=[j for j in w.state['jobs'].values() if j['source']['experiment']==s.rf_experiment
+                  and (s.rf_recipe_filter=='all' or s.rf_recipe_filter in j['recipes'])]
             if s.rf_selected_job not in {j['id'] for j in jobs}:self._clear_refinement_output()
             jobs.sort(key=lambda j:(j['source'].get('run_number') or 0,j['queued_utc']),reverse=True)
             version={r['id']:r['version'] for r in recipes}
@@ -1119,9 +1128,11 @@ class RefinementMixin(GuidedRefinementMixin):
         if w is None:return
         job=w.state['jobs'].get(uid)
         if not job or job['source']['experiment']!=s.rf_experiment:return
+        if getattr(s,'rf_recipe_filter','all')!='all' and s.rf_recipe_filter not in job['recipes']:return
         experiment=s.rf_experiment
         def current():return (self._refinement_workspace is w and s.rf_selected_job==uid
             and s.rf_experiment==experiment and self._refinement_selection_owner is owner
+            and (getattr(s,'rf_recipe_filter','all')=='all' or s.rf_recipe_filter in job['recipes'])
             and w.state['jobs'].get(uid) is job)
         # Release the old curve before assigning a new scan's heading. Keep
         # visibility false across every awaited recovery or baseline read.
@@ -1243,6 +1254,7 @@ class RefinementMixin(GuidedRefinementMixin):
             stage_options={'final':'Final recipe output'}
             for candidate_job in w.state['jobs'].values():
                 if candidate_job['source']['experiment']!=s.rf_experiment:continue
+                if s.rf_recipe_filter!='all' and s.rf_recipe_filter not in candidate_job['recipes']:continue
                 for stage in (candidate_job.get('result') or {}).get('stages',[]):
                     stage_options.setdefault(stage['id'],stage.get('title') or stage['id'])
             s.rf_trend_stage_options=[dict(value=k,title=v) for k,v in stage_options.items()]

@@ -157,7 +157,7 @@ def refinement_dashboard(app):
                 with html.Div(classes='rf-list'):
                     with html.Button(v_for="job in rf_jobs.filter(j => (rf_job_status === 'all' || j.filter_statuses.includes(rf_job_status)) && (rf_recipe_filter === 'all' || j.recipe_ids.includes(rf_recipe_filter)) && (j.scan + ' ' + j.sample).toLowerCase().includes(rf_job_search.toLowerCase()))",key='job.id',classes=("'rf-scan ' + (job.id === rf_selected_job ? 'active' : '')",),click=(app.select_refinement_job,'[job.id]'),title=('job.review_message',)):
                         html.Strong('{{ job.scan }}');html.Span('{{ job.sample }}');html.Span('Recipe {{ job.recipe }} · {{ job.status_label }}',classes='rf-state')
-                html.P('Completed jobs finished all recipe stages; their final GPXs still require scientific review. Stopped or failed recipes appear under Needs attention.',v_if='rf_jobs.length',classes='rf-notice')
+                html.P('Completed jobs published a final GPX. A recovered recipe can omit rejected stages; its retained stages and warnings remain available for review. Progress counts follow the selected recipe.',v_if='rf_jobs.length',classes='rf-notice')
                 html.P('No refinements queued yet.',v_if='!rf_jobs.length',classes='rf-notice')
             with html.Div(classes='rf-card'):
                 with html.Div(classes='rf-result-title'):

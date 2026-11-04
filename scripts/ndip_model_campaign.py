@@ -19,27 +19,14 @@ from gpx_recipe.symmetry.compiler import confined,file_sha,package_signature,req
 from gpx_recipe.symmetry.contracts import digest
 from gpx_recipe.symmetry.chunks import execute_chunk
 from gpx_recipe.symmetry.resources import allocation
-
-FIELDS={
-    'inspect':({'source'},set()),
-    'export':({'source','phase','destination'},set()),
-    'match':({'cif','k','options'},set()),
-    'modes':({'child','temporary'},set()),
-    'modes-many':({'children','workers'},set()),
-    'k-prepare':({'source','source_sha256','parent','histogram'},set()),
-    'k-inventory':({'source','source_sha256','parent','parent_setting_sha256','sites','directions','catalogs'},set()),
-    'k-template':({'directory'},set()),
-    'k-portfolio':({'directories','workers','seconds'},set()),
-}
+from gpx_recipe.symmetry.native_protocol import validate_native_payload
 
 
 def native(request,inputs,root,cancel):
     if set(request)!={'schema','operation','payload','implementation_sha256','expected_source_sha256','dispatch_key','timeout','input_hashes'} or request['schema']!='radar-model-native/v1':
         raise ValueError('Invalid native model request')
     operation=request['operation'];payload=copy.deepcopy(request['payload'])
-    if operation not in FIELDS or not isinstance(payload,dict):raise ValueError('Unsupported native operation')
-    required,optional=FIELDS[operation]
-    if set(payload)-required-optional or required-set(payload):raise ValueError('Unexpected native operation fields')
+    validate_native_payload(operation,payload)
     if request['implementation_sha256']!=package_signature():raise ValueError('The native worker image differs from NOVA')
     require_adapters()
     actual={str(p.relative_to(inputs)):file_sha(p) for p in inputs.rglob('*') if p.is_file()}

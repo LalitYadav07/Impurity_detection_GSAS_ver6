@@ -144,15 +144,18 @@ def _requested_moment_model(request):
     subgroup_components = (r'(?:all|every)\s+(?:the\s+)?(?:magnetic\s+)?(?:moment\s+)?components?\s+'
                            r'(?:allowed|permitted)\s+by\s+(?:each|the)\s+(?:magnetic\s+)?subgroup'
                            r'(?:\s+including\s+canting)?')
+    subgroup_adjective = (r'(?:all|every)\s+(?:the\s+)?subgroup[- ](?:allowed|permitted)\s+'
+                          r'(?:magnetic\s+)?(?:moment\s+)?components?(?:\s+including\s+canting)?')
     symmetry_choice = (r'symmetry[- _]allowed(?:\s+(?:magnetic\s+)?(?:moments?|components?|moment\s+components?))?'
                        r'(?:\s+model)?(?:\s+(?:including|with|allowing)\s+canting)?')
     # A numeric ceiling alone does not choose collinear or free geometry.
     numeric_moment_bound = (r'(?:'
-                            r'(?:(?:set|use|keep)\s+)?(?:the\s+)?(?:maximum|max)\s+(?:magnetic\s+)?moment\s*'
+                            r'(?:(?:set|use|keep)\s+)?(?:(?:a|the)\s+)?(?:maximum|max)\s+(?:magnetic\s+)?moment\s*'
                             r'(?:(?:to|of|=|:)\s*)?|'
                             r'bound\s+(?:(?:each|every|all|the)\s+)?(?:magnetic\s+)?moments?\s+to\s+)'
                             r'[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?\s*'
-                            r'(?:mu[_ -]?b|[\u00b5\u03bc]b|bohr(?:\s+magnetons?)?|microbohr\s+magnetons?)?')
+                            r'(?:mu[_ -]?b|[\u00b5\u03bc]b|bohr(?:\s+magnetons?)?|micro[- ]?bohr\s+magnetons?)?'
+                            r'(?:\s+per\s+(?:(?:selected|magnetic)\s+)?(?:atom|site|[a-z]{1,2}\d*))?')
     historical = (r'\b(?:previous(?:ly)?|prior|earlier|formerly|last\s+(?:run|fit)|historical)\b|'
                   r'^(?:which|that|it)\s+(?:was|were|had been)\b|'
                   r'^moment[_ ]model\b.*\b(?:was|were|had been)\s+(?:used|selected|assumed|set)\b')
@@ -170,6 +173,9 @@ def _requested_moment_model(request):
         original = clause
         clause = re.sub(r'^[-*\u2022]\s+', '', clause)
         clause = re.sub(r'^(?:please\s+|now\s+)+', '', clause)
+        clause = re.sub(r'^for\s+(?:the\s+)?(?:(?:subsequent|following|current|new)\s+)?'
+                        r'(?:magnetic\s+)?(?:model\s+)?(?:search|refinement|campaign)\s*,?\s+'
+                        r'(?=(?:' + verbs + r')\b)', '', clause)
         clause = re.sub(r'^(?:i|we)\s+(?:want|would like)\s+(?:you\s+)?to\s+', '', clause)
         negation = re.match(r"(?:(?:do|must|should)\s+not|don't|never)\s+", clause)
         negative = bool(negation)
@@ -213,6 +219,7 @@ def _requested_moment_model(request):
                 if setting:
                     model = setting.group(1)
                 elif (re.fullmatch(components, argument) or re.fullmatch(subgroup_components, argument)
+                      or re.fullmatch(subgroup_adjective, argument)
                       or re.fullmatch(r'(?:all\s+)?symmetry[- ]permitted\s+(?:magnetic\s+)?moment\s+components', argument)):
                     # Not releasing *all* components does not require a
                     # collinear model; leave a negated quantified scope open.

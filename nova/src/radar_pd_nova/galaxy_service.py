@@ -2259,6 +2259,14 @@ class GalaxyService:
         stderr = next((str(job[key]) for key in ("stderr", "tool_stderr", "job_stderr")
                        if job.get(key) and str(job[key]).strip()), "")
         if action.status == RunStatus.ERROR:
+            # Native tools redirect their traceback to the declared console
+            # output. Galaxy's process stdout/stderr can both be empty.
+            console_id = action.outputs.get("console_output")
+            if not stdout and not stderr and isinstance(console_id, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,128}", console_id):
+                try:
+                    stdout = self.load_text_document(console_id, max_bytes=262144)
+                except (requests.RequestException, ValueError, UnicodeError):
+                    pass  # Preserve the job identity and existing fallback.
             exit_code = job.get("exit_code")
             exit_note = "" if exit_code is None else f" (exit code {exit_code})"
             missing = ("No stdout, stderr, or exit code was available." if exit_code is None

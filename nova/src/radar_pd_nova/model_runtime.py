@@ -334,6 +334,8 @@ class GalaxyModelRuntime(GalaxyRefinementRuntime):
     def native(self,operation,payload,root,*,source,timeout=120,cancel=None,
                preparation_attempt=None,before_submit=None,preparation_guard=None):
         """Only named scientific files are staged, never backend environments."""
+        from gpx_recipe.symmetry.native_protocol import validate_native_payload
+        validate_native_payload(operation,payload)
         started=time.monotonic();root=Path(root).resolve();root.mkdir(parents=True,exist_ok=True)
         event=cancel or threading.Event();token=(event,str(root))
         with self._event_lock:

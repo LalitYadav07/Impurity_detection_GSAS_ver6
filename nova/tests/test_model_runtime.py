@@ -104,6 +104,13 @@ def test_native_inspections_reuse_a_manifest_only_packet_without_copying_gpx(rem
     assert third!=first
 
 
+def test_invalid_native_packet_is_rejected_before_upload_or_dispatch(remote,tmp_path):
+    runtime,service,source=remote
+    with pytest.raises(ValueError,match='Unexpected native operation fields'):
+        runtime.native('inspect',dict(source=source['source_path'],extra=True),tmp_path,source=source)
+    assert not service.submissions and not service.data
+
+
 def test_parent_inspection_does_not_reuse_old_zero_member_zip(remote,tmp_path):
     import io
     from gpx_recipe.symmetry.bundle import unpack

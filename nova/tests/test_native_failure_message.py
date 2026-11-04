@@ -86,6 +86,30 @@ def test_long_utility_fatal_still_retains_runner_context(tmp_path, monkeypatch):
     assert len(result.message) <= 2000
 
 
+def test_native_error_uses_redirected_console_dataset_when_process_logs_are_empty(tmp_path, monkeypatch):
+    service=GalaxyService('https://galaxy.example','key','history',output_root=tmp_path)
+    monkeypatch.setattr(service,'_job_details',lambda _uid:dict(id='job',state='error',exit_code=0))
+    monkeypatch.setattr(service,'_job_output_ids',lambda _job:{'console_output':'console-id'})
+    reads=[]
+    def read(uid,*,max_bytes):
+        reads.append((uid,max_bytes))
+        return 'Traceback\nValueError: Unexpected native operation fields for k-inventory\n'
+    monkeypatch.setattr(service,'load_text_document',read)
+    result=service.refresh_utility(UtilityActionRecord(uid='native',galaxy_job_id='job',tool_id='model',name='model'))
+    assert 'Unexpected native operation fields for k-inventory' in result.message
+    assert reads==[('console-id',262144)] and result.status is RunStatus.ERROR
+
+
+def test_unavailable_redirected_console_keeps_the_failed_job_identity(tmp_path, monkeypatch):
+    service=GalaxyService('https://galaxy.example','key','history',output_root=tmp_path)
+    monkeypatch.setattr(service,'_job_details',lambda _uid:dict(id='job',state='error',exit_code=0))
+    monkeypatch.setattr(service,'_job_output_ids',lambda _job:{'console_output':'console-id'})
+    def unavailable(*args,**kwargs):raise ValueError('Console exceeds the byte limit')
+    monkeypatch.setattr(service,'load_text_document',unavailable)
+    result=service.refresh_utility(UtilityActionRecord(uid='native',galaxy_job_id='job',tool_id='model',name='model'))
+    assert 'Galaxy job job ended with an error (exit code 0)' in result.message
+
+
 @pytest.fixture
 def refresh_library_error(tmp_path, monkeypatch):
     service = GalaxyService('https://galaxy.example', 'key', 'history', output_root=tmp_path)
