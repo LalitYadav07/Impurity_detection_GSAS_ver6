@@ -120,6 +120,11 @@ def _requested_moment_model(request):
     missed paraphrase cannot silently select the legacy collinear default.
     """
     text = request.lower().translate(str.maketrans({'\u2019': "'", '\u2011': '-', '\u2013': '-'}))
+    # A completed setting may introduce an explanation with a colon. Keep the
+    # setting and explanation as separate clauses so both are checked: an
+    # explicit assignment must never hide a contradictory following sentence.
+    text = re.sub(r'(\bmoment[_ ]model\s*(?:=|:)\s*(?:symmetry_allowed|collinear))\s*:\s*',
+                  r'\1. ', text)
     verbs = r'use|reuse|select|choose|apply|set|assume|impose|enforce|require|keep|constrain|force|restrict|allow|permit|refine|vary|release|fit'
     # All coordinated clauses participate, including modal statements and bare
     # settings. Keep the connector so a negated list of settings stays negated.
@@ -146,6 +151,9 @@ def _requested_moment_model(request):
                            r'(?:\s+including\s+canting)?')
     subgroup_adjective = (r'(?:all|every)\s+(?:the\s+)?subgroup[- ](?:allowed|permitted)\s+'
                           r'(?:magnetic\s+)?(?:moment\s+)?components?(?:\s+including\s+canting)?')
+    subgroup_modal = (r'(?:all|every)\s+(?:the\s+)?subgroup[- ](?:allowed|permitted)\s+'
+                      r'(?:magnetic\s+)?(?:moment\s+)?components?\s+'
+                      r'(?:may|can|must|should)\s+(?:refine|vary|be\s+refined)')
     symmetry_choice = (r'symmetry[- _]allowed(?:\s+(?:magnetic\s+)?(?:moments?|components?|moment\s+components?))?'
                        r'(?:\s+model)?(?:\s+(?:including|with|allowing)\s+canting)?')
     # A numeric ceiling alone does not choose collinear or free geometry.
@@ -208,6 +216,8 @@ def _requested_moment_model(request):
         elif re.fullmatch(r'(?:(?:strictly\s+)?collinear\s+only|only\s+collinear(?:\s+moments?)?|no\s+canting)\b', clause):
             model = 'collinear'
         elif re.fullmatch(r'no\s+collinearity\b', clause):
+            model = 'symmetry_allowed'
+        elif not negative and re.fullmatch(subgroup_modal, clause):
             model = 'symmetry_allowed'
         else:
             if modal:

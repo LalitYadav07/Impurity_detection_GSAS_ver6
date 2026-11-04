@@ -79,7 +79,8 @@ def model_exploration(app):
             html.H3('Explore models from a completed GPX')
             html.P('Enter a commensurate k vector, or use the magnetic k survey below. Review hypotheses before native refinement.',classes='rf-notice')
             with html.Div(classes='rf-toolbar'):
-                scan_select('Starting GPX · original or recipe checkpoint','sx_start_source','sx_start_sources')
+                scan_select('Starting GPX · original or recipe checkpoint','sx_start_source','sx_start_sources',
+                    placeholder='Type a run number, temperature or recipe stage',persistent_placeholder=True)
                 v.VBtn('Inspect exact parent',click=app.inspect_symmetry_source,disabled=('!sx_start_source || sx_busy',),variant='outlined')
             with html.Details(v_if='sx_has_context',classes='mt-3'):
                 html.Summary('Describe a magnetic model search')
@@ -173,7 +174,7 @@ def model_exploration(app):
                 with html.Div(classes='rf-actions'):
                     v.VBtn('Approve finite plan',click=(app.approve_symmetry,form),disabled=('sx_approved || sx_campaign_running',),variant='outlined',color='#15543c')
                     v.VBtn('Start approved campaign',click=(app.start_symmetry_campaign,form),disabled=('!sx_approved || sx_busy || sx_campaign_running',),variant='flat',color='#15543c')
-                html.P('Each start uses a fresh native process. Galaxy jobs share immutable inputs and batch independent starts within allocated CPU/RAM. Missing allocation information limits the pool to one worker. Model calls run only during setup.',classes='rf-notice')
+                html.P('Fast checked magnetic searches prepare one surrogate per model and verify distinct fitted profiles in GSAS-II. Other searches use isolated native starts. Galaxy jobs share immutable inputs and use the allocated CPU/RAM. Missing allocation information limits the pool to one worker. Model calls run only during setup.',classes='rf-notice')
                 html.P('Structural fit comparisons require a matched parent/nuisance refinement. A lower Rwp alone does not establish a transition.',v_if="sx_kind === 'structural'",classes='rf-notice')
         html.P('{{ sx_scope_progress }}',v_if='!sx_setup && sx_results_current && !!sx_scope_progress',classes='rf-notice')
         html.Div('{{ sx_progress }}',v_if='!sx_setup && sx_results_current && !!sx_progress',classes='sx-status')

@@ -772,3 +772,27 @@ def test_numeric_bound_exemption_does_not_hide_geometry_or_unsupported_scope(sou
 def test_presentation_canting_requests_do_not_conflict_with_explicit_geometry(user_request):
     from radar_pd_nova.model_planner import _requested_moment_model
     assert _requested_moment_model(user_request)=='symmetry_allowed'
+
+
+@pytest.mark.parametrize('assignment',[
+    'Use moment_model=symmetry_allowed:',
+    'Use moment model: symmetry_allowed:',
+])
+def test_explicit_geometry_with_colon_explanation_is_checked(assignment):
+    from radar_pd_nova.model_planner import _requested_moment_model
+    request=assignment+' all subgroup-allowed moment components may refine, including canting.'
+    assert _requested_moment_model(request)=='symmetry_allowed'
+    with pytest.raises(ValueError,match='conflicting moment models'):
+        _requested_moment_model(request+' Keep moments collinear.')
+
+
+def test_colon_explanation_cannot_override_an_opposite_explicit_geometry():
+    from radar_pd_nova.model_planner import _requested_moment_model
+    with pytest.raises(ValueError,match='conflicting moment models'):
+        _requested_moment_model('Use moment_model=collinear: all subgroup-allowed moment components may refine, including canting.')
+
+
+def test_negated_quantified_modal_does_not_imply_collinearity():
+    from radar_pd_nova.model_planner import _requested_moment_model
+    with pytest.raises(ValueError,match='geometry instruction needs an explicit choice'):
+        _requested_moment_model('Do not allow all subgroup-allowed moment components to refine.')
