@@ -51,15 +51,17 @@ def artificial_project(tmp_path,*,sites=1,constrained=False,masked=False,scale_f
     p=G.G2Project(newgpx=str(path))
     cell=[4.7,5.6,6.8,79.,93.,104.]
     nuclear=p.add_phase(phasename='Public artificial nuclear',cell=cell)
-    nuclear.add_atom(.13,.21,.34,'Fe','Fe1');nuclear.add_atom(.37,.29,.19,'O','O1')
-    if sites==2:nuclear.add_atom(.41,.36,.71,'Fe','Fe2')
+    positions=[(.13,.21,.34),(.41,.36,.71),(.23,.67,.46),(.76,.14,.58)]
+    assert 1<=sites<=len(positions)
+    nuclear.add_atom(.37,.29,.19,'O','O1')
+    for i,xyz in enumerate(positions[:sites]):nuclear.add_atom(*xyz,'Fe','Fe'+str(i+1))
     mag=p.add_phase(phasename='Public artificial magnet',cell=cell)
     general=mag.data['General'];general['Type']='magnetic';general['AtomPtrs']=[3,1,10,12]
     general['SGData']=L.makeBilbaoPhase(['P1',''],[0.,0.,0.],np.eye(3),True)['SGData']
     general['MagDmin']=.6
     G.SetupGeneral(mag.data,None)
     for i in range(sites):
-        xyz=[.13,.21,.34] if i==0 else [.41,.36,.71]
+        xyz=positions[i]
         mag.add_atom(*xyz,'Fe+3','Fe'+str(i+1))
         mag.data['Atoms'][i][7:10]=([1.7,2.1,1.2] if i==0 else [-1.7,-2.1,-1.2])
     general['Lande g']=[2.]*len(general['AtomTypes'])
@@ -96,6 +98,7 @@ def test_native_full_constraint_basis_matches_independent_profiles(tmp_path,site
     original=hashlib.sha256(path.read_bytes()).hexdigest()
     adapter=NativeMagneticStartingPoint(path,refine_scale=scale_free,refine_background=background_free,maximum_moment=6.)
     model,receipt=adapter.build()
+    assert receipt['compiler']=='native_profiles'  # smaller bases retain their faster path
     assert max(receipt['heldout_relative_errors'])<1e-8
     assert receipt['linear_identity_error']<1e-8
     expected=3 if constrained else sites*3
@@ -123,3 +126,42 @@ def test_declared_freedom_and_process_global_ownership_fail_closed(tmp_path):
     NativeMagneticStartingPoint(path,refine_scale=True,refine_background=True,maximum_moment=6.)
     with pytest.raises(RuntimeError,match='process-global'):
         first.residual(first.initial[first.moment_indices],first.source_scale,first.initial[first.background_indices])
+
+
+@pytest.mark.parametrize('masked',[False,True])
+def test_shared_derivative_compiler_matches_forward_only_oracle(tmp_path,masked):
+    project,path=artificial_project(tmp_path,sites=2,masked=masked)
+    project.histograms()[0].data['data'][0]['wtFactor']=2.5
+    project.save()
+    before=hashlib.sha256(path.read_bytes()).hexdigest()
+    fast=NativeMagneticStartingPoint(path,refine_scale=True,refine_background=True,maximum_moment=6.)
+    model,proof=fast._build(use_derivative=True)
+    assert proof['compiler']=='native_derivatives',proof
+    assert proof['native_derivative_calls']>=12
+    direct=NativeMagneticStartingPoint(path,refine_scale=True,refine_background=True,maximum_moment=6.)
+    reference,control=direct._build(use_derivative=False)
+    assert control['compiler']=='native_profiles'
+    for name in ['offset','nuclear','quadratic','background']:
+        np.testing.assert_allclose(getattr(model,name),getattr(reference,name),rtol=1e-8,atol=1e-6)
+    assert max(proof['heldout_relative_errors'])<1e-8
+    assert hashlib.sha256(path.read_bytes()).hexdigest()==before
+
+
+def test_bad_native_magnetic_derivatives_fall_back_to_checked_profiles(tmp_path,monkeypatch):
+    _,path=artificial_project(tmp_path,sites=2)
+    native=NativeMagneticStartingPoint(path,refine_scale=True,refine_background=True,maximum_moment=6.)
+    original=native.math.dervRefine
+    monkeypatch.setattr(native.math,'dervRefine',lambda *args:2.*original(*args))
+    _,proof=native._build(use_derivative=True)
+    assert proof['compiler']=='native_profiles'
+    assert proof['compiler_note']
+    assert max(proof['heldout_relative_errors'])<1e-8
+
+
+def test_large_basis_automatically_uses_shared_derivative_compiler(tmp_path):
+    _,path=artificial_project(tmp_path,sites=4,masked=True)
+    native=NativeMagneticStartingPoint(path,refine_scale=True,refine_background=True,maximum_moment=6.)
+    model,proof=native.build()
+    assert model.dimension==12
+    assert proof['compiler']=='native_derivatives',proof
+    assert max(proof['heldout_relative_errors'])<1e-8

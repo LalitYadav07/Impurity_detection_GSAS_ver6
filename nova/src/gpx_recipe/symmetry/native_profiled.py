@@ -19,6 +19,17 @@ from .profiled_magnetic import ProfiledMagneticObjective
 _active=None
 
 
+class _CompilerObjective:
+    """Present the same weighted native residual to the shared compiler."""
+    def __init__(self, native, background):
+        self.native=native;self.background=background;self.numerical_indices=[]
+
+    def profile(self, moments, jacobian=False):
+        value=self.native.residual(moments,1.,self.background)
+        if not jacobian:return value
+        return value,self.native.magnetic_jacobian(moments,1.,self.background)
+
+
 class NativeMagneticStartingPoint:
     def __init__(self,filename,*,refine_scale,refine_background,maximum_moment,deadline=None):
         global _active
@@ -82,7 +93,7 @@ class NativeMagneticStartingPoint:
         self.moment_names=moment_names
         if len(moment_names)>24:raise ValueError('The declared independent magnetic basis exceeds this bounded adapter')
         self.args=([histograms,phases,restraints,rigid],self.parms,histdict,self.vary,controls,pawley,None)
-        self.phases=phases;self.calls=0;self.residual_mask=None
+        self.phases=phases;self.calls=0;self.derivative_calls=0;self.residual_mask=None
         self.atoms=[];unit_matrices=[]
         for name,phase in phases.items():
             general=phase['General']
@@ -146,6 +157,31 @@ class NativeMagneticStartingPoint:
         self.calls+=1
         return values.copy()
 
+    def magnetic_jacobian(self,moments,scale,background):
+        """Use native constrained derivatives with the residual's exact mask.
+
+        GSAS-II's analytic Jacobian applies wtFactor, while errRefine applies
+        its square root. One independent histogram makes that conversion
+        explicit; no observed value, weight or exclusion is changed.
+        """
+        self._check();vector=self.initial.copy();vector[self.moment_indices]=moments
+        vector[self.background_indices]=background
+        if self.scale_index is not None:vector[self.scale_index]=scale
+        self.parms[self.scale_name]=scale
+        derivative=np.ma.asarray(self.math.dervRefine(vector,*self.args),dtype=float)
+        mask=self.residual_mask
+        if mask is None or derivative.shape!=(len(self.vary),len(mask)):
+            raise ValueError('Native magnetic derivative has a different residual domain')
+        if np.ma.getmaskarray(derivative)[:,~mask].any():
+            raise ValueError('Native magnetic derivative masks fitted observations')
+        factor=float(self.args[4][f':{self.histogram_id}:wtFactor'])
+        if not np.isfinite(factor) or factor<=0:
+            raise ValueError('Native histogram weight factor is invalid')
+        values=np.asarray(np.ma.getdata(derivative))[self.moment_indices][:,~mask]/np.sqrt(factor)
+        if not np.isfinite(values).all():raise ValueError('Native magnetic derivative is nonfinite')
+        self.derivative_calls+=1
+        return values
+
     @contextmanager
     def _cache_lock(self, path):
         """Coordinate disposable workers without reusing native globals."""
@@ -173,7 +209,8 @@ class NativeMagneticStartingPoint:
                 return self._build(heldouts=heldouts,cache_path=cache_path,cache_identity=cache_identity)
         return self._build(heldouts=heldouts)
 
-    def _build(self,*,heldouts=4,cache_path=None,cache_identity=None,skip_cache=False):
+    def _build(self,*,heldouts=4,cache_path=None,cache_identity=None,skip_cache=False,
+               use_derivative=None,compiler_note=''):
         started=time.monotonic();dimension=len(self.moment_indices);nb=len(self.background_indices)
         # GetAtomFXU replaces exact zero components with 1e-8. An evenly
         # spaced anchor can contain 1.0, so a minus-unit interpolation probe
@@ -196,7 +233,23 @@ class NativeMagneticStartingPoint:
                                 all(np.isfinite(data[k]).all() for k in ('nuclear','quadratic','background','linear_error'))):
                             cached={key:data[key].copy() for key in ('nuclear','quadratic','background','linear_error')}
             except (OSError,ValueError,KeyError,EOFError) as exc:cache_note=type(exc).__name__
-        if cached is None:
+        compilation=None;compiler='transported_cache' if cached is not None else 'native_profiles'
+        # Derivative cost is amortized only by larger bases. Measured cold
+        # controls favor forward evaluations for the smaller spin spaces.
+        if cached is None and (use_derivative is True or (use_derivative is None and dimension>=12)):
+            try:
+                from ..live.native_kernel_policy import compile_native_magnetic_kernel
+                compiled=compile_native_magnetic_kernel(_CompilerObjective(self,zero_bg),anchor,
+                    list(range(dimension)),method='derivative',checks=4)
+                quadratic=compiled['quadratic'].transpose(2,0,1)
+                nuclear=compiled['base']-offset
+                f0=self.residual(anchor,1.,zero_bg)-offset
+                linear=self.magnetic_jacobian(anchor,1.,zero_bg).T
+                linear_error=float(np.max(np.abs(linear-2*np.einsum('nij,j->ni',quadratic,anchor)))/max(1.,float(np.max(np.abs(f0)))))
+                compiler='native_derivatives';compilation=compiled['diagnostics']
+            except (ValueError,FloatingPointError,np.linalg.LinAlgError) as exc:
+                compiler_note=str(exc);compilation=None;compiler='native_profiles'
+        if cached is None and compilation is None:
             f0=self.residual(anchor,1.,zero_bg)-offset
             quadratic=np.zeros((len(f0),dimension,dimension));linear=np.zeros((len(f0),dimension));plus=[]
             for i in range(dimension):
@@ -209,9 +262,10 @@ class NativeMagneticStartingPoint:
                     value=self.residual(anchor+np.eye(dimension)[i]+np.eye(dimension)[j],1.,zero_bg)-offset
                     quadratic[:,i,j]=quadratic[:,j,i]=(value-plus[i]-plus[j]+f0)/2
             nuclear=f0-np.einsum('i,nij,j->n',anchor,quadratic,anchor)
+            linear_error=float(np.max(np.abs(linear-2*np.einsum('nij,j->ni',quadratic,anchor)))/max(1.,float(np.max(np.abs(f0)))))
+        if cached is None:
             columns=[self.residual(anchor,0.,np.eye(nb)[i])-offset for i in range(nb)]
             background=np.column_stack(columns) if columns else np.empty((len(f0),0))
-            linear_error=float(np.max(np.abs(linear-2*np.einsum('nij,j->ni',quadratic,anchor)))/max(1.,float(np.max(np.abs(f0)))))
         else:
             nuclear,quadratic,background=(cached[k] for k in ('nuclear','quadratic','background'))
             linear_error=float(cached['linear_error'])
@@ -234,6 +288,10 @@ class NativeMagneticStartingPoint:
                 # rejected scientific model. Rebuild once from native calls.
                 return self._build(heldouts=heldouts,cache_path=cache_path,
                                    cache_identity=cache_identity,skip_cache=True)
+            if compiler=='native_derivatives':
+                return self._build(heldouts=heldouts,cache_path=cache_path,
+                    cache_identity=cache_identity,skip_cache=True,use_derivative=False,
+                    compiler_note='Analytic compilation failed the stricter native residual identity check')
             raise ValueError('The native profile failed held-out quadratic identity checks: '+
                 str(dict(heldouts=errors,linear_identity_error=linear_error)))
         if cached is None and cache_path is not None and cache_identity:
@@ -250,7 +308,9 @@ class NativeMagneticStartingPoint:
         self.build_receipt=dict(schema='radar-native-profiled-start/v1',
             independent_variables=self.moment_names,magnetic_atoms=len(self.atoms),
             free_background_coefficients=nb,common_scale_free=self.fixed_scale is None,
-            native_calls=self.calls,heldout_relative_errors=errors,linear_identity_error=linear_error,
+            native_calls=self.calls,native_derivative_calls=self.derivative_calls,
+            compiler=compiler,compiler_note=compiler_note,compiler_diagnostics=compilation,
+            heldout_relative_errors=errors,linear_identity_error=linear_error,
             cache_hit=cached is not None,cache_identity=cache_identity,cache_note=cache_note,
             interpolation_anchor_seed=77831,
             seconds=time.monotonic()-started,weighted_residual_points=len(offset),
