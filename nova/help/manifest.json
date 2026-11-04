@@ -1,6 +1,6 @@
 {
   "schema": "radar-pd-user-guide/v2",
-  "application_version": "0.6.41",
+  "application_version": "0.6.42",
   "pages": [
     "index.html",
     "reference-0.4.34.html"
@@ -34,371 +34,371 @@
       "path": "assets/6650a61bd720b5436b81.jpg",
       "application_version": "0.4.34",
       "captured": "2026-10-29",
-      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "context": "Recorded public AGES Al\u2082O\u2083/MgO example; historical layout and results.",
       "role": "historical_example"
     },
     "01-new-history": {
       "path": "assets/b9d5139cafdeb600b591.jpg",
       "application_version": "0.4.34",
       "captured": "2026-10-29",
-      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "context": "Recorded public AGES Al\u2082O\u2083/MgO example; historical layout and results.",
       "role": "historical_example"
     },
     "02-launch-tool": {
       "path": "assets/fd2dbb4afe01d19cb485.jpg",
       "application_version": "0.4.34",
       "captured": "2026-10-29",
-      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "context": "Recorded public AGES Al\u2082O\u2083/MgO example; historical layout and results.",
       "role": "historical_example"
     },
     "04-discover-ipts": {
       "path": "assets/fc53d6c04c37109bb31a.jpg",
       "application_version": "0.4.34",
       "captured": "2026-10-29",
-      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "context": "Recorded public AGES Al\u2082O\u2083/MgO example; historical layout and results.",
       "role": "historical_example"
     },
     "06-scan-bank-options": {
       "path": "assets/3dd4838a6d56417388ab.jpg",
       "application_version": "0.4.34",
       "captured": "2026-10-29",
-      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "context": "Recorded public AGES Al\u2082O\u2083/MgO example; historical layout and results.",
       "role": "historical_example"
     },
     "05-select-sample": {
       "path": "assets/1b2b34d6981845c8ae19.jpg",
       "application_version": "0.4.34",
       "captured": "2026-10-29",
-      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "context": "Recorded public AGES Al\u2082O\u2083/MgO example; historical layout and results.",
       "role": "historical_example"
     },
     "07-two-cif-input": {
       "path": "assets/5c18a7298231e540daf2.jpg",
       "application_version": "0.4.34",
       "captured": "2026-10-29",
-      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "context": "Recorded public AGES Al\u2082O\u2083/MgO example; historical layout and results.",
       "role": "historical_example"
     },
     "08-library-build": {
       "path": "assets/98970a49a43428401f1c.jpg",
       "application_version": "0.4.34",
       "captured": "2026-10-29",
-      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "context": "Recorded public AGES Al\u2082O\u2083/MgO example; historical layout and results.",
       "role": "historical_example"
     },
     "09-library-ready": {
       "path": "assets/9764e7d5abd366a653f3.jpg",
       "application_version": "0.4.34",
       "captured": "2026-10-29",
-      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "context": "Recorded public AGES Al\u2082O\u2083/MgO example; historical layout and results.",
       "role": "historical_example"
     },
     "13-review-analysis-contract": {
       "path": "assets/a8be02ea5f7eed336979.jpg",
       "application_version": "0.4.34",
       "captured": "2026-10-29",
-      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "context": "Recorded public AGES Al\u2082O\u2083/MgO example; historical layout and results.",
       "role": "historical_example"
     },
     "10-import-analysis-settings": {
       "path": "assets/7741ffe667bdd9539ee5.jpg",
       "application_version": "0.4.34",
       "captured": "2026-10-29",
-      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "context": "Recorded public AGES Al\u2082O\u2083/MgO example; historical layout and results.",
       "role": "historical_example"
     },
     "12-auto-profile": {
       "path": "assets/4305560ad358389ecad9.jpg",
       "application_version": "0.4.34",
       "captured": "2026-10-29",
-      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "context": "Recorded public AGES Al\u2082O\u2083/MgO example; historical layout and results.",
       "role": "historical_example"
     },
     "06b-bank-wavelength": {
       "path": "assets/fe125ef98e627cd6c801.jpg",
       "application_version": "0.4.34",
       "captured": "2026-10-29",
-      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "context": "Recorded public AGES Al\u2082O\u2083/MgO example; historical layout and results.",
       "role": "historical_example"
     },
     "11-preflight-cohort": {
       "path": "assets/89d9703a5937f81477c3.jpg",
       "application_version": "0.4.34",
       "captured": "2026-10-29",
-      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "context": "Recorded public AGES Al\u2082O\u2083/MgO example; historical layout and results.",
       "role": "historical_example"
     },
     "15-watch-live-queue": {
       "path": "assets/17e4e3303247b640a97a.jpg",
       "application_version": "0.4.34",
       "captured": "2026-10-29",
-      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "context": "Recorded public AGES Al\u2082O\u2083/MgO example; historical layout and results.",
       "role": "historical_example"
     },
     "14-start-series": {
       "path": "assets/c1b5c472d1b8351a038a.jpg",
       "application_version": "0.4.34",
       "captured": "2026-10-29",
-      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "context": "Recorded public AGES Al\u2082O\u2083/MgO example; historical layout and results.",
       "role": "historical_example"
     },
     "16-first-results": {
       "path": "assets/ae70aefbbc3075138ab2.jpg",
       "application_version": "0.4.34",
       "captured": "2026-10-29",
-      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "context": "Recorded public AGES Al\u2082O\u2083/MgO example; historical layout and results.",
       "role": "historical_example"
     },
     "30-base-series-complete": {
       "path": "assets/eb7cf8c60c6c54e39c2b.jpg",
       "application_version": "0.4.34",
       "captured": "2026-10-29",
-      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "context": "Recorded public AGES Al\u2082O\u2083/MgO example; historical layout and results.",
       "role": "historical_example"
     },
     "37-original-radar-fit": {
       "path": "assets/03b1328a2f20a2b46f93.jpg",
       "application_version": "0.4.34",
       "captured": "2026-10-29",
-      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "context": "Recorded public AGES Al\u2082O\u2083/MgO example; historical layout and results.",
       "role": "historical_example"
     },
     "36-open-original-scan": {
       "path": "assets/33eb2a9a60ea6dadefd5.jpg",
       "application_version": "0.4.34",
       "captured": "2026-10-29",
-      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "context": "Recorded public AGES Al\u2082O\u2083/MgO example; historical layout and results.",
       "role": "historical_example"
     },
     "34b-relative-lattice-temperature": {
       "path": "assets/cadf7daf3d426236699f.jpg",
       "application_version": "0.4.34",
       "captured": "2026-10-29",
-      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "context": "Recorded public AGES Al\u2082O\u2083/MgO example; historical layout and results.",
       "role": "historical_example"
     },
     "31a-results-axis-controls": {
       "path": "assets/3421960fe7eb051a4f35.jpg",
       "application_version": "0.4.34",
       "captured": "2026-10-29",
-      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "context": "Recorded public AGES Al\u2082O\u2083/MgO example; historical layout and results.",
       "role": "historical_example"
     },
     "31b-fractions-temperature": {
       "path": "assets/7a7f0c52c822fc9314e3.jpg",
       "application_version": "0.4.34",
       "captured": "2026-10-29",
-      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "context": "Recorded public AGES Al\u2082O\u2083/MgO example; historical layout and results.",
       "role": "historical_example"
     },
     "32-lattice-controls": {
       "path": "assets/7962ac75b361c7d4c7a1.jpg",
       "application_version": "0.4.34",
       "captured": "2026-10-29",
-      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "context": "Recorded public AGES Al\u2082O\u2083/MgO example; historical layout and results.",
       "role": "historical_example"
     },
     "33-mgo-lattice-temperature": {
       "path": "assets/88c49d12b25947928d71.jpg",
       "application_version": "0.4.34",
       "captured": "2026-10-29",
-      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "context": "Recorded public AGES Al\u2082O\u2083/MgO example; historical layout and results.",
       "role": "historical_example"
     },
     "34a-multiple-lattice-controls": {
       "path": "assets/ff2125e34a54ca4330be.jpg",
       "application_version": "0.4.34",
       "captured": "2026-10-29",
-      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "context": "Recorded public AGES Al\u2082O\u2083/MgO example; historical layout and results.",
       "role": "historical_example"
     },
     "35-export-observations": {
       "path": "assets/e6266f6779d9029ae886.jpg",
       "application_version": "0.4.34",
       "captured": "2026-10-29",
-      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "context": "Recorded public AGES Al\u2082O\u2083/MgO example; historical layout and results.",
       "role": "historical_example"
     },
     "39-pattern-map-ribbon": {
       "path": "assets/ee3fa8c2fbcccd8fda6e.jpg",
       "application_version": "0.4.34",
       "captured": "2026-10-29",
-      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "context": "Recorded public AGES Al\u2082O\u2083/MgO example; historical layout and results.",
       "role": "historical_example"
     },
     "38-pattern-map-controls": {
       "path": "assets/772c358eb2e4663fbf1f.jpg",
       "application_version": "0.4.34",
       "captured": "2026-10-29",
-      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "context": "Recorded public AGES Al\u2082O\u2083/MgO example; historical layout and results.",
       "role": "historical_example"
     },
     "39b-select-map-scan": {
       "path": "assets/ee3fa8c2fbcccd8fda6e.jpg",
       "application_version": "0.4.34",
       "captured": "2026-10-29",
-      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "context": "Recorded public AGES Al\u2082O\u2083/MgO example; historical layout and results.",
       "role": "historical_example"
     },
     "21-inspect-atoms": {
       "path": "assets/9660db40099ceb7408ee.jpg",
       "application_version": "0.4.34",
       "captured": "2026-10-29",
-      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "context": "Recorded public AGES Al\u2082O\u2083/MgO example; historical layout and results.",
       "role": "historical_example"
     },
     "20-refinement-scope": {
       "path": "assets/4838948c3e07db7167a5.jpg",
       "application_version": "0.4.34",
       "captured": "2026-10-29",
-      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "context": "Recorded public AGES Al\u2082O\u2083/MgO example; historical layout and results.",
       "role": "historical_example"
     },
     "23-review-stages": {
       "path": "assets/3a61c91b59d934b85b8c.jpg",
       "application_version": "0.4.34",
       "captured": "2026-10-29",
-      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "context": "Recorded public AGES Al\u2082O\u2083/MgO example; historical layout and results.",
       "role": "historical_example"
     },
     "22-enter-recipe-request": {
       "path": "assets/bd1a2791739d55199a73.jpg",
       "application_version": "0.4.34",
       "captured": "2026-10-29",
-      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "context": "Recorded public AGES Al\u2082O\u2083/MgO example; historical layout and results.",
       "role": "historical_example"
     },
     "24-review-bound-usage": {
       "path": "assets/9b65aa9d98430c35eea0.jpg",
       "application_version": "0.4.34",
       "captured": "2026-10-29",
-      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "context": "Recorded public AGES Al\u2082O\u2083/MgO example; historical layout and results.",
       "role": "historical_example"
     },
     "24b-model-usage": {
       "path": "assets/b6f9268209b0f23f8751.jpg",
       "application_version": "0.4.34",
       "captured": "2026-10-29",
-      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "context": "Recorded public AGES Al\u2082O\u2083/MgO example; historical layout and results.",
       "role": "historical_example"
     },
     "25-approved-scope": {
       "path": "assets/35806fef83309d390c90.jpg",
       "application_version": "0.4.34",
       "captured": "2026-10-29",
-      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "context": "Recorded public AGES Al\u2082O\u2083/MgO example; historical layout and results.",
       "role": "historical_example"
     },
     "40-refinement-complete": {
       "path": "assets/847a5ad890e915715a5c.jpg",
       "application_version": "0.4.34",
       "captured": "2026-10-29",
-      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "context": "Recorded public AGES Al\u2082O\u2083/MgO example; historical layout and results.",
       "role": "historical_example"
     },
     "26-refinement-queue": {
       "path": "assets/f1a1c0b79d71871cefcc.jpg",
       "application_version": "0.4.34",
       "captured": "2026-10-29",
-      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "context": "Recorded public AGES Al\u2082O\u2083/MgO example; historical layout and results.",
       "role": "historical_example"
     },
     "27-refinement-progress": {
       "path": "assets/673f93e7ae4dfc6e883c.jpg",
       "application_version": "0.4.34",
       "captured": "2026-10-29",
-      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "context": "Recorded public AGES Al\u2082O\u2083/MgO example; historical layout and results.",
       "role": "historical_example"
     },
     "42b-refined-fit-peaks": {
       "path": "assets/8fec7422c39cafe31908.jpg",
       "application_version": "0.4.34",
       "captured": "2026-10-29",
-      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "context": "Recorded public AGES Al\u2082O\u2083/MgO example; historical layout and results.",
       "role": "historical_example"
     },
     "41-select-refinement-stage": {
       "path": "assets/f21dbfb09f5fc3bfe783.jpg",
       "application_version": "0.4.34",
       "captured": "2026-10-29",
-      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "context": "Recorded public AGES Al\u2082O\u2083/MgO example; historical layout and results.",
       "role": "historical_example"
     },
     "42-refined-fit": {
       "path": "assets/50301fe20591e9dde30f.jpg",
       "application_version": "0.4.34",
       "captured": "2026-10-29",
-      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "context": "Recorded public AGES Al\u2082O\u2083/MgO example; historical layout and results.",
       "role": "historical_example"
     },
     "43-parameter-uncertainties": {
       "path": "assets/262d4b796f15a6c0299f.jpg",
       "application_version": "0.4.34",
       "captured": "2026-10-29",
-      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "context": "Recorded public AGES Al\u2082O\u2083/MgO example; historical layout and results.",
       "role": "historical_example"
     },
     "44-refined-temperature-trend": {
       "path": "assets/d8be3b5c767d0f1cf7a3.jpg",
       "application_version": "0.4.34",
       "captured": "2026-10-29",
-      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "context": "Recorded public AGES Al\u2082O\u2083/MgO example; historical layout and results.",
       "role": "historical_example"
     },
     "48-native-gsasii-project": {
       "path": "assets/ae3dff66fd85ca9cdb1f.jpg",
       "application_version": "0.4.34",
       "captured": "2026-10-29",
-      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "context": "Recorded public AGES Al\u2082O\u2083/MgO example; historical layout and results.",
       "role": "historical_example"
     },
     "45-select-download": {
       "path": "assets/e653afeb193ee5c33bc7.jpg",
       "application_version": "0.4.34",
       "captured": "2026-10-29",
-      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "context": "Recorded public AGES Al\u2082O\u2083/MgO example; historical layout and results.",
       "role": "historical_example"
     },
     "46-direct-gsasii-launch": {
       "path": "assets/ab5ba06c85ec5ac4f67a.jpg",
       "application_version": "0.4.34",
       "captured": "2026-10-29",
-      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "context": "Recorded public AGES Al\u2082O\u2083/MgO example; historical layout and results.",
       "role": "historical_example"
     },
     "47-open-hosted-desktop": {
       "path": "assets/0a8a407c05b3b6bbf214.jpg",
       "application_version": "0.4.34",
       "captured": "2026-10-29",
-      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "context": "Recorded public AGES Al\u2082O\u2083/MgO example; historical layout and results.",
       "role": "historical_example"
     },
     "49-returned-gsasii-output": {
       "path": "assets/90ef7a0752d39f08b0da.jpg",
       "application_version": "0.4.34",
       "captured": "2026-10-29",
-      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "context": "Recorded public AGES Al\u2082O\u2083/MgO example; historical layout and results.",
       "role": "historical_example"
     },
     "51-end-session-dialog": {
       "path": "assets/2e140c949aec17afc529.jpg",
       "application_version": "0.4.34",
       "captured": "2026-10-29",
-      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "context": "Recorded public AGES Al\u2082O\u2083/MgO example; historical layout and results.",
       "role": "historical_example"
     },
     "50-pause-finite-replay": {
       "path": "assets/a532e7184c4ba042a0a4.jpg",
       "application_version": "0.4.34",
       "captured": "2026-10-29",
-      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "context": "Recorded public AGES Al\u2082O\u2083/MgO example; historical layout and results.",
       "role": "historical_example"
     },
     "52-clear-workspace-dialog": {
       "path": "assets/bbb9dd957a1265ebb5cb.jpg",
       "application_version": "0.4.34",
       "captured": "2026-10-29",
-      "context": "Recorded public AGES Al₂O₃/MgO example; historical layout and results.",
+      "context": "Recorded public AGES Al\u2082O\u2083/MgO example; historical layout and results.",
       "role": "historical_example"
     },
     "launch-031": {
@@ -497,7 +497,7 @@
     "assets/ff2125e34a54ca4330be.jpg": "ff2125e34a54ca4330be10216af2b81c44e4bc4ed2ed09fe7ef801d7bc53795d",
     "guide.css": "5c42c1e1efb87a99c78d01e726a5856492245faff6eae738f116da679777ce1a",
     "guide.js": "4ab14ce0c86f67a2d8b3f8cbe29a2f49e62ca1e03bd6d1bcd9aba264c118930e",
-    "index.html": "b86e2741116a61386aa9cdcbc2d46604802eb2d8ea3f5a41d1355862a80b7f27",
+    "index.html": "4744ed628532be2730d43b08c945d02989d1a03ca5d0880a28ffb7d231050ac2",
     "inputs/ages-analysis-settings.yaml": "fbbff1d875b7b38f963c7edfe55ef019bdc01acc5e649c2918b3ae8e428656fc",
     "inputs/approved-refinement-recipe.json": "4e8e9d6365a47df527566ad20caaa4eb3a53b87e6d34bd7360ff0aeca94855fd",
     "inputs/llm-refinement-request.txt": "8bb6e275e5e675c32442279b246b1eaf38632fd6689b07133ce2c06139291283",
