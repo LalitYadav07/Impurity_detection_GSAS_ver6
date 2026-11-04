@@ -57,6 +57,8 @@ def build_plan(context,catalog,root,settings):
     if kind=='magnetic' and 'moment_model' in settings:policy['moment_model']=settings['moment_model']
     for key in ('magnetic_optimizer','optimizer_iterations'):
         if key in settings:policy[key]=settings[key]
+    if policy.get('magnetic_optimizer')=='profiled_quadratic':
+        policy['grouped_surrogate']=True
     if kind=='magnetic':
         policy['refine_histogram_scale']=settings.get('refine_histogram_scale',False)
         policy['refine_background']=settings.get('refine_background',False)

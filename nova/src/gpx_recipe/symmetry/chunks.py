@@ -10,6 +10,7 @@ import subprocess
 import sys
 import threading
 import time
+import os
 
 from ..execution import write_json
 from ..jobs import scientific_environment
@@ -76,6 +77,43 @@ def run_trial(directory, *, cancel):
     return row
 
 
+def run_profiled_group(directories,*,cancel,timeout):
+    """One isolated native process for a model, not one for every seed."""
+    from .grouped_worker import SCHEMA
+    owner=Path(directories[0]);request=owner/'group-request.json'
+    write_json(request,dict(schema=SCHEMA,directories=[str(p) for p in directories]))
+    env=scientific_environment()
+    adapters=str(Path(__file__).parent/'adapters')
+    env['PYTHONPATH']=os.pathsep.join(filter(None,[adapters,env.get('PYTHONPATH')]))
+    process=None;interrupted=False
+    with (owner/'group-worker.log').open('w') as log:
+        try:
+            process=run_scientific([sys.executable,'-m','gpx_recipe.symmetry.grouped_worker',str(request)],
+                timeout=timeout,cancel_event=cancel,cwd=owner,env=env,stdout=log,stderr=subprocess.STDOUT)
+        except (ScientificCancelled,subprocess.TimeoutExpired):
+            interrupted=True  # uncommitted starts remain pending for explicit recovery
+    rows=[];pending=[]
+    for directory in directories:
+        job=json.loads((directory/'job.json').read_text())
+        if not (directory/'result.json').exists():
+            if not interrupted and process is not None and process.returncode:
+                write_json(directory/'result.json',dict(schema='radar-symmetry-trial/v1',
+                    id=job['id'],protocol_sha256=job['protocol_sha256'],status='technical_failure',
+                    reason='Grouped native worker exited without a terminal receipt; inspect its shared worker log',llm_calls=0))
+            else:
+                pending.append(job['id']);continue
+        result=verify_receipt(directory,dict(id=job['id'],protocol_sha256=job['protocol_sha256']))
+        row=dict(id=job['id'],state='finished',status=result['status'],rwp=result.get('rwp'),
+            wall_seconds=result.get('resources',{}).get('wall_seconds',0.),
+            screening_only=result.get('screening_only',False))
+        proof=directory/'results/optimizer-receipt.json'
+        if proof.exists():
+            identity=json.loads(proof.read_text())['objective_identity']
+            row['profiled_setup']=dict(cache_hit=identity['cache_hit'],seconds=identity['seconds'])
+        rows.append(row)
+    return rows,pending
+
+
 def execute_chunk(request, input_root, directory, *, cancel=None, runner=run_trial, clock=time.monotonic, environ=None):
     protocol,expected=validate_request(request)
     budget=allocation(request['workers'],environ=environ)
@@ -98,6 +136,44 @@ def execute_chunk(request, input_root, directory, *, cancel=None, runner=run_tri
         compile_shared_job(protocol,directory/'trials'/key,candidate_id=candidate,seed_id=seed,approved_hash=digest(protocol))
     started=clock();deadline=started+request['seconds']
     write_json(directory/'progress.json',dict(completed=0,total=len(remaining),active=0,pending=len(remaining)))
+    if protocol.get('policy',{}).get('grouped_surrogate'):
+        groups={}
+        for key in remaining:groups.setdefault(expected[key][0],[]).append(directory/'trials'/key)
+        pending_groups=list(groups.values());remaining=[];active={}
+        group_workers=min(budget['workers'],len(pending_groups))
+        with ThreadPoolExecutor(max_workers=group_workers) as pool:
+            while pending_groups or active:
+                while pending_groups and len(active)<group_workers and clock()<deadline and not cancel.is_set():
+                    paths=pending_groups.pop(0)
+                    active[pool.submit(run_profiled_group,paths,cancel=cancel,
+                        timeout=max(1.,deadline-clock()))]=paths
+                if not active:break
+                ready,_=wait(active,timeout=.1,return_when=FIRST_COMPLETED)
+                for future in ready:
+                    paths=active.pop(future)
+                    try:
+                        completed,unfinished=future.result()
+                    except Exception as exc:
+                        # Keep the other independent models running and retain
+                        # each failed group's exact IDs for explicit recovery.
+                        completed=[dict(id=path.name,state='needs_recovery',
+                            reason=type(exc).__name__+': '+str(exc)) for path in paths]
+                        unfinished=[]
+                    done.extend(completed);remaining.extend(unfinished)
+                queued=sum(len(paths) for paths in pending_groups)
+                write_json(directory/'progress.json',dict(completed=len(done),total=len(request['trials']),
+                    active=sum(len(paths) for paths in active.values()),pending=len(remaining)+queued,
+                    active_models=len(active),pending_models=len(pending_groups)))
+        remaining.extend(path.name for paths in pending_groups for path in paths)
+        reported_allocation=dict(budget,concurrent_model_workers=group_workers,
+            starts_per_native_process='complete model portfolio')
+        response=dict(schema='radar-model-chunk-result/v1',dispatch_key=request['dispatch_key'],
+            protocol_sha256=digest(protocol),trials=done,pending=remaining,cancelled=[],
+            allocation=reported_allocation,wall_seconds=clock()-started,llm_calls=0,grouped_surrogate=True)
+        response['profiled_cache']=export(protocol,expected,done,captured,directory)
+        response['discarded_cache_candidates']=cache_discarded
+        write_json(directory/'response.json',response)
+        return response
     with ThreadPoolExecutor(max_workers=budget['workers']) as pool:
         while remaining or active:
             while remaining and len(active)<budget['workers'] and clock()<deadline and not cancel.is_set():

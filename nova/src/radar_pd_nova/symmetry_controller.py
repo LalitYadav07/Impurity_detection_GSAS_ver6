@@ -61,7 +61,7 @@ class SymmetryMixin(KSearchMixin):
             sx_overview=plots.empty('Open a campaign to inspect its coverage'),sx_fit=plots.empty('Select an audited checkpoint'),sx_fit_title='',sx_expanded_title='',sx_source_notices=[],sx_source_display_notices=[],sx_axis='d',sx_reset=0,sx_pins=[],sx_pin_options=[],sx_parameters=[],sx_parent_moments=[],sx_parent_moment_note='',sx_details=[],sx_fit_diagnostics=[],sx_moment_note='',sx_embedding_evidence=[],sx_embedding_summary='',sx_gsas_model='',sx_intensity_scale='linear',
             sx_parent_axis='c',sx_parent='',sx_parents=[],sx_histogram='',sx_histograms=[],sx_k='',sx_sites=[],sx_site_options=[],sx_form_factors='',sx_lande='',sx_directions=['x','y','z'],sx_adequate=None,sx_max_moment='',sx_cycles=20,sx_slots=4,sx_moment_model='symmetry_allowed',sx_refine_scale=False,sx_refine_background=False,
             sx_kind='magnetic',sx_magnetic_optimizer='profiled_quadratic',sx_optimizer_iterations=120,sx_mag_d_min=0.,sx_max_mode=.5,sx_start_mode=.1,sx_candidate_options=[],sx_candidates=[],sx_mode_options=[],sx_modes=[],sx_discovered=False,sx_discovery_scope='',
-            sx_plan_ready=False,sx_approved=False,sx_plan_summary='',sx_plan_candidates=[],sx_setup=False,sx_expanded=False,sx_expanded_layout={},sx_has_context=False,sx_has_gpx=False,sx_has_receipt=False,sx_resumable=False,
+            sx_plan_ready=False,sx_approved=False,sx_plan_summary='',sx_plan_candidates=[],sx_setup=False,sx_expanded=False,sx_expanded_layout={},sx_has_context=False,sx_has_gpx=False,sx_has_receipt=False,sx_resumable=False,sx_native_reference='',
             sx_request='',sx_planning_summary='',sx_planning_notes=[],sx_planning_usage='',sx_planning_cost='',sx_has_setup_details=False,sx_sign_starts=True,sx_coverage=[],sx_group_limit=12,sx_result_scope='experiment',sx_start_source='',sx_start_sources=[],sx_results_current=False,sx_scope_progress='')
         for key,value in defaults.items():setattr(s,key,value)
         extra=dict(sx_existing='selected',sx_selected_scans=[],sx_selectable_scans=[],sx_follow_new=False,sx_max_scans=200,sx_enrollments=[],sx_priority_acquisition='',sx_priority_options=[],sx_priority_notice='',sx_retry_acquisition='',sx_retry_options=[],sx_retry_notice='',sx_following=False,sx_campaign_running=False,sx_pause_pending=False,sx_parallel_jobs=4,
@@ -384,7 +384,10 @@ class SymmetryMixin(KSearchMixin):
                         else:
                             await asyncio.to_thread(campaign.recover,recovery)
                 allocated=campaign.setting('allocation')
-                if allocated:backend+=f" · last chunk: {allocated['workers']} native workers · {allocated.get('memory_mb') or 'unreported'} MiB memory"
+                if allocated:
+                    workers=allocated.get('concurrent_model_workers',allocated['workers'])
+                    label='model workers' if 'concurrent_model_workers' in allocated else 'native workers'
+                    backend+=f" · last job: {workers} {label} · {allocated.get('memory_mb') or 'unreported'} MiB memory"
                 s.sx_backend=backend
                 current_transport=self._symmetry_transport(campaign) if remote else None
                 s.sx_batches=batch_rows(getattr(current_transport,'state',{}).get('chunks',{})) if current_transport else []
@@ -419,7 +422,13 @@ class SymmetryMixin(KSearchMixin):
                 counts=Counter(r['status'] for r in rows)
                 current=sum(r['execution_state']=='terminal' for r in rows)
                 s.sx_progress=f'{current} / {len(rows)} terminal receipts in this view · '+', '.join(f'{n} {display_status(k)}' for k,n in sorted(counts.items()))
-                if s.sx_result_scope=='experiment':s.sx_progress+=f' · whole campaign verified receipts: {sum(v["received_count"] for v in summaries)} / {sum(v["declared_count"] for v in summaries)}'
+                if any(r.get('grouped_surrogate') for r in rows):
+                    native=sum(bool(r.get('native_verified')) for r in rows)
+                    equivalent=sum(r['status']=='profile_equivalent' for r in rows)
+                    s.sx_progress=f'{current} / {len(rows)} starts processed · {native} native-verified representative fits · {equivalent} equivalent screened starts'
+                if s.sx_result_scope=='experiment':
+                    label='recorded outcomes' if any(r.get('grouped_surrogate') for r in rows) else 'verified receipts'
+                    s.sx_progress+=f' · whole campaign {label}: {sum(v["received_count"] for v in summaries)} / {sum(v["declared_count"] for v in summaries)}'
                 if rows:s.sx_message='Audited fits remain hypotheses. Matching calculated curves do not establish a unique space group.'
                 elif s.sx_enrollments:
                     pending=sum(e['status'] in {'queued','preparing'} for e in s.sx_enrollments)
@@ -524,6 +533,7 @@ class SymmetryMixin(KSearchMixin):
         s.sx_fit_title=fit_caption(row)
         s.sx_expanded_title=s.sx_fit_title
         s.sx_source_notices=[];s.sx_source_display_notices=[]
+        s.sx_native_reference=(row or {}).get('native_reference','')
         if len(s.sx_pins)>2:s.sx_pins=s.sx_pins[-2:]
         pins=[r for r in self._symmetry_rows if r['id'] in s.sx_pins]
         try:
@@ -552,7 +562,9 @@ class SymmetryMixin(KSearchMixin):
                 if isinstance(usage.get('wall_seconds'),(int,float)):
                     detail=f"{usage['wall_seconds']:.2f} s native wall time"
                     if isinstance(usage.get('cpu_seconds'),(int,float)):detail+=f" · {usage['cpu_seconds']:.2f} s CPU"
-                    if isinstance(usage.get('peak_rss_bytes'),(int,float)):detail+=f" · {usage['peak_rss_bytes']/1024**2:.0f} MiB peak RAM"
+                    if isinstance(usage.get('peak_rss_bytes'),(int,float)):
+                        scope='shared worker peak RAM' if usage.get('peak_rss_scope')=='shared_group_worker' else 'peak RAM'
+                        detail+=f" · {usage['peak_rss_bytes']/1024**2:.0f} MiB {scope}"
                     s.sx_details.append(dict(label='Measured resources',value=detail+' · excludes Galaxy queue and transfer'))
                 if row.get('sites'):s.sx_details.append(dict(label='Magnetic sites',value='; '.join(site['label']+'='+site['form_factor']+' (g='+str(site['lande_g'])+')' for site in row['sites'])))
                 if row.get('baseline_rwp') is not None and row.get('rwp') is not None:
@@ -566,6 +578,13 @@ class SymmetryMixin(KSearchMixin):
         except Exception as exc:s.sx_error=str(exc)
 
     def symmetry_reset_zoom(self):self.server.state.sx_reset+=1
+
+    def open_symmetry_representative(self):
+        uid=getattr(self.server.state,'sx_native_reference','')
+        if uid and any(row['id']==uid for row in self._symmetry_rows):
+            self._symmetry_explicit_selection=True
+            self.server.state.sx_selected=uid
+            self._symmetry_plot_changed()
 
     def download_symmetry_artifact(self,kind):
         s=self.server.state

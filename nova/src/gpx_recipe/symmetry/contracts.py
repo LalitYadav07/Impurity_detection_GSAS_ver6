@@ -104,10 +104,15 @@ def policy(value):
     if isinstance(value,dict) and 'magnetic_d_min' in value:defaults['magnetic_d_min']=None
     if isinstance(value,dict) and 'magnetic_optimizer' in value:defaults['magnetic_optimizer']=None
     if isinstance(value,dict) and 'optimizer_iterations' in value:defaults['optimizer_iterations']=None
+    if isinstance(value,dict) and 'grouped_surrogate' in value:defaults['grouped_surrogate']=False
     p=fields(value,['cycles','timeout_seconds','maximum_trials','maximum_cell_multiplier','maximum_moment','fit_band_percent','maximum_mode','adequate_rwp_percent'],defaults)
     if 'moment_model' in p:p['moment_model']=choices(p['moment_model'],['collinear','symmetry_allowed'])
     if 'magnetic_d_min' in p:p['magnetic_d_min']=number(p['magnetic_d_min'],0,10)
     validate_optimizer(p)
+    if 'grouped_surrogate' in p:
+        p['grouped_surrogate']=boolean(p['grouped_surrogate'])
+        if p['grouped_surrogate'] and p.get('magnetic_optimizer')!='profiled_quadratic':
+            raise ValueError('Grouped surrogate execution requires the full-basis profiled optimizer')
     for k,lo,hi in [('cycles',1,100),('timeout_seconds',1,3600),('maximum_trials',1,2000),('maximum_cell_multiplier',1,64)]:p[k]=number(p[k],lo,hi,integer=True)
     for k,hi in [('maximum_moment',20),('maximum_mode',2),('adequate_rwp_percent',100),('maximum_cell_relative_change',.1),('maximum_angle_change_degrees',10)]:p[k]=number(p[k],0,hi,positive=True)
     p['fit_band_percent']=number(p['fit_band_percent'],0,10);p['site_policy']=choices(p['site_policy'],['all','any'])

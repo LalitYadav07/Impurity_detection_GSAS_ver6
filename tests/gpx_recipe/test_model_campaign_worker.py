@@ -162,6 +162,63 @@ def test_soft_deadline_and_cancel_keep_unstarted_work_pending(model,tmp_path,mon
     assert not result['trials'] and len(result['pending'])==8
 
 
+def grouped_protocol(source,p,count=2):
+    p=copy.deepcopy(p)
+    p['policy'].update(moment_model='symmetry_allowed',magnetic_optimizer='profiled_quadratic',
+        optimizer_iterations=120,grouped_surrogate=True,maximum_trials=8*count)
+    p['candidates']=[dict(p['candidates'][0],id='model-'+str(i)) for i in range(count)]
+    catalog_path=source/p['catalog']['path']
+    catalog=json.loads(catalog_path.read_text());catalog['candidates']=p['candidates']
+    catalog_path.write_text(json.dumps(catalog));p['catalog']['sha256']=file_sha(catalog_path)
+    return validate_protocol(p)
+
+
+def test_group_completion_is_reported_without_waiting_for_the_first_model(model,tmp_path,monkeypatch):
+    source,p=model;p=grouped_protocol(source,p);release_first=threading.Event()
+    monkeypatch.setattr(chunks,'allocation',lambda *a,**k:dict(workers=4,blas_threads=1))
+    original_write=chunks.write_json
+    def write(path,value):
+        original_write(path,value)
+        if path.name=='progress.json' and value.get('completed')==8:release_first.set()
+    monkeypatch.setattr(chunks,'write_json',write)
+    def runner(paths,**kwargs):
+        job=json.loads((paths[0]/'job.json').read_text())
+        if job['candidate_id']=='model-0':
+            assert release_first.wait(2),'The finished second model was hidden behind the first'
+        return [dict(id=path.name,state='finished',status='technical_failure') for path in paths],[]
+    monkeypatch.setattr(chunks,'run_profiled_group',runner)
+    result=chunks.execute_chunk(request(p),source,tmp_path/'grouped')
+    by_id={trial_id(p,c['id'],s['id']):c['id'] for c,s in iter_trials(p)}
+    assert by_id[result['trials'][0]['id']]=='model-1'
+    assert len(result['trials'])==16 and not result['pending']
+    assert result['allocation']['concurrent_model_workers']==2
+
+
+def test_group_cancel_keeps_other_models_pending_and_does_not_launch_them(model,tmp_path,monkeypatch):
+    source,p=model;p=grouped_protocol(source,p,3);cancel=threading.Event();calls=[]
+    monkeypatch.setattr(chunks,'allocation',lambda *a,**k:dict(workers=1))
+    def runner(paths,**kwargs):
+        calls.append(paths);cancel.set()
+        return [dict(id=path.name,state='finished',status='site_incompatible') for path in paths],[]
+    monkeypatch.setattr(chunks,'run_profiled_group',runner)
+    result=chunks.execute_chunk(request(p),source,tmp_path/'group-cancel',cancel=cancel)
+    assert len(calls)==1 and len(result['trials'])==8 and len(result['pending'])==16
+    assert set(result['pending'])|{r['id'] for r in result['trials']}==set(request(p)['trials'])
+
+
+def test_one_broken_group_does_not_drop_other_models(model,tmp_path,monkeypatch):
+    source,p=model;p=grouped_protocol(source,p)
+    monkeypatch.setattr(chunks,'allocation',lambda *a,**k:dict(workers=2))
+    def runner(paths,**kwargs):
+        if json.loads((paths[0]/'job.json').read_text())['candidate_id']=='model-0':
+            raise RuntimeError('corrupt output archive')
+        return [dict(id=path.name,state='finished',status='site_incompatible') for path in paths],[]
+    monkeypatch.setattr(chunks,'run_profiled_group',runner)
+    result=chunks.execute_chunk(request(p),source,tmp_path/'group-failure')
+    assert len(result['trials'])==16 and not result['pending']
+    assert sum(r['state']=='needs_recovery' for r in result['trials'])==8
+
+
 @pytest.mark.parametrize('mutate',[
     lambda r:r.update(protocol_sha256='0'*64),lambda r:r['trials'].append(r['trials'][0]),
     lambda r:r['trials'].append('0'*24),lambda r:r.update(seconds=True),

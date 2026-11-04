@@ -649,7 +649,8 @@ class GalaxyChunkTransport:
             packet=self.runtime.packet(input_root,['protocol.json']+[a['path'] for a in assets(protocol)],source_sha256=protocol['source']['sha256'])
             with self._state_lock:self.state['inputs'][sha]=packet
         request=dict(schema='radar-model-chunk/v1',protocol=protocol,protocol_sha256=sha,trials=ids,
-            workers=workers,dispatch_key=key,seconds=240)
+            workers=workers,dispatch_key=key,
+            seconds=1800 if protocol.get('policy',{}).get('grouped_surrogate') else 240)
         asset_id=self.state['inputs'][sha]
         if protocol.get('policy',{}).get('magnetic_optimizer')=='profiled_quadratic':
             # Every batch of this exact protocol can share one immutable input
@@ -779,6 +780,7 @@ class GalaxyChunkTransport:
                 if response.get('profiled_cache'):
                     protocol=json.loads((self.campaign.root/'inputs'/chunk['protocol']/'protocol.json').read_text())
                     self._collect_profiled_cache(protocol,received,response,dispatch)
+                commits=[]
                 for uid,row in terminal.items():
                     if row['state']=='finished':
                         source=received/'trials'/uid;target=self.campaign.root/'trials'/uid
@@ -786,9 +788,12 @@ class GalaxyChunkTransport:
                             if p.is_file() and p.name!='result.json':
                                 relative=str(p.relative_to(source));destination=confined(target,relative,exists=False)
                                 destination.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(p,destination)
-                        # A receipt is the atomic commit marker, after all of its artifacts.
-                        temporary=target/('.result-'+uuid.uuid4().hex+'.partial')
-                        shutil.copyfile(source/'result.json',temporary);temporary.replace(target/'result.json')
+                        commits.append((source,target,json.loads((source/'result.json').read_text()).get('status')))
+                # Shared kernels and native representatives must exist before
+                # any equivalent-start receipt becomes visible to readers.
+                for source,target,status in sorted(commits,key=lambda item:item[2]=='profile_equivalent'):
+                    temporary=target/('.result-'+uuid.uuid4().hex+'.partial')
+                    shutil.copyfile(source/'result.json',temporary);temporary.replace(target/'result.json')
                 from .model_batch_budget import output_measurements
                 measurements=output_measurements(received,set(chunk['members']))
                 with self._state_lock:chunk.update(complete=True,result=response,output_measurements=measurements);self.save()

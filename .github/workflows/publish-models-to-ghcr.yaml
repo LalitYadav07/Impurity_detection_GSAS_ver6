@@ -80,6 +80,7 @@ jobs:
             /validation/tests/gpx_recipe/test_profiled_cache_transport.py \
             /validation/tests/gpx_recipe/test_native_forward.py \
             /validation/tests/gpx_recipe/test_profiled_magnetic.py \
+            /validation/tests/gpx_recipe/test_grouped_profile_receipts.py \
             /validation/tests/gpx_recipe/test_profiled_optimizer_contract.py \
             /validation/tests/gpx_recipe/test_profiled_solver_native.py'
       - name: Publish verified immutable image

@@ -18,7 +18,8 @@ def selected_optimizer_settings(kind, optimizer, iterations):
 
 def optimizer_budget_label(policy):
     if policy.get('magnetic_optimizer') == 'profiled_quadratic':
-        return (f"Up to {policy['optimizer_iterations']} profiled optimizer iterations per start. "
+        grouped=('One checked surrogate per model; all starts are screened together, then distinct calculated profiles are verified natively. ' if policy.get('grouped_surrogate') else '')
+        return (grouped+f"Up to {policy['optimizer_iterations']} profiled optimizer iterations per start. "
                 "GSAS-II evaluates the diffraction model; the profiled solver has its own convergence checks.")
     label = f"Up to {policy['cycles']} refinement cycles per start."
     if policy['cycles'] == 1:

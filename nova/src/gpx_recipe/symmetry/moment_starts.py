@@ -4,6 +4,39 @@ import hashlib
 import numpy as np
 
 
+def site_moment_start(ids, coefficients, basis_ids, refined_axes, *, magnitude,
+                      axis, direction, site_sign, symmetry_allowed,
+                      independent_seed=None, orbit=None, metric=None):
+    """Construct the same initial site moment for native and grouped workers."""
+    indices = {'x': 0, 'y': 1, 'z': 2}
+    initial = np.array([magnitude if name == axis else 0. for name in 'xyz'])
+    moment = np.zeros(3, dtype=float)
+    for basis_id in sorted(basis_ids):
+        group = [i for i, value in enumerate(ids) if int(value) == basis_id]
+        requested = [i for i in group if 'xyz'[i] in refined_axes]
+        pivot = requested[0] if requested else group[0]
+        coefficient = float(coefficients[pivot])
+        if abs(coefficient) < 1e-12:
+            raise ValueError('GSAS-II returned a zero magnetic-basis coefficient')
+        amplitude = float(initial[pivot])
+        if symmetry_allowed and abs(amplitude) < 1e-8:
+            amplitude = float(magnitude)*.02
+        if direction is not None:
+            component = float(direction[pivot])
+            if abs(component) < 1e-8:
+                component = .02
+            amplitude = float(np.linalg.norm(initial))*component
+        for i in group:
+            moment[i] = amplitude*float(coefficients[i])/coefficient
+    if not any(abs(moment[indices[name]]) >= 1e-8 for name in refined_axes):
+        raise ValueError('A refined magnetic component would start at zero')
+    moment *= site_sign
+    if symmetry_allowed and independent_seed is not None:
+        moment = independent_orbit_start(ids, coefficients, moment, metric,
+            magnitude=magnitude, seed=independent_seed, orbit=orbit)
+    return moment
+
+
 def independent_orbit_start(ids, coefficients, current, metric, *, magnitude, seed, orbit):
     """Break accidental equal-orbit starts without changing any allowed DOF.
 

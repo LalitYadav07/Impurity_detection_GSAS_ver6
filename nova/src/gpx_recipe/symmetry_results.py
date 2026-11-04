@@ -11,6 +11,7 @@ import math
 TERMINAL = {'valid', 'physical_rejection', 'site_incompatible', 'optimization_unresolved',
             'technical_failure', 'deferred', 'inadequate_fit', 'integrity_failure',
             'runtime_incompatible', 'unsupported', 'effect_mismatch', 'timed_out'}
+TERMINAL.add('profile_equivalent')
 
 
 def summarize_portfolio(expected_trial_ids, results, *, fit_band_percent):

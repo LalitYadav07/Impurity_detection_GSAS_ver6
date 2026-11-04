@@ -106,3 +106,67 @@ def test_zero_gradient_at_zero_moment_is_not_mistaken_for_a_minimum():
     fit=model.fit(np.zeros(3))
     assert not fit.success
     assert fit.local_descent_found
+
+
+def test_group_search_keeps_all_starts_and_time_reversed_parameter_solutions():
+    from gpx_recipe.symmetry.profiled_groups import screen_group
+    model, truth, _, _ = fixture_model(dimension=2)
+    starts = [(f'start-{i}', truth*(.4+i/150)*(-1 if i%2 else 1)) for i in range(96)]
+    events=[]
+    report, fits=screen_group(model, starts, max_iterations=120, on_progress=events.append)
+    assert report['declared_ids']==[uid for uid,_ in starts]
+    assert len(report['records'])==len(fits)==96
+    assert not report['pending']
+    assert events[-1]['completed']==96
+    assert all(not row['native_verified'] and not row['uncertainty_available'] for row in report['records'])
+    assert all(fit.weighted_cost<1e-8 for fit in fits.values())
+    # Grouping does not discard opposite moment directions or choose a
+    # physical structure from indistinguishable powder patterns.
+    assert fits['start-0'].coefficients @ fits['start-1'].coefficients < 0
+    assert sorted(uid for group in report['groups'] for uid in group['members'])==sorted(fits)
+
+
+def test_profile_grouping_does_not_merge_equal_rwp_different_peak_patterns():
+    from gpx_recipe.symmetry.profiled_groups import same_profile
+    a=np.array([1.,0.,0.,0.]);b=np.array([0.,0.,0.,1.])
+    assert a@a==b@b
+    assert not same_profile(a,b)
+    assert same_profile(a,a+1e-12)
+    assert not same_profile(a,np.array([1.,0.]))
+    assert not same_profile(a,np.array([np.nan,0.,0.,0.]))
+
+
+def test_group_cancellation_preserves_unstarted_ids_without_fake_failures():
+    from gpx_recipe.symmetry.profiled_groups import screen_group
+    model,truth,*_=fixture_model(dimension=1)
+    events=[]
+    starts=[(str(i),truth*.7) for i in range(8)]
+    report,fits=screen_group(model,starts,max_iterations=120,on_progress=events.append,
+        cancelled=lambda:len(events)>=2)
+    assert [r['id'] for r in report['records']]==['0','1']
+    assert report['pending']==[str(i) for i in range(2,8)]
+    assert set(fits)=={'0','1'}
+
+
+def test_group_failed_start_does_not_hide_other_solutions():
+    from gpx_recipe.symmetry.profiled_groups import screen_group
+    model,truth,*_=fixture_model(dimension=2)
+    report,fits=screen_group(model,[('zero',np.zeros(2)),('good',truth*.7)],max_iterations=120)
+    assert len(report['records'])==2
+    assert not report['records'][0]['optimizer_qualified']
+    assert report['records'][1]['optimizer_qualified']
+    assert [g['members'] for g in report['groups']]==[['good']]
+    assert 'zero' in fits
+
+
+def test_native_reassessment_recomputes_screened_cost_and_rejects_false_minimum():
+    from dataclasses import replace
+    model,truth,*_=fixture_model(dimension=2)
+    fit=model.fit(truth*.7)
+    audited=model.reassess(replace(fit,weighted_cost=-1.,scaled_stationarity_norm=0.))
+    assert audited.success
+    assert audited.weighted_cost>=0
+    assert audited.weighted_cost==pytest.approx(fit.weighted_cost,abs=1e-10)
+    fake=model.reassess(replace(fit,coefficients=np.zeros(2),success=True,
+        scaled_stationarity_norm=0.,local_descent_found=False))
+    assert not fake.success and fake.local_descent_found

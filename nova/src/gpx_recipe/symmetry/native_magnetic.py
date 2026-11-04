@@ -158,8 +158,8 @@ def audit_target_peak_windows(histogram, baseline, half_width=12):
         weighted_residual_improvement=sum(row['weighted_residual_improvement']*max(row['baseline_weighted_absolute_residual'],1e-12) for row in rows)/residual_weight if rows else None,
         peaks=rows)
 
-def run(source_gpx,ctx,protocol,candidate_record,seed):
-    return _run(source_gpx,ctx,protocol,candidate_record,seed,forward_only=False)
+def run(source_gpx,ctx,protocol,candidate_record,seed,*,screened=None):
+    return _run(source_gpx,ctx,protocol,candidate_record,seed,forward_only=False,screened=screened)
 
 
 def simulate(source_gpx,ctx,protocol,candidate_record,seed):
@@ -167,7 +167,15 @@ def simulate(source_gpx,ctx,protocol,candidate_record,seed):
     return _run(source_gpx,ctx,protocol,candidate_record,seed,forward_only=True)
 
 
-def _run(source_gpx,ctx,protocol,candidate_record,seed,*,forward_only):
+def prepare(source_gpx,ctx,protocol,candidate_record,seed):
+    """Construct one checked fixed-geometry model without fitting a start."""
+    if (protocol['policy'].get('magnetic_optimizer')!='profiled_quadratic' or
+            protocol['policy'].get('moment_model')!='symmetry_allowed'):
+        raise ValueError('Grouped preparation requires the full-basis profiled optimizer')
+    return _run(source_gpx,ctx,protocol,candidate_record,seed,forward_only=False,prepare_only=True)
+
+
+def _run(source_gpx,ctx,protocol,candidate_record,seed,*,forward_only,prepare_only=False,screened=None):
     from pathlib import Path
     import copy,hashlib,math,re,time
     stage_started=time.monotonic()
@@ -399,6 +407,7 @@ def _run(source_gpx,ctx,protocol,candidate_record,seed,*,forward_only):
     kept_codes = []
     kept_parent_indices = []
     moment_audit = []
+    seed_sites = []
     omitted_magnetic_sites = []
     component_index = {'x': 0, 'y': 1, 'z': 2}
     component_var = {'x': 'AMx', 'y': 'AMy', 'z': 'AMz'}
@@ -448,36 +457,15 @@ def _run(source_gpx,ctx,protocol,candidate_record,seed,*,forward_only):
         if not refined:
             omitted_magnetic_sites.append({'label': atom[ct - 1], 'element': element, 'reason': 'candidate symmetry forbids the requested moment orientation', 'allowed_components': sorted(allowed)})
             continue
-        moment = np.zeros(3, dtype=float)
-        for basis_id in sorted(requested_basis_ids):
-            group = [index for index, value in enumerate(allowed_ids) if int(value) == basis_id]
-            requested_group = [index for index in group if ('x', 'y', 'z')[index] in candidate_refine_components]
-            seed_index = requested_group[0] if requested_group else group[0]
-            seed_coefficient = float(allowed_coefficients[seed_index])
-            if abs(seed_coefficient) < 1e-12:
-                raise ValueError('GSAS-II returned a zero magnetic-basis coefficient')
-            seed_amplitude = float(initial_moment[seed_index])
-            if symmetry_allowed and abs(seed_amplitude)<1e-8:
-                # A zero moment component has zero intensity derivative. Seed
-                # every independent allowed basis, without releasing forbidden
-                # components or imposing a direction on the final structure.
-                seed_amplitude = float(seed['magnitude'])*.02
-            if candidate_seed_moment_direction is not None:
-                direction_coefficient = float(candidate_seed_moment_direction[seed_index])
-                if abs(direction_coefficient) < 1e-08:
-                    direction_coefficient = 0.02
-                seed_amplitude = float(np.linalg.norm(initial_moment)) * direction_coefficient
-            for index in group:
-                moment[index] = seed_amplitude * float(allowed_coefficients[index]) / seed_coefficient
-        if not any((abs(moment[component_index[axis]]) >= 1e-08 for axis in refined)):
-            raise ValueError('A refined magnetic component would start at zero')
-        moment *= seed.get('site_signs',{}).get(parent_label,1)
-        if symmetry_allowed and 'independent_mode_seed' in seed:
-            from .moment_starts import independent_orbit_start
-            cell=new_phase['General']['Cell'][1:7]
-            axes=G2lat.cell2AB(cell)[0] @ np.diag(1/np.asarray(cell[:3]))
-            moment=independent_orbit_start(allowed_ids,allowed_coefficients,moment,axes.T @ axes,
-                magnitude=seed['magnitude'],seed=seed['independent_mode_seed'],orbit=str(code))
+        from .moment_starts import site_moment_start
+        cell=new_phase['General']['Cell'][1:7]
+        axes=G2lat.cell2AB(cell)[0] @ np.diag(1/np.asarray(cell[:3]))
+        moment=site_moment_start(allowed_ids,allowed_coefficients,requested_basis_ids,
+            candidate_refine_components,magnitude=seed['magnitude'],axis=seed['axis'],
+            direction=candidate_seed_moment_direction,
+            site_sign=seed.get('site_signs',{}).get(parent_label,1),
+            symmetry_allowed=symmetry_allowed,independent_seed=seed.get('independent_mode_seed'),
+            orbit=str(code),metric=axes.T @ axes)
         atom[cx + 4:cx + 7] = list(moment)
         for axis in {'x', 'y', 'z'} - refined:
             hold_specs.append((component_var[axis], atom[-1]))
@@ -485,6 +473,10 @@ def _run(source_gpx,ctx,protocol,candidate_record,seed,*,forward_only):
         kept_codes.append(code)
         kept_parent_indices.append(int(code.split('+')[0].split(':')[0]))
         moment_audit.append({'label': atom[ct - 1], 'element': element, 'allowed_components': sorted(allowed), 'refined_components': sorted(refined), 'initial_moment': list(moment)})
+        seed_sites.append(dict(label=atom[ct-1],parent_label=parent_label,orbit=str(code),
+            ids=list(map(int,allowed_ids)),coefficients=list(map(float,allowed_coefficients)),
+            basis_ids=sorted(requested_basis_ids),refined_axes=sorted(candidate_refine_components),
+            metric=(axes.T @ axes).tolist()))
     ctx.save_json('site-policy-audit.json', dict(kept=moment_audit, omitted=omitted_magnetic_sites, require_all_sites=protocol['policy']['site_policy']=='all'))
     if omitted_magnetic_sites and protocol['policy']['site_policy']=='all':
         raise TrialDisposition('site_incompatible','Required magnetic sites/orientations incompatible: ' + str(omitted_magnetic_sites))
@@ -667,6 +659,13 @@ def _run(source_gpx,ctx,protocol,candidate_record,seed,*,forward_only):
     if protocol['policy'].get('magnetic_optimizer')=='gsas_hessian':controls['deriv type']='analytic Hessian'
     gpx.save(str(output_gpx))
     gpx.index_ids()
+    if prepare_only:
+        transform=np.column_stack([transform_native_moment(np.eye(3)[i],
+            old_phase['General']['Cell'][1:7],trans) for i in range(3)])
+        template=dict(schema='radar-magnetic-seed-template/v1',sites=seed_sites,
+            parent_to_child=transform.tolist(),magnetic_phase=magnetic_name)
+        ctx.save_json('seed-template.json',template)
+        return dict(gpx=output_gpx.name,seed_template=template)
     if forward_only:
         from .k_native import audit_simulation
         from .k_periodicity import audit_structure
@@ -694,7 +693,7 @@ def _run(source_gpx,ctx,protocol,candidate_record,seed,*,forward_only):
     optimizer=None
     if protocol['policy'].get('magnetic_optimizer','gsas_hessian')=='profiled_quadratic':
         from .profiled_solver import refine,ProfiledScopeError
-        try:optimizer=refine(gpx,output_gpx,protocol,cache_root=ctx.input_root/'_profiled_cache',candidate=candidate_record)
+        try:optimizer=refine(gpx,output_gpx,protocol,cache_root=ctx.input_root/'_profiled_cache',candidate=candidate_record,screened=screened)
         except ProfiledScopeError as exc:
             ctx.save_json('optimizer-receipt.json',dict(name='profiled_quadratic',qualification=dict(passed=False),reason=str(exc)))
             raise TrialDisposition('unsupported',str(exc)) from exc

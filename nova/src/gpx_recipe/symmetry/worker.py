@@ -49,8 +49,9 @@ def runtime_identity():
     return dict(version=str(version.GetVersionNumber()),magnetic_function_sha256=hashlib.sha256(inspect.getsource(module.MagStructureFactor2).encode()).hexdigest(),**native_stack())
 
 
-def execute(directory):
+def execute(directory,*,screened=None):
     directory=Path(directory).resolve();started=time.monotonic()
+    initial_usage=resource.getrusage(resource.RUSAGE_SELF)
     target=directory/'result.json'
     if target.exists():raise ValueError('A completed trial cannot be silently rerun')
     output=directory/'results';output.mkdir(exist_ok=False)
@@ -81,7 +82,10 @@ def execute(directory):
             from .native_magnetic import run
         else:
             from .native_structural import run
-        result=run(source,ctx,protocol,candidate,seed)
+        if screened is not None and protocol['kind']!='magnetic':
+            raise TrialDisposition('integrity_failure','A magnetic screened solution cannot replace structural refinement')
+        result=(run(source,ctx,protocol,candidate,seed,screened=screened)
+                if screened is not None else run(source,ctx,protocol,candidate,seed))
         mark('model_and_refinement_seconds')
         response.update(result)
         from .native_audit import audit_trial
@@ -107,8 +111,10 @@ def execute(directory):
         mark('remaining_work_and_final_integrity_seconds')
         response['timings']=timings
         usage=resource.getrusage(resource.RUSAGE_SELF)
-        response['resources']=dict(wall_seconds=time.monotonic()-started,cpu_seconds=usage.ru_utime+usage.ru_stime,
+        response['resources']=dict(wall_seconds=time.monotonic()-started,
+                                  cpu_seconds=usage.ru_utime+usage.ru_stime-initial_usage.ru_utime-initial_usage.ru_stime,
                                   peak_rss_bytes=int(usage.ru_maxrss*(1024 if sys.platform.startswith('linux') else 1)))
+        if screened is not None:response['resources']['peak_rss_scope']='shared_group_worker'
         response['files']={str(p.relative_to(directory)):file_sha(p) for p in output.rglob('*') if p.is_file() and p.suffix in {'.gpx','.json','.log'}}
         write_json(target,response)
     return response

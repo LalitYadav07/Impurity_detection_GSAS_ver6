@@ -56,7 +56,8 @@ def fit(selected,pins=(),*,axis='d',reset=0,intensity_scale='linear'):
         y=display(values)
         return np.where(y>0,y,np.nan) if intensity_scale=='log' else y
     fig.add_trace(go.Scattergl(x=xx,y=intensity(obs),mode='markers',marker=dict(color='#293e38',size=3),name='Observed'),row=1,col=1)
-    fig.add_trace(go.Scattergl(x=xx,y=intensity(calc),mode='lines',connectgaps=False,line=dict(color='#2377be',width=1.5),name='Selected calculated'),row=1,col=1)
+    calculated_label='Native-verified representative' if selected.get('status')=='profile_equivalent' else 'Selected calculated'
+    fig.add_trace(go.Scattergl(x=xx,y=intensity(calc),mode='lines',connectgaps=False,line=dict(color='#2377be',width=1.5),name=calculated_label),row=1,col=1)
     for index,pin in enumerate(pins[:2]):
         if pin['source']!=selected['source'] or not pin['has_view'] or pin['id']==selected['id']:continue
         pv=view_for(pin)

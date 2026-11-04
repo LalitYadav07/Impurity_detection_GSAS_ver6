@@ -85,7 +85,7 @@ def _retain_forward_profile(project,path,context):
     return metrics
 
 
-def refine(project,path,protocol,*,cache_root=None,candidate=None):
+def refine(project,path,protocol,*,cache_root=None,candidate=None,screened=None):
     """Return separate optimizer qualification; leave native flags unavailable."""
     validate_scope(protocol)
     p=protocol['policy'];started=time.monotonic();deadline=started+p['timeout_seconds']
@@ -110,8 +110,13 @@ def refine(project,path,protocol,*,cache_root=None,candidate=None):
     null_background=np.linalg.lstsq(model.background,-null_curve,rcond=None)[0] if model.background.shape[1] else np.empty(0)
     null_residual=context.residual(np.zeros(model.dimension),null_scale,null_background)
     null_identity=model.heldout_error(np.zeros(model.dimension),null_scale,null_background,null_residual)
-    fit=model.fit(context.initial[context.moment_indices],max_iterations=p['optimizer_iterations'],
-        objective_ftol=TOLERANCES['normalized_objective_ftol'],callback=lambda _:context._check())
+    if screened is None:
+        fit=model.fit(context.initial[context.moment_indices],max_iterations=p['optimizer_iterations'],
+            objective_ftol=TOLERANCES['normalized_objective_ftol'],callback=lambda _:context._check())
+    else:
+        if screened['magnetic_variables']!=context.moment_names:
+            raise ProfiledScopeError('Screened solution and native independent variables differ')
+        fit=model.reassess(screened['fit'])
     context._check()
     proof=dict(schema=SCHEMA,name='profiled_quadratic',iterations=fit.iterations,
         maximum_iterations=p['optimizer_iterations'],success=fit.optimizer_success,status=fit.optimizer_status,
@@ -120,6 +125,7 @@ def refine(project,path,protocol,*,cache_root=None,candidate=None):
         magnetic_variables=list(context.moment_names),nuisance_scope=dict(common_scale=p['refine_histogram_scale'],
             existing_background_coefficients=p['refine_background']),
         objective_identity=identity,raw_solution=json_safe(dataclasses.asdict(fit)),
+        reused_group_screen=screened is not None,
         nuclear_baseline=dict(rwp=100*np.sqrt(2*null_cost/model.normalization),native_identity_error=null_identity,
             common_scale=null_scale,background=null_background.tolist(),same_nuisance_scope=True))
     checks=dict(raw_optimizer_success=fit.optimizer_success and fit.optimizer_status==0,

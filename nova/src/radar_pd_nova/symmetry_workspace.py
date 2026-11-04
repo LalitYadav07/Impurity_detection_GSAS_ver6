@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import copy
 import time
 import threading
 from collections import OrderedDict
@@ -42,6 +43,9 @@ def _checked_receipt(directory,job,expected_receipt):
     raw=json.loads((directory/'result.json').read_text())
     if expected_receipt and digest(raw)!=digest(json.loads(expected_receipt)):raise ValueError('A terminal receipt changed after collection')
     paths=[(directory,p) for p in set(['job.json','result.json',*raw.get('files',{})])]
+    if raw.get('status')=='profile_equivalent':
+        from gpx_recipe.symmetry.group_receipts import reference_paths
+        paths.extend(reference_paths(directory,raw))
     paths.extend((job_inputs(directory,job),a['path']) for a in assets(job['protocol']))
     before=Campaign._artifact_stamps(directory,paths)
     result=verify_receipt(directory,dict(id=job['id'],protocol_sha256=job['protocol_sha256']))
@@ -66,7 +70,8 @@ def _trial_identity(directory,job,metadata=None):
         embedding=dict(basis=candidate['transformation_matrix'],origin=candidate['origin_shift']),kind=p['kind'],source=p.get('acquisition_id') or p['source']['sha256'],source_sha256=p['source']['sha256'],sites=p.get('sites',[]),
         magnetic_function_sha256=p.get('magnetic_function_sha256'),
         metadata=metadata or {},parent=p['parent_phase'],histogram=p['histogram'],k=p['k'],worker_revision=job.get('package_sha256',''),status='pending',rwp=None,nvars=None,reason='',has_view=False,has_gpx=False,
-        adequate_rwp_percent=(p.get('policy') or {}).get('adequate_rwp_percent'))
+        adequate_rwp_percent=(p.get('policy') or {}).get('adequate_rwp_percent'),
+        grouped_surrogate=bool(p.get('policy',{}).get('grouped_surrogate')))
 
 
 def read_trial(directory,metadata=None,*,expected_receipt=None):
@@ -79,6 +84,10 @@ def read_trial(directory,metadata=None,*,expected_receipt=None):
             row['refined_moments']=result.get('moments',[])
             row['resources']=result.get('resources',{})
             row['timings']=result.get('timings',{})
+            row['screening_only']=result.get('screening_only',False)
+            row['native_reference']=(result.get('native_reference') or {}).get('id','')
+            row['native_verified']=bool(result.get('effects_verified') and result.get('audit',{}).get('passed'))
+            row['grouped_surrogate']=bool(p.get('policy',{}).get('grouped_surrogate'))
             row['receipt_sha256']=digest(result);row['native_version']=result.get('runtime',{}).get('version','unknown')
             row['bns_audited']=result.get('audit',{}).get('checks',{}).get('complete_magnetic_operators_preserved') is True
             gpx='results/'+str(result.get('gpx') or '')
@@ -86,6 +95,15 @@ def read_trial(directory,metadata=None,*,expected_receipt=None):
             views=[k for k in result.get('files',{}) if k.endswith('.view.json')]
             row['has_view']=len(views)==1
             if row['has_view']:row['view_path']=str(confined(directory,views[0]))
+            if row['status']=='profile_equivalent':
+                # The checked reference owns the one full plot/GPX. Alternatives
+                # retain compact moment vectors instead of duplicating arrays.
+                reference=confined(directory.parent,row['native_reference'])
+                source=json.loads((reference/'result.json').read_text())
+                row['native_reference_status']=source.get('status')
+                linked_views=[k for k in source.get('files',{}) if k.endswith('.view.json')]
+                if len(linked_views)!=1:raise ValueError('Verified representative has no unique view')
+                row.update(has_view=True,view_path=str(confined(reference,linked_views[0])))
             native='results/'+str(result.get('native_receipt') or '')
             evidence={}
             if native in result.get('files',{}):
@@ -98,7 +116,7 @@ def read_trial(directory,metadata=None,*,expected_receipt=None):
                 row['residual_targets']={key:evidence.get('target_peak_audit',{}).get(key)
                                          for key in ['target_count','underfit_peak_count','weighted_residual_improvement']}
             fitted_output=row['status']=='valid' or row['has_view'] or row['has_gpx'] or bool(row['refined_moments'])
-            if p.get('policy',{}).get('magnetic_optimizer')=='profiled_quadratic' and fitted_output:
+            if p.get('policy',{}).get('magnetic_optimizer')=='profiled_quadratic' and fitted_output and not row['screening_only']:
                 row['optimizer']=validated_profiled_evidence(evidence,p['policy'],row['status'])
         except Exception as exc:
             row.update(status='integrity_failure',reason=str(exc),has_view=False,has_gpx=False,rwp=None,nvars=None)
@@ -114,7 +132,15 @@ def cached_view(path,mtime_ns,size,ctime_ns=None):
 
 
 def view_for(row):
-    path=Path(row['view_path']);stat=path.stat();return cached_view(str(path),stat.st_mtime_ns,stat.st_size,stat.st_ctime_ns)
+    path=Path(row['view_path']);stat=path.stat();view=cached_view(str(path),stat.st_mtime_ns,stat.st_size,stat.st_ctime_ns)
+    if row.get('status')=='profile_equivalent':
+        view=copy.deepcopy(view)
+        moments={m['label']:m for m in row.get('refined_moments',[])}
+        for phase in view.get('phases',[]):
+            for value in phase.get('moments',[]):
+                own=moments.get(value['label'])
+                if own:value.update(components=own['moment'],magnitude=own['magnitude'])
+    return view
 
 
 @lru_cache(maxsize=1024)
@@ -152,7 +178,8 @@ def choose_group(groups,selected,*,explicit=False):
 def choose_member(members,selected,*,explicit=False):
     if explicit and any(row['id']==selected for row in members):return selected
     qualified=next((row for row in members if row.get('has_view') and row.get('status')=='valid'),None)
-    return (qualified or (members[0] if members else {})).get('id','')
+    native=next((row for row in members if row.get('has_view') and row.get('native_verified')),None)
+    return (qualified or native or (members[0] if members else {})).get('id','')
 
 
 def display_groups(groups):
@@ -160,6 +187,7 @@ def display_groups(groups):
     displayed=[]
     for group in groups:
         qualified=[row for row in group['members'] if row.get('has_view') and row.get('status')=='valid']
+        if not qualified:qualified=[row for row in group['members'] if row.get('has_view') and row.get('native_verified')]
         representative=min(qualified,key=lambda row:(row['rwp'] is None,row['rwp'] or 0,row['id'])) if qualified else group['representative']
         displayed.append(dict(group,representative=representative))
     return sorted(displayed,key=lambda group:(group['representative'].get('status')!='valid',
@@ -176,7 +204,7 @@ def disposition_reason(row):
 
 def display_status(status):
     return {'prepared':'awaiting dispatch','running':'assigned to a batch',
-            'submitting':'submission pending'}.get(status,status.replace('_',' '))
+            'submitting':'submission pending','profile_equivalent':'equivalent screened start'}.get(status,status.replace('_',' '))
 
 
 def pin_label(row,*,include_start=False):
@@ -215,6 +243,11 @@ def fit_diagnostics(row):
     are not indexed magnetic reflections, nor another acceptance rule.
     """
     if not row:return []
+    if row.get('status')=='profile_equivalent':
+        details=[dict(label='Screened alternative',value='Agreement was checked within the fitted domain. The plot and Bragg ticks show the native-verified representative; the magnetic parameter table retains this screened start. Equality outside masked or excluded regions is not established. Open the representative for its audited GPX.')]
+        if row.get('native_reference_status')=='inadequate_fit':
+            details.append(dict(label='Fit quality',value='The representative did not meet the declared fit-adequacy criterion. Profile agreement does not make this an adequate fit.'))
+        return details
     def finite(value):
         return isinstance(value,(int,float)) and not isinstance(value,bool) and np.isfinite(value)
     details=[];criterion=row.get('adequate_rwp_percent');optimizer=profiled_optimizer_evidence(row)
@@ -338,7 +371,7 @@ def unqualified_covariance(row):
     """An aborted or rank-deficient checkpoint has no qualified error bars."""
     native=row.get('native_convergence') or {}
     rank=native.get('SVD0')
-    return (profiled_optimizer_evidence(row) is not None or row.get('status')=='optimization_unresolved' or
+    return (row.get('screening_only') or profiled_optimizer_evidence(row) is not None or row.get('status')=='optimization_unresolved' or
             native.get('converged') is False or native.get('Aborted') is True or
             (isinstance(rank,(int,float)) and np.isfinite(rank) and rank>0))
 
@@ -369,6 +402,8 @@ def moment_precision_note(row):
     combine correlated components, or assign a probability of magnetic order.
     """
     if row.get('kind') != 'magnetic':return ''
+    if row.get('screening_only'):
+        return 'Surrogate-screened magnetic parameters. Their calculated profile agrees with the linked native-verified representative; no separate native refinement or parameter uncertainties are claimed for this start.'
     optimizer=profiled_optimizer_evidence(row)
     if optimizer:
         passed=profiled_optimizer_qualified(row)

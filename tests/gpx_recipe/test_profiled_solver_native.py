@@ -96,6 +96,43 @@ def test_unlisted_nuclear_parameters_are_not_accepted(tmp_path):
         refine(project,path,protocol())
 
 
+@pytest.mark.parametrize('constrained,masked',[(False,True),(True,False)])
+def test_group_screen_reuses_solution_but_rechecks_native_and_saved_gpx(tmp_path,monkeypatch,constrained,masked):
+    from gpx_recipe.symmetry.native_profiled import NativeMagneticStartingPoint
+    from gpx_recipe.symmetry.profiled_magnetic import ProfiledMagneticObjective
+    project,path=artificial_project(tmp_path,sites=2 if constrained else 1,constrained=constrained,masked=masked)
+    native=NativeMagneticStartingPoint(path,refine_scale=True,refine_background=True,maximum_moment=6.)
+    model,_=native.build()
+    fit=model.fit(native.initial[native.moment_indices],max_iterations=100)
+    assert fit.success
+    names=list(native.moment_names)
+    def forbidden_second_optimization(*args,**kwargs):
+        raise AssertionError('A screened start must not optimize again during native verification')
+    monkeypatch.setattr(ProfiledMagneticObjective,'fit',forbidden_second_optimization)
+    result=refine(project,path,protocol(),screened=dict(magnetic_variables=names,fit=fit))
+    assert result['reused_group_screen'] and result['candidate_applied']
+    assert result['qualification']['passed'],result['qualification']
+    assert result['serialized_native_identity_error']<1e-8
+    assert not result['native_convergence_declared'] and not result['native_covariance_supplied']
+    reloaded=G.G2Project(gpxfile=str(path))
+    assert not reloaded.data['Covariance']['data']['covMatrix']
+    actual=np.asarray(MAIN.DoNoFit(str(path),reloaded.histograms()[0].name))
+    expected=np.ma.getdata(reloaded.histograms()[0].data['data'][1][3])
+    np.testing.assert_allclose(actual,expected,rtol=1e-8,atol=1e-8)
+    histogram=reloaded.histograms()[0]
+    metrics=profile_residual_metrics(histogram.data['data'][1][:3],actual,histogram.data['Limits'])
+    assert result['final_profile']['rwp_native']==pytest.approx(metrics['rwp_native'],rel=1e-10)
+
+
+def test_group_screen_cannot_use_a_different_native_variable_basis(tmp_path):
+    from gpx_recipe.symmetry.native_profiled import NativeMagneticStartingPoint
+    project,path=artificial_project(tmp_path)
+    native=NativeMagneticStartingPoint(path,refine_scale=True,refine_background=True,maximum_moment=6.)
+    model,_=native.build();fit=model.fit(native.initial[native.moment_indices])
+    with pytest.raises(ProfiledScopeError,match='independent variables differ'):
+        refine(project,path,protocol(),screened=dict(magnetic_variables=['wrong'],fit=fit))
+
+
 def test_boundary_solution_does_not_acquire_unreviewed_qualification(tmp_path):
     project,path=artificial_project(tmp_path)
     p=protocol();p['policy']['maximum_moment']=.5

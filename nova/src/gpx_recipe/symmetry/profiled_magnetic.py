@@ -155,16 +155,38 @@ class ProfiledMagneticObjective:
             constraints=[dict(type='ineq',fun=self._constraint,jac=self._constraint_jacobian)],
             bounds=[(-self.maximum_moment,self.maximum_moment)]*self.dimension,
             options=dict(maxiter=max_iterations,ftol=objective_ftol),callback=callback)
-        cost,gradient,scale=self._evaluate(result.x)
-        coefficients=self.to_native@result.x
+        return self._assess(result.x,optimizer_success=bool(result.success),
+            optimizer_status=int(result.status),message=str(result.message),
+            iterations=int(result.nit),evaluations=int(result.nfev),
+            objective_ftol=objective_ftol,optimizer_scale=optimizer_scale)
+
+    def reassess(self,fit):
+        """Recheck a screened solution on this independently loaded objective.
+
+        This does not trust saved costs, gradients, bounds or curvature, and
+        does not run a second local search. The native stage subsequently
+        checks the serialized GPX against its independent forward model.
+        """
+        coefficients=np.asarray(fit.coefficients,float)
+        if coefficients.shape!=(self.dimension,) or not np.isfinite(coefficients).all():
+            raise ValueError('Screened solution has the wrong independent moment basis')
+        return self._assess(self.to_physical@coefficients,
+            optimizer_success=fit.optimizer_success,optimizer_status=fit.optimizer_status,
+            message=fit.message,iterations=fit.iterations,evaluations=fit.evaluations,
+            objective_ftol=fit.objective_ftol,optimizer_scale=fit.optimizer_objective_scale)
+
+    def _assess(self,point,*,optimizer_success,optimizer_status,message,
+                iterations,evaluations,objective_ftol,optimizer_scale):
+        cost,gradient,scale=self._evaluate(point)
+        coefficients=self.to_native@point
         full=self.offset+scale*(self.nuclear+np.einsum('i,nij,j->n',coefficients,self.quadratic,coefficients))
         background=np.linalg.lstsq(self.background,-full,rcond=None)[0] if self.background.shape[1] else np.empty(0)
         maximum=float(np.max(np.linalg.norm(self.moment_maps@coefficients,axis=1)))
         physical=maximum<=self.maximum_moment*(1+1e-8)
-        active=self._constraint(result.x)<=1e-7*self.maximum_moment**2
+        active=self._constraint(point)<=1e-7*self.maximum_moment**2
         scaled_gradient=gradient/self.normalization
         if active.any():
-            constraint_jacobian=self._constraint_jacobian(result.x)[active].T
+            constraint_jacobian=self._constraint_jacobian(point)[active].T
             multipliers,_=nnls(constraint_jacobian,scaled_gradient)
             stationary=scaled_gradient-constraint_jacobian@multipliers
         else:
@@ -172,22 +194,22 @@ class ProfiledMagneticObjective:
         stationarity=float(np.linalg.norm(stationary))
         # Quadratic intensities have zero first derivatives at zero moments.
         # A native or SciPy "success" at a maximum is not a useful start.
-        step=1e-4*max(1.,float(np.linalg.norm(result.x)))
-        curvature,directions=np.linalg.eigh(self._hessian(result.x))
+        step=1e-4*max(1.,float(np.linalg.norm(point)))
+        curvature,directions=np.linalg.eigh(self._hessian(point))
         local_descent=False
         for direction in directions.T:
             for sign in [-1.,1.]:
-                probe=result.x+sign*step*direction
+                probe=point+sign*step*direction
                 probe_max=float(np.max(np.linalg.norm(self.physical_maps@probe,axis=1)))
                 if probe_max>self.maximum_moment:probe*=self.maximum_moment/probe_max
                 if self.value_gradient(probe)[0]<cost/self.normalization-1e-12:
                     local_descent=True
         return StartingPoint(coefficients=coefficients,scale=float(scale),background=background,
-            weighted_cost=cost,success=bool(result.success and physical and scale>0 and stationarity<=1e-7 and not local_descent),
-            message=str(result.message),iterations=int(result.nit),evaluations=int(result.nfev),
+            weighted_cost=cost,success=bool(optimizer_success and physical and scale>0 and stationarity<=1e-7 and not local_descent),
+            message=message,iterations=iterations,evaluations=evaluations,
             maximum_moment=maximum,scaled_gradient_norm=float(np.linalg.norm(gradient)/self.normalization),
             scaled_stationarity_norm=stationarity,local_descent_found=local_descent,
-            optimizer_status=int(result.status),optimizer_success=bool(result.success),objective_ftol=float(objective_ftol),
+            optimizer_status=optimizer_status,optimizer_success=optimizer_success,objective_ftol=float(objective_ftol),
             curvature_eigenvalues=curvature,bound_active=bool(active.any()),
             optimizer_objective_scale=optimizer_scale)
 

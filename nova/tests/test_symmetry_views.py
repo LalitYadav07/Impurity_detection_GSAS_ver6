@@ -97,6 +97,38 @@ def test_incompatible_trial_without_curve_stays_inspectable(tmp_path):
     assert 'annotations' in fit(bad)['layout']
 
 
+def test_screened_alternative_reuses_plot_but_keeps_own_moments_and_no_native_claim(tmp_path):
+    from radar_pd_nova.symmetry_workspace import view_for
+    native=row(tmp_path,'native',status='inadequate_fit')
+    view=json.loads(Path(native['view_path']).read_text())
+    view['phases']=[dict(name='magnetic',moments=[dict(label='Ni1',magnitude=1.,components=[1.,0.,0.])])]
+    Path(native['view_path']).write_text(json.dumps(view))
+    alternative=dict(native,id='screened',kind='magnetic',status='profile_equivalent',
+        screening_only=True,native_reference='native',
+        refined_moments=[dict(label='Ni1',magnitude=1.,moment=[-1.,0.,0.])])
+    adapted=view_for(alternative)
+    assert adapted['phases'][0]['moments'][0]['components']==[-1.,0.,0.]
+    assert view_for(native)['phases'][0]['moments'][0]['components']==[1.,0.,0.]
+    table=parameter_rows(alternative,adapted)
+    assert all(item['uncertainty']=='—' for item in table)
+    assert next(item['value'] for item in table if item['parameter']=='Ni1 · mx')==-1.
+    assert 'Surrogate-screened' in moment_precision_note(alternative)
+    assert 'fitted domain' in fit_diagnostics(alternative)[0]['value']
+    graph=fit(alternative)
+    assert any(t['name']=='Native-verified representative' for t in graph['data'])
+    assert not any(t['name']=='Selected calculated' for t in graph['data'])
+
+
+def test_native_representative_is_default_without_hiding_screened_alternatives(tmp_path):
+    native=dict(row(tmp_path,'native',status='inadequate_fit',rwp=20.),native_verified=True)
+    alternative=dict(row(tmp_path,'alternative',status='profile_equivalent',rwp=19.999999),screening_only=True)
+    groups=group_models([alternative,native])
+    assert len(groups)==1
+    assert choose_member(groups[0]['members'],'')=='native'
+    assert choose_member(groups[0]['members'],'alternative',explicit=True)=='alternative'
+    assert display_groups(groups)[0]['representative']['id']=='native'
+
+
 def test_streaming_default_opens_first_fit_and_explicit_trial_survives_regrouping():
     groups=[dict(id='fit-1',members=[dict(id='fit-1'),dict(id='fit-2')]),dict(id='pending',members=[dict(id='waiting')])]
     assert choose_group(groups,'waiting')=='fit-1'

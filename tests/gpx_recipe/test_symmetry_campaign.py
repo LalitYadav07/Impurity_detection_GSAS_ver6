@@ -13,6 +13,25 @@ def test_profiled_pairing_preserves_denominator_and_early_candidate_coverage():
     assert {r['id'] for r in ordered}=={r['id'] for r in rows}
     assert len(ordered)==len(rows)
     assert [r['candidate'] for r in ordered[:6]]==['a','a','b','b','c','c']
+
+
+def test_grouped_surrogate_submits_whole_model_despite_small_legacy_batch_limit(setup):
+    root,p,c,_=setup
+    p['policy'].update(moment_model='symmetry_allowed',magnetic_optimizer='profiled_quadratic',
+        optimizer_iterations=120,grouped_surrogate=True)
+    ids=c.enroll(p,root/'inputs',approved_hash=digest(p))
+    class GroupTransport:
+        max_active_jobs=2;chunk_size=1
+        def __init__(self):self.groups=[]
+        def submit_many(self,entries,*,workers):
+            self.groups.append([uid for uid,_ in entries])
+            return {uid:dict(key=uid,dispatch_key='shared-group') for uid,_ in entries}
+        def poll(self,handle,directory):return dict(state='running',handle=handle)
+    transport=GroupTransport()
+    c.tick(transport,slots=1)
+    assert transport.groups==[ids]
+    c.tick(transport,slots=1)
+    assert len(transport.groups)==1  # no duplicated model or seed submissions
 from gpx_recipe.symmetry.compiler import file_sha
 from gpx_recipe.symmetry.contracts import digest
 from test_symmetry_contracts import make_protocol

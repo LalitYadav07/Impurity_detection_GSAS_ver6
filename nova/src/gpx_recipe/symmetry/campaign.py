@@ -58,6 +58,9 @@ def verify_receipt(directory, expected):
     if result['status']=='valid':
         if result.get('effects_verified') is not True or result.get('inputs_verified') is not True or not result.get('files') or not result.get('audit',{}).get('passed'):
             raise ValueError('A qualified fit needs independently audited native artifacts')
+    if result['status']=='profile_equivalent':
+        from .group_receipts import verify_equivalent
+        verify_equivalent(directory,result,job,verify_receipt)
     return result
 
 
@@ -231,6 +234,9 @@ class Campaign:
             original=json.loads((directory/'result.json').read_text())
             job=json.loads((directory/'job.json').read_text());protocol=validate_protocol(job['protocol'])
             paths=[(str(directory),p) for p in sorted(set(['result.json','job.json']+list(original.get('files',{}))))]
+            if original.get('status')=='profile_equivalent':
+                from .group_receipts import reference_paths
+                paths.extend(reference_paths(directory,original))
             paths += [(str(job_inputs(directory,job)),asset['path']) for asset in assets(protocol)]
             before=self._artifact_stamps(directory,paths)
             receipt=verify_receipt(directory,dict(id=row['id'],protocol_sha256=row['protocol']))
@@ -299,7 +305,13 @@ class Campaign:
                         # a profiled batch. All candidates still receive early
                         # coverage; no start is removed from the finite plan.
                         paired=protocol.get('policy',{}).get('magnetic_optimizer')=='profiled_quadratic'
-                        group=balanced_trial_order(prepared,per_candidate=2 if paired else 1)[:size]
+                        if protocol.get('policy',{}).get('grouped_surrogate'):
+                            # One complete model portfolio shares a compiled
+                            # objective. Other models use other job slots.
+                            candidate=prepared[0]['candidate']
+                            group=[r for r in prepared if r['candidate']==candidate][:256]
+                        else:
+                            group=balanced_trial_order(prepared,per_candidate=2 if paired else 1)[:size]
                         for row in group:self.set_state(row['id'],'submitting')
                         try:
                             handles=transport.submit_many([(r['id'],self.trial_directory(r)) for r in group],workers=slots)

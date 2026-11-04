@@ -251,6 +251,8 @@ def model_exploration(app):
                     html.P('Coordinate conversion of asymmetric-site representative moments only; the fit status above still applies. Projection onto the selected direct axis is signed; the angle to that axis is 0–90° and unchanged by reversing every moment. In a nonorthogonal cell, this is a geometric projection rather than a raw fractional component. These are not net magnetization or proof of ordering or canting. Derived uncertainties are unavailable; raw component uncertainties remain in the table above.',classes='rf-notice')
                     html.P('{{ sx_parent_moment_note }}',v_if='!!sx_parent_moment_note',classes='rf-notice')
                 with html.Div(classes='rf-actions'):
+                    v.VBtn('Open native-verified representative',v_if='!!sx_native_reference',
+                        click=app.open_symmetry_representative,variant='outlined',size='small')
                     v.VBtn('Open selected GPX in GSAS-II',click=app.open_symmetry_in_gsasii,
                         disabled=("!sx_has_gpx || gsasii_session_status === 'starting' || gsasii_session_status === 'ready'",),
                         loading=("gsasii_session_status === 'starting'",),variant='outlined',size='small')
