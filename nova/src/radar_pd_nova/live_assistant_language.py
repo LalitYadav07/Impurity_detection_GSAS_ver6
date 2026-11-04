@@ -561,7 +561,7 @@ def _run_policy(text: str, context: ReplyContext) -> ParsedReply | None:
         return _patch({"powgen_wavelength": value}, f"Require {value} A for every selected run; the experiment check must verify each reduction")
     existing = re.fullmatch(
         r"(?:process\s+)?(?:all|every)\s+existing\s+(isothermal\s+)?(?:matching\s+)?(?:scans?|runs?)"
-        r"(?:\s+only|\s+(?:and|then)\s+(?:all\s+)?(?:future|new)\s+(?:scans?|runs?))?", body)
+        r"(?:\s+only|,?\s+(?:and|then)\s+(?:all\s+)?(?:future|new)\s+(?:scans?|runs?))?", body)
     if existing:
         values = {"powgen_backfill_mode": "all"}
         label = "Process all existing matching scans, then new scans"

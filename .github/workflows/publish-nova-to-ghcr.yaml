@@ -111,6 +111,10 @@ jobs:
           python -m pip install --quiet pytest==8.4.2 &&
           cd /tmp &&
           PYTHONPATH=/src/src:/validation-tests python -m pytest -q \
+            /validation-tests/test_live_assistant_language.py \
+            /validation-tests/test_live_assistant.py \
+            /validation-tests/test_live_assistant_integration.py \
+            /validation-tests/test_live_assistant_inventory.py \
             /validation-tests/test_powgen_discovery_revisions.py \
             /validation-tests/test_webmon_cancelled_job.py \
             /validation-tests/test_unet_core_audit_regressions.py \

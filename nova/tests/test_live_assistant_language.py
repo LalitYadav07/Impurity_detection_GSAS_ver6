@@ -225,9 +225,14 @@ def user_selection_context(banks=(1, 2)):
                    defer_sample_bank_membership=True)
 
 
-def test_combined_selection_wavelength_and_matching_scope_remains_atomic():
+@pytest.mark.parametrize('scope', [
+    'all existing matching scans',
+    'all existing matching scans, then new scans',
+    'all existing matching scans, and future runs',
+])
+def test_combined_selection_wavelength_and_matching_scope_remains_atomic(scope):
     context = replace(user_selection_context(banks=(1,)), wavelengths=('0.8', '1.5', '2.665'))
-    reply = interpret_reply('Use sample 21213, bank 2, wavelength 2.665 angstrom, and all existing matching scans.', context)
+    reply = interpret_reply('Use sample 21213, bank 2, wavelength 2.665 angstrom, and ' + scope + '.', context)
     assert reply.action == 'patch'
     assert reply.value == {
         'powgen_processing_scope': 'selected', 'powgen_processing_sample_ids': ['21213'],
@@ -316,6 +321,12 @@ def test_explicit_future_scope_preserves_live_monitoring_semantics(suffix):
 def test_future_scope_does_not_ignore_unknown_trailing_instruction():
     reply = interpret_reply("all existing scans and future scans until the phase is correct", user_selection_context())
     assert reply.action == "clarify"
+    assert reply.value is None
+
+
+def test_future_scope_with_comma_does_not_ignore_unknown_trailing_instruction():
+    reply = interpret_reply('all existing matching scans, then new scans until the phase is correct', user_selection_context())
+    assert reply.action == 'clarify'
     assert reply.value is None
 
 
