@@ -292,6 +292,10 @@ class SymmetryMixin(KSearchMixin):
         self.refresh_symmetry()
 
     def refresh_symmetry(self):
+        # Tab entry and polling must not take ownership of an in-flight parent
+        # inspection, discovery, setup draft or campaign staging operation.
+        # Those operations publish their own progress and release sx_busy.
+        if not self._symmetry_loading and getattr(self.server.state,'sx_busy',False):return
         if self._symmetry_loading:
             s=self.server.state
             if (s.sx_campaign,s.rf_experiment,s.sx_result_scope)!=self._symmetry_loading_identity:
@@ -311,7 +315,7 @@ class SymmetryMixin(KSearchMixin):
             s.sx_retry_acquisition='';s.sx_retry_notice=''
             self._symmetry_navigation_identity=self._symmetry_loading_identity
         async def load():
-            s=self.server.state;s.sx_busy=True;s.sx_error=''
+            s=self.server.state;s.sx_busy=True
             self._symmetry_loading_identity=(s.sx_campaign,s.rf_experiment,s.sx_result_scope)
             s.sx_results_current=getattr(self,'_symmetry_display_identity',None)==self._symmetry_loading_identity
             s.flush()
@@ -354,7 +358,10 @@ class SymmetryMixin(KSearchMixin):
                     s.sx_source='';s.sx_source_options=[];s.sx_enrollments=[];s.sx_coverage=[]
                     s.sx_progress='';s.sx_execution_detail='';s.sx_scope_progress='';s.sx_resumable=False;s.sx_following=False
                     self._symmetry_publish_source()
-                    s.sx_message='Select a completed RADAR-PD GPX above, then prepare model exploration.';return
+                    if not getattr(s,'sx_has_context',False) and not getattr(s,'sx_error',''):
+                        s.sx_message='Select a completed RADAR-PD GPX above, then prepare model exploration.'
+                    return
+                s.sx_error=''
                 root=next(p.parent for p in roots if p.parent.name==s.sx_campaign)
                 campaign=self._symmetry_campaign(root)
                 review_source=None;indexed_options=None
@@ -767,11 +774,17 @@ class SymmetryMixin(KSearchMixin):
                 if not d or d['source_id']!=s.sx_start_source:raise ValueError('Inspect the selected source GPX first')
                 parent=next(p for p in d['context']['phases'] if p['name']==s.sx_parent);k=[str(Fraction(v.strip())) for v in s.sx_k.split(',')]
                 identity=self._discovery_identity();root=d['root']
+                loop=asyncio.get_running_loop()
+                def publish_progress(message):
+                    if self._symmetry_draft is d and identity==self._discovery_identity():
+                        s.sx_message=message;s.flush()
+                def progress(message):loop.call_soon_threadsafe(publish_progress,message)
                 if s.sx_kind=='magnetic':catalog=await asyncio.to_thread(discover_magnetic,parent,k,api_key=os.environ.get('BCS_API_KEY',''))
                 else:
                     parent_source=root/'source.gpx'
                     d.pop('reference_asset',None)
                     if s.sx_parent_reference:
+                        publish_progress('Checking the selected parent-reference GPX and its exact setting. No structural fits have started.')
                         w=self._refinement_store()
                         reference=await asyncio.to_thread(resolve_start,w,s.rf_experiment,s.sx_parent_reference)
                         captured=await asyncio.to_thread(w.runtime.resolve,reference)
@@ -786,18 +799,24 @@ class SymmetryMixin(KSearchMixin):
                         parent=selected;parent_source=reference_root/'source.gpx'
                         d['reference_asset']=dict(path=str(parent_source.relative_to(root)),sha256=captured['source_sha256'])
                     parent_cif=root/'parent.cif'
+                    publish_progress('Exporting the reviewed parent structure for ISODISTORT. Diffraction arrays stay in Galaxy.')
                     await asyncio.to_thread(self._symmetry_native,'export',dict(source=str(parent_source),phase=s.sx_parent,destination=str(parent_cif)),root)
                     discovery=root/('isodistort-'+uuid.uuid4().hex)
                     def inventory_many(children):
                         rows=[]
                         for offset in range(0,len(children),32):
+                            progress(f'Checking native construction for candidates {offset+1}–{min(offset+32,len(children))} of {len(children)}. Refinement has not started.')
                             rows.extend(self._symmetry_native('modes-many',dict(children=[str(p) for p in children[offset:offset+32]],workers=int(s.sx_slots)),root)['items'])
                         return rows
+                    def match(cif,vector,options):
+                        progress('Mapping the requested k vector into the exact parent setting, then generating ISODISTORT candidates.')
+                        return self._symmetry_native('match',dict(cif=cif,k=vector,options=options),root)
                     def prepare():
-                        return discover_structural(parent_cif,parent,k,discovery,matcher=lambda cif,vector,options:self._symmetry_native('match',dict(cif=cif,k=vector,options=options),root),
+                        return discover_structural(parent_cif,parent,k,discovery,matcher=match,
                             inventory=lambda child:self._symmetry_native('modes',dict(child=str(child),temporary=str(root/(child.stem+'.gpx'))),root),
                             opd_policy=s.sx_opd_policy,maximum=int(s.sx_construct_limit),
                             inventory_many=inventory_many if self._model_remote() else None)
+                    publish_progress('Requesting finite structural candidates from ISODISTORT. Native construction checks follow before plan review.')
                     catalog=await asyncio.to_thread(prepare)
                     for candidate in catalog['candidates']:candidate['child']['path']=str((discovery/candidate['child']['path']).relative_to(root))
                 if identity!=self._discovery_identity():raise ValueError('Inputs changed during discovery; discover again for the current parent and k')
@@ -876,8 +895,9 @@ class SymmetryMixin(KSearchMixin):
                     f"Each independent displacement coordinate is bounded to ±{settings['structural_mode_radius']} Å RMS; reciprocal-metric coordinates to ±{settings['structural_cell_radius']}. "
                     "Common scale and a bounded additive Back;0 correction vary; higher background coefficients and other phases stay fixed. Verified point estimates require optimization review; no model probabilities or automatic structure assignment")
             s.sx_plan_summary=f"{len(p['candidates'])} embeddings · {sum(1 for _ in iter_trials(p))} finite trials. {optimizer_budget_label(p['policy'])} {free}. Instrument, occupancy and displacement parameters fixed. Adequacy: Rwp ≤ {s.sx_adequate}%."
-            s.sx_plan_summary+=f" {len(template['existing_ids'])} selected scans · {trial_count(template)} starts per scan · maximum {template['maximum_scans']} scans. Following new scans: {'on' if template['future'] else 'off'}."
-            s.sx_plan_summary+=f" Existing-cohort budget: {len(template['existing_ids'])*trial_count(template):,} starts before per-scan compatibility checks."
+            unit='model fits' if prepared else 'starts'
+            s.sx_plan_summary+=f" {len(template['existing_ids'])} selected scans · {trial_count(template)} {unit} per scan · maximum {template['maximum_scans']} scans. Following new scans: {'on' if template['future'] else 'off'}."
+            s.sx_plan_summary+=f" Existing-cohort budget: {len(template['existing_ids'])*trial_count(template):,} {unit} before per-scan compatibility checks."
             s.sx_plan_ready=True;s.sx_approved=False
         except Exception as exc:s.sx_error=str(exc)
 

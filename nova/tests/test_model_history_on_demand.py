@@ -54,6 +54,33 @@ def test_fresh_search_lists_sources_without_restoring_any_old_campaign(tmp_path,
     assert not state.sx_busy
 
 
+@pytest.mark.parametrize('operation', ['parent inspection', 'candidate discovery', 'campaign staging'])
+def test_tab_entry_does_not_overlap_owned_preparation(tmp_path, monkeypatch, operation):
+    app, state = setup_app(tmp_path, monkeypatch)
+    state.sx_busy = True
+    state.sx_message = operation + ' in progress'
+    state.sx_error = ''
+    app._refinement_schedule = lambda *a: pytest.fail('Tab entry overlapped active preparation')
+    app.refresh_symmetry()
+    assert state.sx_busy and state.sx_message == operation + ' in progress'
+    assert not app._symmetry_loading
+
+
+@pytest.mark.parametrize('failed', [False, True])
+def test_tab_entry_preserves_prepared_search_or_discovery_failure(tmp_path, monkeypatch, failed):
+    app, state = setup_app(tmp_path, monkeypatch)
+    state.sx_start_source = 'current'
+    state.sx_has_context = True
+    state.sx_discovered = not failed
+    state.sx_error = 'ISODISTORT is unavailable' if failed else ''
+    state.sx_message = 'Candidate discovery stopped' if failed else '9 ready to refine'
+    app._symmetry_scan_choices = lambda: None
+    before = (state.sx_error, state.sx_message, state.sx_discovered)
+    asyncio.run(run_action(app, app.refresh_symmetry))
+    assert not state.sx_busy
+    assert (state.sx_error, state.sx_message, state.sx_discovered) == before
+
+
 @pytest.mark.parametrize('scope', ['experiment', 'campaign'])
 def test_explicit_load_honors_selected_scope_and_does_not_auto_repeat(tmp_path, monkeypatch, scope):
     app, state = setup_app(tmp_path, monkeypatch)

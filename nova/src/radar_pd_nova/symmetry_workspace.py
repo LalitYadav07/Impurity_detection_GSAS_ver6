@@ -596,6 +596,8 @@ def model_progress(rows):
     if leader:
         label='Best qualified' if qualified else 'Best audited, needs review'
         text+=f" · {label}: {leader['name']} · Rwp {leader['rwp']:.3f}%"
+    elif complete:
+        text+=' · No checked fit returned from the processed models; inspect their failure or review reasons'
     else:
         text+=' · First checked fit pending; assigned batches may still be queued'
     return text

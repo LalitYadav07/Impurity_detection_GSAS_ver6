@@ -45,8 +45,9 @@ def scope_progress(template,entries):
     label=(f"{len(entries)} captured scans · {counts['enrolled']} prepared · "
            f"{counts['queued']+counts['preparing']} awaiting preparation · {counts['needs_review']} need review.")
     if template.get('protocol'):
-        label+=f" Reviewed budget: {len(entries)*trial_count(template):,} starts before per-scan compatibility checks."
         policy=template['protocol'].get('policy',{})
+        unit='model fits' if policy.get('structural_optimizer')=='prepared_nonlinear' else 'starts'
+        label+=f" Reviewed budget: {len(entries)*trial_count(template):,} {unit} before per-scan compatibility checks."
         if 'cycles' in policy:
             from .magnetic_optimizer import optimizer_budget_label
             label+=' '+optimizer_budget_label(policy)

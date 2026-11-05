@@ -46,6 +46,16 @@ def test_profiled_progress_reports_iterations_not_unused_native_cycles():
     assert 'GSAS-II evaluates' in label
 
 
+def test_structural_progress_distinguishes_models_from_internal_starting_guesses(monkeypatch):
+    from radar_pd_nova import model_campaigns
+    monkeypatch.setattr(model_campaigns, 'trial_count', lambda _: 9)
+    policy = {'cycles': 12, 'structural_optimizer': 'prepared_nonlinear',
+              'structural_starts': 4, 'structural_seconds': 120, 'structural_recovery_seconds': 0}
+    label = scope_progress({'protocol': {'policy': policy}}, [{'status': 'enrolled'}] * 4)
+    assert '36 model fits' in label and '4 starting guesses' in label
+    assert '36 starts' not in label
+
+
 def test_optimizer_changes_invalidate_an_inflight_setup_reply():
     state = SimpleNamespace(rf_experiment='experiment', sx_start_source='source', sx_request='search',
                             sx_magnetic_optimizer='gsas_hessian', sx_optimizer_iterations=60)

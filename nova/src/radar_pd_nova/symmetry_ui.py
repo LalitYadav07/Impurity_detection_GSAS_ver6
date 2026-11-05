@@ -49,6 +49,7 @@ def model_exploration(app):
         .sx-fit{min-width:0;width:100%;height:570px}.sx-overview{min-width:0;width:100%;height:300px}.sx-evidence{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:14px 0}.sx-evidence p{font-size:12px;line-height:1.7;overflow-wrap:anywhere}
         .sx-settings{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin:18px 0;align-items:start}.sx-settings>.v-input{min-width:0}.sx-bounds{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-items:start}.sx-bounds>.v-input{min-width:0}.sx-setup{margin-bottom:20px}.sx-status{padding:12px 16px;background:#f2f6f3;border-radius:6px;font-size:13px;line-height:1.8;margin-bottom:18px}
         .sx-choices .v-field__input{max-height:92px;overflow-y:auto}.sx-choices .v-chip{max-width:95%}
+        .sx-full-width{grid-column:1/-1}
         @media(max-width:850px){.sx-layout,.sx-evidence,.sx-settings,.sx-bounds{grid-template-columns:1fr}.sx-models{max-height:260px}}
         ''')
         client.Style(FIT_PRESENTATION_CSS)
@@ -118,7 +119,7 @@ def model_exploration(app):
                 v.VTextField(label='Experiment-specific adequate Rwp (%)',v_model=('sx_adequate',),type='text',inputmode='decimal',density='compact',variant='outlined',hide_details=True)
                 v.VTextField(v_if="sx_kind === 'magnetic'",label='Maximum moment (µB)',v_model=('sx_max_moment',),type='text',inputmode='decimal',density='compact',variant='outlined',hide_details=True)
                 v.VTextField(v_if="sx_kind === 'magnetic'",label='Magnetic d cutoff (Å) · 0 uses the full fit range',v_model=('sx_mag_d_min',),type='text',inputmode='decimal',density='compact',variant='outlined',hide_details=True)
-                with html.Details(v_if="sx_kind === 'structural'",classes="mt-3"):
+                with html.Details(v_if="sx_kind === 'structural'",classes="sx-full-width mt-3"):
                     html.Summary("Search bounds and computation")
                     with html.Div(classes="sx-bounds mt-3"):
                         v.VTextField(label='Displacement bound (Å RMS)',v_model=('sx_structural_radius',),type='text',inputmode='decimal',density='compact',variant='outlined',hide_details=True)
@@ -162,6 +163,7 @@ def model_exploration(app):
             html.P("{{ sx_kind === 'structural' ? 'Discovery sends the selected parent structure, without pattern arrays, to ISODISTORT. The selected OPD scope and construction budget are explicit; deferred or failed models remain visible. A budget smaller than the selected tier requires a narrower scope.' : 'Discovery sends parent symmetry operations and k to Bilbao. Refinement consumes the cached catalog offline.' }}",v_if='sx_has_context',classes='rf-notice')
             html.P('Review and use a k-survey candidate, or enter an exact rational k, before discovering models.',v_if="sx_has_context && sx_kind === 'magnetic' && !sx_k.trim()",classes='rf-notice')
             v.VBtn('Discover finite candidates',v_if='sx_has_context',click=app.discover_symmetry_candidates,disabled=('sx_busy || !sx_k.trim()',),variant='outlined',color='#15543c')
+            html.P('{{ sx_message }}',v_if='sx_busy',role='status',aria_live='polite',classes='rf-notice mt-2')
             html.P('{{ sx_discovery_scope }}',v_if='sx_discovered && !!sx_discovery_scope',classes='rf-notice mt-4')
             with html.Details(v_if='sx_discovered && sx_discovery_rows.length',classes='mt-3'):
                 html.Summary('Construction details ({{ sx_discovery_rows.length }})')
@@ -178,6 +180,7 @@ def model_exploration(app):
                 v.VCheckbox(label='Follow new matching GPXs while this session is open',v_model=('sx_follow_new',),density='compact')
                 html.P('Each new scan is checked against the reviewed parent, sample, bank and recipe. Incompatible inputs wait for review.',classes='rf-notice')
                 v.VBtn('Build finite plan',click=(app.build_symmetry_plan,form),disabled=('sx_busy || sx_campaign_running || !sx_candidates.length || !sx_adequate',),variant='outlined',color='#15543c',classes='mt-3')
+                html.P('Enter an experiment-specific adequate Rwp above before building the plan. This is a reviewed fit-quality target, not a space-group assignment.',v_if='!sx_adequate',classes='rf-notice mt-2')
             with html.Div(v_if='sx_plan_ready',classes='mt-4'):
                 html.P('{{ sx_plan_summary }}',classes='rf-notice')
                 with html.Details():

@@ -86,6 +86,8 @@ if __name__=='__main__':
     elif sys.argv[1]=='modes-many':result=modes_many(request['children'],request['workers'],Path(sys.argv[3]).parent/'mode-inventories')
     elif sys.argv[1]=='export':
         from ..snapshot import gsas
-        project=gsas().G2Project(gpxfile=request['source']);project.phase(request['phase']).export_CIF(request['destination']);result=dict(path=request['destination'])
+        from .parent_export import export_exact_parent
+        project=gsas().G2Project(gpxfile=request['source'])
+        result=export_exact_parent(project.phase(request['phase']),request['destination'])
     else:raise ValueError('Unknown native preparation action')
     write_json(sys.argv[3],result)

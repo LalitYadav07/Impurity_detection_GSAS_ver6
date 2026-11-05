@@ -94,6 +94,30 @@ def test_batched_native_inventory_imports_the_packaged_occupancy_loader(tmp_path
     assert all(row['inventory']['import_receipt']['source_mode_counts']['displacive']==2 for row in result['items'])
 
 
+def test_numerical_parent_export_retains_refined_precision_and_original_gpx(tmp_path, synthetic):
+    import CifFile
+    from gpx_recipe.symmetry.parent_export import export_exact_parent
+    source, _, _, _, phase_name = synthetic
+    project = G.G2Project(gpxfile=str(source))
+    phase = project.phase(phase_name)
+    cx, ct, _, _ = phase.data['General']['AtomPtrs']
+    phase.data['Atoms'][0][cx+1] = .41302825940451562
+    phase.data['Atoms'][1][cx+1] = .14206451284333196
+    before = copy.deepcopy(phase.data)
+    source_hash = sha(source)
+    destination = tmp_path/'exact-parent.cif'
+    receipt = export_exact_parent(phase, destination)
+    cif = CifFile.ReadCif(str(destination))
+    block = next(cif[k] for k in cif.keys() if '_atom_site_label' in cif[k])
+    rows = {label: i for i, label in enumerate(block['_atom_site_label'])}
+    for atom in phase.data['Atoms']:
+        for index, axis in enumerate('xyz'):
+            assert float(block['_atom_site_fract_'+axis][rows[atom[ct-1]]]) == atom[cx+index]
+    assert sha(source) == source_hash
+    assert [a[cx:cx+4] for a in phase.data['Atoms']] == [a[cx:cx+4] for a in before['Atoms']]
+    assert receipt['precision_policy'] == 'native_float64_structure'
+
+
 def test_sequential_distortion_cell_shift_and_parent_return_recover_native_truth(tmp_path,synthetic):
     from gpx_recipe.structural_live.session import StructuralSession
     source,cif,transform,*_=synthetic;prepared=tmp_path/'prepared'

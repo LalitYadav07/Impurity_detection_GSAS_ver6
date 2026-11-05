@@ -33,3 +33,11 @@ def test_progress_counts_models_and_never_calls_an_inadequate_leader_qualified()
     rows[0]['status']='valid'
     assert 'Best qualified' in model_progress(rows)
     assert 'First checked fit pending' in model_progress(rows[2:])
+
+
+def test_failed_model_progress_does_not_look_like_a_waiting_first_fit():
+    rows=[dict(protocol='one',candidate='a',name='A',execution_state='terminal',
+               native_verified=False,has_view=False,status='technical_failure')]
+    text=model_progress(rows)
+    assert '1 / 1' in text and 'No checked fit returned' in text
+    assert 'First checked fit pending' not in text
