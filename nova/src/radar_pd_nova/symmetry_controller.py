@@ -452,7 +452,7 @@ class SymmetryMixin(KSearchMixin):
                     s.sx_progress+=f' · whole campaign {label}: {sum(v["received_count"] for v in summaries)} / {sum(v["declared_count"] for v in summaries)}'
                 from .symmetry_workspace import model_progress
                 s.sx_execution_detail=s.sx_progress
-                s.sx_progress=model_progress(rows) if rows else ''
+                s.sx_progress=(('Selected scan · ' if review_source is not None else '')+model_progress(rows)) if rows else ''
                 if rows:s.sx_message='Audited fits remain hypotheses. Matching calculated curves do not establish a unique space group.'
                 elif s.sx_enrollments:
                     pending=sum(e['status'] in {'queued','preparing'} for e in s.sx_enrollments)
