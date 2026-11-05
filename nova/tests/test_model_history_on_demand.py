@@ -58,12 +58,34 @@ def test_fresh_search_lists_sources_without_restoring_any_old_campaign(tmp_path,
 def test_tab_entry_does_not_overlap_owned_preparation(tmp_path, monkeypatch, operation):
     app, state = setup_app(tmp_path, monkeypatch)
     state.sx_busy = True
+    app._symmetry_navigation_identity=('', 'IPTS-1', 'experiment')
     state.sx_message = operation + ' in progress'
     state.sx_error = ''
     app._refinement_schedule = lambda *a: pytest.fail('Tab entry overlapped active preparation')
     app.refresh_symmetry()
     assert state.sx_busy and state.sx_message == operation + ' in progress'
     assert not app._symmetry_loading
+
+
+def test_scope_change_during_preparation_hides_stale_results_then_refreshes(tmp_path, monkeypatch):
+    app, state = setup_app(tmp_path, monkeypatch)
+    app._symmetry_navigation_identity=('', 'IPTS-1', 'experiment')
+    state.sx_busy=True;state.rf_experiment='IPTS-2';state.sx_results_current=True
+    state.sx_source_options=[{'value':'old-scan'}]
+    app.refresh_symmetry()
+    assert state.sx_busy and not state.sx_results_current and not state.sx_source_options
+    assert app._symmetry_refresh_pending
+    calls=[];app.refresh_symmetry=lambda:calls.append(state.rf_experiment)
+    app._finish_symmetry_preparation()
+    assert calls==['IPTS-2'] and not state.sx_busy and not app._symmetry_refresh_pending
+
+
+def test_experiment_change_invalidates_a_structural_discovery_reply():
+    state=State(rf_experiment='IPTS-1',sx_kind='structural',sx_parent='Parent',sx_k='0,0,0',
+                sx_start_source='source',sx_opd_policy='all',sx_construct_limit=100,sx_parent_reference='')
+    app=controller.SymmetryMixin();app.server=SimpleNamespace(state=state)
+    before=app._discovery_identity();state.rf_experiment='IPTS-2'
+    assert app._discovery_identity()!=before
 
 
 @pytest.mark.parametrize('failed', [False, True])

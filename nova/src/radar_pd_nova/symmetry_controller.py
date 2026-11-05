@@ -295,7 +295,11 @@ class SymmetryMixin(KSearchMixin):
         # Tab entry and polling must not take ownership of an in-flight parent
         # inspection, discovery, setup draft or campaign staging operation.
         # Those operations publish their own progress and release sx_busy.
-        if not self._symmetry_loading and getattr(self.server.state,'sx_busy',False):return
+        if not self._symmetry_loading and getattr(self.server.state,'sx_busy',False):
+            s=self.server.state
+            if (s.sx_campaign,s.rf_experiment,s.sx_result_scope)!=getattr(self,'_symmetry_navigation_identity',None):
+                self._symmetry_refresh_pending=True;s.sx_results_current=False;s.sx_source_options=[]
+            return
         if self._symmetry_loading:
             s=self.server.state
             if (s.sx_campaign,s.rf_experiment,s.sx_result_scope)!=self._symmetry_loading_identity:
@@ -495,6 +499,11 @@ class SymmetryMixin(KSearchMixin):
         selected=[r for r in rows if r['source']==source]
         return selected,display_groups(group_models(selected))
 
+    def _finish_symmetry_preparation(self):
+        self.server.state.sx_busy=False;self.server.state.flush()
+        if getattr(self,'_symmetry_refresh_pending',False):
+            self._symmetry_refresh_pending=False;self.refresh_symmetry()
+
     def _symmetry_source_data(self,source):
         self._symmetry_rows,self._symmetry_groups=self._symmetry_source_snapshot(self._symmetry_all_rows,source)
 
@@ -679,7 +688,7 @@ class SymmetryMixin(KSearchMixin):
                 s.sx_site_options=[dict(title=p['name']+' / '+a['label']+' ('+a['type']+')',value=a['label']) for p in context['phases'] if p['name']==s.sx_parent for a in p['atoms']]
                 s.sx_has_context=True;s.sx_setup=True;s.sx_message='Parent setting, operations and instrument coordinates captured from this exact GPX.'
             except Exception as exc:s.sx_error=str(exc);s.sx_message='Parent inspection stopped; review the error above.'
-            finally:s.sx_busy=False;s.flush()
+            finally:self._finish_symmetry_preparation()
         self._refinement_schedule(inspect(),'radar-symmetry-inspect')
 
     def plan_symmetry_request(self):
@@ -761,7 +770,7 @@ class SymmetryMixin(KSearchMixin):
                         except (OSError,TypeError,ValueError):
                             s.sx_planning_notes=['Failed setup replies could not be retained; no settings were accepted.']
                 s.sx_error=str(exc);s.sx_message='Setup planning stopped; review the error above.'
-            finally:s.sx_busy=False;s.flush()
+            finally:self._finish_symmetry_preparation()
         self._refinement_schedule(plan(),'radar-symmetry-plan')
 
     def discover_symmetry_candidates(self):
@@ -833,12 +842,12 @@ class SymmetryMixin(KSearchMixin):
                 s.sx_discovered=True;s.sx_plan_ready=False;s.sx_approved=False
                 s.sx_message=s.sx_discovery_scope+('. Review the finite plan before starting refinement.' if catalog['candidates'] else '. No refinement plan is available.')
             except Exception as exc:s.sx_error=str(exc);s.sx_message='Candidate discovery stopped; review the error above.'
-            finally:s.sx_busy=False;s.flush()
+            finally:self._finish_symmetry_preparation()
         self._refinement_schedule(discover(),'radar-symmetry-discovery')
 
     def _discovery_identity(self):
         s=self.server.state
-        identity=(s.sx_kind,s.sx_parent,s.sx_k,s.sx_start_source)
+        identity=(getattr(s,'rf_experiment',''),s.sx_kind,s.sx_parent,s.sx_k,s.sx_start_source)
         return identity+(s.sx_opd_policy,int(s.sx_construct_limit),getattr(s,'sx_parent_reference',''),'prepared_nonlinear') if s.sx_kind=='structural' else identity
 
     def _model_form(self,payload=None):
@@ -982,7 +991,7 @@ class SymmetryMixin(KSearchMixin):
                         store_start_barrier(*staged,current_only=True)
                 finally:
                     if self._model_start_cancel is cancelled:self._model_start_cancel=None
-                    s.sx_busy=False;s.flush()
+                    self._finish_symmetry_preparation()
         work=run()
         try:self._symmetry_task=self._refinement_schedule(work,'radar-symmetry-campaign')
         except BaseException:
@@ -1279,7 +1288,7 @@ class SymmetryMixin(KSearchMixin):
                 if isinstance(transport,GalaxyChunkTransport):transport.resume()
                 await self._drive_symmetry_campaign(campaign,transport)
             except Exception as exc:s.sx_error=str(exc)
-            finally:s.sx_busy=False;s.flush()
+            finally:self._finish_symmetry_preparation()
         self._symmetry_task=self._refinement_schedule(resume(),'radar-symmetry-continue')
 
     def prioritize_symmetry_acquisition(self):
