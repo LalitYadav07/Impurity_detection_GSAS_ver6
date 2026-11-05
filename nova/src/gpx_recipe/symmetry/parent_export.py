@@ -39,7 +39,12 @@ def export_exact_parent(phase, destination):
     block['_atom_site_occupancy'] = [number(atoms[label][cx+3]) for label in labels]
     for key, value in zip(('length_a', 'length_b', 'length_c', 'angle_alpha', 'angle_beta', 'angle_gamma'),
                           phase.data['General']['Cell'][1:7]):
-        block['_cell_'+key] = number(value)
+        # Native reciprocal/direct conversions can leave symmetry-equivalent
+        # lengths one ULP apart or an exact 120-degree angle just below 120.
+        # ISODISTORT compares those values strictly. Twelve significant digits
+        # remove arithmetic roundoff without uncertainty-driven table rounding.
+        block['_cell_'+key] = format(float(number(value)), '.12g')
     destination.write_text(cif.WriteOut())
-    return dict(path=str(destination), precision_policy='native_float64_structure',
+    return dict(path=str(destination), precision_policy='native_coordinates_precise_cell',
+                cell_significant_digits=12,
                 source_coordinates_unchanged=True, sites=len(labels))

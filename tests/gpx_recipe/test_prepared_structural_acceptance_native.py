@@ -115,7 +115,7 @@ def test_numerical_parent_export_retains_refined_precision_and_original_gpx(tmp_
             assert float(block['_atom_site_fract_'+axis][rows[atom[ct-1]]]) == atom[cx+index]
     assert sha(source) == source_hash
     assert [a[cx:cx+4] for a in phase.data['Atoms']] == [a[cx:cx+4] for a in before['Atoms']]
-    assert receipt['precision_policy'] == 'native_float64_structure'
+    assert receipt['precision_policy'] == 'native_coordinates_precise_cell'
 
 
 def test_sequential_distortion_cell_shift_and_parent_return_recover_native_truth(tmp_path,synthetic):
