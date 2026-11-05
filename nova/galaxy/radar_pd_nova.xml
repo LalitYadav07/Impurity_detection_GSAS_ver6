@@ -5,7 +5,7 @@
         <organization url="https://www.ornl.gov/" name="ORNL"/>
     </creator>
     <requirements>
-        <container type="docker" shell="/bin/bash">ghcr.io/lalityadav07/impurity_detection_gsas_ver6:nova-1726679c5f5d6f38214210d0d35bc28a4716881e</container>
+        <container type="docker" shell="/bin/bash">ghcr.io/lalityadav07/impurity_detection_gsas_ver6:nova-bcc8a2ad8e343754a5a5983c5b6c24cd24230968</container>
         <credentials name="ornl_illumine" version="1.0" label="ORNL Illumine"
                      description="Personal Illumine key for optional reviewed refinement recipes"
                      optional="true">
