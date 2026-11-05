@@ -102,6 +102,17 @@ jobs:
           ' > "${RUNNER_TEMP}/nova-upload-handlers.json"
           node nova/tests/client_upload.test.js "${RUNNER_TEMP}/nova-upload-handlers.json"
 
+          docker run --rm --entrypoint python \
+            "${IMAGE_NAME}:nova-${NOVA_VERSION}" -c '
+          import json
+          from pathlib import Path
+          import trame_client
+          from radar_pd_nova.feedback_ui import browser_private_delivery_js
+          runtime=Path(trame_client.__file__).parent/"module/vue3-www/vue.global.js"
+          print(json.dumps({"handler":browser_private_delivery_js(),"vue":runtime.read_text()}))
+          ' > "${RUNNER_TEMP}/nova-feedback-client.json"
+          node nova/tests/client_feedback.test.js "${RUNNER_TEMP}/nova-feedback-client.json"
+
       - name: Verify packaged Live, result recovery and transition regressions
         shell: bash
         run: |

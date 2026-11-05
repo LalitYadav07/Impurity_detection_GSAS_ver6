@@ -11,6 +11,19 @@ from trame.widgets import html, vuetify3 as v
 from .feedback import FeedbackDelivery, image_attachment, MAX_IMAGES
 
 
+def browser_private_delivery_js():
+    """Use qualified browser APIs inside Vue's component-scoped handler."""
+    return ("async () => { const prepared=await trigger('radar_contact_prepare',[]); if(!prepared)return;"
+        "try { if(new window.URL(prepared.origin).origin !== window.location.origin)throw new Error();"
+        "const who=await window.fetch('/api/users/current',{credentials:'same-origin',redirect:'error',cache:'no-store'});"
+        "if(!who.ok || (await who.json()).id !== prepared.owner_id)throw new Error();"
+        "const response=await window.fetch('/history/make_private?history_id='+encodeURIComponent(prepared.history_id),"
+        "{credentials:'same-origin',redirect:'error',cache:'no-store',headers:{Accept:'application/json'}});"
+        "if(!response.ok || !(await response.json()).message)throw new Error();"
+        "return trigger('radar_contact_send',[]);"
+        "}catch(e){return trigger('radar_contact_privacy_failed',[]);} }")
+
+
 class FeedbackMixin:
     def _init_feedback(self):
         self._feedback_images = []
@@ -142,15 +155,7 @@ class FeedbackMixin:
         self.server.controller.trigger('radar_contact_prepare')(self.prepare_contact_report)
         self.server.controller.trigger('radar_contact_send')(self.send_contact_report)
         self.server.controller.trigger('radar_contact_privacy_failed')(self.contact_privacy_failed)
-        send_js = ("async () => { const prepared=await trigger('radar_contact_prepare',[]); if(!prepared)return;"
-            "try { if(new URL(prepared.origin).origin !== window.location.origin)throw new Error();"
-            "const who=await fetch('/api/users/current',{credentials:'same-origin',redirect:'error',cache:'no-store'});"
-            "if(!who.ok || (await who.json()).id !== prepared.owner_id)throw new Error();"
-            "const response=await fetch('/history/make_private?history_id='+encodeURIComponent(prepared.history_id),"
-            "{credentials:'same-origin',redirect:'error',cache:'no-store',headers:{Accept:'application/json'}});"
-            "if(!response.ok || !(await response.json()).message)throw new Error();"
-            "return trigger('radar_contact_send',[]);"
-            "}catch(e){return trigger('radar_contact_privacy_failed',[]);} }")
+        send_js = browser_private_delivery_js()
         paste = ("async ($event) => { if(contact_pending || contact_uploading)return; const files=Array.from($event.clipboardData?.items || [])"
                  ".filter(i=>i.kind==='file' && i.type.startsWith('image/')).map(i=>i.getAsFile());"
                  " if (!files.length) return; $event.preventDefault();"
