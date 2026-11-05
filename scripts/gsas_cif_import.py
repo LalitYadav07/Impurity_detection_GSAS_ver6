@@ -9,6 +9,7 @@ repaired by changing atom occupancies or guessing a different structure.
 from __future__ import annotations
 
 from collections import defaultdict
+import copy
 import hashlib
 import importlib.util
 import json
@@ -54,6 +55,31 @@ def elemental_counts(atom_types):
             result[match[1]] += amount
     return dict(result)
 
+
+def refresh_native_inventory(phase, setup_general):
+    """Rebuild stale native totals after the importer's ionic normalization.
+
+    GSAS-II can normalize an unsupported charge label in the atom list while
+    overwriting (rather than accumulating) NoAtoms for repeated instances.
+    Re-running native setup on the normalized records fixes bookkeeping. It
+    must not change an atom or replace the independent composition check.
+    """
+    atoms=copy.deepcopy(phase['Atoms'])
+    before=copy.deepcopy(phase['General']['NoAtoms'])
+    setup_general(phase, '')
+    if atoms != phase['Atoms']:
+        raise ValueError('Native inventory refresh changed atom records; import review required')
+    cx,ct,cs,_=phase['General']['AtomPtrs']
+    expected=defaultdict(float)
+    for atom in atoms:
+        contribution=float(atom[cx+3])*float(atom[cs+1])
+        if not math.isfinite(contribution) or contribution < 0:
+            raise ValueError('Invalid atom population during inventory refresh')
+        expected[atom[ct]]+=contribution
+    actual=phase['General']['NoAtoms']
+    if set(expected)!=set(actual) or any(not math.isclose(expected[k],actual[k],rel_tol=1e-10,abs_tol=1e-10) for k in expected):
+        raise ValueError('Native totals disagree with unchanged atom populations')
+    return dict(before=before,after=copy.deepcopy(actual),atom_records_unchanged=True)
 
 def _operator_sets(operations):
     return _occupancy_review_module().operator_sets(operations)
@@ -165,12 +191,12 @@ def add_verified_phase(project, cif_file, **kwargs):
     source_bytes = source.read_bytes()
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        from cif_occupancy import load_authorized_structure
+        from gpx_recipe.cif_occupancy import load_authorized_structure
         original = load_authorized_structure(source)
     # Elemental aggregation already ignores oxidation states. Mutating each
     # species through pymatgen's setter would reject an explicitly reviewed
     # small excess, even though its unchanged values are the import reference.
-    from cif_occupancy import authorized_review, raw_sites, species_inventory, species_key, _species
+    from gpx_recipe.cif_occupancy import authorized_review, raw_sites, species_inventory, species_key, _species
     expected = species_inventory(original)
     review = authorized_review(source)
     cache = Path(project.filename).resolve().parent / "verified_cif_settings"
@@ -179,6 +205,12 @@ def add_verified_phase(project, cif_file, **kwargs):
     phase = project.add_phase(str(prepared), **kwargs)
     if source.read_bytes() != source_bytes or prepared.read_bytes() != prepared_bytes:
         raise ValueError("CIF changed during verified import; retry from an immutable reviewed source")
+    inventory_refresh=None
+    # The actual native project has already imported its scriptable module.
+    # Keep strict CIF validation usable before GSAS-II is loaded.
+    if type(project).__module__.startswith('GSASII'):
+        from GSASII import GSASIIscriptable as G2sc
+        inventory_refresh=refresh_native_inventory(phase.data,G2sc.SetupGeneral)
     actual = elemental_counts(phase.data['General']['NoAtoms'])
     e_sum, a_sum = sum(expected.values()), sum(actual.values())
     if not e_sum > 0 or not a_sum > 0 or set(expected) != set(actual) or any(
@@ -210,10 +242,11 @@ def add_verified_phase(project, cif_file, **kwargs):
     receipt = {"schema": VERSION, "source": str(source),
                "source_sha256": hashlib.sha256(source_bytes).hexdigest(),
                "imported_cif": str(prepared), "imported_cif_sha256": hashlib.sha256(prepared_bytes).hexdigest(),
+               "native_inventory_refresh": inventory_refresh,
                "expected_elemental_counts": expected, "imported_elemental_counts": actual,
                "relative_elemental_inventory_preserved": True, "phase": phase.name}
     if review is not None:
-        from cif_occupancy import model_fields
+        from gpx_recipe.cif_occupancy import model_fields
         receipt['occupancy_review']=review
         receipt['absolute_counts_and_site_values_preserved']=True
         native_review = _occupancy_review_module()

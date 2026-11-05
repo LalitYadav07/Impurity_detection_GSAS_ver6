@@ -265,10 +265,11 @@ class GalaxyRefinementRuntime(LocalRefinementRuntime):
             write_json(acknowledged,record)
             if on_submitted:on_submitted(record)
         started=time.monotonic()
-        while job.status not in {RunStatus.OK,RunStatus.ERROR}:
+        while job.status not in {RunStatus.OK,RunStatus.ERROR,RunStatus.CANCELLED}:
             if time.monotonic()-started>self.timeout:raise RuntimeUnavailable('Galaxy refinement is still pending; recover the existing job before retrying')
             time.sleep(self.poll_seconds);self.service.refresh_utility(job)
         if job.status==RunStatus.ERROR:raise RuntimeError(job.message or 'The Galaxy refinement worker failed')
+        if job.status==RunStatus.CANCELLED:raise RuntimeUnavailable('The Galaxy refinement job was cancelled; it is not still queued')
         bundle=job.outputs.get('result_bundle')
         if not bundle:raise RuntimeError('Galaxy refinement completed without its result bundle')
         archive=directory/'result.zip';self.service._download_dataset(bundle,archive)

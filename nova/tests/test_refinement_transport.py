@@ -32,6 +32,15 @@ def runtime(tmp_path):
  return rt,service,source
 
 
+def test_cancelled_native_job_is_terminal_without_polling_or_result_download(tmp_path,monkeypatch):
+ rt,service,source=runtime(tmp_path)
+ job=service.job();job.status=RunStatus.CANCELLED
+ service.job=lambda:job
+ service.refresh_utility=lambda *_:pytest.fail('A cancelled job must not be polled as pending')
+ with pytest.raises(RuntimeUnavailable,match='cancelled'):
+  rt.call('inspect',source,tmp_path/'cancelled',dispatch_key='c'*24)
+
+
 def test_capacity_refusal_does_not_claim_a_submitted_recipe(tmp_path,monkeypatch):
  from radar_pd_nova.native_job_admission import AdmissionUnavailable
  rt,s,source=runtime(tmp_path)

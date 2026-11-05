@@ -76,7 +76,7 @@ def rebind(template,context,source,origin):
         previous=prior[key]
         if a['type']!=previous['type'] or not math.isclose(a['occupancy'],previous['occupancy'],rel_tol=0,abs_tol=1e-8):
             raise ValueError('Parent chemistry/occupancy changed; inspect a new plan')
-        if protocol['kind']=='structural' and any(abs((v-w+.5)%1-.5)>1e-6 for v,w in zip(a['xyz'],previous['xyz'])):
+        if protocol['kind']=='structural' and 'structural_reference' not in protocol and any(abs((v-w+.5)%1-.5)>1e-6 for v,w in zip(a['xyz'],previous['xyz'])):
             raise ValueError('Parent positions changed; regenerate the structural mode basis for this scan')
     old_hist=next(h for h in template['context']['histograms'] if h['name']==protocol['histogram'])
     choices=[h for h in context['histograms'] if h['name'] in new['histograms'] and _value(h,'Type')==_value(old_hist,'Type')]

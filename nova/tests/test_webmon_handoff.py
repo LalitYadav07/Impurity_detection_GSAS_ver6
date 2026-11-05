@@ -4,7 +4,7 @@ from radar_pd_nova.webmon.ui import WebmonMixin
 
 
 @pytest.mark.parametrize('published',[True,False])
-def test_posterior_handoff_never_uses_parent_dataset(published):
+def test_magnetic_recipe_handoff_is_gated_until_inspector_supports_magnetism(published):
     obj=WebmonMixin();messages=[];selected={}
     state=SimpleNamespace(webmon_busy=False,webmon_model='posterior',powgen_ipts='1',webmon_target='2',
         webmon_rows=[dict(posterior='posterior',fitted_dataset_id='posterior-hda' if published else None)],flush=lambda:None)
@@ -15,15 +15,24 @@ def test_posterior_handoff_never_uses_parent_dataset(published):
     obj._webmon=SimpleNamespace(selected_checkpoint=lambda *a:choice)
     obj._webmon_handoff_source=lambda source,prompt:selected.update(source)
     obj.webmon_open_posterior_refinement()
-    if published:
-        assert selected['dataset_id']=='posterior-hda'
-        assert selected['source_path']=='/verified/posterior.gpx'
-        assert 'collection_id' not in selected
-        assert selected['run_id']=='PG3_2'
-        assert 'galaxy_job_id' not in selected
-    else:
-        assert not selected
-        assert 'not been mapped' in state.webmon_message
+    assert not selected
+    assert 'nuclear projects only' in state.webmon_message
+
+
+def test_magnetic_gpx_download_is_bound_to_the_fitted_bytes(tmp_path):
+    from gpx_recipe.live.contracts import file_hash
+    obj=WebmonMixin();downloads=[]
+    state=SimpleNamespace(webmon_busy=False,webmon_model='fit',flush=lambda:None)
+    obj.server=SimpleNamespace(state=state)
+    path=tmp_path/'fitted.gpx';path.write_bytes(b'actual magnetic checkpoint')
+    post=dict(fitted_gpx=str(path),gpx_export=dict(fitted_gpx_sha256=file_hash(path)))
+    obj._webmon_post=lambda _:post
+    obj.download_file=lambda *args:downloads.append(args)
+    obj.webmon_download_posterior_gpx()
+    assert downloads[0][2]==b'actual magnetic checkpoint'
+    path.write_bytes(b'changed')
+    obj.webmon_download_posterior_gpx()
+    assert len(downloads)==1 and 'No intact fitted' in state.webmon_message
 
 
 def test_dispatch_identity_uses_content_not_temporary_host_paths():

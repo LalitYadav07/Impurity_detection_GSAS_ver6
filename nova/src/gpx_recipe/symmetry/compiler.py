@@ -20,7 +20,7 @@ def confined(root,relative,*,exists=True):
 
 
 def assets(protocol):
-    return [protocol['source'],protocol['catalog']]+[c['child'] for c in protocol['candidates'] if c['child']]
+    return [protocol['source'],protocol['catalog']]+([protocol['structural_reference']] if 'structural_reference' in protocol else [])+[c['child'] for c in protocol['candidates'] if c['child']]
 
 
 SHARED_ENTRYPOINT = 'from pathlib import Path\nimport sys\nimport gpx_recipe\nsys.path.insert(0,str(Path(gpx_recipe.__file__).parent/"symmetry/adapters"))\nfrom gpx_recipe.symmetry.worker import main\nif __name__ == "__main__":\n    main(Path(__file__).resolve().parent)\n'
@@ -126,7 +126,7 @@ def package_signature():
     root=Path(__file__).parent.parent
     # Include transitive native dependencies such as freeze(), extraction and
     # constraint auditing, not just the new symmetry entry points.
-    values={str(p.relative_to(root)):file_sha(p) for p in sorted(root.rglob('*')) if p.is_file() and p.suffix in {'.py','.json'}}
+    values={str(p.relative_to(root)):file_sha(p) for p in sorted(root.rglob('*')) if p.is_file() and p.suffix in {'.py','.json','.csv'}}
     return digest(values)
 
 
@@ -134,7 +134,7 @@ def freeze_runtime(destination):
     """Ship the approved code as data beside the compiled, trusted entry point."""
     root=Path(__file__).parent.parent;destination=Path(destination)
     for path in root.rglob('*'):
-        if path.is_file() and (path.suffix in {'.py','.json'} or path.name.endswith('LICENSE')):
+        if path.is_file() and (path.suffix in {'.py','.json','.csv'} or path.name.endswith('LICENSE')):
             target=destination/'gpx_recipe'/path.relative_to(root)
             target.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(path,target)
     for name in ['gsas_magnetic_preflight.py','gsas_isodistort_import.py','gsas_cif_import.py']:

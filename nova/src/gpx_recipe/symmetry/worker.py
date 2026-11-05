@@ -81,7 +81,10 @@ def execute(directory,*,screened=None):
         if protocol['kind']=='magnetic':
             from .native_magnetic import run
         else:
-            from .native_structural import run
+            if protocol['policy'].get('structural_optimizer')=='prepared_nonlinear':
+                from .native_prepared_structural import run
+            else:
+                from .native_structural import run
         if screened is not None and protocol['kind']!='magnetic':
             raise TrialDisposition('integrity_failure','A magnetic screened solution cannot replace structural refinement')
         result=(run(source,ctx,protocol,candidate,seed,screened=screened)
@@ -89,7 +92,8 @@ def execute(directory,*,screened=None):
         mark('model_and_refinement_seconds')
         response.update(result)
         from .native_audit import audit_trial
-        response['audit']=audit_trial(source,output/result['gpx'],protocol,candidate)
+        reference=confined(input_root,protocol['structural_reference']['path']) if 'structural_reference' in protocol else None
+        response['audit']=audit_trial(source,output/result['gpx'],protocol,candidate,**(dict(reference_source=reference) if reference else {}))
         mark('independent_audit_seconds')
         response['native_reported_rwp']=response.get('rwp');response['rwp']=response['audit']['rwp_recomputed']
         registered=output/'artifacts.json'

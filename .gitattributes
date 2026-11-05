@@ -9,3 +9,6 @@ nova/src/radar_pd_nova/data/powgen_calibrations/*.instprm -whitespace
 
 # HB-2A hashes cover original published bytes, including their line endings.
 nova/src/radar_pd_nova/data/hb2a_calibrations/*.instprm -text -whitespace
+
+# Structural contact catalogs are bound by their original byte checksums.
+nova/src/gpx_recipe/structural_live/optimization/chemistry-*.csv -text whitespace=cr-at-eol

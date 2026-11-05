@@ -1,0 +1,25 @@
+{
+  "schema_version": 2,
+  "catalog": "mp_cod_ordered",
+  "mode": "screened_empirical_minimum",
+  "quality": {
+    "schema_version": 1,
+    "absolute_screen_angstrom": 0.5,
+    "covalent_radius_fraction": 0.7,
+    "no_credible_source": "no_minimum",
+    "selection": "minimum_of_credible_sources"
+  },
+  "distribution_use": "Pooled moments are diagnostics only; no histogram or density is available",
+  "application": "All occupied periodic contacts; explicit extrapolation from CrystalNN bonds",
+  "model_prior": "Normalize within-model conditioned prior; preserve model odds",
+  "universal_physical_law": false,
+  "production_qualified": false,
+  "statistics": "chemistry-statistics.csv",
+  "statistics_sha256": "0c18fe2107daccf4eef86242687f71ef944a8e3556eb521b5dd2faae64b61fff",
+  "mp_statistics": "chemistry-mp_statistics.csv",
+  "mp_statistics_sha256": "a27859254cbd754b2a83a03189e2c194dd806b8a92259aa6f8c965b1453d5e88",
+  "cod_statistics": "chemistry-cod_statistics.csv",
+  "cod_statistics_sha256": "891af6b953af5b803ac576e06b25ca304e3c89bca442506d9801f645005902c4",
+  "radii": "chemistry-covalent_radii.json",
+  "radii_sha256": "3eec755e17d9731c89a0df405e22dbdd2572ee1df82fb3f081cadd8b75587955"
+}

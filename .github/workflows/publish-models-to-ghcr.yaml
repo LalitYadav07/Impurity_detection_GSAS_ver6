@@ -61,6 +61,15 @@ jobs:
           os.environ["BCS_API_KEY"]="must-not-transfer"
           assert not any("KEY" in k or "TOKEN" in k for k in scientific_environment())
           print("Verified worker implementation",package_signature())'
+          docker run --rm --entrypoint python "$IMAGE" -c '
+          from pathlib import Path
+          from gpx_recipe.structural_live.optimization import native_fast_candidate
+          from gpx_recipe.structural_live.optimization.empirical_catalog import load_declared_catalog
+          from gpx_recipe.structural_live.service import SearchSettings
+          policy=Path(native_fast_candidate.__file__).with_name("empirical_chemistry_policy.json")
+          assert load_declared_catalog(policy).fingerprint
+          assert SearchSettings().starts >= 2
+          print("Verified packaged structural service and contact data")'
           docker run --rm --entrypoint python "$IMAGE" /opt/radar-symmetry/ndip_model_campaign.py --help
       - name: Verify resource, protocol and runtime gates
         run: |
@@ -82,6 +91,10 @@ jobs:
             /validation/tests/gpx_recipe/test_profiled_magnetic.py \
             /validation/tests/gpx_recipe/test_grouped_profile_receipts.py \
             /validation/tests/gpx_recipe/test_profiled_optimizer_contract.py \
+            /validation/tests/gpx_recipe/test_structural_reduced_service.py \
+            /validation/tests/gpx_recipe/test_structural_live_basis.py \
+            /validation/tests/gpx_recipe/test_structural_live_native_profile.py \
+            /validation/tests/gpx_recipe/test_structural_live_refinable_export.py \
             /validation/tests/gpx_recipe/test_profiled_solver_native.py'
       - name: Publish verified immutable image
         run: docker push "$IMAGE"

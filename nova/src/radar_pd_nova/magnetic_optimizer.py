@@ -17,6 +17,10 @@ def selected_optimizer_settings(kind, optimizer, iterations):
 
 
 def optimizer_budget_label(policy):
+    if policy.get('structural_optimizer')=='prepared_nonlinear':
+        return (f"One prepared nonlinear work unit per child, with {policy['structural_starts']} starting guesses. "
+                f"{policy['structural_seconds']} s optimization and {policy['structural_recovery_seconds']} s recovery per model, "
+                "plus construction, starting-curve preparation and independent export verification.")
     if policy.get('magnetic_optimizer') == 'profiled_quadratic':
         grouped=('One checked surrogate per model; all starts are screened together, then distinct calculated profiles are verified natively. ' if policy.get('grouped_surrogate') else '')
         return (grouped+f"Up to {policy['optimizer_iterations']} profiled optimizer iterations per start. "

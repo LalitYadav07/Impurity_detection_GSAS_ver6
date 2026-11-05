@@ -48,7 +48,8 @@ from gpx_recipe.symmetry.templates import make_template,trial_count,validate_tem
 MODEL_FIELDS=('sx_kind','sx_moment_model','sx_magnetic_optimizer','sx_optimizer_iterations','sx_refine_scale','sx_refine_background','sx_parent','sx_histogram','sx_k','sx_sites','sx_form_factors','sx_lande',
     'sx_directions','sx_adequate','sx_max_moment','sx_mag_d_min','sx_max_mode','sx_start_mode','sx_cycles',
     'sx_sign_starts','sx_candidates','sx_modes','sx_existing','sx_follow_new','sx_max_scans','sx_request',
-    'sx_opd_policy','sx_construct_limit','sx_selected_scans')
+    'sx_opd_policy','sx_construct_limit','sx_selected_scans','sx_structural_optimizer','sx_structural_starts',
+    'sx_structural_seconds','sx_structural_radius','sx_structural_cells','sx_structural_recovery','sx_parent_reference')
 
 
 class SymmetryMixin(KSearchMixin):
@@ -66,7 +67,9 @@ class SymmetryMixin(KSearchMixin):
         for key,value in defaults.items():setattr(s,key,value)
         extra=dict(sx_existing='selected',sx_selected_scans=[],sx_selectable_scans=[],sx_follow_new=False,sx_max_scans=200,sx_enrollments=[],sx_priority_acquisition='',sx_priority_options=[],sx_priority_notice='',sx_retry_acquisition='',sx_retry_options=[],sx_retry_notice='',sx_following=False,sx_campaign_running=False,sx_pause_pending=False,sx_parallel_jobs=4,
             sx_queue_notice='',sx_backend='',sx_batches=[],sx_plan_token='',sx_cancel_notice='Cancelling a Galaxy chunk stops all starts in that job.',
-            sx_opd_policy='highest-symmetry-per-irrep',sx_construct_limit=100)
+            sx_opd_policy='highest-symmetry-per-irrep',sx_construct_limit=100,
+            sx_structural_optimizer='native_reference',sx_structural_starts=4,sx_structural_seconds=20.,
+            sx_structural_radius=.05,sx_structural_cells=.0008,sx_structural_recovery=0.,sx_parent_reference='')
         for key,value in extra.items():setattr(s,key,value)
         self._symmetry_defaults={**defaults,**extra}
         s.change('rf_mode')(self._symmetry_mode_changed)
@@ -80,6 +83,8 @@ class SymmetryMixin(KSearchMixin):
         s.change('sx_existing','sx_follow_new','sx_max_scans','sx_selected_scans')(self._symmetry_unapprove)
         s.change('sx_moment_model','sx_refine_scale','sx_refine_background')(self._symmetry_unapprove)
         s.change('sx_magnetic_optimizer','sx_optimizer_iterations')(self._symmetry_unapprove)
+        s.change('sx_structural_optimizer','sx_structural_starts','sx_structural_seconds',
+                 'sx_structural_radius','sx_structural_cells','sx_structural_recovery','sx_parent_reference')(self._symmetry_unapprove)
         s.change('sx_candidates','sx_modes')(self._symmetry_unapprove)
         s.change('sx_opd_policy','sx_construct_limit')(self._symmetry_unapprove)
         s.change('sx_start_source')(self._symmetry_start_changed)
@@ -757,8 +762,25 @@ class SymmetryMixin(KSearchMixin):
                 identity=self._discovery_identity();root=d['root']
                 if s.sx_kind=='magnetic':catalog=await asyncio.to_thread(discover_magnetic,parent,k,api_key=os.environ.get('BCS_API_KEY',''))
                 else:
+                    parent_source=root/'source.gpx'
+                    d.pop('reference_asset',None)
+                    if s.sx_parent_reference:
+                        if s.sx_structural_optimizer!='prepared_nonlinear':raise ValueError('Separate parent reference requires the prepared structural solver')
+                        w=self._refinement_store()
+                        reference=await asyncio.to_thread(resolve_start,w,s.rf_experiment,s.sx_parent_reference)
+                        captured=await asyncio.to_thread(w.runtime.resolve,reference)
+                        reference_root=root/'reference'/captured['source_sha256']
+                        context=await asyncio.to_thread(self._inspect_model_input,captured,reference_root)
+                        selected=next((p for p in context['phases'] if p['name']==s.sx_parent),None)
+                        if selected is None or selected['setting_sha256']!=parent['setting_sha256']:
+                            raise ValueError('The reference needs the same named parent phase and exact setting as the target')
+                        target_sites={(a['label'],a['type'],a['occupancy']) for a in parent['atoms']}
+                        if target_sites!={(a['label'],a['type'],a['occupancy']) for a in selected['atoms']}:
+                            raise ValueError('Reference and target parent site chemistry or occupancy differ')
+                        parent=selected;parent_source=reference_root/'source.gpx'
+                        d['reference_asset']=dict(path=str(parent_source.relative_to(root)),sha256=captured['source_sha256'])
                     parent_cif=root/'parent.cif'
-                    await asyncio.to_thread(self._symmetry_native,'export',dict(source=str(root/'source.gpx'),phase=s.sx_parent,destination=str(parent_cif)),root)
+                    await asyncio.to_thread(self._symmetry_native,'export',dict(source=str(parent_source),phase=s.sx_parent,destination=str(parent_cif)),root)
                     discovery=root/('isodistort-'+uuid.uuid4().hex)
                     def inventory_many(children):
                         rows=[]
@@ -790,7 +812,7 @@ class SymmetryMixin(KSearchMixin):
     def _discovery_identity(self):
         s=self.server.state
         identity=(s.sx_kind,s.sx_parent,s.sx_k,s.sx_start_source)
-        return identity+(s.sx_opd_policy,int(s.sx_construct_limit)) if s.sx_kind=='structural' else identity
+        return identity+(s.sx_opd_policy,int(s.sx_construct_limit),getattr(s,'sx_parent_reference',''),getattr(s,'sx_structural_optimizer','native_reference')) if s.sx_kind=='structural' else identity
 
     def _model_form(self,payload=None):
         s=self.server.state
@@ -814,8 +836,15 @@ class SymmetryMixin(KSearchMixin):
             sites=[]
             if s.sx_kind=='magnetic':
                 sites=sites_from_inputs(s.sx_sites,s.sx_form_factors,s.sx_lande)
-            settings=dict(acquisition_id=d['source_id'],kind=s.sx_kind,parent=s.sx_parent,histogram=s.sx_histogram,k=[str(Fraction(v.strip())) for v in s.sx_k.split(',')],candidates=list(s.sx_candidates),modes=list(s.sx_modes),sites=sites,directions=list(s.sx_directions),adequate_rwp=float(s.sx_adequate),maximum_moment=float(s.sx_max_moment),magnetic_d_min=float(s.sx_mag_d_min),maximum_mode=float(s.sx_max_mode),start_mode=float(s.sx_start_mode),cycles=int(s.sx_cycles),relative_sign_starts=s.sx_sign_starts)
+            settings=dict(acquisition_id=d['source_id'],kind=s.sx_kind,parent=s.sx_parent,histogram=s.sx_histogram,k=[str(Fraction(v.strip())) for v in s.sx_k.split(',')],candidates=list(s.sx_candidates),modes=list(s.sx_modes),sites=sites,directions=list(s.sx_directions),adequate_rwp=float(s.sx_adequate),maximum_moment=float(s.sx_max_moment) if s.sx_kind=='magnetic' else 10.,magnetic_d_min=float(s.sx_mag_d_min) if s.sx_kind=='magnetic' else 0.,maximum_mode=float(s.sx_max_mode),start_mode=float(s.sx_start_mode),cycles=int(s.sx_cycles),relative_sign_starts=s.sx_sign_starts)
             if s.sx_kind=='magnetic':settings.update(moment_model=s.sx_moment_model,refine_histogram_scale=s.sx_refine_scale,refine_background=s.sx_refine_background)
+            if s.sx_kind=='structural' and s.sx_structural_optimizer=='prepared_nonlinear':
+                settings.update(structural_optimizer='prepared_nonlinear',structural_starts=int(s.sx_structural_starts),
+                    structural_seconds=float(s.sx_structural_seconds),structural_mode_radius=float(s.sx_structural_radius),
+                    structural_cell_radius=float(s.sx_structural_cells),structural_recovery_seconds=float(s.sx_structural_recovery))
+                if s.sx_parent_reference:
+                    if not d.get('reference_asset'):raise ValueError('Discover candidates using the selected parent reference first')
+                    settings['structural_reference']=d['reference_asset']
             settings.update(selected_optimizer_settings(s.sx_kind,s.sx_magnetic_optimizer,s.sx_optimizer_iterations))
             p=build_plan(d['context'],d['catalog'],d['root'],settings);verify_inputs(p,d['root']);d.update(protocol=p,settings=settings)
             w=self._refinement_store()
@@ -828,6 +857,11 @@ class SymmetryMixin(KSearchMixin):
             s.sx_plan_candidates=[dict(name=c['magnetic_space_group'] or c['irrep'],bns=c['bns_number'] or '—',basis=str(c['transformation_matrix']),origin=str(c['origin_shift']),modes=', '.join(c['modes']) or magnetic_scope) for c in p['candidates']]
             free='Selected modes, cell, background and global scale' if s.sx_kind=='structural' else magnetic_scope+('; shared nuclear/magnetic histogram scale varied' if s.sx_refine_scale else '; all scales fixed')+('; existing background coefficients varied' if s.sx_refine_background else '; background fixed')+'; nuclear geometry fixed'
             if s.sx_kind=='magnetic':free+=('; all fitted d spacings' if settings['magnetic_d_min']==0 else f"; magnetic d ≥ {settings['magnetic_d_min']} Å")
+            if settings.get('structural_optimizer')=='prepared_nonlinear':
+                free=(f"Prepared nonlinear pilot: all physical modes, with only origin gauges removed; {settings['structural_starts']} starting guesses per model; "
+                    f"{settings['structural_seconds']} s optimization plus {settings['structural_recovery_seconds']} s recovery per model. "
+                    f"Each independent displacement coordinate is bounded to ±{settings['structural_mode_radius']} Å RMS; reciprocal-metric coordinates to ±{settings['structural_cell_radius']}. "
+                    "Common scale and a bounded additive Back;0 correction vary; higher background coefficients and other phases stay fixed. Verified point estimates require optimization review; no model probabilities or automatic structure assignment")
             s.sx_plan_summary=f"{len(p['candidates'])} embeddings · {sum(1 for _ in iter_trials(p))} finite trials. {optimizer_budget_label(p['policy'])} {free}. Instrument, occupancy and displacement parameters fixed. Adequacy: Rwp ≤ {s.sx_adequate}%."
             s.sx_plan_summary+=f" {len(template['existing_ids'])} selected scans · {trial_count(template)} starts per scan · maximum {template['maximum_scans']} scans. Following new scans: {'on' if template['future'] else 'off'}."
             s.sx_plan_summary+=f" Existing-cohort budget: {len(template['existing_ids'])*trial_count(template):,} starts before per-scan compatibility checks."

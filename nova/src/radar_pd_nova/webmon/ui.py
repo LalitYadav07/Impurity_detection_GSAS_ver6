@@ -344,7 +344,8 @@ class WebmonMixin:
                         v.VSelect(label='Inspect setting',v_model=('webmon_model',),items=('webmon_models',),item_title='title',item_value='value',update_modelValue=(self.webmon_show_model,'[$event]'),density='compact')
                         v.VAlert(text=('webmon_boundary',),type='warning',variant='tonal',density='compact')
                         html.P('{{ webmon_sampling }}')
-                        v.VBtn('Use selected checkpoint in Refinement',click=self.webmon_open_posterior_refinement,disabled=('!webmon_model || webmon_busy',),variant='outlined')
+                        v.VBtn('Download magnetic GPX',click=self.webmon_download_posterior_gpx,disabled=('!webmon_model || webmon_busy',),variant='outlined')
+                        html.P('Continue magnetic models in GSAS-II. Custom recipe planning currently accepts nuclear projects; it does not yet support magnetic moment or structural mode targets.')
                         html.P('Uses a separately saved project at the selected posterior maximum. It is conditional on the fixed nuclear response and carries no inherited covariance.')
                         html.P('Intervals are conditional on the fixed nuclear model. Small intervals do not establish accuracy.')
                         with html.Div(classes='wm-smallplot'):self._webmon_moments=plotly.Figure(display_mode_bar=True)
@@ -777,30 +778,35 @@ class WebmonMixin:
         finally:self._refinement_internal=False
         self._refinement_sync();self.inspect_refinement_project()
 
-    def webmon_open_posterior_refinement(self,**_):
-        import copy
+    def _webmon_validate_posterior_owner(self):
+        if self._webmon_live_scope():
+            choice=self._webmon.selected_checkpoint(self._webmon_effective_ipts(),self.server.state.webmon_target)
+            if not choice or not choice.get('refinement_source'):
+                raise ValueError('The original experiment source is unavailable')
+            self._webmon_require_reference(choice['refinement_source'],self._webmon_require_target(self.server.state.webmon_target))
+
+    def webmon_download_posterior_gpx(self,**_):
+        from pathlib import Path
+        from .contracts import file_hash
         s=self.server.state
         if s.webmon_busy:return
         try:
+            self._webmon_validate_posterior_owner()
             post=self._webmon_post(s.webmon_model)
-            path=post.get('fitted_gpx');export=post.get('gpx_export') or {}
-            if not path:raise ValueError('This result has no verified posterior project; the starting project is not a fitted output')
-            choice=self._webmon.selected_checkpoint(self._webmon_effective_ipts(),s.webmon_target)
-            if not choice or not choice.get('refinement_source'):raise ValueError('The original experiment source is unavailable')
-            if choice['source_sha256']!=self._webmon_request['reference_revision'].split(':')[-1]:raise ValueError('Select the reference used by this posterior first')
-            if self._webmon_live_scope():
-                self._webmon_require_reference(choice['refinement_source'],self._webmon_require_target(s.webmon_target))
-            from .lineage import posterior_source
-            checksum=export['fitted_gpx_sha256']
-            row=next(r for r in s.webmon_rows if r.get('posterior')==s.webmon_model)
-            if not self._webmon_is_local() and not row.get('fitted_dataset_id'):
-                raise ValueError('The verified posterior GPX has not been mapped to a Galaxy collection element yet')
-            source=posterior_source(choice['refinement_source'],revision=self._webmon_request['source_revision'],
-                path=path,checksum=checksum,rwp=post['rwp'],scope=(getattr(self,'_webmon_plot_binding',None) or {}).get('source_scope'))
-            if row.get('fitted_dataset_id'):source['dataset_id']=row['fitted_dataset_id']
-            self._webmon_handoff_source(source,'Inspect this conditional magnetic checkpoint and its fixed nuclear reference. Preserve its phases, moment constraints, fit limits and instrument parameters. Propose refinements for review; do not infer native convergence or uncertainty from the saved starting state.')
-        except Exception as exc:s.webmon_message=f'Posterior handoff unavailable: {exc}'
+            path=post.get('fitted_gpx');expected=(post.get('gpx_export') or {}).get('fitted_gpx_sha256')
+            if not path or not expected or file_hash(path)!=expected:
+                raise ValueError('No intact fitted magnetic GPX is available for this result')
+            self.download_file('radar-pd-magnetic.gpx','application/octet-stream',Path(path).read_bytes())
+        except Exception as exc:s.webmon_message=f'Magnetic GPX download unavailable: {exc}'
         s.flush()
+
+    def webmon_open_posterior_refinement(self,**_):
+        try:
+            self._webmon_validate_posterior_owner()
+            self.server.state.webmon_message='Custom recipes accept nuclear projects only. Download this magnetic GPX and continue in GSAS-II.'
+        except Exception as exc:self.server.state.webmon_message=f'Posterior handoff unavailable: {exc}'
+        self.server.state.flush()
+        return
 
     def webmon_find_polishes(self,**_):
         s=self.server.state

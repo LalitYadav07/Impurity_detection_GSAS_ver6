@@ -105,10 +105,21 @@ def policy(value):
     if isinstance(value,dict) and 'magnetic_optimizer' in value:defaults['magnetic_optimizer']=None
     if isinstance(value,dict) and 'optimizer_iterations' in value:defaults['optimizer_iterations']=None
     if isinstance(value,dict) and 'grouped_surrogate' in value:defaults['grouped_surrogate']=False
+    if isinstance(value,dict) and 'structural_optimizer' in value:
+        defaults.update(structural_optimizer=None,structural_starts=4,structural_seconds=20.,
+                        structural_mode_radius=.05,structural_cell_radius=.0008,structural_recovery_seconds=0.)
     p=fields(value,['cycles','timeout_seconds','maximum_trials','maximum_cell_multiplier','maximum_moment','fit_band_percent','maximum_mode','adequate_rwp_percent'],defaults)
     if 'moment_model' in p:p['moment_model']=choices(p['moment_model'],['collinear','symmetry_allowed'])
     if 'magnetic_d_min' in p:p['magnetic_d_min']=number(p['magnetic_d_min'],0,10)
     validate_optimizer(p)
+    if 'structural_optimizer' in p:
+        p['structural_optimizer']=choices(p['structural_optimizer'],['prepared_nonlinear'])
+        for key,maximum in [('structural_mode_radius',.5),('structural_cell_radius',.02),('structural_seconds',300.)]:
+            p[key]=number(p[key],0,maximum,positive=True)
+        p['structural_starts']=number(p['structural_starts'],2,16,integer=True)
+        p['structural_recovery_seconds']=number(p['structural_recovery_seconds'],0,120)
+        if not p['refine_cell'] or not p['refine_background'] or not p['refine_histogram_scale']:
+            raise ValueError('Prepared structural search declares cell, common scale and constant background freedom')
     if 'grouped_surrogate' in p:
         p['grouped_surrogate']=boolean(p['grouped_surrogate'])
         if p['grouped_surrogate'] and p.get('magnetic_optimizer')!='profiled_quadratic':
@@ -137,6 +148,7 @@ def validate_protocol(value):
     defaults=dict(schema='radar-symmetry-protocol/v1',sites=[])
     if isinstance(value,dict) and 'acquisition_id' in value:defaults['acquisition_id']=None
     if isinstance(value,dict) and 'template_sha256' in value:defaults['template_sha256']=None
+    if isinstance(value,dict) and 'structural_reference' in value:defaults['structural_reference']=None
     p=fields(value,['kind','source','parent_phase','histogram','parent_setting_sha256','magnetic_function_sha256','implementation_sha256','catalog','k','candidates','seeds','policy'],defaults)
     if 'acquisition_id' in p:p['acquisition_id']=text(p['acquisition_id'],maximum=300)
     if 'template_sha256' in p:p['template_sha256']=text(p['template_sha256'],pattern=r'[a-f0-9]{64}')
@@ -156,6 +168,14 @@ def validate_protocol(value):
     p['candidates']=[validate_candidate(c) for c in p['candidates']];p['seeds']=[seed(s) for s in p['seeds']];p['policy']=normalized_policy
     if p['kind']!='magnetic' and any(key in p['policy'] for key in ('magnetic_optimizer','optimizer_iterations')):
         raise ValueError('Magnetic optimizer fields cannot apply to structural protocols')
+    if p['kind']!='structural' and 'structural_optimizer' in p['policy']:
+        raise ValueError('Structural optimizer fields cannot apply to magnetic protocols')
+    if 'structural_reference' in p:
+        p['structural_reference']=asset(p['structural_reference'])
+        if p['kind']!='structural' or p['policy'].get('structural_optimizer')!='prepared_nonlinear':
+            raise ValueError('Separate parent reference requires the prepared structural backend')
+        if p['structural_reference']['path'] in {p['source']['path'],p['catalog']['path']}:
+            raise ValueError('Parent reference and target observation assets must be distinct')
     if p['policy'].get('magnetic_optimizer')=='profiled_quadratic':
         if p['kind']!='magnetic':
             raise ValueError('Profiled optimizer supports magnetic protocols only')
@@ -182,7 +202,8 @@ def validate_protocol(value):
             if len({s['lande_g'] for s in sites if s['form_factor']==form})!=1:raise ValueError('Native Lande g is shared by each form-factor species')
     else:
         if any(s.get('site_signs') for s in p['seeds']):raise ValueError('Parent-site moment signs are magnetic-only')
-        if sites or any(c['magnetic_space_group'] or not c['child'] or not c['modes'] for c in p['candidates']):raise ValueError('Structural candidates need authoritative displacement-mode CIFs')
+        prepared=p['policy'].get('structural_optimizer')=='prepared_nonlinear'
+        if sites or any(c['magnetic_space_group'] or not c['child'] or (not c['modes'] and not prepared) for c in p['candidates']):raise ValueError('Structural candidates need authoritative displacement-mode CIFs')
         if any(abs(v)>p['policy']['maximum_mode'] for s in p['seeds'] for v in s['mode_values'].values()):raise ValueError('A displacement-mode start exceeds its bound')
     return p
 

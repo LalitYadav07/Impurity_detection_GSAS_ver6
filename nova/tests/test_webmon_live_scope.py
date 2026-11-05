@@ -298,10 +298,8 @@ def test_posterior_handoff_keeps_exact_output_and_sample_owner(view,sample):
     selected={};view._webmon_handoff_source=lambda result,prompt:selected.update(result)
     view.webmon_open_posterior_refinement()
     if sample=='100':
-        assert selected['dataset_id']=='exact-posterior-hda'
-        assert selected['source_path']=='/verified/posterior.gpx'
-        assert selected['sample_key']=='id:100' and selected['run_number']==8
-        assert 'collection_id' not in selected
+        assert not selected
+        assert 'nuclear projects only' in state.webmon_message
     else:
         assert not selected and 'outside' in state.webmon_message
 

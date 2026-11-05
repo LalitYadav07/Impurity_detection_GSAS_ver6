@@ -16,7 +16,7 @@ import re
 
 from gsas_cif_import import _gsas_operations, _operator_sets, add_verified_phase
 
-VERSION = "radar-isodistort-import/v1"
+VERSION = "radar-isodistort-import/v2"
 _HM_TAGS = {"_symmetry_space_group_name_h-m", "_space_group_name_h-m_alt"}
 
 
@@ -58,7 +58,24 @@ def _values(value):
     return [value] if isinstance(value, str) else list(value)
 
 
-def prepare_isodistort_cif(source, cache_dir):
+def _matching_native_setting(number, supplied, spc):
+    """Select a supported name for these exact operators, never a new basis.
+
+    The IT number alone chooses a default setting and rejects valid alternatives
+    such as Pbnm. GSAS-II's own Hall table associates its setting names with the
+    same IT number; exact operator equality remains the acceptance criterion.
+    """
+    symbols = [spc.spgbyNum[number]]
+    symbols += [value[1] for value in spc.spgHall.values() if value[2] == number]
+    expected = _operator_sets(supplied)
+    for symbol in dict.fromkeys(symbols):
+        error, data = spc.SpcGroup(symbol)
+        if not error and _operator_sets(_gsas_operations(data)) == expected:
+            return data
+    raise ValueError('Mode-bearing CIF requires an origin/basis transformation; name-only repair withheld')
+
+
+def prepare_isodistort_cif(source, cache_dir, *, allow_strain_only=False):
     """Return (private import copy, receipt), or fail without guessing a setting.
 
 Only displacive nuclear models are supported here. Strain modes are recorded
@@ -79,7 +96,7 @@ work. All non-H-M CIF values and every supplied symmetry operator must survive.
     block = blocks[0]
     counts = {kind: int(block.get(f"_iso_{kind}mode_number", "0"))
               for kind in ["displacive", "strain", "magnetic", "occupancy", "rotational"]}
-    if any(value < 0 for value in counts.values()) or not counts['displacive']:
+    if any(value < 0 for value in counts.values()) or (not counts['displacive'] and not (allow_strain_only and counts['strain'])):
         raise ValueError("A positive native displacement-mode inventory is required")
     if any(counts[kind] for kind in ["magnetic", "occupancy", "rotational"]):
         raise ValueError("This adapter supports nuclear displacement modes only")
@@ -93,9 +110,6 @@ work. All non-H-M CIF values and every supplied symmetry operator must survive.
     if not number_values or len(set(number_values)) != 1 or not 1 <= number_values[0] <= 230:
         raise ValueError("A consistent International Tables number is required")
     number = number_values[0]
-    error, sgdata = G2spc.SpcGroup(G2spc.spgbyNum[number])
-    if error:
-        raise ValueError("The installed GSAS-II cannot resolve this space group")
     operation_tag = next((tag for tag in ["_space_group_symop_operation_xyz", "_symmetry_equiv_pos_as_xyz"] if tag in block), None)
     if operation_tag is None:
         raise ValueError("Explicit child symmetry operators are required")
@@ -106,8 +120,7 @@ work. All non-H-M CIF values and every supplied symmetry operator must survive.
     for expression in expressions:
         op = SymmOp.from_xyz_str(expression)
         supplied.append((op.rotation_matrix, op.translation_vector))
-    if _operator_sets(supplied) != _operator_sets(_gsas_operations(sgdata)):
-        raise ValueError("Mode-bearing CIF requires an origin/basis transformation; name-only repair withheld")
+    sgdata = _matching_native_setting(number, supplied, G2spc)
 
     derived_text = _replace_inline_names(text, sgdata['SpGrp'])
     # Parse a temporary private copy before publishing the derived artifact.
@@ -141,14 +154,23 @@ work. All non-H-M CIF values and every supplied symmetry operator must survive.
     return destination, receipt
 
 
-def add_isodistort_phase(project, source, **kwargs):
+def add_isodistort_phase(project, source, *, allow_strain_only=False, **kwargs):
     """Import and verify GSAS-II's exact native displacement-mode inventory."""
     import numpy as np
     directory = Path(project.filename).resolve().parent / 'isodistort_import'
-    derived, receipt = prepare_isodistort_cif(source, directory)
+    derived, receipt = prepare_isodistort_cif(source, directory, allow_strain_only=allow_strain_only)
     phase = add_verified_phase(project, derived, **kwargs)
     iso = phase.data.get('ISODISTORT', {})
     expected = receipt['source_mode_counts']['displacive']
+    if not expected:
+        if iso.get('G2ModeList'):
+            raise ValueError('Unexpected native displacements in a strain-only child')
+        receipt.update(native_displacement_inventory_verified=True,
+                       native_coordinate_mapping_invertible=True,
+                       native_mode_labels=[], native_mode_variables=[], native_normalization=[],
+                       scope='strain-only structural import; cell parameterization required separately')
+        derived.with_suffix('.import.json').write_text(json.dumps(receipt, indent=2)+'\n')
+        return phase, receipt
     labels, variables = iso.get('IsoModeList', []), iso.get('G2ModeList', [])
     norms = iso.get('NormList', [])
     if not (len(labels) == len(variables) == len(norms) == expected):

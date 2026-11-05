@@ -43,6 +43,7 @@ pip-wheel-metadata/
 !/docs/nomad_integration.md
 !/docs/battery_implementation.md
 !/docs/beamline_profile_selection.md
+!/docs/prepared_structural_integration.md
 !/docs/user_manual/
 !/docs/user_manual/**
 /docs/user_manual/dist/*

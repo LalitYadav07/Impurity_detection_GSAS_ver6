@@ -8,6 +8,7 @@ import numpy as np
 
 from ..snapshot import gsas,json_safe
 from ..execution import write_json
+from ..fit_domain import native_powder_fit_mask
 from .worker import TrialDisposition
 
 
@@ -46,9 +47,15 @@ def inspect_source(path):
         histograms=[dict(name=h.name,points=len(h.data['data'][1][0]),limits=h.data['Limits'],instrument=h.InstrumentParameters) for h in p.histograms()],runtime=runtime_identity()))
 
 
-def audit_trial(source,output,protocol,candidate):
+def audit_trial(source,output,protocol,candidate,*,reference_source=None):
     G=gsas();a=G.G2Project(gpxfile=str(source));b=G.G2Project(gpxfile=str(output))
     ah=a.histogram(protocol['histogram']);bh=b.histogram(protocol['histogram']);parent=a.phase(protocol['parent_phase'])
+    if reference_source is not None:
+        reference=G.G2Project(gpxfile=str(reference_source))
+        parent=reference.phase(protocol['parent_phase'])
+        # Reference fractional geometry/ADPs are held in the target's reviewed
+        # parent cell before transforming them to the child setting.
+        parent.data['General']['Cell']=copy.deepcopy(a.phase(protocol['parent_phase']).data['General']['Cell'])
     from .native_preparation import normalize_flags
     normalize_flags(a);normalize_flags(b)
     # A native abort can restore an old calculated array while retaining
@@ -107,6 +114,39 @@ def audit_trial(source,output,protocol,candidate):
                     checks['magnetic_reflection_domain_preserved']=bool(domain.any() and actual is not None and 0<actual<float(source_d[domain].min()))
             checks['magnetic_cell_linked']=bool(np.allclose(L.TransformCell(nuclear.data['General']['Cell'][1:7],candidate['transformation_matrix'])[:6],magnetic.data['General']['Cell'][1:7],atol=1e-8,rtol=0))
             checks['material_amount_linked']=bool(np.isclose(magnetic.data['Histograms'][bh.name]['Scale'][0]*det,nuclear.data['Histograms'][bh.name]['Scale'][0],rtol=0,atol=1e-10))
+    elif protocol['policy'].get('structural_optimizer')=='prepared_nonlinear':
+        import json
+        from ..structural_live.native import inventory
+        from ..structural_live.optimization.refinable_gpx import assess_chemistry
+        proof=json.loads(Path(output).with_name('structural-export.json').read_text())
+        child=b.phase(protocol['parent_phase'])
+        native_names=[v.name for v in child.data.get('ISODISTORT',{}).get('G2ModeList',[])]
+        checks['complete_native_mode_inventory']=set(native_names)==set(candidate['modes'])
+        info,_=inventory(child.data)
+        checks['physical_mode_rank_preserved']=info['physical_rank']==proof['contract']['physical_mode_count']
+        from ..live.native_profile import NativeReducedProfile
+        native=NativeReducedProfile(str(output),refresh_cell_reflections=True)
+        vary=list(native.vary)
+        checks['structural_active_set_closed']=set(vary)==set(proof['contract']['native_active_variables']) and len(vary)==len(set(vary))
+        checks['chemistry_feasible']=bool(assess_chemistry(b,child.name)['feasible'])
+        checks['no_stale_covariance']=not cov
+        cx,ct,_,cia=child.data['General']['AtomPtrs']
+        mapping=json.loads(Path(output).with_name('zero-control.json').read_text())['site_mapping']
+        old={a[parent.data['General']['AtomPtrs'][1]-1]:a for a in parent.data['Atoms']}
+        pcx,pct,_,pcia=parent.data['General']['AtomPtrs']
+        checks['occupancies_preserved']=all(np.isclose(atom[cx+3],old[row['parent']][pcx+3],rtol=0,atol=1e-10) for atom,row in zip(child.data['Atoms'],mapping))
+        # Recompute the expected ADP tensors using every matching parent
+        # operation; never compare just Uiso for an anisotropic parent.
+        from ..structural_live.native import parent_sites
+        import GSASII.GSASIIspc as S
+        expected=copy.deepcopy(child.data)
+        parent_sites(parent.data,expected,np.asarray(candidate['transformation_matrix']),np.asarray(candidate['origin_shift']),S)
+        checks['displacements_preserved']=all(same(a[cia:cia+8],z[cia:cia+8]) for a,z in zip(child.data['Atoms'],expected['Atoms']))
+        import GSASII.GSASIIlattice as L
+        reference=L.TransformCell(a.phase(protocol['parent_phase']).data['General']['Cell'][1:7],candidate['transformation_matrix'])
+        cell=child.data['General']['Cell'][1:7]
+        checks['cell_in_reviewed_physical_bounds']=bool(np.all(abs(np.asarray(cell[:3])/np.asarray(reference[:3])-1)<=protocol['policy']['maximum_cell_relative_change']) and np.all(abs(np.asarray(cell[3:])-np.asarray(reference[3:6]))<=protocol['policy']['maximum_angle_change_degrees']))
+        checks['higher_background_coefficients_fixed']=same(ah.data['Background'][0][4:],bh.data['Background'][0][4:]) and same(ah.data['Background'][0][:3],bh.data['Background'][0][:3]) and same(ah.data['Background'][1:],bh.data['Background'][1:])
     else:
         children=[p for p in b.phases() if p.data.get('ISODISTORT')]
         if len(children)!=1:raise TrialDisposition('effect_mismatch','The output has no unique displacement-mode child')
@@ -139,8 +179,7 @@ def profile_residual_metrics(arrays,calculated,limits):
     """
     x,observed,weight=[np.asarray(np.ma.getdata(a),dtype=float) for a in arrays]
     calculated=np.asarray(calculated,dtype=float)
-    lo,hi=limits[1];domain=np.zeros(len(x),dtype=bool)
-    domain[np.searchsorted(x,lo):np.searchsorted(x,hi)+1]=True
+    domain=native_powder_fit_mask(x,limits[1])
     valid=np.isfinite(observed)&np.isfinite(weight)&(weight>0)
     for array in arrays[1:]:valid &= ~np.ma.getmaskarray(array)
     normalization=domain&valid
@@ -165,8 +204,8 @@ def write_view(project,histogram,destination):
     x,y,w,calc,bg=map(lambda a:np.asarray(np.ma.getdata(a),dtype=float),arrays[:5])
     valid=np.isfinite(x)&np.isfinite(y)&np.isfinite(w)&(w>0)
     for array in arrays[:3]:valid &= ~np.ma.getmaskarray(array)
-    low,high=h.data['Limits'][1];fitted=valid&(x>=low)&(x<=high)
-    for a,b in h.data['Limits'][2:]:fitted &= (x<a)|(x>b)
+    low,high=h.data['Limits'][1]
+    fitted=valid&native_powder_fit_mask(x,[low,high],h.data['Limits'][2:])
     d=np.asarray(L.Pos2dsp(h.InstrumentParameters,x));phases=[];ticks=[]
     from gsas_magnetic_preflight import magnetic_magnitude
     for phase in project.phases():

@@ -31,15 +31,20 @@ def build_plan(context,catalog,root,settings):
                     signs=dict(zip([site['label'] for site in sites],(1,*tail)))
                     seeds.append(dict(id=axis+'-signs-'+str(index+1),axis=axis,magnitude=min(2.,settings['maximum_moment']),site_signs=signs))
     elif kind=='structural':
-        amplitude=float(settings['start_mode'])
-        if not 0<amplitude<=settings['maximum_mode']:raise ValueError('A nonzero mode start must be within its declared bound')
-        for index,candidate in enumerate(candidates):
-            chosen=[mode for mode in candidate['modes'] if candidate['id']+'|'+mode in settings['modes']]
-            if not chosen:raise ValueError('Select at least one native mode for every chosen child')
-            if len(chosen)>6:raise ValueError('The exhaustive signed-start budget requires selecting at most six modes per child')
-            candidate['modes']=chosen
-            for number,signs in enumerate(itertools.product([-1,1],repeat=len(chosen))):
-                seeds.append(dict(id=f'child-{index+1}-signs-{number+1}',candidate_ids=[candidate['id']],mode_values=dict(zip(chosen,[amplitude*s for s in signs]))))
+        if settings.get('structural_optimizer')=='prepared_nonlinear':
+            # One work unit owns the complete model and its internal start
+            # portfolio. No exponential sign expansion or six-mode truncation.
+            seeds=[dict(id=f'child-{i+1}-portfolio',candidate_ids=[c['id']]) for i,c in enumerate(candidates)]
+        else:
+            amplitude=float(settings['start_mode'])
+            if not 0<amplitude<=settings['maximum_mode']:raise ValueError('A nonzero mode start must be within its declared bound')
+            for index,candidate in enumerate(candidates):
+                chosen=[mode for mode in candidate['modes'] if candidate['id']+'|'+mode in settings['modes']]
+                if not chosen:raise ValueError('Select at least one native mode for every chosen child')
+                if len(chosen)>6:raise ValueError('The exhaustive signed-start budget requires selecting at most six modes per child')
+                candidate['modes']=chosen
+                for number,signs in enumerate(itertools.product([-1,1],repeat=len(chosen))):
+                    seeds.append(dict(id=f'child-{index+1}-signs-{number+1}',candidate_ids=[candidate['id']],mode_values=dict(zip(chosen,[amplitude*s for s in signs]))))
     else:raise ValueError('Unknown exploration kind')
     if kind=='magnetic' and settings.get('moment_model')=='symmetry_allowed':
         starts=[]
@@ -62,6 +67,12 @@ def build_plan(context,catalog,root,settings):
     if kind=='magnetic':
         policy['refine_histogram_scale']=settings.get('refine_histogram_scale',False)
         policy['refine_background']=settings.get('refine_background',False)
+    if kind=='structural' and settings.get('structural_optimizer')=='prepared_nonlinear':
+        policy.update({key:settings[key] for key in ('structural_optimizer','structural_starts','structural_seconds',
+            'structural_mode_radius','structural_cell_radius','structural_recovery_seconds') if key in settings})
+        policy['timeout_seconds']=min(3600,int(settings.get('structural_seconds',20)+settings.get('structural_recovery_seconds',0)+180))
     protocol=dict(kind=kind,source=dict(path='source.gpx',sha256=file_sha(root/'source.gpx')),parent_phase=parent['name'],histogram=settings['histogram'],parent_setting_sha256=parent['setting_sha256'],magnetic_function_sha256=context['runtime']['magnetic_function_sha256'],implementation_sha256=package_signature(),catalog=dict(path='catalog.json',sha256=file_sha(root/'catalog.json')),k=settings['k'],candidates=candidates,seeds=seeds,sites=sites,policy=policy)
     if settings.get('acquisition_id'):protocol['acquisition_id']=settings['acquisition_id']
+    if settings.get('structural_reference'):
+        protocol['structural_reference']=copy.deepcopy(settings['structural_reference'])
     return validate_protocol(protocol)

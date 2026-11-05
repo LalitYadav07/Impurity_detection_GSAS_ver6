@@ -1,0 +1,20 @@
+{
+  "schema": "structural-forward-model-policy-1",
+  "instrument_parameters": {
+    "assume_supplied_file_correct": true,
+    "allow_refinement_in_structural_search": false,
+    "identity_change_requires_new_preparation": true
+  },
+  "profile_generation": {
+    "authority": "GSAS-II native full powder-profile engine",
+    "allow_custom_peak_shape_or_convolution": false,
+    "allow_interpolated_width_or_asymmetry_parameters": false,
+    "allow_caching_native_generated_profiles": true,
+    "native_cell_dependent_peak_positions_and_widths": true,
+    "note": "Fixed instrument coefficients do not mean fixed widths for moving peaks: GSAS-II evaluates its resolution function at the current reflection positions. This is not instrument refinement."
+  },
+  "status": "structural_nonlinear_pilot_no_statistical_decision_authority",
+  "surrogate_scope": [
+    "Exact-cell GSAS-II profile responses with exact native structure factors; no structural intensity or instrumental-profile interpolation"
+  ]
+}
