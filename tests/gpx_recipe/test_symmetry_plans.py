@@ -34,6 +34,23 @@ def test_selected_displacement_modes_and_scoped_signs_preserve_full_catalog(tmp_
     assert all(s['candidate_ids']==['mag:fixture'] for s in p['seeds'])
 
 
+@pytest.mark.parametrize('recovery_seconds',[0.,30.])
+def test_prepared_structural_deadline_includes_shared_fit_default(tmp_path,recovery_seconds):
+    catalog,context,settings=inputs(tmp_path)
+    (tmp_path/'child.cif').write_text('data_authoritative')
+    from gpx_recipe.symmetry.compiler import file_sha
+    from gpx_recipe.structural_live.defaults import DEFAULT_FIT_SECONDS
+    catalog['candidates'][0].update(magnetic_space_group=None,
+        child=dict(path='child.cif',sha256=file_sha(tmp_path/'child.cif')),
+        modes=['X1_primary'],irrep='X1+')
+    (tmp_path/'catalog.json').write_text(json.dumps(catalog))
+    settings.update(kind='structural',sites=[],structural_optimizer='prepared_nonlinear',
+        structural_recovery_seconds=recovery_seconds)
+    protocol=build_plan(context,catalog,tmp_path,settings)
+    assert protocol['policy']['structural_seconds']==DEFAULT_FIT_SECONDS
+    assert protocol['policy']['timeout_seconds']==DEFAULT_FIT_SECONDS+recovery_seconds+180
+
+
 def test_explicit_chemical_site_validation_happens_before_compilation(tmp_path):
     catalog,context,settings=inputs(tmp_path);settings['sites']=[dict(label='Mn1',form_factor='Fe+3',lande_g=2.)]
     with pytest.raises(ValueError,match='chemical element'):build_plan(context,catalog,tmp_path,settings)

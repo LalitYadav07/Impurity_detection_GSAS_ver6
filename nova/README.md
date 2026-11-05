@@ -318,6 +318,21 @@ execution, rather than granting permission to transmit data on each request.
 Automated benchmark approvals are labeled as test approvals and do not assert
 scientific acceptance of a structural model.
 
+Structural model exploration uses one prepared native-forward workflow with
+every independent physical displacement and lattice coordinate retained. The
+default reciprocal-metric coordinate bound is 0.01 and the optimization
+allocation is 120 seconds per model with four starting guesses; native
+preparation and independent saved-GPX verification are additional. These
+coordinates are normalized by the mean parent diagonal reciprocal metric, not
+by each cell length. Independent audits retain the 2% length and 3-degree angle
+limits. Complete-domain prepared starting curves guide initialization, and
+interleaved lattice/displacement steps avoid spending short runs only on atomic
+intensities. A checked point fit remains unresolved until scientific review;
+receipts distinguish starting-curve checks from completed local update blocks.
+Candidate preparation failures remain visible even if no model is admitted.
+Check the parent peak-width model before interpreting a lower-symmetry fit:
+profile mismatch can otherwise be absorbed into structural degrees of freedom.
+
 On NDIP, select the **ORNL Illumine** credential group in the Galaxy tool form
 before starting NOVA. Galaxy binds this selection to the exact tool version;
 verify it again after an upgrade. A running session does not acquire a key

@@ -4,13 +4,14 @@ Only the unobservable origin gauge is removed by the native preparation.
 No irrep, atom, secondary mode, or low-symmetry family is frozen here.
 """
 import numpy as np
+from ..defaults import DEFAULT_CELL_RADIUS
 from .bounded_chemical_prior import BoundedChemicalGeometry
 from .chemical_geometry import direct_metric_from_reciprocal
 from .physical_prior_geometry import native_reciprocal_matrix, displacement_gram
 
 
 class FullModeSlice:
-    def __init__(self, fast, mode_radius=.05, cell_radius=.0008):
+    def __init__(self, fast, mode_radius=.05, cell_radius=DEFAULT_CELL_RADIUS):
         self.fast = fast
         self.mode_dimensions = fast.nm
         self.cell_dimensions = fast.nc

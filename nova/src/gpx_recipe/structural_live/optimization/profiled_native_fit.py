@@ -22,7 +22,7 @@ class CellDirectionUnavailable(RuntimeError):
 
 
 def fit(source,table,observation,bank,*,seconds=120.,starts=4,seed=90231,warm=None,warm_pool=None,
-        mode_iterations=12,cell_iterations=3,kicks=False,evaluator=None,force_native_mode_derivatives=False,screening_exclusions=None):
+        mode_iterations=1,cell_iterations=1,kicks=False,evaluator=None,force_native_mode_derivatives=False,screening_exclusions=None):
     if not np.isfinite(seconds) or seconds<=0 or type(starts)is not int or starts<1:
         raise ValueError('Positive finite time and integer start count required')
     if type(mode_iterations)is not int or mode_iterations<1 or type(cell_iterations)is not int or cell_iterations<1:
@@ -85,7 +85,11 @@ def fit(source,table,observation,bank,*,seconds=120.,starts=4,seed=90231,warm=No
         nonlocal rejected
         columns=np.arange(m) if mode else np.arange(m,d)
         z=z.copy();current=score(z);z=current[4];damping=1e-3;accepted=[];start=time.monotonic();reason='iteration_limit'
-        if mode:current=verify(z,score(z,cached=True,remember=False))
+        # A forced native derivative already evaluates the complete profile.
+        # Building a fixed-cell reflection-response matrix for one interleaved
+        # step costs more than these few direct profiles, especially in TOF.
+        cached_mode=mode and not force_native_mode_derivatives
+        if cached_mode:current=verify(z,score(z,cached=True,remember=False))
         for iteration in range(iterations):
             check_time();j,r=jacobian(z,mode)
             step,info=bounded_damped_step(j,r,damping,lo[columns]-z[columns],hi[columns]-z[columns],radius=.4)
@@ -96,9 +100,9 @@ def fit(source,table,observation,bank,*,seconds=120.,starts=4,seed=90231,warm=No
             for power in range(12):
                 trial=z.copy();trial[columns]+=step*(.5**power)
                 if not allowed(trial):rejected+=1;continue
-                proposed=score(trial,cached=mode)
+                proposed=score(trial,cached=cached_mode)
                 if proposed[0]<=current[0]+2e-4*(.5**power)*descent:
-                    exact=verify(trial,proposed) if mode else proposed
+                    exact=verify(trial,proposed) if cached_mode else proposed
                     if exact[0]<=current[0]+2e-4*(.5**power)*descent:
                         z=exact[4];current=exact;accepted.append(current[0]);damping=max(damping*.3,1e-10);found=True;break
             if not found:damping*=10.
@@ -143,8 +147,11 @@ def fit(source,table,observation,bank,*,seconds=120.,starts=4,seed=90231,warm=No
             while True:
                 attempt['iterations']+=1
                 before=cost
-                if m:z,cost=block(z,True,mode_iterations)
+                # Peak-position errors must not spend an entire short start
+                # being absorbed into atomic intensities. Interleave one cell
+                # and one displacement step, beginning with the lattice.
                 if d>m:z,cost=block(z,False,cell_iterations)
+                if m:z,cost=block(z,True,mode_iterations)
                 cycles+=1
                 if before-cost<1e-9*max(cost,1.) and (not kicks or not restart_points):
                     attempt['reason']='local_block_progress_small';break

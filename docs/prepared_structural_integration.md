@@ -134,8 +134,12 @@ Release requires coordinated UI and Model Campaign images with identical
 scientific package identities. Keep old immutable workers and protocols intact.
 Production qualification requires independent model-recovery controls, full
 exported-GPX round trips and measured complete workflow latency in the actual
-deployment. The consolidated local UI has not yet passed the experimental
-Ba4SbRu3O12 recovery test and has not been deployed to NDIP-test.
+deployment. Four-scan Ba4SbRu3O12 controls recover the expected C2/m candidate,
+with all 80 saved-GPX audits passing across the declared local comparisons.
+They also expose a peak-width confounder: a warm-scan X/Y/Z adjustment materially
+improves the parent fit. The C2/m improvement is much larger in the cold scans,
+but missing impurities, conditional ADPs and competing lower-symmetry fits
+prevent a unique structure claim. The new image still needs NDIP-test acceptance.
 Successful process exits or excellent Rwp on one case do not complete that
 qualification.
 
@@ -153,7 +157,7 @@ stale-revision rejection. Each successful export is checked by an independent
 GSAS-II calculation; these synthetic controls establish contract behavior,
 not universal experimental model recovery or deployment latency.
 The packaged wheel passed 27 real GSAS-II structural and magnetic controls.
-The final five-case structural acceptance gate runs without skips, including
+The final nine-case structural acceptance gate runs without skips, including
 nine invalid-output injections. A deliberately perturbed two-mode export was continued
 with native least squares, recovering its original amplitudes with a finite
 seven-variable covariance matrix while preserving the source checkpoint.

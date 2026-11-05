@@ -79,6 +79,21 @@ def test_reused_start_bank_matches_every_direct_native_curve(tmp_path,synthetic)
     assert receipt['construction_execution']['diagnostics']['maximum_check_error']<1e-9
 
 
+def test_batched_native_inventory_imports_the_packaged_occupancy_loader(tmp_path,monkeypatch):
+    import shutil
+    from gpx_recipe.symmetry.isodistort_native import modes_many
+    child=Path(__file__).with_name('data')/'synthetic-ersi-cmcm-isodistort.cif'
+    children=[]
+    for index in range(2):
+        target=tmp_path/f'child-{index}.cif';shutil.copyfile(child,target);children.append(str(target))
+    monkeypatch.setenv('GALAXY_SLOTS','2')
+    monkeypatch.setenv('GALAXY_MEMORY_MB','4096')
+    result=modes_many(children,2,tmp_path/'inventories')
+    assert [row['child'] for row in result['items']]==children
+    assert all('error' not in row and len(row['inventory']['modes'])==2 for row in result['items']),result
+    assert all(row['inventory']['import_receipt']['source_mode_counts']['displacive']==2 for row in result['items'])
+
+
 def test_sequential_distortion_cell_shift_and_parent_return_recover_native_truth(tmp_path,synthetic):
     from gpx_recipe.structural_live.session import StructuralSession
     source,cif,transform,*_=synthetic;prepared=tmp_path/'prepared'
@@ -126,6 +141,24 @@ def test_extra_mask_and_tiny_optional_recovery_preserve_saved_objective(tmp_path
     assert saved[2][index]>0 and saved[2][30]==0
 
 
+def test_default_search_recovers_cell_distortion_beyond_former_tight_domain(tmp_path,synthetic):
+    source,cif,transform,*_=synthetic;prepared=tmp_path/'prepared'
+    settings=SearchSettings(seconds=12.,starts=2)
+    metadata=prepare_model(source,cif,transform,[0,0,0],prepared,settings=settings)
+    oracle=NativeCandidate(prepared,tmp_path/'oracle')
+    m=metadata['inventory']['physical_rank']
+    cells=np.array([-.001,.004,.002]);modes=np.array([.008,-.006])
+    y=oracle.evaluate(modes,cells);arrays=oracle.hist.data['data'][1]
+    observed=from_arrays([arrays[0],y,np.full(len(y),4.)],oracle.hist.data['Limits'],
+        acquisition='synthetic-moderate-cell-distortion',protocol_sha256=sha(prepared/'prepared.json'))
+    result=fit_snapshot(prepared,tmp_path/'fit',settings=settings,observation=observed)
+    assert max(abs(cells))>.0008
+    np.testing.assert_allclose(result['physical_parameters'][:m],modes,rtol=0,atol=1e-4)
+    np.testing.assert_allclose(result['physical_parameters'][m:],cells,rtol=0,atol=2e-7)
+    assert result['metrics']['rwp_native']<.02
+    assert result['verification']['saved_observations']['continuation']['weighted_objective_verified']
+
+
 def test_binding_preserves_measurements_outside_fit_limits_and_replaces_exclusions(tmp_path,synthetic):
     source,cif,transform,*_=synthetic;prepared=tmp_path/'prepared'
     prepare(source,cif,transform,[0,0,0],prepared)
@@ -158,7 +191,7 @@ def test_worker_audit_reconstructs_declared_freedom_and_bounds(tmp_path,syntheti
     context=inspect_source(source);catalog['parent_setting_sha256']=context['phases'][0]['setting_sha256']
     (root/'catalog.json').write_text(json.dumps(catalog))
     settings.update(kind='structural',parent=phase,histogram=histogram,sites=[],modes=[],
-        structural_optimizer='prepared_nonlinear',structural_starts=2,structural_seconds=2.)
+        structural_optimizer='prepared_nonlinear',structural_starts=2,structural_seconds=2.,structural_cell_radius=.0008)
     protocol=build_plan(context,catalog,root,settings)
     job=tmp_path/'worker'
     compile_bundle(protocol,root,job,candidate_id=protocol['candidates'][0]['id'],

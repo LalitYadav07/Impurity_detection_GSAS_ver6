@@ -5,6 +5,23 @@ from .compiler import confined
 from .worker import TrialDisposition
 
 
+def optimization_progress(result):
+    """Expose incomplete local work separately from a checked starting curve."""
+    fitted=result['result'];blocks=fitted.get('blocks',[]);attempts=fitted.get('attempts',[])
+    progress=dict(starts_attempted=len(attempts),
+        starts_time_limited=sum(a.get('reason')=='per_start_time_budget' for a in attempts),
+        complete_lattice_blocks=sum(b['kind']=='cell' for b in blocks),
+        complete_displacement_blocks=sum(b['kind']=='modes' for b in blocks),
+        accepted_local_steps=sum(len(b.get('accepted_costs',[])) for b in blocks))
+    if not blocks:
+        message='Prepared starting curves were checked, but no complete local-update block finished. Increase the per-model allocation before comparing structures.'
+    else:
+        message=(f"{progress['starts_attempted']} starts attempted; {progress['starts_time_limited']} reached their allocation; "
+            f"{progress['complete_lattice_blocks']} lattice and {progress['complete_displacement_blocks']} displacement blocks completed. "
+            'Optimization and structure assignment require review.')
+    return progress,message
+
+
 def run(source_gpx,ctx,protocol,candidate,seed):
     scope=protocol['policy']
     from .contracts import structural_cell_budget,policy
@@ -28,14 +45,15 @@ def run(source_gpx,ctx,protocol,candidate,seed):
                   site_mapping=metadata['site_mapping'],inventory=metadata['inventory']))
     ctx.save_json('structural-fit.json',result)
     ctx.save_json('structural-export.json',result['continuation'])
+    progress,message=optimization_progress(result)
     # A checked prediction is not a convergence certificate. Keep it available
     # for inspection/continuation without promoting it to a qualified model.
     return dict(status='optimization_unresolved',gpx=output.name,
-        reason='Independently verified structural point fit; optimization and structure assignment require review.',
+        reason='Independently verified structural point fit. '+message,
         rwp=result['metrics']['rwp_native'],nvars=result['physical_mode_count']+result['cell_parameter_count']+2,
         zero_control_error=metadata['zero_profile_error'],
         structural_fit=dict(all_physical_modes_retained=True,physical_modes=result['physical_mode_count'],
             origin_gauges=metadata['inventory']['gauge_rank'],covariance_available=False,
-            timings=result['timings'],optimization_qualified=False,
+            timings=result['timings'],optimization_qualified=False,optimization_progress=progress,
             native_active_set_verified=result['continuation']['native_active_set_verified']),
         reviewable_gpx=True)

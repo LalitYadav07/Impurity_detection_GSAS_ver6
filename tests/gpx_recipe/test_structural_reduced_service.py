@@ -7,6 +7,33 @@ from gpx_recipe.structural_live.reduced import from_arrays, from_snapshot
 from gpx_recipe.structural_live.service import SearchSettings
 from gpx_recipe.symmetry.native_audit import profile_residual_metrics
 
+
+def test_default_cell_domain_is_shared_and_supports_moderate_symmetry_breaking():
+    import inspect
+    from gpx_recipe.structural_live.defaults import DEFAULT_CELL_RADIUS,DEFAULT_FIT_SECONDS
+    from gpx_recipe.structural_live.optimization.full_mode_slice import FullModeSlice
+    from gpx_recipe.symmetry.contracts import policy
+    assert DEFAULT_CELL_RADIUS==.01
+    assert SearchSettings().cell_radius==DEFAULT_CELL_RADIUS
+    assert inspect.signature(FullModeSlice).parameters['cell_radius'].default==DEFAULT_CELL_RADIUS
+    scope=policy(dict(cycles=10,timeout_seconds=120,maximum_trials=2000,maximum_cell_multiplier=4,
+        maximum_moment=10.,fit_band_percent=1.,maximum_mode=.5,adequate_rwp_percent=15.,
+        structural_optimizer='prepared_nonlinear',refine_cell=True,refine_background=True,refine_histogram_scale=True))
+    assert scope['structural_cell_radius']==DEFAULT_CELL_RADIUS
+    assert scope['structural_seconds']==SearchSettings().seconds==DEFAULT_FIT_SECONDS==120.
+
+
+def test_structural_receipt_distinguishes_start_bank_only_from_local_refinement():
+    from gpx_recipe.symmetry.native_prepared_structural import optimization_progress
+    result={'result':{'attempts':[{'reason':'per_start_time_budget'}],'blocks':[]}}
+    progress,notice=optimization_progress(result)
+    assert progress['starts_time_limited']==1 and 'no complete local-update block' in notice
+    result['result']['blocks']=[{'kind':'cell','accepted_costs':[10.,8.]},{'kind':'modes','accepted_costs':[7.]}]
+    progress,notice=optimization_progress(result)
+    assert progress['accepted_local_steps']==3 and progress['complete_lattice_blocks']==1
+    assert '1 lattice and 1 displacement' in notice
+    assert 'require review' in notice
+
 def saved_result(path,parameters):
     result=dict(parameters=parameters,previous_likelihood_accumulated=False)
     for role in ('frozen','continuation'):

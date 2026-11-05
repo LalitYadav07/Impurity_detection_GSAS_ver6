@@ -7,6 +7,7 @@ from __future__ import annotations
 from fractions import Fraction
 import hashlib,json,math,re
 from pathlib import PurePosixPath
+from ..structural_live.defaults import DEFAULT_CELL_RADIUS, DEFAULT_FIT_SECONDS
 
 
 def digest(value):
@@ -125,8 +126,8 @@ def policy(value):
     if isinstance(value,dict) and 'optimizer_iterations' in value:defaults['optimizer_iterations']=None
     if isinstance(value,dict) and 'grouped_surrogate' in value:defaults['grouped_surrogate']=False
     if isinstance(value,dict) and 'structural_optimizer' in value:
-        defaults.update(structural_optimizer=None,structural_starts=4,structural_seconds=20.,
-                        structural_mode_radius=.05,structural_cell_radius=.0008,structural_recovery_seconds=0.)
+        defaults.update(structural_optimizer=None,structural_starts=4,structural_seconds=DEFAULT_FIT_SECONDS,
+                        structural_mode_radius=.05,structural_cell_radius=DEFAULT_CELL_RADIUS,structural_recovery_seconds=0.)
     p=fields(value,['cycles','timeout_seconds','maximum_trials','maximum_cell_multiplier','maximum_moment','fit_band_percent','maximum_mode','adequate_rwp_percent'],defaults)
     if 'moment_model' in p:p['moment_model']=choices(p['moment_model'],['collinear','symmetry_allowed'])
     if 'magnetic_d_min' in p:p['magnetic_d_min']=number(p['magnetic_d_min'],0,10)

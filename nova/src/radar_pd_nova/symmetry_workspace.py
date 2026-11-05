@@ -20,6 +20,32 @@ _verified_receipts=OrderedDict()
 _evidence_lock=threading.RLock()
 
 
+def candidate_display_name(catalog,candidate):
+    """Use the authoritative constructed-child label, including its subgroup."""
+    if candidate.get('magnetic_space_group'):return candidate['magnetic_space_group']
+    for row in (catalog.get('coverage') or {}).get('candidates',[]):
+        if row.get('id')==candidate['id'] and row.get('label'):
+            return str(row['label']).split(', basis=',1)[0]
+    return candidate.get('irrep') or candidate['id']
+
+
+def structural_discovery_feedback(catalog):
+    """Keep failed construction visible without offering an empty fit plan."""
+    coverage=catalog.get('coverage') or {}
+    rows=[dict(id=str(row.get('id','')),model=str(row.get('label','')).split(', basis=',1)[0],
+               state=str(row.get('state','unknown')).replace('_',' '),reason=str(row.get('reason','')))
+          for row in coverage.get('candidates',[])]
+    ready=len(catalog.get('candidates') or [])
+    discovered=coverage.get('discovered_count',len(rows) or ready)
+    failed=sum(row['state']=='construction failed' for row in rows)
+    deferred=sum(row['state']=='deferred' for row in rows)
+    summary=f'{discovered} OPDs discovered · {ready} ready to refine · {failed} construction failures · {deferred} deferred'
+    for index,failure in enumerate(coverage.get('irrep_failures') or []):
+        rows.append(dict(id=f'irrep-failure-{index+1}',model='Irrep discovery',state='discovery failed',reason=str(failure)))
+    error='' if ready else 'No structural models passed native preparation. Review construction details below; no refinement plan is available.'
+    return summary,rows,error
+
+
 def clear_evidence_cache():
     with _evidence_lock:
         _verified_receipts.clear();cached_view.cache_clear();comparison_profile.cache_clear()

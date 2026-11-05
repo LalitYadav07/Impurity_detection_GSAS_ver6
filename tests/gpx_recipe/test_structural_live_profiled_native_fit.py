@@ -32,3 +32,29 @@ def test_screening_timeout_keeps_exact_conditional_incumbent(monkeypatch):
     assert result['starts']==0 and not result['attempts']
     residual,_=residual_and_factor(o,rate)
     assert result['best']['deviance']==pytest.approx(residual@residual)
+
+
+def test_short_start_updates_lattice_before_expensive_displacement_derivatives(monkeypatch):
+    s,t,o,z,c,b,_=setup();clock=[0.]
+    monkeypatch.setattr(module,'time',SimpleNamespace(monotonic=lambda:clock[0]))
+    original=c.mode_jacobian
+    def expensive_modes(point):
+        value=original(point);clock[0]+=2.;return value
+    c.mode_jacobian=expensive_modes
+    result,rate=module.fit(s,t,o,b,seconds=1.,starts=1,evaluator=c)
+    assert result['blocks'][0]['kind']=='cell'
+    assert result['blocks'][0]['accepted_costs']
+    assert result['attempts'][0]['reason']=='per_start_time_budget'
+    assert result['best']['deviance']==pytest.approx(residual_and_factor(o,rate)[0]@residual_and_factor(o,rate)[0])
+
+
+def test_forced_native_derivatives_do_not_build_a_single_step_response_cache():
+    s,t,o,z,c,b,_=setup()
+    def forbidden(point):raise AssertionError('Exact-native fitting must not build a fixed-cell response matrix')
+    c.evaluate=forbidden
+    result,rate=module.fit(s,t,o,b,seconds=2.,starts=1,evaluator=c,force_native_mode_derivatives=True)
+    residual,_=residual_and_factor(o,rate)
+    assert result['independent_cache_checks']==0
+    assert result['best']['deviance']==pytest.approx(residual@residual)
+    assert result['best']['deviance']<150
+    assert {'cell','modes'}<={block['kind'] for block in result['blocks']}

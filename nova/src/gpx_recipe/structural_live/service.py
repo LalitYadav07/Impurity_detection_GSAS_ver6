@@ -15,13 +15,14 @@ from ..symmetry.compiler import package_signature
 from ..symmetry.native_audit import profile_residual_metrics
 from .native import NativeCandidate, prepare, sha
 from .reduced import from_arrays, native_limits, verify_native_observation, ReducedObservation
+from .defaults import DEFAULT_CELL_RADIUS, DEFAULT_FIT_SECONDS
 
 
 @dataclass(frozen=True)
 class SearchSettings:
     mode_radius: float = .05
-    cell_radius: float = .0008
-    seconds: float = 20.
+    cell_radius: float = DEFAULT_CELL_RADIUS
+    seconds: float = DEFAULT_FIT_SECONDS
     starts: int = 4
     recovery_seconds: float = 0.
     background_scale: float | None = None
@@ -57,7 +58,7 @@ def prepare_model(source_gpx, child_cif, transform, origin, output, *, settings=
     metadata=prepare(source_gpx,child_cif,transform,origin,output,**roles)
     output=Path(output)
     source=make_source(output,output/'bank-construction',settings)
-    bank=build(source,output/'starting-curves.npz',reuse_fixed_cell_profiles=True)
+    bank=build(source,output/'starting-curves.npz',policy='joint_cell_v1',reuse_fixed_cell_profiles=True)
     write_json(output/'starting-curve-contract.json',bank)
     return metadata
 
@@ -107,7 +108,7 @@ def fit_snapshot(prepared, output, *, settings=None, observation=None, warm_star
     bank_reused=bank_path.is_file()
     if not bank_reused:
         bank_path=output/'starts.npz'
-        build(source,bank_path,reuse_fixed_cell_profiles=True)
+        build(source,bank_path,policy='joint_cell_v1',reuse_fixed_cell_profiles=True)
     bank=OfflineNativeStartBank(source,bank_path)
     timings['start_bank_seconds']=time.monotonic()-checkpoint
     checkpoint=time.monotonic()
