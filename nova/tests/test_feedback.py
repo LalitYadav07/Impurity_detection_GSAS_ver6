@@ -123,6 +123,15 @@ def test_image_transfer_blocks_prepare_until_server_has_decoded_it():
     assert not s.contact_uploading and 'not transferred' in s.contact_error
 
 
+def test_feedback_initialization_supports_the_pinned_trame_state_api():
+    from radar_pd_nova.feedback_ui import FeedbackMixin
+    class DictionaryOnlyState(SimpleNamespace):
+        def update(self, values):self.__dict__.update(values)
+    app=SimpleNamespace(server=SimpleNamespace(state=DictionaryOnlyState()))
+    FeedbackMixin._init_feedback(app)
+    assert app.server.state.contact_message=='' and app._feedback_uploads==0
+
+
 def test_contact_button_precedes_end_and_paste_does_not_intercept_text():
     from radar_pd_nova.app import RadarPdNovaApp
     app=RadarPdNovaApp();app.create_ui();template=app.layout.html

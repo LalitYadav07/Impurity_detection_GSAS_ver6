@@ -17,10 +17,10 @@ class FeedbackMixin:
         self._feedback_delivery = None
         self._feedback_inflight = False
         self._feedback_uploads = 0
-        self.server.state.update(contact_open=False, contact_message='', contact_category='Other',
+        self.server.state.update(dict(contact_open=False, contact_message='', contact_category='Other',
             contact_reply='', contact_images=[], contact_busy=False, contact_error='',
             contact_status='', contact_receipt='', contact_url='', contact_pending=False,
-            contact_download='', contact_file=None, contact_uploading=False)
+            contact_download='', contact_file=None, contact_uploading=False))
 
     def contact_upload_started(self):
         s=self.server.state
