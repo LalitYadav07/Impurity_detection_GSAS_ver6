@@ -101,8 +101,8 @@ def test_numerical_parent_export_retains_refined_precision_and_original_gpx(tmp_
     project = G.G2Project(gpxfile=str(source))
     phase = project.phase(phase_name)
     cx, ct, _, _ = phase.data['General']['AtomPtrs']
-    phase.data['Atoms'][0][cx+1] = .41302825940451562
-    phase.data['Atoms'][1][cx+1] = .14206451284333196
+    phase.data['Atoms'][0][cx+1] = .4131764285096381
+    phase.data['Atoms'][1][cx+1] = .1423876102347659
     before = copy.deepcopy(phase.data)
     source_hash = sha(source)
     destination = tmp_path/'exact-parent.cif'
