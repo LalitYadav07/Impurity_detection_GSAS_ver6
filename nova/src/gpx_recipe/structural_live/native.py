@@ -125,15 +125,16 @@ def curve(project, histogram):
 
 
 def refresh_profile_metadata(project, histogram, prediction):
-    """Retain GSAS-II's computed reflection lists and background at export.
+    """Retain GSAS-II's current reflections, background and fit statistics.
 
     DoNoFit returns its curve but discards its local histogram dictionaries.
-    A newly constructed child therefore otherwise has no saved Bragg ticks.
+    A child otherwise has missing Bragg ticks and its parent's residuals.
     Use the existing native forward adapter, check the same prediction, and
     copy only calculated metadata. Observations, weights and limits stay put.
     """
     from ..live.native_profile import NativeReducedProfile
     from ..fit_domain import native_powder_fit_mask
+    from ..symmetry.native_audit import profile_residual_metrics
     forward = NativeReducedProfile(project.filename)
     forward.profile(forward.x0)
     data = forward.histo_phases[0][histogram.name]
@@ -144,8 +145,46 @@ def refresh_profile_metadata(project, histogram, prediction):
     mask &= ~np.ma.getmaskarray(histogram.data['data'][1][0])
     if not mask.any() or not np.allclose(calculated[mask], expected[mask], rtol=1e-8, atol=1e-10):
         raise ValueError('Native reflection metadata disagrees with the saved prediction')
+    # The profile adapter intentionally uses unit weights. Restore the saved
+    # measurement model in its private dictionaries before asking GSAS-II for
+    # statistics; never copy its unweighted or inherited parent residuals.
+    for name, _ in forward.parts:
+        saved = project.histogram(name).data
+        native = forward.histo_phases[0][name]
+        arrays = saved['data'][1]
+        observed, weights = [np.asarray(np.ma.getdata(a), float) for a in arrays[1:3]]
+        invalid = (~np.isfinite(observed) | ~np.isfinite(weights) | (weights <= 0)
+                   | np.ma.getmaskarray(arrays[1]) | np.ma.getmaskarray(arrays[2]))
+        native['Data'][0] = np.ma.array(native['Data'][0],
+            mask=np.ma.getmaskarray(native['Data'][0]) | np.ma.getmaskarray(arrays[0]))
+        native['Data'][1] = np.ma.array(np.where(invalid, 0., observed), mask=invalid)
+        native['Data'][2] = np.ma.array(np.where(invalid, 0., weights), mask=invalid)
+        # All-zero observations trigger native random dummy-data generation.
+        # There is no meaningful Rwp in that case; do not publish invented data.
+        if not np.any(observed[~invalid]):
+            raise ValueError('Native residual statistics require nonzero measured intensity')
+        factor = float(saved['data'][0].get('wtFactor', 1.))
+        if not np.isfinite(factor) or factor <= 0:
+            raise ValueError('Native residual statistics require a finite positive weight factor')
+        forward.controls[f":{native['hId']}:wtFactor"] = factor
+        native['Residuals'] = {}
+    forward.math.errRefine(forward.x0, forward.histo_phases, forward.parms,
+        forward.histdict, forward.vary, forward.controls, forward.pawley, None)
+    # Use the native powder structure-factor extraction for RF/RF2 and Nref,
+    # rather than retaining parent-phase counts or approximating their formulas.
+    forward.math.GetFobsSq(*forward.histo_phases[:2], forward.parms, forward.controls)
+    data = forward.histo_phases[0][histogram.name]
+    if not np.allclose(np.asarray(data['Data'][3])[mask], expected[mask], rtol=1e-8, atol=1e-10):
+        raise ValueError('Native statistics refresh changed the saved prediction')
+    independent = profile_residual_metrics(histogram.data['data'][1][:3],
+        expected, histogram.data['Limits'])
+    if not np.isclose(data['Residuals']['wR'], min(100., independent['rwp_native']), rtol=1e-8, atol=1e-8):
+        raise ValueError('Native exported Rwp disagrees with the measured weighted objective')
     reflections = data['Reflection Lists']
     histogram.data['Reflection Lists'] = copy.deepcopy(reflections)
+    # Scriptable GPX stores these in the histogram's first data dictionary;
+    # a top-level 'Residuals' entry is discarded by its canonical writer.
+    histogram.data['data'][0].update(copy.deepcopy(data['Residuals']))
     histogram.data['data'][1][4] = np.asarray(data['Data'][4]).copy()
 
 

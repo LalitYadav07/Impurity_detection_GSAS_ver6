@@ -91,6 +91,45 @@ def test_native_continuation_preserves_inactive_recipe_limits(tmp_path,synthetic
         configure(project)
 
 
+@pytest.mark.parametrize('exclude', [False, True])
+def test_export_replaces_parent_statistics_using_saved_weights(tmp_path, synthetic, exclude):
+    from gpx_recipe.symmetry.native_audit import profile_residual_metrics
+    from gpx_recipe.structural_live.optimization.refinable_gpx import export_refinable
+    source,cif,transform,histogram,phase=synthetic
+    before=sha(source)
+    prepared=tmp_path/'prepared';prepare(source,cif,transform,[0,0,0],prepared)
+    n=NativeCandidate(prepared,tmp_path/'evaluation')
+    data=n.hist.data['data'][1]
+    prediction=n.evaluate(np.zeros(n.basis['physical_basis'].shape[1]))
+    data[1]=prediction+1.+np.sin(np.arange(len(prediction))*.2)
+    data[2]=np.geomspace(.2,20.,len(prediction))
+    n.hist.data['data'][0]['wtFactor']=2.5
+    n.hist.data['Limits'][1]=[40.,110.]
+    if exclude:
+        peak=int(np.argmax(np.where((data[0]>40)&(data[0]<110),prediction,-np.inf)))
+        n.hist.data['Limits'].append([float(data[0][peak]-.3),float(data[0][peak]+.3)])
+        data[1][peak]+=10000.
+        masked=int(np.flatnonzero((data[0]>40)&(data[0]<110))[10])
+        data[1]=np.ma.array(data[1],mask=np.arange(len(prediction))==masked)
+    n.hist.data['data'][0].update({'wR':99.,'0:0:Rf':98.,'0:0:Rf^2':97.,'0:0:Nref':999999})
+    n.project.save()
+    prediction=n.evaluate(np.zeros(n.basis['physical_basis'].shape[1]))
+    result=n.save_verified_prediction(prediction)
+    continuation=export_refinable(result['path'],tmp_path/'continuation',
+        expected_sha256=result['sha256'],phase_name=phase,histogram_name=histogram)
+    for path in (result['path'],continuation['path']):
+        h=G.G2Project(gpxfile=path).histogram(histogram)
+        expected=profile_residual_metrics(h.data['data'][1][:3],h.data['data'][1][3],h.data['Limits'])
+        stats=h.data['data'][0]
+        assert stats['wR']==pytest.approx(expected['rwp_native'],rel=1e-8,abs=1e-8)
+        assert stats['0:0:Rf']!=98. and stats['0:0:Rf^2']!=97.
+        assert 0<stats['0:0:Nref']<=len(h.data['Reflection Lists'][phase]['RefList'])<999999
+        assert h.data['data'][0]['wtFactor']==2.5
+        np.testing.assert_array_equal(h.data['data'][1][2],data[2])
+        if exclude:assert len(h.data['Limits'])==3
+    assert sha(source)==before
+
+
 @pytest.mark.parametrize('scale',[0.,-1.])
 def test_nonpositive_histogram_scale_is_rejected_before_preparation(tmp_path,synthetic,scale):
     source,cif,transform,*_=synthetic
