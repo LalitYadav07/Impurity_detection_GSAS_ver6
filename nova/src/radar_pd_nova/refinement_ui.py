@@ -49,7 +49,7 @@ def refinement_dashboard(app):
         with html.Details(v_if='rf_source_warnings.length',classes='mb-4'):
             html.Summary('{{ rf_source_warnings.length }} completed project(s) need attention before refinement',style='cursor:pointer;color:#8b6028;font-size:13px')
             v.VDataTable(items=('rf_source_warnings',),headers=("[{title:'Scan',key:'scan'},{title:'Reason',key:'reason'}]",),items_per_page=5,density='compact')
-        v.VAlert(v_if="rf_mode !== 'models' && !!rf_source_qualification",text=('rf_source_qualification',),type='info',variant='tonal',density='compact',classes='mb-3')
+        v.VAlert(v_if="rf_mode === 'recipe' && !!rf_source_qualification",text=('rf_source_qualification',),type='info',variant='tonal',density='compact',classes='mb-3')
         with html.Div(classes='rf-toolbar'):
             select('Experiment','rf_experiment','rf_experiments')
             with v.VBtnToggle(v_model=('rf_mode',),mandatory=True,color='#15543c',variant='outlined',divided=True):
@@ -203,6 +203,7 @@ def refinement_dashboard(app):
                         select('Horizontal axis','rf_trend_axis','rf_trend_axes')
                     with html.Div(classes='rf-toolbar'):
                         select('Representation','rf_trend_display',"[{title:'Absolute values',value:'absolute'},{title:'Difference from first scan',value:'difference'},{title:'Relative cell change (%)',value:'relative'}]",disabled=("['rwp','phase_fractions'].includes(rf_trend_metric)",))
+                        v.VBtn('Expand trend',click='rf_expanded = true',variant='text',size='small',prepend_icon='mdi-arrow-expand')
                     with html.Div(classes='rf-trend'):
                         fig=plotly.Figure(display_mode_bar=True,responsive=True,style='height:100%;width:100%');fig.data=('rf_trend.data',);fig.layout=('rf_trend.layout',)
                     html.P('{{ rf_trend_notice }}',classes='rf-notice')
@@ -230,10 +231,12 @@ def refinement_dashboard(app):
                 html.P('{{ rf_output_provenance }}',v_if='!!rf_output_provenance',classes='rf-notice')
         with html.Div(v_if='rf_expanded',classes='rf-overlay'):
             v.VBtn('Close expanded plot',click='rf_expanded = false',variant='text',prepend_icon='mdi-arrow-collapse')
-            html.H3('{{ rf_selected_title }}',classes='mt-2')
+            html.H3('{{ rf_selected_title }}',v_if="rf_result_tab !== 'trends'",classes='mt-2')
+            html.H3('Refinement trends · {{ (rf_experiments.find(item => item.value === rf_experiment) || {}).title || rf_experiment }}',v_if="rf_result_tab === 'trends'",classes='mt-2')
             html.P("Histogram: {{ rf_fit.layout.meta.refinement_histogram.title || rf_fit.layout.meta.refinement_histogram.name }}",
-                v_if='rf_fit.layout && rf_fit.layout.meta && rf_fit.layout.meta.refinement_histogram',
+                v_if="rf_result_tab !== 'trends' && rf_fit.layout && rf_fit.layout.meta && rf_fit.layout.meta.refinement_histogram",
                 classes='rf-notice',style='overflow-wrap:anywhere')
-            html.P('{{ rf_rwp_summary }}',classes='rf-notice')
+            html.P('{{ rf_rwp_summary }}',v_if="rf_result_tab !== 'trends'",classes='rf-notice')
+            html.P('{{ rf_trend_notice }}',v_if="rf_result_tab === 'trends'",classes='rf-notice')
             with html.Div(style='height:calc(100vh - 300px);min-height:260px'):
-                fig=plotly.Figure(display_mode_bar=True,responsive=True,style='height:100%;width:100%');fig.data=('rf_fit.data',);fig.layout=('rf_fit.layout',)
+                fig=plotly.Figure(display_mode_bar=True,responsive=True,style='height:100%;width:100%');fig.data=("rf_result_tab === 'trends' ? rf_trend.data : rf_fit.data",);fig.layout=("rf_result_tab === 'trends' ? rf_trend.layout : rf_fit.layout",)

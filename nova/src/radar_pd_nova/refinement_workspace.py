@@ -19,6 +19,7 @@ from gpx_recipe.usage import summarize_calls
 from .refinement_runtime import RuntimeUnavailable
 from .checkpoint_uploads import CheckpointUploadPending
 from .refinement_sources import RefinementScope, digest, retained_fallback_group
+from .refinement_messages import galaxy_refinement_activity
 
 
 def utc():
@@ -504,6 +505,15 @@ class RefinementWorkspace:
                 job['message']='Submitted to Galaxy; waiting for the verified result'
                 self.save()
             if self.runtime.kind=='galaxy':self.checkpoint()
+        def progress(action):
+            # Polling already occurs in the scientific runtime. Persist the
+            # observed phase locally without another History upload/poll.
+            with self.lock:
+                if not job.get('remote_action') or action.get('galaxy_job_id')!=job['remote_action'].get('galaxy_job_id'):
+                    raise ValueError('Refinement progress belongs to a different Galaxy job')
+                job['remote_action']=action
+                job['message']=galaxy_refinement_activity(action)
+                self.save()
         try:
             # Persist the claimed stable dispatch before contacting Galaxy.
             # A restored interrupted claim searches/reuses that dispatch.
@@ -513,7 +523,7 @@ class RefinementWorkspace:
                 self.save()
             result=self.runtime.call('run',source,directory,plan=recipe['plan'],approval=recipe['approval'],
                 dispatch_key=job['id'],on_submitted=submitted,resume=job.get('remote_action'),recover=job['attempts']>1,
-                cancel_event=cancel_event)
+                cancel_event=cancel_event,on_progress=progress)
             with self.lock:
                 status=result['status']
                 if status=='needs_review' and 'match' in result.get('error','').lower() and 'model' in result.get('error','').lower():status='needs_recipe'

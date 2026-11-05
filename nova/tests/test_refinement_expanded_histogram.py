@@ -38,13 +38,13 @@ def test_expanded_histogram_caption_uses_the_same_physical_bank_options_as_the_s
             if tag == 'div' and self.inside: self.inside -= 1
     expanded = Expanded(); expanded.feed(app.layout.html)
     assert expanded.caption == ('Histogram: {{ rf_fit.layout.meta.refinement_histogram.title || rf_fit.layout.meta.refinement_histogram.name }}')
-    assert expanded.caption_attrs['v-if'] == 'rf_fit.layout && rf_fit.layout.meta && rf_fit.layout.meta.refinement_histogram'
+    assert expanded.caption_attrs['v-if'] == "rf_result_tab !== 'trends' && rf_fit.layout && rf_fit.layout.meta && rf_fit.layout.meta.refinement_histogram"
     assert 'rf_histograms.find' not in expanded.caption
     # A missing physical-bank mapping still uses the native identity verbatim.
     assert refinement_histogram_options(view,{})[1] == {'title':'PWDR b5.gsa Bank 1','value':'PWDR b5.gsa Bank 1'}
-    # The caption is text-only; the expanded plot retains the existing data/layout bindings.
-    assert ':data="rf_fit.data"' in app.layout.html
-    assert ':layout="rf_fit.layout"' in app.layout.html
+    # An expanded trend must use the trend rather than the selected scan's fit.
+    assert ':data="rf_result_tab === \'trends\' ? rf_trend.data : rf_fit.data"' in app.layout.html
+    assert ':layout="rf_result_tab === \'trends\' ? rf_trend.layout : rf_fit.layout"' in app.layout.html
 
 
 def multibank_view():

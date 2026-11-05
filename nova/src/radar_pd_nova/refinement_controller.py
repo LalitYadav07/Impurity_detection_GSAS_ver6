@@ -21,7 +21,7 @@ from .refinement_plots import empty_figure, fit_figure, trend_figure, electrical
 from .refinement_runtime import configured_runtime, verify_result_files
 from .refinement_sources import RefinementScope, digest, source_from_record
 from .refinement_workspace import RefinementWorkspace
-from .refinement_messages import convergence_notice, refinement_review_status, retain_review_evidence
+from .refinement_messages import convergence_notice, refinement_review_status, retain_review_evidence, galaxy_refinement_activity, review_notices
 from .results import experiment_axis_options
 from .guided_refinement_controller import GuidedRefinementMixin
 from .refinement_parameters import execution_parameters, parameter_table
@@ -40,7 +40,7 @@ def refinement_activity_label(job, runtime_kind):
     status = job['status']
     if runtime_kind == 'galaxy':
         if status == 'running':
-            return 'Submitted to Galaxy' if job.get('remote_action') else 'Preparing submission'
+            return galaxy_refinement_activity(job['remote_action']) if job.get('remote_action') else 'Preparing submission'
         if status == 'recovering':
             return 'Recovering Galaxy job' if job.get('remote_action') else 'Checking prior submission'
     return status.replace('_', ' ').capitalize()
@@ -694,7 +694,7 @@ class RefinementMixin(GuidedRefinementMixin):
         source=(w.state['sources'].get(s.rf_source) if w else None) or {}
         prepared=source.get('project',{}).get('stage') in {'prepared_unqualified','edited_unqualified'}
         s.rf_source_qualification=('Prepared starting hypothesis. No refinement has been accepted; calibration, phase assignments and composition require scientific review.' if prepared else '')
-        warnings=[str(value) for value in source.get('scientific_warnings',[]) if str(value).strip()]
+        warnings=review_notices(source.get('scientific_warnings',[]))
         if warnings:
             s.rf_source_qualification=(' '.join([s.rf_source_qualification,
                 'Starting result requires scientific review: ' + ' '.join(warnings)])).strip()

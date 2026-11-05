@@ -12,7 +12,7 @@ import pytest
 
 from gpx_recipe.convergence import SCHEMA
 from radar_pd_nova.refinement_controller import RefinementMixin, refinement_activity_label
-from radar_pd_nova.refinement_messages import refinement_review_status,retain_review_evidence
+from radar_pd_nova.refinement_messages import refinement_review_status,retain_review_evidence,review_notices
 from radar_pd_nova.refinement_plots import trend_figure
 from radar_pd_nova.refinement_runtime import retain_result_review,verify_result_files,LocalRefinementRuntime,GalaxyRefinementRuntime
 from test_refinement_integration import create,source,approved
@@ -51,6 +51,13 @@ def test_explicit_nonconvergence_marks_review_without_changing_completed_status(
     assert output==before and output['status']=='completed'
 
 
+def test_repeated_starting_notices_keep_the_full_diagnostic_and_other_reasons():
+    short='Native refinement did not converge. Review the retained candidate.'
+    detailed=short+' Largest final-cycle shift / conditional s.u.: 2.6522.'
+    separate='The phase inventory may be incomplete.'
+    assert review_notices([short,detailed,short,separate,''])==[detailed,separate]
+
+
 def test_galaxy_dispatch_labels_do_not_claim_a_worker_is_running():
     pending = {'status': 'running', 'remote_action': None}
     assert refinement_activity_label(pending, 'galaxy') == 'Preparing submission'
@@ -58,6 +65,15 @@ def test_galaxy_dispatch_labels_do_not_claim_a_worker_is_running():
     assert refinement_activity_label(acknowledged, 'galaxy') == 'Submitted to Galaxy'
     assert refinement_activity_label(pending, 'local') == 'Running'
     assert pending == {'status': 'running', 'remote_action': None}
+
+
+@pytest.mark.parametrize('remote_status,label',[
+    ('queued','Queued on NDIP'),('running','Running on NDIP'),
+    ('ok','Collecting and verifying outputs'),('uploading','Preparing inputs on NDIP')])
+def test_activity_uses_observed_galaxy_phase_before_scientific_completion(remote_status,label):
+    entry={'status':'running','remote_action':{'galaxy_job_id':'one-job','status':remote_status}}
+    assert refinement_activity_label(entry,'galaxy')==label
+    assert entry['status']=='running'
 
 
 def test_selected_dispatch_message_refreshes_without_reselecting_or_loading_old_result(tmp_path):

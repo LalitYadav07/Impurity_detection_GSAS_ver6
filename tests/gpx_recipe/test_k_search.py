@@ -179,7 +179,13 @@ def test_real_subprocess_cancel_kills_its_process_group(tmp_path):
     marker=tmp_path/'child-was-not-killed';ready=tmp_path/'ready'
     child=f"import pathlib,time;time.sleep(.8);pathlib.Path({str(marker)!r}).write_text('unexpected')"
     parent=f"import subprocess,sys,pathlib,time;subprocess.Popen([sys.executable,'-c',{child!r}]);pathlib.Path({str(ready)!r}).touch();time.sleep(10)"
-    event=threading.Event();timer=threading.Timer(.2,event.set);timer.start()
+    event=threading.Event()
+    def cancel_after_child_started():
+        deadline=time.monotonic()+5
+        while not ready.exists() and time.monotonic()<deadline:
+            if event.wait(.01):return
+        event.set()
+    timer=threading.Thread(target=cancel_after_child_started);timer.start()
     with pytest.raises(ScientificCancelled):run_scientific([sys.executable,'-c',parent],timeout=10,cancel_event=event,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
     timer.join();time.sleep(.85)
     assert ready.exists() and not marker.exists()

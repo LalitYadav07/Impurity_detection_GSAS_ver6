@@ -127,7 +127,7 @@ class LocalRefinementRuntime:
         return source
 
     def call(self, action, source, directory, *, plan=None, approval=None, dispatch_key='',
-             on_submitted=None, resume=None, recover=False, cancel_event=None):
+             on_submitted=None, resume=None, recover=False, cancel_event=None, on_progress=None):
         # A previously registered battery source can outlive a converter fix.
         # Retain inspection/recovery of historical artifacts, but recheck the
         # captured legacy coefficients before any new preview or execution.
@@ -205,7 +205,7 @@ class GalaxyRefinementRuntime(LocalRefinementRuntime):
         if len(matches)!=1:raise ValueError('The published GPX does not map to one exact Galaxy collection element')
         return matches[0]['id']
 
-    def call(self,action,source,directory,*,plan=None,approval=None,dispatch_key='',on_submitted=None,resume=None,recover=False,cancel_event=None):
+    def call(self,action,source,directory,*,plan=None,approval=None,dispatch_key='',on_submitted=None,resume=None,recover=False,cancel_event=None,on_progress=None):
         from .models import UtilityActionRecord,RunStatus
         from .galaxy_service import _extract_results_archive
         source=self.resolve(source);directory=Path(directory);directory.mkdir(parents=True,exist_ok=True)
@@ -265,9 +265,17 @@ class GalaxyRefinementRuntime(LocalRefinementRuntime):
             write_json(acknowledged,record)
             if on_submitted:on_submitted(record)
         started=time.monotonic()
+        reported_status=None
+        def report_progress():
+            nonlocal reported_status
+            if on_progress and job.status!=reported_status:
+                on_progress(job.model_dump(mode='json',exclude={'inputs':{'recipe_request_b64'}}))
+                reported_status=job.status
+        report_progress()
         while job.status not in {RunStatus.OK,RunStatus.ERROR,RunStatus.CANCELLED}:
             if time.monotonic()-started>self.timeout:raise RuntimeUnavailable('Galaxy refinement is still pending; recover the existing job before retrying')
             time.sleep(self.poll_seconds);self.service.refresh_utility(job)
+            report_progress()
         if job.status==RunStatus.ERROR:raise RuntimeError(job.message or 'The Galaxy refinement worker failed')
         if job.status==RunStatus.CANCELLED:raise RuntimeUnavailable('The Galaxy refinement job was cancelled; it is not still queued')
         bundle=job.outputs.get('result_bundle')

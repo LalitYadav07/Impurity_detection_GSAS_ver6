@@ -17,6 +17,27 @@ SELECTION = ReplyContext(step="selection", samples=SAMPLES, shown_samples=SAMPLE
 CHEMISTRY = ReplyContext(step="chemistry")
 
 
+def test_discovery_count_decoration_does_not_hide_exact_sample_name():
+    samples=(SampleOption('100805','100805 — RuTrimer1 (6 scans)'),
+             SampleOption('100804','100804 — BaNbCrRu_Dimer (9 scans)'))
+    context=ReplyContext(step='selection',samples=samples,shown_samples=samples,banks=(2,))
+    result=interpret_reply('RuTrimer1; bank 2',context)
+    assert result.action=='patch'
+    assert result.value['powgen_processing_sample_ids']==['100805']
+    assert result.value['powgen_processing_banks']==[2]
+    assert interpret_reply('RuTrimer2',context).action=='clarify'
+
+
+def test_discovery_count_aliases_keep_ambiguity_and_scientific_name_digits():
+    samples=(SampleOption('A','A — oxide (0.15) (6 scans)'),
+             SampleOption('B','B — oxide (0.15) (3 scans)'))
+    context=ReplyContext(step='selection',samples=samples,banks=(2,))
+    result=interpret_reply('oxide (0.15)',context)
+    assert result.action=='clarify' and len(result.choices)==2
+    assert interpret_reply('oxide (0.16)',context).action=='clarify'
+    assert interpret_reply('A',context).value['powgen_processing_sample_ids']==['A']
+
+
 @pytest.mark.parametrize("text", [
     "POWGEN IPTS-12345", "PG3, IPTS 12345", "powgen ipts:12345",
     "I am on POWGEN, IPTS-12345", "I'm working at POWGEN with IPTS 12345",
@@ -153,6 +174,16 @@ def test_detailed_experiment_request_reports_unapplied_group_only_once():
     assert reply.action == "clarify"
     assert reply.message.count("The grouped answer has not been applied.") == 1
     assert "Unresolved clause:" in reply.message
+    assert "Copy the exact sample ID" not in reply.message
+    assert reply.value is None
+    assert len(reply.choices) == 1
+    assert reply.choices[0].value == {"live_beamline": "PG3", "powgen_ipts": "IPTS-99999"}
+
+
+def test_experiment_discovery_offer_does_not_hide_conflicting_proposals():
+    reply = interpret_reply("POWGEN IPTS-34523. NOMAD IPTS-21886; use sample X")
+    assert reply.action == "clarify" and reply.value is None
+    assert not reply.choices
 
 
 @pytest.mark.parametrize("bad", ["2.5", "2e0", "02", "-2", "7", "2 or 1", "2 and secret"])

@@ -9,6 +9,20 @@ import pytest
 from gpx_recipe.structural_live.reduced import from_arrays,native_limits,verify_native_observation
 
 
+def test_magnetic_setup_assistant_cannot_silently_replace_a_structural_search(monkeypatch):
+    import asyncio
+    from radar_pd_nova import symmetry_controller as module
+    app=module.SymmetryMixin()
+    state=NS(sx_kind='structural',sx_request='Find a distorted nuclear structure',flush=lambda:None)
+    app.server=NS(state=state)
+    app._clear_symmetry_setup_details=lambda:None
+    app._refinement_schedule=lambda coroutine,name:asyncio.run(coroutine)
+    monkeypatch.setattr(module,'make_intent',lambda *a,**kw:pytest.fail('Magnetic planner called for structural search'))
+    app.plan_symmetry_request()
+    assert state.sx_kind=='structural' and not state.sx_busy
+    assert 'structural controls' in state.sx_error
+
+
 def test_extra_exclusion_preserves_measurement_and_normalization_domains():
     x=np.arange(9.);y=np.ones(9);y[4]=1000.
     limits=[[0,8],[1.2,6.4]]
@@ -167,7 +181,7 @@ def test_recovery_timeout_retains_checked_incumbent_but_integrity_error_propagat
         module.improve(s,t,o,z)
 
 
-@pytest.mark.parametrize('field',['sx_max_mode','sx_start_mode','sx_cycles'])
+@pytest.mark.parametrize('field',['sx_max_mode','sx_start_mode','sx_cycles','sx_structural_optimizer'])
 def test_prepared_form_ignores_hidden_legacy_fields_but_validates_visible_settings(monkeypatch,tmp_path,field):
     from radar_pd_nova import symmetry_controller as module
     state=NS(sx_error='',sx_adequate=5.,sx_kind='structural',sx_parent='parent',sx_histogram='bank',sx_k='0,0,0',
@@ -185,5 +199,6 @@ def test_prepared_form_ignores_hidden_legacy_fields_but_validates_visible_settin
     monkeypatch.setattr(module,'build_plan',stop)
     app.build_symmetry_plan()
     assert len(reached)==1 and reached[0]['cycles']==12
+    assert reached[0]['structural_optimizer']=='prepared_nonlinear'
     state.sx_structural_radius='invalid visible value';app.build_symmetry_plan()
     assert len(reached)==1 and state.sx_error

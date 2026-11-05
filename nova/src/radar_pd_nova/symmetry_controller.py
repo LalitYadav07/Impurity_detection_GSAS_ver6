@@ -48,7 +48,7 @@ from gpx_recipe.symmetry.templates import make_template,trial_count,validate_tem
 MODEL_FIELDS=('sx_kind','sx_moment_model','sx_magnetic_optimizer','sx_optimizer_iterations','sx_refine_scale','sx_refine_background','sx_parent','sx_histogram','sx_k','sx_sites','sx_form_factors','sx_lande',
     'sx_directions','sx_adequate','sx_max_moment','sx_mag_d_min','sx_max_mode','sx_start_mode','sx_cycles',
     'sx_sign_starts','sx_candidates','sx_modes','sx_existing','sx_follow_new','sx_max_scans','sx_request',
-    'sx_opd_policy','sx_construct_limit','sx_selected_scans','sx_structural_optimizer','sx_structural_starts',
+    'sx_opd_policy','sx_construct_limit','sx_selected_scans','sx_structural_starts',
     'sx_structural_seconds','sx_structural_radius','sx_structural_cells','sx_structural_recovery','sx_parent_reference')
 
 
@@ -68,7 +68,7 @@ class SymmetryMixin(KSearchMixin):
         extra=dict(sx_existing='selected',sx_selected_scans=[],sx_selectable_scans=[],sx_follow_new=False,sx_max_scans=200,sx_enrollments=[],sx_priority_acquisition='',sx_priority_options=[],sx_priority_notice='',sx_retry_acquisition='',sx_retry_options=[],sx_retry_notice='',sx_following=False,sx_campaign_running=False,sx_pause_pending=False,sx_parallel_jobs=4,
             sx_queue_notice='',sx_backend='',sx_batches=[],sx_plan_token='',sx_cancel_notice='Cancelling a Galaxy chunk stops all starts in that job.',
             sx_opd_policy='highest-symmetry-per-irrep',sx_construct_limit=100,
-            sx_structural_optimizer='native_reference',sx_structural_starts=4,sx_structural_seconds=20.,
+            sx_structural_starts=4,sx_structural_seconds=20.,
             sx_structural_radius=.05,sx_structural_cells=.0008,sx_structural_recovery=0.,sx_parent_reference='')
         for key,value in extra.items():setattr(s,key,value)
         self._symmetry_defaults={**defaults,**extra}
@@ -83,7 +83,7 @@ class SymmetryMixin(KSearchMixin):
         s.change('sx_existing','sx_follow_new','sx_max_scans','sx_selected_scans')(self._symmetry_unapprove)
         s.change('sx_moment_model','sx_refine_scale','sx_refine_background')(self._symmetry_unapprove)
         s.change('sx_magnetic_optimizer','sx_optimizer_iterations')(self._symmetry_unapprove)
-        s.change('sx_structural_optimizer','sx_structural_starts','sx_structural_seconds',
+        s.change('sx_structural_starts','sx_structural_seconds',
                  'sx_structural_radius','sx_structural_cells','sx_structural_recovery','sx_parent_reference')(self._symmetry_unapprove)
         s.change('sx_candidates','sx_modes')(self._symmetry_unapprove)
         s.change('sx_opd_policy','sx_construct_limit')(self._symmetry_unapprove)
@@ -679,6 +679,8 @@ class SymmetryMixin(KSearchMixin):
             s.sx_message='Asking Illumine for a setup-only draft. No model refinement starts from this request.';s.flush()
             d=None;identity=None;request=s.sx_request
             try:
+                if getattr(s,'sx_kind','magnetic')!='magnetic':
+                    raise ValueError('The search assistant currently configures magnetic searches. Use the structural controls to set up a displacement-mode search.')
                 d=self._symmetry_draft
                 if not d or d['source_id']!=s.sx_start_source:raise ValueError('Inspect this exact source GPX first')
                 identity=self._symmetry_setup_identity()
@@ -765,7 +767,6 @@ class SymmetryMixin(KSearchMixin):
                     parent_source=root/'source.gpx'
                     d.pop('reference_asset',None)
                     if s.sx_parent_reference:
-                        if s.sx_structural_optimizer!='prepared_nonlinear':raise ValueError('Separate parent reference requires the prepared structural solver')
                         w=self._refinement_store()
                         reference=await asyncio.to_thread(resolve_start,w,s.rf_experiment,s.sx_parent_reference)
                         captured=await asyncio.to_thread(w.runtime.resolve,reference)
@@ -812,7 +813,7 @@ class SymmetryMixin(KSearchMixin):
     def _discovery_identity(self):
         s=self.server.state
         identity=(s.sx_kind,s.sx_parent,s.sx_k,s.sx_start_source)
-        return identity+(s.sx_opd_policy,int(s.sx_construct_limit),getattr(s,'sx_parent_reference',''),getattr(s,'sx_structural_optimizer','native_reference')) if s.sx_kind=='structural' else identity
+        return identity+(s.sx_opd_policy,int(s.sx_construct_limit),getattr(s,'sx_parent_reference',''),'prepared_nonlinear') if s.sx_kind=='structural' else identity
 
     def _model_form(self,payload=None):
         s=self.server.state
@@ -836,16 +837,14 @@ class SymmetryMixin(KSearchMixin):
             sites=[]
             if s.sx_kind=='magnetic':
                 sites=sites_from_inputs(s.sx_sites,s.sx_form_factors,s.sx_lande)
-            prepared=s.sx_kind=='structural' and s.sx_structural_optimizer=='prepared_nonlinear'
-            # Hidden reference-backend fields do not define a prepared search.
-            # Keep their unused contract defaults independent of stale UI text.
+            prepared=s.sx_kind=='structural'
+            # New structural plans use one complete-coordinate workflow. The
+            # old executor remains available only for sealed historical plans.
             maximum_mode,start_mode,cycles=.5,.1,12
-            if s.sx_kind=='structural' and not prepared:
-                maximum_mode,start_mode=float(s.sx_max_mode),float(s.sx_start_mode)
             if not prepared:cycles=int(s.sx_cycles)
             settings=dict(acquisition_id=d['source_id'],kind=s.sx_kind,parent=s.sx_parent,histogram=s.sx_histogram,k=[str(Fraction(v.strip())) for v in s.sx_k.split(',')],candidates=list(s.sx_candidates),modes=list(s.sx_modes),sites=sites,directions=list(s.sx_directions),adequate_rwp=float(s.sx_adequate),maximum_moment=float(s.sx_max_moment) if s.sx_kind=='magnetic' else 10.,magnetic_d_min=float(s.sx_mag_d_min) if s.sx_kind=='magnetic' else 0.,maximum_mode=maximum_mode,start_mode=start_mode,cycles=cycles,relative_sign_starts=s.sx_sign_starts)
             if s.sx_kind=='magnetic':settings.update(moment_model=s.sx_moment_model,refine_histogram_scale=s.sx_refine_scale,refine_background=s.sx_refine_background)
-            if s.sx_kind=='structural' and s.sx_structural_optimizer=='prepared_nonlinear':
+            if prepared:
                 settings.update(structural_optimizer='prepared_nonlinear',structural_starts=int(s.sx_structural_starts),
                     structural_seconds=float(s.sx_structural_seconds),structural_mode_radius=float(s.sx_structural_radius),
                     structural_cell_radius=float(s.sx_structural_cells),structural_recovery_seconds=float(s.sx_structural_recovery))
@@ -865,7 +864,7 @@ class SymmetryMixin(KSearchMixin):
             free='Selected modes, cell, background and global scale' if s.sx_kind=='structural' else magnetic_scope+('; shared nuclear/magnetic histogram scale varied' if s.sx_refine_scale else '; all scales fixed')+('; existing background coefficients varied' if s.sx_refine_background else '; background fixed')+'; nuclear geometry fixed'
             if s.sx_kind=='magnetic':free+=('; all fitted d spacings' if settings['magnetic_d_min']==0 else f"; magnetic d ≥ {settings['magnetic_d_min']} Å")
             if settings.get('structural_optimizer')=='prepared_nonlinear':
-                free=(f"Prepared nonlinear pilot: all physical modes, with only origin gauges removed; {settings['structural_starts']} starting guesses per model; "
+                free=(f"Joint structural fit: all physical modes, with only origin gauges removed; {settings['structural_starts']} starting guesses per model; "
                     f"{settings['structural_seconds']} s optimization plus {settings['structural_recovery_seconds']} s recovery per model. "
                     f"Each independent displacement coordinate is bounded to ±{settings['structural_mode_radius']} Å RMS; reciprocal-metric coordinates to ±{settings['structural_cell_radius']}. "
                     "Common scale and a bounded additive Back;0 correction vary; higher background coefficients and other phases stay fixed. Verified point estimates require optimization review; no model probabilities or automatic structure assignment")

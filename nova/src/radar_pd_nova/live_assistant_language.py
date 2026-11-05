@@ -275,12 +275,17 @@ def _sample_aliases(option: SampleOption) -> set[str]:
     parts = re.split(r"\s+[—–-]\s+", option.title, maxsplit=1)
     if len(parts) == 2:
         aliases.add(_key(parts[1]))
+        aliases.update(_sample_names(option))
     return aliases
 
 
 def _sample_names(option: SampleOption) -> set[str]:
     parts = re.split(r"\s+[—–-]\s+", option.title, maxsplit=1)
-    name = _key(parts[1] if len(parts) == 2 else option.title)
+    name = parts[1] if len(parts) == 2 else option.title
+    # Catalog titles append a changing scan count. It is presentation, not
+    # part of the specimen's name or its identifier. Preserve all other
+    # parentheses and digits; ambiguous names still require explicit review.
+    name = _key(re.sub(r"\s+\([0-9]+\s+scans?\)\s*$", "", name, flags=re.I))
     return {name} if name and name != _key(option.value) else set()
 
 
@@ -813,6 +818,19 @@ def interpret_reply(text: str, context: ReplyContext | None = None) -> ParsedRep
     result = _merge(replies, "Updated setup: " + "; ".join(r.message for r in replies))
     if result.action != "patch":
         unresolved = [clause for clause, reply in zip(clauses, replies) if reply.action != "patch"]
+        if context.step == "experiment":
+            experiment = _experiment(text, context)
+            if experiment and experiment.action == "clarify" and experiment.choices and all(
+                choice.action == "patch" and set(choice.value) <= {"live_beamline", "powgen_ipts"}
+                for choice in experiment.choices
+            ):
+                # Discovery has not happened yet. Offer an explicit, limited
+                # experiment choice rather than asking for IDs from a list
+                # that does not exist. Never silently apply the partial edit.
+                return _clarify(
+                    "I can first find the experiment shown below. The grouped answer has not been applied. "
+                    "After discovery, review samples and banks, then configure structures and analysis settings. "
+                    "Unresolved clause: " + "; ".join(unresolved), experiment.choices)
         result = ParsedReply(result.action, result.value,
                              result.message + " Unresolved clause: " + "; ".join(unresolved) + " " + SETUP_REPLY_HELP, result.choices)
     return result

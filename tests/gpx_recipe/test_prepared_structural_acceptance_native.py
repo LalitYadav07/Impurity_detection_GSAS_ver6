@@ -60,6 +60,51 @@ def test_prepare_fit_export_reopen_and_native_continuation(tmp_path,synthetic):
     assert np.shape(check['covariance']['covMatrix'])==(expected,expected)
 
 
+def test_reused_start_bank_matches_every_direct_native_curve(tmp_path,synthetic):
+    from gpx_recipe.structural_live.service import make_source
+    from gpx_recipe.structural_live.optimization.offline_native_start_bank import build, OfflineNativeStartBank
+    source,cif,transform,*_=synthetic;prepared=tmp_path/'prepared'
+    prepare(source,cif,transform,[0,0,0],prepared)
+    settings=SearchSettings(seconds=2.,starts=2)
+    direct_source=make_source(prepared,tmp_path/'direct-context',settings)
+    direct=tmp_path/'direct.npz';build(direct_source,direct)
+    reused_source=make_source(prepared,tmp_path/'reuse-context',settings)
+    reused=tmp_path/'reused.npz';receipt=build(reused_source,reused,reuse_fixed_cell_profiles=True)
+    left=OfflineNativeStartBank(direct_source,direct)
+    right=OfflineNativeStartBank(reused_source,reused)
+    np.testing.assert_array_equal(left.points,right.points)
+    np.testing.assert_allclose(left.curves,right.curves,rtol=1e-11,atol=1e-9)
+    np.testing.assert_allclose(left.proposal_cell_steps,right.proposal_cell_steps,rtol=0,atol=0)
+    assert receipt['construction_execution']['cached_calls']>0
+    assert receipt['construction_execution']['diagnostics']['maximum_check_error']<1e-9
+
+
+def test_sequential_distortion_cell_shift_and_parent_return_recover_native_truth(tmp_path,synthetic):
+    from gpx_recipe.structural_live.session import StructuralSession
+    source,cif,transform,*_=synthetic;prepared=tmp_path/'prepared'
+    settings=SearchSettings(seconds=8.,starts=4)
+    metadata=prepare_model(source,cif,transform,[0,0,0],prepared,settings=settings)
+    oracle=NativeCandidate(prepared,tmp_path/'oracle')
+    m=metadata['inventory']['physical_rank'];c=metadata['inventory']['cell_rank']
+    assert m==2 and c==3
+    truth=[(np.array([.015,-.012]),np.zeros(c)),
+           (np.zeros(m),np.array([.00015,0.,0.])),
+           (np.zeros(m),np.zeros(c))]
+    observations=[]
+    for revision,(modes,cells) in enumerate(truth):
+        y=oracle.evaluate(modes,cells);arrays=oracle.hist.data['data'][1]
+        observations.append(from_arrays([arrays[0],y,np.full(len(y),4.)],oracle.hist.data['Limits'],
+            acquisition='synthetic-native-sequence',revision=revision,protocol_sha256=sha(prepared/'prepared.json')))
+    session=StructuralSession(prepared,tmp_path/'session',settings=settings)
+    for observation,(modes,cells) in zip(observations,truth):
+        result=session.update(observation)
+        np.testing.assert_allclose(result['physical_parameters'][:m],modes,rtol=0,atol=1e-4)
+        np.testing.assert_allclose(result['physical_parameters'][m:],cells,rtol=0,atol=2e-7)
+        assert result['metrics']['rwp_native']<.02
+        assert result['starting_curves_reused'] and not result['previous_likelihood_accumulated']
+        assert all(check['weighted_objective_verified'] for check in result['verification']['saved_observations'].values())
+
+
 def test_extra_mask_and_tiny_optional_recovery_preserve_saved_objective(tmp_path,synthetic):
     source,cif,transform,histogram,phase=synthetic;prepared=tmp_path/'prepared'
     settings=SearchSettings(seconds=2.,starts=2,recovery_seconds=1e-6)

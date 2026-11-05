@@ -1,6 +1,6 @@
-# Prepared structural search (pilot)
+# Joint structural search
 
-The pilot adds a nonlinear structural backend to **Refinement → Model
+The structural workflow adds a nonlinear backend to **Refinement → Model
 exploration → Structural displacement modes**. It uses GSAS-II for diffraction
 and instrumental profiles, and shares the existing campaign ledger, Galaxy
 admission policy, process cancellation, independent audits and result viewer.
@@ -10,7 +10,8 @@ Hessian/grouped optimization or live magnetic posterior analysis.
 ## User workflow
 
 1. Select the target RADAR or recipe GPX and inspect its parent.
-2. Choose **Prepared nonlinear search · all modes · pilot**.
+2. Choose **Structural displacement modes**. The application uses one complete
+   coordinate workflow; an optimizer choice is not required.
 3. Optionally select a well-refined **Parent reference GPX**. Its named parent,
    exact setting, site labels, species, occupancies and isotope selection must
    agree with the target. The reference supplies fractional coordinates and
@@ -27,9 +28,10 @@ Hessian/grouped optimization or live magnetic posterior analysis.
    GSAS-II. These point estimates remain **optimization unresolved** rather than
    being promoted to unique structures or native convergence certificates.
 
-The native reference solver remains the default. It supports explicit selected
-modes and signed starts; the pilot instead retains every independent physical
-mode in each included child. Only demonstrated uniform-origin gauges are
+New UI plans retain every independent physical mode in each included child.
+The older selected-mode executor is retained internally to read and recover
+sealed historical plans; it is not an alternative new-setup option.
+Only demonstrated uniform-origin gauges are
 removed. Gauge reference holds in exported GPXs preserve that physical space.
 One campaign work unit owns a complete child and its internal starting portfolio;
 there is no exponential expansion of sign combinations into separate Galaxy
@@ -58,6 +60,12 @@ jobs. Independent children and scans use the existing bounded worker pool.
   native fallback instead of relaxing the reconstruction tolerance. Models
   above the 256-coordinate response-cache limit also use the complete native
   calculation; their coordinates are not truncated or rejected by that cache.
+- Starting-curve construction reuses the exact fixed-cell native profile for
+  displacement-only proposals. Cell changes still use complete native
+  calculations. All starting points, contact checks and secant-step choices
+  remain unchanged. A paired Linux/amd64 TOF control measured 52.45 → 33.38 s
+  preparation (36% less), with all 69 curves agreeing to 1.8e-15 relative error.
+  This is a preparation timing, not complete experimental-workflow latency.
 - An independent saved-GPX calculation must agree within 1e-8 relative error
   and 0.01 supplied standard deviations. Export verifies active mode variables,
   origin holds, cell freedom and fixed instrumental values, with no stale
@@ -124,14 +132,16 @@ compatibility import so the batch and model workers use one implementation.
 
 Release requires coordinated UI and Model Campaign images with identical
 scientific package identities. Keep old immutable workers and protocols intact.
-The pilot must not become the default based only on successful process exits,
-excellent Rwp on a single case, or the research branch's local latency figures.
-Qualification needs independent model-recovery controls, full exported-GPX
-round trips and measured complete workflow latency in the actual deployment.
+Production qualification requires independent model-recovery controls, full
+exported-GPX round trips and measured complete workflow latency in the actual
+deployment. The consolidated local UI has not yet passed the experimental
+Ba4SbRu3O12 recovery test and has not been deployed to NDIP-test.
+Successful process exits or excellent Rwp on one case do not complete that
+qualification.
 
 ## Integration validation
 
-The local integration was checked against the current NOVA, campaign, recipe
+The initial integration was checked against the NOVA, campaign, recipe
 and CIF contract suites (5,196 passing tests; 19 environment-dependent skips).
 The focused repair suite adds 67 passing contract/controller tests with no skips.
 Separate offline Linux controls use the deployed scientific image and the
@@ -158,3 +168,17 @@ outlier, a tiny recovery budget, preserved out-of-range weights, and injected
 scale, cell, mode, background and active-set violations. This dedicated gate
 requires actual execution with no skipped cases; external fixture variables
 are not needed. These controls do not establish experimental model recovery.
+
+The subsequent user-journey review exercised four real POWGEN scans through
+discovery, profile resolution, preliminary fitting, five-stage LLM-assisted
+nuclear recipes, per-scan fits and temperature trends. It exposed sample-name
+parsing, stale warning, transport-status and structural-form presentation bugs.
+The local fixes passed 1,027 focused setup/model checks and 517 focused
+refinement/UI checks; those suites overlap. The broader host run had 5,146
+passes, 19 skips and two local process-control failures. Both failures passed
+their focused rerun after replacing a startup-time assumption with a ready-file
+handshake and allowing process visibility. The final scientific wheel passed
+seven native structural controls without skips, including direct/reused
+starting-curve equivalence and a sequential distortion, cell-shift and
+return-to-parent series. Experimental structural model recovery and the
+coordinated NDIP image release remain outstanding.

@@ -7,6 +7,24 @@ from gpx_recipe.convergence import SCHEMA as CONVERGENCE_SCHEMA, assess_converge
 REVIEW_SCHEMA = 'radar-refinement-review/v1'
 
 
+def review_notices(values):
+    """Keep exact notices once; a longer verbatim notice retains its prefix."""
+    unique=list(dict.fromkeys(str(value).strip() for value in values if str(value).strip()))
+    return [value for value in unique if not any(value!=other and value in other for other in unique)]
+
+
+def galaxy_refinement_activity(action):
+    """Report observed transport state, separately from scientific completion."""
+    return {
+        'uploading': 'Preparing inputs on NDIP',
+        'queued': 'Queued on NDIP',
+        'running': 'Running on NDIP',
+        'ok': 'Collecting and verifying outputs',
+        'error': 'Galaxy job failed',
+        'cancelled': 'Galaxy job cancelled',
+    }.get((action or {}).get('status'), 'Submitted to Galaxy')
+
+
 def retain_review_evidence(result, view, criteria=None):
     """Retain small diagnostics from the verified final view, not its curves."""
     if (not isinstance(view,dict) or result.get('status')!='completed' or not result.get('output_sha256')

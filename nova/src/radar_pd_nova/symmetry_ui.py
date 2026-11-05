@@ -47,9 +47,9 @@ def model_exploration(app):
         .sx-models{max-height:740px;overflow:auto;margin-top:12px}.sx-model{width:100%;text-align:left;border:1px solid #dce7df;border-radius:7px;padding:12px;margin:0 0 8px;background:white;color:#234839;cursor:pointer}
         .sx-model.active{background:#eff8f2;border-color:#277754;box-shadow:inset 3px 0 #277754}.sx-model b{display:block;font-size:14px}.sx-model span{font-size:12px;display:block;margin-top:4px;color:#64796b}
         .sx-fit{min-width:0;width:100%;height:570px}.sx-overview{min-width:0;width:100%;height:300px}.sx-evidence{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:14px 0}.sx-evidence p{font-size:12px;line-height:1.7;overflow-wrap:anywhere}
-        .sx-settings{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin:18px 0}.sx-setup{margin-bottom:20px}.sx-status{padding:12px 16px;background:#f2f6f3;border-radius:6px;font-size:13px;line-height:1.8;margin-bottom:18px}
+        .sx-settings{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin:18px 0;align-items:start}.sx-settings>.v-input{min-width:0}.sx-bounds{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-items:start}.sx-bounds>.v-input{min-width:0}.sx-setup{margin-bottom:20px}.sx-status{padding:12px 16px;background:#f2f6f3;border-radius:6px;font-size:13px;line-height:1.8;margin-bottom:18px}
         .sx-choices .v-field__input{max-height:92px;overflow-y:auto}.sx-choices .v-chip{max-width:95%}
-        @media(max-width:850px){.sx-layout,.sx-evidence,.sx-settings{grid-template-columns:1fr}.sx-models{max-height:260px}}
+        @media(max-width:850px){.sx-layout,.sx-evidence,.sx-settings,.sx-bounds{grid-template-columns:1fr}.sx-models{max-height:260px}}
         ''')
         client.Style(FIT_PRESENTATION_CSS)
         with html.Div(classes='rf-toolbar'):
@@ -82,7 +82,7 @@ def model_exploration(app):
                 scan_select('Starting GPX · original or recipe checkpoint','sx_start_source','sx_start_sources',
                     placeholder='Type a run number, temperature or recipe stage',persistent_placeholder=True)
                 v.VBtn('Inspect exact parent',click=app.inspect_symmetry_source,disabled=('!sx_start_source || sx_busy',),variant='outlined')
-            with html.Details(v_if='sx_has_context',classes='mt-3'):
+            with html.Details(v_if="sx_has_context && sx_kind === 'magnetic'",classes='mt-3'):
                 html.Summary('Describe a magnetic model search')
                 html.P('Describe magnetic sites, ions and physical bounds. If k is unknown, request a data-based k survey; review its candidates before discovery. State whether moments may cant and whether to refine a shared nuclear/magnetic intensity scale.',classes='rf-notice')
                 v.VTextarea(label='Magnetic refinement request',v_model=('sx_request',),rows=3,auto_grow=True,variant='outlined',hide_details=True,classes='mt-3')
@@ -94,12 +94,12 @@ def model_exploration(app):
                 html.P('{{ note }}',v_for='note in sx_planning_notes',classes='rf-notice')
             with html.Div(v_if='sx_has_context',classes='sx-settings'):
                 select('Exploration','sx_kind',"[{title:'Magnetic models',value:'magnetic'},{title:'Structural displacement modes',value:'structural'}]")
+                html.P('For structural distortions, enter the distortion k vector in the parent basis. Use 0, 0, 0 for a zone-center distortion with unchanged translation periodicity. The magnetic k survey and magnetic setup assistant do not configure structural searches.',v_if="sx_kind === 'structural'",classes='rf-notice')
                 select('Moment model','sx_moment_model',"[{title:'Collinear moments',value:'collinear'},{title:'Symmetry-allowed components · can cant',value:'symmetry_allowed'}]",v_if="sx_kind === 'magnetic'")
                 select('Magnetic optimizer','sx_magnetic_optimizer',"[{title:'Fast checked optimizer · fixed nuclear model',value:'profiled_quadratic'},{title:'GSAS-II Hessian',value:'gsas_hessian'}]",v_if="sx_kind === 'magnetic'")
-                select('Structural optimizer','sx_structural_optimizer',"[{title:'Native GSAS-II reference · selected modes',value:'native_reference'},{title:'Prepared nonlinear search · all modes · pilot',value:'prepared_nonlinear'}]",v_if="sx_kind === 'structural'")
-                select('Parent reference GPX · optional','sx_parent_reference','sx_start_sources',v_if="sx_kind === 'structural' && sx_structural_optimizer === 'prepared_nonlinear'",clearable=True)
-                html.P('The starting GPX is the target scan. An optional well-refined parent scan supplies fractional coordinates and ADPs for candidate construction. Target observations, instrument, fitted parent cell, background and secondary phases are retained. Both inputs must have the same named parent phase, site chemistry and setting. Clear the reference to use the target itself.',v_if="sx_kind === 'structural' && sx_structural_optimizer === 'prepared_nonlinear'",classes='rf-notice')
-                html.P('The pilot prepares each child once, retains every independent displacement and lattice coordinate, and verifies its saved GPX with GSAS-II. Fixed secondary nuclear phases are retained. It produces point estimates, with unresolved optimization kept visible. It does not assign a unique structure or give counting-stop advice.',v_if="sx_kind === 'structural' && sx_structural_optimizer === 'prepared_nonlinear'",classes='rf-notice')
+                select('Parent reference GPX · optional','sx_parent_reference','sx_start_sources',v_if="sx_kind === 'structural'",clearable=True)
+                html.P('The starting GPX is the target scan. An optional well-refined parent scan supplies fractional coordinates and ADPs for candidate construction. Target observations, instrument, fitted parent cell, background and secondary phases are retained. Both inputs must have the same named parent phase, site chemistry and setting. Clear the reference to use the target itself.',v_if="sx_kind === 'structural'",classes='rf-notice')
+                html.P('Each child is prepared once. All independent displacement and lattice coordinates are fitted jointly, and the saved GPX is independently checked with GSAS-II. Fixed secondary nuclear phases are retained. Unresolved optimization remains visible; a good fit alone does not identify a unique structure.',v_if="sx_kind === 'structural'",classes='rf-notice')
                 html.P('Profiled optimization varies the allowed magnetic components and the selected common scale/background against the same GSAS-II model. It requires a commensurate constructed model, symmetry-allowed components and one neutron histogram. Unsupported inputs stop with a reason.',v_if="sx_kind === 'magnetic' && sx_magnetic_optimizer === 'profiled_quadratic'",classes='rf-notice')
                 select('Nuclear parent','sx_parent','sx_parents')
                 select('Histogram / bank','sx_histogram','sx_histograms')
@@ -118,20 +118,19 @@ def model_exploration(app):
                 v.VTextField(label='Experiment-specific adequate Rwp (%)',v_model=('sx_adequate',),type='text',inputmode='decimal',density='compact',variant='outlined',hide_details=True)
                 v.VTextField(v_if="sx_kind === 'magnetic'",label='Maximum moment (µB)',v_model=('sx_max_moment',),type='text',inputmode='decimal',density='compact',variant='outlined',hide_details=True)
                 v.VTextField(v_if="sx_kind === 'magnetic'",label='Magnetic d cutoff (Å) · 0 uses the full fit range',v_model=('sx_mag_d_min',),type='text',inputmode='decimal',density='compact',variant='outlined',hide_details=True)
-                v.VTextField(v_if="sx_kind === 'structural' && sx_structural_optimizer === 'native_reference'",label='Maximum normalized mode (Å)',v_model=('sx_max_mode',),type='text',inputmode='decimal',density='compact',variant='outlined',hide_details=True)
-                v.VTextField(v_if="sx_kind === 'structural' && sx_structural_optimizer === 'native_reference'",label='Signed mode start · ± amplitude (Å)',v_model=('sx_start_mode',),type='text',inputmode='decimal',density='compact',variant='outlined',hide_details=True)
-                with html.Details(v_if="sx_kind === 'structural' && sx_structural_optimizer === 'prepared_nonlinear'",classes="mt-3"):
+                with html.Details(v_if="sx_kind === 'structural'",classes="mt-3"):
                     html.Summary("Search bounds and computation")
-                    with html.Div(classes="rf-grid mt-3"):
-                        v.VTextField(v_if="sx_kind === 'structural' && sx_structural_optimizer === 'prepared_nonlinear'",label='RMS displacement bound per independent coordinate (Å)',v_model=('sx_structural_radius',),type='text',inputmode='decimal',density='compact',variant='outlined',hide_details=True)
-                        v.VTextField(v_if="sx_kind === 'structural' && sx_structural_optimizer === 'prepared_nonlinear'",label='Relative reciprocal-metric coordinate bound',v_model=('sx_structural_cells',),type='text',inputmode='decimal',density='compact',variant='outlined',hide_details=True)
-                        v.VTextField(v_if="sx_kind === 'structural' && sx_structural_optimizer === 'prepared_nonlinear'",label='Starting guesses per model · 2–16',v_model=('sx_structural_starts',),type='text',inputmode='decimal',density='compact',variant='outlined',hide_details=True)
-                        v.VTextField(v_if="sx_kind === 'structural' && sx_structural_optimizer === 'prepared_nonlinear'",label='Optimization allocation per model (s)',v_model=('sx_structural_seconds',),type='text',inputmode='decimal',density='compact',variant='outlined',hide_details=True)
-                        v.VTextField(v_if="sx_kind === 'structural' && sx_structural_optimizer === 'prepared_nonlinear'",label='Additional recovery allocation (s) · 0 disables',v_model=('sx_structural_recovery',),type='text',inputmode='decimal',density='compact',variant='outlined',hide_details=True)
-                html.P('The empirical contact screen uses packaged MP/COD bond minima as declared assumptions, not universal bounds. Ambiguous partial-occupancy contacts and unsupported source constraints stop for review. The GPX can be continued in hosted GSAS-II; ordinary GUI refinement does not enforce this contact screen.',v_if="sx_kind === 'structural' && sx_structural_optimizer === 'prepared_nonlinear'",classes='rf-notice')
+                    with html.Div(classes="sx-bounds mt-3"):
+                        v.VTextField(label='Displacement bound (Å RMS)',v_model=('sx_structural_radius',),type='text',inputmode='decimal',density='compact',variant='outlined',hide_details=True)
+                        v.VTextField(label='Cell metric relative bound',v_model=('sx_structural_cells',),type='text',inputmode='decimal',density='compact',variant='outlined',hide_details=True)
+                        v.VTextField(label='Starts per model · 2–16',v_model=('sx_structural_starts',),type='text',inputmode='decimal',density='compact',variant='outlined',hide_details=True)
+                        v.VTextField(label='Fit time per model (s)',v_model=('sx_structural_seconds',),type='text',inputmode='decimal',density='compact',variant='outlined',hide_details=True)
+                        v.VTextField(label='Recovery time (s) · 0 disables',v_model=('sx_structural_recovery',),type='text',inputmode='decimal',density='compact',variant='outlined',hide_details=True)
+                    html.P('The displacement bound applies to each independent coordinate; the cell bound applies to relative reciprocal-metric coordinates. Time limits leave unresolved optimization visible.',classes='rf-notice mt-2')
+                html.P('The empirical contact screen uses packaged MP/COD bond minima as declared assumptions, not universal bounds. Ambiguous partial-occupancy contacts and unsupported source constraints stop for review. The GPX can be continued in hosted GSAS-II; ordinary GUI refinement does not enforce this contact screen.',v_if="sx_kind === 'structural'",classes='rf-notice')
                 select('Structural candidate scope','sx_opd_policy',"[{title:'Highest symmetry per irrep',value:'highest-symmetry-per-irrep'},{title:'All discovered OPDs',value:'all'}]",v_if="sx_kind === 'structural'")
                 select('Maximum children to construct','sx_construct_limit','[16,50,100,250,500]',v_if="sx_kind === 'structural'")
-                v.VTextField(v_if="(sx_kind === 'structural' && sx_structural_optimizer === 'native_reference') || (sx_kind === 'magnetic' && sx_magnetic_optimizer === 'gsas_hessian')",label='GSAS-II cycles per start',v_model=('sx_cycles',),type='text',inputmode='numeric',density='compact',variant='outlined',hide_details=True)
+                v.VTextField(v_if="sx_kind === 'magnetic' && sx_magnetic_optimizer === 'gsas_hessian'",label='GSAS-II cycles per start',v_model=('sx_cycles',),type='text',inputmode='numeric',density='compact',variant='outlined',hide_details=True)
                 v.VTextField(v_if="sx_kind === 'magnetic' && sx_magnetic_optimizer === 'profiled_quadratic'",label='Profiled optimizer iterations per start · 1–200',v_model=('sx_optimizer_iterations',),type='text',inputmode='numeric',density='compact',variant='outlined',hide_details=True)
             with html.Details(v_if="sx_has_context && sx_kind === 'magnetic'",classes='mt-3'):
                 html.Summary('K-survey coverage and workers')
@@ -161,16 +160,13 @@ def model_exploration(app):
                 html.P('Screening overlay: the nuclear model is fixed and only one magnetic intensity amplitude is fitted. No Rietveld refinement runs in this survey. A leading k, a tie or a missing template does not establish magnetic order. Use a candidate to review a full refinement plan.',classes='rf-notice')
                 html.P('Hover over Bragg ticks for the exact template reflection and indexing basis. Observed-minus-nuclear includes errors in the nuclear model; it is not a list of confirmed magnetic peaks.',classes='rf-notice')
             html.P("{{ sx_kind === 'structural' ? 'Discovery sends the selected parent structure, without pattern arrays, to ISODISTORT. The selected OPD scope and construction budget are explicit; deferred or failed models remain visible. A budget smaller than the selected tier requires a narrower scope.' : 'Discovery sends parent symmetry operations and k to Bilbao. Refinement consumes the cached catalog offline.' }}",v_if='sx_has_context',classes='rf-notice')
-            html.P('Review and use a k-survey candidate, or enter an exact rational k, before discovering models.',v_if="sx_has_context && !sx_k.trim()",classes='rf-notice')
+            html.P('Review and use a k-survey candidate, or enter an exact rational k, before discovering models.',v_if="sx_has_context && sx_kind === 'magnetic' && !sx_k.trim()",classes='rf-notice')
             v.VBtn('Discover finite candidates',v_if='sx_has_context',click=app.discover_symmetry_candidates,disabled=('sx_busy || !sx_k.trim()',),variant='outlined',color='#15543c')
             with html.Div(v_if='sx_discovered',classes='mt-4'):
                 html.P('{{ sx_discovery_scope }}',classes='rf-notice')
                 v.VBtn('Include all catalog embeddings',click='sx_candidates = sx_candidate_options.map(c => c.value)',variant='text',size='small')
                 v.VBtn('Clear model selection',click='sx_candidates = []',variant='text',size='small')
                 v.VAutocomplete(label='Constructed models to explore',v_model=('sx_candidates',),items=('sx_candidate_options',),multiple=True,chips=True,closable_chips=True,density='compact',variant='outlined',hide_details=True,classes='sx-choices',update_modelValue=app._symmetry_unapprove)
-                with html.Details(v_if="sx_kind === 'structural' && sx_structural_optimizer === 'native_reference'",classes='mt-3'):
-                    html.Summary('Select native displacement modes')
-                    v.VAutocomplete(label='Modes · every selected mode gets both start signs',v_model=('sx_modes',),items=('sx_mode_options',),multiple=True,chips=True,closable_chips=True,density='compact',variant='outlined',hide_details=True,classes='mt-3 sx-choices',update_modelValue=app._symmetry_unapprove)
                 with html.Div(classes='rf-toolbar mt-3'):
                     select('Scans to refine','sx_existing',"[{title:'Current scan only',value:'selected'},{title:'Select scans',value:'custom'},{title:'All matching scans',value:'sample'}]")
                     app._number_field(label='Maximum scans',v_model=('sx_max_scans',),min=1,max=2000,density='compact',variant='outlined')
