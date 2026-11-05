@@ -836,7 +836,14 @@ class SymmetryMixin(KSearchMixin):
             sites=[]
             if s.sx_kind=='magnetic':
                 sites=sites_from_inputs(s.sx_sites,s.sx_form_factors,s.sx_lande)
-            settings=dict(acquisition_id=d['source_id'],kind=s.sx_kind,parent=s.sx_parent,histogram=s.sx_histogram,k=[str(Fraction(v.strip())) for v in s.sx_k.split(',')],candidates=list(s.sx_candidates),modes=list(s.sx_modes),sites=sites,directions=list(s.sx_directions),adequate_rwp=float(s.sx_adequate),maximum_moment=float(s.sx_max_moment) if s.sx_kind=='magnetic' else 10.,magnetic_d_min=float(s.sx_mag_d_min) if s.sx_kind=='magnetic' else 0.,maximum_mode=float(s.sx_max_mode),start_mode=float(s.sx_start_mode),cycles=int(s.sx_cycles),relative_sign_starts=s.sx_sign_starts)
+            prepared=s.sx_kind=='structural' and s.sx_structural_optimizer=='prepared_nonlinear'
+            # Hidden reference-backend fields do not define a prepared search.
+            # Keep their unused contract defaults independent of stale UI text.
+            maximum_mode,start_mode,cycles=.5,.1,12
+            if s.sx_kind=='structural' and not prepared:
+                maximum_mode,start_mode=float(s.sx_max_mode),float(s.sx_start_mode)
+            if not prepared:cycles=int(s.sx_cycles)
+            settings=dict(acquisition_id=d['source_id'],kind=s.sx_kind,parent=s.sx_parent,histogram=s.sx_histogram,k=[str(Fraction(v.strip())) for v in s.sx_k.split(',')],candidates=list(s.sx_candidates),modes=list(s.sx_modes),sites=sites,directions=list(s.sx_directions),adequate_rwp=float(s.sx_adequate),maximum_moment=float(s.sx_max_moment) if s.sx_kind=='magnetic' else 10.,magnetic_d_min=float(s.sx_mag_d_min) if s.sx_kind=='magnetic' else 0.,maximum_mode=maximum_mode,start_mode=start_mode,cycles=cycles,relative_sign_starts=s.sx_sign_starts)
             if s.sx_kind=='magnetic':settings.update(moment_model=s.sx_moment_model,refine_histogram_scale=s.sx_refine_scale,refine_background=s.sx_refine_background)
             if s.sx_kind=='structural' and s.sx_structural_optimizer=='prepared_nonlinear':
                 settings.update(structural_optimizer='prepared_nonlinear',structural_starts=int(s.sx_structural_starts),

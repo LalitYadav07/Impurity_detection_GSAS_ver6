@@ -21,6 +21,10 @@ class ExactCellIntensity:
 
     def _entry(self,cells):
         s=self.source;m=s.mode_dimensions;cells=np.asarray(cells,float)
+        # The response-cache dimension ceiling is an optimization limit,
+        # not an admission limit on the complete structural model.
+        if len(s.radii)>256:
+            return dict(fallback=True,reason='response_cache_dimension_limit')
         point=np.r_[np.zeros(m),cells]
         # A valid distorted structure need not have a chemically valid
         # zero-distortion reference at the same cell. Use the full native

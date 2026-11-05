@@ -35,6 +35,9 @@ def _mapped_parent_sites(parent,child,transform,origin,S):
 
 
 def run(source_gpx,ctx,protocol,candidate,seed):
+    from .contracts import structural_cell_budget
+    try:structural_cell_budget(candidate,protocol['policy'])
+    except ValueError as exc:raise TrialDisposition('unsupported',str(exc)) from exc
     G=gsas();prefix=G.__package__+'.' if G.__package__ else ''
     L=importlib.import_module(prefix+'GSASIIlattice');M=importlib.import_module(prefix+'GSASIImath');S=importlib.import_module(prefix+'GSASIIspc');O=importlib.import_module(prefix+'GSASIIobj');R=importlib.import_module(prefix+'GSASIIstrMain')
     from gsas_magnetic_preflight import setting_fingerprint
@@ -57,7 +60,6 @@ def run(source_gpx,ctx,protocol,candidate,seed):
     p.save();baseline=np.asarray(R.DoNoFit(str(output),h.name),dtype=float)
     old=copy.deepcopy(parent.data);hap=copy.deepcopy(old['Histograms'][h.name]);trans=np.asarray(candidate['transformation_matrix']);origin=np.asarray(candidate['origin_shift'])
     det=abs(np.linalg.det(trans))
-    if det>protocol['policy']['maximum_cell_multiplier']:raise TrialDisposition('unsupported','Candidate exceeds the declared cell-expansion budget')
     effective=L.CellDijCorr(old['General']['Cell'][1:7],old['General']['SGData'],old['Histograms'],h.name)
     child_cell=list(L.TransformCell(effective,trans))
     authoritative=confined(ctx.input_root,candidate['child']['path'])

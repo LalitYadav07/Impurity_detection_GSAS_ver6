@@ -13,6 +13,9 @@ from .fit_fast_native import residual_and_factor
 from .damped_step import damped_step,bounded_damped_step
 from .reference_secants import FeasibleDirectionUnavailable
 
+class EvaluationBudgetExpired(TimeoutError):
+    """The time budget ended before one native evaluation completed."""
+
 def observation_rwp_percent(observation,prediction):
     """Keep Gaussian diagnostics distinct from verified raw-count likelihoods."""
     if isinstance(observation,CumulativeCounts):return count_rwp_percent(observation,prediction)
@@ -240,7 +243,9 @@ def fit_feasible_gn(source,table,observation,*,warm=None,warm_pool=None,seconds=
                 active=None
             finally:
                 obj.deadline=begin+seconds
-    except TimeoutError:
+    except TimeoutError as exc:
+        if best is None:
+            raise EvaluationBudgetExpired('No native evaluation completed before the time budget expired') from exc
         if active is None:trace.append(dict(reason='time_budget',stage='screening_or_between_starts'))
         else:active.update(reason='time_budget',final_parameters=z.tolist())
     if screening_seconds is None:screening_seconds=time.monotonic()-begin

@@ -6,6 +6,8 @@ on:
     paths:
       - Dockerfile.symmetry
       - nova/src/gpx_recipe/**
+      - tests/gpx_recipe/test_prepared_structural_acceptance_native.py
+      - tests/gpx_recipe/data/synthetic-ersi-cmcm-isodistort.cif
       - scripts/ndip_model_campaign.py
       - scripts/ndip_symmetry.py
       - .github/workflows/publish-models-to-ghcr.yaml
@@ -96,5 +98,14 @@ jobs:
             /validation/tests/gpx_recipe/test_structural_live_native_profile.py \
             /validation/tests/gpx_recipe/test_structural_live_refinable_export.py \
             /validation/tests/gpx_recipe/test_profiled_solver_native.py'
+      - name: Require structural prepare-fit-audit-export-continuation acceptance
+        run: |
+          docker run --rm --entrypoint sh -v "$PWD:/validation:ro" "$IMAGE" -c '
+          python -m pip install --quiet pytest &&
+          export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}/validation/tests/gpx_recipe" &&
+          export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 RADAR_REQUIRE_STRUCTURAL_NATIVE=1 &&
+          python -m pytest -q -o cache_dir=/tmp/pytest-cache --junitxml=/tmp/structural.xml \
+            /validation/tests/gpx_recipe/test_prepared_structural_acceptance_native.py &&
+          python -c "import xml.etree.ElementTree as E; cases=E.parse(\"/tmp/structural.xml\").findall(\".//testcase\"); assert len(cases)>=5 and all(c.find(\"skipped\") is None and c.find(\"failure\") is None and c.find(\"error\") is None for c in cases), \"Structural native acceptance must run without skips\""'
       - name: Publish verified immutable image
         run: docker push "$IMAGE"

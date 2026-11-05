@@ -62,7 +62,7 @@ def test_native_export_refines_perturbed_modes_and_saves_covariance(tmp_path,nat
     result2=continue_native_refinement(p,result['contract']['native_active_variables'])
     assert result2['objective_verified'] and result2['chemistry_feasible']
     np.testing.assert_allclose(mode_amplitudes(p.phases()[0].data),q,atol=2e-6,rtol=0)
-    assert len(p.data['Covariance']['data']['varyList'])==8
+    assert set(p.data['Covariance']['data']['varyList'])==set(result['contract']['native_active_variables'])
     assert sha(native_fixture)==source_hash
 
 

@@ -47,7 +47,7 @@ def inspect_source(path):
         histograms=[dict(name=h.name,points=len(h.data['data'][1][0]),limits=h.data['Limits'],instrument=h.InstrumentParameters) for h in p.histograms()],runtime=runtime_identity()))
 
 
-def audit_trial(source,output,protocol,candidate,*,reference_source=None):
+def audit_trial(source,output,protocol,candidate,*,reference_source=None,input_root=None):
     G=gsas();a=G.G2Project(gpxfile=str(source));b=G.G2Project(gpxfile=str(output))
     ah=a.histogram(protocol['histogram']);bh=b.histogram(protocol['histogram']);parent=a.phase(protocol['parent_phase'])
     if reference_source is not None:
@@ -116,22 +116,19 @@ def audit_trial(source,output,protocol,candidate,*,reference_source=None):
             checks['material_amount_linked']=bool(np.isclose(magnetic.data['Histograms'][bh.name]['Scale'][0]*det,nuclear.data['Histograms'][bh.name]['Scale'][0],rtol=0,atol=1e-10))
     elif protocol['policy'].get('structural_optimizer')=='prepared_nonlinear':
         import json
-        from ..structural_live.native import inventory
         from ..structural_live.optimization.refinable_gpx import assess_chemistry
-        proof=json.loads(Path(output).with_name('structural-export.json').read_text())
+        from .prepared_audit import check_prepared
+        independent,mapping,vary=check_prepared(source,output,protocol,candidate,b,
+            input_root=input_root,reference_source=reference_source)
+        checks.update(independent)
+        if not all(independent.values()):
+            raise TrialDisposition('effect_mismatch','Prepared output violates the reconstructed input contract: '+str({k:v for k,v in independent.items() if not v}))
         child=b.phase(protocol['parent_phase'])
         native_names=[v.name for v in child.data.get('ISODISTORT',{}).get('G2ModeList',[])]
         checks['complete_native_mode_inventory']=set(native_names)==set(candidate['modes'])
-        info,_=inventory(child.data)
-        checks['physical_mode_rank_preserved']=info['physical_rank']==proof['contract']['physical_mode_count']
-        from ..live.native_profile import NativeReducedProfile
-        native=NativeReducedProfile(str(output),refresh_cell_reflections=True)
-        vary=list(native.vary)
-        checks['structural_active_set_closed']=set(vary)==set(proof['contract']['native_active_variables']) and len(vary)==len(set(vary))
         checks['chemistry_feasible']=bool(assess_chemistry(b,child.name)['feasible'])
         checks['no_stale_covariance']=not cov
         cx,ct,_,cia=child.data['General']['AtomPtrs']
-        mapping=json.loads(Path(output).with_name('zero-control.json').read_text())['site_mapping']
         old={a[parent.data['General']['AtomPtrs'][1]-1]:a for a in parent.data['Atoms']}
         pcx,pct,_,pcia=parent.data['General']['AtomPtrs']
         checks['occupancies_preserved']=all(np.isclose(atom[cx+3],old[row['parent']][pcx+3],rtol=0,atol=1e-10) for atom,row in zip(child.data['Atoms'],mapping))

@@ -13,6 +13,25 @@ def digest(value):
     return hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':'),allow_nan=False).encode()).hexdigest()
 
 
+def structural_cell_budget(candidate, policy):
+    """Enforce the reviewed expansion before any native preparation."""
+    matrix=candidate['transformation_matrix']
+    if len(matrix)!=3 or any(len(row)!=3 for row in matrix):
+        raise ValueError('A finite nonsingular 3 by 3 child transformation is required')
+    a,b,c=matrix
+    try:
+        if not all(math.isfinite(v) for row in matrix for v in row):raise ValueError
+        determinant=abs(a[0]*(b[1]*c[2]-b[2]*c[1])-a[1]*(b[0]*c[2]-b[2]*c[0])+a[2]*(b[0]*c[1]-b[1]*c[0]))
+        maximum=number(policy['maximum_cell_multiplier'],1,64,integer=True)
+    except (TypeError,ValueError):
+        raise ValueError('A finite nonsingular child transformation and cell-expansion budget are required') from None
+    if not math.isfinite(determinant) or determinant<=1e-12:
+        raise ValueError('A finite nonsingular child transformation is required')
+    if determinant>maximum+1e-10:
+        raise ValueError('Candidate exceeds the declared cell-expansion budget')
+    return determinant
+
+
 def fields(value,required,defaults=None):
     defaults=defaults or {}
     if not isinstance(value,dict):raise ValueError('A contract object must be a JSON object')
@@ -201,6 +220,7 @@ def validate_protocol(value):
         for form in {s['form_factor'] for s in sites}:
             if len({s['lande_g'] for s in sites if s['form_factor']==form})!=1:raise ValueError('Native Lande g is shared by each form-factor species')
     else:
+        for candidate in p['candidates']:structural_cell_budget(candidate,p['policy'])
         if any(s.get('site_signs') for s in p['seeds']):raise ValueError('Parent-site moment signs are magnetic-only')
         prepared=p['policy'].get('structural_optimizer')=='prepared_nonlinear'
         if sites or any(c['magnetic_space_group'] or not c['child'] or (not c['modes'] and not prepared) for c in p['candidates']):raise ValueError('Structural candidates need authoritative displacement-mode CIFs')

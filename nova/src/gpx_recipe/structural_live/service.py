@@ -14,7 +14,7 @@ from ..execution import write_json
 from ..symmetry.compiler import package_signature
 from ..symmetry.native_audit import profile_residual_metrics
 from .native import NativeCandidate, prepare, sha
-from .reduced import from_arrays
+from .reduced import from_arrays, native_limits, verify_native_observation, ReducedObservation
 
 
 @dataclass(frozen=True)
@@ -76,6 +76,8 @@ def fit_snapshot(prepared, output, *, settings=None, observation=None, warm_star
     from .optimization.refinable_gpx import export_refinable
     settings = settings or SearchSettings()
     if not isinstance(settings,SearchSettings): raise TypeError('Explicit SearchSettings required')
+    if observation is not None and not isinstance(observation,ReducedObservation):
+        raise TypeError('A supplied-variance ReducedObservation is required')
     if observation is not None and observation.protocol_sha256!=sha(Path(prepared)/'prepared.json'):
         raise ValueError('Observation does not bind this prepared structural context')
     output=Path(output);output.mkdir(parents=True,exist_ok=False)
@@ -90,9 +92,9 @@ def fit_snapshot(prepared, output, *, settings=None, observation=None, warm_star
         raise ValueError('Observation does not bind this prepared structural context')
     if not np.array_equal(observation.x,source.fast.x):
         raise ValueError('Observation grid differs from this prepared native context')
-    from .reduced import fit_mask
-    if np.any(observation.mask & ~fit_mask(observation.x,source.fast.slow.hist.data['Limits'])):
-        raise ValueError('Observation enables bins outside the reviewed fit domain')
+    native_limits(observation,source.fast.slow.hist.data['Limits'])
+    if np.any(observation.mask&np.ma.getmaskarray(arrays[0])):
+        raise ValueError('Observation enables bins masked in the reviewed native grid')
     background=source.fast.slow.background0
     if not np.isfinite(background): raise ValueError('Nonfinite native background coefficient')
     background_scale=settings.background_scale if settings.background_scale is not None else max(abs(background),1.)
@@ -140,6 +142,27 @@ def fit_snapshot(prepared, output, *, settings=None, observation=None, warm_star
     frozen=native.save_verified_prediction(exact)
     continuation=export_refinable(frozen['path'],output/'continuation',expected_sha256=frozen['sha256'],
                                   phase_name=phase_name,histogram_name=histogram_name)
+    # Reopen each saved artifact. Curve agreement alone cannot establish that
+    # the same measurements, likelihood mask and weighted objective survived.
+    from .native import modules,curve
+    import shutil
+    G,*_=modules();contracts={}
+    for role,artifact in [('frozen',frozen),('continuation',continuation)]:
+        # Native calculation saves its project. Verify on a copy so the sealed
+        # published artifact and its digest remain immutable.
+        verification_dir=output/'verification'/role
+        verification_dir.mkdir(parents=True)
+        checked=verification_dir/'project.gpx'
+        if sha(artifact['path'])!=artifact['sha256']:
+            raise ValueError('Saved GPX changed before independent verification')
+        shutil.copyfile(artifact['path'],checked)
+        project=G.G2Project(gpxfile=str(checked));histogram=project.histogram(histogram_name)
+        saved_curve=curve(project,histogram)
+        contracts[role]=verify_native_observation(observation,histogram.data['data'][1][:3],
+            histogram.data['Limits'],saved_curve,fitted['best']['deviance'],
+            weight_factor=float(histogram.data['data'][0].get('wtFactor',1.)))
+        if sha(artifact['path'])!=artifact['sha256']:
+            raise ValueError('Published GPX changed during independent verification')
     metrics=profile_residual_metrics(native.hist.data['data'][1][:3],exact,native.hist.data['Limits'])
     timings['independent_export_seconds']=time.monotonic()-checkpoint
     result=dict(schema='radar-structural-fit/v1',state='verified_point_fit',
@@ -147,7 +170,7 @@ def fit_snapshot(prepared, output, *, settings=None, observation=None, warm_star
         prepared_sha256=sha(Path(prepared)/'prepared.json'),implementation_sha256=package_signature(),
         settings=asdict(settings),parameters=z.tolist(),physical_parameters=physical.tolist(),
         physical_mode_count=m,cell_parameter_count=d-m,all_physical_modes_retained=True,
-        result=fitted,metrics=metrics,verification=dict(relative_error=relative,max_sigma_error=sigma),
+        result=fitted,metrics=metrics,verification=dict(relative_error=relative,max_sigma_error=sigma,saved_observations=contracts),
         starting_curves_reused=bank_reused,
         frozen=frozen,continuation=continuation,timings=timings,wall_seconds=time.monotonic()-started,
         previous_likelihood_accumulated=False,instrument_parameters_fixed=True,

@@ -7,6 +7,14 @@ from gpx_recipe.structural_live.reduced import from_arrays, from_snapshot
 from gpx_recipe.structural_live.service import SearchSettings
 from gpx_recipe.symmetry.native_audit import profile_residual_metrics
 
+def saved_result(path,parameters):
+    result=dict(parameters=parameters,previous_likelihood_accumulated=False)
+    for role in ('frozen','continuation'):
+        gpx=path/(role+'.gpx');gpx.write_bytes(b'synthetic publication integrity test')
+        result[role]=dict(path=str(gpx),sha256=hashlib.sha256(gpx.read_bytes()).hexdigest())
+    (path/'fit.json').write_text(json.dumps(result))
+    return result
+
 
 def observation(revision=0, exposure=None):
     return from_arrays([np.arange(5.),np.array([1.,1.,100.,1.,1.]),np.ones(5)],
@@ -55,8 +63,7 @@ def test_failed_updates_restore_and_duplicate_updates_do_not_accumulate_likeliho
     def run(p,path,**kw):
         calls.append(kw)
         if kw['observation'].revision==3:raise RuntimeError('export failed')
-        path.mkdir();result={'parameters':[.1,.2], 'previous_likelihood_accumulated':False}
-        (path/'fit.json').write_text(json.dumps(result));return result
+        path.mkdir();return saved_result(path,[.1,.2])
     session=module.StructuralSession(prepared,tmp_path/'session',runner=run)
     session.update(observation(1));before=(session.root/'latest.json').read_bytes()
     assert session.update(observation(1))['new_fit'] is False and len(calls)==1
@@ -112,8 +119,7 @@ def test_restored_session_rejects_changed_settings_and_unbound_observations(tmp_
     from gpx_recipe.structural_live.reduced import ReducedObservation
     prepared=tmp_path/'prepared';prepared.mkdir();(prepared/'prepared.json').write_text('{}')
     def run(p,path,**kw):
-        path.mkdir();result={'parameters':[.1]}
-        (path/'fit.json').write_text(json.dumps(result));return result
+        path.mkdir();return saved_result(path,[.1])
     session=StructuralSession(prepared,tmp_path/'session',runner=run)
     good=observation(1);session.update(good)
     with pytest.raises(ValueError,match='changed'):

@@ -342,6 +342,7 @@ class NativeCandidate:
         self.a_scale = float(np.mean(self.basis['baseline_a'][:3]))
         self.histogram_scale = float(self.hist.data['Sample Parameters']['Scale'][0])
         self.background0 = float(self.hist.data['Background'][0][3])
+        self.observation_limits = copy.deepcopy(self.hist.data['Limits'])
 
     def evaluate(self, amplitudes, cell_offsets=None, *, log_scale=0., background0_delta=0.):
         q = np.asarray(amplitudes, float)
@@ -370,14 +371,15 @@ class NativeCandidate:
         data = self.hist.data['data'][1]
         if not np.array_equal(observation.x, data[0]):
             raise ValueError('Observation grid differs from the prepared native grid')
-        from .reduced import fit_mask
-        x = np.asarray(data[0]); usable = fit_mask(x, self.hist.data['Limits'])
-        if np.any(observation.mask & ~usable):
-            raise ValueError('Observation enables bins outside the prepared limits/masks')
+        from .reduced import native_limits
+        if not hasattr(self,'bound_observation_limits') or self.hist.data['Limits']!=self.bound_observation_limits:
+            self.observation_limits=copy.deepcopy(self.hist.data['Limits'])
+        self.hist.data['Limits']=native_limits(observation,self.observation_limits)
+        self.bound_observation_limits=copy.deepcopy(self.hist.data['Limits'])
         # Exclusions suppress the likelihood, not the saved measured intensity
         # or its native Rwp normalization. Do not erase excluded strong peaks.
-        valid = getattr(observation, 'normalization_mask', observation.mask)
-        data[1] = np.ma.array(observation.y, mask=~np.isfinite(observation.y))
+        valid = observation.measurement_mask
+        data[1] = np.ma.array(observation.y, mask=~valid)
         data[2] = np.divide(1., observation.variance, out=np.zeros_like(observation.variance), where=valid)
         self.project.data['Covariance']['data'] = {}
 

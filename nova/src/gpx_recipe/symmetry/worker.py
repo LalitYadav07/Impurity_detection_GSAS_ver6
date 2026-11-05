@@ -93,7 +93,7 @@ def execute(directory,*,screened=None):
         response.update(result)
         from .native_audit import audit_trial
         reference=confined(input_root,protocol['structural_reference']['path']) if 'structural_reference' in protocol else None
-        response['audit']=audit_trial(source,output/result['gpx'],protocol,candidate,**(dict(reference_source=reference) if reference else {}))
+        response['audit']=audit_trial(source,output/result['gpx'],protocol,candidate,input_root=input_root,**(dict(reference_source=reference) if reference else {}))
         mark('independent_audit_seconds')
         response['native_reported_rwp']=response.get('rwp');response['rwp']=response['audit']['rwp_recomputed']
         registered=output/'artifacts.json'

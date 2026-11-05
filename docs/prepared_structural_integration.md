@@ -55,12 +55,23 @@ jobs. Independent children and scans use the existing bounded worker pool.
   transfer implementations. They are refused rather than silently stripped.
 - Exact-cell native response reuse is independently checked. Exclusions,
   masked grids, retained secondary phases and nonlinear extinction use a full
-  native fallback instead of relaxing the reconstruction tolerance.
+  native fallback instead of relaxing the reconstruction tolerance. Models
+  above the 256-coordinate response-cache limit also use the complete native
+  calculation; their coordinates are not truncated or rejected by that cache.
 - An independent saved-GPX calculation must agree within 1e-8 relative error
   and 0.01 supplied standard deviations. Export verifies active mode variables,
   origin holds, cell freedom and fixed instrumental values, with no stale
   covariance. Ordinary GUI continuation does not enforce the contact screen or
   the original search box; this limitation is recorded in its contract.
+- Both saved GPXs are reopened independently to verify measured intensities,
+  supplied variances, likelihood bins, Rwp normalization and weighted cost.
+  Extra likelihood omissions become exact-bin native exclusions. Valid
+  measured weights outside the current fit interval are retained for later
+  changes of limits. A different normalization convention is refused.
+- Cell-expansion admission runs before either structural executor begins
+  native work. The worker audit reconstructs the physical displacement/cell
+  bounds and complete active set from the sealed parent and child CIF; it
+  independently checks positive bounded scale and constant background.
 - Native GSAS-II Rwp and the fitted-bins-only diagnostic are separately named.
   Excluded strong peaks remain in native Rwp normalization. Neither value is a
   transition probability, model posterior or automatic counting-stop rule.
@@ -74,6 +85,18 @@ parameters forward, never a previous cumulative likelihood. It rejects stale
 or changed same-revision observations, grid/protocol changes and exposure
 resets. A failed update leaves the previous publication intact; duplicate
 updates do not run another fit.
+
+Restoration, duplicate returns and warm starts verify the sealed receipt and
+both GPX digests. Artifact manifests use confined relative paths so a session
+can be relocated without rewriting its sealed scientific receipt. A missing
+or changed artifact requires repair/re-export; it is not silently refitted or
+treated as a reusable publication. This session serializes updates within one
+owner instance, not across independent processes.
+
+Optional recovery deadlines retain the independently evaluated incumbent.
+The receipt names budget-expired stages. Native identity, objective and physics
+errors still propagate and prevent publication; recovery is not a general
+exception suppression mechanism.
 
 `ReducedObservation` accepts unknown exposure. Its `mask=True` means usable;
 the snapshot adapter explicitly accepts `invalid_mask=True`. Reduced intensity
@@ -109,7 +132,8 @@ round trips and measured complete workflow latency in the actual deployment.
 ## Integration validation
 
 The local integration was checked against the current NOVA, campaign, recipe
-and CIF contract suites (5,189 passing tests; 22 environment-dependent skips).
+and CIF contract suites (5,196 passing tests; 19 environment-dependent skips).
+The focused repair suite adds 67 passing contract/controller tests with no skips.
 Separate offline Linux controls use the deployed scientific image and the
 built wheel. They exercise a separate parent reference, a strong excluded
 peak, a retained secondary phase, a TOF child with 27 physical displacement
@@ -118,7 +142,19 @@ The latter verifies prepared-start reuse, restored-session duplicates and
 stale-revision rejection. Each successful export is checked by an independent
 GSAS-II calculation; these synthetic controls establish contract behavior,
 not universal experimental model recovery or deployment latency.
-The shared native-profile changes also pass 21 real GSAS-II magnetic solver
-controls. A deliberately perturbed two-mode structural export was continued
+The packaged wheel passed 27 real GSAS-II structural and magnetic controls.
+The final five-case structural acceptance gate runs without skips, including
+nine invalid-output injections. A deliberately perturbed two-mode export was continued
 with native least squares, recovering its original amplitudes with a finite
 seven-variable covariance matrix while preserving the source checkpoint.
+
+The independent review of `088cb51` exposed gaps in observation binding,
+admission, independent output audits, optional recovery, saved-artifact reuse,
+cache fallback and hidden UI fields. Regression controls now cover these
+failures. The Linux release gate generates a synthetic Cmcm ErSi experiment,
+executes a sealed compiled worker, audits/export/reopens its GPX, and continues
+native refinement after a perturbation. It also tests an extra excluded
+outlier, a tiny recovery budget, preserved out-of-range weights, and injected
+scale, cell, mode, background and active-set violations. This dedicated gate
+requires actual execution with no skipped cases; external fixture variables
+are not needed. These controls do not establish experimental model recovery.

@@ -71,11 +71,19 @@ def improve(source,table,observation,initial,*,bank=None,native_pool=None,
     def fit_stage(name,seconds,warm,seed):
         nonlocal best,rate
         before=time.monotonic()
-        fitted,prediction=fit_feasible_gn(source,table,observation,warm_pool=warm,
-            seconds=seconds,starts=policy.starts,maxiter=250,adaptive_cells=True,
-            multiscale=True,offline_bank=bank,precomputed_proposal_steps=bank is not None,
-            balanced_restarts=True,stationarity_polls=2,screening_seed=seed,
-            force_native_mode_derivatives=force_native_mode_derivatives,native_pool=native_pool)
+        try:
+            fitted,prediction=fit_feasible_gn(source,table,observation,warm_pool=warm,
+                seconds=seconds,starts=policy.starts,maxiter=250,adaptive_cells=True,
+                multiscale=True,offline_bank=bank,precomputed_proposal_steps=bank is not None,
+                balanced_restarts=True,stationarity_polls=2,screening_seed=seed,
+                force_native_mode_derivatives=force_native_mode_derivatives,native_pool=native_pool)
+        except TimeoutError as exc:
+            # Only a budget/deadline failure is optional. Integrity, physics
+            # and objective disagreements must still stop publication.
+            records.append(dict(stage=name,state='budget_expired',accepted=False,
+                incumbent_retained=True,reason=str(exc),seconds=time.monotonic()-before))
+            publish()
+            return
         candidate=np.asarray(fitted['best']['parameters']);exact,checked=score(candidate)
         if not np.isclose(exact,fitted['best']['deviance'],rtol=1e-8,atol=1e-8):
             raise ValueError('Recovery objective disagrees with a fresh native calculation')
@@ -110,8 +118,13 @@ def improve(source,table,observation,initial,*,bank=None,native_pool=None,
         if bank is None:raise ValueError('Chemistry-constrained recovery requires a prepared native start bank')
         from .chemistry_sqp_native_fit import fit
         before=time.monotonic()
-        fitted,prediction=fit(source,table,observation,bank,np.asarray(best['parameters']),
-            seconds=policy.chemistry_seconds,force_native_mode_derivatives=force_native_mode_derivatives)
+        try:
+            fitted,prediction=fit(source,table,observation,bank,np.asarray(best['parameters']),
+                seconds=policy.chemistry_seconds,force_native_mode_derivatives=force_native_mode_derivatives)
+        except TimeoutError as exc:
+            records.append(dict(stage='chemistry_constrained_native_gn',state='budget_expired',accepted=False,
+                incumbent_retained=True,reason=str(exc),seconds=time.monotonic()-before))
+            return publish(),rate
         candidate=np.asarray(fitted['best']['parameters']);exact,checked=score(candidate)
         if not np.isclose(exact,fitted['best']['deviance'],rtol=1e-8,atol=1e-8):
             raise ValueError('Chemistry-constrained recovery differs from the native objective')

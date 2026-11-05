@@ -7,6 +7,11 @@ from .worker import TrialDisposition
 
 def run(source_gpx,ctx,protocol,candidate,seed):
     scope=protocol['policy']
+    from .contracts import structural_cell_budget,policy
+    try:
+        structural_cell_budget(candidate,scope)
+        policy(scope)
+    except ValueError as exc:raise TrialDisposition('unsupported',str(exc)) from exc
     root=ctx.run_dir/'structural'
     child=confined(ctx.input_root,candidate['child']['path'])
     settings=SearchSettings(mode_radius=scope['structural_mode_radius'],cell_radius=scope['structural_cell_radius'],
