@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import importlib
 import json
 from pathlib import Path
 import time
@@ -19,6 +20,38 @@ from gpx_recipe.execution import freeze, write_json
 from gpx_recipe.fit_domain import native_powder_fit_mask
 from gpx_recipe.snapshot import json_safe
 from gpx_recipe.structural_live.native import curve, inventory, modules, sha
+
+
+def audit_inactive_native_limits(controls, active_variables, native_object):
+    """Retain source limits that cannot freeze this continuation's variables.
+
+    A recipe can legitimately leave ADP/occupancy limits in a GPX although
+    those variables are fixed here. Native exact/wildcard lookup remains the
+    authority. The recipe's nonnegative histogram-scale lower bound is
+    already enforced by this service's positive log-scale parameterization.
+    Other limits on newly active variables still require explicit transfer.
+    """
+    counts = {}; redundant = []
+    for family in ('parmMinDict', 'parmMaxDict'):
+        values = controls.get(family, {})
+        if not isinstance(values, dict):
+            raise ValueError('Native freeze-on-limit controls must be dictionaries')
+        counts[family] = len(values)
+        if not values:
+            continue
+        for variable in sorted(active_variables):
+            matched, value = native_object.prmLookup(variable, values)
+            if matched is not None:
+                fields = variable.split(':')
+                if (family == 'parmMinDict' and len(fields) == 3 and
+                        fields[0] == '' and fields[1] and fields[2] == 'Scale' and value == 0.):
+                    redundant.append(dict(variable=variable, rule=str(matched), value=float(value),
+                                          enforced_by='positive histogram log-scale parameterization'))
+                    continue
+                raise ValueError(f'Native freeze-on-limit rule {matched} applies to active variable {variable}; explicit review required')
+    return dict(preserved_inactive_rules=counts, active_variables_checked=len(active_variables),
+                redundant_active_rules=redundant,
+                matching='GSAS-II exact and wildcard parameter lookup', rules_removed=False)
 
 
 def origin_reference_modes(gauge):
@@ -190,10 +223,10 @@ def configure(project, *, refine_cell=True, refine_scale=True, refine_background
     controls['max cyc'] = 30
     controls['min dM/M'] = 1e-8
     controls['shift factor'] = 1.
+    frozen = controls.get('parmFrozen', {})
+    if not isinstance(frozen, dict) or any(frozen.values()):
+        raise ValueError('Previously frozen native variables require explicit review')
     controls['parmFrozen'] = {}
-    # Native parmMin/Max freeze on crossing; they are not hard chemistry bounds.
-    if controls.get('parmMinDict') or controls.get('parmMaxDict'):
-        raise ValueError('Existing native freeze-on-limit controls require explicit review')
     project.data['Covariance']['data'] = {}
     if names:
         iso['modeDispl'] = mode_amplitudes(phase.data).tolist()
@@ -218,12 +251,15 @@ def configure(project, *, refine_cell=True, refine_scale=True, refine_background
         allowed.add(f':{hist.id}:Back;0')
     if set(native.vary) != allowed or len(native.vary) != len(allowed):
         raise ValueError(f'Native active variables differ from export contract: {native.vary}')
+    g = modules()[0]
+    native_object = importlib.import_module((g.__package__ + '.' if g.__package__ else '') + 'GSASIIobj')
+    native_limits = audit_inactive_native_limits(controls, allowed, native_object)
     return dict(native_mode_count=len(names), physical_mode_count=info['physical_rank'],
         origin_gauge_count=len(held), modes=[dict(name=name, label=iso['IsoModeList'][i],
             amplitude=float(mode_amplitudes(phase.data)[i]), refine=i not in held,
             held_reason='origin reference, not a rejected distortion' if i in held else None)
             for i, name in enumerate(names)], native_active_variables=list(native.vary),
-        cell_variables=cell_variables, instrument_parameters_fixed=True,
+        cell_variables=cell_variables, instrument_parameters_fixed=True, native_limit_audit=native_limits,
         higher_background_coefficients_fixed=True, derivative_method='native GSAS-II numeric',
         objective='GSAS-II weighted least squares using the saved observations and weights',
         chemistry_enforced_during_gui_refinement=False, search_parameter_bounds_enforced=False,

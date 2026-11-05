@@ -71,7 +71,11 @@ def build_plan(context,catalog,root,settings):
     if kind=='structural' and settings.get('structural_optimizer')=='prepared_nonlinear':
         policy.update({key:settings[key] for key in ('structural_optimizer','structural_starts','structural_seconds',
             'structural_mode_radius','structural_cell_radius','structural_recovery_seconds') if key in settings})
-        policy['timeout_seconds']=min(3600,int(settings.get('structural_seconds',DEFAULT_FIT_SECONDS)+settings.get('structural_recovery_seconds',0)+180))
+        # Nonlinear time is the reviewed optimization allocation. Exact
+        # starting-curve construction and independent GPX verification are
+        # separate work; low-symmetry TOF candidates exceeded the old 180 s
+        # preparation reserve before optimization could complete.
+        policy['timeout_seconds']=min(3600,int(settings.get('structural_seconds',DEFAULT_FIT_SECONDS)+settings.get('structural_recovery_seconds',0)+900))
     protocol=dict(kind=kind,source=dict(path='source.gpx',sha256=file_sha(root/'source.gpx')),parent_phase=parent['name'],histogram=settings['histogram'],parent_setting_sha256=parent['setting_sha256'],magnetic_function_sha256=context['runtime']['magnetic_function_sha256'],implementation_sha256=package_signature(),catalog=dict(path='catalog.json',sha256=file_sha(root/'catalog.json')),k=settings['k'],candidates=candidates,seeds=seeds,sites=sites,policy=policy)
     if settings.get('acquisition_id'):protocol['acquisition_id']=settings['acquisition_id']
     if settings.get('structural_reference'):

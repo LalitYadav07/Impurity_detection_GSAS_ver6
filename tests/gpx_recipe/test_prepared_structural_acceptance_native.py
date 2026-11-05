@@ -31,6 +31,8 @@ def synthetic(tmp_path):
     phase=p.add_phase(phasename='Synthetic ErSi',cell=[4.195,10.353,3.779,90,90,90],spacegroup='C m c m')
     phase.add_atom(0.,.413,.25,'Si','Si1');phase.add_atom(0.,.142,.25,'Er','Er1')
     h=p.add_simulated_powder_histogram('synthetic',str(inst),12.,125.,Npoints=701,scale=120.,phases=[phase])
+    # The ordinary LLM-assisted recipe leaves this native positivity limit.
+    p.set_Controls('parmMin',0.,variable=f':{h.id}:Scale')
     h.data['Background'][0][2]=3;h.data['Background'][0][3:]=[3.,.2,.1]
     freeze(p);h.data['data'][1][1][:]=1.;p.save()
     y=np.asarray(MAIN.DoNoFit(str(path),h.name),float)
@@ -58,6 +60,35 @@ def test_prepare_fit_export_reopen_and_native_continuation(tmp_path,synthetic):
     expected=meta['inventory']['physical_rank']+meta['inventory']['cell_rank']+2
     assert len(check['covariance']['varyList'])==expected
     assert np.shape(check['covariance']['covMatrix'])==(expected,expected)
+
+
+def test_native_continuation_preserves_inactive_recipe_limits(tmp_path,synthetic):
+    from GSASII import GSASIIobj as OBJ
+    from gpx_recipe.structural_live.optimization.refinable_gpx import configure
+    source,cif,transform,*_=synthetic
+    prepared=tmp_path/'prepared';prepare(source,cif,transform,[0,0,0],prepared)
+    project=G.G2Project(gpxfile=str(prepared/'prepared.gpx'),newgpx=str(tmp_path/'continued.gpx'))
+    project.index_ids();controls=project.data['Controls']['data']
+    key=OBJ.G2VarObj('0::AUiso:*')
+    scale=OBJ.G2VarObj(':0:Scale')
+    controls['parmMinDict']={key:0.,scale:0.};controls['parmMaxDict']={key:.08}
+    contract=configure(project)
+    assert controls['parmMinDict']=={key:0.,scale:0.} and controls['parmMaxDict']=={key:.08}
+    assert contract['native_limit_audit']['preserved_inactive_rules']==dict(parmMinDict=2,parmMaxDict=1)
+    assert contract['native_limit_audit']['redundant_active_rules'][0]['variable']==':0:Scale'
+    active=OBJ.G2VarObj(contract['cell_variables'][0])
+    controls['parmMinDict'][active]=.0001
+    with pytest.raises(ValueError,match='applies to active variable'):
+        configure(project)
+
+
+@pytest.mark.parametrize('scale',[0.,-1.])
+def test_nonpositive_histogram_scale_is_rejected_before_preparation(tmp_path,synthetic,scale):
+    source,cif,transform,*_=synthetic
+    project=G.G2Project(gpxfile=str(source))
+    project.histograms()[0].data['Sample Parameters']['Scale'][0]=scale;project.save()
+    with pytest.raises(ValueError,match='positive source histogram scale'):
+        prepare(source,cif,transform,[0,0,0],tmp_path/'rejected')
 
 
 def test_reused_start_bank_matches_every_direct_native_curve(tmp_path,synthetic):

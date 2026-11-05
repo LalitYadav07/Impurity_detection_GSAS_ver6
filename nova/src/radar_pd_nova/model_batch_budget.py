@@ -53,7 +53,7 @@ def output_measurements(root, members):
         fixed_bytes=fixed_bytes, fixed_files=fixed_files, native_artifacts=native)
 
 
-def batch_size(source_bytes, chunks, *, maximum=128, profiled=False):
+def batch_size(source_bytes, chunks, *, maximum=128, profiled=False, prepared=False):
     """Keep the initial pilot small; learn only from this exact source protocol.
 
     A fourfold output reserve and a two-source-file floor leave room for other
@@ -62,6 +62,15 @@ def batch_size(source_bytes, chunks, *, maximum=128, profiled=False):
     """
     initial = min(maximum, max(1, TARGET_BYTES // max(1, 8 * source_bytes)))
     results = [c for c in chunks if c.get('result')]
+    if prepared:
+        # A structural unit already owns a complete nonlinear model and all
+        # its starts. Publish one model in the unknown-allocation pilot, then
+        # at most one concurrent wave per measured native worker allocation.
+        # Serial multi-model batches delay every completed fit until the
+        # slowest model finishes, without amortizing a shared model kernel.
+        workers=results[-1]['result'].get('allocation',{}).get('workers',1) if results else 1
+        workers=workers if type(workers) is int and workers>0 else 1
+        maximum=min(maximum,workers);initial=min(initial,maximum)
     if not results:
         return min(8, initial)
     measured = [c['output_measurements'] for c in results

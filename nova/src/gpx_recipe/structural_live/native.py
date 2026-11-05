@@ -216,6 +216,9 @@ def prepare(source_gpx, child_cif, transform, origin, output, *, phase_name=None
         reference=copy.deepcopy(reference_phase.data)
     p = g.G2Project(gpxfile=str(source_gpx), newgpx=str(output/'prepared.gpx'))
     h = p.histogram(histogram_name) if histogram_name else p.histograms()[0]
+    histogram_scale = float(h.data['Sample Parameters']['Scale'][0])
+    if not np.isfinite(histogram_scale) or histogram_scale <= 0:
+        raise ValueError('Structural log-scale fitting requires a finite positive source histogram scale')
     parent = p.phase(phase_name) if phase_name else p.phases()[0]
     if reference is not None:
         from gsas_magnetic_preflight import setting_fingerprint
@@ -341,6 +344,8 @@ class NativeCandidate:
         self.initial_cell = list(self.phase.data['General']['Cell'][1:7])
         self.a_scale = float(np.mean(self.basis['baseline_a'][:3]))
         self.histogram_scale = float(self.hist.data['Sample Parameters']['Scale'][0])
+        if not np.isfinite(self.histogram_scale) or self.histogram_scale <= 0:
+            raise ValueError('Structural log-scale fitting requires a finite positive source histogram scale')
         self.background0 = float(self.hist.data['Background'][0][3])
         self.observation_limits = copy.deepcopy(self.hist.data['Limits'])
 

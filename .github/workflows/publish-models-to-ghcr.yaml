@@ -106,6 +106,6 @@ jobs:
           export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 RADAR_REQUIRE_STRUCTURAL_NATIVE=1 &&
           python -m pytest -q -o cache_dir=/tmp/pytest-cache --junitxml=/tmp/structural.xml \
             /validation/tests/gpx_recipe/test_prepared_structural_acceptance_native.py &&
-          python -c "import xml.etree.ElementTree as E; cases=E.parse(\"/tmp/structural.xml\").findall(\".//testcase\"); assert len(cases)>=10 and all(c.find(\"skipped\") is None and c.find(\"failure\") is None and c.find(\"error\") is None for c in cases), \"Structural native acceptance must run without skips\""'
+          python -c "import xml.etree.ElementTree as E; cases=E.parse(\"/tmp/structural.xml\").findall(\".//testcase\"); assert len(cases)>=13 and all(c.find(\"skipped\") is None and c.find(\"failure\") is None and c.find(\"error\") is None for c in cases), \"Structural native acceptance must run without skips\""'
       - name: Publish verified immutable image
         run: docker push "$IMAGE"

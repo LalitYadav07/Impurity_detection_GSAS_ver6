@@ -19,6 +19,14 @@ def test_small_pilot_then_measured_batch_amortizes_dispatch_without_increasing_w
     assert batch_size(source,[measured(seconds=900.)])==1
 
 
+def test_structural_models_publish_without_waiting_for_serial_siblings():
+    assert batch_size(2600000,[],prepared=True)==1
+    assert batch_size(2600000,[measured(seconds=120.,workers=1)],prepared=True)==1
+    assert batch_size(2600000,[measured(seconds=120.,workers=4)],prepared=True)==4
+    assert batch_size(2600000,[measured(seconds=900.,workers=4)],prepared=True)==1
+    assert batch_size(2600000,[measured(seconds=10.,workers=4)],prepared=True,maximum=2)==2
+
+
 def test_reusable_quadratic_uses_measured_warm_cost_not_repeated_cold_assembly():
     sample=measured(seconds=120.)
     sample['result']['trials'] += [dict(state='finished',status='inadequate_fit',wall_seconds=12.,

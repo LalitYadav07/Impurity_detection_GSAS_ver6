@@ -48,7 +48,7 @@ def test_prepared_structural_deadline_includes_shared_fit_default(tmp_path,recov
         structural_recovery_seconds=recovery_seconds)
     protocol=build_plan(context,catalog,tmp_path,settings)
     assert protocol['policy']['structural_seconds']==DEFAULT_FIT_SECONDS
-    assert protocol['policy']['timeout_seconds']==DEFAULT_FIT_SECONDS+recovery_seconds+180
+    assert protocol['policy']['timeout_seconds']==DEFAULT_FIT_SECONDS+recovery_seconds+900
 
 
 def test_explicit_chemical_site_validation_happens_before_compilation(tmp_path):

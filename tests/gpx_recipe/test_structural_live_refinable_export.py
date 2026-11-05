@@ -8,6 +8,43 @@ import pytest
 from gpx_recipe.structural_live.optimization.refinable_gpx import origin_reference_modes
 
 
+def test_inactive_native_limit_rules_remain_unchanged():
+    from types import SimpleNamespace
+    from gpx_recipe.structural_live.optimization.refinable_gpx import audit_inactive_native_limits
+    controls={'parmMinDict':{'0::AUiso:*':0.},'parmMaxDict':{'0::Afrac:*':1.}}
+    before=json.dumps(controls,sort_keys=True)
+    native=SimpleNamespace(prmLookup=lambda name, values: (None,None))
+    receipt=audit_inactive_native_limits(controls,{'0::nv-mode',':0:Scale'},native)
+    assert json.dumps(controls,sort_keys=True)==before
+    assert receipt['preserved_inactive_rules']==dict(parmMinDict=1,parmMaxDict=1)
+    assert not receipt['rules_removed']
+
+
+@pytest.mark.parametrize('family',['parmMinDict','parmMaxDict'])
+def test_active_native_freeze_rule_remains_rejected(family):
+    from types import SimpleNamespace
+    from gpx_recipe.structural_live.optimization.refinable_gpx import audit_inactive_native_limits
+    native=SimpleNamespace(prmLookup=lambda name, values: ('0::A*',.5))
+    with pytest.raises(ValueError,match='applies to active variable'):
+        audit_inactive_native_limits({family:{'0::A*':.5}}, {'0::A0'}, native)
+
+
+@pytest.mark.parametrize('family,value,allowed',[
+    ('parmMinDict',0.,True),('parmMinDict',.1,False),('parmMaxDict',10.,False)])
+def test_only_redundant_histogram_scale_lower_bound_is_accepted(family,value,allowed):
+    from types import SimpleNamespace
+    from gpx_recipe.structural_live.optimization.refinable_gpx import audit_inactive_native_limits
+    native=SimpleNamespace(prmLookup=lambda name, values: (':0:Scale',value))
+    controls={family:{':0:Scale':value}}
+    if allowed:
+        result=audit_inactive_native_limits(controls,{':0:Scale'},native)
+        assert result['redundant_active_rules'][0]['value']==0.
+        assert controls=={family:{':0:Scale':value}}
+    else:
+        with pytest.raises(ValueError,match='applies to active variable'):
+            audit_inactive_native_limits(controls,{':0:Scale'},native)
+
+
 @pytest.mark.parametrize('n,g', [(0,0),(2,0),(6,1),(12,3),(30,3)])
 def test_origin_reference_keeps_entire_physical_quotient(n,g):
     rng=np.random.default_rng(142)

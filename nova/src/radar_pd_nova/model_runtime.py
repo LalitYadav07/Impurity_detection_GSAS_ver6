@@ -595,7 +595,8 @@ class GalaxyChunkTransport:
         from .model_batch_budget import batch_size,concurrency_batch_limit
         measured=[c for c in self.state['chunks'].values() if c.get('protocol')==protocol]
         return min(batch_size(size,measured,maximum=self.chunk_size,
-                       profiled=p.get('policy',{}).get('magnetic_optimizer')=='profiled_quadratic'),
+                       profiled=p.get('policy',{}).get('magnetic_optimizer')=='profiled_quadratic',
+                       prepared=p.get('kind')=='structural' and p.get('policy',{}).get('structural_optimizer')=='prepared_nonlinear'),
                    concurrency_batch_limit(self.campaign,protocol,self.max_active_jobs))
 
     def _collect_profiled_cache(self,protocol,received,response,dispatch):
