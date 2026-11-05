@@ -10,6 +10,7 @@ from pathlib import Path
 from functools import lru_cache
 
 import numpy as np
+import hashlib
 
 from gpx_recipe.symmetry.campaign import Campaign,verify_receipt
 from gpx_recipe.symmetry.compiler import confined,assets,job_inputs
@@ -27,6 +28,18 @@ def candidate_display_name(catalog,candidate):
         if row.get('id')==candidate['id'] and row.get('label'):
             return str(row['label']).split(', basis=',1)[0]
     return candidate.get('irrep') or candidate['id']
+
+
+def structural_result_names(root,protocol,protocol_sha):
+    """Resolve display labels once per protocol from its sealed input catalog."""
+    if protocol.get('kind')!='structural':return {}
+    try:
+        path=confined(Path(root)/'inputs'/protocol_sha,protocol['catalog']['path'])
+        raw=path.read_bytes()
+        if hashlib.sha256(raw).hexdigest()!=protocol['catalog']['sha256']:return {}
+        catalog=json.loads(raw)
+        return {candidate['id']:candidate_display_name(catalog,candidate) for candidate in protocol['candidates']}
+    except (OSError,ValueError,KeyError,TypeError):return {}
 
 
 def structural_discovery_feedback(catalog):
@@ -535,13 +548,15 @@ def group_models(rows,*,relative_tolerance=1e-6):
 def campaign_rows(root,*,experiment=None,acquisition=None):
     campaign=Campaign(root)
     protocols,trials,summaries=portfolio_snapshot(campaign)
-    rows=[]
+    rows=[];names={}
     for trial in trials:
         # Restrict before opening any GPX/job/result files. Large portfolios in
         # another experiment must not delay the selected experiment's view.
         entry=protocols[trial['protocol']];metadata=entry['metadata'];protocol=entry['protocol']
         if experiment is not None and metadata.get('series')!=experiment:continue
         if acquisition is not None and (protocol.get('acquisition_id') or protocol['source']['sha256'])!=acquisition:continue
+        if trial['protocol'] not in names:
+            names[trial['protocol']]=structural_result_names(root,protocol,trial['protocol'])
         if trial['state']=='prepared':
             # Pending starts have no scientific evidence to display. Read their
             # exact sealed identity from the ledger once per protocol instead
@@ -552,6 +567,8 @@ def campaign_rows(root,*,experiment=None,acquisition=None):
             row=_trial_identity(campaign.trial_directory(trial),job,metadata)
         else:
             row=read_trial(campaign.trial_directory(trial),metadata,expected_receipt=trial.get('receipt'))
+        label=names[trial['protocol']].get(trial.get('candidate'))
+        if label:row['name']=label
         row['execution_state']=trial['state']
         if trial['state']!='terminal' and row['status']=='pending':row.update(status=trial['state'],reason=trial['error'] or '')
         rows.append(row)
