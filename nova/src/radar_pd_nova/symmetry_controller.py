@@ -61,7 +61,7 @@ class SymmetryMixin(KSearchMixin):
         self._symmetry_rows=[];self._symmetry_all_rows=[];self._symmetry_groups=[];self._symmetry_draft=None;self._symmetry_approved='';self._symmetry_task=None;self._symmetry_loading=False;self._symmetry_refresh_pending=False;self._symmetry_explicit_selection=False;self._symmetry_display_identity=None;self._symmetry_loading_identity=None;self._symmetry_setup_details=None
         s=self.server.state
         defaults=dict(sx_campaign='',sx_campaigns=[],sx_source='',sx_source_options=[],sx_busy=False,sx_error='',sx_message='',sx_progress='',sx_execution_detail='',sx_groups=[],sx_group='',sx_members=[],sx_selected='',sx_search='',sx_status='all',
-            sx_overview=plots.empty('Open a campaign to inspect its coverage'),sx_fit=plots.empty('Select an audited checkpoint'),sx_fit_title='',sx_expanded_title='',sx_source_notices=[],sx_source_display_notices=[],sx_axis='d',sx_reset=0,sx_pins=[],sx_pin_options=[],sx_parameters=[],sx_parameter_note='',sx_parent_moments=[],sx_parent_moment_note='',sx_details=[],sx_fit_diagnostics=[],sx_moment_note='',sx_embedding_evidence=[],sx_embedding_summary='',sx_gsas_model='',sx_intensity_scale='linear',
+            sx_overview=plots.empty('Open a campaign to inspect its coverage'),sx_fit=plots.empty('Select an audited checkpoint'),sx_fit_title='',sx_expanded_title='',sx_source_notices=[],sx_source_display_notices=[],sx_source_notice_context='',sx_axis='d',sx_reset=0,sx_pins=[],sx_pin_options=[],sx_parameters=[],sx_parameter_note='',sx_parent_moments=[],sx_parent_moment_note='',sx_details=[],sx_fit_diagnostics=[],sx_moment_note='',sx_embedding_evidence=[],sx_embedding_summary='',sx_gsas_model='',sx_intensity_scale='linear',
             sx_parent_axis='c',sx_parent='',sx_parents=[],sx_histogram='',sx_histograms=[],sx_k='',sx_sites=[],sx_site_options=[],sx_form_factors='',sx_lande='',sx_directions=['x','y','z'],sx_adequate=None,sx_max_moment='',sx_cycles=20,sx_slots=4,sx_moment_model='symmetry_allowed',sx_refine_scale=False,sx_refine_background=False,
             sx_kind='magnetic',sx_magnetic_optimizer='profiled_quadratic',sx_optimizer_iterations=120,sx_mag_d_min=0.,sx_max_mode=.5,sx_start_mode=.1,sx_candidate_options=[],sx_candidates=[],sx_mode_options=[],sx_modes=[],sx_discovered=False,sx_discovery_scope='',sx_discovery_rows=[],
             sx_plan_ready=False,sx_approved=False,sx_plan_summary='',sx_plan_candidates=[],sx_setup=False,sx_expanded=False,sx_expanded_layout={},sx_has_context=False,sx_has_gpx=False,sx_has_receipt=False,sx_resumable=False,sx_native_reference='',
@@ -561,7 +561,7 @@ class SymmetryMixin(KSearchMixin):
         row=next((r for r in self._symmetry_rows if r['id']==s.sx_selected),None)
         s.sx_fit_title=fit_caption(row)
         s.sx_expanded_title=s.sx_fit_title
-        s.sx_source_notices=[];s.sx_source_display_notices=[]
+        s.sx_source_notices=[];s.sx_source_display_notices=[];s.sx_source_notice_context=''
         s.sx_native_reference=(row or {}).get('native_reference','')
         if len(s.sx_pins)>2:s.sx_pins=s.sx_pins[-2:]
         pins=[r for r in self._symmetry_rows if r['id'] in s.sx_pins]
@@ -577,6 +577,8 @@ class SymmetryMixin(KSearchMixin):
                 workspace=self._refinement_store()
                 s.sx_source_notices=acquisition_notices(workspace,s.rf_experiment,row['source'])
                 s.sx_source_display_notices=display_acquisition_notices(s.sx_source_notices)
+                if str(row['source']).startswith('recipe:'):
+                    s.sx_source_notice_context='These notices retain the original preliminary fit and acquisition cautions. They do not describe convergence of the selected recipe checkpoint. The selected model has its own status below.'
                 s.sx_expanded_title=fit_caption(row,temperature=acquisition_temperature(
                     workspace,s.rf_experiment,row['source'],row.get('source_sha256')))
                 reason=disposition_reason(row)

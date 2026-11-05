@@ -205,12 +205,18 @@ def test_selection_change_clears_parent_directions_and_keeps_the_raw_table(monke
     app._symmetry_plot_changed()
     assert state.sx_parent_moments and not state.sx_error
     assert state.sx_parameters == parameter_rows(row, view)
+    assert state.sx_source_notice_context == ''
+    row['source']='recipe:checkpoint'
+    app._symmetry_plot_changed()
+    assert 'original preliminary fit' in state.sx_source_notice_context
+    assert 'do not describe convergence of the selected recipe checkpoint' in state.sx_source_notice_context
     view['phases'][0].pop('cell')
     app._symmetry_plot_changed()
     assert state.sx_parent_moments == [] and 'unavailable' in state.sx_parent_moment_note
     app._symmetry_rows = []
     app._symmetry_plot_changed()
     assert state.sx_parent_moments == [] and state.sx_parent_moment_note == ''
+    assert state.sx_source_notice_context == ''
 
 
 def test_unreadable_selected_view_cannot_retain_previous_parent_directions(monkeypatch):

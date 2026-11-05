@@ -20,7 +20,8 @@ def scan_select(label,field,items,**kwargs):
 
 def source_caveats():
     with v.VAlert(v_if='sx_source_display_notices.length',type='warning',color='#6b4b12',variant='tonal',density='compact',classes='sx-source-caveats my-2',role='note',tabindex=0):
-        html.Strong('Source requires review')
+        html.Strong('Recorded input cautions')
+        html.P('{{ sx_source_notice_context }}',v_if='!!sx_source_notice_context')
         with html.Ul():
             html.Li('{{ notice }}',v_for='notice in sx_source_display_notices',key='notice')
         with html.Details():
