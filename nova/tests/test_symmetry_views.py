@@ -6,6 +6,23 @@ from radar_pd_nova.symmetry_workspace import group_models,display_groups,choose_
 from radar_pd_nova.symmetry_plots import coordinate,fit
 
 
+def test_structural_parameters_use_child_cell_and_mode_units_without_inventing_errors():
+    from radar_pd_nova.symmetry_workspace import parameter_note
+    view=dict(phases=[dict(name='child',cell=[5.,6.,7.,90.,103.,90.],
+        modes=[dict(label='normalized displacement',value=.18)])])
+    original=json.loads(json.dumps(view))
+    values=parameter_rows(dict(kind='structural'),view)
+    assert [v['parameter'] for v in values]==[
+        'Cell · a','Cell · b','Cell · c','Cell · alpha','Cell · beta','Cell · gamma','normalized displacement']
+    assert [v['unit'] for v in values]==['Å']*3+['°']*3+['Å']
+    assert all(v['uncertainty']=='—' for v in values)
+    assert view==original
+    assert 'not individual atomic displacements' in parameter_note(dict(kind='structural'))
+    assert 'magnetic atom' not in parameter_note(dict(kind='structural'))
+    assert 'magnetic atom' in parameter_note(dict(kind='magnetic'))
+    assert parameter_note(None)==''
+
+
 def test_expanded_fit_caption_retains_scan_model_residual_and_disposition():
     r=dict(metadata={'scan':'Run123 · Bank2'},name='R-3c',bns='167.103',rwp=23.171,status='inadequate_fit')
     assert fit_caption(r)=='Run123 · Bank2 · R-3c · BNS 167.103 · Rwp 23.171% · inadequate fit'

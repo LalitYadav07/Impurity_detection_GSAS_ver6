@@ -505,6 +505,11 @@ def parameter_rows(row,view):
             and not isinstance(value,bool) and np.isfinite(value) and value>=0) else '—'
     rows=[]
     for phase in view['phases']:
+        if row.get('kind') == 'structural':
+            for label, value in zip(('a', 'b', 'c', 'alpha', 'beta', 'gamma'), phase.get('cell', [])):
+                if isinstance(value, (int, float)) and not isinstance(value, bool) and np.isfinite(value):
+                    rows.append(dict(phase=phase['name'], parameter='Cell · '+label,
+                        value=round(value, 6), uncertainty='—', unit='Å' if label in ('a','b','c') else '°'))
         for value in phase.get('moments',phase.get('modes',[])):
             magnetic='magnitude' in value
             uncertainty=estimates.get(value['label'],{}).get('magnitude_esd') if magnetic else value.get('esd')
@@ -519,6 +524,20 @@ def parameter_rows(row,view):
                     rows.append(dict(phase=phase['name'],parameter=value['label']+' · '+axis,
                         value=round(component,6),uncertainty=uncertainty_label(error),unit='µB'))
     return rows
+
+
+def parameter_note(row):
+    if not row:
+        return ''
+    if row.get('kind') == 'structural':
+        return ('Cell values use the child crystallographic basis shown above. Mode values are normalized '
+                'ISODISTORT amplitudes, not individual atomic displacements or the bounded search coordinates. '
+                'A dash means uncertainty is unavailable; none is inferred from the fit residual. '
+                'The exported GPX contains the atomic coordinates and cell. The fit status above still applies.')
+    return ('The first row for each magnetic atom is its magnitude; mx, my and mz use the candidate crystallographic '
+            'basis shown in the embedding. Uncertainties are conditional on this model and its fixed nuclear parameters. '
+            'A dash means fixed, dependent or unavailable; a magnitude uncertainty is not inferred from component errors '
+            'without their covariance. A nonzero moment or qualified fit does not establish ordering.')
 
 
 def group_models(rows,*,relative_tolerance=1e-6):

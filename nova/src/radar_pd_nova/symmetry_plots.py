@@ -77,6 +77,9 @@ def fit(selected,pins=(),*,axis='d',reset=0,intensity_scale='linear'):
             legend=legend_label+' Bragg'
         else:legend=tick['phase']+' Bragg'
         fig.add_trace(go.Scatter(x=tx[keep],y=np.full(keep.sum(),index),mode='markers',marker=dict(symbol='line-ns-open',size=8,color=['#157347','#ae4e4e','#815ba1'][index%3]),name=legend,hovertemplate=tick['phase']+'<br>%{x:.5g}<extra></extra>'),row=2,col=1)
+    if not v['ticks']:
+        fig.add_annotation(text='Bragg positions unavailable in this saved view',x=.5,y=.5,
+            xref='x2 domain',yref='y2 domain',showarrow=False,font=dict(size=11,color='#62776d'))
     fig.add_trace(go.Scattergl(x=xx,y=display(obs-calc),mode='lines',connectgaps=False,line=dict(color='#6b7974',width=1),name='Observed − calculated'),row=3,col=1)
     fig.add_hline(y=0,line_width=1,line_color='#b5c8bc',row=3,col=1)
     fig.update_layout(template='plotly_white',height=570,margin=dict(l=65,r=25,t=25,b=55),legend=dict(orientation='h',y=1.14),uirevision=selected['source']+axis+str(reset))

@@ -124,6 +124,31 @@ def curve(project, histogram):
     return y
 
 
+def refresh_profile_metadata(project, histogram, prediction):
+    """Retain GSAS-II's computed reflection lists and background at export.
+
+    DoNoFit returns its curve but discards its local histogram dictionaries.
+    A newly constructed child therefore otherwise has no saved Bragg ticks.
+    Use the existing native forward adapter, check the same prediction, and
+    copy only calculated metadata. Observations, weights and limits stay put.
+    """
+    from ..live.native_profile import NativeReducedProfile
+    from ..fit_domain import native_powder_fit_mask
+    forward = NativeReducedProfile(project.filename)
+    forward.profile(forward.x0)
+    data = forward.histo_phases[0][histogram.name]
+    calculated = np.asarray(data['Data'][3], float)
+    expected = np.asarray(prediction, float)
+    x = np.asarray(np.ma.getdata(histogram.data['data'][1][0]), float)
+    mask = native_powder_fit_mask(x, histogram.data['Limits'][1], histogram.data['Limits'][2:])
+    mask &= ~np.ma.getmaskarray(histogram.data['data'][1][0])
+    if not mask.any() or not np.allclose(calculated[mask], expected[mask], rtol=1e-8, atol=1e-10):
+        raise ValueError('Native reflection metadata disagrees with the saved prediction')
+    reflections = data['Reflection Lists']
+    histogram.data['Reflection Lists'] = copy.deepcopy(reflections)
+    histogram.data['data'][1][4] = np.asarray(data['Data'][4]).copy()
+
+
 def parent_sites(parent, child, transform, origin, native_spc):
     pcx, pct, _, pcia = parent['General']['AtomPtrs']
     cx, ct, _, cia = child['General']['AtomPtrs']
@@ -394,6 +419,7 @@ class NativeCandidate:
         if not np.allclose(y, prediction, rtol=1e-9, atol=1e-10):
             raise ValueError('Current native state does not match the requested plotted prediction')
         data = self.hist.data['data'][1]; data[3] = y; data[5] = np.asarray(data[1])-y
+        refresh_profile_metadata(self.project, self.hist, y)
         self.project.data['Covariance']['data'] = {}; self.project.save()
         return dict(path=str(self.project.filename), sha256=sha(self.project.filename),
                     covariance_cleared=True, native_curve_verified=True,

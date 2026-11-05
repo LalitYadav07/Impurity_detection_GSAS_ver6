@@ -48,7 +48,16 @@ def test_prepare_fit_export_reopen_and_native_continuation(tmp_path,synthetic):
     result=fit_snapshot(prepared,tmp_path/'fit',settings=settings)
     assert result['state']=='verified_point_fit'
     assert result['verification']['saved_observations']['continuation']['weighted_objective_verified']
-    for role in ('frozen','continuation'):assert sha(result[role]['path'])==result[role]['sha256']
+    for role in ('frozen','continuation'):
+        assert sha(result[role]['path'])==result[role]['sha256']
+        saved=G.G2Project(gpxfile=result[role]['path'])
+        from gpx_recipe.symmetry.native_audit import write_view
+        view=write_view(saved,histogram,tmp_path/(role+'-view.json'))
+        assert view['ticks'] and sum(len(group['d']) for group in view['ticks'])>0
+        for group in view['ticks']:
+            from GSASII import GSASIIlattice as L
+            converted=L.Pos2dsp(saved.histogram(histogram).InstrumentParameters,np.asarray(group['native']))
+            np.testing.assert_allclose(converted,group['d'],rtol=1e-8,atol=1e-10)
     from gpx_recipe.structural_live.optimization.refinable_gpx import mode_amplitudes,continue_native_refinement
     p=G.G2Project(gpxfile=result['continuation']['path'],newgpx=str(tmp_path/'continued.gpx'))
     current=p.phase(phase)
