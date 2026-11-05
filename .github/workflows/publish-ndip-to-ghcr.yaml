@@ -63,6 +63,17 @@ jobs:
           cache-from: type=registry,ref=${{ env.IMAGE_NAME }}:ndip-buildcache
           cache-to: type=registry,ref=${{ env.IMAGE_NAME }}:ndip-buildcache,mode=max
 
+      - name: Verify native TOF profile recovery in the built image
+        shell: bash
+        run: |
+          docker run --rm --entrypoint sh -v "$PWD:/validation:ro" \
+            -e OPENBLAS_NUM_THREADS=1 -e OMP_NUM_THREADS=1 \
+            "${IMAGE_NAME}:ndip-${GITHUB_SHA}" -c '
+          python -m pip install --quiet pytest &&
+          cd /tmp &&
+          python -m pytest -q -o cache_dir=/tmp/pytest-cache \
+            /validation/tests/gpx_recipe/test_tof_profile_native.py'
+
       - name: Check scientific contracts in the built image
         shell: bash
         run: |

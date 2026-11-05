@@ -46,6 +46,7 @@ TASKS = [
                    "A ZIP of source CIFs is material for a library build. A finished portable library is a different input. Building checks usable structures; it does not prove phase identity. A two-structure library cannot discover an absent third structure. Obtain licensed CIFs through a source you may use; they are not redistributed here."),
                   ("Reuse settings without copying a specimen",
                    "A saved configuration supplies analysis settings. The current Live selection still supplies scans, profile, library and dominant phase. Use <b>Edit a copy</b> to make a new draft. The <a href=\"#downloads\">AGES configuration</a> has experiment-specific ranges, background and exclusions; inspect it rather than adopting it as a general default."),
+                  ("TOF peak-profile treatment", "Keep the supplied profile fixed by default. For an explicit main-phase CIF, advanced per-scan adjustment can release available histogram X/Y/Z width coefficients in one separate checked stage before residual searches. Position calibration stays fixed. Failed or correlated adjustments retain the supplied profile. For reuse across a series, supply a reviewed reference profile and keep Fixed. This empirical width adjustment is separate from atomic x/y/z and can absorb genuine broadening; inspect raw transition evidence independently."),
                   ("Full, Rapid and background choices",
                    "<b>Balanced discovery</b> is a useful first setup goal. <b>Rapid hypotheses</b> ranks bounded alternatives and refines a selected number; inspect which hypotheses received a final refinement. A background suggestion is an aid to review, not an automatic scientific acceptance. Increasing search effort cannot fix the wrong data or instrument profile.")]),
     dict(id="check", group="First Live result", title="Check the setup, then test one scan",
@@ -117,7 +118,7 @@ TASKS = [
          steps=[
              "Open <b>Refinement → Recipe</b> and <b>Refresh projects</b>. Select the experiment, <b>Apply recipe to</b> scope, banks and a <b>Representative GPX</b>. Click <b>Inspect starting model</b>.",
              "Choose <b>Recipe setup</b>: <b>Guided recipes</b> asks structured questions; use <b>Start / restart guided setup</b>, <b>Use this answer</b> and <b>Build and check recipe</b>. <b>Expert request</b> accepts a bounded request and <b>Generate recipe</b>.",
-             "Review every stage, fixed parameters, explicit edits, bounds and scope. Click <b>Approve recipe and scope</b>, then <b>Start refinement</b>. Approval and execution are separate actions."
+             "If clarification is needed, use <b>Answer the questions above</b> and <b>Use answer and revise recipe</b>. Review every stage, fixed parameters, explicit edits, bounds and scope. Click <b>Approve recipe and scope</b>, then <b>Start refinement</b>. Approval and execution are separate actions."
          ],
          expected="The displayed stages release only the intended parameters. The queue reports each scan’s verified progress and retains the original project.",
          prompt="Create two stages: first refine existing background coefficients and phase scales; then add unit-cell parameters. Keep atom positions, occupancies, displacement parameters, instrument/profile, sample broadening and texture fixed. Keep the current fit limits. Explain any unsupported request before proceeding.",
@@ -132,7 +133,7 @@ TASKS = [
          purpose="Assess what changed, including parameters that remain weakly determined.",
          shot="43-parameter-uncertainties", alt="Historical AGES parameter table showing refined values and conditional uncertainties.",
          steps=[
-             "In <b>Refinement → Results</b>, select the scan, recipe and stage. Use the fit, trends and parameters views to compare with the original on the same fit interval.",
+             "In <b>Refinement → Refined results</b>, select the scan, recipe and stage. Use the fit, trends and parameters views to compare with the original on the same fit interval.",
              "Inspect conditional uncertainties, held values, parameter bounds and stage provenance. Separate a completed computation from scientific acceptance.",
              "Choose the required artifact and <b>Download</b>, or open the selected GPX in the hosted GSAS-II desktop. Save and close that desktop before opening a different GPX."
          ],
@@ -180,6 +181,15 @@ TASKS = [
                    "The restored watch keeps its saved experiment and configuration. Changing the setup draft does not retarget it. Review the watch shown above the results; clear the workspace before configuring a separate watch. If recovery is read-only or blocked, inspect its stated restrictions instead of using Start monitoring as a substitute."),
                   ("If a connection closes",
                    "Return to the same Galaxy History and open a new RADAR-PD session. Recover published records and inspect ongoing jobs before resuming. The old interactive URL is not a permanent report. Saved artifacts, not the browser tab, are the durable record.")]),
+    dict(id="contact", group="Save and recover", title="Contact the developer",
+         purpose="Send a question, bug report, feature request or message without sharing your experiment History.",
+         diagram="contact",
+         steps=["Click <b>Contact developer</b> immediately left of <b>End session</b>.",
+                "Write your message. Optionally choose a category, add a reply contact, attach an image or paste a screenshot into the message field. Review every preview and remove anything you do not want to send.",
+                "Click <b>Send privately</b>. Keep the Galaxy browser signed in as this session's owner. Wait for the delivery reference; uploads may still be processing. If delivery fails, retry the unchanged report or download its ZIP."],
+         expected="A verified report reference and Open saved report link appear. The developer receives a separate private feedback History; your analysis History is not shared.",
+         details=[("What accompanies a report", "Only your text, chosen images, optional reply contact, Galaxy username/email, application version and current view. Keys, logs, configurations and scientific arrays are not automatically attached. Screenshot metadata is removed."),
+                  ("Find the report later", "The report remains in Galaxy after End session. Developers open Histories shared with me; reporters retain their own report History. Download a draft before closing a session if delivery has not been confirmed.")]),
     dict(id="finish", group="Save and recover", title="Save, clear or end the session deliberately",
          purpose="Keep the scientific record and stop only the work you intend to stop.",
          shot="51-end-session-dialog", alt="Historical confirmation dialog for ending an interactive RADAR-PD session.",

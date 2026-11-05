@@ -41,7 +41,7 @@ class RefinementWorkspace:
             self.state=json.loads(self.manifest.read_text())
             if self.state.get('schema')!='radar-refinement-workspace/v1' or self.state.get('history_id')!=self.history_id:
                 raise ValueError('Refinement workspace belongs to a different history')
-        else:self.state=dict(schema='radar-refinement-workspace/v1',history_id=self.history_id,sources={},drafts={},recipes={},jobs={},paused=False)
+        else:self.state=dict(schema='radar-refinement-workspace/v1',history_id=self.history_id,sources={},drafts={},recipes={},jobs={},paused=False,parallel_jobs=2 if runtime.kind=='galaxy' else 1)
         self._validate_parallel_jobs(self.state.get('parallel_jobs',1))
         self._recover_interrupted()
         self.save()

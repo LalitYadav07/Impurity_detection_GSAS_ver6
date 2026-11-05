@@ -38,9 +38,11 @@ def refinement_dashboard(app):
             with html.Div():
                 html.H2('Refinement')
                 html.P('Review a recipe once. Apply it to selected RADAR-PD projects as scans become available.')
+                html.P('LLM assistance is sponsored by the Illumine project. Token usage and estimated cost appear with each generated plan.',classes='rf-notice')
             with html.Div(classes='rf-actions',style='margin-top:0'):
                 v.VChip('{{ rf_provider }}',v_if="rf_mode === 'recipe'",variant='tonal',color='#15543c',size='small')
                 v.VBtn('Refresh projects',click=app.refresh_refinement_sources,loading=('rf_loading',),variant='text',prepend_icon='mdi-refresh',size='small')
+        html.P("{{ 'Service credentials in this session: Illumine ' + (rf_illumine_configured ? 'configured' : 'unavailable') + ' · Bilbao ' + (rf_bilbao_configured ? 'configured' : 'unavailable') + '. A completed request verifies service access; configured credentials alone do not verify network availability.' }}",classes='rf-notice mb-3')
         v.VProgressLinear(v_if='rf_loading || rf_busy',indeterminate=True,color='#287654',height=3,classes='mb-4')
         v.VAlert(v_if='rf_loading',text=('rf_catalog_message',),type='info',variant='tonal',density='compact',classes='mb-3')
         v.VAlert(v_if="rf_mode !== 'models' && !!rf_error",text=('rf_error',),type='error',variant='tonal',density='compact',classes='mb-3',closable=True)
@@ -52,8 +54,9 @@ def refinement_dashboard(app):
             select('Experiment','rf_experiment','rf_experiments')
             with v.VBtnToggle(v_model=('rf_mode',),mandatory=True,color='#15543c',variant='outlined',divided=True):
                 v.VBtn('Recipe',value='recipe',prepend_icon='mdi-playlist-edit')
-                v.VBtn('Results',value='results',prepend_icon='mdi-chart-line')
+                v.VBtn('Refined results',value='results',prepend_icon='mdi-chart-line')
                 v.VBtn('Model exploration',value='models',prepend_icon='mdi-molecule')
+        html.P("{{ rf_mode === 'recipe' ? '1 · Choose saved projects and prepare a reviewed refinement plan. Approval records the plan; Start refinement submits it.' : rf_mode === 'results' ? '2 · Inspect recipe checkpoints and trends. Preliminary fits remain in the main Results tab.' : '3 · Compare magnetic or structural hypotheses from an exact original or retained recipe GPX.' }}",classes='rf-notice mb-3')
         model_exploration(app)
         with html.Div(v_show="rf_mode !== 'models'",classes='rf-stats'):
             with html.Div(v_for='metric in rf_metrics',key='metric.label',classes='rf-stat'):
@@ -117,10 +120,16 @@ def refinement_dashboard(app):
                     html.H3('Your staged plan will appear here')
                     html.P('Inspect the exact parameters released at each stage before any scan is polished.')
                 v.VAlert(v_for='question in rf_questions',key='question',text=('question',),type='warning',variant='tonal',density='compact',classes='mt-3')
+                with html.Div(v_if='rf_questions.length',classes='rf-source mt-3'):
+                    v.VTextarea(label='Answer the questions above',v_model=('rf_question_answer',),rows=3,variant='outlined',disabled=('rf_busy',))
+                    v.VBtn('Use answer and revise recipe',click=(app.answer_recipe_questions,'[rf_question_answer]'),disabled=('rf_busy || !rf_question_answer.trim()',),variant='outlined',size='small')
+                html.P('{{ rf_cards.length }} stages · expand each stage to review its complete free set before approval.',v_if='rf_cards.length',classes='rf-notice mt-3')
                 with html.Div(v_for='stage in rf_cards',key='stage.id',classes='rf-stage'):
                     html.H4('{{ stage.number }}. {{ stage.title }}')
                     html.P('{{ stage.cycles }} cycles · refine:',classes='rf-notice')
-                    with html.Ul():html.Li('{{ target }}',v_for='target in stage.free',key='target')
+                    with html.Details(open=("stage.number === 1",)):
+                        html.Summary('Complete free set ({{ stage.free.length }} targets)')
+                        with html.Ul():html.Li('{{ target }}',v_for='target in stage.free',key='target')
                     with html.Details(v_if='stage.held.length || stage.edits.length'):
                         html.Summary('Parameters fixed since previous stage and explicit edits')
                         with html.Ul():html.Li('Fix: {{ target }}',v_for='target in stage.held',key='target')
@@ -142,6 +151,7 @@ def refinement_dashboard(app):
                 with html.Div(classes='rf-actions'):
                     v.VBtn('Approve recipe and scope',click=(app.approve_refinement_recipe,'[rf_scope_token]'),disabled=('!rf_plan_ready || rf_busy || rf_guided_busy || rf_approved',),variant='outlined',color='#15543c',prepend_icon='mdi-check-decagram-outline')
                     v.VBtn('Start refinement',click=app.start_refinement_queue,disabled=('!rf_approved || rf_busy || rf_guided_busy',),variant='flat',color='#15543c',prepend_icon='mdi-play')
+                html.P("{{ rf_approved ? 'Approved. Start refinement submits the reviewed plan to the selected scans.' : 'Approve recipe and scope records your review; it does not start calculations.' }}",classes='rf-notice mt-3')
                 html.P('{{ rf_transfer_notice }}',classes='rf-notice mt-4')
         with html.Div(v_show="rf_mode === 'results' && rf_experiments.length",classes='rf-results'):
             with html.Aside(classes='rf-card'):

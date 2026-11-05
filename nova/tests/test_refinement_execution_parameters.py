@@ -55,6 +55,14 @@ def test_selected_texture_value_sigma_and_native_scale_are_visible_without_mutat
     assert (v,r,e)==before
 
 
+def test_tof_profile_terms_have_physical_coefficient_units():
+    v,r,e=fixture()
+    e['stages'][1]['parameter_changes']['released_parameters']=[
+        native(':3:'+term,term,'instrument_profile',1.) for term in ('X','Y','Z')]
+    extra,_=rows(v,r,e)
+    assert {row['parameter']:row['unit'] for row in extra}=={'X':'µs/Å','Y':'µs/Å²','Z':'µs'}
+
+
 def test_stage_one_cannot_see_future_texture_or_failed_stage_values():
     v,r,e=fixture();v['source_sha256']=FIRST
     e['status']='failed';e['stages'][1]['status']='refined_needs_review'
@@ -88,6 +96,17 @@ def test_completed_final_uses_exact_last_stage_and_final_gpx():
     v,r,e=fixture();v['source_sha256']=FINAL
     extra,_=rows(v,r,e,'final')
     assert next(p for p in extra if p['parameter']=='MD')['refined_stage']=='stage2'
+
+
+def test_recovered_final_uses_only_verified_successes_after_rollback():
+    v,r,e=fixture();v['source_sha256']=FINAL
+    e['stages'].insert(1,dict(id='bad',status='rejected',rollback='previous_checkpoint_restored',
+        parameter_changes=dict(released_parameters=[native('7:3:MD','MD','preferred_orientation',999)])))
+    e['rejected_stages']=['bad']
+    extra,_=rows(v,r,e,'final')
+    assert next(p for p in extra if p['parameter']=='MD')['value']==.973
+    e['stages'][1].pop('rollback')
+    with pytest.raises(ValueError,match='unverified recovery'):rows(v,r,e,'final')
 
 
 @pytest.mark.parametrize('fault',['receipt_type','files_type','ledger_type'])

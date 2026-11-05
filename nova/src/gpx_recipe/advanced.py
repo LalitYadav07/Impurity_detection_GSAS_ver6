@@ -286,7 +286,8 @@ def audit(project, context):
                                    "variable": variable["name"], "lower": project.get_Controls("parmMin", variable=variable["name"]),
                                    "upper": project.get_Controls("parmMax", variable=variable["name"])})
     return copy.deepcopy({"effective_bounds": bounds, "histograms": [{"key": h["key"], "limits": project.histogram(h["name"]).data["Limits"],
-                            "histogram_scale": project.histogram(h["name"]).SampleParameters["Scale"]} for h in context["histograms"]],
+                            "histogram_scale": project.histogram(h["name"]).SampleParameters["Scale"],
+                            "instrument": getattr(project.histogram(h["name"]), "InstrumentParameters", {})} for h in context["histograms"]],
             "phases": [{"key": p["key"], "cell_refined": phase.data["General"]["Cell"][0],
                         "atoms": [{"label": a.label, "flags": a.refinement_flags.strip(), "occupancy": a.occupancy,
                                    "coordinates": list(a.coordinates), "adp": a.ADP} for a in phase.atoms()],

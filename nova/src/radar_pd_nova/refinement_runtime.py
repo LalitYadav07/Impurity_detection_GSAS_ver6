@@ -27,7 +27,9 @@ def portable_refinement_workspace(manifest):
     the inline tables for older outputs that do not have that recoverable file.
     Do not mutate live job state or any scientific result receipt.
     """
-    document=dict(manifest);document['jobs']=dict(manifest.get('jobs') or {})
+    document=dict(manifest)
+    if 'jobs' not in manifest:return document
+    document['jobs']=dict(manifest.get('jobs') or {})
     for uid,job in document['jobs'].items():
         result=job.get('result') or {}
         execution=result.get('execution');sha=(result.get('files') or {}).get(execution)

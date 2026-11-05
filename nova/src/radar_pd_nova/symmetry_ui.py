@@ -178,6 +178,9 @@ def model_exploration(app):
                 html.P('Structural fit comparisons require a matched parent/nuisance refinement. A lower Rwp alone does not establish a transition.',v_if="sx_kind === 'structural'",classes='rf-notice')
         html.P('{{ sx_scope_progress }}',v_if='!sx_setup && sx_results_current && !!sx_scope_progress',classes='rf-notice')
         html.Div('{{ sx_progress }}',v_if='!sx_setup && sx_results_current && !!sx_progress',classes='sx-status')
+        with html.Details(v_if='!sx_setup && sx_results_current && !!sx_execution_detail',classes='mb-3'):
+            html.Summary('Start outcomes and detailed coverage')
+            html.P('{{ sx_execution_detail }}',classes='rf-notice')
         with html.Details(v_if='!sx_setup && sx_results_current && sx_batches.length',classes='rf-card mb-4'):
             html.Summary('Galaxy batch status ({{ sx_batches.length }})')
             html.P('Elapsed time starts at submission and includes queueing. Last status check is in UTC. Assigned starts may still be waiting for a worker.',classes='rf-notice')

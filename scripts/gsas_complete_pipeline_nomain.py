@@ -3093,6 +3093,8 @@ class UnifiedPipeline:
         # Main phase CIF and name
         main_cif = _expand(ds.get("main_cif"))
         user_supplied_main_cif = bool(main_cif)
+        if (self.top_cfg.get('tof_profile') or {}).get('mode','fixed') != 'fixed' and not user_supplied_main_cif:
+            raise ValueError('TOF profile adjustment requires a supplied main-phase CIF')
         main_phase_name = ds.get("main_phase_name") or "auto"
         if main_phase_name == "auto":
             parsed_name, parsed_sg = _parse_cif_metadata(main_cif)
@@ -3966,6 +3968,28 @@ class UnifiedPipeline:
                     if cleanup_audit.get("exported_cif"):
                         self.manifest.add_artifact(str(cleanup_audit["exported_cif"]))
 
+                from tof_profile_adjustment import adjust_main_profile
+                tof_report = adjust_main_profile(main_ref, self.top_cfg, technical_dir)
+                if tof_report:
+                    print('[INFO] TOF profile: ' + tof_report['status'] + ' ' + tof_report.get('reason',''))
+                    self.manifest.add_artifact(tof_report['audit_path'])
+                    if tof_report['status'] == 'adopted':
+                        instprm_path = tof_report['exported_instprm']
+                        calibrated_instprm_path = instprm_path
+                        ds_cfg['instprm_path'] = instprm_path
+                        ds_cfg['calibrated_instprm_path'] = instprm_path
+                        self.manifest.add_artifact(instprm_path)
+                        reference_phase_exclusion_report, exclude_regions = _reference_exclusion_state(instprm_path)
+                        ds_cfg['exclude_regions'] = exclude_regions
+                        ds_cfg['reference_phase_exclusion_report'] = reference_phase_exclusion_report
+                        normalized_exclusions = normalize_excluded_regions(exclude_regions, lo, hi)
+                        if lo is not None and hi is not None:
+                            ensure_usable_range(lo, hi, normalized_exclusions)
+                        set_excluded(hist, normalized_exclusions)
+                        main_results = _run_stage1_cleanup_refinement(main_ref)
+                        if not main_results.success:
+                            raise RuntimeError('Main fit failed after the checked TOF adjustment')
+
                 prenudge_audit_path = Path(tech_logs_dir) / "main_phase_prenudge.json"
                 prenudge_audit_path.write_text(json.dumps(prenudge_audit, indent=2, default=str), encoding="utf-8")
                 self.manifest.add_artifact(str(prenudge_audit_path))
@@ -3996,6 +4020,7 @@ class UnifiedPipeline:
                         "calibration_rwp_after": calibration_rwp_after,
                         "main_phase_prenudge": prenudge_audit,
                         "main_phase_cleanup": cleanup_audit,
+                        "tof_profile": tof_report,
                     },
                 )
 

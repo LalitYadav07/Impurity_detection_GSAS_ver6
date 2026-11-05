@@ -347,6 +347,18 @@ class SetupEditorMixin:
             density="compact",
             disabled=(locked,) if locked else False,
         )
+        with html.Div(v_show=f"{prefix}radiation === 'neutron' && {prefix}instrument_mode !== 'cw' && ({main_phase_ready})",classes='my-3'):
+            vuetify.VSelect(label='TOF peak-profile treatment',v_model=(f'{prefix}tof_profile_mode',),
+                items=("[{title:'Supplied profile fixed (recommended)',value:'fixed'},{title:'Adjust selected terms per scan (advanced)',value:'per_scan'}]",),
+                density='compact',variant='outlined',disabled=(locked,) if locked else False)
+            vuetify.VSelect(label='Width terms · checked against the imported histogram',v_model=(f'{prefix}tof_profile_terms',),
+                items=("['X','Y','Z']",),multiple=True,chips=True,density='compact',variant='outlined',
+                v_show=f"{prefix}tof_profile_mode === 'per_scan'",disabled=(locked,) if locked else False)
+            html.P('X/Y/Z control TOF Lorentzian peak width, not atomic positions or TOF position calibration. '
+                'A separate 20-cycle main-phase stage checks convergence, covariance and physical widths. '
+                'The accepted profile is held for every candidate; rejected adjustments keep the supplied profile. '
+                'Use a reviewed standard/reference profile with Fixed to reuse it across compatible scans. '
+                'Per-scan adjustments can absorb genuine peak broadening; raw-pattern transition evidence remains independent.',classes='text-caption')
         vuetify.VSwitch(
             v_show=f"{prefix}radiation === 'xray' && ({main_phase_ready})",
             v_model=(f"{prefix}light_calibration_enabled",),

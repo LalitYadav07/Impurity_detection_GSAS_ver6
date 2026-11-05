@@ -179,6 +179,8 @@ class AnalysisConfig(BaseModel):
     refine_u_iso: bool = False
     refine_positions: bool = False
     light_calibration_enabled: bool = False
+    tof_profile_mode: Literal["fixed", "per_scan"] = "fixed"
+    tof_profile_terms: list[Literal["X", "Y", "Z"]] = Field(default_factory=lambda: ["X"])
     magnetic_precheck: bool = False
     magnetic_q_max: float = Field(default=4.0, gt=0)
     magnetic_denominators: list[int] = Field(default_factory=lambda: [2, 3, 4])
@@ -235,6 +237,11 @@ class AnalysisConfig(BaseModel):
         for start, end in self.exclude_regions:
             if start >= end:
                 raise ValueError("Ignored-region start must be less than end")
+        self.tof_profile_terms = list(dict.fromkeys(self.tof_profile_terms))
+        if self.tof_profile_mode == 'fixed' and not self.tof_profile_terms:
+            self.tof_profile_terms = ['X']  # Inactive default; no coefficient is released.
+        if self.tof_profile_mode != "fixed" and (not self.tof_profile_terms or self.instrument_mode == "cw" or self.radiation != Radiation.NEUTRON):
+            raise ValueError("TOF profile adjustment requires selected terms and a neutron TOF histogram")
         denominators = list(dict.fromkeys(int(value) for value in self.magnetic_denominators))
         if not denominators or any(value < 2 for value in denominators):
             raise ValueError("Magnetic denominators must contain integers greater than or equal to 2")
@@ -310,6 +317,7 @@ class AnalysisConfig(BaseModel):
                 "q_max": self.magnetic_q_max,
                 "denominators": self.magnetic_denominators,
             },
+            "tof_profile": {"mode": self.tof_profile_mode, "terms": list(dict.fromkeys(self.tof_profile_terms))},
             "light_calibration": {
                 "enabled": self.light_calibration_enabled,
             },

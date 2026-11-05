@@ -553,6 +553,28 @@ def coverage_rows(rows):
     return result
 
 
+def model_progress(rows):
+    """Lead with model coverage; starts and incompatible models are not fits."""
+    if any(not r.get('protocol') or not r.get('candidate') for r in rows):
+        return 'Model identities are being prepared; checked coverage is not available yet'
+    models={}
+    for row in rows:
+        models.setdefault((row['protocol'],row['candidate']),[]).append(row)
+    complete=sum(all(r.get('execution_state')=='terminal' for r in members) for members in models.values())
+    evaluated=sum(any(r.get('native_verified') for r in members) for members in models.values())
+    fits=[r for r in rows if r.get('native_verified') and r.get('has_view') and
+          isinstance(r.get('rwp'),(int,float)) and np.isfinite(r['rwp'])]
+    qualified=[r for r in fits if r.get('status')=='valid']
+    leader=min(qualified or fits,key=lambda r:r['rwp']) if fits else None
+    text=f'{complete} / {len(models)} scan/model embeddings processed · {evaluated} with checked native fits'
+    if leader:
+        label='Best qualified' if qualified else 'Best audited, needs review'
+        text+=f" · {label}: {leader['name']} · Rwp {leader['rwp']:.3f}%"
+    else:
+        text+=' · First checked fit pending; assigned batches may still be queued'
+    return text
+
+
 def scope_rows(rows, experiment, scope='experiment'):
     if scope=='campaign':return rows
     if scope!='experiment':raise ValueError('Unknown model-result scope')

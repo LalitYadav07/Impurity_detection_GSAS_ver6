@@ -17,16 +17,35 @@
     "library_review": {
       "description": "Explicit per-configuration permission for a hash-bound custom-library policy; archive declarations never activate it.",
       "oneOf": [
-        {"type": "object", "maxProperties": 0},
         {
           "type": "object",
-          "required": ["acknowledged", "archive_sha256", "policy_set_sha256"],
+          "maxProperties": 0
+        },
+        {
+          "type": "object",
+          "required": [
+            "acknowledged",
+            "archive_sha256",
+            "policy_set_sha256"
+          ],
           "properties": {
-            "acknowledged": {"const": true},
-            "archive_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
-            "policy_set_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
-            "allow_incomplete": {"type": "boolean"},
-            "source_key": {"type": "string"}
+            "acknowledged": {
+              "const": true
+            },
+            "archive_sha256": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "policy_set_sha256": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "allow_incomplete": {
+              "type": "boolean"
+            },
+            "source_key": {
+              "type": "string"
+            }
           },
           "additionalProperties": false
         }
@@ -492,6 +511,35 @@
           "type": "boolean"
         }
       }
+    },
+    "tof_profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "enum": [
+            "fixed",
+            "per_scan"
+          ]
+        },
+        "terms": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "X",
+              "Y",
+              "Z"
+            ]
+          },
+          "uniqueItems": true,
+          "minItems": 1,
+          "maxItems": 3
+        }
+      },
+      "required": [
+        "mode",
+        "terms"
+      ]
     }
   },
   "$defs": {

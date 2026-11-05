@@ -14,6 +14,7 @@ import requests
 ACTIVE_STATES = frozenset({'new', 'upload', 'waiting', 'queued', 'running',
                            'resubmitted', 'paused', 'setting_metadata'})
 _LOCKS = {}
+_WAITERS = {}
 _LOCKS_LOCK = threading.Lock()
 
 
@@ -48,6 +49,8 @@ class HistoryJobAdmission:
         self.timeout, self.poll_seconds = timeout, poll_seconds
         self.fetch, self.clock, self.wait = fetch or requests.get, clock, wait or time.sleep
         self.lock = _history_lock(service)
+        with _LOCKS_LOCK:
+            self.waiters = _WAITERS.setdefault((service.galaxy_url.rstrip('/'), service.history_id), [])
 
     def active_jobs(self):
         try:
@@ -90,25 +93,43 @@ class HistoryJobAdmission:
         if type(family_limit) is not int or family_limit < 1:
             raise ValueError('A positive per-workflow job limit is required')
         started = self.clock()
-        while True:
-            if cancel is not None and cancel.is_set():
-                raise AdmissionUnavailable('Scientific submission paused before dispatch')
-            acquired = self.lock.acquire(timeout=min(self.poll_seconds, .25))
-            if acquired:
-                try:
-                    jobs = self.active_jobs()
-                    if (len(jobs) < self.total_limit and
-                            sum(row['tool_id'] == tool_id for row in jobs) < family_limit):
-                        if cancel is not None and cancel.is_set():
-                            raise AdmissionUnavailable('Scientific submission paused before dispatch')
-                        # The caller performs the POST before releasing the lock.
-                        yield
-                        return
-                finally:
-                    self.lock.release()
-            if self.clock() - started >= self.timeout:
-                raise AdmissionUnavailable('Waiting for an existing scientific job to release capacity')
-            if cancel is not None:
-                cancel.wait(self.poll_seconds)
-            else:
-                self.wait(self.poll_seconds)
+        ticket = dict(tool=tool_id, family_limit=family_limit, total_limit=self.total_limit, cancel=cancel)
+        enqueued = False
+        try:
+            while True:
+                if cancel is not None and cancel.is_set():
+                    raise AdmissionUnavailable('Scientific submission paused before dispatch')
+                acquired = self.lock.acquire(timeout=min(self.poll_seconds, .25))
+                if acquired:
+                    try:
+                        if not enqueued:
+                            self.waiters.append(ticket); enqueued = True
+                        jobs = self.active_jobs()
+                        # Oldest eligible request wins. A family already at its
+                        # own limit must not block another workflow's free slot.
+                        eligible = next((w for w in self.waiters if
+                            not (w['cancel'] is not None and w['cancel'].is_set()) and
+                            len(jobs) < w['total_limit'] and
+                            sum(r['tool_id'] == w['tool'] for r in jobs) < w['family_limit']), None)
+                        if eligible is ticket:
+                            if cancel is not None and cancel.is_set():
+                                raise AdmissionUnavailable('Scientific submission paused before dispatch')
+                            self.waiters[:] = [w for w in self.waiters if w is not ticket]
+                            enqueued = False
+                            # The caller performs the POST before releasing the lock.
+                            yield
+                            return
+                    finally:
+                        self.lock.release()
+                if self.clock() - started >= self.timeout:
+                    raise AdmissionUnavailable('Waiting for an existing scientific job to release capacity')
+                if cancel is not None:
+                    cancel.wait(self.poll_seconds)
+                else:
+                    self.wait(self.poll_seconds)
+        finally:
+            if enqueued:
+                with self.lock:
+                    # Identity, not dict equality: two requests can have the
+                    # same tool/settings and still be separate queue entries.
+                    self.waiters[:] = [w for w in self.waiters if w is not ticket]

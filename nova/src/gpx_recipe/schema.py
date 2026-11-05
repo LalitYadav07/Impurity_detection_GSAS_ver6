@@ -11,6 +11,7 @@ def response_schema(model_signature=None):
     def nullable(value): return {"anyOf": [value, {"type": "null"}]}
     string={"type":"string"};number={"type":"number"};integer={"type":"integer"}
     target={"anyOf":[
+        obj({"kind":enum("instrument_profile"),"histogram":string,"parameter":enum("X","Y","Z")}),
         obj({"kind":enum("background","histogram_scale"),"histogram":string}),
         obj({"kind":enum("phase_scale","preferred_orientation","sample_size","sample_microstrain"),"phase":string,"histogram":string}),
         obj({"kind":enum("cell"),"phase":string}),

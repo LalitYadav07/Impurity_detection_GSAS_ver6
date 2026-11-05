@@ -97,6 +97,8 @@ CONFIG_FORM_FIELDS = (
     "include_cu_kbeta",
     "instrument_mode",
     "light_calibration_enabled",
+    "tof_profile_mode",
+    "tof_profile_terms",
     "magnetic_denominators",
     "magnetic_precheck",
     "magnetic_q_max",
@@ -220,6 +222,7 @@ def configuration_from_form(state: Any) -> AnalysisConfig:
         )
         or (state.main_cif_source == "ipts" and bool(state.facility_main_cif_path))
     )
+    profile_terms = getattr(state, 'tof_profile_terms', None)
     values: dict[str, Any] = {
         'library_review':review,
         "mode": state.analysis_mode,
@@ -257,6 +260,8 @@ def configuration_from_form(state: Any) -> AnalysisConfig:
         "refine_positions": bool(state.refine_positions)
         if has_main_phase and state.cleanup_enabled
         else False,
+        "tof_profile_mode": (getattr(state, "tof_profile_mode", None) or "fixed") if has_main_phase and state.radiation == "neutron" and state.instrument_mode != "cw" else "fixed",
+        "tof_profile_terms": list(profile_terms) if profile_terms is not None else ["X"],
         "light_calibration_enabled": bool(state.light_calibration_enabled)
         if has_main_phase and state.radiation == "xray"
         else False,

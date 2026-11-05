@@ -18,7 +18,8 @@ RUN apt-get update \
 # The reviewed PyTorch CPU wheel excludes CUDA packages. Its content hash pins
 # the download even where ORNL network certificate interception requires a
 # host-specific trust exception.
-RUN python -m pip install --no-cache-dir 'scipy==1.15.3' \
+RUN python -m pip install --no-cache-dir 'Pillow==12.3.0' \
+    && python -m pip install --no-cache-dir 'scipy==1.15.3' \
     && python -m pip install --no-cache-dir --no-deps --only-binary=:all: 'h5py==3.13.0' \
     && python -m pip install --no-cache-dir --no-deps 'RapidFuzz==3.14.3' \
     && python -m pip install --no-cache-dir --no-deps 'galvani==0.5.0' \

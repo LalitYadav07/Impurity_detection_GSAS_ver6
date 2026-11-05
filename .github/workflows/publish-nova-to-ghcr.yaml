@@ -125,6 +125,18 @@ jobs:
             /validation-tests/test_refinement_detail_owner.py \
             /validation-tests/test_refinement_planner_payload.py'
 
+      - name: Verify private feedback and reviewed profile setup
+        shell: bash
+        run: |
+          docker run --rm --entrypoint sh -v "$PWD/nova/tests:/validation-tests:ro" \
+            "${IMAGE_NAME}:nova-${NOVA_VERSION}" -c '
+          python -m pip install --quiet pytest==8.4.2 &&
+          cd /tmp &&
+          PYTHONPATH=/src/src:/validation-tests python -m pytest -q \
+            /validation-tests/test_feedback.py \
+            /validation-tests/test_post_demo_workflow.py \
+            /validation-tests/test_refinement_execution_parameters.py'
+
       - name: Verify packaged magnetic optimizer setup and evidence
         shell: bash
         run: |

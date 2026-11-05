@@ -106,9 +106,11 @@ def build_payload(request, context, previous=None):
                    'scope': 'Existing isotropic HAP coefficient only; mixing and instrument held fixed'}
             for kind, family, unit in [('sample_size', 'Size', 'micrometre'), ('sample_microstrain', 'Mustrain', 'microstrain')]}
             for key, hap in phase.get('histogram_phase_models', {}).items() if hap.get('Use', True)}
+    from .tof_profile import capabilities as tof_capabilities
     histogram_capabilities=[{'histogram':h['key'],'name':h['name'],
         'linked_phases':[p['key'] for p in context['phases'] if h['name'] in p['histograms']],
         'linked_phase_count':sum(h['name'] in p['histograms'] for p in context['phases']),
+        'tof_instrument_profile':tof_capabilities(h), 'profile_policy':'Only explicitly requested available X/Y/Z. Hold TOF position calibration and sample size/microstrain fixed. Use a separate, converged profile stage; signed coefficients are permitted but the width function and identifiability are checked.',
         'already_normalized':h['key'] in context.get('normalized_histograms',[])} for h in context['histograms']]
     for h in histogram_capabilities:
         raw={}

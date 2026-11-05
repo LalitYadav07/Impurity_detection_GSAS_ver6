@@ -57,7 +57,7 @@ class SymmetryMixin(KSearchMixin):
         self._model_active_campaigns={};self._model_owned_campaigns={};self._model_review_campaigns=OrderedDict();self._model_checkpoint_errors={};self._model_preparations={};self._model_enrollment_task=None;self._model_tick_task=None;self._model_pause_task=None;self._model_start_cancel=None
         self._symmetry_rows=[];self._symmetry_all_rows=[];self._symmetry_groups=[];self._symmetry_draft=None;self._symmetry_approved='';self._symmetry_task=None;self._symmetry_loading=False;self._symmetry_refresh_pending=False;self._symmetry_explicit_selection=False;self._symmetry_display_identity=None;self._symmetry_loading_identity=None;self._symmetry_setup_details=None
         s=self.server.state
-        defaults=dict(sx_campaign='',sx_campaigns=[],sx_source='',sx_source_options=[],sx_busy=False,sx_error='',sx_message='',sx_progress='',sx_groups=[],sx_group='',sx_members=[],sx_selected='',sx_search='',sx_status='all',
+        defaults=dict(sx_campaign='',sx_campaigns=[],sx_source='',sx_source_options=[],sx_busy=False,sx_error='',sx_message='',sx_progress='',sx_execution_detail='',sx_groups=[],sx_group='',sx_members=[],sx_selected='',sx_search='',sx_status='all',
             sx_overview=plots.empty('Open a campaign to inspect its coverage'),sx_fit=plots.empty('Select an audited checkpoint'),sx_fit_title='',sx_expanded_title='',sx_source_notices=[],sx_source_display_notices=[],sx_axis='d',sx_reset=0,sx_pins=[],sx_pin_options=[],sx_parameters=[],sx_parent_moments=[],sx_parent_moment_note='',sx_details=[],sx_fit_diagnostics=[],sx_moment_note='',sx_embedding_evidence=[],sx_embedding_summary='',sx_gsas_model='',sx_intensity_scale='linear',
             sx_parent_axis='c',sx_parent='',sx_parents=[],sx_histogram='',sx_histograms=[],sx_k='',sx_sites=[],sx_site_options=[],sx_form_factors='',sx_lande='',sx_directions=['x','y','z'],sx_adequate=None,sx_max_moment='',sx_cycles=20,sx_slots=4,sx_moment_model='symmetry_allowed',sx_refine_scale=False,sx_refine_background=False,
             sx_kind='magnetic',sx_magnetic_optimizer='profiled_quadratic',sx_optimizer_iterations=120,sx_mag_d_min=0.,sx_max_mode=.5,sx_start_mode=.1,sx_candidate_options=[],sx_candidates=[],sx_mode_options=[],sx_modes=[],sx_discovered=False,sx_discovery_scope='',
@@ -343,7 +343,7 @@ class SymmetryMixin(KSearchMixin):
                 if not s.sx_campaign:
                     self._symmetry_rows=[];self._symmetry_all_rows=[];self._symmetry_groups=[]
                     s.sx_source='';s.sx_source_options=[];s.sx_enrollments=[];s.sx_coverage=[]
-                    s.sx_progress='';s.sx_scope_progress='';s.sx_resumable=False;s.sx_following=False
+                    s.sx_progress='';s.sx_execution_detail='';s.sx_scope_progress='';s.sx_resumable=False;s.sx_following=False
                     self._symmetry_publish_source()
                     s.sx_message='Select a completed RADAR-PD GPX above, then prepare model exploration.';return
                 root=next(p.parent for p in roots if p.parent.name==s.sx_campaign)
@@ -429,6 +429,9 @@ class SymmetryMixin(KSearchMixin):
                 if s.sx_result_scope=='experiment':
                     label='recorded outcomes' if any(r.get('grouped_surrogate') for r in rows) else 'verified receipts'
                     s.sx_progress+=f' · whole campaign {label}: {sum(v["received_count"] for v in summaries)} / {sum(v["declared_count"] for v in summaries)}'
+                from .symmetry_workspace import model_progress
+                s.sx_execution_detail=s.sx_progress
+                s.sx_progress=model_progress(rows) if rows else ''
                 if rows:s.sx_message='Audited fits remain hypotheses. Matching calculated curves do not establish a unique space group.'
                 elif s.sx_enrollments:
                     pending=sum(e['status'] in {'queued','preparing'} for e in s.sx_enrollments)

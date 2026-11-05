@@ -8,7 +8,7 @@ from . import SCHEMA
 from .snapshot import digest
 
 BACKGROUNDS = ["chebyschev-1", "chebyschev", "cosine", "Q^2 power series", "Q^-2 power series", "lin interpolate", "inv interpolate", "log interpolate"]
-KINDS = {"background", "phase_scale", "histogram_scale", "preferred_orientation", "sample_size", "sample_microstrain", "cell", "atom"}
+KINDS = {"background", "instrument_profile", "phase_scale", "histogram_scale", "preferred_orientation", "sample_size", "sample_microstrain", "cell", "atom"}
 
 
 def exact_keys(value, allowed, required=()):
@@ -64,7 +64,7 @@ def validate_plan(plan, context):
         seen = set()
         for target in stage["free"]:
             kind = target.get("kind") if isinstance(target, dict) else None
-            fields = {"background": {"kind", "histogram"}, "histogram_scale": {"kind", "histogram"},
+            fields = {"instrument_profile": {"kind", "histogram", "parameter"}, "background": {"kind", "histogram"}, "histogram_scale": {"kind", "histogram"},
                       "preferred_orientation": {"kind", "phase", "histogram"}, "phase_scale": {"kind", "phase", "histogram"},
                       "sample_size": {"kind", "phase", "histogram"}, "sample_microstrain": {"kind", "phase", "histogram"},
                       "cell": {"kind", "phase"}, "atom": {"kind", "phase", "atom", "flags"}}
@@ -96,10 +96,15 @@ def validate_plan(plan, context):
                     raise ValueError("Version 1 supports isotropic displacement parameters only")
                 if "X" in flags and matches[0].get("position_dof") == 0:
                     raise ValueError(f"{target['phase']}:{target['atom']} has no symmetry-independent positions")
-            identity = (kind, target.get("phase"), target.get("histogram"), target.get("atom"))
+            if kind == 'instrument_profile' and (
+                    not isinstance(target['parameter'], str) or target['parameter'] not in {'X', 'Y', 'Z'}):
+                raise ValueError('Select an exact native TOF coefficient X, Y or Z')
+            identity = (kind, target.get("phase"), target.get("histogram"), target.get("atom"), target.get("parameter"))
             if identity in seen:
                 raise ValueError("Duplicate target; combine flags explicitly")
             seen.add(identity)
+        from .tof_profile import validate_targets
+        validate_targets(stage, context)
         bg = stage.get("background")
         if bg is not None:
             exact_keys(bg, {"histogram", "function", "coefficients", "fixed_points"}, {"histogram", "function", "coefficients", "fixed_points"})
@@ -169,6 +174,8 @@ def plan_hash(plan):
 
 
 def target_labels(target):
+    if target["kind"] == "instrument_profile":
+        return {f"instrument_profile:{target['histogram']}:{target['parameter']}"}
     if target["kind"] == "atom":
         return {f"{target['phase']}:{target['atom']}:{flag}" for flag in target["flags"]}
     return {":".join(str(target.get(k, "")) for k in ("kind", "phase", "histogram")).rstrip(":")}

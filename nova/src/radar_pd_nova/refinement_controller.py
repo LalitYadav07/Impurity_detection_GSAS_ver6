@@ -351,6 +351,7 @@ def recipe_cards(plan, context, *, physical_banks=None):
     flags={'X':'positions','U':'Uiso','F':'occupancy'}
     def label(target):
         kind=target['kind'];p=phases.get(target.get('phase'),'');h=histograms.get(target.get('histogram'),'')
+        if kind=='instrument_profile':return f"{h} / TOF peak-profile {target['parameter']} (position calibration held)"
         if kind=='atom':return f"{p} / {target['atom']}: "+', '.join(flags[f] for f in target['flags'])
         name={'cell':'cell','phase_scale':'phase scale','histogram_scale':'histogram scale','background':'background','preferred_orientation':'preferred orientation','sample_size':'isotropic crystallite size (µm)','sample_microstrain':'isotropic sample microstrain'}[kind]
         return ' / '.join(x for x in [p,h,name] if x)
@@ -404,12 +405,12 @@ class RefinementMixin(GuidedRefinementMixin):
 
     @staticmethod
     def _refinement_state_defaults():
-        return dict(rf_mode='recipe',rf_busy=False,rf_loading=False,rf_catalog_message='',rf_message='',rf_preparation_progress='',rf_error='',rf_transport='',rf_source_qualification='',rf_can_load_baseline=False,rf_provider='Guided rules · no model call required',
+        return dict(rf_mode='recipe',rf_busy=False,rf_loading=False,rf_catalog_message='',rf_message='',rf_preparation_progress='',rf_error='',rf_transport='',rf_source_qualification='',rf_can_load_baseline=False,rf_provider='Guided rules · no model call required',rf_illumine_configured=bool(os.environ.get('AZURE_ILLUMINE_API_KEY')),rf_bilbao_configured=bool(os.environ.get('BCS_API_KEY')),
             rf_experiment='',rf_experiments=[],rf_source='',rf_sources=[],rf_source_details=[],rf_context_atoms=[],rf_context_search='',rf_scope='all',rf_samples=[],rf_sample_options=[],rf_scans=[],rf_scan_options=[],rf_banks=[],rf_bank_options=[],
-            rf_failure_policy='stop',rf_existing=True,rf_future=False,rf_scope_summary='No published GPXs available',rf_scope_token='',rf_request='',rf_draft_status='',rf_cards=[],rf_questions=[],rf_assumptions=[],rf_plan_calls='',rf_model_tokens='',rf_model_cost='',rf_model_has_luna_price=False,rf_plan_ready=False,
+            rf_failure_policy='stop',rf_existing=True,rf_future=False,rf_scope_summary='No published GPXs available',rf_scope_token='',rf_question_answer='',rf_request='',rf_draft_status='',rf_cards=[],rf_questions=[],rf_assumptions=[],rf_plan_calls='',rf_model_tokens='',rf_model_cost='',rf_model_has_luna_price=False,rf_plan_ready=False,
             rf_approved=False,rf_recipe_id='',rf_recipe_summary='',rf_active_summary='',rf_saved_recipe='',rf_recipe_versions=[],rf_recipe_filter='all',rf_metrics=[],rf_source_warnings=[],rf_future_armed=False,
             rf_jobs=[],rf_job_search='',rf_job_status='all',rf_progress_text='No refinements started',rf_progress_percent=0,rf_selected_job='',rf_selected_title='',rf_selected_message='',rf_has_output=False,rf_output_provenance='',
-            rf_result_tab='fit',rf_stage='final',rf_stages=[],rf_histogram='',rf_histograms=[],rf_axis='d',rf_display='compare',rf_fit=figure_json(empty_figure()),rf_fit_notice='',rf_rwp_summary='',rf_parameter_warnings=[],rf_convergence_notice='',rf_exposure_notice='',rf_zoom=0,rf_parallel_jobs=1,
+            rf_result_tab='fit',rf_stage='final',rf_stages=[],rf_histogram='',rf_histograms=[],rf_axis='d',rf_display='compare',rf_fit=figure_json(empty_figure()),rf_fit_notice='',rf_rwp_summary='',rf_parameter_warnings=[],rf_convergence_notice='',rf_exposure_notice='',rf_zoom=0,rf_parallel_jobs=2,
             rf_trend=figure_json(empty_figure('Completed refinements will populate this trend')),rf_trend_notice='',rf_trend_stage='final',rf_trend_stage_options=[],rf_trend_metric='rwp',rf_trend_metrics=[dict(title='Rwp · original and polished',value='rwp')],rf_trend_axis='run_number',rf_trend_axes=[dict(title='Scan number',value='run_number')],rf_trend_display='absolute',
             rf_parameters=[],rf_parameter_search='',rf_parameter_notice='',rf_downloads=[],rf_download='',rf_can_open_gsas=False,rf_open_gsas_label='Open selected verified GPX in GSAS-II',rf_queue_running=False,rf_follow=True,rf_expanded=False)
 
@@ -884,6 +885,14 @@ class RefinementMixin(GuidedRefinementMixin):
                 work.add_done_callback(lambda task:task.exception() if not task.cancelled() else None)
             if self._recipe_preparation_current(owner) or self._refinement_workspace is None:
                 self._sync_recipe_preparation_progress();self.server.state.flush()
+
+    def answer_recipe_questions(self, answer=None, **_):
+        s=self.server.state
+        text=str(answer if answer is not None else s.rf_question_answer).strip()
+        if s.rf_busy or not s.rf_questions or not text:return
+        request=s.rf_request+'\n\nClarification for this draft:\n'+text
+        s.rf_question_answer=''
+        self.generate_refinement_recipe({'experiment':s.rf_experiment,'source':s.rf_source,'request':request})
 
     def generate_refinement_recipe(self, submission_payload=None, **_):
         s=self.server.state

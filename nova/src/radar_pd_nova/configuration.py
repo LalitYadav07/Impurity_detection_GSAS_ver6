@@ -114,6 +114,8 @@ def config_from_contract(payload: dict[str, Any]) -> AnalysisConfig:
         cleanup_enabled=bool(cleanup.get("enabled", False)),
         refine_u_iso=bool(cleanup.get("refine_u_iso", False)),
         refine_positions=bool(cleanup.get("refine_positions", False)),
+        tof_profile_mode=(payload.get("tof_profile") or {}).get("mode", "fixed"),
+        tof_profile_terms=(payload.get("tof_profile") or {}).get("terms", ["X"]),
         light_calibration_enabled=bool(light_calibration.get("enabled", False)),
         magnetic_precheck=bool(magnetic.get("enabled", False)),
         magnetic_q_max=float(magnetic.get("q_max", 4.0)),

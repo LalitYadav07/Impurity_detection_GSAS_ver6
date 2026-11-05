@@ -26,6 +26,7 @@ from trame.app import get_server
 from trame.widgets import client, html, plotly, vuetify3 as vuetify
 import yaml
 
+from .feedback_ui import FeedbackMixin
 from .configuration import config_from_contract, load_configuration
 from .run_timing import run_elapsed_label
 from .setup_forms import configuration_from_form, configuration_form_values, CONFIG_FORM_FIELDS
@@ -157,7 +158,7 @@ _SUBMISSION_FIELDS = (
     "reference_fractional_d_tolerance", "reference_zero_tolerance", "reference_min_half_width",
     "reference_max_half_width", "include_cu_kbeta", "background_mode", "background_type",
     "background_terms", "main_prenudge", "main_shadow_filter", "cleanup_enabled", "refine_u_iso",
-    "refine_positions", "light_calibration_enabled", "magnetic_precheck", "magnetic_q_max",
+    "refine_positions", "light_calibration_enabled", "tof_profile_mode", "tof_profile_terms", "magnetic_precheck", "magnetic_q_max",
     "magnetic_denominators", "full_profile",
     "full_max_passes", "full_min_phase_percent", "full_top_n_ml", "full_nudge_candidates", "full_nudge_samples",
     "full_nudge_representatives", "full_compare_candidates", "full_compare_cycles",
@@ -281,13 +282,14 @@ def _powgen_retry_time(value: Any) -> datetime | None:
 from .webmon.ui import WebmonMixin
 
 
-class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssistantMixin, LiveSettingsReviewMixin, LiveRestoreMixin, LiveSetupMixin, LibraryReviewMixin, SetupEditorMixin, PostAnalysisMixin, RefinementMixin, SymmetryMixin, ThemedApp):
+class RadarPdNovaApp(FeedbackMixin, WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssistantMixin, LiveSettingsReviewMixin, LiveRestoreMixin, LiveSetupMixin, LibraryReviewMixin, SetupEditorMixin, PostAnalysisMixin, RefinementMixin, SymmetryMixin, ThemedApp):
     """Interactive orchestration and results workspace backed by Galaxy."""
 
     def __init__(self) -> None:
         self.server = get_server(None, client_type="vue3")
         super().__init__(server=self.server)
         self.service = GalaxyService()
+        self._init_feedback()
         self.facility = FacilityBrowser(facility="SNS")
         self.records: dict[str, RunRecord] = {}
         self.utility_actions: dict[str, UtilityActionRecord] = {}
@@ -431,6 +433,8 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
         state.refine_u_iso = False
         state.refine_positions = False
         state.light_calibration_enabled = False
+        state.tof_profile_mode = "fixed"
+        state.tof_profile_terms = ["X"]
         state.magnetic_precheck = False
         state.magnetic_q_max = 4.0
         state.magnetic_denominators = "2, 3, 4"
@@ -844,6 +848,9 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
             # with a session-specific action that explains the Galaxy job boundary.
             layout.actions.children.pop()
             with layout.actions:
+                vuetify.VBtn("Contact developer", id="radar-contact-developer",
+                    prepend_icon="mdi-message-text-outline", variant="text",
+                    click="contact_open = true", disabled=("session_closing",))
                 vuetify.VBtn(
                     "End session",
                     id="radar-end-session",
@@ -860,6 +867,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
             # which keeps the two-pane layout intact after reactive updates.
             client.Style(self._css() + self._live_assistant_css())
             with layout.content:
+                self._contact_ui()
                 with html.Div(classes="radar-app-shell"):
                     self._header()
                     with html.Div(
@@ -2887,6 +2895,7 @@ class RadarPdNovaApp(WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssista
                     title, value=value, v_if="live_beamline === 'PG3'" if value == "webmon" else None,
                     click="$nextTick(() => window.setTimeout(() => window.document.querySelectorAll('.js-plotly-plot').forEach(el => el.getBoundingClientRect().width > 0 && el.getBoundingClientRect().height > 0 && window.Plotly && window.Plotly.Plots.resize(el)), 80))",
                 )
+        html.P("{{ experiment_result_view === 'results' ? 'Preliminary RADAR-PD fits and trends. Select a scan to inspect its pattern, phases and native GPX.' : experiment_result_view === 'transitions' ? 'Measured-pattern comparisons across scans. Select a marker or move the heat-map cursor to inspect the same scan.' : experiment_result_view === 'webmon' ? 'POWGEN WebMon shows a scan while it is still being collected. Live monitoring processes completed reduced scans.' : 'Refine an existing GPX or compare structural/magnetic models. Original preliminary results remain available in Results.' }}",classes='radar-section-help my-3')
         if self._webmon_configured:
             self._webmon_ui()
         with html.Div(v_show="experiment_result_view === 'results'", classes="radar-experiment-results"):

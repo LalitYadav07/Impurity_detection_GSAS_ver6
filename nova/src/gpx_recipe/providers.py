@@ -168,7 +168,7 @@ class IllumineLuna:
             raise ValueError("The Luna output allowance must be 1024–16384 tokens")
         self.key = os.environ.get("AZURE_ILLUMINE_API_KEY", "")
         if not self.key:
-            raise ValueError("This session started without an Illumine credential. In the Galaxy RADAR-PD tool form, select your ORNL Illumine credential group for this tool version and start a new session. API launches must include the selected credentials_context. Your analyses remain in Galaxy History.")
+            raise ValueError("This session started without an Illumine credential. Start a fresh RADAR-PD session to receive NDIP-managed shared access. If it is still unavailable, contact the NDIP team; a personal ORNL Illumine credential group is an optional alternative. Your analyses remain in Galaxy History.")
 
     def prepare_output(self, allowance):
         self.max_output_tokens=max(self.max_output_tokens,min(16384,int(allowance)))

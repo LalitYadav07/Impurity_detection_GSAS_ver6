@@ -696,8 +696,7 @@ def _effective_limits_and_exclusions(
     if active_limits:
         ensure_usable_range(float(active_limits[0]), float(active_limits[1]), normalized_excludes)
         set_limits(hist, float(active_limits[0]), float(active_limits[1]))
-    if normalized_excludes:
-        set_excluded(hist, normalized_excludes)
+    set_excluded(hist, normalized_excludes)
 
     if audit_dir is not None and (manual_excludes or generated or active_limits):
         audit_dir.mkdir(parents=True, exist_ok=True)
@@ -1092,6 +1091,8 @@ def _extract_q_signal(
     xray_doublet_config: Optional[dict] = None,
     run_dir: Optional[Path] = None,
 ) -> Tuple[np.ndarray, np.ndarray, str, str]:
+    if (cfg.get('tof_profile') or {}).get('mode','fixed') != 'fixed' and not dataset.get('main_cif'):
+        raise ValueError('TOF profile adjustment requires a supplied main-phase CIF')
     work = out_dir / "rapid_base"
     pm = GSASProjectManager(str(work), "rapid_base")
     if not pm.create_project():
@@ -1235,6 +1236,21 @@ def _extract_q_signal(
                 dataset["main_cif_cleanup_path"] = cleanup_anchor.main_cif
                 current_main_cif = cleanup_anchor.main_cif
                 signal_kind = "main-phase residual (cleaned main)"
+
+            from tof_profile_adjustment import adjust_main_profile
+            profile_report = adjust_main_profile(refiner, cfg, out_dir)
+            if profile_report:
+                _log('[rapid] TOF profile: ' + profile_report['status'] + ' ' + profile_report.get('reason',''))
+                if profile_report['status'] == 'adopted':
+                    dataset.setdefault('supplied_instprm_path',dataset['instprm_path'])
+                    dataset['calibrated_instprm_path'] = profile_report['exported_instprm']
+                    dataset['instprm_path'] = profile_report['exported_instprm']
+                    _effective_limits_and_exclusions(
+                        cfg, dataset, mode=mode, instprm_path=dataset['instprm_path'],
+                        hist=pm.main_histogram, audit_dir=out_dir,
+                    )
+                    main_results = _run_anchor_refinement(refiner)
+                    if not main_results.success:raise RuntimeError('Main fit failed after the checked TOF adjustment')
 
             final_anchor_cfg = main_prenudge_cfg(cfg, dataset, cfg.get("stage4") or {})
             final_fit_audit, _anchor_q, _anchor_signal = assess_main_fit_for_prenudge(

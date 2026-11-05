@@ -89,7 +89,9 @@ def configure(project, stage, context, added_constraints):
             hist.data["Background"][1].pop("FixedPoints", None)
     for target in stage["free"]:
         kind = target["kind"]
-        if kind == "background":
+        if kind == "instrument_profile":
+            hists[target["histogram"]].set_refinements({"Instrument Parameters": [target["parameter"]]})
+        elif kind == "background":
             hists[target["histogram"]].set_refinements({"Background": True})
         elif kind == "histogram_scale":
             hist = hists[target["histogram"]]
@@ -168,6 +170,8 @@ def parameter_matches_target(row, target, context):
     phase = next((p for p in context["phases"] if p["key"] == target.get("phase")), None)
     hist = next((h for h in context["histograms"] if h["key"] == target.get("histogram")), None)
     kind = target["kind"]
+    if kind == "instrument_profile":
+        return hist is not None and row["histogram_id"] == hist["native_id"] and row["phase_id"] is None and row.get("family", row["name"].split(":")[2]) == target["parameter"]
     if kind in {"background", "histogram_scale"}:
         scope=hist is not None and row["histogram_id"] == hist["native_id"] and row["phase_id"] is None
         if kind=='background':
@@ -202,7 +206,7 @@ def check_preflight(state, stage, context):
         native_maps = importlib.import_module((G2.__package__ + "." if G2.__package__ else "") + "GSASIImapvars")
         check_active_parameters(state, context, dependent=native_maps.GetDependentVars(), inverse=native_maps.getInvConstraintEq)
     # A rigid-body or custom variable must not bypass our closed active set.
-    allowed = {"background", "phase_fraction", "histogram_scale", "preferred_orientation", "crystallite_size", "microstrain", "lattice", "atomic_coordinates", "atomic_displacement", "occupancy"}
+    allowed = {"instrument_profile", "background", "phase_fraction", "histogram_scale", "preferred_orientation", "crystallite_size", "microstrain", "lattice", "atomic_coordinates", "atomic_displacement", "occupancy"}
     permitted = lambda row: row["configured_now"] and any(parameter_matches_target(row, target, context) for target in stage["free"])
     permitted_names={name for p in space['parameters'] if permitted(p)
                      for name in (p['name'],p.get('refinement_variable',p['name']))}
@@ -360,7 +364,7 @@ def run_plan(source, output, plan, *, approved=None, preview=False):
                         raise StageRejected("Stage did not produce fresh refinement covariance")
                     row.update(status="refined_needs_review", rwp={h.name: h.get_wR() for h in project.histograms()},
                                actual_vary=after["parameter_space"]["last_vary"], covariance={k: v for k, v in after["covariance"].items() if k not in {"matrix", "correlation_matrix"}},
-                               metric_rows=[p for p in after["parameter_space"]["parameters"] if p["group"] in {"lattice", "atomic_coordinates", "atomic_displacement", "occupancy"}],
+                               metric_rows=[p for p in after["parameter_space"]["parameters"] if p["group"] in {"instrument_profile", "lattice", "atomic_coordinates", "atomic_displacement", "occupancy"}],
                                frozen_variables=after["parameter_space"]["frozen_variables"])
                     row["constraint_bound_audit"] = native_bounds
                     row["native_storage_audit"] = native_storage_audit(native_bounds,after)
@@ -373,6 +377,9 @@ def run_plan(source, output, plan, *, approved=None, preview=False):
                     scientific_check(require_constraint_bounds,native_bounds)
                     scientific_check(require_native_storage,row["native_storage_audit"])
                     scientific_check(advanced.check_site_totals,project,context)
+                    if any(t["kind"] == "instrument_profile" for t in stage["free"]):
+                        from .tof_profile import audit as audit_tof_profile
+                        row["tof_profile_audit"] = scientific_check(audit_tof_profile,project,stage,context,cov_native)
                     row["normalization_checks"] = scientific_check(advanced.check_normalization,project,context,normalized_histograms)
                     scientific_check(advanced.check_requested_relations,project,context,list(declared_relations.values()))
                     if set(row["actual_vary"]) != set(row["effective_vary"]):
@@ -381,10 +388,11 @@ def run_plan(source, output, plan, *, approved=None, preview=False):
                     if row["blocking_frozen_variables"]:
                         row["status"] = "needs_review"
                         raise StageRejected("GSAS-II froze a variable at its bound")
-                    if stage.get('convergence'):
+                    if stage.get('convergence') or any(t['kind']=='instrument_profile' for t in stage['free']):
                         from .convergence import require_convergence,assess_convergence
-                        row['convergence_screen']=assess_convergence(row['convergence'],stage['convergence']['max_shift_over_sigma'])
-                        scientific_check(require_convergence,row['convergence'],stage['convergence'])
+                        criterion=stage.get('convergence') or {'max_shift_over_sigma':1.0}
+                        row['convergence_screen']=assess_convergence(row['convergence'],criterion['max_shift_over_sigma'])
+                        scientific_check(require_convergence,row['convergence'],criterion)
                     row["status"] = "completed"
                     checkpoint = output.with_name(output.stem + "_" + stage["id"] + ".gpx")
                     project.save(str(checkpoint))

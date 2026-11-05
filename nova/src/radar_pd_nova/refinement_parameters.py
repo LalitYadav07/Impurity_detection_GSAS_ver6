@@ -44,23 +44,33 @@ def _selected_stages(view, result, execution, selected, source_sha, plan_sha):
     files = result.get('files') or {}
     if not isinstance(files, dict) or not _sha(files.get(result.get('execution'))):
         raise ValueError('The execution receipt is not a verified result artifact')
+    def accepted_prefix(prefix):
+        rejected=set(execution.get('rejected_stages') or [])
+        accepted=[]
+        for item in prefix:
+            if item.get('status')=='completed':accepted.append(item)
+            elif item['id'] not in rejected or not (
+                item.get('status')=='skipped' or
+                (item.get('status')=='rejected' and item.get('rollback')=='previous_checkpoint_restored')):
+                raise ValueError('Execution parameters cannot come from an incomplete or unverified recovery stage')
+        if not accepted:raise ValueError('No completed checkpoint is available')
+        return accepted
     if selected == 'final':
         if (result.get('status') != 'completed' or execution.get('status') != 'completed_needs_scientific_review'
-                or [s['id'] for s in published] != [s['id'] for s in stages]
-                or any(s.get('status') != 'completed' for s in stages)):
+                or [s['id'] for s in published] != [s['id'] for s in accepted_prefix(stages)]):
             raise ValueError('Final parameters require every stage to have completed')
         expected = files.get(result.get('final_gpx'))
         if not _sha(expected) or expected != result.get('output_sha256') or expected != execution.get('output_gpx_sha256'):
             raise ValueError('Final parameters do not match the published final GPX')
-        prefix = stages
+        prefix = accepted_prefix(stages)
     else:
         matches = [i for i, s in enumerate(stages) if s['id'] == selected]
         output = next((s for s in published if s['id'] == selected), None)
         if len(matches) != 1 or output is None:
             raise ValueError('Choose a published completed stage for execution parameters')
-        prefix = stages[:matches[0]+1]
-        if any(s.get('status') != 'completed' for s in prefix):
-            raise ValueError('Execution parameters cannot come from an incomplete stage')
+        if stages[matches[0]].get('status') != 'completed':
+            raise ValueError('Choose a completed checkpoint')
+        prefix = accepted_prefix(stages[:matches[0]+1])
         expected = files.get(output.get('gpx'))
     if not _sha(expected) or view.get('source_sha256') != expected:
         raise ValueError('Execution parameters do not match the selected GPX view')
@@ -103,6 +113,10 @@ def _held_value(record, stage, phase, histogram, previous):
         stored = matches[0].get('histogram_scale') if len(matches) == 1 else None
         if isinstance(stored, list) and len(stored) >= 2 and stored[1] is False:
             value = stored[0]
+    elif group=='instrument_profile' and histogram:
+        matches=[h for h in state.get('histograms',[]) if h.get('key')==histogram.get('key')]
+        stored=(matches[0].get('instrument') or {}).get(family) if len(matches)==1 else None
+        if isinstance(stored,list) and len(stored)>2 and stored[2] is False:value=stored[1]
     elif phase and histogram:
         matches = [p for p in state.get('phases', []) if p.get('key') == phase.get('key')]
         hap = (matches[0].get('hap') or {}).get(histogram.get('name'), {}) if len(matches) == 1 else {}
@@ -171,6 +185,9 @@ def execution_parameters(view, result, execution, selected, *, source_sha, plan_
         elif group == 'background':
             number = family.removeprefix('Back;')
             label, unit = 'Background coefficient '+number, 'native'
+        elif group == 'instrument_profile' and family in {'X', 'Y', 'Z'}:
+            label = 'TOF Lorentzian width · '+family
+            unit = {'X': 'µs/Å', 'Y': 'µs/Å²', 'Z': 'µs'}[family]
         else:
             label, unit = str(record.get('meaning') or group.replace('_', ' ')), 'native'
         place = ' · '.join(p for p in [(phase or {}).get('name'), (hist or {}).get('name') or fallback] if p)
@@ -183,7 +200,7 @@ def execution_parameters(view, result, execution, selected, *, source_sha, plan_
             status='refined_in_prior_stage' if prior else 'refined' if estimated else 'configured',
             native_status=native_status,native_variable=variable,refined_stage=refined_stage,
             evidence='Selected-stage execution receipt',evidence_stage=current['id']))
-    notice = ('Additional scale, background and texture values come from the verified selected-stage execution receipt. '
+    notice = ('Additional scale, background, profile and texture values come from the verified selected-stage execution receipt. '
               'Their s.u. values are conditional native uncertainties. “Native” units are not a calibrated physical quantity.') if rows else ''
     if omitted:
         notice += ' Prior-stage nuisance estimates without an unchanged held value recorded in this stage are omitted.'

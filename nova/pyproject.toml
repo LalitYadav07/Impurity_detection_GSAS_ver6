@@ -1,6 +1,6 @@
 [project]
 name = "radar-pd-nova"
-version = "0.6.45"
+version = "0.6.46"
 description = "Interactive NDIP/NOVA workspace for RADAR-PD"
 requires-python = ">=3.10,<3.14"
 dependencies = [
@@ -10,6 +10,7 @@ dependencies = [
   "pydantic>=2.8,<3",
   "PyYAML>=6,<7",
   "requests>=2.32,<3",
+  "Pillow>=11,<13",
   "numpy>=1.26,<3",
   "h5py>=3.10,<4",
   "scipy>=1.11,<2",

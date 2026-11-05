@@ -88,6 +88,29 @@ def test_pause_during_capacity_request_never_admits_the_job():
             pytest.fail('A paused job must not be submitted')
 
 
+def test_family_at_its_limit_does_not_block_another_workflow():
+    rows=[job('model')];started=threading.Event();refined=threading.Event();errors=[]
+    gate=HistoryJobAdmission(service('fairness'),total_limit=2,poll_seconds=.01,timeout=2,
+        fetch=lambda *a,**k:Response([{**r,'history_id':'fairness'} for r in rows]))
+    def model():
+        try:
+            started.set()
+            with gate.slot('neutrons_radar_pd_model_campaign_prototype',family_limit=1):pass
+        except Exception as exc:errors.append(exc)
+    worker=threading.Thread(target=model);worker.start();assert started.wait(1)
+    with gate.slot('neutrons_radar_pd_refine_recipe_prototype',family_limit=1):refined.set()
+    assert refined.is_set()
+    rows.clear();worker.join(2)
+    assert not worker.is_alive() and not errors and not gate.waiters
+
+
+def test_failed_capacity_check_does_not_leave_a_waiter():
+    gate=HistoryJobAdmission(service('failure-cleanup'),fetch=lambda *a,**k:Response({}))
+    with pytest.raises(AdmissionUnavailable):
+        with gate.slot('neutrons_radar_pd_refine_recipe_prototype',family_limit=1):pass
+    assert not gate.waiters
+
+
 def test_analyze_uses_same_admission_and_honors_pause(tmp_path,monkeypatch):
     from contextlib import contextmanager
     from radar_pd_nova.galaxy_service import GalaxyService

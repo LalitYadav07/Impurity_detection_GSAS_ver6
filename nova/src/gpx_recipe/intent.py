@@ -76,7 +76,11 @@ def parse_free_item(item,context):
         if name:clean=clean.replace(repr(name),' ')
     clean=re.sub(r'\b[ph]\d+\b',' ',clean)
     # Type words are read only after quoted scientific identities are removed.
-    if re.search(r'\b(?:HAP\s+)?phase\s+(?:scale|fraction)\b',clean,re.I):
+    profile_match=re.search(r'\b(?:TOF\s+)?(?:instrument\s+|peak[- ]?)?profile\s+([XYZ])\b',clean,re.I)
+    if profile_match:
+        target={'kind':'instrument_profile','histogram':histogram,'parameter':profile_match[1].upper()}
+        words=r'\b(?:TOF|instrument|peak|profile|width|[XYZ])\b'
+    elif re.search(r'\b(?:HAP\s+)?phase\s+(?:scale|fraction)\b',clean,re.I):
         target={'kind':'phase_scale','phase':phase,'histogram':histogram};words=r'\b(?:HAP|phase|scale|fraction)\b'
     elif re.search(r'\b(?:sample\s+)?(?:isotropic\s+)?(?:crystallite\s+)?size\b',clean,re.I):
         target={'kind':'sample_size','phase':phase,'histogram':histogram};words=r'\b(?:sample|isotropic|crystallite|size)\b'
@@ -135,7 +139,7 @@ def literal_stage_cards(request,context):
         if any(t is None for t in targets):continue
         merged={}
         for target in targets:
-            identity=tuple(target.get(k) for k in ['kind','phase','histogram','atom'])
+            identity=tuple(target.get(k) for k in ['kind','phase','histogram','atom','parameter'])
             if identity in merged and target['kind']=='atom':
                 flags=set(merged[identity]['flags']+target['flags']);merged[identity]['flags']=''.join(f for f in 'FXU' if f in flags)
             else:merged[identity]=target

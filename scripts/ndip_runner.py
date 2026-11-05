@@ -390,6 +390,14 @@ def _materialize_contract_config(
     main_phase = dict(contract.get("main_phase") or {})
     cleanup = dict(main_phase.get("cleanup") or {})
     light_calibration = dict(contract.get("light_calibration") or {})
+    tof_profile = dict(contract.get('tof_profile') or {'mode':'fixed','terms':['X']})
+    if (set(tof_profile)-{'mode','terms'} or tof_profile.get('mode') not in {'fixed','per_scan'}
+            or not isinstance(tof_profile.get('terms'),list)
+            or any(t not in {'X','Y','Z'} for t in tof_profile['terms'])
+            or len(set(tof_profile['terms'])) != len(tof_profile['terms'])):
+        raise ValueError('Invalid explicit TOF profile treatment')
+    if tof_profile['mode']=='per_scan' and (not main_cif or not tof_profile['terms']):
+        raise ValueError('Per-scan TOF width adjustment requires a supplied main-phase CIF and selected coefficients')
     rapid = dict(contract.get("rapid") or {})
     full = dict(contract.get("full") or {})
     mode = "rapid" if analysis.get("mode") == "rapid" else "full"
@@ -460,6 +468,7 @@ def _materialize_contract_config(
             "refine_positions": bool(cleanup.get("refine_positions", False)),
         },
         "magnetic_precheck": dict(contract.get("magnetic_precheck") or {"enabled": False}),
+        "tof_profile": dict(contract.get("tof_profile") or {"mode": "fixed", "terms": ["X"]}),
         "light_calibration": {
             "enabled": bool(light_calibration.get("enabled", False)),
             "zero_cycles": int(light_calibration.get("zero_cycles", 1)),
