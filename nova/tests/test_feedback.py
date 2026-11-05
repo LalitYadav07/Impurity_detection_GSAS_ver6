@@ -25,7 +25,7 @@ def test_screenshot_decode_and_metadata_free_name():
 
 class API:
     def __init__(self, *, queued=False, failed_share=False):
-        self.calls=[];self.title='';self.files=[];self.queued=queued;self.failed_share=failed_share
+        self.calls=[];self.title='';self.files=[];self.queued=queued;self.failed_share=failed_share;self.contents={}
     def __call__(self, method, url, **kwargs):
         assert kwargs['allow_redirects'] is False
         path=url.split('/api/')[1];self.calls.append((method,path,kwargs))
@@ -35,10 +35,16 @@ class API:
         elif path=='histories': self.title=kwargs['json']['name'];value={'id':'report-only'}
         elif path=='histories/report-only': value={'name':self.title,'user_id':'reporter'}
         elif path=='histories/report-only/contents': value=self.files.copy()
-        elif path=='tools':
-            name=json.loads(kwargs['data']['inputs'])['files_0|NAME']
+        elif path=='tools/fetch':
+            element=json.loads(kwargs['data']['targets'])[0]['elements'][0]
+            assert element['space_to_tab'] is False and element['to_posix_lines'] is False
+            assert element['auto_decompress'] is False
+            name=element['name']
             self.files.append({'name':name,'id':str(len(self.files))})
+            self.contents[self.files[-1]['id']]=kwargs['files']['files_0|file_data'][1]
             value={'outputs':[self.files[-1]]}
+        elif path.startswith('datasets/') and path.endswith('/display'):
+            return SimpleNamespace(status_code=200,raise_for_status=lambda:None,content=self.contents[path.split('/')[1]])
         elif path.startswith('datasets/'): value={'state':'queued' if self.queued else 'ok','permissions':{'access':['private-role']}}
         elif path.endswith('/share_with_users'):
             assert kwargs['json'] in ({'user_ids':['ly6@ornl.gov'],'share_option':'make_accessible_to_shared'}, {'user_ids':[],'share_option':'no_changes'})
@@ -59,11 +65,11 @@ def test_report_shares_only_its_new_history_and_does_not_copy_session_data():
                          {'version':'test','view':'results','api_key':'NEVER-SEND','config':'PRIVATE'})
     assert result['history_id']=='report-only' and result['attachments']==1
     assert not any('PRIVATE-ANALYSIS' in path for _,path,_ in api.calls)
-    content=next(kwargs['files']['files_0|file_data'][1] for method,path,kwargs in api.calls if path=='tools' and json.loads(kwargs['data']['inputs'])['files_0|NAME']=='message.json')
+    content=next(kwargs['files']['files_0|file_data'][1] for method,path,kwargs in api.calls if path=='tools/fetch' and kwargs['files']['files_0|file_data'][0]=='message.json')
     assert b'NEVER-SEND' not in content and b'PRIVATE' not in content
     # Confirmed retries reconcile existing attachments instead of duplicating.
     delivery.send('A user message','Bug','',[image_attachment(png(),'screenshot.png')],{'version':'test','view':'results'})
-    assert sum(path=='tools' for _,path,_ in api.calls)==3
+    assert sum(path=='tools/fetch' for _,path,_ in api.calls)==3
 
 
 def test_queued_upload_keeps_attempt_and_retry_does_not_duplicate():
@@ -73,7 +79,7 @@ def test_queued_upload_keeps_attempt_and_retry_does_not_duplicate():
     assert not any(path.endswith('/share_with_users') for _,path,_ in api.calls)
     api.queued=False
     delivery.send('message','Other','',[],{})
-    assert sum(path=='tools' for _,path,_ in api.calls)==2
+    assert sum(path=='tools/fetch' for _,path,_ in api.calls)==2
 
 
 def test_missing_sharing_confirmation_is_not_success_and_draft_cannot_change():
@@ -92,10 +98,37 @@ def test_public_upload_default_blocks_message_and_screenshot_before_upload():
     delivery=FeedbackDelivery(service(),request=public_default)
     with pytest.raises(ValueError,match='Private upload defaults'):
         delivery.send('PRIVATE MESSAGE','Bug','',[image_attachment(png(),'private.png')],{})
-    uploaded=[kwargs['files']['files_0|file_data'] for _,path,kwargs in api.calls if path=='tools']
+    uploaded=[kwargs['files']['files_0|file_data'] for _,path,kwargs in api.calls if path=='tools/fetch']
     assert len(uploaded)==1 and uploaded[0][0]=='privacy-check.txt'
     assert b'PRIVATE MESSAGE' not in uploaded[0][1]
     assert not any(path.endswith('/share_with_users') for _,path,_ in api.calls)
+
+
+def test_corrupted_report_bytes_cannot_be_marked_delivered_or_shared():
+    api=API()
+    def altered(method,url,**kwargs):
+        response=api(method,url,**kwargs)
+        if url.endswith('/display'):
+            response.content=response.content.replace(b' ',b'\t')
+        return response
+    delivery=FeedbackDelivery(service(),request=altered)
+    with pytest.raises(ValueError,match='altered a report attachment'):
+        delivery.send('Message with spaces and Unicode Å µ','Bug','',[],{})
+    assert not any(path.endswith('/share_with_users') for _,path,_ in api.calls)
+
+
+def test_queued_retry_keeps_timestamp_and_exact_unicode_message():
+    api=API(queued=True);delivery=FeedbackDelivery(service(),request=api)
+    message='Preserve two  spaces, a tab\tand a new line\nÅ µ β.'
+    with pytest.raises(ValueError,match='processing'):
+        delivery.send(message,'Other','',[],{'version':'test'})
+    original=next(content for uid,content in api.contents.items() if b'created_utc' in content)
+    api.queued=False
+    delivery.send(message,'Other','',[],{'version':'test'})
+    report=json.loads(original)
+    assert report['message']==message and report['created_utc']==delivery.created_utc
+    assert sum(path=='tools/fetch' for _,path,_ in api.calls)==2
+    assert len(delivery.verified_uploads)==2
 
 
 def test_static_select_items_survive_real_html_attribute_parsing():

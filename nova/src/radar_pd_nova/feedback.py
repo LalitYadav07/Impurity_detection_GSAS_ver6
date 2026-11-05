@@ -54,6 +54,8 @@ class FeedbackDelivery:
         self.create_uncertain = False
         self.payload = None
         self.uploads = {}
+        self.created_utc = datetime.now(timezone.utc).isoformat()
+        self.verified_uploads = {}
 
     def api(self, method, path, **kwargs):
         response = self.request(method, self.base + '/api/' + path,
@@ -105,7 +107,7 @@ class FeedbackDelivery:
         owner = self.owner
         hid = self.history_id
         report = {**reviewed, 'report_id': self.report_id,
-                  'created_utc': datetime.now(timezone.utc).isoformat(),
+                  'created_utc': self.created_utc,
                   'sender': {k: owner.get(k) for k in ('username', 'email')},
                   'recipient': self.recipient}
         roles = self.api('GET', 'roles')
@@ -125,11 +127,14 @@ class FeedbackDelivery:
             elif name not in self.uploads:
                 # Mark uncertain before POST; a lost response must not re-upload.
                 self.uploads[name] = None
-                inputs = {'files_0|type': 'upload_dataset', 'files_0|NAME': name,
-                          'files_0|space_to_tab': False, 'files_0|to_posix_lines': False,
-                          'file_type': file_type, 'dbkey': '?'}
-                result = self.api('POST', 'tools',
-                    data={'history_id': hid, 'tool_id': 'upload1', 'inputs': json.dumps(inputs)},
+                # upload1 uses legacy checkbox values; on Galaxy 26.1 an
+                # explicitly false/empty space_to_tab can still enable it.
+                # Fetch accepts real JSON booleans and preserves report bytes.
+                targets = [{'destination': {'type': 'hdas'}, 'elements': [{
+                    'src': 'files', 'name': name, 'ext': file_type, 'dbkey': '?',
+                    'space_to_tab': False, 'to_posix_lines': False, 'auto_decompress': False}]}]
+                result = self.api('POST', 'tools/fetch',
+                    data={'history_id': hid, 'targets': json.dumps(targets)},
                     files={'files_0|file_data': (name, contents, 'application/octet-stream')})
                 self.uploads[name] = result['outputs'][0]['id']
             if self.uploads.get(name) is None:
@@ -139,7 +144,18 @@ class FeedbackDelivery:
                 raise ValueError('A report upload failed in Galaxy; the draft is retained.')
             if set((dataset.get('permissions') or {}).get('access', [])) != set(private):
                 raise ValueError('Private upload defaults are not confirmed. No further report content will be uploaded.')
-            if dataset.get('state') != 'ok':pending.append(name)
+            if dataset.get('state') != 'ok':
+                pending.append(name)
+            else:
+                digest = hashlib.sha256(contents).hexdigest()
+                uid = self.uploads[name]
+                if self.verified_uploads.get(uid) != digest:
+                    response = self.request('GET', self.base+'/api/datasets/'+uid+'/display',
+                        headers=self.headers, timeout=30, allow_redirects=False)
+                    response.raise_for_status()
+                    if response.status_code != 200 or hashlib.sha256(response.content).hexdigest() != digest:
+                        raise ValueError('Galaxy altered a report attachment. Download the retained draft; delivery is not confirmed.')
+                    self.verified_uploads[uid] = digest
         if pending:
             raise ValueError('Galaxy is still processing an attachment. Retry delivery when the upload completes.')
         # Sharing permissions must include protected contents, never make_public.
