@@ -76,5 +76,6 @@ def prepare_starting_bank(source,destination,choices=()):
         selected_bank=selected['bank'] if selected is not None else None,
         attached_entries=len(choices),discarded_entries=discarded,
         seconds=time.monotonic()-began,observations_reused=False,scientific_candidates_removed=False,
-        qualification_persisted_as_trust=False,current_native_probes=native_probes)
+        qualification_persisted_as_trust=False,current_native_probes=native_probes,
+        affine_nuisance_binding=provided.nuisance_binding if selected is not None else None)
     return receipt,qualification

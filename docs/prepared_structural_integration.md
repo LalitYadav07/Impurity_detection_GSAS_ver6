@@ -200,7 +200,7 @@ console dataset. A later tool invocation obtains creating-job metadata through
 the Galaxy template, separately from its uploaded scientific request. A JSON
 field claiming native verification cannot establish this provenance.
 
-For an exact current structural context, an original receipt from the reviewed
+For a compatible current structural context, an original receipt from the reviewed
 Model Campaign wrapper permits reuse of the complete prepared bank after three
 fresh native profile probes. The reader still checks every declared start,
 chemical feasibility, array shape, grid, checksum and physical context. Every
@@ -208,10 +208,31 @@ subsequent fit and exported GPX retains its independent native acceptance
 checks. The probes check the current reader/context; the producer evidence
 binds the complete bank, including the curves not selected as probes.
 
+For a single nuclear phase with zero extinction and an unmasked PNC/PNT grid,
+the bank also retains its native reference background and an identity with
+only intensity normalization and existing polynomial background coefficients
+removed. A later nuclear fit can change histogram scale, the single-phase HAP
+scale or those background values. The reader then uses the exact affine
+relation `(prepared_curve - reference_background) * scale_ratio + current_background`.
+The scale ratio includes both native intensity-scale factors. The current
+background is evaluated by GSAS-II; it is not fitted to the prepared curves.
+Native scale floors, a conservative foreground roundoff bound and the complete
+remaining dependency identity guard this operation. This does not change any
+fit freedom or copy experimental observations into preparation. Recorded
+proposal steps remain heuristics from the preparation reference.
+
+The background definition/order, cell, displacement basis, occupancies, ADPs,
+instrument/profile values, grid, masks and chemistry remain dependencies.
+Secondary phases, nonlinear extinction, exclusions and unsupported background
+terms retain complete native reconstruction. This is one automatic policy,
+not a user-selectable approximate solver. The qualification receipt records
+any affine nuisance binding and its numerical error bound. Origin checks and
+fresh native probes apply after rebinding too.
+
 If the receipt is absent, changed, inaccessible, produced by an unreviewed tool,
 or incompatible with the current scientific implementation, the normal native
 reconstruction remains in force. A changed physical context also rebuilds.
-Receipts do not make another cell, profile, grid or nuisance baseline compatible.
+Receipts do not make another cell, profile, grid or unsupported baseline compatible.
 Reuse/reconstruction state and native-probe errors are recorded in
 `starting-curve-contract.json` and the resulting structural service receipt.
 

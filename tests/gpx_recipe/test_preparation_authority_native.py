@@ -41,6 +41,14 @@ row=library.document['entries'][0];model=row['model'];settings=model['settings']
 began=time.monotonic()
 reference=create_reference(library.root/library.document['specification']['source'],
     library.root/model['instrument'],work/'reference',**model['grid'])
+changed_nuisance=len(sys.argv)>4 and sys.argv[4]=='changed'
+if changed_nuisance:
+    from GSASII import GSASIIscriptable as G
+    project=G.G2Project(gpxfile=str(reference['path']));hist=project.histograms()[0]
+    hist.data['Sample Parameters']['Scale'][0]*=1.7
+    project.phase(0).data['Histograms'][hist.name]['Scale'][0]*=.73
+    hist.data['Background'][0][3:]=[-2.]+[.1]*(len(hist.data['Background'][0])-4)
+    project.save()
 prepare(reference['path'],library.root/model['child'],settings['candidate']['transformation_matrix'],
     settings['candidate']['origin_shift'],work/'prepared')
 source=make_source(work/'prepared',work/'evaluation',SearchSettings(mode_radius=settings['mode_radius'],cell_radius=settings['cell_radius']))
@@ -56,7 +64,9 @@ with server_scope(None if sys.argv[3]=='none' else sys.argv[3],work):
 bank=OfflineNativeStartBank(source,work/'starts.npz')
 if sys.argv[3]!='none':
     assert report['status']=='reused_certified_native_bank',report
-    assert len(calls)==3, len(calls)
+    assert report['native_curves_recomputed']==3
+    assert len(calls)==(5 if changed_nuisance else 3),len(calls)
+    assert bool(report['affine_nuisance_binding'])==changed_nuisance
 else:
     assert report['status']=='native_requalified',report
     schedule=receipt['construction_execution']
@@ -72,8 +82,8 @@ np.savez_compressed(work/'checked.npz',points=bank.points,curves=bank.curves,ste
 '''
 
 
-@pytest.mark.parametrize('kind',['PNC','PNT'])
-def test_cold_portable_structural_bank_reuses_native_receipt_without_producer_files(tmp_path,kind):
+@pytest.mark.parametrize('kind,changed_nuisance',[('PNC',False),('PNT',False),('PNT',True)])
+def test_cold_portable_structural_bank_reuses_native_receipt_without_producer_files(tmp_path,kind,changed_nuisance):
     source,_=native_source(tmp_path/'public-inputs',kind)
     cif=tmp_path/'parent.cif';G.G2Project(gpxfile=str(source)).phase(0).export_CIF(str(cif))
     child=Path(__file__).with_name('data')/'synthetic-ersi-cmcm-isodistort.cif'
@@ -127,7 +137,8 @@ def test_cold_portable_structural_bank_reuses_native_receipt_without_producer_fi
     for label,origin in (('certified',str(envelope)),('unverified','none')):
         output=tmp_path/label
         with (tmp_path/(label+'.log')).open('w') as stream:
-            subprocess.run([sys.executable,str(consumer),str(restored.root),str(output),origin],
+            subprocess.run([sys.executable,str(consumer),str(restored.root),str(output),origin,
+                'changed' if changed_nuisance else 'same'],
                 check=True,timeout=240,stdout=stream,stderr=subprocess.STDOUT)
         results[label]=json.loads((output/'result.json').read_text())
     assert results['certified']['mode_dimensions']==2 and results['certified']['cell_dimensions']==3
@@ -135,6 +146,8 @@ def test_cold_portable_structural_bank_reuses_native_receipt_without_producer_fi
     with np.load(tmp_path/'certified/checked.npz') as a,np.load(tmp_path/'unverified/checked.npz') as b:
         np.testing.assert_array_equal(a['points'],b['points'])
         np.testing.assert_allclose(a['curves'],b['curves'],rtol=1e-11,atol=1e-11)
-        np.testing.assert_array_equal(a['steps'],b['steps'])
+        if not changed_nuisance:np.testing.assert_array_equal(a['steps'],b['steps'])
+        else:assert np.isfinite(a['steps']).all() and np.all(a['steps']>0)
     write_json(tmp_path/'cold-reuse-measurement.json',dict(preparation_seconds=preparation_seconds,results=results,
-        scope='Public artificial '+kind+' child; real native wrapper and independent cold processes; Galaxy origin metadata simulated; exact context only'))
+        scope='Public artificial '+kind+' child; real native wrapper and independent cold processes; Galaxy origin metadata simulated; '+
+            ('changed nuclear scale/background at fixed geometry' if changed_nuisance else 'exact context')))

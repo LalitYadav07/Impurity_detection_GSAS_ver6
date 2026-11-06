@@ -100,11 +100,16 @@ def build(source,path,policy='multiscale_v1',*,reuse_fixed_cell_profiles=False):
     proposal.update(seconds=time.perf_counter()-began,derivative_qualified=False,observations_used=False,
         weighting='inverse square root of parent profile magnitude with 1e-4 peak floor; proposal heuristic only',anchor='parent geometry')
     if context(source)!=identity:raise ValueError('Fixed native context changed while preparing starting curves')
+    from ...preparation.structural_nuisance import reference
+    normalization=reference(source)
+    if context(source)!=identity:raise ValueError('Fixed native context changed during background factorization')
+    extra={} if normalization is None else {'reference_background':normalization[1]}
     path.parent.mkdir(parents=True,exist_ok=True)
-    np.savez_compressed(path,points=points[selected],curves=np.asarray(curves),original_indices=np.asarray(selected),feasible=np.asarray(feasible),x=source.fast.x,proposal_cell_steps=steps)
+    np.savez_compressed(path,points=points[selected],curves=np.asarray(curves),original_indices=np.asarray(selected),feasible=np.asarray(feasible),x=source.fast.x,proposal_cell_steps=steps,**extra)
     receipt=dict(context=identity,policy=policy,sha256=sha(path),seconds=time.perf_counter()-start,proposed_points=len(points),native_curves=len(curves),
         chemically_infeasible_points=int(np.count_nonzero(~np.asarray(feasible))),bytes=path.stat().st_size,proposal_step_selection=proposal,
         interpolation=False,shared_across_candidates=False,scope='Optimizer starts and optional proposal step sizes; all allowed continuous parameters remain free')
+    if normalization is not None:receipt['affine_nuisance']=normalization[0]
     path.with_suffix('.json').write_text(json.dumps(receipt,indent=2)+'\n')
     _remember_native(source,path)
     return receipt
@@ -129,14 +134,26 @@ class OfflineNativeStartBank:
     def __init__(self,source,path,*,receipt_path=None):
         path=Path(path)
         receipt=read_bank_receipt(path,receipt_path)
-        if receipt.get('context')!=context(source) or receipt.get('sha256')!=sha(path):
+        if 'affine_nuisance' in receipt:
+            from ...preparation.structural_nuisance import validate_context
+            validate_context(receipt['affine_nuisance'])
+        actual_context=context(source);same_context=receipt.get('context')==actual_context
+        stored_context=receipt.get('context',{})
+        # All non-physics dependencies (bounds, grid, native/package identity,
+        # coordinate lift and chemistry) remain exact even for affine reuse.
+        same_dependencies=({k:v for k,v in stored_context.items() if k!='physics_sha256'}==
+            {k:v for k,v in actual_context.items() if k!='physics_sha256'})
+        if (not same_context and (not same_dependencies or 'affine_nuisance' not in receipt)) or receipt.get('sha256')!=sha(path):
             raise ValueError('Native start-bank context or checksum changed; rebuild before using it')
         try:
             with np.load(path,allow_pickle=False) as stored:
-                if set(stored.files)!={'points','curves','original_indices','feasible','x','proposal_cell_steps'}:
+                expected_names={'points','curves','original_indices','feasible','x','proposal_cell_steps'}
+                if 'affine_nuisance' in receipt:expected_names.add('reference_background')
+                if set(stored.files)!=expected_names:
                     raise ValueError('Invalid native start-bank array inventory')
                 self.points=stored['points'].copy();self.curves=stored['curves'].copy();original=stored['original_indices'];feasible=stored['feasible'];x=stored['x']
                 self.proposal_cell_steps=stored['proposal_cell_steps'].copy()
+                reference_background=stored['reference_background'].copy() if 'affine_nuisance' in receipt else None
         except (zipfile.BadZipFile,zlib.error,NotImplementedError) as exc:
             raise ValueError('Malformed or unsupported native start-bank array payload') from exc
         expected=policy_points(source,receipt['policy'])
@@ -151,6 +168,19 @@ class OfflineNativeStartBank:
         if actual.shape!=feasible.shape or not np.array_equal(actual,feasible):
             raise ValueError('Native start-bank feasibility differs from the current complete domain')
         if self.proposal_cell_steps.shape!=source.radii.shape or not np.isfinite(self.proposal_cell_steps).all() or np.any(self.proposal_cell_steps<=0):raise ValueError('Invalid prepared proposal steps')
+        self.nuisance_binding=None
+        if reference_background is not None:
+            if reference_background.shape!=x.shape or not np.isfinite(reference_background).all():
+                raise ValueError('Invalid prepared native background shape')
+            from ...preparation.structural_nuisance import affine_context,reference,rebind
+            affine=affine_context(source)
+            if affine is None or receipt['affine_nuisance'].get('shape_sha256')!=affine['shape_sha256']:
+                raise ValueError('Native start-bank structural shape context changed; rebuild before using it')
+            if not same_context:
+                current=reference(source)
+                self.nuisance_binding=rebind(self.curves,reference_background,receipt['affine_nuisance'],current[0],current[1])
+            elif receipt['affine_nuisance']!=affine:
+                raise ValueError('Native start-bank scale metadata differs from its exact context')
         self.proposal_cell_steps.flags.writeable=False
         self.points.flags.writeable=False;self.curves.flags.writeable=False;self.receipt=receipt
 
