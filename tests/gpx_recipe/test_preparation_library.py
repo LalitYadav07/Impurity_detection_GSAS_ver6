@@ -165,3 +165,18 @@ def test_targeted_dependency_checks_reject_changed_inputs(tmp_path):
     (lib.root/'inputs/parent.cif').write_text('changed after initial validation')
     with pytest.raises(ValueError, match='artifact changed'):
         lib.verify_assets(['inputs/parent.cif'])
+
+
+def test_prepared_entry_consumption_rechecks_its_captured_parent(tmp_path):
+    lib = library(tmp_path);identifier = lib.document['entries'][0]['id']
+    prepare_one(lib, identifier)
+    (lib.root/'inputs/parent.cif').write_text('changed after compilation')
+    with pytest.raises(ValueError, match='artifact changed'):
+        lib.prepared_assets(identifier)
+
+
+def test_state_refresh_checks_manifest_size_before_parsing(tmp_path):
+    lib = library(tmp_path)
+    lib.path.write_text(' '*(8*1024*1024)+'{}')
+    with pytest.raises(ValueError, match='oversized'):
+        lib.refresh()

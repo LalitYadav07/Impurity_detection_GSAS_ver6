@@ -152,10 +152,16 @@ class PreparationLibrary:
 
     def verify(self):
         validate_manifest(self.document)
-        if digest(json.loads(self.path.read_text())) != digest(self.document):
+        if digest(self._read_document()) != digest(self.document):
             raise ValueError('Preparation state changed; refresh its durable manifest')
         self._verify_artifacts()
         return True
+
+    def _read_document(self):
+        if (self.path.is_symlink() or not self.path.is_file()
+                or self.path.stat().st_size > 8*1024*1024):
+            raise ValueError('Preparation library manifest is absent or oversized')
+        return validate_manifest(json.loads(self.path.read_text()))
 
     def refresh(self):
         """Read durable state; state inspection does not consume scientific arrays.
@@ -165,7 +171,7 @@ class PreparationLibrary:
         through ``verify_assets``. State-only transitions must not repeatedly
         hash and decompress every unrelated completed model.
         """
-        self.document = validate_manifest(json.loads(self.path.read_text()))
+        self.document = self._read_document()
         return self.document
 
     def _assets(self):
@@ -213,7 +219,14 @@ class PreparationLibrary:
         row = self.row(identifier)
         if row['state'] != 'prepared':
             raise ValueError('This preparation entry has no completed scientific artifacts')
-        return self.verify_assets([a['path'] for a in row['files']])
+        outputs = [a['path'] for a in row['files']]
+        dependencies = [self.document['specification'].get('source')]
+        dependencies += [row['model'].get(k) for k in ('instrument', 'child')]
+        dependencies = [p for p in dependencies if p is not None]
+        if not dependencies:
+            dependencies = [a['path'] for a in self.document['inputs']]
+        verified = self.verify_assets(list(dict.fromkeys(dependencies+outputs)))
+        return {name: verified[name] for name in outputs}
 
     @contextmanager
     def _transaction(self):
@@ -350,9 +363,14 @@ def import_library(archive, destination):
                 target.parent.mkdir(parents=True, exist_ok=True)
                 with packet.open(name) as source, target.open('xb') as output:
                     shutil.copyfileobj(source, output, 1024*1024)
-        PreparationLibrary(temporary)
+        checked = PreparationLibrary(temporary)
         temporary.replace(destination)
-        return PreparationLibrary(destination)
+        # Atomic directory relocation changes no scientific bytes. Reuse the
+        # completed full inventory check instead of hashing/decompressing the
+        # entire imported library a second time at its new local pathname.
+        checked.root = destination.resolve()
+        checked.path = checked.root/'library.json'
+        return checked
     finally:
         if temporary.exists():
             shutil.rmtree(temporary)
