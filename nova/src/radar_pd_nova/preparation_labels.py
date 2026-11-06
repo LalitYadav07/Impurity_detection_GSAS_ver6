@@ -37,7 +37,42 @@ def scope_labels(library):
     return labels
 
 
-def entry_label(model, labels):
+def native_dimensions(library, entry):
+    """Read display counts from the exact completed entry, not discovery hints.
+
+    Inventory integrity does not authorize reuse of imported numerical assets.
+    The consumer still qualifies those against its current native context.
+    """
+    if entry.get('state') != 'prepared' or entry['model']['kind'] != 'structural':
+        return None
+    names = [row['path'] for row in entry.get('files', [])
+             if row['path'].endswith('/entry.json')]
+    if not names:
+        return None
+    if len(names) != 1:
+        raise ValueError('Prepared model has ambiguous dimension metadata')
+    path = confined(library.root, names[0])
+    if path.stat().st_size > 8 * 1024 * 1024:
+        raise ValueError('Prepared dimension metadata exceeds its display budget')
+    path = library.verify_assets(names)[names[0]]
+    document = json.loads(path.read_text())
+    model = entry['model']
+    if (not isinstance(document, dict)
+            or document.get('schema') != 'radar-experiment-preparation-entry/v1'
+            or document.get('kind') != 'structural'
+            or document.get('settings') != model.get('settings')
+            or document.get('grid') != model.get('grid')):
+        raise ValueError('Prepared dimension metadata differs from this model')
+    detail = document.get('detail')
+    if not isinstance(detail, dict):
+        return None
+    counts = tuple(detail.get(k) for k in ('mode_dimensions', 'cell_dimensions'))
+    if any(type(value) is not int or value < 0 for value in counts):
+        return None
+    return counts
+
+
+def entry_label(model, labels, *, dimensions=None):
     settings=model.get('settings',{});candidate=settings.get('candidate',{})
     identifier=candidate.get('id','');kind=model['kind']
     label=candidate.get('magnetic_space_group') or candidate.get('irrep') or identifier or 'Parent and profile'
@@ -49,6 +84,15 @@ def entry_label(model, labels):
         if kind=='structural':
             group=_method1_catalog_group(choices[0]['label'])
             if group:label=group['catalog_child_space_group_symbol']+' · '+label
+    coordinates = ''
+    if kind == 'structural':
+        modes = candidate.get('modes')
+        if dimensions is not None:
+            coordinates = f'{dimensions[0]} native displacement coordinates · {dimensions[1]} lattice coordinates'
+        elif isinstance(modes, list) and modes:
+            coordinates = f'{len(modes)} displacement modes in discovery; native count pending'
+        else:
+            coordinates = 'Native coordinate count unavailable'
     return dict(model=label,k=', '.join(vector),candidate=identifier,
-        coordinates=(str(len(candidate.get('modes',[])))+' native displacement coordinates') if kind=='structural' else '',
+        coordinates=coordinates,
         basis=str(candidate.get('transformation_matrix',[])),origin=str(candidate.get('origin_shift',[])))

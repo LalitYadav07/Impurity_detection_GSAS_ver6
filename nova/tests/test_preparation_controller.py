@@ -57,6 +57,30 @@ def test_read_only_selection_caption_does_not_initialize_any_preparation_service
     assert app._preparation_workspace is None
 
 
+def test_table_checks_only_visible_metadata_and_clears_unreadable_or_deselected_rows(app,monkeypatch):
+    application,store,_,_=app;s=application.server.state
+    from radar_pd_nova import preparation_labels
+    entries=[dict(id=str(i),state='prepared',reason='',files=[],model=dict(kind='structural',
+        bank='bank',settings=dict(candidate=dict(id='model-'+str(i),modes=[])))) for i in range(100)]
+    counts=dict(prepared=100,preparing=0,pending=0,failed=0,cancelled=0,unsupported=0)
+    library=SimpleNamespace(document=dict(entries=entries,specification={}),coverage=lambda:dict(counts=counts,total=100))
+    monkeypatch.setattr(store.registry,'get',lambda key:library)
+    checked=[]
+    def dimensions(library,entry):checked.append(entry['id']);return (2,3)
+    monkeypatch.setattr(preparation_labels,'native_dimensions',dimensions)
+    s.prep_library='library';application._preparation_table_changed()
+    assert checked==list(map(str,range(25))) and s.prep_table_count==100
+    assert all(r['coordinates']=='2 native displacement coordinates · 3 lattice coordinates' for r in s.prep_entries)
+    checked.clear();s.prep_page=2;application._preparation_table_changed()
+    assert checked==list(map(str,range(25,50)))
+    def missing(*args):raise FileNotFoundError('Prepared metadata is unavailable')
+    monkeypatch.setattr(preparation_labels,'native_dimensions',missing)
+    application._preparation_table_changed()
+    assert not s.prep_entries and s.prep_table_count==0 and 'unavailable' in s.prep_error
+    s.prep_library='';s.prep_entries=[dict(id='stale')];application._preparation_table_changed()
+    assert not s.prep_entries and not s.prep_coverage
+
+
 def test_unregistered_parent_path_is_rejected_before_any_server_file_read(app,tmp_path,monkeypatch):
     app,_,_,service=app;path=tmp_path/'private.cif';path.write_text('must not be read')
     app._prep_parent_upload=SimpleNamespace(current_path=None);app.server.state.prep_parent_path=str(path)

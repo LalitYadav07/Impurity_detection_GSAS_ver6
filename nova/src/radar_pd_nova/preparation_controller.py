@@ -407,7 +407,10 @@ class PreparationMixin:
     def _preparation_table_changed(self,**_):
         s=self.server.state
         s.prep_can_pause=False;s.prep_can_resume=False
-        if not s.prep_library:return
+        if not s.prep_library:
+            s.prep_entries=[];s.prep_table_count=0;s.prep_pages=1
+            s.prep_coverage='';s.prep_library_kind=''
+            return
         try:
             store=self._preparation_store()
             library=store.registry.get(s.prep_library);coverage=library.coverage();counts=coverage['counts']
@@ -419,7 +422,7 @@ class PreparationMixin:
             kinds={r['model']['kind'] for r in library.document['entries']}
             s.prep_library_kind='Input inspection' if kinds=={'reference'} else 'Model preparation'
             s.prep_coverage=f"{counts['prepared']} prepared · {counts['preparing']} in preparation · {counts['pending']} pending · {counts['failed']+counts['cancelled']+counts['unsupported']} need attention · {coverage['total']} total"
-            from .preparation_labels import scope_labels,entry_label
+            from .preparation_labels import scope_labels,entry_label,native_dimensions
             labels=scope_labels(library)
             text=str(s.prep_entry_search).strip().lower()[:200];rows=[]
             for row in library.document['entries']:
@@ -431,8 +434,17 @@ class PreparationMixin:
             s.prep_table_count=len(rows);s.prep_pages=max(1,math.ceil(len(rows)/25))
             page=min(max(1,finite_number(s.prep_page,integer=True)),s.prep_pages)
             if page!=s.prep_page:s.prep_page=page
-            s.prep_entries=rows[(page-1)*25:page*25]
-        except ValueError as exc:s.prep_error=str(exc)
+            visible=rows[(page-1)*25:page*25]
+            entries={row['id']:row for row in library.document['entries']}
+            # Verify only the displayed page's small metadata, never every
+            # model's numerical payload on each progress refresh.
+            for row in visible:
+                entry=entries[row['id']]
+                row.update(entry_label(entry['model'],labels,dimensions=native_dimensions(library,entry)))
+            s.prep_entries=visible
+        except (OSError,ValueError) as exc:
+            s.prep_entries=[];s.prep_table_count=0;s.prep_pages=1
+            s.prep_error=str(exc)
 
     def pause_preparation(self,**_):
         async def pause():
