@@ -1,0 +1,67 @@
+# Prepared magnetic response reuse
+
+Model Campaign and Live Snapshot use the same native magnetic response
+compiler. A selected preparation can supply both reflection-level scattering
+factors and a fully rendered, unweighted magnetic quadratic response. Neither
+artifact contains observations, variances, likelihoods or fitted results.
+
+The rendered response avoids reconstructing every moment cross term and
+repeating native peak-profile capture at a matching physical context. The
+consumer still calculates its current baseline, binds its own observations,
+weights, exclusions and normalization, and performs its existing independent
+native forward, derivative and fitted-state checks. Model starts and scientific
+candidate coverage are unchanged.
+
+## Compatibility
+
+The response key pins the native sources, functions and binaries, exact grid
+and fit range, physical parameters, phase/site roles, complete moment map and
+reflection inventory. Changing a cell, coordinate, ADP, instrument coefficient
+or reduction grid invalidates the rendered response. Compatible scattering
+factors can still be used while the affected response is rendered again.
+
+Common histogram scale is applied to the unit-scale response by the consumer.
+Observed values, weights, exclusions, ordinary background coefficients and
+refinement cycle count do not enter the response key. They remain fresh inputs
+to the calculation that owns them. The correction-wrapper active flag is
+ignored only for the pinned installed build where that wrapper replaces no
+functions; actual function/source/binary identities remain required.
+
+## Portable provenance
+
+An intact ZIP, checksum or uploaded qualification claim is insufficient. The
+installed native producer publishes a certificate tied to its exact response
+bytes and physical scope. The launcher verifies that certificate against the
+creating Galaxy job before a numerical child receives an ephemeral origin
+reference. A missing, inaccessible or incompatible origin uses the original
+checked native compilation path.
+
+The reader hashes the exact bounded bytes that it decodes. A file replacement
+cannot substitute a different response between checksum verification and
+loading. Invalid optional response files retain compatible factors and the
+complete scientific search. Independent coefficient-qualification calls
+explicitly bypass rendered-response reuse, so they cannot verify a response
+against itself.
+
+## Transport and receipts
+
+One dependency-closure helper enumerates factors and responses for Model and
+Live packets. The existing bounded packet budget still applies. Older
+factor-only entries remain usable. Omitted or unavailable optional assets do
+not remove scientific candidates.
+
+Native compiler receipts record `prepared_rendered_response_reused`, the
+exact rendered identity and component hashes, originating certificate, native
+construction call counts and fallback notes. Preparation attachments separately
+record how many rendered responses actually reached the worker. A transferred
+file alone is not reported as reused computation.
+
+## Acceptance
+
+The mandatory native publication gate includes complete Model/Live handoffs
+and fresh-process portable controls for PNC/PNT profiles, three- and
+nine-dimensional moment bases, changed scale, masks, grid, cell, ADPs, profile
+widths, unverified origins and damaged files. Saved GPXs and actual fitted
+native residuals remain checked. Synthetic controls establish numerical and
+integration behavior; real-material identification, uncertainty calibration,
+whole-catalog throughput and NDIP latency require their own acceptance.
