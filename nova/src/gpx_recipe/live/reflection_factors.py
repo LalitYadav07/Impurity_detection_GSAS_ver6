@@ -9,6 +9,7 @@ from collections import OrderedDict
 from dataclasses import dataclass
 import hashlib
 import inspect
+import io
 import json
 from pathlib import Path
 import re
@@ -71,8 +72,12 @@ class AmplitudeBlock:
     identity: str
     factors: np.ndarray
     proof: dict
+    source_sha256: str | None = None
 
     def __post_init__(self):
+        if self.source_sha256 is not None and (not isinstance(self.source_sha256,str)
+                or not re.fullmatch('[a-f0-9]{64}',self.source_sha256)):
+            raise ValueError('Imported amplitude bytes need an exact checksum')
         a = np.asarray(self.factors)
         if (not isinstance(self.identity, str) or not re.fullmatch('[a-f0-9]{64}', self.identity)
                 or a.ndim != 3 or a.shape[1] != 6 or not 1 <= a.shape[2] <= 24
@@ -100,9 +105,10 @@ class AmplitudeBlock:
 class ScatteringFactorCache:
     """One worker's LRU; imported files never carry native qualification.
 
-    Only the native compiler admits freshly checked blocks. A checksum guards
-    integrity, not provenance: a loaded block must be checked against the
-    current native function before becoming a qualified resident entry.
+    Only the native compiler admits checked blocks. A checksum guards integrity,
+    not provenance: a loaded block needs complete current native checks, or an
+    authenticated originating complete check plus current-context native probes,
+    before becoming a qualified resident entry.
     """
     def __init__(self, directory=None, *, maximum_bytes=MAX_BYTES):
         if type(maximum_bytes) is not int or not 1 <= maximum_bytes <= MAX_BYTES:
@@ -144,9 +150,13 @@ class ScatteringFactorCache:
             path = self._sources.get(identity)
         if path is None:
             return None, False
-        from .array_limits import validate_npz
-        validate_npz(path, maximum_bytes=MAX_BYTES+262144)
-        with np.load(path, allow_pickle=False) as data:
+        from .array_limits import validate_npz_bytes
+        # The origin must bind the same immutable bytes actually decoded,
+        # including if a producer atomically replaces its path meanwhile.
+        with path.open('rb') as stream:raw=stream.read(MAX_BYTES+262145)
+        validate_npz_bytes(raw, maximum_bytes=MAX_BYTES+262144)
+        source_sha256=hashlib.sha256(raw).hexdigest()
+        with np.load(io.BytesIO(raw), allow_pickle=False) as data:
             if set(data.files) != {'manifest', 'factors'}:
                 raise ValueError('Unexpected scattering-factor file inventory')
             entry = data['manifest']
@@ -158,7 +168,7 @@ class ScatteringFactorCache:
                     or manifest['observations_included'] is not False
                     or digest_array(data['factors']) != manifest['sha256']):
                 raise ValueError('Scattering-factor identity or checksum differs')
-            block = AmplitudeBlock(identity, data['factors'], manifest['proof'])
+            block = AmplitudeBlock(identity, data['factors'], manifest['proof'],source_sha256)
         return block, False
 
     def _admit_native(self, identity, factors, proof):

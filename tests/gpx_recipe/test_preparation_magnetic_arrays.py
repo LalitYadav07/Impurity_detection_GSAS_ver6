@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from gpx_recipe.preparation.magnetic import MagneticResponse, load
-from gpx_recipe.live.array_limits import validate_npz
+from gpx_recipe.live.array_limits import validate_npz,validate_npz_bytes
 
 
 def response():
@@ -109,3 +109,23 @@ def test_archive_headers_cannot_claim_unbounded_allocation(tmp_path):
 def test_array_budget_cannot_be_increased_by_a_caller(tmp_path):
     with pytest.raises(ValueError, match='only tighten'):
         validate_npz(tmp_path/'absent.npz', maximum_bytes=1024**3)
+
+
+@pytest.mark.parametrize('variant',['valid','object','expanded','observation_inventory'])
+def test_immutable_byte_validation_retains_file_validator_limits(tmp_path,variant):
+    path=tmp_path/'input.npz'
+    values=np.array([object()]) if variant=='object' else np.zeros(1000)
+    np.savez_compressed(path,values=values)
+    options=dict(maximum_bytes=4096) if variant=='expanded' else dict(observation=variant=='observation_inventory')
+    if variant=='valid':
+        assert validate_npz(path,**options) and validate_npz_bytes(path.read_bytes(),**options)
+    else:
+        for call,value in ((validate_npz,path),(validate_npz_bytes,path.read_bytes())):
+            with pytest.raises(ValueError):call(value,**options)
+
+
+def test_immutable_validator_rejects_mutable_input_and_oversized_source():
+    with pytest.raises(TypeError,match='Immutable'):
+        validate_npz_bytes(bytearray(b'not immutable'))
+    with pytest.raises(ValueError,match='byte budget'):
+        validate_npz_bytes(b'x'*1001,maximum_bytes=1000)

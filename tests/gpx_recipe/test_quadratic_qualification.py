@@ -3,6 +3,7 @@ import numpy as np
 import pytest
 
 from gpx_recipe.live.quadratic_qualification import check_coefficients,check_factor_coefficients,compare_coefficients
+from gpx_recipe.live.quadratic_qualification import check_certified_factor_context
 
 
 @pytest.mark.parametrize('dimension',[1,3,7,24])
@@ -64,3 +65,43 @@ def test_native_rebuilt_tensor_comparison_checks_all_entries():
     assert compare_coefficients(q,q)['maximum_tolerance_ratio']==0.
     with pytest.raises(ValueError,match='independently rebuilt'):
         compare_coefficients(bad,q)
+
+
+@pytest.mark.parametrize('dimension',[1,3,7,24])
+def test_authenticated_complete_proof_is_reused_with_new_mixed_context_checks(dimension):
+    factors=np.random.default_rng(807+dimension).normal(size=(17,6,dimension))
+    native=lambda p:np.sum((factors@p)**2,axis=1)
+    original=check_factor_coefficients(factors,native);calls=[]
+    def counted(point):calls.append(point.copy());return native(point)
+    result=check_certified_factor_context(factors,counted,original,{'certificate_sha256':'a'*64})
+    assert len(calls)==result['native_structure_factor_calls']==3
+    assert result['all_coefficient_directions_checked']
+    assert result['original_native_validation']==original
+    assert result['complete_check_scope']=='authenticated originating native preparation'
+    assert max(result['current_probe_tolerance_ratios'])<1
+    assert all(np.count_nonzero(p)==dimension for p in calls)
+
+
+@pytest.mark.parametrize('field,value',[
+    ('method','random probes'),('all_coefficient_directions_checked',False),
+    ('dimensions',2),('reflections',16),('symmetric_coefficients',5),
+    ('native_structure_factor_calls',3),('relative_tolerance',1e-6),
+    ('absolute_floor',0.),('maximum_tolerance_ratio',1.1),
+    ('maximum_tolerance_ratio',float('nan')),
+])
+def test_missing_or_partial_originating_native_checks_cannot_be_reused(field,value):
+    factors=np.ones((17,6,3));native=lambda p:np.sum((factors@p)**2,axis=1)
+    original=check_factor_coefficients(factors,native);original[field]=value
+    with pytest.raises(ValueError,match='complete native coefficient proof'):
+        check_certified_factor_context(factors,native,original,{'certificate_sha256':'a'*64})
+
+
+@pytest.mark.parametrize('change',['missing_origin','wrong_native','nonfinite','inventory'])
+def test_fresh_native_context_failures_do_not_inherit_qualification(change):
+    factors=np.random.default_rng(809).normal(size=(17,6,3))
+    native=lambda p:np.sum((factors@p)**2,axis=1)
+    original=check_factor_coefficients(factors,native)
+    forward={'missing_origin':native,'wrong_native':lambda p:native(p)*1.001,
+        'nonfinite':lambda p:np.full(17,np.nan),'inventory':lambda p:native(p)[:-1]}[change]
+    with pytest.raises(ValueError):
+        check_certified_factor_context(factors,forward,original,{} if change=='missing_origin' else {'certificate_sha256':'a'*64})

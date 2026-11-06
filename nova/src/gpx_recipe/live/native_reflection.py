@@ -171,6 +171,7 @@ def compile_reflection_quadratic(*, math, lattice, histogram, phases, histdict,
     factor_identity = None
     cached_block = None
     qualified_resident = False
+    authenticated_origin = None
     cache_note = ''
     if factor_cache is not None:
         from .reflection_factors import ScatteringFactorCache, scattering_identity
@@ -196,7 +197,7 @@ def compile_reflection_quadratic(*, math, lattice, histogram, phases, histdict,
             amplitude_basis[:, :, index] = (amplitudes(point)-amplitudes(-point))/2.
     coefficient_validation = cached_block.proof if qualified_resident else None
     if (verify_coefficients or factor_cache is not None) and not qualified_resident:
-        from .quadratic_qualification import check_factor_coefficients
+        from .quadratic_qualification import check_factor_coefficients,check_certified_factor_context
         def intensities(point):
             nonlocal verification_calls
             check()
@@ -207,7 +208,11 @@ def compile_reflection_quadratic(*, math, lattice, histogram, phases, histdict,
             verification_calls+=1
             return reflection['RefList'][:,9]
         try:
-            coefficient_validation = check_factor_coefficients(amplitude_basis, intensities)
+            if cached_block is not None:
+                from ..preparation.authority import magnetic_factor_origin
+                authenticated_origin=magnetic_factor_origin(cached_block.source_sha256)
+            coefficient_validation = (check_certified_factor_context(amplitude_basis,intensities,cached_block.proof,authenticated_origin)
+                if authenticated_origin is not None else check_factor_coefficients(amplitude_basis,intensities))
         except ValueError as error:
             if cached_block is None:
                 raise ReflectionCompilerUnavailable(str(error)) from error
@@ -215,6 +220,7 @@ def compile_reflection_quadratic(*, math, lattice, histogram, phases, histdict,
             # scientific model. Rebuild amplitudes and repeat the native gate.
             cache_note = 'Imported amplitudes failed native checks: '+str(error)
             cached_block = None
+            authenticated_origin = None
             amplitude_basis = np.empty((count, 6, dimension))
             for index in range(dimension):
                 point = np.eye(dimension)[index]
@@ -249,6 +255,7 @@ def compile_reflection_quadratic(*, math, lattice, histogram, phases, histdict,
         coefficient_validation=coefficient_validation,
         scattering_identity=factor_identity, scattering_factors_reused=cached_block is not None,
         scattering_qualification_reused=qualified_resident, scattering_cache_note=cache_note,
+        scattering_authenticated_origin_reused=authenticated_origin is not None,
         seconds=time.monotonic()-started, observation_values_used=False, native_functions_replaced=False,
         tracing_restored=sys.gettrace() is None, fit_slice=[fit_slice.start, fit_slice.stop])
 

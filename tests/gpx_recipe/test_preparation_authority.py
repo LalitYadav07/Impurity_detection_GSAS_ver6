@@ -9,14 +9,17 @@ from gpx_recipe.preparation import authority, certificates
 from gpx_recipe.symmetry.compiler import file_sha, package_signature
 
 
-def certified(tmp_path, *, batch=False):
+def certified(tmp_path, *, batch=False,kind='structural'):
     root=tmp_path/'worker';output=root/'native'/'prepared';output.mkdir(parents=True)
-    for name in ('starts.npz','starts.json'):(output/name).write_bytes(b'public artificial native output '+name.encode())
-    manifest=dict(schema='radar-experiment-preparation-entry/v1',kind='structural',
+    names=('starts.npz','starts.json') if kind=='structural' else ('response.npz','scattering.npz')
+    for name in names:(output/name).write_bytes(b'public artificial native output '+name.encode())
+    detail=dict(physics_sha256='a'*64)
+    if kind=='magnetic':detail['scattering']=dict(status='prepared',artifact='scattering.npz',identity='b'*64)
+    manifest=dict(schema='radar-experiment-preparation-entry/v1',kind=kind,
         implementation_sha256=package_signature(),observations_included=False,scientific_result=False,
-        detail=dict(physics_sha256='a'*64),artifacts={name:file_sha(output/name) for name in ('starts.npz','starts.json')})
+        detail=detail,artifacts={name:file_sha(output/name) for name in names})
     (output/'entry.json').write_text(json.dumps(manifest))
-    result=dict(schema='radar-experiment-preparation-worker/v1',status='prepared',kind='structural',
+    result=dict(schema='radar-experiment-preparation-worker/v1',status='prepared',kind=kind,
         observations_included=False,scientific_result=False,output=str(output),entry_sha256=file_sha(output/'entry.json'))
     if batch:
         result=dict(schema='radar-preparation-batch-result/v1',entries=[
@@ -35,6 +38,44 @@ def envelope(tmp_path, certificate):
         job_stdout=certificates.MARKER+file_sha(certificate)+'\n')
     path=tmp_path/'server.json';path.write_text(json.dumps(dict(schema=authority.SCHEMA,records=[row])))
     return path,row
+
+
+def test_magnetic_authority_applies_only_to_exact_native_amplitude_bytes(tmp_path):
+    *_,certificate,document=certified(tmp_path,kind='magnetic');path,_=envelope(tmp_path,certificate)
+    entry=document['entries'][0];factor_sha=entry['artifacts']['scattering.npz']
+    assert authority.magnetic_factor_origin(factor_sha) is None
+    with authority.server_scope(path,tmp_path):
+        origin=authority.magnetic_factor_origin(factor_sha)
+        assert origin['certificate_sha256']==file_sha(certificate)
+        assert origin['entry_sha256']==entry['entry_sha256']
+        assert origin['reference_physics_sha256']==entry['physics_sha256']
+        assert authority.magnetic_factor_origin(entry['artifacts']['response.npz']) is None
+        assert authority.magnetic_factor_origin('f'*64) is None
+        assert authority.magnetic_factor_origin(None) is None
+    assert authority.magnetic_factor_origin(factor_sha) is None
+
+
+def test_a_structural_origin_cannot_authorize_magnetic_scattering(tmp_path):
+    *_,certificate,document=certified(tmp_path);path,_=envelope(tmp_path,certificate)
+    with authority.server_scope(path,tmp_path):
+        for sha in document['entries'][0]['artifacts'].values():
+            assert authority.magnetic_factor_origin(sha) is None
+
+
+@pytest.mark.parametrize('mutation',['failed_job','changed_certificate','old_implementation'])
+def test_magnetic_reuse_rejects_missing_or_changed_producer_evidence(tmp_path,mutation):
+    *_,certificate,document=certified(tmp_path,kind='magnetic');path,row=envelope(tmp_path,certificate)
+    factor_sha=document['entries'][0]['artifacts']['scattering.npz']
+    if mutation=='failed_job':
+        row['job_state']='error';path.write_text(json.dumps(dict(schema=authority.SCHEMA,records=[row])))
+    elif mutation=='changed_certificate':certificate.write_text(certificate.read_text()+' ')
+    else:
+        document['implementation_sha256']='f'*64;certificate.write_text(json.dumps(document))
+        row['job_stdout']=certificates.MARKER+file_sha(certificate)
+        path.write_text(json.dumps(dict(schema=authority.SCHEMA,records=[row])))
+    with authority.server_scope(path,tmp_path) as report:
+        assert report['verified_certificates']==0
+        assert authority.magnetic_factor_origin(factor_sha) is None
 
 
 @pytest.mark.parametrize('batch',[False,True])

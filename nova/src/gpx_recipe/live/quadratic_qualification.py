@@ -8,6 +8,49 @@ Independent full-profile checks remain required.
 import numpy as np
 
 
+def check_certified_factor_context(factors,forward,original,origin):
+    """Reuse a complete authenticated proof, with fresh current-context probes.
+
+    These probes are not a new complete coefficient certificate. Authority
+    for all coefficients comes from the exact originating native preparation
+    plus the caller's exact current scattering-identity comparison. Without
+    that provenance the ordinary complete coefficient check remains required.
+    """
+    a=np.asarray(factors,float);dimension=a.shape[-1] if a.ndim==3 else 0
+    if (a.ndim!=3 or not len(a) or not 1<=dimension<=24 or not np.isfinite(a).all()
+            or not isinstance(origin,dict) or not origin
+            or not isinstance(original,dict)
+            or original.get('method')!='complete native reflection-intensity polarization'
+            or original.get('all_coefficient_directions_checked') is not True
+            or original.get('dimensions')!=dimension or original.get('reflections')!=len(a)
+            or original.get('symmetric_coefficients')!=dimension*(dimension+1)//2
+            or original.get('native_structure_factor_calls')!=2*dimension*dimension+1
+            or original.get('relative_tolerance')!=1e-8
+            or type(original.get('absolute_floor')) not in (float,int)
+            or not np.isfinite(original['absolute_floor']) or original['absolute_floor']<=0
+            or type(original.get('maximum_tolerance_ratio')) not in (float,int)
+            or not np.isfinite(original['maximum_tolerance_ratio'])
+            or not 0<=original['maximum_tolerance_ratio']<=1):
+        raise ValueError('An authenticated complete native coefficient proof is required')
+    floor=max(float(np.max(np.sum(a*a,axis=1)))*1e-12,np.finfo(float).tiny)
+    ratios=[]
+    for point in np.random.default_rng(629173).normal(size=(3,dimension)):
+        expected=np.sum((a@point)**2,axis=1)
+        actual=np.asarray(forward(point),float)
+        if actual.shape!=expected.shape or not np.isfinite(actual).all():
+            raise ValueError('Certified amplitude native probe changed its reflection inventory')
+        ratio=float(np.max(abs(actual-expected)/(1e-8*np.maximum(abs(actual),abs(expected))+floor)))
+        if not np.isfinite(ratio) or ratio>1:
+            raise ValueError('Certified amplitudes disagree with current native intensities')
+        ratios.append(ratio)
+    return dict(method='authenticated complete coefficients with current-context native probes',
+        dimensions=dimension,reflections=len(a),symmetric_coefficients=dimension*(dimension+1)//2,
+        all_coefficient_directions_checked=True,complete_check_scope='authenticated originating native preparation',
+        original_native_validation=original,native_origin=origin,current_probe_tolerance_ratios=ratios,
+        native_structure_factor_calls=3,native_jacobian_calls=0,
+        scope='Exact current scattering identity and amplitude bytes; independent full-profile and fitted-state checks remain required')
+
+
 def compare_coefficients(quadratic,reference,*,relative_tolerance=1e-8,absolute_fraction=1e-12):
     """Compare complete independently obtained coefficient arrays."""
     q=np.asarray(quadratic,float);other=np.asarray(reference,float)

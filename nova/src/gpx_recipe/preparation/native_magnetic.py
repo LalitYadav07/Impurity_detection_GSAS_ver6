@@ -168,7 +168,8 @@ def qualify_response(response, native, *, factor_cache=None):
                 prepared_tensor_comparison=comparison,profile_capture=checked['diagnostics']['profile_capture'],
                 scattering_identity=checked['diagnostics']['scattering_identity'],
                 scattering_factors_reused=checked['diagnostics']['scattering_factors_reused'],
-                scattering_qualification_reused=checked['diagnostics']['scattering_qualification_reused'])
+                scattering_qualification_reused=checked['diagnostics']['scattering_qualification_reused'],
+                scattering_authenticated_origin_reused=checked['diagnostics'].get('scattering_authenticated_origin_reused',False))
         response._seal_native()
         return dict(independent_total_errors=errors, independent_magnetic_errors=signal_errors,
             coefficient_validation=coefficients)
@@ -303,6 +304,7 @@ def adapt_response(prepared, native, *, factor_cache=None):
         previous_physics_sha256=prepared.physics_sha256, physics_sha256=response.physics_sha256,
         scattering_factors_reused=reuse.get('scattering_factors_reused', False),
         scattering_qualification_reused=reuse.get('scattering_qualification_reused', False),
+        scattering_authenticated_origin_reused=reuse.get('scattering_authenticated_origin_reused',False),
         native_peak_profiles_rendered=True, observations_included=False, scientific_result=False,
         seconds=time.monotonic()-began)
 

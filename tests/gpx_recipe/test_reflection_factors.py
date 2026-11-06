@@ -1,5 +1,7 @@
 """Data-only factor integrity, qualification ownership and memory limits."""
 import json
+import hashlib
+import io
 
 import numpy as np
 import pytest
@@ -128,3 +130,28 @@ def test_invalid_portable_blocks_are_rejected_before_native_use(tmp_path, mutati
 def test_unsupported_factor_shapes_and_dtypes_are_not_accepted(factors):
     with pytest.raises(ValueError):
         AmplitudeBlock('a'*64, factors, {})
+
+
+@pytest.mark.parametrize('checksum',[False,7,{},'wrong','A'*64])
+def test_imported_factor_checksum_is_a_complete_lowercase_sha256(checksum):
+    with pytest.raises(ValueError,match='exact checksum'):
+        AmplitudeBlock('a'*64,np.ones((2,6,3)),{},checksum)
+
+
+def test_factor_origin_binds_decoded_bytes_even_if_the_file_is_replaced(tmp_path,monkeypatch):
+    from gpx_recipe.live import reflection_factors as module
+    cache=ScatteringFactorCache(tmp_path);original=np.arange(36.).reshape(2,6,3)
+    cache._admit_native('a'*64,original,proof(original))
+    path=tmp_path/('a'*64+'.npz');before=path.read_bytes()
+    cache._admit_native('a'*64,original+100,proof(original));replacement=path.read_bytes()
+    path.write_bytes(before);native_load=np.load
+    def replace_then_decode(source,**kwargs):
+        assert isinstance(source,io.BytesIO)
+        path.write_bytes(replacement)
+        return native_load(source,**kwargs)
+    monkeypatch.setattr(module.np,'load',replace_then_decode)
+    loaded,qualified=ScatteringFactorCache(tmp_path).lookup('a'*64)
+    assert not qualified and path.read_bytes()==replacement
+    np.testing.assert_array_equal(loaded.factors,original)
+    assert loaded.source_sha256==hashlib.sha256(before).hexdigest()
+    assert loaded.source_sha256!=hashlib.sha256(replacement).hexdigest()

@@ -132,3 +132,24 @@ def structural_bank_origin(bank_sha256,receipt_sha256,physics_sha256):
                 return dict(certificate_sha256=record['sha256'],entry_sha256=entry['entry_sha256'],
                     origin='Galaxy native preparation with current-context native probes')
     return None
+
+
+def magnetic_factor_origin(factor_sha256):
+    """Authorize only exact native amplitude-file bytes, never a fitted score.
+
+    The reader separately matches the file's scattering identity to the full
+    current geometry, symmetry, moment basis and native dependencies. The
+    certificate cannot authorize another bank's binned response or likelihood.
+    """
+    if not checksum(factor_sha256):return None
+    environment=child_environment()
+    if not environment:return None
+    capsule=_inherited(environment)
+    if capsule is None:return None
+    for record in capsule['records']:
+        for entry in record['certificate']['entries']:
+            if entry['kind']=='magnetic' and entry['artifacts'].get('scattering.npz')==factor_sha256:
+                return dict(certificate_sha256=record['sha256'],entry_sha256=entry['entry_sha256'],
+                    reference_physics_sha256=entry['physics_sha256'],
+                    origin='Galaxy native preparation; exact amplitude bytes and current scattering identity')
+    return None

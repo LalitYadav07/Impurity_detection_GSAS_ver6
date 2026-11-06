@@ -93,6 +93,10 @@ jobs:
             /validation/tests/gpx_recipe/test_project_view.py \
             /validation/tests/gpx_recipe/test_native_profiled.py \
             /validation/tests/gpx_recipe/test_profiled_cache_transport.py \
+            /validation/tests/gpx_recipe/test_reflection_factors.py \
+            /validation/tests/gpx_recipe/test_quadratic_qualification.py \
+            /validation/tests/gpx_recipe/test_preparation_authority.py \
+            /validation/tests/gpx_recipe/test_preparation_magnetic_arrays.py \
             /validation/tests/gpx_recipe/test_native_forward.py \
             /validation/tests/gpx_recipe/test_profiled_magnetic.py \
             /validation/tests/gpx_recipe/test_grouped_profile_receipts.py \
@@ -123,8 +127,10 @@ jobs:
             /validation/tests/gpx_recipe/test_preparation_theory_native.py \
             /validation/tests/gpx_recipe/test_preparation_worker_native.py \
             /validation/tests/gpx_recipe/test_preparation_adaptation_native.py \
+            /validation/tests/gpx_recipe/test_preparation_authority_native.py \
+            /validation/tests/gpx_recipe/test_preparation_magnetic_authority_native.py \
             /validation/tests/gpx_recipe/test_prepared_k_series_native.py \
             /validation/tests/gpx_recipe/test_structural_snapshot_job_native.py &&
-          python -c "import xml.etree.ElementTree as E; cases=E.parse(\"/tmp/preparation.xml\").findall(\".//testcase\"); assert len(cases)>=20 and all(c.find(\"skipped\") is None and c.find(\"failure\") is None and c.find(\"error\") is None for c in cases), \"Preparation native acceptance must run without skips\""'
+          python -c "import xml.etree.ElementTree as E; cases=E.parse(\"/tmp/preparation.xml\").findall(\".//testcase\"); assert len(cases)>=26 and all(c.find(\"skipped\") is None and c.find(\"failure\") is None and c.find(\"error\") is None for c in cases), \"Preparation native acceptance must run without skips\""'
       - name: Publish verified immutable image
         run: docker push "$IMAGE"
