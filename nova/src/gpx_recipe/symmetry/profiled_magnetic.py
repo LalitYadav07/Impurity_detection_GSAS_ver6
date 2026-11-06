@@ -202,7 +202,12 @@ class ProfiledMagneticObjective:
                 probe=point+sign*step*direction
                 probe_max=float(np.max(np.linalg.norm(self.physical_maps@probe,axis=1)))
                 if probe_max>self.maximum_moment:probe*=self.maximum_moment/probe_max
-                if self.value_gradient(probe)[0]<cost/self.normalization-1e-12:
+                # Compare the weighted residual costs, not a decrement in
+                # Rwp-normalized cost. An arbitrarily large nuclear signal
+                # can otherwise hide real magnetic descent at zero moments.
+                probe_cost=self._evaluate(probe)[0]
+                roundoff=64*np.finfo(float).eps*max(abs(cost),abs(probe_cost),np.finfo(float).tiny)
+                if probe_cost<cost-roundoff:
                     local_descent=True
         return StartingPoint(coefficients=coefficients,scale=float(scale),background=background,
             weighted_cost=cost,success=bool(optimizer_success and physical and scale>0 and stationarity<=1e-7 and not local_descent),

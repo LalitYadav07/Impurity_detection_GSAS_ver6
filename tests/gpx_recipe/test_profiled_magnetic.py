@@ -108,6 +108,29 @@ def test_zero_gradient_at_zero_moment_is_not_mistaken_for_a_minimum():
     assert fit.local_descent_found
 
 
+@pytest.mark.parametrize('nuclear_level',[1.,1e3,1e6])
+@pytest.mark.parametrize('fixed_scale',[None,1.])
+@pytest.mark.parametrize('truth',[0.,2.])
+def test_null_assessment_retains_weak_magnetic_descent_beside_large_nuclear_signal(
+        nuclear_level,fixed_scale,truth):
+    nuclear=np.full(16,nuclear_level)
+    q=np.zeros((16,1,1));q[-4:,0,0]=5.
+    observed=nuclear+truth**2*q[:,0,0]
+    model=ProfiledMagneticObjective(offset=-observed,nuclear=nuclear,quadratic=q,
+        background=np.empty((16,0)),moment_maps=np.array([[[1.],[0.],[0.]]]),
+        maximum_moment=4.,normalization=float(observed@observed),fixed_scale=fixed_scale)
+    fit=model.fit(np.zeros(1))
+    assert fit.optimizer_success
+    assert fit.success == (truth==0.)
+    assert fit.local_descent_found == (truth!=0.)
+    if truth:
+        # The zero-gradient stationary point is not a minimum. Nuclear Rwp
+        # normalization must not hide an identifiable magnetic improvement.
+        assert model._evaluate(np.array([truth]))[0]<1e-12
+        assert fit.weighted_cost>100.
+        assert not model.reassess(fit).success
+
+
 def test_group_search_keeps_all_starts_and_time_reversed_parameter_solutions():
     from gpx_recipe.symmetry.profiled_groups import screen_group
     model, truth, _, _ = fixture_model(dimension=2)
