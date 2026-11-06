@@ -75,11 +75,13 @@ jobs. Independent children and scans use the existing bounded worker pool.
   minimum. Native context ownership requires separate processes for parallel
   candidates, never concurrent GSAS-II adapters in one process.
 - Starting-curve construction reuses the exact fixed-cell native profile for
-  displacement-only proposals. Cell changes still use complete native
-  calculations. All starting points, contact checks and secant-step choices
-  remain unchanged. A paired Linux/amd64 TOF control measured 52.45 → 33.38 s
-  preparation (36% less), with all 69 curves agreeing to 1.8e-15 relative error.
-  This is a preparation timing, not complete experimental-workflow latency.
+  displacement-only proposals. It uses the same required-pass capture engine
+  as the shared fit service; it does not construct a separate Pawley response.
+  Cell changes still use complete native calculations. All starting points,
+  contact checks and secant-step choices remain unchanged. The earlier native
+  reuse schedule measured 52.45 → 33.38 s preparation in one Linux/amd64 TOF
+  control, with all 69 curves agreeing to 1.8e-15 relative error. That historical
+  measurement does not measure this newer schedule or complete workflow latency.
 - An independent saved-GPX calculation must agree within 1e-8 relative error
   and 0.01 supplied standard deviations. Export verifies active mode variables,
   origin holds, cell freedom and fixed instrumental values, with no stale
@@ -119,6 +121,13 @@ Optional recovery deadlines retain the independently evaluated incumbent.
 The receipt names budget-expired stages. Native identity, objective and physics
 errors still propagate and prevent publication; recovery is not a general
 exception suppression mechanism.
+Recovery uses the same owned response evaluator for displacement derivatives,
+anchored by a complete native curve at every derivative request. Its scores,
+cell secants and acceptance checks remain original native calculations.
+Unsupported contexts retain the full native derivative path. A recovery receipt
+records the evaluator counters at admission and afterward, since its response
+cache can have been populated by the main fit. The final reported objective and
+Rwp follow the retained recovery result, rather than the earlier main fit.
 
 `ReducedObservation` accepts unknown exposure. Its `mask=True` means usable;
 the snapshot adapter explicitly accepts `invalid_mask=True`. Reduced intensity

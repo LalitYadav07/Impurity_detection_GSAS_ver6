@@ -127,8 +127,9 @@ def fit_snapshot(prepared, output, *, settings=None, observation=None, warm_star
         budget=settings.recovery_seconds/3
         recovered,prediction=improve(source,table,observation,fitted['best']['parameters'],bank=bank,
             policy=RecoveryPolicy(local_seconds=budget,proposal_seconds=budget,joint_seconds=budget,
-                                  starts=settings.starts),force_native_mode_derivatives=True)
-        fitted=dict(fitted,best=recovered['best'],recovery=recovered)
+                                  starts=settings.starts),evaluator=evaluator)
+        fitted=dict(fitted,best=recovered['best'],recovery=recovered,
+            rwp_percent=recovered['rwp_percent'],exact_native_deviance=recovered['best']['deviance'])
     timings['optimization_seconds']=time.monotonic()-checkpoint
     z=np.asarray(fitted['best']['parameters'],float);m=source.mode_dimensions;d=len(source.radii)
     physical=source.lift@(z[:d]*source.radii)
