@@ -5,7 +5,7 @@ import time
 import numpy as np
 
 from ..structural_live.optimization.offline_native_start_bank import (
-    OfflineNativeStartBank,build,native_in_this_process,
+    OfflineNativeStartBank,build,native_in_this_process,_remember_native,
 )
 from ..symmetry.compiler import file_sha
 from .hints import _copy
@@ -15,11 +15,10 @@ from .structural_hints import MAX_BYTES,MAX_METADATA
 def prepare_starting_bank(source,destination,choices=()):
     """Preserve the full joint-cell portfolio and actual observation contract.
 
-    A checksum is not native attestation. Imported banks with an exact current
-    context are fully recomputed once unless this process itself constructed
-    those exact bytes. The owned result contains freshly native curves and
-    freshly selected proposal steps. Qualification cost is reported, never
-    disguised as a fast cache hit. Later snapshots reuse the owned bank.
+    A checksum is not native attestation. Cold banks require either a verified
+    native producer receipt plus current-context probes or full native
+    reconstruction. Banks built in this process retain exact-byte provenance.
+    Qualification and reconstruction cost remain explicit in the receipt.
     """
     if not isinstance(choices,(list,tuple)) or len(choices)>5000:
         raise ValueError('A bounded structural preparation selection is required')
@@ -37,12 +36,30 @@ def prepare_starting_bank(source,destination,choices=()):
         except (OSError,ValueError,EOFError,KeyError,TypeError,IndexError) as exc:
             discarded.append(dict(entry=choice.get('entry') if isinstance(choice,dict) else None,
                 reason=str(exc)[:300],status='rebuild_required'))
-    if selected is not None and native_in_this_process(source,selected['files']['path'],selected['files']['receipt_path']):
+    authority=None;native_probes=[]
+    if selected is not None and not native_in_this_process(source,selected['files']['path'],selected['files']['receipt_path']):
+        from .authority import structural_bank_origin
+        authority=structural_bank_origin(selected['sha256'],selected['receipt_sha256'],
+            provided.receipt['context'].get('physics_sha256'))
+        if authority is not None:
+            # Origin authorizes the complete stored bank, not merely these
+            # probes. The probes catch current-context/reader regressions;
+            # neither their locations nor their outcomes use observations.
+            indices=sorted({0,len(provided.points)//2,len(provided.points)-1})
+            for index in indices:
+                native=source.native(provided.points[index]*source.radii)
+                error=float(np.linalg.norm(native-provided.curves[index])/max(np.linalg.norm(native),1e-30))
+                native_probes.append(dict(index=index,relative_error=error))
+            if any(not np.isfinite(r['relative_error']) or r['relative_error']>1e-11 for r in native_probes):
+                authority=None
+    if selected is not None and (authority is not None or native_in_this_process(source,selected['files']['path'],selected['files']['receipt_path'])):
         _copy(Path(selected['files']['path']),destination,selected['sha256'])
         _copy(Path(selected['files']['receipt_path']),destination.with_suffix('.json'),selected['receipt_sha256'])
         receipt=provided.receipt
-        qualification=dict(status='reused_native_bank',curve_bytes_reused=True,
-            native_curves_recomputed=0,native_origin='Same owned process, exact bank/receipt bytes and current physical context')
+        if authority is not None:_remember_native(source,destination)
+        qualification=dict(status='reused_certified_native_bank' if authority is not None else 'reused_native_bank',curve_bytes_reused=True,
+            native_curves_recomputed=len(native_probes) if authority is not None else 0,
+            native_origin=authority if authority is not None else 'Same owned process, exact bank/receipt bytes and current physical context')
     else:
         receipt=build(source,destination,policy='joint_cell_v1',reuse_fixed_cell_profiles=True)
         qualification=dict(status='native_requalified' if selected is not None else 'rebuilt_current_context' if choices else 'not_selected',
@@ -59,5 +76,5 @@ def prepare_starting_bank(source,destination,choices=()):
         selected_bank=selected['bank'] if selected is not None else None,
         attached_entries=len(choices),discarded_entries=discarded,
         seconds=time.monotonic()-began,observations_reused=False,scientific_candidates_removed=False,
-        qualification_persisted_as_trust=False)
+        qualification_persisted_as_trust=False,current_native_probes=native_probes)
     return receipt,qualification

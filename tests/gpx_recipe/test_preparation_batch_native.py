@@ -46,7 +46,8 @@ def test_two_bank_native_preparation_shares_one_job_and_exports_no_construction_
     script=Path(__file__).resolve().parents[2]/'scripts/ndip_model_campaign.py'
     with (tmp_path/'wrapper.log').open('w') as stream:
         subprocess.run([sys.executable,str(script),'native',str(source),str(tmp_path/'inputs.zip'),
-            str(tmp_path/'request.json'),str(tmp_path/'job'),str(tmp_path/'result.zip')],
+            str(tmp_path/'request.json'),str(tmp_path/'job'),str(tmp_path/'result.zip'),
+            '--preparation-certificate',str(tmp_path/'certificate.json')],
             check=True,timeout=180,stdout=stream,stderr=subprocess.STDOUT)
     received=unpack(tmp_path/'result.zip',tmp_path/'received')
     envelope=json.loads((received/'response.json').read_text());result=envelope['result']
@@ -58,6 +59,10 @@ def test_two_bank_native_preparation_shares_one_job_and_exports_no_construction_
     assert result['observations_included'] is False and result['scientific_result'] is False
     assert not any(name.endswith('.gpx') or '/.work/' in name for name in envelope['files'])
     assert all(name.startswith('native/prepared/') for name in envelope['files'])
+    from gpx_recipe.preparation.certificates import read
+    certificate=read(tmp_path/'certificate.json')
+    assert len(certificate['entries'])==2 and all(row['kind']=='magnetic' for row in certificate['entries'])
+    assert certificate['result_archive_sha256']==file_sha(tmp_path/'result.zip')
     parallel_responses={}
     for row in result['entries']:
         native_result=row['result']

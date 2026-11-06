@@ -191,6 +191,44 @@ recipe inspector.
 
 ## Packaging and qualification
 
+### Cold prepared-bank provenance
+
+The preparation worker can publish a compact, data-only native-origin receipt
+alongside its ordinary result ZIP. The fixed Galaxy command announces that
+receipt's checksum in job stdout; scientific subprocess output remains in the
+console dataset. A later tool invocation obtains creating-job metadata through
+the Galaxy template, separately from its uploaded scientific request. A JSON
+field claiming native verification cannot establish this provenance.
+
+For an exact current structural context, an original receipt from the reviewed
+Model Campaign wrapper permits reuse of the complete prepared bank after three
+fresh native profile probes. The reader still checks every declared start,
+chemical feasibility, array shape, grid, checksum and physical context. Every
+subsequent fit and exported GPX retains its independent native acceptance
+checks. The probes check the current reader/context; the producer evidence
+binds the complete bank, including the curves not selected as probes.
+
+If the receipt is absent, changed, inaccessible, produced by an unreviewed tool,
+or incompatible with the current scientific implementation, the normal native
+reconstruction remains in force. A changed physical context also rebuilds.
+Receipts do not make another cell, profile, grid or nuisance baseline compatible.
+Reuse/reconstruction state and native-probe errors are recorded in
+`starting-curve-contract.json` and the resulting structural service receipt.
+
+Portable libraries retain only bounded receipt lookup references. NOVA uses
+the current user's authorized access to the same Galaxy site to select the
+original small dataset; it never follows a site URL supplied by a bundle.
+Origin lookup failure does not invalidate checked preparation arrays. Reuse
+across accounts, unavailable original Histories, sites and compatible software
+upgrades still requires additional qualification; downloadable files alone do
+not establish standalone trusted reuse. No API key or signing secret is stored
+in a library, receipt, numerical request or child-process environment.
+
+The future Galaxy template introduces these inputs/outputs at Model Campaign
+0.2.17. Updating that template does not activate an image or alter the deployed
+tool XML. A coordinated immutable release and actual Galaxy acceptance remain
+required.
+
 Runtime code never imports benchmark runners or laptop paths. Superseded
 interpolation engines and independent prototype schedulers were not installed.
 The packaged contact files, policy and source code are bound by the scientific

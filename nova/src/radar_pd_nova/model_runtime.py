@@ -234,6 +234,9 @@ class GalaxyModelRuntime(GalaxyRefinementRuntime):
             source_dataset=self.dataset_id(source)
             inputs={'action':action,'dispatch_key':key,'source_gpx':{'dataset_id':source_dataset},
                     'model_assets':{'dataset_id':asset_id}}
+            from .preparation_evidence import input_ids
+            evidence_ids=input_ids(self,request)
+            if evidence_ids:inputs['preparation_evidence']=[{'dataset_id':v} for v in evidence_ids]
             if inline:inputs['model_request_b64']=encoded
             else:inputs['model_request']={'dataset_id':request_id}
             entry.update(pending=True,request_id=request_id,request_sha256=digest(request),

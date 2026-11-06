@@ -190,6 +190,11 @@ class PreparationQueue:
             # every sibling; persist its outcome table once per whole batch.
             job['outcomes'][identifier]=outcome
         cancelled=any(row['state']=='cancelled' or row['reason']=='cancelled_before_start' for row in rows)
+        # Origin metadata is an optional acceleration aid. Failure to fetch a
+        # receipt cannot invalidate already checked scientific artifacts; a
+        # fresh recovery can discover it again without rerunning native work.
+        from .preparation_evidence import remember
+        remember(self.library,self.runtime,job['handle'],self.root)
         if cancelled:
             state['paused']=True;self._paused.set()
         job.update(phase='collected',reason='Native work was cancelled; preparation is paused for review.' if cancelled else '')

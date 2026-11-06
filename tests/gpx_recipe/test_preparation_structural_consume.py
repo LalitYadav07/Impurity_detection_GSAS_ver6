@@ -117,3 +117,61 @@ def test_valid_bank_after_process_provenance_is_lost_is_rechecked(tmp_path, monk
     assert report['supplied_curves_match_current']
     assert not report['curve_bytes_reused']
     assert report['qualification_persisted_as_trust'] is False
+
+
+def certified_bank(tmp_path,monkeypatch):
+    from gpx_recipe.preparation import authority,certificates
+    from gpx_recipe.symmetry.contracts import digest
+    from gpx_recipe.symmetry.compiler import package_signature
+    s,_,_,_=source(monkeypatch)
+    context=bank_module.context
+    monkeypatch.setattr(bank_module,'context',lambda s:dict(context(s),physics_sha256=digest(context(s))))
+    path=tmp_path/'prepared.npz';receipt=bank_module.build(s,path,policy='joint_cell_v1')
+    entry=dict(kind='structural',entry_sha256='e'*64,physics_sha256=receipt['context']['physics_sha256'],
+        artifacts={'starts.npz':file_sha(path),'starts.json':file_sha(path.with_suffix('.json'))})
+    certificate=tmp_path/'certificate.json';certificate.write_text(json.dumps(dict(schema=certificates.SCHEMA,
+        implementation_sha256=package_signature(),result_archive_sha256='f'*64,entries=[entry])))
+    envelope=tmp_path/'server.json';envelope.write_text(json.dumps(dict(schema=authority.SCHEMA,records=[
+        dict(certificate_path=str(certificate),tool_id='neutrons_radar_pd_model_campaign_prototype',tool_version='0.2.17',
+            job_state='ok',dataset_state='ok',dataset_deleted=False,dataset_purged=False,
+            job_stdout=certificates.MARKER+file_sha(certificate))])))
+    monkeypatch.setattr(bank_module,'_native_banks',bank_module.OrderedDict())
+    return s,path,envelope,certificate
+
+
+def test_certified_cold_bank_retains_all_185_curves_with_three_current_native_probes(tmp_path,monkeypatch):
+    from gpx_recipe.preparation import authority
+    s,path,envelope,_=certified_bank(tmp_path,monkeypatch)
+    calls=native_builder(monkeypatch);native=s.native;probes=[]
+    def counted(point):probes.append(point.copy());return native(point)
+    s.native=counted
+    output=tmp_path/'received'/'starts.npz'
+    with authority.server_scope(envelope,tmp_path):
+        receipt,report=consume.prepare_starting_bank(s,output,[choice(path)])
+    assert report['status']=='reused_certified_native_bank' and report['curve_bytes_reused']
+    assert not calls and len(probes)==report['native_curves_recomputed']==3
+    assert receipt['native_curves']==185 and output.read_bytes()==path.read_bytes()
+    assert report['scientific_candidates_removed'] is False
+    assert bank_module.native_in_this_process(s,output)
+
+
+@pytest.mark.parametrize('change',['certificate','bank','context','native_probe'])
+def test_certified_origin_never_bypasses_changed_bytes_context_or_native_predictions(tmp_path,monkeypatch,change):
+    from gpx_recipe.preparation import authority
+    s,path,envelope,certificate=certified_bank(tmp_path,monkeypatch)
+    if change=='certificate':
+        data=json.loads(certificate.read_text());data['entries'][0]['entry_sha256']='b'*64
+        certificate.write_text(json.dumps(data))
+    elif change=='bank':
+        def corrupt(values,_):values['curves'][10,0]+=1e6
+        rewrite_bank(path,corrupt)
+    elif change=='context':s.identity='new-actual-context'
+    else:
+        native=s.native;s.native=lambda point:native(point)+.5
+    calls=native_builder(monkeypatch)
+    with authority.server_scope(envelope,tmp_path):
+        receipt,report=consume.prepare_starting_bank(s,tmp_path/'owned.npz',[choice(path)])
+    assert len(calls)==1 and not report['curve_bytes_reused']
+    assert receipt['native_curves']==report['native_curves_recomputed']==185
+    assert report['scientific_candidates_removed'] is False
+    if change=='native_probe':assert any(p['relative_error']>1e-11 for p in report['current_native_probes'])

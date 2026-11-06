@@ -32,6 +32,8 @@ def scientific_environment(gsasii_root=None):
                VECLIB_MAXIMUM_THREADS="1", NUMEXPR_NUM_THREADS="1")
     if gsasii_root:
         env["GSASII_ROOT"] = str(gsasii_root)
+    from .preparation.authority import child_environment
+    env.update(child_environment())
     return env
 
 

@@ -75,6 +75,19 @@ def test_generic_capture_restore_and_candidate_subset_keep_structural_scope(tmp_
     assert protocol==original and hints.validate(empty,protocol)==empty
 
 
+def test_structural_origin_routing_survives_capture_restore_without_claiming_authority(tmp_path,monkeypatch):
+    library,protocol,_=fixture(tmp_path/'fixture',monkeypatch)
+    entry=next(a['sha256'] for a in library.document['entries'][0]['files'] if a['path'].endswith('/entry.json'))
+    reference=dict(site='https://galaxy.invalid',dataset_id='original-certificate',sha256='a'*64,entries=[entry,'b'*64])
+    library.add_evidence(reference)
+    target=tmp_path/'packet';document=hints.capture(library,protocol,target)
+    assert document['evidence']==[dict(reference,entries=[entry])]
+    received=tmp_path/'received';proof=hints.restore(document,protocol,target,received)
+    assert proof['native_qualification_required']
+    assert hints.read(received,protocol)['evidence']==document['evidence']
+    assert hints.subset(document,protocol,[])['evidence']==[]
+
+
 @pytest.mark.parametrize('damage',['missing','checksum','receipt','well_hashed_bad_zip','receipt_list','context_list'])
 def test_damaged_structural_assets_rebuild_without_removing_a_scientific_trial(tmp_path,monkeypatch,damage):
     library,protocol,inputs=fixture(tmp_path/'fixture',monkeypatch)

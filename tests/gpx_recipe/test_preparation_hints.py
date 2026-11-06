@@ -74,6 +74,21 @@ def test_capture_transfers_only_needed_theory_assets_and_import_never_inherits_q
     np.testing.assert_array_equal(block.factors,np.arange(72.).reshape(4,6,3))
 
 
+def test_native_origin_lookup_references_follow_only_the_captured_entries(tmp_path):
+    library,protocol,_=fixture(tmp_path/'fixture')
+    entry=next(a['sha256'] for a in library.document['entries'][0]['files'] if a['path'].endswith('/entry.json'))
+    reference=dict(site='https://galaxy.invalid',dataset_id='original-certificate',sha256='a'*64,entries=[entry,'b'*64])
+    library.add_evidence(reference)
+    library.add_evidence(dict(reference,dataset_id='irrelevant',entries=['c'*64]))
+    target=tmp_path/'packet';document=hints.capture(library,protocol,target)
+    assert document['evidence']==[dict(reference,entries=[entry])]
+    assert hints.validate(document,protocol)==document
+    received=tmp_path/'received';hints.restore(document,protocol,target,received)
+    assert hints.read(received,protocol)['evidence']==document['evidence']
+    empty=hints.subset(document,protocol,[])
+    assert empty['evidence']==[] and empty['entries']==[]
+
+
 def test_existing_snapshot_is_not_replaced_by_another_library_revision(tmp_path):
     library,protocol,_=fixture(tmp_path/'first');target=tmp_path/'packet'
     first=hints.capture(library,protocol,target)

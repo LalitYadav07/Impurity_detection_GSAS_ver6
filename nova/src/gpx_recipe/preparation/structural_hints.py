@@ -36,7 +36,7 @@ def validate(document,protocol):
     from .hints import _hash
     keys={'schema','protocol_sha256','library_id','library_name','entries',
         'eligible_entries','omitted_entries','snapshot_sha256','observations_included'}
-    if (not isinstance(document,dict) or set(document)!=keys or document['schema']!=SCHEMA
+    if (not isinstance(document,dict) or set(document)-keys-{'evidence'} or keys-set(document) or document['schema']!=SCHEMA
             or protocol['kind']!='structural' or document['protocol_sha256']!=digest(protocol)
             or not isinstance(document['library_id'],str) or not re.fullmatch('[a-f0-9]{24}',document['library_id'])
             or not isinstance(document['library_name'],str) or len(document['library_name'])>200
@@ -49,6 +49,9 @@ def validate(document,protocol):
             or not _hash(document['snapshot_sha256']) or document['snapshot_sha256']!=
                 digest({k:v for k,v in document.items() if k!='snapshot_sha256'})):
         raise ValueError('Structural preparation needs its exact bounded protocol and library snapshot')
+    if 'evidence' in document:
+        from .evidence import validate_references
+        validate_references(document['evidence'])
     candidates={c['id'] for c in protocol['candidates']};seen=set()
     fields={'entry','candidate','bank','identity','path','sha256','receipt_path','receipt_sha256','entry_sha256'}
     for row in document['entries']:
@@ -131,6 +134,9 @@ def capture(library,protocol,root):
             receipt_sha256=inventory['starts.json']['sha256'],entry_sha256=inventory['entry.json']['sha256']))
     result=dict(schema=SCHEMA,protocol_sha256=digest(protocol),library_id=document['id'],library_name=document['name'],
         entries=rows,eligible_entries=eligible,omitted_entries=omitted,observations_included=False)
+    if document.get('evidence'):
+        from .evidence import select
+        result['evidence']=select(document['evidence'],[r['entry_sha256'] for r in rows])
     result['snapshot_sha256']=digest(result);validate(result,protocol)
     write_json(confined(root,MANIFEST,exists=False),result)
     return result

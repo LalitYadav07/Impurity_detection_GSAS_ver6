@@ -69,7 +69,7 @@ def native(request,inputs,root,cancel):
     return json.loads(output.read_text()),root
 
 
-def work(action,source,assets,request_file,directory,archive):
+def _work(action,source,assets,request_file,directory,archive):
     entered=time.monotonic()
     entry_utc=datetime.now(timezone.utc).isoformat()
     initial_usage=process_usage()
@@ -149,9 +149,22 @@ def work(action,source,assets,request_file,directory,archive):
         raise
 
 
+def work(action,source,assets,request_file,directory,archive,*,preparation_evidence=None,preparation_certificate=None):
+    from gpx_recipe.preparation.authority import server_scope
+    from gpx_recipe.preparation.certificates import produce
+    parent=Path(directory).resolve().parent;parent.mkdir(parents=True,exist_ok=True)
+    with server_scope(preparation_evidence,parent):
+        result=_work(action,source,assets,request_file,directory,archive)
+        if preparation_certificate is not None:
+            produce(result,directory,archive,preparation_certificate)
+        return result
+
+
 def main():
     p=argparse.ArgumentParser();p.add_argument('action',choices=['native','chunk']);p.add_argument('source');p.add_argument('assets');p.add_argument('request');p.add_argument('directory');p.add_argument('archive')
-    a=p.parse_args();work(a.action,a.source,a.assets,a.request,a.directory,a.archive)
+    p.add_argument('--preparation-evidence');p.add_argument('--preparation-certificate')
+    a=p.parse_args();work(a.action,a.source,a.assets,a.request,a.directory,a.archive,
+        preparation_evidence=a.preparation_evidence,preparation_certificate=a.preparation_certificate)
 
 
 if __name__=='__main__':main()

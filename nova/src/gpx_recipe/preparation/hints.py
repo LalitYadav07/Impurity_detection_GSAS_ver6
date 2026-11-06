@@ -49,7 +49,7 @@ def validate(document,protocol):
         return structural_validate(document,protocol)
     keys={'schema','protocol_sha256','library_id','library_name','entries',
           'eligible_entries','omitted_entries','snapshot_sha256','observations_included'}
-    if (not isinstance(document,dict) or set(document)!=keys or document['schema']!=SCHEMA
+    if (not isinstance(document,dict) or set(document)-keys-{'evidence'} or keys-set(document) or document['schema']!=SCHEMA
             or protocol['kind']!='magnetic' or document['protocol_sha256']!=digest(protocol)
             or not isinstance(document['library_id'],str)
             or not re.fullmatch('[a-f0-9]{24}',document['library_id'])
@@ -61,6 +61,9 @@ def validate(document,protocol):
             or document['eligible_entries']!=len(document['entries'])+document['omitted_entries']
             or len(json.dumps(document,allow_nan=False).encode())>MAX_METADATA):
         raise ValueError('Prepared scattering inputs need their exact bounded protocol and library snapshot')
+    if 'evidence' in document:
+        from .evidence import validate_references
+        validate_references(document['evidence'])
     if (not _hash(document['snapshot_sha256']) or document['snapshot_sha256']!=
             digest({k:v for k,v in document.items() if k!='snapshot_sha256'})):
         raise ValueError('Prepared scattering snapshot changed')
@@ -156,6 +159,9 @@ def capture(library,protocol,root):
     result=dict(schema=SCHEMA,protocol_sha256=digest(protocol),library_id=document['id'],
         library_name=document['name'],entries=rows,eligible_entries=eligible,
         omitted_entries=omitted,observations_included=False)
+    if document.get('evidence'):
+        from .evidence import select
+        result['evidence']=select(document['evidence'],[r['entry_sha256'] for r in rows])
     result['snapshot_sha256']=digest(result);validate(result,protocol)
     write_json(confined(root,MANIFEST,exists=False),result)
     return result
@@ -185,6 +191,9 @@ def subset(document,protocol,candidates):
         raise ValueError('Prepared subset requested an undeclared scientific candidate')
     result=copy.deepcopy(document)
     result['entries']=[row for row in result['entries'] if row['candidate'] in requested]
+    if result.get('evidence'):
+        from .evidence import select
+        result['evidence']=select(result['evidence'],[r['entry_sha256'] for r in result['entries']])
     result['omitted_entries']=result['eligible_entries']-len(result['entries'])
     result['snapshot_sha256']=digest({k:v for k,v in result.items() if k!='snapshot_sha256'})
     return validate(result,protocol)

@@ -101,7 +101,7 @@ def test_galaxy_worker_roundtrip_accepts_cif_and_bank_without_a_gpx(tmp_path):
     with (tmp_path/'galaxy-wrapper.log').open('w') as stream:
         subprocess.run([sys.executable, str(script), 'native', str(root/'parent.cif'),
             str(tmp_path/'inputs.zip'), str(tmp_path/'request.json'), str(tmp_path/'job'),
-            str(tmp_path/'results.zip')], check=True, timeout=150, stdout=stream,
+            str(tmp_path/'results.zip'), '--preparation-certificate',str(tmp_path/'certificate.json')], check=True, timeout=150, stdout=stream,
             stderr=subprocess.STDOUT)
     received = unpack(tmp_path/'results.zip', tmp_path/'received')
     response = json.loads((received/'response.json').read_text())
@@ -111,6 +111,8 @@ def test_galaxy_worker_roundtrip_accepts_cif_and_bank_without_a_gpx(tmp_path):
     assert entry['kind'] == 'reference' and entry['observations_included'] is False
     assert entry['scientific_result'] is False
     assert not (tmp_path/'job/verified_projects').exists()
+    from gpx_recipe.preparation.certificates import read
+    assert read(tmp_path/'certificate.json')['entries']==[]
 
 
 @pytest.mark.parametrize('kind', ['PNC', 'PNT'])

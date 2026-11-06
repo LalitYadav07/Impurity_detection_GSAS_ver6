@@ -59,8 +59,8 @@ def _asset(value):
 
 
 def validate_manifest(value):
-    if (not isinstance(value, dict) or set(value) != {'schema', 'id', 'name', 'specification',
-            'specification_sha256', 'inputs', 'entries', 'observations_included', 'scientific_result'}
+    required={'schema','id','name','specification','specification_sha256','inputs','entries','observations_included','scientific_result'}
+    if (not isinstance(value, dict) or set(value)-required-{'evidence'} or required-set(value)
             or value['schema'] != SCHEMA or value['observations_included'] is not False
             or value['scientific_result'] is not False
             or not isinstance(value['name'], str) or not 1 <= len(value['name']) <= 200
@@ -68,6 +68,9 @@ def validate_manifest(value):
             or digest(value['specification']) != value['specification_sha256']
             or not isinstance(value['id'], str)):
         raise ValueError('Invalid experiment preparation manifest')
+    if 'evidence' in value:
+        from .evidence import validate_references
+        validate_references(value['evidence'])
     entries = value['entries']
     if not isinstance(entries, list) or not 1 <= len(entries) <= MAX_MODELS:
         raise ValueError('Declare a bounded, nonempty preparation scope')
@@ -287,6 +290,26 @@ class PreparationLibrary:
                 raise ValueError('Only a reviewed terminal failure can be retried')
             row.update(state='pending', reason='', files=[])
             self._save()
+
+    def add_evidence(self, reference):
+        """Persist a routing hint; the native launcher verifies actual origin."""
+        import copy
+        from .evidence import validate_references
+        validate_references([reference])
+        with self._transaction():
+            values=copy.deepcopy(self.document.get('evidence',[]))
+            previous=[r for r in values if (r['site'],r['dataset_id'])==(reference['site'],reference['dataset_id'])]
+            if previous:
+                if previous[0]['sha256']!=reference['sha256']:raise ValueError('An origin receipt dataset changed')
+                previous[0]['entries']=sorted(set(previous[0]['entries'])|set(reference['entries']))
+            else:values.append(copy.deepcopy(reference))
+            validate_references(values)
+            previous_document=copy.deepcopy(self.document)
+            self.document['evidence']=values
+            try:self._save()
+            except Exception:
+                self.document=previous_document
+                raise
 
     def interrupt(self, identifier, attempt):
         # The caller must first establish that the old job/process is terminal.
