@@ -73,7 +73,7 @@ def model_exploration(app):
             with html.Div(classes='sx-settings'):
                 select('Concurrent Galaxy batches','sx_parallel_jobs','[1,2,4,8]')
                 select('Native workers requested per batch','sx_slots','[1,2,4]')
-            html.P('Galaxy controls admission and CPU/RAM allocation. More batches can process different scans at once; they may remain queued when the cluster is busy. An unreported allocation permits one native worker per job. This History-wide limit includes model preparation jobs. Lowering it lets accepted jobs finish before submitting more.',classes='rf-notice')
+            html.P('New campaigns default to eight concurrent Galaxy batches for independent models and scans. Analysis, recipe and model jobs share the History-wide capacity limit. Galaxy controls admission and CPU/RAM allocation; jobs may remain queued when the cluster is busy. An unreported allocation permits one native worker per job. The model-batch limit includes preparation jobs. Lowering it lets accepted jobs finish before submitting more.',classes='rf-notice')
         v.VProgressLinear(v_if='sx_busy',indeterminate=True,color='#267653',height=3,classes='mb-3')
         html.P('{{ sx_message }}',classes='rf-notice',raw_attrs=['aria-live="polite"'])
         html.P('Qualified fits appear first when available. All failed, unresolved and physically rejected trials remain inspectable.',v_if='!sx_setup && sx_groups.length',classes='rf-notice')
