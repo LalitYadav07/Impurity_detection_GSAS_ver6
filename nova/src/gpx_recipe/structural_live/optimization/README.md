@@ -4,6 +4,14 @@ an experiment runner. `profiled_native_fit` is the main fitter;
 `automatic_fit_recovery` retains a complementary native search. Both evaluate
 the same original-bin objective and preserve unresolved outcomes.
 
+The main fitter retains separate mode-block and cell-block LM damping within
+each start, and resets both for the next independent start. An unsuccessful
+step can increase damping and retry; that bookkeeping step is not evidence of
+small physical progress. Exhausted native descent remains an unresolved
+attempt. Block receipts record the start and initial/final damping. These
+changes preserve the native acceptance, stationarity-retry and export checks;
+they do not establish global convergence or a complete-fit speedup.
+
 The empirical contact policy uses aggregate Materials Project and
 Crystallography Open Database bond statistics, with source hashes preserved in
 the policy JSON. It is an experimental, source-screened assumption; neither

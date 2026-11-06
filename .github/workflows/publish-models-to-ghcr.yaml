@@ -7,6 +7,7 @@ on:
       - Dockerfile.symmetry
       - nova/src/gpx_recipe/**
       - tests/gpx_recipe/test_prepared_structural_acceptance_native.py
+      - tests/gpx_recipe/test_structural_block_damping.py
       - tests/gpx_recipe/test_preparation*.py
       - tests/gpx_recipe/test_prepared_k_series_native.py
       - tests/gpx_recipe/test_prepared_model_handoff_native.py
@@ -123,8 +124,9 @@ jobs:
           export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}/validation/tests/gpx_recipe" &&
           export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 RADAR_REQUIRE_STRUCTURAL_NATIVE=1 &&
           python -m pytest -q -o cache_dir=/tmp/pytest-cache --junitxml=/tmp/structural.xml \
-            /validation/tests/gpx_recipe/test_prepared_structural_acceptance_native.py &&
-          python -c "import xml.etree.ElementTree as E; cases=E.parse(\"/tmp/structural.xml\").findall(\".//testcase\"); assert len(cases)>=13 and all(c.find(\"skipped\") is None and c.find(\"failure\") is None and c.find(\"error\") is None for c in cases), \"Structural native acceptance must run without skips\""'
+            /validation/tests/gpx_recipe/test_prepared_structural_acceptance_native.py \
+            /validation/tests/gpx_recipe/test_structural_block_damping.py &&
+          python -c "import xml.etree.ElementTree as E; cases=E.parse(\"/tmp/structural.xml\").findall(\".//testcase\"); assert len(cases)>=15 and all(c.find(\"skipped\") is None and c.find(\"failure\") is None and c.find(\"error\") is None for c in cases), \"Structural native acceptance must run without skips\""'
       - name: Require portable preparation and structural acquisition handoffs
         run: |
           docker run --rm --entrypoint sh -v "$PWD:/validation:ro" "$IMAGE" -c '

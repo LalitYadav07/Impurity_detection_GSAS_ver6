@@ -43,6 +43,10 @@ def fit(source,table,observation,bank,*,seconds=120.,starts=4,seed=90231,warm=No
     pending_native_cell_refresh=False
     native_profiles=OrderedDict();profile_hits=0
     native_probe_calls=0
+    # Alternation divides one local solve into short blocks. Preserve each
+    # block's trust adaptation until this start ends, rather than restarting
+    # LM at its initial damping after every accepted or unsuccessful step.
+    block_damping={True:1e-3,False:1e-3}
     def check_time():
         if time.monotonic()>=deadline:raise TimeoutError('Native alternating fit allocation exhausted')
     def allowed(z):
@@ -144,7 +148,8 @@ def fit(source,table,observation,bank,*,seconds=120.,starts=4,seed=90231,warm=No
     def block(z,mode,iterations):
         nonlocal rejected,pending_native_cell_refresh
         columns=np.arange(m) if mode else np.arange(m,d)
-        z=z.copy();current=score(z);z=current[4];damping=1e-3;accepted=[];start=time.monotonic();reason='iteration_limit'
+        z=z.copy();current=score(z);z=current[4];damping=block_damping[mode];initial_damping=damping
+        accepted=[];start=time.monotonic();reason='iteration_limit'
         # Captured responses add no second profile construction. A context
         # that cannot capture uses the original native acceptance path, rather
         # than evaluating a native fallback twice under a cached-mode label.
@@ -183,8 +188,11 @@ def fit(source,table,observation,bank,*,seconds=120.,starts=4,seed=90231,warm=No
                 damping*=10.;break
             if stationary:break
             if damping>1e7:reason='native_descent_stalled';break
+            reason='iteration_limit' if found else 'damping_increased'
             if found and np.max(abs(step*(.5**power)))<1e-8:reason='small_step';break
-        blocks.append(dict(kind='modes' if mode else 'cell',seconds=time.monotonic()-start,accepted_costs=accepted,reason=reason))
+        block_damping[mode]=damping
+        blocks.append(dict(start=index,kind='modes' if mode else 'cell',seconds=time.monotonic()-start,
+            accepted_costs=accepted,reason=reason,initial_damping=initial_damping,final_damping=damping))
         return z,current[0]
     warm_ranked=[];prior_ranked=[];selected=[]
     exclusions=[] if screening_exclusions is None else [np.asarray(v,float) for v in screening_exclusions]
@@ -219,12 +227,14 @@ def fit(source,table,observation,bank,*,seconds=120.,starts=4,seed=90231,warm=No
         attempt=dict(start=index,initial_parameters=initial.tolist(),iterations=0,reason='running')
         attempts.append(attempt)
         cell_model.invalidate()
+        block_damping.update({True:1e-3,False:1e-3})
         pending_native_cell_refresh=False
         try:
             z=initial.copy();cost=score(z)[0];cycles=0;restart_points=[]
             while True:
                 attempt['iterations']+=1
                 before=cost
+                block_begin=len(blocks)
                 # Peak-position errors must not spend an entire short start
                 # being absorbed into atomic intensities. Interleave one cell
                 # and one displacement step, beginning with the lattice.
@@ -232,6 +242,11 @@ def fit(source,table,observation,bank,*,seconds=120.,starts=4,seed=90231,warm=No
                 if m:z,cost=block(z,True,mode_iterations)
                 cycles+=1
                 if before-cost<1e-9*max(cost,1.) and (not kicks or not restart_points):
+                    reasons={row['reason'] for row in blocks[block_begin:]}
+                    if 'native_descent_stalled' in reasons:
+                        attempt['reason']='native_descent_stalled';break
+                    if 'damping_increased' in reasons:
+                        continue
                     if cell_model.last_requires_native_retry or (cell_model.model is not None and cell_model.model['age']):
                         cell_model.invalidate()
                         pending_native_cell_refresh=True
