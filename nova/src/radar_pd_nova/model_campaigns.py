@@ -362,6 +362,23 @@ def restore_history(root,runtime,*,experiment=None,progress=None):
                         {asset['path']:asset['sha256'] for asset in assets(protocol)},protocol['source']['sha256'])
                     transport['sources'][sha]=portable_source(resolved)
                 inputs[sha]=prepare_shared_inputs(protocol,target/'unpacked',campaign.root)
+                from gpx_recipe.preparation.hints import read as read_prepared,restore as restore_prepared
+                try:
+                    prepared=read_prepared(target/'unpacked',protocol)
+                    if prepared is not None:
+                        restored=restore_prepared(prepared,protocol,target/'unpacked',inputs[sha])
+                        transport.setdefault('prepared_inputs',{})[sha]=dict(
+                            status='attached' if restored['attached'] else 'unavailable',
+                            library_id=prepared['library_id'],library_name=prepared['library_name'],
+                            snapshot_sha256=prepared['snapshot_sha256'],attached_entries=restored['attached'],
+                            eligible_entries=prepared['eligible_entries'],omitted_entries=prepared['omitted_entries'],
+                            discarded_entries=restored['discarded_entries'],native_qualification_required=True)
+                except (OSError,ValueError,EOFError) as error:
+                    # Optional acceleration cannot make an otherwise valid
+                    # scientific campaign or its acknowledged jobs disappear.
+                    transport.setdefault('prepared_inputs',{})[sha]=dict(status='unavailable',
+                        message='Prepared inputs could not be recovered. Current physics will be rebuilt.',
+                        error_type=type(error).__name__)
             if digest(template['protocol']) not in inputs:raise ValueError('The reviewed reference inputs are absent from the checkpoint')
             if progress:progress(f'Rebuilding {len(document["ledger"]["trials"]):,} saved starts for {identifier}. No new refinements are being submitted.')
             from .model_ledger_recovery import restore_ledger

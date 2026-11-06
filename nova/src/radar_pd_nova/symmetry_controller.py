@@ -65,7 +65,7 @@ class SymmetryMixin(KSearchMixin):
             sx_parent_axis='c',sx_parent='',sx_parents=[],sx_histogram='',sx_histograms=[],sx_k='',sx_sites=[],sx_site_options=[],sx_form_factors='',sx_lande='',sx_directions=['x','y','z'],sx_adequate=None,sx_max_moment='',sx_cycles=20,sx_slots=4,sx_moment_model='symmetry_allowed',sx_refine_scale=False,sx_refine_background=False,
             sx_kind='magnetic',sx_magnetic_optimizer='profiled_quadratic',sx_optimizer_iterations=120,sx_mag_d_min=0.,sx_max_mode=.5,sx_start_mode=.1,sx_candidate_options=[],sx_candidates=[],sx_mode_options=[],sx_modes=[],sx_discovered=False,sx_discovery_scope='',sx_discovery_rows=[],
             sx_plan_ready=False,sx_approved=False,sx_plan_summary='',sx_plan_candidates=[],sx_setup=False,sx_expanded=False,sx_expanded_layout={},sx_has_context=False,sx_has_gpx=False,sx_has_receipt=False,sx_resumable=False,sx_native_reference='',
-            sx_request='',sx_planning_summary='',sx_planning_notes=[],sx_planning_usage='',sx_planning_cost='',sx_has_setup_details=False,sx_sign_starts=True,sx_coverage=[],sx_group_limit=12,sx_result_scope='experiment',sx_start_source='',sx_start_sources=[],sx_results_current=False,sx_scope_progress='')
+            sx_request='',sx_planning_summary='',sx_planning_notes=[],sx_planning_usage='',sx_planning_cost='',sx_has_setup_details=False,sx_sign_starts=True,sx_coverage=[],sx_group_limit=12,sx_result_scope='experiment',sx_start_source='',sx_start_sources=[],sx_results_current=False,sx_scope_progress='',sx_preparation_notice='')
         for key,value in defaults.items():setattr(s,key,value)
         extra=dict(sx_existing='selected',sx_selected_scans=[],sx_selectable_scans=[],sx_follow_new=False,sx_max_scans=200,sx_enrollments=[],sx_priority_acquisition='',sx_priority_options=[],sx_priority_notice='',sx_retry_acquisition='',sx_retry_options=[],sx_retry_notice='',sx_following=False,sx_campaign_running=False,sx_pause_pending=False,sx_parallel_jobs=8,
             sx_queue_notice='',sx_backend='',sx_batches=[],sx_prepared_structural=False,sx_plan_token='',sx_cancel_notice='Cancelling a Galaxy chunk stops all starts in that job.',
@@ -105,6 +105,7 @@ class SymmetryMixin(KSearchMixin):
         if not isinstance(self.service,GalaxyService):return None
         if not (self.service.galaxy_url and self.service.galaxy_key and self.service.history_id):return None
         if self._model_runtime_cache is None:self._model_runtime_cache=GalaxyModelRuntime(self._symmetry_root()/'runtime',self.service)
+        self._model_runtime_cache.preparation_provider=getattr(self,'_capture_prepared_model_inputs',None)
         self._model_runtime_cache.max_active_jobs=self.server.state.sx_parallel_jobs
         return self._model_runtime_cache
 
@@ -327,6 +328,8 @@ class SymmetryMixin(KSearchMixin):
                 remote=self._model_remote()
                 backend='Galaxy jobs · allocated CPU/RAM' if remote else 'Configured local scientific worker'
                 s.sx_backend=backend
+                caption=getattr(self,'_prepared_selection_caption',None)
+                s.sx_preparation_notice=caption() if callable(caption) else ''
                 scope=s.rf_experiment if s.sx_result_scope=='experiment' else None
                 restored=getattr(self,'_model_restored_scopes',set())
                 requested=getattr(self,'_model_restore_requests',set())

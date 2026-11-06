@@ -111,7 +111,9 @@ class PreparationMixin:
         self._prep_refresh();s.flush()
 
     def close_preparation_workspace(self,**_):
-        s=self.server.state;s.workspace_view,s.setup_collapsed=self._prep_return or ('monitor',False);s.flush()
+        s=self.server.state;s.workspace_view,s.setup_collapsed=self._prep_return or ('monitor',False)
+        if hasattr(s,'sx_preparation_notice'):s.sx_preparation_notice=self._prepared_selection_caption()
+        s.flush()
 
     def _prep_refresh(self):
         store=self._preparation_store();s=self.server.state;rows=store.registry.summaries()
@@ -358,7 +360,34 @@ class PreparationMixin:
 
     def _preparation_library_changed(self,**_):
         s=self.server.state;s.prep_page=1;s.prep_download_href='';s.prep_active_jobs=0
+        if s.prep_library:self._preparation_store().registry.select(s.prep_library)
         self._preparation_table_changed()
+
+    def _capture_prepared_model_inputs(self,protocol,root):
+        """Called off the UI thread before a new immutable source dispatch."""
+        from gpx_recipe.preparation.hints import read,capture
+        saved=read(root,protocol)
+        if saved is not None:return saved
+        if (protocol['kind']!='magnetic'
+                or protocol['policy'].get('magnetic_optimizer')!='profiled_quadratic'):return None
+        store=self._preparation_store()
+        if not store.registry.summaries():return None
+        return capture(store.registry.get(),protocol,root)
+
+    def _prepared_selection_caption(self):
+        try:
+            registry=self._preparation_store().registry;selected=registry.selected_key()
+            if not selected:
+                return 'No preparation library selected. Model searches build the required physics when they run.'
+            row=next(row for row in registry.summaries() if row['id']==selected)
+            if not row['available']:raise ValueError('Selected preparation needs review')
+            if 'magnetic' not in row['kinds']:
+                return (f"Prepared library: {row['name']}. This selection contains no magnetic scattering assets. "
+                    'Magnetic model searches build the required physics when they run.')
+            return (f"Prepared library: {row['name']} · {row['prepared']} / {row['total']} entries prepared. "
+                'Applies to new model inputs; each scan’s compatibility is checked before reuse.')
+        except (OSError,ValueError):
+            return 'The selected preparation needs review. Model searches can rebuild the required physics.'
 
     def _preparation_table_changed(self,**_):
         s=self.server.state

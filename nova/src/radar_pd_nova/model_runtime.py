@@ -90,6 +90,7 @@ class GalaxyModelRuntime(GalaxyRefinementRuntime):
         self.max_active_jobs=max_active_jobs
         self._lock=threading.RLock();self._event_lock=threading.Lock();self._events=set();self._cancelled_roots=set();self._verified_jobs=set()
         self._preparation_retry_permits=set()
+        self.preparation_provider=None
         self.state_path=self.root/'model-dispatches.json'
         self.state=json.loads(self.state_path.read_text()) if self.state_path.exists() else {'assets':{},'dispatches':{}}
 
@@ -548,11 +549,38 @@ class GalaxyChunkTransport:
         from gpx_recipe.symmetry.compiler import prepare_shared_inputs
         sha=digest(protocol)
         captured=prepare_shared_inputs(protocol,root,self.campaign.root)
-        packet=self.runtime.packet(captured,['protocol.json']+[a['path'] for a in assets(protocol)],
+        _,prepared_paths=self._prepared_inputs(protocol,captured,capture_new=True)
+        packet=self.runtime.packet(captured,['protocol.json']+[a['path'] for a in assets(protocol)]+prepared_paths,
                                    source_sha256=protocol['source']['sha256'])
         with self._state_lock:
             self.state['inputs'][sha]=packet
             self.bind_source(sha,source)
+
+    def _prepared_inputs(self,protocol,root,*,capture_new=False):
+        from gpx_recipe.preparation.hints import read,packet_paths
+        from .native_operations import intent_lock
+        sha=digest(protocol)
+        try:
+            if capture_new:
+                with intent_lock(root/'prepared-input-intent.json'):
+                    provider=getattr(self.runtime,'preparation_provider',None)
+                    if callable(provider):provider(protocol,root)
+            document=read(root,protocol)
+            if document is None:return None,[]
+            paths=packet_paths(root,protocol)
+        except (OSError,ValueError) as error:
+            with self._state_lock:
+                self.state.setdefault('prepared_inputs',{})[sha]=dict(status='unavailable',
+                    message='Prepared inputs could not be attached. Current physics will be rebuilt.',
+                    error_type=type(error).__name__)
+            return None,[]
+        with self._state_lock:
+            self.state.setdefault('prepared_inputs',{})[sha]=dict(status='attached',
+                library_id=document['library_id'],library_name=document['library_name'],
+                snapshot_sha256=document['snapshot_sha256'],attached_entries=len(document['entries']),
+                eligible_entries=document['eligible_entries'],omitted_entries=document['omitted_entries'],
+                native_qualification_required=True)
+        return document,paths
 
     def checkpoint(self,*,force=False,dispatch_intent=False):
         with self._checkpoint_lock:
@@ -635,13 +663,16 @@ class GalaxyChunkTransport:
                 raise RuntimeUnavailable('The previous model chunk acknowledgment is still ambiguous')
         key=digest([self.campaign.root.name,sha,ids,len(self.state['chunks'])])[:24]
         input_root=job_inputs(entries[0][1],first)
+        prepared,extra_paths=self._prepared_inputs(protocol,input_root)
         if sha not in self.state['inputs']:
-            packet=self.runtime.packet(input_root,['protocol.json']+[a['path'] for a in assets(protocol)],source_sha256=protocol['source']['sha256'])
+            packet=self.runtime.packet(input_root,['protocol.json']+[a['path'] for a in assets(protocol)]+extra_paths,source_sha256=protocol['source']['sha256'])
             with self._state_lock:self.state['inputs'][sha]=packet
         request=dict(schema='radar-model-chunk/v1',protocol=protocol,protocol_sha256=sha,trials=ids,
             workers=workers,dispatch_key=key,
             seconds=1800 if protocol.get('policy',{}).get('grouped_surrogate') else 240)
         asset_id=self.state['inputs'][sha]
+        if prepared is not None:
+            request['prepared_scattering']=prepared
         if protocol.get('policy',{}).get('magnetic_optimizer')=='profiled_quadratic':
             # Every batch of this exact protocol can share one immutable input
             # packet. Candidate-specific subsets otherwise create a separate
@@ -658,7 +689,7 @@ class GalaxyChunkTransport:
             cached['entries']=bounded
             if cached['entries']:
                 request['profiled_cache']=cached
-                paths=['protocol.json']+[a['path'] for a in assets(protocol)]+[r['path'] for r in cached['entries']]
+                paths=['protocol.json']+[a['path'] for a in assets(protocol)]+extra_paths+[r['path'] for r in cached['entries']]
                 asset_id=self.runtime.packet(input_root,paths,source_sha256=protocol['source']['sha256'])
         if protocol.get('template_sha256'):
             template=self.campaign.setting('template');source=self.state['sources'][sha]

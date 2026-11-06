@@ -81,6 +81,10 @@ def model_exploration(app):
             html.H3('Explore models from a completed GPX')
             html.P('Enter a commensurate k vector, or use the magnetic k survey below. Review hypotheses before native refinement.',classes='rf-notice')
             with html.Div(classes='rf-toolbar'):
+                html.P('{{ sx_preparation_notice }}',v_if='!!sx_preparation_notice',classes='rf-notice')
+                v.VBtn('Choose or prepare calculations',click=app.open_preparation_workspace,
+                    variant='text',prepend_icon='mdi-database-clock-outline')
+            with html.Div(classes='rf-toolbar'):
                 scan_select('Starting GPX · original or recipe checkpoint','sx_start_source','sx_start_sources',
                     placeholder='Type a run number, temperature or recipe stage',persistent_placeholder=True)
                 v.VBtn('Inspect exact parent',click=app.inspect_symmetry_source,disabled=('!sx_start_source || sx_busy',),variant='outlined')

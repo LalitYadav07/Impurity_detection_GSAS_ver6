@@ -179,6 +179,10 @@ class PreparationRegistry:
             state['selected'] = key
             write_json(self.path, state)
 
+    def selected_key(self):
+        """Read the selection without opening or hashing scientific assets."""
+        return self._read()['selected']
+
     def summaries(self):
         """Inspect state metadata without rereading every numerical artifact."""
         rows = []

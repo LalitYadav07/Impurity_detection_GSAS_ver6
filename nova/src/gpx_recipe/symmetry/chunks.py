@@ -22,7 +22,7 @@ from .resources import allocation
 
 def validate_request(request):
     required={'schema','protocol','protocol_sha256','trials','workers','dispatch_key','seconds'}
-    optional={'template','source_identity','origin','profiled_cache'}
+    optional={'template','source_identity','origin','profiled_cache','prepared_scattering'}
     if not isinstance(request,dict) or set(request)-required-optional or required-set(request) or request['schema']!='radar-model-chunk/v1':
         raise ValueError('Invalid model chunk request')
     protocol=validate_protocol(request['protocol'])
@@ -35,6 +35,9 @@ def validate_request(request):
     if 'profiled_cache' in request:
         from .profiled_cache import validate_manifest
         validate_manifest(request['profiled_cache'], protocol)
+    if 'prepared_scattering' in request:
+        from ..preparation.hints import validate
+        validate(request['prepared_scattering'],protocol)
     if not isinstance(request['trials'],list) or not 1<=len(request['trials'])<=256 or len(set(request['trials']))!=len(request['trials']):
         raise ValueError('Declare one to 256 unique starts in a chunk')
     expected={trial_id(protocol,c['id'],s['id']):(c['id'],s['id']) for c,s in iter_trials(protocol)}
@@ -121,6 +124,10 @@ def execute_chunk(request, input_root, directory, *, cancel=None, runner=run_tri
     cache_discarded=[]
     if 'profiled_cache' in request:
         _,cache_discarded=restore(request['profiled_cache'],protocol,input_root,captured)
+    prepared_scattering=None
+    if 'prepared_scattering' in request:
+        from ..preparation.hints import restore as restore_scattering
+        prepared_scattering=restore_scattering(request['prepared_scattering'],protocol,input_root,captured)
     if 'template_sha256' in protocol:
         from .native_audit import inspect_source
         from .templates import rebind
@@ -173,6 +180,7 @@ def execute_chunk(request, input_root, directory, *, cancel=None, runner=run_tri
             allocation=reported_allocation,wall_seconds=clock()-started,llm_calls=0,grouped_surrogate=True)
         response['profiled_cache']=export(protocol,expected,done,captured,directory)
         response['discarded_cache_candidates']=cache_discarded
+        if prepared_scattering is not None:response['prepared_scattering']=prepared_scattering
         write_json(directory/'response.json',response)
         return response
     with ThreadPoolExecutor(max_workers=budget['workers']) as pool:
@@ -195,5 +203,6 @@ def execute_chunk(request, input_root, directory, *, cancel=None, runner=run_tri
     if protocol.get('policy',{}).get('magnetic_optimizer')=='profiled_quadratic':
         response['profiled_cache']=export(protocol,expected,done,captured,directory)
         response['discarded_cache_candidates']=cache_discarded
+    if prepared_scattering is not None:response['prepared_scattering']=prepared_scattering
     write_json(directory/'response.json',response)
     return response

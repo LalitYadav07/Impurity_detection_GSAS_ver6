@@ -9,6 +9,7 @@ from __future__ import annotations
 import dataclasses
 import copy
 import time
+from pathlib import Path
 import numpy as np
 
 from .native_profiled import NativeMagneticStartingPoint
@@ -95,14 +96,20 @@ def refine(project,path,protocol,*,cache_root=None,candidate=None,screened=None)
         cache_identity=None;cache_path=None
         if cache_root is not None and candidate is not None:
             from .contracts import digest
-            from pathlib import Path
             # The full protocol binds source, calibration, masks, runtime,
             # implementation, nuisance scope and the candidate catalog. Native
             # variable names/maps additionally bind the constructed basis.
             cache_identity=digest(dict(protocol=protocol,candidate=candidate,
                 variables=context.moment_names,maps=context.cartesian_maps.tolist()))
             cache_path=Path(cache_root)/(cache_identity+'.npz')
-        model,identity=context.build(heldouts=4,cache_path=cache_path,cache_identity=cache_identity)
+        factor_cache=None;prepared_scattering=dict(attached=0,native_qualification_required=True)
+        if cache_root is not None:
+            from ..preparation.hints import cache_for
+            factor_cache,prepared_scattering=cache_for(Path(cache_root).parent,protocol,
+                candidate=candidate['id'] if candidate is not None else None)
+        model,identity=context.build(heldouts=4,cache_path=cache_path,cache_identity=cache_identity,
+            factor_cache=factor_cache)
+        identity['prepared_scattering']=prepared_scattering
     except ValueError as exc:
         raise ProfiledScopeError(str(exc)) from exc
     null_cost,_,null_scale=model._evaluate_full(np.zeros(model.dimension))
