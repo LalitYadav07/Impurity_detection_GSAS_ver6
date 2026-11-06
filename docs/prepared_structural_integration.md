@@ -129,6 +129,27 @@ records the evaluator counters at admission and afterward, since its response
 cache can have been populated by the main fit. The final reported objective and
 Rwp follow the retained recovery result, rather than the earlier main fit.
 
+The reduced-profile adapter selects one bounded, process-local peak memo for
+fixed-cell, fixed-profile workloads; the Model magnetic residual adapter uses
+the same memo. Variable-cell/profile workloads keep original native rendering: a
+complete 185-start control exposed a regression hidden by a shorter rendering
+test. This selection does not alter the scientific parameter set.
+The memo supports the reviewed native PNC/PNT peak routines.
+It reuses only exact scalar arguments and exact grid windows; grid contents
+are hashed on every native driver call. Reflections, intensity corrections and
+native summation order remain unchanged. No interpolation or uploaded numeric
+predictions enter this cache. Exclusions, secondary phases and extinction still
+use their full native equations. Unknown drivers, native multiprocessing and
+active response-capture hooks bypass the memo, and temporary functions are
+restored on exceptions. Each adapter reports reuse and bypass counters; its
+64 MiB accounted-cache ceiling and entry bound do not describe total native
+process memory. Periodic bounded probes compare estimated native work saved
+with measured bookkeeping cost. An unprofitable driver call immediately
+returns to the original peak functions; later driver calls can probe again.
+The bypassed native tail is not included in the observed peak-call counter.
+This can reduce repeated rendering, but does not itself solve
+portable preparation or nonlinear cell/profile adaptation.
+
 `ReducedObservation` accepts unknown exposure. Its `mask=True` means usable;
 the snapshot adapter explicitly accepts `invalid_mask=True`. Reduced intensity
 and supplied variance are never converted into invented counts. Verified raw

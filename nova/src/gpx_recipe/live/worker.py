@@ -11,7 +11,7 @@ from .contracts import validate_request,seal_posterior,verify_posterior
 def _read_code_identity():
     import inspect
     from ..symmetry.compiler import package_signature
-    result={name:sha(Path(__file__).parent/name) for name in ["statistics.py","native_profile.py","validated_backend.py","native_quadratic.py","native_kernel_policy.py","native_reflection.py","reflection_factors.py","quadratic_qualification.py","moment_basis.py","central_quadratic.py","gpx_index.py","native_validation.py","contracts.py","worker.py","observations.py","gpx_export.py","resources.py"]}
+    result={name:sha(Path(__file__).parent/name) for name in ["statistics.py","native_profile.py","native_peak_memo.py","validated_backend.py","native_quadratic.py","native_kernel_policy.py","native_reflection.py","reflection_factors.py","quadratic_qualification.py","moment_basis.py","central_quadratic.py","gpx_index.py","native_validation.py","contracts.py","worker.py","observations.py","gpx_export.py","resources.py"]}
     import importlib.util
     for name in ['gsas_magnetic_preflight','gpx_recipe.symmetry.native_magnetic','gpx_recipe.symmetry.native_preparation','gpx_recipe.symmetry.worker','gpx_recipe.execution','gpx_recipe.preparation.identity','gpx_recipe.preparation.hints','gpx_recipe.structural_live.optimization.native_profile_capture']:
         spec=importlib.util.find_spec(name)
@@ -70,7 +70,7 @@ def compile_candidate(source,candidate,k,sites,out,*,particles=256,factor_cache=
         if e>1e-7:raise ValueError('Independent native kernel validation failed')
     np.savez_compressed(out/'kernel.npz',base=base[mask],quadratic=q[:,:,mask],forms=np.array(forms),x=x[mask],y=y[mask],sigma=1/np.sqrt(weight[mask]),labels=np.array(labels))
     from .validated_backend import active_identity
-    meta=dict(native_gpx_sha256=sha(project),kernel_sha256=sha(out/'kernel.npz'),compiler=compiled['diagnostics'],code_identity=code_identity(),backend=active_identity(),id=candidate['id'],name=candidate['magnetic_space_group'],dimensions=n,bin_count=len(native.counts),memory_budget=memory_budget,labels=labels,source_sha256=sha(source),candidate=candidate,k=k,sites=sites,native_errors=errors,validated=True,fixed_nuclear=True)
+    meta=dict(native_gpx_sha256=sha(project),kernel_sha256=sha(out/'kernel.npz'),compiler=compiled['diagnostics'],exact_native_peak_reuse=native.peak_memo.diagnostics(),code_identity=code_identity(),backend=active_identity(),id=candidate['id'],name=candidate['magnetic_space_group'],dimensions=n,bin_count=len(native.counts),memory_budget=memory_budget,labels=labels,source_sha256=sha(source),candidate=candidate,k=k,sites=sites,native_errors=errors,validated=True,fixed_nuclear=True)
     write(out/'kernel.json',meta);return meta
 
 def infer(kernel,destination,*,lower,upper,particles=256,seconds=45.,seed=0):

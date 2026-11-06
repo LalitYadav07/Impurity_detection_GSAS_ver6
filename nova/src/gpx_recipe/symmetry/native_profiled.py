@@ -42,6 +42,8 @@ class NativeMagneticStartingPoint:
         from GSASII import GSASIIstrMath as math,GSASIImapvars as maps
         from GSASII import GSASIImpsubs as mp,GSASIIlattice as lattice
         self.math,self.maps,self.lattice=math,maps,lattice
+        from ..live.native_peak_memo import NativePeakMemo
+        self.peak_memo=NativePeakMemo()
         self.deadline=deadline
         _active=self
         mp.InitMP();main.ptx.pyqlmninit();maps.InitVars();log=io.StringIO()
@@ -125,7 +127,8 @@ class NativeMagneticStartingPoint:
         vector[self.background_indices]=background
         if self.scale_index is not None:vector[self.scale_index]=scale
         self.parms[self.scale_name]=scale
-        result=np.ma.asarray(self.math.errRefine(vector,*self.args),dtype=float)
+        with self.peak_memo.evaluation(self.math):
+            result=np.ma.asarray(self.math.errRefine(vector,*self.args),dtype=float)
         mask=np.ma.getmaskarray(result)
         if self.residual_mask is None:self.residual_mask=mask.copy()
         elif not np.array_equal(mask,self.residual_mask):
@@ -327,6 +330,7 @@ class NativeMagneticStartingPoint:
             independent_variables=self.moment_names,magnetic_atoms=len(self.atoms),
             free_background_coefficients=nb,common_scale_free=self.fixed_scale is None,
             native_calls=self.calls,native_derivative_calls=self.derivative_calls,
+            exact_native_peak_reuse=self.peak_memo.diagnostics(),
             compiler=compiler,compiler_note=compiler_note,compiler_diagnostics=compilation,
             heldout_relative_errors=errors,linear_identity_error=linear_error,
             cache_hit=cached is not None,cache_identity=cache_identity,cache_note=cache_note,

@@ -24,7 +24,7 @@ def constraint_state_signature(maps):
 
 
 class NativeReducedProfile:
-    def __init__(self, filename, *, refresh_cell_reflections=False):
+    def __init__(self, filename, *, refresh_cell_reflections=False, peak_memo_bytes=None):
         numerical_cell=False
         global _active
         from GSASII import GSASIIstrMain as main, GSASIIstrIO as stio
@@ -82,6 +82,18 @@ class NativeReducedProfile:
             if np.max(abs(np.array([self.parms[k] for k in cell_keys])-base_cell))>1e-12:
                 self.cell_indices.append(j)
         self.parms.update(zip(self.vary, self.x0)); maps.Dict2Map(self.parms)
+        from .native_peak_memo import NativePeakMemo, MAXIMUM_BYTES
+        # A complete changing-cell portfolio measured slower with peak memo
+        # bookkeeping despite a gain in short repeated-profile controls.
+        # Select the measured fixed-geometry use case, not fewer cell freedoms.
+        changing_profile=any(len(parts)==3 and parts[1]
+            and parts[2]!='Scale' and not parts[2].startswith('Back;')
+            for parts in (name.split(':',2) for name in self.vary))
+        changing_geometry=bool(self.cell_indices or changing_profile)
+        memo_bytes=(0 if changing_geometry else MAXIMUM_BYTES) if peak_memo_bytes is None else peak_memo_bytes
+        self.peak_memo=NativePeakMemo(memo_bytes,disabled_reason=(
+            'variable-cell/profile workload uses original native rendering'
+            if changing_geometry and peak_memo_bytes is None else 'disabled native reference'))
         self.numerical_indices = self.cell_indices.copy() if numerical_cell else []
         self.derivative_validation = None
         self.parts=[]; self.original_weights={}
@@ -156,7 +168,8 @@ class NativeReducedProfile:
                 zero_observations.append((data,data[1].copy()))
                 data[1]=np.ones_like(data[1])
         try:
-            residual = self.math.errRefine(values, *args)
+            with self.peak_memo.evaluation(self.math):
+                residual = self.math.errRefine(values, *args)
         finally:
             for data,observed in zero_observations:data[1]=observed
         if len(residual) != len(self.counts):
