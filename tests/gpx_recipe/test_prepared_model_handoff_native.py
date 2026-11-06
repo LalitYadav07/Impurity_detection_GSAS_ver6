@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import shutil
 
 import numpy as np
 import pytest
@@ -16,7 +17,8 @@ G=pytest.importorskip('GSASII.GSASIIscriptable')
 from GSASII import GSASIIstrMain as MAIN
 from test_preparation_worker_native import request as preparation_request
 from gpx_recipe.execution import write_json
-from gpx_recipe.preparation import hints
+from gpx_recipe.preparation import hints,authority,certificates
+from gpx_recipe.preparation.reference import create_reference
 from gpx_recipe.preparation.operations import create_library,stage_entry,publish_entry
 from gpx_recipe.preparation.worker import execute
 from gpx_recipe.symmetry.bundle import pack,unpack
@@ -27,8 +29,10 @@ from gpx_recipe.symmetry.native_magnetic import construct_theory
 from gpx_recipe.symmetry.worker import Artifacts
 
 
-@pytest.mark.parametrize('kind,change',[('PNC','same'),('PNT','same'),('PNC','cell')])
-def test_theory_library_reaches_real_model_jobs_and_current_native_checks(tmp_path,kind,change):
+@pytest.mark.parametrize('kind,change,authenticated',[
+    ('PNC','same',False),('PNT','same',False),('PNC','cell',False),
+    ('PNC','same',True),('PNT','same',True),('PNC','cell',True)])
+def test_theory_library_reaches_real_model_jobs_and_current_native_checks(tmp_path,kind,change,authenticated):
     payload,construction,candidate=preparation_request(tmp_path/'before-measurement',kind)
     settings=dict(candidate=candidate,k=construction['k'],sites=construction['sites'],maximum_moment=6.,
         refine_histogram_scale=True,refine_background=True)
@@ -36,12 +40,47 @@ def test_theory_library_reaches_real_model_jobs_and_current_native_checks(tmp_pa
         banks={'selected bank':dict(instrument=payload['instrument'],grid=payload['grid'])},
         models=[dict(kind='magnetic',bank='selected bank',settings=settings)])
     entry=library.document['entries'][0]['id'];attempt=library.start(entry)
-    preparation=stage_entry(library,entry,attempt,tmp_path/'offline-calculation')
-    result=execute('magnetic',preparation)
+    calculation=tmp_path/'offline-calculation'
+    preparation=stage_entry(library,entry,attempt,calculation)
+    script=Path(__file__).resolve().parents[2]/'scripts/ndip_model_campaign.py'
+    envelope=None
+    if authenticated:
+        # The producer and certificate are real; only the trusted Galaxy
+        # creating-job metadata is simulated for this offline integration gate.
+        payload=copy.deepcopy(preparation);names=[]
+        for key in ('source','instrument'):
+            payload[key]=str(Path(payload[key]).relative_to(calculation));names.append(payload[key])
+        payload['destination']='compiled';producer_source=calculation/payload['source']
+        pack(calculation,tmp_path/'preparation-inputs.zip',names)
+        write_json(tmp_path/'preparation-request.json',dict(schema='radar-model-native/v1',
+            operation='preparation-magnetic',payload=payload,implementation_sha256=package_signature(),
+            expected_source_sha256=file_sha(producer_source),dispatch_key='b'*24,timeout=180,
+            input_hashes={name:file_sha(calculation/name) for name in names}))
+        certificate=tmp_path/'certificate.json'
+        with (tmp_path/'preparation-wrapper.log').open('w') as log:
+            subprocess.run([sys.executable,str(script),'native',str(producer_source),
+                str(tmp_path/'preparation-inputs.zip'),str(tmp_path/'preparation-request.json'),
+                str(tmp_path/'preparation-job'),str(tmp_path/'preparation-result.zip'),
+                '--preparation-certificate',str(certificate)],check=True,timeout=210,stdout=log,stderr=subprocess.STDOUT)
+        producer=unpack(tmp_path/'preparation-result.zip',tmp_path/'preparation-received')
+        result=json.loads((producer/'response.json').read_text())['result']
+        shutil.copytree(producer/'native/compiled',preparation['destination'])
+        result['output']=preparation['destination']
+        envelope=tmp_path/'server-preparation-evidence.json'
+        write_json(envelope,dict(schema=authority.SCHEMA,records=[dict(certificate_path=str(certificate),
+            tool_id='neutrons_radar_pd_model_campaign_prototype',tool_version='0.2.17',job_state='ok',
+            dataset_state='ok',dataset_deleted=False,dataset_purged=False,
+            job_stdout=certificates.MARKER+file_sha(certificate)+'\n')]))
+    else:result=execute('magnetic',preparation)
     assert publish_entry(library,entry,attempt,preparation,result)['all_prepared']
-    offline=Path(result['output'])
     # Reveal the actual observation only after the preparation is complete.
-    parent=G.G2Project(gpxfile=str(offline/'native-reference/reference.gpx'))
+    # Installed preparation workers export data-only arrays, not their private
+    # construction GPXs. Rebuild an independent acquisition context from the
+    # same original CIF/profile, including fresh native IDs in every case.
+    model=library.row(entry)['model']
+    reference=create_reference(library.root/library.document['specification']['source'],
+        library.root/model['instrument'],tmp_path/'actual-reference',**model['grid'])
+    parent=G.G2Project(gpxfile=str(reference['path']))
     if change=='cell':
         cell=parent.phase(0).data['General']['Cell']
         cell[1]*=1.003;cell[2]*=.998
@@ -90,10 +129,10 @@ def test_theory_library_reaches_real_model_jobs_and_current_native_checks(tmp_pa
     message=dict(schema='radar-model-chunk/v1',protocol=protocol,protocol_sha256=digest(protocol),
         trials=ids,workers=1,dispatch_key='a'*24,seconds=240,prepared_scattering=document)
     write_json(tmp_path/'model-request.json',message)
-    script=Path(__file__).resolve().parents[2]/'scripts/ndip_model_campaign.py'
     with (tmp_path/'model-wrapper.log').open('w') as log:
         subprocess.run([sys.executable,str(script),'chunk',str(source),str(tmp_path/'model-assets.zip'),
-            str(tmp_path/'model-request.json'),str(tmp_path/'model-job'),str(tmp_path/'model-result.zip')],
+            str(tmp_path/'model-request.json'),str(tmp_path/'model-job'),str(tmp_path/'model-result.zip')]+
+            (['--preparation-evidence',str(envelope)] if envelope is not None else []),
             check=True,timeout=300,stdout=log,stderr=subprocess.STDOUT)
     received=unpack(tmp_path/'model-result.zip',tmp_path/'received')
     response=json.loads((received/'response.json').read_text())
@@ -107,9 +146,10 @@ def test_theory_library_reaches_real_model_jobs_and_current_native_checks(tmp_pa
     compiler=proof['compiler_diagnostics']
     assert compiler['scattering_factors_reused'] == (change=='same')
     assert not compiler['scattering_qualification_reused']
+    assert compiler['scattering_authenticated_origin_reused']==(authenticated and change=='same')
     if change=='same':
         assert compiler['native_amplitude_calls']==0
-        assert compiler['coefficient_structure_factor_calls']==19
+        assert compiler['coefficient_structure_factor_calls']==(3 if authenticated else 19)
     else:assert compiler['native_amplitude_calls']==6
     # Final GPXs are real native outputs, separate from the theory library.
     published=list(received.glob('trials/*/results/*.gpx'))
@@ -136,7 +176,8 @@ def test_theory_library_reaches_real_model_jobs_and_current_native_checks(tmp_pa
     live_document=hints.capture(library,hints.live_context(live_request,catalog),live_inputs)
     live_request['prepared_scattering']=live_document
     packet=tmp_path/'live-packet.zip';create_packet(live_request,packet,prepared_root=live_inputs)
-    live=run_packet(packet,tmp_path/'live-native',tmp_path/'live-result.zip',tmp_path/'live-cache.zip')
+    with authority.server_scope(envelope,tmp_path):
+        live=run_packet(packet,tmp_path/'live-native',tmp_path/'live-result.zip',tmp_path/'live-cache.zip')
     assert len(live['rows'])==1 and live['rows'][0]['status'] in {'conditional_posterior','sampling_unresolved'},live['rows']
     assert not live['rows'][0].get('sampling_incomplete'),live['rows']
     assert live['rows'][0].get('posterior')
@@ -151,9 +192,10 @@ def test_theory_library_reaches_real_model_jobs_and_current_native_checks(tmp_pa
     live_compiler=live_meta['compiler']['native_reflection_diagnostics']
     assert live_compiler['scattering_factors_reused']==(change=='same')
     assert not live_compiler['scattering_qualification_reused']
+    assert live_compiler['scattering_authenticated_origin_reused']==(authenticated and change=='same')
     assert live_compiler['native_amplitude_calls']==(0 if change=='same' else 6)
-    assert live_compiler['coefficient_structure_factor_calls']==19
-    write_json(tmp_path/'handoff.json',dict(kind=kind,change=change,library_id=document['library_id'],
+    assert live_compiler['coefficient_structure_factor_calls']==(3 if authenticated and change=='same' else 19)
+    write_json(tmp_path/'handoff.json',dict(kind=kind,change=change,authenticated_origin=authenticated,library_id=document['library_id'],
         snapshot_sha256=document['snapshot_sha256'],native_compiler=compiler,
         statuses=[row['status'] for row in response['trials']],published_gpx=len(published),
         live_compiler=live_compiler,live_status=live['rows'][0]['status']))

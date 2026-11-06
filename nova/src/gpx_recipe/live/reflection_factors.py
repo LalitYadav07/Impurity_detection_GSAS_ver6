@@ -14,6 +14,8 @@ import json
 from pathlib import Path
 import re
 import uuid
+import zipfile
+import zlib
 
 import numpy as np
 
@@ -150,6 +152,16 @@ class ScatteringFactorCache:
             path = self._sources.get(identity)
         if path is None:
             return None, False
+        try:
+            return self._read_portable(path,identity),False
+        except (zipfile.BadZipFile,zlib.error) as error:
+            # Portable factors are optional acceleration hints. Normalize ZIP
+            # corruption so the compiler's existing rebuild path retains the
+            # scientific candidate instead of aborting its calculation.
+            raise ValueError('Imported scattering archive is invalid') from error
+
+    @staticmethod
+    def _read_portable(path,identity):
         from .array_limits import validate_npz_bytes
         # The origin must bind the same immutable bytes actually decoded,
         # including if a producer atomically replaces its path meanwhile.
@@ -169,7 +181,7 @@ class ScatteringFactorCache:
                     or digest_array(data['factors']) != manifest['sha256']):
                 raise ValueError('Scattering-factor identity or checksum differs')
             block = AmplitudeBlock(identity, data['factors'], manifest['proof'],source_sha256)
-        return block, False
+        return block
 
     def _admit_native(self, identity, factors, proof):
         if (proof.get('all_coefficient_directions_checked') is not True

@@ -56,6 +56,9 @@ if variant=='corrupt':
     injected=work/'changed-factors.npz'
     np.savez_compressed(injected,factors=factors,manifest=np.array(json.dumps(metadata)))
     cache.attach_source(injected,identity=manifest['detail']['scattering']['identity'])
+elif variant=='invalid':
+    injected=work/'invalid-factors.npz';injected.write_bytes(b'not a NumPy archive')
+    cache.attach_source(injected,identity=manifest['detail']['scattering']['identity'])
 reference=create_reference(library.root/library.document['specification']['source'],
     library.root/model['instrument'],work/'reference',**model['grid'])
 project=G.G2Project(gpxfile=str(reference['path']));phase=project.phase(0)
@@ -99,6 +102,7 @@ elif variant!='fresh':
     assert proof['native_amplitude_calls']==2*dimension,proof
     assert proof['coefficient_structure_factor_calls']>=2*dimension**2+1,proof
 if variant=='corrupt':assert 'failed native checks' in proof['scattering_cache_note']
+if variant=='invalid':assert 'archive is invalid' in proof['scattering_cache_note']
 assert len(fitted['rows'])==2*dimension and fitted['best']['cost']<1e-5
 assert proof['native_profile_calls']>=1
 np.savez_compressed(work/'checked.npz',residuals=np.array([r['residual'] for r in fitted['rows']]),observed=observed)
@@ -158,7 +162,7 @@ def test_cold_authenticated_magnetic_reuse_keeps_current_physics_and_all_fit_che
     script=tmp_path/'consumer.py';script.write_text(CONSUMER);results={}
     cases=[('certified','same',str(envelope)),('uncertified','same','none'),('fresh','fresh','none'),
         ('width','width',str(envelope)),('cell','cell',str(envelope)),
-        ('adp','adp',str(envelope)),('corrupted','corrupt',str(envelope))]
+        ('adp','adp',str(envelope)),('corrupted','corrupt',str(envelope)),('invalid','invalid',str(envelope))]
     # Keep the existing full invalidation controls, and add an independent
     # higher-dimensional cold timing/control case without dropping any start.
     if site_count==3:cases=cases[:3]
@@ -170,7 +174,7 @@ def test_cold_authenticated_magnetic_reuse_keeps_current_physics_and_all_fit_che
         results[label]=json.loads((output/'result.json').read_text())
         assert file_sha(archive)==frozen
         write_json(tmp_path/'progress.json',dict(kind=kind,completed=list(results),expected=len(cases)))
-    for label in ('uncertified','fresh')+(('corrupted',) if site_count==1 else ()):
+    for label in ('uncertified','fresh')+(('corrupted','invalid') if site_count==1 else ()):
         np.testing.assert_allclose(results[label]['costs'],results['certified']['costs'],rtol=1e-6,atol=1e-6)
         with np.load(tmp_path/label/'checked.npz') as a,np.load(tmp_path/'certified/checked.npz') as b:
             np.testing.assert_allclose(a['residuals'],b['residuals'],rtol=1e-6,atol=2e-5)

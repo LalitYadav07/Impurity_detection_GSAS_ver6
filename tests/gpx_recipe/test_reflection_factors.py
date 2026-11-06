@@ -2,6 +2,7 @@
 import json
 import hashlib
 import io
+import zipfile
 
 import numpy as np
 import pytest
@@ -155,3 +156,20 @@ def test_factor_origin_binds_decoded_bytes_even_if_the_file_is_replaced(tmp_path
     np.testing.assert_array_equal(loaded.factors,original)
     assert loaded.source_sha256==hashlib.sha256(before).hexdigest()
     assert loaded.source_sha256!=hashlib.sha256(replacement).hexdigest()
+
+
+@pytest.mark.parametrize('damage',['not_zip','truncated','crc'])
+def test_archive_corruption_uses_the_compilers_recoverable_hint_error(tmp_path,damage):
+    factors=np.ones((2,6,3));cache=ScatteringFactorCache(tmp_path)
+    cache._admit_native('a'*64,factors,proof(factors));path=tmp_path/('a'*64+'.npz')
+    if damage=='not_zip':path.write_bytes(b'not a NumPy archive')
+    elif damage=='truncated':path.write_bytes(path.read_bytes()[:20])
+    else:
+        with np.load(path,allow_pickle=False) as data:values={name:data[name] for name in data.files}
+        np.savez(path,**values)
+        with zipfile.ZipFile(path) as archive:entry=archive.getinfo('factors.npy')
+        raw=bytearray(path.read_bytes())
+        start=entry.header_offset+30+int.from_bytes(raw[entry.header_offset+26:entry.header_offset+28],'little')+int.from_bytes(raw[entry.header_offset+28:entry.header_offset+30],'little')
+        raw[start+entry.compress_size-1]^=1;path.write_bytes(raw)
+    with pytest.raises(ValueError,match='archive is invalid'):
+        ScatteringFactorCache(tmp_path).lookup('a'*64)
