@@ -11,6 +11,7 @@ from .magnetic import MagneticResponse, MAX_BYTES
 from .identity import _plain, native_identity, BOOKKEEPING_CONTROLS
 from ..live.moment_basis import from_native
 from ..live.native_kernel_policy import compile_native_magnetic_kernel
+from ..live.quadratic_qualification import check_coefficients
 
 
 def _context(native):
@@ -24,6 +25,12 @@ def _context(native):
     hfx = f":{histogram['hId']}:"
     if native.controls[hfx+'histType'] not in {'PNC', 'PNT'}:
         raise ValueError('Preparation requires a reviewed PNC/PNT native profile')
+    for phase in phases.values():
+        phfx=f"{phase['pId']}:{histogram['hId']}:"
+        if (native.parms.get(phfx+'Extinction',0.)!=0.
+                or native.parms.get(phfx+'LeBail',False)
+                or phase['General'].get('doPawley')):
+            raise ValueError('Intensity-dependent or extracted-intensity corrections require full native evaluation, not quadratic preparation')
     background = [k for k in native.vary if k.startswith(hfx+'Back;')]
     scale = hfx+'Scale'
     moments = [k for k in native.vary if '::AM' in k or k.startswith('::constr')]
@@ -133,8 +140,16 @@ def qualify_response(response, native):
             signal_errors.append(difference/max(float(np.max(abs(direct-baseline))), 1e-12))
         if not np.isfinite(errors+signal_errors).all() or max(errors+signal_errors) > 1e-8:
             raise ValueError('Prepared forward response disagrees with independent native profiles')
+        native.parms[scale]=1.
+        def derivatives(moment):
+            point=original.copy();point[indices]=moment;point[backgrounds]=0.
+            if scale_index is not None:point[scale_index]=1.
+            _,jacobian=native.profile(point,jacobian=True)
+            return jacobian[indices]
+        coefficients=check_coefficients(response.quadratic,derivatives)
         response._seal_native()
-        return dict(independent_total_errors=errors, independent_magnetic_errors=signal_errors)
+        return dict(independent_total_errors=errors, independent_magnetic_errors=signal_errors,
+            coefficient_validation=coefficients)
     finally:
         native.parms[scale] = source_scale
         native.profile(original)

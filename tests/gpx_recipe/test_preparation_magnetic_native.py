@@ -1,5 +1,6 @@
 """Native controls for portable unweighted physics and fresh scan binding."""
 import hashlib
+import json
 import numpy as np
 import pytest
 
@@ -32,6 +33,10 @@ def test_portable_response_requires_fresh_native_checks_after_load(tmp_path, con
         restored.bind(**kwargs)
     validation = qualify_response(restored, native)
     assert max(validation['independent_magnetic_errors']) < 1e-8
+    coefficients=validation['coefficient_validation']
+    assert coefficients['all_coefficient_directions_checked']
+    assert coefficients['symmetric_coefficients']==response.quadratic.shape[1]*(response.quadratic.shape[1]+1)//2
+    assert max(coefficients['maximum_tolerance_ratios'])<=1.
     restored.bind(**kwargs)
     for name in ARRAYS:
         np.testing.assert_array_equal(getattr(restored, name), getattr(response, name))
@@ -138,3 +143,33 @@ def test_another_native_adapter_invalidates_measured_global_maps(tmp_path):
     with pytest.raises(RuntimeError, match='process-global'):
         measured.residual(measured.initial[measured.moment_indices], measured.source_scale,
             measured.initial[measured.background_indices])
+
+
+def test_all_coefficients_are_checked_at_the_complete_24_variable_limit(tmp_path):
+    project,path=artificial_project(tmp_path,sites=4)
+    nuclear,magnetic=project.phases()
+    for i,xyz in enumerate([(.19,.47,.63),(.51,.28,.79),(.62,.83,.17),(.87,.52,.39)],5):
+        nuclear.add_atom(*xyz,'Fe','Fe'+str(i))
+        magnetic.add_atom(*xyz,'Fe+3','Fe'+str(i))
+        magnetic.data['Atoms'][-1][2]='M'
+        magnetic.data['Atoms'][-1][7:10]=[1.,-1.5,.7]
+    project.index_ids();project.save()
+    response=compile_response(NativeReducedProfile(path))
+    assert response.quadratic.shape[1]==24
+    proof=response.proof['coefficient_validation']
+    assert proof['symmetric_coefficients']==300 and proof['native_jacobian_calls']==48
+    assert proof['all_coefficient_directions_checked']
+    assert max(proof['maximum_tolerance_ratios'])<=1.
+    (tmp_path/'qualification.json').write_text(json.dumps(dict(dimensions=24,
+        compile_and_qualification_seconds=response.proof['seconds'],
+        coefficient_validation=proof,compiler=response.proof['compiler']),indent=2)+'\n')
+
+
+def test_intensity_dependent_corrections_do_not_get_a_quadratic_preparation_seal(tmp_path):
+    _,path=artificial_project(tmp_path)
+    native=NativeReducedProfile(path)
+    magnetic=next(p for p in native.histo_phases[1].values() if p['General']['Type']=='magnetic')
+    histogram=native.histo_phases[0][native.parts[0][0]]
+    native.parms[f"{magnetic['pId']}:{histogram['hId']}:Extinction"]=.1
+    with pytest.raises(ValueError,match='Intensity-dependent'):
+        compile_response(native)
