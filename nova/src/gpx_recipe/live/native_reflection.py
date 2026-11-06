@@ -90,7 +90,8 @@ def _amplitudes(function, reflection, metric, hfx, pfx, symmetry, controls, para
 
 
 def compile_reflection_quadratic(*, math, lattice, histogram, phases, histdict,
-                                 parameters, controls, basis, check, histogram_name):
+                                 parameters, controls, basis, check, histogram_name,
+                                 verify_coefficients=False):
     """Return unweighted bin-by-moment-by-moment response at current nuisance values.
 
     ``basis`` is the shared audited native homogeneous moment map. The caller
@@ -152,6 +153,7 @@ def compile_reflection_quadratic(*, math, lattice, histogram, phases, histdict,
     private_parameters = parameters.copy()
     keys = [keys for _, _, keys in basis.atoms]
     calls = 0
+    verification_calls=0
 
     def amplitudes(point):
         nonlocal calls
@@ -169,6 +171,20 @@ def compile_reflection_quadratic(*, math, lattice, histogram, phases, histdict,
     for index in range(dimension):
         point = np.eye(dimension)[index]
         amplitude_basis[:, :, index] = (amplitudes(point)-amplitudes(-point))/2.
+    coefficient_validation=None
+    if verify_coefficients:
+        from .quadratic_qualification import check_factor_coefficients
+        def intensities(point):
+            nonlocal verification_calls
+            check()
+            for row,values in zip(keys,basis.components@point):
+                private_parameters.update(zip(row,values))
+            reflection=copy.deepcopy(reference)
+            function(reflection,metric,hfx,pfx,phase['General']['SGData'],controls,private_parameters)
+            verification_calls+=1
+            return reflection['RefList'][:,9]
+        try:coefficient_validation=check_factor_coefficients(amplitude_basis,intensities)
+        except ValueError as error:raise ReflectionCompilerUnavailable(str(error)) from error
     quadratic = np.empty((len(axis), dimension, dimension))
     # Stream symmetric cross terms. A large reflection inventory must not
     # allocate another dense reflection-by-D-by-D tensor as temporary storage.
@@ -181,15 +197,18 @@ def compile_reflection_quadratic(*, math, lattice, histogram, phases, histdict,
     check()
     return quadratic, dict(method='native_reflection_amplitudes', dimensions=dimension,
         reflections=count, bins=len(axis), native_amplitude_calls=calls,
+        coefficient_structure_factor_calls=verification_calls,
+        native_total_structure_factor_calls=calls+verification_calls,
         native_profile_calls=profile_proof['native_driver_calls'], profile_capture=profile_proof,
         profile_seconds=profile_seconds, amplitude_assembly_seconds=time.monotonic()-before_amplitudes,
         amplitude_bytes=amplitude_basis.nbytes, response_bytes=quadratic.nbytes,
         profile_bytes=response.data.nbytes+response.indices.nbytes+response.indptr.nbytes,
+        coefficient_validation=coefficient_validation,
         seconds=time.monotonic()-started, observation_values_used=False, native_functions_replaced=False,
         tracing_restored=sys.gettrace() is None, fit_slice=[fit_slice.start, fit_slice.stop])
 
 
-def compile_profile_reflections(native, reference, indices):
+def compile_profile_reflections(native, reference, indices, *,verify_coefficients=False):
     """Use the shared physical response in a forward-only native adapter."""
     from .native_profile import NativeReducedProfile
     from .moment_basis import from_native
@@ -209,7 +228,7 @@ def compile_profile_reflections(native, reference, indices):
     quadratic, proof = compile_reflection_quadratic(math=native.math, lattice=native.lattice,
         histogram=histogram, phases=native.histo_phases[1], histdict=native.histdict,
         parameters=native.parms, controls=native.controls, basis=basis,
-        check=native._check, histogram_name=name)
+        check=native._check, histogram_name=name,verify_coefficients=verify_coefficients)
     if len(base) != len(quadratic):
         raise ReflectionCompilerUnavailable('Native profile and reflection grids differ')
     # errRefine's saved calculated array is zero at its native excluded bins.

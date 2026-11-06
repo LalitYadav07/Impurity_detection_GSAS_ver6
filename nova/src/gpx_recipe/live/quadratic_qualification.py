@@ -8,6 +8,63 @@ Independent full-profile checks remain required.
 import numpy as np
 
 
+def compare_coefficients(quadratic,reference,*,relative_tolerance=1e-8,absolute_fraction=1e-12):
+    """Compare complete independently obtained coefficient arrays."""
+    q=np.asarray(quadratic,float);other=np.asarray(reference,float)
+    if q.ndim!=3 or q.shape!=other.shape or q.shape[1]!=q.shape[2] or not np.isfinite(q).all() or not np.isfinite(other).all():
+        raise ValueError('Complete finite coefficient arrays in the same basis are required')
+    diagonals=np.max(abs(np.diagonal(other,axis1=1,axis2=2)),axis=0)
+    floor=max(float(np.max(diagonals))*absolute_fraction,np.finfo(float).tiny)
+    maximum=0.
+    for i in range(q.shape[1]):
+        scales=np.sqrt(diagonals)*np.sqrt(diagonals[i])
+        ratio=np.max(abs(q[:,:,i]-other[:,:,i]),axis=0)/(relative_tolerance*scales+floor)
+        maximum=max(maximum,float(np.max(ratio)))
+    if not np.isfinite(maximum) or maximum>1.:
+        raise ValueError('Prepared quadratic coefficients disagree with independently rebuilt native coefficients')
+    return dict(maximum_tolerance_ratio=maximum,relative_tolerance=relative_tolerance,absolute_floor=floor)
+
+
+def check_factor_coefficients(factors,forward,*,relative_tolerance=1e-8,absolute_fraction=1e-12):
+    """Verify every Gram coefficient using black-box native reflection F².
+
+    Native peak shapes are checked separately. This skips neither mixed
+    coefficients nor reflections, and does not differentiate a cached tensor.
+    """
+    a=np.asarray(factors,float)
+    if a.ndim!=3 or not len(a) or not 1<=a.shape[2]<=24 or not np.isfinite(a).all():
+        raise ValueError('A bounded finite reflection amplitude basis is required')
+    dimension=a.shape[2];diagonals=np.sum(a*a,axis=1)
+    floor=max(float(np.max(diagonals))*absolute_fraction,np.finfo(float).tiny)
+    calls=0;maximum=0.
+    def evaluate(point):
+        nonlocal calls
+        value=np.asarray(forward(point),float);calls+=1
+        if value.shape!=(len(a),) or not np.isfinite(value).all():
+            raise ValueError('Native reflection intensity inventory changed')
+        return value.copy()
+    def check(actual,expected,i,j):
+        nonlocal maximum
+        scale=np.sqrt(diagonals[:,i])*np.sqrt(diagonals[:,j])
+        ratio=float(np.max(abs(actual-expected)/(relative_tolerance*scale+floor)))
+        maximum=max(maximum,ratio)
+        if not np.isfinite(ratio) or ratio>1.:
+            raise ValueError('Captured magnetic amplitudes disagree with complete native reflection coefficients')
+    zero=evaluate(np.zeros(dimension));eye=np.eye(dimension)
+    for i in range(dimension):
+        check((evaluate(eye[i])+evaluate(-eye[i]))/2-zero,diagonals[:,i],i,i)
+        for j in range(i):
+            native=(evaluate(eye[i]+eye[j])+evaluate(-eye[i]-eye[j])-
+                evaluate(eye[i]-eye[j])-evaluate(-eye[i]+eye[j]))/8.
+            check(native,np.sum(a[:,:,i]*a[:,:,j],axis=1),i,j)
+    return dict(method='complete native reflection-intensity polarization',dimensions=dimension,
+        reflections=len(a),symmetric_coefficients=dimension*(dimension+1)//2,
+        native_structure_factor_calls=calls,native_jacobian_calls=0,
+        relative_tolerance=relative_tolerance,absolute_floor=floor,maximum_tolerance_ratio=maximum,
+        all_coefficient_directions_checked=True,
+        scope='Every native reflection coefficient at this fixed context; independent full-profile checks remain required')
+
+
 def check_coefficients(quadratic,derivatives,*,relative_tolerance=1e-8,
                        absolute_fraction=1e-12):
     """Stream coefficient columns using J(+e_i) - J(-e_i) = 4 Q[:, :, i].

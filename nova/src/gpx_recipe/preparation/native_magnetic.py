@@ -11,7 +11,7 @@ from .magnetic import MagneticResponse, MAX_BYTES
 from .identity import _plain, native_identity, BOOKKEEPING_CONTROLS
 from ..live.moment_basis import from_native
 from ..live.native_kernel_policy import compile_native_magnetic_kernel
-from ..live.quadratic_qualification import check_coefficients
+from ..live.quadratic_qualification import check_coefficients,compare_coefficients
 
 
 def _context(native):
@@ -146,7 +146,23 @@ def qualify_response(response, native):
             if scale_index is not None:point[scale_index]=1.
             _,jacobian=native.profile(point,jacobian=True)
             return jacobian[indices]
-        coefficients=check_coefficients(response.quadratic,derivatives)
+        # Full powder Jacobians repeat the peak rendering and numerical
+        # derivatives of every native moment at every basis direction. Use
+        # complete native reflection F² checks plus one native peak response
+        # where supported; retain the full-Jacobian oracle as automatic fallback.
+        from ..live.native_reflection import compile_profile_reflections,ReflectionCompilerUnavailable
+        anchor=original.copy();anchor[indices]=0.;anchor[backgrounds]=0.
+        if scale_index is not None:anchor[scale_index]=1.
+        try:
+            checked=compile_profile_reflections(native,anchor,indices,verify_coefficients=True)
+        except ReflectionCompilerUnavailable as error:
+            coefficients=check_coefficients(response.quadratic,derivatives)
+            coefficients['fallback_reason']=str(error)
+        else:
+            rebuilt=checked['quadratic'].transpose(2,0,1)
+            comparison=compare_coefficients(response.quadratic,rebuilt)
+            coefficients=dict(checked['diagnostics']['coefficient_validation'],
+                prepared_tensor_comparison=comparison,profile_capture=checked['diagnostics']['profile_capture'])
         response._seal_native()
         return dict(independent_total_errors=errors, independent_magnetic_errors=signal_errors,
             coefficient_validation=coefficients)

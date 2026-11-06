@@ -1,6 +1,7 @@
 """Native controls for portable unweighted physics and fresh scan binding."""
 import hashlib
 import json
+import time
 import numpy as np
 import pytest
 
@@ -8,7 +9,7 @@ G = pytest.importorskip('GSASII.GSASIIscriptable')
 from test_native_profiled import artificial_project
 from gpx_recipe.live.native_profile import NativeReducedProfile
 from gpx_recipe.symmetry.native_profiled import NativeMagneticStartingPoint
-from gpx_recipe.preparation.magnetic import ARRAYS, load
+from gpx_recipe.preparation.magnetic import ARRAYS, MagneticResponse, load
 from gpx_recipe.preparation.native_magnetic import compile_response, physics_identity, qualify_response
 
 
@@ -36,7 +37,8 @@ def test_portable_response_requires_fresh_native_checks_after_load(tmp_path, con
     coefficients=validation['coefficient_validation']
     assert coefficients['all_coefficient_directions_checked']
     assert coefficients['symmetric_coefficients']==response.quadratic.shape[1]*(response.quadratic.shape[1]+1)//2
-    assert max(coefficients['maximum_tolerance_ratios'])<=1.
+    assert coefficients['maximum_tolerance_ratio']<=1.
+    assert coefficients['prepared_tensor_comparison']['maximum_tolerance_ratio']<=1.
     restored.bind(**kwargs)
     for name in ARRAYS:
         np.testing.assert_array_equal(getattr(restored, name), getattr(response, name))
@@ -154,14 +156,48 @@ def test_all_coefficients_are_checked_at_the_complete_24_variable_limit(tmp_path
         magnetic.data['Atoms'][-1][2]='M'
         magnetic.data['Atoms'][-1][7:10]=[1.,-1.5,.7]
     project.index_ids();project.save()
-    response=compile_response(NativeReducedProfile(path))
+    native=NativeReducedProfile(path)
+    response=compile_response(native)
     assert response.quadratic.shape[1]==24
     proof=response.proof['coefficient_validation']
-    assert proof['symmetric_coefficients']==300 and proof['native_jacobian_calls']==48
+    assert proof['symmetric_coefficients']==300 and proof['native_jacobian_calls']==0
+    assert proof['native_structure_factor_calls']==1153
     assert proof['all_coefficient_directions_checked']
-    assert max(proof['maximum_tolerance_ratios'])<=1.
+    assert proof['maximum_tolerance_ratio']<=1.
+    # Retain the slower full native powder Jacobian as an independent oracle.
+    from gpx_recipe.live.quadratic_qualification import check_coefficients
+    indices=[i for i,k in enumerate(native.vary) if '::AM' in k or k.startswith('::constr')]
+    backgrounds=[i for i,k in enumerate(native.vary) if ':Back;' in k]
+    histogram=native.histo_phases[0][native.parts[0][0]];scale=f":{histogram['hId']}:Scale"
+    scale_index=native.vary.index(scale) if scale in native.vary else None
+    original=native.x0.copy();source_scale=native.parms[scale]
+    def derivatives(moment):
+        values=original.copy();values[indices]=moment;values[backgrounds]=0.
+        native.parms[scale]=1.
+        if scale_index is not None:values[scale_index]=1.
+        return native.profile(values,jacobian=True)[1][indices]
+    began=time.monotonic()
+    try:independent=check_coefficients(response.quadratic,derivatives)
+    finally:
+        native.parms[scale]=source_scale;native.profile(original)
+    oracle_seconds=time.monotonic()-began
+    assert max(independent['maximum_tolerance_ratios'])<=1.
+    # Construct a response corruption invisible to the original seven random
+    # probes. The complete native-coefficient check must still reject it.
+    rng=np.random.default_rng(30917);probes=[]
+    for _ in range(7):
+        probes.append(rng.normal(size=24)*2.);rng.normal(size=len(backgrounds));rng.uniform(.3,3.)
+    _,_,vh=np.linalg.svd(np.asarray(probes),full_matrices=True);unseen=vh[-1]
+    bad=response.quadratic.copy();bad[len(bad)//2]+=1e-3*np.outer(unseen,unseen)
+    forged=MagneticResponse(**{name:(bad if name=='quadratic' else getattr(response,name)) for name in ARRAYS},
+        physics_sha256=response.physics_sha256,proof=response.proof)
+    with pytest.raises(ValueError,match='independently rebuilt native coefficients'):
+        qualify_response(forged,native)
+    assert forged._native_seal is None
     (tmp_path/'qualification.json').write_text(json.dumps(dict(dimensions=24,
         compile_and_qualification_seconds=response.proof['seconds'],
+        independent_full_powder_jacobian_seconds=oracle_seconds,
+        independent_full_powder_jacobian=independent,
         coefficient_validation=proof,compiler=response.proof['compiler']),indent=2)+'\n')
 
 
@@ -173,3 +209,18 @@ def test_intensity_dependent_corrections_do_not_get_a_quadratic_preparation_seal
     native.parms[f"{magnetic['pId']}:{histogram['hId']}:Extinction"]=.1
     with pytest.raises(ValueError,match='Intensity-dependent'):
         compile_response(native)
+
+
+def test_unavailable_reflection_check_automatically_retains_full_native_jacobian_checks(tmp_path,monkeypatch):
+    from gpx_recipe.live import native_reflection
+    _,path=artificial_project(tmp_path)
+    original=native_reflection.compile_profile_reflections
+    def unavailable(*args,**kwargs):
+        if kwargs.get('verify_coefficients'):
+            raise native_reflection.ReflectionCompilerUnavailable('Injected reflection capture unavailable')
+        return original(*args,**kwargs)
+    monkeypatch.setattr(native_reflection,'compile_profile_reflections',unavailable)
+    response=compile_response(NativeReducedProfile(path))
+    proof=response.proof['coefficient_validation']
+    assert proof['all_coefficient_directions_checked'] and proof['native_jacobian_calls']==6
+    assert proof['fallback_reason']=='Injected reflection capture unavailable'
