@@ -13,11 +13,11 @@ from radar_pd_nova.model_runtime import GalaxyModelRuntime
 from radar_pd_nova.preparation_history import PreparationHistory, saved_preparations, INPUT_LABEL, STATE_LABEL
 from radar_pd_nova.preparation_registry import PreparationRegistry
 from test_model_runtime import remote
-from test_preparation_queue import setup, complete
+from test_preparation_queue import setup, complete, entry
 
 
-def history_setup(remote,tmp_path,count=2):
-    queue,snapshots,_=setup(remote,tmp_path,count=count)
+def history_setup(remote,tmp_path,count=2,*,batch_size=1):
+    queue,snapshots,_=setup(remote,tmp_path,count=count,batch_size=batch_size)
     runtime,service,_=remote
     search=service.search_history_datasets
     def rows(query,**kwargs):
@@ -41,7 +41,7 @@ def test_base_uploaded_once_and_progress_snapshots_contain_only_metadata(remote,
     queue,history=history_setup(remote,tmp_path);_,service,_=remote
     queue.resume();queue.tick()
     first=saved_preparations(service)[0]
-    task=queue.snapshot()['tasks'][0];complete(queue,service,task,tmp_path);queue.pause();queue.tick()
+    task=queue.snapshot()['jobs'][0];complete(queue,service,task,tmp_path);queue.pause();queue.tick()
     second=saved_preparations(service)[0]
     assert first['queue_id']==second['queue_id'] and first['dataset_id']!=second['dataset_id']
     bases=[key for key,label in service.labels.items() if INPUT_LABEL in label]
@@ -60,7 +60,7 @@ def test_base_uploaded_once_and_progress_snapshots_contain_only_metadata(remote,
 
 def test_total_viewer_loss_restores_inputs_and_verified_arrays_without_new_jobs(remote,tmp_path,monkeypatch):
     queue,history=history_setup(remote,tmp_path);_,service,_=remote
-    queue.resume();queue.tick();task=queue.snapshot()['tasks'][0]
+    queue.resume();queue.tick();task=queue.snapshot()['jobs'][0]
     complete(queue,service,task,tmp_path);queue.pause();queue.tick()
     dataset=saved_preparations(service)[0]['dataset_id']
     registry=PreparationRegistry(tmp_path/'fresh-workspace')
@@ -72,16 +72,36 @@ def test_total_viewer_loss_restores_inputs_and_verified_arrays_without_new_jobs(
     result=restored.tick()
     assert result['coverage']['counts']['prepared']==1
     assert len(service.submissions)==1
-    assert registry.get(key).prepared_assets(task['entry'])
+    assert registry.get(key).prepared_assets(entry(task))
     assert reference.reference['queue_id']==history.reference['queue_id']
+
+
+def test_native_batch_finishing_after_viewer_loss_recovers_all_siblings(remote,tmp_path,monkeypatch):
+    import shutil
+    from radar_pd_nova.models import RunStatus
+    queue,_=history_setup(remote,tmp_path,count=6,batch_size=None);runtime,service,_=remote
+    queue.resume();queue.tick();batch=queue.snapshot()['jobs'][0]
+    dataset=saved_preparations(service)[0]['dataset_id']
+    complete(queue,service,batch,tmp_path)
+    # Its output exists remotely, but Galaxy has not yet published completion.
+    job=service.jobs[batch['handle']['key']];job.status=RunStatus.QUEUED
+    shutil.rmtree(queue.library.root);shutil.rmtree(runtime.root)
+    registry=PreparationRegistry(tmp_path/'fresh-workspace')
+    fresh=GalaxyModelRuntime(tmp_path/'fresh-runtime',service)
+    monkeypatch.setattr(fresh,'find_dispatch',lambda key:service.jobs.get(key))
+    _,restored,_=PreparationHistory.recover(tmp_path/'recover',fresh,registry,dataset)
+    assert restored.tick()['active']==1
+    job.status=RunStatus.OK
+    assert restored.tick()['coverage']['all_prepared']
+    assert len(service.submissions)==1 and len(restored.snapshot()['jobs'][0]['members'])==6
 
 
 def test_recovery_preserves_failed_attempt_and_later_successful_retry(remote,tmp_path,monkeypatch):
     from radar_pd_nova.models import RunStatus
     queue,_=history_setup(remote,tmp_path,count=1);_,service,_=remote
-    queue.resume();queue.tick();first=queue.snapshot()['tasks'][0]
+    queue.resume();queue.tick();first=queue.snapshot()['jobs'][0]
     service.jobs[first['handle']['key']].status=RunStatus.ERROR;queue.tick()
-    queue.library.retry(first['entry']);queue.tick();second=queue.snapshot()['tasks'][1]
+    queue.library.retry(entry(first));queue.tick();second=queue.snapshot()['jobs'][1]
     complete(queue,service,second,tmp_path);queue.tick()
     dataset=saved_preparations(service)[0]['dataset_id']
     registry=PreparationRegistry(tmp_path/'recovered-registry')
@@ -89,8 +109,8 @@ def test_recovery_preserves_failed_attempt_and_later_successful_retry(remote,tmp
     monkeypatch.setattr(runtime,'find_dispatch',lambda key:service.jobs.get(key))
     _,restored,_=PreparationHistory.recover(tmp_path/'restore',runtime,registry,dataset)
     assert restored.tick()['coverage']['all_prepared']
-    assert [t['phase'] for t in restored.snapshot()['tasks']]==['failed','prepared']
-    assert restored.library.row(first['entry'])['attempt']==2
+    assert [next(iter(t['outcomes'].values()))['state'] for t in restored.snapshot()['jobs']]==['failed','prepared']
+    assert restored.library.row(entry(first))['attempt']==2
     assert len(service.submissions)==2
 
 

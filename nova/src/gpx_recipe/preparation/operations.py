@@ -21,7 +21,7 @@ PORTABLE = {'reference': set(), 'magnetic': {'response.npz'},
             'structural': {'starts.npz', 'starts.json'}}
 
 
-def pending_entries(library):
+def pending_entries(library, *, deferred=()):
     """Balance finite k/irrep/bank coverage across repeated admission passes.
 
     Counting prior admissions (including active/failed ones) prevents a new
@@ -30,6 +30,9 @@ def pending_entries(library):
     library.coverage()  # Refresh the durable, atomically written manifest.
     if library.document['specification'].get('schema') != PLAN_SCHEMA:
         raise ValueError('This library needs a supported scientific preparation plan before admission')
+    deferred=set(deferred)
+    if any(library.row(identifier)['state']!='preparing' for identifier in deferred):
+        raise ValueError('Only verified unstarted attempts may be deferred')
     groups = {}
     for row in library.document['entries']:
         model = row['model'];settings = model['settings']
@@ -37,7 +40,7 @@ def pending_entries(library):
             settings['candidate'].get('irrep')], sort_keys=True)
         group = groups.setdefault(family, dict(admitted=0, pending=[]))
         group['admitted'] += int(row['attempt'] > 0)
-        if row['state'] == 'pending':
+        if row['state'] == 'pending' or row['id'] in deferred:
             group['pending'].append(row['id'])
     queue = [(group['admitted'], family, 0) for family, group in groups.items() if group['pending']]
     heapq.heapify(queue)

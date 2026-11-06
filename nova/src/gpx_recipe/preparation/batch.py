@@ -87,9 +87,11 @@ def inputs(plan):
 
 
 def stage(library, entries, directory, *, workers=4, seconds=480):
-    """Deduplicate immutable inputs while retaining each typed model request."""
+    """Capture or resume the same immutable batch before its first dispatch."""
     from .operations import stage_entry
-    directory=Path(directory).resolve();directory.mkdir(parents=True,exist_ok=False)
+    directory=Path(directory)
+    if directory.is_symlink():raise ValueError('Preparation batch directory is not owned')
+    directory=directory.resolve();directory.mkdir(parents=True,exist_ok=True)
     tasks=[];parent=None
     for entry,attempt in entries:
         request=stage_entry(library,entry,attempt,directory/'tasks'/entry/('attempt-'+str(attempt)))
@@ -106,7 +108,10 @@ def stage(library, entries, directory, *, workers=4, seconds=480):
                 parent=shared
         captured['destination']=str(Path(request['destination']).relative_to(directory))
         tasks.append(dict(entry=entry,attempt=attempt,kind=kind,request=captured))
-    plan=validate_plan(dict(schema=SCHEMA,tasks=tasks));path=directory/'plan.json';write_json(path,plan)
+    plan=validate_plan(dict(schema=SCHEMA,tasks=tasks));path=directory/'plan.json'
+    if path.exists():
+        if read_plan(path)!=plan:raise ValueError('An immutable preparation batch plan changed')
+    else:write_json(path,plan)
     return validate_request(dict(source=str(parent),plan=str(path),destination=str(directory),
         workers=workers,seconds=seconds))
 

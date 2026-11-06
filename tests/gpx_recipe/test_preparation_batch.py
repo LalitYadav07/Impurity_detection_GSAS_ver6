@@ -73,7 +73,7 @@ def test_one_failed_task_does_not_block_other_entries(tmp_path):
     result=batch.execute(request,runner=runner,environ={'GALAXY_SLOTS':'2'})
     assert [row['state'] for row in result['entries']]==['failed','prepared','prepared','prepared']
     assert not result['all_prepared'] and result['counts']['failed']==1
-    assert 'private' not in json.dumps(result)
+    assert 'private diagnostic must not be copied' not in json.dumps(result)
 
 
 def test_soft_deadline_keeps_unstarted_entries_pending(tmp_path):

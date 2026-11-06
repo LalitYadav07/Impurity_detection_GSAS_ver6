@@ -1,243 +1,290 @@
-"""Finite preparation scheduling over the shared durable native transport.
+"""Durable finite preparation: one Galaxy dispatch per bounded model batch.
 
-Large arrays stay in library assets or immutable Galaxy result bundles. The
-checkpoint callback persists only this queue's data-only task/handle records.
+Members retain independent scientific outcomes. A worker-proven unstarted
+member may continue in a later batch with the same logical attempt; failures
+require explicit retry. Counts, weights and experiment inference stay absent.
 """
 from __future__ import annotations
 
 import copy
 import json
 from pathlib import Path
-import re
 import threading
+import uuid
 import zipfile
 
 from gpx_recipe.execution import write_json
+from gpx_recipe.preparation import batch
 from gpx_recipe.preparation.operations import pending_entries, stage_entry, publish_entry
-from gpx_recipe.symmetry.compiler import file_sha
+from gpx_recipe.symmetry.compiler import confined, file_sha
 from .native_operations import capture, handle_path, intent_lock, validate_handle
-
-SCHEMA = 'radar-preparation-queue/v1'
-TERMINAL = {'prepared', 'failed', 'cancelled', 'unsupported'}
-PHASES = TERMINAL | {'awaiting_submission', 'submitted', 'needs_recovery'}
-MAX_METADATA = 64*1024*1024
+from .preparation_queue_state import SCHEMA, MAX_METADATA, TERMINAL, validate, upgrade
+from .preparation_queue_results import requests_for, stable_digest, outcomes
 
 
 class PreparationQueue:
-    def __init__(self, root, library, runtime, *, source, checkpoint):
+    def __init__(self, root, library, runtime, *, source, checkpoint, _batch_size=16):
         if not callable(checkpoint):
             raise ValueError('Preparation needs a durable checkpoint callback before dispatch')
-        self.root = Path(root).resolve();self.root.mkdir(parents=True, exist_ok=True)
-        if self.root != library.root/'queue':
+        if type(_batch_size) is not int or not 1<=_batch_size<=64:
+            raise ValueError('A preparation batch contains 1–64 models')
+        self.root=Path(root).resolve();self.root.mkdir(parents=True,exist_ok=True)
+        if self.root!=library.root/'queue':
             raise ValueError('Use the single preparation queue inside this library revision')
-        self.path = self.root/'queue.json'
-        self.library, self.runtime, self.checkpoint = library, runtime, checkpoint
-        self._lock = threading.RLock();self._paused = threading.Event()
-        self.source = dict(source)
-        self.source.pop('record_uid',None)
-        self.source['id'] = 'preparation-'+library.document['id']
-        expected = next(a['sha256'] for a in library.document['inputs']
-                        if a['path'] == library.document['specification']['source'])
-        resolved = runtime.resolve(self.source)
-        if resolved['source_sha256'] != expected:
+        self.path=self.root/'queue.json'
+        self.library,self.runtime,self.checkpoint=library,runtime,checkpoint
+        self._lock=threading.RLock();self._paused=threading.Event();self._verified=set()
+        self.source=dict(source);self.source.pop('record_uid',None)
+        self.source['id']='preparation-'+library.document['id']
+        expected=next(a['sha256'] for a in library.document['inputs']
+                      if a['path']==library.document['specification']['source'])
+        resolved=runtime.resolve(self.source)
+        if resolved['source_sha256']!=expected:
             raise ValueError('Preparation source differs from the captured parent CIF')
-        self.source = resolved
-        self.source['dataset_id'] = runtime.dataset_id(resolved)
-        self.identity = {k:self.source[k] for k in ('id', 'dataset_id', 'source_sha256')}
-        with self._lock, intent_lock(self.path):
+        self.source=resolved;self.source['dataset_id']=runtime.dataset_id(resolved)
+        self.identity={k:self.source[k] for k in ('id','dataset_id','source_sha256')}
+        with self._lock,intent_lock(self.path):
             if not self.path.exists():
-                write_json(self.path, dict(schema=SCHEMA, history_id=runtime.service.history_id,
-                    library_id=library.document['id'], source=self.identity,
+                write_json(self.path,dict(schema=SCHEMA,history_id=runtime.service.history_id,
+                    library_id=library.document['id'],source=self.identity,
                     base_attempts={r['id']:r['attempt'] for r in library.document['entries']},
-                    paused=True, maximum_jobs=1, tasks=[]))
+                    paused=True,maximum_jobs=1,batch_size=_batch_size,jobs=[]))
             self._read()
 
-    def _validate(self, value):
-        if (not isinstance(value, dict) or set(value) != {'schema', 'history_id', 'library_id',
-                'source', 'base_attempts', 'paused', 'maximum_jobs', 'tasks'} or value['schema'] != SCHEMA
-                or value['history_id'] != self.runtime.service.history_id
-                or value['library_id'] != self.library.document['id'] or value['source'] != self.identity
-                or type(value['paused']) is not bool or type(value['maximum_jobs']) is not int
-                or value['maximum_jobs'] not in {1,2,4,8} or not isinstance(value['tasks'], list)
-                or len(value['tasks']) > 20000):
-            raise ValueError('Preparation queue belongs to another library, History or schema')
-        base=value['base_attempts']
-        if (not isinstance(base,dict) or set(base)!={r['id'] for r in self.library.document['entries']}
-                or any(type(v) is not int or not 0<=v<=1000000 for v in base.values())):
-            raise ValueError('Preparation baseline attempt inventory changed')
-        seen=set();attempts=dict(base)
-        for task in value['tasks']:
-            if (not isinstance(task, dict) or set(task) != {'entry', 'attempt', 'phase', 'handle', 'reason'}
-                    or not isinstance(task['entry'], str) or not re.fullmatch('[a-f0-9]{24}',task['entry'])
-                    or type(task['attempt']) is not int or task['attempt'] < 1
-                    or task['phase'] not in PHASES or not isinstance(task['reason'],str)
-                    or len(task['reason']) > 2000 or (task['entry'],task['attempt']) in seen
-                    or task['attempt'] != attempts.get(task['entry'], 0)+1):
-                raise ValueError('Invalid or reordered preparation attempt record')
-            self.library.row(task['entry'])
-            seen.add((task['entry'],task['attempt']));attempts[task['entry']]=task['attempt']
-            if task['handle'] is not None:
-                validate_handle(self.runtime,task['handle'])
-                if task['handle']['source'] != self.identity:
-                    raise ValueError('Preparation handle names another source')
-            if task['phase'] == 'prepared' and (not task['handle'] or not task['handle']['job']):
-                raise ValueError('Prepared work needs its acknowledged native job')
-        if len(json.dumps(value,allow_nan=False).encode()) > MAX_METADATA:
-            raise ValueError('Preparation queue exceeds its bounded metadata scope')
-        return value
+    def _validate(self,value):
+        # Also used by History validation without constructing a live queue.
+        return validate(value,self.library,self.runtime,self.identity)
 
     def _read(self):
-        if self.path.is_symlink() or self.path.stat().st_size > MAX_METADATA:
+        if self.path.is_symlink() or self.path.stat().st_size>MAX_METADATA:
             raise ValueError('Preparation queue is absent or oversized')
-        return self._validate(json.loads(self.path.read_text()))
+        original=json.loads(self.path.read_text());state=self._validate(upgrade(original))
+        if state!=original:write_json(self.path,state)
+        return state
 
-    def _save(self, state, *, remote=False):
+    def _save(self,state,*,remote=False):
         self._validate(state);write_json(self.path,state)
-        if remote:
-            self.checkpoint(copy.deepcopy(state))
+        if remote:self.checkpoint(copy.deepcopy(state))
 
     def snapshot(self):
         return copy.deepcopy(self._read())
 
-    def restore(self, snapshot):
-        """Restore beside the same captured base library, paused for review.
-
-        A tick replays acknowledged results into the new local library. It
-        never accepts missing local arrays from a prepared status alone.
-        """
-        state=copy.deepcopy(self._validate(snapshot));state['paused']=True
-        with self._lock, intent_lock(self.path):
+    def restore(self,snapshot):
+        state=copy.deepcopy(self._validate(upgrade(snapshot)));state['paused']=True
+        with self._lock,intent_lock(self.path):
             existing=self._read()
-            if existing['tasks'] and existing != state:
+            if existing['jobs'] and existing!=state:
                 raise ValueError('Restore into a fresh preparation queue; preserve existing progress')
-            self._save(state)
+            self._save(state);self._verified.clear()
 
-    def resume(self, *, maximum_jobs=None):
-        with self._lock, intent_lock(self.path):
+    def resume(self,*,maximum_jobs=None):
+        with self._lock,intent_lock(self.path):
             state=self._read()
             if maximum_jobs is not None:state['maximum_jobs']=maximum_jobs
             state['paused']=False;self._paused.clear();self._save(state,remote=True)
 
     def pause(self):
-        # Stop new admission promptly; active Galaxy work remains collectible.
         self._paused.set()
-        with self._lock, intent_lock(self.path):
+        with self._lock,intent_lock(self.path):
             state=self._read();state['paused']=True;self._save(state,remote=True)
 
-    def _directory(self, task):
-        return self.root/'attempts'/task['entry']/('attempt-'+str(task['attempt']))
+    def _ensure_attempt(self,member):
+        self.library.refresh();row=self.library.row(member['entry']);attempt=member['attempt']
+        if row['attempt']>attempt:return False
+        if row['attempt']<attempt:
+            if row['attempt']!=attempt-1:raise ValueError('Preparation attempt lineage has a gap')
+            if row['state'] in TERMINAL-{'prepared'}:self.library.retry(member['entry'])
+            actual=self.library.start(member['entry'])
+            if actual!=attempt:raise ValueError('Preparation ownership changed during recovery')
+            return True
+        # An explicit review may already have put a terminal attempt back in
+        # pending. Replaying its old failure must not undo that review.
+        return row['state']!='pending'
 
-    def _stage(self, task, *, recover_completed=False):
-        return stage_entry(self.library,task['entry'],task['attempt'],self._directory(task),
-                           recover_completed=recover_completed)
+    def _stage(self,job):
+        if job['mode']=='batch':
+            return batch.stage(self.library,[(m['entry'],m['attempt']) for m in job['members']],
+                self.root/'batches'/job['id'],workers=4,seconds=480)
+        member=job['members'][0]
+        return stage_entry(self.library,member['entry'],member['attempt'],
+            self.root/'attempts'/member['entry']/('attempt-'+str(member['attempt'])))
 
-    def _submit(self, state, task):
-        request=self._stage(task);kind=self.library.row(task['entry'])['model']['kind']
+    def _submit(self,state,job):
+        payload=self._stage(job)
+        operation='preparation-batch' if job['mode']=='batch' else (
+            'preparation-'+self.library.row(job['members'][0]['entry'])['model']['kind'])
         def before_post(handle):
-            task.update(handle=handle,phase='awaiting_submission',reason='')
+            job.update(handle=handle,phase='awaiting_submission',reason='')
             self._save(state,remote=True)
         try:
-            handle=self.runtime.submit_native('preparation-'+kind,request,self.root,
-                source=self.source,timeout=600,cancel=self._paused,on_intent=before_post)
+            handle=self.runtime.submit_native(operation,payload,self.root,source=self.source,
+                timeout=600,cancel=self._paused,on_intent=before_post)
         except Exception as exc:
-            # Capture uses no POST. Its exact key locates the retained intent
-            # even when the dispatcher lost its acknowledgment.
             try:
-                captured,_=capture(self.runtime,'preparation-'+kind,request,self.root,self.source,600)
+                captured,_=capture(self.runtime,operation,payload,self.root,self.source,600)
                 path=handle_path(self.root,captured['key'])
-                if path.exists():task['handle']=validate_handle(self.runtime,json.loads(path.read_text()))
-            except (OSError,ValueError):
-                pass
-            uncertain=bool(task['handle'] and task['handle']['submission_started'])
-            task.update(phase='needs_recovery' if uncertain else 'awaiting_submission',
+                if path.exists():job['handle']=validate_handle(self.runtime,json.loads(path.read_text()))
+            except (OSError,ValueError):pass
+            uncertain=bool(job['handle'] and job['handle']['submission_started'])
+            job.update(phase='needs_recovery' if uncertain else 'awaiting_submission',
                 reason=('Recovering the existing Galaxy dispatch; no duplicate will be submitted.' if uncertain
-                        else 'Submission is waiting for its inputs or durable History checkpoint ('+type(exc).__name__+').'))
-            self._save(state)
-            return
-        task.update(handle=handle,phase='submitted' if handle['job'] else 'needs_recovery',reason='')
+                    else 'Submission is waiting for inputs or its durable History checkpoint ('+type(exc).__name__+').'))
+            self._save(state);return
+        job.update(handle=handle,phase='submitted' if handle['job'] else 'needs_recovery',reason='')
         self._save(state,remote=True)
 
-    def _publish(self, state, task, request, result):
-        self.library.refresh();row=self.library.row(task['entry'])
-        if row['state']=='prepared' and row['attempt']==task['attempt']:
-            paths=self.library.prepared_assets(task['entry'])
+    def _inputs(self,job):
+        hashes=job['handle']['request']['input_hashes'];missing=False
+        for name,checksum in hashes.items():
+            path=confined(self.root,name,exists=False)
+            if not path.exists():missing=True
+            elif file_sha(path)!=checksum:raise ValueError('Captured preparation input changed')
+        if missing:self.runtime.restore_native_inputs(job['handle'],self.root)
+        return requests_for(job,self.root)
+
+    def _finish(self,member,state,reason):
+        self.library.refresh();row=self.library.row(member['entry'])
+        if row['attempt']!=member['attempt'] or row['state']=='pending':return
+        if row['state']=='preparing':
+            self.library.finish(member['entry'],member['attempt'],state=state,reason=reason)
+        elif row['state']!=state:
+            raise ValueError('A late receipt cannot replace a different completed preparation')
+
+    def _publish(self,member,request,result):
+        self.library.refresh();row=self.library.row(member['entry'])
+        if row['attempt']!=member['attempt'] or row['state']=='pending':return
+        if row['state']=='prepared':
+            paths=self.library.prepared_assets(member['entry'])
             entry=next(p for p in paths.values() if p.name=='entry.json')
-            if file_sha(entry)!=result['entry_sha256']:
-                raise ValueError('Recovered preparation differs from the published worker receipt')
-        else:
-            publish_entry(self.library,task['entry'],task['attempt'],request,result)
-        task.update(phase='prepared',reason='');self._save(state,remote=True)
+            if file_sha(entry)!=result.get('entry_sha256'):
+                raise ValueError('Recovered preparation differs from its published worker receipt')
+        else:publish_entry(self.library,member['entry'],member['attempt'],request,result)
 
-    def _reject_result(self, state, task, error):
-        reason='Preparation result failed verification ('+type(error).__name__+'); no artifact was accepted.'
-        self.library.finish(task['entry'],task['attempt'],state='failed',reason=reason)
-        task.update(phase='failed',reason=reason);self._save(state,remote=True)
+    def _collect(self,state,job):
+        requests,plan=self._inputs(job)
+        result,_=self.runtime.collect_native(job['handle'],self.root)
+        rows=outcomes(job,result,self.root,plan);checksum=stable_digest(result,self.root)
+        if job['result_sha256'] is not None and job['result_sha256']!=checksum:
+            raise ValueError('Recovered preparation receipt changed')
+        job['result_sha256']=checksum;self._save(state)
+        for row in rows:
+            member={k:row[k] for k in ('entry','attempt')};identifier=member['entry']
+            previous=job['outcomes'].get(identifier)
+            # Preserve a locally rejected artifact on recovery. Its native
+            # worker completion was never permission to accept it anyway.
+            if previous and previous['source']=='verification':
+                self._finish(member,previous['state'],previous['reason']);continue
+            outcome=dict(state=row['state'],reason=row['reason'],source='worker')
+            if row['state']=='prepared':
+                try:self._publish(member,requests[identifier],row['result'])
+                except (ValueError,KeyError,TypeError) as exc:
+                    self.library.refresh()
+                    current=self.library.row(identifier)
+                    if current['attempt']==member['attempt'] and current['state']=='prepared':raise
+                    reason='Preparation result failed verification ('+type(exc).__name__+'); no artifact was accepted.'
+                    self._finish(member,'failed',reason)
+                    outcome=dict(state='failed',reason=reason,source='verification')
+            elif row['state']!='pending':self._finish(member,row['state'],row['reason'])
+            # Each library publication is already atomic and independently
+            # receipt-checked on replay. Do not rewrite the growing queue for
+            # every sibling; persist its outcome table once per whole batch.
+            job['outcomes'][identifier]=outcome
+        cancelled=any(row['state']=='cancelled' or row['reason']=='cancelled_before_start' for row in rows)
+        if cancelled:
+            state['paused']=True;self._paused.set()
+        job.update(phase='collected',reason='Native work was cancelled; preparation is paused for review.' if cancelled else '')
+        self._save(state,remote=True)
+        self._verified.add(job['id'])
 
-    def _replay(self, state):
-        """Reconstruct progress after base inputs and queue state are restored."""
-        for task in state['tasks']:
-            self.library.refresh();row=self.library.row(task['entry'])
-            if row['attempt']>task['attempt']:continue
-            if row['attempt']<task['attempt']:
-                if row['state'] in {'failed','cancelled','unsupported'}:self.library.retry(task['entry'])
-                attempt=self.library.start(task['entry'])
-                if attempt!=task['attempt']:raise ValueError('Preparation attempt lineage changed during recovery')
-                row=self.library.row(task['entry'])
-            if task['phase']=='prepared' and row['state']!='prepared':
-                request=self._stage(task)
-                result,_=self.runtime.collect_native(task['handle'],self.root)
-                self._publish(state,task,request,result)
-            elif task['phase'] in TERMINAL-{'prepared'} and row['state']=='preparing':
-                self.library.finish(task['entry'],task['attempt'],state=task['phase'],reason=task['reason'])
+    def _reject(self,state,job,error):
+        reason='Preparation result failed verification ('+type(error).__name__+'); no unchecked artifact was accepted.'
+        for member in job['members']:
+            self.library.refresh();row=self.library.row(member['entry'])
+            if row['attempt']==member['attempt'] and row['state']=='prepared':
+                if job['outcomes'].get(member['entry'],{}).get('state')!='prepared':raise error
+                continue
+            self._finish(member,'failed',reason)
+            job['outcomes'][member['entry']]=dict(state='failed',reason=reason,source='verification')
+        job.update(phase='collected',reason=reason);self._save(state,remote=True)
+        self._verified.add(job['id'])
+
+    def _replay(self,state):
+        for job in state['jobs']:
+            for member in job['members']:self._ensure_attempt(member)
+            self.library.refresh()
+            # A locally reviewed retry still needs terminal remote ownership
+            # proof after restart; its pending row is not permission to submit
+            # a second job while an earlier one might still be running.
+            needed=any(self.library.row(m['entry'])['attempt']<=m['attempt'] for m in job['members'])
+            if job['phase']!='collected' or job['id'] in self._verified or not needed:continue
+            if job['result_sha256'] is not None or any(
+                    o['state']=='prepared' for o in job['outcomes'].values()):
+                # Authenticate the original complete receipt. Claimed status
+                # flags never reconstruct missing numeric arrays by themselves.
+                self._collect(state,job)
+            else:
+                status=self.runtime.poll_native(job['handle']);job['handle']=status['handle']
+                if status['state'] not in {'finished','failed','cancelled'}:
+                    raise ValueError('A recovered terminal preparation job is not terminal')
+                for member in job['members']:
+                    outcome=job['outcomes'][member['entry']]
+                    if outcome['source']=='job' and outcome['state']!=status['state']:
+                        raise ValueError('Recovered Galaxy failure differs from its saved receipt')
+                    self._finish(member,outcome['state'],outcome['reason'])
+                self._verified.add(job['id'])
+
+    def _deferred(self,state):
+        latest={m['entry']:(job,m) for job in state['jobs'] for m in job['members']}
+        self.library.refresh();result=[]
+        for identifier,(job,member) in latest.items():
+            row=self.library.row(identifier)
+            if (job['phase']=='collected' and job['id'] in self._verified
+                    and job['outcomes'][identifier]['state']=='pending'
+                    and row['state']=='preparing' and row['attempt']==member['attempt']):
+                result.append(identifier)
+        return result
 
     def tick(self):
-        """Collect existing jobs and admit only the bounded fair pending scope."""
-        with self._lock, intent_lock(self.path):
+        """Collect each batch once, then admit a bounded fair finite scope."""
+        with self._lock,intent_lock(self.path):
             state=self._read();self._replay(state)
             if state['paused']:self._paused.set()
-            for task in state['tasks']:
-                if task['phase'] in TERMINAL:continue
-                handle=task['handle']
+            for job in state['jobs']:
+                if job['phase']=='collected':continue
+                handle=job['handle']
                 if not handle or not handle['submission_started']:
-                    if not state['paused'] and not self._paused.is_set():self._submit(state,task)
+                    if not state['paused'] and not self._paused.is_set():self._submit(state,job)
                     continue
-                status=self.runtime.poll_native(handle)
-                task['handle']=status['handle']
+                status=self.runtime.poll_native(handle);job['handle']=status['handle']
                 if status['state']=='finished':
-                    if not task['handle']['job']['outputs'].get('result_bundle'):
-                        task['reason']='Calculation completed; waiting for Galaxy to publish its result bundle.'
+                    if not job['handle']['job']['outputs'].get('result_bundle'):
+                        job['reason']='Calculation completed; waiting for Galaxy to publish its result bundle.'
                         continue
-                    request=self._stage(task,recover_completed=True)
-                    try:
-                        result,_=self.runtime.collect_native(task['handle'],self.root)
-                    except (ValueError,zipfile.BadZipFile) as exc:
-                        self._reject_result(state,task,exc)
-                        continue
-                    try:
-                        self._publish(state,task,request,result)
-                    except ValueError as exc:
-                        self.library.refresh()
-                        if self.library.row(task['entry'])['state']=='prepared':raise
-                        self._reject_result(state,task,exc)
+                    try:self._collect(state,job)
+                    except (ValueError,KeyError,TypeError,zipfile.BadZipFile) as exc:self._reject(state,job,exc)
                 elif status['state'] in {'failed','cancelled'}:
                     reason='Galaxy preparation job '+status['state']+'; inspect its console before retrying.'
-                    self.library.finish(task['entry'],task['attempt'],state=status['state'],reason=reason)
-                    task.update(phase=status['state'],reason=reason);self._save(state,remote=True)
-                elif status['state']=='needs_recovery':
-                    task.update(phase='needs_recovery',reason=status['message'])
-                else:task.update(phase='submitted',reason='')
-            active=sum(t['phase'] not in TERMINAL for t in state['tasks'])
-            slots=min(state['maximum_jobs'],self.runtime.max_active_jobs)-active
-            if not state['paused'] and not self._paused.is_set():
-                for identifier in pending_entries(self.library)[:max(0,slots)]:
-                    attempt=self.library.row(identifier)['attempt']+1
-                    task=dict(entry=identifier,attempt=attempt,phase='awaiting_submission',handle=None,reason='')
-                    state['tasks'].append(task);self._save(state)
-                    actual=self.library.start(identifier)
-                    if actual!=attempt:raise ValueError('Preparation ownership changed before admission')
-                    self._submit(state,task)
-                    if self._paused.is_set():break
+                    for member in job['members']:
+                        self._finish(member,status['state'],reason)
+                        job['outcomes'][member['entry']]=dict(state=status['state'],reason=reason,source='job')
+                    job.update(phase='collected',reason=reason);self._save(state,remote=True)
+                    self._verified.add(job['id'])
+                elif status['state']=='needs_recovery':job.update(phase='needs_recovery',reason=status['message'])
+                else:job.update(phase='submitted',reason='')
+            limit=min(state['maximum_jobs'],self.runtime.max_active_jobs)
+            active=sum(j['phase']!='collected' for j in state['jobs'])
+            for _ in range(max(0,limit-active)):
+                if state['paused'] or self._paused.is_set():break
+                deferred=self._deferred(state)
+                identifiers=pending_entries(self.library,deferred=deferred)[:state['batch_size']]
+                if not identifiers:break
+                members=[dict(entry=i,attempt=self.library.row(i)['attempt']+(i not in deferred)) for i in identifiers]
+                job=dict(id=uuid.uuid4().hex,mode='batch',phase='awaiting_submission',handle=None,
+                    members=members,outcomes={},reason='',result_sha256=None)
+                state['jobs'].append(job);self._save(state)
+                for member in members:self._ensure_attempt(member)
+                self._submit(state,job)
             self._save(state)
             return dict(queue=copy.deepcopy(state),coverage=self.library.coverage(),
-                active=sum(t['phase'] not in TERMINAL for t in state['tasks']),
-                effective_job_limit=min(state['maximum_jobs'],self.runtime.max_active_jobs))
+                active=sum(j['phase']!='collected' for j in state['jobs']),
+                deferred=len(self._deferred(state)),effective_job_limit=limit)
