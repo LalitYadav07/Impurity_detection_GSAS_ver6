@@ -181,7 +181,7 @@ class NativeMagneticStartingPoint:
         finally:
             fcntl.flock(stream,fcntl.LOCK_UN);stream.close()
 
-    def build(self,*,heldouts=4,cache_path=None,cache_identity=None):
+    def build(self,*,heldouts=4,cache_path=None,cache_identity=None,factor_cache=None):
         if cache_path is not None and cache_identity:
             # Immutable, checked cache readers may validate native holdouts
             # concurrently. Only a rebuild needs the exclusive writer lock.
@@ -189,15 +189,16 @@ class NativeMagneticStartingPoint:
                 with self._cache_lock(cache_path,shared=True):
                     try:
                         return self._build(heldouts=heldouts,cache_path=cache_path,
-                            cache_identity=cache_identity,cache_only=True)
+                            cache_identity=cache_identity,cache_only=True,factor_cache=factor_cache)
                     except _CacheMiss:
                         pass
             with self._cache_lock(cache_path):
-                return self._build(heldouts=heldouts,cache_path=cache_path,cache_identity=cache_identity)
-        return self._build(heldouts=heldouts)
+                return self._build(heldouts=heldouts,cache_path=cache_path,cache_identity=cache_identity,
+                    factor_cache=factor_cache)
+        return self._build(heldouts=heldouts,factor_cache=factor_cache)
 
     def _build(self,*,heldouts=4,cache_path=None,cache_identity=None,skip_cache=False,
-               use_derivative=None,compiler_note='',cache_only=False):
+               use_derivative=None,compiler_note='',cache_only=False,factor_cache=None):
         started=time.monotonic();dimension=len(self.moment_indices);nb=len(self.background_indices)
         # GetAtomFXU replaces exact zero components with 1e-8. An evenly
         # spaced anchor can contain 1.0, so a minus-unit interpolation probe
@@ -230,7 +231,7 @@ class NativeMagneticStartingPoint:
                 physical,proof=compile_reflection_quadratic(math=self.math,lattice=self.lattice,
                     histogram=self.histogram,phases=self.phases,histdict=self.args[2],
                     parameters=self.parms,controls=self.args[4],basis=self.moment_basis,
-                    check=self._check,histogram_name=self.histogram_name)
+                    check=self._check,histogram_name=self.histogram_name,factor_cache=factor_cache)
                 begin,end=proof['fit_slice'];weights=np.asarray(np.ma.getdata(self.histogram['Data'][2]),float)[begin:end]
                 factor=float(self.args[4].get(f':{self.histogram_id}:wtFactor',1.))
                 if (self.residual_mask is None or self.residual_mask.shape!=(len(physical),)
@@ -303,11 +304,12 @@ class NativeMagneticStartingPoint:
                 # A hint can never turn a recoverable cache mismatch into a
                 # rejected scientific model. Rebuild once from native calls.
                 return self._build(heldouts=heldouts,cache_path=cache_path,
-                                   cache_identity=cache_identity,skip_cache=True)
+                                   cache_identity=cache_identity,skip_cache=True,factor_cache=factor_cache)
             if compiler in {'native_derivatives','native_reflection_amplitudes'}:
                 return self._build(heldouts=heldouts,cache_path=cache_path,
                     cache_identity=cache_identity,skip_cache=True,use_derivative=False,
-                    compiler_note='Accelerated compilation failed the stricter native residual identity check')
+                    compiler_note='Accelerated compilation failed the stricter native residual identity check',
+                    factor_cache=factor_cache)
             raise ValueError('The native profile failed held-out quadratic identity checks: '+
                 str(dict(heldouts=errors,linear_identity_error=linear_error)))
         if cached is None and cache_path is not None and cache_identity:

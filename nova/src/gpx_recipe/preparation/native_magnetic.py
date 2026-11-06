@@ -1,9 +1,11 @@
 """Compile observation-independent physics through the shared native engine."""
 import hashlib
+import copy
 import json
 from pathlib import Path
 import re
 import time
+from contextlib import contextmanager
 
 import numpy as np
 
@@ -102,7 +104,7 @@ def moment_basis(native):
         nuisance=background+[scale])
 
 
-def qualify_response(response, native):
+def qualify_response(response, native, *, factor_cache=None):
     """Fresh native forward checks, including after importing a theory file."""
     histogram, _, hfx, moments, background, scale = _context(native)
     if (native.controls.get(hfx+'Exclude')
@@ -154,7 +156,8 @@ def qualify_response(response, native):
         anchor=original.copy();anchor[indices]=0.;anchor[backgrounds]=0.
         if scale_index is not None:anchor[scale_index]=1.
         try:
-            checked=compile_profile_reflections(native,anchor,indices,verify_coefficients=True)
+            checked=compile_profile_reflections(native,anchor,indices,verify_coefficients=True,
+                factor_cache=factor_cache)
         except ReflectionCompilerUnavailable as error:
             coefficients=check_coefficients(response.quadratic,derivatives)
             coefficients['fallback_reason']=str(error)
@@ -162,7 +165,10 @@ def qualify_response(response, native):
             rebuilt=checked['quadratic'].transpose(2,0,1)
             comparison=compare_coefficients(response.quadratic,rebuilt)
             coefficients=dict(checked['diagnostics']['coefficient_validation'],
-                prepared_tensor_comparison=comparison,profile_capture=checked['diagnostics']['profile_capture'])
+                prepared_tensor_comparison=comparison,profile_capture=checked['diagnostics']['profile_capture'],
+                scattering_identity=checked['diagnostics']['scattering_identity'],
+                scattering_factors_reused=checked['diagnostics']['scattering_factors_reused'],
+                scattering_qualification_reused=checked['diagnostics']['scattering_qualification_reused'])
         response._seal_native()
         return dict(independent_total_errors=errors, independent_magnetic_errors=signal_errors,
             coefficient_validation=coefficients)
@@ -171,7 +177,7 @@ def qualify_response(response, native):
         native.profile(original)
 
 
-def compile_response(native):
+def compile_response(native, *, factor_cache=None):
     """Compile from a real or theory-only native model, never from its residual.
 
     Mask-free preparation covers the planned grid; measured fit masks and
@@ -209,7 +215,7 @@ def compile_response(native):
         if scale_index is not None:
             reference[scale_index] = 1.
         native.parms[scale] = 1.
-        compiled = compile_native_magnetic_kernel(native, reference, indices)
+        compiled = compile_native_magnetic_kernel(native, reference, indices, factor_cache=factor_cache)
         fixed = profile(reference, 0.)
         nuclear = compiled['base']-fixed
         columns = []
@@ -221,7 +227,7 @@ def compile_response(native):
             quadratic=compiled['quadratic'].transpose(2, 0, 1),
             background=np.column_stack(columns) if columns else np.empty((len(x), 0)),
             moment_maps=basis.cartesian, physics_sha256=identity, proof={})
-        validation = qualify_response(response, native)
+        validation = qualify_response(response, native, factor_cache=factor_cache)
         final = MagneticResponse(**{k: getattr(response, k) for k in
             ('x', 'fixed', 'nuclear', 'quadratic', 'background', 'moment_maps')},
             physics_sha256=identity, proof=dict(compiler=compiled['diagnostics'],
@@ -233,3 +239,69 @@ def compile_response(native):
     finally:
         native.parms[scale] = source_scale
         native.profile(original)
+
+
+@contextmanager
+def _unmasked_physical_context(native):
+    """Temporarily separate measurement exclusions from physical rendering.
+
+    Keep all actual counts, weights and input objects for restoration. This
+    does not create a measurement or change the source GPX. New objectives
+    still apply the actual masks and weights after rendering.
+    """
+    native._check()
+    saved = []
+    try:
+        for name, _ in native.parts:
+            histogram = native.histo_phases[0][name]
+            key = f":{histogram['hId']}:Exclude"
+            original_data = histogram['Data']
+            saved.append((histogram, original_data, key, key in native.controls, native.controls.get(key)))
+            # Data can be one stacked MaskedArray. Saving row views and then
+            # assigning into the original container would also clear the
+            # saved masks through shared storage. Own a separate container.
+            physical_data = copy.deepcopy(original_data)
+            for i, value in enumerate(original_data[:3]):
+                physical_data[i] = np.asarray(np.ma.getdata(value)).copy()
+            histogram['Data'] = physical_data
+            native.controls.pop(key, None)
+        yield
+    finally:
+        for histogram, original_data, key, present, exclusion in saved:
+            histogram['Data'] = original_data
+            if present:
+                native.controls[key] = exclusion
+            else:
+                native.controls.pop(key, None)
+
+
+def adapt_response(prepared, native, *, factor_cache=None):
+    """Automatically render and check the current scan's physical context.
+
+    A changed cell, structure, calibration or grid is never represented by
+    shifting the old curve. Exact unchanged scattering dependencies can reuse
+    qualified factors while native peak rendering is performed freshly.
+    Observations are bound separately after this operation.
+    """
+    began = time.monotonic()
+    if not isinstance(prepared, MagneticResponse):
+        raise ValueError('A prepared magnetic response is required for adaptation')
+    with _unmasked_physical_context(native):
+        current = physics_identity(native)
+        if current == prepared.physics_sha256:
+            validation = qualify_response(prepared, native, factor_cache=factor_cache)
+            response = prepared
+            action = 'same_context_requalified'
+            reuse = validation['coefficient_validation']
+        else:
+            response = compile_response(native, factor_cache=factor_cache)
+            action = 'current_context_rendered'
+            # Report reuse when adapting the old preparation, not the later
+            # internal recheck of factors just created for this new context.
+            reuse = response.proof['compiler'].get('native_reflection_diagnostics') or {}
+    return response, dict(schema='radar-prepared-magnetic-adaptation/v1', action=action,
+        previous_physics_sha256=prepared.physics_sha256, physics_sha256=response.physics_sha256,
+        scattering_factors_reused=reuse.get('scattering_factors_reused', False),
+        scattering_qualification_reused=reuse.get('scattering_qualification_reused', False),
+        native_peak_profiles_rendered=True, observations_included=False, scientific_result=False,
+        seconds=time.monotonic()-began)

@@ -10,9 +10,9 @@ from .contracts import validate_request,seal_posterior,verify_posterior
 
 def _read_code_identity():
     import inspect
-    result={name:sha(Path(__file__).parent/name) for name in ["statistics.py","native_profile.py","validated_backend.py","native_quadratic.py","native_kernel_policy.py","native_reflection.py","moment_basis.py","central_quadratic.py","gpx_index.py","native_validation.py","contracts.py","worker.py","observations.py","gpx_export.py","resources.py"]}
+    result={name:sha(Path(__file__).parent/name) for name in ["statistics.py","native_profile.py","validated_backend.py","native_quadratic.py","native_kernel_policy.py","native_reflection.py","reflection_factors.py","quadratic_qualification.py","moment_basis.py","central_quadratic.py","gpx_index.py","native_validation.py","contracts.py","worker.py","observations.py","gpx_export.py","resources.py"]}
     import importlib.util
-    for name in ['gsas_magnetic_preflight','gpx_recipe.symmetry.native_magnetic','gpx_recipe.symmetry.native_preparation','gpx_recipe.symmetry.worker','gpx_recipe.execution','gpx_recipe.structural_live.optimization.native_profile_capture']:
+    for name in ['gsas_magnetic_preflight','gpx_recipe.symmetry.native_magnetic','gpx_recipe.symmetry.native_preparation','gpx_recipe.symmetry.worker','gpx_recipe.execution','gpx_recipe.preparation.identity','gpx_recipe.structural_live.optimization.native_profile_capture']:
         spec=importlib.util.find_spec(name)
         result[name]=sha(Path(spec.origin)) if spec and spec.origin else 'unavailable'
     result.update({fn.__name__:hashlib.sha256(inspect.getsource(fn).encode()).hexdigest() for fn in [compile_candidate,infer]})
@@ -24,7 +24,7 @@ def sha(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 def write(path,value):
     path=Path(path);tmp=path.with_suffix('.tmp');tmp.write_text(json.dumps(value,indent=2,allow_nan=False));tmp.replace(path)
 
-def compile_candidate(source,candidate,k,sites,out,*,particles=256):
+def compile_candidate(source,candidate,k,sites,out,*,particles=256,factor_cache=None):
     from GSASII import GSASIIscriptable as G,GSASIIlattice as L
     from gpx_recipe.symmetry.native_magnetic import simulate
     from gpx_recipe.symmetry.worker import Artifacts
@@ -47,7 +47,8 @@ def compile_candidate(source,candidate,k,sites,out,*,particles=256):
     memory_budget=kernel_budget(n,len(native.counts),particles)
     # The native candidate constructor freezes all nonmagnetic parameters.
     from .native_kernel_policy import compile_native_magnetic_kernel
-    compiled=compile_native_magnetic_kernel(native,np.zeros(n),list(range(n)),checks=5)
+    compiled=compile_native_magnetic_kernel(native,np.zeros(n),list(range(n)),checks=5,
+        factor_cache=factor_cache)
     zero=np.zeros(n);base=compiled['base'];q=compiled['quadratic']
     histograms,phases=native.histo_phases[:2]
     from .moment_basis import from_native

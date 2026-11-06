@@ -13,7 +13,7 @@ from .native_reflection import compile_profile_reflections, ReflectionCompilerUn
 
 
 def compile_native_magnetic_kernel(objective, reference, indices, *,
-                                   method='auto', seed=192, checks=5):
+                                   method='auto', seed=192, checks=5, factor_cache=None):
     if method not in {'auto', 'central', 'derivative', 'reflection'}:
         raise ValueError('Unknown magnetic compiler')
     reference = np.asarray(reference, float)
@@ -49,7 +49,8 @@ def compile_native_magnetic_kernel(objective, reference, indices, *,
     try:
         if selected == 'reflection':
             try:
-                compiled = compile_profile_reflections(objective, reference, indices)
+                compiled = compile_profile_reflections(objective, reference, indices,
+                    factor_cache=factor_cache)
                 base, q = compiled['base'], compiled['quadratic']
                 validation = validate(base, q)
                 reflection_diagnostics = compiled['diagnostics']

@@ -91,7 +91,7 @@ def _amplitudes(function, reflection, metric, hfx, pfx, symmetry, controls, para
 
 def compile_reflection_quadratic(*, math, lattice, histogram, phases, histdict,
                                  parameters, controls, basis, check, histogram_name,
-                                 verify_coefficients=False):
+                                 verify_coefficients=False, factor_cache=None):
     """Return unweighted bin-by-moment-by-moment response at current nuisance values.
 
     ``basis`` is the shared audited native homogeneous moment map. The caller
@@ -167,12 +167,35 @@ def compile_reflection_quadratic(*, math, lattice, histogram, phases, histdict,
         return result
 
     before_amplitudes = time.monotonic()
-    amplitude_basis = np.empty((count, 6, dimension))
-    for index in range(dimension):
-        point = np.eye(dimension)[index]
-        amplitude_basis[:, :, index] = (amplitudes(point)-amplitudes(-point))/2.
-    coefficient_validation=None
-    if verify_coefficients:
+    amplitude_basis = None
+    factor_identity = None
+    cached_block = None
+    qualified_resident = False
+    cache_note = ''
+    if factor_cache is not None:
+        from .reflection_factors import ScatteringFactorCache, scattering_identity
+        if not isinstance(factor_cache, ScatteringFactorCache):
+            raise ReflectionCompilerUnavailable('A bounded native scattering-factor cache is required')
+        factor_identity = scattering_identity(math=math, parameters=parameters, controls=controls,
+            pfx=pfx, hfx=hfx, symmetry=phase['General']['SGData'], metric=metric,
+            reflections=reference['RefList'], basis=basis)
+        try:
+            cached_block, qualified_resident = factor_cache.lookup(factor_identity)
+            if cached_block is not None:
+                if cached_block.factors.shape != (count, 6, dimension):
+                    raise ValueError('Cached scattering factors have a different reflection basis')
+                amplitude_basis = cached_block.factors
+        except (ValueError, OSError, EOFError) as error:
+            cached_block = None
+            qualified_resident = False
+            cache_note = type(error).__name__+': '+str(error)
+    if amplitude_basis is None:
+        amplitude_basis = np.empty((count, 6, dimension))
+        for index in range(dimension):
+            point = np.eye(dimension)[index]
+            amplitude_basis[:, :, index] = (amplitudes(point)-amplitudes(-point))/2.
+    coefficient_validation = cached_block.proof if qualified_resident else None
+    if (verify_coefficients or factor_cache is not None) and not qualified_resident:
         from .quadratic_qualification import check_factor_coefficients
         def intensities(point):
             nonlocal verification_calls
@@ -183,8 +206,28 @@ def compile_reflection_quadratic(*, math, lattice, histogram, phases, histdict,
             function(reflection,metric,hfx,pfx,phase['General']['SGData'],controls,private_parameters)
             verification_calls+=1
             return reflection['RefList'][:,9]
-        try:coefficient_validation=check_factor_coefficients(amplitude_basis,intensities)
-        except ValueError as error:raise ReflectionCompilerUnavailable(str(error)) from error
+        try:
+            coefficient_validation = check_factor_coefficients(amplitude_basis, intensities)
+        except ValueError as error:
+            if cached_block is None:
+                raise ReflectionCompilerUnavailable(str(error)) from error
+            # An imported acceleration hint is never a reason to reject the
+            # scientific model. Rebuild amplitudes and repeat the native gate.
+            cache_note = 'Imported amplitudes failed native checks: '+str(error)
+            cached_block = None
+            amplitude_basis = np.empty((count, 6, dimension))
+            for index in range(dimension):
+                point = np.eye(dimension)[index]
+                amplitude_basis[:, :, index] = (amplitudes(point)-amplitudes(-point))/2.
+            try:
+                coefficient_validation = check_factor_coefficients(amplitude_basis, intensities)
+            except ValueError as fresh_error:
+                raise ReflectionCompilerUnavailable(str(fresh_error)) from fresh_error
+        if factor_cache is not None:
+            try:
+                factor_cache._admit_native(factor_identity, amplitude_basis, coefficient_validation)
+            except OSError as error:
+                cache_note = 'Native amplitudes checked; cache publication failed: '+str(error)
     quadratic = np.empty((len(axis), dimension, dimension))
     # Stream symmetric cross terms. A large reflection inventory must not
     # allocate another dense reflection-by-D-by-D tensor as temporary storage.
@@ -204,11 +247,13 @@ def compile_reflection_quadratic(*, math, lattice, histogram, phases, histdict,
         amplitude_bytes=amplitude_basis.nbytes, response_bytes=quadratic.nbytes,
         profile_bytes=response.data.nbytes+response.indices.nbytes+response.indptr.nbytes,
         coefficient_validation=coefficient_validation,
+        scattering_identity=factor_identity, scattering_factors_reused=cached_block is not None,
+        scattering_qualification_reused=qualified_resident, scattering_cache_note=cache_note,
         seconds=time.monotonic()-started, observation_values_used=False, native_functions_replaced=False,
         tracing_restored=sys.gettrace() is None, fit_slice=[fit_slice.start, fit_slice.stop])
 
 
-def compile_profile_reflections(native, reference, indices, *,verify_coefficients=False):
+def compile_profile_reflections(native, reference, indices, *,verify_coefficients=False, factor_cache=None):
     """Use the shared physical response in a forward-only native adapter."""
     from .native_profile import NativeReducedProfile
     from .moment_basis import from_native
@@ -228,7 +273,8 @@ def compile_profile_reflections(native, reference, indices, *,verify_coefficient
     quadratic, proof = compile_reflection_quadratic(math=native.math, lattice=native.lattice,
         histogram=histogram, phases=native.histo_phases[1], histdict=native.histdict,
         parameters=native.parms, controls=native.controls, basis=basis,
-        check=native._check, histogram_name=name,verify_coefficients=verify_coefficients)
+        check=native._check, histogram_name=name,verify_coefficients=verify_coefficients,
+        factor_cache=factor_cache)
     if len(base) != len(quadratic):
         raise ReflectionCompilerUnavailable('Native profile and reflection grids differ')
     # errRefine's saved calculated array is zero at its native excluded bins.
