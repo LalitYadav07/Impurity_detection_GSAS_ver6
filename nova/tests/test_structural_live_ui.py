@@ -220,3 +220,49 @@ def test_transfer_edit_pauses_following_without_rewriting_existing_review(tmp_pa
     assert not obj.server.state.webmon_stream_active and not obj.server.state.webmon_structural_ready
     assert plan['templates'][0]['refine_transfer'] is False
     assert 'existing jobs and results' in obj.server.state.webmon_structural_message
+
+
+def structural_publication(obj,path):
+    from gpx_recipe.symmetry.compiler import file_sha
+    obj.server.state.webmon_structural_selected='snapshot:child'
+    obj._webmon_structural_results['snapshot:child']=dict(name='Child',revision=2,
+        result=dict(result=dict(continuation=dict(path=str(path),sha256=file_sha(path)))))
+
+
+def test_structural_download_uses_the_real_three_argument_download_contract(tmp_path):
+    obj,_=view(tmp_path);path=tmp_path/'point.gpx';path.write_bytes(b'public native point-fit fixture')
+    structural_publication(obj,path);downloads=[]
+    def download(name,mime,content):downloads.append((name,mime,content))
+    obj.download_file=download;obj.webmon_download_structural()
+    assert downloads[0][0].endswith('.gpx') and downloads[0][1:] == ('application/octet-stream',path.read_bytes())
+    path.write_bytes(b'changed');obj.webmon_download_structural()
+    assert len(downloads)==1 and 'changed' in obj.server.state.webmon_structural_message
+
+
+def test_structural_desktop_keeps_exact_clicked_gpx_and_scope(tmp_path):
+    obj,_=view(tmp_path);path=tmp_path/'point.gpx';path.write_bytes(b'public native point-fit fixture')
+    structural_publication(obj,path);s=obj.server.state;s.gsasii_session_status='idle'
+    uploads=[];actions=[]
+    def upload(path,**kwargs):uploads.append(Path(path).read_bytes());return 'uploaded-point'
+    obj.service=SimpleNamespace(upload_document=upload)
+    async def submit(**kwargs):actions.append(kwargs);return object()
+    obj._submit_utility_action=submit
+    def schedule(coroutine,_):asyncio.run(coroutine)
+    obj._schedule_utility=schedule
+    obj.webmon_open_structural_gsasii()
+    assert uploads==[b'public native point-fit fixture']
+    assert actions[0]['inputs']['project_source|gpx_project']=={'dataset_id':'uploaded-point'}
+    assert 'revision 2' in actions[0]['name']
+    # The desktop keeps its existing project rather than silently replacing it.
+    s.gsasii_session_status='ready';obj.webmon_open_structural_gsasii();assert len(actions)==1
+
+
+def test_structural_desktop_stale_owner_cannot_submit_a_different_scope(tmp_path):
+    obj,_=view(tmp_path);path=tmp_path/'point.gpx';path.write_bytes(b'public fixture')
+    structural_publication(obj,path);obj.server.state.gsasii_session_status='idle'
+    obj._webmon_scope_current=lambda owner:False
+    obj.service=SimpleNamespace(upload_document=lambda *a,**k:pytest.fail('No stale upload'))
+    obj._schedule_utility=lambda coroutine,_:asyncio.run(coroutine)
+    obj.webmon_open_structural_gsasii()
+    assert obj.server.state.gsasii_session_status=='error'
+    assert 'scope changed' in obj.server.state.webmon_structural_message

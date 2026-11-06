@@ -3,6 +3,7 @@ import asyncio
 import copy
 import json
 from pathlib import Path
+import shutil
 import uuid
 
 from trame.widgets import html,plotly
@@ -182,6 +183,9 @@ class StructuralLiveMixin:
                     v.VSelect(label='Intensity',v_model=('webmon_structural_scale',),items=(['linear','log'],),update_modelValue=(self.webmon_structural_control,"['webmon_structural_scale', $event]"),density='compact')
                     v.VBtn('Reset zoom',click=self.webmon_reset_structural,variant='text')
                     v.VBtn('Download continuation GPX',click=self.webmon_download_structural,variant='outlined')
+                    v.VBtn('Open continuation in GSAS-II',click=self.webmon_open_structural_gsasii,variant='outlined',
+                        disabled=("['starting','ready'].includes(gsasii_session_status)",))
+                html.A('Open GSAS-II desktop',href=('gsasii_launch_url',),target='_blank',rel='noopener noreferrer',v_if='!!gsasii_launch_url')
                 self._webmon_structural_fit=plotly.Figure(display_mode_bar=True)
                 with html.Details():
                     html.Summary('Fitted cell and mode amplitudes')
@@ -346,5 +350,36 @@ class StructuralLiveMixin:
             row=self._webmon_structural_results[s.webmon_structural_selected]
             artifact=row['result']['result']['continuation'];path=Path(artifact['path'])
             if file_sha(path)!=artifact['sha256']:raise ValueError('The structural publication changed')
-            self.download_file('Structural continuation GPX','structural-'+digest(s.webmon_structural_selected)[:12]+'.gpx',path.read_bytes(),'application/octet-stream')
+            self.download_file('structural-'+digest(s.webmon_structural_selected)[:12]+'.gpx','application/octet-stream',path.read_bytes())
         except Exception as exc:s.webmon_structural_message=str(exc);s.flush()
+
+    def webmon_open_structural_gsasii(self,**_):
+        """Capture the exact checked continuation selected at click time."""
+        s=self.server.state
+        if s.gsasii_session_status in {'starting','ready'}:return
+        try:
+            owner=self._webmon_scope_snapshot();key=s.webmon_structural_selected
+            row=copy.deepcopy(self._webmon_structural_results[key]);artifact=row['result']['result']['continuation']
+            source=Path(artifact['path'])
+            if file_sha(source)!=artifact['sha256']:raise ValueError('The structural publication changed')
+            root=Path(self._webmon.config['jobs'])/'desktop-inputs';root.mkdir(parents=True,exist_ok=True)
+            path=root/(artifact['sha256']+'.gpx');shutil.copyfile(source,path)
+            if file_sha(path)!=artifact['sha256']:raise ValueError('The structural GPX changed during capture')
+            s.gsasii_session_status='starting';s.gsasii_launch_url=''
+            s.gsasii_status_message='Opening the selected structural point fit; optimization and scientific review remain required.'
+            s.flush()
+        except Exception as exc:s.webmon_structural_message=str(exc);s.flush();return
+        async def launch():
+            try:
+                if not self._webmon_scope_current(owner):raise ValueError('The Live scope changed before desktop submission')
+                dataset=await asyncio.to_thread(self.service.upload_document,path,label='Structural point fit '+key)
+                if not self._webmon_scope_current(owner):raise ValueError('The Live scope changed before desktop submission')
+                from ..galaxy_service import GSASII_INTERACTIVE_TOOL_ID
+                action=await self._submit_utility_action(tool_id=GSASII_INTERACTIVE_TOOL_ID,
+                    name='Review structural point fit '+row['name']+' · revision '+str(row['revision']),
+                    inputs={'project_source|source_kind':'single','project_source|gpx_project':{'dataset_id':dataset}})
+                if action is None:raise ValueError('Galaxy did not accept the selected structural desktop')
+            except Exception as exc:
+                s.gsasii_session_status='error';s.gsasii_status_message=str(exc)
+                s.webmon_structural_message='GSAS-II handoff unavailable: '+str(exc);s.flush()
+        self._schedule_utility(launch(),'radar-structural-live-gsasii')

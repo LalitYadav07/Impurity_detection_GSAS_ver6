@@ -264,7 +264,10 @@ them before another snapshot is admitted. Editing the producer mapping or
 scale/background-transfer choice requires adopting the current plan again.
 The table accounts for every selected model, and native fits become available
 as each completes, with calibrated d/Q/TOF axes, Bragg ticks, cell/mode point
-values and a continuation-GPX download. Original RADAR-PD fits stay in Results.
+values, a continuation-GPX download and **Open continuation in GSAS-II**.
+The desktop handoff captures the exact checked GPX selected at click time and
+uses the existing hosted desktop transport. Save and close an existing desktop
+before opening another project. Original RADAR-PD fits stay in Results.
 
 Local native transport and public artificial UI controls do not establish
 deployed acceptance. Cross-job preparation amortization, sustained live queue

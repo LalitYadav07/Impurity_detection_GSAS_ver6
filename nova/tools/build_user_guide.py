@@ -104,6 +104,12 @@ JS = r"""
 """
 
 DIAGRAMS = {
+    "preparation": ("From a parent CIF to reusable calculations", [
+        ("Inspect CIF + bank profiles", "No measured scan is supplied."),
+        ("Review finite model scope", "Choose k families, sites or displacement children."),
+        ("Prepare and save", "Track individual outcomes and recover acknowledged jobs."),
+        ("Bind the actual nuclear fit", "Reuse compatible blocks; rebuild changed dependencies."),
+        ("Fit and independently check", "New data produce new scores and scientific results.")]),
     "contact": ("A private report, separate from experiment data", [("Contact developer", "Write freely and choose screenshots."),("Review and send", "Verify the previews and sender identity."),("Wait for delivery reference", "Galaxy stores and privately shares the report."),("Retry or download if needed", "Keep the draft until delivery is confirmed.")]),
     "models": ("From one parent to a reviewed comparison", [
         ("Inspect exact parent", "Confirm the phase, sites and histogram."),
