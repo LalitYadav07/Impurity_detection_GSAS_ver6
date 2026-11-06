@@ -188,10 +188,46 @@ the snapshot adapter explicitly accepts `invalid_mask=True`. Reduced intensity
 and supplied variance are never converted into invented counts. Verified raw
 counts retain a separate count/exposure contract.
 
-The library is ready for an adapter under the existing WebMON acquisition owner.
-This change does **not** expose structural analysis in WebMON's live UI or launch
-a second polling service. Cross-job prepared-context transport and actual live
-queue latency need their own acceptance tests before enabling that route.
+The shared acquisition adapter is
+`gpx_recipe.structural_live.acquisition.prepare_acquisition` followed by
+`StructuralAcquisition.update`. It runs in an owned scientific process under
+the existing WebMON acquisition owner; it has no source polling loop.
+Magnetic preparation and structural acquisition share
+`gpx_recipe.live.nuclear_transfer.prepare_nuclear_snapshot` for transferring
+the reviewed nuclear reference onto the producer's uniform TOF grid. The
+original nuclear GPX and instrument remain immutable. Model-specific magnetic
+site/catalog review stays separate from structural displacement construction.
+Released instrument refinement flags in a recipe output are deliberately held
+for transfer; both initial and current numerical X/Y/Z values are preserved.
+The final source check uses the originally requested GPX checksum, so an edit
+after native loading cannot acquire a new reference identity unnoticed.
+
+The acquisition contract binds the prepared model, native grid/fit exclusions,
+reviewed exporter geometry and normalization, physical bank, producer identity,
+run/sample scope and spectrum marker. The owner supplies an archived snapshot
+receipt and an explicit monotonic revision. Signed reduced values and supplied
+uncertainties are preserved; exposure may remain unknown. Newly measured bins
+can replace zero-weight placeholders without rebuilding physical preparation.
+Every snapshot supplies its own likelihood and native normalization masks.
+Changed grids, spectrum markers, banks or producer/sample declarations require
+review. A declared mapping is not independent evidence that a live producer
+actually retains that configuration.
+
+Snapshot input lineage is sealed before fitting. POSIX writer ownership and a
+fresh durable-ledger read prevent recovered owner instances from overlapping
+or replacing newer publications with stale updates. Duplicate delivery verifies
+the existing receipt and both GPXs, without another nonlinear fit. Restoration
+also recomputes the observation identity from its archived raw snapshot. A
+failed new fit leaves the previous publication intact. Only previous parameter
+guesses carry forward, together with the existing complete starting policy.
+Point-fit results carry no structural posterior, model probability, exclusion
+permission or counting-stop recommendation.
+
+Acquisition contexts contain measured experiment data. They belong to private
+scientific job/History artifacts, not portable theory-only preparation libraries.
+This backend does **not yet** expose structural analysis in WebMON's live UI.
+Cross-job context transport, structural result presentation and actual live
+queue latency still need acceptance tests before enabling that route.
 Likewise, Method-3 catalog enumeration, calibrated structural posteriors,
 counting advice and named-mode custom recipes remain separate work. Current
 custom recipes accept nuclear projects; magnetic posterior checkpoints are

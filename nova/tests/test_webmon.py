@@ -43,6 +43,14 @@ def test_exact_density_integrals_and_masks():
     assert t['weights'][1]==0
 
 
+@pytest.mark.parametrize('error,factor',[(1e-200,100.),(1e200,100.),(2.,1e-300),(2.,1e300)])
+def test_unrepresentable_variances_are_rejected_instead_of_becoming_unmeasured_bins(error,factor):
+    raw=f'# X , Y , E Distribution=true\n0\n1,10,{error}\n2,20,{error}\n3,30,{error}\n'.encode()
+    pattern=parse_live_ascii(raw)
+    with pytest.raises(ValueError,match='cannot represent'):
+        density_to_tof(pattern,d_edges=[.5,1.5,2.5,3.5],export_difc=factor)
+
+
 def test_scope_and_other_run_not_inherits_checkpoint(tmp_path):
     manifest=tmp_path/'context.json';manifest.write_text(json.dumps(dict(facility_root=str(tmp_path/'inputs'),archive=str(tmp_path/'archive'))))
     s=WebmonSession(manifest)

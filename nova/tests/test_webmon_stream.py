@@ -53,6 +53,24 @@ def test_configuration_change_does_not_reuse_response(tmp_path):
     with pytest.raises(ReviewRequired):s.capture()
 
 
+def test_changed_spectrum_marker_requires_review_even_on_an_identical_grid(tmp_path):
+    stream,path=fixture(tmp_path);stream.capture()
+    path.write_bytes(path.read_bytes().replace(b'\n0\n',b'\n1\n',1))
+    with pytest.raises(ReviewRequired,match='spectrum'):
+        stream.capture()
+
+
+def test_stream_admission_rejects_a_changed_spectrum_in_a_newer_snapshot(tmp_path):
+    from radar_pd_nova.webmon.stream import scope_of
+    stream,path=fixture(tmp_path)
+    original=tmp_path/'reviewed.dat';original.write_bytes(path.read_bytes())
+    binding=dict(stream.binding,source_dat=str(original),live_source_path=str(path),
+        source_scope=scope_of(stream.session.runs('1')[0]))
+    path.write_bytes(path.read_bytes().replace(b'\n0\n',b'\n1\n',1))
+    with pytest.raises(ReviewRequired,match='spectrum'):
+        ObservationStream(stream.session,'1','2',binding,stream.request,tmp_path/'new-stream')
+
+
 def test_latest_queue_coalesces_without_overlapping_jobs(tmp_path):
     async def scenario():
         q=LatestQueue(tmp_path/'q.json');q.offer(dict(id='a'));entered=asyncio.Event();release=asyncio.Event();seen=[]
