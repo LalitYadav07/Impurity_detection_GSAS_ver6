@@ -98,7 +98,7 @@ def test_native_full_constraint_basis_matches_independent_profiles(tmp_path,site
     original=hashlib.sha256(path.read_bytes()).hexdigest()
     adapter=NativeMagneticStartingPoint(path,refine_scale=scale_free,refine_background=background_free,maximum_moment=6.)
     model,receipt=adapter.build()
-    assert receipt['compiler']=='native_profiles'  # smaller bases retain their faster path
+    assert receipt['compiler']=='native_reflection_amplitudes'
     assert max(receipt['heldout_relative_errors'])<1e-8
     assert receipt['linear_identity_error']<1e-8
     expected=3 if constrained else sites*3
@@ -158,10 +158,10 @@ def test_bad_native_magnetic_derivatives_fall_back_to_checked_profiles(tmp_path,
     assert max(proof['heldout_relative_errors'])<1e-8
 
 
-def test_large_basis_automatically_uses_shared_derivative_compiler(tmp_path):
+def test_large_basis_automatically_uses_shared_reflection_compiler(tmp_path):
     _,path=artificial_project(tmp_path,sites=4,masked=True)
     native=NativeMagneticStartingPoint(path,refine_scale=True,refine_background=True,maximum_moment=6.)
     model,proof=native.build()
     assert model.dimension==12
-    assert proof['compiler']=='native_derivatives',proof
+    assert proof['compiler']=='native_reflection_amplitudes',proof
     assert max(proof['heldout_relative_errors'])<1e-8

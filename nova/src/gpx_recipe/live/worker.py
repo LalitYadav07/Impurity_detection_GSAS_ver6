@@ -10,9 +10,9 @@ from .contracts import validate_request,seal_posterior,verify_posterior
 
 def _read_code_identity():
     import inspect
-    result={name:sha(Path(__file__).parent/name) for name in ["statistics.py","native_profile.py","validated_backend.py","native_quadratic.py","native_kernel_policy.py","central_quadratic.py","gpx_index.py","native_validation.py","contracts.py","worker.py","observations.py","gpx_export.py","resources.py"]}
+    result={name:sha(Path(__file__).parent/name) for name in ["statistics.py","native_profile.py","validated_backend.py","native_quadratic.py","native_kernel_policy.py","native_reflection.py","moment_basis.py","central_quadratic.py","gpx_index.py","native_validation.py","contracts.py","worker.py","observations.py","gpx_export.py","resources.py"]}
     import importlib.util
-    for name in ['gsas_magnetic_preflight','gpx_recipe.symmetry.native_magnetic','gpx_recipe.symmetry.native_preparation','gpx_recipe.symmetry.worker','gpx_recipe.execution']:
+    for name in ['gsas_magnetic_preflight','gpx_recipe.symmetry.native_magnetic','gpx_recipe.symmetry.native_preparation','gpx_recipe.symmetry.worker','gpx_recipe.execution','gpx_recipe.structural_live.optimization.native_profile_capture']:
         spec=importlib.util.find_spec(name)
         result[name]=sha(Path(spec.origin)) if spec and spec.origin else 'unavailable'
     result.update({fn.__name__:hashlib.sha256(inspect.getsource(fn).encode()).hexdigest() for fn in [compile_candidate,infer]})
@@ -49,16 +49,11 @@ def compile_candidate(source,candidate,k,sites,out,*,particles=256):
     from .native_kernel_policy import compile_native_magnetic_kernel
     compiled=compile_native_magnetic_kernel(native,np.zeros(n),list(range(n)),checks=5)
     zero=np.zeros(n);base=compiled['base'];q=compiled['quadratic']
-    histograms,phases=native.histo_phases[:2];forms=[];labels=[]
-    for phase in phases.values():
-        if phase['General']['Type']!='magnetic':continue
-        pre=f"{phase['pId']}::";cell=phase['General']['Cell'][1:7];a=L.cell2AB(cell)[0];metric=(a/np.asarray(cell[:3])).T@(a/np.asarray(cell[:3]))
-        for atom,record in enumerate(phase['Atoms']):
-            b=np.zeros((3,n))
-            for j in range(n):
-                p=zero.copy();p[j]=1.;native.parms.update(zip(native.vary,p));native.maps.Dict2Map(native.parms)
-                b[:,j]=[native.parms[pre+f'AM{axis}:{atom}'] for axis in 'xyz']
-            forms.append(b.T@metric@b);labels.append(str(record[0]))
+    histograms,phases=native.histo_phases[:2]
+    from .moment_basis import from_native
+    basis=from_native(native,zero,list(range(n)))
+    forms=np.einsum('aki,akj->aij',basis.cartesian,basis.cartesian)
+    labels=[str(phases[name]['Atoms'][atom][0]) for name,atom,_ in basis.atoms]
     arrays=[histograms[name]['Data'] for name,sl in native.parts]
     x=np.concatenate([histograms[name]['Data'][0][sl] for name,sl in native.parts]);y=np.concatenate([histograms[name]['Data'][1][sl] for name,sl in native.parts]);weight=np.concatenate([native.original_weights[name][sl] for name,sl in native.parts])
     mask=np.isfinite(x)&np.isfinite(y)&np.isfinite(weight)&(weight>0)

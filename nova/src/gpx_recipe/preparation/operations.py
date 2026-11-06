@@ -97,7 +97,7 @@ def create_library(root, *, name, source, banks, models):
 
 def stage_entry(library, identifier, attempt, directory):
     """Capture or recover this exact attempt without changing its inputs."""
-    library.verify()
+    library.refresh()
     row = library.row(identifier)
     if row['state'] != 'preparing' or row['attempt'] != attempt:
         raise ValueError('Stage only the currently owned preparation attempt')
@@ -111,6 +111,7 @@ def stage_entry(library, identifier, attempt, directory):
     roles = dict(source=specification['source'], instrument=model['instrument'])
     if model['kind'] == 'structural':
         roles['child'] = model['child']
+    library.verify_assets(roles.values())
     payload = dict(grid=model['grid'], settings=model['settings'], destination=str(directory/'compiled'))
     for role, name in roles.items():
         if name not in captured:
@@ -129,7 +130,7 @@ def stage_entry(library, identifier, attempt, directory):
 
 def publish_entry(library, identifier, attempt, request, result):
     """Accept a checked worker receipt; an upload alone never marks preparation done."""
-    library.verify()
+    library.refresh()
     row = library.row(identifier)
     if row['state'] != 'preparing' or row['attempt'] != attempt:
         raise ValueError('Late preparation receipt belongs to another attempt')
@@ -139,6 +140,7 @@ def publish_entry(library, identifier, attempt, request, result):
     roles = [library.document['specification']['source'], model['instrument']]
     if kind == 'structural':
         roles.append(model['child'])
+    library.verify_assets(roles)
     captured = {asset['path']: asset['sha256'] for asset in library.document['inputs']}
     if request['grid'] != model['grid'] or request['settings'] != model['settings']:
         raise ValueError('The returned preparation changed its declared model or bank')
@@ -175,6 +177,7 @@ def publish_entry(library, identifier, attempt, request, result):
     # A recovered attempt can encounter already copied immutable files after
     # an interrupted manifest write. Accept byte identity, never overwrite.
     paths = []
+    expected = dict(manifest['artifacts'], **{'entry.json': result['entry_sha256']})
     for name in sorted(names):
         destination = confined(library.root,
             relative(f'entries/{identifier}/attempt-{attempt}/{name}'), exists=False)
@@ -184,6 +187,8 @@ def publish_entry(library, identifier, attempt, request, result):
                 raise ValueError('A different preparation already occupies this entry')
         else:
             shutil.copyfile(source, destination)
+        if file_sha(destination) != expected[name]:
+            raise ValueError('A preparation artifact changed while copying its verified output')
         paths.append(str(destination.relative_to(library.root)))
     library.finish(identifier, attempt, state='prepared', files=paths)
     return library.coverage()

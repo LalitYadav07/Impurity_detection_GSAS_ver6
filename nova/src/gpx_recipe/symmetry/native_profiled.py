@@ -41,7 +41,7 @@ class NativeMagneticStartingPoint:
         from GSASII import GSASIIstrMain as main,GSASIIstrIO as stio
         from GSASII import GSASIIstrMath as math,GSASIImapvars as maps
         from GSASII import GSASIImpsubs as mp,GSASIIlattice as lattice
-        self.math,self.maps=math,maps
+        self.math,self.maps,self.lattice=math,maps,lattice
         self.deadline=deadline
         _active=self
         mp.InitMP();main.ptx.pyqlmninit();maps.InitVars();log=io.StringIO()
@@ -103,6 +103,7 @@ class NativeMagneticStartingPoint:
         from ..live.moment_basis import derive
         basis=derive(phases,self.parms,self.vary,self.initial,self.moment_indices,
             map_values=self._map,lattice=lattice,nuisance=nuisance)
+        self.moment_basis=basis
         self.atoms=list(basis.atoms);self.component_maps=basis.components;self.cartesian_maps=basis.cartesian
         self.maximum_moment=maximum_moment
         self.fixed_scale=None if refine_scale else self.source_scale
@@ -222,9 +223,34 @@ class NativeMagneticStartingPoint:
         if cached is None and cache_only:
             raise _CacheMiss
         compilation=None;compiler='transported_cache' if cached is not None else 'native_profiles'
+        if cached is None and use_derivative is None:
+            try:
+                from ..live.native_reflection import compile_reflection_quadratic
+                self.residual(anchor,1.,zero_bg)
+                physical,proof=compile_reflection_quadratic(math=self.math,lattice=self.lattice,
+                    histogram=self.histogram,phases=self.phases,histdict=self.args[2],
+                    parameters=self.parms,controls=self.args[4],basis=self.moment_basis,
+                    check=self._check,histogram_name=self.histogram_name)
+                begin,end=proof['fit_slice'];weights=np.asarray(np.ma.getdata(self.histogram['Data'][2]),float)[begin:end]
+                factor=float(self.args[4].get(f':{self.histogram_id}:wtFactor',1.))
+                if (self.residual_mask is None or self.residual_mask.shape!=(len(physical),)
+                        or not np.isfinite(factor) or factor<=0
+                        or not np.isfinite(weights[~self.residual_mask]).all()
+                        or np.any(weights[~self.residual_mask]<=0)):
+                    raise ValueError('Native reflection weights/masks differ from the measured residual')
+                quadratic=physical[~self.residual_mask]*np.sqrt(weights[~self.residual_mask]*factor)[:,None,None]
+                f0=self.residual(anchor,1.,zero_bg)-offset
+                nuclear=f0-np.einsum('i,nij,j->n',anchor,quadratic,anchor)
+                linear=self.magnetic_jacobian(anchor,1.,zero_bg).T
+                linear_error=float(np.max(np.abs(linear-2*np.einsum('nij,j->ni',quadratic,anchor)))/max(1.,float(np.max(np.abs(f0)))))
+                if not np.isfinite(linear_error) or linear_error>1e-8:
+                    raise ValueError('Native reflection response fails the independent derivative check')
+                compiler='native_reflection_amplitudes';compilation=proof
+            except (ValueError,FloatingPointError,np.linalg.LinAlgError) as exc:
+                compiler_note=str(exc)
         # Derivative cost is amortized only by larger bases. Measured cold
         # controls favor forward evaluations for the smaller spin spaces.
-        if cached is None and (use_derivative is True or (use_derivative is None and dimension>=12)):
+        if cached is None and compilation is None and (use_derivative is True or (use_derivative is None and dimension>=12)):
             try:
                 from ..live.native_kernel_policy import compile_native_magnetic_kernel
                 compiled=compile_native_magnetic_kernel(_CompilerObjective(self,zero_bg),anchor,
@@ -278,10 +304,10 @@ class NativeMagneticStartingPoint:
                 # rejected scientific model. Rebuild once from native calls.
                 return self._build(heldouts=heldouts,cache_path=cache_path,
                                    cache_identity=cache_identity,skip_cache=True)
-            if compiler=='native_derivatives':
+            if compiler in {'native_derivatives','native_reflection_amplitudes'}:
                 return self._build(heldouts=heldouts,cache_path=cache_path,
                     cache_identity=cache_identity,skip_cache=True,use_derivative=False,
-                    compiler_note='Analytic compilation failed the stricter native residual identity check')
+                    compiler_note='Accelerated compilation failed the stricter native residual identity check')
             raise ValueError('The native profile failed held-out quadratic identity checks: '+
                 str(dict(heldouts=errors,linear_identity_error=linear_error)))
         if cached is None and cache_path is not None and cache_identity:

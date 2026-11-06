@@ -26,7 +26,8 @@ _capture_lock = threading.Lock()
 
 
 def capture_response(driver, powder, parameters, histdict, axis, histogram,
-                     phases, controls, lookup, *, histogram_name, phase_name):
+                     phases, controls, lookup, *, histogram_name, phase_name,
+                     maximum_bytes=None):
     """Return a native F²-to-signal matrix without N full driver invocations.
 
     This deliberately supports the qualified PNC/PNT, single-phase unit-F²
@@ -48,6 +49,8 @@ def capture_response(driver, powder, parameters, histdict, axis, histogram,
         raise CaptureUnavailable('Native response capture requires one ordered finite grid')
     refs = histogram['Reflection Lists'][phase_name]['RefList']
     count = len(refs)
+    if maximum_bytes is not None and (type(maximum_bytes) is not int or maximum_bytes < 1):
+        raise ValueError('A positive native response byte budget is required')
     native_mp = driver.__globals__.get('G2mp')
     if native_mp is None or (count >= 100 and native_mp.InitMP()[0]):
         raise CaptureUnavailable('Native multiprocessing needs its own response-capture adapter')
@@ -56,13 +59,14 @@ def capture_response(driver, powder, parameters, histdict, axis, histogram,
     originals = {}
     columns = {}
     native_peak_calls = 0
+    stored_entries = 0
 
     def wrap(name):
         original = getattr(powder, name)
         originals[name] = original
 
         def observed(*args, **kwargs):
-            nonlocal native_peak_calls
+            nonlocal native_peak_calls, stored_entries
             result = original(*args, **kwargs)
             frame = sys._getframe(1)
             try:
@@ -89,6 +93,9 @@ def capture_response(driver, powder, parameters, histdict, axis, histogram,
                     raise CaptureUnavailable('Nonfinite or unexpected native peak response')
                 signal = factor * profile
                 use = np.flatnonzero(signal)
+                stored_entries += len(use)
+                if maximum_bytes is not None and stored_entries*12+(count+1)*8 > maximum_bytes:
+                    raise CaptureUnavailable('Native profile response exceeds its allocated byte budget')
                 columns[index] = (use.astype(np.int32) + begin, signal[use].copy())
                 native_peak_calls += 1
                 return result

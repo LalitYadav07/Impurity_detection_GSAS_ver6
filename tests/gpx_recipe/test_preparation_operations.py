@@ -101,6 +101,30 @@ def test_changed_staging_file_is_not_overwritten_on_recovery(tmp_path):
         stage_entry(library, identifier, attempt, tmp_path/'input/attempt')
 
 
+def test_copy_race_does_not_publish_a_different_numeric_artifact(tmp_path, monkeypatch):
+    from gpx_recipe.preparation import operations
+    library, identifier, attempt, request = fixture(tmp_path/'input')
+    result = returned(request)
+    original = operations.shutil.copyfile
+    def changed(source, destination):
+        result = original(source, destination)
+        if Path(destination).name == 'response.npz':
+            np.savez(destination, x=np.ones(4))
+        return result
+    monkeypatch.setattr(operations.shutil, 'copyfile', changed)
+    with pytest.raises(ValueError, match='changed while copying'):
+        publish_entry(library, identifier, attempt, request, result)
+    assert library.coverage()['counts']['preparing'] == 1
+    assert not library.row(identifier)['files']
+
+
+def test_staging_rechecks_exact_library_input_even_on_recovery(tmp_path):
+    library, identifier, attempt, request = fixture(tmp_path/'input')
+    (library.root/'inputs/parent.cif').write_text('changed captured parent')
+    with pytest.raises(ValueError, match='artifact changed'):
+        stage_entry(library, identifier, attempt, tmp_path/'input/attempt')
+
+
 def test_repeated_admission_covers_families_before_deepening_one(tmp_path):
     from gpx_recipe.preparation.library import PreparationLibrary
     cif = tmp_path/'parent.cif';cif.write_text('data_public\n')

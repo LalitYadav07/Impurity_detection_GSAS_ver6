@@ -157,19 +157,63 @@ class PreparationLibrary:
         self._verify_artifacts()
         return True
 
-    def _verify_artifacts(self):
-        assets = self.document['inputs']+[a for r in self.document['entries'] for a in r['files']]
-        total = self.path.stat().st_size
-        for asset in assets:
-            path = confined(self.root, asset['path'])
-            if not path.is_file() or sha(path) != asset['sha256']:
-                raise ValueError('A preparation artifact changed: '+asset['path'])
+    def refresh(self):
+        """Read durable state; state inspection does not consume scientific arrays.
+
+        Opening/importing/exporting a library checks its full inventory. Work
+        dispatch and consumption additionally verify their exact dependencies
+        through ``verify_assets``. State-only transitions must not repeatedly
+        hash and decompress every unrelated completed model.
+        """
+        self.document = validate_manifest(json.loads(self.path.read_text()))
+        return self.document
+
+    def _assets(self):
+        return self.document['inputs']+[a for r in self.document['entries'] for a in r['files']]
+
+    def _check_budget(self, extra_paths=()):
+        # Retain the aggregate size and confinement checks at every publication.
+        # This inspects metadata; it never reads/decompresses unrelated arrays.
+        total = len(json.dumps(self.document, allow_nan=False).encode())
+        names = list(dict.fromkeys([a['path'] for a in self._assets()]+list(extra_paths)))
+        if len(names)+1 > MAX_FILES:
+            raise ValueError('Preparation exceeds its portable file-count budget')
+        for name in names:
+            path = confined(self.root, name)
+            if not path.is_file():
+                raise ValueError('A preparation artifact changed: '+name)
             total += path.stat().st_size
             if total > MAX_BYTES:
                 raise ValueError('Preparation exceeds the library byte budget; split its declared scope')
+
+    def _verify_artifacts(self, assets=None):
+        self._check_budget()
+        for asset in self._assets() if assets is None else assets:
+            path = confined(self.root, asset['path'])
+            if not path.is_file() or sha(path) != asset['sha256']:
+                raise ValueError('A preparation artifact changed: '+asset['path'])
             if path.suffix == '.npz':
                 from ..live.array_limits import validate_npz
                 validate_npz(path)
+
+    def verify_assets(self, names):
+        """Check the exact published inputs/outputs a calculation will consume."""
+        self.refresh()
+        inventory = {a['path']: a for a in self._assets()}
+        names = list(names)
+        if (any(not isinstance(n, str) for n in names) or len(names) != len(set(names))
+                or any(n not in inventory for n in names)):
+            raise ValueError('Scientific dependencies must belong to this preparation inventory')
+        self._verify_artifacts([inventory[n] for n in names])
+        return {n: confined(self.root, n) for n in names}
+
+    def prepared_assets(self, identifier):
+        """Verify a completed entry before handing its arrays to an evaluator."""
+        self.refresh()
+        row = self.row(identifier)
+        if row['state'] != 'prepared':
+            raise ValueError('This preparation entry has no completed scientific artifacts')
+        return self.verify_assets([a['path'] for a in row['files']])
 
     @contextmanager
     def _transaction(self):
@@ -177,8 +221,7 @@ class PreparationLibrary:
         with self._lock, (self.root/'.library.lock').open('a+b') as stream:
             fcntl.flock(stream, fcntl.LOCK_EX)
             try:
-                self.document = validate_manifest(json.loads(self.path.read_text()))
-                self._verify_artifacts()
+                self.refresh()
                 yield
             finally:
                 fcntl.flock(stream, fcntl.LOCK_UN)
@@ -205,12 +248,17 @@ class PreparationLibrary:
                 raise ValueError('Late preparation result belongs to a different entry attempt')
             if state not in TERMINAL:
                 raise ValueError('A preparation result needs an explicit terminal state')
+            files = list(files)
+            for name in files:
+                relative(name)
+                if not name.startswith('entries/'+identifier+'/'):
+                    raise ValueError('Preparation output belongs to another model')
+            self._check_budget(files)
             copied = []
             for name in files:
                 target = confined(self.root, name)
-                if not name.startswith('entries/'+identifier+'/'):
-                    raise ValueError('Preparation output belongs to another model')
                 copied.append(dict(path=name, sha256=sha(target)))
+            self._verify_artifacts(copied)
             old = dict(row)
             row.update(state=state, files=copied, reason=reason)
             try:
@@ -232,7 +280,7 @@ class PreparationLibrary:
         self.finish(identifier, attempt, state='cancelled', reason='Preparation interrupted; retry is explicit')
 
     def coverage(self):
-        self.document = validate_manifest(json.loads(self.path.read_text()))
+        self.refresh()
         counts = {state: 0 for state in sorted(STATES)}
         banks = {}; families = {}
         for row in self.document['entries']:
@@ -247,7 +295,7 @@ class PreparationLibrary:
 
     def _save(self):
         validate_manifest(self.document)
-        self._verify_artifacts()
+        self._check_budget()
         write_json(self.path, self.document)
 
     def export(self, destination):

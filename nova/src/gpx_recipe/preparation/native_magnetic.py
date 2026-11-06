@@ -9,7 +9,7 @@ import numpy as np
 
 from .magnetic import MagneticResponse, MAX_BYTES
 from .identity import _plain, native_identity, BOOKKEEPING_CONTROLS
-from ..live.moment_basis import derive
+from ..live.moment_basis import from_native
 from ..live.native_kernel_policy import compile_native_magnetic_kernel
 
 
@@ -90,16 +90,9 @@ def physics_identity(native, basis=None):
 
 
 def moment_basis(native):
-    _, phases, _, moments, background, scale = _context(native)
-
-    def map_values(values):
-        native._check()
-        native.parms.update(zip(native.vary, values))
-        native.maps.Dict2Map(native.parms)
-
-    return derive(phases, native.parms, native.vary, native.x0,
-        [native.vary.index(k) for k in moments], map_values=map_values,
-        lattice=native.lattice, nuisance=background+[scale])
+    _, _, _, moments, background, scale = _context(native)
+    return from_native(native, native.x0, [native.vary.index(k) for k in moments],
+        nuisance=background+[scale])
 
 
 def qualify_response(response, native):

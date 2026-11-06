@@ -110,3 +110,58 @@ def test_failed_or_partial_models_never_publish_arrays_as_prepared(tmp_path):
     with pytest.raises(ValueError, match='Only fully prepared'):
         lib.finish(identifier, attempt, state='prepared')
     assert PreparationLibrary(lib.root).row(identifier)['state'] == 'preparing'
+
+
+def test_state_updates_read_only_new_artifact_bytes(tmp_path, monkeypatch):
+    from gpx_recipe.preparation import library as module
+    lib = library(tmp_path)
+    read = []
+    original = module.sha
+    def counted(path):
+        if Path(path).suffix == '.npz':
+            read.append(str(Path(path).relative_to(lib.root)))
+        return original(path)
+    monkeypatch.setattr(module, 'sha', counted)
+    ids = [r['id'] for r in lib.document['entries']]
+    for identifier in ids:
+        prepare_one(lib, identifier)
+    # Each new file is hashed for its published checksum and checked once.
+    # Later entries do not reread that earlier file during state transitions.
+    assert len(read) == 2*len(ids)
+    assert all(read.count(f'entries/{identifier}/response.npz') == 2 for identifier in ids)
+    lib.prepared_assets(ids[0])
+    assert len(read) == 2*len(ids)+1
+
+
+def test_consumption_and_export_reject_corruption_after_state_only_admission(tmp_path):
+    lib = library(tmp_path);ids = [r['id'] for r in lib.document['entries']]
+    prepare_one(lib, ids[0])
+    np.savez(lib.root/'entries'/ids[0]/'response.npz', coefficient=np.array([5., 9.]))
+    # Admission is bookkeeping. It must not consume a different entry's arrays.
+    assert lib.start(ids[1]) == 1
+    with pytest.raises(ValueError, match='artifact changed'):
+        lib.prepared_assets(ids[0])
+    with pytest.raises(ValueError, match='artifact changed'):
+        lib.export(tmp_path/'corrupt.zip')
+    with pytest.raises(ValueError, match='artifact changed'):
+        PreparationLibrary(lib.root)
+
+
+def test_new_file_budget_is_checked_before_reading_output(tmp_path, monkeypatch):
+    from gpx_recipe.preparation import library as module
+    lib = library(tmp_path);identifier = lib.document['entries'][0]['id']
+    attempt = lib.start(identifier)
+    folder = lib.root/'entries'/identifier;folder.mkdir(parents=True)
+    path = folder/'response.npz';np.savez(path, coefficient=np.ones(1000))
+    monkeypatch.setattr(module, 'MAX_BYTES', path.stat().st_size)
+    monkeypatch.setattr(module, 'sha', lambda p:pytest.fail('Reject oversized output before hashing it'))
+    with pytest.raises(ValueError, match='byte budget'):
+        lib.finish(identifier, attempt, state='prepared', files=[str(path.relative_to(lib.root))])
+    assert lib.coverage()['counts']['preparing'] == 1
+
+
+def test_targeted_dependency_checks_reject_changed_inputs(tmp_path):
+    lib = library(tmp_path)
+    (lib.root/'inputs/parent.cif').write_text('changed after initial validation')
+    with pytest.raises(ValueError, match='artifact changed'):
+        lib.verify_assets(['inputs/parent.cif'])

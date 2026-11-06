@@ -168,6 +168,13 @@ class NativeReducedProfile:
         derivative = np.asarray(self.math.dervRefine(values, *args), float)
         if derivative.shape != (len(values), len(mean)): raise ValueError('Unexpected native Jacobian shape')
         derivative = derivative * self.factor[None, :]
+        # errRefine's saved calculated array is zero in the native excluded
+        # region, but dervRefine retains underlying values beneath its mask.
+        # Return the derivative of this adapter's profile, including those
+        # zeroed bins, rather than exposing masked residual storage as data.
+        excluded = np.concatenate([np.ma.getmaskarray(histograms[n]['Data'][0])[sl]
+                                   for n, sl in self.parts])
+        derivative[:, excluded] = 0.
         if self.numerical_indices:
             for j in self.numerical_indices:
                 h = self._difference_step(values, j, 1e-4)

@@ -11,6 +11,16 @@ class MomentBasis:
     cartesian: np.ndarray
 
 
+def from_native(native, reference, indices, *, nuisance=()):
+    """Extract the same checked map from a direct native forward adapter."""
+    def map_values(values):
+        native._check()
+        native.parms.update(zip(native.vary, values))
+        native.maps.Dict2Map(native.parms)
+    return derive(native.histo_phases[1], native.parms, native.vary, reference,
+        indices, map_values=map_values, lattice=native.lattice, nuisance=nuisance)
+
+
 def derive(phases, parameters, variables, reference, indices, *, map_values,
            lattice, nuisance=()):
     """Extract and check the native homogeneous constraint map.
