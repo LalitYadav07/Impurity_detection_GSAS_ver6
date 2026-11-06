@@ -31,13 +31,18 @@ from gpx_recipe.symmetry.worker import Artifacts
 def fit_portfolio(path,cache):
     began=time.monotonic()
     native=NativeMagneticStartingPoint(path,refine_scale=False,refine_background=False,maximum_moment=6.)
+    initialization_seconds=time.monotonic()-began;compile_started=time.monotonic()
     model,compilation=native.build(factor_cache=cache)
+    compilation_seconds=time.monotonic()-compile_started;fit_seconds=verification_seconds=0.
     seeds=[np.eye(model.dimension)[i]*amplitude for amplitude in (.4,1.8) for i in range(model.dimension)]
     rows=[]
     for index,seed in enumerate(seeds):
+        started=time.monotonic()
         fit=model.fit(seed,max_iterations=250)
+        fit_seconds+=time.monotonic()-started;started=time.monotonic()
         residual=native.residual(fit.coefficients,fit.scale,fit.background)
         error=model.heldout_error(fit.coefficients,fit.scale,fit.background,residual)
+        verification_seconds+=time.monotonic()-started
         assert error<1e-8
         native_cost=float(.5*(residual@residual))
         assert native_cost==pytest.approx(fit.weighted_cost,rel=1e-8,abs=1e-7)
@@ -45,7 +50,10 @@ def fit_portfolio(path,cache):
             optimizer_qualified=fit.success,maximum_moment=fit.maximum_moment,
             residual=residual.copy()))
     best=min(rows,key=lambda row:row['cost'])
-    return dict(rows=rows,best=best,compilation=compilation,seconds=time.monotonic()-began)
+    return dict(rows=rows,best=best,compilation=compilation,seconds=time.monotonic()-began,
+        stages_seconds=dict(native_initialization=initialization_seconds,response_compilation=compilation_seconds,
+            multistart_optimization=fit_seconds,independent_native_checks=verification_seconds),
+        native_calls=native.calls,native_derivative_calls=native.derivative_calls)
 
 
 def test_portable_library_preserves_complete_k_search_across_a_new_series(tmp_path):
@@ -131,6 +139,7 @@ def test_portable_library_preserves_complete_k_search_across_a_new_series(tmp_pa
             assert proof['scattering_factors_reused']==(change in {'same','width'})
             results[label]=dict(best_cost=prepared['best']['cost'],cold_best_cost=cold['best']['cost'],
                 prepared_seconds=prepared['seconds'],cold_seconds=cold['seconds'],
+                prepared_stages_seconds=prepared['stages_seconds'],cold_stages_seconds=cold['stages_seconds'],
                 starts=len(prepared['rows']),qualified=sum(row['optimizer_qualified'] for row in prepared['rows']),
                 maximum_native_error=max(row['forward_error'] for row in prepared['rows']),
                 factors_reused=proof['scattering_factors_reused'])
