@@ -201,7 +201,7 @@ class NativeMagneticStartingPoint:
         return self._build(heldouts=heldouts,factor_cache=factor_cache)
 
     def _build(self,*,heldouts=4,cache_path=None,cache_identity=None,skip_cache=False,
-               use_derivative=None,compiler_note='',cache_only=False,factor_cache=None):
+               use_derivative=None,compiler_note='',cache_only=False,factor_cache=None,background_basis=True):
         started=time.monotonic();dimension=len(self.moment_indices);nb=len(self.background_indices)
         # GetAtomFXU replaces exact zero components with 1e-8. An evenly
         # spaced anchor can contain 1.0, so a minus-unit interpolation probe
@@ -281,9 +281,29 @@ class NativeMagneticStartingPoint:
                     quadratic[:,i,j]=quadratic[:,j,i]=(value-plus[i]-plus[j]+f0)/2
             nuclear=f0-np.einsum('i,nij,j->n',anchor,quadratic,anchor)
             linear_error=float(np.max(np.abs(linear-2*np.einsum('nij,j->ni',quadratic,anchor)))/max(1.,float(np.max(np.abs(f0)))))
+        background_proof=dict(method='transported cache' if cached is not None else 'native full powder',columns=nb)
         if cached is None:
-            columns=[self.residual(anchor,0.,np.eye(nb)[i])-offset for i in range(nb)]
-            background=np.column_stack(columns) if columns else np.empty((len(f0),0))
+            background=None
+            if nb and background_basis:
+                from ..live.native_background import compile_columns,BackgroundCompilerUnavailable
+                try:
+                    lower,upper=self.args[4][f':{self.histogram_id}:Limits']
+                    x=self.histogram['Data'][0]
+                    sl=slice(int(np.searchsorted(x,lower)),int(np.searchsorted(x,upper))+1)
+                    columns,background_proof=compile_columns(math=self.math,histogram=self.histogram,
+                        parameters=self.parms,controls=self.args[4],axis=x[sl],
+                        names=[self.vary[i] for i in self.background_indices])
+                    weights=np.asarray(np.ma.getdata(self.histogram['Data'][2]),float)[sl]
+                    factor=float(self.args[4][f':{self.histogram_id}:wtFactor'])
+                    if (self.residual_mask is None or columns.shape[0]!=len(self.residual_mask)
+                            or not np.isfinite(factor) or factor<=0):
+                        raise BackgroundCompilerUnavailable('Native background residual domain changed')
+                    background=columns[~self.residual_mask]*np.sqrt(weights[~self.residual_mask]*factor)[:,None]
+                except BackgroundCompilerUnavailable as error:
+                    background_proof=dict(method='native full powder',columns=nb,fallback_reason=str(error))
+            if background is None:
+                columns=[self.residual(anchor,0.,np.eye(nb)[i])-offset for i in range(nb)]
+                background=np.column_stack(columns) if columns else np.empty((len(f0),0))
         else:
             nuclear,quadratic,background=(cached[k] for k in ('nuclear','quadratic','background'))
             linear_error=float(cached['linear_error'])
@@ -301,18 +321,22 @@ class NativeMagneticStartingPoint:
             native=self.residual(moments,scale,bg)
             errors.append(model.heldout_error(moments,scale,bg,native))
         if not errors or max(errors+[linear_error])>1e-8:
+            if background_proof['method']=='unchanged native background function':
+                return self._build(heldouts=heldouts,cache_path=cache_path,cache_identity=cache_identity,
+                    skip_cache=True,use_derivative=use_derivative,factor_cache=factor_cache,background_basis=False,
+                    compiler_note='Native background-only compilation failed the full residual identity check; original powder columns used')
             if cached is not None:
                 if cache_only:
                     raise _CacheMiss
                 # A hint can never turn a recoverable cache mismatch into a
                 # rejected scientific model. Rebuild once from native calls.
                 return self._build(heldouts=heldouts,cache_path=cache_path,
-                                   cache_identity=cache_identity,skip_cache=True,factor_cache=factor_cache)
+                                   cache_identity=cache_identity,skip_cache=True,factor_cache=factor_cache,background_basis=background_basis)
             if compiler in {'native_derivatives','native_reflection_amplitudes'}:
                 return self._build(heldouts=heldouts,cache_path=cache_path,
                     cache_identity=cache_identity,skip_cache=True,use_derivative=False,
                     compiler_note='Accelerated compilation failed the stricter native residual identity check',
-                    factor_cache=factor_cache)
+                    factor_cache=factor_cache,background_basis=background_basis)
             raise ValueError('The native profile failed held-out quadratic identity checks: '+
                 str(dict(heldouts=errors,linear_identity_error=linear_error)))
         if cached is None and cache_path is not None and cache_identity:
@@ -332,6 +356,7 @@ class NativeMagneticStartingPoint:
             native_calls=self.calls,native_derivative_calls=self.derivative_calls,
             exact_native_peak_reuse=self.peak_memo.diagnostics(),
             compiler=compiler,compiler_note=compiler_note,compiler_diagnostics=compilation,
+            background_compiler=background_proof,
             heldout_relative_errors=errors,linear_identity_error=linear_error,
             cache_hit=cached is not None,cache_identity=cache_identity,cache_note=cache_note,
             residual_reduction=dict(model.reduction_diagnostics),

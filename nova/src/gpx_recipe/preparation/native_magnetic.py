@@ -219,19 +219,37 @@ def compile_response(native, *, factor_cache=None):
         compiled = compile_native_magnetic_kernel(native, reference, indices, factor_cache=factor_cache)
         fixed = profile(reference, 0.)
         nuclear = compiled['base']-fixed
-        columns = []
-        for index in backgrounds:
-            point = reference.copy()
-            point[index] = 1.
-            columns.append(profile(point, 0.)-fixed)
-        response = MagneticResponse(x=x, fixed=fixed, nuclear=nuclear,
-            quadratic=compiled['quadratic'].transpose(2, 0, 1),
-            background=np.column_stack(columns) if columns else np.empty((len(x), 0)),
-            moment_maps=basis.cartesian, physics_sha256=identity, proof={})
-        validation = qualify_response(response, native, factor_cache=factor_cache)
+        def original_background():
+            columns=[]
+            for index in backgrounds:
+                point=reference.copy();point[index]=1.
+                columns.append(profile(point,0.)-fixed)
+            return np.column_stack(columns) if columns else np.empty((len(x),0))
+        background_proof=dict(method='native full powder',columns=len(backgrounds))
+        if backgrounds:
+            from ..live.native_background import compile_columns,BackgroundCompilerUnavailable
+            try:
+                columns,background_proof=compile_columns(math=native.math,histogram=histogram,
+                    parameters=native.parms,controls=native.controls,axis=x,names=background)
+            except BackgroundCompilerUnavailable as error:
+                columns=original_background();background_proof['fallback_reason']=str(error)
+        else:columns=original_background()
+        def make_response(columns):
+            return MagneticResponse(x=x,fixed=fixed,nuclear=nuclear,
+                quadratic=compiled['quadratic'].transpose(2,0,1),background=columns,
+                moment_maps=basis.cartesian,physics_sha256=identity,proof={})
+        response=make_response(columns)
+        try:validation=qualify_response(response,native,factor_cache=factor_cache)
+        except ValueError as error:
+            if background_proof['method']!='unchanged native background function':raise
+            response=make_response(original_background())
+            background_proof=dict(method='native full powder',columns=len(backgrounds),
+                fallback_reason='Background-only compilation failed native qualification: '+str(error))
+            validation=qualify_response(response,native,factor_cache=factor_cache)
         final = MagneticResponse(**{k: getattr(response, k) for k in
             ('x', 'fixed', 'nuclear', 'quadratic', 'background', 'moment_maps')},
             physics_sha256=identity, proof=dict(compiler=compiled['diagnostics'],
+                background_compiler=background_proof,
                 **validation,
                 observations_included=False, seconds=time.monotonic()-began,
                 geometry_scope='Exact prepared geometry, bank and native implementation'))
