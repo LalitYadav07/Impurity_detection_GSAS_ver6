@@ -16,7 +16,7 @@ from ..commensurate_k import rank_profiles,reciprocal_equivalent
 from ..execution import write_json
 from ..jobs import scientific_environment
 from ..process import run_scientific
-from .compiler import compile_bundle,file_sha,package_signature,confined
+from .compiler import compile_native_bundle,file_sha,package_signature,confined
 from .contracts import digest,validate_protocol
 from .plans import build_plan
 
@@ -242,7 +242,7 @@ class KSearch:
                     raise ValueError('A cached simulation artifact changed')
                 return dict(cached=(i,saved,path,True))
             directory=cache/('attempt-'+uuid.uuid4().hex)
-            compile_bundle(protocol,inputs,directory,candidate_id=candidate_id,seed_id=seed_id,approved_hash=digest(protocol))
+            compile_native_bundle(protocol,inputs,directory,candidate_id=candidate_id,seed_id=seed_id,approved_hash=digest(protocol))
             from ..preparation.hints import read,subset,restore
             try:
                 prepared=read(inputs,protocol)

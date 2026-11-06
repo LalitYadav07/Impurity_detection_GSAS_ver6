@@ -9,7 +9,7 @@ import pytest
 
 from test_symmetry_contracts import make_protocol
 from gpx_recipe.symmetry import k_native,k_group
-from gpx_recipe.symmetry.compiler import compile_bundle,package_signature
+from gpx_recipe.symmetry.compiler import compile_native_bundle as compile_bundle,package_signature
 from gpx_recipe.symmetry.contracts import digest
 from gpx_recipe.symmetry.k_search import portfolio_batch
 

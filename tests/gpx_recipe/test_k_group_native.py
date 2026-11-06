@@ -10,7 +10,7 @@ import pytest
 G=pytest.importorskip('GSASII.GSASIIscriptable')
 from test_preparation_theory_native import inputs
 from gpx_recipe.execution import write_json
-from gpx_recipe.symmetry.compiler import compile_bundle,file_sha,package_signature
+from gpx_recipe.symmetry.compiler import compile_native_bundle as compile_bundle,file_sha,package_signature
 from gpx_recipe.symmetry.contracts import digest,validate_protocol
 from gpx_recipe.symmetry.k_group import simulate_group
 from gpx_recipe.symmetry.k_native import template,portfolio

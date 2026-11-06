@@ -152,6 +152,22 @@ def freeze_runtime(destination):
 
 
 def compile_bundle(protocol,input_root,destination,*,candidate_id,seed_id,approved_hash):
+    return _compile_bundle(protocol,input_root,destination,candidate_id=candidate_id,
+        seed_id=seed_id,approved_hash=approved_hash,standalone=True)
+
+
+def compile_native_bundle(protocol,input_root,destination,*,candidate_id,seed_id,approved_hash):
+    """Data-only inputs for the pinned installed native API, not worker.py.
+
+    Native entry points independently check package_signature and every input
+    before/after execution. No per-start runtime copy or executable is needed.
+    The ordinary standalone bundle retains its complete captured runtime.
+    """
+    return _compile_bundle(protocol,input_root,destination,candidate_id=candidate_id,
+        seed_id=seed_id,approved_hash=approved_hash,standalone=False)
+
+
+def _compile_bundle(protocol,input_root,destination,*,candidate_id,seed_id,approved_hash,standalone):
     protocol=validate_protocol(protocol)
     if approved_hash!=digest(protocol):raise ValueError('Approval does not bind the complete protocol')
     if protocol['implementation_sha256']!=package_signature():raise ValueError('The scientific implementation changed after approval')
@@ -168,8 +184,9 @@ def compile_bundle(protocol,input_root,destination,*,candidate_id,seed_id,approv
         target.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(source,target)
     job=dict(schema='radar-symmetry-job/v1',protocol=protocol,protocol_sha256=approved_hash,
              candidate_id=candidate_id,seed_id=seed_id,id=trial_id(protocol,candidate_id,seed_id),package_sha256=package_signature())
-    freeze_runtime(destination/'runtime')
     (destination/'job.json').write_text(json.dumps(job,indent=2,allow_nan=False)+'\n')
+    if not standalone:return job
+    freeze_runtime(destination/'runtime')
     # Only this trusted entry point is generated; no model-written Python runs.
     code='from pathlib import Path\nimport sys\nroot=Path(__file__).resolve().parent\nsys.path[:0]=[str(root/"runtime"),str(root/"runtime/scripts")]\nfrom gpx_recipe.symmetry.worker import main\nif __name__ == "__main__":\n    main(root)\n'
     (destination/'worker.py').write_text(code)
