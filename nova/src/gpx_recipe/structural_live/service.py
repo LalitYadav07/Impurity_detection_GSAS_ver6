@@ -185,6 +185,7 @@ def fit_snapshot(prepared, output, *, settings=None, observation=None, warm_star
         frozen=frozen,continuation=continuation,timings=timings,wall_seconds=time.monotonic()-started,
         previous_likelihood_accumulated=False,instrument_parameters_fixed=True,
         higher_background_coefficients_fixed=True,covariance_available=False,
+        background_execution=table.background_execution,
         nuisance_scope=dict(common_scale_bounds=[float(np.exp(-.3)),float(np.exp(.3))],
             background0_initial=background,background_scale=background_scale,
             background0_bounds=[background-.75*background_scale,background+3*background_scale]),

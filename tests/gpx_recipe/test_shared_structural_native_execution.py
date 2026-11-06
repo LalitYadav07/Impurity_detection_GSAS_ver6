@@ -71,6 +71,8 @@ def test_shared_service_recovery_publishes_its_actual_best_objective_and_verifie
         source.fast.slow.hist.data['Limits'],acquisition='public recovery control',
         protocol_sha256=sha(prepared/'prepared.json'))
     result=fit_snapshot(prepared,tmp_path/'fit',settings=settings,observation=observation)
+    assert result['background_execution']['method']=='unchanged native background function'
+    assert result['background_execution']['full_powder_calls_avoided']==3
     fitted=result['result'];recovery=fitted['recovery']
     assert fitted['rwp_percent']==recovery['rwp_percent']
     assert fitted['exact_native_deviance']==recovery['best']['deviance']==fitted['best']['deviance']
