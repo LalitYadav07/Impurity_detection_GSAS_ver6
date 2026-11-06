@@ -5,12 +5,14 @@ import pytest
 
 import gpx_recipe.live.native_profile as module
 from gpx_recipe.live.native_peak_memo import NativePeakMemo
+from gpx_recipe.live.native_axis_view import NativeUnmaskedAxisView
 
 
 @pytest.mark.parametrize('array_storage',[False,True])
 def test_zero_observation_forward_call_never_generates_dummy_counts(array_storage):
     native=module.NativeReducedProfile.__new__(module.NativeReducedProfile)
     native.peak_memo=NativePeakMemo()
+    native.axis_view=NativeUnmaskedAxisView(False)
     data=[np.arange(4.),np.zeros(4),np.ones(4),np.zeros(4),np.zeros(4),np.zeros(4)]
     if array_storage:data=np.array(data)
     histogram={'Data':data,'Reflection Lists':{}}
@@ -38,6 +40,7 @@ def test_zero_observation_forward_call_never_generates_dummy_counts(array_storag
 def test_observations_are_restored_even_when_native_profile_fails():
     native=module.NativeReducedProfile.__new__(module.NativeReducedProfile)
     native.peak_memo=NativePeakMemo()
+    native.axis_view=NativeUnmaskedAxisView(False)
     data=[np.arange(2.),np.zeros(2),np.ones(2),np.zeros(2),np.zeros(2),np.zeros(2)]
     native.histo_phases=[{'PWDR test':{'Data':data,'Reflection Lists':{}}},{},{},{}]
     native.parts=[('PWDR test',slice(None))];native.parms={};native.vary=[]

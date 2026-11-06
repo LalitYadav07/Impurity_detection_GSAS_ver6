@@ -95,6 +95,11 @@ class NativeReducedProfile:
             else NativePeakMemo(memo_bytes,disabled_reason=(
             'variable-cell/profile workload uses original native rendering'
             if changing_geometry and peak_memo_bytes is None else 'disabled native reference')))
+        from .native_axis_view import NativeUnmaskedAxisView
+        # Changing cells do not benefit from peak-cache bookkeeping, but an
+        # unmasked axis can still avoid the native loop's masked temporaries.
+        # Explicit zero-byte controls keep the untouched reference path.
+        self.axis_view=NativeUnmaskedAxisView(changing_geometry and peak_memo_bytes is None)
         self.numerical_indices = self.cell_indices.copy() if numerical_cell else []
         self.derivative_validation = None
         self.parts=[]; self.original_weights={}
@@ -179,7 +184,7 @@ class NativeReducedProfile:
                 zero_observations.append((data,data[1].copy()))
                 data[1]=np.ones_like(data[1])
         try:
-            with self.peak_memo.evaluation(self.math):
+            with self.peak_memo.evaluation(self.math), self.axis_view.evaluation(self.math):
                 residual = self.math.errRefine(values, *args)
         finally:
             for data,observed in zero_observations:data[1]=observed

@@ -159,6 +159,18 @@ The bypassed native tail is not included in the observed peak-call counter.
 This can reduce repeated rendering, but does not itself solve
 portable preparation or nonlinear cell/profile adaptation.
 
+Variable-cell/profile calls can independently avoid masked-array temporary
+objects when the reviewed native driver receives an entirely unmasked,
+contiguous float64 axis. `NativeUnmaskedAxisView` passes a zero-copy plain
+array view to that original driver; it preserves the reflection loop, native
+kernel calls, summation order and owned histogram arrays. Real masks,
+unusual storage, native multiprocessing and active response-capture hooks
+keep their original arguments. Temporary driver wrapping is restored on
+exceptions. Explicit zero-byte native reference controls do not enable this
+optimization. Receipts report its selection and conversion/bypass counters
+separately from peak-cache accounting. This does not make a prepared bank
+compatible with a changed cell or profile.
+
 For reviewed single-phase PNC/PNT structural contexts, lattice proposals can
 stream the original native peak derivatives together with native reflection
 geometry and intensity probes. One complete native anchor restores the
