@@ -119,7 +119,16 @@ def libraries_panel(app):
                     for title in ['Bank','Model','k','Status','Message','Action']:html.Th(title)
             with html.Tbody():
                 with html.Tr(v_for='item in prep_entries',key='item.id'):
-                    html.Td('{{ item.bank }}');html.Td('{{ item.model }}');html.Td('{{ item.k || "—" }}');html.Td('{{ item.state }}');html.Td('{{ item.reason }}')
+                    html.Td('{{ item.bank }}')
+                    with html.Td():
+                        html.Div('{{ item.model }}')
+                        html.Div('{{ item.coordinates }}',v_if='!!item.coordinates',classes='text-caption')
+                        with html.Details(v_if='!!item.candidate',classes='text-caption'):
+                            html.Summary('Model identity',style='cursor:pointer')
+                            html.Div('{{ item.candidate }}',style='overflow-wrap:anywhere')
+                            html.Div('Basis: {{ item.basis }}')
+                            html.Div('Origin: {{ item.origin }}')
+                    html.Td('{{ item.k || "Not recorded" }}');html.Td('{{ item.state }}');html.Td('{{ item.reason }}')
                     with html.Td():v.VBtn('Retry',v_if="['failed','cancelled','unsupported'].includes(item.state)",click=(app.retry_preparation_entry,'[item.id]'),disabled=('prep_busy',),variant='text',size='small')
         html.P('{{ prep_table_count }} matching entries · 25 per page',classes='text-caption mt-2')
         v.VPagination(v_model=('prep_page',),length=('prep_pages',),total_visible=7)

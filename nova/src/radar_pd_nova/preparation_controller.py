@@ -419,14 +419,15 @@ class PreparationMixin:
             kinds={r['model']['kind'] for r in library.document['entries']}
             s.prep_library_kind='Input inspection' if kinds=={'reference'} else 'Model preparation'
             s.prep_coverage=f"{counts['prepared']} prepared · {counts['preparing']} in preparation · {counts['pending']} pending · {counts['failed']+counts['cancelled']+counts['unsupported']} need attention · {coverage['total']} total"
+            from .preparation_labels import scope_labels,entry_label
+            labels=scope_labels(library)
             text=str(s.prep_entry_search).strip().lower()[:200];rows=[]
             for row in library.document['entries']:
                 model=row['model'];candidate=model.get('settings',{}).get('candidate',{})
-                label=candidate.get('magnetic_space_group') or candidate.get('irrep') or candidate.get('id') or 'Parent and profile'
+                display=entry_label(model,labels)
                 if s.prep_entry_filter!='all' and row['state']!=s.prep_entry_filter:continue
-                if text and text not in (label+' '+model['bank']+' '+row['reason']).lower():continue
-                rows.append(dict(id=row['id'],bank=model['bank'],model=label,
-                    k=', '.join(model['settings'].get('k',[])),state=row['state'],reason=row['reason']))
+                if text and text not in (' '.join(display.values())+' '+model['bank']+' '+row['reason']).lower():continue
+                rows.append(dict(id=row['id'],bank=model['bank'],**display,state=row['state'],reason=row['reason']))
             s.prep_table_count=len(rows);s.prep_pages=max(1,math.ceil(len(rows)/25))
             page=min(max(1,finite_number(s.prep_page,integer=True)),s.prep_pages)
             if page!=s.prep_page:s.prep_page=page
