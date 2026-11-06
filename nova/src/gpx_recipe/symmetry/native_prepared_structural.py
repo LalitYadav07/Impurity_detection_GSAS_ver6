@@ -33,12 +33,16 @@ def run(source_gpx,ctx,protocol,candidate,seed):
     child=confined(ctx.input_root,candidate['child']['path'])
     settings=SearchSettings(mode_radius=scope['structural_mode_radius'],cell_radius=scope['structural_cell_radius'],
         seconds=scope['structural_seconds'],starts=scope['structural_starts'],recovery_seconds=scope['structural_recovery_seconds'])
+    from ..preparation.structural_hints import candidates as prepared_candidates
+    prepared_banks,preparation=prepared_candidates(ctx.input_root,protocol,candidate['id'])
     metadata=prepare_model(source_gpx,child,candidate['transformation_matrix'],candidate['origin_shift'],
                      root/'prepared',phase_name=protocol['parent_phase'],histogram_name=protocol['histogram'],
-                     reference_gpx=confined(ctx.input_root,protocol['structural_reference']['path']) if 'structural_reference' in protocol else None,settings=settings)
+                     reference_gpx=confined(ctx.input_root,protocol['structural_reference']['path']) if 'structural_reference' in protocol else None,
+                     settings=settings,prepared_banks=prepared_banks)
     if set(candidate['modes'])!=set(metadata['inventory']['native_mode_names']):
         raise TrialDisposition('integrity_failure','Prepared search requires the complete discovered native mode inventory')
     result=fit_snapshot(root/'prepared',root/'fit',settings=settings)
+    result['preparation_attachment']=preparation
     output=ctx.run_dir/'child-refinement.gpx'
     shutil.copyfile(result['continuation']['path'],output)
     ctx.save_json('zero-control.json',dict(relative_profile_error=metadata['zero_profile_error'],
@@ -55,5 +59,6 @@ def run(source_gpx,ctx,protocol,candidate,seed):
         structural_fit=dict(all_physical_modes_retained=True,physical_modes=result['physical_mode_count'],
             origin_gauges=metadata['inventory']['gauge_rank'],covariance_available=False,
             timings=result['timings'],optimization_qualified=False,optimization_progress=progress,
+            portable_preparation=result['portable_preparation'],preparation_attachment=preparation,
             native_active_set_verified=result['continuation']['native_active_set_verified']),
         reviewable_gpx=True)

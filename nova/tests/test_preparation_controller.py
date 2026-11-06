@@ -195,3 +195,26 @@ def test_completed_library_has_no_pending_work_controls(app,tmp_path):
     app,store,key,service=app;load_context(app,store,key,service,tmp_path)
     s=app.server.state;s.prep_library=key;app._preparation_library_changed()
     assert not s.prep_can_resume and not s.prep_can_pause
+
+
+@pytest.mark.parametrize('kind,optimizer,enabled',[
+    ('structural','prepared_nonlinear',True),('structural',None,False),
+    ('magnetic','profiled_quadratic',True),('magnetic',None,False)])
+def test_model_preparation_capture_uses_only_supported_consumer_contract(kind,optimizer,enabled,tmp_path,monkeypatch):
+    app=PreparationMixin();seen=[]
+    monkeypatch.setattr(app,'_capture_prepared_inputs',lambda p,r:seen.append((p,r)) or {'captured':True})
+    key='structural_optimizer' if kind=='structural' else 'magnetic_optimizer'
+    protocol=dict(kind=kind,policy={} if optimizer is None else {key:optimizer})
+    result=app._capture_prepared_model_inputs(protocol,tmp_path)
+    assert bool(seen)==enabled
+    assert result==({'captured':True} if enabled else None)
+
+
+def test_structural_selection_caption_states_qualification_without_claiming_live_gui_support():
+    app=PreparationMixin()
+    registry=SimpleNamespace(selected_key=lambda:'selected',summaries=lambda:[dict(id='selected',
+        available=True,name='Structural theory',kinds=['structural'],prepared=3,total=5)])
+    app._preparation_workspace=SimpleNamespace(registry=registry)
+    caption=app._prepared_selection_caption()
+    assert '3 / 5' in caption and 'current geometry' in caption and 'rebuild automatically' in caption
+    assert 'Live' not in caption

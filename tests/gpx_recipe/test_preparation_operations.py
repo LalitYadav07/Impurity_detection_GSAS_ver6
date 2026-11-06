@@ -56,6 +56,20 @@ def test_stage_resume_and_roundtrip_preserve_exact_scope(tmp_path):
     assert restored.coverage()['all_prepared']
 
 
+def test_structural_plan_rejects_a_different_declared_child_before_creating_a_library(tmp_path):
+    parent=tmp_path/'parent.cif';parent.write_text('data_parent\n')
+    profile=tmp_path/'bank.instprm';profile.write_text('# artificial profile\n')
+    child=tmp_path/'child.cif';child.write_text('data_different_child\n')
+    candidate=dict(id='struct:test',transformation_matrix=np.eye(3).tolist(),origin_shift=[0,0,0],
+        child=dict(path='elsewhere/child.cif',sha256='a'*64))
+    with pytest.raises(ValueError,match='child differs from the declared candidate'):
+        create_library(tmp_path/'rejected-library',name='Mismatched child',source=parent,
+            banks={'bank':dict(instrument=profile,grid=dict(kind='PNT',lower=3000.,upper=40000.,bins=701,bank=1))},
+            models=[dict(kind='structural',bank='bank',child=child,
+                settings=dict(candidate=candidate,mode_radius=.05,cell_radius=.005))])
+    assert not (tmp_path/'rejected-library').exists()
+
+
 def test_portable_factor_asset_publishes_and_survives_library_recovery(tmp_path):
     library,identifier,attempt,request=fixture(tmp_path/'input')
     result=returned(request);output=Path(result['output'])

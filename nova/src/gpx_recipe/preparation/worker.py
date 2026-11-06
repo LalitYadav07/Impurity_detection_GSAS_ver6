@@ -62,6 +62,13 @@ def validate_request(kind, request):
     return request
 
 
+def verify_structural_child(settings, checksum):
+    """Bind declared scientific content, independently of transport location."""
+    declared = settings['candidate'].get('child')
+    if declared is not None and declared['sha256'] != checksum:
+        raise ValueError('Structural preparation child differs from the declared candidate')
+
+
 def execute(kind, request):
     """One owned native process prepares a single bank and candidate context."""
     if kind=='batch':
@@ -74,6 +81,8 @@ def execute(kind, request):
     if kind == 'structural':
         inputs.append(Path(request['child']).resolve())
     checksums = [file_sha(p) for p in inputs]
+    if kind == 'structural':
+        verify_structural_child(settings, checksums[2])
     output = Path(request['destination']).resolve()
     output.mkdir(parents=True, exist_ok=False)
     reference = create_reference(inputs[0], inputs[1], output/'native-reference', **grid)

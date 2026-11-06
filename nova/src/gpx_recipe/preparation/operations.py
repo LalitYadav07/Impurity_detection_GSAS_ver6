@@ -15,7 +15,7 @@ import tempfile
 from ..symmetry.compiler import file_sha
 from ..symmetry.contracts import digest, fields
 from .library import PreparationLibrary, confined, relative
-from .worker import validate_request, validate_settings
+from .worker import validate_request, validate_settings, verify_structural_child
 
 PLAN_SCHEMA = 'radar-experiment-preparation-plan/v1'
 PORTABLE = {'reference': set(), 'magnetic': {'response.npz'},
@@ -115,7 +115,9 @@ def create_library(root, *, name, source, banks, models, scope=None):
         if model['kind'] == 'structural':
             if not model['child']:
                 raise ValueError('A structural model requires its authoritative child CIF')
-            child = 'child-'+file_sha(model['child'])+'.cif'
+            child_sha = file_sha(model['child'])
+            verify_structural_child(settings, child_sha)
+            child = 'child-'+child_sha+'.cif'
             inputs[child] = model['child']
             captured['child'] = 'inputs/'+child
         elif model['child'] is not None:

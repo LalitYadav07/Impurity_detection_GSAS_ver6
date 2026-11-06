@@ -366,8 +366,9 @@ class PreparationMixin:
 
     def _capture_prepared_model_inputs(self,protocol,root):
         """Called off the UI thread before a new immutable source dispatch."""
-        if (protocol['kind']!='magnetic'
-                or protocol['policy'].get('magnetic_optimizer')!='profiled_quadratic'):return None
+        enabled=((protocol['kind']=='magnetic' and protocol['policy'].get('magnetic_optimizer')=='profiled_quadratic')
+            or (protocol['kind']=='structural' and protocol['policy'].get('structural_optimizer')=='prepared_nonlinear'))
+        if not enabled:return None
         return self._capture_prepared_inputs(protocol,root)
 
     def _capture_prepared_inputs(self,context,root):
@@ -391,6 +392,9 @@ class PreparationMixin:
                 return 'No preparation library selected. Model searches build the required physics when they run.'
             row=next(row for row in registry.summaries() if row['id']==selected)
             if not row['available']:raise ValueError('Selected preparation needs review')
+            if 'structural' in row['kinds']:
+                return (f"Prepared library: {row['name']} · {row['prepared']} / {row['total']} entries prepared. "
+                    'Structural Model calculations check the current geometry and complete starting bank before reuse; changed contexts rebuild automatically.')
             if 'magnetic' not in row['kinds']:
                 return (f"Prepared library: {row['name']}. This selection contains no magnetic scattering assets. "
                     'Magnetic model searches build the required physics when they run.')

@@ -44,6 +44,9 @@ def _hash(value):
 
 
 def validate(document,protocol):
+    if protocol['kind']=='structural':
+        from .structural_hints import validate as structural_validate
+        return structural_validate(document,protocol)
     keys={'schema','protocol_sha256','library_id','library_name','entries',
           'eligible_entries','omitted_entries','snapshot_sha256','observations_included'}
     if (not isinstance(document,dict) or set(document)!=keys or document['schema']!=SCHEMA
@@ -76,6 +79,9 @@ def validate(document,protocol):
 
 
 def read(root,protocol):
+    if protocol.get('kind')=='structural':
+        from .structural_hints import read as structural_read
+        return structural_read(root,protocol)
     path=confined(root,MANIFEST,exists=False)
     if not path.exists():return None
     if path.is_symlink() or path.stat().st_size>MAX_METADATA:
@@ -103,6 +109,9 @@ def capture(library,protocol,root):
     This checks only the dependency closure that is actually transferred.
     Unused dense pattern-response tensors do not enter the job packet.
     """
+    if protocol['kind']=='structural':
+        from .structural_hints import capture as structural_capture
+        return structural_capture(library,protocol,root)
     root=Path(root).resolve()
     existing=read(root,protocol)
     if existing is not None:return existing
@@ -154,6 +163,9 @@ def capture(library,protocol,root):
 
 def packet_paths(root,protocol):
     """Missing optional hints do not prevent the scientific inputs dispatching."""
+    if protocol['kind']=='structural':
+        from .structural_hints import packet_paths as structural_paths
+        return structural_paths(root,protocol)
     document=read(root,protocol)
     if document is None:return []
     names=[MANIFEST]
@@ -179,6 +191,9 @@ def subset(document,protocol,candidates):
 
 
 def restore(document,protocol,source_root,target_root):
+    if protocol['kind']=='structural':
+        from .structural_hints import restore as structural_restore
+        return structural_restore(document,protocol,source_root,target_root)
     validate(document,protocol);accepted=[];discarded=[];total=0;copied=set()
     previous=read(target_root,protocol)
     if previous is not None and previous!=document:
@@ -202,6 +217,7 @@ def restore(document,protocol,source_root,target_root):
 
 
 def cache_for(root,protocol,*,candidate=None):
+    if protocol['kind']!='magnetic':return None,dict(attached=0,native_qualification_required=True)
     try:document=read(root,protocol)
     except (OSError,ValueError,EOFError) as error:
         return None,dict(attached=0,status='unavailable',error_type=type(error).__name__,

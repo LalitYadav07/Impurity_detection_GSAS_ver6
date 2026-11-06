@@ -24,8 +24,9 @@ class LocalTransport:
         from ..preparation.hints import read
         from ..execution import write_json
         job=json.loads((directory/'job.json').read_text());protocol=job['protocol']
-        if (protocol.get('kind')!='magnetic'
-                or protocol.get('policy',{}).get('magnetic_optimizer')!='profiled_quadratic'):return
+        enabled=((protocol.get('kind')=='magnetic' and protocol.get('policy',{}).get('magnetic_optimizer')=='profiled_quadratic')
+            or (protocol.get('kind')=='structural' and protocol.get('policy',{}).get('structural_optimizer')=='prepared_nonlinear'))
+        if not enabled:return
         root=job_inputs(directory,job)
         try:
             with (root/'.prepared-scattering.lock').open('a+b') as lock:

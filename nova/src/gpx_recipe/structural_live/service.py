@@ -46,20 +46,20 @@ def make_source(prepared, work, settings):
                          mode_radius=settings.mode_radius,cell_radius=settings.cell_radius)
 
 
-def prepare_model(source_gpx, child_cif, transform, origin, output, *, settings=None, **roles):
+def prepare_model(source_gpx, child_cif, transform, origin, output, *, settings=None, prepared_banks=(), **roles):
     """Build immutable native geometry and reusable starting curves once.
 
     Starting curves contain no fitted likelihood or evidence. Their identity
     includes the native implementation, instrument/grid, chemistry and bounds.
     """
-    from .optimization.offline_native_start_bank import build
+    from ..preparation.structural_consume import prepare_starting_bank
     settings=settings or SearchSettings()
     if not isinstance(settings,SearchSettings): raise TypeError('Explicit SearchSettings required')
     metadata=prepare(source_gpx,child_cif,transform,origin,output,**roles)
     output=Path(output)
     source=make_source(output,output/'bank-construction',settings)
-    bank=build(source,output/'starting-curves.npz',policy='joint_cell_v1',reuse_fixed_cell_profiles=True)
-    write_json(output/'starting-curve-contract.json',bank)
+    bank,qualification=prepare_starting_bank(source,output/'starting-curves.npz',prepared_banks)
+    write_json(output/'starting-curve-contract.json',dict(bank,portable_preparation=qualification))
     return metadata
 
 
@@ -110,6 +110,12 @@ def fit_snapshot(prepared, output, *, settings=None, observation=None, warm_star
         bank_path=output/'starts.npz'
         build(source,bank_path,policy='joint_cell_v1',reuse_fixed_cell_profiles=True)
     bank=OfflineNativeStartBank(source,bank_path)
+    portable_preparation=None
+    contract=Path(prepared)/'starting-curve-contract.json'
+    if contract.is_file():
+        if contract.stat().st_size>4*1024*1024:raise ValueError('Starting-curve provenance exceeds its budget')
+        import json
+        portable_preparation=json.loads(contract.read_text()).get('portable_preparation')
     timings['start_bank_seconds']=time.monotonic()-checkpoint
     checkpoint=time.monotonic()
     fitted,prediction=fit(source,table,observation,bank,seconds=settings.seconds,
@@ -173,6 +179,7 @@ def fit_snapshot(prepared, output, *, settings=None, observation=None, warm_star
         physical_mode_count=m,cell_parameter_count=d-m,all_physical_modes_retained=True,
         result=fitted,metrics=metrics,verification=dict(relative_error=relative,max_sigma_error=sigma,saved_observations=contracts),
         starting_curves_reused=bank_reused,
+        portable_preparation=portable_preparation,
         frozen=frozen,continuation=continuation,timings=timings,wall_seconds=time.monotonic()-started,
         previous_likelihood_accumulated=False,instrument_parameters_fixed=True,
         higher_background_coefficients_fixed=True,covariance_available=False,

@@ -8,7 +8,7 @@ import hashlib,inspect,json,time
 from pathlib import Path
 import numpy as np
 from .native_cell_intensity import ExactCellIntensity
-from .offline_native_start_bank import build
+from .offline_native_start_bank import build,_remember_native
 
 class NativeBankSource:
     def __init__(self,source):
@@ -29,4 +29,5 @@ def build_reusing_profiles(source,path,policy='multiscale_v1'):
         diagnostics=proxy.cache.diagnostics(),implementation_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         source_target_context_unchanged=True,additional_independent_checks_required=True)
     Path(path).with_suffix('.json').write_text(json.dumps(receipt,indent=2)+'\n')
+    _remember_native(source,path)
     return receipt
