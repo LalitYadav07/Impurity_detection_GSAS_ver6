@@ -42,8 +42,8 @@ class NativeMagneticStartingPoint:
         from GSASII import GSASIIstrMath as math,GSASIImapvars as maps
         from GSASII import GSASIImpsubs as mp,GSASIIlattice as lattice
         self.math,self.maps,self.lattice=math,maps,lattice
-        from ..live.native_peak_memo import NativePeakMemo
-        self.peak_memo=NativePeakMemo()
+        from ..live.native_peak_memo import shared_native_peak_memo
+        self.peak_memo=shared_native_peak_memo()
         self.deadline=deadline
         _active=self
         mp.InitMP();main.ptx.pyqlmninit();maps.InitVars();log=io.StringIO()

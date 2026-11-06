@@ -87,3 +87,72 @@ def test_refinable_profile_uses_original_native_rendering_by_default(tmp_path):
     native.profile(native.x0)
     assert native.peak_memo.diagnostics()['scope_bypasses']=={
         'variable-cell/profile workload uses original native rendering':1}
+
+
+@pytest.mark.parametrize('kind',['PNC','PNT'])
+def test_fresh_native_contexts_share_exact_shapes_and_invalidate_changed_geometry(tmp_path,kind,monkeypatch):
+    from GSASII import GSASIIscriptable as G, GSASIIlattice as lattice
+    from gpx_recipe.live import native_peak_memo as module
+    from test_preparation_adaptation_native import model
+    monkeypatch.setattr(module,'_PROCESS_STORE',None)
+    path=model(tmp_path/'source',kind)
+    first=NativeReducedProfile(path)
+    first.profile(first.x0)
+    first_proof=first.peak_memo.diagnostics()
+    assert first_proof['shared_across_contexts'] and first_proof['misses']>0
+    second=NativeReducedProfile(path)
+    assert second.peak_memo is not first.peak_memo
+    assert second.peak_memo._store is first.peak_memo._store
+    assert second.peak_memo.diagnostics()['calls']==0
+    for factor in [.7,1.3]:
+        point=second.x0.copy()
+        for i,name in enumerate(second.vary):
+            if '::AM' in name or name.startswith('::constr'):point[i]*=factor
+        memo=second.peak_memo
+        second.peak_memo=NativePeakMemo(0);expected=second.profile(point)
+        second.peak_memo=memo;actual=second.profile(point)
+        np.testing.assert_array_equal(actual,expected)
+    assert second.peak_memo.hits>0
+    with pytest.raises(RuntimeError,match='Native global constraint state was replaced'):
+        first.profile(first.x0)
+    project=G.G2Project(gpxfile=str(path))
+    for phase in project.phases():
+        cell=phase.data['General']['Cell']
+        cell[1]*=1.001
+        cell[7]=lattice.calc_V(lattice.cell2A(cell[1:7]))
+    profile=project.histograms()[0].data['Instrument Parameters'][0]
+    key='sig-1' if kind=='PNT' else 'U'
+    profile[key][0]=profile[key][1]=float(profile[key][1])*1.1
+    changed=tmp_path/'changed.gpx';project.save(str(changed))
+    third=NativeReducedProfile(changed);memo=third.peak_memo
+    third.peak_memo=NativePeakMemo(0);expected=third.profile(third.x0)
+    third.peak_memo=memo;actual=third.profile(third.x0)
+    np.testing.assert_array_equal(actual,expected)
+    assert memo.misses>0  # Previous cell/profile values are never approximate hits.
+    assert memo.diagnostics()['accounted_cache_bytes']<=module.MAXIMUM_BYTES
+
+
+@pytest.mark.parametrize('masked',[False,True])
+def test_shared_shapes_do_not_share_measurements_or_native_constraint_ownership(tmp_path,masked,monkeypatch):
+    from gpx_recipe.live import native_peak_memo as module
+    monkeypatch.setattr(module,'_PROCESS_STORE',None)
+    project,path=artificial_project(tmp_path,sites=2,constrained=True,masked=masked)
+    options=dict(refine_scale=True,refine_background=True,maximum_moment=6.)
+    first=NativeMagneticStartingPoint(path,**options)
+    seed=first.initial[first.moment_indices]
+    bg=first.initial[first.background_indices]
+    before=first.residual(seed,first.source_scale,bg)
+    project.histograms()[0].data['data'][1][1]+=2.5
+    project.save()
+    second=NativeMagneticStartingPoint(path,**options)
+    memo=second.peak_memo
+    second.peak_memo=NativePeakMemo(0)
+    expected=second.residual(seed,second.source_scale,bg)
+    second.peak_memo=memo
+    actual=second.residual(seed,second.source_scale,bg)
+    np.testing.assert_array_equal(actual,expected)
+    assert not np.array_equal(actual,before)
+    assert memo.hits>0
+    assert second.peak_memo._store is first.peak_memo._store
+    with pytest.raises(RuntimeError,match='process-global'):
+        first.residual(seed,first.source_scale,bg)

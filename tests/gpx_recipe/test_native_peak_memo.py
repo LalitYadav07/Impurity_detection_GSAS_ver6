@@ -127,3 +127,105 @@ def test_profitable_prefix_does_not_admit_an_unprofitable_complete_driver(monkey
     with memo.evaluation(math):result=math.getPowderProfile(None,None,x,prefix=True)
     assert len(result)==102 and len(calls)==101
     assert 2<memo.calls<102 and memo.adaptive_driver_bypasses==1
+
+
+def test_fresh_contexts_share_only_numeric_storage_and_keep_independent_counters(monkeypatch):
+    monkeypatch.setattr(module,'_PROCESS_STORE',None)
+    math,calls=runtime(monkeypatch);x=np.arange(7.)
+    first=module.shared_native_peak_memo()
+    with first.evaluation(math):
+        original=math.getPowderProfile(None,None,x)[0][0]
+    expected=original.copy();original[:]=-100.
+    second=module.shared_native_peak_memo()
+    assert second is not first and second.calls==0
+    with second.evaluation(math):
+        actual=math.getPowderProfile(None,None,x)[0][0]
+    np.testing.assert_array_equal(actual,expected)
+    assert len(calls)==1
+    assert first.misses==1 and first.hits==1
+    assert second.misses==0 and second.hits==2
+    for owner in (first,second):
+        proof=owner.diagnostics()
+        assert proof['shared_across_contexts'] and proof['cache_scope']=='owned process'
+        assert proof['counters_scope']=='this adapter'
+        assert proof['entries']==1 and proof['accounted_cache_bytes']<=module.MAXIMUM_BYTES
+    private=module.NativePeakMemo()
+    with private.evaluation(math):math.getPowderProfile(None,None,x)
+    assert len(calls)==2 and not private.shared_across_contexts
+
+
+def test_shared_store_invalidation_reaches_every_existing_adapter(monkeypatch):
+    monkeypatch.setattr(module,'_PROCESS_STORE',None)
+    math,calls=runtime(monkeypatch);x=np.arange(7.)
+    first=module.shared_native_peak_memo();second=module.shared_native_peak_memo()
+    with first.evaluation(math):math.getPowderProfile(None,None,x)
+    math.G2pwd.pyd=SimpleNamespace(pyepsvoigt=lambda:None)
+    with second.evaluation(math):math.getPowderProfile(None,None,x)
+    assert len(calls)==2 and second.misses==1
+    del math.G2pwd.pyd
+    with first.evaluation(math):math.getPowderProfile(None,None,x)
+    assert len(calls)==3 and first.misses==2
+    driver=math.getPowderProfile
+    math.getPowderProfile=lambda *a,**k:driver(*a,**k)
+    with second.evaluation(math):math.getPowderProfile(None,None,x)
+    assert not second.diagnostics()['entries']
+    math.getPowderProfile=driver
+    with first.evaluation(math):math.getPowderProfile(None,None,x)
+    assert len(calls)==6 and first.misses==3
+
+
+def test_shared_allocation_is_bounded_once_across_many_contexts(monkeypatch):
+    math,calls=runtime(monkeypatch);x=np.arange(7.)
+    store=module._PeakStore(600)
+    owners=[module.NativePeakMemo(600,_store=store) for _ in range(5)]
+    for shift,owner in enumerate(owners):
+        with owner.evaluation(math):math.getPowderProfile(None,None,x,shift=shift)
+    assert len(calls)==5 and sum(owner.evictions for owner in owners)==4
+    assert all(owner.diagnostics()['entries']==1 for owner in owners)
+    assert store.bytes<=600
+    owners[0].clear()
+    assert all(owner.diagnostics()['entries']==0 for owner in owners)
+    with pytest.raises(ValueError,match='same bounded allocation'):
+        module.NativePeakMemo(_store=store)
+
+
+def test_nested_owner_cannot_invalidate_or_replace_shared_outer_hooks(monkeypatch):
+    monkeypatch.setattr(module,'_PROCESS_STORE',None)
+    math,calls=runtime(monkeypatch);x=np.arange(7.)
+    first=module.shared_native_peak_memo();second=module.shared_native_peak_memo()
+    driver=math.getPowderProfile
+    with first.evaluation(math):
+        math.getPowderProfile(None,None,x)
+        owned=math.getPowderProfile
+        with second.evaluation(math):
+            assert math.getPowderProfile is owned
+            math.getPowderProfile(None,None,x)
+        assert math.getPowderProfile is owned
+        math.getPowderProfile(None,None,x)
+    assert math.getPowderProfile is driver and not module._LOCK.locked()
+    assert len(calls)==1 and first.hits==5 and second.calls==0
+    assert second.scope_bypasses=={'another native peak scope owns this process':1}
+
+
+@pytest.mark.parametrize('inherited_first',[False,True])
+def test_changed_process_identity_loses_inherited_qualification(monkeypatch,inherited_first):
+    monkeypatch.setattr(module,'_PROCESS_STORE',None)
+    math,calls=runtime(monkeypatch);x=np.arange(7.)
+    first=module.shared_native_peak_memo()
+    old_store=first._store
+    with first.evaluation(math):math.getPowderProfile(None,None,x)
+    actual_pid=module.os.getpid()
+    monkeypatch.setattr(module.os,'getpid',lambda:actual_pid+1)
+    if inherited_first:
+        with first.evaluation(math):math.getPowderProfile(None,None,x)
+        second=module.shared_native_peak_memo()
+        with second.evaluation(math):math.getPowderProfile(None,None,x)
+        assert first.misses==2 and second.misses==0
+    else:
+        second=module.shared_native_peak_memo()
+        with second.evaluation(math):math.getPowderProfile(None,None,x)
+        with first.evaluation(math):math.getPowderProfile(None,None,x)
+        assert first.misses==1 and second.misses==1
+    assert len(calls)==2
+    assert first._store is second._store and first._store is not old_store
+    assert old_store.bytes==0

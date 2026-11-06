@@ -126,7 +126,8 @@ def test_restored_packet_retains_theory_provenance_without_rebuilding_the_librar
 def test_selection_caption_does_not_load_scientific_arrays(tmp_path,monkeypatch):
     prepared=library(tmp_path/'preparation');archive=tmp_path/'portable.zip';prepared.export(archive)
     registry=PreparationRegistry(tmp_path/'registry');key=registry.import_archive(archive)
-    app=PreparationMixin();app._preparation_store=lambda:SimpleNamespace(registry=registry)
+    app=PreparationMixin();app._preparation_workspace=SimpleNamespace(registry=registry)
+    app._preparation_store=lambda:pytest.fail('A read-only caption must not initialize a workspace')
     monkeypatch.setattr(registry,'get',lambda *args:pytest.fail('Caption must use metadata summaries'))
     assert registry.selected_key()==key
     text=app._prepared_selection_caption()
