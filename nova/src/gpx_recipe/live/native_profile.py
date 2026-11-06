@@ -100,6 +100,8 @@ class NativeReducedProfile:
         # unmasked axis can still avoid the native loop's masked temporaries.
         # Explicit zero-byte controls keep the untouched reference path.
         self.axis_view=NativeUnmaskedAxisView(changing_geometry and peak_memo_bytes is None)
+        from .native_reflection_memo import NativeReflectionMemo
+        self.reflection_memo=NativeReflectionMemo(enabled=bool(refresh_cell_reflections and peak_memo_bytes is None))
         self.numerical_indices = self.cell_indices.copy() if numerical_cell else []
         self.derivative_validation = None
         self.parts=[]; self.original_weights={}
@@ -149,8 +151,9 @@ class NativeReducedProfile:
                 phase['General']['Cell'][1:]=list(self.lattice.A2cell(a))+[float(self.lattice.calc_V(a))]
             # Use the native generator, including its exact range/extinction
             # rules. A fixed list loses/adds edge reflections as the cell moves.
-            self.stio.GetHistogramPhaseData(phases,histograms,Controls=self.controls,
-                                            Print=False,pFile=io.StringIO(),resetRefList=True)
+            with self.reflection_memo.evaluation(self.lattice,phases):
+                self.stio.GetHistogramPhaseData(phases,histograms,Controls=self.controls,
+                                                Print=False,pFile=io.StringIO(),resetRefList=True)
             self._reflection_cell_signature=signature
         # errRefine adds scalar summary entries to the histogram dictionary.
         for histogram_name, _ in self.parts:

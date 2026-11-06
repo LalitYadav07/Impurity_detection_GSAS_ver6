@@ -422,3 +422,29 @@ instrument/HAP initialization and creates the requested empty logarithmic
 grid before any scientific calculation. The upper bound is the exclusive
 TOF grid edge. Observations are never resampled or synthesized by this path;
 actual-grid compatibility and native forward/export checks still apply.
+
+
+## Native reflection reuse during cell changes
+
+The shared changing-cell evaluator can reuse a bounded, native-generated HKL
+inventory. Each evaluation still applies the current reciprocal metric, native
+integer search bounds, d-range inclusion rule and native ordering. A checked
+metric envelope establishes that the stored inventory contains the current
+reflections, including reflections with zero parent intensity. Intensities
+never determine inventory membership.
+
+Reuse is local to one owned process. It requires the reviewed GSAS-II
+functions, supported commensurate nuclear setting and a bounded allocation.
+The initial reconstructed list must agree with an independent native list.
+Unsupported settings, small inventories, exhausted construction budgets and
+changed native functions use original native generation. A changed cell outside
+the envelope requires a new native inventory. The explicit zero-byte native
+reference path remains untouched. Diagnostics expose hits, builds, bypasses and
+accounted numeric bytes; no portable qualification is inferred from this cache.
+
+Local acceptance includes exact native lists across 15 space groups, changing
+metrics and range boundaries, complete PNC/PNT profiles and mode derivatives,
+and the structural prepare/fit/export/continuation controls. A 185-point public
+structural scalar portfolio retained array-identical records in four
+counterbalanced passes. Its median scalar-stage time decreased by about 18%;
+this is a component measurement, not a complete-fit or NDIP latency claim.

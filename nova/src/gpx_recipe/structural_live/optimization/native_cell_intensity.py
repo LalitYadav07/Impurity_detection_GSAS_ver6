@@ -108,6 +108,7 @@ class ExactCellIntensity:
     def diagnostics(self):
         memo=getattr(getattr(getattr(self.source,'fast',None),'native',None),'peak_memo',None)
         axis=getattr(getattr(getattr(self.source,'fast',None),'native',None),'axis_view',None)
+        reflections=getattr(getattr(getattr(self.source,'fast',None),'native',None),'reflection_memo',None)
         return dict(builds=self.builds,hits=self.hits,entries=len(self.cache),max_cells=self.max_cells,
             build_seconds=self.build_seconds,structure_factor_calls=self.structure_factor_calls,
             native_fallback_calls=self.native_fallback_calls,inventory_sizes=sorted(self.inventory_sizes),
@@ -115,4 +116,5 @@ class ExactCellIntensity:
             scattering='GSASIIstrMath.StructureFactor2',profile='GSASIIstrMath.getPowderProfile',
             intensity_interpolation=False,custom_scattering_or_profile=False,
             exact_native_peak_reuse=memo.diagnostics() if memo is not None else None,
-            native_axis_view=axis.diagnostics() if axis is not None else None)
+            native_axis_view=axis.diagnostics() if axis is not None else None,
+            native_reflection_envelope=reflections.diagnostics() if reflections is not None else None)
