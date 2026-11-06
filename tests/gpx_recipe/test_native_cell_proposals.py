@@ -37,7 +37,9 @@ def test_streamed_native_anchor_and_cell_directions_restore_the_scientific_state
     assert _capture_lock.acquire(blocking=False);_capture_lock.release()
     proof=engine.diagnostics()
     assert proof['maximum_accounted_workspace_bytes']<=proof['workspace_budget_bytes']
-    assert proof['full_native_anchor_calls']==1 and proof['scalar_driver_calls']==2*s.cell_dimensions
+    assert proof['full_native_anchor_calls']==1
+    assert proof['scalar_driver_calls']+proof['batched_scalar_probe_calls']==2*s.cell_dimensions
+    assert proof['batched_scalar_anchor_checks']==int(kind=='PNT')
     assert not proof['uncertainty_derivatives_qualified']
 
 
@@ -59,6 +61,9 @@ def test_unsupported_contexts_keep_original_native_functions_and_fallback(tmp_pa
 
 
 def test_failure_during_scalar_probes_restores_original_full_profile(tmp_path,monkeypatch):
+    # Keep coverage of the original scalar-driver fallback as well as the
+    # separate batched-collector failure controls below.
+    monkeypatch.setattr(module,'scalar_collector_for_source',lambda *args:None)
     _,s=native_source(tmp_path/'inputs','PNT');n=s.fast.native
     point=np.zeros(len(s.radii));expected=s.native(point);original=s.native;calls=[]
     def fail_second_probe(at):

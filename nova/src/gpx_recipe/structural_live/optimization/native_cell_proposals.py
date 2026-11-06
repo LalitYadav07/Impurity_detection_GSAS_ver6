@@ -17,6 +17,8 @@ import numpy as np
 
 from .native_profile_capture import _capture_lock, RIETVELD_DRIVERS
 from .reference_secants import feasible_stencil
+from .native_tof_scalars import (for_source as scalar_collector_for_source,
+    record_bytes,ScalarBatchUnavailable)
 
 
 class ProposalUnavailable(ValueError):
@@ -49,6 +51,8 @@ class NativeCellProposals:
         self.scalar_calls=0; self.anchor_calls=0; self.seconds=0.
         self.maximum_accounted_bytes=0; self.membership_fallback_columns=0
         self.support_window_changes=0; self.last_reason=None
+        self.batched_probe_calls=0;self.batched_anchor_checks=0;self.batched_anchor_mismatches=0
+        self.maximum_batched_workspace_bytes=0
 
     def _context(self):
         s=self.source; n=s.fast.native; n._check()
@@ -99,6 +103,7 @@ class NativeCellProposals:
             self.fallbacks+=1;self.last_reason=str(error);self.seconds+=time.monotonic()-began
             raise
         n,driver,powder,kernel,peak,deriv,axis,histogram,phases,phase=context
+        collector=scalar_collector_for_source(s,driver)
         if not _capture_lock.acquire(blocking=False):
             self.fallbacks+=1;self.last_reason='Another native capture owns this process';self.seconds+=time.monotonic()-began
             raise ProposalUnavailable('Another native capture owns this process')
@@ -153,6 +158,11 @@ class NativeCellProposals:
         try:
             budget()
             raw=np.zeros((count,len(s.fast.x)))
+            scalar_anchor=None
+            if collector is not None:
+                check_time();scalars_started=True
+                scalar_anchor=collector.collect(point,maximum_bytes=self.maximum_bytes-required)
+                required+=record_bytes(scalar_anchor);budget()
             for column in range(m,d):
                 check_time()
                 points,detail=feasible_stencil(point,column,steps[column],allowed=allowed)
@@ -168,13 +178,25 @@ class NativeCellProposals:
                         records[key]=(parameters.copy(),height,begin,end)
                         return np.zeros(end-begin),1.
                     scalars_started=True
-                    run(at,scalar); self.scalar_calls+=1; pair.append(records)
+                    if collector is None:
+                        run(at,scalar);self.scalar_calls+=1
+                    else:
+                        records=collector.collect(at,maximum_bytes=self.maximum_bytes-required)
+                        required+=record_bytes(records);budget();self.batched_probe_calls+=1
+                    pair.append(records)
                 probes.append((pair,detail))
             seen=set()
             def stream(key,parameters,height,begin,end,args,kwargs):
                 if key in seen:
                     raise ProposalUnavailable('Duplicate native anchor reflection')
                 seen.add(key)
+                if scalar_anchor is not None:
+                    saved=scalar_anchor.get(key)
+                    if (saved is None or saved[2:]!=(begin,end)
+                            or not np.allclose(saved[0],parameters,rtol=1e-12,atol=1e-12)
+                            or not np.isclose(saved[1],height,rtol=1e-12,atol=1e-12)):
+                        self.batched_anchor_mismatches+=1
+                        raise ProposalUnavailable('Batched native scalars disagree with the full native anchor')
                 result=peak(*args,**kwargs); values=deriv(*args,**kwargs)
                 profile=np.asarray(result[0],float); derivatives=np.asarray(values[1:],float)
                 budget(derivatives.nbytes+profile.nbytes)
@@ -194,6 +216,11 @@ class NativeCellProposals:
                 return result
             check_time()
             anchor=run(point,stream); restored=True; self.anchor_calls+=1
+            if scalar_anchor is not None:
+                if set(scalar_anchor)!=seen:
+                    self.batched_anchor_mismatches+=1
+                    raise ProposalUnavailable('Batched native anchor reflection inventory changed')
+                self.batched_anchor_checks+=1
             for index,(pair,detail) in enumerate(probes):
                 if set(pair[0])!=seen or set(pair[1])!=seen:
                     usable[index]=False
@@ -205,10 +232,16 @@ class NativeCellProposals:
             return anchor,raw,usable
         except ProposalUnavailable as error:
             self.fallbacks+=1; self.last_reason=str(error); raise
+        except ScalarBatchUnavailable as error:
+            self.fallbacks+=1;self.last_reason=str(error)
+            raise ProposalUnavailable(str(error)) from error
         finally:
             powder.__dict__[kernel]=peak
             driver.__globals__['getPowderProfile']=driver
             try:
+                if collector is not None:
+                    self.maximum_batched_workspace_bytes=max(self.maximum_batched_workspace_bytes,
+                        collector.maximum_workspace_bytes)
                 if scalars_started and not restored:
                     s.native(point*s.radii); self.anchor_calls+=1
             finally:
@@ -218,6 +251,10 @@ class NativeCellProposals:
     def diagnostics(self):
         return dict(requests=self.requests,completed=self.completed,fallbacks=self.fallbacks,
             scalar_driver_calls=self.scalar_calls,full_native_anchor_calls=self.anchor_calls,
+            batched_scalar_probe_calls=self.batched_probe_calls,
+            batched_scalar_anchor_checks=self.batched_anchor_checks,
+            batched_scalar_anchor_mismatches=self.batched_anchor_mismatches,
+            maximum_batched_workspace_bytes=self.maximum_batched_workspace_bytes,
             membership_fallback_columns=self.membership_fallback_columns,
             support_window_changes=self.support_window_changes,
             maximum_accounted_workspace_bytes=self.maximum_accounted_bytes,

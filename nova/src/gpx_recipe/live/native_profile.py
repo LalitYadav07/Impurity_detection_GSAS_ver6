@@ -117,7 +117,12 @@ class NativeReducedProfile:
         if constraint_state_signature(self.maps)!=self._constraint_signature:
             raise RuntimeError('Native global constraint maps changed outside this adapter; reconstruct it in an isolated worker')
 
-    def profile(self, values, jacobian=False):
+    def _prepare_values(self, values):
+        """Bind owned parameters and regenerate the native reflection inventory.
+
+        Shared by full rendering and scalar-only proposal collection. This
+        performs no likelihood, rendering, weight or observation update.
+        """
         self._check(); values = np.asarray(values, float)
         if values.shape!=(len(self.vary),) or not np.isfinite(values).all():
             raise ValueError('A complete finite native parameter vector is required')
@@ -157,6 +162,11 @@ class NativeReducedProfile:
                 reciprocal_d_squared = np.einsum('ni,ij,nj->n',hkl,reciprocal,hkl)
                 if np.any(reciprocal_d_squared<=0): raise ValueError('Nonpositive reflection metric')
                 reflections['RefList'][:,4] = 1/np.sqrt(reciprocal_d_squared)
+        return values
+
+    def profile(self, values, jacobian=False):
+        values = self._prepare_values(values)
+        histograms = self.histo_phases[0]
         args = (self.histo_phases, self.parms, self.histdict, self.vary, self.controls, self.pawley, None)
         # errRefine treats all-zero observations as a request to synthesize
         # random dummy data and replace weights. This adapter requests only a

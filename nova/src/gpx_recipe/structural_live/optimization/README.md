@@ -23,3 +23,13 @@ proposal metadata, diffraction arrays, credentials or private CIF libraries.
 Native exact-cell response caching is optional within the fitter. It retains
 the full GSAS-II path for unqualified contexts. No custom peak convolution or
 global structure-uniqueness guarantee is introduced.
+
+Qualified TOF cell proposals collect native scalar reflection data directly,
+batching compatible original GSAS-II scalar functions. Scalar-only reflection
+positions and intensity corrections keep their original per-reflection calls.
+The native reflection generator still runs at every changed cell, including
+reflections absent at the parent. Each build checks its scalar anchor against
+the original full native rendering; unsupported runtimes or memory limits use
+the original native path. These records supply directions only, with unchanged
+native acceptance, stalled-step retries and final GPX checks. They neither
+interpolate peak profiles nor qualify uncertainty derivatives.
