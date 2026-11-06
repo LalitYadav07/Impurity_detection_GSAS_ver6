@@ -8,7 +8,7 @@ import pytest
 from gpx_recipe.live import native_peak_memo as module
 
 
-def runtime(monkeypatch,native_work=None):
+def runtime(monkeypatch,native_work=None,seen_axes=None):
     calls=[]
     def tof(pos,alpha,beta,sig,gam,x):
         if native_work is not None:native_work()
@@ -18,6 +18,7 @@ def runtime(monkeypatch,native_work=None):
     def cw(pos,sig,gam,shl,x):return tof(pos,sig,gam,shl,1.,x)
     powder=SimpleNamespace(getEpsVoigt=tof,getFCJVoigt3=cw)
     def driver(_a,_b,x,*,shift=0.,foreign=False,unique=False,prefix=False):
+        if seen_axes is not None:seen_axes.append(x)
         view=x[1:-1].copy() if foreign else x[1:-1]
         if prefix:
             return [powder.getEpsVoigt(0.,.1,.2,3.,4.,view) for _ in range(2)]+[
@@ -31,6 +32,26 @@ def runtime(monkeypatch,native_work=None):
     identities={driver:module._DRIVER,tof:module._KERNELS['getEpsVoigt'][0],cw:module._KERNELS['getFCJVoigt3'][0]}
     monkeypatch.setattr(module,'_source_hash',lambda f:identities.get(f))
     return math,calls
+
+
+@pytest.mark.parametrize('kind',['plain','nomask','all_false','excluded','strided','float32'])
+def test_only_standard_unmasked_native_grids_use_a_zero_copy_plain_view(monkeypatch,kind):
+    seen=[];math,_=runtime(monkeypatch,seen_axes=seen);memo=module.NativePeakMemo()
+    x=np.arange(7.,dtype=float)
+    if kind!='plain':x=np.ma.array(x,mask=False)
+    if kind=='all_false':x.mask=np.zeros(7,dtype=bool)
+    elif kind=='excluded':x.mask=[False,False,True,False,False,False,False]
+    elif kind=='strided':x=np.ma.array(np.arange(14.,dtype=float)[::2],mask=False,copy=False)
+    elif kind=='float32':x=x.astype('float32')
+    values=np.ma.getdata(x).copy();mask=np.ma.getmaskarray(x).copy()
+    with memo.evaluation(math):math.getPowderProfile(None,None,x)
+    expected=kind in {'nomask','all_false'}
+    assert memo.unmasked_grid_driver_calls==int(expected)
+    if expected:
+        assert type(seen[0]) is np.ndarray and np.shares_memory(seen[0],np.ma.getdata(x))
+    else:assert seen[0] is x
+    np.testing.assert_array_equal(np.ma.getdata(x),values)
+    np.testing.assert_array_equal(np.ma.getmaskarray(x),mask)
 
 
 def test_identical_native_arguments_reuse_independent_result_arrays(monkeypatch):

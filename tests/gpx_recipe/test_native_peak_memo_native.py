@@ -69,6 +69,9 @@ def test_model_magnetic_residuals_include_secondary_nuclear_phase_and_masks(tmp_
     native=NativeMagneticStartingPoint(path,refine_scale=True,refine_background=True,maximum_moment=6.)
     assert native.peak_memo.maximum_bytes>0
     memo=native.peak_memo;raw=NativePeakMemo(0)
+    # Other native cases may already have filled the process-wide shape store.
+    # This control deliberately exercises both cold admission and later hits.
+    memo.clear()
     for factor in [.3,1.,1.7]:
         moments=native.initial[native.moment_indices]*factor
         background=native.initial[native.background_indices]*.9
@@ -76,6 +79,7 @@ def test_model_magnetic_residuals_include_secondary_nuclear_phase_and_masks(tmp_
         native.peak_memo=memo;actual=native.residual(moments,120.,background)
         np.testing.assert_array_equal(actual,expected)
     assert memo.hits>0 and memo.misses>0
+    assert bool(memo.unmasked_grid_driver_calls)==(not masked)
 
 
 def test_refinable_profile_uses_original_native_rendering_by_default(tmp_path):

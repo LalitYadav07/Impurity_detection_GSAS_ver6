@@ -65,3 +65,12 @@ widths, unverified origins and damaged files. Saved GPXs and actual fitted
 native residuals remain checked. Synthetic controls establish numerical and
 integration behavior; real-material identification, uncertainty calibration,
 whole-catalog throughput and NDIP latency require their own acceptance.
+
+The pinned native profile driver also receives a plain, zero-copy axis view
+when its standard masked array contains no excluded bins. This avoids masked
+temporaries without changing the values or native profile calculation. Actual
+masks and unsupported array layouts retain the original path. A counterbalanced
+local nine-moment, 18-start synthetic portfolio improved from 13.35 to 10.78
+seconds (median, 19.2%), with identical residuals and the same 25 native forward
+and one native derivative calls. This is a bounded local measurement, not an
+NDIP latency or general experiment speed guarantee.

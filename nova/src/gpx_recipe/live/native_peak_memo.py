@@ -123,6 +123,7 @@ class NativePeakMemo:
         self.shared_across_contexts = _store is not None
         self.calls = self.hits = self.misses = self.bypasses = self.evictions = 0
         self.driver_calls = 0
+        self.unmasked_grid_driver_calls = 0
         self.adaptive_driver_bypasses = 0
         self.estimated_saved_seconds = self.measured_overhead_seconds = 0.
         self.scope_bypasses = {}
@@ -135,6 +136,7 @@ class NativePeakMemo:
         return dict(method='exact native peak arguments', calls=self.calls,
             hits=self.hits, misses=self.misses, bypasses=self.bypasses,
             evictions=self.evictions, driver_calls=self.driver_calls,
+            unmasked_grid_driver_calls=self.unmasked_grid_driver_calls,
             entries=len(self._store.cache), accounted_cache_bytes=self._store.bytes,
             maximum_accounted_cache_bytes=self.maximum_bytes,
             maximum_entries=MAXIMUM_ENTRIES, scope_bypasses=dict(self.scope_bypasses),
@@ -237,6 +239,15 @@ class NativePeakMemo:
                         identity = hashlib.sha256(memoryview(axis).cast('B')).digest()
                         grid = (axis, identity, axis.ctypes.data, axis.ctypes.data + axis.nbytes)
                     self.driver_calls += 1
+                if (grid is not None and type(args[2]) is np.ma.MaskedArray
+                        and not np.ma.is_masked(args[2])):
+                    # The reviewed driver otherwise creates masked temporary
+                    # arrays for every reflection even when no mask exists.
+                    # Retain the exact values/storage and original native
+                    # calculation; real masks and unusual array types keep
+                    # their original semantics. Histogram data are untouched.
+                    args=list(args);args[2]=grid[0]
+                    self.unmasked_grid_driver_calls += 1
                 return driver(*args, **kwargs)
             finally:
                 grid = old
