@@ -85,6 +85,23 @@ def test_structural_dispatch_carries_the_sealed_optional_preparation_snapshot(re
     assert 'model/'+structural_hints.MANIFEST in handle['request']['input_hashes']
 
 
+def test_structural_native_dispatch_uses_the_existing_shared_model_input_layout(remote,tmp_path):
+    from gpx_recipe.symmetry.compiler import prepare_shared_inputs,compile_shared_job
+    from gpx_recipe.symmetry.contracts import trial_id
+    runtime,_,source=remote;root,payload,protocol=captured(tmp_path,source)
+    shared=prepare_shared_inputs(protocol,root/'model-inputs',root/'models')
+    child=protocol['candidates'][0];directory=root/'models/trials'/trial_id(protocol,child['id'],'prepared')
+    compile_shared_job(protocol,directory,candidate_id=child['id'],seed_id='prepared',approved_hash=digest(protocol))
+    payload.update(directory=str(directory),source=str(shared/'source.gpx'))
+    handle=StructuralSnapshotRuntime(runtime).submit(payload,root,source=source,timeout=60)
+    names=set(handle['request']['input_hashes'])
+    assert str((shared/'source.gpx').relative_to(root)) in names
+    assert str((shared/'reference.gpx').relative_to(root)) in names
+    assert str((directory/'job.json').relative_to(root)) in names
+    assert not any(name.endswith('.py') for name in names)
+    assert not any(name.startswith(str(directory.relative_to(root))+'/') and name.endswith('.gpx') for name in names)
+
+
 @pytest.mark.parametrize('change',['extra','revision','transfer','mapping','anchor_revision','reference_revision','receipt'])
 def test_closed_structural_payload_rejects_changed_review_or_arbitrary_controls(remote,tmp_path,change):
     _,_,source=remote;_,payload,_=captured(tmp_path,source)

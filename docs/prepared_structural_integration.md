@@ -225,9 +225,8 @@ permission or counting-stop recommendation.
 
 Acquisition contexts contain measured experiment data. They belong to private
 scientific job/History artifacts, not portable theory-only preparation libraries.
-This backend does **not yet** expose structural analysis in WebMON's live UI.
 The closed `structural-snapshot` native operation now carries a self-contained
-reviewed Model job, its optional parent-reference GPX, reviewed anchor snapshot,
+or shared-input reviewed Model job, its optional parent-reference GPX, reviewed anchor snapshot,
 current snapshot/receipt, producer mapping, scope and monotonic owner revision
 through the existing Model Campaign transport. `webmon.structural_runtime`
 uses its submit/poll/recover/collect methods; it introduces no acquisition
@@ -249,9 +248,27 @@ and producer origin checks pass. This is not a claimed fast streaming policy.
 The future Galaxy template publishes independently checked point-fit GPXs in
 a separate `reviewable_projects` collection, explicitly requiring optimization
 and scientific review. The qualified-model collection keeps its prior meaning.
-Source polling, UI controls/presentation, cross-job preparation amortization
-and actual live queue latency still require integration and acceptance before
-enabling structural monitoring in the interface.
+The Live acquisition workspace now offers **Structural distortion models** in
+its Live analysis selector. Select a published nuclear GPX, save its reviewed
+producer mapping, then choose **Set structural models in Refinement**. Inspect
+the parent and optional parent reference in Model exploration, discover the
+children, and build and approve the finite plan. Return to Live acquisition and
+choose **Use approved structural plan**. Adoption captures all reviewed models
+with shared immutable source inputs and starts no scientific jobs.
+
+**Fit current structural snapshot** fits once. **Follow structural updates for
+this run** uses the existing acquisition polling and one-active/latest-pending
+queue; it introduces no second acquisition service. Pause preserves the latest
+pending revision. Stop waiting leaves accepted Galaxy jobs recoverable; recover
+them before another snapshot is admitted. Editing the producer mapping or
+scale/background-transfer choice requires adopting the current plan again.
+The table accounts for every selected model, and native fits become available
+as each completes, with calibrated d/Q/TOF axes, Bragg ticks, cell/mode point
+values and a continuation-GPX download. Original RADAR-PD fits stay in Results.
+
+Local native transport and public artificial UI controls do not establish
+deployed acceptance. Cross-job preparation amortization, sustained live queue
+latency and complete real-experiment/browser acceptance remain required.
 Likewise, Method-3 catalog enumeration, calibrated structural posteriors,
 counting advice and named-mode custom recipes remain separate work. Current
 custom recipes accept nuclear projects; magnetic posterior checkpoints are

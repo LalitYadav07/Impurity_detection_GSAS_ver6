@@ -117,9 +117,12 @@ def capture(runtime, operation, payload, root, source, timeout, preparation_atte
     if 'directory' in payload:payload['directory']=directories[0]
     for relative in directories:
         directory=confined(root,relative);job=json.loads((directory/'job.json').read_text())
+        asset_root=directory
         if operation=='structural-snapshot':
             from gpx_recipe.structural_live.job import reviewed_job
+            from gpx_recipe.symmetry.compiler import job_inputs
             _,protocol,_=reviewed_job(directory)
+            asset_root=job_inputs(directory,job)
             if (file_sha(confined(root,payload['source']))!=protocol['source']['sha256']
                     or float(timeout)<protocol['policy']['structural_seconds']+
                         protocol['policy']['structural_recovery_seconds']+15):
@@ -128,17 +131,17 @@ def capture(runtime, operation, payload, root, source, timeout, preparation_atte
                     or file_sha(confined(root,payload['snapshot']))!=payload['receipt']['content_sha256']):
                 raise ValueError('Structural snapshot bytes differ from their reviewed receipt')
             from gpx_recipe.preparation.structural_hints import read as read_preparation
-            try:prepared=read_preparation(directory,protocol)
+            try:prepared=read_preparation(asset_root,protocol)
             except (OSError,ValueError,EOFError):prepared=None
             if 'prepared_scattering' in payload and payload['prepared_scattering']!=prepared:
                 raise ValueError('Structural preparation metadata differs from its captured model inputs')
             if prepared is not None:payload['prepared_scattering']=prepared
         files.append(str((directory/'job.json').relative_to(root)))
-        for asset in assets(job['protocol']):files.append(str(confined(directory,asset['path']).relative_to(root)))
+        for asset in assets(job['protocol']):files.append(str(confined(asset_root,asset['path']).relative_to(root)))
         from gpx_recipe.preparation.hints import packet_paths
-        try:extra=packet_paths(directory,job['protocol'])
+        try:extra=packet_paths(asset_root,job['protocol'])
         except (OSError,ValueError,EOFError):extra=[]
-        files.extend(str(confined(directory,name).relative_to(root)) for name in extra)
+        files.extend(str(confined(asset_root,name).relative_to(root)) for name in extra)
     if not files:
         write_json(root/'packet.json',{'schema':'radar-native-input-marker/v1'})
         files=['packet.json']

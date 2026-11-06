@@ -14,7 +14,7 @@ import re
 
 from ..execution import write_json
 from ..live.snapshot import stable_read
-from ..symmetry.compiler import confined, file_sha, package_signature, verify_inputs
+from ..symmetry.compiler import confined, file_sha, package_signature, verify_inputs,job_inputs
 from ..symmetry.contracts import digest, trial_id, validate_protocol
 from .acquisition import _mapping, _scope, prepare_acquisition, StructuralAcquisition
 from .service import SearchSettings
@@ -58,8 +58,8 @@ def reviewed_job(directory):
     if path.stat().st_size>8*1024*1024:raise ValueError('Structural job metadata is oversized')
     job=json.loads(path.read_text())
     if (not isinstance(job,dict) or set(job)!={'schema','protocol','protocol_sha256',
-            'candidate_id','seed_id','id','package_sha256'} or job['schema']!='radar-symmetry-job/v1'):
-        raise ValueError('Capture a self-contained reviewed structural model job')
+            'candidate_id','seed_id','id','package_sha256'} or job['schema'] not in {'radar-symmetry-job/v1','radar-symmetry-job/v2'}):
+        raise ValueError('Capture a reviewed structural model job')
     protocol=validate_protocol(job['protocol'])
     if (protocol['kind']!='structural' or protocol['policy'].get('structural_optimizer')!='prepared_nonlinear'
             or job['protocol_sha256']!=digest(protocol)
@@ -71,7 +71,7 @@ def reviewed_job(directory):
     seed=next((s for s in protocol['seeds'] if s['id']==job['seed_id']),None)
     if candidate is None or seed is None or candidate['id'] not in seed.get('candidate_ids',[candidate['id']]):
         raise ValueError('Structural child is outside its reviewed finite portfolio')
-    verify_inputs(protocol,root)
+    verify_inputs(protocol,job_inputs(root,job))
     return job,protocol,candidate
 
 
@@ -80,9 +80,10 @@ def execute(payload):
     validate_payload(payload)
     directory=Path(payload['directory']).resolve()
     job,protocol,candidate=reviewed_job(directory)
+    inputs=job_inputs(directory,job)
     if 'prepared_scattering' in payload:
         from ..preparation.structural_hints import read as read_preparation
-        if read_preparation(directory,protocol)!=payload['prepared_scattering']:
+        if read_preparation(inputs,protocol)!=payload['prepared_scattering']:
             raise ValueError('Structural preparation metadata differs from the captured model inputs')
     source=Path(payload['source']).resolve()
     if file_sha(source)!=protocol['source']['sha256']:
@@ -106,14 +107,14 @@ def execute(payload):
         seconds=scope['structural_seconds'],starts=scope['structural_starts'],
         recovery_seconds=scope['structural_recovery_seconds'])
     from ..preparation.structural_hints import candidates as prepared_candidates
-    banks,attachment=prepared_candidates(directory,protocol,candidate['id'])
-    reference=confined(directory,protocol['structural_reference']['path']) if 'structural_reference' in protocol else None
+    banks,attachment=prepared_candidates(inputs,protocol,candidate['id'])
+    reference=confined(inputs,protocol['structural_reference']['path']) if 'structural_reference' in protocol else None
     root=Path(payload['destination']);root.mkdir(parents=True,exist_ok=False)
     request=dict(source_gpx=str(source),source_sha256=protocol['source']['sha256'],
         observation_source=payload['anchor_snapshot'],observation_source_sha256=mapping['snapshot_sha256'],
         source_revision=payload['source_revision'],reference_revision=payload['reference_revision'],
         parent_phase=protocol['parent_phase'],mapping=mapping,refine_transfer=payload['refine_transfer'])
-    contract=prepare_acquisition(request,confined(directory,candidate['child']['path']),
+    contract=prepare_acquisition(request,confined(inputs,candidate['child']['path']),
         candidate['transformation_matrix'],candidate['origin_shift'],root/'acquisition',
         source_scope=payload['source_scope'],settings=settings,prepared_banks=banks,reference_gpx=reference)
     metadata=json.loads((root/'acquisition/model/prepared.json').read_text())
@@ -147,7 +148,7 @@ def execute(payload):
     if (file_sha(source)!=protocol['source']['sha256'] or stable_read(payload['snapshot'])!=snapshot
             or stable_read(payload['anchor_snapshot'])!=anchor):
         raise ValueError('Structural handoff inputs changed during native calculation')
-    verify_inputs(protocol,directory)
+    verify_inputs(protocol,inputs)
     return result
 
 

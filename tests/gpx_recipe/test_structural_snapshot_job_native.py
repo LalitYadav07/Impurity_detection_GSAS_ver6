@@ -16,12 +16,13 @@ from gpx_recipe.execution import write_json
 from gpx_recipe.live.snapshot import parse_live_ascii,uniform_density_to_tof
 from gpx_recipe.structural_live.native import sha
 from gpx_recipe.symmetry.bundle import pack,unpack
-from gpx_recipe.symmetry.compiler import compile_native_bundle,file_sha,package_signature
-from gpx_recipe.symmetry.contracts import digest,validate_candidate,validate_protocol
+from gpx_recipe.symmetry.compiler import compile_native_bundle,compile_shared_job,prepare_shared_inputs,file_sha,package_signature
+from gpx_recipe.symmetry.contracts import digest,validate_candidate,validate_protocol,trial_id
 from gpx_recipe.symmetry.native_audit import inspect_source
 
 
-def test_model_wrapper_preserves_reviewed_reference_and_exports_native_structural_snapshot(tmp_path):
+@pytest.mark.parametrize('shared',[False,True])
+def test_model_wrapper_preserves_reviewed_reference_and_exports_native_structural_snapshot(tmp_path,shared):
     source,public=native_source(tmp_path/'public','PNT');source_sha=sha(source)
     parent=G.G2Project(gpxfile=str(source));warm=tmp_path/'warm.gpx'
     # A separately reviewed fractional structure/ADP reference must survive
@@ -58,29 +59,35 @@ def test_model_wrapper_preserves_reviewed_reference_and_exports_native_structura
             refine_background=True,structural_optimizer='prepared_nonlinear',structural_starts=2,structural_seconds=4.,
             structural_mode_radius=.05,structural_cell_radius=.005)))
     packet=tmp_path/'packet';packet.mkdir()
-    compile_native_bundle(protocol,inputs,packet/'model',candidate_id=candidate['id'],seed_id='prepared',approved_hash=digest(protocol))
+    if shared:
+        captured=prepare_shared_inputs(protocol,inputs,packet/'models')
+        model=packet/'models/trials'/trial_id(protocol,candidate['id'],'prepared')
+        compile_shared_job(protocol,model,candidate_id=candidate['id'],seed_id='prepared',approved_hash=digest(protocol))
+    else:
+        model=packet/'model';captured=model
+        compile_native_bundle(protocol,inputs,model,candidate_id=candidate['id'],seed_id='prepared',approved_hash=digest(protocol))
     from gpx_recipe.preparation import structural_hints
     preparation=dict(schema=structural_hints.SCHEMA,protocol_sha256=digest(protocol),library_id='c'*24,
         library_name='Empty public handoff control',entries=[],eligible_entries=0,omitted_entries=0,observations_included=False)
     preparation['snapshot_sha256']=digest(preparation)
-    hint=packet/'model'/structural_hints.MANIFEST;hint.parent.mkdir();write_json(hint,preparation)
+    hint=captured/structural_hints.MANIFEST;hint.parent.mkdir();write_json(hint,preparation)
     (packet/'anchor.dat').write_bytes(anchor);(packet/'snapshot.dat').write_bytes(raw)
     identity=dict(facility='SNS',instrument='PG3',ipts=1,run=2,epoch='public-native-roundtrip')
     mapping=dict(mapping_kind='user_reviewed',source_gpx_sha256=source_sha,snapshot_sha256=hashlib.sha256(anchor).hexdigest(),
         physical_bank=1,identity=identity,export_geometry=dict(kind='linear_tof_from_d',microseconds_per_angstrom=factor),
         normalization='Public native reduced density control',producer_config_sha256='a'*64)
-    payload=dict(source='model/source.gpx',directory='model',anchor_snapshot='anchor.dat',snapshot='snapshot.dat',
+    payload=dict(source=str((captured/'source.gpx').relative_to(packet)),directory=str(model.relative_to(packet)),anchor_snapshot='anchor.dat',snapshot='snapshot.dat',
         receipt=dict(identity=identity,content_sha256=hashlib.sha256(raw).hexdigest(),metadata=dict(physical_bank=1)),
         mapping=mapping,source_scope=dict(run='2',sample_id='public',sample='Public ErSi',wavelength='1.5'),revision=2,
         source_revision='PG3_2:'+mapping['snapshot_sha256'],reference_revision='PG3_ref:'+source_sha,
         refine_transfer=False,destination='snapshot-output',prepared_scattering=preparation)
-    hashes={str(p.relative_to(packet)):sha(p) for p in packet.rglob('*') if p.is_file()}
+    hashes={str(p.relative_to(packet)):sha(p) for p in packet.rglob('*') if p.is_file() and p.suffix!='.py'}
     request=dict(schema='radar-model-native/v1',operation='structural-snapshot',payload=payload,
         implementation_sha256=package_signature(),expected_source_sha256=source_sha,input_hashes=hashes,
         timeout=180,dispatch_key='b'*24)
     # Omit the source bytes in the archive; the normal Galaxy HDA hydration
     # path must reconstruct exactly the same captured model input.
-    pack(packet,tmp_path/'assets.zip',[name for name in hashes if name!='model/source.gpx'])
+    pack(packet,tmp_path/'assets.zip',[name for name in hashes if name!=payload['source']])
     write_json(tmp_path/'request.json',request)
     script=Path(__file__).resolve().parents[2]/'scripts/ndip_model_campaign.py'
     with (tmp_path/'wrapper.log').open('w') as log:
