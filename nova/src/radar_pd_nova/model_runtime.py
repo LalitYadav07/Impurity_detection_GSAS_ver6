@@ -197,6 +197,7 @@ class GalaxyModelRuntime(GalaxyRefinementRuntime):
             return identifier
 
     def _submit(self,action,source,request,asset_id,key,*,cancel=None):
+        began=time.monotonic()
         with self._lock:
             entry=self.state['dispatches'].setdefault(key,{'pending':False})
             if entry.get('job'):return UtilityActionRecord.model_validate(entry['job'])
@@ -207,7 +208,9 @@ class GalaxyModelRuntime(GalaxyRefinementRuntime):
             if entry.get('pending'):
                 raise RuntimeUnavailable('This model submission has no acknowledged job yet. Recover the existing dispatch before retrying; no duplicate was submitted.')
             entry['absence_verified']=True
+            lookup_done=time.monotonic()
             self.wait_capacity(cancel)
+            capacity_ready=time.monotonic()
             capability=getattr(self.service,'tool_has_input',None)
             inline=bool(capability and capability(self.tool_id,'model_request_b64'))
             request_id=None;encoded=None
@@ -229,7 +232,11 @@ class GalaxyModelRuntime(GalaxyRefinementRuntime):
             if inline:inputs['model_request_b64']=encoded
             else:inputs['model_request']={'dataset_id':request_id}
             entry.update(pending=True,request_id=request_id,request_sha256=digest(request),
-                         request_format='inline_base64' if inline else 'history_json');self._save()
+                         request_format='inline_base64' if inline else 'history_json',
+                         submission_timing=dict(lookup_seconds=lookup_done-began,
+                            capacity_wait_seconds=capacity_ready-lookup_done,
+                            request_preparation_seconds=time.monotonic()-capacity_ready));self._save()
+            post_started=time.monotonic()
             try:
                 job=self.service.submit_utility(tool_id=self.tool_id,name='RADAR-PD model '+key,
                     associated_run_uid=source.get('record_uid'),inputs=inputs,cancel_event=cancel)
@@ -239,6 +246,8 @@ class GalaxyModelRuntime(GalaxyRefinementRuntime):
                     entry['pending']=False;self._save()
                     raise RuntimeUnavailable(str(exc)) from exc
                 raise RuntimeUnavailable('Galaxy did not acknowledge the model job. Its stable dispatch key was retained for recovery.') from exc
+            entry['submission_timing']['submit_acknowledgment_seconds']=time.monotonic()-post_started
+            entry['submission_timing']['total_before_identity_verification_seconds']=time.monotonic()-began
             entry['job']=job_record(job);self._save()
             self.verify_job(job,key)
             return job

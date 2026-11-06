@@ -9,10 +9,12 @@ def affinity_limit():
     except (AttributeError,OSError):return None
 
 
-def allocation(requested, *, environ=None, cgroup=Path('/sys/fs/cgroup')):
+def allocation(requested, *, environ=None, cgroup=Path('/sys/fs/cgroup'), maximum_workers=16):
     env = os.environ if environ is None else environ
-    if type(requested) is not int or not 1 <= requested <= 16:
-        raise ValueError('Request one to sixteen native workers')
+    if type(maximum_workers) is not int or not 1 <= maximum_workers <= 256:
+        raise ValueError('Invalid worker-pool ceiling')
+    if type(requested) is not int or not 1 <= requested <= maximum_workers:
+        raise ValueError(f'Request one to {maximum_workers} native workers')
     def integer(name):
         try:
             value=int(env.get(name,''))

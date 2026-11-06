@@ -427,7 +427,9 @@ def main():
  
     if args.workers and args.workers > 0:
         import multiprocessing as mp
-        with mp.Pool(processes=args.workers) as pool:
+        from worker_budget import analysis_workers
+        workers=analysis_workers(args.workers,tasks=max(1,len(todo)))
+        with mp.Pool(processes=workers) as pool:
             it = pool.imap_unordered(worker_wrapper, todo, chunksize=4)
             iterator = tqdm(it, total=len(todo)) if HAS_TQDM else it
             for row, fail, mm in iterator:

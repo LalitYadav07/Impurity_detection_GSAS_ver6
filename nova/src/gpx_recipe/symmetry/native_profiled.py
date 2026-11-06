@@ -19,6 +19,10 @@ from .profiled_magnetic import ProfiledMagneticObjective
 _active=None
 
 
+class _CacheMiss(Exception):
+    """Release the reader lock before rebuilding a missing or invalid hint."""
+
+
 class _CompilerObjective:
     """Present the same weighted native residual to the shared compiler."""
     def __init__(self, native, background):
@@ -183,7 +187,7 @@ class NativeMagneticStartingPoint:
         return values
 
     @contextmanager
-    def _cache_lock(self, path):
+    def _cache_lock(self, path, *, shared=False):
         """Coordinate disposable workers without reusing native globals."""
         try:import fcntl
         except ImportError:
@@ -197,7 +201,7 @@ class NativeMagneticStartingPoint:
         try:
             while True:
                 self._check()
-                try:fcntl.flock(stream,fcntl.LOCK_EX|fcntl.LOCK_NB);break
+                try:fcntl.flock(stream,(fcntl.LOCK_SH if shared else fcntl.LOCK_EX)|fcntl.LOCK_NB);break
                 except BlockingIOError:time.sleep(.05)
             yield
         finally:
@@ -205,12 +209,21 @@ class NativeMagneticStartingPoint:
 
     def build(self,*,heldouts=4,cache_path=None,cache_identity=None):
         if cache_path is not None and cache_identity:
+            # Immutable, checked cache readers may validate native holdouts
+            # concurrently. Only a rebuild needs the exclusive writer lock.
+            if Path(cache_path).is_file():
+                with self._cache_lock(cache_path,shared=True):
+                    try:
+                        return self._build(heldouts=heldouts,cache_path=cache_path,
+                            cache_identity=cache_identity,cache_only=True)
+                    except _CacheMiss:
+                        pass
             with self._cache_lock(cache_path):
                 return self._build(heldouts=heldouts,cache_path=cache_path,cache_identity=cache_identity)
         return self._build(heldouts=heldouts)
 
     def _build(self,*,heldouts=4,cache_path=None,cache_identity=None,skip_cache=False,
-               use_derivative=None,compiler_note=''):
+               use_derivative=None,compiler_note='',cache_only=False):
         started=time.monotonic();dimension=len(self.moment_indices);nb=len(self.background_indices)
         # GetAtomFXU replaces exact zero components with 1e-8. An evenly
         # spaced anchor can contain 1.0, so a minus-unit interpolation probe
@@ -233,6 +246,8 @@ class NativeMagneticStartingPoint:
                                 all(np.isfinite(data[k]).all() for k in ('nuclear','quadratic','background','linear_error'))):
                             cached={key:data[key].copy() for key in ('nuclear','quadratic','background','linear_error')}
             except (OSError,ValueError,KeyError,EOFError) as exc:cache_note=type(exc).__name__
+        if cached is None and cache_only:
+            raise _CacheMiss
         compilation=None;compiler='transported_cache' if cached is not None else 'native_profiles'
         # Derivative cost is amortized only by larger bases. Measured cold
         # controls favor forward evaluations for the smaller spin spaces.
@@ -284,6 +299,8 @@ class NativeMagneticStartingPoint:
             errors.append(model.heldout_error(moments,scale,bg,native))
         if not errors or max(errors+[linear_error])>1e-8:
             if cached is not None:
+                if cache_only:
+                    raise _CacheMiss
                 # A hint can never turn a recoverable cache mismatch into a
                 # rejected scientific model. Rebuild once from native calls.
                 return self._build(heldouts=heldouts,cache_path=cache_path,

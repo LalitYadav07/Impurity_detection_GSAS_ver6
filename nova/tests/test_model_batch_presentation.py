@@ -1,5 +1,18 @@
 from datetime import datetime,timezone
-from radar_pd_nova.model_batch_presentation import batch_rows
+from radar_pd_nova.model_batch_presentation import batch_rows, allocation_caption
+
+
+def test_allocation_caption_distinguishes_model_count_from_native_cpu_budget():
+    text=allocation_caption(dict(workers=4,concurrent_model_workers=1,
+        representative_workers_per_model=4,memory_mb=8192,allocation_reported=True))
+    assert '4 native worker slots' in text
+    assert '1 model × up to 4 native checks' in text
+    assert '8192 MiB' in text
+
+
+def test_unreported_allocation_is_visible():
+    text=allocation_caption(dict(workers=1,allocation_reported=False,memory_mb=None))
+    assert '1 native worker slot (allocation unreported)' in text
 
 
 def test_dispatch_execution_and_retrieval_remain_distinct():

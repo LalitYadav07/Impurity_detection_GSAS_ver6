@@ -1380,19 +1380,21 @@ class LatticeNudger:
         When Stage 4 is already distributing candidates across a process pool,
         inner fan-out should stay disabled to avoid multiplying concurrency.
         """
-        if num_reps <= 1:
+        if num_reps <= 1 or not allow_parallel:
             return 1
 
         env_workers = int(os.environ.get("STAGE4_REP_WORKERS", "0"))
         if env_workers > 0:
-            return max(1, min(env_workers, num_reps))
+            from worker_budget import analysis_workers
+            return analysis_workers(env_workers, tasks=num_reps)
 
         is_hf = "SPACE_ID" in os.environ
         if not allow_parallel or is_hf:
             return 1
 
         cpu = os.cpu_count() or 1
-        return max(1, min(num_reps, cpu // 2))
+        from worker_budget import analysis_workers
+        return analysis_workers(max(1, cpu // 2), tasks=num_reps)
 
     @staticmethod
     def _resolve_outer_workers(num_candidates: int) -> int:
@@ -1415,7 +1417,8 @@ class LatticeNudger:
             workers = min(2, cpu_count)
         else:
             workers = max(1, cpu_count // 2)
-        return max(1, min(num_candidates, workers))
+        from worker_budget import analysis_workers
+        return analysis_workers(max(1, workers), tasks=num_candidates)
 
     # ------------------------ Q-signature constrained strategy (optimized) ------------------------
 

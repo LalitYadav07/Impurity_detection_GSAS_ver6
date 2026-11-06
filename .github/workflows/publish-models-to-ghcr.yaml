@@ -9,6 +9,7 @@ on:
       - tests/gpx_recipe/test_prepared_structural_acceptance_native.py
       - tests/gpx_recipe/data/synthetic-ersi-cmcm-isodistort.cif
       - scripts/ndip_model_campaign.py
+      - scripts/ndip_runtime.py
       - scripts/ndip_symmetry.py
       - .github/workflows/publish-models-to-ghcr.yaml
   workflow_dispatch: {}
@@ -92,6 +93,8 @@ jobs:
             /validation/tests/gpx_recipe/test_native_forward.py \
             /validation/tests/gpx_recipe/test_profiled_magnetic.py \
             /validation/tests/gpx_recipe/test_grouped_profile_receipts.py \
+            /validation/tests/gpx_recipe/test_grouped_native_parallelism.py \
+            /validation/tests/gpx_recipe/test_prepared_magnetic_capture.py \
             /validation/tests/gpx_recipe/test_profiled_optimizer_contract.py \
             /validation/tests/gpx_recipe/test_structural_reduced_service.py \
             /validation/tests/gpx_recipe/test_structural_live_basis.py \

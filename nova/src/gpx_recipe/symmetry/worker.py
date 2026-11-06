@@ -5,6 +5,7 @@ import hashlib
 import importlib
 import inspect
 import json
+import os
 from pathlib import Path
 import resource
 import sys
@@ -49,7 +50,7 @@ def runtime_identity():
     return dict(version=str(version.GetVersionNumber()),magnetic_function_sha256=hashlib.sha256(inspect.getsource(module.MagStructureFactor2).encode()).hexdigest(),**native_stack())
 
 
-def execute(directory,*,screened=None):
+def execute(directory,*,screened=None,isolated=False):
     directory=Path(directory).resolve();started=time.monotonic()
     initial_usage=resource.getrusage(resource.RUSAGE_SELF)
     target=directory/'result.json'
@@ -79,7 +80,10 @@ def execute(directory,*,screened=None):
         if 'candidate_ids' in seed and candidate['id'] not in seed['candidate_ids']:raise TrialDisposition('integrity_failure','Start is outside this candidate’s approved finite set')
         source=confined(input_root,protocol['source']['path']);ctx=Artifacts(output,input_root=input_root)
         if protocol['kind']=='magnetic':
-            from .native_magnetic import run
+            if screened is not None and 'prepared' in screened:
+                from .prepared_magnetic import run_prepared as run
+            else:
+                from .native_magnetic import run
         else:
             if protocol['policy'].get('structural_optimizer')=='prepared_nonlinear':
                 from .native_prepared_structural import run
@@ -117,8 +121,10 @@ def execute(directory,*,screened=None):
         usage=resource.getrusage(resource.RUSAGE_SELF)
         response['resources']=dict(wall_seconds=time.monotonic()-started,
                                   cpu_seconds=usage.ru_utime+usage.ru_stime-initial_usage.ru_utime-initial_usage.ru_stime,
-                                  peak_rss_bytes=int(usage.ru_maxrss*(1024 if sys.platform.startswith('linux') else 1)))
-        if screened is not None:response['resources']['peak_rss_scope']='shared_group_worker'
+                                  peak_rss_bytes=int(usage.ru_maxrss*(1024 if sys.platform.startswith('linux') else 1)),
+                                  process_id=os.getpid())
+        if screened is not None:
+            response['resources']['peak_rss_scope']='isolated_native_process' if isolated else 'shared_group_worker'
         response['files']={str(p.relative_to(directory)):file_sha(p) for p in output.rglob('*') if p.is_file() and p.suffix in {'.gpx','.json','.log'}}
         write_json(target,response)
     return response

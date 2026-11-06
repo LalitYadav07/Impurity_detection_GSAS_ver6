@@ -108,19 +108,23 @@ class Stage4WorkerPolicyTests(unittest.TestCase):
         self.assertEqual(_lattice_deviation_metric(lattice, lattice, 1.0, 3.0), 0.0)
 
     def test_outer_workers_are_capped_by_candidate_count(self):
-        with patch.dict(os.environ, {}, clear=False), patch("scripts.lattice_nudger.os.cpu_count", return_value=256):
-            workers = LatticeNudger._resolve_outer_workers(10)
-        self.assertEqual(workers, 10)
+        with patch.dict(os.environ, {'GALAXY_SLOTS':'4','GALAXY_MEMORY_MB':'8192'}, clear=False), patch("scripts.lattice_nudger.os.cpu_count", return_value=256):
+            workers = LatticeNudger._resolve_outer_workers(2)
+        self.assertEqual(workers, 2)
 
     def test_outer_worker_env_override_still_caps_to_real_work(self):
-        with patch.dict(os.environ, {"STAGE4_MAX_WORKERS": "64"}, clear=False), patch("scripts.lattice_nudger.os.cpu_count", return_value=256):
+        with patch.dict(os.environ, {"STAGE4_MAX_WORKERS": "64",'GALAXY_SLOTS':'4','GALAXY_MEMORY_MB':'8192'}, clear=False), patch("scripts.lattice_nudger.os.cpu_count", return_value=256):
             workers = LatticeNudger._resolve_outer_workers(10)
-        self.assertEqual(workers, 10)
+        self.assertEqual(workers, 4)
 
     def test_inner_parallelism_is_disabled_when_outer_pool_is_active(self):
         with patch.dict(os.environ, {}, clear=False), patch("scripts.lattice_nudger.os.cpu_count", return_value=256):
             workers = LatticeNudger._resolve_inner_workers(50, allow_parallel=False)
         self.assertEqual(workers, 1)
+
+    def test_inner_override_cannot_bypass_disabled_parallelism(self):
+        with patch.dict(os.environ, {'STAGE4_REP_WORKERS':'4'}, clear=False):
+            self.assertEqual(LatticeNudger._resolve_inner_workers(50, allow_parallel=False),1)
 
     def test_inner_workers_are_capped_by_rep_count_when_enabled(self):
         with patch.dict(os.environ, {}, clear=False), patch("scripts.lattice_nudger.os.cpu_count", return_value=32):

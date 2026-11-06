@@ -7,6 +7,7 @@ USER root
 WORKDIR /opt/radar-pd
 ARG RADAR_PD_BUILD_SHA=unknown
 ENV RADAR_PD_GIT_COMMIT=${RADAR_PD_BUILD_SHA}
+ENV RADAR_PD_EXECUTION_CONTEXT=galaxy
 COPY --chown=radar:radar . /opt/radar-pd
 RUN python -m py_compile \
         scripts/ndip_contracts.py \

@@ -2,6 +2,18 @@
 from datetime import datetime,timezone
 
 
+def allocation_caption(allocated):
+    workers=allocated.get('workers',1)
+    text=f'{workers} native worker slot'+('s' if workers!=1 else '')
+    if allocated.get('allocation_reported') is False:
+        text+=' (allocation unreported)'
+    models=allocated.get('concurrent_model_workers')
+    checks=allocated.get('representative_workers_per_model')
+    if models and checks:
+        text+=f' · {models} model'+('s' if models!=1 else '')+f' × up to {checks} native checks'
+    return text+f" · {allocated.get('memory_mb') or 'unreported'} MiB memory"
+
+
 def batch_rows(chunks,*,now=None):
     now=now or datetime.now(timezone.utc)
     rows=[]

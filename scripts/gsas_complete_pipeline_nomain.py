@@ -2804,7 +2804,8 @@ class UnifiedPipeline:
                 pearson_best_by_pid[pid] = float("-inf")
                 print(f"[RESULT] [pass {pass_ix}] {pid}: no-cif (r=-inf)")
 
-        workers = max(1, min(int(workers), len(tasks))) if tasks else 1
+        from worker_budget import analysis_workers
+        workers = analysis_workers(int(workers), tasks=len(tasks)) if tasks else 1
         print(f"[INFO] Pearson refinement work queue: {len(tasks)} task(s), {workers} worker(s).")
 
         if tasks:

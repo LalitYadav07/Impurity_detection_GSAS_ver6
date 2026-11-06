@@ -45,6 +45,8 @@ def _pick_workers(n_items):
     On SLURM, standard os.cpu_count() returns the *node* total, not allocation.
     We try len(os.sched_getaffinity(0)) on Linux if available.
     """
+    if n_items <= 1:
+        return 1
     import os
     cpus = 1
     if hasattr(os, "sched_getaffinity"):
@@ -58,7 +60,8 @@ def _pick_workers(n_items):
     # Cap at n_items (if small)
     w = min(cpus, n_items)
     # Cap at something reasonable to avoid OS thrashing if cpus is huge
-    return max(1, min(w, 64))
+    from worker_budget import analysis_workers
+    return analysis_workers(max(1,min(w,64)),tasks=n_items)
 
 def _gaussian_deposit(prof, center_bin, weight, sigma_bins):
     L = prof.shape[0]

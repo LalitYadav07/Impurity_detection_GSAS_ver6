@@ -182,6 +182,7 @@ def test_group_completion_is_reported_without_waiting_for_the_first_model(model,
         if path.name=='progress.json' and value.get('completed')==8:release_first.set()
     monkeypatch.setattr(chunks,'write_json',write)
     def runner(paths,**kwargs):
+        assert kwargs['workers']==2  # two models × two verifiers, not 2 × 4
         job=json.loads((paths[0]/'job.json').read_text())
         if job['candidate_id']=='model-0':
             assert release_first.wait(2),'The finished second model was hidden behind the first'
@@ -192,6 +193,19 @@ def test_group_completion_is_reported_without_waiting_for_the_first_model(model,
     assert by_id[result['trials'][0]['id']]=='model-1'
     assert len(result['trials'])==16 and not result['pending']
     assert result['allocation']['concurrent_model_workers']==2
+    assert result['allocation']['maximum_concurrent_native_verifications']==4
+
+
+def test_one_group_can_use_its_entire_allocated_verification_budget(model,tmp_path,monkeypatch):
+    source,p=model;p=grouped_protocol(source,p,1)
+    monkeypatch.setattr(chunks,'allocation',lambda *a,**k:dict(workers=4,blas_threads=1))
+    def runner(paths,**kwargs):
+        assert kwargs['workers']==4
+        return [dict(id=path.name,state='finished',status='site_incompatible') for path in paths],[]
+    monkeypatch.setattr(chunks,'run_profiled_group',runner)
+    result=chunks.execute_chunk(request(p),source,tmp_path/'one-group')
+    assert len(result['trials'])==8 and not result['pending']
+    assert result['allocation']['maximum_concurrent_native_verifications']==4
 
 
 def test_group_cancel_keeps_other_models_pending_and_does_not_launch_them(model,tmp_path,monkeypatch):
@@ -279,8 +293,12 @@ def test_galaxy_entrypoint_uses_separate_source_without_reupload_and_preserves_o
     monkeypatch.setattr(module,'native',native)
     result=module.work('native',source,assets,request,tmp_path/'worker',tmp_path/'output.zip')
     assert result['result']=={'checked':True}
+    assert result['worker_timing']['staging_seconds']>=0
+    assert result['worker_timing']['calculation_seconds']>=0
+    assert result['worker_timing']['final_input_verification_seconds']>=0
     with zipfile.ZipFile(tmp_path/'output.zip') as z:
         assert not any(p.endswith('source.gpx') for p in z.namelist())
+        assert json.loads(z.read('response.json'))['worker_timing']==result['worker_timing']
 
 
 def template(p):

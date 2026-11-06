@@ -10,6 +10,10 @@ import subprocess
 import sys
 import threading
 import time
+from datetime import datetime, timezone
+
+sys.path.insert(0,str(Path(__file__).resolve().parent))
+from ndip_runtime import runtime_limits, process_usage, usage_delta
 
 from gpx_recipe.execution import write_json
 from gpx_recipe.jobs import scientific_environment
@@ -64,6 +68,9 @@ def native(request,inputs,root,cancel):
 
 
 def work(action,source,assets,request_file,directory,archive):
+    entered=time.monotonic()
+    entry_utc=datetime.now(timezone.utc).isoformat()
+    initial_usage=process_usage()
     directory=Path(directory).resolve();directory.mkdir(parents=True,exist_ok=True)
     inputs=unpack(assets,directory/'inputs-packet')
     request=json.loads(Path(request_file).read_text())
@@ -78,6 +85,7 @@ def work(action,source,assets,request_file,directory,archive):
     else:hashes=request.get('input_hashes')
     hydrate_source(inputs,source,hashes,expected)
     before={str(p.relative_to(inputs)):file_sha(p) for p in inputs.rglob('*') if p.is_file()}
+    staged=time.monotonic()
     cancel=threading.Event()
     def stop(*_):cancel.set()
     if threading.current_thread() is threading.main_thread():
@@ -110,9 +118,20 @@ def work(action,source,assets,request_file,directory,archive):
                 native_seconds=time.monotonic()-started,llm_calls=0)
             write_json(directory/'response.json',result);base=directory;paths.append('response.json')
         else:raise ValueError('Unsupported model job action')
+        calculated=time.monotonic()
         for relative,sha in before.items():
             if file_sha(confined(inputs,relative))!=sha:raise ValueError('A native job changed its captured inputs')
+        checked=time.monotonic()
+        timing=dict(schema='radar-worker-timing/v1',entered_utc=entry_utc,
+            staging_seconds=staged-entered,calculation_seconds=calculated-staged,
+            final_input_verification_seconds=checked-calculated,
+            scope='Inside the worker only; Galaxy dispatch, image pull and pre-entry staging are outside this clock')
+        result['worker_timing']=timing
+        write_json(base/'response.json',result)
         pack(base,archive,paths)
+        print('[RADAR MODEL RUNTIME] '+json.dumps(dict(**timing,
+            archive_seconds=time.monotonic()-checked,total_worker_seconds=time.monotonic()-entered,
+            limits=runtime_limits(),usage=usage_delta(initial_usage))),flush=True)
         return result
     except Exception:
         # Logs survive a controlled failure; never publish an unaudited GPX as a fit.

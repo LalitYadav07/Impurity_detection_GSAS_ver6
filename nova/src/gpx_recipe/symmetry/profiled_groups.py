@@ -29,6 +29,17 @@ def native_seed(template, seed, component_maps, labels):
     parent-to-child directions, coupled components and independent orbit signs.
     No new randomized portfolio is introduced by grouped execution.
     """
+    values=seed_moments(template,seed,labels)
+    matrix=np.asarray(component_maps,float).reshape(len(labels)*3,-1)
+    target=np.asarray(values,float).ravel()
+    coefficients=np.linalg.lstsq(matrix,target,rcond=1e-12)[0]
+    if not np.allclose(matrix@coefficients,target,rtol=1e-9,atol=1e-10):
+        raise ValueError('The reviewed seed cannot be represented by the prepared native constraints')
+    return coefficients
+
+
+def seed_moments(template,seed,labels):
+    """The same per-site starts for surrogate screening and native GPX copies."""
     from .moment_starts import site_moment_start
     if template.get('schema') != 'radar-magnetic-seed-template/v1':
         raise ValueError('Unsupported prepared magnetic seed template')
@@ -51,12 +62,7 @@ def native_seed(template, seed, component_maps, labels):
             direction=direction,site_sign=seed.get('site_signs',{}).get(row['parent_label'],1),
             symmetry_allowed=True,independent_seed=seed.get('independent_mode_seed'),
             orbit=row['orbit'],metric=row['metric']))
-    matrix=np.asarray(component_maps,float).reshape(len(labels)*3,-1)
-    target=np.asarray(values,float).ravel()
-    coefficients=np.linalg.lstsq(matrix,target,rcond=1e-12)[0]
-    if not np.allclose(matrix@coefficients,target,rtol=1e-9,atol=1e-10):
-        raise ValueError('The reviewed seed cannot be represented by the prepared native constraints')
-    return coefficients
+    return np.asarray(values,float)
 
 
 def calculated_residual(model, fit):

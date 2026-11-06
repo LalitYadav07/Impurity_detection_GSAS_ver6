@@ -7,6 +7,9 @@ reference to the native representative. They are not native-verified GPXs.
 from __future__ import annotations
 
 import json
+from contextlib import redirect_stdout, redirect_stderr
+import multiprocessing
+import os
 from pathlib import Path
 import shutil
 import signal
@@ -31,6 +34,82 @@ SCHEMA = 'radar-profiled-group-job/v1'
 EQUIVALENT = 'profile_equivalent'
 
 
+def _isolated_representative(directory, screened):
+    """A spawned process owns exactly one native project and GSAS-II globals."""
+    from ..jobs import scientific_environment
+    env = scientific_environment()
+    os.environ.clear()
+    os.environ.update(env)
+    os.chdir(directory)
+    with (Path(directory)/'native-process.log').open('w') as log:
+        with redirect_stdout(log), redirect_stderr(log):
+            return execute(directory, screened=screened, isolated=True)
+
+
+def verify_representatives(tasks, *, workers, cancelled, completed):
+    """Replenish independent verifications without sharing native Python state.
+
+    Only the coordinator publishes group membership. Cancellation leaves work
+    that has not started pending; an active native check retains its own receipt.
+    The outer scientific process group owns timeout/termination of all children.
+    """
+    if type(workers) is not int or not 1 <= workers <= 16:
+        raise ValueError('Declare one to sixteen representative workers')
+    if workers == 1:
+        for uid, directory, screened in tasks:
+            if cancelled(): break
+            completed(uid, execute(directory, screened=screened))
+        return
+    pending = iter(tasks)
+    active = {}
+    context=multiprocessing.get_context('spawn')
+    # Own the child handles: multiprocessing.Pool can leave an AsyncResult
+    # pending forever when a native process crashes before returning a value.
+    # Receipts on disk, rather than a pickled result queue, are authoritative.
+    try:
+        exhausted = False
+        while active or not exhausted:
+            while not exhausted and not cancelled() and len(active) < workers:
+                task = next(pending, None)
+                if task is None:
+                    exhausted = True
+                    break
+                uid, directory, screened = task
+                process=context.Process(target=_isolated_representative,args=(str(directory),screened))
+                process.start()
+                active[process]=(uid,Path(directory))
+            if cancelled():break
+            if not active: break
+            ready = [process for process in active if not process.is_alive()]
+            if not ready:
+                time.sleep(.05)
+            for process in ready:
+                uid,directory=active.pop(process)
+                process.join()
+                target=directory/'result.json'
+                if process.exitcode or not target.is_file():
+                    job=json.loads((directory/'job.json').read_text())
+                    result=dict(schema='radar-symmetry-trial/v1',id=uid,
+                        protocol_sha256=job.get('protocol_sha256'),candidate_id=job.get('candidate_id'),
+                        seed_id=job.get('seed_id'),status='technical_failure',llm_calls=0,
+                        effects_verified=False,reason=f'Native verification process exited with code {process.exitcode} without a complete process acknowledgement')
+                    if target.is_file():
+                        prior=json.loads(target.read_text())
+                        result['files']=prior.get('files',{})
+                    write_json(target,result)
+                else:
+                    result=json.loads(target.read_text())
+                process.close()
+                completed(uid,result)
+    finally:
+        for process in active:
+            if process.is_alive():process.terminate()
+        for process in active:
+            process.join(timeout=5)
+            if process.is_alive():process.kill();process.join()
+            process.close()
+
+
 def _write_screen_result(directory, job, record, *, status, reason, runtime,
                          reference=None, kernel=None, moments=None,nvars=None,rwp=None):
     output=directory/'results';output.mkdir(exist_ok=True)
@@ -47,7 +126,7 @@ def _write_screen_result(directory, job, record, *, status, reason, runtime,
     return result
 
 
-def execute_group(directories, *, cancelled=None):
+def execute_group(directories, *, cancelled=None, workers=1):
     directories=[Path(p).resolve() for p in directories]
     if not directories or len(directories)>256 or len(set(directories))!=len(directories):
         raise ValueError('A group needs one to 256 unique declared trial directories')
@@ -79,6 +158,9 @@ def execute_group(directories, *, cancelled=None):
     owner=directories[0];data=owner/'group-data';data.mkdir(exist_ok=False)
     prepared=data/'prepared';prepared.mkdir()
     cancelled=cancelled or (lambda:False)
+    from .resources import allocation
+    budget=allocation(workers)
+    workers=budget['workers']
     began=time.monotonic()
     try:
         built=prepare(confined(input_root,protocol['source']['path']),
@@ -115,24 +197,26 @@ def execute_group(directories, *, cancelled=None):
         jobs_by_id={j['id']:j for j in jobs}
         verification_started=time.monotonic()
         native_results={}
-        for group in report['groups']:
-            if cancelled():break
-            uid=group['representative']
-            native_results[uid]=execute(directories_by_id[uid],screened=dict(
-                magnetic_variables=native.moment_names,fit=fits[uid]))
+        def collect_native(uid, result):
+            native_results[uid]=result
             write_json(data/'progress.json',dict(stage='native_verification',
                 screened=len(records),total=len(jobs),
                 verified_profiles=len(native_results),distinct_profiles=len(report['groups'])))
             # Verify parameters against the same kernel as well as the native
             # worker's independent checks. A different numerical outcome may
             # not serve as the reference for any screened alternatives.
-            result=native_results[uid]
             if result.get('status') in {'valid','inadequate_fit'}:
                 proof_path=directories_by_id[uid]/'results'/'optimizer-receipt.json'
                 actual=json.loads(proof_path.read_text())
                 if (actual.get('objective_identity',{}).get('cache_identity')!=identity or
                     not actual.get('qualification',{}).get('passed')):
                     raise ValueError('Native representative lost its checked group objective')
+        tasks=[(group['representative'], directories_by_id[group['representative']],
+                dict(magnetic_variables=native.moment_names,fit=fits[group['representative']],
+                     prepared=built['prepared']))
+               for group in report['groups']]
+        verify_representatives(tasks, workers=min(workers,max(1,len(tasks))),
+            cancelled=cancelled,completed=collect_native)
         for job,directory in zip(jobs,directories):
             uid=job['id']
             if (directory/'result.json').exists() or uid not in records:
@@ -176,6 +260,11 @@ def execute_group(directories, *, cancelled=None):
             native_verification_seconds=time.monotonic()-verification_started,
             preparation_and_compilation_seconds=verification_started-began-report['wall_seconds'],
             screen_seconds=report['wall_seconds'],kernel=kernel))
+        summary_path=data/'summary.json'
+        summary=json.loads(summary_path.read_text())
+        summary['allocation']=dict(budget,representative_workers=min(workers,max(1,len(tasks))),
+            representative_isolation='spawned_process_per_profile' if workers>1 else 'serial_group_process')
+        write_json(summary_path,summary)
     except Exception as exc:
         # An unsupported group is checked once, not once for every seed. Other
         # failures remain technical errors and do not become scientific rejections.
@@ -190,11 +279,11 @@ def execute_group(directories, *, cancelled=None):
 
 def main(path):
     request=json.loads(Path(path).read_text())
-    if request.get('schema')!=SCHEMA or set(request)!={'schema','directories'}:
+    if request.get('schema')!=SCHEMA or set(request)-{'schema','directories','workers'} or {'schema','directories'}-set(request):
         raise ValueError('Invalid grouped-worker request')
     event=threading.Event()
     signal.signal(signal.SIGTERM,lambda *_:event.set())
-    execute_group(request['directories'],cancelled=event.is_set)
+    execute_group(request['directories'],cancelled=event.is_set,workers=request.get('workers',1))
 
 
 if __name__=='__main__':main(sys.argv[1])

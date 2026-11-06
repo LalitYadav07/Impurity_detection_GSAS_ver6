@@ -876,6 +876,10 @@ def command_analyze(args: argparse.Namespace) -> int:
     print('[NDIP RUNTIME] '+json.dumps(runtime), flush=True)
     pipeline_started = time.monotonic()
     env = os.environ.copy()
+    env['RADAR_PD_EXECUTION_CONTEXT'] = 'galaxy'
+    for name in ('OPENBLAS_NUM_THREADS', 'OMP_NUM_THREADS', 'MKL_NUM_THREADS',
+                 'VECLIB_MAXIMUM_THREADS', 'NUMEXPR_NUM_THREADS'):
+        env[name] = '1'
     env["PYTHONUNBUFFERED"] = "1"
     env["PYTHONIOENCODING"] = "utf-8"
     env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(SCRIPT_DIR), env.get("PYTHONPATH", "")]))

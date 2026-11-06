@@ -405,9 +405,8 @@ class SymmetryMixin(KSearchMixin):
                             await asyncio.to_thread(campaign.recover,recovery)
                 allocated=campaign.setting('allocation')
                 if allocated:
-                    workers=allocated.get('concurrent_model_workers',allocated['workers'])
-                    label='model workers' if 'concurrent_model_workers' in allocated else 'native workers'
-                    backend+=f" · last job: {workers} {label} · {allocated.get('memory_mb') or 'unreported'} MiB memory"
+                    from .model_batch_presentation import allocation_caption
+                    backend+=' · last job: '+allocation_caption(allocated)
                 s.sx_backend=backend
                 current_transport=self._symmetry_transport(campaign) if remote else None
                 s.sx_batches=batch_rows(getattr(current_transport,'state',{}).get('chunks',{})) if current_transport else []

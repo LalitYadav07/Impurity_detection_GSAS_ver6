@@ -267,8 +267,11 @@ def _pick_workers(n_items: int) -> int:
     except Exception:
         cpus = os.cpu_count() or 1
     if os.environ.get("SPACE_ID"):
-        return max(1, min(n_items, cpus, 2))
-    return max(1, min(n_items, cpus, 8))
+        requested=max(1,min(cpus,2))
+    else:
+        requested=max(1,min(cpus,8))
+    from worker_budget import analysis_workers
+    return analysis_workers(requested,tasks=n_items)
 
 
 def _worker_init() -> None:

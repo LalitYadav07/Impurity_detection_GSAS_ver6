@@ -507,14 +507,17 @@ def _run(source_gpx,ctx,protocol,candidate_record,seed,*,forward_only,prepare_on
         hstrain_basis = np.stack([np.asarray(G2spc.HStrainVals([1.0 if row == column else 0.0 for row in range(n_dij)], general['SGData']), dtype=float) for column in range(n_dij)], axis=1)
         child_hstrain, _residuals, _rank, _singular = np.linalg.lstsq(hstrain_basis, target_full_dij, rcond=None)
         parent_hstrain_names = list(G2spc.HStrainNames(old_phase['General']['SGData']))
-        parent_base_a = np.asarray(G2lat.cell2A(old_phase['General']['Cell'][1:7]), dtype=float)
         transfer_columns = []
+        inverse_trans = np.linalg.inv(trans)
         for parent_column in range(len(parent_hstrain_names)):
             parent_basis_values = [1.0 if row == parent_column else 0.0 for row in range(len(parent_hstrain_names))]
             parent_basis_full_dij = np.asarray(G2spc.HStrainVals(parent_basis_values, old_phase['General']['SGData']), dtype=float)
-            parent_basis_cell = G2lat.A2cell(parent_base_a + parent_basis_full_dij)
-            child_basis_cell = list(G2lat.TransformCell(parent_basis_cell, trans)[:6])
-            child_basis_full_dij = np.asarray(G2lat.cell2A(child_basis_cell), dtype=float) - np.asarray(G2lat.cell2A(child_base_cell), dtype=float)
+            # Reciprocal-metric increments transform linearly. A unit basis
+            # increment need not itself describe a physical unit cell, so do
+            # not convert it through A2cell (which fails for oblique cells).
+            increment = G2lat.A2Gmat(parent_basis_full_dij, inverse=False)
+            child_basis_full_dij = np.asarray(G2lat.Gmat2A(
+                inverse_trans.T @ increment @ inverse_trans), dtype=float)
             child_basis_values = np.linalg.lstsq(hstrain_basis, child_basis_full_dij, rcond=None)[0]
             transfer_columns.append(child_basis_values)
         hstrain_transfer_matrix = np.stack(transfer_columns, axis=1)
@@ -659,13 +662,34 @@ def _run(source_gpx,ctx,protocol,candidate_record,seed,*,forward_only,prepare_on
     if protocol['policy'].get('magnetic_optimizer')=='gsas_hessian':controls['deriv type']='analytic Hessian'
     gpx.save(str(output_gpx))
     gpx.index_ids()
+    state=dict(
+        candidate=candidate,
+        selected_histograms=selected_histograms,
+        baseline_residuals=baseline_residuals,
+        baseline_target_profiles=baseline_target_profiles,
+        magnetic_elements=magnetic_elements,
+        maximum_moment_magnitude=maximum_moment_magnitude,
+        fixed_moment_direction=fixed_moment_direction,
+        initial_moment_direction=initial_moment_direction,
+        candidate_fixed_moment_direction=candidate_fixed_moment_direction,
+        candidate_seed_moment_direction=candidate_seed_moment_direction,
+        magnetic_name=magnetic_name,
+        minimum_relative_chi2_change=minimum_relative_chi2_change,
+        moment_audit=moment_audit,
+        moment_site_coupling=moment_site_coupling,
+        omitted_magnetic_sites=omitted_magnetic_sites,
+        atom_constraint_warning=atom_constraint_warning,
+        transferred_hstrain=transferred_hstrain,
+        mode_constraint_count=len(mode_constraints),nuclear_name=nuclear.name)
     if prepare_only:
         transform=np.column_stack([transform_native_moment(np.eye(3)[i],
             old_phase['General']['Cell'][1:7],trans) for i in range(3)])
         template=dict(schema='radar-magnetic-seed-template/v1',sites=seed_sites,
             parent_to_child=transform.tolist(),magnetic_phase=magnetic_name)
         ctx.save_json('seed-template.json',template)
-        return dict(gpx=output_gpx.name,seed_template=template)
+        from .prepared_magnetic import seal_prepared
+        prepared=seal_prepared(ctx,protocol,candidate_record,template,state,output_gpx)
+        return dict(gpx=output_gpx.name,seed_template=template,prepared=prepared)
     if forward_only:
         from .k_native import audit_simulation
         from .k_periodicity import audit_structure
@@ -688,7 +712,41 @@ def _run(source_gpx,ctx,protocol,candidate_record,seed,*,forward_only,prepare_on
         np.savez_compressed(target,intensity=np.maximum(difference,0.),**tick_arrays(ticks))
         return dict(status='simulated',profile=target.name,gpx=output_gpx.name,
                     audit=audit,periodicity=periodicity,no_refinement=True,initial_maximum_moment=audit['maximum_moment'],magnetic_atoms=len(new_phase['Atoms']))
-    construction_seconds=time.monotonic()-stage_started
+    return _finish(ctx,protocol,candidate_record,gpx,state,
+        construction_seconds=time.monotonic()-stage_started,screened=screened)
+
+
+def _finish(ctx,protocol,candidate_record,gpx,state,*,construction_seconds,screened=None):
+    """Complete the same optimizer, native objective checks and result export."""
+    import math,time
+    import numpy as np
+    from GSASII import GSASIIobj as G2obj
+    from gsas_magnetic_preflight import magnetic_magnitude
+    from .worker import TrialDisposition
+    candidate=state['candidate']
+    selected_histograms=state['selected_histograms']
+    baseline_residuals=state['baseline_residuals']
+    baseline_target_profiles=state['baseline_target_profiles']
+    magnetic_elements=state['magnetic_elements']
+    maximum_moment_magnitude=state['maximum_moment_magnitude']
+    fixed_moment_direction=state['fixed_moment_direction']
+    initial_moment_direction=state['initial_moment_direction']
+    candidate_fixed_moment_direction=state['candidate_fixed_moment_direction']
+    candidate_seed_moment_direction=state['candidate_seed_moment_direction']
+    magnetic_name=state['magnetic_name']
+    minimum_relative_chi2_change=state['minimum_relative_chi2_change']
+    moment_audit=state['moment_audit']
+    moment_site_coupling=state['moment_site_coupling']
+    omitted_magnetic_sites=state['omitted_magnetic_sites']
+    atom_constraint_warning=state['atom_constraint_warning']
+    transferred_hstrain=state['transferred_hstrain']
+    mode_constraint_count=state["mode_constraint_count"]
+    nuclear=gpx.phase(state["nuclear_name"])
+    new_phase=gpx.phase(magnetic_name).data
+    cx,ct,_,_=new_phase["General"]["AtomPtrs"]
+    available_histograms={h.name:h for h in gpx.histograms()}
+    constraints=gpx.data["Constraints"]["data"]
+    output_gpx=ctx.run_dir/"magnetic-refinement.gpx"
     refinement_started=time.monotonic()
     optimizer=None
     if protocol['policy'].get('magnetic_optimizer','gsas_hessian')=='profiled_quadratic':
@@ -716,7 +774,7 @@ def _run(source_gpx,ctx,protocol,candidate_record,seed,*,forward_only,prepare_on
             sigma = None
         refined_parameter_sigmas[variable_name] = sigma if sigma is not None and math.isfinite(sigma) and (sigma >= 0.0) else None
     refined_moment_variables = [value for value in vary_list if '::AM' in value]
-    refined_magnetic_mode_variables = [value for value in vary_list if mode_constraints and value.startswith('::constr')]
+    refined_magnetic_mode_variables = [value for value in vary_list if mode_constraint_count and value.startswith('::constr')]
     allowed_scale_variables = {f':{available_histograms[name].id}:Scale' for name in selected_histograms} if protocol['policy']['refine_histogram_scale'] else set()
     allowed_background_variables = {f':{available_histograms[name].id}:Back;{i}'
         for name in selected_histograms for i in range(available_histograms[name].data['Background'][0][2])} if protocol['policy']['refine_background'] else set()
@@ -757,7 +815,7 @@ def _run(source_gpx,ctx,protocol,candidate_record,seed,*,forward_only,prepare_on
     rwp_values = [float(values['wR']) for values in final_residuals.values() if values.get('wR') is not None and math.isfinite(float(values['wR']))]
     if not rwp_values:
         raise RuntimeError('Magnetic refinement produced no finite weighted-profile R factor')
-    receipt = {'schema_version': 'structural-transition-magnetic-refinement-receipt-v1', 'candidate': candidate, 'nuclear_phase_name': nuclear.name, 'magnetic_phase_name': magnetic_name, 'histogram_names': selected_histograms, 'magnetic_elements': sorted(magnetic_elements), 'moment_initialization': moment_audit, 'fixed_moment_direction': list(fixed_moment_direction) if fixed_moment_direction is not None else None, 'fixed_moment_direction_basis': 'parent_crystallographic', 'initial_moment_direction': list(initial_moment_direction) if initial_moment_direction is not None else None, 'initial_moment_direction_in_candidate_basis': list(candidate_seed_moment_direction) if candidate_seed_moment_direction is not None else None, 'fixed_moment_direction_in_candidate_basis': list(candidate_fixed_moment_direction) if candidate_fixed_moment_direction is not None else None, 'moment_site_coupling': moment_site_coupling, 'magnetic_mode_constraint_count': len(mode_constraints), 'omitted_magnetic_sites': omitted_magnetic_sites, 'refined_moments': final_moments, 'maximum_moment_magnitude': maximum_moment_magnitude, 'physicality_violations': physicality_violations, 'refined_moment_variables': refined_moment_variables, 'refined_magnetic_mode_variables': refined_magnetic_mode_variables, 'refined_parameter_sigmas': refined_parameter_sigmas, 'unexpected_refined_variables': unexpected_refined_variables, 'transferred_histogram_lattice_state': transferred_hstrain, 'screening_parameter_contract': {'refined_family': 'magnetic_moments_only', 'fixed_families': ['background', 'instrument', 'sample', 'nuclear_cell', 'nuclear_atomic_coordinates', 'nuclear_atomic_displacements', 'phase_scale', 'profile_broadening']}, 'minimum_relative_chi2_change': minimum_relative_chi2_change, 'refinement_rvals': rvals, 'baseline_residuals': baseline_residuals, 'final_residuals': final_residuals, 'target_peak_audit': target_peak_audit, 'phase_constraint_count': len(constraints['Phase']), 'hap_constraint_count': len(constraints['HAP']), 'atom_constraint_warning': atom_constraint_warning, 'magnetic_space_group': str(magnetic.data['General']['SGData'].get('MagSpGrp') or ''), 'candidate_only': True}
+    receipt = {'schema_version': 'structural-transition-magnetic-refinement-receipt-v1', 'candidate': candidate, 'nuclear_phase_name': nuclear.name, 'magnetic_phase_name': magnetic_name, 'histogram_names': selected_histograms, 'magnetic_elements': sorted(magnetic_elements), 'moment_initialization': moment_audit, 'fixed_moment_direction': list(fixed_moment_direction) if fixed_moment_direction is not None else None, 'fixed_moment_direction_basis': 'parent_crystallographic', 'initial_moment_direction': list(initial_moment_direction) if initial_moment_direction is not None else None, 'initial_moment_direction_in_candidate_basis': list(candidate_seed_moment_direction) if candidate_seed_moment_direction is not None else None, 'fixed_moment_direction_in_candidate_basis': list(candidate_fixed_moment_direction) if candidate_fixed_moment_direction is not None else None, 'moment_site_coupling': moment_site_coupling, 'magnetic_mode_constraint_count': mode_constraint_count, 'omitted_magnetic_sites': omitted_magnetic_sites, 'refined_moments': final_moments, 'maximum_moment_magnitude': maximum_moment_magnitude, 'physicality_violations': physicality_violations, 'refined_moment_variables': refined_moment_variables, 'refined_magnetic_mode_variables': refined_magnetic_mode_variables, 'refined_parameter_sigmas': refined_parameter_sigmas, 'unexpected_refined_variables': unexpected_refined_variables, 'transferred_histogram_lattice_state': transferred_hstrain, 'screening_parameter_contract': {'refined_family': 'magnetic_moments_only', 'fixed_families': ['background', 'instrument', 'sample', 'nuclear_cell', 'nuclear_atomic_coordinates', 'nuclear_atomic_displacements', 'phase_scale', 'profile_broadening']}, 'minimum_relative_chi2_change': minimum_relative_chi2_change, 'refinement_rvals': rvals, 'baseline_residuals': baseline_residuals, 'final_residuals': final_residuals, 'target_peak_audit': target_peak_audit, 'phase_constraint_count': len(constraints['Phase']), 'hap_constraint_count': len(constraints['HAP']), 'atom_constraint_warning': atom_constraint_warning, 'magnetic_space_group': str(magnetic.data['General']['SGData'].get('MagSpGrp') or ''), 'candidate_only': True}
     receipt['screening_parameter_contract'] = dict(
         refined_families=['magnetic_moments']+(['common_histogram_scale'] if allowed_scale_variables else [])+(['existing_background_coefficients'] if allowed_background_variables else []),
         moment_model=protocol['policy'].get('moment_model','collinear'),

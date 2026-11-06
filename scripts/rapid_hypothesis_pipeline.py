@@ -3055,7 +3055,8 @@ def _resolve_gsas_workers(limit: int, rapid_cfg: dict) -> int:
     else:
         cpu = os.cpu_count() or 1
         workers = min(2, max(1, cpu // 4))
-    return max(1, min(int(limit), workers))
+    from worker_budget import analysis_workers
+    return analysis_workers(max(1, workers), tasks=max(1, int(limit)))
 
 
 def _emit_gsas_progress(

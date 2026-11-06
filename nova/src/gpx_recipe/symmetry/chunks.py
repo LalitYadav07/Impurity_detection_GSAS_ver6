@@ -77,11 +77,11 @@ def run_trial(directory, *, cancel):
     return row
 
 
-def run_profiled_group(directories,*,cancel,timeout):
+def run_profiled_group(directories,*,cancel,timeout,workers=1):
     """One isolated native process for a model, not one for every seed."""
     from .grouped_worker import SCHEMA
     owner=Path(directories[0]);request=owner/'group-request.json'
-    write_json(request,dict(schema=SCHEMA,directories=[str(p) for p in directories]))
+    write_json(request,dict(schema=SCHEMA,directories=[str(p) for p in directories],workers=workers))
     env=scientific_environment()
     adapters=str(Path(__file__).parent/'adapters')
     env['PYTHONPATH']=os.pathsep.join(filter(None,[adapters,env.get('PYTHONPATH')]))
@@ -141,12 +141,13 @@ def execute_chunk(request, input_root, directory, *, cancel=None, runner=run_tri
         for key in remaining:groups.setdefault(expected[key][0],[]).append(directory/'trials'/key)
         pending_groups=list(groups.values());remaining=[];active={}
         group_workers=min(budget['workers'],len(pending_groups))
+        representative_workers=max(1,budget['workers']//group_workers)
         with ThreadPoolExecutor(max_workers=group_workers) as pool:
             while pending_groups or active:
                 while pending_groups and len(active)<group_workers and clock()<deadline and not cancel.is_set():
                     paths=pending_groups.pop(0)
                     active[pool.submit(run_profiled_group,paths,cancel=cancel,
-                        timeout=max(1.,deadline-clock()))]=paths
+                        timeout=max(1.,deadline-clock()),workers=representative_workers)]=paths
                 if not active:break
                 ready,_=wait(active,timeout=.1,return_when=FIRST_COMPLETED)
                 for future in ready:
@@ -166,7 +167,9 @@ def execute_chunk(request, input_root, directory, *, cancel=None, runner=run_tri
                     active_models=len(active),pending_models=len(pending_groups)))
         remaining.extend(path.name for paths in pending_groups for path in paths)
         reported_allocation=dict(budget,concurrent_model_workers=group_workers,
-            starts_per_native_process='complete model portfolio')
+            representative_workers_per_model=representative_workers,
+            maximum_concurrent_native_verifications=group_workers*representative_workers,
+            starts_per_native_process='one distinct profile when allocated parallel workers')
         response=dict(schema='radar-model-chunk-result/v1',dispatch_key=request['dispatch_key'],
             protocol_sha256=digest(protocol),trials=done,pending=remaining,cancelled=[],
             allocation=reported_allocation,wall_seconds=clock()-started,llm_calls=0,grouped_surrogate=True)
