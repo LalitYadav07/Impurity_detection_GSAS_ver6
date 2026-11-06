@@ -13,6 +13,31 @@ from gpx_recipe.symmetry.compiler import file_sha
 from gsas_magnetic_preflight import setting_fingerprint
 
 
+@pytest.mark.parametrize('lower,upper', [(11301.913503367501, 239409.), (220000., 300000.)])
+def test_long_tof_preparation_preserves_native_grid_and_empty_observations(tmp_path, lower, upper):
+    inputs(tmp_path, 'PNT')
+    if lower >= 200000.:
+        # Keep actual Bragg reflections in this deliberately high-d window;
+        # a small unit cell correctly makes native GSAS-II reject no-reflection
+        # ranges, which would test a different scientific admission condition.
+        (tmp_path/'parent.cif').write_text(CIF.replace('_cell_length_a 4.7', '_cell_length_a 47')
+            .replace('_cell_length_b 5.6', '_cell_length_b 56')
+            .replace('_cell_length_c 6.8', '_cell_length_c 68'))
+    reference = create_reference(tmp_path/'parent.cif', tmp_path/'bank.instprm', tmp_path/'long-reference',
+        kind='PNT', lower=lower, upper=upper, bins=701)
+    project = G.G2Project(gpxfile=reference['path']);histogram = project.histogram(0)
+    arrays = histogram.data['data'][1]
+    expected = np.exp(np.arange(701)*((np.log(upper/1000.)-np.log(lower/1000.))/701)+np.log(lower))
+    np.testing.assert_array_equal(arrays[0], expected)
+    assert len(arrays[0]) == 701 and arrays[0][-1] < upper
+    assert histogram.data['Limits'] == [[float(expected[0]), float(expected[-1])]]*2
+    assert not np.any(arrays[1]) and np.all(arrays[2] == 1.)
+    assert not project.data['Covariance']['data']
+    from gpx_recipe.native_forward import forward_profile
+    calculated, _ = forward_profile(reference['path'], histogram.name)
+    assert calculated.shape == expected.shape and np.isfinite(calculated).all()
+
+
 CIF = '''data_public_artificial
 _cell_length_a 4.7
 _cell_length_b 5.6

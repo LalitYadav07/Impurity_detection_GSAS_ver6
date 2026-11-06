@@ -140,6 +140,7 @@ jobs:
           export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 &&
           python -m pytest -q -o cache_dir=/tmp/pytest-cache --junitxml=/tmp/preparation.xml \
             /validation/tests/gpx_recipe/test_preparation_theory_native.py \
+            /validation/tests/gpx_recipe/test_preparation_reference.py \
             /validation/tests/gpx_recipe/test_native_background_native.py \
             /validation/tests/gpx_recipe/test_native_background_benchmark_native.py \
             /validation/tests/gpx_recipe/test_structural_background_context_native.py \
@@ -158,6 +159,6 @@ jobs:
             /validation/tests/gpx_recipe/test_prepared_k_series_native.py \
             /validation/tests/gpx_recipe/test_prepared_model_handoff_native.py \
             /validation/tests/gpx_recipe/test_structural_snapshot_job_native.py &&
-          python -c "import xml.etree.ElementTree as E; cases=E.parse(\"/tmp/preparation.xml\").findall(\".//testcase\"); assert len(cases)>=171 and all(c.find(\"skipped\") is None and c.find(\"failure\") is None and c.find(\"error\") is None for c in cases), \"Preparation native acceptance must run without skips\""'
+          python -c "import xml.etree.ElementTree as E; cases=E.parse(\"/tmp/preparation.xml\").findall(\".//testcase\"); assert len(cases)>=180 and all(c.find(\"skipped\") is None and c.find(\"failure\") is None and c.find(\"error\") is None for c in cases), \"Preparation native acceptance must run without skips\""'
       - name: Publish verified immutable image
         run: docker push "$IMAGE"

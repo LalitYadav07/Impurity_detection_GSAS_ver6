@@ -5,6 +5,8 @@ import math
 
 import numpy as np
 
+MAXIMUM_TOF_MICROSECONDS = 2_000_000.
+
 
 def validate_grid(*, kind, lower, upper, bins=2500, bank=1):
     """Validate the same finite reference context before dispatch or native use."""
@@ -12,7 +14,8 @@ def validate_grid(*, kind, lower, upper, bins=2500, bank=1):
             or type(bank) is not int or not 1 <= bank <= 10000
             or any(isinstance(v, bool) or not isinstance(v, (float, int)) or not math.isfinite(v)
                 for v in (lower, upper)) or not 0 < lower < upper
-            or (kind == 'PNC' and upper >= 180) or (kind == 'PNT' and upper > 200000)):
+            or (kind == 'PNC' and upper >= 180)
+            or (kind == 'PNT' and upper > MAXIMUM_TOF_MICROSECONDS)):
         raise ValueError('An explicit supported bank, histogram type and bounded physical grid are required')
     return dict(kind=kind,lower=float(lower),upper=float(upper),bins=bins,bank=bank)
 
@@ -40,11 +43,29 @@ def create_reference(cif, instrument, output, *, kind, lower, upper, bins=2500, 
     if len(project.phases()) != 1 or phase.data['General']['Type'] != 'nuclear' or phase.data['General'].get('Modulated'):
         raise ValueError('Select one unmodulated nuclear parent CIF')
     unit = 1000. if kind == 'PNT' else 1.
+    # The native simulation convenience API rejects Tmax > 200 ms as a
+    # historical units-error guard. Real POWGEN reduced ranges can exceed it.
+    # Use that API for its reviewed instrument/HAP initialization, then set
+    # the requested empty native logarithmic grid before any calculation.
+    # No measured arrays are resampled, and native scientific functions stay
+    # unchanged. Existing ranges retain their original API-generated arrays.
+    extended_tof = kind == 'PNT' and upper > 200000.
+    seed_upper = min(upper, 200000.) if extended_tof else upper
+    seed_lower = min(lower, seed_upper/2.) if extended_tof else lower
     histogram = project.add_simulated_powder_histogram('Preparation reference', str(instrument),
-        lower/unit, upper/unit, Npoints=bins, ibank=bank, scale=1., phases=[phase])
+        seed_lower/unit, seed_upper/unit, Npoints=bins, ibank=bank, scale=1., phases=[phase])
     if histogram.InstrumentParameters['Type'][0] != kind:
         raise ValueError('Instrument profile type differs from the planned grid')
     data = histogram.data['data'][1]
+    if extended_tof:
+        # Match the native TOF convention: logarithmic bin centers beginning
+        # at lower, with upper the exclusive edge, not the last center.
+        data[0] = np.exp(np.arange(bins)*((np.log(upper/unit)-np.log(lower/unit))/bins)
+                         + np.log(lower))
+        for i in range(1, 6):
+            data[i] = np.zeros_like(data[0])
+        actual_range = [float(data[0][0]), float(data[0][-1])]
+        histogram.data['Limits'] = [actual_range.copy(), actual_range.copy()]
     if len(data[0]) > bins+1:
         raise ValueError('Native simulation grid exceeded its declared size')
     for i in (1, 3, 4, 5):

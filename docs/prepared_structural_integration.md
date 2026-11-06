@@ -402,3 +402,11 @@ seven native structural controls without skips, including direct/reused
 starting-curve equivalence and a sequential distortion, cell-shift and
 return-to-parent series. Experimental structural model recovery and the
 coordinated NDIP image release remain outstanding.
+
+Experiment preparation accepts bounded TOF ranges through 2,000,000 µs.
+POWGEN reduced patterns can extend beyond the simulation convenience API's
+historical 200 ms units guard. For such ranges, preparation retains the native
+instrument/HAP initialization and creates the requested empty logarithmic
+grid before any scientific calculation. The upper bound is the exclusive
+TOF grid edge. Observations are never resampled or synthesized by this path;
+actual-grid compatibility and native forward/export checks still apply.
