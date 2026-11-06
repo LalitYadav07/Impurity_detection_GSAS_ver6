@@ -19,7 +19,7 @@ import zlib
 
 import numpy as np
 
-from ..preparation.identity import _plain
+from ..preparation.identity import _plain, numerical_identity
 
 SCHEMA = 'radar-native-magnetic-amplitudes/v1'
 MAX_BYTES = 64 * 1024 * 1024
@@ -55,7 +55,7 @@ def scattering_identity(*, math, parameters, controls, pfx, hfx, symmetry,
             getattr(math.G2lat, name)).encode()).hexdigest() for name in ('Gmat2AB','U6toUij')},
         active_atomic_function_sha256=hashlib.sha256(inspect.getsource(math.GetAtomFXU).encode()).hexdigest(),
         form_factor_function_sha256=hashlib.sha256(inspect.getsource(math.G2el.MagScatFac).encode()).hexdigest(),
-        numpy_version=np.__version__,
+        numerical_runtime=numerical_identity(),
         phase_parameters={k[len(pfx):]: v for k, v in parameters.items()
                           if k.startswith(pfx) and k not in moments},
         phase_controls={k[len(pfx):]: v for k, v in controls.items() if k.startswith(pfx)},

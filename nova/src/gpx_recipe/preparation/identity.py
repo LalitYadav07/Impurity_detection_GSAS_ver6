@@ -2,8 +2,10 @@
 import hashlib
 import inspect
 from pathlib import Path
+import platform
 import sys
 import numpy as np
+import scipy
 
 # Saved-file locations/users and refinement limits are not forward physics.
 # The physical bounds, implementation and parameter basis are pinned by the
@@ -30,6 +32,27 @@ def _plain(value):
     raise ValueError('Unsupported native physics identity value: '+type(value).__name__)
 
 
+def numerical_identity():
+    """Portable qualification also depends on the numerical runtime build.
+
+    Record reported BLAS/LAPACK build metadata without installation paths or
+    process-local thread counts. This is a compatibility boundary, not a claim
+    of bitwise reproducibility: consumers still run independent native checks.
+    """
+    builds = {}
+    for name, module in (('numpy', np), ('scipy', scipy)):
+        config = getattr(module.__config__, 'CONFIG', {})
+        dependencies = config.get('Build Dependencies', {}) if isinstance(config, dict) else {}
+        builds[name] = {kind: {key: value for key, value in dependencies.get(kind, {}).items()
+            if key in {'name', 'version', 'openblas configuration', 'configuration'}}
+            for kind in ('blas', 'lapack')}
+    return dict(schema='radar-numerical-runtime/v1', numpy=np.__version__, scipy=scipy.__version__,
+        python=dict(implementation=sys.implementation.name, version=list(sys.version_info[:3]),
+                    cache_tag=sys.implementation.cache_tag),
+        system=platform.system(), machine=platform.machine(), byteorder=sys.byteorder,
+        reported_builds=builds)
+
+
 def native_identity(native):
     """Pin reviewed native sources, active functions and loaded GSAS binaries."""
     from ..live.validated_backend import (active_identity, backend_identity,
@@ -38,6 +61,7 @@ def native_identity(native):
     if source_hash != PINNED_PRODUCTION_STRMATH and active_identity() is None:
         raise ValueError('Preparation requires the reviewed native scientific backend')
     identity = backend_identity()
+    identity['numerical_runtime'] = numerical_identity()
     identity['active_backend'] = active_identity()
     identity['powder_source_sha256'] = hashlib.sha256(Path(native.math.G2pwd.__file__).read_bytes()).hexdigest()
     identity['active_functions'] = {name: hashlib.sha256(inspect.getsource(getattr(native.math, name)).encode()).hexdigest()

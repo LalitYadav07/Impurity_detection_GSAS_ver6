@@ -14,7 +14,8 @@ candidate coverage are unchanged.
 
 ## Compatibility
 
-The response key pins the native sources, functions and binaries, exact grid
+The response key pins the native sources, functions and binaries, numerical
+runtime versions/architecture and reported BLAS/LAPACK build metadata, exact grid
 and fit range, physical parameters, phase/site roles, complete moment map and
 reflection inventory. Changing a cell, coordinate, ADP, instrument coefficient
 or reduction grid invalidates the rendered response. Compatible scattering
@@ -65,6 +66,10 @@ widths, unverified origins and damaged files. Saved GPXs and actual fitted
 native residuals remain checked. Synthetic controls establish numerical and
 integration behavior; real-material identification, uncertainty calibration,
 whole-catalog throughput and NDIP latency require their own acceptance.
+
+Numerical build metadata is a conservative reuse boundary; it does not replace
+native checks or promise bitwise equality across different hardware. An older
+response without this runtime identity is rebuilt by the existing checked path.
 
 The pinned native profile driver also receives a plain, zero-copy axis view
 when its standard masked array contains no excluded bins. This avoids masked

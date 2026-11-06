@@ -153,10 +153,11 @@ jobs:
             /validation/tests/gpx_recipe/test_preparation_authority_native.py \
             /validation/tests/gpx_recipe/test_preparation_magnetic_authority_native.py \
             /validation/tests/gpx_recipe/test_preparation_rendered_magnetic.py \
+            /validation/tests/gpx_recipe/test_preparation_identity.py \
             /validation/tests/gpx_recipe/test_prepared_rendered_oracle_native.py \
             /validation/tests/gpx_recipe/test_prepared_k_series_native.py \
             /validation/tests/gpx_recipe/test_prepared_model_handoff_native.py \
             /validation/tests/gpx_recipe/test_structural_snapshot_job_native.py &&
-          python -c "import xml.etree.ElementTree as E; cases=E.parse(\"/tmp/preparation.xml\").findall(\".//testcase\"); assert len(cases)>=162 and all(c.find(\"skipped\") is None and c.find(\"failure\") is None and c.find(\"error\") is None for c in cases), \"Preparation native acceptance must run without skips\""'
+          python -c "import xml.etree.ElementTree as E; cases=E.parse(\"/tmp/preparation.xml\").findall(\".//testcase\"); assert len(cases)>=171 and all(c.find(\"skipped\") is None and c.find(\"failure\") is None and c.find(\"error\") is None for c in cases), \"Preparation native acceptance must run without skips\""'
       - name: Publish verified immutable image
         run: docker push "$IMAGE"
