@@ -150,6 +150,30 @@ The bypassed native tail is not included in the observed peak-call counter.
 This can reduce repeated rendering, but does not itself solve
 portable preparation or nonlinear cell/profile adaptation.
 
+For reviewed single-phase PNC/PNT structural contexts, lattice proposals can
+stream the original native peak derivatives together with native reflection
+geometry and intensity probes. One complete native anchor restores the
+scientific state. The probes' unrendered arrays never enter an objective,
+screening score, observation, exported GPX or uncertainty calculation.
+Derivative arrays are accumulated immediately under a bounded workspace;
+they are not retained for every reflection. A reflection entering or leaving
+the native inventory makes that entire lattice direction use original native
+differences. Unknown native code, extracted intensities, secondary phases,
+masked contexts, nonlinear extinction and unsupported peak conventions also
+retain original differences.
+
+These directions are optimization proposals, not qualified exact Jacobians.
+Every accepted step uses the complete native objective with freshly profiled
+scale/background coefficients. Stalled or apparently stationary proposals,
+including the outer small-progress stopping rule, require a fresh native
+cell-direction retry. Deadlines between probes restore the genuine native
+state before returning. Receipts distinguish scalar probes, full native
+anchors, membership fallbacks and reused directions. This is one automatic
+execution policy; the force-native argument is an internal regression oracle,
+not a user accuracy/speed choice. It does not establish portable structural
+acceleration, global optimization, covariance validity or faster whole-catalog
+execution by itself.
+
 `ReducedObservation` accepts unknown exposure. Its `mask=True` means usable;
 the snapshot adapter explicitly accepts `invalid_mask=True`. Reduced intensity
 and supplied variance are never converted into invented counts. Verified raw

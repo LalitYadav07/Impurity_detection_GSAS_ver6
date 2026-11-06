@@ -17,6 +17,7 @@ from .multiaxis_fit import background_components,background_reference
 from .reference_secants import feasible_secant,FeasibleDirectionUnavailable
 from .profiled_nuisance import ConditionalNuisance
 from .cell_derivative_model import CellDerivativeModel
+from .native_cell_proposals import for_source as cell_proposals_for_source,ProposalUnavailable
 
 
 class CellDirectionUnavailable(RuntimeError):
@@ -24,7 +25,8 @@ class CellDirectionUnavailable(RuntimeError):
 
 
 def fit(source,table,observation,bank,*,seconds=120.,starts=4,seed=90231,warm=None,warm_pool=None,
-        mode_iterations=1,cell_iterations=1,kicks=False,evaluator=None,force_native_mode_derivatives=False,screening_exclusions=None):
+        mode_iterations=1,cell_iterations=1,kicks=False,evaluator=None,force_native_mode_derivatives=False,
+        screening_exclusions=None,force_native_cell_directions=False):
     if not np.isfinite(seconds) or seconds<=0 or type(starts)is not int or starts<1:
         raise ValueError('Positive finite time and integer start count required')
     if type(mode_iterations)is not int or mode_iterations<1 or type(cell_iterations)is not int or cell_iterations<1:
@@ -37,6 +39,8 @@ def fit(source,table,observation,bank,*,seconds=120.,starts=4,seed=90231,warm=No
     best=None;trace=[];blocks=[];restarts=[];blocked_starts=[];attempts=[];native_calls=0;rejected=0;cache_checks=0;max_error=0.;max_sigma=0.
     rng=np.random.default_rng(seed)
     cell_model=CellDerivativeModel(m,d)
+    cell_proposals=None if force_native_cell_directions else cell_proposals_for_source(s)
+    pending_native_cell_refresh=False
     native_profiles=OrderedDict();profile_hits=0
     native_probe_calls=0
     def check_time():
@@ -85,7 +89,8 @@ def fit(source,table,observation,bank,*,seconds=120.,starts=4,seed=90231,warm=No
         max_error=max(max_error,error);max_sigma=max(max_sigma,sigma)
         if error>1e-8 or sigma>.01:raise ValueError('Native fixed-cell response disagrees with the full native profile')
         return exact
-    def jacobian(z,mode):
+    def jacobian(z,mode,*,native_cells=False):
+        nonlocal native_calls
         check_time()
         if mode:
             curve,j=cache.mode_jacobian(z[:d]*s.radii)
@@ -100,9 +105,9 @@ def fit(source,table,observation,bank,*,seconds=120.,starts=4,seed=90231,warm=No
         cost,rate,residual,factor,adjusted=score(z)
         def profile(point):
             trial=z.copy();trial[:d]=point;return score(trial,remember=False,prepare_response=False)[1]
-        def build():
+        def build(columns=None):
             raw=[]
-            for i in range(m,d):
+            for i in range(m,d) if columns is None else columns:
                 check_time()
                 try:
                     column,_=feasible_secant(profile,z[:d],i,bank.proposal_cell_steps[i],
@@ -110,12 +115,34 @@ def fit(source,table,observation,bank,*,seconds=120.,starts=4,seed=90231,warm=No
                 except FeasibleDirectionUnavailable as exc:
                     raise CellDirectionUnavailable(f'No feasible lattice stencil for coordinate {i}') from exc
                 raw.append(column)
-            return np.asarray(raw).reshape(d-m,len(rate))
+            return np.asarray(raw).reshape(-1,len(rate))
+        def propose():
+            nonlocal native_calls
+            before=cell_proposals.anchor_calls
+            try:
+                curve,raw,usable=cell_proposals.columns(z[:d],bank.proposal_cell_steps,
+                    allowed=lambda p:allowed(np.r_[p,z[-2:]]),check_time=check_time)
+            finally:
+                native_calls+=cell_proposals.anchor_calls-before
+            remember_curve(z[:d]*s.radii,curve)
+            if not np.any(usable):
+                raise ProposalUnavailable('All cell columns changed native reflection membership')
+            conditional=ConditionalNuisance(observation,curve-table.renderer.background,fixed,background*response)
+            _,anchor_rate,_,_=conditional.solve(np.exp(z[-2:]))
+            if np.linalg.norm(anchor_rate-rate)>1e-10*max(np.linalg.norm(rate),1e-30):
+                raise ValueError('Native cell proposal anchor changed the original objective')
+            result=conditional.rate_jacobian(raw)
+            if not np.all(usable):
+                result[~usable]=build(np.arange(m,d)[~usable])
+            return result
         weights=np.zeros(len(rate));weights[mask]=abs(factor)
-        raw=cell_model.columns(z[:d],rate,weights,build)
+        if cell_proposals is not None:
+            raw=cell_model.columns(z[:d],rate,weights,build,propose=propose,force_native=native_cells)
+        else:
+            raw=cell_model.columns(z[:d],rate,weights,build)
         return (raw[:,mask]*factor).T,residual
     def block(z,mode,iterations):
-        nonlocal rejected
+        nonlocal rejected,pending_native_cell_refresh
         columns=np.arange(m) if mode else np.arange(m,d)
         z=z.copy();current=score(z);z=current[4];damping=1e-3;accepted=[];start=time.monotonic();reason='iteration_limit'
         # Captured responses add no second profile construction. A context
@@ -127,12 +154,14 @@ def fit(source,table,observation,bank,*,seconds=120.,starts=4,seed=90231,warm=No
         if cached_mode:current=verify(z,score(z,cached=True,remember=False))
         for iteration in range(iterations):
             found=False;stationary=False
-            # A recycled derivative cannot declare stationarity or end a
-            # stalled trajectory. Retry this SAME iterate once with freshly
-            # evaluated native cell columns before those decisions.
+            # Neither a recycled direction nor a fresh peak proposal can
+            # declare stationarity or end a stalled trajectory. Retry this
+            # SAME iterate once with original native cell differences.
             for retry in range(2):
-                check_time();j,r=jacobian(z,mode)
-                recycled=not mode and cell_model.last_reused
+                force_cells=not mode and (retry>0 or pending_native_cell_refresh)
+                check_time();j,r=jacobian(z,mode,native_cells=force_cells)
+                if force_cells:pending_native_cell_refresh=False
+                recycled=not mode and (cell_model.last_reused or cell_model.last_requires_native_retry)
                 step,info=bounded_damped_step(j,r,damping,lo[columns]-z[columns],hi[columns]-z[columns],radius=.4)
                 if info['information_score']<1e-4:
                     if recycled:cell_model.invalidate();continue
@@ -190,6 +219,7 @@ def fit(source,table,observation,bank,*,seconds=120.,starts=4,seed=90231,warm=No
         attempt=dict(start=index,initial_parameters=initial.tolist(),iterations=0,reason='running')
         attempts.append(attempt)
         cell_model.invalidate()
+        pending_native_cell_refresh=False
         try:
             z=initial.copy();cost=score(z)[0];cycles=0;restart_points=[]
             while True:
@@ -202,8 +232,9 @@ def fit(source,table,observation,bank,*,seconds=120.,starts=4,seed=90231,warm=No
                 if m:z,cost=block(z,True,mode_iterations)
                 cycles+=1
                 if before-cost<1e-9*max(cost,1.) and (not kicks or not restart_points):
-                    if cell_model.model is not None and cell_model.model['age']:
+                    if cell_model.last_requires_native_retry or (cell_model.model is not None and cell_model.model['age']):
                         cell_model.invalidate()
+                        pending_native_cell_refresh=True
                         continue
                     attempt['reason']='local_block_progress_small';break
         except CellDirectionUnavailable as exc:
@@ -224,4 +255,5 @@ def fit(source,table,observation,bank,*,seconds=120.,starts=4,seed=90231,warm=No
         native_response_cache=cache.diagnostics(),all_allowed_modes_retained=True,truth_used=False,
         cell_derivative_proposals=cell_model.diagnostics(),exact_profile_memo=dict(hits=profile_hits,entries=len(native_profiles),maximum_entries=2),
         native_cell_probe_calls=native_probe_calls,
+        native_cell_proposals=cell_proposals.diagnostics() if cell_proposals is not None else None,
         global_optimum_certified=False,model_exclusion_authorized=False),best['rate']

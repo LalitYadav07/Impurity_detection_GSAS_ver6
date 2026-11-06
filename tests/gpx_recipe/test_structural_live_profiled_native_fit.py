@@ -110,3 +110,59 @@ def test_owned_capture_receives_required_native_calls_without_replacing_acceptan
     assert result['native_cell_probe_calls']==result['full_native_calls']-len(direct)
     assert result['independent_cache_checks']>0
     assert result['best']['deviance']==pytest.approx(residual@residual)
+
+
+def test_zero_peak_proposal_is_retried_natively_before_stationarity(monkeypatch):
+    s,t,o,z,c,b,_=setup()
+    class ZeroProposal:
+        anchor_calls=0
+        def columns(self,point,steps,*,allowed,check_time=None):
+            self.anchor_calls+=1
+            curve=s.native(point*s.radii)
+            return curve,np.zeros((s.cell_dimensions,len(curve))),np.ones(s.cell_dimensions,dtype=bool)
+        def diagnostics(self):return dict(anchors=self.anchor_calls)
+    proposal=ZeroProposal()
+    monkeypatch.setattr(module,'cell_proposals_for_source',lambda source:proposal)
+    result,rate=module.fit(s,t,o,b,seconds=2.,starts=1,evaluator=c)
+    assert proposal.anchor_calls>0
+    assert result['cell_derivative_proposals']['proposal_builds']>0
+    assert result['cell_derivative_proposals']['forced_native_builds']>0
+    assert result['best']['deviance']<150
+    residual,_=residual_and_factor(o,rate)
+    assert result['best']['deviance']==pytest.approx(residual@residual)
+
+
+def test_peak_proposal_anchor_cannot_change_the_native_objective(monkeypatch):
+    s,t,o,z,c,b,_=setup()
+    class BadProposal:
+        anchor_calls=0
+        def columns(self,point,steps,*,allowed,check_time=None):
+            self.anchor_calls+=1
+            curve=s.native(point*s.radii)+.001*(1.+.1*np.sin(o.x*23))
+            return curve,np.zeros((s.cell_dimensions,len(curve))),np.ones(s.cell_dimensions,dtype=bool)
+        def diagnostics(self):return {}
+    monkeypatch.setattr(module,'cell_proposals_for_source',lambda source:BadProposal())
+    with pytest.raises(ValueError,match='anchor changed'):
+        module.fit(s,t,o,b,seconds=2.,starts=1,evaluator=c)
+
+
+def test_outer_small_progress_exit_also_requires_original_native_cell_directions(monkeypatch):
+    s,t,o,z,c,b,_=setup()
+    class FreshProposal:
+        anchor_calls=0
+        def columns(self,point,steps,*,allowed,check_time=None):
+            self.anchor_calls+=1;curve=s.native(point*s.radii);rows=[]
+            for column in range(s.mode_dimensions,len(point)):
+                upper=point.copy();lower=point.copy();upper[column]+=1e-5;lower[column]-=1e-5
+                rows.append((s.native(upper*s.radii)-s.native(lower*s.radii))/2e-5)
+            return curve,np.asarray(rows),np.ones(s.cell_dimensions,dtype=bool)
+        def diagnostics(self):return {}
+    def tiny(j,residual,*args,**kwargs):
+        gradient=j.T@residual
+        return -1e-11*gradient/max(np.linalg.norm(gradient),1e-30),dict(information_score=1.)
+    monkeypatch.setattr(module,'cell_proposals_for_source',lambda source:FreshProposal())
+    monkeypatch.setattr(module,'bounded_damped_step',tiny)
+    result,rate=module.fit(s,t,o,b,seconds=2.,starts=1,evaluator=c)
+    assert result['cell_derivative_proposals']['proposal_builds']>0
+    assert result['cell_derivative_proposals']['forced_native_builds']>0
+    assert result['attempts'][0]['reason']=='local_block_progress_small'

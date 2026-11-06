@@ -21,11 +21,12 @@ class CellDerivativeModel:
         self.modes=modes;self.dimensions=dimensions
         self.max_reuses=max_reuses;self.maximum_step=maximum_step;self.mismatch_limit=mismatch_limit
         self.maximum_bytes=maximum_bytes;self.memory_bypasses=0
-        self.model=None;self.latest_modes=None;self.last_reused=False
+        self.model=None;self.latest_modes=None;self.last_reused=False;self.last_requires_native_retry=False
         self.builds=0;self.reuses=0;self.same_point_hits=0;self.invalidations=0;self.rejected_predictions=0
+        self.proposal_builds=0;self.proposal_fallbacks=0;self.forced_native_builds=0
 
     def invalidate(self):
-        self.model=None;self.latest_modes=None;self.last_reused=False;self.invalidations+=1
+        self.model=None;self.latest_modes=None;self.last_reused=False;self.last_requires_native_retry=False;self.invalidations+=1
 
     def _point(self, point, rate):
         point=np.asarray(point,float);rate=np.asarray(rate,float)
@@ -56,23 +57,24 @@ class CellDerivativeModel:
             else:
                 self.model['modes']=derivatives.copy()
 
-    def columns(self, point, rate, weights, build):
+    def columns(self, point, rate, weights, build, *, propose=None, force_native=False):
         point,rate=self._point(point,rate);weights=np.asarray(weights,float)
         if weights.shape != rate.shape or not np.isfinite(weights).all() or np.any(weights<0) or not np.any(weights>0):
             raise ValueError('Finite observation weights with fitted support required')
         if not self._storage_allowed(rate):
-            self.model=None;self.latest_modes=None;self.last_reused=False
+            self.model=None;self.latest_modes=None;self.last_reused=False;self.last_requires_native_retry=False
             cells=np.asarray(build(),float)
             if cells.shape != (self.dimensions-self.modes,len(rate)) or not np.isfinite(cells).all():
                 raise ValueError('All finite native lattice derivative columns required')
             self.builds+=1;self.memory_bypasses+=1
             return cells
-        model=self.model;self.last_reused=False
-        if model is not None and len(model['rate']) == len(rate):
+        model=self.model;self.last_reused=False;self.last_requires_native_retry=False
+        if not force_native and model is not None and len(model['rate']) == len(rate):
             delta=point-model['point']
             if np.array_equal(point,model['point']) and np.array_equal(rate,model['rate']):
                 self.same_point_hits+=1
                 self.last_reused=bool(model['age'])
+                self.last_requires_native_retry=self.last_reused or model['approximate']
                 return model['cells'].copy()
             reusable=(model['age']<self.max_reuses
                 and np.max(abs(point-model['native_point']),initial=0.)<=self.maximum_step
@@ -90,10 +92,19 @@ class CellDerivativeModel:
                     if denominator>1e-16 and denominator>=.01*float(delta@delta):
                         cells+=np.outer(cell_delta/denominator,error)
                     model.update(point=point.copy(),rate=rate.copy(),cells=cells,age=model['age']+1)
-                    self.reuses+=1;self.last_reused=True
+                    self.reuses+=1;self.last_reused=True;self.last_requires_native_retry=True
                     return cells.copy()
                 self.rejected_predictions+=1
-        cells=np.asarray(build(),float)
+        approximate=False
+        if propose is not None and not force_native:
+            from .native_cell_proposals import ProposalUnavailable
+            try:
+                cells=np.asarray(propose(),float);approximate=True;self.proposal_builds+=1
+            except ProposalUnavailable:
+                self.proposal_fallbacks+=1;cells=np.asarray(build(),float)
+        else:
+            cells=np.asarray(build(),float)
+            self.forced_native_builds+=int(force_native)
         if cells.shape != (self.dimensions-self.modes,len(rate)) or not np.isfinite(cells).all():
             raise ValueError('All finite native lattice derivative columns required')
         modes=np.empty((0,len(rate))) if self.modes==0 else None
@@ -101,7 +112,8 @@ class CellDerivativeModel:
                 and np.max(abs(point-self.latest_modes['point']),initial=0.)<=self.maximum_step):
             modes=self.latest_modes['modes'].copy()
         self.model=dict(point=point.copy(),native_point=point.copy(),rate=rate.copy(),
-            modes=modes,cells=cells.copy(),age=0)
+            modes=modes,cells=cells.copy(),age=0,approximate=approximate)
+        self.last_requires_native_retry=approximate
         self.builds+=1
         return cells.copy()
 
@@ -110,5 +122,7 @@ class CellDerivativeModel:
             invalidations=self.invalidations,rejected_predictions=self.rejected_predictions,
             max_reuses=self.max_reuses,maximum_step=self.maximum_step,mismatch_limit=self.mismatch_limit,
             maximum_cache_bytes=self.maximum_bytes,memory_bypasses=self.memory_bypasses,
+            proposal_builds=self.proposal_builds,proposal_fallbacks=self.proposal_fallbacks,
+            forced_native_builds=self.forced_native_builds,
             scope='Current-observation lattice proposals only; full native objective acceptance',
             uncertainty_derivatives_qualified=False)

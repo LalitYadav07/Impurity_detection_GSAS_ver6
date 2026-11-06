@@ -93,3 +93,34 @@ def test_joint_native_recovery_uses_the_same_proposal_model_and_original_cost():
     assert proposal['builds']>0 and proposal['reuses']>0
     assert result['best']['deviance']==pytest.approx(residual_and_factor(o,rate)[0]@residual_and_factor(o,rate)[0])
     assert not result['global_optimum_certified']
+
+
+def test_fresh_peak_proposal_cannot_claim_native_stationarity_even_at_same_point():
+    model=CellDerivativeModel(0,1);calls=[]
+    def native():calls.append(True);return np.ones((1,3))
+    model.columns([0.],[0.,0.,0.],np.ones(3),native,propose=lambda:np.zeros((1,3)))
+    assert model.last_requires_native_retry and not model.last_reused and not calls
+    model.columns([0.],[0.,0.,0.],np.ones(3),native)
+    assert model.last_requires_native_retry
+    result=model.columns([0.],[0.,0.,0.],np.ones(3),native,force_native=True,
+                         propose=lambda:pytest.fail('Fresh native retry must bypass the proposal'))
+    np.testing.assert_array_equal(result,np.ones((1,3)))
+    assert calls and not model.last_requires_native_retry
+    assert model.diagnostics()['forced_native_builds']==1
+
+
+def test_unavailable_peak_proposal_preserves_all_native_columns():
+    from gpx_recipe.structural_live.optimization.native_cell_proposals import ProposalUnavailable
+    model=CellDerivativeModel(0,2)
+    def unavailable():raise ProposalUnavailable('Changed native inventory')
+    expected=np.arange(6.).reshape(2,3)
+    np.testing.assert_array_equal(model.columns([0.,0.],[0.,0.,0.],np.ones(3),
+        lambda:expected,propose=unavailable),expected)
+    assert not model.last_requires_native_retry and model.diagnostics()['proposal_fallbacks']==1
+
+
+def test_a_programming_failure_in_a_proposal_is_not_disguised_as_native_fallback():
+    model=CellDerivativeModel(0,1)
+    def broken():raise RuntimeError('Induced scientific callback failure')
+    with pytest.raises(RuntimeError,match='scientific callback'):
+        model.columns([0.],[0.],[1.],lambda:pytest.fail('Do not conceal the failure'),propose=broken)
