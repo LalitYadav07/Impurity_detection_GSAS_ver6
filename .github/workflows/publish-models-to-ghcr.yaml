@@ -7,6 +7,9 @@ on:
       - Dockerfile.symmetry
       - nova/src/gpx_recipe/**
       - tests/gpx_recipe/test_prepared_structural_acceptance_native.py
+      - tests/gpx_recipe/test_preparation*.py
+      - tests/gpx_recipe/test_prepared_k_series_native.py
+      - tests/gpx_recipe/test_structural_snapshot_job_native.py
       - tests/gpx_recipe/data/synthetic-ersi-cmcm-isodistort.cif
       - scripts/ndip_model_campaign.py
       - scripts/ndip_runtime.py
@@ -110,5 +113,18 @@ jobs:
           python -m pytest -q -o cache_dir=/tmp/pytest-cache --junitxml=/tmp/structural.xml \
             /validation/tests/gpx_recipe/test_prepared_structural_acceptance_native.py &&
           python -c "import xml.etree.ElementTree as E; cases=E.parse(\"/tmp/structural.xml\").findall(\".//testcase\"); assert len(cases)>=13 and all(c.find(\"skipped\") is None and c.find(\"failure\") is None and c.find(\"error\") is None for c in cases), \"Structural native acceptance must run without skips\""'
+      - name: Require portable preparation and structural acquisition handoffs
+        run: |
+          docker run --rm --entrypoint sh -v "$PWD:/validation:ro" "$IMAGE" -c '
+          python -m pip install --quiet pytest &&
+          export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}/validation/tests/gpx_recipe" &&
+          export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 &&
+          python -m pytest -q -o cache_dir=/tmp/pytest-cache --junitxml=/tmp/preparation.xml \
+            /validation/tests/gpx_recipe/test_preparation_theory_native.py \
+            /validation/tests/gpx_recipe/test_preparation_worker_native.py \
+            /validation/tests/gpx_recipe/test_preparation_adaptation_native.py \
+            /validation/tests/gpx_recipe/test_prepared_k_series_native.py \
+            /validation/tests/gpx_recipe/test_structural_snapshot_job_native.py &&
+          python -c "import xml.etree.ElementTree as E; cases=E.parse(\"/tmp/preparation.xml\").findall(\".//testcase\"); assert len(cases)>=20 and all(c.find(\"skipped\") is None and c.find(\"failure\") is None and c.find(\"error\") is None for c in cases), \"Preparation native acceptance must run without skips\""'
       - name: Publish verified immutable image
         run: docker push "$IMAGE"
