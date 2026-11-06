@@ -119,6 +119,10 @@ def capture(runtime, operation, payload, root, source, timeout, preparation_atte
         directory=confined(root,relative);job=json.loads((directory/'job.json').read_text())
         files.append(str((directory/'job.json').relative_to(root)))
         for asset in assets(job['protocol']):files.append(str(confined(directory,asset['path']).relative_to(root)))
+        from gpx_recipe.preparation.hints import packet_paths
+        try:extra=packet_paths(directory,job['protocol'])
+        except (OSError,ValueError,EOFError):extra=[]
+        files.extend(str(confined(directory,name).relative_to(root)) for name in extra)
     if not files:
         write_json(root/'packet.json',{'schema':'radar-native-input-marker/v1'})
         files=['packet.json']

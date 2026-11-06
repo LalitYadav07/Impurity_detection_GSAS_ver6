@@ -165,6 +165,19 @@ def packet_paths(root,protocol):
     return names
 
 
+def subset(document,protocol,candidates):
+    """Select acceleration assets without changing scientific candidates."""
+    validate(document,protocol)
+    requested=set(candidates)
+    if not requested.issubset({c['id'] for c in protocol['candidates']}):
+        raise ValueError('Prepared subset requested an undeclared scientific candidate')
+    result=copy.deepcopy(document)
+    result['entries']=[row for row in result['entries'] if row['candidate'] in requested]
+    result['omitted_entries']=result['eligible_entries']-len(result['entries'])
+    result['snapshot_sha256']=digest({k:v for k,v in result.items() if k!='snapshot_sha256'})
+    return validate(result,protocol)
+
+
 def restore(document,protocol,source_root,target_root):
     validate(document,protocol);accepted=[];discarded=[];total=0;copied=set()
     previous=read(target_root,protocol)

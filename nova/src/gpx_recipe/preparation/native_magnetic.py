@@ -305,3 +305,36 @@ def adapt_response(prepared, native, *, factor_cache=None):
         scattering_qualification_reused=reuse.get('scattering_qualification_reused', False),
         native_peak_profiles_rendered=True, observations_included=False, scientific_result=False,
         seconds=time.monotonic()-began)
+
+
+def render_current_response(native,*,factor_cache=None):
+    """Compile current physical scattering separately from measurement masks."""
+    with _unmasked_physical_context(native):
+        return compile_response(native,factor_cache=factor_cache)
+
+
+def current_native_profiles(native,coefficients):
+    """Evaluate a small finite start set in one owned native context.
+
+    A short k survey need not pay quadratic compilation/qualification costs.
+    This uses exact native forward calls and shares their expensive setup;
+    optimizer/sampling consumers still use the qualified compiled response.
+    """
+    points=np.asarray(coefficients,float)
+    _,_,_,moments,_,_=_context(native)
+    if (points.ndim!=2 or points.shape[1]!=len(moments) or not 1<=len(points)<=64
+            or not np.isfinite(points).all()):
+        raise ValueError('Declare a bounded complete set of native moment starts')
+    indices=[native.vary.index(k) for k in moments];original=native.x0.copy()
+    histogram=native.histo_phases[0][native.parts[0][0]]
+    x=np.asarray(histogram['Data'][0][native.parts[0][1]],float).copy()
+    try:
+        with _unmasked_physical_context(native):
+            zero=original.copy();zero[indices]=0.;baseline=native.profile(zero)
+            curves=[]
+            for coefficients in points:
+                value=original.copy();value[indices]=coefficients
+                curves.append(native.profile(value)-baseline)
+        return x,np.asarray(curves),dict(method='shared_native_profiles',
+            native_forward_evaluations=len(points)+1,observations_included=False,no_refinement=True)
+    finally:native.profile(original)

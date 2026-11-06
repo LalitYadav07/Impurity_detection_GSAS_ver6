@@ -24,6 +24,20 @@ from .plans import build_plan
 class SearchStopped(RuntimeError):pass
 
 
+def portfolio_batch(staged_jobs,workers):
+    """Keep a few independent contexts active without splitting their starts."""
+    selected=set();batch=[]
+    for name,staged in staged_jobs.items():
+        task=staged['task'];protocol=task[1]
+        shared=(protocol['policy'].get('moment_model')=='symmetry_allowed'
+                and not protocol['policy'].get('refine_cell'))
+        key=(digest(protocol),task[3]) if shared else ('single',name)
+        if key not in selected and len(selected)>=max(1,workers*2):continue
+        selected.add(key);batch.append(name)
+        if len(batch)==512:break
+    return batch
+
+
 class NativeRunner:
     supports_portfolio=True
     def __init__(self,command,*,environment=None,cancel_event=None):
@@ -77,9 +91,10 @@ def representative_starts(eligible,sites,*,limit,relative_signs=True):
 
 
 class KSearch:
-    def __init__(self,cache_root,native,discover,*,clock=time.monotonic):
+    def __init__(self,cache_root,native,discover,*,clock=time.monotonic,preparation_provider=None):
         self.cache=Path(cache_root).resolve();self.cache.mkdir(parents=True,exist_ok=True)
         self.native=native;self.discover=discover;self.clock=clock
+        self.preparation_provider=preparation_provider
 
     def run(self,source,root,*,parent,histogram,sites,directions=('x','y','z'),
             maximum_moment=6.,magnetic_d_min=0.,relative_signs=True,templates_per_k=6,
@@ -156,7 +171,7 @@ class KSearch:
                     except Exception as exc:families[i].update(discovery='unavailable',status='untested',reason=str(exc))
                     announce('discovery',f'{len(families)-len(pending)} / {len(families)} k catalogs checked')
         finally:pool.shutdown(wait=True,cancel_futures=True)
-        profiles=[];template_records={};errors=[];inventory=None
+        profiles=[];template_records={};errors=[];inventory=None;preparation=[]
         if catalogs and remaining()>.25:
             announce('inventory','Checking magnetic sites, allowed directions and subgroup settings')
             try:
@@ -193,6 +208,15 @@ class KSearch:
                     cycles=1,adequate_rwp=100.,maximum_moment=float(maximum_moment),magnetic_d_min=float(magnetic_d_min),
                     maximum_mode=.5,modes=[],start_mode=.1,moment_model=moment_model)
                 protocol=build_plan(context,catalog,inputs,settings)
+                if callable(self.preparation_provider):
+                    try:
+                        self.preparation_provider(protocol,inputs)
+                        from ..preparation.hints import read
+                        document=read(inputs,protocol)
+                        preparation.append(dict(k=family['k'],status='attached' if document else 'not_selected',
+                            attached_entries=len(document['entries']) if document else 0))
+                    except (OSError,ValueError,EOFError) as error:
+                        preparation.append(dict(k=family['k'],status='unavailable',error_type=type(error).__name__))
                 # The simulation path fits no parameters. A single declared
                 # nonzero moment supplies a shape; intensity is scored later.
                 for index,choice in enumerate(choices):
@@ -219,6 +243,11 @@ class KSearch:
                 return dict(cached=(i,saved,path,True))
             directory=cache/('attempt-'+uuid.uuid4().hex)
             compile_bundle(protocol,inputs,directory,candidate_id=candidate_id,seed_id=seed_id,approved_hash=digest(protocol))
+            from ..preparation.hints import read,subset,restore
+            try:
+                prepared=read(inputs,protocol)
+                if prepared is not None:restore(subset(prepared,protocol,[candidate_id]),protocol,inputs,directory)
+            except (OSError,ValueError,EOFError):pass  # Native work remains available without optional hints.
             return dict(task=task,directory=directory,cache=cache,receipt=receipt)
         def collect(staged,response):
             task=staged['task'];i,protocol,_,candidate_id,seed_id=task
@@ -273,7 +302,7 @@ class KSearch:
             while staged_jobs and remaining()>2:
                 # Keep an ordered, interleaved finite queue. Each short portfolio
                 # publishes progress; no arbitrary whole-survey time cap is used.
-                batch=list(staged_jobs)[:max(1,workers*2)] if deadline is None else list(staged_jobs)
+                batch=portfolio_batch(staged_jobs,workers) if deadline is None else list(staged_jobs)[:512]
                 announce('simulate',f'{len(profiles)} profiles complete · {len(staged_jobs)} pending · {workers} requested workers',
                     completed=len(profiles),total=len(tasks),families_total=len(families),
                     families_evaluated=sum(f['simulated']>0 for f in families))
@@ -329,6 +358,7 @@ class KSearch:
             elapsed_seconds=self.clock()-started,budget_seconds=budget_seconds,points=prepared['points'],
             baseline=str(baseline),baseline_sha256=file_sha(baseline),ranking=ranking,families=families,
             templates=template_records,catalogs={','.join(v['k']):v for v in catalogs.values()},errors=errors,
+            preparation=preparation,
             coordinate='tof' if 'T' in str(next(h for h in context['histograms'] if h['name']==histogram)['instrument']['Type']) else 'two_theta',
             source_unchanged=file_sha(captured)==expected,llm_calls=0,scope='Finite high-symmetry, '+moment_model+' template survey; not exhaustive magnetic identification')
         write_json(root/'survey.json',result);announce('finished','K survey ready to inspect')

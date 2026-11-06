@@ -65,6 +65,18 @@ def test_no_signal_does_not_become_a_k_assignment(tmp_path):
     assert result['complete'] and result['status']=='no_support'
 
 
+def test_optional_preparation_failure_does_not_remove_any_k_family_or_start(tmp_path):
+    search,native,_,source,values=setup(tmp_path)
+    native.supports_portfolio=True
+    def unavailable(protocol,root):raise ValueError('Artificial damaged preparation')
+    search.preparation_provider=unavailable
+    result=search.run(source,tmp_path/'search',**values)
+    assert result['complete'] and len(result['templates'])==2
+    assert len(result['preparation'])==2 and not result['errors']
+    assert all(row['status']=='unavailable' for row in result['preparation'])
+    assert all(row['simulated']==1 for row in result['families'])
+
+
 def test_unavailable_catalog_remains_visible_without_zero_score(tmp_path):
     search,_,_,source,values=setup(tmp_path,unavailable=True)
     result=search.run(source,tmp_path/'search',**values)

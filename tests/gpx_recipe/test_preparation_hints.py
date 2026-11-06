@@ -159,6 +159,18 @@ def test_corrupt_optional_manifest_cannot_reject_a_scientific_candidate(tmp_path
     assert len(protocol['candidates'])==1
 
 
+def test_candidate_hint_subset_preserves_the_complete_scientific_protocol(tmp_path):
+    library,protocol,_=fixture(tmp_path/'fixture');root=tmp_path/'packet'
+    document=hints.capture(library,protocol,root);before=copy.deepcopy(protocol)
+    selected=hints.subset(document,protocol,[protocol['candidates'][0]['id']])
+    assert selected==document and selected is not document
+    empty=hints.subset(document,protocol,[])
+    assert empty['entries']==[] and empty['omitted_entries']==empty['eligible_entries']==1
+    assert empty['protocol_sha256']==document['protocol_sha256']
+    assert hints.validate(empty,protocol)==empty and protocol==before
+    with pytest.raises(ValueError,match='undeclared'):hints.subset(document,protocol,['foreign'])
+
+
 def test_local_launch_captures_one_immutable_selection_before_each_scientific_ticket(tmp_path,monkeypatch):
     from types import SimpleNamespace
     import gpx_recipe.symmetry.local_transport as local
