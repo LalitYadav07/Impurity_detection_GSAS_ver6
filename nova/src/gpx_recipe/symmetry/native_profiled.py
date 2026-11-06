@@ -15,6 +15,7 @@ from pathlib import Path
 from contextlib import contextmanager
 import numpy as np
 from .profiled_magnetic import ProfiledMagneticObjective
+from ..live.native_profile import constraint_state_signature
 
 _active=None
 
@@ -76,6 +77,7 @@ class NativeMagneticStartingPoint:
         error,warning,_,_=maps.GenerateConstraints(self.vary,constraints,fixed,self.parms)
         if error:raise ValueError(error)
         maps.normParms(self.parms);maps.Map2Dict(self.parms,self.vary);maps.Dict2Map(self.parms)
+        self._constraint_signature=constraint_state_signature(maps)
         self.initial=np.asarray([self.parms[key] for key in self.vary],float)
         self.scale_index=self.vary.index(self.scale_name) if self.scale_name in self.vary else None
         if bool(self.scale_index is not None)!=bool(refine_scale):
@@ -98,47 +100,18 @@ class NativeMagneticStartingPoint:
         if len(moment_names)>24:raise ValueError('The declared independent magnetic basis exceeds this bounded adapter')
         self.args=([histograms,phases,restraints,rigid],self.parms,histdict,self.vary,controls,pawley,None)
         self.phases=phases;self.calls=0;self.derivative_calls=0;self.residual_mask=None
-        self.atoms=[];unit_matrices=[]
-        for name,phase in phases.items():
-            general=phase['General']
-            if general['Type']!='magnetic':continue
-            if general.get('Modulated'):raise ValueError('Modulated magnetic profiles need a different adapter')
-            cell=np.asarray(general['Cell'][1:7],float)
-            unit=lattice.cell2AB(cell)[0]/cell[:3][None,:]
-            for index,atom in enumerate(phase['Atoms']):
-                keys=[f"{phase['pId']}::AM{axis}:{index}" for axis in 'xyz']
-                self.atoms.append((name,index,keys));unit_matrices.append(unit)
-        if not self.atoms:raise ValueError('The source has no native magnetic atoms')
-        zero=self.initial.copy();zero[self.moment_indices]=0.
-        self._map(zero)
-        zero_moments=self._all_moments()
-        if not np.allclose(zero_moments,0.,rtol=0,atol=1e-10):
-            raise ValueError('Fixed nonzero magnetic moments are outside the homogeneous starting-point adapter')
-        fixed_keys=[key for key in self.parms if not any(key in row[2] for row in self.atoms) and key not in nuisance and key not in moment_names]
-        fixed_values={key:self.parms[key] for key in fixed_keys}
-        matrix=[]
-        for j in range(len(self.moment_indices)):
-            vector=zero.copy();vector[self.moment_indices[j]]=1.;self._map(vector)
-            if any(not self._same(self.parms[key],value) for key,value in fixed_values.items()):
-                raise ValueError('An independent moment variable also changes a fixed parameter')
-            matrix.append(self._all_moments())
-        self.component_maps=np.stack(matrix,axis=-1)
-        self.cartesian_maps=np.einsum('aij,ajk->aik',np.asarray(unit_matrices),self.component_maps)
-        self._map(self.initial)
-        predicted=np.einsum('aij,j->ai',self.component_maps,self.initial[self.moment_indices])
-        if not np.allclose(predicted,self._all_moments(),rtol=1e-9,atol=1e-10):
-            raise ValueError('The native magnetic constraints are not the checked homogeneous linear map')
+        from ..live.moment_basis import derive
+        basis=derive(phases,self.parms,self.vary,self.initial,self.moment_indices,
+            map_values=self._map,lattice=lattice,nuisance=nuisance)
+        self.atoms=list(basis.atoms);self.component_maps=basis.components;self.cartesian_maps=basis.cartesian
         self.maximum_moment=maximum_moment
         self.fixed_scale=None if refine_scale else self.source_scale
-
-    @staticmethod
-    def _same(a,b):
-        try:return bool(np.allclose(a,b,rtol=0,atol=1e-10,equal_nan=True))
-        except (TypeError,ValueError):return a==b
 
     def _check(self):
         if self.deadline is not None and time.monotonic()>self.deadline:raise TimeoutError('The declared profiled optimizer time budget expired')
         if _active is not self:raise RuntimeError('The native process-global constraint map was replaced')
+        if constraint_state_signature(self.maps)!=self._constraint_signature:
+            raise RuntimeError('The native process-global constraint maps changed outside this adapter')
 
     def _map(self,vector):
         self._check();self.parms.update(zip(self.vary,vector));self.maps.Dict2Map(self.parms)

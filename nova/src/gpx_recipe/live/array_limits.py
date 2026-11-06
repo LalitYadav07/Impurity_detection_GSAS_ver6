@@ -10,9 +10,13 @@ MAX_ARRAY_ELEMENTS = 48_000_000
 MAX_OBSERVATION_BINS = 1_000_000
 
 
-def validate_npz(path, *, observation=False):
+def validate_npz(path, *, observation=False, maximum_bytes=None):
     path = Path(path)
     limit = 32 * 1024 * 1024 if observation else MAX_ARRAY_BYTES
+    if maximum_bytes is not None:
+        if type(maximum_bytes) is not int or not 1 <= maximum_bytes <= limit:
+            raise ValueError('An array budget can only tighten the existing limit')
+        limit = maximum_bytes
     if path.stat().st_size > limit:
         raise ValueError('NPZ exceeds the array byte budget')
     with zipfile.ZipFile(path) as archive:
