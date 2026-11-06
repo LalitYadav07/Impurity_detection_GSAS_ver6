@@ -49,6 +49,9 @@ def validate_settings(kind, value):
 
 
 def validate_request(kind, request):
+    if kind=='batch':
+        from .batch import validate_request as validate_batch
+        return validate_batch(request)
     required = ['source', 'instrument', 'grid', 'settings', 'destination']
     if kind == 'structural':
         required.append('child')
@@ -60,6 +63,9 @@ def validate_request(kind, request):
 
 def execute(kind, request):
     """One owned native process prepares a single bank and candidate context."""
+    if kind=='batch':
+        from .batch import execute as execute_batch
+        return execute_batch(request)
     request = validate_request(kind, request)
     settings, grid = request['settings'], request['grid']
     started = time.monotonic()
@@ -145,11 +151,20 @@ def execute(kind, request):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('kind', choices=['reference', 'magnetic', 'structural'])
+    parser.add_argument('kind', choices=['reference', 'magnetic', 'structural', 'batch'])
     parser.add_argument('request')
     parser.add_argument('output')
     args = parser.parse_args()
-    write_json(args.output, execute(args.kind, json.loads(Path(args.request).read_text())))
+    if args.kind=='batch':
+        import threading
+        from ..process import cancellation_signals
+        from .batch import execute as execute_batch
+        cancel=threading.Event()
+        with cancellation_signals(cancel):
+            result=execute_batch(json.loads(Path(args.request).read_text()),cancel=cancel)
+        write_json(args.output,result)
+    else:
+        write_json(args.output, execute(args.kind, json.loads(Path(args.request).read_text())))
 
 
 if __name__ == '__main__':

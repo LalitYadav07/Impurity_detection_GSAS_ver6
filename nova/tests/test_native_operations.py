@@ -187,3 +187,56 @@ def test_fresh_runtime_revalidates_saved_job_owner(remote, tmp_path):
         params={'dispatch_key': handle['key']})
     with pytest.raises(RuntimeUnavailable, match='does not belong'):
         fresh.poll_native(handle)
+
+
+def test_batch_transport_deduplicates_inputs_and_captures_typed_plan(remote,tmp_path):
+    import io
+    from gpx_recipe.preparation.batch import stage
+    from test_preparation_queue import setup
+    queue,_,_=setup(remote,tmp_path,count=2);runtime,service,_=remote
+    entries=[(r['id'],queue.library.start(r['id'])) for r in list(queue.library.document['entries'])]
+    payload=stage(queue.library,entries,queue.root/'batch',workers=4,seconds=60)
+    # This test checks packet capture only; the service's fake native job does
+    # not construct real diffraction arrays or provide numerical validation.
+    service.submit_utility=type(service).submit_utility.__get__(service)
+    handle=runtime.submit_native('preparation-batch',payload,queue.root,source=queue.source,timeout=120)
+    assert len(handle['request']['input_hashes'])==3
+    packet=service.data[handle['asset_id']]
+    with zipfile.ZipFile(io.BytesIO(packet)) as archive:
+        assert len(archive.namelist())==3
+        assert 'batch/plan.json' in archive.namelist()
+        assert len([p for p in archive.namelist() if p.endswith('.cif')])==1
+        assert len([p for p in archive.namelist() if p.endswith('.instprm')])==1
+    assert len(service.submissions)==1 and b'PRIVATE-' not in packet
+    destination=tmp_path/'new-viewer-inputs'
+    restored=runtime.restore_native_inputs(handle,destination)
+    assert set(restored)==set(handle['request']['input_hashes'])
+    assert (destination/'batch/plan.json').read_bytes()==Path(payload['plan']).read_bytes()
+    assert len(service.submissions)==1
+
+
+def test_input_recovery_verifies_packet_and_preserves_existing_files(remote,tmp_path):
+    runtime,service,source=remote
+    root,payload=inputs(tmp_path,source)
+    handle=runtime.submit_native('inspect',payload,root,source=source)
+    # The thin GPX packet reconstructs its declared source from the separately
+    # captured dataset, with the same marker and checksums as the worker.
+    service.data['original-data']=Path(source['source_path']).read_bytes()
+    destination=tmp_path/'restored-inputs'
+    restored=runtime.restore_native_inputs(handle,destination)
+    assert (destination/'source.gpx').read_bytes()==Path(source['source_path']).read_bytes()
+    assert set(restored)==set(handle['request']['input_hashes'])
+    (destination/'source.gpx').write_bytes(b'changed')
+    with pytest.raises(ValueError,match='immutable native attempt'):
+        runtime.restore_native_inputs(handle,destination)
+    assert (destination/'source.gpx').read_bytes()==b'changed'
+    assert len(service.submissions)==1
+
+
+def test_packet_byte_budget_is_checked_before_upload(remote,tmp_path,monkeypatch):
+    from gpx_recipe.symmetry import bundle
+    runtime,service,source=remote
+    monkeypatch.setattr(bundle,'MAX_BYTES',2)
+    with pytest.raises(ValueError,match='packet byte/file budget'):
+        runtime.packet(tmp_path,['source.gpx'],source_sha256=source['source_sha256'])
+    assert not service.data and not service.submissions

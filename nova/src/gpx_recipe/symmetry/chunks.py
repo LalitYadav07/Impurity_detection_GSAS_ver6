@@ -10,7 +10,6 @@ import subprocess
 import sys
 import threading
 import time
-import os
 
 from ..execution import write_json
 from ..jobs import scientific_environment
@@ -82,9 +81,8 @@ def run_profiled_group(directories,*,cancel,timeout,workers=1):
     from .grouped_worker import SCHEMA
     owner=Path(directories[0]);request=owner/'group-request.json'
     write_json(request,dict(schema=SCHEMA,directories=[str(p) for p in directories],workers=workers))
-    env=scientific_environment()
-    adapters=str(Path(__file__).parent/'adapters')
-    env['PYTHONPATH']=os.pathsep.join(filter(None,[adapters,env.get('PYTHONPATH')]))
+    from .compiler import native_environment
+    env=native_environment()
     process=None;interrupted=False
     with (owner/'group-worker.log').open('w') as log:
         try:

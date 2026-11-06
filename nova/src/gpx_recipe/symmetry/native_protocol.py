@@ -14,6 +14,7 @@ FIELDS = {
     'preparation-reference': ({'source', 'instrument', 'grid', 'settings', 'destination'}, set()),
     'preparation-magnetic': ({'source', 'instrument', 'grid', 'settings', 'destination'}, set()),
     'preparation-structural': ({'source', 'instrument', 'child', 'grid', 'settings', 'destination'}, set()),
+    'preparation-batch': ({'source', 'plan', 'destination', 'workers', 'seconds'}, set()),
 }
 
 

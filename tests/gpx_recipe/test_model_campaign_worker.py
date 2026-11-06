@@ -284,7 +284,9 @@ def test_galaxy_entrypoint_uses_separate_source_without_reupload_and_preserves_o
     with zipfile.ZipFile(assets,'w') as z:
         if legacy:z.write(source,'source.gpx')
     request=tmp_path/'request.json'
-    request.write_text(json.dumps(dict(schema='radar-model-native/v1',expected_source_sha256=file_sha(source),
+    from gpx_recipe.symmetry.compiler import package_signature
+    request.write_text(json.dumps(dict(schema='radar-model-native/v1',operation='inspect',payload={'source':'source.gpx'},
+        implementation_sha256=package_signature(),timeout=120,expected_source_sha256=file_sha(source),
         input_hashes={'source.gpx':file_sha(source)},dispatch_key='a'*24)))
     def native(value,inputs,root,cancel):
         assert (inputs/'source.gpx').read_bytes()==source.read_bytes()

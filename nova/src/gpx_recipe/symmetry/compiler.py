@@ -38,6 +38,16 @@ def require_adapters():
             raise ValueError('The native adapter differs from the pinned package: '+name)
 
 
+def native_environment(gsasii_root=None):
+    """Credential-free child environment with this package's reviewed adapters."""
+    import os
+    from ..jobs import scientific_environment
+    environment=scientific_environment(gsasii_root)
+    environment['PYTHONPATH']=os.pathsep.join([str(Path(__file__).resolve().parent/'adapters'),
+                                            environment['PYTHONPATH']])
+    return environment
+
+
 def job_inputs(directory, job):
     """Resolve only the fixed, confined shared-input layout; no client paths."""
     directory = Path(directory).resolve()

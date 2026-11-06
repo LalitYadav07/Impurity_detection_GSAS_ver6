@@ -31,7 +31,11 @@ class Service:
     def search_history_datasets(self,query,**kwargs):
         rows=[dict(id=k,name=v) for k,v in reversed(list(self.labels.items())) if query in v]
         return rows[kwargs.get('offset',0):kwargs.get('offset',0)+kwargs.get('limit',500)]
-    def _download_dataset(self,key,target):Path(target).write_bytes(self.data[key])
+    def _download_dataset(self,key,target,**kwargs):
+        data=self.data[key]
+        if kwargs.get('maximum_bytes') is not None and len(data)>kwargs['maximum_bytes']:
+            raise ValueError('Dataset exceeds its download bound')
+        Path(target).write_bytes(data)
     def submit_utility(self,**kwargs):
         self.submissions.append(kwargs);key=kwargs['inputs']['dispatch_key']
         job=UtilityActionRecord(uid=key,tool_id=MODEL_TOOL_ID,name='RADAR-PD model '+key,galaxy_job_id='job'+str(len(self.jobs)),status=RunStatus.OK)

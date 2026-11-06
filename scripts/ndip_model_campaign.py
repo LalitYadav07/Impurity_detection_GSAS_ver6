@@ -16,7 +16,6 @@ sys.path.insert(0,str(Path(__file__).resolve().parent))
 from ndip_runtime import runtime_limits, process_usage, usage_delta
 
 from gpx_recipe.execution import write_json
-from gpx_recipe.jobs import scientific_environment
 from gpx_recipe.process import run_scientific
 from gpx_recipe.symmetry.bundle import unpack,pack,hydrate_source,DATA_SUFFIXES
 from gpx_recipe.symmetry.compiler import confined,file_sha,package_signature,require_adapters
@@ -38,7 +37,7 @@ def native(request,inputs,root,cancel):
     import math
     if type(request['timeout']) not in {int,float} or not math.isfinite(request['timeout']) or not 1<=request['timeout']<=600:raise ValueError('Invalid native deadline')
     # Work on a private input capture; every path comes from a confined data packet.
-    for key in ['source','child','instrument','directory']:
+    for key in ['source','child','instrument','directory','plan']:
         if key in payload:payload[key]=str(confined(inputs,payload[key]))
     if 'source' in payload and file_sha(payload['source'])!=request['expected_source_sha256']:
         raise ValueError('Native source packet differs from the Galaxy GPX')
@@ -59,12 +58,11 @@ def native(request,inputs,root,cancel):
     elif operation.startswith('k-'):command=['-m','gpx_recipe.symmetry.k_native',operation[2:],str(request_file),str(output)]
     else:command=['-m','gpx_recipe.symmetry.isodistort_native',operation,str(request_file),str(output)]
     with (root/'native.log').open('w') as log:
-        environment=scientific_environment()
         # The repository's scripts/gpx_recipe compatibility package forwards
         # submodule imports but has no adapters beside its own __init__.py.
         # Resolve from the actual reviewed compiler, not that package shim.
-        from gpx_recipe.symmetry import compiler
-        environment['PYTHONPATH']+=':'+str(Path(compiler.__file__).resolve().parent/'adapters')
+        from gpx_recipe.symmetry.compiler import native_environment
+        environment=native_environment()
         process=run_scientific([sys.executable,*command],timeout=request['timeout'],cancel_event=cancel,
             cwd=root,env=environment,stdout=log,stderr=subprocess.STDOUT)
     if process.returncode or not output.is_file():raise RuntimeError('The native operation stopped before producing its checked response')
@@ -113,8 +111,15 @@ def work(action,source,assets,request_file,directory,archive):
         elif action=='native':
             root=directory/'native';root.mkdir()
             result,root=native(request,inputs,root,cancel)
-            files=[p for p in directory.rglob('*') if p.is_file() and p.suffix.lower() in DATA_SUFFIXES
-                and not (p.is_relative_to(inputs) and str(p.relative_to(inputs)) in before)]
+            if request['operation'].startswith('preparation-'):
+                # Only declared portable data leaves theoretical preparation.
+                # Native construction GPXs and repeated scratch are ephemeral.
+                owned=Path(result['output']).resolve()
+                if not owned.is_relative_to(root):raise ValueError('Preparation output escaped its native workspace')
+                files=[confined(owned,name) for name in result['artifacts']]
+            else:
+                files=[p for p in directory.rglob('*') if p.is_file() and p.suffix.lower() in DATA_SUFFIXES
+                    and not (p.is_relative_to(inputs) and str(p.relative_to(inputs)) in before)]
             paths=[str(p.relative_to(directory)) for p in files]
             result=dict(schema='radar-model-native-result/v1',dispatch_key=request['dispatch_key'],
                 request_sha256=digest(request),source_sha256=expected,result=result,

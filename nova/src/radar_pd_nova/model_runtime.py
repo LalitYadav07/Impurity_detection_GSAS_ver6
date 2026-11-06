@@ -169,6 +169,10 @@ class GalaxyModelRuntime(GalaxyRefinementRuntime):
 
     def packet(self,root,paths,*,source_sha256=None):
         root=Path(root).resolve()
+        from gpx_recipe.symmetry.bundle import MAX_BYTES
+        unique=set(paths)
+        if len(unique)>10000 or sum(confined(root,p).stat().st_size for p in unique)>MAX_BYTES:
+            raise ValueError('Model inputs exceed the worker packet byte/file budget')
         paths=[p for p in paths if not (source_sha256 and Path(p).suffix.lower()=='.gpx'
                                       and file_sha(confined(root,p))==source_sha256)]
         hashes={p:file_sha(confined(root,p)) for p in sorted(set(paths))}
@@ -363,6 +367,10 @@ class GalaxyModelRuntime(GalaxyRefinementRuntime):
     def collect_native(self,handle,root,*,immutable=True):
         from .native_operations import collect
         return collect(self,handle,root,immutable=immutable)
+
+    def restore_native_inputs(self,handle,root):
+        from .native_operations import restore_inputs
+        return restore_inputs(self,handle,root)
 
     def cancel_native(self,handle):
         from .native_operations import recover_job

@@ -96,10 +96,18 @@ def capture(runtime, operation, payload, root, source, timeout, preparation_atte
     validate_native_payload(operation, payload)
     root=Path(root).resolve();root.mkdir(parents=True, exist_ok=True)
     payload=copy.deepcopy(payload);files=[]
-    for field in ['source','child','instrument']:
+    for field in ['source','child','instrument','plan']:
         if field in payload:
             path=Path(payload[field]).resolve();relative=str(path.relative_to(root))
             files.append(relative);payload[field]=relative
+    if operation=='preparation-batch':
+        from gpx_recipe.preparation.batch import read_plan,inputs
+        plan_path=confined(root,payload['plan']);plan=read_plan(plan_path)
+        for name in inputs(plan):
+            path=confined(plan_path.parent,name)
+            files.append(str(path.relative_to(root)))
+        if float(timeout)<payload['seconds']+15:
+            raise ValueError('Preparation batch timeout must include its declared work and cleanup allowance')
     if 'children' in payload:
         children=[str(Path(p).resolve().relative_to(root)) for p in payload['children']]
         payload['children']=children;files.extend(children)
@@ -214,6 +222,42 @@ def poll(runtime, handle):
     handle['job']=job_record(job)
     state={RunStatus.OK:'finished',RunStatus.ERROR:'failed',RunStatus.CANCELLED:'cancelled'}.get(job.status,job.status.value)
     return dict(state=state,handle=handle,message=job.message or '')
+
+
+def restore_inputs(runtime, handle, root):
+    """Restore the exact captured packet, independent of current plan builders."""
+    from gpx_recipe.symmetry.bundle import unpack, hydrate_source, MAX_BYTES
+    handle=copy.deepcopy(validate_handle(runtime,handle))
+    job=recover_job(runtime,handle)
+    if job is None:raise RuntimeUnavailable('Recover the native job before restoring its captured inputs')
+    if not handle['asset_id']:raise ValueError('Native handle lost its captured scientific input packet')
+    root=Path(root).resolve();root.mkdir(parents=True,exist_ok=True)
+    owned=runtime.root/'native-inputs'/(handle['key']+'-'+uuid.uuid4().hex)
+    owned.mkdir(parents=True)
+    archive=owned/'inputs.zip'
+    try:
+        runtime.service._download_dataset(handle['asset_id'],archive,maximum_bytes=MAX_BYTES)
+        received=unpack(archive,owned/'unpacked')
+        hashes=handle['request']['input_hashes']
+        missing=[name for name in hashes if not (received/name).is_file()]
+        if missing:
+            source=runtime.resolve(handle['source'])
+            hydrate_source(received,source['source_path'],hashes,handle['source']['source_sha256'])
+        actual={str(p.relative_to(received)):file_sha(p) for p in received.rglob('*') if p.is_file()}
+        if actual!=hashes:raise ValueError('Recovered native inputs differ from the captured request')
+        copies=[]
+        for name,checksum in hashes.items():
+            target=confined(root,name,exists=False)
+            if target.exists() and file_sha(target)!=checksum:
+                raise ValueError('A different input already occupies this immutable native attempt')
+            copies.append((confined(received,name),target,checksum))
+        for path,target,checksum in copies:
+            target.parent.mkdir(parents=True,exist_ok=True)
+            if not target.exists():shutil.copyfile(path,target)
+            if file_sha(target)!=checksum:raise ValueError('Native input changed during recovery')
+        return {name:confined(root,name) for name in hashes}
+    finally:
+        shutil.rmtree(owned)
 
 
 def collect(runtime, handle, root, *, immutable=True):
