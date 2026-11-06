@@ -145,3 +145,26 @@ def test_active_native_function_replacement_uses_original_powder_path(tmp_path,t
         background.compile_columns(math=native.math,histogram=native.histogram,parameters=native.parms,
             controls=native.args[4],axis=native.histogram['Data'][0],
             names=[native.vary[i] for i in native.background_indices])
+
+
+def test_fixed_background_array_changes_rebuild_prepared_physics(tmp_path):
+    from gpx_recipe.preparation.native_magnetic import physics_identity,adapt_response,_physics_record
+    path=measured(tmp_path/'inputs','PNT');before=file_sha(path)
+    native=NativeReducedProfile(path);initial_identity=physics_identity(native)
+    assert 'fixed_background_profile' not in _physics_record(native)
+    histogram=native.histo_phases[0][native.parts[0][0]]
+    fixed=np.full(len(histogram['Data'][0]),.12)
+    histogram['Background'][1]['fixback']=fixed
+    changed_identity=physics_identity(native)
+    assert changed_identity!=initial_identity
+    fixed[10]+=.01
+    assert physics_identity(native)!=changed_identity
+    del histogram['Background'][1]['fixback']
+    assert physics_identity(native)==initial_identity
+    response=compile_response(native)
+    histogram['Background'][1]['fixback']=np.full(len(histogram['Data'][0]),.12)
+    adapted,report=adapt_response(response,native)
+    assert report['action']=='current_context_rendered'
+    assert adapted.physics_sha256!=response.physics_sha256
+    np.testing.assert_allclose(adapted.fixed-response.fixed,.12,rtol=1e-10,atol=1e-11)
+    assert file_sha(path)==before

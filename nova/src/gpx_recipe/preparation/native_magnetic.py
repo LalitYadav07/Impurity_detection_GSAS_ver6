@@ -90,6 +90,13 @@ def _physics_record(native, basis=None):
         variables=dict(moments=[key(k) for k in moments], background=[key(k) for k in background]),
         atoms=[(names[name], index, [key(k) for k in keys]) for name, index, keys in basis.atoms],
         components=basis.components, cartesian=basis.cartesian)
+    fixed_background=histogram['Background'][1].get('fixback')
+    if fixed_background is not None:
+        # This native additive profile is model input, not the current scan's
+        # observation. Its contents can change while all scalar parameters,
+        # grid and source labels remain identical. Preserve legacy identities
+        # for the ordinary no-fixed-background case.
+        content['fixed_background_profile']=fixed_background
     return _plain(content)
 
 
