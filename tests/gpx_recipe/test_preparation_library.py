@@ -180,3 +180,18 @@ def test_state_refresh_checks_manifest_size_before_parsing(tmp_path):
     lib.path.write_text(' '*(8*1024*1024)+'{}')
     with pytest.raises(ValueError, match='oversized'):
         lib.refresh()
+
+
+def test_portable_branch_preserves_completed_assets_and_does_not_claim_originating_jobs(tmp_path):
+    lib=library(tmp_path);ids=[r['id'] for r in lib.document['entries']]
+    prepare_one(lib,ids[0]);attempt=lib.start(ids[1])
+    packet=tmp_path/'portable.zip';lib.export(packet)
+    branch=import_library(packet,tmp_path/'branch')
+    assert branch.detach_imported_work()==1
+    assert branch.row(ids[0])['files']==lib.row(ids[0])['files']
+    assert branch.row(ids[1])['state']=='pending' and branch.row(ids[1])['attempt']==attempt
+    assert branch.start(ids[1])==attempt+1
+    assert lib.row(ids[1])['state']=='preparing' and lib.row(ids[1])['attempt']==attempt
+    (branch.root/'queue').mkdir();(branch.root/'queue/queue.json').write_text('{}')
+    with pytest.raises(ValueError,match='recover owned jobs'):
+        branch.detach_imported_work()

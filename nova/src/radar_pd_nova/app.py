@@ -51,6 +51,8 @@ from .symmetry_controller import SymmetryMixin
 from .refinement_ui import refinement_dashboard
 from .battery_controller import BatteryMixin
 from .battery_ui import battery_dashboard
+from .preparation_controller import PreparationMixin
+from .preparation_ui import preparation_dashboard
 from .checkpoints import CoalescedCheckpoint
 from .post_analysis import PostAnalysisSettings
 from .facility import FacilityBrowser, FacilityPathError, WatchRecipe
@@ -282,7 +284,7 @@ def _powgen_retry_time(value: Any) -> datetime | None:
 from .webmon.ui import WebmonMixin
 
 
-class RadarPdNovaApp(FeedbackMixin, WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssistantMixin, LiveSettingsReviewMixin, LiveRestoreMixin, LiveSetupMixin, LibraryReviewMixin, SetupEditorMixin, PostAnalysisMixin, RefinementMixin, SymmetryMixin, ThemedApp):
+class RadarPdNovaApp(PreparationMixin, FeedbackMixin, WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssistantMixin, LiveSettingsReviewMixin, LiveRestoreMixin, LiveSetupMixin, LibraryReviewMixin, SetupEditorMixin, PostAnalysisMixin, RefinementMixin, SymmetryMixin, ThemedApp):
     """Interactive orchestration and results workspace backed by Galaxy."""
 
     def __init__(self) -> None:
@@ -474,6 +476,7 @@ class RadarPdNovaApp(FeedbackMixin, WebmonMixin, BatteryMixin, UnetTransitionMix
         self._init_refinement()
         self._init_symmetry()
         self._init_battery()
+        self._init_preparation()
         state.history_datasets = []
         state.history_search = ""
         state.history_offset = 0
@@ -891,7 +894,7 @@ class RadarPdNovaApp(FeedbackMixin, WebmonMixin, BatteryMixin, UnetTransitionMix
                 click="setup_collapsed = !setup_collapsed",
             )
             with html.Div(classes="radar-context-title"):
-                html.Div("{{ workspace_view === 'experiment' ? 'Live experiment' : 'Analysis workspace' }}", classes="radar-product-name")
+                html.Div("{{ workspace_view === 'preparation' ? 'Experiment preparation' : workspace_view === 'experiment' ? 'Live experiment' : 'Analysis workspace' }}", classes="radar-product-name")
             vuetify.VSpacer()
             vuetify.VChip(
                 text=("application_version",),
@@ -908,7 +911,7 @@ class RadarPdNovaApp(FeedbackMixin, WebmonMixin, BatteryMixin, UnetTransitionMix
                 size="small",
             )
             vuetify.VChip(
-                v_if="!!selected_run_uid && workspace_view !== 'experiment'",
+                v_if="!!selected_run_uid && !['experiment','preparation'].includes(workspace_view)",
                 text=("selected_run_name",),
                 prepend_icon="mdi-flask-outline",
                 variant="outlined",
@@ -916,7 +919,7 @@ class RadarPdNovaApp(FeedbackMixin, WebmonMixin, BatteryMixin, UnetTransitionMix
                 classes="radar-run-chip",
             )
             vuetify.VChip(
-                v_if="!!selected_run_uid && workspace_view !== 'experiment'",
+                v_if="!!selected_run_uid && !['experiment','preparation'].includes(workspace_view)",
                 text=("selected_run_status",),
                 color=("selected_run_status === 'Ok' ? '#dff2e8' : selected_run_status === 'Error' ? '#fde7e7' : '#fff0d4'",),
                 variant="flat",
@@ -934,6 +937,11 @@ class RadarPdNovaApp(FeedbackMixin, WebmonMixin, BatteryMixin, UnetTransitionMix
             ):
                 vuetify.VIcon("mdi-book-open-page-variant-outline", size="small")
                 html.Span("User guide")
+            vuetify.VBtn(
+                "Prepare experiment",id="radar-experiment-preparation",
+                prepend_icon="mdi-flask-outline",variant="outlined",size="small",
+                click=self.open_preparation_workspace,
+            )
             vuetify.VBtn(
                 "Battery experiments",
                 prepend_icon="mdi-battery-charging-outline",
@@ -999,9 +1007,13 @@ class RadarPdNovaApp(FeedbackMixin, WebmonMixin, BatteryMixin, UnetTransitionMix
         if (state.rf_busy or state.rf_loading or state.rf_queue_running or state.selected_run_loading
                 or getattr(self, "_refinement_approving", False)):
             return "Wait for the current recipe, result load, or refinement dispatch to finish, then try again."
+        if getattr(state,'prep_busy',False):
+            return "Wait for the current preparation operation to be acknowledged, then try again."
         return ""
 
     async def _stop_session_enrollment(self) -> None:
+        shutdown=getattr(self,'_preparation_shutdown',None)
+        if callable(shutdown):await shutdown()
         await self.webmon_shutdown()
         await self._pause_model_campaigns()
         monitor_task = self._powgen_monitor_task
@@ -2752,7 +2764,7 @@ class RadarPdNovaApp(FeedbackMixin, WebmonMixin, BatteryMixin, UnetTransitionMix
                 text=("powgen_results_refresh_busy ? powgen_message : (live_test_message || powgen_message)",),
                 type="info", variant="tonal", classes="mb-2")
             vuetify.VProgressLinear(v_if="live_launch_busy", indeterminate=True, height=3, color="#15543c")
-            with html.Div(v_if="!live_launch_busy && !selected_run_uid && !['experiment','refinement','battery'].includes(workspace_view)", classes="radar-workspace-empty"):
+            with html.Div(v_if="!live_launch_busy && !selected_run_uid && !['experiment','refinement','battery','preparation'].includes(workspace_view)", classes="radar-workspace-empty"):
                 html.Div("RADAR-PD SCIENTIFIC AI WORKSPACE", classes="radar-kicker")
                 html.H1("Phase detection for powder diffraction")
                 html.P(
@@ -2783,7 +2795,10 @@ class RadarPdNovaApp(FeedbackMixin, WebmonMixin, BatteryMixin, UnetTransitionMix
             with html.Div(v_show="workspace_view === 'battery'", classes="radar-workspace-view"):
                 battery_dashboard(self)
 
-            with html.Div(v_if="!!selected_run_uid && !['experiment','battery'].includes(workspace_view)"):
+            with html.Div(v_show="workspace_view === 'preparation'", classes="radar-workspace-view"):
+                preparation_dashboard(self)
+
+            with html.Div(v_if="!!selected_run_uid && !['experiment','battery','preparation'].includes(workspace_view)"):
                 with html.Div(classes="radar-run-context"):
                     with html.Div():
                         html.Div("OPENED RADAR-PD RUN", classes="radar-context-kicker")
@@ -7093,7 +7108,8 @@ class RadarPdNovaApp(FeedbackMixin, WebmonMixin, BatteryMixin, UnetTransitionMix
             )
         options.append({"title": "Refinement", "value": "refinement", "icon": "mdi-playlist-edit"})
         state.workspace_options = options
-        if getattr(state, "workspace_view", "monitor") not in {item["value"] for item in options}:
+        if (getattr(state, "workspace_view", "monitor") not in {item["value"] for item in options}
+                and state.workspace_view not in {"battery", "preparation"}):
             state.workspace_view = "monitor"
 
     @staticmethod

@@ -175,3 +175,21 @@ def test_lost_index_write_acknowledgment_preserves_the_published_library(tmp_pat
     reopened = PreparationRegistry(registry.root)
     assert len(reopened.summaries()) == 1
     assert reopened.get().coverage()['all_prepared']
+
+
+def test_unchanged_summary_metadata_is_cached_but_new_progress_invalidates_it(tmp_path,monkeypatch):
+    from radar_pd_nova import preparation_registry as module
+    _,_,_,request=fixture(tmp_path/'input')
+    registry=PreparationRegistry(tmp_path/'workspace')
+    key=registry.create(name='Cached metadata',source=request['source'],
+        banks={'bank 1':dict(instrument=request['instrument'],grid=request['grid'])},
+        models=[dict(kind='magnetic',bank='bank 1',settings=request['settings'])])
+    validate=module.validate_manifest;reads=[]
+    def counted(document):reads.append('manifest');return validate(document)
+    monkeypatch.setattr(module,'validate_manifest',counted)
+    first=registry.summaries();first[0]['counts']['pending']=999
+    assert registry.summaries()[0]['counts']['pending']==1
+    assert len(reads)==1
+    library=registry.get(key);library.start(library.document['entries'][0]['id'])
+    assert registry.summaries()[0]['counts']['preparing']==1
+    assert len(reads)==2

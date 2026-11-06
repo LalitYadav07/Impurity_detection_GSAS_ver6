@@ -7,6 +7,7 @@ Portable input remains the preparation library's checked data-only archive.
 from __future__ import annotations
 
 from collections import Counter, OrderedDict
+import copy
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import json
@@ -38,6 +39,7 @@ class PreparationRegistry:
         self.path = self.root/'registry.json'
         self._lock = threading.RLock()
         self._loaded = OrderedDict()
+        self._summaries = {}
         with self._transaction():
             if not self.path.exists():
                 write_json(self.path, dict(schema=SCHEMA, selected='', items=[]))
@@ -131,13 +133,14 @@ class PreparationRegistry:
         if not registered and target.exists():
             shutil.rmtree(target)
 
-    def create(self, *, name, source, banks, models):
+    def create(self, *, name, source, banks, models, scope=None):
         self._capacity()
         key = uuid.uuid4().hex
         target = self._directory(key)
         target.parent.mkdir(parents=True, exist_ok=True)
         try:
-            library = create_library(target, name=name, source=source, banks=banks, models=models)
+            library = create_library(target, name=name, source=source, banks=banks, models=models,
+                **({'scope':scope} if scope is not None else {}))
             return self._register(key, library, 'created')
         except Exception:
             self._discard_unregistered(key, target)
@@ -184,15 +187,21 @@ class PreparationRegistry:
                 path = self._directory(row['id'])/'library.json'
                 if path.is_symlink() or path.stat().st_size > 8*1024*1024:
                     raise ValueError('Preparation state is absent or oversized')
+                stat=path.stat();stamp=(stat.st_ino,stat.st_size,stat.st_mtime_ns,row['library_id'])
+                cached=self._summaries.get(row['id'])
+                if cached and cached[0]==stamp:
+                    rows.append(copy.deepcopy(cached[1]));continue
                 document = validate_manifest(json.loads(path.read_text()))
                 if document['id'] != row['library_id']:
                     raise ValueError('A preparation changed its registered scientific scope')
                 counts = dict(Counter(e['state'] for e in document['entries']))
-                rows.append(dict(row, name=document['name'], total=len(document['entries']),
-                    prepared=counts.get('prepared', 0), counts=counts, available=True, message=''))
+                summary=dict(row,name=document['name'],total=len(document['entries']),
+                    prepared=counts.get('prepared',0),counts=counts,available=True,message='',
+                    kinds=sorted({e['model']['kind'] for e in document['entries']}))
+                self._summaries[row['id']]=(stamp,copy.deepcopy(summary));rows.append(summary)
             except (OSError, ValueError):
                 rows.append(dict(row, name='Preparation needs review', total=None,
-                    prepared=None, counts={}, available=False,
+                    prepared=None, counts={}, kinds=[], available=False,
                     message='The saved preparation is missing or changed. Import a verified copy to recover it.'))
         return rows
 

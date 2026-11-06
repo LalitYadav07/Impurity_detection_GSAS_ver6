@@ -10,6 +10,7 @@ import json
 import heapq
 from pathlib import Path
 import shutil
+import tempfile
 
 from ..symmetry.compiler import file_sha
 from ..symmetry.contracts import digest, fields
@@ -37,7 +38,7 @@ def pending_entries(library, *, deferred=()):
     for row in library.document['entries']:
         model = row['model'];settings = model['settings']
         family = json.dumps([model['kind'], model['bank'], settings.get('k'),
-            settings['candidate'].get('irrep')], sort_keys=True)
+            settings.get('candidate',{}).get('irrep')], sort_keys=True)
         group = groups.setdefault(family, dict(admitted=0, pending=[]))
         group['admitted'] += int(row['attempt'] > 0)
         if row['state'] == 'pending' or row['id'] in deferred:
@@ -54,7 +55,7 @@ def pending_entries(library, *, deferred=()):
     return ordered
 
 
-def create_library(root, *, name, source, banks, models):
+def create_library(root, *, name, source, banks, models, scope=None):
     """Capture one parent, selected bank profiles and the finite model scope."""
     if not isinstance(banks, dict) or not banks or len(banks) > 100:
         raise ValueError('Select a bounded nonempty set of bank profiles')
@@ -75,7 +76,7 @@ def create_library(root, *, name, source, banks, models):
     declared = []
     for model in models:
         model = fields(model, ['kind', 'bank', 'settings'], {'child': None})
-        if model['kind'] not in {'magnetic', 'structural'} or model['bank'] not in bank_records:
+        if model['kind'] not in PORTABLE or model['bank'] not in bank_records:
             raise ValueError('The model must refer to a selected physical bank')
         settings = validate_settings(model['kind'], model['settings'])
         captured = dict(kind=model['kind'], bank=model['bank'], settings=settings,
@@ -93,9 +94,21 @@ def create_library(root, *, name, source, banks, models):
             grid=captured['grid'], settings=settings, destination='compiled',
             **({'child': captured['child']} if 'child' in captured else {})))
         declared.append(captured)
-    return PreparationLibrary.create(root, name=name,
-        specification=dict(schema=PLAN_SCHEMA, source='inputs/parent.cif'),
-        models=declared, inputs=inputs)
+    specification=dict(schema=PLAN_SCHEMA,source='inputs/parent.cif')
+    if scope is None:
+        return PreparationLibrary.create(root,name=name,specification=specification,models=declared,inputs=inputs)
+    # Keep the selected discovery denominator portable. It is provenance data,
+    # not a source of native executable instructions or an inferred result.
+    if (not isinstance(scope,dict) or scope.get('schema')!='radar-preparation-declared-scope/v1'
+            or scope.get('parent_cif_sha256')!=file_sha(source)
+            or scope.get('selected_banks')!=sorted(bank_records)
+            or not isinstance(scope.get('searches'),list) or not scope['searches']
+            or len(json.dumps(scope,allow_nan=False).encode())>4*1024*1024):
+        raise ValueError('Preparation needs its exact declared parent, banks and discovery scope')
+    with tempfile.TemporaryDirectory(prefix='radar-preparation-scope-') as temporary:
+        path=Path(temporary)/'scope.json';path.write_text(json.dumps(scope,sort_keys=True,allow_nan=False)+'\n')
+        inputs['scope.json']=path;specification['scope']='inputs/scope.json'
+        return PreparationLibrary.create(root,name=name,specification=specification,models=declared,inputs=inputs)
 
 
 def stage_entry(library, identifier, attempt, directory, *, recover_completed=False):
@@ -105,7 +118,7 @@ def stage_entry(library, identifier, attempt, directory, *, recover_completed=Fa
     states={'preparing','prepared'} if recover_completed else {'preparing'}
     if row['state'] not in states or row['attempt'] != attempt:
         raise ValueError('Stage only the currently owned preparation attempt')
-    specification = fields(library.document['specification'], ['schema', 'source'])
+    specification = fields(library.document['specification'], ['schema', 'source'], {'scope':None})
     if specification['schema'] != PLAN_SCHEMA:
         raise ValueError('This preparation plan cannot be reconstructed by the current client')
     directory = Path(directory).resolve()

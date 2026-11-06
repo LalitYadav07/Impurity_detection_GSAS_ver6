@@ -78,7 +78,7 @@ def validate_manifest(value):
                 or row['state'] not in STATES or type(row['attempt']) is not int or row['attempt'] < 0
                 or not isinstance(row['reason'], str) or len(row['reason']) > 2000
                 or not isinstance(row['model'], dict)
-                or row['model'].get('kind') not in {'magnetic', 'structural'}
+                or row['model'].get('kind') not in {'reference', 'magnetic', 'structural'}
                 or not isinstance(row['model'].get('bank'), str) or not row['model']['bank']
                 or not isinstance(row['files'], list) or len(row['files']) > 200):
             raise ValueError('Invalid or duplicate preparation model record')
@@ -291,6 +291,25 @@ class PreparationLibrary:
     def interrupt(self, identifier, attempt):
         # The caller must first establish that the old job/process is terminal.
         self.finish(identifier, attempt, state='cancelled', reason='Preparation interrupted; retry is explicit')
+
+    def detach_imported_work(self):
+        """Branch an imported copy without claiming ownership of its old jobs.
+
+        Call only on a fresh portable import, before attaching a local queue.
+        This does not cancel, retry or change any originating Galaxy job. A
+        later explicit start creates new attempts for this independent copy.
+        Same-History recovery must instead retain the original task handles.
+        """
+        if (self.root/'queue/queue.json').exists():
+            raise ValueError('Detach only a fresh portable copy; recover owned jobs through their History checkpoint')
+        with self._transaction():
+            count=0
+            for row in self.document['entries']:
+                if row['state']=='preparing':
+                    row.update(state='pending',reason='Imported branch; original job ownership was not transferred.')
+                    count+=1
+            if count:self._save()
+            return count
 
     def coverage(self):
         self.refresh()

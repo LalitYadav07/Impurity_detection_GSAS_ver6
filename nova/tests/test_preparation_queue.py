@@ -48,7 +48,7 @@ def setup(remote, tmp_path, count=3, *, batch_size=1):
     return queue, snapshots, base
 
 
-def complete(queue, service, task, tmp_path, *, states=None, mutate=None):
+def complete(queue, service, task, tmp_path, *, states=None, mutate=None, manifest_extra=None):
     """Protocol-only fake worker; the native worker has separate integration tests."""
     from gpx_recipe.preparation.batch import read_plan, RESULT_SCHEMA
     handle=task['handle'];request=handle['request'];payload=request['payload']
@@ -63,20 +63,22 @@ def complete(queue, service, task, tmp_path, *, states=None, mutate=None):
                  reason='batch_time_budget' if status=='pending' else '')
         if status=='prepared':
             child=member['request']
+            arrays={} if member['kind']=='reference' else {'response.npz':numeric}
             entry=dict(schema='radar-experiment-preparation-entry/v1',kind=member['kind'],
                 grid=child['grid'],settings=child['settings'],
                 input_sha256=[file_sha(queue.root/(Path('.') if single else Path(payload['plan']).parent)/child[k])
                               for k in ('source','instrument')],
                 observations_included=False,scientific_result=False,
-                artifacts={'response.npz':hashlib.sha256(numeric).hexdigest()})
+                artifacts={name:hashlib.sha256(data).hexdigest() for name,data in arrays.items()})
+            if manifest_extra:entry.update(manifest_extra(member))
             manifest=json.dumps(entry).encode();prefix=(child['destination'] if single
                 else payload['destination']+'/'+child['destination'])
             files['native/'+prefix+'/entry.json']=manifest
-            files['native/'+prefix+'/response.npz']=numeric
-            artifacts.extend(child['destination']+'/'+name for name in ('entry.json','response.npz'))
+            for name,data in arrays.items():files['native/'+prefix+'/'+name]=data
+            artifacts.extend(child['destination']+'/'+name for name in ['entry.json',*arrays])
             row['result']=dict(schema='radar-experiment-preparation-worker/v1',status='prepared',kind=member['kind'],
                 output='/worker/native/'+prefix,observations_included=False,scientific_result=False,
-                artifacts=['entry.json','response.npz'],entry_sha256=hashlib.sha256(manifest).hexdigest())
+                artifacts=['entry.json',*arrays],entry_sha256=hashlib.sha256(manifest).hexdigest())
         rows.append(row)
     counts={name:sum(r['state']==name for r in rows) for name in ('prepared','failed','cancelled','pending')}
     result=dict(schema=RESULT_SCHEMA,plan_sha256=digest(plan),status='partial' if counts['pending'] else 'complete',

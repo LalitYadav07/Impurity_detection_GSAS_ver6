@@ -6,18 +6,24 @@ import math
 import numpy as np
 
 
-def create_reference(cif, instrument, output, *, kind, lower, upper, bins=2500, bank=1):
-    """Ranges are degrees 2theta (PNC) or microseconds (PNT).
-
-    These empty histogram arrays specify a planned rendering grid. They are
-    never passed to the measured refinement adapter or published as scans.
-    """
+def validate_grid(*, kind, lower, upper, bins=2500, bank=1):
+    """Validate the same finite reference context before dispatch or native use."""
     if (kind not in {'PNC', 'PNT'} or type(bins) is not int or not 3 <= bins <= 25000
             or type(bank) is not int or not 1 <= bank <= 10000
             or any(isinstance(v, bool) or not isinstance(v, (float, int)) or not math.isfinite(v)
                 for v in (lower, upper)) or not 0 < lower < upper
             or (kind == 'PNC' and upper >= 180) or (kind == 'PNT' and upper > 200000)):
         raise ValueError('An explicit supported bank, histogram type and bounded physical grid are required')
+    return dict(kind=kind,lower=float(lower),upper=float(upper),bins=bins,bank=bank)
+
+
+def create_reference(cif, instrument, output, *, kind, lower, upper, bins=2500, bank=1):
+    """Ranges are degrees 2theta (PNC) or microseconds (PNT).
+
+    These empty histogram arrays specify a planned rendering grid. They are
+    never passed to the measured refinement adapter or published as scans.
+    """
+    validate_grid(kind=kind,lower=lower,upper=upper,bins=bins,bank=bank)
     cif, instrument, output = Path(cif), Path(instrument), Path(output)
     for path, limit in ((cif, 10*1024*1024), (instrument, 1024*1024)):
         if not path.is_file() or not 0 < path.stat().st_size <= limit:

@@ -14,7 +14,7 @@ import time
 from ..execution import write_json
 from ..symmetry.compiler import file_sha, package_signature
 from ..symmetry.contracts import digest, fields, number, validate_candidate, validate_protocol
-from .reference import create_reference
+from .reference import create_reference, validate_grid
 
 
 def validate_settings(kind, value):
@@ -58,6 +58,7 @@ def validate_request(kind, request):
     request = fields(request, required)
     request['settings'] = validate_settings(kind, request['settings'])
     request['grid'] = fields(request['grid'], ['kind', 'lower', 'upper', 'bins', 'bank'])
+    request['grid'] = validate_grid(**request['grid'])
     return request
 
 
