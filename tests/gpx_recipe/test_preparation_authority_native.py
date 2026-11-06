@@ -70,7 +70,14 @@ if sys.argv[3]!='none':
 else:
     assert report['status']=='native_requalified',report
     schedule=receipt['construction_execution']
-    assert schedule['direct_calls']+schedule['cached_calls']>=receipt['native_curves']
+    forwarded=schedule.get('native_forward_requests',0)
+    assert schedule['direct_calls']+schedule['cached_calls']+forwarded>=receipt['native_curves']
+    if forwarded:
+        native_forward=schedule['native_forward']
+        assert native_forward['requests']==forwarded
+        assert native_forward['rendered']+native_forward['native_fallback_calls']==forwarded
+        assert native_forward['qualified_anchor'] and not native_forward['disabled']
+        assert native_forward['native_anchor_checks']==1
 assert receipt['proposed_points']==185
 assert len(bank.points)==receipt['native_curves']
 assert report['scientific_candidates_removed'] is False

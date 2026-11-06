@@ -3,8 +3,9 @@
 Only original GSAS-II functions calculate scattering, positions, corrections
 and profile parameters. Compatible scalar operations are batched; native
 position and intensity corrections retain their per-reflection calls. These
-records supply proposal directions, never calculated patterns or likelihoods.
-The caller must compare an anchor against its original full native pass.
+records supply proposal directions or the separately guarded native TOF start
+renderer. They are not predictions until the original native peak kernels and
+background have rendered them. Each caller checks an original full native pass.
 """
 import hashlib
 import inspect
@@ -61,12 +62,17 @@ class NativeTOFScalars:
         self.calls=0;self.maximum_workspace_bytes=0
 
     def collect(self,point,*,maximum_bytes):
+        return self.collect_physical(np.asarray(point,float)*self.source.radii,
+                                     maximum_bytes=maximum_bytes)
+
+    def collect_physical(self,point,*,maximum_bytes):
+        """Retain physical coordinate bits without a normalization round trip."""
         if type(maximum_bytes)is not int or maximum_bytes<1:
             raise ScalarBatchUnavailable('No remaining scalar collection workspace')
         n=self.native;s=self.source;n._check()
         if any(getattr(module,name,None) is not function for module,name,function in self.dependencies):
             raise ScalarBatchUnavailable('Native scalar functions changed during this proposal')
-        p=s.check(np.asarray(point,float)*s.radii)
+        p=s.check(np.asarray(point,float))
         _,values=s.fast._values(s.theta(p),chemistry_domain=(s.chemistry,p))
         n._prepare_values(values)
         h=n.histo_phases[0][s.fast.slow.hist.name];phase=n.histo_phases[1][s.fast.slow.phase.name]

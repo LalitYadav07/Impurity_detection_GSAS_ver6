@@ -448,3 +448,30 @@ and the structural prepare/fit/export/continuation controls. A 185-point public
 structural scalar portfolio retained array-identical records in four
 counterbalanced passes. Its median scalar-stage time decreased by about 18%;
 this is a component measurement, not a complete-fit or NDIP latency claim.
+
+## Native TOF starting-curve construction
+
+The complete structural starting portfolio can batch native scalar calculations
+before rendering each reflection with the original GSAS-II TOF peak kernel.
+Native reflection order, peak support, intensity corrections, background and
+physical parameter bits are preserved. The first rendered curve is checked for
+array identity against the original complete native calculation; a mismatch
+disables this helper for that context. Fixed-cell displacement curves retain the
+separate checked response reuse described above.
+
+This construction helper requires one unmasked commensurate nuclear phase,
+reviewed native functions, isotropic size/microstrain and no extinction or native
+multiprocessing. Unsupported contexts retain the complete native calculation.
+Extra workspace is bounded at 64 MiB; native process RSS is a separate resource.
+Receipts report native anchor checks, fallback reasons and original peak calls.
+Fitting, stationarity checks and final GPX publication retain their original
+native acceptance paths. This does not qualify interpolation or transfer a
+rendered profile between cells, grids or instruments.
+
+A public 16-mode/four-cell candidate was checked over the complete 185-curve
+bank and proposal-step calculation in four counterbalanced passes. Every saved
+array was identical. Median construction time changed from 89.19 to 81.33 s
+(about 9%); individual passes ranged from 79.84 to 96.36 s. This is a local
+starting-bank measurement with reflection-envelope reuse enabled in both arms,
+not a complete nonlinear fit or NDIP throughput measurement. Preparation reuse
+after real cell/profile changes and full deployed acceptance remain required.

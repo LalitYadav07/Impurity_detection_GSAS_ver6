@@ -4,6 +4,11 @@ import pytest
 from gpx_recipe.structural_live.optimization import native_bank_reuse as module
 
 
+@pytest.fixture(autouse=True)
+def no_native_stack_for_host_contracts(monkeypatch):
+    monkeypatch.setattr(module,'native_forward_for_source',lambda source:None)
+
+
 def test_only_displacements_at_exact_fixed_cell_reuse_native_profiles(monkeypatch):
     calls=[]
     class Cache:

@@ -64,6 +64,17 @@ def test_batch_does_not_read_or_change_observations(tmp_path):
     for actual,expected in zip(data[:3],before):np.testing.assert_array_equal(actual,expected)
 
 
+def test_physical_collection_does_not_round_trip_coordinates_through_radii(tmp_path,monkeypatch):
+    _,s=native_source(tmp_path/'inputs','PNT');collector=module.for_source(s,s.fast.native.math.getPowderProfile)
+    physical=np.linspace(-.053,.071,len(s.radii))*s.radii
+    checked=[];original=s.check
+    def watch(point):checked.append(np.asarray(point).copy());return original(point)
+    monkeypatch.setattr(s,'check',watch)
+    collector.collect_physical(physical,maximum_bytes=64*1024*1024)
+    assert checked
+    np.testing.assert_array_equal(checked[0],physical)
+
+
 def test_unreviewed_scalar_implementation_keeps_original_path(tmp_path,monkeypatch):
     _,s=native_source(tmp_path/'inputs','PNT');n=s.fast.native
     monkeypatch.setattr(n.math,'GetReflPos',lambda *a:0.)

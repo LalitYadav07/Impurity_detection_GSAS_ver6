@@ -30,6 +30,13 @@ def test_complete_joint_start_bank_matches_full_native_without_a_second_profile_
     assert response['maximum_capture_relative_error']<1e-9
     assert response['maximum_check_error']<1e-9
     assert response['numeric_cache_bytes']<=response['maximum_numeric_cache_bytes']
+    if kind=='PNT':
+        assert execution['native_forward_requests']>0
+        assert execution['native_forward']['qualified_anchor']
+        assert execution['native_forward']['native_anchor_checks']==1
+        moving=np.any(new.points[:,source.mode_dimensions:]!=0,axis=1)
+        np.testing.assert_array_equal(new.curves[moving],old.curves[moving])
+    else:assert execution['native_forward'] is None
 
 
 @pytest.mark.parametrize('kind',['PNC','PNT'])
