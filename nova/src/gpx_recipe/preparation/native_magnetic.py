@@ -1,60 +1,16 @@
 """Compile observation-independent physics through the shared native engine."""
 import hashlib
-import inspect
 import json
 from pathlib import Path
-import sys
+import re
 import time
 
 import numpy as np
 
 from .magnetic import MagneticResponse, MAX_BYTES
+from .identity import _plain, native_identity, BOOKKEEPING_CONTROLS
 from ..live.moment_basis import derive
 from ..live.native_kernel_policy import compile_native_magnetic_kernel
-
-
-def _plain(value):
-    if isinstance(value, np.ndarray):
-        return _plain(value.tolist())
-    if isinstance(value, np.generic):
-        return _plain(value.item())
-    if isinstance(value, dict):
-        keys = [str(k) for k in value]
-        if len(set(keys)) != len(keys):
-            raise ValueError('Ambiguous native identity dictionary')
-        return {str(k): _plain(v) for k, v in value.items()}
-    if isinstance(value, (tuple, list)):
-        return [_plain(v) for v in value]
-    if isinstance(value, complex):
-        return {'complex': [value.real, value.imag]}
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return value
-    raise ValueError('Unsupported native physics identity value: '+type(value).__name__)
-
-
-def native_identity(native):
-    """Pin reviewed native sources, active functions and loaded GSAS binaries."""
-    from ..live.validated_backend import (active_identity, backend_identity,
-                                          PINNED_PRODUCTION_STRMATH)
-    source_hash = hashlib.sha256(Path(native.math.__file__).read_bytes()).hexdigest()
-    if source_hash != PINNED_PRODUCTION_STRMATH and active_identity() is None:
-        raise ValueError('Preparation requires the reviewed native scientific backend')
-    identity = backend_identity()
-    identity['active_backend'] = active_identity()
-    identity['powder_source_sha256'] = hashlib.sha256(Path(native.math.G2pwd.__file__).read_bytes()).hexdigest()
-    identity['active_functions'] = {name: hashlib.sha256(inspect.getsource(getattr(native.math, name)).encode()).hexdigest()
-        for name in ('StructureFactor2', 'MagStructureFactor2', 'MagStructureFactorDerv', 'getPowderProfile')}
-    native_root = Path(native.math.__file__).parent.resolve()
-    binaries = {}
-    for name, module in list(sys.modules.items()):
-        filename = getattr(module, '__file__', None)
-        if not filename:
-            continue
-        path = Path(filename)
-        if path.suffix in {'.so', '.pyd'} and path.resolve().is_relative_to(native_root):
-            binaries[name] = hashlib.sha256(path.read_bytes()).hexdigest()
-    identity['native_binaries'] = binaries
-    return identity
 
 
 def _context(native):
@@ -77,22 +33,59 @@ def _context(native):
     return histogram, phases, hfx, moments, background, scale
 
 
-def physics_identity(native, basis=None):
+def _physics_record(native, basis=None):
     histogram, phases, hfx, moments, background, scale = _context(native)
     if basis is None:
         basis = moment_basis(native)
     dynamic = set(moments+background+[scale]) | {k for _, _, keys in basis.atoms for k in keys}
-    ignored = {'Seq Data', 'parmMinDict', 'parmMaxDict', 'parmFrozen'} | {
+    ignored = BOOKKEEPING_CONTROLS | {'atomIndx'} | {
         hfx+'Exclude', hfx+'wtFactor'}
+    # Native random atom IDs and display histogram/phase names are not
+    # scattering inputs. Preserve exact site and variable order, while
+    # describing their parameter references through deterministic roles.
+    names = {name: ('magnetic' if p['General']['Type'] == 'magnetic' else 'nuclear')+'-'+str(i)
+             for i, (name, p) in enumerate(phases.items())}
+    ids = {str(p['pId']): names[name] for name, p in phases.items()}
+    histogram_name = native.parts[0][0]
+    hid = str(histogram['hId'])
+
+    def key(value):
+        text = str(value)
+        if text in names:
+            return names[text]
+        if text == histogram_name:
+            return 'bank'
+        match = re.match(r'^(\d*):(\d*):(.*)$', text)
+        if match:
+            p, h, rest = match.groups()
+            return ':'.join((ids.get(p, p), 'bank' if h == hid else h, rest))
+        return text
+
+    def canonical(value):
+        if isinstance(value, dict):
+            result = {key(k): canonical(v) for k, v in value.items()}
+            if len(result) != len(value):
+                raise ValueError('Ambiguous magnetic physical parameter roles')
+            return result
+        if isinstance(value, (list, tuple)):
+            return [canonical(v) for v in value]
+        return value
+
     content = dict(runtime=native_identity(native),
-        parameters={k: v for k, v in native.parms.items() if k not in dynamic},
-        controls={k: v for k, v in native.controls.items() if k not in ignored},
-        histogram_dictionary=native.histdict,
+        parameters=canonical({k: v for k, v in native.parms.items() if k not in dynamic}),
+        controls=canonical({k: v for k, v in native.controls.items() if k not in ignored}),
+        histogram_dictionary=canonical(native.histdict),
         grid=np.asarray(np.ma.getdata(histogram['Data'][0]), float),
-        phases={name: dict(general=p['General'], histograms=p['Histograms']) for name, p in phases.items()},
-        variables=dict(moments=moments, background=background),
-        atoms=basis.atoms, components=basis.components, cartesian=basis.cartesian)
-    encoded = json.dumps(_plain(content), sort_keys=True, allow_nan=False, separators=(',', ':'))
+        phases={names[name]: dict(general={k: v for k, v in p['General'].items() if k not in {'Name', 'Mydir'}},
+            histograms=canonical(p['Histograms'])) for name, p in phases.items()},
+        variables=dict(moments=[key(k) for k in moments], background=[key(k) for k in background]),
+        atoms=[(names[name], index, [key(k) for k in keys]) for name, index, keys in basis.atoms],
+        components=basis.components, cartesian=basis.cartesian)
+    return _plain(content)
+
+
+def physics_identity(native, basis=None):
+    encoded = json.dumps(_physics_record(native, basis), sort_keys=True, allow_nan=False, separators=(',', ':'))
     return hashlib.sha256(encoded.encode()).hexdigest()
 
 

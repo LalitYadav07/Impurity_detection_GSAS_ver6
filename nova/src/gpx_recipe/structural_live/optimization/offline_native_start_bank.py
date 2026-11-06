@@ -22,8 +22,8 @@ def context(source):
     from gpx_recipe.live.native_profile import NativeReducedProfile
     implementations=[Path(__file__),Path(inspect.getfile(multiscale_starts)),Path(inspect.getfile(FullModeSlice)),
         Path(inspect.getfile(NativeFastCandidate)),Path(inspect.getfile(NativeReducedProfile))]
-    prepared=source.fast.slow.root
-    return dict(schema='native-start-bank/v1',prepared_sha256={name:sha(prepared/name) for name in ['prepared.json','prepared.gpx','basis.npz']},
+    from gpx_recipe.preparation.structural_identity import structural_physics_identity
+    return dict(schema='native-start-bank/v2',physics_sha256=structural_physics_identity(source),
         scientific_implementation_sha256=implementation()[0],
         native_powder_sources_sha256={name:sha(module.__file__) for name,module in [('GSASIIstrMath',source.fast.native.math),('GSASIIpwd',source.fast.native.math.G2pwd),('pypowder',source.fast.native.math.G2pwd.pyd)]},
         radii=source.radii.tolist(),lift_sha256=array_hash(source.lift),x_sha256=array_hash(source.fast.x),

@@ -352,7 +352,7 @@ class GalaxyModelRuntime(GalaxyRefinementRuntime):
             self._events.add(token)
         try:
             payload=copy.deepcopy(payload);files=[]
-            for field in ['source','child']:
+            for field in ['source','child','instrument']:
                 if field in payload:
                     path=Path(payload[field]).resolve();relative=str(path.relative_to(root))
                     files.append(relative);payload[field]=relative

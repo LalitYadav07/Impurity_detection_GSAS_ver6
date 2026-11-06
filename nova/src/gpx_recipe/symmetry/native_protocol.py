@@ -11,6 +11,9 @@ FIELDS = {
                      'sites', 'directions', 'catalogs'}, {'moment_model'}),
     'k-template': ({'directory'}, set()),
     'k-portfolio': ({'directories', 'workers', 'seconds'}, set()),
+    'preparation-reference': ({'source', 'instrument', 'grid', 'settings', 'destination'}, set()),
+    'preparation-magnetic': ({'source', 'instrument', 'grid', 'settings', 'destination'}, set()),
+    'preparation-structural': ({'source', 'instrument', 'child', 'grid', 'settings', 'destination'}, set()),
 }
 
 
@@ -24,3 +27,6 @@ def validate_native_payload(operation, payload):
         'collinear', 'symmetry_allowed',
     }:
         raise ValueError('Choose a supported magnetic moment model')
+    if operation.startswith('preparation-'):
+        from ..preparation.worker import validate_request
+        validate_request(operation.removeprefix('preparation-'), payload)

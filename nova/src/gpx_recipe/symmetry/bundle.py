@@ -4,7 +4,7 @@ import stat
 import zipfile
 
 MAX_BYTES=512*1024*1024
-DATA_SUFFIXES={'.json','.gpx','.cif','.npz','.log','.txt','.lst'}
+DATA_SUFFIXES={'.json','.gpx','.cif','.npz','.log','.txt','.lst','.instprm','.prm','.ins','.inst'}
 
 
 def hydrate_source(inputs,source,hashes,expected):
