@@ -19,6 +19,25 @@ import numpy as np
 from gsas_cif_import import _gsas_operations, _operator_sets
 
 
+def complete_magnetic_orbits(child,codes):
+    """Honor a magnetic P1 antitranslation despite native P1 shortcuts.
+
+    Native TransformPhase skips GetUnique and SytSym returns multiplicity one
+    whenever the ordinary group is P1. A type-IV magnetic centring translation
+    still relates chemical sites. Keep one native symmetry representative and
+    its full positional multiplicity; never initialize related mates as
+    independent magnetic orbits. BNS operations and spin characters stay intact.
+    """
+    sg=child['General']['SGData']
+    if sg.get('SpGrp')!='P 1' or len(sg.get('SGCen',[]))<=1:return child,codes
+    from GSASII import GSASIIlattice as L,GSASIIspc as S
+    child['Atoms'],codes=L.GetUnique(child,codes)
+    cx,_,cs,_=child['General']['AtomPtrs']
+    for atom in child['Atoms']:
+        atom[cs+1]=len(list(S.GenAtom(atom[cx:cx+3],sg,Move=True)))
+    return child,codes
+
+
 class NativeRepresentationError(ValueError):
     """A native construction needs a verified basis/site transfer, not a fit."""
 
@@ -226,6 +245,7 @@ approved protocol, not an inference performed by this function.
         [candidate['magnetic_space_group'], candidate.get('bns_lattice', '')], origin, transform, True)['SGData']
     child['General']['Cell'][1:] = list(G2lat.TransformCell(general['Cell'][1:7], transform))
     child, codes = G2lat.TransformPhase(parent, child, transform, origin, np.zeros(3), True)
+    child,codes=complete_magnetic_orbits(child,codes)
     ccx, cct, _, _ = child['General']['AtomPtrs']
     rows = []
     represented = {site:0 for site in sites}
@@ -237,7 +257,7 @@ approved protocol, not an inference performed by this function.
         if parent_label not in sites:
             continue
         syms = G2spc.SytSym(atom[ccx:ccx+3], child['General']['SGData'])
-        represented[parent_label] += int(syms[1])
+        represented[parent_label] += int(atom[child['General']['AtomPtrs'][2]+1])
         ids, coefficients = G2spc.GetCSpqinel(child['General']['SGData']['SpnFlp'], syms[3])
         basis = moment_basis(ids, coefficients)
         direction_allowed = fixed_direction_child is None or direction_in_basis(basis, fixed_direction_child)

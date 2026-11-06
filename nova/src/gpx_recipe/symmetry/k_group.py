@@ -94,7 +94,7 @@ def simulate_group(directories):
         physical_x=response.x
         curves=scale*np.einsum('si,nij,sj->sn',starts,response.quadratic,starts)
         compiler=dict(method='qualified_quadratic_response',proof=response.proof)
-        preparation['used']=True
+        preparation['used']=bool(response.proof['compiler'].get('native_reflection_diagnostics',{}).get('scattering_factors_reused',False))
     else:
         physical_x,curves,compiler=current_native_profiles(native,starts)
         preparation['used']=False

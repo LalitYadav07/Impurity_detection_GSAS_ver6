@@ -28,7 +28,9 @@ class QuadraticObservation:
         if not 1<=self.dimension<=64 or not len(self.y) or self.quadratic.size>40_000_000:raise ValueError('Model exceeds the validated shape/resource budget')
         if self.base.ndim!=1 or self.y.shape!=self.base.shape or self.sigma.shape!=self.y.shape or self.quadratic.shape!=(self.dimension,self.dimension,len(self.y)):
             raise ValueError('Matching reduced-observation arrays required')
-        if not all(np.isfinite(v).all() for v in [self.base,self.quadratic,self.y,self.sigma,self.forms]) or np.any(self.sigma<=0) or not 0<=self.lower<self.upper:
+        if (not all(np.isfinite(v).all() for v in [self.base,self.quadratic,self.y,self.sigma,self.forms])
+                or np.any(self.sigma<=0) or not np.isfinite([self.lower,self.upper]).all()
+                or not 0<=self.lower<self.upper):
             raise ValueError('Finite data and positive uncertainties/bounds required')
         if self.forms.ndim!=3 or self.forms.shape[1:]!=(self.dimension,self.dimension):raise ValueError('Native moment forms required')
         if not len(self.forms) or not np.allclose(self.forms,self.forms.transpose(0,2,1),rtol=1e-10,atol=1e-12):raise ValueError('Symmetric physical moment forms required')
@@ -68,18 +70,51 @@ class QuadraticObservation:
             touching=[g for g in groups if g & support]
             for g in touching:support=support|g;groups.remove(g)
             groups.append(support)
-        output=np.zeros((n,self.dimension));rng_deadline=deadline or time.monotonic()+30
+        if type(n) is not int or n<1:raise ValueError('A positive finite prior sample count is required')
+        output=np.zeros((n,self.dimension));rng_deadline=time.monotonic()+30 if deadline is None else float(deadline)
+        if not np.isfinite(rng_deadline):raise ValueError('A finite prior deadline is required')
+        self.prior_diagnostics=[]
         for group in groups:
             cols=sorted(group);forms=np.array([f[np.ix_(cols,cols)] for f,s in zip(self.forms,supports) if s and s<=group])
-            bound=self.upper*np.sqrt(len(forms)*np.diag(np.linalg.inv(forms.sum(axis=0))))
-            count=0;accepted=[]
+            # Every feasible point satisfies
+            #   K*lower² <= p.T sum(forms) p <= K*upper².
+            # A uniform ellipsoidal-shell proposal contains the full target.
+            # Its density is constant in these coordinates (the linear map
+            # has a constant Jacobian); rejection with ALL original forms
+            # therefore preserves the exact uniform physical constraint prior.
+            # This avoids an exponentially wasteful axis-aligned box after
+            # an equivalent dense change of independent magnetic coordinates.
+            metric=forms.sum(axis=0)
+            transform=np.linalg.solve(np.linalg.cholesky(metric).T,np.eye(len(cols)))
+            # Enlarge the proposal if roundoff makes its computed metric
+            # differ from identity. A conservative spectral bound keeps the
+            # original feasible region inside the proposal, including after
+            # moderately ill-conditioned changes of coordinates.
+            actual=transform.T@metric@transform
+            margin=(np.max(np.sum(abs(actual-np.eye(len(cols))),axis=1))+
+                128*np.finfo(float).eps*len(cols)*np.linalg.norm(transform,2)**2*np.linalg.norm(metric,2))
+            if not np.isfinite(margin) or margin>=.25:
+                raise ValueError('Prior coordinates cannot safely bound the physical constraint region')
+            outer=self.upper*np.sqrt(len(forms))/np.sqrt(1-margin)
+            inner=self.lower*np.sqrt(len(forms))/np.sqrt(1+margin)
+            radial_floor=(inner/outer)**len(cols)
+            count=proposed=0;accepted=[]
             while count<n:
                 if time.monotonic()>rng_deadline:raise TimeoutError('Prior sampling budget exceeded; candidate remains unresolved')
-                p=rng.uniform(-bound,bound,(max(512,n-count),len(cols)))
+                rate=count/proposed if proposed else 1.
+                batch=min(4096,max(512,int((n-count)/max(rate,1/4096))))
+                directions=rng.normal(size=(batch,len(cols)))
+                lengths=np.linalg.norm(directions,axis=1)
+                if np.any(lengths==0):continue
+                radius=outer*(radial_floor+(1-radial_floor)*rng.random(batch))**(1/len(cols))
+                p=(directions*(radius/lengths)[:,None])@transform.T
                 mag=np.sqrt(np.maximum(0.,np.einsum('ni,sij,nj->ns',p,forms,p)))
                 good=p[((mag>=self.lower)&(mag<=self.upper)).all(axis=1)]
-                accepted.append(good);count+=len(good)
+                accepted.append(good);count+=len(good);proposed+=batch
             output[:,cols]=np.concatenate(accepted)[:n]
+            self.prior_diagnostics.append(dict(method='uniform_constraint_ellipsoid_rejection',
+                dimensions=len(cols),constraints=len(forms),proposals=proposed,accepted=count,
+                complete_original_constraints_checked=True))
         if not self.valid(output).all():raise ValueError('Factored prior failed full native moment constraints')
         return output
 
@@ -87,7 +122,7 @@ def sample_posterior(model,*,particles=256,seed=0,moves=12,max_seconds=60.):
     if not isinstance(particles,int) or isinstance(particles,bool) or not isinstance(moves,int) or particles<64 or moves<2 or not np.isfinite(max_seconds) or max_seconds<=0:raise ValueError('Invalid sampler budget')
     start=time.monotonic();rng=np.random.default_rng(seed);x=model.prior(rng,particles,deadline=start+max_seconds);ll=model.loglike(x)
     if not np.isfinite(ll).all():raise ValueError('Nonfinite prior likelihood; inference remains unresolved')
-    prior=x.copy();beta=0.;history=[];logz=0.
+    prior=x.copy();prior_diagnostics=[dict(v) for v in model.prior_diagnostics];beta=0.;history=[];logz=0.
     while beta<1.-1e-10:
         if time.monotonic()-start>max_seconds or len(history)>600:raise TimeoutError('Posterior incomplete; no rejection or precision claim')
         lo=0.;hi=1.-beta
@@ -120,10 +155,39 @@ def sample_posterior(model,*,particles=256,seed=0,moves=12,max_seconds=60.):
             ok=np.log(rng.random(particles))<beta*(tl-ll);x[ok]=trial[ok];ll[ok]=tl[ok];accepted+=int(ok.sum())
             local_accepted+=int((ok&~flips).sum());local_proposals+=int((~flips).sum());sign_accepted+=int((ok&flips).sum());sign_proposals+=int(flips.sum())
         history.append(dict(beta=beta,ess=ess,acceptance=accepted/(particles*moves),local_acceptance=local_accepted/max(1,local_proposals),sign_acceptance=sign_accepted/max(1,sign_proposals),local_proposals=local_proposals,sign_proposals=sign_proposals))
-    return dict(samples=x,prior=prior,loglike=ll,log_evidence=logz,history=history,seconds=time.monotonic()-start,qualified=False)
+    return dict(samples=x,prior=prior,prior_diagnostics=prior_diagnostics,loglike=ll,log_evidence=logz,history=history,seconds=time.monotonic()-start,qualified=False)
 
 def compare_replicas(model,a,b):
-    qa=np.quantile(model.moments(a['samples']),[.025,.5,.975],axis=0);qb=np.quantile(model.moments(b['samples']),[.025,.5,.975],axis=0)
+    """Necessary agreement screens, never a proof of global convergence.
+
+    Predictive coordinates are the exact whitened QR sufficient statistics;
+    they do not require rendering every full pattern again. Physical second
+    moments detect orientation/relative-sign disagreement while respecting
+    the exact global +/- symmetry. These are per-model replica checks, not
+    posterior model probabilities or proof of an identifiable structure.
+    """
+    samples=[np.asarray(v['samples'],float) for v in (a,b)]
+    if any(x.ndim!=2 or x.shape[1]!=model.dimension or len(x)<2
+            or not model.valid(x).all() for x in samples):
+        raise ValueError('Two complete finite physical replica ensembles are required')
+    qa=np.quantile(model.moments(samples[0]),[.025,.5,.975],axis=0);qb=np.quantile(model.moments(samples[1]),[.025,.5,.975],axis=0)
     width=np.maximum(np.maximum(qa[2]-qa[0],qb[2]-qb[0]),.05)
     discrepancy=float(np.max(abs(qa[1]-qb[1])/width))
-    return dict(median_discrepancy_in_interval_widths=discrepancy,screen_passed=discrepancy<.5,global_convergence_proven=False)
+    def compare(first,second,floor):
+        va=float(np.sum(np.var(first,axis=0,ddof=1)));vb=float(np.sum(np.var(second,axis=0,ddof=1)))
+        mean=float(np.linalg.norm(np.mean(first,axis=0)-np.mean(second,axis=0))/max(np.sqrt(va+vb),floor))
+        spread=abs(va-vb)/max(va+vb,floor**2)
+        return dict(mean_discrepancy_in_spread=mean,relative_spread_discrepancy=float(spread),
+            passed=mean<.5 and spread<.5)
+    predictions=[model.features(x)@model.R.T for x in samples]
+    predictive=compare(*predictions,1.)
+    metric=np.linalg.cholesky(model.forms.sum(axis=0))
+    physical=[x@metric for x in samples]
+    factors=np.where(model.i==model.j,1.,np.sqrt(2.))
+    second_moments=[x[:,model.i]*x[:,model.j]*factors for x in physical]
+    orientation=compare(*second_moments,1e-12*max(1.,len(model.forms)*model.upper**2))
+    return dict(median_discrepancy_in_interval_widths=discrepancy,
+        predictive_agreement=predictive,physical_second_moment_agreement=orientation,
+        screen_passed=bool(discrepancy<.5 and predictive['passed'] and orientation['passed']),
+        global_convergence_proven=False,
+        scope='Necessary magnitude, predictive and physical second-moment replica agreement; structural identifiability is not established')

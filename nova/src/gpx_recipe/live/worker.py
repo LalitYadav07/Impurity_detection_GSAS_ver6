@@ -86,7 +86,9 @@ def infer(kernel,destination,*,lower,upper,particles=256,seconds=45.,seed=0):
     result=dict(prior_moment_draws=prior_moments[::max(1,len(prior_moments)//256)].tolist(),relative_half_width=((intervals[:,2]-intervals[:,0])/(2*np.maximum(intervals[:,1],1e-12))).tolist(),prior_edge_mass=float(np.mean(np.any((moments<lower+.01*(upper-lower))|(moments>upper-.01*(upper-lower)),axis=1))),status='conditional_posterior' if health['screen_passed'] else 'sampling_unresolved',rwp=float(rwp),reduced_chi2=float(-2*ll.max()/max(1,len(data['y'])-model.dimension)),health=health,
       seconds=a['seconds']+b['seconds'],intervals=intervals.tolist(),labels=data['labels'].tolist(),x=data['x'][take].tolist(),y=data['y'][take].tolist(),sigma=data['sigma'][take].tolist(),fit=calc[take].tolist(),
       mean_band=np.quantile(draws,[.025,.5,.975],axis=0)[:,take].tolist(),ensemble=draws[:8,take].tolist(),moment_draws=moments[::max(1,len(moments)//256)].tolist(),parameter_draws=samples[::max(1,len(samples)//256)].tolist(),
-      sampler_history=a['history'],sampler_histories=[a['history'],b['history']],particles=particles,exclusion_authorized=False,forecast_enabled=False,scope='Conditional on fixed nuclear baseline and supplied diagonal reduced variances; reference/cross-bin covariance unqualified')
+      sampler_history=a['history'],sampler_histories=[a['history'],b['history']],
+      prior_diagnostics=[a['prior_diagnostics'],b['prior_diagnostics']],
+      particles=particles,exclusion_authorized=False,forecast_enabled=False,scope='Conditional on fixed nuclear baseline and supplied diagonal reduced variances; reference/cross-bin covariance unqualified')
     write(Path(destination)/'posterior.json',result);return result
 
 def execute(request_path,candidate_id=None):

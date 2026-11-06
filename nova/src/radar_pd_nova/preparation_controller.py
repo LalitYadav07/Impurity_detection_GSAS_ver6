@@ -380,8 +380,13 @@ class PreparationMixin:
         return capture(store.registry.get(),context,root)
 
     def _prepared_selection_caption(self):
+        # A read-only Results/Live refresh must not create a runtime, registry
+        # or filesystem workspace. Actual selection/capture opens that store
+        # explicitly, including its durable saved selection when appropriate.
+        if self._preparation_workspace is None:
+            return 'Open Experiment preparation to choose or review a saved library. Model searches check compatibility before reuse.'
         try:
-            registry=self._preparation_store().registry;selected=registry.selected_key()
+            registry=self._preparation_workspace.registry;selected=registry.selected_key()
             if not selected:
                 return 'No preparation library selected. Model searches build the required physics when they run.'
             row=next(row for row in registry.summaries() if row['id']==selected)

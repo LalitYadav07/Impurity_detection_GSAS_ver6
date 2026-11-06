@@ -17,7 +17,7 @@ from gpx_recipe.symmetry.k_native import template,portfolio
 from gpx_recipe.symmetry.native_audit import inspect_source
 
 
-def setup(root,kind,masked):
+def setup(root,kind,masked,anti_translation=False):
     root.mkdir();reference,construction,candidate,_=inputs(root,kind)
     project=G.G2Project(gpxfile=reference['path']);h=project.histogram(0)
     arrays=h.data['data'][1];arrays[1]=np.ones(len(arrays[0]));arrays[2]=np.ones(len(arrays[0]))
@@ -28,6 +28,13 @@ def setup(root,kind,masked):
         h.data['data'][1]=a
     source=root/'source.gpx';project.save(str(source));context=inspect_source(source)
     candidate=copy.deepcopy(candidate)
+    if anti_translation:
+        # GSAS-II's Bilbao representation separates the ordinary P1 symbol
+        # from the S antitranslation suffix (BNS 1.3). Doubling parent c gives
+        # the exact k=(0,0,1/2) antiferromagnetic translation character.
+        candidate.update(id='public:antiferro-p1',magnetic_space_group='P 1',bns_number='1.3',
+            bns_lattice='S',transformation_matrix=np.diag([1.,1.,2.]).tolist())
+        construction['k']=['0','0','1/2']
     catalog=dict(schema='radar-symmetry-catalog/v1',parent_setting_sha256=construction['parent_setting_sha256'],
         k=construction['k'],candidates=[candidate]);write_json(root/'catalog.json',catalog)
     protocol=validate_protocol(dict(kind='magnetic',source=dict(path='source.gpx',sha256=file_sha(source)),
@@ -44,9 +51,9 @@ def setup(root,kind,masked):
     return source,protocol
 
 
-@pytest.mark.parametrize('kind,masked',[('PNC',False),('PNT',True)])
-def test_shared_profiles_preserve_every_seed_native_curve_and_original_masks(tmp_path,kind,masked):
-    source,protocol=setup(tmp_path/'input',kind,masked);before=source.read_bytes()
+@pytest.mark.parametrize('kind,masked,anti_translation',[('PNC',False,False),('PNT',True,False),('PNC',False,True)])
+def test_shared_profiles_preserve_every_seed_native_curve_and_original_masks(tmp_path,kind,masked,anti_translation):
+    source,protocol=setup(tmp_path/'input',kind,masked,anti_translation);before=source.read_bytes()
     direct=[];grouped=[];timing={}
     for label,target in [('ordinary',direct),('grouped',grouped)]:
         for seed in protocol['seeds']:
@@ -73,12 +80,34 @@ def test_shared_profiles_preserve_every_seed_native_curve_and_original_masks(tmp
         assert result['shared_physics']['native_constructions']==1
         assert result['shared_physics']['declared_starts']==6
         assert result['shared_physics']['independent_seed_error']<=1e-8
+    if anti_translation:
+        from GSASII import GSASIIlattice as L
+        from gpx_recipe.native_forward import forward_profile
+        # Independent representation: an ordinary P1 doubled cell with two
+        # explicitly opposite moments must give the same native intensity as
+        # one asymmetric orbit related by a magnetic antitranslation.
+        path=direct[0]/'simulation/magnetic-refinement.gpx'
+        project=G.G2Project(gpxfile=str(path));phase=project.phases()[-1]
+        cx,_,cs,_=phase.data['General']['AtomPtrs']
+        assert len(phase.data['Atoms'])==1 and phase.data['Atoms'][0][cs+1]==2
+        explicit=copy.deepcopy(phase.data['Atoms'][0]);explicit[0]+='_opposite'
+        explicit[cx:cx+3]=((np.asarray(explicit[cx:cx+3])+[0,0,.5])%1).tolist()
+        explicit[cx+4:cx+7]=(-np.asarray(explicit[cx+4:cx+7])).tolist()
+        explicit[-1]+=1;explicit[cs+1]=1;phase.data['Atoms'][0][cs+1]=1
+        phase.data['Atoms'].append(explicit)
+        phase.data['General']['SGData']=L.makeBilbaoPhase(['P 1',''],[0,0,0],np.eye(3),True)['SGData']
+        G.SetupGeneral(phase.data,None)
+        explicit_path=tmp_path/'explicit-opposite-moments.gpx';project.save(str(explicit_path))
+        actual,_=forward_profile(path,protocol['histogram'])
+        expected,_=forward_profile(explicit_path,protocol['histogram'])
+        np.testing.assert_allclose(actual,expected,rtol=1e-8,atol=1e-10)
     assert source.read_bytes()==before
-    write_json(tmp_path/'timing.json',dict(timing,starts=6,kind=kind,masked=masked,
+    write_json(tmp_path/'timing.json',dict(timing,starts=6,kind=kind,masked=masked,k=protocol['k'],
         scope='Artificial native equivalence and timing; not a material identification or NDIP latency benchmark'))
 
 
-def test_large_group_consumes_prepared_factors_and_checks_all_native_seed_profiles(tmp_path):
+@pytest.mark.parametrize('changed_cell',[False,True])
+def test_large_group_consumes_prepared_factors_and_checks_all_native_seed_profiles(tmp_path,changed_cell):
     from gpx_recipe.preparation import hints
     from gpx_recipe.preparation.operations import create_library,stage_entry,publish_entry
     from gpx_recipe.preparation.worker import execute
@@ -96,6 +125,10 @@ def test_large_group_consumes_prepared_factors_and_checks_all_native_seed_profil
     entry=library.document['entries'][0]['id'];attempt=library.start(entry)
     request=stage_entry(library,entry,attempt,tmp_path/'offline')
     published=execute('magnetic',request);assert publish_entry(library,entry,attempt,request,published)['all_prepared']
+    if changed_cell:
+        project=G.G2Project(gpxfile=str(source));project.phase(0).data['General']['Cell'][1]*=1.003
+        project.save(str(source));protocol['source']['sha256']=file_sha(source)
+        protocol=validate_protocol(protocol)
     directories=[]
     for seed in protocol['seeds']:
         directory=tmp_path/'grouped'/seed['id']
@@ -106,9 +139,10 @@ def test_large_group_consumes_prepared_factors_and_checks_all_native_seed_profil
     grouped_seconds=time.monotonic()-began
     assert len(results)==48
     proof=results[0]['response']['shared_physics']
-    assert proof['prepared_scattering']['attached']==1 and proof['prepared_scattering']['used']
+    assert proof['prepared_scattering']['attached']==1
+    assert proof['prepared_scattering']['used']==(not changed_cell)
     compiler=proof['native_compiler'];assert compiler['method']=='qualified_quadratic_response'
-    assert compiler['proof']['compiler']['native_reflection_diagnostics']['scattering_factors_reused']
+    assert compiler['proof']['compiler']['native_reflection_diagnostics']['scattering_factors_reused']==(not changed_cell)
     began=time.monotonic()
     for seed,item,directory in zip(protocol['seeds'],results,directories):
         result=item['response'];assert result['status']=='simulated',result
@@ -119,7 +153,7 @@ def test_large_group_consumes_prepared_factors_and_checks_all_native_seed_profil
         with np.load(directory/result['profile']) as actual,np.load(independent/check['profile']) as expected:
             np.testing.assert_allclose(actual['intensity'],expected['intensity'],rtol=1e-8,atol=1e-10)
         assert result['id']==check['id'] and result['audit']['passed'] and result['periodicity']['passed']
-    write_json(tmp_path/'timing.json',dict(starts=48,grouped_seconds=grouped_seconds,
+    write_json(tmp_path/'timing.json',dict(starts=48,changed_cell=changed_cell,grouped_seconds=grouped_seconds,
         ordinary_seconds=time.monotonic()-began,scope='Public artificial prepared-factor/native-equivalence control'))
 
 

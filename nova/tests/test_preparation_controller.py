@@ -41,6 +41,15 @@ def test_open_and_close_preserve_live_workspace_and_do_not_start_jobs(app):
     assert s.workspace_view=='experiment' and not s.setup_collapsed
 
 
+def test_read_only_selection_caption_does_not_initialize_any_preparation_service():
+    class ReadOnlyHistory:
+        def __getattr__(self,name):raise AssertionError('A caption must not access the service: '+name)
+    app=PreparationMixin();app.server=SimpleNamespace(state=State());app.service=ReadOnlyHistory()
+    app._init_preparation()
+    assert 'choose or review' in app._prepared_selection_caption()
+    assert app._preparation_workspace is None
+
+
 def test_unregistered_parent_path_is_rejected_before_any_server_file_read(app,tmp_path,monkeypatch):
     app,_,_,service=app;path=tmp_path/'private.cif';path.write_text('must not be read')
     app._prep_parent_upload=SimpleNamespace(current_path=None);app.server.state.prep_parent_path=str(path)
