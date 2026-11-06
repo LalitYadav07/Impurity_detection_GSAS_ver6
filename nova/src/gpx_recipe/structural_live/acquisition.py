@@ -73,7 +73,7 @@ def _json(path):
 
 
 def prepare_acquisition(request,child,transform,origin,directory,*,source_scope,
-                        settings=None,prepared_banks=()):
+                        settings=None,prepared_banks=(),reference_gpx=None):
     """Transfer the nuclear reference once, then use the shared mode engine.
 
     Experiment snapshots remain outside portable theory-only libraries. The
@@ -90,7 +90,8 @@ def prepare_acquisition(request,child,transform,origin,directory,*,source_scope,
     transfer=prepare_nuclear_snapshot(request,root)
     write_json(root/'transfer.json',transfer)
     metadata=prepare_model(root/transfer['source_gpx'],child,transform,origin,root/'model',
-        phase_name=request['parent_phase'],settings=settings,prepared_banks=prepared_banks)
+        phase_name=request['parent_phase'],settings=settings,prepared_banks=prepared_banks,
+        reference_gpx=reference_gpx)
     G,*_=modules();project=G.G2Project(gpxfile=str(root/'model'/'prepared.gpx'))
     histogram=project.histogram(metadata['histogram'])
     raw=stable_read(request['observation_source'])

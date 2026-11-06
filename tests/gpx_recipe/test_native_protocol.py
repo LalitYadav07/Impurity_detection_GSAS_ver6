@@ -27,7 +27,7 @@ def test_inventory_reaches_native_worker_with_its_requested_geometry(tmp_path, m
         input_hashes={'source.gpx':file_sha(source)},dispatch_key='b'*24,timeout=120)
     path=tmp_path/'request.json';path.write_text(json.dumps(request))
     monkeypatch.setattr(module,'require_adapters',lambda:None)
-    monkeypatch.setattr(module,'scientific_environment',lambda:{'PYTHONPATH':''})
+    monkeypatch.setattr('gpx_recipe.symmetry.compiler.native_environment',lambda:{'PYTHONPATH':''})
     observed=[]
     def run(command,**kwargs):
         captured=json.loads(Path(command[-2]).read_text());observed.append(captured)

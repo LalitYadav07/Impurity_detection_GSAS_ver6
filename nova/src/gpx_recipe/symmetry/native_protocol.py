@@ -15,6 +15,8 @@ FIELDS = {
     'preparation-magnetic': ({'source', 'instrument', 'grid', 'settings', 'destination'}, set()),
     'preparation-structural': ({'source', 'instrument', 'child', 'grid', 'settings', 'destination'}, set()),
     'preparation-batch': ({'source', 'plan', 'destination', 'workers', 'seconds'}, set()),
+    'structural-snapshot': ({'source','directory','anchor_snapshot','snapshot','receipt','mapping',
+        'source_scope','revision','source_revision','reference_revision','refine_transfer','destination'}, {'prepared_scattering'}),
 }
 
 
@@ -31,3 +33,6 @@ def validate_native_payload(operation, payload):
     if operation.startswith('preparation-'):
         from ..preparation.worker import validate_request
         validate_request(operation.removeprefix('preparation-'), payload)
+    if operation=='structural-snapshot':
+        from ..structural_live.job import validate_payload
+        validate_payload(payload)

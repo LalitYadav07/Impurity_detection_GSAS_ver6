@@ -48,6 +48,8 @@ def _remember(library,runtime,handle,root):
 
 def input_ids(runtime,request):
     document=request.get('prepared_scattering') or {}
+    if request.get('operation')=='structural-snapshot':
+        document=request.get('payload',{}).get('prepared_scattering') or {}
     if not document.get('evidence'):return []
     service=runtime.service
     capability=getattr(service,'tool_has_input',None)

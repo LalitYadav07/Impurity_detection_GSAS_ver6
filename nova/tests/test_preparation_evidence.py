@@ -35,6 +35,14 @@ def test_only_selected_same_site_original_receipt_is_forwarded_as_an_hda(tmp_pat
     assert not any(p.name=='authority.json' for p in runtime.root.rglob('*'))
 
 
+def test_structural_snapshot_routes_original_receipts_through_the_same_server_input(tmp_path):
+    _,_,calls,runtime,request=setup(tmp_path)
+    snapshot=dict(operation='structural-snapshot',payload=dict(prepared_scattering=request['prepared_scattering']))
+    assert evidence.input_ids(runtime,snapshot)==['receipt1'] and calls==['receipt1']
+    runtime.service.galaxy_url='https://another.invalid'
+    assert evidence.input_ids(runtime,snapshot)==[] and calls==['receipt1']
+
+
 @pytest.mark.parametrize('change',['site','entry','hash','body','permission','capability'])
 def test_optional_unavailable_or_edited_origins_do_not_block_science_or_contact_other_sites(tmp_path,change):
     path,ref,calls,runtime,request=setup(tmp_path)

@@ -226,8 +226,32 @@ permission or counting-stop recommendation.
 Acquisition contexts contain measured experiment data. They belong to private
 scientific job/History artifacts, not portable theory-only preparation libraries.
 This backend does **not yet** expose structural analysis in WebMON's live UI.
-Cross-job context transport, structural result presentation and actual live
-queue latency still need acceptance tests before enabling that route.
+The closed `structural-snapshot` native operation now carries a self-contained
+reviewed Model job, its optional parent-reference GPX, reviewed anchor snapshot,
+current snapshot/receipt, producer mapping, scope and monotonic owner revision
+through the existing Model Campaign transport. `webmon.structural_runtime`
+uses its submit/poll/recover/collect methods; it introduces no acquisition
+poller, posterior engine or second job queue. A fresh viewer restores exact
+captured inputs before accepting a result. Complete mode inventory, package,
+parent setting, snapshot bytes, histogram, publications and source lineage
+are checked. The native view contains the current curve and Bragg ticks.
+
+Optional preparation metadata is captured alongside the model inputs. Original
+receipt HDAs are routed through the same authenticated origin lookup and fixed
+Galaxy-template metadata as Model exploration. A copied manifest does not
+attest its own curves. Missing authority or incompatible physical context keeps
+the existing native requalification/rebuild policy.
+
+Each operation currently reconstructs an owned structural acquisition context;
+it does not yet transport a qualified persistent native context across jobs.
+Original prepared banks may help only where their actual-context compatibility
+and producer origin checks pass. This is not a claimed fast streaming policy.
+The future Galaxy template publishes independently checked point-fit GPXs in
+a separate `reviewable_projects` collection, explicitly requiring optimization
+and scientific review. The qualified-model collection keeps its prior meaning.
+Source polling, UI controls/presentation, cross-job preparation amortization
+and actual live queue latency still require integration and acceptance before
+enabling structural monitoring in the interface.
 Likewise, Method-3 catalog enumeration, calibrated structural posteriors,
 counting advice and named-mode custom recipes remain separate work. Current
 custom recipes accept nuclear projects; magnetic posterior checkpoints are

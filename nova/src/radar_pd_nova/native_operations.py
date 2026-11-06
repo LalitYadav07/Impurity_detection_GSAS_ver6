@@ -96,7 +96,7 @@ def capture(runtime, operation, payload, root, source, timeout, preparation_atte
     validate_native_payload(operation, payload)
     root=Path(root).resolve();root.mkdir(parents=True, exist_ok=True)
     payload=copy.deepcopy(payload);files=[]
-    for field in ['source','child','instrument','plan']:
+    for field in ['source','child','instrument','plan','anchor_snapshot','snapshot']:
         if field in payload:
             path=Path(payload[field]).resolve();relative=str(path.relative_to(root))
             files.append(relative);payload[field]=relative
@@ -117,6 +117,22 @@ def capture(runtime, operation, payload, root, source, timeout, preparation_atte
     if 'directory' in payload:payload['directory']=directories[0]
     for relative in directories:
         directory=confined(root,relative);job=json.loads((directory/'job.json').read_text())
+        if operation=='structural-snapshot':
+            from gpx_recipe.structural_live.job import reviewed_job
+            _,protocol,_=reviewed_job(directory)
+            if (file_sha(confined(root,payload['source']))!=protocol['source']['sha256']
+                    or float(timeout)<protocol['policy']['structural_seconds']+
+                        protocol['policy']['structural_recovery_seconds']+15):
+                raise ValueError('Structural snapshot source or native cleanup allocation differs from its reviewed scope')
+            if (file_sha(confined(root,payload['anchor_snapshot']))!=payload['mapping']['snapshot_sha256']
+                    or file_sha(confined(root,payload['snapshot']))!=payload['receipt']['content_sha256']):
+                raise ValueError('Structural snapshot bytes differ from their reviewed receipt')
+            from gpx_recipe.preparation.structural_hints import read as read_preparation
+            try:prepared=read_preparation(directory,protocol)
+            except (OSError,ValueError,EOFError):prepared=None
+            if 'prepared_scattering' in payload and payload['prepared_scattering']!=prepared:
+                raise ValueError('Structural preparation metadata differs from its captured model inputs')
+            if prepared is not None:payload['prepared_scattering']=prepared
         files.append(str((directory/'job.json').relative_to(root)))
         for asset in assets(job['protocol']):files.append(str(confined(directory,asset['path']).relative_to(root)))
         from gpx_recipe.preparation.hints import packet_paths
@@ -127,6 +143,8 @@ def capture(runtime, operation, payload, root, source, timeout, preparation_atte
         write_json(root/'packet.json',{'schema':'radar-native-input-marker/v1'})
         files=['packet.json']
     source=runtime.resolve(source)
+    if operation=='structural-snapshot' and file_sha(confined(root,payload['source']))!=source['source_sha256']:
+        raise ValueError('Structural snapshot belongs to another Galaxy source revision')
     request=dict(schema='radar-model-native/v1',operation=operation,payload=payload,
         implementation_sha256=package_signature(),expected_source_sha256=source['source_sha256'],
         input_hashes={p:file_sha(confined(root,p)) for p in files},timeout=min(600,max(1,float(timeout))))

@@ -37,7 +37,7 @@ def native(request,inputs,root,cancel):
     import math
     if type(request['timeout']) not in {int,float} or not math.isfinite(request['timeout']) or not 1<=request['timeout']<=600:raise ValueError('Invalid native deadline')
     # Work on a private input capture; every path comes from a confined data packet.
-    for key in ['source','child','instrument','directory','plan']:
+    for key in ['source','child','instrument','directory','plan','anchor_snapshot','snapshot']:
         if key in payload:payload[key]=str(confined(inputs,payload[key]))
     if 'source' in payload and file_sha(payload['source'])!=request['expected_source_sha256']:
         raise ValueError('Native source packet differs from the Galaxy GPX')
@@ -54,6 +54,7 @@ def native(request,inputs,root,cancel):
     request_file=root/'native-request.json';output=root/'native-response.json'
     write_json(request_file,payload)
     if operation=='inspect':command=['-m','gpx_recipe.symmetry.inspect',payload['source'],str(output)]
+    elif operation=='structural-snapshot':command=['-m','gpx_recipe.structural_live.job',str(request_file),str(output)]
     elif operation.startswith('preparation-'):command=['-m','gpx_recipe.preparation.worker',operation.removeprefix('preparation-'),str(request_file),str(output)]
     elif operation.startswith('k-'):command=['-m','gpx_recipe.symmetry.k_native',operation[2:],str(request_file),str(output)]
     else:command=['-m','gpx_recipe.symmetry.isodistort_native',operation,str(request_file),str(output)]
@@ -111,12 +112,21 @@ def _work(action,source,assets,request_file,directory,archive):
         elif action=='native':
             root=directory/'native';root.mkdir()
             result,root=native(request,inputs,root,cancel)
-            if request['operation'].startswith('preparation-'):
+            if request['operation'].startswith('preparation-') or request['operation']=='structural-snapshot':
                 # Only declared portable data leaves theoretical preparation.
                 # Native construction GPXs and repeated scratch are ephemeral.
                 owned=Path(result['output']).resolve()
                 if not owned.is_relative_to(root):raise ValueError('Preparation output escaped its native workspace')
                 files=[confined(owned,name) for name in result['artifacts']]
+                if request['operation']=='structural-snapshot':
+                    # These GPXs have passed the native observation/export
+                    # checks, not optimization or structure-identification
+                    # qualification. Keep their collection explicitly separate.
+                    for role in ('frozen','continuation'):
+                        item=result['result'][role];path=confined(owned,str(Path(item['path']).relative_to(owned)))
+                        if file_sha(path)!=item['sha256']:raise ValueError('Structural publication changed before collection')
+                        target=directory/'reviewable_projects'/('reviewable_'+digest([request['dispatch_key'],role])+'.gpx')
+                        target.parent.mkdir(exist_ok=True);shutil.copyfile(path,target)
             else:
                 files=[p for p in directory.rglob('*') if p.is_file() and p.suffix.lower() in DATA_SUFFIXES
                     and not (p.is_relative_to(inputs) and str(p.relative_to(inputs)) in before)]
