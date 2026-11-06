@@ -5,6 +5,7 @@ from pathlib import Path
 import threading
 import time
 
+import numpy as np
 import pytest
 
 from gpx_recipe.execution import write_json
@@ -37,6 +38,39 @@ def prepared(task,request,scratch,**kwargs):
     return dict(state='prepared',reason='',result=dict(schema='radar-experiment-preparation-worker/v1',
         status='prepared',kind=task['kind'],output=str(root),observations_included=False,scientific_result=False,
         artifacts=['entry.json'],entry_sha256=file_sha(root/'entry.json')))
+
+
+@pytest.mark.parametrize('scattering',[False,True])
+def test_batch_accepts_legacy_and_factor_bearing_magnetic_artifacts(tmp_path,scattering):
+    request=plan(tmp_path,count=1)
+    task=json.loads(Path(request['plan']).read_text())['tasks'][0]
+    task['kind']='magnetic'
+    payload=dict(task['request'],destination=request['destination'])
+    for role in ('source','instrument'):
+        payload[role]=str(Path(request['plan']).parent/payload[role])
+    row=prepared(task,payload,tmp_path/'scratch')
+    output=Path(payload['destination']);manifest=json.loads((output/'entry.json').read_text())
+    names=['response.npz']+(['scattering.npz'] if scattering else [])
+    for name in names:
+        np.savez(output/name,control=np.ones(3))
+        manifest['artifacts'][name]=file_sha(output/name)
+    if scattering:
+        manifest['detail']=dict(scattering=dict(status='prepared',artifact='scattering.npz',identity='a'*64))
+    write_json(output/'entry.json',manifest)
+    row['result'].update(artifacts=['entry.json']+names,entry_sha256=file_sha(output/'entry.json'))
+    assert {path.name for path in batch.verify_result(task,payload,row)}==set(names+['entry.json'])
+    if scattering:
+        manifest['detail']['scattering']['identity']='unbound'
+        write_json(output/'entry.json',manifest)
+        row['result']['entry_sha256']=file_sha(output/'entry.json')
+        with pytest.raises(ValueError,match='physical identity'):
+            batch.verify_result(task,payload,row)
+
+
+@pytest.mark.parametrize('result',[None,[],{},dict(artifacts=['entry.json','entry.json'])])
+def test_batch_rejects_malformed_receipts_with_a_checked_error(tmp_path,result):
+    with pytest.raises(ValueError,match='portable artifact inventory'):
+        batch.verify_result(dict(kind='magnetic'),dict(destination=str(tmp_path)),dict(result=result))
 
 
 def test_batch_uses_granted_workers_with_separate_attempt_paths(tmp_path):

@@ -137,9 +137,13 @@ def run_task(task, request, scratch, *, cancel, timeout):
 
 
 def verify_result(task, request, row):
-    from .operations import PORTABLE
-    result=row['result'];root=Path(request['destination']).resolve()
-    names=PORTABLE[task['kind']]|{'entry.json'}
+    from .operations import portable_artifacts, portable_entry_artifacts
+    result=row.get('result');root=Path(request['destination']).resolve()
+    if (not isinstance(result,dict) or not isinstance(result.get('artifacts'),list)
+            or result['artifacts'].count('entry.json')!=1):
+        raise ValueError('The preparation returned an unexpected portable artifact inventory')
+    numeric=portable_artifacts(task['kind'],[name for name in result['artifacts'] if name!='entry.json'])
+    names=numeric|{'entry.json'}
     if (not isinstance(result,dict) or result.get('schema')!='radar-experiment-preparation-worker/v1'
             or result.get('status')!='prepared' or result.get('kind')!=task['kind']
             or result.get('observations_included') is not False or result.get('scientific_result') is not False
@@ -159,8 +163,9 @@ def verify_result(task, request, row):
             or manifest.get('input_sha256')!=expected or manifest.get('settings')!=request['settings']
             or manifest.get('grid')!=request['grid'] or manifest.get('observations_included') is not False
             or manifest.get('scientific_result') is not False
-            or set(manifest.get('artifacts',{}))!=PORTABLE[task['kind']]):
+            or set(manifest.get('artifacts',{}))!=numeric):
         raise ValueError('Preparation manifest does not bind its captured model and bank')
+    portable_entry_artifacts(task['kind'],manifest)
     for name,checksum in manifest['artifacts'].items():
         path=confined(root,name)
         if file_sha(path)!=checksum:raise ValueError('Preparation array changed before batch publication')

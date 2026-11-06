@@ -45,10 +45,11 @@ def test_magnetic_worker_prepares_native_response_without_a_measurement(tmp_path
         refine_background=True)
     result = execute('magnetic', payload)
     output = Path(result['output'])
-    assert result['artifacts'] == ['response.npz', 'entry.json']
+    assert result['artifacts'] == ['response.npz', 'scattering.npz', 'entry.json']
     manifest = json.loads((output/'entry.json').read_text())
     assert manifest['detail']['operator_audit']['passed']
     assert manifest['detail']['periodicity']['passed']
+    assert manifest['detail']['scattering']['status']=='prepared'
     response = load(output/'response.npz', physics_sha256=manifest['detail']['physics_sha256'])
     assert response._native_seal is None  # Import never trusts an old native qualification.
     assert response.quadratic.shape[1] == 3 and np.any(response.quadratic)
@@ -134,7 +135,10 @@ def test_prepared_magnetic_library_reconstructs_without_the_original_gpx_ids(tmp
     restored = import_library(tmp_path/'portable.zip', tmp_path/'restored')
     assets = {Path(a['path']).name: restored.root/a['path'] for a in restored.row(identifier)['files']}
     manifest = json.loads(assets['entry.json'].read_text())
-    response = load(assets['response.npz'], physics_sha256=manifest['detail']['physics_sha256'])
+    from gpx_recipe.preparation.consume import restore_magnetic_entry
+    response,cache,imported=restore_magnetic_entry(assets['entry.json'].parent)
+    assert imported['scattering_available'] and imported['native_qualification_required']
+    assert not cache.lookup(manifest['detail']['scattering']['identity'])[1]
     first = NativeReducedProfile(Path(result['output'])/'native-model/magnetic-refinement.gpx')
     first_record = _physics_record(first)
     # A new reference and audited constructor produce new native random IDs.
@@ -147,5 +151,9 @@ def test_prepared_magnetic_library_reconstructs_without_the_original_gpx_ids(tmp
     (tmp_path/'first-magnetic.json').write_text(json.dumps(first_record, indent=2))
     (tmp_path/'second-magnetic.json').write_text(json.dumps(_physics_record(native), indent=2))
     assert physics_identity(native) == response.physics_sha256
-    assert max(qualify_response(response, native)['independent_magnetic_errors']) < 1e-8
+    validation=qualify_response(response,native,factor_cache=cache)
+    assert max(validation['independent_magnetic_errors']) < 1e-8
+    proof=validation['coefficient_validation']
+    assert proof['scattering_factors_reused'] and not proof['scattering_qualification_reused']
+    assert proof['native_structure_factor_calls']==19
     assert response._native_seal is not None

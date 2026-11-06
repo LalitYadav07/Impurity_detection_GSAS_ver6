@@ -91,6 +91,7 @@ def execute(kind, request):
         from ..symmetry.worker import Artifacts
         from ..live.native_profile import NativeReducedProfile
         from .native_magnetic import compile_response
+        from ..live.reflection_factors import ScatteringFactorCache
         protocol = validate_protocol(dict(kind='magnetic',
             source=dict(path='reference.gpx', sha256=file_sha(reference['path'])),
             catalog=dict(path='catalog.json', sha256=digest(settings['candidate'])),
@@ -113,11 +114,27 @@ def execute(kind, request):
             protocol['candidates'][0], protocol['seeds'][0])
         if construction['status'] != 'theory_constructed' or construction['observations_included']:
             raise ValueError('Preparation did not construct an observation-free magnetic model')
-        response = compile_response(NativeReducedProfile(native_dir/construction['gpx']))
+        cache_directory = output/'scattering-private'
+        response = compile_response(NativeReducedProfile(native_dir/construction['gpx']),
+            factor_cache=ScatteringFactorCache(cache_directory))
         response.save(output/'response.npz')
         artifacts.append('response.npz')
+        compiler = response.proof['compiler']
+        scattering_proof = compiler.get('native_reflection_diagnostics') or {}
+        scattering_identity = scattering_proof.get('scattering_identity')
+        scattering_file = cache_directory/(scattering_identity+'.npz') if scattering_identity else None
+        if scattering_file is not None and scattering_file.is_file():
+            scattering_file.replace(output/'scattering.npz')
+            artifacts.append('scattering.npz')
+            scattering = dict(status='prepared', identity=scattering_identity,
+                artifact='scattering.npz', native_qualification_required_on_import=True,
+                scope='Unweighted native amplitudes; actual geometry dependencies are checked before reuse')
+        else:
+            scattering = dict(status='unavailable', reason=compiler.get('fallback_reason')
+                or 'The native preparation produced no portable scattering block')
         detail = dict(physics_sha256=response.physics_sha256,
             dimensions=response.quadratic.shape[1], bins=len(response.x), proof=response.proof,
+            scattering=scattering,
             operator_audit=construction['audit'], periodicity=construction['periodicity'],
             geometry_scope='Exact reference geometry; current-scan rendering/qualification required')
     else:

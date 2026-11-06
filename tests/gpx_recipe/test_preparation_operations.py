@@ -56,6 +56,22 @@ def test_stage_resume_and_roundtrip_preserve_exact_scope(tmp_path):
     assert restored.coverage()['all_prepared']
 
 
+def test_portable_factor_asset_publishes_and_survives_library_recovery(tmp_path):
+    library,identifier,attempt,request=fixture(tmp_path/'input')
+    result=returned(request);output=Path(result['output'])
+    np.savez_compressed(output/'scattering.npz',factors=np.ones((2,6,1)))
+    manifest=json.loads((output/'entry.json').read_text())
+    manifest['artifacts']['scattering.npz']=file_sha(output/'scattering.npz')
+    manifest['detail']=dict(scattering=dict(status='prepared',identity='a'*64,artifact='scattering.npz'))
+    (output/'entry.json').write_text(json.dumps(manifest))
+    result['artifacts'].insert(1,'scattering.npz');result['entry_sha256']=file_sha(output/'entry.json')
+    assert publish_entry(library,identifier,attempt,request,result)['all_prepared']
+    library.export(tmp_path/'portable.zip')
+    restored=import_library(tmp_path/'portable.zip',tmp_path/'restored')
+    names={Path(a['path']).name for a in restored.row(identifier)['files']}
+    assert names=={'entry.json','response.npz','scattering.npz'}
+
+
 @pytest.mark.parametrize('changed', ['input', 'settings', 'grid', 'artifact', 'manifest', 'gpx', 'result'])
 def test_substituted_preparation_is_not_counted_as_ready(tmp_path, changed):
     library, identifier, attempt, request = fixture(tmp_path/'input')

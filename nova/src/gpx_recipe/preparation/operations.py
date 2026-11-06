@@ -20,6 +20,37 @@ from .worker import validate_request, validate_settings
 PLAN_SCHEMA = 'radar-experiment-preparation-plan/v1'
 PORTABLE = {'reference': set(), 'magnetic': {'response.npz'},
             'structural': {'starts.npz', 'starts.json'}}
+OPTIONAL_PORTABLE = {'magnetic': {'scattering.npz'}}
+
+
+def portable_artifacts(kind, names):
+    """Closed inventories, preserving response-only legacy magnetic entries."""
+    if kind not in PORTABLE or not isinstance(names,(list,set,dict,tuple)):
+        raise ValueError('Unknown portable preparation inventory')
+    if any(not isinstance(name,str) for name in names):
+        raise ValueError('Portable artifact names must be strings')
+    inventory=set(names)
+    if (len(inventory)!=len(names) or not PORTABLE[kind] <= inventory
+            or not inventory <= PORTABLE[kind] | OPTIONAL_PORTABLE.get(kind,set())):
+        raise ValueError('Unexpected portable preparation artifact inventory')
+    return inventory
+
+
+def portable_entry_artifacts(kind, manifest):
+    """One artifact/identity contract for workers, publication and import."""
+    if not isinstance(manifest,dict) or not isinstance(manifest.get('artifacts'),dict):
+        raise ValueError('A preparation needs its declared portable artifacts')
+    names=portable_artifacts(kind,manifest['artifacts'])
+    if 'scattering.npz' in names:
+        import re
+        detail=manifest.get('detail')
+        scattering=detail.get('scattering') if isinstance(detail,dict) else None
+        if (not isinstance(scattering,dict) or scattering.get('status')!='prepared'
+                or scattering.get('artifact')!='scattering.npz'
+                or not isinstance(scattering.get('identity'),str)
+                or not re.fullmatch('[a-f0-9]{64}',scattering['identity'])):
+            raise ValueError('Portable scattering factors need their native physical identity')
+    return names
 
 
 def pending_entries(library, *, deferred=()):
@@ -172,10 +203,11 @@ def publish_entry(library, identifier, attempt, request, result):
     output = Path(request['destination']).resolve()
     if output != Path(result.get('output', '')).resolve():
         raise ValueError('The returned preparation belongs to another output context')
-    names = PORTABLE[kind] | {'entry.json'}
-    if (not isinstance(result.get('artifacts'), list) or len(result['artifacts']) != len(names)
-            or set(result['artifacts']) != names):
+    if (not isinstance(result.get('artifacts'),list)
+            or result['artifacts'].count('entry.json')!=1):
         raise ValueError('The preparation returned an unexpected portable artifact inventory')
+    numeric = portable_artifacts(kind,[name for name in result['artifacts'] if name!='entry.json'])
+    names = numeric | {'entry.json'}
     entry = confined(output, 'entry.json')
     if entry.stat().st_size > 8*1024*1024 or file_sha(entry) != result.get('entry_sha256'):
         raise ValueError('The preparation manifest differs from its collected receipt')
@@ -184,8 +216,9 @@ def publish_entry(library, identifier, attempt, request, result):
             or manifest.get('kind') != kind or manifest.get('grid') != request['grid']
             or manifest.get('settings') != request['settings'] or manifest.get('input_sha256') != checksums
             or manifest.get('observations_included') is not False or manifest.get('scientific_result') is not False
-            or set(manifest.get('artifacts', {})) != PORTABLE[kind]):
+            or set(manifest.get('artifacts', {})) != numeric):
         raise ValueError('The worker preparation differs from its exact reviewed inputs')
+    portable_entry_artifacts(kind,manifest)
     for name, checksum in manifest['artifacts'].items():
         if file_sha(confined(output, name)) != checksum:
             raise ValueError('A prepared numeric artifact changed before publication')

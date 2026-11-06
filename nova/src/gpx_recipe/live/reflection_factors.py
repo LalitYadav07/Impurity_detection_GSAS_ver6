@@ -45,6 +45,11 @@ def scattering_identity(*, math, parameters, controls, pfx, hfx, symmetry,
         atom_roles.append([index, [key[len(pfx):] for key in keys]])
     record = dict(schema=SCHEMA,
         native_source_sha256=hashlib.sha256(Path(math.__file__).read_bytes()).hexdigest(),
+        native_dependency_sources={Path(m.__file__).name:
+            hashlib.sha256(Path(m.__file__).read_bytes()).hexdigest()
+            for m in (math.G2lat, math.G2el)},
+        active_geometry_functions={name: hashlib.sha256(inspect.getsource(
+            getattr(math.G2lat, name)).encode()).hexdigest() for name in ('Gmat2AB','U6toUij')},
         active_atomic_function_sha256=hashlib.sha256(inspect.getsource(math.GetAtomFXU).encode()).hexdigest(),
         form_factor_function_sha256=hashlib.sha256(inspect.getsource(math.G2el.MagScatFac).encode()).hexdigest(),
         numpy_version=np.__version__,
@@ -74,14 +79,22 @@ class AmplitudeBlock:
                 or not len(a) or a.dtype.kind != 'f' or a.dtype.itemsize != 8
                 or a.nbytes > MAX_BYTES or not np.isfinite(a).all()):
             raise ValueError('A bounded finite native amplitude block is required')
-        a = np.array(a, dtype='<f8', copy=True)
-        a.flags.writeable = False
+        # A read-only owning ndarray can be made writable again. Back this
+        # immutable physical block with bytes so that ordinary array aliases
+        # cannot change a qualified resident. Hash once at this boundary.
+        storage = np.asarray(a, dtype='<f8').tobytes(order='C')
+        a = np.frombuffer(storage, dtype='<f8').reshape(a.shape)
         proof = json.dumps(self.proof, sort_keys=True, allow_nan=False)
         if len(proof) > 65536:
             raise ValueError('Amplitude qualification metadata exceeds its budget')
         object.__setattr__(self, 'factors', a)
         object.__setattr__(self, 'proof', json.loads(proof))
         object.__setattr__(self, '_digest', digest_array(a))
+        object.__setattr__(self, '_shape', a.shape)
+        object.__setattr__(self, '_strides', a.strides)
+        object.__setattr__(self, '_owner', a.base)
+        object.__setattr__(self, '_storage', storage)
+        object.__setattr__(self, '_address', a.ctypes.data)
 
 
 class ScatteringFactorCache:
@@ -98,22 +111,38 @@ class ScatteringFactorCache:
         self.maximum_bytes = maximum_bytes
         self._entries = OrderedDict()
         self._seals = {}
+        self._sources = {}
+
+    def attach_source(self, path, *, identity):
+        """Register one immutable library hint; load it only if physics match.
+
+        Never write to this source or inherit its qualification. Current
+        native checks admit the resulting block into this worker's cache.
+        """
+        if (not isinstance(identity,str) or not re.fullmatch('[a-f0-9]{64}',identity)
+                or len(self._sources)>=5000 and identity not in self._sources):
+            raise ValueError('A bounded inventory of native scattering identities is required')
+        self._sources[identity] = Path(path).resolve()
 
     def lookup(self, identity):
         if not isinstance(identity, str) or not re.fullmatch('[a-f0-9]{64}', identity):
             raise ValueError('A native scattering identity is required')
         block = self._entries.get(identity)
         if block is not None:
-            if digest_array(block.factors) != block._digest:
+            if (block.factors.flags.writeable or block.factors.dtype.str != '<f8'
+                    or block.factors.shape != block._shape or block.factors.base is not block._owner
+                    or block.factors.strides != block._strides
+                    or block._owner.base is not block._storage
+                    or block.factors.ctypes.data != block._address):
                 del self._entries[identity]
                 self._seals.pop(identity, None)
                 raise ValueError('Resident scattering amplitudes changed')
             self._entries.move_to_end(identity)
             return block, self._seals.get(identity) == block._digest
-        if self.directory is None:
-            return None, False
-        path = self.directory / (identity+'.npz')
-        if not path.exists():
+        path = self.directory / (identity+'.npz') if self.directory is not None else None
+        if path is None or not path.exists():
+            path = self._sources.get(identity)
+        if path is None:
             return None, False
         from .array_limits import validate_npz
         validate_npz(path, maximum_bytes=MAX_BYTES+262144)

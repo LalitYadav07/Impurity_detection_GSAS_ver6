@@ -55,11 +55,46 @@ def test_altered_resident_arrays_lose_their_native_seal():
     cache = ScatteringFactorCache()
     factors = np.ones((2, 6, 3))
     block = cache._admit_native('a'*64, factors, proof(factors))
-    block.factors.flags.writeable = True
-    block.factors[0, 0, 0] = 2.
+    with pytest.raises(ValueError):
+        block.factors.flags.writeable = True
+    # Even metadata reinterpretation of the immutable bytes cannot preserve
+    # the declared native reflection/basis shape.
+    block.factors.shape = (4, 3, 3)
     with pytest.raises(ValueError, match='changed'):
         cache.lookup('a'*64)
     assert cache.lookup('a'*64) == (None, False)
+
+
+def test_qualified_immutable_lookup_does_not_rehash_every_numeric_byte(monkeypatch):
+    from gpx_recipe.live import reflection_factors as module
+    factors=np.ones((2,6,3));cache=ScatteringFactorCache()
+    cache._admit_native('a'*64,factors,proof(factors))
+    def forbidden(value):
+        raise AssertionError('Warm immutable lookups must not rescan array bytes')
+    monkeypatch.setattr(module,'digest_array',forbidden)
+    assert cache.lookup('a'*64)[1]
+
+
+def test_changed_strides_cannot_reinterpret_qualified_physics():
+    factors=np.arange(36.,dtype=float).reshape(2,6,3);cache=ScatteringFactorCache()
+    block=cache._admit_native('a'*64,factors,proof(factors))
+    block.factors.strides=(0,24,8)
+    with pytest.raises(ValueError,match='changed'):
+        cache.lookup('a'*64)
+
+
+def test_registered_library_sources_are_read_only_lazy_and_unqualified(tmp_path):
+    factors=np.ones((2,6,3));source=ScatteringFactorCache(tmp_path)
+    source._admit_native('a'*64,factors,proof(factors))
+    path=tmp_path/('a'*64+'.npz');before=path.read_bytes()
+    imported=ScatteringFactorCache()
+    imported.attach_source(path,identity='a'*64)
+    imported.attach_source(tmp_path/'does-not-exist.npz',identity='b'*64)
+    assert imported.lookup('c'*64)==(None,False)
+    block,qualified=imported.lookup('a'*64)
+    assert not qualified
+    np.testing.assert_array_equal(block.factors,factors)
+    assert path.read_bytes()==before
 
 
 @pytest.mark.parametrize('mutation', ['checksum', 'identity', 'inventory', 'nonfinite', 'dtype'])
