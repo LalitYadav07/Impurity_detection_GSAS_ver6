@@ -103,9 +103,15 @@ def test_fixed_background_has_no_hidden_columns_and_scale_stays_common():
 
 def test_zero_gradient_at_zero_moment_is_not_mistaken_for_a_minimum():
     model,*_=fixture_model()
+    zero=model._assess(np.zeros(3),optimizer_success=True,optimizer_status=0,
+        message='Raw zero-gradient termination',iterations=1,evaluations=1,
+        objective_ftol=1e-14,optimizer_scale=1.)
+    assert not zero.success and zero.local_descent_found
     fit=model.fit(np.zeros(3))
-    assert not fit.success
-    assert fit.local_descent_found
+    assert fit.success and not fit.local_descent_found
+    assert fit.descent_restarts>=1
+    assert fit.weighted_cost<1e-8
+    assert fit.weighted_cost<zero.weighted_cost
 
 
 @pytest.mark.parametrize('nuclear_level',[1.,1e3,1e6])
@@ -119,16 +125,24 @@ def test_null_assessment_retains_weak_magnetic_descent_beside_large_nuclear_sign
     model=ProfiledMagneticObjective(offset=-observed,nuclear=nuclear,quadratic=q,
         background=np.empty((16,0)),moment_maps=np.array([[[1.],[0.],[0.]]]),
         maximum_moment=4.,normalization=float(observed@observed),fixed_scale=fixed_scale)
+    assessed=model._assess(np.zeros(1),optimizer_success=True,optimizer_status=0,
+        message='Raw zero-gradient termination',iterations=1,evaluations=1,
+        objective_ftol=1e-14,optimizer_scale=1.)
+    assert assessed.success == (truth==0.)
+    assert assessed.local_descent_found == (truth!=0.)
     fit=model.fit(np.zeros(1))
-    assert fit.optimizer_success
-    assert fit.success == (truth==0.)
-    assert fit.local_descent_found == (truth!=0.)
+    assert fit.success and not fit.local_descent_found
+    assert fit.weighted_cost<1e-8
+    assert abs(fit.coefficients[0])==pytest.approx(truth,abs=2e-5)
     if truth:
         # The zero-gradient stationary point is not a minimum. Nuclear Rwp
         # normalization must not hide an identifiable magnetic improvement.
         assert model._evaluate(np.array([truth]))[0]<1e-12
-        assert fit.weighted_cost>100.
-        assert not model.reassess(fit).success
+        assert assessed.weighted_cost>100.
+        assert not model.reassess(assessed).success
+        assert fit.descent_restarts>=1
+    else:
+        assert fit.descent_restarts==0
 
 
 def test_group_search_keeps_all_starts_and_time_reversed_parameter_solutions():
@@ -171,15 +185,34 @@ def test_group_cancellation_preserves_unstarted_ids_without_fake_failures():
     assert set(fits)=={'0','1'}
 
 
-def test_group_failed_start_does_not_hide_other_solutions():
+def test_group_zero_start_can_recover_without_hiding_other_solutions():
     from gpx_recipe.symmetry.profiled_groups import screen_group
     model,truth,*_=fixture_model(dimension=2)
     report,fits=screen_group(model,[('zero',np.zeros(2)),('good',truth*.7)],max_iterations=120)
     assert len(report['records'])==2
+    assert report['records'][0]['optimizer_qualified']
+    assert report['records'][1]['optimizer_qualified']
+    assert sorted(uid for group in report['groups'] for uid in group['members'])==['good','zero']
+    assert fits['zero'].descent_restarts>0 and fits['zero'].weighted_cost<1e-8
+
+
+def test_group_failed_start_does_not_hide_other_solutions(monkeypatch):
+    from gpx_recipe.symmetry.profiled_groups import screen_group
+    model,truth,*_=fixture_model(dimension=2)
+    original=model.fit
+    def fail_one(seed,**kwargs):
+        if not np.any(seed):
+            raise ValueError('Injected numerical failure')
+        return original(seed,**kwargs)
+    monkeypatch.setattr(model,'fit',fail_one)
+    report,fits=screen_group(model,[('failed',np.zeros(2)),('good',truth*.7)],max_iterations=120)
+    assert len(report['records'])==2
+    assert report['records'][0]['state']=='failed'
     assert not report['records'][0]['optimizer_qualified']
+    assert report['records'][0]['initial_coefficients']==[0.,0.]
     assert report['records'][1]['optimizer_qualified']
     assert [g['members'] for g in report['groups']]==[['good']]
-    assert 'zero' in fits
+    assert set(fits)=={'good'}
 
 
 def test_native_reassessment_recomputes_screened_cost_and_rejects_false_minimum():
