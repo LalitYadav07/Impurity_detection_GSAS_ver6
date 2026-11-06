@@ -44,7 +44,7 @@ def test_wrong_quadratic_hint_rebuilds_from_native_instead_of_rejecting_model(tm
     assert max(proof['heldout_relative_errors'])<1e-8
 
 
-def artificial_project(tmp_path,*,sites=1,constrained=False,masked=False,scale_free=True,background_free=True):
+def artificial_project(tmp_path,*,sites=1,constrained=False,masked=False,scale_free=True,background_free=True,npoints=701):
     path=tmp_path/'artificial.gpx'
     inst=tmp_path/'artificial.instprm'
     inst.write_text('#GSAS-II instrument parameter file\nType:PNC\nBank:1.0\nLam:1.54\nZero:0.0\nU:0.12\nV:0.0\nW:0.08\nX:0.0\nY:0.0\nZ:0.0\nSH/L:0.002\nPolariz.:0.0\nAzimuth:0.0\n')
@@ -65,7 +65,7 @@ def artificial_project(tmp_path,*,sites=1,constrained=False,masked=False,scale_f
         mag.add_atom(*xyz,'Fe+3','Fe'+str(i+1))
         mag.data['Atoms'][i][7:10]=([1.7,2.1,1.2] if i==0 else [-1.7,-2.1,-1.2])
     general['Lande g']=[2.]*len(general['AtomTypes'])
-    hist=p.add_simulated_powder_histogram('public artificial',str(inst),12.,130.,Npoints=701,scale=120.,phases=p.phases())
+    hist=p.add_simulated_powder_histogram('public artificial',str(inst),12.,130.,Npoints=npoints,scale=120.,phases=p.phases())
     hist.data['Background'][0][2]=3;hist.data['Background'][0][3:]=[3.,.2,.1]
     freeze(p)
     hist.data['data'][1][1][:]=1.

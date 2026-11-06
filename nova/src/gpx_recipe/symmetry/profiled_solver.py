@@ -105,7 +105,7 @@ def refine(project,path,protocol,*,cache_root=None,candidate=None,screened=None)
         model,identity=context.build(heldouts=4,cache_path=cache_path,cache_identity=cache_identity)
     except ValueError as exc:
         raise ProfiledScopeError(str(exc)) from exc
-    null_cost,_,null_scale=model._evaluate(np.zeros(model.dimension))
+    null_cost,_,null_scale=model._evaluate_full(np.zeros(model.dimension))
     null_curve=model.offset+null_scale*model.nuclear
     null_background=np.linalg.lstsq(model.background,-null_curve,rcond=None)[0] if model.background.shape[1] else np.empty(0)
     null_residual=context.residual(np.zeros(model.dimension),null_scale,null_background)
@@ -125,6 +125,8 @@ def refine(project,path,protocol,*,cache_root=None,candidate=None,screened=None)
         magnetic_variables=list(context.moment_names),nuisance_scope=dict(common_scale=p['refine_histogram_scale'],
             existing_background_coefficients=p['refine_background']),
         objective_identity=identity,raw_solution=json_safe(dataclasses.asdict(fit)),
+        residual_reduction=dict(model.reduction_diagnostics,
+            reduced_evaluations=model.reduction_evaluations,full_evaluations=model.full_evaluations),
         reused_group_screen=screened is not None,
         nuclear_baseline=dict(rwp=100*np.sqrt(2*null_cost/model.normalization),native_identity_error=null_identity,
             common_scale=null_scale,background=null_background.tolist(),same_nuisance_scope=True))

@@ -330,6 +330,7 @@ class NativeMagneticStartingPoint:
             compiler=compiler,compiler_note=compiler_note,compiler_diagnostics=compilation,
             heldout_relative_errors=errors,linear_identity_error=linear_error,
             cache_hit=cached is not None,cache_identity=cache_identity,cache_note=cache_note,
+            residual_reduction=dict(model.reduction_diagnostics),
             interpolation_anchor_seed=77831,
             seconds=time.monotonic()-started,weighted_residual_points=len(offset),
             native_convergence_declared=False,covariance_supplied=False)

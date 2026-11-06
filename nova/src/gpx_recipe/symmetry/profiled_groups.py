@@ -158,6 +158,9 @@ def screen_group(model, starts, *, max_iterations, objective_ftol=1e-14,
         profile_equivalence=dict(rtol=PROFILE_RTOL, atol=PROFILE_ATOL,
             meaning="Calculated-profile agreement only; magnetic parameter solutions remain distinct"),
         native_verified=False, covariance_supplied=False)
+    report['residual_reduction'] = dict(getattr(model,'reduction_diagnostics',dict(method='full_pattern')),
+        reduced_evaluations=getattr(model,'reduction_evaluations',0),
+        full_evaluations=getattr(model,'full_evaluations',0))
     return report, fits
 
 

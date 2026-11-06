@@ -95,11 +95,27 @@ class ProfiledMagneticObjective:
         self.projected_offset=self._project(self.offset)
         self.projected_nuclear=self._project(self.nuclear)
         self.projected_quadratic=self._project(self.qphysical.reshape(n,-1)).reshape(self.qphysical.shape)
+        from .profiled_reduction import MagneticResidualReduction
+        self.reduction,self.reduction_diagnostics=MagneticResidualReduction.build(
+            self.projected_offset,self.projected_nuclear,self.projected_quadratic)
+        self.reduction_evaluations=0
+        self.full_evaluations=0
 
     def _project(self,array):
         return array-self.background_q@(self.background_q.T@array)
 
     def _evaluate(self,physical):
+        z=np.asarray(physical,dtype=float)
+        if self.reduction is not None:
+            result=self.reduction.evaluate(z,self.fixed_scale)
+            if result is not None:
+                self.reduction_evaluations+=1
+                return result
+        return self._evaluate_full(z)
+
+    def _evaluate_full(self,physical):
+        """Original weighted arrays; independent of the QR representation."""
+        self.full_evaluations+=1
         z=np.asarray(physical,dtype=float)
         curve=self.projected_nuclear+np.einsum('i,nij,j->n',z,self.projected_quadratic,z)
         denominator=float(curve@curve)
@@ -117,6 +133,10 @@ class ProfiledMagneticObjective:
         cost,gradient,_=self._evaluate(physical)
         return cost/self.normalization,gradient/self.normalization
 
+    def _full_value_gradient(self,physical):
+        cost,gradient,_=self._evaluate_full(physical)
+        return cost/self.normalization,gradient/self.normalization
+
     def _constraint(self,z):
         moments=np.einsum('aki,i->ak',self.physical_maps,z)
         return self.maximum_moment**2-np.einsum('ak,ak->a',moments,moments)
@@ -125,10 +145,11 @@ class ProfiledMagneticObjective:
         return -2*np.einsum('aki,ak->ai',self.physical_maps,
             np.einsum('aki,i->ak',self.physical_maps,z))
 
-    def _hessian(self, z):
+    def _hessian(self, z, *, direct=False):
         step=1e-4*max(1.,float(np.linalg.norm(z)))
-        hessian=np.column_stack([(self.value_gradient(z+np.eye(self.dimension)[j]*step)[1]-
-                                  self.value_gradient(z-np.eye(self.dimension)[j]*step)[1])/(2*step)
+        evaluate=self._full_value_gradient if direct else self.value_gradient
+        hessian=np.column_stack([(evaluate(z+np.eye(self.dimension)[j]*step)[1]-
+                                  evaluate(z-np.eye(self.dimension)[j]*step)[1])/(2*step)
                                  for j in range(self.dimension)])
         return (hessian+hessian.T)/2
 
@@ -187,8 +208,8 @@ class ProfiledMagneticObjective:
         This does not replace the declared multistart portfolio or certify a
         global minimum. If no better feasible point is found, keep unresolved.
         """
-        cost=self._evaluate(point)[0]
-        _,directions=np.linalg.eigh(self._hessian(point))
+        cost=self._evaluate_full(point)[0]
+        _,directions=np.linalg.eigh(self._hessian(point,direct=True))
         length=max(1.,float(np.linalg.norm(point)))
         best=None;best_cost=cost;checked=0
         for relative in (1e-3,1e-2,5e-2):
@@ -198,7 +219,7 @@ class ProfiledMagneticObjective:
                     maximum=float(np.max(np.linalg.norm(self.physical_maps@probe,axis=1)))
                     if maximum>self.maximum_moment:
                         probe*=self.maximum_moment/maximum
-                    probe_cost=self._evaluate(probe)[0];checked+=1
+                    probe_cost=self._evaluate_full(probe)[0];checked+=1
                     roundoff=64*np.finfo(float).eps*max(abs(cost),abs(probe_cost),np.finfo(float).tiny)
                     if probe_cost<best_cost-roundoff:
                         best,best_cost=probe.copy(),probe_cost
@@ -223,7 +244,9 @@ class ProfiledMagneticObjective:
 
     def _assess(self,point,*,optimizer_success,optimizer_status,message,
                 iterations,evaluations,objective_ftol,optimizer_scale):
-        cost,gradient,scale=self._evaluate(point)
+        # Accept a state only on the original complete weighted profile.
+        # Numerical reduction changes neither convergence nor descent guards.
+        cost,gradient,scale=self._evaluate_full(point)
         coefficients=self.to_native@point
         full=self.offset+scale*(self.nuclear+np.einsum('i,nij,j->n',coefficients,self.quadratic,coefficients))
         background=np.linalg.lstsq(self.background,-full,rcond=None)[0] if self.background.shape[1] else np.empty(0)
@@ -241,7 +264,7 @@ class ProfiledMagneticObjective:
         # Quadratic intensities have zero first derivatives at zero moments.
         # A native or SciPy "success" at a maximum is not a useful start.
         step=1e-4*max(1.,float(np.linalg.norm(point)))
-        curvature,directions=np.linalg.eigh(self._hessian(point))
+        curvature,directions=np.linalg.eigh(self._hessian(point,direct=True))
         local_descent=False
         for direction in directions.T:
             for sign in [-1.,1.]:
@@ -251,7 +274,7 @@ class ProfiledMagneticObjective:
                 # Compare the weighted residual costs, not a decrement in
                 # Rwp-normalized cost. An arbitrarily large nuclear signal
                 # can otherwise hide real magnetic descent at zero moments.
-                probe_cost=self._evaluate(probe)[0]
+                probe_cost=self._evaluate_full(probe)[0]
                 roundoff=64*np.finfo(float).eps*max(abs(cost),abs(probe_cost),np.finfo(float).tiny)
                 if probe_cost<cost-roundoff:
                     local_descent=True
