@@ -41,6 +41,13 @@ def test_open_and_close_preserve_live_workspace_and_do_not_start_jobs(app):
     assert s.workspace_view=='experiment' and not s.setup_collapsed
 
 
+def test_new_preparation_defaults_match_the_shared_structural_refinement_domain(app):
+    from gpx_recipe.structural_live.service import SearchSettings
+    application,_,_,_=app;s=application.server.state;settings=SearchSettings()
+    assert float(s.prep_cell_radius)==settings.cell_radius
+    assert float(s.prep_mode_radius)==settings.mode_radius
+
+
 def test_read_only_selection_caption_does_not_initialize_any_preparation_service():
     class ReadOnlyHistory:
         def __getattr__(self,name):raise AssertionError('A caption must not access the service: '+name)

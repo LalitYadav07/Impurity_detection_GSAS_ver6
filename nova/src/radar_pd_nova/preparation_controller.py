@@ -16,6 +16,7 @@ from gpx_recipe.preparation.reference import validate_grid
 from gpx_recipe.preparation.library import MAX_BYTES
 from gpx_recipe.symmetry.compiler import file_sha
 from gpx_recipe.symmetry.contracts import digest
+from gpx_recipe.structural_live.defaults import DEFAULT_CELL_RADIUS
 from .battery_preparation import checked_upload, capture_file
 from .model_runtime import GalaxyModelRuntime,identifier
 from .preparation_discovery import PreparationDiscovery,k_vector
@@ -55,7 +56,7 @@ class PreparationMixin:
             prep_profile_bank='1',prep_grid_kind='PNT',prep_lower='3000',prep_upper='180000',prep_bins='2500',
             prep_bank_rows=[],prep_reference='',prep_reference_options=[],prep_context_ready=False,prep_parent_title='',
             prep_kind='magnetic',prep_k_options=[],prep_selected_k=[],prep_custom_k='',prep_site_options=[],prep_sites=[],
-            prep_site_rows=[],prep_maximum_moment='6',prep_mode_radius='.05',prep_cell_radius='.005',
+            prep_site_rows=[],prep_maximum_moment='6',prep_mode_radius='.05',prep_cell_radius=format(DEFAULT_CELL_RADIUS,'g'),
             prep_opd_policy='highest-symmetry-per-irrep',prep_construct_limit='100',prep_discovery_rows=[],
             prep_discovery_ready=False,prep_candidate_count=0,prep_selected_banks=[],prep_inspected_banks=[],
             prep_parallel_jobs=2,prep_library='',prep_library_options=[],prep_entries=[],prep_coverage='',prep_active_jobs=0,

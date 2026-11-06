@@ -15,6 +15,7 @@ from gpx_recipe.preparation.library import confined,MAX_MODELS
 from gpx_recipe.symmetry.chemistry import validate_sites,sites_from_inputs
 from gpx_recipe.symmetry.compiler import file_sha, package_signature
 from gpx_recipe.symmetry.contracts import digest, validate_candidate
+from gpx_recipe.structural_live.defaults import DEFAULT_CELL_RADIUS
 from .model_runtime import identifier
 from .native_operations import intent_lock
 from .preparation_history import PreparationHistory, saved_preparations
@@ -170,7 +171,7 @@ class PreparationWorkspace:
             source_sha256=file_sha(confined(library.root,library.document['specification']['source'])))
 
     def create_models(self,reference,*,name,kind,catalogs,bank_labels=None,sites=None,
-                      maximum_moment=6.,mode_radius=.05,cell_radius=.005,
+                      maximum_moment=6.,mode_radius=.05,cell_radius=DEFAULT_CELL_RADIUS,
                       refine_scale=True,refine_background=True):
         context=self.references(reference)
         if kind not in {'magnetic','structural'}:raise ValueError('Choose magnetic or structural model preparation')

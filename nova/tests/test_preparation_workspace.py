@@ -171,6 +171,13 @@ def test_structural_child_and_full_discovery_coverage_are_retained(workspace,tmp
     model_key=w.create_models(key,name='Structural preparation',kind='structural',catalogs=[c],bank_labels=['bank 2'])
     library=w.registry.get(model_key);model=library.document['entries'][0]['model']
     assert model['kind']=='structural' and (library.root/model['child']).read_text()=='data_structure_contract_only\n'
+    from gpx_recipe.structural_live.service import SearchSettings
+    assert model['settings']['cell_radius']==SearchSettings().cell_radius
+    assert model['settings']['mode_radius']==SearchSettings().mode_radius
+    custom_key=w.create_models(key,name='Reviewed custom domain',kind='structural',catalogs=[c],
+        bank_labels=['bank 2'],cell_radius=.003)
+    custom=w.registry.get(custom_key).document['entries'][0]['model']
+    assert custom['settings']['cell_radius']==.003
     scope=json.loads((library.root/'inputs/scope.json').read_text())
     assert scope['searches'][0]['coverage']['discovered_count']==3
     child=Path(c['directory'])/'children/child.cif';child.write_text('changed structure')
