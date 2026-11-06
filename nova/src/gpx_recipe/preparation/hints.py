@@ -27,6 +27,18 @@ MAX_METADATA=4*1024*1024
 MAX_ENTRIES=5000
 
 
+def live_context(request,catalog):
+    """Bind hints to reviewed live model choices, independent of path/counts.
+
+    The scientific request and packet separately bind the exact observation,
+    source GPX and grid. Current native scattering identities still decide
+    whether any theory asset is compatible with that actual source.
+    """
+    return dict(schema='radar-live-scattering-context/v1',kind='magnetic',
+        k=copy.deepcopy(catalog['k']),candidates=copy.deepcopy(catalog['candidates']),
+        sites=copy.deepcopy(request['sites']))
+
+
 def _hash(value):
     return isinstance(value,str) and re.fullmatch('[a-f0-9]{64}',value) is not None
 
@@ -177,7 +189,10 @@ def restore(document,protocol,source_root,target_root):
 
 
 def cache_for(root,protocol,*,candidate=None):
-    document=read(root,protocol)
+    try:document=read(root,protocol)
+    except (OSError,ValueError,EOFError) as error:
+        return None,dict(attached=0,status='unavailable',error_type=type(error).__name__,
+            native_qualification_required=True)
     if document is None:return None,dict(attached=0,native_qualification_required=True)
     cache=ScatteringFactorCache();accepted=[];discarded=[];total=0;copied=set()
     for row in document['entries']:

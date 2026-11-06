@@ -50,6 +50,7 @@ class WebmonMixin:
         self._webmon_colors={};self._webmon_pattern=None;self._webmon_payloads={};self._webmon_out=None;self._webmon_plot_binding=None;self._webmon_saved_paths={};self._webmon_request={};self._webmon_last_preview=None;self._webmon_model_paths=set();self._webmon_process=None;self._webmon_cancelled=False;self._webmon_task=None;self._webmon_poll_task=None;self._webmon_binding=None;self._webmon_start_scope=None
         self._webmon_display_scope=None;self._webmon_scope_generation=0
         s.webmon_scope_notice='';s.webmon_scope_allowed=False
+        s.webmon_preparation_notice=''
         s.update(dict(webmon_follow_latest=True,webmon_stale=False,webmon_analysis_revision='',webmon_local=bool(self._webmon and self._webmon.config.get('local_replay')),webmon_runs=[],webmon_run='',webmon_target='',webmon_message='Start or restore a saved Live watch, then refresh to select a stored or current WebMON scan.',webmon_reference='',webmon_accepted=False,webmon_k='0, 0, 0',webmon_ion='',webmon_lower=.1,webmon_upper=9.,webmon_busy=False,webmon_rows=[],webmon_model='',webmon_models=[],webmon_details='',webmon_has_result=False,webmon_context_ready=False,webmon_revision='',webmon_latency='',webmon_latest='',webmon_health='No inference yet',webmon_reference_rows=[],webmon_poll_seconds=30))
         s.update(dict(webmon_table_selected=[],webmon_compared=[],webmon_axis='tof',webmon_axes=[{'title':'TOF (µs)','value':'tof'}],webmon_errors=False,webmon_band=True,webmon_ticks=True,webmon_sampler_summary="",webmon_fit_metrics=[],webmon_component=False,webmon_region='full',webmon_filter='All',webmon_search='',webmon_display_rows=[],webmon_moment_rows=[],webmon_pair_a=0,webmon_pair_b=1,webmon_site_options=[],webmon_saved=[],webmon_saved_job='',webmon_checked='Not checked',webmon_connection='Not connected',webmon_count_summary='No candidates analyzed',webmon_validity='No fit assessed',webmon_boundary='Not assessed',webmon_sampling='Not assessed',webmon_fit_caption='',webmon_lower_used=None,webmon_upper_used=None))
         s.change('powgen_processing_scope','powgen_processing_sample_ids','powgen_bank_scope',
@@ -261,6 +262,9 @@ class WebmonMixin:
             with v.VExpansionPanels(variant='accordion'):
                 with v.VExpansionPanel(title='Review nuclear reference & magnetic assumptions'):
                     with v.VExpansionPanelText():
+                        html.P('{{ webmon_preparation_notice }}',v_if='webmon_preparation_notice',classes='text-body-2')
+                        v.VBtn('Choose or prepare calculations',click=self.open_preparation_workspace,
+                            disabled=('webmon_busy',),variant='text')
                         with html.Div(v_if='!webmon_local && !webmon_context_ready'):
                             v.VBtn('Load published GPX sources',click=self.webmon_load_published_sources,disabled=('webmon_busy',),variant='outlined')
                             v.VSelect(label='Published source GPX',v_model=('webmon_published_source',),items=('webmon_published_sources',),update_modelValue=(self.webmon_published_source_changed,'[$event]'),density='compact')
@@ -404,6 +408,7 @@ class WebmonMixin:
             if self.server.state.powgen_monitoring:self.webmon_refresh(quiet=True)
             if self.server.state.powgen_monitoring and getattr(self,'_webmon_stream',None):self.webmon_stream_tick()
     def webmon_refresh(self,quiet=False,**_):
+        self.server.state.webmon_preparation_notice=getattr(self,'_prepared_selection_caption',lambda:'')()
         s=self.server.state;owner=None
         try:
             if str(s.live_beamline)!='PG3':raise ValueError('WebMON is currently available for POWGEN only')
@@ -1084,6 +1089,7 @@ class WebmonMixin:
             service=owner['service'] if owner is not None else self.service
             factory=getattr(service,'staging_client',None)
             runtime=GalaxyLiveRuntime(root,factory() if factory else service)
+            runtime.preparation_provider=getattr(self,'_capture_prepared_inputs',None)
             self._webmon_remote_cancel=ScopeCancellation(current)
             self._webmon_pending_binding=b;self._webmon_pending_request=req
             s.webmon_busy=True;s.webmon_stale=bool(s.webmon_has_result)

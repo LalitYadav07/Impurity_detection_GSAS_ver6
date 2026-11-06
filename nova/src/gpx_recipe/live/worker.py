@@ -12,7 +12,7 @@ def _read_code_identity():
     import inspect
     result={name:sha(Path(__file__).parent/name) for name in ["statistics.py","native_profile.py","validated_backend.py","native_quadratic.py","native_kernel_policy.py","native_reflection.py","reflection_factors.py","quadratic_qualification.py","moment_basis.py","central_quadratic.py","gpx_index.py","native_validation.py","contracts.py","worker.py","observations.py","gpx_export.py","resources.py"]}
     import importlib.util
-    for name in ['gsas_magnetic_preflight','gpx_recipe.symmetry.native_magnetic','gpx_recipe.symmetry.native_preparation','gpx_recipe.symmetry.worker','gpx_recipe.execution','gpx_recipe.preparation.identity','gpx_recipe.structural_live.optimization.native_profile_capture']:
+    for name in ['gsas_magnetic_preflight','gpx_recipe.symmetry.native_magnetic','gpx_recipe.symmetry.native_preparation','gpx_recipe.symmetry.worker','gpx_recipe.execution','gpx_recipe.preparation.identity','gpx_recipe.preparation.hints','gpx_recipe.structural_live.optimization.native_profile_capture']:
         spec=importlib.util.find_spec(name)
         result[name]=sha(Path(spec.origin)) if spec and spec.origin else 'unavailable'
     result.update({fn.__name__:hashlib.sha256(inspect.getsource(fn).encode()).hexdigest() for fn in [compile_candidate,infer]})
@@ -117,13 +117,22 @@ def execute(request_path,candidate_id=None):
             if meta and (meta.get('backend')!=active_identity() or meta.get('sites')!=req['sites'] or meta.get('k')!=req['k']):meta=None
             cache_hit=not (meta is None or not (dest/'magnetic-refinement.gpx').is_file() or meta.get('native_gpx_sha256')!=sha(dest/'magnetic-refinement.gpx') or meta.get('code_identity')!=code_identity() or meta['source_sha256']!=sha(source) or meta['candidate']!=c or meta.get('kernel_sha256')!=sha(dest/'kernel.npz'))
             if not cache_hit:
-                meta=compile_candidate(source,c,req['k'],req['sites'],dest,particles=req['particles'])
+                factor_cache=None;prepared_scattering=None
+                if req.get('prepared_scattering') is not None:
+                    from ..preparation.hints import cache_for,live_context
+                    factor_cache,prepared_scattering=cache_for(Path(req['catalog']).parent.parent,
+                        live_context(req,catalog),candidate=c['id'])
+                meta=compile_candidate(source,c,req['k'],req['sites'],dest,particles=req['particles'],
+                    factor_cache=factor_cache)
+                if prepared_scattering is not None:
+                    meta['prepared_scattering']=prepared_scattering;write(dest/'kernel.json',meta)
             from .resources import kernel_budget
             kernel_budget(meta['dimensions'],meta['bin_count'],req['particles'])
             from .observations import replace_observations
             if replace_observations(dest/'kernel.npz',req):
                 meta['kernel_sha256']=sha(dest/'kernel.npz');meta['observation_revision']=req['source_revision'];write(dest/'kernel.json',meta)
             r.update(status='sampling',dimensions=meta['dimensions'],native_errors=meta['native_errors'],preparation_seconds=time.monotonic()-preparation_started,response_cache_hit=cache_hit);write(report_dir/'result.json',report)
+            if meta.get('prepared_scattering') is not None:r['prepared_scattering']=meta['prepared_scattering']
             inference_key=dict(lower=req['lower'],upper=req['upper'],particles=req['particles'],code_identity=code_identity(),kernel_sha256=sha(dest/'kernel.npz'))
             existing_key=json.loads((dest/'inference-request.json').read_text()) if (dest/'inference-request.json').exists() else None
             if (dest/'posterior.json').exists() and existing_key==inference_key:
@@ -155,6 +164,13 @@ def execute(request_path,candidate_id=None):
                 r['reflection_warning']=f'Native ticks unavailable: {type(exc).__name__}: {exc}'
             r['artifacts']=seal_posterior(dest)
             r.update({k:post[k] for k in ['status','rwp','reduced_chi2','health','seconds','intervals','labels']});r['posterior']=str(dest/'posterior.json')
+        except TimeoutError as exc:
+            if r.get('status')!='sampling':
+                r.update(status='numerical_failure',reason=type(exc).__name__+': '+str(exc)[:600])
+                (report_dir/'failures.log').open('a').write(traceback.format_exc()+'\n')
+            else:
+                r.update(status='sampling_unresolved',sampling_incomplete=True,
+                    reason=str(exc)[:600],kernel_retained=True)
         except Exception as exc:
             r.update(status='numerical_failure',reason=type(exc).__name__+': '+str(exc)[:600]);(report_dir/'failures.log').open('a').write(traceback.format_exc()+'\n')
         finally:

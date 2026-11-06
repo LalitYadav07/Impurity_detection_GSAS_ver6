@@ -113,6 +113,7 @@ class PreparationMixin:
     def close_preparation_workspace(self,**_):
         s=self.server.state;s.workspace_view,s.setup_collapsed=self._prep_return or ('monitor',False)
         if hasattr(s,'sx_preparation_notice'):s.sx_preparation_notice=self._prepared_selection_caption()
+        if hasattr(s,'webmon_preparation_notice'):s.webmon_preparation_notice=self._prepared_selection_caption()
         s.flush()
 
     def _prep_refresh(self):
@@ -365,14 +366,18 @@ class PreparationMixin:
 
     def _capture_prepared_model_inputs(self,protocol,root):
         """Called off the UI thread before a new immutable source dispatch."""
-        from gpx_recipe.preparation.hints import read,capture
-        saved=read(root,protocol)
-        if saved is not None:return saved
         if (protocol['kind']!='magnetic'
                 or protocol['policy'].get('magnetic_optimizer')!='profiled_quadratic'):return None
+        return self._capture_prepared_inputs(protocol,root)
+
+    def _capture_prepared_inputs(self,context,root):
+        """Common selection for independent Model and Live request contracts."""
+        from gpx_recipe.preparation.hints import read,capture
+        saved=read(root,context)
+        if saved is not None:return saved
         store=self._preparation_store()
-        if not store.registry.summaries():return None
-        return capture(store.registry.get(),protocol,root)
+        if not store.registry.selected_key():return None
+        return capture(store.registry.get(),context,root)
 
     def _prepared_selection_caption(self):
         try:
@@ -385,7 +390,7 @@ class PreparationMixin:
                 return (f"Prepared library: {row['name']}. This selection contains no magnetic scattering assets. "
                     'Magnetic model searches build the required physics when they run.')
             return (f"Prepared library: {row['name']} · {row['prepared']} / {row['total']} entries prepared. "
-                'Applies to new model inputs; each scan’s compatibility is checked before reuse.')
+                'New magnetic Model and Live calculations check each scan’s compatibility before reuse.')
         except (OSError,ValueError):
             return 'The selected preparation needs review. Model searches can rebuild the required physics.'
 

@@ -2,7 +2,7 @@
 from __future__ import annotations
 import hashlib,json,re,time,uuid
 from pathlib import Path
-from gpx_recipe.live.packet import create_packet,canonical,extract_result_archive
+from gpx_recipe.live.packet import create_packet,canonical,extract_result_archive,scientific_packet_identity
 from gpx_recipe.live.contracts import file_hash
 from ..refinement_runtime import GalaxyRefinementRuntime,RuntimeUnavailable
 
@@ -14,6 +14,40 @@ class GalaxyLiveRuntime(GalaxyRefinementRuntime):
     workspace_label='RADAR-PD live snapshot workspace'
     workspace_schema='radar-live-workspace/v1'
 
+    def _prepared_request(self,request,key):
+        """Freeze optional preparation independently of a lost job reply."""
+        if request.get('action')=='prepare':return request,None
+        from gpx_recipe.preparation.hints import live_context,read
+        from gpx_recipe.execution import write_json
+        from gpx_recipe.symmetry.contracts import digest
+        from ..native_operations import intent_lock
+        catalog=Path(request['catalog'])
+        if catalog.stat().st_size>4*1024*1024:raise ValueError('Live catalog exceeds its metadata budget')
+        context=live_context(request,json.loads(catalog.read_text()))
+        root=self.root/'prepared-inputs'/key;root.mkdir(parents=True,exist_ok=True)
+        choice=root/'choice.json'
+        with intent_lock(root/'choice-intent.json'):
+            if choice.exists():
+                saved=json.loads(choice.read_text())
+                if saved.get('context_sha256')!=digest(context):
+                    raise ValueError('Live dispatch already captured different preparation choices')
+            else:
+                try:
+                    provider=getattr(self,'preparation_provider',None)
+                    if callable(provider):provider(context,root)
+                    document=read(root,context)
+                    saved=dict(context_sha256=digest(context),selected=document is not None)
+                except (OSError,ValueError,EOFError) as error:
+                    saved=dict(context_sha256=digest(context),selected=False,status='unavailable',
+                        error_type=type(error).__name__)
+                write_json(choice,saved)
+            result=dict(request)
+            if saved.get('selected'):
+                try:document=read(root,context)
+                except (OSError,ValueError,EOFError):document=None
+                if document is not None:result['prepared_scattering']=document
+            return result,root
+
     def call(self,request,directory,*,dispatch_key,on_submitted=None,resume=None,
              cache_dataset_id=None,recover=False,cancel_event=None):
         from ..models import UtilityActionRecord,RunStatus
@@ -21,14 +55,23 @@ class GalaxyLiveRuntime(GalaxyRefinementRuntime):
         if cancel_event is not None and cancel_event.is_set():
             raise RuntimeUnavailable('Live request is no longer active; existing dispatch receipts are retained')
         directory=Path(directory).resolve();directory.mkdir(parents=True,exist_ok=True)
-        packet=directory/'request-packet.zip';packet_id=create_packet(request,packet)
+        request,prepared_root=self._prepared_request(request,dispatch_key)
+        packet=directory/'request-packet.zip';packet_id=create_packet(request,packet,prepared_root=prepared_root)
+        scientific_id=scientific_packet_identity(packet)
         ledger=self.root/'dispatches';ledger.mkdir(exist_ok=True)
         acknowledged=ledger/(dispatch_key+'.json');pending=ledger/(dispatch_key+'.pending')
-        if pending.exists() and pending.read_text().strip()!=packet_id:
-            raise ValueError('Pending dispatch key already belongs to different live inputs')
+        def original_packet(saved,message):
+            if saved.get('scientific_packet_id'):
+                if saved['scientific_packet_id']!=scientific_id:raise ValueError(message)
+            elif saved['packet_id']!=packet_id:raise ValueError(message)
+            return saved['packet_id']
+        if pending.exists():
+            text=pending.read_text().strip()
+            saved=json.loads(text) if text.startswith('{') else dict(packet_id=text)
+            packet_id=original_packet(saved,'Pending dispatch key already belongs to different live inputs')
         if acknowledged.exists():
             saved=json.loads(acknowledged.read_text())
-            if saved['packet_id']!=packet_id:raise ValueError('Dispatch key already belongs to different live inputs')
+            packet_id=original_packet(saved,'Dispatch key already belongs to different live inputs')
             job=UtilityActionRecord.model_validate(saved['job'])
         elif resume:
             job=UtilityActionRecord.model_validate(resume)
@@ -45,7 +88,7 @@ class GalaxyLiveRuntime(GalaxyRefinementRuntime):
                 inputs={'dispatch_key':dispatch_key,'packet':{'dataset_id':packet_dataset}}
                 if cache_dataset_id:inputs['response_cache']={'dataset_id':cache_dataset_id}
                 try:
-                    with pending.open('x') as handle:handle.write(packet_id+'\n')
+                    with pending.open('x') as handle:json.dump(dict(packet_id=packet_id,scientific_packet_id=scientific_id),handle)
                 except FileExistsError:raise RuntimeUnavailable('Another caller owns this live dispatch; recover it') from None
                 try:
                     job=self.service.submit_utility(tool_id=self.tool_id,name='RADAR-PD live snapshot '+dispatch_key,
@@ -57,7 +100,7 @@ class GalaxyLiveRuntime(GalaxyRefinementRuntime):
                         raise RuntimeUnavailable(str(exc)) from exc
                     raise RuntimeUnavailable('Galaxy did not acknowledge the live submission. The dispatch key is retained for recovery.') from exc
         from gpx_recipe.live.io import atomic_json
-        atomic_json(acknowledged,{'packet_id':packet_id,'job':job.model_dump(mode='json')})
+        atomic_json(acknowledged,{'packet_id':packet_id,'scientific_packet_id':scientific_id,'job':job.model_dump(mode='json')})
         if on_submitted:on_submitted(job.model_dump(mode='json'))
         start=time.monotonic()
         while job.status not in {RunStatus.OK,RunStatus.ERROR,RunStatus.CANCELLED}:

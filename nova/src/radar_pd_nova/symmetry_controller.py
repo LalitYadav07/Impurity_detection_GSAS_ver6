@@ -133,7 +133,8 @@ class SymmetryMixin(KSearchMixin):
         environment={}
         for name in ['GSASII_ROOT','RADAR_GPX_DOCKER_IMAGE']:
             if os.environ.get(name):environment[name]=os.environ[name]
-        return LocalTransport([python],environment=environment)
+        return LocalTransport([python],environment=environment,
+            preparation_provider=getattr(self,'_capture_prepared_model_inputs',None))
 
     def _symmetry_campaign(self,root):
         """Retain stamp-checked receipt caches across ordinary UI refreshes."""

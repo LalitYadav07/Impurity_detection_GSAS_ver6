@@ -120,6 +120,40 @@ def test_theory_library_reaches_real_model_jobs_and_current_native_checks(tmp_pa
         assert phases
         moment=np.asarray(phases[0].data['Atoms'][0][7:10],float)
         assert np.isfinite(moment).all() and np.linalg.norm(moment)>1.
+    # The independent Live packet uses the same library and native compiler.
+    # This intentionally tiny sampling budget checks handoffs, not posterior
+    # convergence, magnetic identification or an exposure recommendation.
+    from gpx_recipe.live.packet import create_packet
+    from gpx_recipe.live.galaxy_worker import run_packet
+    preflight=tmp_path/'live-preflight.json'
+    write_json(preflight,[dict(id=candidate['id'],compatible=True,dimensions=3)])
+    live_request=dict(source_gpx=str(source),source_sha256=file_sha(source),
+        catalog=str(inputs/'catalog.json'),catalog_sha256=file_sha(inputs/'catalog.json'),
+        preflight=str(preflight),preflight_sha256=file_sha(preflight),k=protocol['k'],sites=protocol['sites'],
+        source_revision='artificial:current',reference_revision='artificial:nominal',
+        lower=0.,upper=6.,particles=64,workers=1,candidate_seconds=5.,preparation_timeout_seconds=180.)
+    live_inputs=tmp_path/'live-inputs'
+    live_document=hints.capture(library,hints.live_context(live_request,catalog),live_inputs)
+    live_request['prepared_scattering']=live_document
+    packet=tmp_path/'live-packet.zip';create_packet(live_request,packet,prepared_root=live_inputs)
+    live=run_packet(packet,tmp_path/'live-native',tmp_path/'live-result.zip',tmp_path/'live-cache.zip')
+    assert len(live['rows'])==1 and live['rows'][0]['status'] in {'conditional_posterior','sampling_unresolved'},live['rows']
+    assert not live['rows'][0].get('sampling_incomplete'),live['rows']
+    assert live['rows'][0].get('posterior')
+    assert live['rows'][0]['gpx_status']=='conditional_checkpoint'
+    checkpoint=tmp_path/'live-native'/live['rows'][0]['fitted_gpx']
+    assert file_sha(checkpoint)==live['rows'][0]['fitted_gpx_sha256']
+    saved=G.G2Project(gpxfile=str(checkpoint))
+    assert any(p.data['General']['Type']=='magnetic' for p in saved.phases())
+    assert live['rows'][0]['prepared_scattering']['attached']==1
+    model_name=candidate['id'].replace(':','_')
+    live_meta=json.loads((tmp_path/'live-native/models'/model_name/'kernel.json').read_text())
+    live_compiler=live_meta['compiler']['native_reflection_diagnostics']
+    assert live_compiler['scattering_factors_reused']==(change=='same')
+    assert not live_compiler['scattering_qualification_reused']
+    assert live_compiler['native_amplitude_calls']==(0 if change=='same' else 6)
+    assert live_compiler['coefficient_structure_factor_calls']==19
     write_json(tmp_path/'handoff.json',dict(kind=kind,change=change,library_id=document['library_id'],
         snapshot_sha256=document['snapshot_sha256'],native_compiler=compiler,
-        statuses=[row['status'] for row in response['trials']],published_gpx=len(published)))
+        statuses=[row['status'] for row in response['trials']],published_gpx=len(published),
+        live_compiler=live_compiler,live_status=live['rows'][0]['status']))

@@ -147,3 +147,53 @@ def test_manifest_and_factor_symlinks_are_not_followed(tmp_path):
     assert hints.cache_for(root,protocol)[0] is None
     manifest=root/hints.MANIFEST;other=manifest.with_name('copy.json');manifest.rename(other);manifest.symlink_to(other)
     with pytest.raises(ValueError):hints.read(root,protocol)
+
+
+def test_corrupt_optional_manifest_cannot_reject_a_scientific_candidate(tmp_path):
+    library,protocol,_=fixture(tmp_path/'fixture');root=tmp_path/'packet'
+    hints.capture(library,protocol,root)
+    (root/hints.MANIFEST).write_text('damaged optional metadata')
+    cache,report=hints.cache_for(root,protocol,candidate=protocol['candidates'][0]['id'])
+    assert cache is None and report['status']=='unavailable'
+    assert report['native_qualification_required']
+    assert len(protocol['candidates'])==1
+
+
+def test_local_launch_captures_one_immutable_selection_before_each_scientific_ticket(tmp_path,monkeypatch):
+    from types import SimpleNamespace
+    import gpx_recipe.symmetry.local_transport as local
+    from gpx_recipe.symmetry.campaign import Campaign
+    library,protocol,source=fixture(tmp_path/'fixture')
+    protocol['policy'].update(magnetic_optimizer='profiled_quadratic',moment_model='symmetry_allowed',optimizer_iterations=120)
+    protocol['seeds'].append(dict(protocol['seeds'][0],id='second'))
+    campaign=Campaign(tmp_path/'campaign',shared_inputs=True)
+    ids=campaign.enroll(protocol,source,approved_hash=digest(protocol));seen=[]
+    def capture(p,root):
+        assert not any(campaign.root.glob('trials/*/launch.json'))
+        seen.append(1);return hints.capture(library,p,root)
+    def launched(*args,**kwargs):
+        assert hints.read(campaign.root/'inputs'/digest(protocol),protocol)['entries']
+        assert b'preparation_provider' not in next(campaign.root.glob('trials/*/launch.json')).read_bytes()
+        return SimpleNamespace(pid=12345)
+    monkeypatch.setattr(local.subprocess,'Popen',launched)
+    first=local.LocalTransport(['python'],preparation_provider=capture)
+    first.submit(ids[0],campaign.root/'trials'/ids[0])
+    second=local.LocalTransport(['python'],preparation_provider=lambda *_:pytest.fail('Selection changed for captured inputs'))
+    second.submit(ids[1],campaign.root/'trials'/ids[1])
+    assert seen==[1]
+
+
+def test_optional_provider_failure_still_publishes_a_local_scientific_launch(tmp_path,monkeypatch):
+    from types import SimpleNamespace
+    import gpx_recipe.symmetry.local_transport as local
+    from gpx_recipe.symmetry.campaign import Campaign
+    _,protocol,source=fixture(tmp_path/'fixture')
+    protocol['policy'].update(magnetic_optimizer='profiled_quadratic',moment_model='symmetry_allowed',optimizer_iterations=120)
+    campaign=Campaign(tmp_path/'campaign',shared_inputs=True)
+    uid=campaign.enroll(protocol,source,approved_hash=digest(protocol))[0]
+    def damaged(*args):raise ValueError('optional data changed')
+    monkeypatch.setattr(local.subprocess,'Popen',lambda *a,**k:SimpleNamespace(pid=12345))
+    local.LocalTransport(['python'],preparation_provider=damaged).submit(uid,campaign.root/'trials'/uid)
+    receipt=json.loads((campaign.root/'trials'/uid/'preparation-attachment.json').read_text())
+    assert receipt['status']=='unavailable'
+    assert (campaign.root/'trials'/uid/'launch.json').exists()
