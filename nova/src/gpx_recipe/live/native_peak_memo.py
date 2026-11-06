@@ -2,8 +2,9 @@
 
 This does not approximate profiles or combine reflection intensities. The
 unchanged driver retains its reflection loop, corrections and summation order.
-Only identical peak-function arguments on identical native grids can reuse a
-result. One owned process is required, as for the native GSAS constraint maps.
+Only identical native inputs on identical grids can reuse a result, including
+the pinned TOF kernel's exact float32 conversion. One owned process is
+required, as for the native GSAS constraint maps.
 """
 from collections import OrderedDict
 from contextlib import contextmanager
@@ -11,6 +12,7 @@ import hashlib
 import inspect
 import math
 import os
+from pathlib import Path
 import struct
 import threading
 import time
@@ -24,6 +26,10 @@ PROBE_CALLS = 64
 _LOCK = threading.Lock()
 _PROCESS_STORE = None
 _DRIVER = 'caa9e0aac821043004b54a2382008b2c0d04abb97ac8b057d57be6044880944d'
+# The reviewed wrapper subtracts the position in float64, then F2PY converts
+# the offsets and four shape scalars to float32. Only this exact compiled
+# implementation may use that equivalence; all others retain float64 keys.
+_TOF_FLOAT32_BINARY = '895abf0b70909dcd4c280e01effb54e9e245d2e4ded739365841598bbf781241'
 _KERNELS = {
     'getEpsVoigt': ('a299231c52b148b2be785c4fd0b6d6ad8899cf5df67925adc06dc2fa297f73f3', 5),
     'getFCJVoigt3': ('263ea0a0e0a337dd89c74de570f924a23d35648c05f9f90c3e8f334c9e698c82', 4),
@@ -37,6 +43,23 @@ def _source_hash(function):
         return None
 
 
+def _compiled_tof_float32(compiled):
+    try:
+        if type(compiled.pyepsvoigt).__name__!='fortran':return False
+        return hashlib.sha256(Path(compiled.__file__).read_bytes()).hexdigest()==_TOF_FLOAT32_BINARY
+    except (AttributeError,OSError,TypeError):return False
+
+
+def _same_tof_offsets(axis,left,right):
+    """Compare the exact compiled inputs, including signed-zero bits.
+
+    Equal rounded positions alone are insufficient: the original wrapper
+    subtracts each float64 position before its compiled float32 conversion.
+    """
+    return np.array_equal(np.asarray(axis-left,dtype=np.float32).view(np.uint32),
+                          np.asarray(axis-right,dtype=np.float32).view(np.uint32))
+
+
 class _PeakStore:
     """One bounded numeric store, independent of adapter accounting."""
     def __init__(self, maximum_bytes):
@@ -45,6 +68,7 @@ class _PeakStore:
         self.cache = OrderedDict()
         self.bytes = 0
         self.reviewed = None
+        self.tof_float32 = False
 
     def clear(self):
         self.cache.clear()
@@ -102,6 +126,7 @@ class NativePeakMemo:
         self.adaptive_driver_bypasses = 0
         self.estimated_saved_seconds = self.measured_overhead_seconds = 0.
         self.scope_bypasses = {}
+        self.native_float32_hits = self.native_offset_checks = self.native_offset_collisions = 0
 
     def clear(self):
         self._store.clear()
@@ -121,6 +146,10 @@ class NativePeakMemo:
             estimated_saved_native_seconds=self.estimated_saved_seconds,
             measured_memo_overhead_seconds=self.measured_overhead_seconds,
             adaptive_probe_calls=PROBE_CALLS,
+            native_float32_hits=self.native_float32_hits,
+            native_offset_checks=self.native_offset_checks,
+            native_offset_collisions=self.native_offset_collisions,
+            native_precision_equivalence='Exact compiled float32 inputs only for a pinned TOF binary; otherwise original float64 arguments',
             interpolation=False, reflection_intensities_combined=False,
             native_summation_order_preserved=True, persisted_predictions=False)
 
@@ -185,6 +214,7 @@ class NativePeakMemo:
                 yield
                 return
             store.reviewed = current
+            store.tof_float32 = _compiled_tof_float32(compiled)
         grid = None
         activity = None
         owner = threading.get_ident()
@@ -221,6 +251,7 @@ class NativePeakMemo:
                 self.calls += 1
                 started = time.perf_counter()
                 key = None
+                native_float32 = False
                 if (threading.get_ident() == owner and grid is not None
                         and not kwargs and len(args) == parameters + 1):
                     axis, identity, begin, end = grid
@@ -235,6 +266,13 @@ class NativePeakMemo:
                             if all(map(math.isfinite, scalars)):
                                 key = (name, identity, values.ctypes.data - begin, values.size,
                                        struct.pack('!' + 'd' * parameters, *scalars))
+                                if name=='getEpsVoigt' and store.tof_float32:
+                                    # Position rounding is only an index into
+                                    # a possible equivalence class. Hits still
+                                    # compare the compiled translated grid.
+                                    packed=struct.pack('!5f',*scalars)
+                                    key=(name,'native-float32',identity,values.ctypes.data-begin,values.size,packed)
+                                    native_float32=True
                         except (ValueError, TypeError, OverflowError):
                             pass
                 if key is None:
@@ -257,8 +295,16 @@ class NativePeakMemo:
                         self.adaptive_driver_bypasses += 1
                     return value
 
+                if key in store.cache and native_float32:
+                    cached=store.cache[key][0]
+                    if cached[3]!=scalars[0]:
+                        self.native_offset_checks+=1
+                        if not _same_tof_offsets(values,cached[3],scalars[0]):
+                            self.native_offset_collisions+=1
+                            _,removed=store.cache.pop(key);store.bytes-=removed
                 if key in store.cache:
                     self.hits += 1
+                    self.native_float32_hits+=int(native_float32)
                     value, size = store.cache.pop(key)
                     store.cache[key] = value, size
                     # Native callers receive independent mutable arrays, as
@@ -281,7 +327,7 @@ class NativePeakMemo:
                             _, (_, removed) = store.cache.popitem(last=False)
                             store.bytes -= removed
                             self.evictions += 1
-                        store.cache[key] = (value[0].copy(), value[1], native_seconds), size
+                        store.cache[key] = (value[0].copy(), value[1], native_seconds, scalars[0]), size
                         store.bytes += size
                 return completed(value, native_seconds=native_seconds)
             return peak
