@@ -129,6 +129,35 @@ def compile_reflection_quadratic(*, math, lattice, histogram, phases, histdict,
             or count*6*dimension*8 > MAX_AMPLITUDE_BYTES
             or len(axis)*dimension*dimension*8 > MAX_QUADRATIC_BYTES):
         raise ReflectionCompilerUnavailable('Native reflection response exceeds its bounded numeric allocation')
+    # Both Model and Live reach this boundary. Reuse only a complete native
+    # producer's unweighted response at the exact current physical context.
+    # Independent coefficient-oracle calls deliberately bypass this shortcut.
+    from ..preparation.rendered_magnetic import identity as rendered_identity
+    rendered_components={}
+    rendered_key=rendered_identity(math=math,histogram=histogram,phases=phases,histdict=histdict,
+        parameters=parameters,controls=controls,basis=basis,diagnostics=rendered_components)
+    if factor_cache is not None and not verify_coefficients:
+        from .reflection_factors import ScatteringFactorCache
+        if not isinstance(factor_cache,ScatteringFactorCache):
+            raise ReflectionCompilerUnavailable('A bounded native scattering-factor cache is required')
+        reused=factor_cache.rendered_response(rendered_key,axis=axis,moment_maps=basis.cartesian)
+        if reused is not None:
+            quadratic,origin=reused
+            scale=float(parameters[hfx+'Scale'])
+            if not np.isfinite(scale) or scale<0:
+                raise ReflectionCompilerUnavailable('Native histogram scale is invalid')
+            quadratic*=scale
+            return quadratic,dict(method='certified_native_rendered_response',dimensions=dimension,
+                reflections=count,bins=len(axis),native_amplitude_calls=0,coefficient_structure_factor_calls=0,
+                native_total_structure_factor_calls=0,native_profile_calls=0,profile_capture=None,
+                profile_seconds=0.,amplitude_assembly_seconds=0.,amplitude_bytes=0,response_bytes=quadratic.nbytes,
+                profile_bytes=0,coefficient_validation=dict(method='complete certified native producer',origin=origin),
+                scattering_identity=None,scattering_factors_reused=False,scattering_qualification_reused=False,
+                scattering_cache_note='',scattering_authenticated_origin_reused=False,
+                rendered_identity=rendered_key,rendered_components=rendered_components,prepared_rendered_response_reused=True,
+                prepared_rendered_response_origin=origin,prepared_rendered_response_note='',
+                seconds=time.monotonic()-started,observation_values_used=False,native_functions_replaced=False,
+                tracing_restored=sys.gettrace() is None,fit_slice=[fit_slice.start,fit_slice.stop])
     local_phase = copy.deepcopy(phase);local_phase['General']['doPawley'] = True
     local_histogram = copy.copy(histogram)
     local_histogram['Reflection Lists'] = {name: copy.deepcopy(reference)}
@@ -245,6 +274,8 @@ def compile_reflection_quadratic(*, math, lattice, histogram, phases, histdict,
         raise ReflectionCompilerUnavailable('Nonfinite native magnetic response')
     check()
     return quadratic, dict(method='native_reflection_amplitudes', dimensions=dimension,
+        rendered_identity=rendered_key,rendered_components=rendered_components,prepared_rendered_response_reused=False,
+        prepared_rendered_response_note=getattr(factor_cache,'rendered_response_note',''),
         reflections=count, bins=len(axis), native_amplitude_calls=calls,
         coefficient_structure_factor_calls=verification_calls,
         native_total_structure_factor_calls=calls+verification_calls,

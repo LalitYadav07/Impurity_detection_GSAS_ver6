@@ -91,13 +91,13 @@ def create_packet(request,destination,*,prepared_root=None):
             payload[name]=path;hashes[name]=file_hash(path);portable[field]=name
     _validate(request)
     if request.get('prepared_scattering') is not None:
-        from ..preparation.hints import MANIFEST,MAX_BYTES as PREPARED_LIMIT
+        from ..preparation.hints import MANIFEST,MAX_BYTES as PREPARED_LIMIT,entry_assets
         from ..preparation.library import confined
         document=request['prepared_scattering'];payload[MANIFEST]=canonical(document)
         hashes[MANIFEST]=hashlib.sha256(payload[MANIFEST]).hexdigest()
         total=0
         # Optional hints never crowd scientific inputs out of the packet.
-        for row in document['entries']:
+        for row in (asset for row in document['entries'] for asset in entry_assets(row)):
             name=row['path']
             if name in payload or prepared_root is None or len(payload)>=MAX_FILES-2:continue
             try:
@@ -155,10 +155,10 @@ def unpack_packet(archive,directory):
         portable=_read_json(z,'request.json')
         extras=set()
         if portable.get('prepared_scattering') is not None:
-            from ..preparation.hints import MANIFEST,MAX_BYTES as PREPARED_LIMIT,validate,live_context
+            from ..preparation.hints import MANIFEST,MAX_BYTES as PREPARED_LIMIT,validate,live_context,entry_assets
             document=portable['prepared_scattering']
             validate(document,live_context(portable,_read_json(z,INPUTS['catalog'])))
-            extras={MANIFEST}|{r['path'] for r in document['entries']}
+            extras={MANIFEST}|{asset['path'] for row in document['entries'] for asset in entry_assets(row)}
             if MANIFEST not in files or _read_json(z,MANIFEST)!=document:
                 raise ValueError('Live packet preparation differs from its captured selection')
             if sum(v.file_size for v in entries if v.filename in extras-{MANIFEST})>PREPARED_LIMIT:

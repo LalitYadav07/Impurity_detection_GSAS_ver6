@@ -123,7 +123,7 @@ def test_theory_library_reaches_real_model_jobs_and_current_native_checks(tmp_pa
     document=hints.capture(library,protocol,inputs)
     assert len(document['entries'])==1
     names=['catalog.json','protocol.json']+hints.packet_paths(inputs,protocol)
-    assert not any(name.endswith('response.npz') for name in names)
+    assert any(name.endswith('.response.npz') for name in names)
     pack(inputs,tmp_path/'model-assets.zip',names)
     ids=[trial_id(protocol,c['id'],s['id']) for c,s in iter_trials(protocol)]
     message=dict(schema='radar-model-chunk/v1',protocol=protocol,protocol_sha256=digest(protocol),
@@ -144,12 +144,14 @@ def test_theory_library_reaches_real_model_jobs_and_current_native_checks(tmp_pa
     proof=metadata['compilation']
     assert proof['prepared_scattering']['attached']==1
     compiler=proof['compiler_diagnostics']
-    assert compiler['scattering_factors_reused'] == (change=='same')
+    rendered_reused=authenticated and change=='same'
+    assert compiler['prepared_rendered_response_reused']==rendered_reused
+    assert compiler['scattering_factors_reused'] == (change=='same' and not rendered_reused)
     assert not compiler['scattering_qualification_reused']
-    assert compiler['scattering_authenticated_origin_reused']==(authenticated and change=='same')
+    assert not compiler['scattering_authenticated_origin_reused']
     if change=='same':
         assert compiler['native_amplitude_calls']==0
-        assert compiler['coefficient_structure_factor_calls']==(3 if authenticated else 19)
+        assert compiler['coefficient_structure_factor_calls']==(0 if rendered_reused else 19)
     else:assert compiler['native_amplitude_calls']==6
     # Final GPXs are real native outputs, separate from the theory library.
     published=list(received.glob('trials/*/results/*.gpx'))
@@ -190,11 +192,12 @@ def test_theory_library_reaches_real_model_jobs_and_current_native_checks(tmp_pa
     model_name=candidate['id'].replace(':','_')
     live_meta=json.loads((tmp_path/'live-native/models'/model_name/'kernel.json').read_text())
     live_compiler=live_meta['compiler']['native_reflection_diagnostics']
-    assert live_compiler['scattering_factors_reused']==(change=='same')
+    assert live_compiler['prepared_rendered_response_reused']==rendered_reused
+    assert live_compiler['scattering_factors_reused']==(change=='same' and not rendered_reused)
     assert not live_compiler['scattering_qualification_reused']
-    assert live_compiler['scattering_authenticated_origin_reused']==(authenticated and change=='same')
+    assert not live_compiler['scattering_authenticated_origin_reused']
     assert live_compiler['native_amplitude_calls']==(0 if change=='same' else 6)
-    assert live_compiler['coefficient_structure_factor_calls']==(3 if authenticated and change=='same' else 19)
+    assert live_compiler['coefficient_structure_factor_calls']==(0 if rendered_reused else 19)
     write_json(tmp_path/'handoff.json',dict(kind=kind,change=change,authenticated_origin=authenticated,library_id=document['library_id'],
         snapshot_sha256=document['snapshot_sha256'],native_compiler=compiler,
         statuses=[row['status'] for row in response['trials']],published_gpx=len(published),

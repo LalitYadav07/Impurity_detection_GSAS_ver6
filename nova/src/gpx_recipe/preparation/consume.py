@@ -42,6 +42,11 @@ def restore_magnetic_entry(directory, *, factor_cache=None):
     if 'scattering.npz' in names:
         scattering = detail['scattering']
         factor_cache.attach_source(confined(root, 'scattering.npz'), identity=scattering['identity'])
+    from .rendered_magnetic import metadata as rendered_metadata
+    rendered=rendered_metadata(detail)
+    if rendered is not None:
+        factor_cache.attach_response_source(confined(root,'response.npz'),
+            sha256=manifest['artifacts']['response.npz'],**rendered)
     return response, factor_cache, dict(entry_sha256=file_sha(path),
         observations_included=False, scientific_result=False, native_qualification_required=True,
-        scattering_available='scattering.npz' in names)
+        scattering_available='scattering.npz' in names,rendered_response_available=rendered is not None)

@@ -27,6 +27,11 @@ MAX_METADATA=4*1024*1024
 MAX_ENTRIES=5000
 
 
+def entry_assets(row):
+    """The same optional dependency closure in Model and Live packets."""
+    return [row]+([row['response']] if 'response' in row else [])
+
+
 def live_context(request,catalog):
     """Bind hints to reviewed live model choices, independent of path/counts.
 
@@ -69,7 +74,7 @@ def validate(document,protocol):
         raise ValueError('Prepared scattering snapshot changed')
     candidates={c['id'] for c in protocol['candidates']};seen=set()
     for row in document['entries']:
-        if (not isinstance(row,dict) or set(row)!={'entry','candidate','bank','identity','path','sha256','entry_sha256'}
+        if (not isinstance(row,dict) or set(row)-{'response'}!={'entry','candidate','bank','identity','path','sha256','entry_sha256'}
                 or not isinstance(row['entry'],str) or not re.fullmatch('[a-f0-9]{24}',row['entry'])
                 or not isinstance(row['candidate'],str) or row['candidate'] not in candidates
                 or not isinstance(row['bank'],str) or not row['bank'] or len(row['bank'])>100
@@ -77,6 +82,12 @@ def validate(document,protocol):
                 or row['path']!='_prepared_scattering/'+row['sha256']+'.npz'
                 or row['entry'] in seen):
             raise ValueError('Invalid prepared scattering input entry')
+        if 'response' in row:
+            response=row['response']
+            if (not isinstance(response,dict) or set(response)!={'identity','physics_sha256','path','sha256'}
+                    or any(not _hash(response[k]) for k in ('identity','physics_sha256','sha256'))
+                    or response['path']!='_prepared_scattering/'+response['sha256']+'.response.npz'):
+                raise ValueError('Invalid prepared rendered-response input')
         seen.add(row['entry'])
     return document
 
@@ -110,7 +121,8 @@ def capture(library,protocol,root):
     """Capture completed matching assets once; never narrow the model search.
 
     This checks only the dependency closure that is actually transferred.
-    Unused dense pattern-response tensors do not enter the job packet.
+    New preparations may supply a certified rendered response as well as
+    geometry-adaptable factors. Older factor-only packets remain readable.
     """
     if protocol['kind']=='structural':
         from .structural_hints import capture as structural_capture
@@ -153,9 +165,23 @@ def capture(library,protocol,root):
         relative='_prepared_scattering/'+checksum+'.npz'
         _copy(source,confined(root,relative,exists=False),checksum)
         if checksum not in copied:total+=size;copied.add(checksum)
-        rows.append(dict(entry=row['id'],candidate=model['settings']['candidate']['id'],bank=model['bank'],
+        captured=dict(entry=row['id'],candidate=model['settings']['candidate']['id'],bank=model['bank'],
             identity=manifest['detail']['scattering']['identity'],path=relative,sha256=checksum,
-            entry_sha256=inventory['entry.json']['sha256']))
+            entry_sha256=inventory['entry.json']['sha256'])
+        from .rendered_magnetic import metadata as rendered_metadata
+        rendered=rendered_metadata(manifest['detail'])
+        if rendered is not None and 'response.npz' in inventory:
+            response=inventory['response.npz'];response_sha=response['sha256']
+            path=confined(library.root,response['path']);response_size=path.stat().st_size
+            if response_sha in copied or total+response_size<=MAX_BYTES:
+                assets=library.verify_assets([response['path']]);path=assets[response['path']]
+                if manifest['artifacts']['response.npz']!=response_sha:
+                    raise ValueError('Prepared response differs from its published entry')
+                relative='_prepared_scattering/'+response_sha+'.response.npz'
+                _copy(path,confined(root,relative,exists=False),response_sha)
+                if response_sha not in copied:total+=response_size;copied.add(response_sha)
+                captured['response']=dict(rendered,path=relative,sha256=response_sha)
+        rows.append(captured)
     result=dict(schema=SCHEMA,protocol_sha256=digest(protocol),library_id=document['id'],
         library_name=document['name'],entries=rows,eligible_entries=eligible,
         omitted_entries=omitted,observations_included=False)
@@ -175,7 +201,8 @@ def packet_paths(root,protocol):
     document=read(root,protocol)
     if document is None:return []
     names=[MANIFEST]
-    for name in sorted({r['path'] for r in document['entries']}):
+    for name in sorted({asset['path'] for row in document['entries']
+            for asset in entry_assets(row)}):
         try:
             path=confined(root,name,exists=False)
             if path.is_file() and not path.is_symlink() and path.stat().st_size<=MAX_BYTES:names.append(name)
@@ -208,18 +235,21 @@ def restore(document,protocol,source_root,target_root):
     if previous is not None and previous!=document:
         raise ValueError('These model inputs already captured another preparation snapshot')
     for row in document['entries']:
-        try:
-            source=confined(source_root,row['path']);size=source.stat().st_size
-            if row['sha256'] not in copied and total+size>MAX_BYTES:
-                raise ValueError('Prepared scattering byte budget exceeded')
-            if source.is_symlink() or file_sha(source)!=row['sha256']:
-                raise ValueError('Prepared scattering bytes changed')
-            validate_npz(source,maximum_bytes=MAX_BYTES+262144)
-            target=confined(target_root,row['path'],exists=False)
-            if source!=target:_copy(source,target,row['sha256'])
-            if row['sha256'] not in copied:total+=size;copied.add(row['sha256'])
-            accepted.append(row['entry'])
-        except (OSError,ValueError,EOFError):discarded.append(row['entry'])
+        attached=False
+        for asset in entry_assets(row):
+            try:
+                source=confined(source_root,asset['path']);size=source.stat().st_size
+                if asset['sha256'] not in copied and total+size>MAX_BYTES:
+                    raise ValueError('Prepared scattering byte budget exceeded')
+                if source.is_symlink() or file_sha(source)!=asset['sha256']:
+                    raise ValueError('Prepared scattering bytes changed')
+                validate_npz(source,maximum_bytes=MAX_BYTES+262144)
+                target=confined(target_root,asset['path'],exists=False)
+                if source!=target:_copy(source,target,asset['sha256'])
+                if asset['sha256'] not in copied:total+=size;copied.add(asset['sha256'])
+                attached=True
+            except (OSError,ValueError,EOFError):pass
+        (accepted if attached else discarded).append(row['entry'])
     write_json(confined(target_root,MANIFEST,exists=False),document)
     return dict(snapshot_sha256=document['snapshot_sha256'],attached=len(accepted),
                 discarded_entries=discarded,native_qualification_required=True)
@@ -232,17 +262,24 @@ def cache_for(root,protocol,*,candidate=None):
         return None,dict(attached=0,status='unavailable',error_type=type(error).__name__,
             native_qualification_required=True)
     if document is None:return None,dict(attached=0,native_qualification_required=True)
-    cache=ScatteringFactorCache();accepted=[];discarded=[];total=0;copied=set()
+    cache=ScatteringFactorCache();accepted=[];discarded=[];total=0;copied=set();responses=0
     for row in document['entries']:
         if candidate is not None and row['candidate']!=candidate:continue
-        try:
-            path=confined(root,row['path']);size=path.stat().st_size
-            if row['sha256'] not in copied and total+size>MAX_BYTES:
-                raise ValueError('Prepared scattering byte budget exceeded')
-            if file_sha(path)!=row['sha256']:raise ValueError('Prepared scattering bytes changed')
-            if row['sha256'] not in copied:total+=size;copied.add(row['sha256'])
-            cache.attach_source(path,identity=row['identity']);accepted.append(row['entry'])
-        except (OSError,ValueError):discarded.append(row['entry'])
+        attached=False
+        for asset in entry_assets(row):
+            try:
+                path=confined(root,asset['path']);size=path.stat().st_size
+                if asset['sha256'] not in copied and total+size>MAX_BYTES:
+                    raise ValueError('Prepared scattering byte budget exceeded')
+                if file_sha(path)!=asset['sha256']:raise ValueError('Prepared scattering bytes changed')
+                if asset['sha256'] not in copied:total+=size;copied.add(asset['sha256'])
+                if asset is not row:
+                    cache.attach_response_source(path,identity=asset['identity'],sha256=asset['sha256'],
+                        physics_sha256=asset['physics_sha256']);responses+=1
+                else:cache.attach_source(path,identity=asset['identity'])
+                attached=True
+            except (OSError,ValueError):pass
+        (accepted if attached else discarded).append(row['entry'])
     return (cache if accepted else None),dict(library_id=document['library_id'],
         snapshot_sha256=document['snapshot_sha256'],attached=len(accepted),
-        discarded_entries=discarded,native_qualification_required=True)
+        discarded_entries=discarded,rendered_responses_attached=responses,native_qualification_required=True)

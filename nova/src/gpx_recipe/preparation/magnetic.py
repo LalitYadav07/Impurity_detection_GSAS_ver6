@@ -1,6 +1,7 @@
 """Unweighted magnetic physics; every observation creates a fresh objective."""
 from dataclasses import dataclass, field
 import hashlib
+import io
 import json
 from pathlib import Path
 import re
@@ -136,12 +137,15 @@ class MagneticResponse:
         return manifest
 
 
-def load(path, *, physics_sha256):
-    from ..live.array_limits import validate_npz
-    validate_npz(path, maximum_bytes=MAX_BYTES)
-    if Path(path).stat().st_size > MAX_BYTES:
+def load(path, *, physics_sha256, expected_file_sha256=None):
+    from ..live.array_limits import validate_npz_bytes
+    if Path(path).is_symlink() or Path(path).stat().st_size > MAX_BYTES:
         raise ValueError('Prepared response exceeds its file budget')
-    with np.load(path, allow_pickle=False) as data:
+    with Path(path).open('rb') as stream:raw=stream.read(MAX_BYTES+1)
+    if expected_file_sha256 is not None and hashlib.sha256(raw).hexdigest()!=expected_file_sha256:
+        raise ValueError('Prepared response bytes differ from their native producer')
+    validate_npz_bytes(raw,maximum_bytes=MAX_BYTES)
+    with np.load(io.BytesIO(raw), allow_pickle=False) as data:
         if set(data.files) != set(ARRAYS)|{'manifest'}:
             raise ValueError('Unexpected prepared response array inventory')
         entry = data['manifest']

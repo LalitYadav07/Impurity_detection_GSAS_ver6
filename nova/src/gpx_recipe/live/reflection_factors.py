@@ -120,6 +120,28 @@ class ScatteringFactorCache:
         self._entries = OrderedDict()
         self._seals = {}
         self._sources = {}
+        self._response_sources = {}
+        self.rendered_response_note = ''
+
+    def attach_response_source(self, path, *, identity, sha256, physics_sha256):
+        if (any(not isinstance(v,str) or re.fullmatch('[a-f0-9]{64}',v) is None
+                for v in (identity,sha256,physics_sha256))
+                or len(self._response_sources)>=5000 and identity not in self._response_sources):
+            raise ValueError('Bounded exact rendered-response identities are required')
+        self._response_sources[identity]=(Path(path).resolve(),sha256,physics_sha256)
+
+    def rendered_response(self, identity, *, axis, moment_maps):
+        self.rendered_response_note=''
+        source=self._response_sources.get(identity)
+        if source is None:return None
+        from ..preparation.rendered_magnetic import read_certified
+        try:
+            path,sha,physics=source
+            return read_certified(path,checksum=sha,physics_sha256=physics,
+                rendered_identity=identity,axis=axis,moment_maps=moment_maps)
+        except (OSError,ValueError,EOFError,KeyError,zipfile.BadZipFile,zlib.error) as error:
+            self.rendered_response_note=str(error)[:300]
+            return None
 
     def attach_source(self, path, *, identity):
         """Register one immutable library hint; load it only if physics match.

@@ -153,3 +153,19 @@ def magnetic_factor_origin(factor_sha256):
                     reference_physics_sha256=entry['physics_sha256'],
                     origin='Galaxy native preparation; exact amplitude bytes and current scattering identity')
     return None
+
+
+def magnetic_response_origin(response_sha256, physics_sha256):
+    """Match an exact native-produced response, including its physical scope."""
+    if not all(checksum(v) for v in (response_sha256, physics_sha256)):return None
+    environment=child_environment()
+    if not environment:return None
+    capsule=_inherited(environment)
+    if capsule is None:return None
+    for record in capsule['records']:
+        for entry in record['certificate']['entries']:
+            if (entry['kind']=='magnetic' and entry['physics_sha256']==physics_sha256
+                    and entry['artifacts'].get('response.npz')==response_sha256):
+                return dict(certificate_sha256=record['sha256'],entry_sha256=entry['entry_sha256'],
+                    origin='Galaxy native preparation; exact unweighted rendered response and current physical context')
+    return None

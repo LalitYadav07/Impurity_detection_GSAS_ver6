@@ -49,6 +49,15 @@ assets={Path(a['path']).name:library.root/a['path'] for a in row['files']}
 response,cache,receipt=restore_magnetic_entry(assets['entry.json'].parent)
 assert response._native_seal is None and receipt['native_qualification_required']
 manifest=json.loads(assets['entry.json'].read_text())
+if variant in {'corrupt','invalid'}:
+    # Retain the independent factor-corruption controls below. Their intact
+    # certified full response would otherwise correctly avoid factor loading.
+    cache._response_sources.clear()
+if variant=='response_corrupt':
+    rendered=next(iter(cache._response_sources.values()))
+    injected=work/'changed-response.npz';injected.write_bytes(assets['response.npz'].read_bytes()+b'changed')
+    cache.attach_response_source(injected,identity=next(iter(cache._response_sources)),
+        sha256=rendered[1],physics_sha256=rendered[2])
 if variant=='corrupt':
     with np.load(assets['scattering.npz'],allow_pickle=False) as data:
         factors=data['factors'].copy()*1.01;metadata=json.loads(str(data['manifest']))
@@ -59,8 +68,10 @@ if variant=='corrupt':
 elif variant=='invalid':
     injected=work/'invalid-factors.npz';injected.write_bytes(b'not a NumPy archive')
     cache.attach_source(injected,identity=manifest['detail']['scattering']['identity'])
+grid=dict(model['grid'])
+if variant=='grid':grid['bins']+=10
 reference=create_reference(library.root/library.document['specification']['source'],
-    library.root/model['instrument'],work/'reference',**model['grid'])
+    library.root/model['instrument'],work/'reference',**grid)
 project=G.G2Project(gpxfile=str(reference['path']));phase=project.phase(0)
 if variant=='width':
     instrument=project.histograms()[0].data['Instrument Parameters'][0]
@@ -70,6 +81,7 @@ elif variant=='cell':
 elif variant=='adp':
     cia=phase.data['General']['AtomPtrs'][3]
     for atom in phase.data['Atoms']:atom[cia+1]+=.01
+elif variant=='scale':project.histograms()[0].data['Sample Parameters']['Scale'][0]*=2.
 project.save()
 protocol=dict(source={'sha256':file_sha(reference['path'])},parent_phase=phase.name,
     histogram=reference['histogram'],parent_setting_sha256=setting_fingerprint(phase.data['General']['SGData']),
@@ -86,16 +98,22 @@ for phase in project.phases():
 project.save();observed,_=forward_profile(path,project.histograms()[0].name)
 project=G.G2Project(gpxfile=str(path));hist=project.histograms()[0]
 arrays=hist.data['data'][1];arrays[1]=observed.copy();arrays[2]=np.full(len(observed),250000.)
+if variant=='mask':hist.data['Limits'].append([float(arrays[0][23]),float(arrays[0][31])])
 hist.data['data'][0]['Dummy']=False;project.save()
 with server_scope(None if origin=='none' else origin,work):
     fitted=fit_portfolio(path,None if variant=='fresh' else cache)
 proof=fitted['compilation']['compiler_diagnostics']
 dimension=proof['dimensions']
-expected_reuse=variant in {'same','width'}
+rendered_reused=variant in {'same','scale','mask'} and origin!='none'
+expected_reuse=variant in {'same','width','scale','mask','grid','response_corrupt'} and not rendered_reused
+assert proof['prepared_rendered_response_reused']==rendered_reused,proof
 assert proof['scattering_factors_reused']==expected_reuse,proof
 assert proof['scattering_authenticated_origin_reused']==(expected_reuse and origin!='none'),proof
 assert not proof['scattering_qualification_reused']
-if expected_reuse:
+if rendered_reused:
+    assert proof['native_amplitude_calls']==proof['coefficient_structure_factor_calls']==proof['native_profile_calls']==0,proof
+    assert fitted['native_calls']>=len(fitted['rows']) and fitted['native_derivative_calls']>=1
+elif expected_reuse:
     assert proof['native_amplitude_calls']==0
     assert proof['coefficient_structure_factor_calls']==(3 if origin!='none' else 2*dimension**2+1),proof
 elif variant!='fresh':
@@ -103,8 +121,9 @@ elif variant!='fresh':
     assert proof['coefficient_structure_factor_calls']>=2*dimension**2+1,proof
 if variant=='corrupt':assert 'failed native checks' in proof['scattering_cache_note']
 if variant=='invalid':assert 'archive is invalid' in proof['scattering_cache_note']
+if variant=='response_corrupt':assert 'bytes differ' in proof['prepared_rendered_response_note']
 assert len(fitted['rows'])==2*dimension and fitted['best']['cost']<1e-5
-assert proof['native_profile_calls']>=1
+if not rendered_reused:assert proof['native_profile_calls']>=1
 np.savez_compressed(work/'checked.npz',residuals=np.array([r['residual'] for r in fitted['rows']]),observed=observed)
 results=dict(variant=variant,seconds=fitted['seconds'],stages_seconds=fitted['stages_seconds'],
     compiler=proof,costs=[r['cost'] for r in fitted['rows']],starts=len(fitted['rows']),
@@ -162,7 +181,9 @@ def test_cold_authenticated_magnetic_reuse_keeps_current_physics_and_all_fit_che
     script=tmp_path/'consumer.py';script.write_text(CONSUMER);results={}
     cases=[('certified','same',str(envelope)),('uncertified','same','none'),('fresh','fresh','none'),
         ('width','width',str(envelope)),('cell','cell',str(envelope)),
-        ('adp','adp',str(envelope)),('corrupted','corrupt',str(envelope)),('invalid','invalid',str(envelope))]
+        ('adp','adp',str(envelope)),('corrupted','corrupt',str(envelope)),('invalid','invalid',str(envelope)),
+        ('scale','scale',str(envelope)),('masked','mask',str(envelope)),('grid','grid',str(envelope)),
+        ('changed_response','response_corrupt',str(envelope))]
     # Keep the existing full invalidation controls, and add an independent
     # higher-dimensional cold timing/control case without dropping any start.
     if site_count==3:cases=cases[:3]
@@ -174,7 +195,7 @@ def test_cold_authenticated_magnetic_reuse_keeps_current_physics_and_all_fit_che
         results[label]=json.loads((output/'result.json').read_text())
         assert file_sha(archive)==frozen
         write_json(tmp_path/'progress.json',dict(kind=kind,completed=list(results),expected=len(cases)))
-    for label in ('uncertified','fresh')+(('corrupted','invalid') if site_count==1 else ()):
+    for label in ('uncertified','fresh')+(('corrupted','invalid','changed_response') if site_count==1 else ()):
         np.testing.assert_allclose(results[label]['costs'],results['certified']['costs'],rtol=1e-6,atol=1e-6)
         with np.load(tmp_path/label/'checked.npz') as a,np.load(tmp_path/'certified/checked.npz') as b:
             np.testing.assert_allclose(a['residuals'],b['residuals'],rtol=1e-6,atol=2e-5)

@@ -17,7 +17,7 @@ from gpx_recipe.symmetry.chunks import execute_chunk
 from test_symmetry_contracts import make_protocol
 
 
-def fixture(root,*,with_factors=True):
+def fixture(root,*,with_factors=True,with_rendered=False):
     root.mkdir()
     protocol=make_protocol(root/'source');protocol['implementation_sha256']=package_signature()
     source=root/'parent.cif';source.write_text('data_artificial_theory_transport\n')
@@ -32,6 +32,14 @@ def fixture(root,*,with_factors=True):
     output=Path(request['destination']);output.mkdir()
     np.savez(output/'response.npz',placeholder=np.arange(100.))
     artifacts={'response.npz':file_sha(output/'response.npz')};detail={}
+    if with_rendered:
+        from gpx_recipe.preparation.magnetic import MagneticResponse
+        response=MagneticResponse(x=np.arange(5,dtype=float),fixed=np.ones(5),nuclear=np.ones(5),
+            quadratic=np.repeat(np.eye(3)[None],5,axis=0),background=np.ones((5,1)),
+            moment_maps=np.eye(3)[None],physics_sha256='c'*64,
+            proof=dict(compiler=dict(native_reflection_diagnostics=dict(rendered_identity='d'*64))))
+        response.save(output/'response.npz');artifacts['response.npz']=file_sha(output/'response.npz')
+        detail.update(physics_sha256='c'*64,proof=response.proof)
     if with_factors:
         factors=np.arange(72.,dtype=float).reshape(4,6,3)
         # Unit transport fixture only. A new cache still treats this claim as
@@ -50,6 +58,38 @@ def fixture(root,*,with_factors=True):
         observations_included=False,scientific_result=False)
     publish_entry(library,entry,attempt,request,result)
     return library,protocol,root/'source'
+
+
+def test_complete_response_follows_the_same_captured_model_and_live_packet(tmp_path):
+    library,protocol,_=fixture(tmp_path/'fixture',with_rendered=True)
+    source=tmp_path/'packet';document=hints.capture(library,protocol,source)
+    row=document['entries'][0];response=row['response']
+    assert response['identity']=='d'*64 and response['physics_sha256']=='c'*64
+    assert response['path'] in hints.packet_paths(source,protocol)
+    target=tmp_path/'worker';report=hints.restore(document,protocol,source,target)
+    assert report['attached']==1
+    cache,report=hints.cache_for(target,protocol,candidate=protocol['candidates'][0]['id'])
+    assert report['rendered_responses_attached']==1
+    # Transport is not scientific authority, including with an intact proof.
+    assert cache.rendered_response('d'*64,axis=np.arange(5,dtype=float),moment_maps=np.eye(3)[None]) is None
+    assert 'no verified native producer' in cache.rendered_response_note
+    before=copy.deepcopy(protocol);assert hints.subset(document,protocol,[row['candidate']])==document
+    assert protocol==before
+
+
+@pytest.mark.parametrize('damage',['missing','changed'])
+def test_damaged_response_keeps_compatible_factors_and_all_scientific_candidates(tmp_path,damage):
+    library,protocol,_=fixture(tmp_path/'fixture',with_rendered=True)
+    source=tmp_path/'packet';document=hints.capture(library,protocol,source)
+    path=source/document['entries'][0]['response']['path']
+    if damage=='missing':path.unlink()
+    else:path.write_bytes(b'changed')
+    target=tmp_path/'worker';report=hints.restore(document,protocol,source,target)
+    assert report['attached']==1 and not report['discarded_entries']
+    cache,report=hints.cache_for(target,protocol,candidate=protocol['candidates'][0]['id'])
+    assert report['attached']==1 and report['rendered_responses_attached']==0
+    assert cache.lookup('e'*64)[0] is not None
+    assert len(protocol['candidates'])==1
 
 
 def test_capture_transfers_only_needed_theory_assets_and_import_never_inherits_qualification(tmp_path,monkeypatch):
