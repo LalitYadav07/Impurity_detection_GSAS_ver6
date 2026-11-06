@@ -95,11 +95,12 @@ def create_library(root, *, name, source, banks, models):
         models=declared, inputs=inputs)
 
 
-def stage_entry(library, identifier, attempt, directory):
+def stage_entry(library, identifier, attempt, directory, *, recover_completed=False):
     """Capture or recover this exact attempt without changing its inputs."""
     library.refresh()
     row = library.row(identifier)
-    if row['state'] != 'preparing' or row['attempt'] != attempt:
+    states={'preparing','prepared'} if recover_completed else {'preparing'}
+    if row['state'] not in states or row['attempt'] != attempt:
         raise ValueError('Stage only the currently owned preparation attempt')
     specification = fields(library.document['specification'], ['schema', 'source'])
     if specification['schema'] != PLAN_SCHEMA:

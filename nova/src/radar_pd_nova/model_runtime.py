@@ -340,87 +340,59 @@ class GalaxyModelRuntime(GalaxyRefinementRuntime):
         unpack(archive,directory/'unpacked')
         return directory/'unpacked'
 
+    def submit_native(self,operation,payload,root,*,source,timeout=120,cancel=None,
+                      preparation_attempt=None,before_submit=None,preparation_guard=None,on_intent=None):
+        """Capture a durable native job handle without waiting for completion."""
+        from .native_operations import submit
+        root=Path(root).resolve();event=cancel or threading.Event();token=(event,str(root))
+        with self._event_lock:
+            if str(root) in self._cancelled_roots:raise RuntimeUnavailable('This model preparation was cancelled')
+            self._events.add(token)
+        try:
+            return submit(self,operation,payload,root,source=source,timeout=timeout,cancel=event,
+                preparation_attempt=preparation_attempt,before_submit=before_submit,
+                preparation_guard=preparation_guard,on_intent=on_intent)
+        finally:
+            with self._event_lock:self._events.discard(token)
+
+    def poll_native(self,handle):
+        """Recover or poll this exact attempt; this method never submits work."""
+        from .native_operations import poll
+        return poll(self,handle)
+
+    def collect_native(self,handle,root,*,immutable=True):
+        from .native_operations import collect
+        return collect(self,handle,root,immutable=immutable)
+
+    def cancel_native(self,handle):
+        from .native_operations import recover_job
+        job=recover_job(self,handle)
+        if job is None:raise RuntimeUnavailable('Recover the unresolved native job before cancelling it')
+        self.service.refresh_utility(job)
+        if job.status not in {RunStatus.OK,RunStatus.ERROR,RunStatus.CANCELLED}:
+            self.cancel_job(job,handle['key'])
+        return self.poll_native(handle)
+
     def native(self,operation,payload,root,*,source,timeout=120,cancel=None,
                preparation_attempt=None,before_submit=None,preparation_guard=None):
-        """Only named scientific files are staged, never backend environments."""
-        from gpx_recipe.symmetry.native_protocol import validate_native_payload
-        validate_native_payload(operation,payload)
-        started=time.monotonic();root=Path(root).resolve();root.mkdir(parents=True,exist_ok=True)
+        """Blocking compatibility wrapper over the shared durable transport."""
+        from .native_operations import submit,recover_job
+        started=time.monotonic();root=Path(root).resolve()
         event=cancel or threading.Event();token=(event,str(root))
         with self._event_lock:
             if str(root) in self._cancelled_roots:raise RuntimeUnavailable('This model preparation was cancelled')
             self._events.add(token)
         try:
-            payload=copy.deepcopy(payload);files=[]
-            for field in ['source','child','instrument']:
-                if field in payload:
-                    path=Path(payload[field]).resolve();relative=str(path.relative_to(root))
-                    files.append(relative);payload[field]=relative
-            if 'children' in payload:
-                children=[str(Path(p).resolve().relative_to(root)) for p in payload['children']]
-                payload['children']=children;files.extend(children)
-            for field in ['destination','temporary']:
-                if field in payload:payload[field]=str(Path(payload[field]).resolve().relative_to(root))
-            directories=payload.get('directories') or ([str(Path(payload['directory']).resolve().relative_to(root))] if 'directory' in payload else [])
-            if 'directory' in payload:payload['directory']=directories[0]
-            for relative in directories:
-                directory=confined(root,relative);job=json.loads((directory/'job.json').read_text())
-                files.append(str((directory/'job.json').relative_to(root)))
-                for asset in assets(job['protocol']):files.append(str(confined(directory,asset['path']).relative_to(root)))
-            if not files:
-                # Data-only packet, including a marker for content-only k-form matching.
-                write_json(root/'packet.json',{'schema':'radar-native-input-marker/v1'})
-                files=['packet.json']
-            source=self.resolve(source)
-            request=dict(schema='radar-model-native/v1',operation=operation,payload=payload,
-                implementation_sha256=package_signature(),expected_source_sha256=source['source_sha256'],
-                input_hashes={p:file_sha(confined(root,p)) for p in files},
-                timeout=min(600,max(1,float(timeout))))
-            if all(Path(p).suffix.lower()=='.gpx' and sha==source['source_sha256']
-                   for p,sha in request['input_hashes'].items()):
-                # The marker is a real captured transport input. Hashing it in
-                # the request also separates fixed inspections from failed
-                # zero-member-packet dispatches, without retrying those jobs.
-                request['input_hashes'][EMPTY_PACKET_NAME]=EMPTY_PACKET_SHA256
-            key=digest([self.service.history_id,source['id'],request])[:24]
-            if preparation_attempt is not None:
-                from .model_preparation_retry import inspection_request,validate_attempt
-                if operation!='inspect' or request!=inspection_request(source):
-                    raise RuntimeUnavailable('Preparation retries only support the unchanged captured source inspection')
-                validate_attempt(self,source,request,preparation_attempt)
-                key=preparation_attempt['dispatch_key']
-            request['dispatch_key']=key
-            asset_id=self.packet(root,files,source_sha256=source['source_sha256'])
-            if event.is_set():raise RuntimeUnavailable('Model preparation cancelled before dispatch')
-            if preparation_attempt is not None:
-                from .model_preparation_retry import submit_attempt
-                job=submit_attempt(self,source,request,asset_id,preparation_attempt,before_submit,event,preparation_guard)
-            else:
-                job=self._submit('native',source,request,asset_id,key,cancel=event)
-            self.wait_job(job,key=key,cancel=event)
-            received=self.result(job,self.root/'native-results'/(key+'-'+uuid.uuid4().hex))
-            response=json.loads((received/'response.json').read_text())
-            if response.get('schema')!='radar-model-native-result/v1' or response.get('dispatch_key')!=key or response.get('request_sha256')!=digest(request) or response.get('source_sha256')!=source['source_sha256']:
-                raise ValueError('Native model result belongs to another request/source revision')
-            for relative,sha in response['files'].items():
-                path=confined(received,relative)
-                if file_sha(path)!=sha:raise ValueError('A native model output changed')
-                # Worker packet and output roots map back to the caller's confined root.
-                parts=Path(relative).parts
-                if parts[0] not in {'native','inputs-packet'}:raise ValueError('Unexpected native output location')
-                target=confined(root,str(Path(*parts[1:])),exists=False)
-                target.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(path,target)
-            def relocate(value):
-                if isinstance(value,list):return [relocate(v) for v in value]
-                if isinstance(value,dict):return {k:relocate(v) for k,v in value.items()}
-                if isinstance(value,str):
-                    for prefix in [response['worker_root'],response['input_root']]:
-                        if value==prefix or value.startswith(prefix+'/'):return str(root)+value[len(prefix):]
-                return value
-            result=relocate(response['result'])
-            # A k-survey can exclude Galaxy queue/transfer time from its scientific budget.
-            wait=max(0,time.monotonic()-started-float(response.get('native_seconds',0)))
-            return result,wait
+            handle=submit(self,operation,payload,root,source=source,timeout=timeout,cancel=event,
+                preparation_attempt=preparation_attempt,before_submit=before_submit,
+                preparation_guard=preparation_guard)
+            job=recover_job(self,handle)
+            if job is None:raise RuntimeUnavailable('Native submission has an unresolved acknowledgment; recover its existing dispatch')
+            self.wait_job(job,key=handle['key'],cancel=event)
+            # Legacy native clients may intentionally replace working files;
+            # preparation clients use collect_native's immutable default.
+            result,seconds=self.collect_native(handle,root,immutable=False)
+            return result,max(0,time.monotonic()-started-seconds)
         finally:
             with self._event_lock:self._events.discard(token)
 

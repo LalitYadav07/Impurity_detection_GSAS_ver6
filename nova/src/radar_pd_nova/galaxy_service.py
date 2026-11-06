@@ -1243,9 +1243,11 @@ class GalaxyService:
             payload = yaml.safe_load(response.text)
         return payload if isinstance(payload, dict) else None
 
-    def _download_dataset(self, dataset_id: str, destination: Path) -> None:
+    def _download_dataset(self, dataset_id: str, destination: Path, *, maximum_bytes: int | None = None) -> None:
         """Download a durable Galaxy dataset without relying on a live Tool object."""
 
+        if maximum_bytes is not None and (type(maximum_bytes) is not int or maximum_bytes < 1):
+            raise ValueError('A download byte budget must be a positive integer')
         response = requests.get(
             f"{self.galaxy_url}/api/datasets/{dataset_id}/display",
             headers=self._headers,
@@ -1253,12 +1255,24 @@ class GalaxyService:
             timeout=120,
             stream=True,
         )
-        response.raise_for_status()
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        with destination.open("wb") as handle:
-            for chunk in response.iter_content(chunk_size=1024 * 1024):
-                if chunk:
-                    handle.write(chunk)
+        destination=Path(destination)
+        temporary=destination.with_name(destination.name+'.'+uuid.uuid4().hex+'.partial')
+        try:
+            response.raise_for_status()
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            count = 0
+            with temporary.open("xb") as handle:
+                for chunk in response.iter_content(chunk_size=1024 * 1024):
+                    if chunk:
+                        count += len(chunk)
+                        if maximum_bytes is not None and count > maximum_bytes:
+                            raise ValueError('Galaxy dataset exceeds its download byte budget')
+                        handle.write(chunk)
+            temporary.replace(destination)
+        finally:
+            temporary.unlink(missing_ok=True)
+            close=getattr(response,'close',None)
+            if callable(close):close()
 
     def _prefetch_results(self, items: dict[str, tuple[str, Path]], *, collections: bool = False) -> dict[str, Exception | None]:
         """Bound independent REST transfers across collectors in this session."""
