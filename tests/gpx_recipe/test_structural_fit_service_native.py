@@ -43,6 +43,10 @@ def test_nonlinear_service_keeps_all_modes_current_observations_and_native_gpx(t
     assert result['verification']['saved_observations'].keys()=={'frozen','continuation'}
     assert result['result']['exact_profile_memo']['hits']>0
     assert result['result']['cell_derivative_proposals']['builds']>0
+    response=result['result']['native_response_cache']
+    assert response['captured_native_calls']>0 and response['derivative_calls']>0
+    assert response['maximum_capture_relative_error']<1e-9
+    assert response['numeric_cache_bytes']<=response['maximum_numeric_cache_bytes']
     assert not result['optimization_qualified'] and not result['model_exclusion_authorized']
     assert sha(source_gpx)==original_source_sha
     for role in ('frozen','continuation'):

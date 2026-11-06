@@ -14,9 +14,12 @@ def physics_policy():
         raise ValueError('Fixed-instrument, native-profile policy is required')
     return {k:p[k] for k in ['instrument_parameters','profile_generation','surrogate_scope']}
 
+MAXIMUM_RESPONSE_COORDINATES = 256
+
+
 class NativeProfileBank:
     """Memory-bounded reuse of exact-cell, fully GSAS-II-generated responses."""
-    def __init__(self,source,maximum_bytes=64*1024*1024):
+    def __init__(self,source,maximum_bytes=64*1024*1024,*,_snapshot=None):
         if type(maximum_bytes) is not int or maximum_bytes<1:raise ValueError('Positive cache budget required')
         physics_policy()
         self.source=source;self.n=source.fast.native;self.maximum_bytes=maximum_bytes
@@ -25,9 +28,11 @@ class NativeProfileBank:
         # Response generation is linear in reflections, not a tensor over
         # structural parameters. It also supports a pure-strain (zero-mode)
         # model. The byte budget still bounds each response cache.
-        if not (1<=self.dimension<=256 and 1<=self.cell_dimensions<=min(6,self.dimension)):
+        if not (1<=self.dimension<=MAXIMUM_RESPONSE_COORDINATES and 1<=self.cell_dimensions<=min(6,self.dimension)):
             raise ValueError('Bounded structural and cell coordinates required')
-        full,refs,bg,phase,hist=source.snapshot(np.zeros(self.dimension))
+        # An owned capture may supply the snapshot of its already-required
+        # native call. It is never an imported/serialized trust assertion.
+        full,refs,bg,phase,hist=(source.snapshot(np.zeros(self.dimension)) if _snapshot is None else _snapshot)
         self.hkls=refs[:,:3].copy();self.background=bg.copy();self.background.flags.writeable=False
         self.histogram_name=self.n.parts[0][0]
         self.phase_name=source.fast.slow.phase.name

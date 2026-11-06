@@ -74,6 +74,7 @@ def fit_snapshot(prepared, output, *, settings=None, observation=None, warm_star
     from .optimization.native_background_context import fit_table
     from .optimization.offline_native_start_bank import build, OfflineNativeStartBank
     from .optimization.profiled_native_fit import fit
+    from .optimization.captured_cell_derivative import CapturedCellDerivative
     from .optimization.refinable_gpx import export_refinable
     settings = settings or SearchSettings()
     if not isinstance(settings,SearchSettings): raise TypeError('Explicit SearchSettings required')
@@ -118,9 +119,9 @@ def fit_snapshot(prepared, output, *, settings=None, observation=None, warm_star
         portable_preparation=json.loads(contract.read_text()).get('portable_preparation')
     timings['start_bank_seconds']=time.monotonic()-checkpoint
     checkpoint=time.monotonic()
+    evaluator=CapturedCellDerivative(source,max_cells=2)
     fitted,prediction=fit(source,table,observation,bank,seconds=settings.seconds,
-        starts=settings.starts,warm_pool=list(warm_starts) or None,
-        force_native_mode_derivatives=True)
+        starts=settings.starts,warm_pool=list(warm_starts) or None,evaluator=evaluator)
     if settings.recovery_seconds:
         from .optimization.automatic_fit_recovery import improve, RecoveryPolicy
         budget=settings.recovery_seconds/3

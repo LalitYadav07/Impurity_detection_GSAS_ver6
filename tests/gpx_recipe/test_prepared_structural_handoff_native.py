@@ -141,6 +141,8 @@ def test_structural_library_reaches_real_model_and_owned_snapshot_consumers(tmp_
     assert not qualification['scientific_candidates_removed']
     assert fitted['verification']['relative_error']<1e-8
     assert fitted['verification']['max_sigma_error']<.01
+    assert fitted['result']['native_response_cache']['captured_native_calls']>0
+    assert fitted['result']['native_response_cache']['derivative_calls']>0
     saved=G.G2Project(gpxfile=str(results/'child-refinement.gpx'))
     np.testing.assert_array_equal(saved.histograms()[0].data['data'][1][1],arrays[1])
     assert not fitted['optimization_qualified'] and not fitted['model_exclusion_authorized']

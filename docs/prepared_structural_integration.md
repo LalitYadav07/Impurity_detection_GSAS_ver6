@@ -60,6 +60,20 @@ jobs. Independent children and scans use the existing bounded worker pool.
   native fallback instead of relaxing the reconstruction tolerance. Models
   above the 256-coordinate response-cache limit also use the complete native
   calculation; their coordinates are not truncated or rejected by that cache.
+- For the reviewed single-phase, unmasked PNC/PNT native driver, the service
+  records reflection responses during an already-required Rietveld evaluation.
+  Original native peak functions, structure factors and constrained mode
+  derivatives supply the calculations. No division by parent F² is used, so
+  a zero-intensity reflection can acquire intensity under distortion. Responses
+  belong to an exact cell and fixed profile context; the owned numeric cache
+  has a 64 MiB limit. Unknown native drivers and unsupported contexts retain
+  full native evaluation, with a recorded fallback reason. Temporary lattice
+  finite-difference probes do not construct unused response matrices. Every
+  accepted displacement proposal and independently reopened GPX still receives
+  the existing native comparison. This reduces duplicate calculation but does
+  not precompute general nonlinear cell/profile changes or certify a global
+  minimum. Native context ownership requires separate processes for parallel
+  candidates, never concurrent GSAS-II adapters in one process.
 - Starting-curve construction reuses the exact fixed-cell native profile for
   displacement-only proposals. Cell changes still use complete native
   calculations. All starting points, contact checks and secant-step choices

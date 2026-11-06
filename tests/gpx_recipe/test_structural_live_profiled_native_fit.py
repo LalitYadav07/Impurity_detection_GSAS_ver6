@@ -96,3 +96,17 @@ def test_exact_profile_memo_cannot_bypass_native_context_ownership():
     s.fast.native=SimpleNamespace(_check=replaced)
     with pytest.raises(RuntimeError,match='constraint owner'):
         module.fit(s,t,o,b,seconds=2,starts=1,evaluator=c,force_native_mode_derivatives=True)
+
+
+def test_owned_capture_receives_required_native_calls_without_replacing_acceptance():
+    s,t,o,z,c,b,_=setup();direct=[];original=s.native
+    def native(point):
+        direct.append(np.asarray(point).copy())
+        return original(point)
+    c.native_evaluate=native
+    result,rate=module.fit(s,t,o,b,seconds=2,starts=1,evaluator=c)
+    residual,_=residual_and_factor(o,rate)
+    assert 0<len(direct)<result['full_native_calls']
+    assert result['native_cell_probe_calls']==result['full_native_calls']-len(direct)
+    assert result['independent_cache_checks']>0
+    assert result['best']['deviance']==pytest.approx(residual@residual)

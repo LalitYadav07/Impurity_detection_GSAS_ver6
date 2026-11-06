@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import sys
 import threading
+import hashlib
+import inspect
 
 import numpy as np
 from scipy.sparse import csc_matrix
@@ -24,10 +26,38 @@ class CaptureUnavailable(ValueError):
 
 _capture_lock = threading.Lock()
 
+# Reviewed native PNC/PNT loops call the original peak functions even for
+# zero F². This is necessary to retain dormant reflections without division
+# by F². Unknown drivers keep using the independent full-native path.
+RIETVELD_DRIVERS={'caa9e0aac821043004b54a2382008b2c0d04abb97ac8b057d57be6044880944d'}
+
 
 def capture_response(driver, powder, parameters, histdict, axis, histogram,
                      phases, controls, lookup, *, histogram_name, phase_name,
                      maximum_bytes=None):
+    return _capture_response(driver,powder,parameters,histdict,axis,histogram,
+        phases,controls,lookup,histogram_name=histogram_name,phase_name=phase_name,
+        maximum_bytes=maximum_bytes)[:3]
+
+
+def capture_rietveld_response(driver,powder,parameters,histdict,axis,histogram,
+                              phases,controls,lookup,*,histogram_name,phase_name,
+                              evaluate,maximum_bytes):
+    """Record unit-F² columns during an already-needed native evaluation.
+
+    ``evaluate`` is an owned in-process scientific callback, never serialized
+    or accepted from a user recipe. It must invoke exactly this native driver
+    once. Its full native prediction is returned unchanged as the fourth item.
+    """
+    if not callable(evaluate):raise TypeError('An owned native evaluator is required')
+    return _capture_response(driver,powder,parameters,histdict,axis,histogram,
+        phases,controls,lookup,histogram_name=histogram_name,phase_name=phase_name,
+        maximum_bytes=maximum_bytes,evaluate=evaluate)
+
+
+def _capture_response(driver,powder,parameters,histdict,axis,histogram,
+                      phases,controls,lookup,*,histogram_name,phase_name,
+                      maximum_bytes=None,evaluate=None):
     """Return a native F²-to-signal matrix without N full driver invocations.
 
     This deliberately supports the qualified PNC/PNT, single-phase unit-F²
@@ -36,14 +66,25 @@ def capture_response(driver, powder, parameters, histdict, axis, histogram,
     fail closed; temporarily wrapped functions are restored on every exit.
     """
     code = getattr(driver, '__code__', None)
+    unit=evaluate is None
     hfx = f":{histogram['hId']}:"
     kind = controls.get(hfx + 'histType')
     if (code is None or kind not in {'PNC', 'PNT'} or hfx + 'Lam1' in parameters
             or set(phases) != {phase_name}
             or set(histogram['Reflection Lists']) != {phase_name}
             or phases[phase_name]['General'].get('Modulated')
-            or not phases[phase_name]['General'].get('doPawley')):
-        raise CaptureUnavailable('Native response capture requires one PNC/PNT unit-intensity phase')
+            or bool(phases[phase_name]['General'].get('doPawley'))!=unit):
+        raise CaptureUnavailable('Native response capture requires one qualified PNC/PNT phase')
+    if not unit:
+        try:source_hash=hashlib.sha256(inspect.getsource(driver).encode()).hexdigest()
+        except (OSError,TypeError):source_hash=None
+        pfx=f"{phases[phase_name]['pId']}::";phfx=f"{phases[phase_name]['pId']}:{histogram['hId']}:"
+        if (source_hash not in RIETVELD_DRIVERS or driver.__globals__.get('getPowderProfile') is not driver
+                or phases[phase_name]['General'].get('Type')!='nuclear' or parameters.get(pfx+'isMag')
+                or parameters.get(phfx+'Extinction')!=0. or controls.get('PhasePartials')
+                or controls.get(hfx+'Exclude')
+                or any(np.ma.getmaskarray(v).any() for v in histogram['Data'][:3])):
+            raise CaptureUnavailable('Rietveld response capture requires the reviewed unmasked linear native driver')
     axis = np.asarray(axis, float)
     if axis.ndim != 1 or not len(axis) or not np.isfinite(axis).all() or np.any(np.diff(axis) <= 0):
         raise CaptureUnavailable('Native response capture requires one ordered finite grid')
@@ -52,7 +93,7 @@ def capture_response(driver, powder, parameters, histdict, axis, histogram,
     if maximum_bytes is not None and (type(maximum_bytes) is not int or maximum_bytes < 1):
         raise ValueError('A positive native response byte budget is required')
     native_mp = driver.__globals__.get('G2mp')
-    if native_mp is None or (count >= 100 and native_mp.InitMP()[0]):
+    if native_mp is None or ((not unit or count >= 100) and native_mp.InitMP()[0]):
         raise CaptureUnavailable('Native multiprocessing needs its own response-capture adapter')
     if not _capture_lock.acquire(blocking=False):
         raise CaptureUnavailable('Another native response capture owns this process')
@@ -60,6 +101,7 @@ def capture_response(driver, powder, parameters, histdict, axis, histogram,
     columns = {}
     native_peak_calls = 0
     stored_entries = 0
+    native_result=None;driver_calls=0;driver_result=None
 
     def wrap(name):
         original = getattr(powder, name)
@@ -75,16 +117,17 @@ def capture_response(driver, powder, parameters, histdict, axis, histogram,
                 local = frame.f_locals
                 if local.get('phase') != phase_name or local.get('useMP') or local.get('im') != 0:
                     raise CaptureUnavailable('Native peak phase, threading or modulation context changed')
+                current=histogram['Reflection Lists'][phase_name]['RefList']
                 index, begin, end = local['iref'], local['iBeg'], local['iFin']
-                if (not isinstance(index, int) or not 0 <= index < count
+                if (not isinstance(index, int) or not 0 <= index < len(current)
                         or index in columns or not 0 <= begin < end <= len(axis)):
                     raise CaptureUnavailable('Unexpected native reflection or peak-window ordering')
                 if not np.array_equal(np.asarray(args[-1]), axis[begin:end]):
                     raise CaptureUnavailable('Native peak grid differs from the captured window')
                 reflection = local['refl']
-                if not np.array_equal(reflection[:3], refs[index, :3]):
+                if not np.array_equal(reflection[:3], current[index, :3]):
                     raise CaptureUnavailable('Native reflection identity changed')
-                if float(reflection[9]) != 1.:
+                if unit and float(reflection[9]) != 1.:
                     raise CaptureUnavailable('Response capture requires unit native F squared')
                 profile = np.asarray(result[0], float)
                 factor = float(reflection[11])
@@ -94,7 +137,7 @@ def capture_response(driver, powder, parameters, histdict, axis, histogram,
                 signal = factor * profile
                 use = np.flatnonzero(signal)
                 stored_entries += len(use)
-                if maximum_bytes is not None and stored_entries*12+(count+1)*8 > maximum_bytes:
+                if maximum_bytes is not None and stored_entries*12+(len(current)+1)*8 > maximum_bytes:
                     raise CaptureUnavailable('Native profile response exceeds its allocated byte budget')
                 columns[index] = (use.astype(np.int32) + begin, signal[use].copy())
                 native_peak_calls += 1
@@ -104,18 +147,36 @@ def capture_response(driver, powder, parameters, histdict, axis, histogram,
 
         setattr(powder, name, observed)
 
+    def watched(*args,**kwargs):
+        nonlocal driver_calls,driver_result
+        driver_calls+=1
+        if (driver_calls!=1 or len(args)<7 or args[4] is not histogram or args[5] is not phases
+                or not np.array_equal(np.asarray(args[2]),axis)):
+            raise CaptureUnavailable('Owned evaluation changed the native phase, histogram or grid')
+        driver_result=driver(*args,**kwargs)
+        return driver_result
+
     try:
         wrap('getFCJVoigt3' if kind == 'PNC' else 'getEpsVoigt')
         try:
-            signal, background = driver(parameters, histdict, axis, [], histogram,
-                phases, controls, lookup, histogram=histogram_name)
+            if unit:
+                signal, background = driver(parameters, histdict, axis, [], histogram,
+                    phases, controls, lookup, histogram=histogram_name)
+            else:
+                driver.__globals__['getPowderProfile']=watched
+                native_result=evaluate()
+                if driver_calls!=1 or driver_result is None:
+                    raise CaptureUnavailable('Owned evaluation did not call its reviewed native driver once')
+                signal,background=driver_result
         except CaptureUnavailable as exc:
             exc.native_driver_calls = 1
             raise
     finally:
+        if not unit:driver.__globals__['getPowderProfile']=driver
         for name, original in originals.items():
             setattr(powder, name, original)
         _capture_lock.release()
+    refs=histogram['Reflection Lists'][phase_name]['RefList'];count=len(refs)
     indices, values, pointers = [], [], [0]
     for index in range(count):
         rows, data = columns.get(index, (np.empty(0, np.int32), np.empty(0)))
@@ -131,13 +192,13 @@ def capture_response(driver, powder, parameters, histdict, axis, histogram,
             or not np.isfinite(signal).all() or not np.isfinite(background).all()):
         raise CaptureUnavailable('Native driver returned an invalid profile or background',
                                  native_driver_calls=1)
-    rebuilt = matrix @ np.ones(count)
+    rebuilt = matrix @ (np.ones(count) if unit else refs[:,9])
     error = float(np.linalg.norm(rebuilt - signal) / max(np.linalg.norm(signal), 1e-30))
     if not np.isfinite(error) or error > 1e-11:
-        raise CaptureUnavailable(f'Captured contributions disagree with the native unit profile: {error}',
+        raise CaptureUnavailable(f'Captured contributions disagree with the native profile: {error}',
                                  native_driver_calls=1)
     return matrix, background, dict(
-        method='single native profile pass', native_driver_calls=1,
+        method='single native profile pass' if unit else 'already-required native Rietveld pass', native_driver_calls=1,
         native_peak_calls=native_peak_calls, reflections=count,
         unit_profile_relative_error=error, interpolation=False,
-        native_peak_functions_restored=True)
+        native_peak_functions_restored=True,no_F_squared_division=True),native_result

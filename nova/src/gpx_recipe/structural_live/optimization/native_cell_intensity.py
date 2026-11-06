@@ -8,7 +8,23 @@ from collections import OrderedDict
 from types import SimpleNamespace
 import copy,time
 import numpy as np
-from .profile_cache import NativeProfileBank
+from .profile_cache import NativeProfileBank,MAXIMUM_RESPONSE_COORDINATES
+
+
+def native_scattering_entry(source,bank,matrix):
+    """Bind exact-cell native amplitudes to an already-checked response."""
+    n=source.fast.native
+    hist=n.histo_phases[0][bank.histogram_name];phase=n.histo_phases[1][bank.phase_name]
+    if n.parms.get(bank.pfx+'isMag') or phase['General'].get('Modulated'):
+        raise ValueError('Nuclear commensurate StructureFactor2 path required')
+    ref=copy.deepcopy(hist['Reflection Lists'][bank.phase_name])
+    order=np.lexsort((ref['RefList'][:,2],ref['RefList'][:,1],ref['RefList'][:,0]))
+    ref['RefList']=ref['RefList'][order].copy()
+    if not np.array_equal(ref['RefList'][:,:3],bank.hkls):raise ValueError('Native response/HKL alignment changed')
+    parms=n.parms.copy();sg=phase['General']['SGData']
+    a=np.array([parms[bank.pfx+f'A{i}'] for i in range(6)])+n.math.GetDij(bank.phfx,sg,parms)
+    g,_=n.lattice.A2Gmat(a)
+    return dict(bank=bank,matrix=matrix,ref=ref,parms=parms,sg=sg,g=g,fallback=False)
 
 
 class ExactCellIntensity:
@@ -23,7 +39,7 @@ class ExactCellIntensity:
         s=self.source;m=s.mode_dimensions;cells=np.asarray(cells,float)
         # The response-cache dimension ceiling is an optimization limit,
         # not an admission limit on the complete structural model.
-        if len(s.radii)>256:
+        if len(s.radii)>MAXIMUM_RESPONSE_COORDINATES:
             return dict(fallback=True,reason='response_cache_dimension_limit')
         point=np.r_[np.zeros(m),cells]
         # A valid distorted structure need not have a chemically valid
@@ -46,20 +62,8 @@ class ExactCellIntensity:
             check_domain=check,snapshot=lambda p:s.snapshot(check(p)))
         bank=NativeProfileBank(shifted)
         if not bank.linear:return dict(bank=bank,fallback=True)
-        matrix=bank.matrix(np.zeros(s.cell_dimensions));n=s.fast.native
-        hist=n.histo_phases[0][bank.histogram_name];phase=n.histo_phases[1][bank.phase_name]
-        if n.parms.get(bank.pfx+'isMag') or phase['General'].get('Modulated'):
-            raise ValueError('Nuclear commensurate StructureFactor2 path required')
-        # Independent private reflection/scattering state. Native generation
-        # has already populated d spacings and TOF wavelengths at this cell.
-        ref=copy.deepcopy(hist['Reflection Lists'][bank.phase_name])
-        order=np.lexsort((ref['RefList'][:,2],ref['RefList'][:,1],ref['RefList'][:,0]))
-        ref['RefList']=ref['RefList'][order].copy()
-        if not np.array_equal(ref['RefList'][:,:3],bank.hkls):raise ValueError('Native response/HKL alignment changed')
-        parms=n.parms.copy();sg=phase['General']['SGData']
-        a=np.array([parms[bank.pfx+f'A{i}'] for i in range(6)])+n.math.GetDij(bank.phfx,sg,parms)
-        g,_=n.lattice.A2Gmat(a)
-        item=dict(bank=bank,matrix=matrix,ref=ref,parms=parms,sg=sg,g=g,fallback=False)
+        matrix=bank.matrix(np.zeros(s.cell_dimensions))
+        item=native_scattering_entry(s,bank,matrix)
         self.cache[key]=item;self.builds+=1;self.inventory_sizes.add(len(bank.hkls))
         while len(self.cache)>self.max_cells:self.cache.popitem(last=False)
         self.build_seconds+=time.perf_counter()-began

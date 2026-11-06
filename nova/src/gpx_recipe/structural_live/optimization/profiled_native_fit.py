@@ -38,20 +38,25 @@ def fit(source,table,observation,bank,*,seconds=120.,starts=4,seed=90231,warm=No
     rng=np.random.default_rng(seed)
     cell_model=CellDerivativeModel(m,d)
     native_profiles=OrderedDict();profile_hits=0
+    native_probe_calls=0
     def check_time():
         if time.monotonic()>=deadline:raise TimeoutError('Native alternating fit allocation exhausted')
     def allowed(z):
         return z.shape==(d+2,) and np.isfinite(z).all() and np.all(z>=lo) and np.all(z<=hi) and bool(np.isfinite(s.chemistry.log_kernel((z[:d]*s.radii)[None,:])[0]))
     def rate_for(z,curve):return np.exp(z[-2])*(curve-table.renderer.background)+fixed+background*np.exp(z[-1])*response
-    def native_curve(point):
-        nonlocal native_calls,profile_hits
+    def native_curve(point,*,prepare_response=True):
+        nonlocal native_calls,profile_hits,native_probe_calls
         point=np.asarray(point,float);key=tuple(point)
-        if key in native_profiles:
+        needs=getattr(cache,'needs_capture',None)
+        prepare=prepare_response and callable(needs) and needs(point)
+        if key in native_profiles and not prepare:
             owner=getattr(getattr(s,'fast',None),'native',None)
             if owner is not None:owner._check()
             profile_hits+=1;native_profiles.move_to_end(key)
             return native_profiles[key].copy()
-        curve=s.native(point);native_calls+=1
+        native=getattr(cache,'native_evaluate',s.native) if prepare_response else s.native
+        curve=native(point);native_calls+=1
+        native_probe_calls+=int(not prepare_response)
         remember_curve(point,curve)
         return curve
     def remember_curve(point,curve):
@@ -60,11 +65,11 @@ def fit(source,table,observation,bank,*,seconds=120.,starts=4,seed=90231,warm=No
             raise ValueError('Complete finite native structural profile required')
         key=tuple(point);native_profiles[key]=curve.copy();native_profiles.move_to_end(key)
         while len(native_profiles)>2:native_profiles.popitem(last=False)
-    def score(z,cached=False,remember=True):
+    def score(z,cached=False,remember=True,prepare_response=True):
         nonlocal best,native_calls
         check_time()
         if not allowed(z):raise ValueError('Infeasible structural geometry reached native optimizer')
-        curve=cache.evaluate(z[:d]*s.radii) if cached else native_curve(z[:d]*s.radii)
+        curve=cache.evaluate(z[:d]*s.radii) if cached else native_curve(z[:d]*s.radii,prepare_response=prepare_response)
         conditional=ConditionalNuisance(observation,curve-table.renderer.background,fixed,background*response)
         cost,rate,residual,factor=conditional.solve(np.exp(z[-2:]))
         adjusted=z.copy();adjusted[-2:]=np.clip(np.log(conditional.coefficients),lo[-2:],hi[-2:])
@@ -94,7 +99,7 @@ def fit(source,table,observation,bank,*,seconds=120.,starts=4,seed=90231,warm=No
             return (raw[:,mask]*factor).T,residual
         cost,rate,residual,factor,adjusted=score(z)
         def profile(point):
-            trial=z.copy();trial[:d]=point;return score(trial,remember=False)[1]
+            trial=z.copy();trial[:d]=point;return score(trial,remember=False,prepare_response=False)[1]
         def build():
             raw=[]
             for i in range(m,d):
@@ -113,10 +118,12 @@ def fit(source,table,observation,bank,*,seconds=120.,starts=4,seed=90231,warm=No
         nonlocal rejected
         columns=np.arange(m) if mode else np.arange(m,d)
         z=z.copy();current=score(z);z=current[4];damping=1e-3;accepted=[];start=time.monotonic();reason='iteration_limit'
-        # A forced native derivative already evaluates the complete profile.
-        # Building a fixed-cell reflection-response matrix for one interleaved
-        # step costs more than these few direct profiles, especially in TOF.
+        # Captured responses add no second profile construction. A context
+        # that cannot capture uses the original native acceptance path, rather
+        # than evaluating a native fallback twice under a cached-mode label.
         cached_mode=mode and not force_native_mode_derivatives
+        if cached_mode and hasattr(cache,'has_response'):
+            cached_mode=cache.has_response(z[:d]*s.radii)
         if cached_mode:current=verify(z,score(z,cached=True,remember=False))
         for iteration in range(iterations):
             found=False;stationary=False
@@ -216,4 +223,5 @@ def fit(source,table,observation,bank,*,seconds=120.,starts=4,seed=90231,warm=No
         independent_cache_checks=cache_checks,maximum_native_relative_error=max_error,maximum_native_sigma_error=max_sigma,
         native_response_cache=cache.diagnostics(),all_allowed_modes_retained=True,truth_used=False,
         cell_derivative_proposals=cell_model.diagnostics(),exact_profile_memo=dict(hits=profile_hits,entries=len(native_profiles),maximum_entries=2),
+        native_cell_probe_calls=native_probe_calls,
         global_optimum_certified=False,model_exclusion_authorized=False),best['rate']
