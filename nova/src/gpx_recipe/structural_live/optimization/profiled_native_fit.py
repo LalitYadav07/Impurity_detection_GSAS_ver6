@@ -7,6 +7,7 @@ seed a worse local trajectory; the published incumbent never becomes worse.
 No truth values, custom broadening, probability or global certificate.
 """
 import time
+from collections import OrderedDict
 import numpy as np
 from .native_cell_derivative import NativeCellDerivative
 from .damped_step import bounded_damped_step
@@ -15,6 +16,7 @@ from .feasible_gauss_newton import observation_rwp_percent,select_ensemble_start
 from .multiaxis_fit import background_components,background_reference
 from .reference_secants import feasible_secant,FeasibleDirectionUnavailable
 from .profiled_nuisance import ConditionalNuisance
+from .cell_derivative_model import CellDerivativeModel
 
 
 class CellDirectionUnavailable(RuntimeError):
@@ -34,17 +36,35 @@ def fit(source,table,observation,bank,*,seconds=120.,starts=4,seed=90231,warm=No
     fixed,response=background_components(table);background=background_reference(table)
     best=None;trace=[];blocks=[];restarts=[];blocked_starts=[];attempts=[];native_calls=0;rejected=0;cache_checks=0;max_error=0.;max_sigma=0.
     rng=np.random.default_rng(seed)
+    cell_model=CellDerivativeModel(m,d)
+    native_profiles=OrderedDict();profile_hits=0
     def check_time():
         if time.monotonic()>=deadline:raise TimeoutError('Native alternating fit allocation exhausted')
     def allowed(z):
         return z.shape==(d+2,) and np.isfinite(z).all() and np.all(z>=lo) and np.all(z<=hi) and bool(np.isfinite(s.chemistry.log_kernel((z[:d]*s.radii)[None,:])[0]))
     def rate_for(z,curve):return np.exp(z[-2])*(curve-table.renderer.background)+fixed+background*np.exp(z[-1])*response
+    def native_curve(point):
+        nonlocal native_calls,profile_hits
+        point=np.asarray(point,float);key=tuple(point)
+        if key in native_profiles:
+            owner=getattr(getattr(s,'fast',None),'native',None)
+            if owner is not None:owner._check()
+            profile_hits+=1;native_profiles.move_to_end(key)
+            return native_profiles[key].copy()
+        curve=s.native(point);native_calls+=1
+        remember_curve(point,curve)
+        return curve
+    def remember_curve(point,curve):
+        curve=np.asarray(curve,float)
+        if curve.shape!=observation.y.shape or not np.isfinite(curve).all():
+            raise ValueError('Complete finite native structural profile required')
+        key=tuple(point);native_profiles[key]=curve.copy();native_profiles.move_to_end(key)
+        while len(native_profiles)>2:native_profiles.popitem(last=False)
     def score(z,cached=False,remember=True):
         nonlocal best,native_calls
         check_time()
         if not allowed(z):raise ValueError('Infeasible structural geometry reached native optimizer')
-        curve=cache.evaluate(z[:d]*s.radii) if cached else s.native(z[:d]*s.radii)
-        native_calls+=int(not cached)
+        curve=cache.evaluate(z[:d]*s.radii) if cached else native_curve(z[:d]*s.radii)
         conditional=ConditionalNuisance(observation,curve-table.renderer.background,fixed,background*response)
         cost,rate,residual,factor=conditional.solve(np.exp(z[-2:]))
         adjusted=z.copy();adjusted[-2:]=np.clip(np.log(conditional.coefficients),lo[-2:],hi[-2:])
@@ -64,23 +84,31 @@ def fit(source,table,observation,bank,*,seconds=120.,starts=4,seed=90231,warm=No
         check_time()
         if mode:
             curve,j=cache.mode_jacobian(z[:d]*s.radii)
+            # A full-native derivative call already evaluated this same curve.
+            # Factored curves enter the exact memo only after native verify().
+            if force_native_mode_derivatives:remember_curve(z[:d]*s.radii,curve)
             conditional=ConditionalNuisance(observation,curve-table.renderer.background,fixed,background*response)
             _,rate,residual,factor=conditional.solve(np.exp(z[-2:]))
             raw=conditional.rate_jacobian(j*s.radii[:m,None])
+            cell_model.observe_modes(z[:d],rate,raw)
             return (raw[:,mask]*factor).T,residual
         cost,rate,residual,factor,adjusted=score(z)
         def profile(point):
             trial=z.copy();trial[:d]=point;return score(trial,remember=False)[1]
-        raw=[]
-        for i in range(m,d):
-            check_time()
-            try:
-                column,_=feasible_secant(profile,z[:d],i,bank.proposal_cell_steps[i],
-                    allowed=lambda p:allowed(np.r_[p,z[-2:]]))
-            except FeasibleDirectionUnavailable as exc:
-                raise CellDirectionUnavailable(f'No feasible lattice stencil for coordinate {i}') from exc
-            raw.append(column)
-        return (np.asarray(raw)[:,mask]*factor).T,residual
+        def build():
+            raw=[]
+            for i in range(m,d):
+                check_time()
+                try:
+                    column,_=feasible_secant(profile,z[:d],i,bank.proposal_cell_steps[i],
+                        allowed=lambda p:allowed(np.r_[p,z[-2:]]))
+                except FeasibleDirectionUnavailable as exc:
+                    raise CellDirectionUnavailable(f'No feasible lattice stencil for coordinate {i}') from exc
+                raw.append(column)
+            return np.asarray(raw).reshape(d-m,len(rate))
+        weights=np.zeros(len(rate));weights[mask]=abs(factor)
+        raw=cell_model.columns(z[:d],rate,weights,build)
+        return (raw[:,mask]*factor).T,residual
     def block(z,mode,iterations):
         nonlocal rejected
         columns=np.arange(m) if mode else np.arange(m,d)
@@ -91,21 +119,33 @@ def fit(source,table,observation,bank,*,seconds=120.,starts=4,seed=90231,warm=No
         cached_mode=mode and not force_native_mode_derivatives
         if cached_mode:current=verify(z,score(z,cached=True,remember=False))
         for iteration in range(iterations):
-            check_time();j,r=jacobian(z,mode)
-            step,info=bounded_damped_step(j,r,damping,lo[columns]-z[columns],hi[columns]-z[columns],radius=.4)
-            if info['information_score']<1e-4:reason='small_local_score';break
-            descent=float((j.T@r)@step)
-            if descent>=0:damping*=10.;continue
-            found=False
-            for power in range(12):
-                trial=z.copy();trial[columns]+=step*(.5**power)
-                if not allowed(trial):rejected+=1;continue
-                proposed=score(trial,cached=cached_mode)
-                if proposed[0]<=current[0]+2e-4*(.5**power)*descent:
-                    exact=verify(trial,proposed) if cached_mode else proposed
-                    if exact[0]<=current[0]+2e-4*(.5**power)*descent:
-                        z=exact[4];current=exact;accepted.append(current[0]);damping=max(damping*.3,1e-10);found=True;break
-            if not found:damping*=10.
+            found=False;stationary=False
+            # A recycled derivative cannot declare stationarity or end a
+            # stalled trajectory. Retry this SAME iterate once with freshly
+            # evaluated native cell columns before those decisions.
+            for retry in range(2):
+                check_time();j,r=jacobian(z,mode)
+                recycled=not mode and cell_model.last_reused
+                step,info=bounded_damped_step(j,r,damping,lo[columns]-z[columns],hi[columns]-z[columns],radius=.4)
+                if info['information_score']<1e-4:
+                    if recycled:cell_model.invalidate();continue
+                    reason='small_local_score';stationary=True;break
+                descent=float((j.T@r)@step)
+                if descent>=0:
+                    if recycled:cell_model.invalidate();continue
+                    damping*=10.;break
+                for power in range(12):
+                    trial=z.copy();trial[columns]+=step*(.5**power)
+                    if not allowed(trial):rejected+=1;continue
+                    proposed=score(trial,cached=cached_mode)
+                    if proposed[0]<=current[0]+2e-4*(.5**power)*descent:
+                        exact=verify(trial,proposed) if cached_mode else proposed
+                        if exact[0]<=current[0]+2e-4*(.5**power)*descent:
+                            z=exact[4];current=exact;accepted.append(current[0]);damping=max(damping*.3,1e-10);found=True;break
+                if found:break
+                if recycled:cell_model.invalidate();continue
+                damping*=10.;break
+            if stationary:break
             if damping>1e7:reason='native_descent_stalled';break
             if found and np.max(abs(step*(.5**power)))<1e-8:reason='small_step';break
         blocks.append(dict(kind='modes' if mode else 'cell',seconds=time.monotonic()-start,accepted_costs=accepted,reason=reason))
@@ -142,6 +182,7 @@ def fit(source,table,observation,bank,*,seconds=120.,starts=4,seed=90231,warm=No
         deadline=time.monotonic()+remaining/(len(selected)-index)
         attempt=dict(start=index,initial_parameters=initial.tolist(),iterations=0,reason='running')
         attempts.append(attempt)
+        cell_model.invalidate()
         try:
             z=initial.copy();cost=score(z)[0];cycles=0;restart_points=[]
             while True:
@@ -154,6 +195,9 @@ def fit(source,table,observation,bank,*,seconds=120.,starts=4,seed=90231,warm=No
                 if m:z,cost=block(z,True,mode_iterations)
                 cycles+=1
                 if before-cost<1e-9*max(cost,1.) and (not kicks or not restart_points):
+                    if cell_model.model is not None and cell_model.model['age']:
+                        cell_model.invalidate()
+                        continue
                     attempt['reason']='local_block_progress_small';break
         except CellDirectionUnavailable as exc:
             attempt.update(reason='proposal_unavailable',error=str(exc))
@@ -171,4 +215,5 @@ def fit(source,table,observation,bank,*,seconds=120.,starts=4,seed=90231,warm=No
         blocks=blocks,restarts=restarts,blocked_starts=blocked_starts,attempts=attempts,trace=trace,full_native_calls=native_calls,chemistry_rejections=rejected,
         independent_cache_checks=cache_checks,maximum_native_relative_error=max_error,maximum_native_sigma_error=max_sigma,
         native_response_cache=cache.diagnostics(),all_allowed_modes_retained=True,truth_used=False,
+        cell_derivative_proposals=cell_model.diagnostics(),exact_profile_memo=dict(hits=profile_hits,entries=len(native_profiles),maximum_entries=2),
         global_optimum_certified=False,model_exclusion_authorized=False),best['rate']

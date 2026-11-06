@@ -104,3 +104,18 @@ def test_worker_identity_is_bound_at_import():
     assert all(v=='unavailable' or len(v)==64 for v in identity.values())
     identity['infer']='changed'
     assert code_identity()['infer']!='changed'
+
+
+def test_worker_cache_identity_detects_a_transitive_scientific_helper_change(tmp_path,monkeypatch):
+    from gpx_recipe.live import worker
+    from gpx_recipe.symmetry import compiler
+    root=tmp_path/'gpx_recipe/symmetry';root.mkdir(parents=True)
+    entry=root/'compiler.py';entry.write_text('# isolated source inventory\n')
+    helper=root/'displacements.py';helper.write_text('# earlier construction semantics\n')
+    monkeypatch.setattr(compiler,'__file__',str(entry))
+    before=worker._read_code_identity()
+    helper.write_text('# revised construction semantics\n')
+    after=worker._read_code_identity()
+    assert before['gpx_recipe_package_sha256']!=after['gpx_recipe_package_sha256']
+    assert {k:v for k,v in before.items() if k!='gpx_recipe_package_sha256'}=={
+        k:v for k,v in after.items() if k!='gpx_recipe_package_sha256'}

@@ -202,9 +202,13 @@ def fit_feasible_gn(source,table,observation,*,warm=None,warm_pool=None,seconds=
                     norm=max(np.max(abs(step)),1e-30)
                     if not box_steps and norm>.5:step*=.5/norm
                     step=np.clip(step,lo-z,hi-z);gradient=jac.T@residual
-                    if box_steps and np.max(abs(step))<1e-9:reason='bounded_local_step_small';break
+                    if box_steps and np.max(abs(step))<1e-9:
+                        if recycle_cells and obj.last_reused:obj.invalidate_cell_approximation();continue
+                        reason='bounded_local_step_small';break
                     descent=float(gradient@step)
-                    if descent>=0:damping*=10.;continue
+                    if descent>=0:
+                        if recycle_cells and obj.last_reused:obj.invalidate_cell_approximation();continue
+                        damping*=10.;continue
                     found=False
                     for reduction in range(16):
                         alpha=.5**reduction;proposal=np.clip(z+alpha*step,lo,hi)

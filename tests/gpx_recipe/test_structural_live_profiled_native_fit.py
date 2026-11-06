@@ -58,3 +58,41 @@ def test_forced_native_derivatives_do_not_build_a_single_step_response_cache():
     assert result['best']['deviance']==pytest.approx(residual@residual)
     assert result['best']['deviance']<150
     assert {'cell','modes'}<={block['kind'] for block in result['blocks']}
+
+
+def test_recycled_zero_score_is_rebuilt_before_declaring_lattice_stationarity(monkeypatch):
+    from gpx_recipe.structural_live.optimization.cell_derivative_model import CellDerivativeModel
+    instances=[]
+    class ZeroOnce(CellDerivativeModel):
+        def __init__(self,*args,**kwargs):
+            super().__init__(*args,**kwargs);self.injected=False;instances.append(self)
+        def columns(self,point,rate,weights,build):
+            if self.builds and not self.injected:
+                self.injected=True;self.last_reused=True
+                return np.zeros((self.dimensions-self.modes,len(rate)))
+            return super().columns(point,rate,weights,build)
+    monkeypatch.setattr(module,'CellDerivativeModel',ZeroOnce)
+    s,t,o,z,c,b,_=setup()
+    result,rate=module.fit(s,t,o,b,seconds=2,starts=1,evaluator=c,force_native_mode_derivatives=True)
+    assert instances[0].injected
+    assert result['cell_derivative_proposals']['invalidations']>=2
+    assert result['cell_derivative_proposals']['builds']>=2
+    assert result['best']['deviance']==pytest.approx(residual_and_factor(o,rate)[0]@residual_and_factor(o,rate)[0])
+    assert np.all(np.diff([p['deviance'] for p in result['trace']])<0)
+
+
+def test_exact_profile_memo_reuses_repeated_geometry_with_fresh_nuisance_fits():
+    s,t,o,z,c,b,_=setup()
+    result,rate=module.fit(s,t,o,b,seconds=2,starts=1,evaluator=c,force_native_mode_derivatives=True)
+    assert result['exact_profile_memo']['hits']>0
+    assert result['exact_profile_memo']['entries']<=2
+    assert result['cell_derivative_proposals']['reuses']>0
+    assert result['best']['deviance']==pytest.approx(residual_and_factor(o,rate)[0]@residual_and_factor(o,rate)[0])
+
+
+def test_exact_profile_memo_cannot_bypass_native_context_ownership():
+    s,t,o,z,c,b,_=setup()
+    def replaced():raise RuntimeError('Native constraint owner was replaced')
+    s.fast.native=SimpleNamespace(_check=replaced)
+    with pytest.raises(RuntimeError,match='constraint owner'):
+        module.fit(s,t,o,b,seconds=2,starts=1,evaluator=c,force_native_mode_derivatives=True)

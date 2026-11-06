@@ -10,12 +10,17 @@ from .contracts import validate_request,seal_posterior,verify_posterior
 
 def _read_code_identity():
     import inspect
+    from ..symmetry.compiler import package_signature
     result={name:sha(Path(__file__).parent/name) for name in ["statistics.py","native_profile.py","validated_backend.py","native_quadratic.py","native_kernel_policy.py","native_reflection.py","reflection_factors.py","quadratic_qualification.py","moment_basis.py","central_quadratic.py","gpx_index.py","native_validation.py","contracts.py","worker.py","observations.py","gpx_export.py","resources.py"]}
     import importlib.util
     for name in ['gsas_magnetic_preflight','gpx_recipe.symmetry.native_magnetic','gpx_recipe.symmetry.native_preparation','gpx_recipe.symmetry.worker','gpx_recipe.execution','gpx_recipe.preparation.identity','gpx_recipe.preparation.hints','gpx_recipe.structural_live.optimization.native_profile_capture']:
         spec=importlib.util.find_spec(name)
         result[name]=sha(Path(spec.origin)) if spec and spec.origin else 'unavailable'
     result.update({fn.__name__:hashlib.sha256(inspect.getsource(fn).encode()).hexdigest() for fn in [compile_candidate,infer]})
+    # The explicit inventory is useful diagnostics but does not cover every
+    # imported scientific helper or policy table. Bind the complete package
+    # too, so a shared construction/helper change cannot retain an old kernel.
+    result['gpx_recipe_package_sha256']=package_signature()
     return result
 
 def code_identity():return dict(_CODE_IDENTITY)
