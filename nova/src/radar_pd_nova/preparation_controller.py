@@ -125,6 +125,9 @@ class PreparationMixin:
             if row['available'] and row['kinds']==['reference']:
                 references.append(dict(title=row['name'],value=row['id']))
         s.prep_reference_options=references
+        if not s.prep_library:
+            selected=store.registry.selected_key()
+            if selected in {row['id'] for row in rows}:s.prep_library=selected
         if s.prep_library:self._preparation_table_changed()
 
     def _preparation_inputs_changed(self,**_):

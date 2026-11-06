@@ -37,6 +37,8 @@ def test_open_and_close_preserve_live_workspace_and_do_not_start_jobs(app):
     app.open_preparation_workspace()
     assert s.workspace_view=='preparation' and s.setup_collapsed and not s.live_assistant_open
     assert s.prep_reference_options and not service.submissions
+    assert s.prep_library==store.registry.selected_key()==key
+    assert s.prep_entries and s.prep_table_count==2
     app.close_preparation_workspace()
     assert s.workspace_view=='experiment' and not s.setup_collapsed
 
