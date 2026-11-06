@@ -127,7 +127,7 @@ class Stage4WorkerPolicyTests(unittest.TestCase):
             self.assertEqual(LatticeNudger._resolve_inner_workers(50, allow_parallel=False),1)
 
     def test_inner_workers_are_capped_by_rep_count_when_enabled(self):
-        with patch.dict(os.environ, {}, clear=False), patch("scripts.lattice_nudger.os.cpu_count", return_value=32):
+        with patch.dict(os.environ, {'GALAXY_SLOTS':'4','GALAXY_MEMORY_MB':'8192'}, clear=False), patch("scripts.lattice_nudger.os.cpu_count", return_value=32):
             workers = LatticeNudger._resolve_inner_workers(3, allow_parallel=True)
         self.assertEqual(workers, 3)
 
