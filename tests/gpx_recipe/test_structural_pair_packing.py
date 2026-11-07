@@ -23,6 +23,16 @@ def test_native_pair_packing_preserves_all_array_bits_controls_and_trajectories(
         assert len(a.files)==13 and all(key not in a.files for key in codec.CURVES)
 
 
+def test_lossless_storage_keeps_three_curve_features_labels_and_holdouts_identical(tmp_path):
+    from gpx_recipe.preparation.structural_cohort import assemble_pairs
+    original=read(block(tmp_path/'source'));packed=pack_block(tmp_path/'source',tmp_path/'packed')
+    before=assemble_pairs([original],bins=128);after=assemble_pairs([packed],bins=128)
+    for key in ('features','compatible_labels','classes','split','q_edges','reference_features'):
+        np.testing.assert_array_equal(before[key],after[key])
+    assert before['groups']==after['groups'] and before['class_candidate_ids']==after['class_candidate_ids']
+    assert before['input_sha256']!=after['input_sha256']  # New bytes have a new identity.
+
+
 @pytest.mark.parametrize('case',['layout','dtype','missing','nonfinite','encoding','dimensions','padding'])
 def test_hash_valid_corrupt_packed_arrays_cannot_override_physical_checks(tmp_path,case):
     source=block(tmp_path/'source');pack_block(source,tmp_path/'packed');root=tmp_path/'packed'

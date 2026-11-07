@@ -1,4 +1,6 @@
 """Real attention optimization and portable inference on artificial paired data."""
+import json
+
 import numpy as np
 import pytest
 
@@ -24,6 +26,9 @@ def test_training_and_portable_inference_use_three_curves_and_attention(tmp_path
     assert result['schema']==SCHEMA and result['architecture']==ARCHITECTURE and result['channels']==3
     assert result['curriculum']['training_rows_seen']==np.count_nonzero(cohort['split']==0)
     assert result['selected_epoch']==1 and result['history'][-1]['checkpoint_eligible']
+    progress=json.loads((tmp_path/'model/progress.json').read_text())
+    assert progress['state']=='complete' and progress['examples']==result['examples']
+    assert progress['selected_epoch']==result['selected_epoch']
     assert all(cohort['split'][i]==0 for i in result['curriculum']['clean_training_representatives'])
     for key in ('test','prior_only_test'):
         metric=result[key]

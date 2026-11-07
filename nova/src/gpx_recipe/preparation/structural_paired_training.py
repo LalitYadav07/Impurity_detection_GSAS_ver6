@@ -137,11 +137,14 @@ def train(cohort,destination,*,epochs=60,seed=89113,threads=4):
             scheduler.step()
         if best is None:raise ValueError('No attention checkpoint saw the complete declared training pool')
         model.load_state_dict(best);model.eval()
+        write_json(out/'progress.json',dict(state='calibrating_training_support',selected_epoch=selected_epoch))
         support=fit_support(rows,train_rows,validation_rows,targets,mean,scale,seed=seed)
         # Test labels have no influence on initialization, normalization,
         # sampling, prototypes, stopping or checkpoint selection.
+        write_json(out/'progress.json',dict(state='scoring_holdout',selected_epoch=selected_epoch))
         test=evaluate(model,rows,targets,test_rows,mean,scale,classes)
         prior=evaluate(model,rows,targets,test_rows,mean,scale,classes,prior=targets[train_rows].sum(0))
+    write_json(out/'progress.json',dict(state='packing_model',selected_epoch=selected_epoch))
     plane,layout=weights.pack(model)
     arrays=dict(parameters=plane,q_edges=cohort['q_edges'],
         normalization=np.r_[mean.ravel().astype(np.float64),scale.ravel().astype(np.float64),support['limit']],
@@ -172,4 +175,6 @@ def train(cohort,destination,*,epochs=60,seed=89113,threads=4):
     encoded=(json.dumps(metadata,indent=2,allow_nan=False)+'\n').encode()
     if len(encoded)>MAX_METADATA_BYTES:raise ValueError('Attention model metadata exceeds the portable reader budget')
     (out/'weights.npz').write_bytes(raw);write_json(out/'model.json',metadata)
+    write_json(out/'progress.json',dict(state='complete',examples=len(rows),selected_epoch=selected_epoch,
+        screening_qualified=False,seconds=time.monotonic()-began))
     return metadata
