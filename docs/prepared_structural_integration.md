@@ -83,6 +83,12 @@ jobs. Independent children and scans use the existing bounded worker pool.
 - All included independent displacement and symmetry-allowed lattice
   coordinates can vary together. No mode is discarded because it scatters
   weakly. Numerical failure is not subgroup exclusion.
+- Exact parent anchoring intersects the atom-site and displacement-formula
+  printed-precision intervals. ISODISTORT can round a halfway value in opposite
+  directions in those two tables. A unique unchanged parent orbit must lie in
+  both intervals; disjoint intervals, incomplete site arrays and unresolved
+  mode origins require review. The existing precision caps, multiplicity
+  checks and complete zero-distortion native-profile comparison remain active.
 - Occupancy, ADPs and instrument parameters stay fixed. The common histogram
   scale is bounded to exp(±0.3); a bounded additive correction to Back;0 varies.
   Higher background coefficients and additional background terms are retained.

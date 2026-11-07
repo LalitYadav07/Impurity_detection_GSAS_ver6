@@ -17,6 +17,7 @@ def fixture(monkeypatch):
     child['ISODISTORT']={'G2parentCoords':np.array([[.1,.2,.27137]]),
         'G2VarList':[SimpleNamespace(name='dAz',atom=11)],'G2coordOffset':[.27137]}
     monkeypatch.setattr(module,'cif_precision',lambda _:({'O1':[(.1,5e-6,0.),(.2,5e-6,0.),(.27137,5e-6,0.)]},{}))
+    monkeypatch.setattr(module,'cif_mode_precision',lambda _:{'O1':[(.1,5e-6,0.),(.2,5e-6,0.),(.27137,5e-6,0.)]})
     return parent,child,SimpleNamespace(SytSym=lambda *args:('1',1))
 
 
@@ -59,3 +60,57 @@ def test_native_operation_roundoff_does_not_change_special_site_multiplicity(mon
     receipt=module.anchor_child(parent,child,np.eye(3),np.zeros(3),'child.cif',spc)
     assert child['Atoms'][0][5]==0.
     assert 2 in receipt['sites'][0]['operation_roundoff_preserved_axes']
+
+
+def rounded_tables(monkeypatch, *, source=.061205, mode=.06121, site=.06120):
+    parent=phase(source);child=phase(mode)
+    child['ISODISTORT']={'G2parentCoords':np.array([[.1,.2,mode]]),
+        'G2VarList':[SimpleNamespace(name='dAz',atom=11)],'G2coordOffset':[mode]}
+    monkeypatch.setattr(module,'cif_precision',lambda _:({'O1':[(.1,5e-6,0.),(.2,5e-6,0.),(site,5e-6,0.)]},{}))
+    monkeypatch.setattr(module,'cif_mode_precision',lambda _:{'O1':[(.1,5e-6,0.),(.2,5e-6,0.),(mode,5e-6,0.)]})
+    return parent,child,SimpleNamespace(SytSym=lambda *args:('1',1))
+
+
+def test_opposite_halfway_rounding_uses_the_intersection_of_both_tables(monkeypatch):
+    parent,child,spc=rounded_tables(monkeypatch)
+    before=copy.deepcopy(parent['Atoms'])
+    receipt=module.anchor_child(parent,child,np.eye(3),np.zeros(3),'child.cif',spc)
+    assert parent['Atoms']==before
+    assert child['Atoms'][0][5]==.061205
+    assert child['ISODISTORT']['G2coordOffset']==[.061205]
+    assert receipt['precision_rule']=='intersection_of_atom_site_and_mode_origin_intervals'
+    assert receipt['sites'][0]['maximum_shift']==pytest.approx(5e-6)
+
+
+def test_parent_inside_only_one_serialization_interval_is_not_admitted(monkeypatch):
+    parent,child,spc=rounded_tables(monkeypatch,source=.061214)
+    before=copy.deepcopy(child['Atoms'])
+    with pytest.raises(ValueError,match='unique parent orbit'):
+        module.anchor_child(parent,child,np.eye(3),np.zeros(3),'child.cif',spc)
+    assert child['Atoms']==before
+
+
+def test_disjoint_serialization_intervals_are_not_widened(monkeypatch):
+    parent,child,spc=rounded_tables(monkeypatch,mode=.06122)
+    with pytest.raises(ValueError,match='serialized site interval'):
+        module.anchor_child(parent,child,np.eye(3),np.zeros(3),'child.cif',spc)
+
+
+def test_incomplete_baseline_cannot_silently_skip_sites(monkeypatch):
+    parent,child,spc=fixture(monkeypatch);child['ISODISTORT']['G2parentCoords']=np.empty((0,3))
+    with pytest.raises(ValueError,match='every finite site'):
+        module.anchor_child(parent,child,np.eye(3),np.zeros(3),'child.cif',spc)
+
+
+@pytest.mark.parametrize('formula,expected', [('1/3 + O1_dx',(1/3,0.,0.)),
+    ('0.06121 + O1_dz',(.06121,5e-6,0.)),('-1/2 - O1_dx',(-.5,0.,0.)),
+    ('1.20e-3 + O1_dy',(.0012,.000005,0.))])
+def test_formula_origin_retains_its_own_printed_precision(formula,expected):
+    from gpx_recipe.structural_live.source_reference import coordinate_origin_precision
+    np.testing.assert_allclose(coordinate_origin_precision(formula),expected,rtol=1e-15,atol=0.)
+
+
+@pytest.mark.parametrize('formula',['O1_dx','1/0 + O1_dx','NaN + O1_dx'])
+def test_unresolved_formula_precision_requires_review(formula):
+    from gpx_recipe.structural_live.source_reference import coordinate_origin_precision
+    with pytest.raises(ValueError):coordinate_origin_precision(formula)

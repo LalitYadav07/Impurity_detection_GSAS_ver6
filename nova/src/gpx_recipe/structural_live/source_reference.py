@@ -9,6 +9,7 @@ reported as a derived reference assumption rather than measured corrections.
 from __future__ import annotations
 import copy
 import re
+from fractions import Fraction
 
 import numpy as np
 
@@ -77,6 +78,47 @@ def cif_precision(path):
             adps[label]=[numeric_precision(block['_atom_site_aniso_U_'+key][i])
                          for key in ['11','22','33','12','13','23']]
     return coordinates,adps
+
+
+def coordinate_origin_precision(formula):
+    """Read only the constant origin in a native displacement formula.
+
+    Fractions encode exact special coordinates. Decimal origins carry their
+    own printed precision, independently of the atom-site coordinate table.
+    No expression is evaluated or used to change a displacement mode.
+    """
+    match=re.match(r'^\s*([+-]?(?:\d+/\d+|(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?))(?=\s*(?:$|[+-]))',str(formula))
+    if match is None:
+        raise ValueError('Native displacement formula needs an explicit numeric origin')
+    token=match.group(1)
+    if '/' in token:
+        try:value=float(Fraction(token))
+        except (ValueError,ZeroDivisionError):raise ValueError('Invalid exact displacement origin') from None
+        return value,0.,0.
+    return numeric_precision(token)
+
+
+def cif_mode_precision(path):
+    import CifFile
+    document=CifFile.ReadCif(str(path))
+    blocks=[document[k] for k in document.keys() if '_atom_site_label' in document[k]]
+    if len(blocks)!=1:raise ValueError('Mode precision requires one unambiguous atom-site block')
+    block=blocks[0]
+    if '_iso_coordinate_label' not in block and '_iso_coordinate_formula' not in block:return {}
+    if '_iso_coordinate_label' not in block or '_iso_coordinate_formula' not in block:
+        raise ValueError('Displacement origin formulas are incomplete')
+    labels=list(block['_iso_coordinate_label']);formulas=list(block['_iso_coordinate_formula'])
+    if len(labels)!=len(formulas) or len(labels)!=len(set(labels)):
+        raise ValueError('Displacement origins need unique matching coordinate labels')
+    result={}
+    for label,formula in zip(labels,formulas):
+        parts=str(label).rsplit('_',1)
+        if len(parts)!=2 or parts[1] not in 'xyz' or len(parts[1])!=1:
+            raise ValueError('Unknown native displacement coordinate label')
+        result.setdefault(parts[0],{})[parts[1]]=coordinate_origin_precision(formula)
+    if any(set(axes)!=set('xyz') for axes in result.values()):
+        raise ValueError('Displacement origins must retain all three coordinates')
+    return {label:[axes[axis] for axis in 'xyz'] for label,axes in result.items()}
 
 
 def canonicalize_public_reference(phase, source_cif, native_spc):
