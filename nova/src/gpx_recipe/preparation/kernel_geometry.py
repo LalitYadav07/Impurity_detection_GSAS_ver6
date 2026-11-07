@@ -15,13 +15,13 @@ import numpy as np
 
 from ..symmetry.contracts import digest
 from .tof_kernel_arrays import checksum,MAX_BYTES
+from .identity import ACQUISITION_PARAMETERS
 
 SCHEMA='radar-tof-kernel-geometry/v1'
 MATCH_RTOL=1e-10  # Locator only; actual reuse requires exact compiled bits.
 # Recorded conditions do not identify a raw TOF peak function. The current
 # native cell/profile arguments still decide every individual primitive hit;
 # atomic intensities, corrections and observations are always computed afresh.
-ACQUISITION_PARAMETERS=frozenset({'Temperature','Pressure','FreePrm1','FreePrm2','FreePrm3'})
 
 
 class GeometryUnavailable(ValueError):

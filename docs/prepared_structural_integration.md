@@ -598,6 +598,16 @@ Changed X/Y/Z still bypass the stored profile, and every reused peak still
 requires exact compiled-input equality. Full starting-curve and magnetic
 response identities have separate dependencies and acceptance checks.
 
+The full structural, affine starting-curve and magnetic response identities
+also distinguish recorded conditions from fixed forward parameters. Their
+common metadata policy omits only the five exact bank/sample condition keys;
+it retains phase-local and unknown parameters. Actual cells, coordinates,
+ADPs, moments, profile widths and all other fixed physical dependencies still
+invalidate affected responses. The original GPX revision and measured
+conditions remain in experiment/result lineage. Native PNC/PNT tests change
+the recorded fields, verify unchanged complete predictions and response reuse,
+and separately verify native rebuilding after real geometry/profile edits.
+
 `point_for_cell` can express a prepared absolute metric in a new nuclear
 baseline's coordinates. It preserves supplied displacement coordinates and
 requires the original metric subspace and reviewed bounds. It never clips,

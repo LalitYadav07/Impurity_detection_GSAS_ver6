@@ -12,7 +12,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from .identity import BOOKKEEPING_CONTROLS, _plain, native_identity
+from .identity import BOOKKEEPING_CONTROLS, _plain, native_identity, without_recorded_conditions
 from .magnetic import load
 
 
@@ -58,8 +58,9 @@ def identity(*, math, histogram, phases, histdict, parameters, controls, basis, 
         runtime.pop('active_backend',None)
     content = dict(schema='radar-native-rendered-magnetic-identity/v1',
         runtime=runtime,
-        parameters=canonical({k: v for k, v in parameters.items() if k not in moment_keys
-            and not k.startswith('::constr') and k != hfx+'Scale' and not k.startswith(hfx+'Back;')}),
+        parameters=canonical(without_recorded_conditions(
+            {k: v for k, v in parameters.items() if k not in moment_keys
+            and not k.startswith('::constr') and k != hfx+'Scale' and not k.startswith(hfx+'Back;')},prefix=hfx)),
         controls=canonical({k: v for k, v in controls.items() if k not in omitted}),
         histogram_dictionary=canonical(histdict),
         axis=np.asarray(np.ma.getdata(histogram['Data'][0]), float),

@@ -1,7 +1,8 @@
 """Exact affine rebinding of qualified native structural starting curves.
 
+Recorded acquisition metadata is excluded by the common forward identity.
 Only the single-phase intensity normalization and existing additive polynomial
-background values are removed from this identity. Cells, modes, chemistry, masks,
+background values are then removed. Cells, modes, chemistry, masks,
 instrument profiles and background definitions remain dependencies. This is
 not permission to reuse arbitrary uploaded arrays or a changed geometry.
 """

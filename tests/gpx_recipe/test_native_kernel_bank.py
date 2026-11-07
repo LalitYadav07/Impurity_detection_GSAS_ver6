@@ -105,6 +105,22 @@ def test_recorded_acquisition_condition_does_not_invalidate_raw_peak_physics(tmp
     assert not reader.bypasses
 
 
+@pytest.mark.parametrize('kind',['PNC','PNT'])
+def test_structural_forward_and_affine_identity_keep_recorded_conditions_separate(tmp_path,kind):
+    from gpx_recipe.preparation.identity import ACQUISITION_PARAMETERS
+    from gpx_recipe.preparation.structural_identity import structural_physics_identity
+    from gpx_recipe.preparation.structural_nuisance import affine_context
+    _,s=native_source(tmp_path/'inputs',kind);point=np.zeros(len(s.radii))
+    expected=s.native(point).copy();before=structural_physics_identity(s);affine=affine_context(s)
+    n=s.fast.native;histogram=n.histo_phases[0][s.fast.slow.hist.name]
+    hfx=f':{s.fast.slow.hist.id}:'
+    for index,name in enumerate(sorted(ACQUISITION_PARAMETERS)):
+        n.parms[hfx+name]=118.+index;histogram['Sample Parameters'][name]=118.+index
+    np.testing.assert_array_equal(s.native(point),expected)
+    assert structural_physics_identity(s)==before and affine_context(s)==affine
+    assert histogram['Sample Parameters']['Temperature']==n.parms[hfx+'Temperature']
+
+
 @pytest.mark.parametrize('failure',['missing','corrupt','budget','setting'])
 def test_unusable_optional_data_keeps_the_complete_original_native_calculation(tmp_path,failure):
     _,s=native_source(tmp_path/'inputs','PNT');store,_=bank(tmp_path/'store',s)

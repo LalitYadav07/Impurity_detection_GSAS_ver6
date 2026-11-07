@@ -43,6 +43,27 @@ def compare_predictions(response, native):
         np.testing.assert_allclose(predicted, direct, rtol=1e-8, atol=1e-9)
 
 
+@pytest.mark.parametrize('kind',['PNC','PNT'])
+def test_changed_recorded_conditions_reuse_the_same_full_magnetic_response(tmp_path,kind):
+    from gpx_recipe.preparation.identity import ACQUISITION_PARAMETERS
+    from gpx_recipe.preparation.native_magnetic import physics_identity
+    path=model(tmp_path/'source',kind);cache=ScatteringFactorCache()
+    first=compile_response(NativeReducedProfile(path),factor_cache=cache)
+    project=G.G2Project(gpxfile=str(path))
+    sample=project.histograms()[0].data['Sample Parameters']
+    for index,name in enumerate(sorted(ACQUISITION_PARAMETERS)):sample[name]=118.+index
+    changed=tmp_path/'new-conditions.gpx';project.save(str(changed))
+    native=NativeReducedProfile(changed)
+    assert physics_identity(native)==first.physics_sha256
+    current,receipt=adapt_response(first,native,factor_cache=cache)
+    assert receipt['action']=='same_context_requalified'
+    assert current.physics_sha256==first.physics_sha256
+    np.testing.assert_array_equal(current.quadratic,first.quadratic)
+    compare_predictions(current,native)
+    histogram=native.histo_phases[0][native.parts[0][0]]
+    assert histogram['Sample Parameters']['Temperature']==sample['Temperature']
+
+
 @pytest.mark.parametrize('kind', ['PNC', 'PNT'])
 def test_changed_widths_reuse_scattering_but_render_and_check_new_native_peaks(tmp_path, kind):
     path = model(tmp_path/'source', kind)

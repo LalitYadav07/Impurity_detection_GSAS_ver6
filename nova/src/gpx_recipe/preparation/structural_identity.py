@@ -4,7 +4,7 @@ import json
 import re
 import numpy as np
 
-from .identity import _plain, native_identity, BOOKKEEPING_CONTROLS
+from .identity import _plain, native_identity, BOOKKEEPING_CONTROLS, without_recorded_conditions
 
 
 def _physics_record(source):
@@ -58,11 +58,13 @@ def _physics_record(source):
     # canonical phase/atom records below carry its complete physical order.
     ignored = BOOKKEEPING_CONTROLS | {'atomIndx', ':'+hid+':wtFactor'}
     content = dict(schema='radar-structural-forward-identity/v1',
-        runtime=native_identity(native), parameters=canonical(parameters),
+        runtime=native_identity(native), parameters=canonical(
+            without_recorded_conditions(parameters,prefix=':'+hid+':')),
         controls=canonical({k: v for k, v in native.controls.items() if k not in ignored}),
         histogram_dictionary=canonical(native.histdict), phases=phase_records,
         instrument=histogram['Instrument Parameters'], background=histogram['Background'],
-        sample={k: v for k, v in histogram['Sample Parameters'].items() if k != 'ranId'},
+        sample=without_recorded_conditions(
+            {k: v for k, v in histogram['Sample Parameters'].items() if k != 'ranId'}),
         grid=np.asarray(source.fast.x, float),
         # Until a caller constructs an explicitly unmasked rendering context,
         # native exclusions/masks are also rendering dependencies: its saved

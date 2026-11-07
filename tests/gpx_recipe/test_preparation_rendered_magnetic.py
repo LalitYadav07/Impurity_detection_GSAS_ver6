@@ -29,6 +29,16 @@ def key(monkeypatch,values):
     return module.identity(**values)
 
 
+@pytest.mark.parametrize('condition',['Temperature','Pressure','FreePrm1','FreePrm2','FreePrm3',
+                                     'Temperature_model','0::Temperature'])
+def test_recorded_conditions_do_not_hide_actual_fixed_forward_parameters(monkeypatch,condition):
+    values=context();name=condition if condition.startswith('0::') else ':0:'+condition
+    values['parameters'][name]=17.;before=key(monkeypatch,values)
+    values['parameters'][name]=117.
+    unchanged=condition in {'Temperature','Pressure','FreePrm1','FreePrm2','FreePrm3'}
+    assert (key(monkeypatch,values)==before)==unchanged
+
+
 @pytest.mark.parametrize('change',['observed','weights','excluded','scale','background','moments','constraint_helper','cycles'])
 def test_only_observation_and_declared_external_nuisance_changes_preserve_response_identity(monkeypatch,change):
     values=context();before=key(monkeypatch,values)

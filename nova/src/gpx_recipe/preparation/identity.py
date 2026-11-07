@@ -12,6 +12,22 @@ import scipy
 # requesting model separately. Do not remove actual calibration data here.
 BOOKKEEPING_CONTROLS = {'Seq Data', 'parmMinDict', 'parmMaxDict', 'parmFrozen',
                         'LastSavedAs', 'LastSavedBy'}
+# These are recorded sample conditions in the reviewed fixed PNC/PNT forward
+# calculation. They do not parameterize a constitutive temperature/field law.
+# Actual cells, coordinates, ADPs, moments and instrument parameters remain
+# dependencies even when they were obtained by fitting those conditions.
+ACQUISITION_PARAMETERS = frozenset({'Temperature','Pressure','FreePrm1','FreePrm2','FreePrm3'})
+
+
+def without_recorded_conditions(values, *, prefix=''):
+    """Copy fixed-forward dependencies without changing acquisition metadata.
+
+    Only the five exact bank/sample keys are omitted. This helper belongs to
+    the reviewed PNC/PNT preparation identities, never to experiment lineage
+    or an arbitrary user recipe. Unknown and phase-local parameters remain.
+    """
+    omitted = {prefix+name for name in ACQUISITION_PARAMETERS}
+    return {key:value for key,value in values.items() if key not in omitted}
 
 def _plain(value):
     if isinstance(value, np.ndarray):

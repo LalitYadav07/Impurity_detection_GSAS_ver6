@@ -8,6 +8,19 @@ import pytest
 from gpx_recipe.preparation import identity, rendered_magnetic
 
 
+def test_recorded_conditions_are_only_omitted_from_exact_bank_or_sample_keys():
+    values={name:17. for name in identity.ACQUISITION_PARAMETERS}
+    values.update({'X':.1,'Temperature_model':99.,'ranId':13})
+    original=values.copy()
+    assert identity.without_recorded_conditions(values)=={'X':.1,'Temperature_model':99.,'ranId':13}
+    prefixed={':3:'+k:v for k,v in values.items()}
+    prefixed.update({'0::Temperature':73.,':4:Temperature':81.})
+    actual=identity.without_recorded_conditions(prefixed,prefix=':3:')
+    assert actual['0::Temperature']==73. and actual[':4:Temperature']==81.
+    assert actual[':3:X']==.1 and actual[':3:Temperature_model']==99.
+    assert values==original and ':3:Temperature' in prefixed
+
+
 @pytest.mark.parametrize('change', ['numpy', 'scipy', 'python', 'system', 'machine', 'byteorder', 'blas'])
 def test_runtime_changes_invalidate_rendered_physics_without_changing_the_model(monkeypatch, change):
     from test_preparation_rendered_magnetic import context

@@ -10,7 +10,7 @@ from contextlib import contextmanager
 import numpy as np
 
 from .magnetic import MagneticResponse, MAX_BYTES
-from .identity import _plain, native_identity, BOOKKEEPING_CONTROLS
+from .identity import _plain, native_identity, BOOKKEEPING_CONTROLS, without_recorded_conditions
 from ..live.moment_basis import from_native
 from ..live.native_kernel_policy import compile_native_magnetic_kernel
 from ..live.quadratic_qualification import check_coefficients,compare_coefficients
@@ -81,7 +81,8 @@ def _physics_record(native, basis=None):
         return value
 
     content = dict(runtime=native_identity(native),
-        parameters=canonical({k: v for k, v in native.parms.items() if k not in dynamic}),
+        parameters=canonical(without_recorded_conditions(
+            {k: v for k, v in native.parms.items() if k not in dynamic},prefix=hfx)),
         controls=canonical({k: v for k, v in native.controls.items() if k not in ignored}),
         histogram_dictionary=canonical(native.histdict),
         grid=np.asarray(np.ma.getdata(histogram['Data'][0]), float),
