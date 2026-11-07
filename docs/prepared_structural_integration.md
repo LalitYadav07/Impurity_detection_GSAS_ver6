@@ -533,6 +533,14 @@ array identity against the original complete native calculation; a mismatch
 disables this helper for that context. Fixed-cell displacement curves retain the
 separate checked response reuse described above.
 
+The TOF Lorentz correction retains the original per-reflection scalar power
+and multiplication order. NumPy can dispatch array powers differently on
+different CPUs, producing a final-bit intensity difference despite matching
+source and library versions. Such a difference must not be hidden by loosening
+the native comparison. Anchor diagnostics report differing bins, maximum
+absolute error and relative error; release controls require exact scalar
+intensities as well as exact complete curves on the actual Linux runner.
+
 This construction helper requires one unmasked commensurate nuclear phase,
 reviewed native functions, isotropic size/microstrain and no extinction or native
 multiprocessing. Unsupported contexts retain the complete native calculation.

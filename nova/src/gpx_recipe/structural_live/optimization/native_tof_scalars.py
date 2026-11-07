@@ -111,8 +111,6 @@ class NativeTOFScalars:
         # GetReflPos's native calc_rDsq sums all axes and is scalar-only.
         r[5]=[n.math.GetReflPos(r[:,i],0,0.,a,self.pfx,self.hfx,self.phfx,controls,parms)
               for i in range(r.shape[1])]
-        if not geometry_only:
-            lorenz=n.math.sind(abs(parms[self.hfx+'2-theta'])/2)*r[4]**4
         r[5]+=n.math.GetHStrainShift(r,0,sg,self.phfx,self.hfx,controls,parms)
         r[6:8]=self.widths(r,0,reciprocal,gb,self.phfx,controls,parms,n.histdict,self.hfx)
         r[12:14]=self.exponentials(r,0,self.hfx,parms)
@@ -123,7 +121,17 @@ class NativeTOFScalars:
             correction=np.asarray([n.math.GetIntensityCorr(r[:,i],0,unique[i],reciprocal,direct,
                 self.pfx,self.phfx,self.hfx,sg,controls,parms) for i in range(r.shape[1])]).T
             r[11],r[15],r[16],r[17]=correction
-            r[11]*=np.sqrt(np.linalg.det(reciprocal))*lorenz
+            volume=np.sqrt(np.linalg.det(reciprocal))
+            angle=n.math.sind(abs(parms[self.hfx+'2-theta'])/2)
+            # The original driver raises each np.float64 d spacing to the
+            # fourth power in its scalar reflection loop. NumPy's array
+            # power may select a different SIMD implementation on another
+            # CPU, changing a final intensity bit and disabling exact native
+            # reuse. Preserve the original scalar operation order here;
+            # geometry, widths and structure factors remain batched.
+            for i in range(r.shape[1]):
+                lorenz=angle*r[4,i]**4
+                r[11,i]*=volume*lorenz
         _,low,high=n.math.G2pwd.getWidthsTOF(r[5],r[12],r[13],r[6],r[7])
         axis=s.fast.x[s.fast.slice]
         begin=np.searchsorted(axis,r[5]-low);end=np.searchsorted(axis,r[5]+high)
