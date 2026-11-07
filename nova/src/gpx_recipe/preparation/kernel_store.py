@@ -183,7 +183,28 @@ class KernelStore:
     def put(self, index, data):
         if not isinstance(data, KernelData):
             raise TypeError('Immutable checked kernel data required')
-        return self._put(index, data, encode(data), _json(data.metadata))
+        if type(index) is not int or not 0 <= index < self.document['specification']['cell_count']:
+            raise ValueError('Kernel chunk differs from the declared store')
+        current=self._read()
+        if current['id']!=self.document['id']:
+            raise ValueError('Kernel-store specification changed')
+        self.document=current
+        prior=self.document['chunks'].get(str(index))
+        if prior is not None:
+            try:
+                existing=self.get(index)
+            except ValueError:
+                pass  # Repair only if an encoding reproduces the sealed bytes.
+            else:
+                if existing.metadata!=data.metadata:
+                    raise ValueError('A stored kernel chunk is immutable; create a new preparation revision')
+                return dict(index=index,state='unchanged',scientific_qualification=False)
+        raw=encode(data)
+        if prior is not None and _sha(raw)!=prior['data_sha256']:
+            # Legacy stores keep their original file hashes and native
+            # certificates. A codec upgrade is not permission to rewrite them.
+            raw=encode(data,legacy=True)
+        return self._put(index, data, raw, _json(data.metadata))
 
     def _put(self, index, data, raw, metadata):
         if (type(index) is not int or not 0 <= index < self.document['specification']['cell_count']

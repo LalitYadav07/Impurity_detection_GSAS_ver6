@@ -23,6 +23,7 @@ MAX_REFLECTIONS = 100000
 MAX_BINS = 1000000
 DTYPES = dict(hkls='<i4', parameters='<f8', bounds='<i8', pointers='<i8',
               values='<f4', axis='<f8')
+BYTE_PLANES = 'values_byte_planes'
 
 
 def checksum(value):
@@ -103,11 +104,26 @@ class KernelData:
         return self._metadata['numeric_bytes']
 
 
-def encode(data):
+def encode(data, *, legacy=False):
     if not isinstance(data, KernelData):
         raise TypeError('Validated immutable native kernel data required')
+    if type(legacy) is not bool:
+        raise TypeError('A fixed kernel encoding is required')
+    arrays=dict(data._arrays)
+    from ..live.array_limits import MAX_ARRAY_ELEMENTS
+    # Byte planes have the same byte count but four times as many elements
+    # as float32 values. Keep the original encoding if the generic transport
+    # element guard would reject this otherwise valid large native chunk.
+    filtered_elements=sum(a.size for name,a in arrays.items() if name!='values')+4*arrays['values'].size
+    if not legacy and filtered_elements<=MAX_ARRAY_ELEMENTS:
+        # Group corresponding bytes of the original float32 values so zlib
+        # can compress their smooth exponents and mantissas. No bits are
+        # rounded, discarded or predicted. Scientific array hashes and native
+        # qualification continue to describe the restored original values.
+        values=arrays.pop('values')
+        arrays[BYTE_PLANES]=values.view(np.uint8).reshape(-1,4).T.copy()
     stream = io.BytesIO()
-    np.savez_compressed(stream, **data._arrays)
+    np.savez_compressed(stream, **arrays)
     raw = stream.getvalue()
     validate_npz_bytes(raw, maximum_bytes=MAX_BYTES)
     return raw
@@ -120,9 +136,20 @@ def decode(raw, metadata):
     try:
         validate_npz_bytes(raw, maximum_bytes=MAX_BYTES)
         with np.load(io.BytesIO(raw), allow_pickle=False) as archive:
-            if set(archive.files) != set(DTYPES):
+            inventory=set(archive.files)
+            legacy=inventory==set(DTYPES)
+            if not legacy and inventory != (set(DTYPES)-{'values'})|{BYTE_PLANES}:
                 raise ValueError('Unexpected native kernel array inventory')
-            arrays = {name: archive[name] for name in DTYPES}
+            arrays = {name: archive[name] for name in DTYPES if name!='values'}
+            if legacy:
+                arrays['values']=archive['values']
+            else:
+                planes=archive[BYTE_PLANES]
+                if (planes.dtype!=np.dtype('uint8') or planes.ndim!=2
+                        or planes.shape[0]!=4 or not 1<=planes.shape[1]<=MAX_BYTES//4):
+                    raise ValueError('Invalid bounded native kernel byte planes')
+                arrays['values']=planes.T.copy().reshape(-1).view('<f4')
+                del planes
     except (zipfile.BadZipFile, zlib.error, NotImplementedError, EOFError, OSError) as error:
         raise ValueError('Malformed native kernel arrays') from error
     return KernelData(arrays, metadata)

@@ -6,6 +6,14 @@ service time is a subtotal of native worker time; other worker tasks, Galaxy
 queueing, startup and transfer are additional. Loading a previously prepared
 library does not count its historical build time as current computation.
 
+Portable raw TOF peak chunks group the bytes of their original float32 values
+before lossless compression. Decoding restores every bit before the existing
+array hashes and native checks run. Large chunks retain the legacy encoding
+when byte grouping would exceed the existing transport element limit. Legacy
+archives remain readable, and resuming or repairing an existing store preserves
+its sealed file hashes. Smaller archives do not establish current-context
+compatibility, native provenance, convergence or a complete-search speedup.
+
 Current-context starting curves have two explicit roles. Portable native banks
 retain their creating-job admission and exact-context reuse. Large reviewed
 TOF profiles can instead compile continuous starting proposals automatically

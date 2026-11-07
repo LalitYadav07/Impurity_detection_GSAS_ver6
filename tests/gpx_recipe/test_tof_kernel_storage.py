@@ -46,6 +46,64 @@ def test_data_roundtrip_is_immutable_and_never_a_native_permission():
         QualifiedKernel(loaded,lambda:None,{'verified':True})
 
 
+def test_lossless_byte_planes_preserve_every_float_bit_and_read_legacy_arrays():
+    a,m=sample()
+    a['values'][:]=np.array([-0.,0.,np.nextafter(np.float32(0),np.float32(1)),
+        -np.nextafter(np.float32(0),np.float32(1)),np.finfo(np.float32).max,
+        np.nextafter(np.float32(1),np.float32(2))],dtype='<f4')
+    m['arrays_sha256']=arrays.array_identity(a);original=arrays.KernelData(a,m)
+    encoded=arrays.encode(original)
+    with np.load(io.BytesIO(encoded),allow_pickle=False) as archive:
+        assert 'values' not in archive.files
+        assert archive[arrays.BYTE_PLANES].dtype==np.dtype('uint8')
+        assert archive[arrays.BYTE_PLANES].shape==(4,6)
+    for raw in (encoded,arrays.encode(original,legacy=True)):
+        loaded=arrays.decode(raw,m)
+        assert loaded.metadata==original.metadata
+        assert all(loaded._arrays[k].tobytes()==original._arrays[k].tobytes() for k in arrays.DTYPES)
+
+
+@pytest.mark.parametrize('change',['dtype','shape','empty','mixed','bytes'])
+def test_malformed_byte_plane_encoding_cannot_change_native_values(change):
+    original=data()
+    with np.load(io.BytesIO(arrays.encode(original)),allow_pickle=False) as archive:
+        content={name:archive[name] for name in archive.files}
+    planes=content[arrays.BYTE_PLANES]
+    if change=='dtype':content[arrays.BYTE_PLANES]=planes.astype('u2')
+    elif change=='shape':content[arrays.BYTE_PLANES]=planes.reshape(2,12)
+    elif change=='empty':content[arrays.BYTE_PLANES]=np.empty((4,0),dtype='u1')
+    elif change=='mixed':content['values']=original._arrays['values']
+    else:planes[0,0]^=1
+    stream=io.BytesIO();np.savez_compressed(stream,**content)
+    with pytest.raises(ValueError):arrays.decode(stream.getvalue(),original.metadata)
+
+
+def test_legacy_store_resume_and_repair_preserve_sealed_file_bytes(tmp_path):
+    store=create(tmp_path/'store');original=data()
+    raw=arrays.encode(original,legacy=True)
+    metadata=json.dumps(original.metadata,sort_keys=True,separators=(',',':'),allow_nan=False).encode()
+    store._put(0,original,raw,metadata)
+    prior=store._read()['chunks']['0'].copy()
+    assert store.put(0,original)['state']=='unchanged'
+    assert store._read()['chunks']['0']==prior
+    path=store._paths(0,prior)[0];assert path.read_bytes()==raw
+    path.write_bytes(b'interrupted legacy file')
+    assert store.put(0,original)['state']=='repaired'
+    assert store._read()['chunks']['0']==prior and path.read_bytes()==raw
+    assert store.get(0).metadata==original.metadata
+
+
+def test_codec_retains_legacy_encoding_at_the_existing_element_budget(monkeypatch):
+    from gpx_recipe.live import array_limits
+    original=data();elements=sum(a.size for a in original._arrays.values())
+    monkeypatch.setattr(array_limits,'MAX_ARRAY_ELEMENTS',elements)
+    raw=arrays.encode(original)
+    with np.load(io.BytesIO(raw),allow_pickle=False) as archive:
+        assert set(archive.files)==set(arrays.DTYPES)
+    restored=arrays.decode(raw,original.metadata)
+    assert all(restored._arrays[k].tobytes()==original._arrays[k].tobytes() for k in arrays.DTYPES)
+
+
 @pytest.mark.parametrize('change',['dtype','bounds','pointer','nonfinite','unordered','duplicate','position','width','inventory','shape'])
 def test_malformed_numeric_content_cannot_be_admitted(change):
     a,m=sample()
