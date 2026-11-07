@@ -386,8 +386,8 @@ class Campaign:
                     raise ValueError('The shared campaign requires its original pinned worker implementation')
                 continue
             root=confined(directory,'runtime/gpx_recipe')
-            files={str(p.relative_to(root)):file_sha(confined(root,str(p.relative_to(root))))
-                   for p in sorted(root.rglob('*')) if p.is_file() and p.suffix in {'.py','.json','.csv'}}
+            from .compiler import source_inventory
+            files=source_inventory(root)
             if digest(files)!=protocol['implementation_sha256']:
                 raise ValueError('The original sealed scientific package changed')
             for name in ['gsas_magnetic_preflight.py','gsas_isodistort_import.py','gsas_cif_import.py']:

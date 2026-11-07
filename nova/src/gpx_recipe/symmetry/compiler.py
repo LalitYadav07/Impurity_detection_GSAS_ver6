@@ -9,6 +9,8 @@ import uuid
 
 from .contracts import validate_candidate, digest, trial_id, validate_protocol, iter_trials
 
+SOURCE_SUFFIXES=frozenset({'.py','.json','.csv','.c'})
+
 
 def file_sha(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
@@ -131,20 +133,29 @@ def verify_inputs(protocol,root):
             raise ValueError('A candidate differs from the sealed discovery record')
 
 
-def package_signature():
-    """Bind the scientific implementation independently of installation paths."""
-    root=Path(__file__).parent.parent
+def source_inventory(root=None):
+    """One confined source inventory for installed and frozen worker code.
+
+    Older bundles without C files retain their original inventory/hash. A
+    native executable or build receipt is never an approved source asset.
+    """
+    root=Path(__file__).parent.parent if root is None else Path(root)
     # Include transitive native dependencies such as freeze(), extraction and
     # constraint auditing, not just the new symmetry entry points.
-    values={str(p.relative_to(root)):file_sha(p) for p in sorted(root.rglob('*')) if p.is_file() and p.suffix in {'.py','.json','.csv'}}
-    return digest(values)
+    return {str(p.relative_to(root)):file_sha(confined(root,str(p.relative_to(root))))
+            for p in sorted(root.rglob('*')) if p.is_file() and p.suffix in SOURCE_SUFFIXES}
+
+
+def package_signature():
+    """Bind the scientific implementation independently of installation paths."""
+    return digest(source_inventory())
 
 
 def freeze_runtime(destination):
     """Ship the approved code as data beside the compiled, trusted entry point."""
     root=Path(__file__).parent.parent;destination=Path(destination)
     for path in root.rglob('*'):
-        if path.is_file() and (path.suffix in {'.py','.json','.csv'} or path.name.endswith('LICENSE')):
+        if path.is_file() and (path.suffix in SOURCE_SUFFIXES or path.name.endswith('LICENSE')):
             target=destination/'gpx_recipe'/path.relative_to(root)
             target.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(path,target)
     for name in ['gsas_magnetic_preflight.py','gsas_isodistort_import.py','gsas_cif_import.py']:

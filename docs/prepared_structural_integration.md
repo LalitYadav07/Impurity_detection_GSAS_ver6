@@ -148,7 +148,26 @@ Variable-cell/profile workloads keep original native rendering: a
 complete 185-start control exposed a regression hidden by a shorter rendering
 test. This selection does not alter the scientific parameter set.
 The memo supports the reviewed native PNC/PNT peak routines.
-It reuses only exact scalar arguments and exact grid windows; grid contents
+For the reviewed unmasked, single-phase TOF starting-curve path, an installed
+worker helper can batch calls to the original Fortran peak routine. The helper
+retains the native float32 arguments and outputs and the original double
+reflection summation order. It removes repeated Python calls and an unused
+quadrature calculation; it introduces no peak formula or interpolation. All
+current atomic scattering, cell-dependent peak arguments and profile edits are
+still computed by the native scalar functions. The renderer retains its
+independent, array-identical whole-native anchor check.
+
+The helper is compiled once while building the Model worker image, with fused
+multiply/add and fast-math disabled. Its reviewed C source participates in the
+scientific package identity. Frozen worker bundles contain that source as data
+and resolve only the matching helper installed in the image; they never load
+an executable from an imported preparation library or job folder. Unsupported
+ABIs, arithmetic controls, ownership changes or insufficient scratch space use
+the original calculation. The existing 64 MiB forward-workspace bound includes
+the extra native buffers; no reflection is removed to meet it. Batch counters
+report actual work separately from portable-kernel hits.
+
+The exact-input memo reuses only exact scalar arguments and exact grid windows; grid contents
 are hashed on every native driver call. Reflections, intensity corrections and
 native summation order remain unchanged. No interpolation or uploaded numeric
 predictions enter this cache. Exclusions, secondary phases and extinction still

@@ -10,6 +10,8 @@ import numpy as np
 
 from .native_cell_proposals import NativeCellProposals,ProposalUnavailable,_hash
 from .native_tof_scalars import for_source as scalar_for_source,ScalarBatchUnavailable
+from .native_tof_scalars import record_bytes
+from ...preparation.kernel_runtime import floating_state
 
 
 BACKGROUND_SOURCE='ba21fb1e4304debbf4cb43065524b728fa39695087102ffdb50371f4dca274b7'
@@ -21,6 +23,9 @@ class NativeTOFForward:
         if type(maximum_bytes)is not int or not 0<maximum_bytes<=MAXIMUM_BYTES:
             raise ValueError('A positive bounded native forward workspace is required')
         self.source=source;self.maximum_bytes=maximum_bytes
+        self.floating=floating_state()
+        if self.floating is None:
+            raise ProposalUnavailable('Native TOF forward arithmetic controls are unavailable')
         self.guard=NativeCellProposals(source,maximum_bytes=maximum_bytes)
         context=self.guard._context();n=context[0]
         self.collector=scalar_for_source(source,context[1])
@@ -38,6 +43,8 @@ class NativeTOFForward:
         self.kernel_hits=self.kernel_misses=0
         self.seconds=0.;self.bypasses=Counter()
         self.prepared_bank=None
+        from ...live.native_peak_batch import for_powder
+        self.native_batch=for_powder(context[2]);self.batch_fallbacks=Counter();self.native_batch_disabled=False
 
     def _context(self):
         context=self.guard._context()
@@ -47,6 +54,7 @@ class NativeTOFForward:
                 or n.controls.get(phfx+'SizeType')!='isotropic'
                 or n.controls.get(phfx+'MustrainType')!='isotropic'
                 or powder.getBackground is not self.background_function
+                or floating_state()!=self.floating
                 or not np.array_equal(n.factor,np.ones_like(n.factor))
                 or not np.array_equal(axis,np.asarray(histogram['Data'][0][n.parts[0][1]]))):
             raise ProposalUnavailable('Native TOF forward context changed')
@@ -84,14 +92,32 @@ class NativeTOFForward:
             background=np.asarray(background,float)
             if background.shape!=axis.shape or not np.isfinite(background).all():
                 raise ValueError('Native background returned an invalid forward profile')
-            signal=np.zeros_like(background)
-            for hkl,(parameters,height,low,high) in records.items():
-                value=None if kernel is None else kernel.lookup(hkl,parameters,axis,low,high,function=peak)
-                if value is None:
-                    value=peak(*parameters,axis[low:high])[0];self.peak_calls+=1
-                    self.kernel_misses+=int(kernel is not None)
-                else:self.kernel_hits+=1
-                signal[low:high]+=np.float64(height)*value
+            if kernel is None and self.native_batch is not None and not self.native_batch_disabled:
+                from ...live.native_peak_batch import BatchUnavailable
+                try:
+                    remaining=self.maximum_bytes-self.fixed_workspace-record_bytes(records)
+                    if remaining<1:raise BatchUnavailable('No remaining native batch workspace')
+                    signal=self.native_batch.render(records,axis,maximum_bytes=remaining)
+                    self.peak_calls+=len(records)
+                except BatchUnavailable as error:
+                    self.batch_fallbacks[str(error)]+=1;self.fallback_calls+=1
+                    self.native_batch_disabled=True;self.qualified=False
+                    # A changed ABI/control state or an unusual window must
+                    # use a fresh complete native pass, not partial output.
+                    return s.native(physical)
+            else:
+                signal=np.zeros_like(background)
+                for hkl,(parameters,height,low,high) in records.items():
+                    value=None if kernel is None else kernel.lookup(hkl,parameters,axis,low,high,function=peak)
+                    if value is None:
+                        value=peak(*parameters,axis[low:high])[0];self.peak_calls+=1
+                        self.kernel_misses+=int(kernel is not None)
+                    else:self.kernel_hits+=1
+                    signal[low:high]+=np.float64(height)*value
+            # The native helper releases the GIL. The scientific worker is
+            # isolated, but never publish if foreign code replaced its GSAS
+            # constraint owner while the pure peak calculation was running.
+            n._check()
             curve=np.zeros(len(s.fast.x));curve[s.fast.slice]=signal+background
             if not np.isfinite(curve).all():
                 raise ValueError('Native batched forward returned a nonfinite profile')
@@ -116,6 +142,9 @@ class NativeTOFForward:
             kernel_hits=self.kernel_hits,kernel_misses=self.kernel_misses,
             bypasses=dict(self.bypasses),maximum_workspace_bytes=self.maximum_bytes,
             profile_interpolation=False,observations_reused=False,
+            native_peak_batch=self.native_batch.diagnostics() if self.native_batch is not None else None,
+            native_batch_fallbacks=dict(self.batch_fallbacks),
+            native_peak_batch_disabled=self.native_batch_disabled,
             prepared_kernel_bank=self.prepared_bank)
 
 
