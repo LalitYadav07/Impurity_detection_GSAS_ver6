@@ -6,8 +6,8 @@ or likelihoods. Native refinement retains the original measurements.
 import numpy as np
 
 
-def pattern_features(q, intensity, edges, *, background=None, valid=None, contrast=30.):
-    """Return mean, peak, valid-coverage and Q-coordinate channels.
+def _pattern_bins(q, intensity, edges, *, background=None, valid=None):
+    """Shared native-grid projection, before ML normalization.
 
     Integrals are exact for the piecewise-linear input representation. A peak
     between output bin centers remains in its bin's maximum channel. Missing
@@ -34,8 +34,6 @@ def pattern_features(q, intensity, edges, *, background=None, valid=None, contra
         if background.shape != q.shape or not np.isfinite(background[mask]).all():
             raise ValueError('One finite supplied background value per valid pattern point required')
         y = y-background
-    if type(contrast) not in (int, float) or not np.isfinite(contrast) or not 1 <= contrast <= 1000:
-        raise ValueError('A finite feature contrast between one and one thousand is required')
     if np.count_nonzero(mask) < 2:
         raise ValueError('At least two valid pattern points are required')
     values = np.where(mask, y, 0.)
@@ -63,12 +61,58 @@ def pattern_features(q, intensity, edges, *, background=None, valid=None, contra
     # Peaks outside the model's Q range, or isolated points surrounded by
     # missing intervals, must not suppress every feature inside its range.
     scale = max(float(np.max(abs(interpolated[usable]), initial=0.)), np.finfo(float).tiny)
-    transform = lambda v: np.arcsinh(contrast*(v/scale))/np.arcsinh(contrast)
     coordinate = ((edges[:-1]+edges[1:])*.5-edges[0])/(edges[-1]-edges[0])
+    return mean, peak, coverage, coordinate, scale
+
+
+def pattern_features(q, intensity, edges, *, background=None, valid=None, contrast=30.):
+    """Return legacy mean, peak, valid-coverage and Q-coordinate channels."""
+    if type(contrast) not in (int, float) or not np.isfinite(contrast) or not 1 <= contrast <= 1000:
+        raise ValueError('A finite feature contrast between one and one thousand is required')
+    mean, peak, coverage, coordinate, scale = _pattern_bins(q, intensity, edges,
+        background=background, valid=valid)
+    transform = lambda v: np.arcsinh(contrast*(v/scale))/np.arcsinh(contrast)
     features = np.asarray([transform(mean), transform(peak), coverage, coordinate], np.float32)
     if not np.isfinite(features).all():
         raise ValueError('Structural pattern normalization is not numerically finite')
     return features
+
+
+def three_curve_features(q, current, reference, edges, *, background=None,
+                         reference_background=None, valid=None, contrast=30.):
+    """Exactly three channels: reference, current and signed raw difference.
+
+    Both curves share their Q grid, physical intensity units, background
+    treatment, scale and compression. The difference is computed before
+    compression; it is not the subtraction of independently normalized
+    curves. Coverage and Q edges are returned as preprocessing metadata,
+    not additional learned channels. A calculated parent and a measured
+    reference need separate training/validation provenance.
+    """
+    if type(contrast) not in (int, float) or not np.isfinite(contrast) or not 1 <= contrast <= 1000:
+        raise ValueError('A finite feature contrast between one and one thousand is required')
+    shape = np.asarray(q).shape
+    if np.shape(current) != shape or np.shape(reference) != shape:
+        raise ValueError('Both curves must share their native Q coordinates')
+    common = ~np.ma.getmaskarray(current) & ~np.ma.getmaskarray(reference)
+    if valid is not None:
+        valid = np.asarray(valid)
+        if valid.shape != shape or valid.dtype != bool:
+            raise ValueError('One explicit boolean validity flag per native point required')
+        common &= valid
+    before = _pattern_bins(q, reference, edges, background=reference_background, valid=common)
+    after = _pattern_bins(q, current, edges, background=background, valid=common)
+    coverage = np.minimum(before[2], after[2])
+    scale = max(before[4], after[4])
+    transform = lambda v: np.arcsinh(contrast*(v/scale))/np.arcsinh(contrast)
+    values = np.asarray([transform(before[0]), transform(after[0]), transform(after[0]-before[0])], np.float32)
+    values[:, coverage == 0] = 0.
+    if not np.isfinite(values).all():
+        raise ValueError('Three-curve structural features are not finite')
+    return dict(features=values, coverage=coverage.astype(np.float32),
+        q_edges=np.asarray(edges, float).copy(), intensity_scale=scale,
+        channels=['reference', 'current', 'current_minus_reference'],
+        difference='background-subtracted native intensity difference before shared asinh compression')
 
 
 def with_parent_reference(observed, reference):

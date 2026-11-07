@@ -67,6 +67,38 @@ def geometry_labels(source, point, *, tolerances=(1e-6, 1e-5)):
     return labels
 
 
+def render_native(source,points,*,kind,check_indices,progress):
+    """Shared exact child renderer for fixed and paired training examples."""
+    x=source.fast.x
+    hist=source.fast.slow.hist.data
+    if np.any(hist['data'][1][1]) or not hist['data'][0].get('Dummy'):
+        raise ValueError('Only observation-free native references belong in training preparation')
+    d=np.asarray(source.fast.native.lattice.Pos2dsp(hist['Instrument Parameters'][0],x),float)
+    q=2*np.pi/d;order=np.argsort(q);q=q[order]
+    if not np.isfinite(q).all() or np.any(q<=0) or np.any(np.diff(q)<=0):
+        raise ValueError('Instrument conversion has no unique finite positive Q grid')
+    engine=for_source(source) if kind=='PNT' else None
+    curves=[];labels=[];native_checks=0;regenerated=0;original_only=False
+    for index,point in enumerate(points):
+        labels.append(geometry_labels(source,point))
+        curve=source.native(point) if engine is None or original_only else engine.evaluate(point)
+        if engine is not None and not original_only and index in check_indices:
+            expected=source.native(point);native_checks+=1
+            if not np.array_equal(curve,expected):
+                curves=[source.native(previous)[order] for previous in points[:index]]
+                regenerated=len(curves);curve=expected;original_only=True
+        if curve.shape!=x.shape or not np.isfinite(curve).all():
+            raise ValueError('Native structural example returned a nonfinite or incomplete curve')
+        if index==0:
+            native_hist=source.fast.native.histo_phases[0][source.fast.slow.hist.name]
+            background=np.asarray(native_hist['Data'][4],float)[order].copy()
+            if not np.isfinite(background).all():raise ValueError('Native structural example background is not finite')
+        curves.append(curve[order]);progress('rendering',index+1)
+    return dict(q=q,curves=np.asarray(curves),background=background,labels=np.asarray(labels,np.int32),
+        renderer=(engine.diagnostics() if engine is not None else dict(method='original native profile')),
+        native_checks=native_checks,original_only=original_only,regenerated=regenerated)
+
+
 def generate(request, *, seed, trajectories=64, steps=4, trajectory_slice=None):
     """One isolated native process constructs a complete candidate/bank block.
 
@@ -104,21 +136,8 @@ def generate(request, *, seed, trajectories=64, steps=4, trajectory_slice=None):
     samples = from_source(source, seed=seed, trajectories=trajectories, steps=steps)
     selected = (samples.trajectory >= trajectory_slice[0]) & (samples.trajectory < trajectory_slice[1])
     child_group = declared_group(source)
-    x = source.fast.x
-    if (np.count_nonzero(selected)+1)*len(x)*8 > 128*1024**2:
+    if (np.count_nonzero(selected)+1)*len(source.fast.x)*8 > 128*1024**2:
         raise ValueError('Generate smaller structural example blocks within the 128 MiB array limit')
-    hist = source.fast.slow.hist.data
-    if np.any(hist['data'][1][1]) or not hist['data'][0].get('Dummy'):
-        raise ValueError('Only the newly generated observation-free reference belongs in training preparation')
-    instrument = hist['Instrument Parameters'][0]
-    d = np.asarray(source.fast.native.lattice.Pos2dsp(instrument, x), float)
-    q = 2*np.pi/d
-    order = np.argsort(q); q = q[order]
-    if not np.isfinite(q).all() or np.any(q <= 0) or np.any(np.diff(q) <= 0):
-        raise ValueError('Instrument conversion has no unique finite positive Q grid')
-    engine = for_source(source) if request['grid']['kind'] == 'PNT' else None
-    curves = []; labels = []; groups = []
-    native_checks = 0; regenerated = 0; original_only = False
     points = np.vstack([np.zeros(len(source.radii)), samples.points[selected]])
     # The single parent identity is shared across all candidate aliases/banks.
     # It must never appear in different dataset splits under different labels.
@@ -128,29 +147,11 @@ def generate(request, *, seed, trajectories=64, steps=4, trajectory_slice=None):
     identities = ['parent:'+checksums[0]] + [
         f'parent:{checksums[0]}:{seed}:trajectory-{i}' for i in samples.trajectory[selected]]
     progress('rendering', 0)
-    for index, (point, group) in enumerate(zip(points, identities)):
-        labels.append(geometry_labels(source, point))
-        curve = source.native(point) if engine is None or original_only else engine.evaluate(point)
-        if engine is not None and not original_only and (index == 0 or index % steps == 0):
-            expected = source.native(point); native_checks += 1
-            if not np.array_equal(curve, expected):
-                # A shortcut mismatch must not become an incorrect teacher
-                # or a missing class. Reconstruct this entire example block
-                # with the original profile, retaining all points and labels.
-                curves = [source.native(previous)[order] for previous in points[:index]]
-                regenerated = len(curves); curve = expected; original_only = True
-        if curve.shape != x.shape or not np.isfinite(curve).all():
-            raise ValueError('Native structural example returned a nonfinite or incomplete curve')
-        if index == 0:
-            native_hist = source.fast.native.histo_phases[0][source.fast.slow.hist.name]
-            background = np.asarray(native_hist['Data'][4], float)[order].copy()
-            if not np.isfinite(background).all():
-                raise ValueError('Native structural example background is not finite')
-        curves.append(curve[order]); groups.append(group)
-        progress('rendering', index+1)
+    rendered=render_native(source,points,kind=request['grid']['kind'],
+        check_indices=set(range(0,len(points),steps)),progress=progress)
+    q=rendered['q'];curves=rendered['curves'];background=rendered['background'];labels=rendered['labels']
     if checksums != [file_sha(p) for p in inputs]:
         raise ValueError('A structural training input changed during generation')
-    labels = np.asarray(labels, np.int32)
     destination = out/'examples.npz'
     np.savez_compressed(destination, q=q, theory_intensity=np.asarray(curves), background=background, parameters=points,
         trajectory=np.r_[-1, samples.trajectory[selected]],
@@ -162,7 +163,7 @@ def generate(request, *, seed, trajectories=64, steps=4, trajectory_slice=None):
         candidate=candidate, declared_child_group=child_group,
         grid=request['grid'], seed=seed, trajectories=trajectories, steps=steps,
         trajectory_slice=list(trajectory_slice), generated_trajectories=trajectory_slice[1]-trajectory_slice[0],
-        groups=groups, examples=len(curves), bins=len(q),
+        groups=identities, examples=len(curves), bins=len(q),
         mode_dimensions=source.mode_dimensions, cell_dimensions=source.cell_dimensions,
         rejected_directions=samples.rejected_directions,
         rejected_directions_scope='Complete physical portfolio before shard selection',
@@ -173,9 +174,9 @@ def generate(request, *, seed, trajectories=64, steps=4, trajectory_slice=None):
             scope='Species/occupancy and complete expanded geometry; no ADP-tensor or powder-identifiability claim'),
         actual_geometry_groups=sorted(set(map(int, labels.ravel()))),
         ambiguous_examples=int(np.count_nonzero(labels[:, 0] != labels[:, 1])),
-        renderer=(engine.diagnostics() if engine is not None else dict(method='original native profile')),
-        independent_native_anchor_checks=native_checks,
-        original_profile_fallback=original_only, regenerated_examples=regenerated,
+        renderer=rendered['renderer'],
+        independent_native_anchor_checks=rendered['native_checks'],
+        original_profile_fallback=rendered['original_only'], regenerated_examples=rendered['regenerated'],
         package_sha256=package_signature(), examples_sha256=file_sha(destination),
         observations_included=False, classifier_trained=False, screening_qualified=False,
         scientific_result=False, seconds=time.monotonic()-began)

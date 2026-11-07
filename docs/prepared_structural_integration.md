@@ -1049,3 +1049,51 @@ Model/Live/Webmon consumption of trained rankings, long training checkpoint/
 resume, broader sampling and scientific qualification remain required. The
 existing maximum native-job deadline still applies; interrupted jobs do not
 publish successful training receipts.
+
+## Three-curve attention development
+
+The replacement representation under development has exactly three learned
+channels: reference intensity, current intensity and current minus reference.
+Both patterns use one physical Q grid, one shared intensity scale and the same
+asinh contrast. The signed difference is calculated from background-subtracted
+native intensities before compression. Independently normalizing the two
+patterns would erase real intensity changes; normalizing the residual by its
+own maximum would inflate arbitrarily weak changes. Coverage masks and Q edges
+remain preprocessing metadata, rather than fourth or fifth learned channels.
+The existing eight-channel portable format is unchanged until a replacement
+has been trained and independently accepted; its weights cannot be loaded
+into the three-channel architecture.
+
+`preparation.structural_attention.network` combines local convolutions with
+a four-head attention layer over ordered Q-region tokens. Convolutions extract
+peak detail before token pooling. Position encoding retains the ordered grid,
+and coverage metadata masks missing regions. An otherwise matched encoder
+without attention is an experimental control, not another user-facing mode.
+Attention is a hypothesis about useful cross-pattern context, not evidence
+that top-five accuracy has improved. Overall, per-family and weakest-family
+recall must be compared with a frequency-only baseline on identical splits.
+
+`preparation.structural_pairs.generate` builds a separate, versioned native
+paired-pattern pilot. Each physical trajectory has a common parent-compatible
+cell context and a parent-only control. Parent metric variation is sampled
+independently of the child family. Only the parent-invariant part of the
+child's metric is replaced; every atomic mode and symmetry-breaking strain
+coordinate is retained. Final points must pass the original physical bounds
+and chemistry checks. Invalid blocks fail rather than clipping a distortion
+or discarding a weak-scattering family.
+
+Native child patterns are rendered first. Native calculated parent references
+are rendered in a separate owned pass, since GSAS-II global constraint maps
+cannot be interleaved safely. Parent-only controls record their shape agreement
+and intensity-scale ratio against that independent reference. These controls
+do not establish equivalence of every anisotropic ADP transfer or qualify a
+classifier. All steps, null controls, aliases and noise siblings of the same
+physical trajectory remain in one partition. Sharding preserves that identity.
+
+The prepared reference is a calculated undistorted parent at a declared cell.
+A measured pre-transition reference introduces its own noise, background and
+possible hidden distortions. Training with calculated references does not
+validate substitution of measured references. Both cases need separate
+acceptance, including anisotropic thermal cell changes and weak signals that
+finite-resolution powder data cannot distinguish. No three-curve pilot score
+currently authorizes candidate pruning or changes Model/Live execution.
