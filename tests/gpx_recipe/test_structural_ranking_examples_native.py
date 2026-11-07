@@ -61,7 +61,12 @@ Azimuth:0
             transformation_matrix=[[-1., 0, 0], [0, -1., 0], [0, 0, 1.]], origin_shift=[0, 0, 0],
             child=dict(path='child.cif', sha256=file_sha(child))), mode_radius=.05, cell_radius=.01),
         destination=str(tmp_path/'examples'))
-    result = generate(request, seed=1947, trajectories=3, steps=2)
+    from gpx_recipe.preparation.worker import execute
+    dispatched = execute('structural-examples', dict(request,
+        settings=dict(request['settings'], seed=1947, trajectories=3, steps=2)))
+    assert dispatched['status'] == 'prepared'
+    assert dispatched['artifacts'] == ['examples.json', 'examples.npz']
+    result = json.loads((tmp_path/'examples/examples.json').read_text())
     assert result['examples'] == 7
     assert result['declared_child_group']['number'] == 63
     assert result['observations_included'] is False

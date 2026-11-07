@@ -17,6 +17,35 @@ from radar_pd_nova.refinement_runtime import RuntimeUnavailable
 from test_model_runtime import remote
 
 
+def test_structural_training_capture_includes_all_declared_blocks_without_loading_arrays(tmp_path):
+    from types import SimpleNamespace
+    from radar_pd_nova.native_operations import capture
+    from gpx_recipe.preparation.structural_jobs import PLAN_SCHEMA
+    from gpx_recipe.symmetry.compiler import file_sha
+    root=tmp_path/'training';root.mkdir()
+    source=root/'parent.cif';source.write_text('data_public_contract\n')
+    directory=root/'blocks/one';directory.mkdir(parents=True)
+    # Opaque transport bytes: numerical validation belongs to the worker,
+    # never a full-array load on the interactive application's capture path.
+    (directory/'examples.npz').write_bytes(b'opaque transport control')
+    (directory/'examples.json').write_text(json.dumps(dict(source_sha256=file_sha(source),
+        instrument_sha256='b'*64)))
+    plan=dict(schema=PLAN_SCHEMA,parent_sha256=file_sha(source),instrument_sha256='b'*64,
+        blocks=[dict(directory='blocks/one',manifest_sha256=file_sha(directory/'examples.json'),
+            examples_sha256=file_sha(directory/'examples.npz'))])
+    (root/'plan.json').write_text(json.dumps(plan))
+    descriptor=dict(id='parent-control',source_sha256=file_sha(source),dataset_id='parent-dataset')
+    runtime=SimpleNamespace(service=SimpleNamespace(history_id='history-control'),
+        resolve=lambda value:descriptor,dataset_id=lambda value:value['dataset_id'])
+    payload=dict(source=str(source),plan=str(root/'plan.json'),destination=str(root/'result'),settings={})
+    handle,files=capture(runtime,'preparation-structural-training',payload,root,descriptor,600)
+    assert set(files)=={'parent.cif','plan.json','blocks/one/examples.json','blocks/one/examples.npz'}
+    assert set(handle['request']['input_hashes'])==set(files)
+    descriptor['source_sha256']='f'*64
+    with pytest.raises(ValueError,match='another Galaxy source'):
+        capture(runtime,'preparation-structural-training',payload,root,descriptor,600)
+
+
 def inputs(tmp_path, source):
     root = tmp_path/'native-work'
     root.mkdir()

@@ -73,7 +73,10 @@ def test_batch_rejects_malformed_receipts_with_a_checked_error(tmp_path,result):
         batch.verify_result(dict(kind='magnetic'),dict(destination=str(tmp_path)),dict(result=result))
 
 
-def test_batch_uses_granted_workers_with_separate_attempt_paths(tmp_path):
+def test_batch_uses_granted_workers_with_separate_attempt_paths(tmp_path,monkeypatch):
+    from gpx_recipe.symmetry.resources import allocation
+    monkeypatch.setattr(batch,'allocation',lambda requested,**kwargs:
+        allocation(requested,cgroup=tmp_path/'no-cgroup-report',**kwargs))
     request=plan(tmp_path);guard=threading.Lock();active=0;peak=0;paths=[]
     def runner(task,payload,scratch,**kwargs):
         nonlocal active,peak
@@ -94,7 +97,12 @@ def test_batch_uses_granted_workers_with_separate_attempt_paths(tmp_path):
     assert progress['terminal']==progress['prepared']==4 and not progress['active'] and not progress['pending']
 
 
-def test_unreported_allocation_remains_one_worker(tmp_path):
+def test_unreported_allocation_remains_one_worker(tmp_path,monkeypatch):
+    from gpx_recipe.symmetry.resources import allocation
+    # An empty environment does not remove a real container CPU quota. This
+    # unit test explicitly models both absent scheduler and cgroup reports.
+    monkeypatch.setattr(batch,'allocation',lambda requested,**kwargs:
+        allocation(requested,cgroup=tmp_path/'no-cgroup-report',**kwargs))
     result=batch.execute(plan(tmp_path),runner=prepared,environ={})
     assert result['allocation']['workers']==1
 

@@ -124,6 +124,15 @@ def test_dense_and_file_backed_training_publish_identical_numerical_models(tmp_p
         stored['features'].close()
 
 
+def test_training_cannot_publish_metadata_larger_than_its_portable_reader(tmp_path, monkeypatch):
+    from gpx_recipe.preparation import structural_ranker
+    data, _ = cohort(tmp_path)
+    monkeypatch.setattr(structural_ranker, 'MAX_METADATA_BYTES', 128)
+    with pytest.raises(ValueError, match='portable reader budget'):
+        train(data, tmp_path/'oversized', epochs=1, threads=1)
+    assert not (tmp_path/'oversized/model.json').exists()
+
+
 def test_higher_symmetry_labels_never_produce_empty_native_handoffs(tmp_path):
     def higher_symmetry(a):a['geometry_groups'][1:]=6
     paths=[block(tmp_path),block(tmp_path,'cm-construction',label=8,offset=.013,change=higher_symmetry)]

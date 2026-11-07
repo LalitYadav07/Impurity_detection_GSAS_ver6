@@ -108,6 +108,15 @@ def capture(runtime, operation, payload, root, source, timeout, preparation_atte
             files.append(str(path.relative_to(root)))
         if float(timeout)<payload['seconds']+15:
             raise ValueError('Preparation batch timeout must include its declared work and cleanup allowance')
+    if operation=='preparation-structural-training':
+        from gpx_recipe.preparation.structural_jobs import read_plan, plan_inputs, checked_blocks
+        plan_path=confined(root,payload['plan']);plan=read_plan(plan_path)
+        if file_sha(confined(root,payload['source']))!=plan['parent_sha256']:
+            raise ValueError('Structural training source differs from its declared plan')
+        checked_blocks(plan_path,plan,validate_arrays=False)
+        for name in plan_inputs(plan_path):
+            path=confined(plan_path.parent,name)
+            files.append(str(path.relative_to(root)))
     if 'children' in payload:
         children=[str(Path(p).resolve().relative_to(root)) for p in payload['children']]
         payload['children']=children;files.extend(children)
@@ -146,8 +155,9 @@ def capture(runtime, operation, payload, root, source, timeout, preparation_atte
         write_json(root/'packet.json',{'schema':'radar-native-input-marker/v1'})
         files=['packet.json']
     source=runtime.resolve(source)
-    if operation=='structural-snapshot' and file_sha(confined(root,payload['source']))!=source['source_sha256']:
-        raise ValueError('Structural snapshot belongs to another Galaxy source revision')
+    if operation in {'structural-snapshot','preparation-structural-training','preparation-structural-examples'}:
+        if file_sha(confined(root,payload['source']))!=source['source_sha256']:
+            raise ValueError('Structural operation belongs to another Galaxy source revision')
     request=dict(schema='radar-model-native/v1',operation=operation,payload=payload,
         implementation_sha256=package_signature(),expected_source_sha256=source['source_sha256'],
         input_hashes={p:file_sha(confined(root,p)) for p in files},timeout=min(600,max(1,float(timeout))))

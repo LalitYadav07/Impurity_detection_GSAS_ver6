@@ -25,6 +25,7 @@ from .tof_kernel_arrays import read_bounded, checksum
 SCHEMA = 'radar-structural-ranking-model/v4'
 ARCHITECTURE = 'parent-q-cnn-8-16-24-32-pool64/v2'
 MAX_BYTES = 32*1024**2
+MAX_METADATA_BYTES = 2*1024**2
 
 
 def network(class_count):
@@ -186,6 +187,8 @@ def train(cohort, destination, *, epochs=60, seed=89113, threads=4):
         original_examples=cohort['original_examples'], independent_groups=len(set(groups)),
         background_required=True, screening_qualified=False, scientific_result=False,
         seconds=time.monotonic()-began, history=history)
+    if len((json.dumps(metadata, indent=2, allow_nan=False)+'\n').encode()) > MAX_METADATA_BYTES:
+        raise ValueError('Structural model metadata exceeds its portable reader budget')
     write_json(out/'model.json', metadata)
     return metadata
 
@@ -197,7 +200,7 @@ class Ranker:
         self.allocation = allocation(threads)
         torch.set_num_threads(self.allocation['workers'])
         directory = Path(directory)
-        d = json.loads(read_bounded(directory/'model.json', 2*1024**2))
+        d = json.loads(read_bounded(directory/'model.json', MAX_METADATA_BYTES))
         raw = read_bounded(directory/'weights.npz', MAX_BYTES)
         classes = d.get('classes'); bins = d.get('bins')
         if (d.get('schema') not in {SCHEMA,'radar-structural-ranking-model/v3'} or d.get('architecture') != ARCHITECTURE

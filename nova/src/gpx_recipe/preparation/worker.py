@@ -51,6 +51,12 @@ def validate_settings(kind, value):
 
 
 def validate_request(kind, request):
+    if kind == 'structural-examples':
+        from .structural_jobs import validate_examples
+        return validate_examples(request)
+    if kind == 'structural-training':
+        from .structural_jobs import validate_training
+        return validate_training(request)
     if kind=='batch':
         from .batch import validate_request as validate_batch
         return validate_batch(request)
@@ -75,6 +81,12 @@ def verify_structural_child(settings, checksum):
 
 def execute(kind, request):
     """One owned native process prepares a single bank and candidate context."""
+    if kind == 'structural-examples':
+        from .structural_jobs import execute_examples
+        return execute_examples(request)
+    if kind == 'structural-training':
+        from .structural_jobs import execute_training
+        return execute_training(request)
     if kind=='batch':
         from .batch import execute as execute_batch
         return execute_batch(request)
@@ -223,7 +235,8 @@ def execute(kind, request):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('kind', choices=['reference', 'magnetic', 'structural', 'kernel', 'batch'])
+    parser.add_argument('kind', choices=['reference', 'magnetic', 'structural', 'kernel', 'batch',
+                                      'structural-examples', 'structural-training'])
     parser.add_argument('request')
     parser.add_argument('output')
     args = parser.parse_args()

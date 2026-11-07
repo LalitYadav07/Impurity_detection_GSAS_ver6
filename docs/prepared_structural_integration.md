@@ -978,3 +978,25 @@ recall and native-fit outcomes as well as classifier accuracy. Five is an
 initial shortlist target; experimentally indistinguishable alternatives and
 failed adequacy require expansion. Extended k catalogs, automatic expansion,
 Model/Live handoffs and scientific acceptance are still integration work.
+
+The closed native worker now accepts `preparation-structural-examples` and
+`preparation-structural-training`. Example jobs keep the complete trajectory
+count, seed and an explicit slice; sharding changes scheduling, not the native
+sampled points or holdout identities. The existing original-profile teacher
+and independent native checks remain unchanged. Only the example JSON and
+numeric NPZ leave a generation worker, never its construction GPXs.
+
+Training jobs bind an immutable inventory of example-manifest and array
+checksums to one parent CIF and exact instrument profile. NOVA captures those
+assets without loading their arrays in the interactive process; the worker
+checks the numerical blocks, builds a bounded local feature file, then trains
+under the actual allocation guard. The Galaxy wrapper collects only the
+model JSON, numeric weights and training receipt. Large feature working files
+and native scratch do not leave the worker. Portable metadata must fit the
+same bound enforced by its reader before a completed model is published.
+
+These operations provide the application transport boundary, not yet an
+automatic UI training dependency or permission to prune candidates. Their
+existing maximum native-job deadline still applies; interrupted jobs do not
+publish successful training receipts. Long training checkpoint/resume, broader
+sampling, automatic orchestration and scientific qualification remain required.
