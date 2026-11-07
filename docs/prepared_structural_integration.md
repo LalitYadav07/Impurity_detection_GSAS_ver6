@@ -136,7 +136,11 @@ its own accounting and independent native constraint ownership. Changing counts,
 weights, moments or nuisance coefficients does not copy an earlier likelihood;
 only identical peak-function arguments and grid windows can reuse numeric shapes.
 The aggregate shared store has one 64 MiB allocation and one entry ceiling.
-Native implementation changes clear its qualification and contents. Inherited
+Native implementation changes clear its qualification and contents. Arithmetic
+control changes also clear numeric shapes, including between two driver calls
+inside the same owned scope. The read-only control check currently supports
+Linux/glibc x86-64; unavailable evidence uses the original native calculation.
+Sticky exception-status flags are excluded from this identity. Inherited
 adapters detach from a parent process's store before reuse; this does not make
 forked GSAS-II state a supported concurrent execution mode. Spawned workers own
 independent stores. No file transport or cross-worker cache is introduced.

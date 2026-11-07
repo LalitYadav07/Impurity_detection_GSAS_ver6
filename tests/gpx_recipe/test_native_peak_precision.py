@@ -9,6 +9,7 @@ from gpx_recipe.live import native_peak_memo as module
 
 def runtime(monkeypatch,reviewed=True):
     calls=[]
+    monkeypatch.setattr(module,'floating_state',lambda:(895,8064))
     def tof(position,alpha,beta,sigma,gamma,x):
         calls.append((position,alpha))
         offset=np.asarray(x-position,dtype=np.float32)

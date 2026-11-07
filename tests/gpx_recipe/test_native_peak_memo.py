@@ -10,6 +10,7 @@ from gpx_recipe.live import native_peak_memo as module
 
 def runtime(monkeypatch,native_work=None,seen_axes=None):
     calls=[]
+    monkeypatch.setattr(module,'floating_state',lambda:(895,8064))
     def tof(pos,alpha,beta,sig,gam,x):
         if native_work is not None:native_work()
         calls.append(tuple(map(float,(pos,alpha,beta,sig,gam))))
@@ -32,6 +33,40 @@ def runtime(monkeypatch,native_work=None,seen_axes=None):
     identities={driver:module._DRIVER,tof:module._KERNELS['getEpsVoigt'][0],cw:module._KERNELS['getFCJVoigt3'][0]}
     monkeypatch.setattr(module,'_source_hash',lambda f:identities.get(f))
     return math,calls
+
+
+@pytest.mark.parametrize('same_scope',[False,True])
+def test_changed_arithmetic_controls_invalidate_exact_shape_values(monkeypatch,same_scope):
+    math,calls=runtime(monkeypatch);memo=module.NativePeakMemo();x=np.arange(7.)
+    state=[(895,8064)]
+    monkeypatch.setattr(module,'floating_state',lambda:state[0])
+    def twice():
+        math.getPowderProfile(None,None,x)
+        state[0]=(1919,16256)
+        math.getPowderProfile(None,None,x)
+    if same_scope:
+        with memo.evaluation(math):twice()
+    else:
+        with memo.evaluation(math):math.getPowderProfile(None,None,x)
+        state[0]=(1919,16256)
+        with memo.evaluation(math):math.getPowderProfile(None,None,x)
+    assert len(calls)==2 and memo.misses==2 and memo.hits==2
+
+
+@pytest.mark.parametrize('becomes_unknown',[False,True])
+def test_unknown_arithmetic_state_uses_original_driver_and_discards_cache(monkeypatch,becomes_unknown):
+    math,calls=runtime(monkeypatch);memo=module.NativePeakMemo();x=np.arange(7.)
+    driver=math.getPowderProfile;peak=math.G2pwd.getEpsVoigt
+    state=[(895,8064) if becomes_unknown else None]
+    monkeypatch.setattr(module,'floating_state',lambda:state[0])
+    with memo.evaluation(math):
+        if becomes_unknown:math.getPowderProfile(None,None,x)
+        state[0]=None
+        math.getPowderProfile(None,None,x)
+    assert not memo._store.cache and memo._store.floating is None
+    assert math.getPowderProfile is driver and math.G2pwd.getEpsVoigt is peak
+    assert memo.scope_bypasses['unavailable native floating-point control state']==1
+    assert len(calls)==(3 if becomes_unknown else 2)
 
 
 @pytest.mark.parametrize('kind',['plain','nomask','all_false','excluded','strided','float32'])

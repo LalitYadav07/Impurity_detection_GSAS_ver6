@@ -2,8 +2,9 @@
 
 This does not approximate profiles or combine reflection intensities. The
 unchanged driver retains its reflection loop, corrections and summation order.
-Only identical native inputs on identical grids can reuse a result, including
-the pinned TOF kernel's exact float32 conversion. One owned process is
+Only identical native inputs on identical grids and arithmetic controls can
+reuse a result, including the pinned TOF kernel's exact float32 conversion.
+Unknown arithmetic controls retain the original native calculation. One owned process is
 required, as for the native GSAS constraint maps.
 """
 from collections import OrderedDict
@@ -18,6 +19,8 @@ import threading
 import time
 
 import numpy as np
+
+from ..preparation.kernel_runtime import floating_state
 
 
 MAXIMUM_BYTES = 64 * 1024 * 1024
@@ -68,6 +71,7 @@ class _PeakStore:
         self.cache = OrderedDict()
         self.bytes = 0
         self.reviewed = None
+        self.floating = None
         self.tof_float32 = False
 
     def clear(self):
@@ -79,6 +83,7 @@ class _PeakStore:
             # A fork does not transfer native ownership or qualification.
             self.clear()
             self.reviewed = None
+            self.floating = None
             self.pid = os.getpid()
 
 
@@ -202,6 +207,14 @@ class NativePeakMemo:
             store.reviewed = None
             self._store = store = _process_peak_store()
         store.ensure_process()
+        state = floating_state()
+        if state != store.floating or state is None:
+            store.clear()
+            store.floating = state
+        if state is None:
+            self._bypass_scope('unavailable native floating-point control state')
+            yield
+            return
         compiled = getattr(powder, 'pyd', None)
         current = (driver, *functions.values(), compiled,
                    getattr(compiled, 'pyepsvoigt', None),
@@ -228,6 +241,16 @@ class NativePeakMemo:
             grid = None
             activity = dict(calls=0, saved=0., overhead=0.)
             try:
+                # Foreign native code can change the thread's arithmetic
+                # controls between calls in one owned evaluation scope. Peak
+                # arguments alone cannot identify a result in that case.
+                state = floating_state()
+                if state != store.floating or state is None:
+                    store.clear()
+                    store.floating = state
+                if state is None:
+                    self._bypass_scope('unavailable native floating-point control state')
+                    return driver(*args, **kwargs)
                 for name, function in wrappers.items():
                     setattr(powder, name, function)
                 if threading.get_ident() == owner and len(args) > 2:
