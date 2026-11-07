@@ -221,12 +221,12 @@ def capture(source, point, *, check_cancel=None):
     if check_cancel is not None:
         check_cancel()
     guard, collector, function, axis, identity = context(source)
-    records = collector.collect_physical(point, maximum_bytes=MAX_BYTES)
+    records = collector.collect_kernel_geometry(point, maximum_bytes=MAX_BYTES)
     if not records:
         raise KernelUnavailable('No native peak kernels occur in this reference range')
     captured = {}
     accounted = axis.nbytes
-    for hkl, (params, _, low, high) in records.items():
+    for hkl, (params, low, high) in records.items():
         if check_cancel is not None:
             check_cancel()
         # Bound output BEFORE calling the native allocator.
@@ -242,7 +242,9 @@ def capture(source, point, *, check_cancel=None):
         check_cancel()
     _remember(data)
     return QualifiedKernel(data, function, dict(method='original native kernel construction',
-        native_peak_calls=len(captured), seconds=time.monotonic()-started, verified_all_peaks=True), _permit=_PERMIT)
+        native_peak_calls=len(captured), seconds=time.monotonic()-started, verified_all_peaks=True,
+        peak_geometry_only=True, atomic_feasibility_evaluated=False,
+        atomic_scattering_evaluated=False), _permit=_PERMIT)
 
 
 def verify(data, source, *, check_cancel=None):

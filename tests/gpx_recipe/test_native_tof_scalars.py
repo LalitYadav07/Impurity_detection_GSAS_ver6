@@ -10,7 +10,7 @@ from gpx_recipe.structural_live.optimization import native_cell_proposals as pro
 from gpx_recipe.structural_live.optimization.native_profile_capture import _capture_lock
 
 
-def native_records(source,point):
+def native_records(source,point,*,physical=False):
     n=source.fast.native;driver=n.math.getPowderProfile;powder=n.math.G2pwd;original=powder.getEpsVoigt
     records={}
     def watched(*args,**kwargs):
@@ -23,7 +23,7 @@ def native_records(source,point):
         return original(*args,**kwargs)
     try:
         powder.getEpsVoigt=watched
-        curve=source.native(point*source.radii)
+        curve=source.native(point if physical else point*source.radii)
     finally:powder.getEpsVoigt=original
     return records,curve
 
@@ -43,13 +43,18 @@ def test_batched_scalars_match_complete_native_trace_at_current_geometry(tmp_pat
     collector=module.for_source(s,n.math.getPowderProfile)
     assert collector is not None
     batched=collector.collect(point,maximum_bytes=64*1024*1024)
+    geometry=collector.collect_kernel_geometry(point*s.radii,maximum_bytes=64*1024*1024)
     original,curve=native_records(s,point)
     assert set(batched)==set(original)
+    assert set(geometry)==set(original)
     for key in original:
         got,height,low,high=batched[key];expected,expected_height,nlow,nhigh=original[key]
         assert (low,high)==(nlow,nhigh)
         np.testing.assert_allclose(got,expected,rtol=1e-12,atol=1e-12)
         assert height==pytest.approx(expected_height,rel=1e-12,abs=1e-12)
+        shape,glo,ghi=geometry[key]
+        np.testing.assert_array_equal(shape,got)
+        assert (glo,ghi)==(nlow,nhigh)
     np.testing.assert_array_equal(curve,s.native(point*s.radii))
     assert collector.maximum_workspace_bytes<=64*1024*1024
 

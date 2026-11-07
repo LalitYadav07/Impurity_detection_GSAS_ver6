@@ -60,6 +60,7 @@ class NativeTOFScalars:
         self.dependencies.extend([(n.math.G2pwd,'getWidthsTOF',n.math.G2pwd.getWidthsTOF),
                                   (n.math,'getPowderProfile',driver)])
         self.calls=0;self.maximum_workspace_bytes=0
+        self.geometry_calls=0
 
     def collect(self,point,*,maximum_bytes):
         return self.collect_physical(np.asarray(point,float)*self.source.radii,
@@ -67,13 +68,30 @@ class NativeTOFScalars:
 
     def collect_physical(self,point,*,maximum_bytes):
         """Retain physical coordinate bits without a normalization round trip."""
+        return self._collect(point,maximum_bytes=maximum_bytes,geometry_only=False)
+
+    def collect_kernel_geometry(self,point,*,maximum_bytes):
+        """Native shape/window arguments only, with no atomic feasibility.
+
+        The complete bounded point supplies its cell coordinates; displacement
+        coordinates do not affect these isotropic instrument kernels. Returned
+        records deliberately contain no intensity or structure-factor values.
+        """
+        return self._collect(point,maximum_bytes=maximum_bytes,geometry_only=True)
+
+    def _collect(self,point,*,maximum_bytes,geometry_only):
         if type(maximum_bytes)is not int or maximum_bytes<1:
             raise ScalarBatchUnavailable('No remaining scalar collection workspace')
         n=self.native;s=self.source;n._check()
         if any(getattr(module,name,None) is not function for module,name,function in self.dependencies):
             raise ScalarBatchUnavailable('Native scalar functions changed during this proposal')
-        p=s.check(np.asarray(point,float))
-        _,values=s.fast._values(s.theta(p),chemistry_domain=(s.chemistry,p))
+        if geometry_only:
+            p=s.check_domain(np.asarray(point,float))
+            theta=np.r_[s.lift@p,0.,0.];theta[:s.fast.nm]=0.
+            _,values=s.fast._peak_geometry_values(theta)
+        else:
+            p=s.check(np.asarray(point,float))
+            _,values=s.fast._values(s.theta(p),chemistry_domain=(s.chemistry,p))
         n._prepare_values(values)
         h=n.histo_phases[0][s.fast.slow.hist.name];phase=n.histo_phases[1][s.fast.slow.phase.name]
         controls=n.controls;parms=n.parms;sg=phase['General']['SGData']
@@ -87,33 +105,44 @@ class NativeTOFScalars:
         self.maximum_workspace_bytes=max(self.maximum_workspace_bytes,workspace)
         a=np.array([parms[self.pfx+f'A{i}'] for i in range(6)])+n.math.GetDij(self.phfx,sg,parms)
         reciprocal,direct=n.lattice.A2Gmat(a);_,gb=n.lattice.Gmat2AB(reciprocal)
-        n.math.StructureFactor2(refs,reciprocal,self.hfx,self.pfx,sg,controls,parms)
+        if not geometry_only:
+            n.math.StructureFactor2(refs,reciprocal,self.hfx,self.pfx,sg,controls,parms)
         r=rows.T
         # GetReflPos's native calc_rDsq sums all axes and is scalar-only.
         r[5]=[n.math.GetReflPos(r[:,i],0,0.,a,self.pfx,self.hfx,self.phfx,controls,parms)
               for i in range(r.shape[1])]
-        lorenz=n.math.sind(abs(parms[self.hfx+'2-theta'])/2)*r[4]**4
+        if not geometry_only:
+            lorenz=n.math.sind(abs(parms[self.hfx+'2-theta'])/2)*r[4]**4
         r[5]+=n.math.GetHStrainShift(r,0,sg,self.phfx,self.hfx,controls,parms)
         r[6:8]=self.widths(r,0,reciprocal,gb,self.phfx,controls,parms,n.histdict,self.hfx)
         r[12:14]=self.exponentials(r,0,self.hfx,parms)
-        operators=np.array([op[0].T for op in sg['SGOps']]);unique=np.inner(r[:3].T,operators)
-        # Absorption couples a scalar detector angle and wavelength. Keep
-        # the entire original intensity-correction function scalar too.
-        correction=np.asarray([n.math.GetIntensityCorr(r[:,i],0,unique[i],reciprocal,direct,
-            self.pfx,self.phfx,self.hfx,sg,controls,parms) for i in range(r.shape[1])]).T
-        r[11],r[15],r[16],r[17]=correction
-        r[11]*=np.sqrt(np.linalg.det(reciprocal))*lorenz
+        if not geometry_only:
+            operators=np.array([op[0].T for op in sg['SGOps']]);unique=np.inner(r[:3].T,operators)
+            # Absorption couples a scalar detector angle and wavelength. Keep
+            # the entire original intensity-correction function scalar too.
+            correction=np.asarray([n.math.GetIntensityCorr(r[:,i],0,unique[i],reciprocal,direct,
+                self.pfx,self.phfx,self.hfx,sg,controls,parms) for i in range(r.shape[1])]).T
+            r[11],r[15],r[16],r[17]=correction
+            r[11]*=np.sqrt(np.linalg.det(reciprocal))*lorenz
         _,low,high=n.math.G2pwd.getWidthsTOF(r[5],r[12],r[13],r[6],r[7])
         axis=s.fast.x[s.fast.slice]
         begin=np.searchsorted(axis,r[5]-low);end=np.searchsorted(axis,r[5]+high)
         stops=np.flatnonzero((begin==end)&((begin+end)!=0))
         stop=int(stops[0]) if len(stops) else len(begin)
         active=np.flatnonzero((np.arange(len(begin))<stop)&(begin<end))
-        parameters=np.column_stack([r[i] for i in (5,12,13,6,7)]);height=r[9]*r[11]
-        if not np.isfinite(parameters).all() or not np.isfinite(height).all():
+        parameters=np.column_stack([r[i] for i in (5,12,13,6,7)])
+        if not np.isfinite(parameters).all():
             raise ScalarBatchUnavailable('Nonfinite batched native peak arguments')
-        records={tuple(map(int,r[:3,i])):(parameters[i].copy(),float(height[i]),int(begin[i]),int(end[i]))
-                 for i in active}
+        if geometry_only:
+            records={tuple(map(int,r[:3,i])):(parameters[i].copy(),int(begin[i]),int(end[i]))
+                     for i in active}
+            self.geometry_calls+=1
+        else:
+            height=r[9]*r[11]
+            if not np.isfinite(height).all():
+                raise ScalarBatchUnavailable('Nonfinite batched native peak arguments')
+            records={tuple(map(int,r[:3,i])):(parameters[i].copy(),float(height[i]),int(begin[i]),int(end[i]))
+                     for i in active}
         if len(records)!=len(active):raise ScalarBatchUnavailable('Duplicate native reflection identity')
         self.calls+=1
         return records

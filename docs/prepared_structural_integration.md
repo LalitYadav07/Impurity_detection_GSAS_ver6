@@ -547,3 +547,26 @@ use the original peak function. Proposal directions remain proposals: native
 objective acceptance, fresh-native stationarity retries and independent final
 GPX checks are unchanged. Separate counters report cached and original peak
 calls in this stage.
+
+## Geometry-only peak preparation
+
+Preparation of raw isotropic TOF peak kernels uses the native cell metric,
+reflection positions, width/shape arguments and calculation windows. It does
+not calculate atomic structure factors or intensity corrections, and does not
+apply an atomic-contact prior to a cell-only instrument calculation. The
+native cell canonicalization is shared with the actual forward path. Cell
+domain, native ownership, supported profile and workspace checks still apply.
+Returned geometry records contain no calculated intensities.
+
+This distinction prevents a rejected atomic trial at a proposed cell from
+blocking its otherwise reusable instrument kernels. It does not authorize
+that atomic configuration: every actual structural pattern, derivative,
+optimizer point and export retains its original chemistry checks. Initial
+native model construction still requires its valid reference structure.
+
+Qualification compares the actual compiled float32 shape and translated-axis
+bits, followed by full native curve checks. Different float64 wrapper
+intermediates alone do not establish a mismatch or authorize reuse. Native
+tests trace the original functions to confirm that geometry-only production
+does not evaluate scattering/intensity corrections, and confirm that a
+rejected atomic configuration remains rejected by all actual forward paths.
