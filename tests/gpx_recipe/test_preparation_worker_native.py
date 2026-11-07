@@ -29,11 +29,17 @@ def test_reference_worker_returns_pure_parent_and_k_scope(tmp_path, kind):
     result = execute('reference', payload)
     manifest = json.loads((Path(result['output'])/'entry.json').read_text())
     assert result['status'] == 'prepared'
-    assert result['artifacts'] == ['entry.json']
+    assert result['artifacts'] == (['entry.json'] if kind=='PNC' else ['profile.npz','profile.json','entry.json'])
     assert result['observations_included'] is False and result['scientific_result'] is False
     assert manifest['detail']['parent']['space_group'] == 'P 1'
     assert manifest['detail']['points']
-    assert not manifest['artifacts']
+    if kind=='PNC':assert not manifest['artifacts']
+    else:
+        from gpx_recipe.preparation.tof_profile_arrays import read,origin_identity
+        data,_,_=read(Path(result['output'])/'profile.npz',Path(result['output'])/'profile.json')
+        assert data.metadata['observations_included'] is False
+        assert manifest['detail']['physics_sha256']==origin_identity(data.metadata)
+        assert manifest['detail']['profile_table']['native_likelihood_authority'] is False
 
 
 @pytest.mark.parametrize('kind', ['PNC', 'PNT'])

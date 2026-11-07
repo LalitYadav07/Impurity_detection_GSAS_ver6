@@ -149,9 +149,11 @@ class PreparationWorkspace:
             if (manifest.get('schema')!='radar-experiment-preparation-entry/v1' or manifest.get('kind')!='reference'
                     or manifest.get('implementation_sha256')!=implementation
                     or manifest.get('input_sha256')!=expected or manifest.get('settings')!=model['settings']
-                    or manifest.get('grid')!=model['grid'] or manifest.get('artifacts')!={}
+                    or manifest.get('grid')!=model['grid']
                     or manifest.get('observations_included') is not False or manifest.get('scientific_result') is not False):
                 raise ValueError('Parent inspection changed or needs the current native implementation')
+            from gpx_recipe.preparation.operations import portable_entry_artifacts
+            portable_entry_artifacts('reference',manifest)
             detail=manifest.get('detail')
             if (not isinstance(detail,dict) or not isinstance(detail.get('parent'),dict)
                     or not isinstance(detail.get('points'),dict) or not isinstance(manifest.get('native_runtime'),dict)
@@ -217,4 +219,15 @@ class PreparationWorkspace:
                 selected_candidates=[c['id'] for c in candidates],coverage=copy.deepcopy(catalog['coverage'])))
         scope=dict(schema='radar-preparation-declared-scope/v1',parent_cif_sha256=context['source_sha256'],
             selected_banks=sorted(banks),searches=searches)
-        return self.registry.create(name=name,source=context['source'],banks=banks,models=models,scope=scope)
+        # A model library carries its completed shared profile dependencies,
+        # rather than requiring the user to select a second inspection ZIP.
+        inspection=self.registry.get(reference)
+        references=[r for r in inspection.document['entries'] if kind=='structural' and r['model']['bank'] in banks
+            and {'profile.npz','profile.json'}<={Path(a['path']).name for a in r['files']}]
+        models += [dict(kind='reference',bank=r['model']['bank'],settings=r['model']['settings']) for r in references]
+        if len(models)>MAX_MODELS:raise ValueError('Model and shared-profile dependencies exceed the library entry bound')
+        key=self.registry.create(name=name,source=context['source'],banks=banks,models=models,scope=scope)
+        from gpx_recipe.preparation.operations import inherit_reference
+        library=self.registry.get(key)
+        for row in references:inherit_reference(library,inspection,row['id'])
+        return key

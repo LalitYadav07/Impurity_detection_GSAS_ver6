@@ -37,14 +37,8 @@ def _remember(table):
     with _shared_lock:_shared=table
 
 
-def shared_table(shape,powder,d_range):
-    """One bounded owned table, automatically shared across native sources.
-
-    Outside its d envelope the renderer uses original native peaks. A wholly
-    disjoint request compiles a new table; partially covered requests preserve
-    the useful prepared component without excluding their other reflections.
-    No uploaded data or saved qualification flags enter this cache.
-    """
+def available_table(shape,powder,d_range):
+    """Look up a compatible owned field without doing compilation work."""
     global _shared
     _reset_fork();bounds=_bounds(d_range,'A finite positive d-spacing envelope is required')
     with _shared_lock:table=_shared
@@ -53,10 +47,18 @@ def shared_table(shape,powder,d_range):
             table.check_runtime()
             if (table.shape_identity==shape.identity and table._powder is powder
                     and bounds[0]<=np.exp(table.logd[-1]) and bounds[1]>=np.exp(table.logd[0])):
-                return table,True
+                return table
         except ProposalUnavailable:
             with _shared_lock:
                 if _shared is table:_shared=None
+    return None
+
+
+def shared_table(shape,powder,d_range):
+    """Reuse compatible owned physics; uncovered reflections stay native."""
+    table=available_table(shape,powder,d_range)
+    if table is not None:return table,True
+    bounds=_bounds(d_range,'A finite positive d-spacing envelope is required')
     # Compilation is intentionally outside the registry lock. The native
     # worker retains its separate single-context process/thread ownership.
     table=CompiledTOFTable(shape,powder,bounds);_remember(table);return table,False
@@ -82,6 +84,26 @@ def _bounds(value,message):
 
 
 class CompiledTOFTable:
+    @classmethod
+    def _from_portable(cls,data,shape,powder,origin,*,_permit=None):
+        from ...preparation.tof_profile_arrays import _ADMISSION,ProfileTableData
+        if _permit is not _ADMISSION or not isinstance(data,ProfileTableData):
+            raise TypeError('TOF table import requires current native admission')
+        instance=cls.__new__(cls)
+        instance._pid=os.getpid();instance._thread=threading.current_thread()
+        instance._floating=floating_state()
+        if instance._floating!=DEFAULT_FLOATING:
+            raise ProposalUnavailable('Native TOF table requires reviewed arithmetic controls')
+        metadata=data.metadata
+        instance._shape_specification=shape.specification;instance.shape_identity=shape.identity
+        instance._shape=shape;instance._powder=powder
+        instance._functions=(powder.getEpsVoigt,powder.getWidthsTOF,powder.pyd.pyepsvoigt)
+        for name,array in data.arrays().items():setattr(instance,name,array)
+        for name in ('numeric_bytes','midpoint_checks','rejected_cells','native_only_stripes'):
+            setattr(instance,name,metadata[name])
+        instance.build_seconds=0.;instance.portable_origin=copy.deepcopy(origin);instance.portable_probes=0
+        instance.check_runtime();return instance
+
     @classmethod
     def from_reference(cls,native,histogram_name,phase_name,*,tof_range):
         """Compile from a planned TOF interval; no diffraction arrays are read."""
@@ -164,6 +186,7 @@ class CompiledTOFTable:
         if self.numeric_bytes>=MAXIMUM_BYTES:
             raise ProposalUnavailable('Continuous TOF proposal table exceeds its resident bound')
         self.build_seconds=time.monotonic()-began
+        self.portable_origin=None;self.portable_probes=0
         self.check_runtime()
 
     def check_runtime(self):

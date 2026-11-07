@@ -827,3 +827,42 @@ final displacement and cell coordinates remain free. This prevents a ranking
 filter from removing every attempt to escape a parent whose new reflection
 intensities have zero first derivative. It does not guarantee global coverage,
 establish a transition or override the unchanged-parent control.
+
+## Portable shared TOF profile preparation
+
+For a supported isotropic TOF profile, parent/profile inspection also compiles
+the cell-independent proposal table from the planned TOF interval. The paired
+`profile.npz` and `profile.json` contain bounded numeric arrays, the intrinsic
+shape specification, interpolation algorithm identity and native runtime
+identity. Neither observations nor structural-child models are required.
+Constant-wavelength, tabulated and unsupported profiles retain their existing
+native calculations.
+
+Model libraries inherit these exact completed reference bytes and their
+original creating-job references from the selected inspection. They do not
+ask the user to manage another ZIP or repeat an already completed inspection.
+Reference dependencies and model fits remain separately typed library entries.
+Structural Model and Live snapshot packets carry the same optional profile
+dependencies; candidate subsetting does not remove a shared profile.
+
+The installed producer certificate attests proposal-table construction, not
+native likelihood authority. A fresh worker checks the exact artifact bytes,
+creating-job evidence, actual intrinsic shape, native numerical runtime and
+current native probes before binding the table. Wrong profiles are rejected
+from bounded metadata before large arrays are decoded. A changed cell, atomic
+structure or grid alone does not invalidate the intrinsic profile field;
+changed X/Y/Z or sample broadening can. Missing provenance, different runtimes,
+damaged files and unsupported contexts retain current native reconstruction.
+
+Transport reserves 72 MiB per reference task inside the unchanged 480 MiB
+batch-output limit. Profile dependencies have a separate 128 MiB packet budget
+alongside the existing 64 MiB start-bank budget; the complete packet still has
+its original 512 MiB bound. Optional omissions do not remove scientific models.
+Only one shared numeric table remains resident in an owned process at a time.
+
+Receipts distinguish attachment, current admission, actual interpolated-bin
+reuse and reconstruction. Historical compilation time is not counted as new
+work, and a bound table is not reported as used until the renderer consumes
+its interpolation cells. The original fitting objective, derivatives and
+independent exported-GPX checks remain unchanged. Portable component reuse
+does not establish full-fit acceleration, convergence or scientific recovery.

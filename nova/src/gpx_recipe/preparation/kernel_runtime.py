@@ -146,9 +146,14 @@ def _linked(binary,maps):
 
 def _fingerprint(source):
     """Exact-runtime evidence for an origin receipt, not native authorization."""
-    global _cache
     from .native_tof_kernels import context
     _,_,function,_,native=context(source)
+    return _fingerprint_native(function,native)
+
+
+def _fingerprint_native(function,native):
+    """Shared ABI identity for checked native kernels and proposal tables."""
+    global _cache
     state=floating_state()
     if state is None:raise RuntimeUnavailable('Floating-point ABI is not qualified for origin reuse')
     if os.environ.get('LD_PRELOAD') or os.environ.get('LD_AUDIT'):
@@ -178,6 +183,22 @@ def _fingerprint(source):
 
 def fingerprint(source):
     try:return _fingerprint(source)
+    except RuntimeUnavailable:raise
+    except (OSError,AttributeError,TypeError,ValueError,ctypes.ArgumentError) as error:
+        raise RuntimeUnavailable('Current numerical-runtime evidence is unavailable') from error
+
+
+def powder_fingerprint(powder):
+    """Fingerprint the original TOF kernel without a child or observations."""
+    from ..structural_live.optimization.native_cell_proposals import _hash,KERNELS
+    from ..live.native_peak_memo import _compiled_tof_float32
+    try:
+        function=powder.getEpsVoigt
+        if (_hash(function)!=KERNELS['PNT'][2] or function.__globals__.get('pyd') is not powder.pyd
+                or not _compiled_tof_float32(powder.pyd)):
+            raise RuntimeUnavailable('The installed original TOF kernel is not qualified')
+        native=dict(kernel_sha256=KERNELS['PNT'][2],binary_sha256=_sha(powder.pyd.__file__))
+        return _fingerprint_native(function,native)
     except RuntimeUnavailable:raise
     except (OSError,AttributeError,TypeError,ValueError,ctypes.ArgumentError) as error:
         raise RuntimeUnavailable('Current numerical-runtime evidence is unavailable') from error

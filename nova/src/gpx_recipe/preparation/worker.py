@@ -99,6 +99,26 @@ def execute(kind, request):
         detail = dict(parent=parent, histogram=reference['histogram'],
             points=parent_k_points(parent, maximum_denominator=settings['maximum_denominator']),
             k_scope='Finite supported symmetry k points, not every rational vector or multi-k state')
+        if grid['kind']=='PNT':
+            from ..live.native_profile import NativeReducedProfile
+            from ..structural_live.optimization.tof_profile_table import CompiledTOFTable
+            from ..structural_live.optimization.native_cell_proposals import ProposalUnavailable
+            from .kernel_runtime import RuntimeUnavailable
+            from .tof_profile_arrays import capture,encode,origin_identity
+            try:
+                native=NativeReducedProfile(reference['path'])
+                table=CompiledTOFTable.from_reference(native,reference['histogram'],reference['parent_phase'],
+                    tof_range=(grid['lower'],grid['upper']))
+                data=capture(table);identity=origin_identity(data.metadata)
+                (output/'profile.npz').write_bytes(encode(data));write_json(output/'profile.json',data.metadata)
+                artifacts+=['profile.npz','profile.json']
+                detail.update(physics_sha256=identity,profile_table=dict(status='prepared',
+                    role='starting_proposals',physics_sha256=identity,observations_included=False,
+                    native_likelihood_authority=False,numeric_bytes=table.numeric_bytes,
+                    compilation_seconds=table.build_seconds))
+            except (ProposalUnavailable,RuntimeUnavailable) as error:
+                detail['profile_table']=dict(status='unavailable',reason=str(error)[:300],
+                    native_likelihood_authority=False)
     elif kind == 'magnetic':
         from ..symmetry.native_magnetic import construct_theory
         from ..symmetry.worker import Artifacts

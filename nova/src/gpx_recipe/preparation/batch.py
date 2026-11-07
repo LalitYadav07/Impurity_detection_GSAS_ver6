@@ -29,7 +29,7 @@ MAX_METADATA=8*1024*1024
 RESULT_BUDGET=480*1024*1024
 # Reserve the existing maximum scientific array/metadata bounds before
 # admitting a native task, then release unused space at its checked completion.
-RESERVES={'reference':8*1024*1024,'magnetic':144*1024*1024,'structural':400*1024*1024}
+RESERVES={'reference':72*1024*1024,'magnetic':144*1024*1024,'structural':400*1024*1024}
 
 
 def relative(value):

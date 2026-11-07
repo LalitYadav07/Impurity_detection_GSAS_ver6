@@ -40,10 +40,13 @@ def run(source_gpx,ctx,protocol,candidate,seed):
     from ..preparation.structural_hints import candidates as prepared_candidates
     preparation_began=time.monotonic()
     prepared_banks,preparation=prepared_candidates(ctx.input_root,protocol,candidate['id'])
+    from ..preparation.tof_profile_hints import candidates as profile_candidates
+    prepared_profiles,profile_attachment=profile_candidates(ctx.input_root,protocol)
+    preparation['profile_tables']=profile_attachment
     metadata=prepare_model(source_gpx,child,candidate['transformation_matrix'],candidate['origin_shift'],
                      root/'prepared',phase_name=protocol['parent_phase'],histogram_name=protocol['histogram'],
                      reference_gpx=confined(ctx.input_root,protocol['structural_reference']['path']) if 'structural_reference' in protocol else None,
-                     settings=settings,prepared_banks=prepared_banks)
+                     settings=settings,prepared_banks=prepared_banks,prepared_profiles=prepared_profiles)
     if set(candidate['modes'])!=set(metadata['inventory']['native_mode_names']):
         raise TrialDisposition('integrity_failure','Prepared search requires the complete discovered native mode inventory')
     fitting_began=time.monotonic()

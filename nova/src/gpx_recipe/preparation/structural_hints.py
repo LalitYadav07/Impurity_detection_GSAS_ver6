@@ -36,7 +36,7 @@ def validate(document,protocol):
     from .hints import _hash
     keys={'schema','protocol_sha256','library_id','library_name','entries',
         'eligible_entries','omitted_entries','snapshot_sha256','observations_included'}
-    if (not isinstance(document,dict) or set(document)-keys-{'evidence'} or keys-set(document) or document['schema']!=SCHEMA
+    if (not isinstance(document,dict) or set(document)-keys-{'evidence','profile_tables'} or keys-set(document) or document['schema']!=SCHEMA
             or protocol['kind']!='structural' or document['protocol_sha256']!=digest(protocol)
             or not isinstance(document['library_id'],str) or not re.fullmatch('[a-f0-9]{24}',document['library_id'])
             or not isinstance(document['library_name'],str) or len(document['library_name'])>200
@@ -52,6 +52,9 @@ def validate(document,protocol):
     if 'evidence' in document:
         from .evidence import validate_references
         validate_references(document['evidence'])
+    if 'profile_tables' in document:
+        from .tof_profile_hints import validate as validate_profiles
+        validate_profiles(document['profile_tables'])
     candidates={c['id'] for c in protocol['candidates']};seen=set()
     fields={'entry','candidate','bank','identity','path','sha256','receipt_path','receipt_sha256','entry_sha256'}
     for row in document['entries']:
@@ -77,7 +80,8 @@ def read(root,protocol):
 
 
 def paths(document):
-    return sorted({row[k] for row in document['entries'] for k in ('path','receipt_path')})
+    from .tof_profile_hints import paths as profile_paths
+    return sorted({row[k] for row in document['entries'] for k in ('path','receipt_path')}|set(profile_paths(document)))
 
 
 def capture(library,protocol,root):
@@ -134,9 +138,12 @@ def capture(library,protocol,root):
             receipt_sha256=inventory['starts.json']['sha256'],entry_sha256=inventory['entry.json']['sha256']))
     result=dict(schema=SCHEMA,protocol_sha256=digest(protocol),library_id=document['id'],library_name=document['name'],
         entries=rows,eligible_entries=eligible,omitted_entries=omitted,observations_included=False)
+    from .tof_profile_hints import capture as capture_profiles,entry_hashes
+    profiles=capture_profiles(library,document,root)
+    if profiles['eligible_entries']:result['profile_tables']=profiles
     if document.get('evidence'):
         from .evidence import select
-        result['evidence']=select(document['evidence'],[r['entry_sha256'] for r in rows])
+        result['evidence']=select(document['evidence'],[r['entry_sha256'] for r in rows]+entry_hashes(result))
     result['snapshot_sha256']=digest(result);validate(result,protocol)
     write_json(confined(root,MANIFEST,exists=False),result)
     return result
@@ -185,9 +192,11 @@ def restore(document,protocol,source_root,target_root):
                 if checksum not in copied:total+=path.stat().st_size;copied.add(checksum)
             accepted.append(row['entry'])
         except (OSError,ValueError,EOFError,KeyError,TypeError):discarded.append(row['entry'])
+    from .tof_profile_hints import restore as restore_profiles
+    profiles=restore_profiles(document,source_root,target_root)
     write_json(confined(target_root,MANIFEST,exists=False),document)
     return dict(snapshot_sha256=document['snapshot_sha256'],attached=len(accepted),discarded_entries=discarded,
-        native_qualification_required=True,kind='structural')
+        native_qualification_required=True,kind='structural',profile_tables=profiles)
 
 
 def candidates(root,protocol,candidate):

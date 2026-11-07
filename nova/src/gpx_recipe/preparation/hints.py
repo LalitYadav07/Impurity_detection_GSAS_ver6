@@ -220,7 +220,8 @@ def subset(document,protocol,candidates):
     result['entries']=[row for row in result['entries'] if row['candidate'] in requested]
     if result.get('evidence'):
         from .evidence import select
-        result['evidence']=select(result['evidence'],[r['entry_sha256'] for r in result['entries']])
+        from .tof_profile_hints import entry_hashes
+        result['evidence']=select(result['evidence'],[r['entry_sha256'] for r in result['entries']]+entry_hashes(result))
     result['omitted_entries']=result['eligible_entries']-len(result['entries'])
     result['snapshot_sha256']=digest({k:v for k,v in result.items() if k!='snapshot_sha256'})
     return validate(result,protocol)

@@ -20,7 +20,7 @@ from .worker import validate_request, validate_settings, verify_structural_child
 PLAN_SCHEMA = 'radar-experiment-preparation-plan/v1'
 PORTABLE = {'reference': set(), 'magnetic': {'response.npz'},
             'structural': {'starts.npz', 'starts.json'},'kernel':{'kernel.npz','kernel.json'}}
-OPTIONAL_PORTABLE = {'magnetic': {'scattering.npz'}}
+OPTIONAL_PORTABLE = {'magnetic': {'scattering.npz'},'reference':{'profile.npz','profile.json'}}
 
 
 def portable_artifacts(kind, names):
@@ -33,6 +33,8 @@ def portable_artifacts(kind, names):
     if (len(inventory)!=len(names) or not PORTABLE[kind] <= inventory
             or not inventory <= PORTABLE[kind] | OPTIONAL_PORTABLE.get(kind,set())):
         raise ValueError('Unexpected portable preparation artifact inventory')
+    if kind=='reference' and inventory not in (set(),{'profile.npz','profile.json'}):
+        raise ValueError('TOF reference preparation requires both profile arrays and metadata')
     return inventory
 
 
@@ -41,6 +43,15 @@ def portable_entry_artifacts(kind, manifest):
     if not isinstance(manifest,dict) or not isinstance(manifest.get('artifacts'),dict):
         raise ValueError('A preparation needs its declared portable artifacts')
     names=portable_artifacts(kind,manifest['artifacts'])
+    if 'profile.npz' in names:
+        from .tof_kernel_arrays import checksum
+        detail=manifest.get('detail');profile=detail.get('profile_table') if isinstance(detail,dict) else None
+        if (not isinstance(profile,dict) or profile.get('status')!='prepared'
+                or profile.get('role')!='starting_proposals' or profile.get('observations_included') is not False
+                or profile.get('native_likelihood_authority') is not False
+                or not checksum(detail.get('physics_sha256'))
+                or detail['physics_sha256']!=profile.get('physics_sha256')):
+            raise ValueError('Portable TOF tables need their proposal-only physical identity')
     if 'scattering.npz' in names:
         import re
         detail=manifest.get('detail')
@@ -51,6 +62,54 @@ def portable_entry_artifacts(kind, manifest):
                 or not re.fullmatch('[a-f0-9]{64}',scattering['identity'])):
             raise ValueError('Portable scattering factors need their native physical identity')
     return names
+
+
+def inherit_reference(library,inspection,identifier):
+    """Carry an immutable completed reference into its dependent model ZIP.
+
+    This copies the original manifest/arrays and origin routing references;
+    it performs no new native calculation and grants no new native authority.
+    Ordinary publication rechecks the new library's parent/profile inputs.
+    """
+    source=inspection.row(identifier)
+    if source['model']['kind']!='reference' or source['state']!='prepared':
+        raise ValueError('Only a completed shared reference can be inherited')
+    assets={Path(name).name:path for name,path in inspection.prepared_assets(identifier).items()}
+    if set(assets)!={'entry.json','profile.npz','profile.json'}:
+        raise ValueError('The reference has no complete shared TOF table')
+    if assets['entry.json'].stat().st_size>8*1024*1024:
+        raise ValueError('The inherited reference metadata exceeds its bound')
+    matches=[r for r in library.document['entries'] if r['model']['kind']=='reference'
+             and r['model']['bank']==source['model']['bank']]
+    if len(matches)!=1:raise ValueError('The model library must declare the exact shared reference dependency')
+    target=matches[0]
+    if target['model']['grid']!=source['model']['grid'] or target['model']['settings']!=source['model']['settings']:
+        raise ValueError('The inherited reference has different profile or grid choices')
+    if target['state']=='prepared':
+        if {Path(a['path']).name:a['sha256'] for a in target['files']}!={name:file_sha(path) for name,path in assets.items()}:
+            raise ValueError('The completed dependency contains different shared-reference bytes')
+        return library.coverage()
+    if target['state']!='pending':raise ValueError('The reference dependency already has an active or failed attempt')
+    attempt=library.start(target['id'])
+    try:
+        with tempfile.TemporaryDirectory(prefix='radar-reference-transfer-',dir=library.root.parent) as temporary:
+            request=stage_entry(library,target['id'],attempt,Path(temporary)/'inputs')
+            output=Path(request['destination']);output.mkdir()
+            for name,path in assets.items():shutil.copyfile(path,output/name)
+            manifest=json.loads((output/'entry.json').read_text())
+            portable_entry_artifacts('reference',manifest)
+            entry_sha=file_sha(output/'entry.json')
+            result=dict(schema='radar-experiment-preparation-worker/v1',kind='reference',status='prepared',
+                output=str(output),artifacts=sorted(assets),entry_sha256=entry_sha,
+                observations_included=False,scientific_result=False)
+            publish_entry(library,target['id'],attempt,request,result)
+            from .evidence import select
+            for reference in select(inspection.document.get('evidence',[]),[entry_sha]):library.add_evidence(reference)
+    except Exception:
+        if library.row(target['id'])['state']=='preparing':
+            library.finish(target['id'],attempt,state='failed',reason='Shared reference transfer did not complete')
+        raise
+    return library.coverage()
 
 
 def pending_entries(library, *, deferred=()):

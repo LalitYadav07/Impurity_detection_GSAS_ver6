@@ -109,6 +109,9 @@ def execute(payload):
         recovery_seconds=scope['structural_recovery_seconds'])
     from ..preparation.structural_hints import candidates as prepared_candidates
     banks,attachment=prepared_candidates(inputs,protocol,candidate['id'])
+    from ..preparation.tof_profile_hints import candidates as profile_candidates
+    profiles,profile_attachment=profile_candidates(inputs,protocol)
+    attachment['profile_tables']=profile_attachment
     reference=confined(inputs,protocol['structural_reference']['path']) if 'structural_reference' in protocol else None
     root=Path(payload['destination']);root.mkdir(parents=True,exist_ok=False)
     request=dict(source_gpx=str(source),source_sha256=protocol['source']['sha256'],
@@ -118,7 +121,7 @@ def execute(payload):
     preparation_began=time.monotonic()
     contract=prepare_acquisition(request,confined(inputs,candidate['child']['path']),
         candidate['transformation_matrix'],candidate['origin_shift'],root/'acquisition',
-        source_scope=payload['source_scope'],settings=settings,prepared_banks=banks,reference_gpx=reference)
+        source_scope=payload['source_scope'],settings=settings,prepared_banks=banks,prepared_profiles=profiles,reference_gpx=reference)
     metadata=json.loads((root/'acquisition/model/prepared.json').read_text())
     if set(metadata['inventory']['native_mode_names'])!=set(candidate['modes']):
         raise ValueError('Structural acquisition requires every reviewed physical mode')

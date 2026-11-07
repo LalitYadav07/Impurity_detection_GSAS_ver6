@@ -90,6 +90,8 @@ def test_theory_table_rebinds_to_another_structure_grid_and_changing_cell(theory
         assert np.linalg.norm(delta)/max(np.linalg.norm(expected-background),1e-30)<=1e-8
         assert np.max(abs(delta)*np.sqrt(hist[2]))<=.01
     assert before=={k:v.tobytes() for k,v in theory_table.arrays().items()}
+    import json
+    assert json.loads(json.dumps(proposal.diagnostics()))==proposal.diagnostics()
     assert set(theory_table.arrays())=={'coefficients','halo','logd','eta'}
     for array in theory_table.arrays().values():
         with pytest.raises(ValueError):array.flags.writeable=True

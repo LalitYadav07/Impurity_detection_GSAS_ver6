@@ -60,6 +60,8 @@ def input_ids(runtime,request):
         LOG.warning('Native preparation origin input unavailable; using native requalification')
         return []
     expected=[r['entry_sha256'] for r in document.get('entries',[])]
+    from gpx_recipe.preparation.tof_profile_hints import entry_hashes
+    expected+=entry_hashes(document)
     references=select(document['evidence'],expected);matches=[]
     current=site(service.galaxy_url);cache=runtime.root/'preparation-origin-cache';cache.mkdir(parents=True,exist_ok=True)
     for row in references:

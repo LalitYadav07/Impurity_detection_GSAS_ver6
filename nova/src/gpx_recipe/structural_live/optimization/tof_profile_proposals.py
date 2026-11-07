@@ -1,7 +1,8 @@
 """Owned continuous TOF proposals, separate from native likelihood authority.
 
-The native profile compiles its own numeric table; uploaded arrays or proof
-flags are never inputs. Native geometry, F², corrections, reflections and
+The native profile compiles its numeric table or binds proposal-only data
+with verified creating-job origin and current native shape/runtime checks.
+Uploaded proof flags never confer authority. Geometry, F², reflections and
 windows remain current. Fixed-cell reuse belongs to the caller. This renderer
 is only for initial proposals; accepted fits retain the original objective.
 """
@@ -115,10 +116,13 @@ class TOFProfileProposals:
             shape_sha256=self.shape_identity,
             native_midpoint_checks=self.midpoint_checks,rejected_interpolation_cells=self.rejected_cells,
             native_only_d_stripes=self.native_only_stripes,
-            roughness_relative_to_native_precision=ROUGH_NATIVE_RELATIVE,
+            roughness_relative_to_native_precision=float(ROUGH_NATIVE_RELATIVE),
             native_origin_authority=False,observations_used_for_compilation=False,
             owned_table_reused=self.table_reused,
-            table_import_supported=False,original_native_objective_required=True)
+            table_import_supported=True,portable_table_bound=self.table.portable_origin is not None,
+            portable_table_reused=self.table.portable_origin is not None and self.statistics['interpolated_bins']>0,
+            portable_origin=self.table.portable_origin,current_portable_probes=self.table.portable_probes,
+            original_native_objective_required=True)
 
 
 def for_source(source,*,exact=None,table=None):
@@ -126,7 +130,21 @@ def for_source(source,*,exact=None,table=None):
     exact=exact or NativeTOFForward(source)
     records=exact.collector.collect_physical(np.zeros(len(source.radii)),maximum_bytes=MAXIMUM_BYTES)
     if sum(high-low for _,_,low,high in records.values())<MINIMUM_REFERENCE_BINS:
-        return None
+        # This threshold amortizes compilation, not numerical fidelity. A
+        # compatible already-prepared table has paid that cost. Discarding it
+        # here would make a valid cold-library handoff silently unused.
+        if table is None:
+            from .tof_profile_table import available_table
+            from .tof_shape import IsotropicTOFShape
+            n,_,powder,_,_,_,_,hist,_,_=exact._context()
+            refs=hist['Reflection Lists'][source.fast.slow.phase.name]['RefList']
+            if (not len(refs) or not np.isfinite(refs[:,4]).all() or np.any(refs[:,4]<=0)
+                    or refs[:,4].min()>=refs[:,4].max()):return None
+            try:
+                shape=IsotropicTOFShape(n,source.fast.slow.hist.name,source.fast.slow.phase.name)
+                table=available_table(shape,powder,(float(refs[:,4].min()),float(refs[:,4].max())))
+            except ProposalUnavailable:return None
+        if table is None:return None
     result=TOFProfileProposals(source,exact=exact,table=table)
     if not np.any(result.halo):
         raise ProposalUnavailable('Current native profile needs original peaks throughout the proposal envelope')

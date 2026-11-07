@@ -43,6 +43,13 @@ def test_structural_snapshot_routes_original_receipts_through_the_same_server_in
     assert evidence.input_ids(runtime,snapshot)==[] and calls==['receipt1']
 
 
+def test_shared_profile_origin_is_forwarded_without_a_structural_start_bank(tmp_path):
+    _,_,calls,runtime,request=setup(tmp_path)
+    document=request['prepared_scattering'];row=document['entries'].pop()
+    document['profile_tables']=dict(entries=[row])
+    assert evidence.input_ids(runtime,request)==['receipt1'] and calls==['receipt1']
+
+
 @pytest.mark.parametrize('change',['site','entry','hash','body','permission','capability'])
 def test_optional_unavailable_or_edited_origins_do_not_block_science_or_contact_other_sites(tmp_path,change):
     path,ref,calls,runtime,request=setup(tmp_path)

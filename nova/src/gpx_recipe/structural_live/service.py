@@ -67,7 +67,7 @@ def make_source(prepared, work, settings):
                          mode_radius=settings.mode_radius,cell_radius=settings.cell_radius)
 
 
-def prepare_model(source_gpx, child_cif, transform, origin, output, *, settings=None, prepared_banks=(), **roles):
+def prepare_model(source_gpx, child_cif, transform, origin, output, *, settings=None, prepared_banks=(), prepared_profiles=(), **roles):
     """Build immutable native geometry and reusable starting curves once.
 
     Starting curves contain no fitted likelihood or evidence. Their identity
@@ -79,7 +79,10 @@ def prepare_model(source_gpx, child_cif, transform, origin, output, *, settings=
     metadata=prepare(source_gpx,child_cif,transform,origin,output,**roles)
     output=Path(output)
     source=make_source(output,output/'bank-construction',settings)
+    from ..preparation.tof_profile_hints import bind as bind_profiles
+    profile_preparation=bind_profiles(source,prepared_profiles)
     bank,qualification=prepare_starting_bank(source,output/'starting-curves.npz',prepared_banks)
+    qualification['profile_table']=profile_preparation
     write_json(output/'starting-curve-contract.json',dict(bank,portable_preparation=qualification))
     return metadata
 

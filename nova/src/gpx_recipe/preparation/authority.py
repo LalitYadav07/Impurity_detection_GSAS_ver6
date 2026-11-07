@@ -162,6 +162,21 @@ def magnetic_factor_origin(factor_sha256):
     return None
 
 
+def profile_table_origin(table_sha256,receipt_sha256,physics_sha256):
+    """Authorize producer bytes for proposals only, never native likelihood."""
+    if not all(checksum(v) for v in (table_sha256,receipt_sha256,physics_sha256)):return None
+    capsule=_current_capsule()
+    if capsule is None:return None
+    for record in capsule['records']:
+        for entry in record['certificate']['entries']:
+            if (entry['kind']=='reference' and entry['physics_sha256']==physics_sha256
+                    and entry['artifacts']=={'profile.npz':table_sha256,'profile.json':receipt_sha256}):
+                return dict(certificate_sha256=record['sha256'],entry_sha256=entry['entry_sha256'],
+                    origin='Galaxy native-compiled TOF proposal table; current shape and runtime required',
+                    native_likelihood_authority=False)
+    return None
+
+
 def magnetic_response_origin(response_sha256, physics_sha256):
     """Match an exact native-produced response, including its physical scope."""
     if not all(checksum(v) for v in (response_sha256, physics_sha256)):return None

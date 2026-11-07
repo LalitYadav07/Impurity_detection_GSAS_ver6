@@ -89,6 +89,36 @@ def test_inspected_magnetic_scope_is_portable_and_keeps_bank_and_k_denominators(
     assert json.loads((restored.root/'inputs/scope.json').read_text())==scope
 
 
+@pytest.mark.parametrize('kind',['magnetic','structural'])
+def test_model_plan_inherits_only_profile_dependencies_its_engine_consumes(workspace,tmp_path,monkeypatch,kind):
+    w,key,service=workspace;finish_inspection(w,key,service,tmp_path)
+    context=w.references(key);inspection=w.registry.get(key);row=inspection.document['entries'][0]
+    # Coordinator contract only: the real immutable transfer/byte checks have
+    # separate tests. No fabricated arrays are passed to a native calculation.
+    row['files'] += [dict(path='fixture/'+name,sha256='f'*64,size=1) for name in ('profile.npz','profile.json')]
+    lookup=w.registry.get
+    monkeypatch.setattr(w.registry,'get',lambda identifier:inspection if identifier==key else lookup(identifier))
+    monkeypatch.setattr(w,'references',lambda identifier:context)
+    from gpx_recipe.preparation import operations
+    transferred=[]
+    monkeypatch.setattr(operations,'inherit_reference',lambda target,source,identifier:transferred.append(
+        dict(target=target.document['id'],source=source.document['id'],entry=identifier)))
+    record=catalog(PARENT,['0','0','0'],structural=kind=='structural')
+    descriptor=dict(catalog=record)
+    if kind=='structural':
+        directory=w.root/'discovery';child=directory/'children/child.cif';child.parent.mkdir(parents=True)
+        child.write_text('data_public_child\n');record['candidates'][0]['child']['sha256']=file_sha(child)
+        descriptor['directory']=str(directory)
+    selected=w.create_models(key,name='Dependent model library',kind=kind,catalogs=[descriptor],
+        sites=[dict(label='Fe1',form_factor='Fe+3',lande_g=2.)] if kind=='magnetic' else None)
+    library=lookup(selected)
+    models=[r for r in library.document['entries'] if r['model']['kind']==kind]
+    references=[r for r in library.document['entries'] if r['model']['kind']=='reference']
+    assert len(models)==2 and all(r['state']=='pending' for r in models)
+    assert len(references)==len(transferred)==(1 if kind=='structural' else 0)
+    if references:assert references[0]['model']['bank']==row['model']['bank']
+
+
 @pytest.mark.parametrize('cause',['incomplete','setting','duplicate','empty','ion','bank'])
 def test_unresolved_or_incompatible_discovery_does_not_start_a_hidden_narrower_plan(workspace,tmp_path,cause):
     w,key,service=workspace;finish_inspection(w,key,service,tmp_path)

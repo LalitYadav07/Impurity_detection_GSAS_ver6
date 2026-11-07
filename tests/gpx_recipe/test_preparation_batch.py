@@ -130,7 +130,7 @@ def test_cancel_before_start_preserves_all_entries_as_pending(tmp_path):
 
 def test_artifact_budget_defers_work_instead_of_discarding_finished_entries(tmp_path,monkeypatch):
     request=plan(tmp_path,count=3)
-    monkeypatch.setattr(batch,'RESULT_BUDGET',8*1024*1024+512*1024)
+    monkeypatch.setattr(batch,'RESULT_BUDGET',batch.RESERVES['reference']+512*1024)
     def runner(task,payload,scratch,**kwargs):
         result=prepared(task,payload,scratch,**kwargs)
         path=Path(payload['destination'])/'entry.json';manifest=json.loads(path.read_text())

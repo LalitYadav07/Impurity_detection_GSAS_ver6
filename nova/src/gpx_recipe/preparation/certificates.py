@@ -30,7 +30,7 @@ def validate(value):
     seen=set()
     for row in value['entries']:
         if (not isinstance(row,dict) or set(row)!={'kind','entry_sha256','physics_sha256','artifacts'}
-                or row['kind'] not in {'magnetic','structural','kernel'}
+                or row['kind'] not in {'magnetic','structural','kernel','reference'}
                 or not checksum(row['entry_sha256']) or row['entry_sha256'] in seen
                 or not checksum(row['physics_sha256']) or not isinstance(row['artifacts'],dict)
                 or not row['artifacts'] or len(row['artifacts'])>8
@@ -43,6 +43,8 @@ def validate(value):
             raise ValueError('Magnetic certificate requires its declared native arrays')
         if row['kind']=='kernel' and set(row['artifacts'])!={'kernel.npz','kernel.json'}:
             raise ValueError('Kernel certificate requires its complete numeric chunk and metadata')
+        if row['kind']=='reference' and set(row['artifacts'])!={'profile.npz','profile.json'}:
+            raise ValueError('TOF reference certificate requires its complete proposal table')
         seen.add(row['entry_sha256'])
     return value
 
@@ -68,7 +70,8 @@ def produce(response,worker_root,archive,destination):
         results=[r['result'] for r in inner['entries'] if r['state']=='prepared']
     else:results=[]
     for result in results:
-        if result.get('kind') not in {'structural','magnetic','kernel'}:continue
+        if result.get('kind') not in {'structural','magnetic','kernel','reference'}:continue
+        if result.get('kind')=='reference' and 'profile.npz' not in result.get('artifacts',[]):continue
         if (result.get('schema')!='radar-experiment-preparation-worker/v1' or result.get('status')!='prepared'
                 or result.get('observations_included') is not False or result.get('scientific_result') is not False):
             raise ValueError('Only completed theoretical native preparation can be certified')
@@ -116,6 +119,13 @@ def produce(response,worker_root,archive,destination):
                     or proof.get('method') not in {'original native kernel construction',
                                                    'complete original native peak verification'}):
                 raise ValueError('Kernel certificate needs its completed native construction and exact runtime')
+        if result['kind']=='reference':
+            from .tof_profile_arrays import read as read_profile,origin_identity
+            data,_,_=read_profile(output/'profile.npz',output/'profile.json')
+            profile=manifest['detail']['profile_table']
+            if (manifest['detail']['physics_sha256']!=origin_identity(data.metadata)
+                    or profile.get('native_likelihood_authority') is not False):
+                raise ValueError('TOF reference certificate needs completed proposal-only native compilation')
         # Bind the certificate to the exact files already inventoried and
         # packed by the wrapper, including the manifest. A later mutation
         # cannot receive a receipt for different bytes than the result ZIP.
