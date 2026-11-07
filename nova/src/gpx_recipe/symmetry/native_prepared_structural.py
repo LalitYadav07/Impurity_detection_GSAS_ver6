@@ -10,8 +10,9 @@ def optimization_progress(result):
     fitted=result['result'];blocks=fitted.get('blocks',[]);attempts=fitted.get('attempts',[])
     progress=dict(starts_attempted=len(attempts),
         starts_time_limited=sum(a.get('reason')=='per_start_time_budget' for a in attempts),
-        complete_lattice_blocks=sum(b['kind']=='cell' for b in blocks),
-        complete_displacement_blocks=sum(b['kind']=='modes' for b in blocks),
+        complete_lattice_blocks=sum(b['kind'] in {'cell','joint'} for b in blocks),
+        complete_displacement_blocks=sum(b['kind'] in {'modes','joint'} for b in blocks),
+        complete_joint_blocks=sum(b['kind']=='joint' for b in blocks),
         accepted_local_steps=sum(len(b.get('accepted_costs',[])) for b in blocks))
     if not blocks:
         message='Prepared starting curves were checked, but no complete local-update block finished. Increase the per-model allocation before comparing structures.'
@@ -19,6 +20,8 @@ def optimization_progress(result):
         message=(f"{progress['starts_attempted']} starts attempted; {progress['starts_time_limited']} reached their allocation; "
             f"{progress['complete_lattice_blocks']} lattice and {progress['complete_displacement_blocks']} displacement blocks completed. "
             'Optimization and structure assignment require review.')
+        if progress['complete_joint_blocks']:
+            message+=f" {progress['complete_joint_blocks']} blocks updated lattice and displacement coordinates together."
     return progress,message
 
 

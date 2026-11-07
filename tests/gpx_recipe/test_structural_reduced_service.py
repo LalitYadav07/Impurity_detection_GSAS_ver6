@@ -33,6 +33,11 @@ def test_structural_receipt_distinguishes_start_bank_only_from_local_refinement(
     assert progress['accepted_local_steps']==3 and progress['complete_lattice_blocks']==1
     assert '1 lattice and 1 displacement' in notice
     assert 'require review' in notice
+    result['result']['blocks']=[{'kind':'joint','accepted_costs':[6.]}]
+    progress,notice=optimization_progress(result)
+    assert progress['complete_joint_blocks']==1
+    assert progress['complete_lattice_blocks']==progress['complete_displacement_blocks']==1
+    assert 'together' in notice and 'require review' in notice
 
 def saved_result(path,parameters):
     result=dict(parameters=parameters,previous_likelihood_accumulated=False)

@@ -16,6 +16,42 @@ def test_conditional_native_fit_preserves_objective_and_all_modes():
     assert np.all(np.diff([p['deviance'] for p in result['trace']])<0)
     assert result['best']['deviance']<150
 
+
+def test_joint_native_updates_preserve_the_same_observation_objective_and_all_coordinates():
+    s,t,o,z,c,b,_=setup()
+    result,rate=module.fit(s,t,o,b,seconds=2,starts=1,evaluator=c,joint_steps=True)
+    residual,_=residual_and_factor(o,rate)
+    assert result['best']['deviance']==pytest.approx(residual@residual)
+    assert result['method']=='profiled_native_joint' and result['all_allowed_modes_retained']
+    assert len(result['best']['parameters'])==5
+    assert result['blocks'] and {row['kind'] for row in result['blocks']}=={'joint'}
+    assert result['independent_cache_checks']>0
+    assert result['best']['deviance']<150
+    assert np.all(np.diff([p['deviance'] for p in result['trace']])<0)
+
+
+def test_joint_updates_cannot_skip_native_verification_of_the_mode_response():
+    s,t,o,z,c,b,_=setup()
+    c.evaluate=lambda p:s.native(p)+.001*np.sin(o.x*23)
+    with pytest.raises(ValueError,match='disagrees'):
+        module.fit(s,t,o,b,seconds=2,starts=1,evaluator=c,joint_steps=True)
+
+
+def test_joint_native_derivative_reference_keeps_every_coordinate():
+    s,t,o,z,c,b,_=setup()
+    def forbidden(point):raise AssertionError('The native derivative reference cannot use a mode-response matrix')
+    c.evaluate=forbidden
+    result,rate=module.fit(s,t,o,b,seconds=2,starts=1,evaluator=c,
+        joint_steps=True,force_native_mode_derivatives=True)
+    assert result['independent_cache_checks']==0
+    assert result['best']['deviance']==pytest.approx(residual_and_factor(o,rate)[0]@residual_and_factor(o,rate)[0])
+    assert result['best']['deviance']<150 and len(result['best']['parameters'])==5
+
+
+def test_joint_update_control_must_be_an_explicit_boolean():
+    with pytest.raises(ValueError,match='boolean'):
+        module.fit(None,None,None,None,joint_steps='true')
+
 def test_profiled_cache_error_is_not_hidden_by_scale_or_background():
     s,t,o,z,c,b,_=setup()
     c.evaluate=lambda p:s.native(p)+.001*np.sin(o.x*23)

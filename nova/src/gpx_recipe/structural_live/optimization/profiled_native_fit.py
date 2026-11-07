@@ -26,11 +26,19 @@ class CellDirectionUnavailable(RuntimeError):
 
 def fit(source,table,observation,bank,*,seconds=120.,starts=4,seed=90231,warm=None,warm_pool=None,
         mode_iterations=1,cell_iterations=1,kicks=False,evaluator=None,force_native_mode_derivatives=False,
-        screening_exclusions=None,force_native_cell_directions=False):
+        screening_exclusions=None,force_native_cell_directions=False,joint_steps=False):
+    """Use the same complete native objective for either update schedule.
+
+    ``joint_steps`` is an internal qualification control, not a user accuracy
+    choice. Coupled columns retain native acceptance and fresh-cell retries.
+    The existing schedule stays the default until full-fit comparisons qualify
+    the coupled update; a low point-fit Rwp alone is insufficient.
+    """
     if not np.isfinite(seconds) or seconds<=0 or type(starts)is not int or starts<1:
         raise ValueError('Positive finite time and integer start count required')
     if type(mode_iterations)is not int or mode_iterations<1 or type(cell_iterations)is not int or cell_iterations<1:
         raise ValueError('Positive block iteration counts required')
+    if type(joint_steps)is not bool:raise ValueError('Joint native update selection must be boolean')
     if kicks:raise ValueError('Weak-mode restarts are not qualified for profiled nuisance fitting')
     began=time.monotonic();deadline=began+seconds;s=source;m=s.mode_dimensions;d=len(s.radii);mask=observation.mask
     lo=np.r_[-np.ones(d),-.3,np.log(.25)];hi=np.r_[np.ones(d),.3,np.log(4.)]
@@ -46,7 +54,7 @@ def fit(source,table,observation,bank,*,seconds=120.,starts=4,seed=90231,warm=No
     # Alternation divides one local solve into short blocks. Preserve each
     # block's trust adaptation until this start ends, rather than restarting
     # LM at its initial damping after every accepted or unsuccessful step.
-    block_damping={True:1e-3,False:1e-3}
+    block_damping={True:1e-3,False:1e-3,None:1e-3}
     def check_time():
         if time.monotonic()>=deadline:raise TimeoutError('Native alternating fit allocation exhausted')
     def allowed(z):
@@ -96,6 +104,12 @@ def fit(source,table,observation,bank,*,seconds=120.,starts=4,seed=90231,warm=No
     def jacobian(z,mode,*,native_cells=False):
         nonlocal native_calls
         check_time()
+        if mode is None:
+            modes,mode_residual=jacobian(z,True)
+            cells,native_residual=jacobian(z,False,native_cells=native_cells)
+            if mode_residual.shape!=native_residual.shape or modes.shape[0]!=cells.shape[0]:
+                raise ValueError('Joint native derivative columns disagree on their observation')
+            return np.column_stack([modes,cells]),native_residual
         if mode:
             curve,j=cache.mode_jacobian(z[:d]*s.radii)
             # A full-native derivative call already evaluated this same curve.
@@ -150,26 +164,30 @@ def fit(source,table,observation,bank,*,seconds=120.,starts=4,seed=90231,warm=No
         return (raw[:,mask]*factor).T,residual
     def block(z,mode,iterations):
         nonlocal rejected,pending_native_cell_refresh
-        columns=np.arange(m) if mode else np.arange(m,d)
+        columns=np.arange(d) if mode is None else np.arange(m) if mode else np.arange(m,d)
+        has_cells=mode is not True and d>m
         z=z.copy();current=score(z);z=current[4];damping=block_damping[mode];initial_damping=damping
         accepted=[];start=time.monotonic();reason='iteration_limit'
         # Captured responses add no second profile construction. A context
         # that cannot capture uses the original native acceptance path, rather
         # than evaluating a native fallback twice under a cached-mode label.
-        cached_mode=mode and not force_native_mode_derivatives
-        if cached_mode and hasattr(cache,'has_response'):
-            cached_mode=cache.has_response(z[:d]*s.radii)
-        if cached_mode:current=verify(z,score(z,cached=True,remember=False))
+        checked_modes=mode is not False and not force_native_mode_derivatives
+        if checked_modes and hasattr(cache,'has_response'):
+            checked_modes=cache.has_response(z[:d]*s.radii)
+        if checked_modes:current=verify(z,score(z,cached=True,remember=False))
+        # A joint trial changes the cell, so it must use the current native
+        # profile rather than the old cell's displacement response matrix.
+        cached_mode=mode is True and checked_modes
         for iteration in range(iterations):
             found=False;stationary=False
             # Neither a recycled direction nor a fresh peak proposal can
             # declare stationarity or end a stalled trajectory. Retry this
             # SAME iterate once with original native cell differences.
             for retry in range(2):
-                force_cells=not mode and (retry>0 or pending_native_cell_refresh)
+                force_cells=has_cells and (retry>0 or pending_native_cell_refresh)
                 check_time();j,r=jacobian(z,mode,native_cells=force_cells)
                 if force_cells:pending_native_cell_refresh=False
-                recycled=not mode and (cell_model.last_reused or cell_model.last_requires_native_retry)
+                recycled=has_cells and (cell_model.last_reused or cell_model.last_requires_native_retry)
                 step,info=bounded_damped_step(j,r,damping,lo[columns]-z[columns],hi[columns]-z[columns],radius=.4)
                 if info['information_score']<1e-4:
                     if recycled:cell_model.invalidate();continue
@@ -194,7 +212,7 @@ def fit(source,table,observation,bank,*,seconds=120.,starts=4,seed=90231,warm=No
             reason='iteration_limit' if found else 'damping_increased'
             if found and np.max(abs(step*(.5**power)))<1e-8:reason='small_step';break
         block_damping[mode]=damping
-        blocks.append(dict(start=index,kind='modes' if mode else 'cell',seconds=time.monotonic()-start,
+        blocks.append(dict(start=index,kind='joint' if mode is None else 'modes' if mode else 'cell',seconds=time.monotonic()-start,
             accepted_costs=accepted,reason=reason,initial_damping=initial_damping,final_damping=damping))
         return z,current[0]
     warm_ranked=[];prior_ranked=[];selected=[]
@@ -230,7 +248,7 @@ def fit(source,table,observation,bank,*,seconds=120.,starts=4,seed=90231,warm=No
         attempt=dict(start=index,initial_parameters=initial.tolist(),iterations=0,reason='running')
         attempts.append(attempt)
         cell_model.invalidate()
-        block_damping.update({True:1e-3,False:1e-3})
+        block_damping.update({True:1e-3,False:1e-3,None:1e-3})
         pending_native_cell_refresh=False
         try:
             z=initial.copy();cost=score(z)[0];cycles=0;restart_points=[]
@@ -241,8 +259,11 @@ def fit(source,table,observation,bank,*,seconds=120.,starts=4,seed=90231,warm=No
                 # Peak-position errors must not spend an entire short start
                 # being absorbed into atomic intensities. Interleave one cell
                 # and one displacement step, beginning with the lattice.
-                if d>m:z,cost=block(z,False,cell_iterations)
-                if m:z,cost=block(z,True,mode_iterations)
+                if joint_steps and m and d>m:
+                    z,cost=block(z,None,max(mode_iterations,cell_iterations))
+                else:
+                    if d>m:z,cost=block(z,False,cell_iterations)
+                    if m:z,cost=block(z,True,mode_iterations)
                 cycles+=1
                 if before-cost<1e-9*max(cost,1.) and (not kicks or not restart_points):
                     reasons={row['reason'] for row in blocks[block_begin:]}
@@ -266,7 +287,7 @@ def fit(source,table,observation,bank,*,seconds=120.,starts=4,seed=90231,warm=No
     if best is None:raise ValueError('No complete independent native evaluation')
     z=best['z'];s.check(z[:d]*s.radii)
     return dict(best=dict(parameters=z.tolist(),deviance=best['cost']),rwp_percent=observation_rwp_percent(observation,best['rate']),
-        seconds=time.monotonic()-began,method='profiled_native_alternating',exact_native_deviance=best['cost'],
+        seconds=time.monotonic()-began,method='profiled_native_joint' if joint_steps else 'profiled_native_alternating',exact_native_deviance=best['cost'],
         weak_mode_restarts_enabled=kicks,force_native_mode_derivatives=force_native_mode_derivatives,starts=len(selected),mode_dimensions=m,cell_dimensions=d-m,
         blocks=blocks,restarts=restarts,blocked_starts=blocked_starts,attempts=attempts,trace=trace,full_native_calls=native_calls,chemistry_rejections=rejected,
         independent_cache_checks=cache_checks,maximum_native_relative_error=max_error,maximum_native_sigma_error=max_sigma,
