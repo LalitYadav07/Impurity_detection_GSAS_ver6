@@ -278,10 +278,19 @@ class PreparationQueue:
                 else:job.update(phase='submitted',reason='')
             limit=min(state['maximum_jobs'],self.runtime.max_active_jobs)
             active=sum(j['phase']!='collected' for j in state['jobs'])
-            for _ in range(max(0,limit-active)):
+            available=max(0,limit-active)
+            for slot in range(available):
                 if state['paused'] or self._paused.is_set():break
                 deferred=self._deferred(state)
-                identifiers=pending_entries(self.library,deferred=deferred)[:state['batch_size']]
+                pending=pending_entries(self.library,deferred=deferred)
+                # A small catalog must not fill one large batch and leave the
+                # other explicitly allowed Galaxy job slots idle. Spread only
+                # unowned work; existing batch membership and recovery stay
+                # immutable. Keep the per-batch artifact and CPU guards intact.
+                remaining_slots=available-slot
+                members_per_job=min(state['batch_size'],
+                    (len(pending)+remaining_slots-1)//remaining_slots)
+                identifiers=pending[:members_per_job]
                 if not identifiers:break
                 members=[dict(entry=i,attempt=self.library.row(i)['attempt']+(i not in deferred)) for i in identifiers]
                 job=dict(id=uuid.uuid4().hex,mode='batch',phase='awaiting_submission',handle=None,

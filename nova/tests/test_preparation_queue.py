@@ -117,6 +117,29 @@ def test_paused_queue_admits_nothing_then_uses_only_allowed_job_slots(remote,tmp
     assert all('PRIVATE-' not in json.dumps(s) for s in snapshots)
 
 
+@pytest.mark.parametrize('count,requested,allowed,sizes',[
+    (9,2,2,[5,4]),(3,4,2,[2,1]),(3,4,4,[1,1,1]),
+    (9,8,1,[9]),(40,2,2,[16,16]),
+])
+def test_default_batches_distribute_unowned_models_across_allowed_jobs(
+        remote,tmp_path,count,requested,allowed,sizes):
+    queue,_,_=setup(remote,tmp_path,count=count,batch_size=None)
+    runtime,service,_=remote;runtime.max_active_jobs=allowed
+    queue.resume(maximum_jobs=requested)
+    result=queue.tick();jobs=result['queue']['jobs']
+    assert [len(job['members']) for job in jobs]==sizes
+    identifiers=[member['entry'] for job in jobs for member in job['members']]
+    assert len(identifiers)==len(set(identifiers))==sum(sizes)
+    assert len(service.submissions)==result['active']==len(sizes)
+    assert result['coverage']['counts']['preparing']==sum(sizes)
+    assert result['coverage']['counts']['pending']==count-sum(sizes)
+    # Polling/recovery cannot split or replace a batch already submitted.
+    captured=[(job['id'],job['members'],job['handle']['key']) for job in jobs]
+    queue.tick()
+    assert [(job['id'],job['members'],job['handle']['key'])
+        for job in queue.snapshot()['jobs']]==captured
+
+
 def test_out_of_order_completions_publish_exact_entries_and_fill_freed_slots(remote,tmp_path):
     queue,_,_=setup(remote,tmp_path);runtime,service,_=remote
     runtime.max_active_jobs=2;queue.resume(maximum_jobs=2);queue.tick()
