@@ -97,6 +97,11 @@ def test_model_wrapper_preserves_reviewed_reference_and_exports_native_structura
     received=unpack(tmp_path/'result.zip',tmp_path/'received')
     response=json.loads((received/'response.json').read_text());result=response['result'];fitted=result['result']
     assert result['schema']=='radar-structural-snapshot-result/v1' and result['revision']==2
+    stages=result['workflow_timings']
+    assert stages['scope']=='acquisition' and stages['preparation_seconds']>0
+    assert stages['fit_service_seconds']>=fitted['wall_seconds']
+    assert stages['combined_service_seconds']==stages['preparation_seconds']+stages['fit_service_seconds']
+    assert stages['queue_startup_transfer_included'] is False
     assert result['protocol_sha256']==digest(protocol) and result['source_sha256']==source_sha
     assert result['reference_sha256']==warm_sha and result['snapshot_sha256']==hashlib.sha256(raw).hexdigest()
     assert fitted['all_physical_modes_retained'] and fitted['physical_mode_count']==2 and fitted['cell_parameter_count']==3

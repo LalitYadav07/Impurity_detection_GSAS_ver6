@@ -18,6 +18,27 @@ from .reduced import from_arrays, native_limits, verify_native_observation, Redu
 from .defaults import DEFAULT_CELL_RADIUS, DEFAULT_FIT_SECONDS
 
 
+def workflow_timings(preparation_seconds, fitting_seconds, *, scope):
+    """Current call durations, never a persisted library's historical cost.
+
+    These service stages are a subtotal of the worker's native wall time.
+    Other worker tasks and Galaxy queue/startup/transfer remain separate.
+    """
+    if type(scope) is not str or scope not in {'model', 'acquisition'}:
+        raise ValueError('A measured structural service scope is required')
+    values=(preparation_seconds,fitting_seconds)
+    if any(type(v) not in (int,float) or v<0 for v in values):
+        raise ValueError('Finite nonnegative current service durations are required')
+    try:finite=np.isfinite([float(v) for v in values]).all()
+    except OverflowError:finite=False
+    if not finite or not np.isfinite(sum(float(v) for v in values)):
+        raise ValueError('Finite nonnegative current service durations are required')
+    return dict(schema='radar-structural-service-timing/v1',scope=scope,
+        preparation_seconds=float(preparation_seconds),fit_service_seconds=float(fitting_seconds),
+        combined_service_seconds=float(sum(values)),
+        queue_startup_transfer_included=False)
+
+
 @dataclass(frozen=True)
 class SearchSettings:
     mode_radius: float = .05

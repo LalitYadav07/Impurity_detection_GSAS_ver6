@@ -31,7 +31,7 @@ from gpx_recipe.symmetry.isodistort_discovery import discover_structural
 from gpx_recipe.symmetry.plans import build_plan
 from gpx_recipe.symmetry.contracts import iter_trials
 from .symmetry_workspace import campaign_rows,group_models,display_groups,view_for,choose_group,choose_member,disposition_reason,coverage_rows,scope_rows,parameter_rows,moment_precision_note,campaign_can_resume,display_status,embedding_evidence,fit_caption,fit_diagnostics,pin_label
-from .symmetry_workspace import structural_discovery_feedback,candidate_display_name,parameter_note
+from .symmetry_workspace import structural_discovery_feedback,candidate_display_name,parameter_note,structural_timing_summary
 from . import symmetry_plots as plots
 from .parent_moments import parent_frame_moments
 from .symmetry_sources import start_choices,resolve_start,acquisition_details,acquisition_notices,acquisition_temperature,display_acquisition_notices
@@ -600,6 +600,9 @@ class SymmetryMixin(KSearchMixin):
                         scope='shared worker peak RAM' if usage.get('peak_rss_scope')=='shared_group_worker' else 'peak RAM'
                         detail+=f" · {usage['peak_rss_bytes']/1024**2:.0f} MiB {scope}"
                     s.sx_details.append(dict(label='Measured resources',value=detail+' · excludes Galaxy queue and transfer'))
+                structural=row.get('structural_fit') if row.get('kind')=='structural' else None
+                timing=structural_timing_summary(structural.get('workflow_timings') if isinstance(structural,dict) else None)
+                if timing:s.sx_details.append(dict(label='Structural service stages',value=timing))
                 if row.get('sites'):s.sx_details.append(dict(label='Magnetic sites',value='; '.join(site['label']+'='+site['form_factor']+' (g='+str(site['lande_g'])+')' for site in row['sites'])))
                 if row.get('baseline_rwp') is not None and row.get('rwp') is not None:
                     baseline=row['baseline_rwp']

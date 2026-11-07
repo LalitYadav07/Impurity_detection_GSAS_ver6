@@ -6,6 +6,21 @@ from radar_pd_nova.symmetry_workspace import group_models,display_groups,choose_
 from radar_pd_nova.symmetry_plots import coordinate,fit
 
 
+def test_structural_timing_display_distinguishes_missing_and_inconsistent_old_receipts():
+    from gpx_recipe.structural_live.service import workflow_timings
+    from radar_pd_nova.symmetry_workspace import structural_timing_summary
+    timing=workflow_timings(54.5,40.25,scope='model')
+    summary=structural_timing_summary(timing)
+    assert '54.5 s preparation' in summary and '40.2 s fitting and GPX checks' in summary
+    assert '94.8 s combined service time' in summary and 'additional' in summary
+    assert structural_timing_summary(None)==structural_timing_summary({})==''
+    assert structural_timing_summary(dict(timing,combined_service_seconds=1.))==''
+    assert structural_timing_summary(dict(timing,preparation_seconds=float('nan')))==''
+    assert structural_timing_summary(dict(timing,fit_service_seconds=True))==''
+    assert structural_timing_summary(dict(timing,fit_service_seconds=10**400))==''
+    assert structural_timing_summary(dict(timing,scope={}))==''
+
+
 def test_structural_parameters_use_child_cell_and_mode_units_without_inventing_errors():
     from radar_pd_nova.symmetry_workspace import parameter_note
     view=dict(phases=[dict(name='child',cell=[5.,6.,7.,90.,103.,90.],

@@ -1,5 +1,11 @@
 # Joint structural search
 
+Structural Model and Live acquisition receipts separate the current worker's
+preparation from fitting and independent GPX checks. The displayed combined
+service time is a subtotal of native worker time; other worker tasks, Galaxy
+queueing, startup and transfer are additional. Loading a previously prepared
+library does not count its historical build time as current computation.
+
 Current-context starting curves have two explicit roles. Portable native banks
 retain their creating-job admission and exact-context reuse. Large reviewed
 TOF profiles can instead compile continuous starting proposals automatically

@@ -11,13 +11,14 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import time
 
 from ..execution import write_json
 from ..live.snapshot import stable_read
 from ..symmetry.compiler import confined, file_sha, package_signature, verify_inputs,job_inputs
 from ..symmetry.contracts import digest, trial_id, validate_protocol
 from .acquisition import _mapping, _scope, prepare_acquisition, StructuralAcquisition
-from .service import SearchSettings
+from .service import SearchSettings, workflow_timings
 
 FIELDS={'source','directory','anchor_snapshot','snapshot','receipt','mapping',
         'source_scope','revision','source_revision','reference_revision',
@@ -114,6 +115,7 @@ def execute(payload):
         observation_source=payload['anchor_snapshot'],observation_source_sha256=mapping['snapshot_sha256'],
         source_revision=payload['source_revision'],reference_revision=payload['reference_revision'],
         parent_phase=protocol['parent_phase'],mapping=mapping,refine_transfer=payload['refine_transfer'])
+    preparation_began=time.monotonic()
     contract=prepare_acquisition(request,confined(inputs,candidate['child']['path']),
         candidate['transformation_matrix'],candidate['origin_shift'],root/'acquisition',
         source_scope=payload['source_scope'],settings=settings,prepared_banks=banks,reference_gpx=reference)
@@ -123,8 +125,10 @@ def execute(payload):
     if metadata['histogram']!=protocol['histogram']:
         raise ValueError('Structural acquisition changed its reviewed histogram')
     owner=StructuralAcquisition(root/'acquisition',root/'session')
+    fitting_began=time.monotonic()
     fitted=owner.update(snapshot,payload['receipt'],revision=payload['revision'],
         current_scope=payload['source_scope'],current_mapping=mapping)
+    stages=workflow_timings(fitting_began-preparation_began,time.monotonic()-fitting_began,scope='acquisition')
     from .native import modules
     G,*_=modules();project=G.G2Project(gpxfile=fitted['continuation']['path'])
     view=root/'view.json';write_view(project,metadata['histogram'],view)
@@ -136,7 +140,7 @@ def execute(payload):
         child_sha256=candidate['child']['sha256'],acquisition=contract['acquisition'],
         anchor_sha256=mapping['snapshot_sha256'],snapshot_sha256=payload['receipt']['content_sha256'],
         revision=payload['revision'],settings=asdict(settings),preparation_attachment=attachment,
-        result=fitted,view=str(view),output=str(root),
+        result=fitted,view=str(view),output=str(root),workflow_timings=stages,
         forecast_enabled=False,model_exclusion_authorized=False,statistical_policy_qualified=False)
     # Only independently checked publications and their receipts leave this
     # job. Native construction/verification scratch is not a portable library.

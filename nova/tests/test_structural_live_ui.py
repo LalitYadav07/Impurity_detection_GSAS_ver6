@@ -160,11 +160,16 @@ def test_structural_plot_uses_native_calibration_and_rejects_changed_display_art
     from gpx_recipe.symmetry.compiler import file_sha
     obj._webmon_structural_results['current:model']=dict(name='Public',view_sha256=file_sha(path),
         result=dict(view=str(path),snapshot_sha256='a'*64))
+    from gpx_recipe.structural_live.service import workflow_timings
+    obj._webmon_structural_results['current:model']['result']['workflow_timings']=workflow_timings(12.,5.,scope='acquisition')
     s=obj.server.state;s.webmon_structural_selected='current:model';s.webmon_structural_axis='q'
     obj.webmon_render_structural();assert updates
     assert any(trace['name']=='Nuclear Bragg' for trace in updates[-1]['data'])
+    assert '12.0 s preparation' in s.webmon_structural_timing
+    obj._webmon_structural_results['current:model']['result'].pop('workflow_timings')
+    obj.webmon_render_structural();assert s.webmon_structural_timing==''
     path.write_text('{}');obj.webmon_render_structural()
-    assert len(updates)==1 and 'changed' in s.webmon_structural_message
+    assert len(updates)==2 and 'changed' in s.webmon_structural_message
 
 
 def test_structural_axis_control_applies_the_new_coordinate_before_plotting(tmp_path):

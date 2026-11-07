@@ -306,6 +306,12 @@ def test_worker_audit_reconstructs_declared_freedom_and_bounds(tmp_path,syntheti
     result=execute(job)
     assert result['status']=='optimization_unresolved',result
     assert result['inputs_verified'] and result['effects_verified'] and result['audit']['passed']
+    stages=result['structural_fit']['workflow_timings']
+    assert stages['scope']=='model' and stages['preparation_seconds']>0 and stages['fit_service_seconds']>0
+    assert stages['combined_service_seconds']==stages['preparation_seconds']+stages['fit_service_seconds']
+    assert stages['combined_service_seconds']<=result['resources']['wall_seconds']
+    saved=json.loads((job/'results/structural-fit.json').read_text())
+    assert saved['workflow_timings']==stages
     root=job;source=root/'source.gpx';out=job/'results'
     output=out/result['gpx'];original=output.read_bytes()
     good=audit_trial(source,output,protocol,protocol['candidates'][0],input_root=root)

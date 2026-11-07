@@ -13,7 +13,7 @@ import plotly.graph_objects as go
 from gpx_recipe.execution import write_json
 from gpx_recipe.symmetry.compiler import compile_shared_job,prepare_shared_inputs,file_sha
 from gpx_recipe.symmetry.contracts import digest,iter_trials,trial_id
-from ..symmetry_workspace import candidate_display_name
+from ..symmetry_workspace import candidate_display_name,structural_timing_summary
 from .. import symmetry_plots
 from .scope import ScopeCancellation
 from .stream import LatestQueue,scope_of
@@ -30,7 +30,7 @@ class StructuralLiveMixin:
             webmon_structural_summary='',webmon_structural_message='Use a reviewed structural plan from Model exploration.',
             webmon_structural_rows=[],webmon_structural_choices=[],webmon_structural_selected='',
             webmon_structural_axis='d',webmon_structural_scale='linear',webmon_structural_has_result=False,
-            webmon_structural_parameters=[],webmon_structural_reset=0))
+            webmon_structural_parameters=[],webmon_structural_timing='',webmon_structural_reset=0))
 
     def _clear_structural_live(self):
         self._webmon_structural_plan=None;self._webmon_structural_results={}
@@ -38,7 +38,7 @@ class StructuralLiveMixin:
         for name,value in dict(webmon_structural_ready=False,webmon_structural_summary='',webmon_structural_rows=[],
                 webmon_structural_recovery=False,
                 webmon_structural_choices=[],webmon_structural_selected='',webmon_structural_has_result=False,
-                webmon_structural_parameters=[],
+                webmon_structural_parameters=[],webmon_structural_timing='',
                 webmon_structural_message='Review a structural plan for this acquisition.').items():setattr(s,name,value)
         if getattr(self,'_webmon_structural_fit',None):self._webmon_structural_fit.update(go.Figure(symmetry_plots.empty('No structural fit selected')))
 
@@ -186,6 +186,7 @@ class StructuralLiveMixin:
                     v.VBtn('Open continuation in GSAS-II',click=self.webmon_open_structural_gsasii,variant='outlined',
                         disabled=("['starting','ready'].includes(gsasii_session_status)",))
                 html.A('Open GSAS-II desktop',href=('gsasii_launch_url',),target='_blank',rel='noopener noreferrer',v_if='!!gsasii_launch_url')
+                html.P('{{ webmon_structural_timing }}',v_if='!!webmon_structural_timing',classes='text-caption')
                 self._webmon_structural_fit=plotly.Figure(display_mode_bar=True)
                 with html.Details():
                     html.Summary('Fitted cell and mode amplitudes')
@@ -317,12 +318,14 @@ class StructuralLiveMixin:
 
     def webmon_render_structural(self,value=None,**_):
         s=self.server.state
+        s.webmon_structural_timing=''
         if isinstance(value,str) and value in self._webmon_structural_results:s.webmon_structural_selected=value
         row=self._webmon_structural_results.get(s.webmon_structural_selected)
         if row is None or not getattr(self,'_webmon_structural_fit',None):return
         try:
             result=row['result'];view=Path(result['view'])
             if file_sha(view)!=row['view_sha256']:raise ValueError('The structural plot artifact changed; recover its checked job result')
+            s.webmon_structural_timing=structural_timing_summary(result.get('workflow_timings'))
             selected=dict(id=s.webmon_structural_selected,has_view=True,view_path=str(view),status='optimization_unresolved',
                 source=result['snapshot_sha256'],name=row['name'])
             self._webmon_structural_fit.update(go.Figure(symmetry_plots.fit(selected,axis=s.webmon_structural_axis,

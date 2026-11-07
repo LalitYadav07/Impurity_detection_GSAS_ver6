@@ -1,6 +1,7 @@
 """Model-campaign adapter to the shared prepared nonlinear structural service."""
 import shutil
-from ..structural_live.service import SearchSettings, fit_snapshot, prepare_model
+import time
+from ..structural_live.service import SearchSettings, fit_snapshot, prepare_model, workflow_timings
 from .compiler import confined
 from .worker import TrialDisposition
 
@@ -37,6 +38,7 @@ def run(source_gpx,ctx,protocol,candidate,seed):
     settings=SearchSettings(mode_radius=scope['structural_mode_radius'],cell_radius=scope['structural_cell_radius'],
         seconds=scope['structural_seconds'],starts=scope['structural_starts'],recovery_seconds=scope['structural_recovery_seconds'])
     from ..preparation.structural_hints import candidates as prepared_candidates
+    preparation_began=time.monotonic()
     prepared_banks,preparation=prepared_candidates(ctx.input_root,protocol,candidate['id'])
     metadata=prepare_model(source_gpx,child,candidate['transformation_matrix'],candidate['origin_shift'],
                      root/'prepared',phase_name=protocol['parent_phase'],histogram_name=protocol['histogram'],
@@ -44,7 +46,10 @@ def run(source_gpx,ctx,protocol,candidate,seed):
                      settings=settings,prepared_banks=prepared_banks)
     if set(candidate['modes'])!=set(metadata['inventory']['native_mode_names']):
         raise TrialDisposition('integrity_failure','Prepared search requires the complete discovered native mode inventory')
+    fitting_began=time.monotonic()
     result=fit_snapshot(root/'prepared',root/'fit',settings=settings)
+    stages=workflow_timings(fitting_began-preparation_began,time.monotonic()-fitting_began,scope='model')
+    result['workflow_timings']=stages
     result['preparation_attachment']=preparation
     output=ctx.run_dir/'child-refinement.gpx'
     shutil.copyfile(result['continuation']['path'],output)
@@ -61,7 +66,8 @@ def run(source_gpx,ctx,protocol,candidate,seed):
         zero_control_error=metadata['zero_profile_error'],
         structural_fit=dict(all_physical_modes_retained=True,physical_modes=result['physical_mode_count'],
             origin_gauges=metadata['inventory']['gauge_rank'],covariance_available=False,
-            timings=result['timings'],optimization_qualified=False,optimization_progress=progress,
+            timings=result['timings'],workflow_timings=stages,
+            optimization_qualified=False,optimization_progress=progress,
             portable_preparation=result['portable_preparation'],preparation_attachment=preparation,
             initialization_execution=result['initialization_execution'],
             native_active_set_verified=result['continuation']['native_active_set_verified']),

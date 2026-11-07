@@ -8,6 +8,23 @@ from gpx_recipe.structural_live.service import SearchSettings
 from gpx_recipe.symmetry.native_audit import profile_residual_metrics
 
 
+def test_structural_stage_time_includes_current_preparation_without_relabeling_fit_time():
+    from gpx_recipe.structural_live.service import workflow_timings
+    measured=workflow_timings(54.5,40.25,scope='model')
+    assert measured['preparation_seconds']==54.5
+    assert measured['fit_service_seconds']==40.25
+    assert measured['combined_service_seconds']==94.75
+    assert measured['queue_startup_transfer_included'] is False
+    assert workflow_timings(2.,3.,scope='acquisition')['combined_service_seconds']==5.
+
+
+@pytest.mark.parametrize('bad',[True,-1.,float('nan'),float('inf'),None,10**400])
+def test_structural_timing_rejects_invalid_durations(bad):
+    from gpx_recipe.structural_live.service import workflow_timings
+    with pytest.raises(ValueError):workflow_timings(bad,1.,scope='model')
+    with pytest.raises(ValueError):workflow_timings(1.,bad,scope='model')
+
+
 def test_default_cell_domain_is_shared_and_supports_moderate_symmetry_breaking():
     import inspect
     from gpx_recipe.structural_live.defaults import DEFAULT_CELL_RADIUS,DEFAULT_FIT_SECONDS
