@@ -14,6 +14,10 @@ def certified(tmp_path, *, batch=False,kind='structural'):
     names=('starts.npz','starts.json') if kind=='structural' else ('response.npz','scattering.npz')
     for name in names:(output/name).write_bytes(b'public artificial native output '+name.encode())
     detail=dict(physics_sha256='a'*64)
+    if kind=='structural':
+        detail['starting_curves']=2
+        (output/'starts.json').write_text(json.dumps(dict(curve_role='native',
+            interpolation=False,native_curves=2,sha256=file_sha(output/'starts.npz'))))
     if kind=='magnetic':detail['scattering']=dict(status='prepared',artifact='scattering.npz',identity='b'*64)
     manifest=dict(schema='radar-experiment-preparation-entry/v1',kind=kind,
         implementation_sha256=package_signature(),observations_included=False,scientific_result=False,
@@ -30,6 +34,23 @@ def certified(tmp_path, *, batch=False,kind='structural'):
     certificate=tmp_path/'certificate.json'
     document=certificates.produce(response,root,archive,certificate)
     return root,output,response,archive,certificate,document
+
+
+@pytest.mark.parametrize('change',['proposal','interpolation','count'])
+def test_structural_proposals_cannot_receive_native_production_authority(tmp_path,change):
+    root,output,response,archive,path,_=certified(tmp_path)
+    receipt=json.loads((output/'starts.json').read_text())
+    if change=='proposal':receipt.update(curve_role='starting_proposals',native_curves=0,starting_curves=2)
+    elif change=='interpolation':receipt['interpolation']=True
+    else:receipt['native_curves']=1
+    (output/'starts.json').write_text(json.dumps(receipt))
+    manifest=json.loads((output/'entry.json').read_text())
+    manifest['artifacts']['starts.json']=file_sha(output/'starts.json')
+    (output/'entry.json').write_text(json.dumps(manifest))
+    response['result']['entry_sha256']=file_sha(output/'entry.json')
+    response['files']={str(p.relative_to(root)):file_sha(p) for p in output.iterdir()}
+    with pytest.raises(ValueError,match='native structural banks'):
+        certificates.produce(response,root,archive,path)
 
 
 def envelope(tmp_path, certificate):

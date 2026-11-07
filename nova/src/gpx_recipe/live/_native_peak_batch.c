@@ -1,6 +1,5 @@
-/* Bounded scheduling adapter for the existing GSAS-II Fortran kernel.
- * There is no peak-shape formula, interpolation or saved prediction here.
- */
+/* Bounded adapters for the existing GSAS-II Fortran kernel. Exact routines
+ * below remain separate from the explicitly named proposal interpolator. */
 #include <math.h>
 #include <stdint.h>
 #include <stddef.h>
@@ -96,6 +95,72 @@ int native_peak_derivative_columns(derivative_function function,ptrdiff_t nr,ptr
                 derivative+=v[4]*(double)dg[j];
                 columns[c*nx+lo+j]+=dh[row*nc+c]*(double)value[j]+height[row]*derivative;
             }
+        }
+    }
+    return 0;
+}
+
+/* Proposal-only continuous TOF tails. Original Fortran evaluates every core
+ * and unsupported bin. These results never establish native bank authority. */
+static void proposal_spline_weights(double t,double *w) {
+    double a=1.-t;
+    w[0]=a*a*a/6.;w[1]=(3.*t*t*t-6.*t*t+4.)/6.;
+    w[2]=(-3.*t*t*t+3.*t*t+3.*t+1.)/6.;w[3]=t*t*t/6.;
+}
+static int proposal_spline_sample(const double *c,const uint8_t *halo,
+        ptrdiff_t rows,ptrdiff_t cols,double u,double v,double *out) {
+    if (!isfinite(u)||!isfinite(v)||u<1.||v<1.||u>=rows-2.||v>=cols-2.) return 0;
+    ptrdiff_t hu=(ptrdiff_t)floor(u+.5),hv=(ptrdiff_t)floor(v+.5);
+    if (!halo[hu*cols+hv]) return 0;
+    ptrdiff_t iu=(ptrdiff_t)floor(u),iv=(ptrdiff_t)floor(v);
+    double wu[4],wv[4],value=0.;proposal_spline_weights(u-iu,wu);proposal_spline_weights(v-iv,wv);
+    for (int i=0;i<4;i++) {
+        const double *row=c+(iu-1+i)*cols+iv-1;double h=0.;
+        for (int j=0;j<4;j++) h+=wv[j]*row[j];
+        value+=wu[i]*h;
+    }
+    if (!isfinite(value)||value<0.) return 0;
+    *out=value;return 1;
+}
+int proposal_tof_profile_sum(peak_function peak,ptrdiff_t nr,ptrdiff_t nx,
+    const double *axis,const double *parameters,const double *heights,
+    const int64_t *bounds,const double *d,ptrdiff_t maximum,
+    const double *coefficients,const uint8_t *halo,ptrdiff_t rows,ptrdiff_t cols,
+    double u0,double du,double v0,double dv,
+    float *offset,float *native,double *temporary,int64_t *indices,
+    double *signal,int64_t *statistics) {
+    if (!peak||nr<0||nx<1||maximum<2||maximum>INT_MAX||rows<4||cols<4||
+        !isfinite(u0)||!isfinite(v0)||!isfinite(du)||!isfinite(dv)||du<=0.||dv<=0.) return 1;
+    const double radius=sinh(6.);
+    for (ptrdiff_t row=0;row<nr;row++) {
+        int64_t lo=bounds[2*row],hi=bounds[2*row+1];
+        const double *p=parameters+row*5;
+        if (lo<0||hi>nx||hi-lo<2||hi-lo>maximum) return 2;
+        if (!isfinite(heights[row])) return 3;
+        for (int j=0;j<5;j++) if (!isfinite(p[j])) return 3;
+        double width=sqrt(p[3]),u=(log(d[row])-u0)/du;
+        int supported=isfinite(width)&&width>0.&&isfinite(u)&&u>=1.&&u<rows-2.;
+        int count=0;
+        if (!supported) statistics[2]++;
+        for (int64_t j=0;j<hi-lo;j++) {
+            double dx=axis[lo+j]-p[0],value=0.;
+            int central=supported&&dx>=-radius*width&&dx<radius*width;
+            if (!central&&supported&&proposal_spline_sample(coefficients,halo,rows,cols,u,
+                    (asinh(dx/width)-v0)/dv,&value)) {
+                temporary[j]=value/width;statistics[1]++;
+            } else {
+                offset[count]=(float)dx;indices[count]=j;count++;
+                statistics[0]++;if (supported&&!central) statistics[3]++;
+            }
+        }
+        if (count) {
+            float a=(float)p[1],b=(float)p[2],s=(float)p[3],g=(float)p[4];
+            peak(&count,offset,&a,&b,&s,&g,native);
+            for (int j=0;j<count;j++) temporary[indices[j]]=(double)native[j];
+        }
+        for (int64_t j=0;j<hi-lo;j++) {
+            double contribution=heights[row]*temporary[j];
+            signal[lo+j]=signal[lo+j]+contribution;
         }
     }
     return 0;

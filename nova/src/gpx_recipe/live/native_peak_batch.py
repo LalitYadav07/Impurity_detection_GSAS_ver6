@@ -31,6 +31,8 @@ FLAGS=('-O3','-fPIC','-shared','-fno-fast-math','-ffp-contract=off','-frounding-
 SCHEMA='radar-native-peak-batch-build/v1'
 ABI=0x504e5401
 DEFAULT_FLOATING=(895,8064)
+IMAGE_HELPER_ROOTS=(Path('/opt/radar-native/gpx_recipe/live'),
+    Path('/opt/radar-symmetry/gpx_recipe/live'))
 
 
 class BatchUnavailable(ValueError):
@@ -42,8 +44,8 @@ def _files():
     # A frozen scientific bundle can contain the approved Python/C sources,
     # but never supplies executable helper code. Resolve only the image's
     # installed helper (or an ordinary installed wheel), not its job folder.
-    image=Path('/opt/radar-symmetry/gpx_recipe/live')
-    root=image if image.is_dir() else Path(sysconfig.get_path('purelib'))/'gpx_recipe/live'
+    root=next((path for path in IMAGE_HELPER_ROOTS if path.is_dir()),
+        Path(sysconfig.get_path('purelib'))/'gpx_recipe/live')
     return source,root/'_native_peak_batch.so',root/'_native_peak_batch.receipt'
 
 
@@ -57,7 +59,10 @@ def _sha(path):
 def build(directory=None):
     """Image-build/developer command only; never invoked by a fit or import."""
     source=Path(__file__).with_name('_native_peak_batch.c')
-    default_target=source.with_suffix('.so')
+    # The image builder and a later frozen worker must agree on the installed
+    # location. Building beside whichever source happened to be imported made
+    # the reviewed-refinement image invisible to its own loader.
+    default_target=_files()[1]
     target=default_target if directory is None else Path(directory)/default_target.name
     target.parent.mkdir(parents=True,exist_ok=True)
     compiler=shutil.which('cc') or shutil.which('gcc')

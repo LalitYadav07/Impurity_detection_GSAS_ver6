@@ -10,7 +10,8 @@ COPY tests/gpx_recipe/nuclear_powder_control.py /opt/radar-symmetry/nuclear_powd
 ENV PYTHONPATH=/opt/radar-symmetry:/opt/radar-symmetry/gpx_recipe/symmetry/adapters:/opt/radar-pd/scripts:/opt/radar-pd/GSAS-II
 # Only the pure-Python point generator is added. Never resolve/upgrade the
 # installed numerical dependencies as a side effect of a symmetry release.
-RUN python -m gpx_recipe.live.native_peak_batch --build \
+RUN mkdir -p /opt/radar-native/gpx_recipe/live \
+    && python -m gpx_recipe.live.native_peak_batch --build \
     && python -m pip install --no-cache-dir --no-deps 'seekpath==2.2.1' \
     && python /opt/radar-symmetry/kernel_geometry_control.py \
         --kernel-patch /opt/radar-symmetry/gpx_recipe/symmetry/kernel_patch.py \

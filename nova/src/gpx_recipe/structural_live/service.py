@@ -72,7 +72,8 @@ def fit_snapshot(prepared, output, *, settings=None, observation=None, warm_star
     occupancy, ADPs, secondary phases and all higher background coefficients.
     """
     from .optimization.native_background_context import fit_table
-    from .optimization.offline_native_start_bank import build, OfflineNativeStartBank
+    from .optimization.starting_proposals import load_current_bank
+    from ..preparation.structural_consume import prepare_starting_bank
     from .optimization.profiled_native_fit import fit
     from .optimization.captured_cell_derivative import CapturedCellDerivative
     from .optimization.refinable_gpx import export_refinable
@@ -109,8 +110,9 @@ def fit_snapshot(prepared, output, *, settings=None, observation=None, warm_star
     bank_reused=bank_path.is_file()
     if not bank_reused:
         bank_path=output/'starts.npz'
-        build(source,bank_path,policy='joint_cell_v1',reuse_fixed_cell_profiles=True)
-    bank=OfflineNativeStartBank(source,bank_path)
+        prepare_starting_bank(source,bank_path)
+    bank,initialization_execution=load_current_bank(source,bank_path,output)
+    if initialization_execution['regenerated']:bank_reused=False
     portable_preparation=None
     contract=Path(prepared)/'starting-curve-contract.json'
     if contract.is_file():
@@ -181,6 +183,7 @@ def fit_snapshot(prepared, output, *, settings=None, observation=None, warm_star
         physical_mode_count=m,cell_parameter_count=d-m,all_physical_modes_retained=True,
         result=fitted,metrics=metrics,verification=dict(relative_error=relative,max_sigma_error=sigma,saved_observations=contracts),
         starting_curves_reused=bank_reused,
+        initialization_execution=initialization_execution,
         portable_preparation=portable_preparation,
         frozen=frozen,continuation=continuation,timings=timings,wall_seconds=time.monotonic()-started,
         previous_likelihood_accumulated=False,instrument_parameters_fixed=True,

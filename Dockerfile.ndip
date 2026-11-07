@@ -30,7 +30,9 @@ ENV PYTHONPATH=/opt/radar-pd/nova/src:/opt/radar-pd/scripts:/opt/radar-pd/GSAS-I
 
 # The recipe worker and model worker use one reviewed native powder kernel.
 # Apply once at image build; existing containers and sealed results are intact.
-RUN python tests/gpx_recipe/kernel_geometry_control.py \
+RUN mkdir -p /opt/radar-native/gpx_recipe/live \
+    && python -m gpx_recipe.live.native_peak_batch --build \
+    && python tests/gpx_recipe/kernel_geometry_control.py \
         --kernel-patch nova/src/gpx_recipe/symmetry/kernel_patch.py \
         > /opt/radar-pd/kernel-geometry-validation.log \
     && python tests/gpx_recipe/nuclear_powder_control.py \

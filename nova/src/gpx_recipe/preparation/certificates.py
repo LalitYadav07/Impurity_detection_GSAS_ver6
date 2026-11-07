@@ -88,6 +88,17 @@ def produce(response,worker_root,archive,destination):
             artifact=output/name
             if artifact.is_symlink() or file_sha(artifact)!=sha:
                 raise ValueError('Native preparation array changed before certification')
+        if result['kind']=='structural':
+            receipt=output/'starts.json'
+            if receipt.stat().st_size>MAX_BYTES:
+                raise ValueError('Native structural receipt exceeds its bound')
+            bank=json.loads(receipt.read_text())
+            if (not isinstance(bank,dict) or bank.get('curve_role','native')!='native'
+                    or bank.get('interpolation') is not False
+                    or bank.get('sha256')!=file_sha(output/'starts.npz')
+                    or type(bank.get('native_curves')) is not int or bank['native_curves']<1
+                    or bank['native_curves']!=manifest['detail'].get('starting_curves')):
+                raise ValueError('Only complete native structural banks can receive native origin')
         if result['kind']=='kernel':
             from .tof_kernel_arrays import read as read_kernel
             from .kernel_runtime import origin_identity,validate_record

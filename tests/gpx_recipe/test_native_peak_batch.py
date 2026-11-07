@@ -77,6 +77,27 @@ def test_missing_helper_retains_original_kernel_without_runtime_compilation(monk
     assert batch.for_powder(SimpleNamespace(pyd=object())) is None
 
 
+@pytest.mark.parametrize('installation',['shared','legacy','wheel'])
+def test_image_builder_and_frozen_worker_resolve_the_same_installed_helper(tmp_path,monkeypatch,installation):
+    common=tmp_path/'shared';legacy=tmp_path/'legacy';wheel=tmp_path/'wheel'
+    monkeypatch.setattr(batch,'IMAGE_HELPER_ROOTS',(common,legacy))
+    monkeypatch.setattr(batch.sysconfig,'get_path',lambda _:str(wheel))
+    legacy.mkdir()
+    if installation=='shared':common.mkdir()
+    if installation=='wheel':legacy.rmdir()
+    expected={'shared':common,'legacy':legacy,'wheel':wheel/'gpx_recipe/live'}[installation]
+    monkeypatch.setattr(batch.shutil,'which',lambda _: '/installed/compiler')
+    def compile_only_at_image_build(command,**kwargs):
+        Path(command[command.index('-o')+1]).write_bytes(b'compiled-image-helper')
+    monkeypatch.setattr(batch.subprocess,'run',compile_only_at_image_build)
+    receipt=batch.build()
+    source,binary,stamp=batch._files()
+    assert binary.parent==expected and stamp.parent==expected
+    assert binary.read_bytes()==b'compiled-image-helper'
+    assert json.loads(stamp.read_text())==receipt
+    assert receipt['source_sha256']==batch._sha(source)
+
+
 def test_scientific_package_identity_includes_native_source_and_freezes_it(tmp_path,monkeypatch):
     from gpx_recipe.symmetry import compiler
     # Exercise the real package inventory; executable artifacts are excluded

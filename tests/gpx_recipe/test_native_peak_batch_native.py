@@ -83,7 +83,7 @@ from pathlib import Path
 from GSASII import GSASIIpwd as p
 from gpx_recipe.live.native_peak_batch import NativePeakBatch
 b=NativePeakBatch(p)
-assert b.helper_path.parent==Path('/opt/radar-symmetry/gpx_recipe/live')
+assert b.helper_path.parent in (Path('/opt/radar-native/gpx_recipe/live'),Path('/opt/radar-symmetry/gpx_recipe/live'))
 x=np.arange(8.);args=np.array([1.,.5,.25,1.,.125])
 expected=p.getEpsVoigt(*args,x)[0].astype(float)
 np.testing.assert_array_equal(b.render({(1,0,0):(args,1.,0,8)},x),expected)

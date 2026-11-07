@@ -1,5 +1,29 @@
 # Joint structural search
 
+Current-context starting curves have two explicit roles. Portable native banks
+retain their creating-job admission and exact-context reuse. Large reviewed
+TOF profiles can instead compile continuous starting proposals automatically
+when those native banks do not match the actual context. The proposal path
+retains exact fixed-cell response reuse, native geometry and structure factors,
+the complete joint starting portfolio (185 points when displacement modes are
+present), and the original proposal-step selection. It
+uses native peak cores and supported interpolated tails. Tabulated profiles,
+unsupported corrections and small workloads keep the original native path.
+The one-million-reference-bin scheduling threshold avoids compiling a large
+table for small work; it is a performance policy, not a scientific exclusion.
+
+These proposal banks are labelled `starting_proposals`, with zero
+`native_curves`. They cannot receive a native-production certificate or enter
+the native-bank registry. Only their creating process owns reuse; fresh workers
+regenerate into their new output directory without modifying the saved bank.
+No imported table or qualification flag is accepted. Scale/background profiling,
+accepted optimization steps and independent GPX checks remain native. Gaussian
+conditional nuisance fitting solves its bounded least-squares problem from
+the actual native design, so screening-coefficient roundoff is not carried into
+the native optimization trajectory. Receipts distinguish this execution from
+portable native-library reuse. Component and matched-work controls do not
+establish optimization convergence, complete-catalog recovery or NDIP latency.
+
 The structural workflow adds a nonlinear backend to **Refinement → Model
 exploration → Structural displacement modes**. It uses GSAS-II for diffraction
 and instrumental profiles, and shares the existing campaign ledger, Galaxy
@@ -731,6 +755,12 @@ limits or an unqualified anchor retain the original proposal path. Accepted
 steps, stationarity retries, observations and independent GPX checks continue
 to use the full native calculation. These proposal derivatives do not supply
 parameter covariance or a convergence certificate.
+
+The Model and reviewed-refinement images install the same compiled helper in
+`/opt/radar-native/gpx_recipe/live`. Their release checks require both the exact
+batch entry point and the separate proposal entry point. Frozen scientific
+jobs resolve that installed helper; an uploaded library cannot supply an
+executable. Older Model images retain their installed-location fallback.
 
 Internal matched-work qualification can limit the number of complete updates
 per start. Such a receipt is explicitly unresolved; this limit is not exposed

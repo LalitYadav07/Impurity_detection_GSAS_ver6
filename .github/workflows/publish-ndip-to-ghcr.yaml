@@ -128,8 +128,13 @@ jobs:
           from gpx_recipe.symmetry.compiler import package_signature
           from gpx_recipe.battery.transport import implementation_signature
           from gpx_recipe.worker import work
+          from GSASII import GSASIIpwd
+          from gpx_recipe.live.native_peak_batch import NativePeakBatch
           assert len(package_signature()) == 64
           assert len(implementation_signature()) == 64
+          helper=NativePeakBatch(GSASIIpwd)
+          assert helper.diagnostics()["interpolation"] is False
+          assert hasattr(helper.library,"proposal_tof_profile_sum")
           print("Reviewed preparation package and adapter identities available", work.__name__)'
 
       - name: Verify recovered-stage publication in the built worker

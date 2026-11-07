@@ -32,6 +32,9 @@ def _bank_key(source,path,receipt_path=None):
 
 
 def _remember_native(source,path):
+    receipt=read_bank_receipt(path)
+    if receipt.get('curve_role','native')!='native' or receipt.get('interpolation') is not False:
+        raise ValueError('Starting proposals cannot acquire native-bank authority')
     key=_bank_key(source,path)
     with _native_bank_lock:
         _native_banks[key]=True;_native_banks.move_to_end(key)
@@ -75,24 +78,30 @@ def build(source,path,policy='multiscale_v1',*,reuse_fixed_cell_profiles=False):
     if reuse_fixed_cell_profiles:
         from .native_bank_reuse import build_reusing_profiles
         return build_reusing_profiles(source,path,policy=policy)
+    return _construct(source,path,policy=policy)
+
+
+def _construct(source,path,policy='multiscale_v1',*,proposal_renderer=None):
+    """Shared complete portfolio; proposal rendering cannot grant native origin."""
     path=Path(path)
     if path.exists() or path.with_suffix('.json').exists():raise ValueError('Start-bank artifacts are immutable; use a new path')
+    evaluate=source.native if proposal_renderer is None else proposal_renderer
     start=time.perf_counter();identity=context(source);points=policy_points(source,policy)
     feasible=[];curves=[];selected=[]
     for index,point in enumerate(points):
         allowed=bool(np.isfinite(source.chemistry.log_kernel((point*source.radii)[None,:])[0]));feasible.append(allowed)
         if not allowed:continue
-        curves.append(source.native(point*source.radii));selected.append(index)
+        curves.append(evaluate(point*source.radii));selected.append(index)
     if not curves:raise ValueError('No chemically feasible native starting curves')
     # Proposal scales can be chosen before data exist. Their native finite
     # differences remain proposals, not a surrogate likelihood or covariance.
     from .reference_secants import select_secant_steps
-    began=time.perf_counter();origin=np.zeros(len(source.radii));parent=source.native(origin)
+    began=time.perf_counter();origin=np.zeros(len(source.radii));parent=evaluate(origin)
     weight=1/np.sqrt(np.maximum(abs(parent),max(np.max(abs(parent))*1e-4,1e-30)))
     def allowed(p):
         return np.isfinite(p).all() and np.all(abs(p)<=1.) and bool(np.isfinite(source.chemistry.log_kernel((p*source.radii)[None,:])[0]))
     try:
-        steps,details=select_secant_steps(lambda p:source.native(p*source.radii)*weight,origin,
+        steps,details=select_secant_steps(lambda p:evaluate(p*source.radii)*weight,origin,
             range(source.mode_dimensions,len(source.radii)),allowed=allowed,scales=(.0005,.002,.008,.032,.128))
         proposal=dict(state='prepared',details=details)
     except ValueError as exc:
@@ -106,12 +115,15 @@ def build(source,path,policy='multiscale_v1',*,reuse_fixed_cell_profiles=False):
     extra={} if normalization is None else {'reference_background':normalization[1]}
     path.parent.mkdir(parents=True,exist_ok=True)
     np.savez_compressed(path,points=points[selected],curves=np.asarray(curves),original_indices=np.asarray(selected),feasible=np.asarray(feasible),x=source.fast.x,proposal_cell_steps=steps,**extra)
-    receipt=dict(context=identity,policy=policy,sha256=sha(path),seconds=time.perf_counter()-start,proposed_points=len(points),native_curves=len(curves),
+    native=proposal_renderer is None
+    receipt=dict(context=identity,policy=policy,sha256=sha(path),seconds=time.perf_counter()-start,proposed_points=len(points),native_curves=len(curves) if native else 0,
         chemically_infeasible_points=int(np.count_nonzero(~np.asarray(feasible))),bytes=path.stat().st_size,proposal_step_selection=proposal,
-        interpolation=False,shared_across_candidates=False,scope='Optimizer starts and optional proposal step sizes; all allowed continuous parameters remain free')
+        interpolation=not native,curve_role='native' if native else 'starting_proposals',
+        starting_curves=len(curves),shared_across_candidates=False,
+        scope='Optimizer starts and optional proposal step sizes; all allowed continuous parameters remain free; fitted objectives remain original native calculations')
     if normalization is not None:receipt['affine_nuisance']=normalization[0]
     path.with_suffix('.json').write_text(json.dumps(receipt,indent=2)+'\n')
-    _remember_native(source,path)
+    if native:_remember_native(source,path)
     return receipt
 
 
@@ -131,9 +143,13 @@ def read_bank_receipt(path,receipt_path=None,*,maximum_bytes=None):
 
 
 class OfflineNativeStartBank:
+    CURVE_ROLE='native'
     def __init__(self,source,path,*,receipt_path=None):
         path=Path(path)
         receipt=read_bank_receipt(path,receipt_path)
+        role=receipt.get('curve_role','native')
+        if role!=self.CURVE_ROLE or receipt.get('interpolation') is not (role=='starting_proposals'):
+            raise ValueError('Starting proposal and native-bank roles cannot be interchanged')
         if 'affine_nuisance' in receipt:
             from ...preparation.structural_nuisance import validate_context
             validate_context(receipt['affine_nuisance'])
@@ -163,7 +179,9 @@ class OfflineNativeStartBank:
                 or feasible.shape!=(len(expected),) or not np.array_equal(original,np.flatnonzero(feasible))
                 or not np.array_equal(self.points,expected[original]) or not np.array_equal(x,source.fast.x)):
             raise ValueError('Invalid native start-bank shapes, coordinates or grid')
-        if receipt['native_curves']!=len(self.points):raise ValueError('Start-bank count disagrees with receipt')
+        count=receipt['native_curves'] if role=='native' else receipt.get('starting_curves')
+        if count!=len(self.points) or (role=='starting_proposals' and receipt['native_curves']!=0):
+            raise ValueError('Start-bank count disagrees with its curve role')
         actual=np.isfinite(source.chemistry.log_kernel((expected*source.radii)))
         if actual.shape!=feasible.shape or not np.array_equal(actual,feasible):
             raise ValueError('Native start-bank feasibility differs from the current complete domain')
@@ -185,4 +203,6 @@ class OfflineNativeStartBank:
         self.points.flags.writeable=False;self.curves.flags.writeable=False;self.receipt=receipt
 
     def diagnostics(self):
-        return {k:self.receipt[k] for k in ['sha256','policy','seconds','proposed_points','native_curves','chemically_infeasible_points','bytes','scope','proposal_step_selection']}
+        return dict({k:self.receipt[k] for k in ['sha256','policy','seconds','proposed_points','native_curves','chemically_infeasible_points','bytes','scope','proposal_step_selection']},
+            curve_role=self.receipt.get('curve_role','native'),interpolation=self.receipt['interpolation'],
+            starting_curves=self.receipt.get('starting_curves',self.receipt['native_curves']))
