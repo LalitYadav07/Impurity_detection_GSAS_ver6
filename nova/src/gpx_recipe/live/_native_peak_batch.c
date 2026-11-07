@@ -41,3 +41,28 @@ int native_peak_sum(peak_function peak,ptrdiff_t nr,ptrdiff_t nx,
     }
     return 0;
 }
+
+/* Apply native unit-F2 columns without storing their redundant row indices
+ * and double-precision weighted copies. Raw peaks remain original float32
+ * outputs; the factor multiplication is still performed in double precision
+ * before the structural coefficient, in the same reflection order as CSC. */
+int native_window_multiply(ptrdiff_t nc,ptrdiff_t nr,ptrdiff_t nx,ptrdiff_t outputs,
+                    const int64_t *mapping,const int64_t *bounds,const int64_t *pointers,
+                    const double *factors,const float *raw,const double *weights,double *result) {
+    if (nc<0||nr<0||nx<1||outputs<1||outputs>256) return 1;
+    for (ptrdiff_t col=0;col<nc;++col) {
+        const int64_t row=mapping[col];
+        if (row==-1) continue;
+        if (row<0||row>=nr) return 2;
+        const int64_t low=bounds[2*row],high=bounds[2*row+1],begin=pointers[row];
+        if (low<0||high>nx||high<=low||begin<0||high-low!=pointers[row+1]-begin) return 3;
+        for (ptrdiff_t j=0;j<high-low;++j) {
+            const double unit=factors[row]*(double)raw[begin+j];
+            for (ptrdiff_t k=0;k<outputs;++k) {
+                const double contribution=unit*weights[col*outputs+k];
+                result[(low+j)*outputs+k]=result[(low+j)*outputs+k]+contribution;
+            }
+        }
+    }
+    return 0;
+}

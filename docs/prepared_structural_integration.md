@@ -74,6 +74,19 @@ jobs. Independent children and scans use the existing bounded worker pool.
   not precompute general nonlinear cell/profile changes or certify a global
   minimum. Native context ownership requires separate processes for parallel
   candidates, never concurrent GSAS-II adapters in one process.
+- The reviewed TOF capture can store the original float32 peak windows with
+  their double-precision correction factors, rather than a second weighted
+  sparse matrix and repeated row indices. An installed, checksum-matched
+  helper applies those columns in the original reflection order. The native
+  driver still calculates the entire accepted curve and supplies every raw
+  peak; this representation introduces no new peak calculation or interpolation.
+  Dormant zero-F² reflections and empty columns remain present. Capture,
+  reconstruction, mode derivatives and final GPX audits retain their existing
+  checks. Captured arrays are immutable and owned by the scientific process;
+  this matrix type is not imported from portable libraries. Unsupported
+  arithmetic controls or a missing helper retain the existing CSC capture.
+  Numeric cache accounting includes the compact arrays and retained kernels;
+  the 64 MiB resident limit and complete physical parameter set are unchanged.
 - Starting-curve construction reuses the exact fixed-cell native profile for
   displacement-only proposals. It uses the same required-pass capture engine
   as the shared fit service; it does not construct a separate Pawley response.

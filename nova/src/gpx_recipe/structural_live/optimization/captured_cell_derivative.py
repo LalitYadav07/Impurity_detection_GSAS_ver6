@@ -12,6 +12,7 @@ from .native_cell_derivative import NativeCellDerivative
 from .native_cell_intensity import native_scattering_entry
 from .native_profile_capture import CaptureUnavailable,capture_rietveld_response
 from .profile_cache import NativeProfileBank,MAXIMUM_RESPONSE_COORDINATES
+from .native_window_response import for_source as window_builder_for_source,reorder_response,response_bytes,freeze_response
 
 
 def _numeric_bytes(value):
@@ -33,6 +34,8 @@ class CapturedCellDerivative(NativeCellDerivative):
         self.native_forward=(for_source(source)
             if len(source.radii)<=MAXIMUM_RESPONSE_COORDINATES else None)
         self.kernel_capture_fallbacks=Counter();self.kernel_native_evaluations=0
+        self.window_builder=window_builder_for_source(source,maximum_bytes=maximum_bytes)
+        self.response_storage=Counter()
 
     def has_response(self,point):
         p=self.source.check(point)
@@ -85,24 +88,26 @@ class CapturedCellDerivative(NativeCellDerivative):
         driver=n.math.getPowderProfile;began=time.perf_counter();self.capture_attempts+=1
         from ...preparation.native_tof_kernels import recorder_for_source
         recorder=recorder_for_source(s) if self.native_forward is not None else None
+        options={} if self.window_builder is None else dict(packed_builder=self.window_builder)
         try:
             matrix,bg,proof,curve=capture_rietveld_response(driver,n.math.G2pwd,n.parms,n.histdict,
                 np.asarray(s.fast.x[s.fast.slice],float),hist,phases,n.controls,n.pawley,
                 histogram_name=histogram_name,phase_name=phase_name,evaluate=lambda:s.native(p),
                 maximum_bytes=self.maximum_bytes,
-                observe_peak=recorder.observe if recorder is not None else None)
+                observe_peak=recorder.observe if recorder is not None else None,**options)
         except CaptureUnavailable as exc:
             self._unavailable(key,str(exc));self.direct_native_calls+=1
             self.native_fallback_calls+=1
             return s.native(p)
         finally:self.capture_seconds+=time.perf_counter()-began
         self.captured_native_calls+=1
+        self.response_storage[proof.get('response_storage','CSC columns')]+=1
         curve=np.asarray(curve,float)
         if curve.shape!=s.fast.x.shape or not np.isfinite(curve).all():
             raise ValueError('Captured native profile is incomplete')
         refs=hist['Reflection Lists'][phase_name]['RefList']
         order=np.lexsort((refs[:,2],refs[:,1],refs[:,0]))
-        matrix=matrix[:,order].tocsc();refs=refs[order].copy()
+        matrix=reorder_response(matrix,order);refs=refs[order].copy()
         background=np.zeros_like(curve);background[s.fast.slice]=bg
         bank=NativeProfileBank(s,maximum_bytes=self.maximum_bytes,
             _snapshot=(curve,refs,background,phases[phase_name],hist))
@@ -112,7 +117,7 @@ class CapturedCellDerivative(NativeCellDerivative):
         self.maximum_capture_error=max(self.maximum_capture_error,error)
         if not np.isfinite(error) or error>1e-9:raise ValueError('Captured native response disagrees with the full native curve')
         item=native_scattering_entry(s,bank,matrix)
-        size=(matrix.data.nbytes+matrix.indices.nbytes+matrix.indptr.nbytes+
+        size=(response_bytes(matrix)+
               _numeric_bytes(item['ref'])+_numeric_bytes(item['parms'])+background.nbytes+bank.hkls.nbytes)
         if recorder is not None:
             kernel=recorder.finish(maximum_bytes=max(0,self.maximum_bytes-size))
@@ -124,7 +129,7 @@ class CapturedCellDerivative(NativeCellDerivative):
         if size<=self.maximum_bytes:
             while self.cache and (len(self.cache)>=self.max_cells or self.numeric_bytes+size>self.maximum_bytes):
                 _,old=self.cache.popitem(last=False);self.numeric_bytes-=old['numeric_bytes']
-            for values in (matrix.data,matrix.indices,matrix.indptr):values.flags.writeable=False
+            freeze_response(matrix)
             self.cache[key]=item;self.numeric_bytes+=size;self.builds+=1;self.inventory_sizes.add(len(refs))
         else:self._unavailable(key,'complete_numeric_context_exceeds_byte_budget')
         return curve
@@ -153,6 +158,7 @@ class CapturedCellDerivative(NativeCellDerivative):
             capture_seconds=self.capture_seconds,capture_fallbacks=dict(self.capture_fallbacks),
             kernel_native_evaluations=self.kernel_native_evaluations,
             kernel_capture_fallbacks=dict(self.kernel_capture_fallbacks),
+            response_storage=dict(self.response_storage),
             native_forward=self.native_forward.diagnostics() if self.native_forward is not None else None,
             maximum_capture_relative_error=self.maximum_capture_error,
             response_source='Already-required unchanged GSAS-II Rietveld call',interpolation=False)

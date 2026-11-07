@@ -42,7 +42,7 @@ def capture_response(driver, powder, parameters, histdict, axis, histogram,
 
 def capture_rietveld_response(driver,powder,parameters,histdict,axis,histogram,
                               phases,controls,lookup,*,histogram_name,phase_name,
-                              evaluate,maximum_bytes,observe_peak=None):
+                              evaluate,maximum_bytes,observe_peak=None,packed_builder=None):
     """Record unit-F² columns during an already-needed native evaluation.
 
     ``evaluate`` is an owned in-process scientific callback, never serialized
@@ -52,12 +52,12 @@ def capture_rietveld_response(driver,powder,parameters,histdict,axis,histogram,
     if not callable(evaluate):raise TypeError('An owned native evaluator is required')
     return _capture_response(driver,powder,parameters,histdict,axis,histogram,
         phases,controls,lookup,histogram_name=histogram_name,phase_name=phase_name,
-        maximum_bytes=maximum_bytes,evaluate=evaluate,observe_peak=observe_peak)
+        maximum_bytes=maximum_bytes,evaluate=evaluate,observe_peak=observe_peak,packed_builder=packed_builder)
 
 
 def _capture_response(driver,powder,parameters,histdict,axis,histogram,
                       phases,controls,lookup,*,histogram_name,phase_name,
-                      maximum_bytes=None,evaluate=None,observe_peak=None):
+                      maximum_bytes=None,evaluate=None,observe_peak=None,packed_builder=None):
     """Return a native F²-to-signal matrix without N full driver invocations.
 
     This deliberately supports the qualified PNC/PNT, single-phase unit-F²
@@ -71,6 +71,11 @@ def _capture_response(driver,powder,parameters,histdict,axis,histogram,
         raise TypeError('Only an owned Rietveld pass can record original peak outputs')
     hfx = f":{histogram['hId']}:"
     kind = controls.get(hfx + 'histType')
+    if packed_builder is not None:
+        from .native_window_response import NativeWindowBuilder
+        if not isinstance(packed_builder,NativeWindowBuilder) or unit or kind!='PNT':
+            raise TypeError('Packed responses require an owned native TOF Rietveld capture')
+        packed_builder.check()
     if (code is None or kind not in {'PNC', 'PNT'} or hfx + 'Lam1' in parameters
             or set(phases) != {phase_name}
             or set(histogram['Reflection Lists']) != {phase_name}
@@ -131,19 +136,29 @@ def _capture_response(driver,powder,parameters,histdict,axis,histogram,
                     raise CaptureUnavailable('Native reflection identity changed')
                 if unit and float(reflection[9]) != 1.:
                     raise CaptureUnavailable('Response capture requires unit native F squared')
-                profile = np.asarray(result[0], float)
+                profile = np.asarray(result[0]) if packed_builder is not None else np.asarray(result[0],float)
                 factor = float(reflection[11])
                 if (profile.shape != (end - begin,) or not np.isfinite(profile).all()
                         or not np.isfinite(factor)):
                     raise CaptureUnavailable('Nonfinite or unexpected native peak response')
-                signal = factor * profile
-                use = np.flatnonzero(signal)
-                stored_entries += len(use)
-                if maximum_bytes is not None and stored_entries*12+(len(current)+1)*8 > maximum_bytes:
-                    raise CaptureUnavailable('Native profile response exceeds its allocated byte budget')
-                columns[index] = (use.astype(np.int32) + begin, signal[use].copy())
+                if packed_builder is not None:
+                    if profile.dtype!=np.dtype('float32'):
+                        raise CaptureUnavailable('Native TOF window precision is unsupported')
+                    stored_entries+=len(profile)
+                    required=stored_entries*4+40*(len(columns)+1)+8*len(current)+8
+                    if required>maximum_bytes:
+                        raise CaptureUnavailable('Native profile response exceeds its allocated byte budget')
+                    columns[index]=(int(begin),int(end),factor,np.frombuffer(profile.tobytes(),dtype=np.float32))
+                else:
+                    signal = factor * profile
+                    use = np.flatnonzero(signal)
+                    stored_entries += len(use)
+                    required=stored_entries*12+(len(current)+1)*8
+                    if maximum_bytes is not None and required > maximum_bytes:
+                        raise CaptureUnavailable('Native profile response exceeds its allocated byte budget')
+                    columns[index] = (use.astype(np.int32) + begin, signal[use].copy())
                 if observe_peak is not None:
-                    remaining=maximum_bytes-(stored_entries*12+(len(current)+1)*8)
+                    remaining=maximum_bytes-required
                     observe_peak(tuple(reflection[:3]),np.asarray(args[:-1],float),
                         np.asarray(result[0]),begin,end,remaining,original)
                 native_peak_calls += 1
@@ -183,15 +198,18 @@ def _capture_response(driver,powder,parameters,histdict,axis,histogram,
             setattr(powder, name, original)
         _capture_lock.release()
     refs=histogram['Reflection Lists'][phase_name]['RefList'];count=len(refs)
-    indices, values, pointers = [], [], [0]
-    for index in range(count):
-        rows, data = columns.get(index, (np.empty(0, np.int32), np.empty(0)))
-        indices.append(rows)
-        values.append(data)
-        pointers.append(pointers[-1] + len(data))
-    matrix = csc_matrix((np.concatenate(values) if values else np.empty(0),
-                         np.concatenate(indices) if indices else np.empty(0, np.int32),
-                         np.asarray(pointers)), shape=(len(axis), count))
+    if packed_builder is not None:
+        matrix=packed_builder.assemble(columns,count,len(axis))
+    else:
+        indices, values, pointers = [], [], [0]
+        for index in range(count):
+            rows, data = columns.get(index, (np.empty(0, np.int32), np.empty(0)))
+            indices.append(rows)
+            values.append(data)
+            pointers.append(pointers[-1] + len(data))
+        matrix = csc_matrix((np.concatenate(values) if values else np.empty(0),
+                             np.concatenate(indices) if indices else np.empty(0, np.int32),
+                             np.asarray(pointers)), shape=(len(axis), count))
     signal = np.asarray(signal, float)
     background = np.asarray(background, float)
     if (signal.shape != axis.shape or background.shape != axis.shape
@@ -207,4 +225,5 @@ def _capture_response(driver,powder,parameters,histdict,axis,histogram,
         method='single native profile pass' if unit else 'already-required native Rietveld pass', native_driver_calls=1,
         native_peak_calls=native_peak_calls, reflections=count,
         unit_profile_relative_error=error, interpolation=False,
-        native_peak_functions_restored=True,no_F_squared_division=True),native_result
+        native_peak_functions_restored=True,no_F_squared_division=True,
+        response_storage='original native windows' if packed_builder is not None else 'CSC columns'),native_result
