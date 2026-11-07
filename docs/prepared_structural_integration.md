@@ -588,6 +588,16 @@ The locator's metric tolerance is not an intensity or peak-shift tolerance.
 Only exact compiled-input matches reuse native values. No intensity, weight,
 likelihood or fitted structure is imported from a preparation.
 
+Recorded temperature, pressure and the three free acquisition fields are
+excluded from the raw-kernel profile fingerprint. They do not define the
+pinned native peak function. A real public-reference/100 K handoff exposed
+temperature as the only differing field, causing every prepared chunk to be
+bypassed. This exclusion does not freeze physical temperature dependence:
+actual refined cells, coordinates, ADPs and peak arguments remain current.
+Changed X/Y/Z still bypass the stored profile, and every reused peak still
+requires exact compiled-input equality. Full starting-curve and magnetic
+response identities have separate dependencies and acceptance checks.
+
 `point_for_cell` can express a prepared absolute metric in a new nuclear
 baseline's coordinates. It preserves supplied displacement coordinates and
 requires the original metric subspace and reviewed bounds. It never clips,

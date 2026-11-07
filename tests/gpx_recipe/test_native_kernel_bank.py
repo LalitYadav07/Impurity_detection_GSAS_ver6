@@ -89,6 +89,22 @@ def test_actual_xyz_edit_rebuilds_kernels_without_rejecting_the_scientific_model
     assert reader.loads==1 and reader.hits>0
 
 
+@pytest.mark.parametrize('condition',sorted(geometry.ACQUISITION_PARAMETERS))
+def test_recorded_acquisition_condition_does_not_invalidate_raw_peak_physics(tmp_path,condition):
+    _,s=native_source(tmp_path/'inputs','PNT');store,_=bank(tmp_path/'store',s)
+    reader=geometry.PreparedKernelBank(store,s);engine=NativeTOFForward(s);point=np.zeros(len(s.radii))
+    original=s.native(point).copy()
+    key=f':{s.fast.slow.hist.id}:'+condition
+    s.fast.native.parms[key]=float(s.fast.native.parms.get(key,0.))+117.5
+    expected=s.native(point).copy()
+    # These are recorded conditions; the fixed atomic/profile model has not
+    # been transformed into a temperature/pressure-dependent constitutive law.
+    np.testing.assert_array_equal(expected,original)
+    np.testing.assert_array_equal(engine.evaluate(point,kernel=reader),expected)
+    assert not engine.disabled and engine.kernel_hits>0 and reader.loads==1
+    assert not reader.bypasses
+
+
 @pytest.mark.parametrize('failure',['missing','corrupt','budget','setting'])
 def test_unusable_optional_data_keeps_the_complete_original_native_calculation(tmp_path,failure):
     _,s=native_source(tmp_path/'inputs','PNT');store,_=bank(tmp_path/'store',s)

@@ -18,6 +18,10 @@ from .tof_kernel_arrays import checksum,MAX_BYTES
 
 SCHEMA='radar-tof-kernel-geometry/v1'
 MATCH_RTOL=1e-10  # Locator only; actual reuse requires exact compiled bits.
+# Recorded conditions do not identify a raw TOF peak function. The current
+# native cell/profile arguments still decide every individual primitive hit;
+# atomic intensities, corrections and observations are always computed afresh.
+ACQUISITION_PARAMETERS=frozenset({'Temperature','Pressure','FreePrm1','FreePrm2','FreePrm3'})
 
 
 class GeometryUnavailable(ValueError):
@@ -65,7 +69,8 @@ def _profile(source):
         for key,value in n.parms.items():
             if key.startswith(prefix):
                 name=key[len(prefix):]
-                if name!='Scale' and name!='wtFactor' and not name.startswith('Back;'):
+                if (name not in {'Scale','wtFactor'} and not name.startswith('Back;')
+                        and not (role=='bank' and name in ACQUISITION_PARAMETERS)):
                     parameters[role+'/'+name]=value
     controls={name:n.controls.get(prefix+name) for prefix,name in
         [(hfx,'histType'),(hfx,'instType'),(phfx,'SizeType'),(phfx,'MustrainType')]}
