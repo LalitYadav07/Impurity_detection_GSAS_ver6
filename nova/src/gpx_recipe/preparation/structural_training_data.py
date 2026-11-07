@@ -14,11 +14,11 @@ _PERMIT = object()
 
 class FeatureRows:
     """A feature matrix that cannot accidentally materialize as one ndarray."""
-    def __init__(self, array, rows, *, storage, descriptor=None, offset=0, bins=None, _permit=None):
+    def __init__(self, array, rows, *, storage, descriptor=None, offset=0, bins=None, channels=8, _permit=None):
         if _permit is not _PERMIT:
             raise TypeError('Use a checked dense array or owned feature-cache reader')
         self._array = array; self._descriptor = descriptor; self._offset = offset
-        self.shape = (rows, *(array.shape[1:] if array is not None else (8, bins)))
+        self.shape = (rows, *(array.shape[1:] if array is not None else (channels, bins)))
         self.dtype = np.dtype('float32'); self.storage = storage; self.ndim = 3
         self._file_stat = os.fstat(descriptor) if descriptor is not None else None
 
@@ -59,22 +59,23 @@ def feature_rows(value):
     if isinstance(value, FeatureRows):
         return value
     if (not isinstance(value, np.ndarray) or value.ndim != 3 or value.dtype != np.float32
-            or value.shape[1] != 8 or not 64 <= value.shape[2] <= 8192
+            or value.shape[1] not in (3,8) or not 64 <= value.shape[2] <= 8192
             or not 1 <= len(value) <= MAX_ROWS or value.nbytes > MAX_DENSE_BYTES
             or not np.isfinite(value).all()):
         raise ValueError('Use bounded finite structural features or a checked disk-backed cache')
     return FeatureRows(value, len(value), storage='in_memory', _permit=_PERMIT)
 
 
-def open_rows(path, *, sha256, capacity, rows, bins):
+def open_rows(path, *, sha256, capacity, rows, bins, channels=8):
     """Inspect and hash the same regular file descriptor that supplies bounded row reads.
 
     These NPY files are internal working state, not uploaded model programs
     or portable experiment-library assets. Completed cache files are read in bounded batches; no pickle or object dtype is accepted.
     """
     if (type(capacity) is not int or type(rows) is not int or type(bins) is not int
+            or type(channels) is not int or channels not in (3,8)
             or not 1 <= rows <= capacity <= MAX_ROWS or not 64 <= bins <= 8192
-            or capacity*8*bins*4 > MAX_STORE_BYTES):
+            or capacity*channels*bins*4 > MAX_STORE_BYTES):
         raise ValueError('Invalid bounded structural feature-cache dimensions')
     descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     with os.fdopen(descriptor, 'rb') as stream:
@@ -89,8 +90,8 @@ def open_rows(path, *, sha256, capacity, rows, bins):
         else:
             raise ValueError('Unsupported structural feature-cache header')
         offset = stream.tell()
-        if (shape != (capacity, 8, bins) or fortran or dtype != np.dtype('<f4')
-                or info.st_size != offset+capacity*8*bins*4):
+        if (shape != (capacity, channels, bins) or fortran or dtype != np.dtype('<f4')
+                or info.st_size != offset+capacity*channels*bins*4):
             raise ValueError('Feature-cache content differs from its declared dimensions')
         stream.seek(0); digest = hashlib.sha256()
         for block in iter(lambda: stream.read(1024*1024), b''):
@@ -99,7 +100,7 @@ def open_rows(path, *, sha256, capacity, rows, bins):
             raise ValueError('The completed structural feature cache changed')
         owned = os.dup(stream.fileno())
     return FeatureRows(None, rows, storage='file_backed', descriptor=owned,
-                       offset=offset, bins=bins, _permit=_PERMIT)
+                       offset=offset, bins=bins, channels=channels, _permit=_PERMIT)
 
 
 def batches(rows, indices, *, size=64):
@@ -114,15 +115,19 @@ def channel_statistics(rows, indices):
     """Two-pass float64 statistics, with bounded feature working memory."""
     if not len(indices):
         raise ValueError('Normalization needs independent training rows')
-    total = np.zeros(8, np.float64); count = 0
+    channels=rows.shape[1]
+    total = np.zeros(channels, np.float64); count = 0
     for _, values in batches(rows, indices):
         total += values.sum(axis=(0, 2), dtype=np.float64)
         count += len(values)*values.shape[2]
-    mean = total/count; square = np.zeros(8, np.float64)
+    mean = total/count; square = np.zeros(channels, np.float64)
     for _, values in batches(rows, indices):
         delta = values.astype(np.float64)-mean[:, None]
         square += np.einsum('ijk,ijk->j', delta, delta)
     scale = np.maximum(np.sqrt(square/count), .02)
     mean = mean.astype(np.float32)[:, None]; scale = scale.astype(np.float32)[:, None]
-    mean[[2, 3]] = 0.; scale[[2, 3]] = 1.
+    if channels==8:
+        # Only the legacy representation has mask/coordinate channels.
+        # Channel 2 in the new representation is a physical signed residual.
+        mean[[2, 3]] = 0.; scale[[2, 3]] = 1.
     return mean, scale

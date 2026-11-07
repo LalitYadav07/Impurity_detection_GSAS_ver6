@@ -15,7 +15,8 @@ import numpy as np
 from ..live.array_limits import validate_npz_bytes
 from ..symmetry.contracts import validate_candidate
 from .tof_kernel_arrays import read_bounded
-from .structural_features import pattern_features, with_parent_reference
+from .structural_features import pattern_features, with_parent_reference, three_curve_features
+from .structural_paired_blocks import PairedBlock
 from .structural_sampling import partition_trajectories
 from .structural_training_data import MAX_ROWS
 
@@ -88,8 +89,11 @@ def read_block(directory):
 
 
 class DenseFeatures:
+    def __init__(self,channels=8):
+        self.channels=channels
+
     def reserve(self, count, bins):
-        if not 1 <= count <= MAX_ROWS or count*8*bins*4 > MAX_FEATURE_BYTES:
+        if not 1 <= count <= MAX_ROWS or count*self.channels*bins*4 > MAX_FEATURE_BYTES:
             raise ValueError('Assemble structural feature cohorts within the declared memory budget')
         self.values = []
 
@@ -106,20 +110,27 @@ def assemble(blocks, *, bins=2048, split_seed=3917, augmenter=None):
     return assemble_into(lambda: iter(blocks), DenseFeatures(), bins=bins, split_seed=split_seed, augmenter=augmenter)
 
 
-def assemble_into(block_factory, sink, *, bins=2048, split_seed=3917, augmenter=None):
+def assemble_pairs(blocks, *, bins=4096, split_seed=69271, augmenter=None):
+    """Three-curve cohorts use checked parent contexts and class-supported folds."""
+    blocks=list(blocks)
+    return assemble_into(lambda:iter(blocks),DenseFeatures(3),bins=bins,split_seed=split_seed,
+        augmenter=augmenter,paired=True)
+
+
+def assemble_into(block_factory, sink, *, bins=2048, split_seed=3917, augmenter=None, paired=False):
     """One two-pass assembly algorithm for memory or worker-local file storage.
 
     Only one validated raw block and one computed feature need reside at a
     time. Exact aliases still merge labels and close whole trajectory groups
     before partitioning; storage must not change the scientific cohort.
     """
-    if type(bins) is not int or not 64 <= bins <= 8192:
+    if type(paired) is not bool or type(bins) is not int or not 64 <= bins <= 8192:
         raise ValueError('A bounded structural feature grid is required')
     sources = set(); profiles = set(); metadata = []; count = 0
     lower = -np.inf; upper = np.inf; parent_key = None; parent_arrays = None
     definitions = {}; candidate_groups = {}; generated_groups = {}
     for block in block_factory():
-        if not isinstance(block, ExampleBlock):
+        if not isinstance(block, PairedBlock if paired else ExampleBlock):
             raise TypeError('Validated structural example blocks are required')
         d, a = block.manifest, block.arrays
         metadata.append(copy.deepcopy(d))
@@ -132,7 +143,9 @@ def assemble_into(block_factory, sink, *, bins=2048, split_seed=3917, augmenter=
         key = (not preferred, d['child_sha256'])
         if parent_key is None or key < parent_key:
             parent_key = key
-            parent_arrays = (a['q'].copy(), a['theory_intensity'][0].copy(), a['background'].copy())
+            parent_arrays = (a['q'].copy(),
+                (a['parent_intensity'][0] if paired else a['theory_intensity'][0]).copy(),
+                (a['parent_background'][0] if paired else a['background']).copy())
         candidate = d['candidate']; identifier = candidate['id']
         if identifier in definitions and definitions[identifier] != candidate:
             raise ValueError('One structural candidate ID cannot describe different child embeddings')
@@ -156,7 +169,9 @@ def assemble_into(block_factory, sink, *, bins=2048, split_seed=3917, augmenter=
     sink.reserve(count*(1 if augmenter is None else 1+augmenter.controls.variants), bins)
     edges = np.linspace(lower, upper, bins+1)
     q, y, background = parent_arrays
-    reference = pattern_features(q, y, edges, background=background)
+    reference = (three_curve_features(q,y,y,edges,background=background,
+        reference_background=background)['features'] if paired else
+        pattern_features(q, y, edges, background=background))
     records = []; parents = {}; duplicates = {}; clean_origins = {}; augmented = 0
 
     def find(group):
@@ -190,8 +205,12 @@ def assemble_into(block_factory, sink, *, bins=2048, split_seed=3917, augmenter=
         seen += 1
         for index, curve in enumerate(a['theory_intensity']):
             group = d['groups'][index]; parents.setdefault(group, group)
-            feature = with_parent_reference(
-                pattern_features(a['q'], curve, edges, background=a['background']), reference)
+            def feature_for(values,background):
+                if paired:
+                    return three_curve_features(a['q'],values,a['parent_intensity'][index],edges,
+                        background=background,reference_background=a['parent_background'][index])['features']
+                return with_parent_reference(pattern_features(a['q'],values,edges,background=background),reference)
+            feature = feature_for(curve,a['background'])
             key = hashlib.sha256(feature.tobytes()).hexdigest()
             labels = set(map(int, a['geometry_groups'][index])); ref = (block_index, index)
             if key in clean_origins:
@@ -208,17 +227,21 @@ def assemble_into(block_factory, sink, *, bins=2048, split_seed=3917, augmenter=
             if augmenter is not None:
                 for observation in augmenter.observations(a['q'], curve, a['background'], clean_identity=key):
                     augmented += 1
-                    augmented_feature = with_parent_reference(pattern_features(
-                        a['q'], observation['intensity'], edges, background=observation['background']), reference)
+                    augmented_feature = feature_for(observation['intensity'],observation['background'])
                     put(augmented_feature, origin, dict(kind='simulated_observation', **observation['provenance']))
     if seen != len(metadata):
         raise ValueError('Structural inputs changed while building the feature cache')
-    assignments = partition_trajectories([find(r['group']) for r in records], seed=split_seed)
     classes = sorted(set().union(*(o['labels'] for r in records for o in r['origins'])))
     indices = {c: i for i, c in enumerate(classes)}
     targets = np.zeros((len(records), len(classes)), bool)
     for i, record in enumerate(records):
         targets[i, [indices[c] for o in record['origins'] for c in o['labels']]] = True
+    physical_groups=[find(r['group']) for r in records]
+    if paired:
+        from .structural_partitions import partition
+        assignments=partition(physical_groups,targets,seed=split_seed)
+    else:
+        assignments=partition_trajectories(physical_groups,seed=split_seed)
     split = np.asarray([{'train': 0, 'validation': 1, 'test': 2}[assignments[find(r['group'])]]
                         for r in records], np.int8)
     if not np.all(targets[split == 0].any(axis=0)):
@@ -233,7 +256,7 @@ def assemble_into(block_factory, sink, *, bins=2048, split_seed=3917, augmenter=
         augmentation=None if augmenter is None else augmenter.metadata,
         augmentation_sha256=None if augmenter is None else augmenter.sha256,
         augmented_examples=augmented,
-        input_sha256=[d['examples_sha256'] for d in metadata],
+        input_sha256=[d['pairs_sha256' if paired else 'examples_sha256'] for d in metadata],
         candidates=list(definitions.values()),
         candidate_groups=candidate_groups,
         class_candidate_ids={str(group):sorted(identifier for identifier in definitions
@@ -243,4 +266,7 @@ def assemble_into(block_factory, sink, *, bins=2048, split_seed=3917, augmenter=
         parent_sha256=next(iter(sources)), instrument_sha256=next(iter(profiles)),
         original_examples=count, unique_examples=len(records),
         ambiguous_examples=int(np.count_nonzero(targets.sum(axis=1) > 1)),
-        training_domain=domain,screening_qualified=False)
+        training_domain=domain,screening_qualified=False,
+        **(dict(channels=3,representation='reference-current-signed-difference/shared-Q-asinh/v1',
+            reference_kind='calculated_parent_at_shared_parent_compatible_cell',
+            partition_method='class-supported-whole-trajectories/v1') if paired else {}))

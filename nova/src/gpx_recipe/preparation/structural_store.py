@@ -32,21 +32,27 @@ def digest_file(path):
 
 
 class DiskFeatures:
-    def __init__(self, destination):
+    def __init__(self, destination, *, channels=8):
+        if type(channels) is not int or channels not in (3,8):
+            raise ValueError('A declared supported structural channel inventory is required')
+        self.channels=channels
         self.path = Path(destination)/'features.npy'
         self.stream = None; self.count = 0
 
     def reserve(self, count, bins):
-        if not 1 <= count <= MAX_ROWS or count*8*bins*4 > MAX_STORE_BYTES:
+        if not 1 <= count <= MAX_ROWS or count*self.channels*bins*4 > MAX_STORE_BYTES:
             raise ValueError('Structural feature working files exceed their declared disk budget')
         self.capacity = count; self.bins = bins
         self.stream = self.path.open('xb')
         np.lib.format.write_array_header_1_0(self.stream,
-            dict(descr='<f4', fortran_order=False, shape=(count, 8, bins)))
+            dict(descr='<f4', fortran_order=False, shape=(count, self.channels, bins)))
         self.offset = self.stream.tell()
-        self.stream.truncate(self.offset+count*8*bins*4)
+        self.stream.truncate(self.offset+count*self.channels*bins*4)
 
     def append(self, feature):
+        if (not isinstance(feature,np.ndarray) or feature.shape!=(self.channels,self.bins)
+                or feature.dtype!=np.float32 or not np.isfinite(feature).all()):
+            raise ValueError('Feature row differs from its declared structural channels')
         if self.count >= self.capacity:
             raise ValueError('Structural feature count exceeded its reserved capacity')
         self.stream.write(feature.astype('<f4', copy=False).tobytes(order='C')); self.count += 1

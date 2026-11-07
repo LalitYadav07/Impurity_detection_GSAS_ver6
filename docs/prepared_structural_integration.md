@@ -1097,3 +1097,27 @@ validate substitution of measured references. Both cases need separate
 acceptance, including anisotropic thermal cell changes and weak signals that
 finite-resolution powder data cannot distinguish. No three-curve pilot score
 currently authorizes candidate pruning or changes Model/Live execution.
+
+`structural_paired_blocks.read` validates the separate three-curve source
+format before allocating its bounded arrays. Parent-only controls must retain
+both native shape and the same intensity units: an arbitrary scale fit is not
+enough for a shared-scale difference channel. Child identity, complete
+trajectory slices, parent-cell positivity and a constant reference within
+each trajectory are checked. Source hashes establish identity rather than
+native provenance. Imported flags cannot authorize scientific screening.
+
+The shared cohort assembler now supports these checked pairs through
+`assemble_pairs`. Alias closure, noise generation, set-valued targets and
+candidate routes use the existing implementation. New paired cohorts require
+every class in independent training, validation and test trajectories. Noise
+variants cannot manufacture independent class support. An infeasible split
+requests more sampling rather than silently leaving a family out of validation.
+Historical eight-channel cohorts retain their original assignment policy.
+
+`structural_paired_store` writes bounded three-channel working files using the
+shared batch reader. Large training sets do not require materializing all
+features in RAM. Completed caches bind their numerical bytes and retain all
+source references and augmentation provenance. The three-channel signed
+residual is normalized as an intensity feature, never as the legacy coverage
+channel occupying the same numerical index. These working caches are not
+portable weights and do not yet replace the legacy Model/Live ranker loader.

@@ -36,6 +36,8 @@ def generate(request, *, seed, parent_seed, trajectories=64, steps=4,
         raise ValueError('A bounded trajectory count is required')
     if type(steps) is not int or not 1 <= steps <= 32:
         raise ValueError('A bounded amplitude-step count is required')
+    if trajectories*steps>32768:
+        raise ValueError('Generate the paired trajectories in a smaller complete portfolio')
     interval = (0, trajectories) if trajectory_slice is None else trajectory_slice
     if (not isinstance(interval, (tuple, list)) or len(interval) != 2
             or any(type(i) is not int for i in interval)
@@ -72,6 +74,11 @@ def generate(request, *, seed, parent_seed, trajectories=64, steps=4,
     role = paired.role[selected]; trajectory = paired.trajectory[selected]
     if len(points)*len(source.fast.x)*8*2 > 128*1024**2:
         raise ValueError('Generate smaller paired blocks within the 128 MiB curve-array limit')
+    from .structural_paired_blocks import MAX_BYTES
+    numeric_bytes=(3*len(points)*len(source.fast.x)*8+2*len(source.fast.x)*8
+        +points.nbytes+parent_a.nbytes+trajectory.nbytes+role.nbytes+len(points)*(8+1+8+8))
+    if numeric_bytes>MAX_BYTES:
+        raise ValueError('Shard complete paired trajectories to fit the bounded numerical block; retain every coordinate')
     checks = set(np.flatnonzero(role != 2)) | set(np.flatnonzero(np.r_[trajectory[:-1] != trajectory[1:], True]))
     rendered = render_native(source, points, kind=request['grid']['kind'], check_indices=checks, progress=progress)
     # No child callback is allowed after constructing the owned parent below.

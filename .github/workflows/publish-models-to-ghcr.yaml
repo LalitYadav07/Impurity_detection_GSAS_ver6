@@ -216,6 +216,16 @@ jobs:
             /validation/tests/gpx_recipe/test_prepared_tof_profile_handoff_native.py \
             /validation/tests/gpx_recipe/test_structural_ranker_sampling.py \
             /validation/tests/gpx_recipe/test_structural_ranker_features.py \
+            /validation/tests/gpx_recipe/test_structural_parent_metric.py \
+            /validation/tests/gpx_recipe/test_structural_conditioning.py \
+            /validation/tests/gpx_recipe/test_structural_parent_reference_native.py \
+            /validation/tests/gpx_recipe/test_structural_pairs_native.py \
+            /validation/tests/gpx_recipe/test_structural_three_curve_features.py \
+            /validation/tests/gpx_recipe/test_structural_three_curve_attention.py \
+            /validation/tests/gpx_recipe/test_structural_partitions.py \
+            /validation/tests/gpx_recipe/test_structural_paired_blocks.py \
+            /validation/tests/gpx_recipe/test_structural_paired_cohort.py \
+            /validation/tests/gpx_recipe/test_structural_three_curve_store.py \
             /validation/tests/gpx_recipe/test_structural_ranker_cohort.py \
             /validation/tests/gpx_recipe/test_structural_ranker_training_native.py \
             /validation/tests/gpx_recipe/test_structural_ranker_support.py \
@@ -266,6 +276,6 @@ jobs:
             /validation/tests/gpx_recipe/test_prepared_k_series_native.py \
             /validation/tests/gpx_recipe/test_prepared_model_handoff_native.py \
             /validation/tests/gpx_recipe/test_structural_snapshot_job_native.py &&
-          python -c "import xml.etree.ElementTree as E; cases=E.parse(\"/tmp/preparation.xml\").findall(\".//testcase\"); assert len(cases)>=548 and all(c.find(\"skipped\") is None and c.find(\"failure\") is None and c.find(\"error\") is None for c in cases), \"Preparation native acceptance must run without skips\""'
+          python -c "import xml.etree.ElementTree as E; cases=E.parse(\"/tmp/preparation.xml\").findall(\".//testcase\"); assert len(cases)>=600 and all(c.find(\"skipped\") is None and c.find(\"failure\") is None and c.find(\"error\") is None for c in cases), \"Preparation native acceptance must run without skips\""'
       - name: Publish verified immutable image
         run: docker push "$IMAGE"
