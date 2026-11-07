@@ -91,9 +91,10 @@ def test_model_wrapper_preserves_reviewed_reference_and_exports_native_structura
     write_json(tmp_path/'request.json',request)
     script=Path(__file__).resolve().parents[2]/'scripts/ndip_model_campaign.py'
     with (tmp_path/'wrapper.log').open('w') as log:
-        subprocess.run([sys.executable,str(script),'native',str(source),str(tmp_path/'assets.zip'),str(tmp_path/'request.json'),
+        completed=subprocess.run([sys.executable,str(script),'native',str(source),str(tmp_path/'assets.zip'),str(tmp_path/'request.json'),
             str(tmp_path/'worker'),str(tmp_path/'result.zip'),'--preparation-certificate',str(tmp_path/'certificate.json')],
-            check=True,timeout=210,stdout=log,stderr=subprocess.STDOUT)
+            check=False,timeout=210,stdout=log,stderr=subprocess.STDOUT)
+    assert completed.returncode==0,(tmp_path/'wrapper.log').read_text()[-16000:]
     received=unpack(tmp_path/'result.zip',tmp_path/'received')
     response=json.loads((received/'response.json').read_text());result=response['result'];fitted=result['result']
     assert result['schema']=='radar-structural-snapshot-result/v1' and result['revision']==2

@@ -1,6 +1,7 @@
 """Full native start curves, including unsupported-scope and failure controls."""
 import numpy as np
 import pytest
+import json
 
 pytest.importorskip('GSASII.GSASIIscriptable')
 from test_native_profile_capture import native_source
@@ -28,6 +29,7 @@ def test_batched_native_curves_retain_original_values_and_observations(tmp_path,
     assert engine.diagnostics()['qualified_anchor'] and engine.anchor_checks==1,engine.diagnostics()
     assert engine.anchor_comparison['array_identical']
     assert engine.anchor_comparison['differing_bins']==0
+    assert json.loads(json.dumps(engine.diagnostics()))==engine.diagnostics()
     for got,expected in zip(h['Data'][:3],original):np.testing.assert_array_equal(got,expected)
 
 

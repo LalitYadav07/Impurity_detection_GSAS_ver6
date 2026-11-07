@@ -131,7 +131,7 @@ class NativeTOFForward:
                     differing_bins=int(np.count_nonzero(delta)),
                     maximum_absolute_error=float(np.max(abs(delta),initial=0.)),
                     relative_l2_error=float(np.linalg.norm(delta)/max(np.linalg.norm(native),1e-30)),
-                    arithmetic_controls=self.floating)
+                    arithmetic_controls=list(self.floating))
                 if not identical:
                     self.disabled=True
                     self.bypasses['native anchor is not array-identical']+=1
