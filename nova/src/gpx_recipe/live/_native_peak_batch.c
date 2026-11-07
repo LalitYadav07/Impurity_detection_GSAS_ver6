@@ -66,3 +66,37 @@ int native_window_multiply(ptrdiff_t nc,ptrdiff_t nr,ptrdiff_t nx,ptrdiff_t outp
     }
     return 0;
 }
+
+/* Proposal derivatives only. Every peak value and all five partials come
+ * from the original installed GSAS-II Fortran derivative entry point. */
+typedef void (*derivative_function)(int *,float *,float *,float *,float *,float *,
+                                  float *,float *,float *,float *,float *,float *);
+int native_peak_derivative_columns(derivative_function function,ptrdiff_t nr,ptrdiff_t nx,ptrdiff_t nc,
+    const double *axis,const double *parameters,const double *height,const int64_t *bounds,
+    const double *dp,const double *dh,ptrdiff_t maximum,float *scratch,double *signal,double *columns) {
+    if (!function||nr<0||nx<1||nc<1||nc>24||maximum<2||maximum>INT_MAX) return 1;
+    for (ptrdiff_t row=0;row<nr;row++) {
+        const int64_t lo=bounds[2*row],hi=bounds[2*row+1];
+        if (lo<0||hi>nx||hi-lo<2||hi-lo>maximum) return 2;
+        const double *p=parameters+row*5;
+        float a=(float)p[1],b=(float)p[2],s=(float)p[3],g=(float)p[4];
+        int n=(int)(hi-lo);
+        float *offset=scratch,*value=scratch+maximum,*dt=scratch+2*maximum;
+        float *da=scratch+3*maximum,*db=scratch+4*maximum,*ds=scratch+5*maximum,*dg=scratch+6*maximum;
+        for (int j=0;j<n;j++) offset[j]=(float)(axis[lo+j]-p[0]);
+        function(&n,offset,&a,&b,&s,&g,value,dt,da,db,ds,dg);
+        for (int j=0;j<n;j++) {
+            signal[lo+j]+=height[row]*(double)value[j];
+            for (ptrdiff_t c=0;c<nc;c++) {
+                const double *v=dp+(row*nc+c)*5;
+                double derivative=v[0]*(double)dt[j];
+                derivative+=v[1]*(double)da[j];
+                derivative+=v[2]*(double)db[j];
+                derivative+=v[3]*(double)ds[j];
+                derivative+=v[4]*(double)dg[j];
+                columns[c*nx+lo+j]+=dh[row*nc+c]*(double)value[j]+height[row]*derivative;
+            }
+        }
+    }
+    return 0;
+}

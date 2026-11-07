@@ -715,3 +715,24 @@ native entry-point and floating-control checks remain unchanged.
 Automatic component planning, partial-library transport and UI handoff remain
 separate integration requirements. A successful small component test does not
 establish full-catalog storage efficiency or nonlinear-refinement speed.
+
+## Native lattice-proposal batches
+
+For the qualified unmasked isotropic TOF context, the structural optimizer can
+reuse its already evaluated native curve as the anchor for lattice proposals.
+The installed GSAS-II Fortran derivative routine supplies the peak values and
+all five partials in a bounded batch. All child reflections and independent
+cell columns remain represented. A changed reflection inventory makes the
+affected column use the original full-profile finite differences.
+
+The batch must reconstruct the actual current native anchor within its strict
+component check. Missing helpers, incompatible native implementations, memory
+limits or an unqualified anchor retain the original proposal path. Accepted
+steps, stationarity retries, observations and independent GPX checks continue
+to use the full native calculation. These proposal derivatives do not supply
+parameter covariance or a convergence certificate.
+
+Internal matched-work qualification can limit the number of complete updates
+per start. Such a receipt is explicitly unresolved; this limit is not exposed
+as a user accuracy setting and production callers leave it unset. Compare
+work counts as well as wall time when evaluating a faster implementation.

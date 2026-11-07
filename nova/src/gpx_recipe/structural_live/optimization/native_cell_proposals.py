@@ -43,6 +43,8 @@ def _hash(function):
 
 
 class NativeCellProposals:
+    supports_native_anchor=True
+
     def __init__(self, source, *, maximum_bytes=64*1024*1024):
         if type(maximum_bytes) is not int or maximum_bytes < 1:
             raise ValueError('A positive cell-proposal workspace budget is required')
@@ -54,6 +56,10 @@ class NativeCellProposals:
         self.batched_probe_calls=0;self.batched_anchor_checks=0;self.batched_anchor_mismatches=0
         self.maximum_batched_workspace_bytes=0
         self.cached_native_peak_calls=0;self.original_native_peak_calls=0
+        from ...live.native_peak_derivative_batch import for_powder
+        self.derivative_batch=for_powder(source.fast.native.math.G2pwd)
+        self.derivative_batches=0;self.reused_native_anchors=0;self.batch_fallbacks=0
+        self.maximum_batch_anchor_error=0.;self.last_batch_fallback=None
 
     def _context(self):
         s=self.source; n=s.fast.native; n._check()
@@ -84,7 +90,69 @@ class NativeCellProposals:
             raise ProposalUnavailable('Ordered finite native grid required')
         return n,driver,powder,kernel,peak,deriv,axis,histogram,phases,phase
 
-    def columns(self, point, steps, *, allowed, check_time=None, prepared_kernel=None):
+    def _batched_columns(self,context,collector,point,steps,anchor,allowed,check_time):
+        """Reuse an already evaluated native anchor; retain native partials.
+
+        Scalar probes and the compiled partials supply proposals only. Their
+        reconstructed anchor must agree with the actual native curve passed
+        by the owned optimizer. No saved-library assertion substitutes for it.
+        """
+        from ...live.native_peak_batch import BatchUnavailable
+        s=self.source;n=context[0];m=s.mode_dimensions;count=len(point)-m
+        if (collector is None or self.derivative_batch is None or not 1<=count<=24
+                or type(anchor)is not np.ndarray or anchor.shape!=s.fast.x.shape
+                or anchor.dtype!=np.dtype('float64') or not np.isfinite(anchor).all()):
+            raise BatchUnavailable('An existing complete native anchor is required')
+        if not _capture_lock.acquire(blocking=False):
+            raise BatchUnavailable('Another native capture owns this process')
+        pairs=[];details=[];required=8*(count+4)*len(anchor);restored=False
+        try:
+            for column in range(m,len(point)):
+                stencil,detail=feasible_stencil(point,column,steps[column],allowed=allowed)
+                pair=[]
+                for at in stencil:
+                    check_time();records=collector.collect(at,maximum_bytes=self.maximum_bytes-required)
+                    required+=record_bytes(records);pair.append(records);self.batched_probe_calls+=1
+                pairs.append(pair);details.append(detail)
+            check_time();records=collector.collect(point,maximum_bytes=self.maximum_bytes-required)
+            restored=True
+            required+=record_bytes(records)
+            keys=list(records);nr=len(keys)
+            slopes_bytes=8*nr*count*6
+            if required+slopes_bytes>self.maximum_bytes:
+                raise BatchUnavailable('Native derivative coefficients exceed the proposal workspace')
+            dp=np.zeros((nr,count,5));dh=np.zeros((nr,count));usable=np.ones(count,dtype=bool)
+            for index,(pair,detail) in enumerate(zip(pairs,details)):
+                if set(pair[0])!=set(records) or set(pair[1])!=set(records):
+                    usable[index]=False;continue
+                denominator=(2 if detail['scheme']=='central' else 1)*detail['effective_step']
+                for row,key in enumerate(keys):
+                    dp[row,index]=(pair[0][key][0]-pair[1][key][0])/denominator
+                    dh[row,index]=(pair[0][key][1]-pair[1][key][1])/denominator
+            axis=np.asarray(s.fast.x[s.fast.slice],float)
+            signal,raw=self.derivative_batch.render_columns(records,axis,dp,dh,
+                maximum_bytes=self.maximum_bytes-required)
+            histogram=n.histo_phases[0][s.fast.slow.hist.name]
+            background=np.asarray(histogram['Data'][4][s.fast.slice],float)
+            reference=anchor[s.fast.slice]-background
+            error=float(np.linalg.norm(signal-reference)/max(np.linalg.norm(reference),1e-30))
+            self.maximum_batch_anchor_error=max(self.maximum_batch_anchor_error,error)
+            if not np.isfinite(error) or error>1e-10:
+                raise BatchUnavailable('Native derivative-batch anchor is not qualified at this geometry')
+            n._check()
+            full=np.zeros((count,len(anchor)));full[:,s.fast.slice]=raw;full[~usable]=0.
+            self.membership_fallback_columns+=int(np.sum(~usable))
+            self.derivative_batches+=1;self.reused_native_anchors+=1;self.completed+=1
+            self.maximum_accounted_bytes=max(self.maximum_accounted_bytes,
+                required+self.derivative_batch.last_workspace)
+            return anchor.copy(),full,usable
+        finally:
+            try:
+                if not restored:
+                    s.native(point*s.radii);self.anchor_calls+=1
+            finally:_capture_lock.release()
+
+    def columns(self, point, steps, *, allowed, check_time=None, prepared_kernel=None,native_anchor=None):
         """Return a genuine native anchor, raw proposal columns and usable mask.
 
         ``point`` and steps use the optimizer's normalized physical geometry.
@@ -109,6 +177,15 @@ class NativeCellProposals:
             raise
         n,driver,powder,kernel,peak,deriv,axis,histogram,phases,phase=context
         collector=scalar_collector_for_source(s,driver)
+        if self.derivative_batch is not None and native_anchor is not None and collector is not None:
+            from ...live.native_peak_batch import BatchUnavailable
+            try:
+                result=self._batched_columns(context,collector,point,steps,native_anchor,allowed,check_time)
+            except (BatchUnavailable,ScalarBatchUnavailable) as error:
+                self.batch_fallbacks+=1;self.last_batch_fallback=str(error)
+            else:
+                self.seconds+=time.monotonic()-began
+                return result
         if not _capture_lock.acquire(blocking=False):
             self.fallbacks+=1;self.last_reason='Another native capture owns this process';self.seconds+=time.monotonic()-began
             raise ProposalUnavailable('Another native capture owns this process')
@@ -271,6 +348,10 @@ class NativeCellProposals:
             support_window_changes=self.support_window_changes,
             maximum_accounted_workspace_bytes=self.maximum_accounted_bytes,
             workspace_budget_bytes=self.maximum_bytes,seconds=self.seconds,last_fallback_reason=self.last_reason,
+            derivative_batches=self.derivative_batches,reused_native_anchors=self.reused_native_anchors,
+            derivative_batch_fallbacks=self.batch_fallbacks,last_derivative_batch_fallback=self.last_batch_fallback,
+            maximum_derivative_batch_anchor_error=self.maximum_batch_anchor_error,
+            derivative_batch=None if self.derivative_batch is None else self.derivative_batch.diagnostics(),
             scope='Proposal directions only; native acceptance and fresh-native stationarity retry required',
             uncertainty_derivatives_qualified=False,portable_response=False)
 
