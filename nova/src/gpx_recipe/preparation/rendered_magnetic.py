@@ -69,8 +69,12 @@ def identity(*, math, histogram, phases, histdict, parameters, controls, basis, 
                         for k, v in p['Histograms'].items()}) for name, p in phases.items()},
         atoms=[(names[name], index, [key(k) for k in keys]) for name, index, keys in basis.atoms],
         components=basis.components, cartesian=basis.cartesian,
+        # A saved GSAS-II histogram can retain cached reflection lists for a
+        # phase removed from the project. The native forward calculation
+        # consumes the active phases only; orphaned output is not a scattering
+        # dependency and has no canonical phase role in this response.
         reflections={names[name]: np.asarray(rows['RefList'])[:, :4]
-            for name, rows in histogram['Reflection Lists'].items()})
+            for name, rows in histogram['Reflection Lists'].items() if name in names})
     encoded = json.dumps(_plain(content), sort_keys=True, allow_nan=False, separators=(',', ':'))
     if diagnostics is not None:
         diagnostics.update({k:hashlib.sha256(json.dumps(_plain(v),sort_keys=True,allow_nan=False,

@@ -71,6 +71,17 @@ def test_every_rendered_physics_dependency_invalidates_the_identity(monkeypatch,
     assert key(monkeypatch,values)!=before
 
 
+def test_deleted_phase_reflection_cache_has_no_active_scattering_role(monkeypatch):
+    values=context();before=key(monkeypatch,values)
+    reflections=values['histogram']['Reflection Lists']
+    reflections['deleted phase']={'RefList':np.array([[2.,1.,0.,3.,1.,8.]])}
+    assert key(monkeypatch,values)==before
+    reflections['deleted phase']['RefList'][0,3]=7.
+    assert key(monkeypatch,values)==before
+    reflections['mag']['RefList'][0,3]+=1.
+    assert key(monkeypatch,values)!=before
+
+
 def artifact(tmp_path):
     x=np.linspace(100.,200.,5);maps=np.eye(3)[None]
     response=MagneticResponse(x=x,fixed=np.ones(5),nuclear=np.ones(5)*2.,
