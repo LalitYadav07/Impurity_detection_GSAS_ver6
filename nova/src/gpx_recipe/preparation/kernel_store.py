@@ -21,6 +21,7 @@ from .tof_kernel_arrays import (KernelData, checksum, decode, encode, read_bound
                                MAX_BYTES, MAX_METADATA)
 
 SCHEMA = 'radar-tof-kernel-store/v1'
+GEOMETRY_SCHEMA = 'radar-tof-kernel-store/v2'
 PART_SCHEMA = 'radar-tof-kernel-part/v1'
 MAX_CELLS = 512
 MAX_STORE_BYTES = 2 * 1024**3
@@ -38,20 +39,30 @@ def _sha(raw):
 
 
 def _spec(value):
-    if (not isinstance(value, dict) or set(value) != {'model_sha256', 'bank', 'cell_count'}
+    required={'model_sha256', 'bank', 'cell_count'}
+    if (not isinstance(value, dict) or set(value)-{'geometry'} != required
             or not checksum(value['model_sha256']) or not isinstance(value['bank'], str)
             or not 1 <= len(value['bank']) <= 100 or type(value['cell_count']) is not int
             or not 1 <= value['cell_count'] <= MAX_CELLS):
         raise ValueError('Declare a bounded model, physical bank and kernel-cell count')
+    if 'geometry' in value:
+        from .kernel_geometry import validate_geometry
+        validate_geometry(value['geometry'],value['cell_count'])
     return value
+
+
+def _schema(specification):
+    return GEOMETRY_SCHEMA if 'geometry' in specification else SCHEMA
 
 
 def _manifest(value):
     if (not isinstance(value, dict) or set(value) != {'schema', 'specification', 'id', 'chunks'}
-            or value['schema'] != SCHEMA or not isinstance(value['chunks'], dict)
+            or value['schema'] not in {SCHEMA,GEOMETRY_SCHEMA} or not isinstance(value['chunks'], dict)
             or len(value['chunks']) > MAX_CELLS or len(_json(value)) > MAX_INDEX):
         raise ValueError('Invalid bounded kernel-store manifest')
     _spec(value['specification'])
+    if value['schema'] != _schema(value['specification']):
+        raise ValueError('Kernel geometry requires its declared store format')
     if value['id'] != digest(value['specification']):
         raise ValueError('Kernel-store identity differs from its specification')
     total = 0
@@ -113,7 +124,7 @@ class KernelStore:
     def create(cls, root, specification):
         _spec(specification); root = Path(root)
         root.mkdir(parents=True, exist_ok=False)
-        value = dict(schema=SCHEMA, specification=dict(specification), id=digest(specification), chunks={})
+        value = dict(schema=_schema(specification), specification=dict(specification), id=digest(specification), chunks={})
         _atomic(root/'index.json', _json(value))
         return cls(root)
 
@@ -131,7 +142,7 @@ class KernelStore:
                 if any(p.name != '.lock' and not p.name.startswith('.kernel-')
                        for p in pending.root.iterdir()):
                     raise ValueError('Cannot initialize a kernel store over unrelated files')
-                _atomic(index, _json(dict(schema=SCHEMA, specification=dict(specification),
+                _atomic(index, _json(dict(schema=_schema(specification), specification=dict(specification),
                     id=digest(specification), chunks={})))
             document = pending._read()
             if document['specification'] != specification:

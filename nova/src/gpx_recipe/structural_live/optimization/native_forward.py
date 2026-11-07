@@ -37,6 +37,7 @@ class NativeTOFForward:
         self.requests=self.rendered=self.anchor_checks=self.fallback_calls=self.peak_calls=0
         self.kernel_hits=self.kernel_misses=0
         self.seconds=0.;self.bypasses=Counter()
+        self.prepared_bank=None
 
     def _context(self):
         context=self.guard._context()
@@ -52,9 +53,15 @@ class NativeTOFForward:
         return context
 
     def evaluate(self,point,*,kernel=None):
+        prepared=None
         if kernel is not None:
             from ...preparation.native_tof_kernels import QualifiedKernel
-            if not isinstance(kernel,QualifiedKernel):
+            from ...preparation.kernel_geometry import PreparedKernelBank
+            if isinstance(kernel,PreparedKernelBank):
+                if kernel.source is not self.source:
+                    raise TypeError('Prepared kernels must bind this owned native source')
+                prepared=kernel
+            elif not isinstance(kernel,QualifiedKernel):
                 raise TypeError('A natively qualified kernel chunk is required')
         began=time.monotonic();self.requests+=1;s=self.source
         try:
@@ -69,6 +76,8 @@ class NativeTOFForward:
             except (ProposalUnavailable,ScalarBatchUnavailable) as exc:
                 self.bypasses[str(exc)]+=1;self.fallback_calls+=1
                 return s.native(point)
+            if prepared is not None:
+                kernel=prepared.resolve(physical)
             hfx=self.collector.hfx
             background,_=self.background_function(hfx,n.parms,n.controls[hfx+'bakType'],
                 n.controls[hfx+'histType'],axis,histogram['Background'][1].get('fixback'))
@@ -95,7 +104,9 @@ class NativeTOFForward:
                 else:self.qualified=True
                 return native
             return curve
-        finally:self.seconds+=time.monotonic()-began
+        finally:
+            self.seconds+=time.monotonic()-began
+            if prepared is not None:self.prepared_bank=prepared.diagnostics()
 
     def diagnostics(self):
         return dict(method='batched native scalars and original native TOF kernels',
@@ -104,7 +115,8 @@ class NativeTOFForward:
             seconds=self.seconds,qualified_anchor=self.qualified,disabled=self.disabled,
             kernel_hits=self.kernel_hits,kernel_misses=self.kernel_misses,
             bypasses=dict(self.bypasses),maximum_workspace_bytes=self.maximum_bytes,
-            profile_interpolation=False,observations_reused=False)
+            profile_interpolation=False,observations_reused=False,
+            prepared_kernel_bank=self.prepared_bank)
 
 
 def for_source(source,*,maximum_bytes=MAXIMUM_BYTES):

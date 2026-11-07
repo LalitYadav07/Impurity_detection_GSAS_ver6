@@ -570,3 +570,43 @@ intermediates alone do not establish a mismatch or authorize reuse. Native
 tests trace the original functions to confirm that geometry-only production
 does not evaluate scattering/intensity corrections, and confirm that a
 rejected atomic configuration remains rejected by all actual forward paths.
+
+## Actual-cell handoff for stored kernels
+
+Geometry-aware stores use `radar-tof-kernel-store/v2`. Their bounded metric
+table declares absolute canonical reciprocal cells in the native child basis,
+setting/profile fingerprints and the native primitive identity. Legacy v1
+stores remain readable as data; they cannot supply automatic cell selection.
+Repeated proposal cells share a kernel context without removing any model or
+start. The returned proposal-to-cell map retains every original proposal.
+
+`PreparedKernelBank` binds one owned native source to this store. The shared
+TOF renderer can consume it directly: actual atomic structure factors and
+intensity corrections are recalculated, the current metric locates an
+optional chunk, and every original compiled input is compared at each peak.
+The locator's metric tolerance is not an intensity or peak-shift tolerance.
+Only exact compiled-input matches reuse native values. No intensity, weight,
+likelihood or fitted structure is imported from a preparation.
+
+`point_for_cell` can express a prepared absolute metric in a new nuclear
+baseline's coordinates. It preserves supplied displacement coordinates and
+requires the original metric subspace and reviewed bounds. It never clips,
+expands a box or freezes refinement. A caller constructing an initialization
+portfolio must retain an original native proposal when this mapping is
+unavailable; this helper does not authorize dropping that scientific start.
+
+The reader holds one bounded expanded chunk and records loads, qualification
+calls, actual primitive hits/misses and native bypasses separately. A moving
+point without a prepared cell does not evict an unrelated valid resident
+chunk. Changed profiles, missing/corrupt data and insufficient cache space use
+fresh native kernels. Cancellation and replaced native ownership remain
+errors, rather than being swallowed as an optional-cache miss.
+
+A public native control exits its producer before another process imports the
+parts, constructs a changed nuclear baseline, maps the absolute cell and
+reproduces full original-native arrays with fresh intensities. This proves the
+numerical handoff for the tested scope. It does not establish complete-fit
+speed, whole-catalog readiness or the application's import workflow. Imported
+chunks still pay complete native first-use qualification; this cost and the
+remaining controller/library/transport integration must be measured before
+claiming useful offline acceleration.
