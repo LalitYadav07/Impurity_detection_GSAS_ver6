@@ -508,3 +508,28 @@ calibration or nonlinear refinement. The new bounded format still requires
 controller/library integration, preparation-origin and worker-lifecycle cost
 tests, full-catalog search-quality comparisons and actual NDIP handoffs before
 it can become the ordinary preparation workflow.
+
+## Reusing the mandatory native pass during structural fitting
+
+The owned structural response capture can record the original TOF peak outputs
+during its already-required Rietveld calculation. The recorder uses the same
+immutable primitive format and qualified renderer described above. It adds no
+second peak-function construction pass. Current scalar inventory checks and
+the renderer's independent original-native anchor remain required.
+
+Subsequent full-profile acceptance evaluations at that cell recompute the
+structure factors, intensity corrections and background, and reuse only exact
+compiled kernel inputs. A different cell is captured independently. The
+fixed-cell matrix and retained kernels share the existing 64 MiB numeric cache;
+if both cannot fit, the matrix keeps its original native acceptance path and
+diagnostics explain why no kernel was retained. Large models and CW data keep
+their original complete native paths.
+
+The matrix/derivative decomposition still has its separate original-native
+verification. Final fitted profiles are independently recalculated from saved
+GPXs with the unchanged observation and weighted-objective checks. This is
+automatic reuse of native calculations, not an interpolation policy or an
+optimization-convergence certificate. Receipts distinguish recorded kernel
+reuse, original peak calls, native anchor checks and memory bypasses. Complete
+fit and actual-catalog timing must be measured separately from trajectory or
+primitive-kernel replay.

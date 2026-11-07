@@ -42,7 +42,7 @@ def capture_response(driver, powder, parameters, histdict, axis, histogram,
 
 def capture_rietveld_response(driver,powder,parameters,histdict,axis,histogram,
                               phases,controls,lookup,*,histogram_name,phase_name,
-                              evaluate,maximum_bytes):
+                              evaluate,maximum_bytes,observe_peak=None):
     """Record unit-F² columns during an already-needed native evaluation.
 
     ``evaluate`` is an owned in-process scientific callback, never serialized
@@ -52,12 +52,12 @@ def capture_rietveld_response(driver,powder,parameters,histdict,axis,histogram,
     if not callable(evaluate):raise TypeError('An owned native evaluator is required')
     return _capture_response(driver,powder,parameters,histdict,axis,histogram,
         phases,controls,lookup,histogram_name=histogram_name,phase_name=phase_name,
-        maximum_bytes=maximum_bytes,evaluate=evaluate)
+        maximum_bytes=maximum_bytes,evaluate=evaluate,observe_peak=observe_peak)
 
 
 def _capture_response(driver,powder,parameters,histdict,axis,histogram,
                       phases,controls,lookup,*,histogram_name,phase_name,
-                      maximum_bytes=None,evaluate=None):
+                      maximum_bytes=None,evaluate=None,observe_peak=None):
     """Return a native F²-to-signal matrix without N full driver invocations.
 
     This deliberately supports the qualified PNC/PNT, single-phase unit-F²
@@ -67,6 +67,8 @@ def _capture_response(driver,powder,parameters,histdict,axis,histogram,
     """
     code = getattr(driver, '__code__', None)
     unit=evaluate is None
+    if observe_peak is not None and (unit or not callable(observe_peak)):
+        raise TypeError('Only an owned Rietveld pass can record original peak outputs')
     hfx = f":{histogram['hId']}:"
     kind = controls.get(hfx + 'histType')
     if (code is None or kind not in {'PNC', 'PNT'} or hfx + 'Lam1' in parameters
@@ -140,6 +142,10 @@ def _capture_response(driver,powder,parameters,histdict,axis,histogram,
                 if maximum_bytes is not None and stored_entries*12+(len(current)+1)*8 > maximum_bytes:
                     raise CaptureUnavailable('Native profile response exceeds its allocated byte budget')
                 columns[index] = (use.astype(np.int32) + begin, signal[use].copy())
+                if observe_peak is not None:
+                    remaining=maximum_bytes-(stored_entries*12+(len(current)+1)*8)
+                    observe_peak(tuple(reflection[:3]),np.asarray(args[:-1],float),
+                        np.asarray(result[0]),begin,end,remaining)
                 native_peak_calls += 1
                 return result
             finally:

@@ -53,6 +53,17 @@ def context(source):
     return guard, collector, function, axis, identity
 
 
+def _same_compiled_inputs(original, parameters, reference_axis, axis, lo, hi, low, high):
+    """Compare the actual pinned F2PY inputs, including signed-zero bits."""
+    parameters, axis = np.asarray(parameters, float), np.asarray(axis, float)
+    return (parameters.shape == (5,) and axis.ndim == 1 and 0 <= low < high <= len(axis)
+        and high-low == hi-lo and np.isfinite(parameters).all()
+        and np.array_equal(original[1:].astype(np.float32).view(np.uint32),
+                           parameters[1:].astype(np.float32).view(np.uint32))
+        and np.array_equal(np.asarray(reference_axis[lo:hi]-original[0], np.float32).view(np.uint32),
+                           np.asarray(axis[low:high]-parameters[0], np.float32).view(np.uint32)))
+
+
 class QualifiedKernel:
     """Owned native qualification over immutable data, never an imported flag."""
     def __init__(self, data, function, proof, *, _permit=None):
@@ -79,13 +90,7 @@ class QualifiedKernel:
             self.misses += 1
             return None
         original = a['parameters'][index]; lo, hi = a['bounds'][index]
-        parameters, axis = np.asarray(parameters, float), np.asarray(axis, float)
-        if (parameters.shape != (5,) or axis.ndim != 1 or not 0 <= low < high <= len(axis)
-                or high-low != hi-lo or not np.isfinite(parameters).all()
-                or not np.array_equal(original[1:].astype(np.float32).view(np.uint32),
-                                      parameters[1:].astype(np.float32).view(np.uint32))
-                or not np.array_equal(np.asarray(a['axis'][lo:hi]-original[0], np.float32).view(np.uint32),
-                                      np.asarray(axis[low:high]-parameters[0], np.float32).view(np.uint32))):
+        if not _same_compiled_inputs(original, parameters, a['axis'], axis, lo, hi, low, high):
             self.misses += 1
             return None
         start, end = a['pointers'][index:index+2]
@@ -97,27 +102,10 @@ class QualifiedKernel:
                     numeric_bytes=self._data.numeric_bytes, qualification_persisted=False)
 
 
-def capture(source, point, *, check_cancel=None):
-    """One native geometry supplies a bounded, observation-free kernel chunk."""
-    started = time.monotonic()
-    if check_cancel is not None:
-        check_cancel()
-    guard, collector, function, axis, identity = context(source)
-    records = collector.collect_physical(point, maximum_bytes=MAX_BYTES)
-    if not records:
-        raise KernelUnavailable('No native peak kernels occur in this reference range')
+def _make_data(axis, records, identity):
+    """Assemble the same immutable primitive format for both native producers."""
     hkls, parameters, bounds, pointers, values = [], [], [], [0], []
-    accounted = axis.nbytes
-    for hkl, (params, _, low, high) in records.items():
-        if check_cancel is not None:
-            check_cancel()
-        # Bound output BEFORE calling the native allocator.
-        accounted += 4*(high-low)+3*4+5*8+2*8+8
-        if accounted+8 > MAX_BYTES:
-            raise KernelUnavailable('Complete native kernel chunk exceeds its byte budget')
-        raw = np.asarray(function(*params, axis[low:high])[0])
-        if raw.dtype != np.dtype('float32'):
-            raise KernelUnavailable('Native kernel output precision changed')
+    for hkl, (params, low, high, raw) in records.items():
         hkls.append(hkl); parameters.append(params); bounds.append([low, high])
         values.append(raw); pointers.append(pointers[-1]+len(raw))
     arrays = dict(hkls=np.ascontiguousarray(hkls, dtype='<i4'),
@@ -129,12 +117,116 @@ def capture(source, point, *, check_cancel=None):
     metadata = dict(schema=SCHEMA, **identity, arrays_sha256=array_identity(arrays),
         reflection_count=len(hkls), numeric_bytes=sum(a.nbytes for a in arrays.values()),
         observations_included=False)
-    data = KernelData(arrays, metadata)
+    return KernelData(arrays, metadata)
+
+
+class _NativePassRecorder:
+    """Record original peak outputs inside the reviewed Rietveld capture.
+
+    This owned callback never arrives through an uploaded bundle or recipe.
+    The existing capture owns the native hook, verifies its caller and restores
+    it on every exit. Completion also checks the entire current scalar inventory.
+    """
+    def __init__(self, source):
+        self.guard, self.collector, self.function, axis, self.identity = context(source)
+        self.source = source; self.axis = axis.copy(); self.records = {}
+        self.accounted = self.axis.nbytes; self.reason = None
+        self.started = time.monotonic(); self.finished = False
+
+    def observe(self, hkl, parameters, raw, low, high, remaining_bytes):
+        if self.finished:
+            raise ValueError('A completed native pass cannot record more kernels')
+        if self.reason is not None:
+            return
+        hkl = tuple(map(int, hkl)); parameters = np.asarray(parameters, float)
+        raw = np.asarray(raw)
+        if (hkl in self.records or parameters.shape != (5,)
+                or not 0 <= low < high <= len(self.axis)
+                or raw.shape != (high-low,) or not np.isfinite(raw).all()):
+            raise ValueError('Native pass returned inconsistent kernel records')
+        if raw.dtype != np.dtype('float32'):
+            self.reason = 'original native kernel precision is unsupported'
+        additional = raw.nbytes+3*4+5*8+2*8+8+1024
+        if self.accounted+additional > min(MAX_BYTES, remaining_bytes):
+            self.reason = 'combined native matrix and kernel capture exceeds its byte budget'
+        if self.reason is not None:
+            self.records.clear(); self.accounted = 0
+            return
+        self.records[hkl] = (parameters.copy(), int(low), int(high), raw.copy())
+        self.accounted += additional
+
+    def finish(self, point, *, maximum_bytes):
+        if self.finished:
+            raise ValueError('A native pass can be qualified only once')
+        self.finished = True
+        if self.reason is not None or not self.records:
+            return None
+        self.guard._context()
+        current = self.collector.collect_physical(point, maximum_bytes=MAX_BYTES)
+        if set(current) != set(self.records):
+            raise ValueError('Recorded native peak inventory differs from current native scalars')
+        for hkl, (params, _, low, high) in current.items():
+            stored, begin, end, _ = self.records[hkl]
+            if begin != low or end != high or not _same_compiled_inputs(
+                    stored,params,self.axis,self.axis,begin,end,low,high):
+                raise ValueError('Recorded native peak arguments differ from current native scalars')
+        if self.accounted > maximum_bytes:
+            self.reason = 'complete native matrix and kernel context exceeds its byte budget'
+            self.records.clear()
+            return None
+        try:
+            data = _make_data(self.axis, self.records, self.identity)
+        except ValueError as error:
+            # The native pass and its matrix are still valid. Conservative
+            # portable-format limits must not reject an otherwise native fit.
+            self.reason = 'recorded native kernels exceed their admission domain: '+str(error)
+            self.records.clear()
+            return None
+        self.records.clear(); self.guard._context()
+        _remember(data)
+        return QualifiedKernel(data, self.function,
+            dict(method='already-required original native Rietveld pass', native_peak_calls=0,
+                recorded_native_peak_calls=data.metadata['reflection_count'],
+                seconds=time.monotonic()-self.started, verified_all_peaks=True), _permit=_PERMIT)
+
+
+def recorder_for_source(source):
+    """Optional primitive recording; unsupported scopes keep their native pass."""
+    from ..structural_live.optimization.native_cell_proposals import ProposalUnavailable
+    try:
+        return _NativePassRecorder(source)
+    except (KernelUnavailable, ProposalUnavailable):
+        return None
+
+
+def capture(source, point, *, check_cancel=None):
+    """One native geometry supplies a bounded, observation-free kernel chunk."""
+    started = time.monotonic()
+    if check_cancel is not None:
+        check_cancel()
+    guard, collector, function, axis, identity = context(source)
+    records = collector.collect_physical(point, maximum_bytes=MAX_BYTES)
+    if not records:
+        raise KernelUnavailable('No native peak kernels occur in this reference range')
+    captured = {}
+    accounted = axis.nbytes
+    for hkl, (params, _, low, high) in records.items():
+        if check_cancel is not None:
+            check_cancel()
+        # Bound output BEFORE calling the native allocator.
+        accounted += 4*(high-low)+3*4+5*8+2*8+8
+        if accounted+8 > MAX_BYTES:
+            raise KernelUnavailable('Complete native kernel chunk exceeds its byte budget')
+        raw = np.asarray(function(*params, axis[low:high])[0])
+        if raw.dtype != np.dtype('float32'):
+            raise KernelUnavailable('Native kernel output precision changed')
+        captured[hkl] = (params, low, high, raw)
+    data = _make_data(axis, captured, identity)
     if check_cancel is not None:
         check_cancel()
     _remember(data)
     return QualifiedKernel(data, function, dict(method='original native kernel construction',
-        native_peak_calls=len(hkls), seconds=time.monotonic()-started, verified_all_peaks=True), _permit=_PERMIT)
+        native_peak_calls=len(captured), seconds=time.monotonic()-started, verified_all_peaks=True), _permit=_PERMIT)
 
 
 def verify(data, source, *, check_cancel=None):

@@ -29,6 +29,10 @@ class CapturedCellDerivative(NativeCellDerivative):
         self.capture_attempts=0;self.captured_native_calls=0;self.direct_native_calls=0
         self.capture_fallbacks=Counter();self.maximum_capture_error=0.;self.capture_seconds=0.
         self.unavailable=OrderedDict()
+        from .native_forward import for_source
+        self.native_forward=(for_source(source)
+            if len(source.radii)<=MAXIMUM_RESPONSE_COORDINATES else None)
+        self.kernel_capture_fallbacks=Counter();self.kernel_native_evaluations=0
 
     def has_response(self,point):
         p=self.source.check(point)
@@ -61,6 +65,9 @@ class CapturedCellDerivative(NativeCellDerivative):
         key=tuple(p[m:]);entry=self._entry(p[m:])
         if not entry['fallback']:
             self.direct_native_calls+=1
+            if self.native_forward is not None and entry.get('kernel') is not None:
+                self.kernel_native_evaluations+=1
+                return self.native_forward.evaluate(p,kernel=entry['kernel'])
             return s.native(p)
         if entry.get('reason')=='response_cache_dimension_limit' and key not in self.unavailable:
             self._unavailable(key,entry['reason'])
@@ -70,11 +77,14 @@ class CapturedCellDerivative(NativeCellDerivative):
         histogram_name=s.fast.slow.hist.name;phase_name=s.fast.slow.phase.name
         hist=n.histo_phases[0][histogram_name];phases=n.histo_phases[1]
         driver=n.math.getPowderProfile;began=time.perf_counter();self.capture_attempts+=1
+        from ...preparation.native_tof_kernels import recorder_for_source
+        recorder=recorder_for_source(s) if self.native_forward is not None else None
         try:
             matrix,bg,proof,curve=capture_rietveld_response(driver,n.math.G2pwd,n.parms,n.histdict,
                 np.asarray(s.fast.x[s.fast.slice],float),hist,phases,n.controls,n.pawley,
                 histogram_name=histogram_name,phase_name=phase_name,evaluate=lambda:s.native(p),
-                maximum_bytes=self.maximum_bytes)
+                maximum_bytes=self.maximum_bytes,
+                observe_peak=recorder.observe if recorder is not None else None)
         except CaptureUnavailable as exc:
             self._unavailable(key,str(exc));self.direct_native_calls+=1
             self.native_fallback_calls+=1
@@ -98,6 +108,12 @@ class CapturedCellDerivative(NativeCellDerivative):
         item=native_scattering_entry(s,bank,matrix)
         size=(matrix.data.nbytes+matrix.indices.nbytes+matrix.indptr.nbytes+
               _numeric_bytes(item['ref'])+_numeric_bytes(item['parms'])+background.nbytes+bank.hkls.nbytes)
+        if recorder is not None:
+            kernel=recorder.finish(p,maximum_bytes=max(0,self.maximum_bytes-size))
+            if kernel is not None:
+                item['kernel']=kernel
+                size+=kernel.data.numeric_bytes+1024*kernel.data.metadata['reflection_count']
+            elif recorder.reason is not None:self.kernel_capture_fallbacks[recorder.reason]+=1
         item['numeric_bytes']=size;item['capture']=proof
         if size<=self.maximum_bytes:
             while self.cache and (len(self.cache)>=self.max_cells or self.numeric_bytes+size>self.maximum_bytes):
@@ -129,5 +145,8 @@ class CapturedCellDerivative(NativeCellDerivative):
             numeric_cache_bytes=self.numeric_bytes,maximum_numeric_cache_bytes=self.maximum_bytes,
             unavailable_cells=len(self.unavailable),maximum_unavailable_cells=16,
             capture_seconds=self.capture_seconds,capture_fallbacks=dict(self.capture_fallbacks),
+            kernel_native_evaluations=self.kernel_native_evaluations,
+            kernel_capture_fallbacks=dict(self.kernel_capture_fallbacks),
+            native_forward=self.native_forward.diagnostics() if self.native_forward is not None else None,
             maximum_capture_relative_error=self.maximum_capture_error,
             response_source='Already-required unchanged GSAS-II Rietveld call',interpolation=False)
