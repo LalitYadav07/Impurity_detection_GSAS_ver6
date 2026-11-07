@@ -17,6 +17,27 @@ def test_conditional_native_fit_preserves_objective_and_all_modes():
     assert result['best']['deviance']<150
 
 
+def test_gaussian_native_trajectory_does_not_inherit_start_bank_nuisance_roundoff():
+    from gpx_recipe.structural_live.observations import CumulativeObservation
+    results=[]
+    for perturb in [False,True]:
+        s,t,counts,z,c,b,_=setup()
+        observation=CumulativeObservation(counts.acquisition,counts.protocol_sha256,
+            counts.revision,counts.exposure,counts.x,counts.y,counts.variance,counts.mask)
+        if perturb:
+            # Preserve the complete physical start portfolio. Only the curve
+            # values used for its preliminary nuisance fit differ slightly.
+            b.curves=b.curves+1e-11*(1+np.sin(observation.x*9))
+        result,rate=module.fit(s,t,observation,b,seconds=10,starts=2,evaluator=c,
+                               qualification_iterations=3)
+        results.append((result,rate))
+    reference,changed=results
+    assert len(reference[0]['attempts'])==len(changed[0]['attempts'])==2
+    np.testing.assert_array_equal(reference[0]['best']['parameters'],changed[0]['best']['parameters'])
+    np.testing.assert_array_equal(reference[1],changed[1])
+    assert reference[0]['best']['deviance']==changed[0]['best']['deviance']
+
+
 def test_joint_native_updates_preserve_the_same_observation_objective_and_all_coordinates():
     s,t,o,z,c,b,_=setup()
     result,rate=module.fit(s,t,o,b,seconds=2,starts=1,evaluator=c,joint_steps=True)
