@@ -51,6 +51,7 @@ def test_geometry_kernels_use_no_atomic_scattering_or_intensity_and_leave_data_i
 
 def test_chemical_rejection_does_not_block_pure_kernels_or_authorize_a_pattern(tmp_path,monkeypatch):
     _,s=native_source(tmp_path/'inputs','PNT');point=np.zeros(len(s.radii))
+    original_check=s.check
     expected=kernels.capture(s,point).data
     def reject(*args,**kwargs):raise ValueError('Rejected atomic configuration')
     monkeypatch.setattr(s,'check',reject)
@@ -60,6 +61,21 @@ def test_chemical_rejection_does_not_block_pure_kernels_or_authorize_a_pattern(t
     with pytest.raises(ValueError,match='Rejected atomic configuration'):s.native(point)
     with pytest.raises(ValueError,match='Rejected atomic configuration'):NativeTOFForward(s).evaluate(point)
     with pytest.raises(ValueError,match='Rejected atomic configuration'):s.fast.evaluate(np.zeros(s.fast.dimension))
+    # Model a contact rule that rejects the reference configuration while a
+    # displaced configuration at the SAME cell remains admissible. Pure
+    # instrument preparation must neither reject that whole family nor allow
+    # its rejected zero-displacement pattern to become a scientific result.
+    monkeypatch.undo()
+    def reject_reference(p):
+        p=original_check(p)
+        if not np.any(p[:s.mode_dimensions]):raise ValueError('Rejected reference configuration')
+        return p
+    monkeypatch.setattr(s,'check',reject_reference)
+    kernel=kernels.capture(s,point)
+    with pytest.raises(ValueError,match='Rejected reference configuration'):s.native(point)
+    displaced=point.copy();displaced[0]=.02*s.radii[0]
+    native=s.native(displaced).copy()
+    np.testing.assert_array_equal(NativeTOFForward(s).evaluate(displaced,kernel=kernel),native)
 
 
 @pytest.mark.parametrize('invalid',['outside','nan','wrong_shape'])
