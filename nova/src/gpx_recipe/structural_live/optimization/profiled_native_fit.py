@@ -123,9 +123,12 @@ def fit(source,table,observation,bank,*,seconds=120.,starts=4,seed=90231,warm=No
         def propose():
             nonlocal native_calls
             before=cell_proposals.anchor_calls
+            kernel_for=getattr(cache,'kernel_for',None)
+            prepared_kernel=kernel_for(z[:d]*s.radii) if callable(kernel_for) else None
+            kernel_options={} if prepared_kernel is None else dict(prepared_kernel=prepared_kernel)
             try:
                 curve,raw,usable=cell_proposals.columns(z[:d],bank.proposal_cell_steps,
-                    allowed=lambda p:allowed(np.r_[p,z[-2:]]),check_time=check_time)
+                    allowed=lambda p:allowed(np.r_[p,z[-2:]]),check_time=check_time,**kernel_options)
             finally:
                 native_calls+=cell_proposals.anchor_calls-before
             remember_curve(z[:d]*s.radii,curve)

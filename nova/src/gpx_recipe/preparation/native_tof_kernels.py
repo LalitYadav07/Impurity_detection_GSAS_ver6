@@ -101,6 +101,20 @@ class QualifiedKernel:
         return dict(self._proof, hits=self.hits, misses=self.misses,
                     numeric_bytes=self._data.numeric_bytes, qualification_persisted=False)
 
+    def native_result(self, hkl, parameters, axis, low, high, *, function):
+        """The original pinned wrapper tuple, without repeating its native peak.
+
+        The wrapper's quadrature sum depends on the actual float64 axis, not
+        only its compiled float32 offsets. Recompute that sum exactly instead
+        of carrying a reference-grid normalization into a new native call.
+        """
+        raw=self.lookup(hkl,parameters,axis,low,high,function=function)
+        if raw is None:
+            return None
+        xdata=np.asanyarray(axis)[low:high]
+        widths=np.diff(xdata);widths=np.append(widths,widths[-1])
+        return raw,np.sum(raw*widths)
+
 
 def _make_data(axis, records, identity):
     """Assemble the same immutable primitive format for both native producers."""
@@ -125,19 +139,24 @@ class _NativePassRecorder:
 
     This owned callback never arrives through an uploaded bundle or recipe.
     The existing capture owns the native hook, verifies its caller and restores
-    it on every exit. Completion also checks the entire current scalar inventory.
+    it on every exit. Recorded values and arguments are immutable. Compatibility
+    with a later scientific context is checked at every primitive lookup.
     """
     def __init__(self, source):
-        self.guard, self.collector, self.function, axis, self.identity = context(source)
-        self.source = source; self.axis = axis.copy(); self.records = {}
+        self.guard, _, self.function, axis, self.identity = context(source)
+        self.source = source
+        self.axis = np.frombuffer(axis.tobytes(),dtype=axis.dtype).reshape(axis.shape)
+        self.records = {}
         self.accounted = self.axis.nbytes; self.reason = None
         self.started = time.monotonic(); self.finished = False
 
-    def observe(self, hkl, parameters, raw, low, high, remaining_bytes):
+    def observe(self, hkl, parameters, raw, low, high, remaining_bytes, native_function):
         if self.finished:
             raise ValueError('A completed native pass cannot record more kernels')
         if self.reason is not None:
             return
+        if native_function is not self.function:
+            raise ValueError('A recorded peak did not use its original qualified native function')
         hkl = tuple(map(int, hkl)); parameters = np.asarray(parameters, float)
         raw = np.asarray(raw)
         if (hkl in self.records or parameters.shape != (5,)
@@ -152,24 +171,21 @@ class _NativePassRecorder:
         if self.reason is not None:
             self.records.clear(); self.accounted = 0
             return
-        self.records[hkl] = (parameters.copy(), int(low), int(high), raw.copy())
+        self.records[hkl] = (np.frombuffer(parameters.tobytes(),dtype=parameters.dtype),
+            int(low),int(high),np.frombuffer(raw.tobytes(),dtype=raw.dtype))
         self.accounted += additional
 
-    def finish(self, point, *, maximum_bytes):
+    def finish(self, *, maximum_bytes):
         if self.finished:
             raise ValueError('A native pass can be qualified only once')
         self.finished = True
         if self.reason is not None or not self.records:
             return None
         self.guard._context()
-        current = self.collector.collect_physical(point, maximum_bytes=MAX_BYTES)
-        if set(current) != set(self.records):
-            raise ValueError('Recorded native peak inventory differs from current native scalars')
-        for hkl, (params, _, low, high) in current.items():
-            stored, begin, end, _ = self.records[hkl]
-            if begin != low or end != high or not _same_compiled_inputs(
-                    stored,params,self.axis,self.axis,begin,end,low,high):
-                raise ValueError('Recorded native peak arguments differ from current native scalars')
+        # These are outputs of the original function just called by the owned
+        # Rietveld hook, not uploaded values. Repeating scattering/scalar work
+        # here would not verify those output values. Actual-use lookup still
+        # compares every compiled input; changed or missing peaks stay native.
         if self.accounted > maximum_bytes:
             self.reason = 'complete native matrix and kernel context exceeds its byte budget'
             self.records.clear()

@@ -44,6 +44,12 @@ class CapturedCellDerivative(NativeCellDerivative):
         return (tuple(cells) not in self.unavailable and entry['fallback']
             and entry.get('reason')!='response_cache_dimension_limit')
 
+    def kernel_for(self,point):
+        """An already-owned exact-cell primitive, never a new capture request."""
+        p=self.source.check(point)
+        entry=self._entry(p[self.source.mode_dimensions:])
+        return None if entry['fallback'] else entry.get('kernel')
+
     def _unavailable(self,key,reason):
         self.capture_fallbacks[reason]+=1;self.unavailable[key]=reason;self.unavailable.move_to_end(key)
         while len(self.unavailable)>16:self.unavailable.popitem(last=False)
@@ -109,7 +115,7 @@ class CapturedCellDerivative(NativeCellDerivative):
         size=(matrix.data.nbytes+matrix.indices.nbytes+matrix.indptr.nbytes+
               _numeric_bytes(item['ref'])+_numeric_bytes(item['parms'])+background.nbytes+bank.hkls.nbytes)
         if recorder is not None:
-            kernel=recorder.finish(p,maximum_bytes=max(0,self.maximum_bytes-size))
+            kernel=recorder.finish(maximum_bytes=max(0,self.maximum_bytes-size))
             if kernel is not None:
                 item['kernel']=kernel
                 size+=kernel.data.numeric_bytes+1024*kernel.data.metadata['reflection_count']

@@ -65,27 +65,31 @@ def test_recorder_memory_exhaustion_keeps_the_full_original_native_pass(tmp_path
     _,source=native_source(tmp_path/'inputs','PNT');recorder=recorder_for_source(source)
     p=np.zeros(len(source.radii));expected=source.native(p).copy()
     original=recorder.observe
-    recorder.observe=lambda h,params,raw,lo,hi,remaining:original(h,params,raw,lo,hi,1)
+    recorder.observe=lambda h,params,raw,lo,hi,remaining,function:original(h,params,raw,lo,hi,1,function)
     _,_,_,actual=record(source,recorder,p)
     np.testing.assert_array_equal(actual,expected)
     assert recorder.reason and not recorder.records
-    assert recorder.finish(p,maximum_bytes=1) is None
+    assert recorder.finish(maximum_bytes=1) is None
 
 
-def test_changed_scalar_inputs_cannot_qualify_a_recorded_native_pass(tmp_path):
+def test_changed_scalar_inputs_never_use_stale_recorded_peaks(tmp_path):
+    from gpx_recipe.structural_live.optimization.native_forward import NativeTOFForward
     _,source=native_source(tmp_path/'inputs','PNT');recorder=recorder_for_source(source)
     p=np.zeros(len(source.radii));record(source,recorder,p)
     source.fast.native.parms[f':{source.fast.slow.hist.id}:X']+=.1
-    with pytest.raises(ValueError,match='arguments differ|inventory differs'):
-        recorder.finish(p,maximum_bytes=64*1024*1024)
+    kernel=recorder.finish(maximum_bytes=64*1024*1024)
+    engine=NativeTOFForward(source);expected=source.native(p).copy()
+    np.testing.assert_array_equal(engine.evaluate(p,kernel=kernel),expected)
+    assert engine.kernel_misses>0 and engine.peak_calls>0
 
 
-def test_equivalent_compiled_shape_inputs_need_no_false_float64_identity(tmp_path):
+def test_recorded_native_arguments_and_outputs_are_immutable_before_qualification(tmp_path):
     _,source=native_source(tmp_path/'inputs','PNT');recorder=recorder_for_source(source)
     p=np.zeros(len(source.radii));record(source,recorder,p)
-    for params,_,_,_ in recorder.records.values():
-        params[1]=np.nextafter(params[1],np.inf)
-    assert recorder.finish(p,maximum_bytes=64*1024*1024) is not None
+    for params,_,_,raw in recorder.records.values():
+        for array in [params,raw,recorder.axis]:
+            with pytest.raises(ValueError):array.setflags(write=True)
+    assert recorder.finish(maximum_bytes=64*1024*1024) is not None
 
 
 def test_portable_format_limits_cannot_reject_an_otherwise_valid_native_pass(tmp_path,monkeypatch):
@@ -95,7 +99,7 @@ def test_portable_format_limits_cannot_reject_an_otherwise_valid_native_pass(tmp
     _,_,_,actual=record(source,recorder,p)
     np.testing.assert_array_equal(actual,expected)
     monkeypatch.setattr(tof_kernel_arrays,'MAX_REFLECTIONS',1)
-    assert recorder.finish(p,maximum_bytes=64*1024*1024) is None
+    assert recorder.finish(maximum_bytes=64*1024*1024) is None
     assert 'admission domain' in recorder.reason and not recorder.records
 
 
@@ -108,7 +112,15 @@ def test_failed_recorder_restores_native_peak_functions_and_owned_capture(tmp_pa
     with pytest.raises(RuntimeError,match='recorder failure'):record(source,recorder,p)
     assert powder.getEpsVoigt is function
     replacement=recorder_for_source(source);record(source,replacement,p)
-    assert replacement.finish(p,maximum_bytes=64*1024*1024) is not None
+    assert replacement.finish(maximum_bytes=64*1024*1024) is not None
+
+
+def test_recorder_cannot_authorize_another_native_function(tmp_path):
+    _,source=native_source(tmp_path/'inputs','PNT');recorder=recorder_for_source(source)
+    with pytest.raises(ValueError,match='original qualified native function'):
+        recorder.observe((1,0,0),np.ones(5),np.ones(2,np.float32),0,2,
+            64*1024*1024,lambda:None)
+    assert not recorder.records
 
 
 def test_cw_response_stays_on_its_existing_native_engine(tmp_path):
@@ -119,3 +131,48 @@ def test_cw_response_stays_on_its_existing_native_engine(tmp_path):
     np.testing.assert_array_equal(evaluator.native_evaluate(p),expected)
     assert evaluator.native_forward is None
     assert 'kernel' not in evaluator._entry(p[source.mode_dimensions:])
+
+
+def test_primitive_result_retains_the_original_actual_grid_normalization(tmp_path):
+    _,source=native_source(tmp_path/'inputs','PNT')
+    evaluator=CapturedCellDerivative(source);p=np.zeros(len(source.radii))
+    evaluator.native_evaluate(p);kernel=evaluator.kernel_for(p);a=kernel.data._arrays
+    hkl=a['hkls'][0];params=a['parameters'][0];lo,hi=a['bounds'][0]
+    for axis in [a['axis'],np.nextafter(a['axis'],np.inf)]:
+        result=kernel.native_result(hkl,params,axis,lo,hi,function=kernel._function)
+        assert result is not None
+        expected=kernel._function(*params,axis[lo:hi])
+        np.testing.assert_array_equal(result[0],expected[0])
+        assert result[1]==expected[1]
+
+
+@pytest.mark.parametrize('shifted',[False,True])
+def test_lattice_proposals_retain_identical_anchors_and_derivatives_with_owned_kernels(tmp_path,shifted):
+    from gpx_recipe.structural_live.optimization.native_cell_proposals import NativeCellProposals
+    _,source=native_source(tmp_path/'inputs','PNT');evaluator=CapturedCellDerivative(source)
+    point=np.linspace(-.03,.04,len(source.radii));physical=point*source.radii
+    evaluator.native_evaluate(physical);kernel=evaluator.kernel_for(physical)
+    if shifted:point[source.mode_dimensions:]+=.02
+    steps=np.full(len(point),.004)
+    def allowed(p):
+        if np.any(abs(p)>1):return False
+        try:source.check(p*source.radii)
+        except ValueError:return False
+        return True
+    reference=NativeCellProposals(source).columns(point,steps,allowed=allowed)
+    engine=NativeCellProposals(source)
+    actual=engine.columns(point,steps,allowed=allowed,prepared_kernel=kernel)
+    for got,expected in zip(actual,reference):np.testing.assert_array_equal(got,expected)
+    np.testing.assert_array_equal(actual[0],source.native(point*source.radii))
+    if shifted:assert engine.original_native_peak_calls>0
+    else:assert engine.cached_native_peak_calls>0 and engine.original_native_peak_calls==0
+
+
+def test_lattice_proposals_cannot_use_an_unqualified_imported_data_chunk(tmp_path):
+    from gpx_recipe.structural_live.optimization.native_cell_proposals import NativeCellProposals
+    _,source=native_source(tmp_path/'inputs','PNT');evaluator=CapturedCellDerivative(source)
+    point=np.zeros(len(source.radii));evaluator.native_evaluate(point)
+    data=evaluator.kernel_for(point).data
+    with pytest.raises(TypeError,match='owned qualified'):
+        NativeCellProposals(source).columns(point,np.full(len(point),.004),
+            allowed=lambda p:True,prepared_kernel=data)

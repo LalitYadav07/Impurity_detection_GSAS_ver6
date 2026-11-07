@@ -53,6 +53,7 @@ class NativeCellProposals:
         self.support_window_changes=0; self.last_reason=None
         self.batched_probe_calls=0;self.batched_anchor_checks=0;self.batched_anchor_mismatches=0
         self.maximum_batched_workspace_bytes=0
+        self.cached_native_peak_calls=0;self.original_native_peak_calls=0
 
     def _context(self):
         s=self.source; n=s.fast.native; n._check()
@@ -83,7 +84,7 @@ class NativeCellProposals:
             raise ProposalUnavailable('Ordered finite native grid required')
         return n,driver,powder,kernel,peak,deriv,axis,histogram,phases,phase
 
-    def columns(self, point, steps, *, allowed, check_time=None):
+    def columns(self, point, steps, *, allowed, check_time=None, prepared_kernel=None):
         """Return a genuine native anchor, raw proposal columns and usable mask.
 
         ``point`` and steps use the optimizer's normalized physical geometry.
@@ -91,6 +92,10 @@ class NativeCellProposals:
         computes those complete columns with original native differences.
         """
         self.requests+=1; began=time.monotonic()
+        if prepared_kernel is not None:
+            from ...preparation.native_tof_kernels import QualifiedKernel
+            if not isinstance(prepared_kernel,QualifiedKernel):
+                raise TypeError('Native proposals require an owned qualified primitive kernel')
         s=self.source; point=np.asarray(point,float); steps=np.asarray(steps,float)
         m=s.mode_dimensions; d=len(s.radii); count=d-m
         if point.shape!=(d,) or steps.shape!=(d,) or count<1 or not np.isfinite(point).all() or not np.isfinite(steps).all():
@@ -197,7 +202,12 @@ class NativeCellProposals:
                             or not np.isclose(saved[1],height,rtol=1e-12,atol=1e-12)):
                         self.batched_anchor_mismatches+=1
                         raise ProposalUnavailable('Batched native scalars disagree with the full native anchor')
-                result=peak(*args,**kwargs); values=deriv(*args,**kwargs)
+                result=(None if prepared_kernel is None else prepared_kernel.native_result(
+                    key,parameters,axis,begin,end,function=peak))
+                if result is None:
+                    result=peak(*args,**kwargs);self.original_native_peak_calls+=1
+                else:self.cached_native_peak_calls+=1
+                values=deriv(*args,**kwargs)
                 profile=np.asarray(result[0],float); derivatives=np.asarray(values[1:],float)
                 budget(derivatives.nbytes+profile.nbytes)
                 if (len(values)!=len(parameters)+1 or derivatives.shape!=(len(parameters),end-begin)
@@ -255,6 +265,8 @@ class NativeCellProposals:
             batched_scalar_anchor_checks=self.batched_anchor_checks,
             batched_scalar_anchor_mismatches=self.batched_anchor_mismatches,
             maximum_batched_workspace_bytes=self.maximum_batched_workspace_bytes,
+            cached_native_peak_calls=self.cached_native_peak_calls,
+            original_native_peak_calls=self.original_native_peak_calls,
             membership_fallback_columns=self.membership_fallback_columns,
             support_window_changes=self.support_window_changes,
             maximum_accounted_workspace_bytes=self.maximum_accounted_bytes,

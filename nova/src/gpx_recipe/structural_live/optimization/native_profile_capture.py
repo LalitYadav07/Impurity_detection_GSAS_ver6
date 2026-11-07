@@ -145,7 +145,7 @@ def _capture_response(driver,powder,parameters,histdict,axis,histogram,
                 if observe_peak is not None:
                     remaining=maximum_bytes-(stored_entries*12+(len(current)+1)*8)
                     observe_peak(tuple(reflection[:3]),np.asarray(args[:-1],float),
-                        np.asarray(result[0]),begin,end,remaining)
+                        np.asarray(result[0]),begin,end,remaining,original)
                 native_peak_calls += 1
                 return result
             finally:
