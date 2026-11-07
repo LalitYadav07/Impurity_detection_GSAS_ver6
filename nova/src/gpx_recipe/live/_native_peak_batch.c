@@ -4,12 +4,28 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <limits.h>
+#include <string.h>
 
 typedef void (*peak_function)(int *,float *,float *,float *,float *,float *,float *);
 
 int native_peak_batch_abi(void) {
     return sizeof(int)==4 && sizeof(float)==4 && sizeof(double)==8 &&
            sizeof(int64_t)==8 && sizeof(ptrdiff_t)==8 ? 0x504e5401 : 0;
+}
+
+/* All exact sum paths share the original double product/addition order. */
+static void native_peak_add(int n,double height,const float *values,double *signal) {
+    for (int j=0;j<n;++j) {
+        const double contribution=height*(double)values[j];
+        signal[j]=signal[j]+contribution;
+    }
+}
+
+static void native_peak_values(peak_function peak,const double *axis,const double *p,
+                              int64_t low,int n,float *offsets,float *values) {
+    float alpha=(float)p[1],beta=(float)p[2],sigma=(float)p[3],gamma=(float)p[4];
+    for (int j=0;j<n;++j) offsets[j]=(float)(axis[low+j]-p[0]);
+    peak(&n,offsets,&alpha,&beta,&sigma,&gamma,values);
 }
 
 int native_peak_sum(peak_function peak,ptrdiff_t nr,ptrdiff_t nx,
@@ -28,15 +44,53 @@ int native_peak_sum(peak_function peak,ptrdiff_t nr,ptrdiff_t nx,
         float alpha=(float)p[1],beta=(float)p[2],sigma=(float)p[3],gamma=(float)p[4];
         if (!isfinite(alpha)||!isfinite(beta)||!isfinite(sigma)||!isfinite(gamma)) return 3;
         int n=(int)(high-low);
-        for (int j=0;j<n;++j) offsets[j]=(float)(axis[low+j]-p[0]);
-        peak(&n,offsets,&alpha,&beta,&sigma,&gamma,values);
+        native_peak_values(peak,axis,p,low,n,offsets,values);
         /* NumPy's native loop likewise materializes the double product before
          * adding it. Required compiler flags forbid fused multiply/add. */
-        for (int j=0;j<n;++j) {
-            const double contribution=heights[row]*(double)values[j];
-            signal[low+j]=signal[low+j]+contribution;
-        }
+        native_peak_add(n,heights[row],values,signal+low);
         *points+=n;
+    }
+    return 0;
+}
+
+/* Only identical compiled inputs are grouped by the checked Python packer.
+ * Produce original native float32 arrays once for each representative. */
+int native_peak_group_values(peak_function peak,ptrdiff_t nr,ptrdiff_t nx,
+    const double *axis,const double *parameters,const int64_t *bounds,
+    const int64_t *pointers,ptrdiff_t total,ptrdiff_t maximum,
+    float *offsets,float *values,float *raw,ptrdiff_t *points) {
+    *points=0;
+    if (!peak||nr<1||nx<1||total<1||maximum<2||maximum>INT_MAX||
+        pointers[0]!=0||pointers[nr]!=total) return 1;
+    for (ptrdiff_t row=0;row<nr;++row) {
+        int64_t low=bounds[2*row],high=bounds[2*row+1],begin=pointers[row];
+        const double *p=parameters+5*row;
+        if (low<0||high>nx||high-low<2||high-low>maximum||begin<0||
+            pointers[row+1]>total||pointers[row+1]-begin!=high-low) return 2;
+        for (int j=0;j<5;j++) if (!isfinite(p[j])) return 3;
+        for (int j=1;j<5;j++) if (!isfinite((float)p[j])) return 3;
+        int n=(int)(high-low);
+        native_peak_values(peak,axis,p,low,n,offsets,values);
+        for (int j=0;j<n;j++) if (!isfinite(values[j])) return 4;
+        memcpy(raw+begin,values,(size_t)n*sizeof(float));
+        *points+=n;
+    }
+    return 0;
+}
+
+/* Apply every original reflection, including zero-intensity reflections, in
+ * exactly its original position in the double-precision summation loop. */
+int native_peak_group_sum(ptrdiff_t nr,ptrdiff_t ng,ptrdiff_t nx,
+    const double *heights,const int64_t *bounds,const int64_t *mapping,
+    const int64_t *pointers,ptrdiff_t total,const float *raw,double *signal) {
+    if (nr<1||ng<1||nx<1||total<1||pointers[0]!=0||pointers[ng]!=total) return 1;
+    for (ptrdiff_t row=0;row<nr;++row) {
+        int64_t group=mapping[row],low=bounds[2*row],high=bounds[2*row+1];
+        if (group<0||group>=ng||low<0||high>nx||high-low<2||high-low>INT_MAX) return 2;
+        int64_t begin=pointers[group],end=pointers[group+1];
+        if (begin<0||end>total||end-begin!=high-low) return 2;
+        if (!isfinite(heights[row])) return 3;
+        native_peak_add((int)(high-low),heights[row],raw+begin,signal+low);
     }
     return 0;
 }

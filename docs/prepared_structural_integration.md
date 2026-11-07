@@ -556,6 +556,22 @@ Fitting, stationarity checks and final GPX publication retain their original
 native acceptance paths. This does not qualify interpolation or transfer a
 rendered profile between cells, grids or instruments.
 
+Large TOF batches can evaluate identical compiled peak inputs once within that
+batch. Equivalence requires the original float32 shape arguments, peak window
+and every float32 translated grid offset to match bit for bit. Rounded peak
+positions alone are insufficient. Each reflection, including zero-intensity
+reflections, retains its own original intensity and summation order. Distinct
+offsets, signed zeros and profile arguments remain separate; the complete
+native calculation is retained when grouping would exceed the same 64 MiB
+workspace. Nothing persists between batches or transfers across cells.
+If the unique peak plane does not fit, at most four sequential parts can
+reuse the same output accumulator within that budget. Partial output curves
+are never added together: every original reflection still contributes in its
+original order. Unsupported parts use their complete original native calls.
+Diagnostics distinguish logical reflections and requested peak points from
+actual kernel evaluations and evaluated points. These counts describe saved
+duplicate work, not removed reflections or new scientific approximations.
+
 A public 16-mode/four-cell candidate was checked over the complete 185-curve
 bank and proposal-step calculation in four counterbalanced passes. Every saved
 array was identical. Median construction time changed from 89.19 to 81.33 s

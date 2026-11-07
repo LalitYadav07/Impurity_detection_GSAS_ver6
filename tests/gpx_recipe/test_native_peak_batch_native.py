@@ -46,6 +46,83 @@ def test_complete_original_peak_sum_is_bitwise_identical(installed_helper,case):
     assert proof['maximum_accounted_workspace_bytes']<=batch.MAXIMUM_BYTES
 
 
+@pytest.mark.parametrize('case',['identical','rounded_shape','offset_collision','rounded_offsets','mixed_windows','zero_height'])
+def test_grouped_peaks_preserve_every_reflection_and_exact_original_sum(installed_helper,case):
+    axis=np.linspace(99985.,100030.,601)
+    if case=='rounded_offsets':axis+=100.
+    records={};rng=np.random.default_rng(62914)
+    for i in range(512):
+        p=np.array([100000.,.5,.25,1.,.125]);low=0;high=len(axis)
+        if case in ('offset_collision','rounded_offsets') and i%2:p[0]=np.nextafter(p[0],np.inf)
+        if case=='rounded_shape' and i%2:p[1]=np.nextafter(p[1],np.inf)
+        if case=='mixed_windows' and i%2:low=1;high-=1
+        height=0. if case=='zero_height' else float(rng.uniform(-3.,4.))
+        records[(i,0,0)]=(p,height,low,high)
+    expected=np.zeros(len(axis))
+    for p,height,low,high in records.values():
+        expected[low:high]+=np.float64(height)*powder.getEpsVoigt(*p,axis[low:high])[0]
+    actual=installed_helper.render(records,axis)
+    np.testing.assert_array_equal(actual.view(np.uint64),expected.view(np.uint64))
+    proof=installed_helper.diagnostics()
+    assert proof['grouped_calls']==1 and proof['reflections']==512
+    assert proof['native_reflections']==(2 if case in ('offset_collision','mixed_windows') else 1)
+    assert proof['duplicate_reflections']==512-proof['native_reflections']
+    assert proof['requested_peak_points']==sum(r[3]-r[2] for r in records.values())
+    assert proof['maximum_accounted_workspace_bytes']<=batch.MAXIMUM_BYTES
+    if case=='offset_collision':assert proof['compiled_offset_collisions']>0
+
+
+def test_grouping_workspace_exhaustion_uses_complete_original_batch(installed_helper):
+    axis=np.linspace(-10.,10.,101);p=np.array([0.,.5,.25,1.,.125])
+    records={(i,0,0):(p,float(i%3-1),0,len(axis)) for i in range(512)}
+    *_,required=batch.pack_records(records,axis,batch.MAXIMUM_BYTES)
+    expected=np.zeros(len(axis))
+    for args,height,low,high in records.values():
+        expected+=np.float64(height)*powder.getEpsVoigt(*args,axis)[0]
+    actual=installed_helper.render(records,axis,maximum_bytes=required+axis.nbytes)
+    np.testing.assert_array_equal(actual.view(np.uint64),expected.view(np.uint64))
+    proof=installed_helper.diagnostics()
+    assert proof['native_reflections']==512 and proof['grouped_calls']==0
+
+
+@pytest.mark.parametrize('bins,parts',[(101,2),(5001,4)])
+def test_sequential_parts_keep_one_original_accumulator_with_cancellation(installed_helper,bins,parts):
+    axis=np.linspace(-10.,10.,bins);records={}
+    for i in range(1024):
+        p=np.array([float(i%16)/10,.5,.25,1.,.125])
+        records[(i,0,0)]=(p,[1e16,1.,-1e16,0.][i%4],0,len(axis))
+    *_,required=batch.pack_records(records,axis,batch.MAXIMUM_BYTES)
+    maximum=required+axis.nbytes+28*len(records)+8+15*(584+4*bins)
+    expected=np.zeros(len(axis))
+    for p,height,low,high in records.values():
+        expected+=np.float64(height)*powder.getEpsVoigt(*p,axis)[0]
+    actual=installed_helper.render(records,axis,maximum_bytes=maximum)
+    np.testing.assert_array_equal(actual.view(np.uint64),expected.view(np.uint64))
+    proof=installed_helper.diagnostics()
+    assert proof['sequentially_split_calls']==1 and proof['grouped_parts']==parts
+    assert proof['native_reflections']==16*parts and proof['reflections']==1024
+    assert proof['maximum_accounted_workspace_bytes']<=maximum
+
+
+def test_changed_grid_during_grouping_is_not_published(installed_helper,monkeypatch):
+    axis=np.linspace(-10.,10.,101);p=np.array([0.,.5,.25,1.,.125])
+    records={(i,0,0):(p,1.,0,len(axis)) for i in range(512)}
+    original=installed_helper.group_values
+    def changed_grid(*args):
+        result=original(*args);axis[0]-=1.;return result
+    monkeypatch.setattr(installed_helper,'group_values',changed_grid)
+    with pytest.raises(batch.BatchUnavailable,match='grid changed'):installed_helper.render(records,axis)
+    assert installed_helper.diagnostics()['calls']==0
+
+
+def test_nonfinite_original_native_peak_is_rejected_even_with_zero_intensity(installed_helper):
+    axis=np.linspace(99985.,100030.,601)+1e8;p=np.array([1e5,.5,.25,1.,.125])
+    assert not np.isfinite(powder.getEpsVoigt(*p,axis)[0]).all()
+    records={(i,0,0):(p,0.,0,len(axis)) for i in range(512)}
+    with pytest.raises(ValueError,match='nonfinite profile'):installed_helper.render(records,axis)
+    assert installed_helper.diagnostics()['calls']==0
+
+
 @pytest.mark.parametrize('change',['compiled','wrapper','fork','thread','floating'])
 def test_changed_native_ownership_or_controls_do_not_reuse_a_pointer(installed_helper,monkeypatch,change):
     owner=installed_helper

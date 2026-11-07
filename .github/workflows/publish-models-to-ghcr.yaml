@@ -17,6 +17,7 @@ on:
       - tests/gpx_recipe/test_native_peak_precision*.py
       - tests/gpx_recipe/test_native_peak_memo*.py
       - tests/gpx_recipe/test_native_peak_batch*.py
+      - tests/gpx_recipe/test_native_peak_groups.py
       - tests/gpx_recipe/test_native_peak_derivative_batch*.py
       - tests/gpx_recipe/test_structural_live_profiled_native_fit.py
       - tests/gpx_recipe/test_structural_live_profiled_nuisance.py
@@ -157,6 +158,7 @@ jobs:
             /validation/tests/gpx_recipe/test_native_peak_memo.py \
             /validation/tests/gpx_recipe/test_native_peak_precision.py \
             /validation/tests/gpx_recipe/test_native_peak_batch.py \
+            /validation/tests/gpx_recipe/test_native_peak_groups.py \
             /validation/tests/gpx_recipe/test_native_window_response.py \
             /validation/tests/gpx_recipe/test_native_axis_view.py \
             /validation/tests/gpx_recipe/test_native_reflection_memo.py \

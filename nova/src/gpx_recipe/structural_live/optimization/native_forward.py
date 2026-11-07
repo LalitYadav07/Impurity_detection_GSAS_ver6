@@ -146,6 +146,7 @@ class NativeTOFForward:
         return dict(method='batched native scalars and original native TOF kernels',
             requests=self.requests,rendered=self.rendered,native_anchor_checks=self.anchor_checks,
             native_fallback_calls=self.fallback_calls,peak_calls=self.peak_calls,
+            peak_call_count_scope='logical reflections; actual native evaluations are in native_peak_batch',
             seconds=self.seconds,qualified_anchor=self.qualified,disabled=self.disabled,
             kernel_hits=self.kernel_hits,kernel_misses=self.kernel_misses,
             anchor_comparison=self.anchor_comparison,
