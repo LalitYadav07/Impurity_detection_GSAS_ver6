@@ -35,6 +35,7 @@ class NativeTOFForward:
             raise ScalarBatchUnavailable('Native forward output exceeds its workspace budget')
         self.qualified=False;self.disabled=False
         self.requests=self.rendered=self.anchor_checks=self.fallback_calls=self.peak_calls=0
+        self.kernel_hits=self.kernel_misses=0
         self.seconds=0.;self.bypasses=Counter()
 
     def _context(self):
@@ -50,7 +51,11 @@ class NativeTOFForward:
             raise ProposalUnavailable('Native TOF forward context changed')
         return context
 
-    def evaluate(self,point):
+    def evaluate(self,point,*,kernel=None):
+        if kernel is not None:
+            from ...preparation.native_tof_kernels import QualifiedKernel
+            if not isinstance(kernel,QualifiedKernel):
+                raise TypeError('A natively qualified kernel chunk is required')
         began=time.monotonic();self.requests+=1;s=self.source
         try:
             if self.disabled:
@@ -71,9 +76,13 @@ class NativeTOFForward:
             if background.shape!=axis.shape or not np.isfinite(background).all():
                 raise ValueError('Native background returned an invalid forward profile')
             signal=np.zeros_like(background)
-            for parameters,height,low,high in records.values():
-                signal[low:high]+=np.float64(height)*peak(*parameters,axis[low:high])[0]
-                self.peak_calls+=1
+            for hkl,(parameters,height,low,high) in records.items():
+                value=None if kernel is None else kernel.lookup(hkl,parameters,axis,low,high,function=peak)
+                if value is None:
+                    value=peak(*parameters,axis[low:high])[0];self.peak_calls+=1
+                    self.kernel_misses+=int(kernel is not None)
+                else:self.kernel_hits+=1
+                signal[low:high]+=np.float64(height)*value
             curve=np.zeros(len(s.fast.x));curve[s.fast.slice]=signal+background
             if not np.isfinite(curve).all():
                 raise ValueError('Native batched forward returned a nonfinite profile')
@@ -93,6 +102,7 @@ class NativeTOFForward:
             requests=self.requests,rendered=self.rendered,native_anchor_checks=self.anchor_checks,
             native_fallback_calls=self.fallback_calls,peak_calls=self.peak_calls,
             seconds=self.seconds,qualified_anchor=self.qualified,disabled=self.disabled,
+            kernel_hits=self.kernel_hits,kernel_misses=self.kernel_misses,
             bypasses=dict(self.bypasses),maximum_workspace_bytes=self.maximum_bytes,
             profile_interpolation=False,observations_reused=False)
 

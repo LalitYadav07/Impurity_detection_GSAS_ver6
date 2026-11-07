@@ -475,3 +475,36 @@ array was identical. Median construction time changed from 89.19 to 81.33 s
 starting-bank measurement with reflection-envelope reuse enabled in both arms,
 not a complete nonlinear fit or NDIP throughput measurement. Preparation reuse
 after real cell/profile changes and full deployed acceptance remain required.
+
+## Bounded native kernel chunks
+
+The shared TOF renderer accepts a natively qualified primitive kernel chunk.
+It recomputes the current structure factors, reflection membership, intensity
+corrections and background. A stored peak is used only when the original
+compiled float32 shape and translated-axis inputs are identical. Other peaks
+use the original native function. Actual coordinates and measured arrays are
+retained; no grid resampling, interpolation or old intensity is introduced.
+
+Chunk arrays are immutable and data only, bounded at 64 MiB after expansion.
+Metadata and array headers are checked before loading. Imported bytes carry no
+native qualification: every stored peak is recalculated and compared bitwise
+before this process can use it. A bounded process-local qualification index
+recognizes reloaded identical content, but it is neither exported nor inherited
+across a fork. Changed native functions or runtime identity require the native
+path. This check is an explicit first-use cost; it must be included in future
+worker-lifecycle benchmarks.
+
+`KernelStore` atomically registers independent chunks, supports concurrent
+arrivals and exact-byte repair, and retains a declared missing-chunk count.
+It streams deterministic parts of at most 128 MiB, below the native transport
+limit, while retaining the 2 GiB store bound. Parts can be imported out of order
+and resumed after cancellation. Stored/imported coverage describes file
+integrity, never fitted results or scientific qualification.
+
+The complete public C2/m prototype retained array-identical curves for 740
+proposal/scan combinations. Its separate cold-worker timing covered 185
+initial curves plus loading and three native checks, not proposal-step
+calibration or nonlinear refinement. The new bounded format still requires
+controller/library integration, preparation-origin and worker-lifecycle cost
+tests, full-catalog search-quality comparisons and actual NDIP handoffs before
+it can become the ordinary preparation workflow.

@@ -20,6 +20,8 @@ on:
       - tests/gpx_recipe/test_native_reflection_memo*.py
       - tests/gpx_recipe/test_native_tof_scalars.py
       - tests/gpx_recipe/test_native_tof_forward.py
+      - tests/gpx_recipe/test_native_tof_kernels.py
+      - tests/gpx_recipe/test_tof_kernel_storage.py
       - tests/gpx_recipe/test_native_cell_proposals.py
       - tests/gpx_recipe/test_structural_background_context*.py
       - tests/gpx_recipe/test_structural_snapshot_job_native.py
@@ -158,6 +160,8 @@ jobs:
             /validation/tests/gpx_recipe/test_native_reflection_memo_native.py \
             /validation/tests/gpx_recipe/test_native_tof_scalars.py \
             /validation/tests/gpx_recipe/test_native_tof_forward.py \
+            /validation/tests/gpx_recipe/test_native_tof_kernels.py \
+            /validation/tests/gpx_recipe/test_tof_kernel_storage.py \
             /validation/tests/gpx_recipe/test_native_cell_proposals.py \
             /validation/tests/gpx_recipe/test_preparation_worker_native.py \
             /validation/tests/gpx_recipe/test_preparation_adaptation_native.py \
@@ -169,6 +173,6 @@ jobs:
             /validation/tests/gpx_recipe/test_prepared_k_series_native.py \
             /validation/tests/gpx_recipe/test_prepared_model_handoff_native.py \
             /validation/tests/gpx_recipe/test_structural_snapshot_job_native.py &&
-          python -c "import xml.etree.ElementTree as E; cases=E.parse(\"/tmp/preparation.xml\").findall(\".//testcase\"); assert len(cases)>=253 and all(c.find(\"skipped\") is None and c.find(\"failure\") is None and c.find(\"error\") is None for c in cases), \"Preparation native acceptance must run without skips\""'
+          python -c "import xml.etree.ElementTree as E; cases=E.parse(\"/tmp/preparation.xml\").findall(\".//testcase\"); assert len(cases)>=289 and all(c.find(\"skipped\") is None and c.find(\"failure\") is None and c.find(\"error\") is None for c in cases), \"Preparation native acceptance must run without skips\""'
       - name: Publish verified immutable image
         run: docker push "$IMAGE"
