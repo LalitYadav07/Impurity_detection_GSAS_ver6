@@ -52,6 +52,24 @@ def test_joint_update_control_must_be_an_explicit_boolean():
     with pytest.raises(ValueError,match='boolean'):
         module.fit(None,None,None,None,joint_steps='true')
 
+
+def test_matched_work_control_retains_native_objective_without_claiming_convergence():
+    s,t,o,z,c,b,_=setup()
+    result,rate=module.fit(s,t,o,b,seconds=10,starts=2,evaluator=c,qualification_iterations=1)
+    residual,_=residual_and_factor(o,rate)
+    assert result['starts']==len(result['attempts'])==2
+    assert all(a['iterations']==1 and a['reason']=='qualification_iteration_limit' for a in result['attempts'])
+    assert result['qualification_iterations_per_start']==1
+    assert result['all_allowed_modes_retained']
+    assert result['best']['deviance']==pytest.approx(residual@residual)
+    assert not result['global_optimum_certified'] and not result['model_exclusion_authorized']
+
+
+@pytest.mark.parametrize('value',[True,False,0,-1,1.5,1001,'4'])
+def test_matched_work_control_rejects_invalid_or_ambiguous_limits(value):
+    with pytest.raises(ValueError,match='Qualification iterations'):
+        module.fit(None,None,None,None,qualification_iterations=value)
+
 def test_profiled_cache_error_is_not_hidden_by_scale_or_background():
     s,t,o,z,c,b,_=setup()
     c.evaluate=lambda p:s.native(p)+.001*np.sin(o.x*23)

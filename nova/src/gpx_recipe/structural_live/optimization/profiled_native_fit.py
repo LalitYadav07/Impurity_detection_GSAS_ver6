@@ -26,19 +26,26 @@ class CellDirectionUnavailable(RuntimeError):
 
 def fit(source,table,observation,bank,*,seconds=120.,starts=4,seed=90231,warm=None,warm_pool=None,
         mode_iterations=1,cell_iterations=1,kicks=False,evaluator=None,force_native_mode_derivatives=False,
-        screening_exclusions=None,force_native_cell_directions=False,joint_steps=False):
+        screening_exclusions=None,force_native_cell_directions=False,joint_steps=False,
+        qualification_iterations=None):
     """Use the same complete native objective for either update schedule.
 
     ``joint_steps`` is an internal qualification control, not a user accuracy
     choice. Coupled columns retain native acceptance and fresh-cell retries.
     The existing schedule stays the default until full-fit comparisons qualify
-    the coupled update; a low point-fit Rwp alone is insufficient.
+    the coupled update; a low point-fit Rwp alone is insufficient. Internal
+    ``qualification_iterations`` bounds each start's complete outer updates
+    for matched-work benchmarks. Reaching it is explicitly unresolved and
+    never a convergence criterion; production callers leave it unset.
     """
     if not np.isfinite(seconds) or seconds<=0 or type(starts)is not int or starts<1:
         raise ValueError('Positive finite time and integer start count required')
     if type(mode_iterations)is not int or mode_iterations<1 or type(cell_iterations)is not int or cell_iterations<1:
         raise ValueError('Positive block iteration counts required')
     if type(joint_steps)is not bool:raise ValueError('Joint native update selection must be boolean')
+    if qualification_iterations is not None and (type(qualification_iterations)is not int
+            or not 1<=qualification_iterations<=1000):
+        raise ValueError('Qualification iterations must be an integer from one to one thousand')
     if kicks:raise ValueError('Weak-mode restarts are not qualified for profiled nuisance fitting')
     began=time.monotonic();deadline=began+seconds;s=source;m=s.mode_dimensions;d=len(s.radii);mask=observation.mask
     lo=np.r_[-np.ones(d),-.3,np.log(.25)];hi=np.r_[np.ones(d),.3,np.log(4.)]
@@ -265,6 +272,8 @@ def fit(source,table,observation,bank,*,seconds=120.,starts=4,seed=90231,warm=No
                     if d>m:z,cost=block(z,False,cell_iterations)
                     if m:z,cost=block(z,True,mode_iterations)
                 cycles+=1
+                if qualification_iterations is not None and cycles>=qualification_iterations:
+                    attempt['reason']='qualification_iteration_limit';break
                 if before-cost<1e-9*max(cost,1.) and (not kicks or not restart_points):
                     reasons={row['reason'] for row in blocks[block_begin:]}
                     if 'native_descent_stalled' in reasons:
@@ -289,6 +298,7 @@ def fit(source,table,observation,bank,*,seconds=120.,starts=4,seed=90231,warm=No
     return dict(best=dict(parameters=z.tolist(),deviance=best['cost']),rwp_percent=observation_rwp_percent(observation,best['rate']),
         seconds=time.monotonic()-began,method='profiled_native_joint' if joint_steps else 'profiled_native_alternating',exact_native_deviance=best['cost'],
         weak_mode_restarts_enabled=kicks,force_native_mode_derivatives=force_native_mode_derivatives,starts=len(selected),mode_dimensions=m,cell_dimensions=d-m,
+        qualification_iterations_per_start=qualification_iterations,
         blocks=blocks,restarts=restarts,blocked_starts=blocked_starts,attempts=attempts,trace=trace,full_native_calls=native_calls,chemistry_rejections=rejected,
         independent_cache_checks=cache_checks,maximum_native_relative_error=max_error,maximum_native_sigma_error=max_sigma,
         native_response_cache=cache.diagnostics(),all_allowed_modes_retained=True,truth_used=False,
