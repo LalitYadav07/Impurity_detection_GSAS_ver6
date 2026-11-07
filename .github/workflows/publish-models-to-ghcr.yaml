@@ -24,6 +24,8 @@ on:
       - tests/gpx_recipe/test_native_kernel_pass.py
       - tests/gpx_recipe/test_native_kernel_geometry.py
       - tests/gpx_recipe/test_native_kernel_bank.py
+      - tests/gpx_recipe/test_kernel_origin.py
+      - tests/gpx_recipe/test_kernel_origin_native.py
       - tests/gpx_recipe/test_kernel_geometry_storage.py
       - tests/gpx_recipe/test_native_joint_profiled_fit.py
       - tests/gpx_recipe/test_tof_kernel_storage.py
@@ -169,6 +171,8 @@ jobs:
             /validation/tests/gpx_recipe/test_native_kernel_pass.py \
             /validation/tests/gpx_recipe/test_native_kernel_geometry.py \
             /validation/tests/gpx_recipe/test_native_kernel_bank.py \
+            /validation/tests/gpx_recipe/test_kernel_origin.py \
+            /validation/tests/gpx_recipe/test_kernel_origin_native.py \
             /validation/tests/gpx_recipe/test_kernel_geometry_storage.py \
             /validation/tests/gpx_recipe/test_native_joint_profiled_fit.py \
             /validation/tests/gpx_recipe/test_tof_kernel_storage.py \
@@ -183,6 +187,6 @@ jobs:
             /validation/tests/gpx_recipe/test_prepared_k_series_native.py \
             /validation/tests/gpx_recipe/test_prepared_model_handoff_native.py \
             /validation/tests/gpx_recipe/test_structural_snapshot_job_native.py &&
-          python -c "import xml.etree.ElementTree as E; cases=E.parse(\"/tmp/preparation.xml\").findall(\".//testcase\"); assert len(cases)>=351 and all(c.find(\"skipped\") is None and c.find(\"failure\") is None and c.find(\"error\") is None for c in cases), \"Preparation native acceptance must run without skips\""'
+          python -c "import xml.etree.ElementTree as E; cases=E.parse(\"/tmp/preparation.xml\").findall(\".//testcase\"); assert len(cases)>=381 and all(c.find(\"skipped\") is None and c.find(\"failure\") is None and c.find(\"error\") is None for c in cases), \"Preparation native acceptance must run without skips\""'
       - name: Publish verified immutable image
         run: docker push "$IMAGE"

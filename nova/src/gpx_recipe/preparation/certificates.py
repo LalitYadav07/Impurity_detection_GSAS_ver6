@@ -30,7 +30,7 @@ def validate(value):
     seen=set()
     for row in value['entries']:
         if (not isinstance(row,dict) or set(row)!={'kind','entry_sha256','physics_sha256','artifacts'}
-                or row['kind'] not in {'magnetic','structural'}
+                or row['kind'] not in {'magnetic','structural','kernel'}
                 or not checksum(row['entry_sha256']) or row['entry_sha256'] in seen
                 or not checksum(row['physics_sha256']) or not isinstance(row['artifacts'],dict)
                 or not row['artifacts'] or len(row['artifacts'])>8
@@ -41,6 +41,8 @@ def validate(value):
             raise ValueError('Structural certificate requires the complete native bank and receipt')
         if row['kind']=='magnetic' and set(row['artifacts']) not in ({'response.npz'},{'response.npz','scattering.npz'}):
             raise ValueError('Magnetic certificate requires its declared native arrays')
+        if row['kind']=='kernel' and set(row['artifacts'])!={'kernel.npz','kernel.json'}:
+            raise ValueError('Kernel certificate requires its complete numeric chunk and metadata')
         seen.add(row['entry_sha256'])
     return value
 
@@ -66,7 +68,7 @@ def produce(response,worker_root,archive,destination):
         results=[r['result'] for r in inner['entries'] if r['state']=='prepared']
     else:results=[]
     for result in results:
-        if result.get('kind') not in {'structural','magnetic'}:continue
+        if result.get('kind') not in {'structural','magnetic','kernel'}:continue
         if (result.get('schema')!='radar-experiment-preparation-worker/v1' or result.get('status')!='prepared'
                 or result.get('observations_included') is not False or result.get('scientific_result') is not False):
             raise ValueError('Only completed theoretical native preparation can be certified')
@@ -86,6 +88,23 @@ def produce(response,worker_root,archive,destination):
             artifact=output/name
             if artifact.is_symlink() or file_sha(artifact)!=sha:
                 raise ValueError('Native preparation array changed before certification')
+        if result['kind']=='kernel':
+            from .tof_kernel_arrays import read as read_kernel
+            from .kernel_runtime import origin_identity,validate_record
+            from ..symmetry.contracts import digest
+            data=read_kernel(output/'kernel.npz',output/'kernel.json')
+            detail=manifest['detail'];proof=detail.get('native_kernel_proof',{})
+            runtime=validate_record(detail.get('kernel_runtime'))
+            if (detail.get('arrays_sha256')!=data.metadata['arrays_sha256']
+                    or runtime['native']!={k:data.metadata[k] for k in ('kernel_sha256','binary_sha256')}
+                    or digest(runtime)!=detail.get('kernel_runtime_sha256')
+                    or detail.get('physics_sha256')!=origin_identity(
+                        data.metadata['arrays_sha256'],detail.get('kernel_runtime_sha256'))
+                    or proof.get('verified_all_peaks') is not True
+                    or proof.get('native_peak_calls')!=data.metadata['reflection_count']
+                    or proof.get('method') not in {'original native kernel construction',
+                                                   'complete original native peak verification'}):
+                raise ValueError('Kernel certificate needs its completed native construction and exact runtime')
         # Bind the certificate to the exact files already inventoried and
         # packed by the wrapper, including the manifest. A later mutation
         # cannot receive a receipt for different bytes than the result ZIP.

@@ -19,7 +19,7 @@ from .worker import validate_request, validate_settings, verify_structural_child
 
 PLAN_SCHEMA = 'radar-experiment-preparation-plan/v1'
 PORTABLE = {'reference': set(), 'magnetic': {'response.npz'},
-            'structural': {'starts.npz', 'starts.json'}}
+            'structural': {'starts.npz', 'starts.json'},'kernel':{'kernel.npz','kernel.json'}}
 OPTIONAL_PORTABLE = {'magnetic': {'scattering.npz'}}
 
 
@@ -107,7 +107,7 @@ def create_library(root, *, name, source, banks, models, scope=None):
     declared = []
     for model in models:
         model = fields(model, ['kind', 'bank', 'settings'], {'child': None})
-        if model['kind'] not in PORTABLE or model['bank'] not in bank_records:
+        if model['kind'] not in {'reference','magnetic','structural'} or model['bank'] not in bank_records:
             raise ValueError('The model must refer to a selected physical bank')
         settings = validate_settings(model['kind'], model['settings'])
         captured = dict(kind=model['kind'], bank=model['bank'], settings=settings,

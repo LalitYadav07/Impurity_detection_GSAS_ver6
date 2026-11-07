@@ -626,7 +626,46 @@ A public native control exits its producer before another process imports the
 parts, constructs a changed nuclear baseline, maps the absolute cell and
 reproduces full original-native arrays with fresh intensities. This proves the
 numerical handoff for the tested scope. It does not establish complete-fit
-speed, whole-catalog readiness or the application's import workflow. Imported
-chunks still pay complete native first-use qualification; this cost and the
-remaining controller/library/transport integration must be measured before
-claiming useful offline acceleration.
+speed, whole-catalog readiness or the application's import workflow. First-use
+qualification and the remaining controller/library/transport integration must
+be measured before claiming useful offline acceleration. Without a verified
+origin, imported chunks require complete native first-use qualification as
+described below.
+
+A separate native regression leaves the changed nuclear parent's actual cell
+at its ordinary zero coordinate. When that cell was not prepared, the complete
+current native calculation is retained without moving the point back to a
+stored cell. Absolute-cell mapping tests must not be presented as evidence of
+reuse at arbitrary continuous optimizer coordinates.
+
+## Native-origin profile components
+
+`preparation-kernel` is an internal component operation. It constructs one
+bounded raw TOF profile chunk from a parent CIF, instrument profile, reviewed
+child and declared cell index. It is not a new selectable scientific model.
+The ordinary native wrapper publishes only its numeric data/metadata and
+theoretical entry; no construction GPX or measured pattern is transported.
+
+The wrapper can certify complete original native kernel construction. A
+consumer accepts that origin only through Galaxy creating-job evidence and
+the same implementation and numerical runtime. This runtime includes native
+binary and linked-library hashes, CPU classes, numerical build identity and
+the active floating-point controls. The entry point must belong to its mapped
+native binary. Unsupported or changed environments keep complete native
+verification. Local tests simulate Galaxy's creating-job metadata; they do
+not establish that an NDIP account has already exercised this handoff.
+
+A matching origin permits up to seven exact original-kernel probes in a fresh
+worker. This is explicitly recorded as current-runtime probes plus complete
+verification at origin, never as complete re-verification in the current
+worker. Every actual primitive input must still match. The owned kernel also
+checks process, callable and floating-control identity; source state, atomic
+intensities, observations and final full-native checks are unchanged.
+Unattributed numerical uploads still require every original native peak.
+`verify_complete` supplies complete current-runtime requalification even when
+an old process proof exists. These are internal evidence boundaries, not user
+accuracy/speed settings.
+
+Automatic component planning, partial-library transport and UI handoff remain
+separate integration requirements. A successful small component test does not
+establish full-catalog storage efficiency or nonlinear-refinement speed.

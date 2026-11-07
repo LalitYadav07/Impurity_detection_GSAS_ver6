@@ -169,3 +169,25 @@ def magnetic_response_origin(response_sha256, physics_sha256):
                 return dict(certificate_sha256=record['sha256'],entry_sha256=entry['entry_sha256'],
                     origin='Galaxy native preparation; exact unweighted rendered response and current physical context')
     return None
+
+
+def kernel_origin(arrays_sha256,runtime_sha256):
+    """Authorize exact semantic arrays only in their current native runtime.
+
+    Array integrity is checked by the bounded decoder. The creating wrapper
+    attests a complete original native construction. Current-runtime probes
+    and exact actual-use primitive-input checks remain in the consumer.
+    """
+    if not all(checksum(v) for v in (arrays_sha256,runtime_sha256)):return None
+    from .kernel_runtime import origin_identity
+    expected=origin_identity(arrays_sha256,runtime_sha256)
+    environment=child_environment()
+    capsule=_inherited(environment) if environment else None
+    if capsule is None:return None
+    for record in capsule['records']:
+        for entry in record['certificate']['entries']:
+            if entry['kind']=='kernel' and entry['physics_sha256']==expected:
+                return dict(certificate_sha256=record['sha256'],entry_sha256=entry['entry_sha256'],
+                    native_runtime_sha256=runtime_sha256,
+                    origin='Galaxy complete native kernel construction and matching numerical runtime')
+    return None

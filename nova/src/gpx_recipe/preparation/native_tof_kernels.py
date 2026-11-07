@@ -1,8 +1,9 @@
-"""Native-generated kernels and exact full verification of portable chunks.
+"""Native-generated kernels and guarded verification of portable chunks.
 
 Untrusted numerical files cannot become predictions through a saved flag.
-Every imported peak is recalculated by the reviewed original native kernel
-before this process can reuse it. Qualification never survives serialization.
+Unattributed imports require every original native peak. An installed wrapper's
+complete native-production receipt can authorize current-runtime probes instead;
+an uploaded qualification flag cannot. Owned qualification is never serialized.
 """
 from __future__ import annotations
 
@@ -21,16 +22,28 @@ _VERIFIED_PID = os.getpid()
 MAX_QUALIFICATIONS = 4096
 
 
-def _key(data):
+def _compiled(function):
+    module=getattr(function,'__globals__',{}).get('pyd')
+    return module,getattr(module,'pyepsvoigt',None)
+
+
+def _key(data,function):
     global _VERIFIED_PID
     if _VERIFIED_PID != os.getpid():
         _VERIFIED.clear(); _VERIFIED_PID = os.getpid()
     meta = data.metadata
-    return tuple(meta[k] for k in ('arrays_sha256', 'kernel_sha256', 'binary_sha256'))
+    from .kernel_runtime import floating_state
+    state=floating_state()
+    if state is None:return None
+    return tuple(meta[k] for k in ('arrays_sha256', 'kernel_sha256', 'binary_sha256'))+(
+        id(function),id(_compiled(function)[1]),state)
 
 
-def _remember(data):
-    key = _key(data); _VERIFIED[key] = True; _VERIFIED.move_to_end(key)
+def _remember(data,function):
+    key = _key(data,function)
+    if key is None:return
+    # Keep callable references alive so object-ID reuse cannot transfer proof.
+    _VERIFIED[key] = (function,_compiled(function)[1]); _VERIFIED.move_to_end(key)
     while len(_VERIFIED) > MAX_QUALIFICATIONS:
         _VERIFIED.popitem(last=False)
 
@@ -72,6 +85,8 @@ class QualifiedKernel:
         if not isinstance(data, KernelData):
             raise TypeError('Immutable native kernel data required')
         self._data, self._function = data, function
+        from .kernel_runtime import floating_state
+        self._floating=floating_state();self._compiled_module,self._compiled_function=_compiled(function)
         self._pid = os.getpid(); self._proof = dict(proof)
         self._indices = {tuple(map(int, h)): i for i, h in enumerate(data._arrays['hkls'])}
         self.hits = self.misses = 0
@@ -82,7 +97,10 @@ class QualifiedKernel:
 
     def lookup(self, hkl, parameters, axis, low, high, *, function):
         """Reuse only exactly equal compiled shape and translated-grid inputs."""
-        if os.getpid() != self._pid or function is not self._function:
+        from .kernel_runtime import floating_state
+        if (os.getpid() != self._pid or function is not self._function
+                or self._floating is None or floating_state()!=self._floating
+                or getattr(self._compiled_module,'pyepsvoigt',None) is not self._compiled_function):
             self.misses += 1
             return None
         index = self._indices.get(tuple(hkl)); a = self._data._arrays
@@ -199,7 +217,7 @@ class _NativePassRecorder:
             self.records.clear()
             return None
         self.records.clear(); self.guard._context()
-        _remember(data)
+        _remember(data,self.function)
         return QualifiedKernel(data, self.function,
             dict(method='already-required original native Rietveld pass', native_peak_calls=0,
                 recorded_native_peak_calls=data.metadata['reflection_count'],
@@ -240,7 +258,7 @@ def capture(source, point, *, check_cancel=None):
     data = _make_data(axis, captured, identity)
     if check_cancel is not None:
         check_cancel()
-    _remember(data)
+    _remember(data,function)
     return QualifiedKernel(data, function, dict(method='original native kernel construction',
         native_peak_calls=len(captured), seconds=time.monotonic()-started, verified_all_peaks=True,
         peak_geometry_only=True, atomic_feasibility_evaluated=False,
@@ -248,7 +266,21 @@ def capture(source, point, *, check_cancel=None):
 
 
 def verify(data, source, *, check_cancel=None):
-    """Recompute EVERY imported peak; metadata checks alone cannot qualify it."""
+    """Native construction evidence is separate from uploaded metadata."""
+    return _verify(data,source,check_cancel=check_cancel,complete=False)
+
+
+def verify_complete(data,source,*,check_cancel=None):
+    """Requalify every raw peak before issuing evidence in a new runtime.
+
+    This is an internal preparation operation, not a user accuracy option.
+    Even an existing process proof or originating certificate is insufficient
+    to replace the complete current-runtime work requested by this operation.
+    """
+    return _verify(data,source,check_cancel=check_cancel,complete=True)
+
+
+def _verify(data,source,*,check_cancel,complete):
     if not isinstance(data, KernelData):
         raise TypeError('Checked native kernel data required')
     started = time.monotonic()
@@ -257,13 +289,29 @@ def verify(data, source, *, check_cancel=None):
     guard, _, function, _, identity = context(source)
     if any(data.metadata[k] != v for k, v in identity.items()):
         raise KernelUnavailable('Portable kernel runtime differs from the reviewed native runtime')
-    key = _key(data)
-    if key in _VERIFIED:
+    key = _key(data,function)
+    if not complete and key is not None and key in _VERIFIED:
         _VERIFIED.move_to_end(key)
         return QualifiedKernel(data, function, dict(method='same-process exact-content native qualification',
             native_peak_calls=0, seconds=time.monotonic()-started, verified_all_peaks=True), _permit=_PERMIT)
     arrays = data._arrays
-    for index, params in enumerate(arrays['parameters']):
+    origin=None
+    from .kernel_runtime import fingerprint,RuntimeUnavailable
+    from .authority import kernel_origin,child_environment
+    if not complete and child_environment():
+        try:
+            _,runtime_sha=fingerprint(source)
+            origin=kernel_origin(data.metadata['arrays_sha256'],runtime_sha)
+        except RuntimeUnavailable:
+            pass
+    if origin is not None:
+        count=len(arrays['parameters'])
+        indices=sorted({0,count//2,count-1,int(np.argmin(arrays['parameters'][:,3])),
+            int(np.argmax(arrays['parameters'][:,4])),int(np.argmax(np.diff(arrays['pointers']))),
+            int(data.metadata['arrays_sha256'][:8],16)%count})
+    else:indices=range(len(arrays['parameters']))
+    for index in indices:
+        params=arrays['parameters'][index]
         if check_cancel is not None:
             check_cancel()
         guard._context() if index == 0 else None
@@ -276,6 +324,13 @@ def verify(data, source, *, check_cancel=None):
     guard._context()
     if check_cancel is not None:
         check_cancel()
-    _remember(data)
+    if origin is not None:
+        # Do not promote sampled current-runtime evidence into the process's
+        # complete-native-verification cache. A resident reader can reuse its
+        # owned chunk; another import retains the same origin/probe boundary.
+        return QualifiedKernel(data,function,dict(method='verified native origin and current-runtime probes',
+            native_peak_calls=len(indices),seconds=time.monotonic()-started,
+            verified_all_peaks=False,verified_all_peaks_at_origin=True,origin=origin),_permit=_PERMIT)
+    _remember(data,function)
     return QualifiedKernel(data, function, dict(method='complete original native peak verification',
         native_peak_calls=len(arrays['hkls']), seconds=time.monotonic()-started, verified_all_peaks=True), _permit=_PERMIT)

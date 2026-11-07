@@ -36,13 +36,15 @@ def validate_settings(kind, value):
         number(value['magnetic_d_min'], 0, 10)
         if any(type(value[k]) is not bool for k in ('refine_histogram_scale', 'refine_background')):
             raise ValueError('Explicit scale/background freedom is required')
-    elif kind == 'structural':
-        value = fields(value, ['candidate', 'mode_radius', 'cell_radius'])
+    elif kind in {'structural','kernel'}:
+        value = fields(value, ['candidate', 'mode_radius', 'cell_radius']+
+                       (['cell_index'] if kind=='kernel' else []))
         value['candidate'] = validate_candidate(value['candidate'])
         if value['candidate']['magnetic_space_group']:
             raise ValueError('Structural preparation requires a displacement-mode child')
         number(value['mode_radius'], 0, .5, positive=True)
         number(value['cell_radius'], 0, .02, positive=True)
+        if kind=='kernel':number(value['cell_index'],0,511,integer=True)
     else:
         raise ValueError('Unsupported experiment preparation operation')
     return value
@@ -53,12 +55,14 @@ def validate_request(kind, request):
         from .batch import validate_request as validate_batch
         return validate_batch(request)
     required = ['source', 'instrument', 'grid', 'settings', 'destination']
-    if kind == 'structural':
+    if kind in {'structural','kernel'}:
         required.append('child')
     request = fields(request, required)
     request['settings'] = validate_settings(kind, request['settings'])
     request['grid'] = fields(request['grid'], ['kind', 'lower', 'upper', 'bins', 'bank'])
     request['grid'] = validate_grid(**request['grid'])
+    if kind=='kernel' and request['grid']['kind']!='PNT':
+        raise ValueError('Native raw-kernel preparation currently requires a TOF profile')
     return request
 
 
@@ -78,10 +82,10 @@ def execute(kind, request):
     settings, grid = request['settings'], request['grid']
     started = time.monotonic()
     inputs = [Path(request[k]).resolve() for k in ('source', 'instrument')]
-    if kind == 'structural':
+    if kind in {'structural','kernel'}:
         inputs.append(Path(request['child']).resolve())
     checksums = [file_sha(p) for p in inputs]
-    if kind == 'structural':
+    if kind in {'structural','kernel'}:
         verify_structural_child(settings, checksums[2])
     output = Path(request['destination']).resolve()
     output.mkdir(parents=True, exist_ok=False)
@@ -155,13 +159,34 @@ def execute(kind, request):
             candidate['origin_shift'], output/'native-model')
         source = make_source(output/'native-model', output/'native-evaluation',
             SearchSettings(mode_radius=settings['mode_radius'], cell_radius=settings['cell_radius']))
-        bank = build(source, output/'starts.npz', policy='joint_cell_v1', reuse_fixed_cell_profiles=True)
-        artifacts += ['starts.npz', 'starts.json']
-        detail = dict(physics_sha256=bank['context']['physics_sha256'],
-            mode_dimensions=source.mode_dimensions, cell_dimensions=source.cell_dimensions,
-            starting_curves=bank['native_curves'], proposed_starts=bank['proposed_points'],
-            zero_profile_error=metadata['zero_profile_error'],
-            scope='Native nonlinear starting curves and proposals; optimization and new-cell adaptation remain online')
+        if kind=='kernel':
+            from .kernel_geometry import specification
+            from .kernel_runtime import fingerprint,origin_identity
+            from .native_tof_kernels import capture
+            from .tof_kernel_arrays import encode
+            from ..structural_live.optimization.offline_native_start_bank import policy_points
+            points=policy_points(source,'joint_cell_v1')*source.radii
+            spec,representatives,mapping=specification(source,points,
+                model_sha256=checksums[2],bank=f"PNT profile bank {grid['bank']}")
+            index=settings['cell_index']
+            if index>=len(representatives):raise ValueError('Kernel cell index is outside the complete preparation portfolio')
+            kernel=capture(source,representatives[index]);runtime,runtime_sha=fingerprint(source)
+            (output/'kernel.npz').write_bytes(encode(kernel.data))
+            write_json(output/'kernel.json',kernel.data.metadata)
+            artifacts+=['kernel.npz','kernel.json']
+            detail=dict(physics_sha256=origin_identity(kernel.data.metadata['arrays_sha256'],runtime_sha),
+                arrays_sha256=kernel.data.metadata['arrays_sha256'],kernel_runtime=runtime,
+                kernel_runtime_sha256=runtime_sha,native_kernel_proof=kernel.diagnostics(),
+                specification=spec,cell_index=index,proposal_to_cell=mapping,
+                scope='One native profile component, not a scientific model or a fitted result')
+        else:
+            bank = build(source, output/'starts.npz', policy='joint_cell_v1', reuse_fixed_cell_profiles=True)
+            artifacts += ['starts.npz', 'starts.json']
+            detail = dict(physics_sha256=bank['context']['physics_sha256'],
+                mode_dimensions=source.mode_dimensions, cell_dimensions=source.cell_dimensions,
+                starting_curves=bank['native_curves'], proposed_starts=bank['proposed_points'],
+                zero_profile_error=metadata['zero_profile_error'],
+                scope='Native nonlinear starting curves and proposals; optimization and new-cell adaptation remain online')
     if checksums != [file_sha(p) for p in inputs]:
         raise ValueError('A preparation input changed during the native operation')
     manifest = dict(schema='radar-experiment-preparation-entry/v1', kind=kind,
@@ -178,7 +203,7 @@ def execute(kind, request):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('kind', choices=['reference', 'magnetic', 'structural', 'batch'])
+    parser.add_argument('kind', choices=['reference', 'magnetic', 'structural', 'kernel', 'batch'])
     parser.add_argument('request')
     parser.add_argument('output')
     args = parser.parse_args()

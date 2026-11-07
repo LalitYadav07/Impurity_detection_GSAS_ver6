@@ -74,6 +74,29 @@ def test_changed_nuclear_cell_uses_the_same_absolute_metric_with_fresh_atomic_in
     assert reader.loads==1 and reader.hits>0
 
 
+def test_unprepared_current_nuclear_cell_is_not_forced_onto_a_saved_metric(tmp_path):
+    """An absolute-cell reuse control must not imply arbitrary-cell reuse.
+
+    The actual new nuclear parent stays the optimizer's zero coordinate. A
+    library miss preserves that coordinate and uses its full native profile;
+    it must not silently move the fit back to a more convenient stored cell.
+    """
+    _,first=native_source(tmp_path/'before','PNT');store,_=bank(tmp_path/'store',first)
+    current=tmp_path/'current';current.mkdir();original,s=shifted_source(current)
+    before=file_sha(original);point=np.zeros(len(s.radii))
+    actual_cell=geometry.cell_for_point(s,point).copy()
+    stored=np.asarray(store.document['specification']['geometry']['cells'])
+    assert np.min(np.linalg.norm(stored-actual_cell,axis=1)/np.linalg.norm(actual_cell))>geometry.MATCH_RTOL
+    reader=geometry.PreparedKernelBank(store,s);engine=NativeTOFForward(s)
+    expected=s.native(point).copy()
+    np.testing.assert_array_equal(engine.evaluate(point,kernel=reader),expected)
+    np.testing.assert_array_equal(geometry.cell_for_point(s,point),actual_cell)
+    np.testing.assert_array_equal(point,np.zeros(len(s.radii)))
+    assert reader.loads==0 and reader.bypasses['No prepared absolute cell matches this native point']==1
+    assert engine.peak_calls>0 and engine.kernel_hits==0 and not engine.disabled
+    assert file_sha(original)==before
+
+
 def test_actual_xyz_edit_rebuilds_kernels_without_rejecting_the_scientific_model(tmp_path):
     _,s=native_source(tmp_path/'inputs','PNT');store,_=bank(tmp_path/'store',s)
     reader=geometry.PreparedKernelBank(store,s);engine=NativeTOFForward(s);point=np.zeros(len(s.radii))

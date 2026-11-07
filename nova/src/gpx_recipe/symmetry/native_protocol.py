@@ -14,6 +14,7 @@ FIELDS = {
     'preparation-reference': ({'source', 'instrument', 'grid', 'settings', 'destination'}, set()),
     'preparation-magnetic': ({'source', 'instrument', 'grid', 'settings', 'destination'}, set()),
     'preparation-structural': ({'source', 'instrument', 'child', 'grid', 'settings', 'destination'}, set()),
+    'preparation-kernel': ({'source', 'instrument', 'child', 'grid', 'settings', 'destination'}, set()),
     'preparation-batch': ({'source', 'plan', 'destination', 'workers', 'seconds'}, set()),
     'structural-snapshot': ({'source','directory','anchor_snapshot','snapshot','receipt','mapping',
         'source_scope','revision','source_revision','reference_revision','refine_transfer','destination'}, {'prepared_scattering'}),
