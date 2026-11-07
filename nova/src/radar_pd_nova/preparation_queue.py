@@ -17,6 +17,7 @@ from gpx_recipe.execution import write_json
 from gpx_recipe.preparation import batch
 from gpx_recipe.preparation.operations import pending_entries, stage_entry, publish_entry
 from gpx_recipe.symmetry.compiler import confined, file_sha
+from gpx_recipe.symmetry.native_protocol import native_timeout_limit
 from .native_operations import capture, handle_path, intent_lock, validate_handle
 from .preparation_queue_state import SCHEMA, MAX_METADATA, TERMINAL, validate, upgrade
 from .preparation_queue_results import requests_for, stable_digest, outcomes
@@ -113,15 +114,16 @@ class PreparationQueue:
         payload=self._stage(job)
         operation='preparation-batch' if job['mode']=='batch' else (
             'preparation-'+self.library.row(job['members'][0]['entry'])['model']['kind'])
+        timeout=native_timeout_limit(operation)
         def before_post(handle):
             job.update(handle=handle,phase='awaiting_submission',reason='')
             self._save(state,remote=True)
         try:
             handle=self.runtime.submit_native(operation,payload,self.root,source=self.source,
-                timeout=600,cancel=self._paused,on_intent=before_post)
+                timeout=timeout,cancel=self._paused,on_intent=before_post)
         except Exception as exc:
             try:
-                captured,_=capture(self.runtime,operation,payload,self.root,self.source,600)
+                captured,_=capture(self.runtime,operation,payload,self.root,self.source,timeout)
                 path=handle_path(self.root,captured['key'])
                 if path.exists():job['handle']=validate_handle(self.runtime,json.loads(path.read_text()))
             except (OSError,ValueError):pass

@@ -8,7 +8,21 @@ import zipfile
 import pytest
 
 from gpx_recipe.symmetry.compiler import file_sha, package_signature
-from gpx_recipe.symmetry.native_protocol import validate_native_payload
+from gpx_recipe.symmetry.native_protocol import validate_native_payload,validate_native_timeout,native_timeout_limit
+
+
+def test_only_offline_training_has_a_long_native_deadline():
+    assert native_timeout_limit('preparation-structural-training')==7200
+    assert validate_native_timeout('preparation-structural-training',7200)==7200
+    for operation in ('inspect','k-portfolio','preparation-batch','preparation-structural-examples','structural-snapshot'):
+        assert native_timeout_limit(operation)==600
+        with pytest.raises(ValueError,match='deadline'):validate_native_timeout(operation,601)
+
+
+@pytest.mark.parametrize('value',[True,False,0,-1,7201,float('nan'),float('inf'),'7200'])
+def test_invalid_offline_training_deadlines_are_rejected(value):
+    with pytest.raises(ValueError,match='deadline'):
+        validate_native_timeout('preparation-structural-training',value)
 
 
 @pytest.mark.parametrize('moment_model', [None, 'collinear', 'symmetry_allowed'])

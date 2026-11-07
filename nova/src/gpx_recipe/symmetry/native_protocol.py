@@ -1,4 +1,5 @@
 """One closed payload contract for NOVA dispatch and the Galaxy native worker."""
+import math
 
 FIELDS = {
     'inspect': ({'source'}, set()),
@@ -21,6 +22,20 @@ FIELDS = {
     'structural-snapshot': ({'source','directory','anchor_snapshot','snapshot','receipt','mapping',
         'source_scope','revision','source_revision','reference_revision','refine_transfer','destination'}, {'prepared_scattering'}),
 }
+
+
+def native_timeout_limit(operation):
+    if operation not in FIELDS:raise ValueError('Unsupported native operation')
+    # Offline preparation may train tens of thousands of native pairs. This
+    # dedicated ceiling does not widen fit, discovery or batch deadlines.
+    return 7200 if operation=='preparation-structural-training' else 600
+
+
+def validate_native_timeout(operation,value):
+    if (type(value) not in {int,float} or not math.isfinite(value)
+            or not 1<=value<=native_timeout_limit(operation)):
+        raise ValueError('Invalid native deadline for this operation')
+    return float(value)
 
 
 def validate_native_payload(operation, payload):

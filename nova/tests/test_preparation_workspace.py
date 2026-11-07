@@ -120,7 +120,11 @@ def test_model_plan_inherits_only_profile_dependencies_its_engine_consumes(works
         examples=[r for r in library.document['entries'] if r['model']['kind']=='structural-examples']
         training=[r for r in library.document['entries'] if r['model']['kind']=='structural-training']
         assert len(examples)==16 and len(training)==2
+        from gpx_recipe.preparation.structural_training_blocks import REPRESENTATION
+        assert all(e['model']['settings']['representation']==REPRESENTATION for e in examples)
         for trainer in training:
+            assert trainer['model']['settings']['representation']==REPRESENTATION
+            assert trainer['model']['settings']['bins']==4096
             assert trainer['model']['settings']['dependencies']==sorted(
                 e['id'] for e in examples if e['model']['bank']==trainer['model']['bank'])
     if references:assert references[0]['model']['bank']==row['model']['bank']

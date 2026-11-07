@@ -35,10 +35,18 @@ def checksum(value):
     return isinstance(value,str) and len(value)==64 and all(c in '0123456789abcdef' for c in value)
 
 
-def read(directory):
+def filenames(names):
+    # Both are installed data contracts, never arbitrary caller-supplied paths.
+    if not isinstance(names,str) or names not in {'pairs','examples'}:
+        raise ValueError('Use the paired or preparation example artifact names')
+    return names+'.json',names+'.npz'
+
+
+def read(directory,*,names='pairs'):
     directory=Path(directory)
-    document=json.loads(read_bounded(directory/'pairs.json',8*1024**2))
-    raw=read_bounded(directory/'pairs.npz',MAX_BYTES)
+    manifest_name,array_name=filenames(names)
+    document=json.loads(read_bounded(directory/manifest_name,8*1024**2))
+    raw=read_bounded(directory/array_name,MAX_BYTES)
     if (not isinstance(document,dict) or document.get('schema') not in {SCHEMA,packed.SCHEMA}
             or document.get('observations_included') is not False
             or document.get('scientific_result') is not False
@@ -117,7 +125,7 @@ def read(directory):
     return PairedBlock(document,owned)
 
 
-def pack_block(source,destination):
+def pack_block(source,destination,*,source_names='pairs',names='pairs'):
     """Repack an already checked block without changing any numerical value.
 
     This binds the prior bytes as provenance, not native qualification. All
@@ -125,15 +133,16 @@ def pack_block(source,destination):
     """
     from ..execution import write_json
     source=Path(source);destination=Path(destination)
-    block=read(source);arrays=packed.encode(block.arrays)
+    manifest_name,array_name=filenames(names)
+    block=read(source,names=source_names);arrays=packed.encode(block.arrays)
     destination.mkdir(parents=True,exist_ok=False)
-    np.savez_compressed(destination/'pairs.npz',**arrays)
-    raw=read_bounded(destination/'pairs.npz',MAX_BYTES)
+    np.savez_compressed(destination/array_name,**arrays)
+    raw=read_bounded(destination/array_name,MAX_BYTES)
     validate_npz_bytes(raw,maximum_bytes=MAX_BYTES)
     document=dict(block.manifest,schema=packed.SCHEMA,array_encoding=packed.ENCODING,
         original_pairs_sha256=block.manifest['pairs_sha256'],pairs_sha256=hashlib.sha256(raw).hexdigest())
-    write_json(destination/'pairs.json',document)
-    restored=read(destination)
+    write_json(destination/manifest_name,document)
+    restored=read(destination,names=names)
     if any(restored.arrays[key].dtype!=value.dtype or restored.arrays[key].tobytes()!=value.tobytes()
            for key,value in block.arrays.items()):
         raise ValueError('Native paired lossless storage did not preserve every original array byte')

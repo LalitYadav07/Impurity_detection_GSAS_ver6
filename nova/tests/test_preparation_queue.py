@@ -117,6 +117,30 @@ def test_paused_queue_admits_nothing_then_uses_only_allowed_job_slots(remote,tmp
     assert all('PRIVATE-' not in json.dumps(s) for s in snapshots)
 
 
+def test_completed_paired_dependencies_dispatch_one_training_job_with_its_own_deadline(remote,tmp_path):
+    from test_structural_paired_preparation import completed_library
+    runtime,service,_=remote;library=completed_library(tmp_path/'paired')
+    source=tmp_path/'paired/parent.cif'
+    descriptor=dict(id='paired-parent',source_path=str(source),source_sha256=file_sha(source),
+        dataset_id=service._put(source.read_bytes(),'paired parent CIF'))
+    snapshots=[]
+    queue=PreparationQueue(library.root/'queue',library,runtime,source=descriptor,
+        checkpoint=lambda state:snapshots.append(copy.deepcopy(state)))
+    queue.resume();result=queue.tick()
+    assert result['active']==1 and len(service.submissions)==1
+    job=result['queue']['jobs'][0]
+    assert job['mode']=='single' and len(job['members'])==1
+    assert job['handle']['request']['operation']=='preparation-structural-training'
+    assert job['handle']['request']['timeout']==7200
+    assert job['handle']['request']['payload']['settings']['representation']=='reference-current-signed-difference/shared-Q-asinh/v1'
+    assert len(job['handle']['request']['input_hashes'])==5
+    assert snapshots[-1]['jobs'][0]['handle']['submission_started']
+    fresh=PreparationQueue(library.root/'queue',library,runtime,source=descriptor,checkpoint=lambda state:None)
+    fresh.tick()
+    assert len(service.submissions)==1  # Reopening never submits a replacement.
+    assert all('PRIVATE-' not in json.dumps(s) for s in snapshots)
+
+
 @pytest.mark.parametrize('count,requested,allowed,sizes',[
     (9,2,2,[5,4]),(3,4,2,[2,1]),(3,4,4,[1,1,1]),
     (9,8,1,[9]),(40,2,2,[16,16]),

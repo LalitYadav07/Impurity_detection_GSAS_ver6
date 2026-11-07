@@ -22,7 +22,7 @@ from gpx_recipe.symmetry.compiler import confined,file_sha,package_signature,req
 from gpx_recipe.symmetry.contracts import digest
 from gpx_recipe.symmetry.chunks import execute_chunk
 from gpx_recipe.symmetry.resources import allocation
-from gpx_recipe.symmetry.native_protocol import validate_native_payload
+from gpx_recipe.symmetry.native_protocol import validate_native_payload,validate_native_timeout
 
 
 def native(request,inputs,root,cancel):
@@ -34,8 +34,7 @@ def native(request,inputs,root,cancel):
     require_adapters()
     actual={str(p.relative_to(inputs)):file_sha(p) for p in inputs.rglob('*') if p.is_file()}
     if actual!=request['input_hashes']:raise ValueError('The native packet differs from its captured file hashes')
-    import math
-    if type(request['timeout']) not in {int,float} or not math.isfinite(request['timeout']) or not 1<=request['timeout']<=600:raise ValueError('Invalid native deadline')
+    validate_native_timeout(operation,request['timeout'])
     # Work on a private input capture; every path comes from a confined data packet.
     for key in ['source','child','instrument','directory','plan','anchor_snapshot','snapshot']:
         if key in payload:payload[key]=str(confined(inputs,payload[key]))

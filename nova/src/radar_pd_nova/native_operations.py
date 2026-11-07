@@ -18,7 +18,7 @@ import uuid
 from gpx_recipe.execution import write_json
 from gpx_recipe.symmetry.compiler import assets, confined, file_sha, package_signature
 from gpx_recipe.symmetry.contracts import digest
-from gpx_recipe.symmetry.native_protocol import validate_native_payload
+from gpx_recipe.symmetry.native_protocol import validate_native_payload,native_timeout_limit,validate_native_timeout
 from .model_checkpoint import job_record
 from .models import UtilityActionRecord, RunStatus
 from .refinement_runtime import RuntimeUnavailable
@@ -50,11 +50,10 @@ def validate_handle(runtime, value):
     if (set(request) != {'schema','operation','payload','implementation_sha256',
             'expected_source_sha256','input_hashes','timeout','dispatch_key'}
             or not isinstance(request['input_hashes'], dict)
-            or not re.fullmatch('[a-f0-9]{64}', str(request['implementation_sha256']))
-            or isinstance(request['timeout'], bool) or not isinstance(request['timeout'], (int,float))
-            or not math.isfinite(request['timeout']) or not 1 <= request['timeout'] <= 600):
+            or not re.fullmatch('[a-f0-9]{64}', str(request['implementation_sha256']))):
         raise ValueError('Native handle contains an invalid scientific request')
     validate_native_payload(request.get('operation'), request.get('payload'))
+    validate_native_timeout(request['operation'],request['timeout'])
     identity = digest(dict(history_id=value['history_id'], source=source, request=request))
     if identity != value['identity'] or len(json.dumps(value, allow_nan=False)) > 8*1024*1024:
         raise ValueError('Native operation handle changed or exceeds its metadata budget')
@@ -108,6 +107,9 @@ def capture(runtime, operation, payload, root, source, timeout, preparation_atte
         plan_path=confined(root,payload['plan']);plan=read_plan(plan_path)
         if file_sha(confined(root,payload['source']))!=plan['parent_sha256']:
             raise ValueError('Structural training source differs from its declared plan')
+        if (file_sha(confined(root,payload['instrument']))!=plan['instrument_sha256']
+                or payload['settings'].get('representation')!=plan.get('representation')):
+            raise ValueError('Structural training profile or representation differs from its declared plan')
         checked_blocks(plan_path,plan,validate_arrays=False)
         for name in plan_inputs(plan_path):
             path=confined(plan_path.parent,name)
@@ -155,7 +157,8 @@ def capture(runtime, operation, payload, root, source, timeout, preparation_atte
             raise ValueError('Structural operation belongs to another Galaxy source revision')
     request=dict(schema='radar-model-native/v1',operation=operation,payload=payload,
         implementation_sha256=package_signature(),expected_source_sha256=source['source_sha256'],
-        input_hashes={p:file_sha(confined(root,p)) for p in files},timeout=min(600,max(1,float(timeout))))
+        input_hashes={p:file_sha(confined(root,p)) for p in files},
+        timeout=min(native_timeout_limit(operation),max(1,float(timeout))))
     if all(Path(p).suffix.lower()=='.gpx' and sha==source['source_sha256']
            for p,sha in request['input_hashes'].items()):
         request['input_hashes'][EMPTY_PACKET_NAME]=EMPTY_PACKET_SHA256

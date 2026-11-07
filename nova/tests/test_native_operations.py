@@ -10,6 +10,7 @@ import zipfile
 import pytest
 
 from gpx_recipe.symmetry.contracts import digest
+from gpx_recipe.symmetry.compiler import file_sha
 from radar_pd_nova.model_runtime import GalaxyModelRuntime
 from radar_pd_nova.models import RunStatus
 from radar_pd_nova.native_operations import handle_path, validate_handle
@@ -53,7 +54,7 @@ def test_structural_training_capture_includes_all_declared_blocks_without_loadin
     # Opaque transport bytes: numerical validation belongs to the worker,
     # never a full-array load on the interactive application's capture path.
     (directory/'examples.npz').write_bytes(b'opaque transport control')
-    (directory/'examples.json').write_text(json.dumps(dict(source_sha256=file_sha(source),
+    (directory/'examples.json').write_text(json.dumps(dict(schema='radar-structural-ranking-examples/v3',source_sha256=file_sha(source),
         instrument_sha256=file_sha(instrument))))
     plan=dict(schema=PLAN_SCHEMA,parent_sha256=file_sha(source),instrument_sha256=file_sha(instrument),
         blocks=[dict(directory='blocks/one',manifest_sha256=file_sha(directory/'examples.json'),
@@ -68,6 +69,12 @@ def test_structural_training_capture_includes_all_declared_blocks_without_loadin
     handle,files=capture(runtime,'preparation-structural-training',payload,root,descriptor,600)
     assert set(files)=={'parent.cif','profile.instprm','plan.json','blocks/one/examples.json','blocks/one/examples.npz'}
     assert set(handle['request']['input_hashes'])==set(files)
+    long_handle,_=capture(runtime,'preparation-structural-training',payload,root,descriptor,7200)
+    assert long_handle['request']['timeout']==7200
+    validate_handle(runtime,long_handle)
+    changed=copy.deepcopy(payload);changed['settings']['representation']='reference-current-signed-difference/shared-Q-asinh/v1'
+    with pytest.raises(ValueError,match='representation differs'):
+        capture(runtime,'preparation-structural-training',changed,root,descriptor,7200)
     descriptor['source_sha256']='f'*64
     with pytest.raises(ValueError,match='another Galaxy source'):
         capture(runtime,'preparation-structural-training',payload,root,descriptor,600)
@@ -78,6 +85,26 @@ def inputs(tmp_path, source):
     root.mkdir()
     shutil.copyfile(source['source_path'], root/'source.gpx')
     return root, dict(source=str(root/'source.gpx'))
+
+
+def test_paired_training_capture_uses_typed_plan_without_loading_native_arrays(tmp_path,monkeypatch):
+    from types import SimpleNamespace
+    from test_structural_paired_preparation import inputs as paired_inputs
+    from gpx_recipe.preparation import structural_jobs
+    from radar_pd_nova.native_operations import capture
+    root=tmp_path/'paired-capture';example,directory=paired_inputs(root)
+    structural_jobs.create_plan(example['source'],[directory],root/'plan.json')
+    descriptor=dict(id='paired-parent',source_sha256=file_sha(root/'parent.cif'),dataset_id='paired-dataset')
+    runtime=SimpleNamespace(service=SimpleNamespace(history_id='paired-history'),
+        resolve=lambda value:descriptor,dataset_id=lambda value:value['dataset_id'])
+    payload=dict(source=example['source'],instrument=example['instrument'],grid=example['grid'],
+        plan=str(root/'plan.json'),destination=str(root/'trained'),
+        settings=dict(representation='reference-current-signed-difference/shared-Q-asinh/v1'))
+    monkeypatch.setattr(structural_jobs,'read_training_block',lambda *a:pytest.fail('Interactive capture must not load raw arrays'))
+    handle,files=capture(runtime,'preparation-structural-training',payload,root,descriptor,7200)
+    assert handle['request']['timeout']==7200
+    assert set(files)=={'parent.cif','profile.instprm','plan.json','examples/examples.json','examples/examples.npz'}
+    validate_handle(runtime,handle)
 
 
 def reply(service, tmp_path, handle, *, files=None, seconds=1.25, mutate=None):

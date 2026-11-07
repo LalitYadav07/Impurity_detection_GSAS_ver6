@@ -1070,9 +1070,8 @@ job. The cross-process file lock remains in place.
 
 These application dependencies do not grant permission to prune candidates.
 Model/Live/Webmon consumption of trained rankings, long training checkpoint/
-resume, broader sampling and scientific qualification remain required. The
-existing maximum native-job deadline still applies; interrupted jobs do not
-publish successful training receipts.
+resume, broader sampling and scientific qualification remain required.
+Interrupted jobs do not publish successful training receipts.
 
 ## Three-curve attention development
 
@@ -1084,9 +1083,9 @@ native intensities before compression. Independently normalizing the two
 patterns would erase real intensity changes; normalizing the residual by its
 own maximum would inflate arbitrarily weak changes. Coverage masks and Q edges
 remain preprocessing metadata, rather than fourth or fifth learned channels.
-The existing eight-channel portable format is unchanged until a replacement
-has been trained and independently accepted; its weights cannot be loaded
-into the three-channel architecture.
+Existing eight-channel portable libraries remain unchanged and readable. New
+workspace preparations use three channels; old weights cannot be loaded into
+the three-channel architecture. Neither format currently permits pruning.
 
 `preparation.structural_attention.network` combines local convolutions with
 a four-head attention layer over ordered Q-region tokens. Convolutions extract
@@ -1174,10 +1173,29 @@ out-of-support patterns retain the complete native search. A saved screening
 flag never authorizes pruning. Measured pre-transition references remain a
 separate scientific qualification requirement.
 
-The default preparation queue's example-generation/training dependency
-contract still needs migration from eight-channel example blocks to paired
-blocks. The new trainer/reader and native-reference handoff do not by
-themselves prove that full UI-to-worker migration or deployed acceptance.
+The default preparation workspace now creates paired example blocks and a
+three-curve training dependency. Every bank shares its declared parent seed,
+metric interval and trajectory identities across all children. Old saved
+settings and entry identities are preserved. Mixed representations or changed
+parent sampling cannot form a training plan. The default parent reciprocal-
+metric interval is 0.0001–0.001 in the native parent metric norm; this narrow
+development envelope does not establish broad thermal-cell coverage.
+
+Generation exports the same `examples.json` and `examples.npz` artifact names,
+using versioned paired content and lossless storage. Native construction GPXs
+stay in worker scratch. The typed training plan binds that representation and
+every block's hashes. NOVA checks the metadata and hashes without loading raw
+curves; the worker repeats the physical controls before building the three-
+channel feature cache. Export, restore and later model-packet handoff retain
+the exact native candidate routes and require a freshly calculated reference.
+
+Offline structural training has a separate 7,200-second native deadline,
+checked by the same installed contract in NOVA and the Galaxy entry point.
+The queue uses that deadline for a trainer's single allocated job. Other
+native operations retain their 600-second limit, and native generation batches
+retain their existing scheduling and cleanup limits. The longer ceiling is
+not a wall-time guarantee or resumable optimizer checkpoint. Real NDIP queue,
+allocation, full-data training and experimental acceptance remain to be tested.
 
 Large native paired blocks also support lossless byte-plane storage. The
 curve arrays remain exact float64 values; byte shuffling before ZIP compression
