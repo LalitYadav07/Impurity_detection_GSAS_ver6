@@ -9,6 +9,7 @@ pytest.importorskip('torch')
 
 from gpx_recipe.preparation.structural_cohort import assemble, read_block
 from gpx_recipe.preparation.structural_ranker import Ranker, train
+from gpx_recipe.preparation.structural_store import build
 from test_structural_ranker_cohort import block
 
 
@@ -101,3 +102,21 @@ def test_reassigned_trajectory_steps_cannot_pass_as_a_valid_holdout(tmp_path):
     data['split'][index] = (data['split'][index]+1) % 3
     with pytest.raises(ValueError, match='trajectory groups'):
         train(data, tmp_path/'invalid', epochs=1, threads=1)
+
+
+def test_dense_and_file_backed_training_publish_identical_numerical_models(tmp_path):
+    paths = [block(tmp_path), block(tmp_path, 'second', label=65, offset=.013)]
+    dense = assemble([read_block(p) for p in paths], bins=128)
+    stored = build(paths, tmp_path/'cache', bins=128)
+    try:
+        first = train(dense, tmp_path/'dense', epochs=3, threads=1)
+        second = train(stored, tmp_path/'stored', epochs=3, threads=1)
+        assert first['feature_storage'] == 'in_memory'
+        assert second['feature_storage'] == 'file_backed'
+        assert first['test'] == second['test']
+        assert first['history'] == second['history']
+        assert first['weights_sha256'] == second['weights_sha256']
+        a = Ranker(tmp_path/'dense'); b = Ranker(tmp_path/'stored')
+        assert a.support_limit == b.support_limit
+    finally:
+        stored['features'].close()

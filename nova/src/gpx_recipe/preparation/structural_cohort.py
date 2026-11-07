@@ -6,6 +6,7 @@ is training material; it cannot authorize excluding a native candidate.
 from dataclasses import dataclass
 import hashlib
 import io
+import copy
 import json
 from pathlib import Path
 
@@ -16,6 +17,7 @@ from ..symmetry.contracts import validate_candidate
 from .tof_kernel_arrays import read_bounded
 from .structural_features import pattern_features, with_parent_reference
 from .structural_sampling import partition_trajectories
+from .structural_training_data import MAX_ROWS
 
 
 MAX_BLOCK_BYTES = 160*1024**2
@@ -85,36 +87,76 @@ def read_block(directory):
     return ExampleBlock(document, arrays)
 
 
-def assemble(blocks, *, bins=2048, split_seed=3917):
-    """Keep complete trajectories and all exact aliases on one side of a split.
+class DenseFeatures:
+    def reserve(self, count, bins):
+        if not 1 <= count <= MAX_ROWS or count*8*bins*4 > MAX_FEATURE_BYTES:
+            raise ValueError('Assemble structural feature cohorts within the declared memory budget')
+        self.values = []
 
-    A physically ambiguous example has several compatible symmetry labels.
-    Identical input features with different labels retain their label union,
-    rather than discarding inconvenient examples or inventing a unique label.
-    """
+    def append(self, feature):
+        self.values.append(feature)
+
+    def finish(self, rows):
+        return np.stack(self.values)
+
+
+def assemble(blocks, *, bins=2048, split_seed=3917, augmenter=None):
+    """Keep complete trajectories and exact aliases on one side of a split."""
     blocks = list(blocks)
-    if not blocks or any(not isinstance(b, ExampleBlock) for b in blocks):
-        raise TypeError('Validated structural example blocks are required')
+    return assemble_into(lambda: iter(blocks), DenseFeatures(), bins=bins, split_seed=split_seed, augmenter=augmenter)
+
+
+def assemble_into(block_factory, sink, *, bins=2048, split_seed=3917, augmenter=None):
+    """One two-pass assembly algorithm for memory or worker-local file storage.
+
+    Only one validated raw block and one computed feature need reside at a
+    time. Exact aliases still merge labels and close whole trajectory groups
+    before partitioning; storage must not change the scientific cohort.
+    """
     if type(bins) is not int or not 64 <= bins <= 8192:
         raise ValueError('A bounded structural feature grid is required')
-    sources = {b.manifest['source_sha256'] for b in blocks}
-    profiles = {b.manifest['instrument_sha256'] for b in blocks}
+    sources = set(); profiles = set(); metadata = []; count = 0
+    lower = -np.inf; upper = np.inf; parent_key = None; parent_arrays = None
+    definitions = {}; candidate_groups = {}
+    for block in block_factory():
+        if not isinstance(block, ExampleBlock):
+            raise TypeError('Validated structural example blocks are required')
+        d, a = block.manifest, block.arrays
+        metadata.append(copy.deepcopy(d))
+        if len(metadata) > 5000:
+            raise ValueError('The structural preparation block catalog is bounded')
+        sources.add(d['source_sha256']); profiles.add(d['instrument_sha256'])
+        count += len(a['theory_intensity'])
+        lower = max(lower, a['q'][0]); upper = min(upper, a['q'][-1])
+        preferred = d['declared_child_group']['number'] in a['geometry_groups'][0]
+        key = (not preferred, d['child_sha256'])
+        if parent_key is None or key < parent_key:
+            parent_key = key
+            parent_arrays = (a['q'].copy(), a['theory_intensity'][0].copy(), a['background'].copy())
+        candidate = d['candidate']; identifier = candidate['id']
+        if identifier in definitions and definitions[identifier] != candidate:
+            raise ValueError('One structural candidate ID cannot describe different child embeddings')
+        definitions[identifier] = copy.deepcopy(candidate)
+        group = d['declared_child_group']['number']
+        if identifier in candidate_groups and candidate_groups[identifier] != group:
+            raise ValueError('A structural child cannot acquire conflicting declared symmetry labels')
+        candidate_groups[identifier] = group
+    if not metadata:
+        raise TypeError('Validated structural example blocks are required')
     if len(sources) != 1 or len(profiles) != 1:
         raise ValueError('One exact parent and profile define a training context; fuse banks after ranking')
-    count = sum(len(b.arrays['theory_intensity']) for b in blocks)
-    if count*8*bins*4 > MAX_FEATURE_BYTES:
-        raise ValueError('Assemble structural feature cohorts within the declared memory budget')
-    lower = max(b.arrays['q'][0] for b in blocks)
-    upper = min(b.arrays['q'][-1] for b in blocks)
     if not lower < upper:
         raise ValueError('Structural examples have no common measured coordinate range')
+    if augmenter is not None:
+        from .structural_augmentation import ObservationAugmenter
+        if (not isinstance(augmenter, ObservationAugmenter)
+                or augmenter.metadata['instrument_sha256'] != next(iter(profiles))):
+            raise ValueError('Structural augmentation must match the native example profile')
+    sink.reserve(count*(1 if augmenter is None else 1+augmenter.controls.variants), bins)
     edges = np.linspace(lower, upper, bins+1)
-    parent_controls = [b for b in blocks if b.manifest['declared_child_group']['number']
-                       in b.arrays['geometry_groups'][0]]
-    reference_block = min(parent_controls or blocks, key=lambda b: b.manifest['child_sha256'])
-    a = reference_block.arrays
-    reference = pattern_features(a['q'], a['theory_intensity'][0], edges, background=a['background'])
-    records = []; parents = {}; duplicates = {}
+    q, y, background = parent_arrays
+    reference = pattern_features(q, y, edges, background=background)
+    records = []; parents = {}; duplicates = {}; clean_origins = {}; augmented = 0
 
     def find(group):
         while parents[group] != group:
@@ -126,47 +168,68 @@ def assemble(blocks, *, bins=2048, split_seed=3917):
         if first != second:
             parents[max(first, second)] = min(first, second)
 
-    for block_index, block in enumerate(blocks):
+    def put(feature, origin, simulation):
+        key = hashlib.sha256(feature.tobytes()).hexdigest()
+        if key in duplicates:
+            previous = duplicates[key]
+            union(previous['group'], origin['group'])
+            if not any(o is origin for o in previous['origins']):
+                previous['origins'].append(origin)
+            previous['simulations'].append(simulation)
+        else:
+            sink.append(feature)
+            record = dict(origins=[origin], group=origin['group'], simulations=[simulation])
+            duplicates[key] = record; records.append(record)
+
+    seen = 0
+    for block_index, block in enumerate(block_factory()):
         a, d = block.arrays, block.manifest
+        if block_index >= len(metadata) or d != metadata[block_index]:
+            raise ValueError('Structural inputs changed while building the feature cache')
+        seen += 1
         for index, curve in enumerate(a['theory_intensity']):
             group = d['groups'][index]; parents.setdefault(group, group)
             feature = with_parent_reference(
                 pattern_features(a['q'], curve, edges, background=a['background']), reference)
             key = hashlib.sha256(feature.tobytes()).hexdigest()
-            labels = set(map(int, a['geometry_groups'][index]))
-            ref = (block_index, index)
-            if key in duplicates:
-                previous = duplicates[key]
+            labels = set(map(int, a['geometry_groups'][index])); ref = (block_index, index)
+            if key in clean_origins:
+                previous = clean_origins[key]
                 union(previous['group'], group)
                 previous['labels'].update(labels); previous['references'].append(ref)
-            else:
-                record = dict(feature=feature, labels=labels, group=group, references=[ref])
-                duplicates[key] = record; records.append(record)
+                # The shared clean origin carries every alias label and source
+                # to all its noisy siblings, even aliases found in later blocks.
+                continue
+            origin = dict(labels=labels, group=group, references=[ref])
+            clean_origins[key] = origin
+            put(feature, origin, dict(kind='clean_native'))
+            if augmenter is not None:
+                for observation in augmenter.observations(a['q'], curve, a['background'], clean_identity=key):
+                    augmented += 1
+                    augmented_feature = with_parent_reference(pattern_features(
+                        a['q'], observation['intensity'], edges, background=observation['background']), reference)
+                    put(augmented_feature, origin, dict(kind='simulated_observation', **observation['provenance']))
+    if seen != len(metadata):
+        raise ValueError('Structural inputs changed while building the feature cache')
     assignments = partition_trajectories([find(r['group']) for r in records], seed=split_seed)
-    classes = sorted(set().union(*(r['labels'] for r in records)))
+    classes = sorted(set().union(*(o['labels'] for r in records for o in r['origins'])))
     indices = {c: i for i, c in enumerate(classes)}
     targets = np.zeros((len(records), len(classes)), bool)
     for i, record in enumerate(records):
-        targets[i, [indices[c] for c in record['labels']]] = True
+        targets[i, [indices[c] for o in record['origins'] for c in o['labels']]] = True
     split = np.asarray([{'train': 0, 'validation': 1, 'test': 2}[assignments[find(r['group'])]]
                         for r in records], np.int8)
     if not np.all(targets[split == 0].any(axis=0)):
         raise ValueError('Every prepared symmetry class needs independent training trajectories')
-    definitions = {}; candidate_groups = {}
-    for block in blocks:
-        candidate = block.manifest['candidate']; key = candidate['id']
-        if key in definitions and definitions[key] != candidate:
-            raise ValueError('One structural candidate ID cannot describe different child embeddings')
-        definitions[key] = candidate
-        group = block.manifest['declared_child_group']['number']
-        if key in candidate_groups and candidate_groups[key] != group:
-            raise ValueError('A structural child cannot acquire conflicting declared symmetry labels')
-        candidate_groups[key] = group
-    return dict(features=np.stack([r['feature'] for r in records]), compatible_labels=targets,
+    return dict(features=sink.finish(len(records)), compatible_labels=targets,
         classes=np.asarray(classes, np.int32), split=split, q_edges=edges,
         groups=[find(r['group']) for r in records],
-        references=[r['references'] for r in records],
-        input_sha256=[b.manifest['examples_sha256'] for b in blocks],
+        references=[[ref for o in r['origins'] for ref in o['references']] for r in records],
+        example_simulations=[r['simulations'] for r in records],
+        augmentation=None if augmenter is None else augmenter.metadata,
+        augmentation_sha256=None if augmenter is None else augmenter.sha256,
+        augmented_examples=augmented,
+        input_sha256=[d['examples_sha256'] for d in metadata],
         candidates=list(definitions.values()),
         candidate_groups=candidate_groups,
         reference_features=reference,

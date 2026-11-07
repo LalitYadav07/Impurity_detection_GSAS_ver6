@@ -892,6 +892,32 @@ labels. They are not dropped or assigned a convenient compulsory class.
 Different profiles currently require separate models; multi-bank score fusion
 needs independent validation.
 
+The worker-local `preparation.structural_store.build` path reads validated
+blocks in two passes and writes a bounded feature working file. It uses the
+same feature construction, alias closure and trajectory partitions as dense
+assembly. Completed caches bind their numerical files by checksum and admit
+only bounded row reads, without mapping or copying the full feature matrix.
+Training normalization, optimization and validation/test scoring use bounded
+batches. Dense assembly retains its 384 MiB guard; worker-local feature files
+have an 8 GiB/131072-row ceiling. These disposable NPY working files are not
+portable library assets. Portable model weights retain the existing numeric
+array inventory and size bounds.
+
+`preparation.structural_augmentation.ObservationAugmenter` can expand each
+clean native pattern into reproducible observations with declared effective
+Poisson count levels, smooth backgrounds and background-estimation error.
+Optional native impurity templates must share the exact profile and Q grid;
+their declared fraction is integrated Q-pattern intensity, not mass fraction.
+The native dummy background is replaced for these simulations. Noise is added
+to intensities before feature construction, never directly to neural channels.
+Neither this effective-count model nor its conditional variance establishes
+the counting statistics of a real reduced pattern. Instrument-width variation
+still needs additional native profile contexts and is not represented by an
+arbitrary Q-space convolution. All noisy siblings retain the clean geometry's
+compatible labels and trajectory group. Clean aliases connect their groups
+before splitting, and labels discovered in later alias blocks also reach all
+already-created siblings. Clean native examples remain in every cohort.
+
 `preparation.structural_ranker.train` trains a compound/profile-specific CNN
 inside the existing CPU/RAM allocation guard. Validation selects a frozen
 checkpoint before the test holdout is inspected. Model files contain JSON and
@@ -918,6 +944,13 @@ complete native search. This envelope is not a statistical confidence bound or
 experimental qualification. Even an admitted pattern cannot authorize pruning
 through a saved flag. Noise, omitted phases and changing profiles remain part
 of the required experimental acceptance scope.
+
+Large-cohort training selects this compact index from a deterministic training
+pool containing at least one compatible example of every class, bounded to
+2048 rows and 128 MiB. Every validation row still contributes to the empirical
+distance limit. The model records the pool size and method; neither validation
+nor test rows select its anchors. This bounded subset is not a claim of dense
+coverage of the physical distortion space.
 
 This is development infrastructure, not a qualified candidate-pruning engine
 or a released UI workflow. Returned scores order every available space-group

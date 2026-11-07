@@ -18,7 +18,8 @@ from ..live.array_limits import validate_npz_bytes
 from ..symmetry.resources import allocation
 from ..symmetry.contracts import validate_candidate
 from .structural_features import pattern_features, with_parent_reference
-from .structural_support import fit as fit_support, distances as support_distances, MAX_BYTES as SUPPORT_BYTES
+from .structural_support import fit_batches as fit_support, distances as support_distances, MAX_BYTES as SUPPORT_BYTES, STREAM_METHOD
+from .structural_training_data import feature_rows, batches, channel_statistics
 from .tof_kernel_arrays import read_bounded, checksum
 
 SCHEMA = 'radar-structural-ranking-model/v3'
@@ -46,16 +47,30 @@ def _score(logits, compatible):
         loss=float(loss.mean()))
 
 
+
+def _score_batches(model, rows, targets, indices, mean, scale):
+    import torch
+    totals = dict(top1=0., top5=0., loss=0.); count = 0
+    for selected, values in batches(rows, indices):
+        logits = model(torch.from_numpy((values-mean)/scale))
+        result = _score(logits, torch.from_numpy(targets[selected]))
+        for key in totals:
+            totals[key] += result[key]*len(selected)
+        count += len(selected)
+    if not count:
+        raise ValueError('Validation and test partitions must contain independent examples')
+    return {key: value/count for key, value in totals.items()}
+
+
 def train(cohort, destination, *, epochs=60, seed=89113, threads=4):
     import torch
     if type(epochs) is not int or not 1 <= epochs <= 1000 or type(seed) is not int or not 0 <= seed < 2**32:
         raise ValueError('Bounded training epochs and random seed are required')
     classes = np.asarray(cohort['classes'])
-    features = np.asarray(cohort['features']); targets = np.asarray(cohort['compatible_labels'])
+    features = feature_rows(cohort['features']); targets = np.asarray(cohort['compatible_labels'])
     split = np.asarray(cohort['split'])
     if (not 2 <= len(classes) <= 230 or features.ndim != 3 or features.shape[1] != 8
-            or features.dtype != np.float32 or not np.isfinite(features).all()
-            or features.nbytes > 384*1024**2
+            or features.dtype != np.float32
             or targets.shape != (len(features), len(classes)) or targets.dtype != bool
             or not targets.any(axis=1).all() or split.shape != (len(features),)
             or set(split) != {0, 1, 2}):
@@ -67,7 +82,7 @@ def train(cohort, destination, *, epochs=60, seed=89113, threads=4):
             or not np.isfinite(reference).all()
             or hashlib.sha256(reference.tobytes()).hexdigest() != cohort['reference_feature_sha256']):
         raise ValueError('Training needs its exact finite parent reference and coordinate grid')
-    with_parent_reference(features[0, :4], reference)
+    with_parent_reference(features.take(np.asarray([0], np.int64))[0, :4], reference)
     # The cohort assembler seals groups after duplicate closure. Verify that
     # no caller subsequently reassigned individual steps or candidate aliases.
     groups = cohort['groups']
@@ -79,16 +94,13 @@ def train(cohort, destination, *, epochs=60, seed=89113, threads=4):
     budget = allocation(threads)
     torch.set_num_threads(budget['workers'])
     began = time.monotonic(); out = Path(destination); out.mkdir(parents=True, exist_ok=False)
-    train_rows = split == 0; validation_rows = split == 1; test_rows = split == 2
+    train_rows, validation_rows, test_rows = (np.flatnonzero(split == code) for code in (0, 1, 2))
     # Global channel normalization preserves the parent peak reference.
     # Per-bin centering would turn a constant reference into zeros and make
     # the residual merely a duplicate of the centered observation channel.
-    mean = features[train_rows].mean(axis=(0, 2))[:, None]
-    scale = np.maximum(features[train_rows].std(axis=(0, 2)), .02)[:, None]
-    mean[[2, 3]] = 0.; scale[[2, 3]] = 1.
-    normalized = (features-mean)/scale
-    x = torch.from_numpy(normalized); y = torch.from_numpy(targets)
-    rng = np.random.default_rng(seed); indices = np.flatnonzero(train_rows)
+    mean, scale = channel_statistics(features, train_rows)
+    y = torch.from_numpy(targets)
+    rng = np.random.default_rng(seed); indices = train_rows
     counts = targets[train_rows].sum(0)
     if not counts.all():
         raise ValueError('Each catalog class requires independent training examples')
@@ -100,8 +112,8 @@ def train(cohort, destination, *, epochs=60, seed=89113, threads=4):
         optimizer = torch.optim.AdamW(model.parameters(), lr=.001, weight_decay=.0001)
         for epoch in range(epochs):
             model.train(); order = rng.permutation(indices)
-            for start in range(0, len(order), 32):
-                selected = order[start:start+32]; logits = model(x[selected]); allowed = y[selected]
+            for selected, values in batches(features, order, size=32):
+                logits = model(torch.from_numpy((values-mean)/scale)); allowed = y[selected]
                 loss = torch.logsumexp(logits, 1)-torch.logsumexp(logits.masked_fill(~allowed, -torch.inf), 1)
                 row_weights = (allowed*weights).sum(1)/allowed.sum(1)
                 objective = (loss*row_weights).mean()
@@ -110,18 +122,18 @@ def train(cohort, destination, *, epochs=60, seed=89113, threads=4):
                 optimizer.zero_grad(set_to_none=True); objective.backward(); optimizer.step()
             model.eval()
             with torch.no_grad():
-                result = _score(model(x[validation_rows]), y[validation_rows])
+                result = _score_batches(model, features, targets, validation_rows, mean, scale)
             history.append(dict(epoch=epoch+1, validation=result))
             key = (-result['top5'], result['loss'])
             if best_key is None or key < best_key:
                 best_key = key; best_epoch = epoch+1; best = copy.deepcopy(model.state_dict())
             write_json(out/'progress.json', dict(epoch=epoch+1, epochs=epochs, validation=result))
         model.load_state_dict(best); model.eval()
-        support = fit_support(normalized, train_rows, validation_rows)
+        support = fit_support(features, train_rows, validation_rows, targets, mean, scale, seed=seed)
         # This holdout is inspected only after validation selected the frozen
         # checkpoint. Subsequent development must use a fresh external test.
         with torch.no_grad():
-            logits = model(x[test_rows]); score = _score(logits, y[test_rows])
+            score = _score_batches(model, features, targets, test_rows, mean, scale)
     arrays = {k: v.detach().numpy() for k, v in model.state_dict().items()}
     # Keep the generic sixteen-array transport bound. Eight exactly
     # representable float32 scales and the float64 support limit share one
@@ -140,6 +152,9 @@ def train(cohort, destination, *, epochs=60, seed=89113, threads=4):
         candidates=cohort['candidates'], candidate_groups=cohort['candidate_groups'],
         weights_sha256=hashlib.sha256(raw).hexdigest(), classes=classes.tolist(), bins=features.shape[2],
         epochs=epochs, seed=seed, allocation=budget, counts=counts, test=score,
+        feature_storage=features.storage, support_training_pool_rows=support['training_pool_rows'],
+        augmentation=cohort.get('augmentation'), augmentation_sha256=cohort.get('augmentation_sha256'),
+        augmented_examples=cohort.get('augmented_examples', 0),
         checkpoint_selection='validation_top_five_recall_then_loss', selected_epoch=best_epoch,
         reference_feature_sha256=cohort['reference_feature_sha256'],
         support_method=support['method'], support_validation_rows=support['validation_rows'],
@@ -215,7 +230,7 @@ class Ranker:
         if not np.array_equal(reference[3], coordinate):
             raise ValueError('The parent reference does not use the model coordinate grid')
         prototypes, limit = values['support_prototypes'], normalization[8]
-        if (d.get('support_method') != 'training-k-center/validation-maximum-rms/v1'
+        if (d.get('support_method') not in {'training-k-center/validation-maximum-rms/v1', STREAM_METHOD}
                 or prototypes.dtype != np.float32 or prototypes.ndim != 2
                 or not 1 <= len(prototypes) <= 256 or prototypes.shape[1] != 8*bins
                 or prototypes.nbytes > SUPPORT_BYTES or not np.isfinite(prototypes).all()
