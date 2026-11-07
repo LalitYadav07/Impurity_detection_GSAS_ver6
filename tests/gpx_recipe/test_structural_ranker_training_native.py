@@ -44,6 +44,8 @@ def test_training_export_import_and_inference_preserve_all_hypotheses(tmp_path):
     assert first_result['candidate_pruning_authorized'] is False
     assert first_result['native_refinement_required'] is True
     assert {c for row in first_result['families'] for c in row['candidate_ids']} == {'first', 'second'}
+    assert set(first_result['candidate_order'])=={'first','second'}
+    assert len(first_result['candidate_order'])==2
     assert abs(sum(r['model_score'] for r in first_result['families'])-1) < 1e-6
     foreign = a['background']+8.*(-1.)**np.arange(len(a['q']))
     fallback = model.rank(a['q'], foreign, **request)
@@ -120,3 +122,25 @@ def test_dense_and_file_backed_training_publish_identical_numerical_models(tmp_p
         assert a.support_limit == b.support_limit
     finally:
         stored['features'].close()
+
+
+def test_higher_symmetry_labels_never_produce_empty_native_handoffs(tmp_path):
+    def higher_symmetry(a):a['geometry_groups'][1:]=6
+    paths=[block(tmp_path),block(tmp_path,'cm-construction',label=8,offset=.013,change=higher_symmetry)]
+    data=assemble([read_block(p) for p in paths],bins=128)
+    train(data,tmp_path/'model',epochs=1,threads=1)
+    model=Ranker(tmp_path/'model')
+    assert model.metadata['schema']=='radar-structural-ranking-model/v4'
+    assert model.routes['6']==['cm-construction']
+    assert all(model.routes[str(group)] for group in model.metadata['classes'])
+    path=tmp_path/'model/model.json';d=json.loads(path.read_text());d['class_candidate_ids']['6']=[]
+    path.write_text(json.dumps(d))
+    with pytest.raises(ValueError,match='native candidate routes'):Ranker(tmp_path/'model')
+
+
+def test_legacy_model_routes_are_derived_only_when_they_retain_every_candidate(tmp_path):
+    data,_=cohort(tmp_path);train(data,tmp_path/'model',epochs=1,threads=1)
+    path=tmp_path/'model/model.json';d=json.loads(path.read_text())
+    d['schema']='radar-structural-ranking-model/v3';del d['class_candidate_ids'];path.write_text(json.dumps(d))
+    model=Ranker(tmp_path/'model')
+    assert model.routes=={'63':['first'],'65':['second']}

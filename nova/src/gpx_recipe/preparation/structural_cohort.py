@@ -117,7 +117,7 @@ def assemble_into(block_factory, sink, *, bins=2048, split_seed=3917, augmenter=
         raise ValueError('A bounded structural feature grid is required')
     sources = set(); profiles = set(); metadata = []; count = 0
     lower = -np.inf; upper = np.inf; parent_key = None; parent_arrays = None
-    definitions = {}; candidate_groups = {}
+    definitions = {}; candidate_groups = {}; generated_groups = {}
     for block in block_factory():
         if not isinstance(block, ExampleBlock):
             raise TypeError('Validated structural example blocks are required')
@@ -141,6 +141,7 @@ def assemble_into(block_factory, sink, *, bins=2048, split_seed=3917, augmenter=
         if identifier in candidate_groups and candidate_groups[identifier] != group:
             raise ValueError('A structural child cannot acquire conflicting declared symmetry labels')
         candidate_groups[identifier] = group
+        generated_groups.setdefault(identifier,set()).update(map(int,np.unique(a['geometry_groups'])))
     if not metadata:
         raise TypeError('Validated structural example blocks are required')
     if len(sources) != 1 or len(profiles) != 1:
@@ -232,6 +233,8 @@ def assemble_into(block_factory, sink, *, bins=2048, split_seed=3917, augmenter=
         input_sha256=[d['examples_sha256'] for d in metadata],
         candidates=list(definitions.values()),
         candidate_groups=candidate_groups,
+        class_candidate_ids={str(group):sorted(identifier for identifier in definitions
+            if group in generated_groups[identifier] or candidate_groups[identifier]==group) for group in classes},
         reference_features=reference,
         reference_feature_sha256=hashlib.sha256(reference.tobytes()).hexdigest(),
         parent_sha256=next(iter(sources)), instrument_sha256=next(iter(profiles)),

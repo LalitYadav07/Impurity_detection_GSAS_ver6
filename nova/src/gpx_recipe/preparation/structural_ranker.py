@@ -22,7 +22,7 @@ from .structural_support import fit_batches as fit_support, distances as support
 from .structural_training_data import feature_rows, batches, channel_statistics
 from .tof_kernel_arrays import read_bounded, checksum
 
-SCHEMA = 'radar-structural-ranking-model/v3'
+SCHEMA = 'radar-structural-ranking-model/v4'
 ARCHITECTURE = 'parent-q-cnn-8-16-24-32-pool64/v2'
 MAX_BYTES = 32*1024**2
 
@@ -62,6 +62,27 @@ def _score_batches(model, rows, targets, indices, mean, scale):
     return {key: value/count for key, value in totals.items()}
 
 
+def _class_routes(classes, groups, supplied=None):
+    """A geometry label must lead to a complete nonempty native work set.
+
+    A construction can produce several higher-symmetry special states. Its
+    declared SG number alone cannot route all of those generated examples.
+    Legacy models may derive routes only when every class has a declared
+    construction; new models retain the generated-state evidence explicitly.
+    """
+    routes=({str(group):sorted(key for key,value in groups.items() if value==group)
+             for group in classes} if supplied is None else supplied)
+    identifiers=set(groups)
+    if (not isinstance(routes,dict) or set(routes)!={str(group) for group in classes}
+            or any(not isinstance(value,list) or not value
+                   or any(not isinstance(key,str) or key not in identifiers for key in value)
+                   or len(value)!=len(set(value))
+                   for value in routes.values())
+            or set().union(*(set(value) for value in routes.values()))!=identifiers):
+        raise ValueError('Every trained symmetry class needs complete nonempty native candidate routes')
+    return routes
+
+
 def train(cohort, destination, *, epochs=60, seed=89113, threads=4):
     import torch
     if type(epochs) is not int or not 1 <= epochs <= 1000 or type(seed) is not int or not 0 <= seed < 2**32:
@@ -75,6 +96,7 @@ def train(cohort, destination, *, epochs=60, seed=89113, threads=4):
             or not targets.any(axis=1).all() or split.shape != (len(features),)
             or set(split) != {0, 1, 2}):
         raise ValueError('A complete finite cohort with independent holdouts is required')
+    routes=_class_routes(classes,cohort['candidate_groups'],cohort.get('class_candidate_ids'))
     reference = np.asarray(cohort['reference_features']); edges = np.asarray(cohort['q_edges'])
     if (edges.dtype != np.float64 or edges.shape != (features.shape[2]+1,)
             or not np.isfinite(edges).all() or edges[0] <= 0 or np.any(np.diff(edges) <= 0)
@@ -150,6 +172,7 @@ def train(cohort, destination, *, epochs=60, seed=89113, threads=4):
     metadata = dict(schema=SCHEMA, architecture=ARCHITECTURE, parent_sha256=cohort['parent_sha256'],
         instrument_sha256=cohort['instrument_sha256'], input_sha256=cohort['input_sha256'],
         candidates=cohort['candidates'], candidate_groups=cohort['candidate_groups'],
+        class_candidate_ids=routes,
         weights_sha256=hashlib.sha256(raw).hexdigest(), classes=classes.tolist(), bins=features.shape[2],
         epochs=epochs, seed=seed, allocation=budget, counts=counts, test=score,
         feature_storage=features.storage, support_training_pool_rows=support['training_pool_rows'],
@@ -177,7 +200,7 @@ class Ranker:
         d = json.loads(read_bounded(directory/'model.json', 2*1024**2))
         raw = read_bounded(directory/'weights.npz', MAX_BYTES)
         classes = d.get('classes'); bins = d.get('bins')
-        if (d.get('schema') != SCHEMA or d.get('architecture') != ARCHITECTURE
+        if (d.get('schema') not in {SCHEMA,'radar-structural-ranking-model/v3'} or d.get('architecture') != ARCHITECTURE
                 or d.get('weights_sha256') != hashlib.sha256(raw).hexdigest()
                 or not isinstance(classes, list) or not 2 <= len(classes) <= 230
                 or any(type(c) is not int or not 1 <= c <= 230 for c in classes)
@@ -195,6 +218,9 @@ class Ranker:
                 or any(type(v) is not int or not 1 <= v <= 230 for v in groups.values())
                 or any(not c['child'] or c['magnetic_space_group'] is not None for c in candidates)):
             raise ValueError('A structural model needs unambiguous child-to-family mappings')
+        if d['schema']==SCHEMA and 'class_candidate_ids' not in d:
+            raise ValueError('Structural ranking models require their native candidate routes')
+        routes=_class_routes(classes,groups,d.get('class_candidate_ids'))
         validate_npz_bytes(raw, maximum_bytes=MAX_BYTES)
         model = network(len(classes)); expected = model.state_dict()
         with np.load(io.BytesIO(raw), allow_pickle=False) as saved:
@@ -240,6 +266,7 @@ class Ranker:
         self.model, self.metadata = model, d
         self.edges, self.mean, self.scale, self.reference = edges, mean, scale, reference
         self.support_prototypes, self.support_limit = prototypes, float(limit)
+        self.routes=routes
 
     def rank(self, q, intensity, *, background, parent_sha256, instrument_sha256, valid=None, reference=None):
         import torch
@@ -268,8 +295,9 @@ class Ranker:
             statistical_coverage_qualified=False)
         if not inside:
             return dict(families=[dict(space_group=group, model_score=None,
-                candidate_ids=[key for key, value in self.metadata['candidate_groups'].items() if value == group])
+                candidate_ids=list(self.routes[str(group)]))
                 for group in self.metadata['classes']], ranking_available=False,
+                candidate_order=sorted(self.metadata['candidate_groups']),
                 support=support, screening_qualified=False, candidate_pruning_authorized=False,
                 native_refinement_required=True, complete_native_search_required=True,
                 interpretation='This pattern is outside the prepared simulations; retain all families for native refinement')
@@ -278,9 +306,10 @@ class Ranker:
         if not np.isfinite(scores).all():
             raise ValueError('Structural model inference produced nonfinite scores')
         order = np.argsort(-scores, kind='stable')
-        return dict(families=[dict(space_group=self.metadata['classes'][i], model_score=float(scores[i]),
-            candidate_ids=[key for key, value in self.metadata['candidate_groups'].items()
-                           if value == self.metadata['classes'][i]]) for i in order],
+        families=[dict(space_group=self.metadata['classes'][i], model_score=float(scores[i]),
+            candidate_ids=list(self.routes[str(self.metadata['classes'][i])])) for i in order]
+        return dict(families=families,
+            candidate_order=list(dict.fromkeys(key for row in families for key in row['candidate_ids'])),
             ranking_available=True, support=support, candidate_pruning_authorized=False,
             screening_qualified=False, native_refinement_required=True,
             interpretation='Relative model scores order hypotheses; all candidate families remain available')

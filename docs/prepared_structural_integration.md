@@ -938,9 +938,15 @@ never normalized by its own maximum. Global channel normalization retains
 the parent reference; per-bin centering would erase a constant control.
 Inference can use the stored nominal parent or a supplied current calculated
 parent, with explicit coordinates and background. Changing-parent and noise
-generalization still require independent acceptance. Format v3 rejects older
-unqualified tensors rather than interpreting incompatible features or omitting
-the training-support boundary. Validation shortlist recall selects the model
+generalization still require independent acceptance. Format v4 records explicit
+routes from every generated symmetry class to native constructions capable of
+producing that state. A special state may have a different space-group type
+from its nominal construction; its label must not return an empty native work
+set. Candidate identities, embeddings and mode sets remain distinct. Routes
+may overlap, so the returned native work order deduplicates candidate IDs.
+Legacy v3 models can be read only when their declared groups provide complete,
+nonempty native routes. Older incompatible feature formats remain rejected.
+Validation shortlist recall selects the model
 checkpoint, with validation loss breaking ties; the test is inspected later.
 
 A compact farthest-first index contains only training features. The largest

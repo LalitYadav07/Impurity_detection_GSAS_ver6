@@ -62,6 +62,18 @@ def test_identical_patterns_retain_ambiguous_labels_instead_of_discarding_them(t
     assert all(len(refs) == 2 for refs in result['references'])
 
 
+def test_symmetry_enhanced_states_keep_their_generating_native_construction(tmp_path):
+    def higher_symmetry(a):
+        a['geometry_groups'][1:]=6
+    first=read_block(block(tmp_path))
+    second=read_block(block(tmp_path,'cm-construction',label=8,offset=.013,change=higher_symmetry))
+    result=assemble([first,second],bins=128)
+    assert result['classes'].tolist()==[6,63]
+    assert result['candidate_groups']['cm-construction']==8
+    assert result['class_candidate_ids']['6']==['cm-construction']
+    assert result['class_candidate_ids']['63']==['cm-construction','first']
+
+
 def test_transitive_alias_chain_cannot_create_independent_holdout_evidence(tmp_path):
     # The second child's shifted examples coincide with later steps of the
     # first. Connecting complete trajectories collapses every apparent fold.
