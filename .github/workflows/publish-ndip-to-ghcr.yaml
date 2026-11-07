@@ -163,5 +163,7 @@ jobs:
       - name: Push Docker schema v2 manifests
         shell: bash
         run: |
-          docker push "${IMAGE_NAME}:ndip"
           docker push "${IMAGE_NAME}:ndip-${GITHUB_SHA}"
+          if [[ "$GITHUB_REF" == "refs/heads/birthright-container" ]]; then
+            docker push "${IMAGE_NAME}:ndip"
+          fi

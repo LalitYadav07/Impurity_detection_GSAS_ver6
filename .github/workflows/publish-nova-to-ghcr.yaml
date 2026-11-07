@@ -282,5 +282,7 @@ jobs:
       - name: Push immutable and release tags
         shell: bash
         run: |
-          docker push "${IMAGE_NAME}:nova-${NOVA_VERSION}"
           docker push "${IMAGE_NAME}:nova-${GITHUB_SHA}"
+          if [[ "$GITHUB_REF" == "refs/heads/birthright-container" ]]; then
+            docker push "${IMAGE_NAME}:nova-${NOVA_VERSION}"
+          fi
