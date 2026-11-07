@@ -297,11 +297,10 @@ def _verify(data,source,*,check_cancel,complete):
     arrays = data._arrays
     origin=None
     from .kernel_runtime import fingerprint,RuntimeUnavailable
-    from .authority import kernel_origin,child_environment
-    if not complete and child_environment():
+    from .authority import current_kernel_origin
+    if not complete:
         try:
-            _,runtime_sha=fingerprint(source)
-            origin=kernel_origin(data.metadata['arrays_sha256'],runtime_sha)
+            origin=current_kernel_origin(data.metadata['arrays_sha256'],lambda:fingerprint(source)[1])
         except RuntimeUnavailable:
             pass
     if origin is not None:

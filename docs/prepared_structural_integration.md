@@ -666,6 +666,16 @@ Unattributed numerical uploads still require every original native peak.
 an old process proof exists. These are internal evidence boundaries, not user
 accuracy/speed settings.
 
+All structural, magnetic-factor, rendered-response and raw-kernel lookups use
+one complete current authority check. They do not launch-filter the environment
+and then validate the same capsule again. This removes repeated package hashes
+without retaining a saved trust decision: the capsule bytes and scientific
+implementation are checked again at the next lookup. A missing or changed
+origin cannot authorize reuse, and a raw-kernel runtime fingerprint is not
+computed unless a current kernel origin exists. Numerical-runtime map paths
+are deduplicated only within a fresh map snapshot; mapped-file/device/inode,
+native entry-point and floating-control checks remain unchanged.
+
 Automatic component planning, partial-library transport and UI handoff remain
 separate integration requirements. A successful small component test does not
 establish full-catalog storage efficiency or nonlinear-refinement speed.

@@ -116,14 +116,23 @@ def child_environment():
     return {key:os.environ[key] for key in (ENV_PATH,ENV_HASH)} if _inherited() is not None else {}
 
 
+def _current_capsule():
+    """Validate the current authority once, without caching its trust.
+
+    Child-environment filtering is a launch operation. Going through it and
+    then parsing the same capsule again at each scientific lookup repeats all
+    integrity and package checks. A lookup needs one complete current check;
+    an explicitly empty outer scope must still suppress inherited variables.
+    """
+    return _inherited(_owned) if _owned is not None else _inherited()
+
+
 def structural_bank_origin(bank_sha256,receipt_sha256,physics_sha256):
     """Match only certified bytes AND their current native physical context."""
     if not all(checksum(v) for v in (bank_sha256,receipt_sha256,physics_sha256)):return None
-    environment=child_environment()
-    if not environment:return None
     # Owned scopes and child processes use the same bounded parser. Never
     # interpret a library's saved qualification/provenance flag as authority.
-    capsule=_inherited(environment)
+    capsule=_current_capsule()
     if capsule is None:return None
     for record in capsule['records']:
         for entry in record['certificate']['entries']:
@@ -142,9 +151,7 @@ def magnetic_factor_origin(factor_sha256):
     certificate cannot authorize another bank's binned response or likelihood.
     """
     if not checksum(factor_sha256):return None
-    environment=child_environment()
-    if not environment:return None
-    capsule=_inherited(environment)
+    capsule=_current_capsule()
     if capsule is None:return None
     for record in capsule['records']:
         for entry in record['certificate']['entries']:
@@ -158,9 +165,7 @@ def magnetic_factor_origin(factor_sha256):
 def magnetic_response_origin(response_sha256, physics_sha256):
     """Match an exact native-produced response, including its physical scope."""
     if not all(checksum(v) for v in (response_sha256, physics_sha256)):return None
-    environment=child_environment()
-    if not environment:return None
-    capsule=_inherited(environment)
+    capsule=_current_capsule()
     if capsule is None:return None
     for record in capsule['records']:
         for entry in record['certificate']['entries']:
@@ -179,10 +184,29 @@ def kernel_origin(arrays_sha256,runtime_sha256):
     and exact actual-use primitive-input checks remain in the consumer.
     """
     if not all(checksum(v) for v in (arrays_sha256,runtime_sha256)):return None
+    return _kernel_origin(_current_capsule(),arrays_sha256,runtime_sha256)
+
+
+def current_kernel_origin(arrays_sha256,runtime_fingerprint):
+    """Check provenance before computing a costly current runtime identity.
+
+    The callback is installed Python code, never a field in a native request.
+    No capsule or caller-supplied validation flag can establish authority here.
+    Every call rechecks the actual launch capsule and scientific package.
+    """
+    if not checksum(arrays_sha256) or not callable(runtime_fingerprint):return None
+    capsule=_current_capsule()
+    if capsule is None or not any(entry['kind']=='kernel'
+            for row in capsule['records'] for entry in row['certificate']['entries']):
+        return None
+    runtime_sha256=runtime_fingerprint()
+    if not checksum(runtime_sha256):return None
+    return _kernel_origin(capsule,arrays_sha256,runtime_sha256)
+
+
+def _kernel_origin(capsule,arrays_sha256,runtime_sha256):
     from .kernel_runtime import origin_identity
     expected=origin_identity(arrays_sha256,runtime_sha256)
-    environment=child_environment()
-    capsule=_inherited(environment) if environment else None
     if capsule is None:return None
     for record in capsule['records']:
         for entry in record['certificate']['entries']:

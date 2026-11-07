@@ -63,14 +63,20 @@ def _maps():
     try:
         raw=Path('/proc/self/maps').read_bytes()
         if len(raw)>4*1024*1024:raise RuntimeUnavailable('Native map inventory exceeds its bound')
-        rows=[]
+        rows=[];paths={}
         for line in raw.decode().splitlines():
             fields=line.split(None,5)
             if len(fields)!=6 or not fields[5].startswith('/'):continue
             if fields[5].endswith(' (deleted)'):
                 raise RuntimeUnavailable('A mapped numerical library was deleted')
             low,high=(int(v,16) for v in fields[0].split('-'))
-            rows.append((Path(fields[5]).resolve(),low,high,fields[3],int(fields[4])))
+            # One library has several mapped segments. Resolve its path once
+            # within THIS fresh maps snapshot, not again for every segment.
+            # Nothing is cached across calls; _stamp still matches the actual
+            # file's current device and inode against these kernel records.
+            name=fields[5]
+            if name not in paths:paths[name]=Path(name).resolve()
+            rows.append((paths[name],low,high,fields[3],int(fields[4])))
         return rows
     except (OSError,UnicodeError,ValueError) as error:
         raise RuntimeUnavailable('Native map evidence is unavailable') from error

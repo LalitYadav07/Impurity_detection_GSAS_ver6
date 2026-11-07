@@ -189,6 +189,35 @@ def test_actual_scientific_child_receives_only_the_owned_origin_scope(tmp_path):
     assert json.loads(result)['entry_sha256']==entry['entry_sha256']
 
 
+@pytest.mark.parametrize('kind',['structural','magnetic','rendered'])
+@pytest.mark.parametrize('child',[False,True])
+def test_each_lookup_checks_current_capsule_once_and_does_not_cache_trust(tmp_path,monkeypatch,kind,child):
+    import os
+    *_,certificate,document=certified(tmp_path,kind='magnetic' if kind!='structural' else 'structural')
+    path,_=envelope(tmp_path,certificate);entry=document['entries'][0]
+    if kind=='structural':
+        lookup=lambda:authority.structural_bank_origin(entry['artifacts']['starts.npz'],
+            entry['artifacts']['starts.json'],entry['physics_sha256'])
+    elif kind=='magnetic':lookup=lambda:authority.magnetic_factor_origin(entry['artifacts']['scattering.npz'])
+    else:lookup=lambda:authority.magnetic_response_origin(entry['artifacts']['response.npz'],entry['physics_sha256'])
+    with authority.server_scope(path,tmp_path):
+        env=authority.child_environment();capsule=Path(env[authority.ENV_PATH]);original=authority.package_signature
+        with monkeypatch.context() as patch:
+            if child:
+                patch.setattr(authority,'_owned',None)
+                for k,v in env.items():patch.setenv(k,v)
+            calls=[]
+            def signature():calls.append(1);return original()
+            patch.setattr(authority,'package_signature',signature)
+            assert lookup()['entry_sha256']==entry['entry_sha256']
+            assert len(calls)==1
+            # A second request is a fresh check, including in an owned scope.
+            assert lookup() is not None and len(calls)==2
+            capsule.write_bytes(capsule.read_bytes()+b' ')
+            assert lookup() is None
+    assert lookup() is None
+
+
 @pytest.mark.parametrize('change',['schema','unexpected','duplicate_entry','oversized_entries','artifact_name'])
 def test_certificate_schema_is_closed_and_bounded(tmp_path,change):
     *_,document=certified(tmp_path);document=copy.deepcopy(document)

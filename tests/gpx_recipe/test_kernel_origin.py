@@ -76,6 +76,42 @@ def test_only_server_owned_exact_runtime_and_arrays_authorize_a_kernel(tmp_path)
     assert authority.kernel_origin(arrays,native) is None
 
 
+@pytest.mark.parametrize('child',[False,True])
+def test_current_kernel_lookup_checks_authority_once_before_runtime(tmp_path,monkeypatch,child):
+    from test_preparation_authority import envelope
+    _,output,_,_,certificate,document=kernel_certificate(tmp_path)
+    detail=json.loads((output/'entry.json').read_text())['detail']
+    runtime_calls=[]
+    def fingerprint():runtime_calls.append(1);return detail['kernel_runtime_sha256']
+    assert authority.current_kernel_origin(detail['arrays_sha256'],fingerprint) is None and not runtime_calls
+    server,_=envelope(tmp_path,certificate)
+    with authority.server_scope(server,tmp_path):
+        env=authority.child_environment();capsule=Path(env[authority.ENV_PATH]);original=authority.package_signature
+        with monkeypatch.context() as patch:
+            if child:
+                patch.setattr(authority,'_owned',None)
+                for k,v in env.items():patch.setenv(k,v)
+            calls=[]
+            def signature():calls.append(1);return original()
+            patch.setattr(authority,'package_signature',signature)
+            result=authority.current_kernel_origin(detail['arrays_sha256'],fingerprint)
+            assert result['entry_sha256']==document['entries'][0]['entry_sha256']
+            assert len(calls)==len(runtime_calls)==1
+            assert authority.current_kernel_origin(detail['arrays_sha256'],lambda:'f'*64) is None
+            capsule.write_bytes(capsule.read_bytes()+b' ')
+            assert authority.current_kernel_origin(detail['arrays_sha256'],fingerprint) is None
+            assert len(runtime_calls)==1  # Unverified origins do not fingerprint or authorize anything.
+
+
+def test_non_kernel_origin_does_not_request_runtime_work(tmp_path):
+    from test_preparation_authority import certified,envelope
+    *_,certificate,_=certified(tmp_path);server,_=envelope(tmp_path,certificate)
+    with authority.server_scope(server,tmp_path):
+        assert authority.current_kernel_origin('a'*64,lambda:pytest.fail('no kernel origin')) is None
+    with authority.server_scope(None,tmp_path):
+        assert authority.current_kernel_origin('a'*64,lambda:pytest.fail('empty outer scope')) is None
+
+
 @pytest.mark.parametrize('change',['runtime','arrays','partial_proof','record','method'])
 def test_wrapper_refuses_inconsistent_kernel_certificates(tmp_path,change):
     directory,output,response,archive,path,_=kernel_certificate(tmp_path)
