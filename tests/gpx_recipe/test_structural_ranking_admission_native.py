@@ -54,6 +54,27 @@ def test_native_features_recompute_background_and_preserve_real_masks(tmp_path,k
     np.testing.assert_allclose(feature['background'],(original-no_background)[selected],rtol=1e-9,atol=1e-7)
 
 
+@pytest.mark.parametrize('kind',['PNC','PNT'])
+def test_three_curve_parent_is_fresh_native_profile_on_actual_acquisition_grid(tmp_path,kind):
+    source,p,_=pair(tmp_path/'control',kind);h=p.histogram(0)
+    data=h.data['data'][1];data[3][:]=-123456.;data[4][:]=-98765.
+    # A covered thermal cell change must be present in the reference, not an
+    # old nominal-cell curve resampled from the preparation library.
+    p.phase(0).data['General']['Cell'][1]*=1.0001
+    p.save();before=file_sha(source);observed=np.asarray(data[1]).copy()
+    feature=observed_features(source,h,include_reference=True);ref=feature['reference']
+    assert file_sha(source)==before
+    np.testing.assert_array_equal(data[1],observed)
+    np.testing.assert_array_equal(ref['q'],feature['q'])
+    np.testing.assert_array_equal(ref['valid'],feature['valid'])
+    assert np.all(ref['intensity']!=-123456.) and np.all(ref['background']!=-98765.)
+    original=np.asarray(MAIN.DoNoFit(str(source),h.name),float)
+    x=np.asarray(data[0]);limits=h.data['Limits'][1]
+    selected=np.flatnonzero((x>=limits[0])&(x<=limits[1]))
+    if kind=='PNT':selected=selected[::-1]
+    np.testing.assert_allclose(ref['intensity'],original[selected],rtol=1e-12,atol=1e-12)
+
+
 @pytest.mark.parametrize('change',['none','cell_within','cell_outside','profile','position','adp','occupancy','sample','isotope'])
 def test_only_covered_native_contexts_enter_the_prepared_ranker(tmp_path,change):
     _,p,r=pair(tmp_path/'control','PNT');parent=p.phase(0);h=p.histogram(0)

@@ -1,4 +1,4 @@
-"""Three-curve convolution/attention development model, not a portable model.
+"""Three-curve convolution/attention architecture with separate typed weights.
 
 Local convolutions retain peak detail before attention links distant regions.
 Do not load this architecture through the legacy eight-channel weight reader.

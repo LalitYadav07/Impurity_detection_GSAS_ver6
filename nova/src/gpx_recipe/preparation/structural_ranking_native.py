@@ -82,7 +82,7 @@ def require_compatible(parent,histogram,reference,reference_histogram,*,maximum_
     return distance
 
 
-def observed_features(source,histogram):
+def observed_features(source,histogram,*,include_reference=False):
     """Original observations and mask; freshly evaluated native background.
 
     getBackground uses the same native histogram slice as errRefine. It does
@@ -90,6 +90,7 @@ def observed_features(source,histogram):
     potentially stale saved calculated/background array.
     """
     from ..live.native_profile import NativeReducedProfile
+    if type(include_reference) is not bool:raise ValueError('Explicit native parent-reference request required')
     forward=NativeReducedProfile(source)
     native=forward.histo_phases[0][histogram.name]
     sl=next(sl for name,sl in forward.parts if name==histogram.name)
@@ -110,7 +111,26 @@ def observed_features(source,histogram):
         raise ValueError('Native background or Q conversion is unavailable on this fit range')
     q=2*np.pi/d;order=np.argsort(q,kind='stable')
     if np.any(np.diff(q[order])<=0):raise ValueError('Native calibration has no unique increasing Q grid')
-    return dict(q=q[order],intensity=y[sl][order],background=background[order],valid=valid[sl][order])
+    result=dict(q=q[order],intensity=y[sl][order],background=background[order],valid=valid[sl][order])
+    if include_reference:
+        # Recalculate on the actual acquisition grid and current checked
+        # parent cell. Do not interpolate an old prepared curve or trust the
+        # GPX's saved calculated/background arrays. This runs no refinement
+        # and writes neither observations nor the input GPX.
+        calculated=forward.profile(forward.x0)
+        start=0
+        for name,part in forward.parts:
+            size=len(forward.histo_phases[0][name]['Data'][0][part])
+            if name==histogram.name:
+                current=calculated[start:start+size]
+                if current.shape!=background.shape or not np.isfinite(current).all():
+                    raise ValueError('The native parent reference has an invalid acquisition profile')
+                result['reference']=dict(q=q[order].copy(),intensity=current[order].copy(),
+                    background=background[order].copy(),valid=valid[sl][order].copy())
+                break
+            start+=size
+        else:raise ValueError('The native parent histogram is absent from its calculated profile')
+    return result
 
 
 def rank_gpx(input_root,protocol,destination):
@@ -155,8 +175,11 @@ def rank_gpx(input_root,protocol,destination):
                 reference=G.G2Project(gpxfile=prepared['path'])
                 require_compatible(parent,histogram,reference.phase(prepared['parent_phase']),
                     reference.histogram(prepared['histogram']),maximum_metric=maximum)
-                if features is None:features=observed_features(source,histogram)
-                ranked=hints.rank(input_root,protocol,**features,entry_id=row['entry'],
+                from .structural_attention_weights import SCHEMA as THREE_CURVE_SCHEMA
+                paired=metadata.get('schema')==THREE_CURVE_SCHEMA
+                if features is None:features={}
+                if paired not in features:features[paired]=observed_features(source,histogram,include_reference=paired)
+                ranked=hints.rank(input_root,protocol,**features[paired],entry_id=row['entry'],
                     parent_sha256=row['files']['parent']['sha256'],instrument_sha256=row['files']['instrument']['sha256'])
                 if not ranked['ranking_available']:
                     support=ranked.get('support')

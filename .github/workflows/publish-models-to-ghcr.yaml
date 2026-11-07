@@ -51,6 +51,10 @@ on:
       - tests/gpx_recipe/test_structural_ranker_features.py
       - tests/gpx_recipe/test_structural_ranker_cohort.py
       - tests/gpx_recipe/test_structural_ranker_training_native.py
+      - tests/gpx_recipe/test_structural_attention_portable_native.py
+      - tests/gpx_recipe/test_structural_attention_metrics_native.py
+      - tests/gpx_recipe/test_structural_paired_training_native.py
+      - tests/gpx_recipe/test_structural_pair_packing.py
       - tests/gpx_recipe/test_structural_ranker_support.py
       - tests/gpx_recipe/test_structural_ranker_store.py
       - tests/gpx_recipe/test_structural_ranker_augmentation.py
@@ -230,6 +234,10 @@ jobs:
             /validation/tests/gpx_recipe/test_structural_three_curve_store.py \
             /validation/tests/gpx_recipe/test_structural_ranker_cohort.py \
             /validation/tests/gpx_recipe/test_structural_ranker_training_native.py \
+            /validation/tests/gpx_recipe/test_structural_attention_portable_native.py \
+            /validation/tests/gpx_recipe/test_structural_attention_metrics_native.py \
+            /validation/tests/gpx_recipe/test_structural_paired_training_native.py \
+            /validation/tests/gpx_recipe/test_structural_pair_packing.py \
             /validation/tests/gpx_recipe/test_structural_ranker_support.py \
             /validation/tests/gpx_recipe/test_structural_ranker_store.py \
             /validation/tests/gpx_recipe/test_structural_ranker_augmentation.py \

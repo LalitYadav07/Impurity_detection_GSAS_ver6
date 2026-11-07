@@ -15,7 +15,7 @@ from gpx_recipe.symmetry.contracts import digest
 from test_structural_preparation_dependencies import library_inputs,complete_examples,TRAINING
 
 
-def prepared(root):
+def prepared(root,*,three_curve=False):
     library,originals=library_inputs(root)
     complete_examples(library,originals,root/'examples-attempts')
     trainer=next(r for r in library.document['entries'] if r['model']['kind']==TRAINING)
@@ -27,11 +27,24 @@ def prepared(root):
     metadata=dict(schema='radar-structural-ranking-model/v4',candidates=candidates,
         parent_sha256=file_sha(request['source']),instrument_sha256=file_sha(request['instrument']),
         weights_sha256=file_sha(out/'model/weights.npz'))
+    if three_curve:
+        from gpx_recipe.preparation.structural_attention_weights import SCHEMA,ARCHITECTURE
+        metadata.update(schema=SCHEMA,architecture=ARCHITECTURE)
     write_json(out/'model/model.json',metadata);write_json(out/'training.json',dict(status='trained'))
     result=publish_result(TRAINING,request,dict(seconds=.1),['model/model.json','model/weights.npz','training.json'])
     publish_entry(library,trainer['id'],attempt,request,result)
     protocol=dict(kind='structural',candidates=copy.deepcopy(candidates))
     return library,protocol
+
+
+def test_three_curve_attention_data_use_the_same_portable_routes_and_integrity_checks(tmp_path):
+    library,protocol=prepared(tmp_path/'control',three_curve=True);packet=tmp_path/'packet'
+    document=hints.capture(library,protocol,packet);row=document['ranking_models']['entries'][0]
+    assert row['routes']=={'first':'first','second':'second'}
+    restored=hints.restore(document,protocol,packet,tmp_path/'restored')
+    assert restored['ranking_models']['attached']==1 and not restored['ranking_models']['discarded_entries']
+    files=ranking.checked_files(packet,row,protocol)
+    assert json.loads(files['model'].read_text())['schema']=='radar-three-curve-structural-ranking-model/v1'
 
 
 def test_model_capture_restore_and_subset_keep_exact_routes_and_all_candidates(tmp_path):

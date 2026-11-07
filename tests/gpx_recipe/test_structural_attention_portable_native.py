@@ -1,0 +1,97 @@
+"""Numerical transport and inference controls; these random weights are not science."""
+import hashlib
+import json
+
+import numpy as np
+import pytest
+
+torch=pytest.importorskip('torch')
+from gpx_recipe.preparation.structural_attention import network
+from gpx_recipe.preparation import structural_attention_weights as w
+from gpx_recipe.preparation.structural_features import three_curve_features
+from gpx_recipe.preparation.structural_ranker import Ranker
+from gpx_recipe.preparation.structural_support import STREAM_METHOD
+from gpx_recipe.live.array_limits import validate_npz_bytes
+
+
+def artifact(root):
+    root.mkdir();torch.set_num_threads(1);torch.manual_seed(65173)
+    model=network(2);model.eval();plane,layout=w.pack(model)
+    q=np.linspace(.5,4.,301);edges=np.linspace(.5,4.,129);bg=np.full(len(q),3.)
+    parent=bg+np.exp(-((q-1.2)/.08)**2);current=parent+.15*np.exp(-((q-2.3)/.06)**2)
+    feature=three_curve_features(q,current,parent,edges,background=bg,reference_background=bg)['features']
+    reference=three_curve_features(q,parent,parent,edges,background=bg,reference_background=bg)['features']
+    arrays=dict(parameters=plane,q_edges=edges,normalization=np.r_[np.zeros(3),np.ones(3),1e-5],
+        classes=np.array([12,166],np.int32),reference_features=reference,
+        support_prototypes=feature.reshape(1,-1))
+    np.savez_compressed(root/'weights.npz',**arrays)
+    candidates=[dict(id=key,transformation_matrix=np.eye(3).tolist(),origin_shift=[0,0,0],
+        child=dict(path=key+'.cif',sha256='c'*64)) for key in ['child','parent']]
+    metadata=dict(schema=w.SCHEMA,architecture=w.ARCHITECTURE,representation=w.REPRESENTATION,
+        channels=3,reference_kind=w.REFERENCE_KIND,normalization_method=w.NORMALIZATION,
+        weights_sha256=hashlib.sha256((root/'weights.npz').read_bytes()).hexdigest(),
+        classes=[12,166],bins=128,candidates=candidates,candidate_groups=dict(child=12,parent=166),
+        class_candidate_ids={'12':['child'],'166':['parent']},
+        parent_sha256='a'*64,instrument_sha256='b'*64,background_required=True,
+        support_method=STREAM_METHOD,reference_feature_sha256=hashlib.sha256(reference.tobytes()).hexdigest(),
+        tensor_layout_sha256=layout,screening_qualified=True)
+    (root/'model.json').write_text(json.dumps(metadata))
+    request=dict(background=bg,parent_sha256='a'*64,instrument_sha256='b'*64,
+        reference=dict(q=q,intensity=parent,background=bg))
+    return model,q,current,request,arrays,metadata
+
+
+def test_attention_roundtrip_keeps_exact_logits_with_six_data_arrays(tmp_path):
+    model,q,current,request,arrays,d=artifact(tmp_path/'model')
+    raw=(tmp_path/'model/weights.npz').read_bytes();validate_npz_bytes(raw,maximum_bytes=32*1024**2)
+    assert len(arrays)==6 and len(model.state_dict())>16
+    loaded=Ranker(tmp_path/'model')
+    feature=arrays['support_prototypes'].reshape(1,3,128)
+    with torch.no_grad():
+        torch.testing.assert_close(model(torch.from_numpy(feature)),loaded.model(torch.from_numpy(feature)),rtol=0,atol=0)
+    first=loaded.rank(q,current,**request);second=Ranker(tmp_path/'model').rank(q,current,**request)
+    assert first==second and first['ranking_available']
+    assert json.loads(json.dumps(first))==first
+    assert set(first['candidate_order'])=={'child','parent'}
+    assert first['candidate_pruning_authorized'] is first['screening_qualified'] is False
+    assert first['complete_native_search_required'] is True
+    assert first['support']['statistical_coverage_qualified'] is False
+    outside=loaded.rank(q,current+np.sin(q*37),**request)
+    assert not outside['ranking_available'] and outside['candidate_order']==['child','parent']
+    assert json.loads(json.dumps(outside))==outside
+
+
+@pytest.mark.parametrize('case',['missing','q_grid','reference_mask','mask','foreign_context'])
+def test_inference_requires_the_exact_native_parent_and_covered_range(tmp_path,case):
+    _,q,current,request,_,_=artifact(tmp_path/'model');loaded=Ranker(tmp_path/'model')
+    if case=='missing':request['reference']=None
+    elif case=='q_grid':request['reference']['q']=q+1e-8
+    elif case=='reference_mask':request['reference']['valid']=np.ones(len(q))
+    elif case=='mask':request['valid']=np.ones(len(q),bool);request['valid'][100:120]=False
+    else:request['parent_sha256']='f'*64
+    with pytest.raises(ValueError):loaded.rank(q,current,**request)
+
+
+@pytest.mark.parametrize('case',['plane_length','plane_dtype','plane_nan','layout','normalization','support','reference','extra_array'])
+def test_hash_valid_corrupt_numerical_models_cannot_reach_inference(tmp_path,case):
+    _,_,_,_,arrays,d=artifact(tmp_path/'model');root=tmp_path/'model'
+    if case=='plane_length':arrays['parameters']=arrays['parameters'][:-1]
+    elif case=='plane_dtype':arrays['parameters']=arrays['parameters'].astype(np.float64)
+    elif case=='plane_nan':arrays['parameters'][10]=np.nan
+    elif case=='layout':d['tensor_layout_sha256']='f'*64
+    elif case=='normalization':arrays['normalization'][3]=1e100
+    elif case=='support':arrays['support_prototypes']=np.zeros((1,8*128),np.float32)
+    elif case=='reference':arrays['reference_features']=np.zeros((8,128),np.float32)
+    else:arrays['python_program']=np.zeros(1)
+    np.savez_compressed(root/'weights.npz',**arrays)
+    d['weights_sha256']=hashlib.sha256((root/'weights.npz').read_bytes()).hexdigest()
+    (root/'model.json').write_text(json.dumps(d))
+    with pytest.raises(ValueError):Ranker(root)
+
+
+def test_portable_model_dispatch_keeps_asset_names_confined(tmp_path):
+    artifact(tmp_path/'model')
+    with pytest.raises(ValueError,match='captured directory'):
+        Ranker(tmp_path/'model',metadata_name='../model/model.json')
+    (tmp_path/'bad.json').write_text('[]')
+    with pytest.raises(ValueError,match='metadata object'):Ranker(tmp_path,metadata_name='bad.json')

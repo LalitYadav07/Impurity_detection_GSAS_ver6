@@ -65,7 +65,9 @@ def _metadata(path):
     if path.is_symlink() or not 0<path.stat().st_size<=LIMITS['model']:
         raise ValueError('Oversized or changed structural model metadata')
     d=json.loads(path.read_text())
-    if (not isinstance(d,dict) or d.get('schema')!='radar-structural-ranking-model/v4'
+    from .structural_attention_weights import SCHEMA as THREE_CURVE_SCHEMA,ARCHITECTURE as THREE_CURVE_ARCH
+    if (not isinstance(d,dict) or d.get('schema') not in {'radar-structural-ranking-model/v4',THREE_CURVE_SCHEMA}
+            or (d.get('schema')==THREE_CURVE_SCHEMA and d.get('architecture')!=THREE_CURVE_ARCH)
             or not isinstance(d.get('candidates'),list) or not 1<=len(d['candidates'])<=5000
             or any(not _hash(d.get(k)) for k in ('parent_sha256','instrument_sha256','weights_sha256'))):
         raise ValueError('Structural ranking requires typed candidate and physical-context metadata')

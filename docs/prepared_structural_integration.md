@@ -572,6 +572,14 @@ Diagnostics distinguish logical reflections and requested peak points from
 actual kernel evaluations and evaluated points. These counts describe saved
 duplicate work, not removed reflections or new scientific approximations.
 
+On two 228-coordinate source geometries (the parent anchor and one null
+control), an allocation-bounded ABBA comparison measured median peak-batch
+time changing from 6.97 to 1.54 seconds, with identical output bits. This
+component timing excludes setup, native validation, fitting and NDIP latency.
+The earlier complete seven-pair observation did not show an overall runtime
+improvement; full preparation throughput and distorted endpoints require
+separate measurements.
+
 A public 16-mode/four-cell candidate was checked over the complete 185-curve
 bank and proposal-step calculation in four counterbalanced passes. Every saved
 array was identical. Median construction time changed from 89.19 to 81.33 s
@@ -1136,4 +1144,46 @@ features in RAM. Completed caches bind their numerical bytes and retain all
 source references and augmentation provenance. The three-channel signed
 residual is normalized as an intensity feature, never as the legacy coverage
 channel occupying the same numerical index. These working caches are not
-portable weights and do not yet replace the legacy Model/Live ranker loader.
+portable weights; the trainer below produces the separate inference artifact.
+
+## Three-curve attention weights and native inference
+
+The shared trainer now accepts validated three-curve cohorts and trains the
+fixed convolution/attention architecture with 128 Q-region tokens and four
+attention heads. Training-only channel scales preserve the signed difference.
+Strong clean training prototypes precede a clean-to-noisy curriculum. A
+published checkpoint must have seen every declared training row. Validation
+selects among eligible checkpoints using macro family top-five recall, overall
+top-five recall and loss; the test fold is scored afterward. Per-family and
+worst-family recall accompany overall recall and a training-prior baseline.
+
+Portable attention parameters occupy one typed numerical plane. Tensor names
+and dimensions come from installed code, never an uploaded layout or program.
+The six-array file retains the existing sixteen-array and 32 MiB transport
+limits. The shared ranker reader dispatches by the versioned data schema;
+existing eight-channel files remain readable without a user-facing method
+switch. Native preparation snapshots retain the same parent, bank and exact
+candidate-route integrity checks for both formats.
+
+Three-curve inference requires a freshly calculated parent on the actual
+acquisition's Q grid. Native admission can calculate it from the checked GPX
+at its current parent cell and fixed physical parameters, without a refinement
+or a GPX write. Saved calculated arrays and interpolated old preparation
+curves are not substituted. Unsupported masks, contexts and empirical
+out-of-support patterns retain the complete native search. A saved screening
+flag never authorizes pruning. Measured pre-transition references remain a
+separate scientific qualification requirement.
+
+The default preparation queue's example-generation/training dependency
+contract still needs migration from eight-channel example blocks to paired
+blocks. The new trainer/reader and native-reference handoff do not by
+themselves prove that full UI-to-worker migration or deployed acceptance.
+
+Large native paired blocks also support lossless byte-plane storage. The
+curve arrays remain exact float64 values; byte shuffling before ZIP compression
+changes no coordinates, modes, counts, amplitudes, masks or precision. Fixed
+little-endian uint32 storage retains the existing sixteen-array,
+48-million-element and 160 MiB expanded-data guards. Readers reject malformed
+planes and noncanonical padding, reconstruct the original physical arrays,
+then repeat all null-control and immutable-array checks. Repacking retains
+the source checksum as provenance; it does not grant native qualification.

@@ -15,10 +15,11 @@ import numpy as np
 from ..live.array_limits import validate_npz_bytes
 from ..symmetry.contracts import validate_candidate
 from .tof_kernel_arrays import read_bounded
+from . import structural_pair_arrays as packed
 
 SCHEMA='radar-structural-ranking-paired-pilot/v1'
 MAX_BYTES=160*1024**2
-MAX_ROWS=32768+4096+1  # Complete sampled points, per-trajectory controls and anchor.
+MAX_ROWS=packed.MAX_ROWS  # Complete sampled points, per-trajectory controls and anchor.
 ARRAYS={'q','theory_intensity','background','parent_intensity','parent_background',
     'parent_a','parameters','trajectory','role','geometry_groups','ambiguous_geometry',
     'displacement_rms','relative_metric_norm'}
@@ -38,7 +39,7 @@ def read(directory):
     directory=Path(directory)
     document=json.loads(read_bounded(directory/'pairs.json',8*1024**2))
     raw=read_bounded(directory/'pairs.npz',MAX_BYTES)
-    if (not isinstance(document,dict) or document.get('schema')!=SCHEMA
+    if (not isinstance(document,dict) or document.get('schema') not in {SCHEMA,packed.SCHEMA}
             or document.get('observations_included') is not False
             or document.get('scientific_result') is not False
             or document.get('pairs_sha256')!=hashlib.sha256(raw).hexdigest()
@@ -47,12 +48,17 @@ def read(directory):
         raise ValueError('A bound observation-free paired structural block is required')
     validate_npz_bytes(raw,maximum_bytes=MAX_BYTES)
     with np.load(io.BytesIO(raw),allow_pickle=False) as archive:
-        if set(archive.files)!=ARRAYS:raise ValueError('Unexpected paired structural array inventory')
-        arrays={k:archive[k] for k in ARRAYS}
+        expected=(ARRAYS-set(packed.CURVES))|{k+'_byte_planes' for k in packed.CURVES} if document['schema']==packed.SCHEMA else ARRAYS
+        if set(archive.files)!=expected:raise ValueError('Unexpected paired structural array inventory')
+        arrays={k:archive[k] for k in archive.files}
+    if document['schema']==packed.SCHEMA:
+        if document.get('array_encoding')!=packed.ENCODING:
+            raise ValueError('Unsupported native paired array encoding')
+        arrays=packed.decode(arrays,rows=document.get('examples'),bins=document.get('bins'),maximum_bytes=MAX_BYTES)
     q=arrays['q'];curves=arrays['theory_intensity'];n=len(curves) if curves.ndim==2 else 0
     nm=document.get('mode_dimensions');nc=document.get('cell_dimensions')
     if (type(nm) is not int or nm<0 or type(nc) is not int or not 1<=nc<=6
-            or q.ndim!=1 or not 3<=len(q)<=25001 or not 3<=n<=MAX_ROWS
+            or q.ndim!=1 or not 3<=len(q)<=packed.MAX_BINS or not 3<=n<=MAX_ROWS
             or curves.shape!=(n,len(q)) or arrays['parent_intensity'].shape!=curves.shape
             or arrays['parent_background'].shape!=curves.shape or arrays['background'].shape!=q.shape
             or arrays['parameters'].shape!=(n,nm+nc) or arrays['parent_a'].shape!=(n,6)
@@ -109,3 +115,26 @@ def read(directory):
     document['candidate']=candidate
     owned={k:np.frombuffer(a.tobytes(),dtype=a.dtype).reshape(a.shape) for k,a in arrays.items()}
     return PairedBlock(document,owned)
+
+
+def pack_block(source,destination):
+    """Repack an already checked block without changing any numerical value.
+
+    This binds the prior bytes as provenance, not native qualification. All
+    physical controls and closed dimensions are checked again on readback.
+    """
+    from ..execution import write_json
+    source=Path(source);destination=Path(destination)
+    block=read(source);arrays=packed.encode(block.arrays)
+    destination.mkdir(parents=True,exist_ok=False)
+    np.savez_compressed(destination/'pairs.npz',**arrays)
+    raw=read_bounded(destination/'pairs.npz',MAX_BYTES)
+    validate_npz_bytes(raw,maximum_bytes=MAX_BYTES)
+    document=dict(block.manifest,schema=packed.SCHEMA,array_encoding=packed.ENCODING,
+        original_pairs_sha256=block.manifest['pairs_sha256'],pairs_sha256=hashlib.sha256(raw).hexdigest())
+    write_json(destination/'pairs.json',document)
+    restored=read(destination)
+    if any(restored.arrays[key].dtype!=value.dtype or restored.arrays[key].tobytes()!=value.tobytes()
+           for key,value in block.arrays.items()):
+        raise ValueError('Native paired lossless storage did not preserve every original array byte')
+    return restored

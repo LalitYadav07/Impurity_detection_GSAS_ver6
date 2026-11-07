@@ -111,8 +111,11 @@ def batches(rows, indices, *, size=64):
         yield selected, rows.take(selected)
 
 
-def channel_statistics(rows, indices):
+def channel_statistics(rows, indices, *, minimum_scale=.02, center=True):
     """Two-pass float64 statistics, with bounded feature working memory."""
+    if (type(minimum_scale) not in (int,float) or not np.isfinite(minimum_scale)
+            or not 0<minimum_scale<=1 or type(center) is not bool):
+        raise ValueError('Finite bounded channel normalization controls required')
     if not len(indices):
         raise ValueError('Normalization needs independent training rows')
     channels=rows.shape[1]
@@ -124,8 +127,9 @@ def channel_statistics(rows, indices):
     for _, values in batches(rows, indices):
         delta = values.astype(np.float64)-mean[:, None]
         square += np.einsum('ijk,ijk->j', delta, delta)
-    scale = np.maximum(np.sqrt(square/count), .02)
+    scale = np.maximum(np.sqrt(square/count), minimum_scale)
     mean = mean.astype(np.float32)[:, None]; scale = scale.astype(np.float32)[:, None]
+    if not center:mean[:]=0.
     if channels==8:
         # Only the legacy representation has mask/coordinate channels.
         # Channel 2 in the new representation is a physical signed residual.

@@ -90,6 +90,9 @@ def train(cohort, destination, *, epochs=60, seed=89113, threads=4):
         raise ValueError('Bounded training epochs and random seed are required')
     classes = np.asarray(cohort['classes'])
     features = feature_rows(cohort['features']); targets = np.asarray(cohort['compatible_labels'])
+    if features.shape[1]==3:
+        from .structural_paired_training import train as train_pairs
+        return train_pairs(cohort,destination,epochs=epochs,seed=seed,threads=threads)
     split = np.asarray(cohort['split'])
     if (not 2 <= len(classes) <= 230 or features.ndim != 3 or features.shape[1] != 8
             or features.dtype != np.float32
@@ -200,6 +203,15 @@ def train(cohort, destination, *, epochs=60, seed=89113, threads=4):
 
 class Ranker:
     """A validated local CNN can order all families; it cannot prune them."""
+    def __new__(cls,directory,*,threads=1,metadata_name='model.json',weights_name='weights.npz'):
+        from .structural_model_files import document
+        from .structural_attention_weights import SCHEMA as THREE_CURVE_SCHEMA
+        metadata=document(directory,metadata_name,weights_name)
+        if metadata.get('schema')==THREE_CURVE_SCHEMA:
+            from .structural_paired_ranker import Ranker as PairedRanker
+            return PairedRanker(directory,threads=threads,metadata_name=metadata_name,weights_name=weights_name)
+        return super().__new__(cls)
+
     def __init__(self, directory, *, threads=1, metadata_name='model.json', weights_name='weights.npz'):
         import torch
         self.allocation = allocation(threads)
