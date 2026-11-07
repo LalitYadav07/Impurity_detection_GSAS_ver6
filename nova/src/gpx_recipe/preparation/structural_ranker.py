@@ -17,21 +17,22 @@ from ..execution import write_json
 from ..live.array_limits import validate_npz_bytes
 from ..symmetry.resources import allocation
 from ..symmetry.contracts import validate_candidate
-from .structural_features import pattern_features
+from .structural_features import pattern_features, with_parent_reference
+from .structural_support import fit as fit_support, distances as support_distances, MAX_BYTES as SUPPORT_BYTES
 from .tof_kernel_arrays import read_bounded, checksum
 
-SCHEMA = 'radar-structural-ranking-model/v1'
-ARCHITECTURE = 'masked-q-cnn-4-16-32-64-pool32/v1'
+SCHEMA = 'radar-structural-ranking-model/v3'
+ARCHITECTURE = 'parent-q-cnn-8-16-24-32-pool64/v2'
 MAX_BYTES = 32*1024**2
 
 
 def network(class_count):
     from torch import nn
-    return nn.Sequential(nn.Conv1d(4, 16, 9, stride=2, padding=4), nn.ReLU(),
-        nn.Conv1d(16, 32, 7, stride=2, padding=3), nn.ReLU(),
-        nn.Conv1d(32, 64, 5, stride=2, padding=2), nn.ReLU(),
-        nn.AdaptiveAvgPool1d(32), nn.Flatten(), nn.Linear(64*32, 128), nn.ReLU(),
-        nn.Dropout(.1), nn.Linear(128, class_count))
+    return nn.Sequential(nn.Conv1d(8, 16, 9, stride=1, padding=4), nn.ReLU(),
+        nn.Conv1d(16, 24, 7, stride=2, padding=3), nn.ReLU(),
+        nn.Conv1d(24, 32, 5, stride=2, padding=2), nn.ReLU(),
+        nn.AdaptiveAvgPool1d(64), nn.Flatten(), nn.Linear(32*64, 64), nn.ReLU(),
+        nn.Dropout(.1), nn.Linear(64, class_count))
 
 
 def _score(logits, compatible):
@@ -52,13 +53,21 @@ def train(cohort, destination, *, epochs=60, seed=89113, threads=4):
     classes = np.asarray(cohort['classes'])
     features = np.asarray(cohort['features']); targets = np.asarray(cohort['compatible_labels'])
     split = np.asarray(cohort['split'])
-    if (not 2 <= len(classes) <= 230 or features.ndim != 3 or features.shape[1] != 4
+    if (not 2 <= len(classes) <= 230 or features.ndim != 3 or features.shape[1] != 8
             or features.dtype != np.float32 or not np.isfinite(features).all()
             or features.nbytes > 384*1024**2
             or targets.shape != (len(features), len(classes)) or targets.dtype != bool
             or not targets.any(axis=1).all() or split.shape != (len(features),)
             or set(split) != {0, 1, 2}):
         raise ValueError('A complete finite cohort with independent holdouts is required')
+    reference = np.asarray(cohort['reference_features']); edges = np.asarray(cohort['q_edges'])
+    if (edges.dtype != np.float64 or edges.shape != (features.shape[2]+1,)
+            or not np.isfinite(edges).all() or edges[0] <= 0 or np.any(np.diff(edges) <= 0)
+            or reference.shape != (4, features.shape[2]) or reference.dtype != np.float32
+            or not np.isfinite(reference).all()
+            or hashlib.sha256(reference.tobytes()).hexdigest() != cohort['reference_feature_sha256']):
+        raise ValueError('Training needs its exact finite parent reference and coordinate grid')
+    with_parent_reference(features[0, :4], reference)
     # The cohort assembler seals groups after duplicate closure. Verify that
     # no caller subsequently reassigned individual steps or candidate aliases.
     groups = cohort['groups']
@@ -71,9 +80,13 @@ def train(cohort, destination, *, epochs=60, seed=89113, threads=4):
     torch.set_num_threads(budget['workers'])
     began = time.monotonic(); out = Path(destination); out.mkdir(parents=True, exist_ok=False)
     train_rows = split == 0; validation_rows = split == 1; test_rows = split == 2
-    mean = features[train_rows, :2].mean(axis=0)
-    scale = np.maximum(features[train_rows, :2].std(axis=0), .02)
-    normalized = features.copy(); normalized[:, :2] = (normalized[:, :2]-mean)/scale
+    # Global channel normalization preserves the parent peak reference.
+    # Per-bin centering would turn a constant reference into zeros and make
+    # the residual merely a duplicate of the centered observation channel.
+    mean = features[train_rows].mean(axis=(0, 2))[:, None]
+    scale = np.maximum(features[train_rows].std(axis=(0, 2)), .02)[:, None]
+    mean[[2, 3]] = 0.; scale[[2, 3]] = 1.
+    normalized = (features-mean)/scale
     x = torch.from_numpy(normalized); y = torch.from_numpy(targets)
     rng = np.random.default_rng(seed); indices = np.flatnonzero(train_rows)
     counts = targets[train_rows].sum(0)
@@ -81,7 +94,7 @@ def train(cohort, destination, *, epochs=60, seed=89113, threads=4):
         raise ValueError('Each catalog class requires independent training examples')
     weights = counts.sum()/counts
     weights = torch.tensor(weights/weights.mean(), dtype=torch.float32)
-    best = None; best_loss = float('inf'); history = []
+    best = None; best_key = None; best_epoch = None; history = []
     with torch.random.fork_rng(devices=[]):
         torch.manual_seed(seed); model = network(len(classes))
         optimizer = torch.optim.AdamW(model.parameters(), lr=.001, weight_decay=.0001)
@@ -99,16 +112,25 @@ def train(cohort, destination, *, epochs=60, seed=89113, threads=4):
             with torch.no_grad():
                 result = _score(model(x[validation_rows]), y[validation_rows])
             history.append(dict(epoch=epoch+1, validation=result))
-            if result['loss'] < best_loss:
-                best_loss = result['loss']; best = copy.deepcopy(model.state_dict())
+            key = (-result['top5'], result['loss'])
+            if best_key is None or key < best_key:
+                best_key = key; best_epoch = epoch+1; best = copy.deepcopy(model.state_dict())
             write_json(out/'progress.json', dict(epoch=epoch+1, epochs=epochs, validation=result))
         model.load_state_dict(best); model.eval()
+        support = fit_support(normalized, train_rows, validation_rows)
         # This holdout is inspected only after validation selected the frozen
         # checkpoint. Subsequent development must use a fresh external test.
         with torch.no_grad():
             logits = model(x[test_rows]); score = _score(logits, y[test_rows])
     arrays = {k: v.detach().numpy() for k, v in model.state_dict().items()}
-    arrays.update(q_edges=cohort['q_edges'], feature_mean=mean, feature_scale=scale, classes=classes)
+    # Keep the generic sixteen-array transport bound. Eight exactly
+    # representable float32 scales and the float64 support limit share one
+    # typed numerical plane; no model value or bound is discarded.
+    normalization = np.r_[scale.ravel().astype(np.float64), support['limit']]
+    arrays.update(q_edges=cohort['q_edges'], feature_mean=mean,
+                  feature_scale_and_support_limit=normalization, classes=classes,
+                  reference_features=cohort['reference_features'],
+                  support_prototypes=support['prototypes'])
     stream = io.BytesIO(); np.savez_compressed(stream, **arrays); raw = stream.getvalue()
     validate_npz_bytes(raw, maximum_bytes=MAX_BYTES); (out/'weights.npz').write_bytes(raw)
     counts = {name: targets[split == code].sum(0).tolist()
@@ -118,6 +140,10 @@ def train(cohort, destination, *, epochs=60, seed=89113, threads=4):
         candidates=cohort['candidates'], candidate_groups=cohort['candidate_groups'],
         weights_sha256=hashlib.sha256(raw).hexdigest(), classes=classes.tolist(), bins=features.shape[2],
         epochs=epochs, seed=seed, allocation=budget, counts=counts, test=score,
+        checkpoint_selection='validation_top_five_recall_then_loss', selected_epoch=best_epoch,
+        reference_feature_sha256=cohort['reference_feature_sha256'],
+        support_method=support['method'], support_validation_rows=support['validation_rows'],
+        support_coverage_qualified=False,
         ambiguous_examples=cohort['ambiguous_examples'], examples=len(features),
         original_examples=cohort['original_examples'], independent_groups=len(set(groups)),
         background_required=True, screening_qualified=False, scientific_result=False,
@@ -157,38 +183,81 @@ class Ranker:
         validate_npz_bytes(raw, maximum_bytes=MAX_BYTES)
         model = network(len(classes)); expected = model.state_dict()
         with np.load(io.BytesIO(raw), allow_pickle=False) as saved:
-            if set(saved.files) != set(expected)|{'q_edges', 'feature_mean', 'feature_scale', 'classes'}:
+            if set(saved.files) != set(expected)|{'q_edges', 'feature_mean', 'feature_scale_and_support_limit',
+                                                 'classes', 'reference_features', 'support_prototypes'}:
                 raise ValueError('Unexpected structural model tensor inventory')
             values = {k: saved[k] for k in saved.files}
         for name, tensor in expected.items():
             a = values[name]
             if a.shape != tuple(tensor.shape) or a.dtype != np.float32 or not np.isfinite(a).all():
                 raise ValueError('Invalid structural model tensor dimensions or dtype')
-        edges, mean, scale = (values[k] for k in ('q_edges', 'feature_mean', 'feature_scale'))
+        edges, mean = (values[k] for k in ('q_edges', 'feature_mean'))
+        normalization = values['feature_scale_and_support_limit']
+        if normalization.dtype != np.float64 or normalization.shape != (9,) or not np.isfinite(normalization).all():
+            raise ValueError('Invalid structural normalization and support plane')
+        with np.errstate(over='ignore', under='ignore'):
+            scale = normalization[:8].astype(np.float32).reshape(8, 1)
+        reference = values['reference_features']
         if (edges.dtype != np.float64 or mean.dtype != np.float32 or scale.dtype != np.float32
                 or values['classes'].dtype != np.int32
                 or edges.shape != (bins+1,) or not np.isfinite(edges).all() or edges[0] <= 0
                 or np.any(np.diff(edges) <= 0)
-                or mean.shape != (2, bins) or scale.shape != mean.shape
+                or mean.shape != (8, 1) or scale.shape != mean.shape
                 or not np.isfinite(mean).all() or not np.isfinite(scale).all() or np.any(scale <= 0)
+                or not np.array_equal(normalization[:8], scale.ravel().astype(np.float64))
+                or reference.dtype != np.float32 or reference.shape != (4, bins)
+                or not np.isfinite(reference).all()
+                or np.any(reference[2] < 0) or np.any(reference[2] > 1)
+                or hashlib.sha256(reference.tobytes()).hexdigest() != d.get('reference_feature_sha256')
                 or not np.array_equal(values['classes'], classes)):
             raise ValueError('Invalid structural feature normalization')
+        coordinate = (((edges[:-1]+edges[1:])*.5-edges[0])/(edges[-1]-edges[0])).astype(np.float32)
+        if not np.array_equal(reference[3], coordinate):
+            raise ValueError('The parent reference does not use the model coordinate grid')
+        prototypes, limit = values['support_prototypes'], normalization[8]
+        if (d.get('support_method') != 'training-k-center/validation-maximum-rms/v1'
+                or prototypes.dtype != np.float32 or prototypes.ndim != 2
+                or not 1 <= len(prototypes) <= 256 or prototypes.shape[1] != 8*bins
+                or prototypes.nbytes > SUPPORT_BYTES or not np.isfinite(prototypes).all()
+                or limit < 0):
+            raise ValueError('Invalid bounded structural training-support index')
         model.load_state_dict({k: torch.from_numpy(values[k]) for k in expected}); model.eval()
         self.model, self.metadata = model, d
-        self.edges, self.mean, self.scale = edges, mean, scale
+        self.edges, self.mean, self.scale, self.reference = edges, mean, scale, reference
+        self.support_prototypes, self.support_limit = prototypes, float(limit)
 
-    def rank(self, q, intensity, *, background, parent_sha256, instrument_sha256, valid=None):
+    def rank(self, q, intensity, *, background, parent_sha256, instrument_sha256, valid=None, reference=None):
         import torch
         if (parent_sha256 != self.metadata.get('parent_sha256')
                 or instrument_sha256 != self.metadata.get('instrument_sha256')):
             raise ValueError('This ranker needs its exact prepared parent and instrument context')
         features = pattern_features(q, intensity, self.edges, background=background, valid=valid)
+        parent_features = self.reference
+        if reference is not None:
+            if (not isinstance(reference, dict) or set(reference)-{'q', 'intensity', 'background', 'valid'}
+                    or not {'q', 'intensity', 'background'} <= set(reference)):
+                raise ValueError('A parent reference requires its calculated pattern, coordinates and background')
+            parent_features = pattern_features(reference['q'], reference['intensity'], self.edges,
+                background=reference['background'], valid=reference.get('valid'))
+        features = with_parent_reference(features, parent_features)
         # A partial range must not silently acquire the complete-range model's
         # confidence. A future masked-range qualification can explicitly widen
         # this admission rule using independent experimental evidence.
         if np.any(features[2] < .999):
             raise ValueError('This structural ranker is not qualified for missing coordinate intervals')
-        features[:2] = (features[:2]-self.mean)/self.scale
+        features = (features-self.mean)/self.scale
+        distance = float(support_distances(self.support_prototypes, features.reshape(1, -1))[0])
+        inside = distance <= self.support_limit+np.finfo(np.float32).eps*max(1., self.support_limit)
+        support = dict(status='within_empirical_synthetic_support' if inside else 'outside_prepared_support',
+            nearest_training_rms=distance, validation_maximum_rms=self.support_limit,
+            statistical_coverage_qualified=False)
+        if not inside:
+            return dict(families=[dict(space_group=group, model_score=None,
+                candidate_ids=[key for key, value in self.metadata['candidate_groups'].items() if value == group])
+                for group in self.metadata['classes']], ranking_available=False,
+                support=support, screening_qualified=False, candidate_pruning_authorized=False,
+                native_refinement_required=True, complete_native_search_required=True,
+                interpretation='This pattern is outside the prepared simulations; retain all families for native refinement')
         with torch.no_grad():
             scores = self.model(torch.from_numpy(features[None])).softmax(1)[0].numpy()
         if not np.isfinite(scores).all():
@@ -197,5 +266,6 @@ class Ranker:
         return dict(families=[dict(space_group=self.metadata['classes'][i], model_score=float(scores[i]),
             candidate_ids=[key for key, value in self.metadata['candidate_groups'].items()
                            if value == self.metadata['classes'][i]]) for i in order],
+            ranking_available=True, support=support, candidate_pruning_authorized=False,
             screening_qualified=False, native_refinement_required=True,
             interpretation='Relative model scores order hypotheses; all candidate families remain available')

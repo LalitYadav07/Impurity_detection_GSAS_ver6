@@ -69,3 +69,28 @@ def pattern_features(q, intensity, edges, *, background=None, valid=None, contra
     if not np.isfinite(features).all():
         raise ValueError('Structural pattern normalization is not numerically finite')
     return features
+
+
+def with_parent_reference(observed, reference):
+    """Pair a pattern with its parent, retaining the size of weak changes.
+
+    Difference channels use a fixed contrast, never normalization by the
+    difference's own maximum: a tiny change or noise cannot become a unit
+    transition signal merely because it is the largest residual present.
+    Both inputs must have been constructed on the same Q edges. This is a
+    representation for ranking, not subtraction of measured observations.
+    """
+    observed, reference = np.asarray(observed), np.asarray(reference)
+    if (observed.ndim != 2 or observed.shape[0] != 4 or reference.shape != observed.shape
+            or observed.dtype != np.float32 or reference.dtype != np.float32
+            or not np.isfinite(observed).all() or not np.isfinite(reference).all()
+            or np.any(observed[2] < 0) or np.any(observed[2] > 1)
+            or np.any(reference[2] < 0) or np.any(reference[2] > 1)
+            or not np.array_equal(observed[3], reference[3])):
+        raise ValueError('Finite pattern and parent features on the same Q grid are required')
+    coverage = np.minimum(observed[2], reference[2])
+    difference = np.arcsinh(30.*(observed[:2]-reference[:2]))/np.arcsinh(30.)
+    result = np.concatenate([observed.copy(), reference[:2], difference]).astype(np.float32)
+    result[2] = coverage
+    result[np.array([0, 1, 4, 5, 6, 7])[:, None], np.flatnonzero(coverage == 0)] = 0.
+    return result

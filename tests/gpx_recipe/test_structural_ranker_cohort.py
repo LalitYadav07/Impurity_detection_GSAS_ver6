@@ -13,6 +13,7 @@ def block(tmp_path, name='first', *, label=63, offset=0., change=None):
     trajectory = np.r_[-1, np.repeat(np.arange(6), 2)]
     curves = np.asarray([background+np.exp(-((q-(1.+offset+.04*i))/.04)**2)
                          for i in range(len(trajectory))])
+    curves[0] = background+np.exp(-((q-1.)/.04)**2)
     arrays = dict(q=q, theory_intensity=curves, background=background,
         parameters=np.arange(len(trajectory), dtype=float)[:, None], trajectory=trajectory,
         geometry_groups=np.full((len(trajectory), 2), label, np.int32),
@@ -21,6 +22,7 @@ def block(tmp_path, name='first', *, label=63, offset=0., change=None):
         relative_metric_norm=np.zeros(len(trajectory)))
     if change is not None:
         change(arrays)
+    arrays['geometry_groups'][0] = [63, 63]
     np.savez_compressed(directory/'examples.npz', **arrays)
     d = dict(schema='radar-structural-ranking-examples/v3', observations_included=False,
         scientific_result=False, examples_sha256=hashlib.sha256((directory/'examples.npz').read_bytes()).hexdigest(),
@@ -38,7 +40,8 @@ def test_background_removed_cohort_has_whole_trajectory_holdouts(tmp_path):
     first = read_block(block(tmp_path))
     second = read_block(block(tmp_path, 'second', label=65, offset=.01))
     result = assemble([first, second], bins=128)
-    assert result['features'].shape == (26, 4, 128)
+    assert result['features'].shape == (25, 8, 128)
+    assert result['reference_features'].shape == (4, 128)
     assert result['classes'].tolist() == [63, 65]
     assert set(result['split']) == {0, 1, 2}
     for group in result['groups']:
@@ -54,8 +57,8 @@ def test_identical_patterns_retain_ambiguous_labels_instead_of_discarding_them(t
     result = assemble([read_block(block(tmp_path)), read_block(block(tmp_path, 'alias', label=65))], bins=128)
     assert result['original_examples'] == 26
     assert result['unique_examples'] == 13
-    assert result['ambiguous_examples'] == 13
-    assert result['compatible_labels'].all()
+    assert result['ambiguous_examples'] == 12
+    assert result['compatible_labels'][1:].all()
     assert all(len(refs) == 2 for refs in result['references'])
 
 

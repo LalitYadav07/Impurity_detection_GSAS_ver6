@@ -900,6 +900,25 @@ checks tensor inventory, shapes, finite normalization, file integrity and exact
 parent/profile identities before inference. Unsupported masked intervals fail
 explicitly rather than acquiring complete-range confidence.
 
+The current development format pairs the observed features with one common
+undistorted-parent control and fixed-contrast residual channels. A residual is
+never normalized by its own maximum. Global channel normalization retains
+the parent reference; per-bin centering would erase a constant control.
+Inference can use the stored nominal parent or a supplied current calculated
+parent, with explicit coordinates and background. Changing-parent and noise
+generalization still require independent acceptance. Format v3 rejects older
+unqualified tensors rather than interpreting incompatible features or omitting
+the training-support boundary. Validation shortlist recall selects the model
+checkpoint, with validation loss breaking ties; the test is inspected later.
+
+A compact farthest-first index contains only training features. The largest
+validation distance defines an empirical synthetic-support envelope. A pattern
+outside it returns every family without neural ranking scores and requires a
+complete native search. This envelope is not a statistical confidence bound or
+experimental qualification. Even an admitted pattern cannot authorize pruning
+through a saved flag. Noise, omitted phases and changing profiles remain part
+of the required experimental acceptance scope.
+
 This is development infrastructure, not a qualified candidate-pruning engine
 or a released UI workflow. Returned scores order every available space-group
 family and always require native refinement. A saved qualification flag cannot

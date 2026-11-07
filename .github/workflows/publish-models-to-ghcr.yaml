@@ -50,6 +50,7 @@ on:
       - tests/gpx_recipe/test_structural_ranker_features.py
       - tests/gpx_recipe/test_structural_ranker_cohort.py
       - tests/gpx_recipe/test_structural_ranker_training_native.py
+      - tests/gpx_recipe/test_structural_ranker_support.py
       - tests/gpx_recipe/test_structural_ranking_examples_native.py
       - tests/gpx_recipe/test_native_cell_proposals.py
       - tests/gpx_recipe/test_structural_background_context*.py
@@ -208,6 +209,7 @@ jobs:
             /validation/tests/gpx_recipe/test_structural_ranker_features.py \
             /validation/tests/gpx_recipe/test_structural_ranker_cohort.py \
             /validation/tests/gpx_recipe/test_structural_ranker_training_native.py \
+            /validation/tests/gpx_recipe/test_structural_ranker_support.py \
             /validation/tests/gpx_recipe/test_structural_ranking_examples_native.py \
             /validation/tests/gpx_recipe/test_structural_start_diversity.py \
             /validation/tests/gpx_recipe/test_profiled_qualification.py \

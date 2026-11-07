@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from gpx_recipe.preparation.structural_features import pattern_features
+from gpx_recipe.preparation.structural_features import pattern_features, with_parent_reference
 
 
 def test_narrow_peak_between_bin_centers_is_retained_and_integrated():
@@ -44,6 +44,40 @@ def test_zeros_remain_finite_features_and_do_not_imply_a_phase_label():
     features = pattern_features(np.arange(5.), np.zeros(5), np.arange(5.))
     np.testing.assert_array_equal(features[:2], 0.)
     assert np.isfinite(features).all()
+
+
+def test_parent_pair_retains_reference_and_zero_change_without_editing_inputs():
+    q = np.arange(1., 6.); y = np.array([0., 1., 8., 1., 0.])
+    parent = pattern_features(q, y, q); before = parent.copy()
+    paired = with_parent_reference(parent, parent)
+    assert paired.shape == (8, 4)
+    np.testing.assert_array_equal(paired[:4], parent)
+    np.testing.assert_array_equal(paired[4:6], parent[:2])
+    np.testing.assert_array_equal(paired[6:], 0.)
+    np.testing.assert_array_equal(parent, before)
+
+
+def test_tiny_parent_difference_cannot_normalize_itself_to_a_strong_signal():
+    q = np.arange(1., 6.); y = np.array([0., 1., 8., 1., 0.])
+    parent = pattern_features(q, y, q)
+    tiny = parent.copy(); tiny[0, 1] += 1e-6
+    larger = parent.copy(); larger[0, 1] += .01
+    weak = with_parent_reference(tiny, parent)[6:]
+    strong = with_parent_reference(larger, parent)[6:]
+    assert 0 < np.max(abs(weak)) < 1e-4
+    assert np.max(abs(strong)) > 100*np.max(abs(weak))
+
+
+def test_parent_pair_requires_shared_coordinates_and_retains_joint_missingness():
+    q = np.arange(1., 6.); parent = pattern_features(q, np.ones(5), q)
+    reference = parent.copy(); reference[2, 1] = 0.
+    paired = with_parent_reference(parent, reference)
+    assert paired[2, 1] == 0.
+    np.testing.assert_array_equal(paired[[0, 1, 4, 5, 6, 7], 1], 0.)
+    reference[3, 1] += .001
+    with pytest.raises(ValueError, match='same Q'): with_parent_reference(parent, reference)
+    reference = parent.copy(); reference[2, 1] = 2.
+    with pytest.raises(ValueError): with_parent_reference(parent, reference)
 
 
 def test_outside_range_peak_cannot_change_the_features_inside_the_model_range():

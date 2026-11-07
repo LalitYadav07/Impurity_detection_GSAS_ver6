@@ -14,7 +14,7 @@ import numpy as np
 from ..live.array_limits import validate_npz_bytes
 from ..symmetry.contracts import validate_candidate
 from .tof_kernel_arrays import read_bounded
-from .structural_features import pattern_features
+from .structural_features import pattern_features, with_parent_reference
 from .structural_sampling import partition_trajectories
 
 
@@ -102,13 +102,18 @@ def assemble(blocks, *, bins=2048, split_seed=3917):
     if len(sources) != 1 or len(profiles) != 1:
         raise ValueError('One exact parent and profile define a training context; fuse banks after ranking')
     count = sum(len(b.arrays['theory_intensity']) for b in blocks)
-    if count*4*bins*4 > MAX_FEATURE_BYTES:
+    if count*8*bins*4 > MAX_FEATURE_BYTES:
         raise ValueError('Assemble structural feature cohorts within the declared memory budget')
     lower = max(b.arrays['q'][0] for b in blocks)
     upper = min(b.arrays['q'][-1] for b in blocks)
     if not lower < upper:
         raise ValueError('Structural examples have no common measured coordinate range')
     edges = np.linspace(lower, upper, bins+1)
+    parent_controls = [b for b in blocks if b.manifest['declared_child_group']['number']
+                       in b.arrays['geometry_groups'][0]]
+    reference_block = min(parent_controls or blocks, key=lambda b: b.manifest['child_sha256'])
+    a = reference_block.arrays
+    reference = pattern_features(a['q'], a['theory_intensity'][0], edges, background=a['background'])
     records = []; parents = {}; duplicates = {}
 
     def find(group):
@@ -125,7 +130,8 @@ def assemble(blocks, *, bins=2048, split_seed=3917):
         a, d = block.arrays, block.manifest
         for index, curve in enumerate(a['theory_intensity']):
             group = d['groups'][index]; parents.setdefault(group, group)
-            feature = pattern_features(a['q'], curve, edges, background=a['background'])
+            feature = with_parent_reference(
+                pattern_features(a['q'], curve, edges, background=a['background']), reference)
             key = hashlib.sha256(feature.tobytes()).hexdigest()
             labels = set(map(int, a['geometry_groups'][index]))
             ref = (block_index, index)
@@ -163,6 +169,8 @@ def assemble(blocks, *, bins=2048, split_seed=3917):
         input_sha256=[b.manifest['examples_sha256'] for b in blocks],
         candidates=list(definitions.values()),
         candidate_groups=candidate_groups,
+        reference_features=reference,
+        reference_feature_sha256=hashlib.sha256(reference.tobytes()).hexdigest(),
         parent_sha256=next(iter(sources)), instrument_sha256=next(iter(profiles)),
         original_examples=count, unique_examples=len(records),
         ambiguous_examples=int(np.count_nonzero(targets.sum(axis=1) > 1)),
