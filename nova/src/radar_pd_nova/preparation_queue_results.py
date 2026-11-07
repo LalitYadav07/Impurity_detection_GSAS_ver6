@@ -4,7 +4,7 @@ import math
 from pathlib import Path
 
 from gpx_recipe.preparation import batch
-from gpx_recipe.preparation.worker import validate_request
+from gpx_recipe.preparation.worker import validate_request,input_roles
 from gpx_recipe.symmetry.compiler import confined, file_sha
 from gpx_recipe.symmetry.contracts import digest
 
@@ -17,7 +17,7 @@ def requests_for(job, root):
             raise ValueError('Captured preparation input changed')
     if job['mode']=='single':
         member=job['members'][0];request=copy.deepcopy(payload)
-        for role in ('source','instrument','child','destination'):
+        for role in ('source','instrument','child','plan','destination'):
             if role in request:request[role]=str(confined(root,request[role],exists=role!='destination'))
         kind=handle['request']['operation'].removeprefix('preparation-')
         return {member['entry']:validate_request(kind,request)},None
@@ -27,7 +27,7 @@ def requests_for(job, root):
     output=confined(root,payload['destination'],exists=False);requests={}
     for task in plan['tasks']:
         request=copy.deepcopy(task['request'])
-        for role in ['source','instrument']+(['child'] if task['kind']=='structural' else []):
+        for role in input_roles(task['kind']):
             request[role]=str(confined(plan_path.parent,request[role]))
         request['destination']=str(confined(output,request['destination'],exists=False))
         requests[task['entry']]=validate_request(task['kind'],request)

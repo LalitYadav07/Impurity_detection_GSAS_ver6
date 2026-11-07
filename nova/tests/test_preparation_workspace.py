@@ -116,6 +116,13 @@ def test_model_plan_inherits_only_profile_dependencies_its_engine_consumes(works
     references=[r for r in library.document['entries'] if r['model']['kind']=='reference']
     assert len(models)==2 and all(r['state']=='pending' for r in models)
     assert len(references)==len(transferred)==(1 if kind=='structural' else 0)
+    if kind=='structural':
+        examples=[r for r in library.document['entries'] if r['model']['kind']=='structural-examples']
+        training=[r for r in library.document['entries'] if r['model']['kind']=='structural-training']
+        assert len(examples)==16 and len(training)==2
+        for trainer in training:
+            assert trainer['model']['settings']['dependencies']==sorted(
+                e['id'] for e in examples if e['model']['bank']==trainer['model']['bank'])
     if references:assert references[0]['model']['bank']==row['model']['bank']
 
 

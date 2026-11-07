@@ -17,15 +17,18 @@ from test_structural_ranker_cohort import block
 def inputs(root):
     root.mkdir(parents=True, exist_ok=True)
     source = root/'parent.cif'; source.write_text('data_public_training_contract\n')
+    instrument=root/'profile.instprm';instrument.write_text('# public profile identity control\n')
+    grid=dict(kind='PNT',lower=3000.,upper=40000.,bins=101,bank=1)
     directories = [block(root), block(root, 'second', label=65, offset=.013)]
     for directory in directories:
         path = directory/'examples.json'; d = json.loads(path.read_text())
         d['source_sha256'] = file_sha(source)
+        d['instrument_sha256']=file_sha(instrument);d['grid']=grid
         d['groups'] = [g.replace('a'*64, d['source_sha256']) for g in d['groups']]
         path.write_text(json.dumps(d))
     plan_path = root/'plan.json'
     create_plan(source, directories, plan_path)
-    return dict(source=str(source), plan=str(plan_path), destination=str(root/'trained'),
+    return dict(source=str(source),instrument=str(instrument),grid=grid,plan=str(plan_path),destination=str(root/'trained'),
                 settings=dict(bins=128, epochs=1, workers=1, augmentation=None)), directories
 
 

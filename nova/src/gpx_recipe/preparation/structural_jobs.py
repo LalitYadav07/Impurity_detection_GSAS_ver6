@@ -18,12 +18,13 @@ from ..symmetry.contracts import fields, number
 from .batch import relative
 from .structural_augmentation import Controls, ObservationAugmenter
 from .tof_kernel_arrays import checksum, read_bounded
+from .reference import validate_grid
 
 PLAN_SCHEMA = 'radar-structural-training-plan/v1'
 MAX_PLAN_BYTES = 8*1024**2
 MAX_INPUT_BYTES = 480*1024**2
-# The shared Galaxy packet admits 10000 files: parent, plan, and two per block.
-MAX_BLOCKS = (10000-2)//2
+# The shared packet admits parent, profile, plan, and two files per block.
+MAX_BLOCKS = (10000-3)//2
 
 
 def validate_examples(request):
@@ -48,9 +49,9 @@ def validate_examples(request):
 
 
 def validate_training(request):
-    request = fields(request, ['source', 'plan', 'destination', 'settings'])
+    request = fields(request, ['source', 'instrument', 'grid', 'plan', 'destination', 'settings'])
     settings = fields(request['settings'], [], dict(bins=2048, split_seed=3917,
-        epochs=60, seed=89113, workers=4, augmentation=asdict(Controls())))
+        epochs=60, seed=89113, workers=4, augmentation=asdict(Controls()), dependencies=[]))
     for key, lower, upper in [('bins', 64, 8192), ('split_seed', 0, 2**32-1),
                               ('epochs', 1, 1000), ('seed', 0, 2**32-1), ('workers', 1, 16)]:
         settings[key] = number(settings[key], lower, upper, integer=True)
@@ -59,11 +60,35 @@ def validate_training(request):
         controls = Controls(**controls)
         if controls.impurity_fraction != (0., 0.):
             raise ValueError('This training job has no declared native impurity templates')
-        settings['augmentation'] = asdict(controls)
-    for key in ('source', 'plan', 'destination'):
+        settings['augmentation'] = {key:list(value) if isinstance(value,tuple) else value
+                                    for key,value in asdict(controls).items()}
+    dependencies=settings['dependencies']
+    if (not isinstance(dependencies,list) or len(dependencies)>MAX_BLOCKS
+            or any(not isinstance(key,str) or len(key)!=24
+                   or any(c not in '0123456789abcdef' for c in key) for key in dependencies)
+            or dependencies!=sorted(set(dependencies))):
+        raise ValueError('Training dependencies must be unique captured example-entry identities')
+    request['grid']=validate_grid(**fields(request['grid'], ['kind','lower','upper','bins','bank']))
+    for key in ('source', 'instrument', 'plan', 'destination'):
         if not isinstance(request[key], str) or not request[key]:
             raise ValueError('Training requires owned source, plan and destination paths')
     return dict(request, settings=settings)
+
+
+def publish_result(kind, request, detail, names):
+    """Use the same entry receipt and library publication as other preparation."""
+    out=Path(request['destination']).resolve()
+    roles=('source','instrument')+(('child',) if kind=='structural-examples' else ())
+    manifest=dict(schema='radar-experiment-preparation-entry/v1',kind=kind,
+        grid=request['grid'],settings=request['settings'],input_sha256=[file_sha(request[k]) for k in roles],
+        implementation_sha256=package_signature(),detail=detail,
+        observations_included=False,scientific_result=False,
+        artifacts={name:file_sha(out/name) for name in names})
+    write_json(out/'entry.json',manifest)
+    return dict(schema='radar-experiment-preparation-worker/v1',kind=kind,status='prepared',
+        output=str(out),artifacts=names+['entry.json'],entry_sha256=file_sha(out/'entry.json'),
+        observations_included=False,scientific_result=False,screening_qualified=False,
+        candidate_pruning_authorized=False,seconds=detail['seconds'])
 
 
 def read_plan(path):
@@ -90,7 +115,7 @@ def plan_inputs(path):
             for name in ('examples.json', 'examples.npz')]
 
 
-def create_plan(source, directories, destination):
+def create_plan(source, directories, destination, *, recover_identical=False):
     """Bind existing observation-free blocks without copying large arrays."""
     from .structural_cohort import read_block
     destination = Path(destination).resolve()
@@ -117,14 +142,15 @@ def create_plan(source, directories, destination):
         profile = current
         rows.append(dict(directory=name, manifest_sha256=file_sha(directory/'examples.json'),
                          examples_sha256=file_sha(directory/'examples.npz')))
-    if destination.exists():
-        raise ValueError('Training plans are immutable; use a new path')
     value = dict(schema=PLAN_SCHEMA, parent_sha256=parent, instrument_sha256=profile, blocks=rows)
     # Validate before publishing, including duplicate logical block paths.
     if len((json.dumps(value, indent=2)+'\n').encode()) > MAX_PLAN_BYTES:
         raise ValueError('Training plan exceeds its metadata budget')
     if len({row['directory'] for row in rows}) != len(rows):
         raise ValueError('Training blocks need unique directories and exact content identities')
+    if destination.exists():
+        if recover_identical and read_plan(destination)==value:return value
+        raise ValueError('Training plans are immutable; use a new path')
     write_json(destination, value)
     read_plan(destination)
     return value
@@ -156,12 +182,11 @@ def execute_examples(request):
     request = validate_examples(request); settings = request['settings']
     base = dict(request, settings={k: settings[k] for k in ('candidate', 'mode_radius', 'cell_radius')})
     detail = generate(base, **{k: settings[k] for k in ('seed', 'trajectories', 'steps', 'trajectory_slice')})
-    return dict(schema='radar-structural-examples-worker/v1', status='prepared',
-        output=str(Path(request['destination']).resolve()),
-        artifacts=['examples.json', 'examples.npz'], examples=detail['examples'],
-        candidate_id=detail['candidate']['id'], trajectory_slice=detail['trajectory_slice'],
-        examples_sha256=detail['examples_sha256'], observations_included=False,
-        screening_qualified=False, scientific_result=False, seconds=detail['seconds'])
+    return publish_result('structural-examples',request,dict(examples=detail['examples'],
+        candidate_id=detail['candidate']['id'],trajectory_slice=detail['trajectory_slice'],
+        mode_dimensions=detail['mode_dimensions'],cell_dimensions=detail['cell_dimensions'],
+        examples_sha256=detail['examples_sha256'],seconds=detail['seconds']),
+        ['examples.json','examples.npz'])
 
 
 def execute_training(request):
@@ -172,7 +197,16 @@ def execute_training(request):
     source = Path(request['source'])
     if source.is_symlink() or not 0 < source.stat().st_size <= 10*1024**2 or file_sha(source) != plan['parent_sha256']:
         raise ValueError('Training source differs from the captured parent CIF')
+    instrument=Path(request['instrument'])
+    if instrument.is_symlink() or not 0<instrument.stat().st_size<=1024**2 or file_sha(instrument)!=plan['instrument_sha256']:
+        raise ValueError('Training profile differs from the captured instrument file')
+    if request['settings']['dependencies'] and [row['directory'] for row in plan['blocks']]!=[
+            'blocks/'+key for key in request['settings']['dependencies']]:
+        raise ValueError('Training plan does not cover the exact declared library dependencies')
     directories = checked_blocks(plan_path, plan)
+    if any(json.loads(read_bounded(p/'examples.json',MAX_PLAN_BYTES)).get('grid')!=request['grid']
+           for p in directories):
+        raise ValueError('Training examples differ from the captured physical bank grid')
     out = Path(request['destination']).resolve(); out.mkdir(parents=True, exist_ok=False)
     began = time.monotonic()
     write_json(out/'progress.json', dict(state='assembling_examples', blocks=len(directories)))
@@ -188,7 +222,8 @@ def execute_training(request):
                       threads=settings['workers'])
     finally:
         cohort['features'].close()
-    if file_sha(plan_path) != plan_sha or file_sha(source) != plan['parent_sha256']:
+    if (file_sha(plan_path) != plan_sha or file_sha(source) != plan['parent_sha256']
+            or file_sha(instrument)!=plan['instrument_sha256']):
         raise ValueError('Training source or declared plan changed during the job')
     checked_blocks(plan_path, plan)
     receipt = dict(schema='radar-structural-training-worker/v1', status='trained',
@@ -204,4 +239,5 @@ def execute_training(request):
     write_json(out/'training.json', receipt)
     write_json(out/'progress.json', dict(state='complete', examples=model['examples'],
                                        screening_qualified=False))
-    return receipt
+    return publish_result('structural-training',request,receipt,
+        ['model/model.json','model/weights.npz','training.json'])

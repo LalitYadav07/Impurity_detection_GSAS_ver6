@@ -19,19 +19,20 @@ from test_structural_training_jobs import inputs
 def test_training_worker_exports_data_only_model_and_preserves_whole_groups(tmp_path):
     request, directories = inputs(tmp_path)
     result = execute('structural-training', request)
-    assert result['status'] == 'trained'
+    assert result['status'] == 'prepared' and result['kind']=='structural-training'
     assert result['observations_included'] is False
     assert result['candidate_pruning_authorized'] is False
     assert result['screening_qualified'] is False
     # Six physical trajectories plus the common undistorted-parent control.
-    assert result['independent_groups'] == 7
-    assert result['allocation']['workers'] == 1
     root = Path(result['output'])
-    assert set(result['artifacts']) == {'model/model.json','model/weights.npz','training.json'}
+    detail=json.loads((root/'training.json').read_text())
+    assert detail['independent_groups']==7
+    assert detail['allocation']['workers']==1
+    assert set(result['artifacts']) == {'model/model.json','model/weights.npz','training.json','entry.json'}
     assert all(not name.endswith(('.npy','.gpx','.pt','.pkl')) for name in result['artifacts'])
     pack(root, tmp_path/'portable.zip', result['artifacts'])
     restored = unpack(tmp_path/'portable.zip', tmp_path/'restored')
-    assert Ranker(restored/'model').metadata['weights_sha256'] == result['weights_sha256']
+    assert Ranker(restored/'model').metadata['weights_sha256'] == detail['weights_sha256']
     progress = json.loads((root/'progress.json').read_text())
     assert progress['state'] == 'complete'
 
@@ -39,9 +40,9 @@ def test_training_worker_exports_data_only_model_and_preserves_whole_groups(tmp_
 def test_training_runs_through_actual_galaxy_native_wrapper(tmp_path):
     pytest.importorskip('GSASII.GSASIIscriptable')
     root = tmp_path/'capture'; request, _ = inputs(root)
-    names = ['parent.cif','plan.json']+plan_inputs(root/'plan.json')
+    names = ['parent.cif','profile.instprm','plan.json']+plan_inputs(root/'plan.json')
     pack(root, tmp_path/'inputs.zip', names)
-    payload = dict(request, source='parent.cif', plan='plan.json', destination='trained')
+    payload = dict(request, source='parent.cif',instrument='profile.instprm',plan='plan.json',destination='trained')
     message = dict(schema='radar-model-native/v1', operation='preparation-structural-training',
         payload=payload, implementation_sha256=package_signature(),
         expected_source_sha256=file_sha(root/'parent.cif'), dispatch_key='a'*24,
@@ -52,9 +53,9 @@ def test_training_runs_through_actual_galaxy_native_wrapper(tmp_path):
     module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
     result = module._work('native', root/'parent.cif', tmp_path/'inputs.zip',
         tmp_path/'request.json', tmp_path/'job', tmp_path/'result.zip')
-    assert result['result']['status'] == 'trained'
+    assert result['result']['status'] == 'prepared'
     collected = unpack(tmp_path/'result.zip', tmp_path/'collected')
     assert Ranker(collected/'native/trained/model').metadata['classes'] == [63,65]
     assert set(result['files']) == {'native/trained/model/model.json',
-        'native/trained/model/weights.npz','native/trained/training.json'}
+        'native/trained/model/weights.npz','native/trained/training.json','native/trained/entry.json'}
     assert not list(collected.rglob('features.npy'))

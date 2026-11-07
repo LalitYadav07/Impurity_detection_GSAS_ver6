@@ -19,7 +19,10 @@ from .worker import validate_request, validate_settings, verify_structural_child
 
 PLAN_SCHEMA = 'radar-experiment-preparation-plan/v1'
 PORTABLE = {'reference': set(), 'magnetic': {'response.npz'},
-            'structural': {'starts.npz', 'starts.json'},'kernel':{'kernel.npz','kernel.json'}}
+            'structural': {'starts.npz', 'starts.json'},'kernel':{'kernel.npz','kernel.json'},
+            'structural-examples':{'examples.json','examples.npz'},
+            'structural-training':{'model/model.json','model/weights.npz','training.json'}}
+CHILD_KINDS={'structural','structural-examples'}
 OPTIONAL_PORTABLE = {'magnetic': {'scattering.npz'},'reference':{'profile.npz','profile.json'}}
 
 
@@ -127,6 +130,8 @@ def pending_entries(library, *, deferred=()):
     groups = {}
     for row in library.document['entries']:
         model = row['model'];settings = model['settings']
+        from .structural_dependencies import ready
+        if not ready(library,model):continue
         family = json.dumps([model['kind'], model['bank'], settings.get('k'),
             settings.get('candidate',{}).get('irrep')], sort_keys=True)
         group = groups.setdefault(family, dict(admitted=0, pending=[]))
@@ -166,12 +171,16 @@ def create_library(root, *, name, source, banks, models, scope=None):
     declared = []
     for model in models:
         model = fields(model, ['kind', 'bank', 'settings'], {'child': None})
-        if model['kind'] not in {'reference','magnetic','structural'} or model['bank'] not in bank_records:
+        if model['kind'] not in {'reference','magnetic','structural','structural-examples'} or model['bank'] not in bank_records:
             raise ValueError('The model must refer to a selected physical bank')
-        settings = validate_settings(model['kind'], model['settings'])
+        if model['kind']=='structural-examples':
+            from .structural_jobs import validate_examples
+            settings=validate_examples(dict(source='parent.cif',instrument='profile.instprm',child='child.cif',
+                grid=bank_records[model['bank']]['grid'],destination='compiled',settings=model['settings']))['settings']
+        else:settings = validate_settings(model['kind'], model['settings'])
         captured = dict(kind=model['kind'], bank=model['bank'], settings=settings,
             **bank_records[model['bank']])
-        if model['kind'] == 'structural':
+        if model['kind'] in CHILD_KINDS:
             if not model['child']:
                 raise ValueError('A structural model requires its authoritative child CIF')
             child_sha = file_sha(model['child'])
@@ -186,6 +195,8 @@ def create_library(root, *, name, source, banks, models, scope=None):
             grid=captured['grid'], settings=settings, destination='compiled',
             **({'child': captured['child']} if 'child' in captured else {})))
         declared.append(captured)
+    from .structural_dependencies import append_training
+    append_training(declared,bank_records)
     specification=dict(schema=PLAN_SCHEMA,source='inputs/parent.cif')
     if scope is None:
         return PreparationLibrary.create(root,name=name,specification=specification,models=declared,inputs=inputs)
@@ -218,7 +229,7 @@ def stage_entry(library, identifier, attempt, directory, *, recover_completed=Fa
     model = row['model']
     captured = {asset['path']: asset['sha256'] for asset in library.document['inputs']}
     roles = dict(source=specification['source'], instrument=model['instrument'])
-    if model['kind'] == 'structural':
+    if model['kind'] in CHILD_KINDS:
         roles['child'] = model['child']
     library.verify_assets(roles.values())
     payload = dict(grid=model['grid'], settings=model['settings'], destination=str(directory/'compiled'))
@@ -234,6 +245,9 @@ def stage_entry(library, identifier, attempt, directory, *, recover_completed=Fa
         if file_sha(target) != captured[name]:
             raise ValueError('Preparation input changed while staging')
         payload[role] = str(target)
+    if model['kind']=='structural-training':
+        from .structural_dependencies import stage
+        payload=stage(library,model,payload,directory)
     return validate_request(model['kind'], payload)
 
 
@@ -247,7 +261,7 @@ def publish_entry(library, identifier, attempt, request, result):
     request = validate_request(kind, request)
     model = row['model']
     roles = [library.document['specification']['source'], model['instrument']]
-    if kind == 'structural':
+    if kind in CHILD_KINDS:
         roles.append(model['child'])
     library.verify_assets(roles)
     captured = {asset['path']: asset['sha256'] for asset in library.document['inputs']}
@@ -255,8 +269,11 @@ def publish_entry(library, identifier, attempt, request, result):
         raise ValueError('The returned preparation changed its declared model or bank')
     checksums = [captured[name] for name in roles]
     if checksums != [file_sha(request[role]) for role in ('source', 'instrument')+
-                     (('child',) if kind == 'structural' else ())]:
+                     (('child',) if kind in CHILD_KINDS else ())]:
         raise ValueError('The staged preparation no longer matches its captured library inputs')
+    if kind=='structural-training':
+        from .structural_dependencies import verify
+        verify(library,model,request)
     if (not isinstance(result, dict) or result.get('schema') != 'radar-experiment-preparation-worker/v1'
             or result.get('status') != 'prepared' or result.get('kind') != kind
             or result.get('observations_included') is not False or result.get('scientific_result') is not False):
@@ -297,6 +314,7 @@ def publish_entry(library, identifier, attempt, request, result):
             if file_sha(destination) != file_sha(source):
                 raise ValueError('A different preparation already occupies this entry')
         else:
+            destination.parent.mkdir(parents=True,exist_ok=True)
             shutil.copyfile(source, destination)
         if file_sha(destination) != expected[name]:
             raise ValueError('A preparation artifact changed while copying its verified output')

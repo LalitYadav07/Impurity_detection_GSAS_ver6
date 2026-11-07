@@ -224,6 +224,9 @@ class PreparationWorkspace:
         inspection=self.registry.get(reference)
         references=[r for r in inspection.document['entries'] if kind=='structural' and r['model']['bank'] in banks
             and {'profile.npz','profile.json'}<={Path(a['path']).name for a in r['files']}]
+        if kind=='structural':
+            from gpx_recipe.preparation.structural_dependencies import example_models
+            models+=example_models(models)
         models += [dict(kind='reference',bank=r['model']['bank'],settings=r['model']['settings']) for r in references]
         if len(models)>MAX_MODELS:raise ValueError('Model and shared-profile dependencies exceed the library entry bound')
         key=self.registry.create(name=name,source=context['source'],banks=banks,models=models,scope=scope)

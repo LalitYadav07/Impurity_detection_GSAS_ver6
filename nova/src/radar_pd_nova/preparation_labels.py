@@ -43,7 +43,7 @@ def native_dimensions(library, entry):
     Inventory integrity does not authorize reuse of imported numerical assets.
     The consumer still qualifies those against its current native context.
     """
-    if entry.get('state') != 'prepared' or entry['model']['kind'] != 'structural':
+    if entry.get('state') != 'prepared' or entry['model']['kind'] not in {'structural','structural-examples'}:
         return None
     names = [row['path'] for row in entry.get('files', [])
              if row['path'].endswith('/entry.json')]
@@ -59,7 +59,7 @@ def native_dimensions(library, entry):
     model = entry['model']
     if (not isinstance(document, dict)
             or document.get('schema') != 'radar-experiment-preparation-entry/v1'
-            or document.get('kind') != 'structural'
+            or document.get('kind') != model['kind']
             or document.get('settings') != model.get('settings')
             or document.get('grid') != model.get('grid')):
         raise ValueError('Prepared dimension metadata differs from this model')
@@ -75,17 +75,21 @@ def native_dimensions(library, entry):
 def entry_label(model, labels, *, dimensions=None):
     settings=model.get('settings',{});candidate=settings.get('candidate',{})
     identifier=candidate.get('id','');kind=model['kind']
+    if kind=='structural-training':
+        return dict(model='Structural family ranking model',k='All selected k families',candidate='',
+            coordinates=f"Trains after {len(settings['dependencies'])} native example blocks",basis='',origin='')
+    structural=kind in {'structural','structural-examples'}
     label=candidate.get('magnetic_space_group') or candidate.get('irrep') or identifier or 'Parent and profile'
     vector=settings.get('k',[])
-    choices=labels.get((kind,identifier),[])
+    choices=labels.get(('structural' if structural else kind,identifier),[])
     if vector:choices=[row for row in choices if row['k']==vector]
     if len(choices)==1:
         if not vector:vector=choices[0]['k']
-        if kind=='structural':
+        if structural:
             group=_method1_catalog_group(choices[0]['label'])
             if group:label=group['catalog_child_space_group_symbol']+' · '+label
     coordinates = ''
-    if kind == 'structural':
+    if structural:
         modes = candidate.get('modes')
         if dimensions is not None:
             coordinates = f'{dimensions[0]} native displacement coordinates · {dimensions[1]} lattice coordinates'
@@ -93,6 +97,10 @@ def entry_label(model, labels, *, dimensions=None):
             coordinates = f'{len(modes)} displacement modes in discovery; native count pending'
         else:
             coordinates = 'Native coordinate count unavailable'
+        if kind=='structural-examples':
+            first,last=settings['trajectory_slice']
+            label+=' · training patterns'
+            coordinates=f"Trajectories {first+1}–{last} of {settings['trajectories']} · "+coordinates
     return dict(model=label,k=', '.join(vector),candidate=identifier,
         coordinates=coordinates,
         basis=str(candidate.get('transformation_matrix',[])),origin=str(candidate.get('origin_shift',[])))

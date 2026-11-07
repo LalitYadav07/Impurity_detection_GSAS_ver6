@@ -1,0 +1,133 @@
+"""Finite example/training dependencies inside the existing preparation queue."""
+import copy
+from pathlib import Path
+import shutil
+
+from ..symmetry.compiler import file_sha
+from ..symmetry.contracts import digest,fields
+
+EXAMPLES='structural-examples'
+TRAINING='structural-training'
+
+
+def validate_entries(entries):
+    """A library cannot declare training on a missing or partial sample scope."""
+    from .structural_jobs import validate_examples,validate_training
+    examples={};training={};portfolios={};contexts={};training_contexts={}
+    for row in entries:
+        model=row['model'];kind=model['kind']
+        if kind in {EXAMPLES,TRAINING}:
+            fields(model,['kind','bank','instrument','grid','settings']+(['child'] if kind==EXAMPLES else []))
+        if kind==EXAMPLES:
+            request=dict(source='parent.cif',instrument=model['instrument'],child=model['child'],
+                grid=model['grid'],settings=model['settings'],destination='compiled')
+            settings=validate_examples(request)['settings']
+            if settings!=model['settings']:raise ValueError('Example settings must retain their complete declared defaults')
+            examples.setdefault(model['bank'],[]).append(row['id'])
+            contexts.setdefault(model['bank'],set()).add(digest([model['instrument'],model['grid']]))
+            portfolio=copy.deepcopy(model);portfolio['settings'].pop('trajectory_slice')
+            group=portfolios.setdefault(digest(portfolio),dict(total=settings['trajectories'],intervals=[]))
+            group['intervals'].append(settings['trajectory_slice'])
+        elif kind==TRAINING:
+            request=dict(source='parent.cif',instrument=model['instrument'],grid=model['grid'],
+                plan='plan.json',settings=model['settings'],destination='model')
+            settings=validate_training(request)['settings']
+            if settings!=model['settings'] or model['bank'] in training:
+                raise ValueError('A physical bank needs one complete training declaration')
+            training[model['bank']]=settings['dependencies']
+            training_contexts[model['bank']]=digest([model['instrument'],model['grid']])
+    if set(training)!=set(examples):
+        raise ValueError('Every structural example bank needs its dependent training entry')
+    for bank,keys in examples.items():
+        if training[bank]!=sorted(keys) or contexts[bank]!={training_contexts[bank]}:
+            raise ValueError('Training must include every declared example block for its bank')
+    for group in portfolios.values():
+        start=0
+        for lower,upper in sorted(group['intervals']):
+            if lower!=start:raise ValueError('Structural example trajectories must have no missing or overlapping slices')
+            start=upper
+        if start!=group['total']:
+            raise ValueError('Structural example slices must cover the complete declared trajectory portfolio')
+
+
+def example_models(models, *, trajectories=64, shard=8, steps=4, seed=89113):
+    """Expand each structural context into complete, disjoint trajectory slices."""
+    if (type(trajectories) is not int or not 1<=trajectories<=4096
+            or type(shard) is not int or not 1<=shard<=trajectories):
+        raise ValueError('Declare bounded complete structural trajectories and shard size')
+    result=[]
+    for model in models:
+        if model['kind']!='structural':continue
+        for first in range(0,trajectories,shard):
+            row=copy.deepcopy(model);row['kind']=EXAMPLES
+            row['settings'].update(seed=seed,trajectories=trajectories,steps=steps,
+                trajectory_slice=[first,min(first+shard,trajectories)])
+            result.append(row)
+    return result
+
+
+def append_training(declared, banks):
+    """Seal a single training entry per bank after its example identities exist."""
+    from .structural_jobs import validate_training
+    by_bank={}
+    for row in declared:
+        if row['kind']==EXAMPLES:by_bank.setdefault(row['bank'],[]).append(digest(row)[:24])
+    for bank,dependencies in sorted(by_bank.items()):
+        profile=banks[bank]
+        settings=validate_training(dict(source='parent.cif',instrument=profile['instrument'],
+            grid=profile['grid'],plan='plan.json',destination='model',
+            settings=dict(dependencies=sorted(dependencies))))['settings']
+        declared.append(dict(kind=TRAINING,bank=bank,settings=settings,**profile))
+
+
+def ready(library, model):
+    if model['kind']!=TRAINING:return True
+    return all(library.row(key)['state']=='prepared' for key in model['settings']['dependencies'])
+
+
+def dependencies(library, model):
+    """Read only verified artifacts belonging to this exact bank and scope."""
+    result=[]
+    keys=model['settings']['dependencies']
+    if not keys:raise ValueError('A library training entry needs its complete example dependencies')
+    for key in keys:
+        row=library.row(key);other=row['model']
+        if (row['state']!='prepared' or other['kind']!=EXAMPLES
+                or other['bank']!=model['bank'] or other['instrument']!=model['instrument']
+                or other['grid']!=model['grid']):
+            raise ValueError('Complete the exact bank’s structural example dependencies before training')
+        assets={Path(name).name:path for name,path in library.prepared_assets(key).items()}
+        if set(assets)!={'entry.json','examples.json','examples.npz'}:
+            raise ValueError('A training dependency has an incomplete example inventory')
+        result.append((key,assets))
+    return result
+
+
+def stage(library, model, payload, directory):
+    """Copy immutable dependency bytes into the job's recoverable input packet."""
+    from .structural_jobs import create_plan
+    directory=Path(directory);paths=[]
+    for key,assets in dependencies(library,model):
+        target=directory/'blocks'/key;target.mkdir(parents=True,exist_ok=True)
+        for name in ('examples.json','examples.npz'):
+            path=target/name;expected=file_sha(assets[name])
+            if path.is_symlink() or (path.exists() and file_sha(path)!=expected):
+                raise ValueError('A captured training dependency changed')
+            if not path.exists():shutil.copyfile(assets[name],path)
+            if file_sha(path)!=expected:raise ValueError('Training input changed while staging')
+        paths.append(target)
+    plan=directory/'training-plan.json'
+    create_plan(payload['source'],paths,plan,recover_identical=True)
+    payload['plan']=str(plan)
+    return payload
+
+
+def verify(library, model, request):
+    """Publication must still refer to every declared dependency, after recovery."""
+    from .structural_jobs import read_plan
+    plan=read_plan(request['plan'])
+    expected=[dict(directory='blocks/'+key,manifest_sha256=file_sha(assets['examples.json']),
+                   examples_sha256=file_sha(assets['examples.npz'])) for key,assets in dependencies(library,model)]
+    if (plan['blocks']!=expected or plan['parent_sha256']!=file_sha(request['source'])
+            or plan['instrument_sha256']!=file_sha(request['instrument'])):
+        raise ValueError('Training result no longer covers its exact library dependencies')

@@ -57,11 +57,12 @@ class PreparationMixin:
             prep_bank_rows=[],prep_reference='',prep_reference_options=[],prep_context_ready=False,prep_parent_title='',
             prep_kind='magnetic',prep_k_options=[],prep_selected_k=[],prep_custom_k='',prep_site_options=[],prep_sites=[],
             prep_site_rows=[],prep_maximum_moment='6',prep_mode_radius='.05',prep_cell_radius=format(DEFAULT_CELL_RADIUS,'g'),
-            prep_opd_policy='highest-symmetry-per-irrep',prep_construct_limit='100',prep_discovery_rows=[],
+            prep_opd_policy='all',prep_construct_limit='100',prep_discovery_rows=[],
             prep_discovery_ready=False,prep_candidate_count=0,prep_selected_banks=[],prep_inspected_banks=[],
             prep_parallel_jobs=2,prep_library='',prep_library_options=[],prep_entries=[],prep_coverage='',prep_active_jobs=0,
             prep_library_kind='',prep_can_pause=False,prep_can_resume=False,
-            prep_page=1,prep_pages=1,prep_entry_filter='all',prep_entry_search='',prep_table_count=0,
+            prep_page=1,prep_pages=1,prep_entry_filter='all',prep_stage_filter='all',prep_stage_rows=[],
+            prep_entry_search='',prep_table_count=0,
             prep_saved='',prep_saved_options=[],prep_import_path='',prep_import_source='upload',
             prep_history_archive='',prep_history_archives=[],prep_download_href='')
         for key,value in values.items():setattr(s,key,value)
@@ -71,7 +72,7 @@ class PreparationMixin:
         s.change('prep_sites')(self._preparation_site_selection_changed)
         s.change('prep_selected_banks')(self._preparation_count_changed)
         s.change('prep_library')(self._preparation_library_changed)
-        s.change('prep_page','prep_entry_filter','prep_entry_search')(self._preparation_table_changed)
+        s.change('prep_page','prep_entry_filter','prep_stage_filter','prep_entry_search')(self._preparation_table_changed)
         s.change('prep_profile_path')(self._preparation_profile_changed)
 
     def _preparation_store(self):
@@ -412,7 +413,7 @@ class PreparationMixin:
         s.prep_can_pause=False;s.prep_can_resume=False
         if not s.prep_library:
             s.prep_entries=[];s.prep_table_count=0;s.prep_pages=1
-            s.prep_coverage='';s.prep_library_kind=''
+            s.prep_coverage='';s.prep_library_kind='';s.prep_stage_rows=[]
             return
         try:
             store=self._preparation_store()
@@ -425,15 +426,27 @@ class PreparationMixin:
             kinds={r['model']['kind'] for r in library.document['entries']}
             s.prep_library_kind='Input inspection' if kinds=={'reference'} else 'Model preparation'
             s.prep_coverage=f"{counts['prepared']} prepared · {counts['preparing']} in preparation · {counts['pending']} pending · {counts['failed']+counts['cancelled']+counts['unsupported']} need attention · {coverage['total']} total"
+            titles={'reference':'Parent/profile inspection','magnetic':'Magnetic responses',
+                'structural':'Native starting curves','structural-examples':'Training pattern blocks',
+                'structural-training':'Ranking models'}
+            s.prep_stage_rows=[dict(kind=kind,title=titles[kind],total=sum(r['model']['kind']==kind for r in library.document['entries']),
+                prepared=sum(r['model']['kind']==kind and r['state']=='prepared' for r in library.document['entries']))
+                for kind in titles if kind in kinds]
             from .preparation_labels import scope_labels,entry_label,native_dimensions
             labels=scope_labels(library)
             text=str(s.prep_entry_search).strip().lower()[:200];rows=[]
             for row in library.document['entries']:
                 model=row['model'];candidate=model.get('settings',{}).get('candidate',{})
                 display=entry_label(model,labels)
+                reason=row['reason']
+                if model['kind']=='structural-training' and row['state']=='pending' and not reason:
+                    keys=model['settings']['dependencies']
+                    completed=sum(library.row(key)['state']=='prepared' for key in keys)
+                    reason=f'Waiting for native training patterns: {completed} / {len(keys)} blocks prepared.'
                 if s.prep_entry_filter!='all' and row['state']!=s.prep_entry_filter:continue
-                if text and text not in (' '.join(display.values())+' '+model['bank']+' '+row['reason']).lower():continue
-                rows.append(dict(id=row['id'],bank=model['bank'],**display,state=row['state'],reason=row['reason']))
+                if s.prep_stage_filter!='all' and model['kind']!=s.prep_stage_filter:continue
+                if text and text not in (' '.join(display.values())+' '+model['bank']+' '+reason).lower():continue
+                rows.append(dict(id=row['id'],bank=model['bank'],**display,state=row['state'],reason=reason))
             s.prep_table_count=len(rows);s.prep_pages=max(1,math.ceil(len(rows)/25))
             page=min(max(1,finite_number(s.prep_page,integer=True)),s.prep_pages)
             if page!=s.prep_page:s.prep_page=page
@@ -446,7 +459,7 @@ class PreparationMixin:
                 row.update(entry_label(entry['model'],labels,dimensions=native_dimensions(library,entry)))
             s.prep_entries=visible
         except (OSError,ValueError) as exc:
-            s.prep_entries=[];s.prep_table_count=0;s.prep_pages=1
+            s.prep_entries=[];s.prep_table_count=0;s.prep_pages=1;s.prep_stage_rows=[]
             s.prep_error=str(exc)
 
     def pause_preparation(self,**_):

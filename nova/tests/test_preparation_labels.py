@@ -20,6 +20,16 @@ def test_children_of_one_irrep_show_their_declared_subgroup_and_k():
     assert left['candidate']!=right['candidate']
 
 
+def test_training_pattern_shards_keep_the_model_scope_visible():
+    model=dict(kind='structural-examples',settings=dict(candidate=dict(id='one',irrep='GM3+',modes=['a']),
+        trajectory_slice=[8,16],trajectories=64))
+    labels={('structural','one'):[dict(k=['0','0','0'],label='P1 (a,0) 12 C2/m, basis={(1,2,0),(-1,0,0),(-1/3,-2/3,1/3)}')]}
+    result=entry_label(model,labels)
+    assert result['model']=='C2/m · GM3+ · training patterns'
+    assert result['k']=='0, 0, 0'
+    assert result['coordinates'].startswith('Trajectories 9–16 of 64')
+
+
 def test_legacy_and_ambiguous_scope_never_invent_a_propagation_vector():
     model=dict(kind='structural',settings=dict(candidate=dict(id='one',irrep='GM3+',modes=[])))
     assert entry_label(model,{})['k']==''

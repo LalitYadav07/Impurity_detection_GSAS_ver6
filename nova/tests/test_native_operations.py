@@ -24,22 +24,25 @@ def test_structural_training_capture_includes_all_declared_blocks_without_loadin
     from gpx_recipe.symmetry.compiler import file_sha
     root=tmp_path/'training';root.mkdir()
     source=root/'parent.cif';source.write_text('data_public_contract\n')
+    instrument=root/'profile.instprm';instrument.write_text('# transport profile\n')
     directory=root/'blocks/one';directory.mkdir(parents=True)
     # Opaque transport bytes: numerical validation belongs to the worker,
     # never a full-array load on the interactive application's capture path.
     (directory/'examples.npz').write_bytes(b'opaque transport control')
     (directory/'examples.json').write_text(json.dumps(dict(source_sha256=file_sha(source),
-        instrument_sha256='b'*64)))
-    plan=dict(schema=PLAN_SCHEMA,parent_sha256=file_sha(source),instrument_sha256='b'*64,
+        instrument_sha256=file_sha(instrument))))
+    plan=dict(schema=PLAN_SCHEMA,parent_sha256=file_sha(source),instrument_sha256=file_sha(instrument),
         blocks=[dict(directory='blocks/one',manifest_sha256=file_sha(directory/'examples.json'),
             examples_sha256=file_sha(directory/'examples.npz'))])
     (root/'plan.json').write_text(json.dumps(plan))
     descriptor=dict(id='parent-control',source_sha256=file_sha(source),dataset_id='parent-dataset')
     runtime=SimpleNamespace(service=SimpleNamespace(history_id='history-control'),
         resolve=lambda value:descriptor,dataset_id=lambda value:value['dataset_id'])
-    payload=dict(source=str(source),plan=str(root/'plan.json'),destination=str(root/'result'),settings={})
+    payload=dict(source=str(source),instrument=str(instrument),
+        grid=dict(kind='PNT',lower=3000.,upper=40000.,bins=701,bank=1),
+        plan=str(root/'plan.json'),destination=str(root/'result'),settings={})
     handle,files=capture(runtime,'preparation-structural-training',payload,root,descriptor,600)
-    assert set(files)=={'parent.cif','plan.json','blocks/one/examples.json','blocks/one/examples.npz'}
+    assert set(files)=={'parent.cif','profile.instprm','plan.json','blocks/one/examples.json','blocks/one/examples.npz'}
     assert set(handle['request']['input_hashes'])==set(files)
     descriptor['source_sha256']='f'*64
     with pytest.raises(ValueError,match='another Galaxy source'):

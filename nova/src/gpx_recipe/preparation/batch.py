@@ -21,6 +21,7 @@ from ..process import run_scientific, ScientificCancelled
 from ..symmetry.compiler import confined, file_sha, native_environment
 from ..symmetry.contracts import digest, fields
 from ..symmetry.resources import allocation
+from .worker import input_roles
 
 SCHEMA='radar-preparation-batch/v1'
 RESULT_SCHEMA='radar-preparation-batch-result/v1'
@@ -29,7 +30,8 @@ MAX_METADATA=8*1024*1024
 RESULT_BUDGET=480*1024*1024
 # Reserve the existing maximum scientific array/metadata bounds before
 # admitting a native task, then release unused space at its checked completion.
-RESERVES={'reference':72*1024*1024,'magnetic':144*1024*1024,'structural':400*1024*1024}
+RESERVES={'reference':72*1024*1024,'magnetic':144*1024*1024,'structural':400*1024*1024,
+          'structural-examples':184*1024*1024}
 
 
 def relative(value):
@@ -56,7 +58,7 @@ def validate_plan(value):
             raise ValueError('Invalid or duplicate preparation batch entry')
         seen.add(task['entry']);validate_request(task['kind'],task['request'])
         request=task['request']
-        for role in ['source','instrument']+(['child'] if task['kind']=='structural' else []):
+        for role in input_roles(task['kind']):
             relative(request[role])
         expected='tasks/'+task['entry']+'/attempt-'+str(task['attempt'])+'/compiled'
         if request['destination']!=expected:
@@ -83,7 +85,7 @@ def read_plan(path):
 def inputs(plan):
     validate_plan(plan)
     return sorted({task['request'][role] for task in plan['tasks']
-        for role in ['source','instrument']+(['child'] if task['kind']=='structural' else [])})
+        for role in input_roles(task['kind'])})
 
 
 def stage(library, entries, directory, *, workers=4, seconds=480):
@@ -96,7 +98,7 @@ def stage(library, entries, directory, *, workers=4, seconds=480):
     for entry,attempt in entries:
         request=stage_entry(library,entry,attempt,directory/'tasks'/entry/('attempt-'+str(attempt)))
         kind=library.row(entry)['model']['kind'];captured=copy.deepcopy(request)
-        for role in ['source','instrument']+(['child'] if kind=='structural' else []):
+        for role in input_roles(kind):
             path=Path(request[role]);checksum=file_sha(path)
             shared=directory/'shared'/(checksum+path.suffix.lower());shared.parent.mkdir(exist_ok=True)
             if not shared.exists():shutil.copyfile(path,shared)
@@ -157,8 +159,7 @@ def verify_result(task, request, row):
     if manifest_path.stat().st_size>MAX_METADATA or file_sha(manifest_path)!=result.get('entry_sha256'):
         raise ValueError('Preparation manifest changed')
     manifest=json.loads(manifest_path.read_text())
-    expected=[file_sha(request[k]) for k in ('source','instrument')+
-              (('child',) if task['kind']=='structural' else ())]
+    expected=[file_sha(request[k]) for k in input_roles(task['kind'])]
     if (manifest.get('schema')!='radar-experiment-preparation-entry/v1' or manifest.get('kind')!=task['kind']
             or manifest.get('input_sha256')!=expected or manifest.get('settings')!=request['settings']
             or manifest.get('grid')!=request['grid'] or manifest.get('observations_included') is not False
@@ -195,7 +196,7 @@ def execute(value, *, cancel=None, runner=run_task, clock=time.monotonic, enviro
                 if index is None:
                     stop_reason='batch_artifact_budget';break
                 task=remaining.pop(index);payload=copy.deepcopy(task['request'])
-                for role in ['source','instrument']+(['child'] if task['kind']=='structural' else []):
+                for role in input_roles(task['kind']):
                     payload[role]=str(confined(plan_path.parent,payload[role]))
                 if file_sha(payload['source'])!=source_sha:raise ValueError('Batch parent CIF changed between entries')
                 payload['destination']=str(confined(output,payload['destination'],exists=False))

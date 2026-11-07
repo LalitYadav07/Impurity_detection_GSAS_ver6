@@ -81,6 +81,7 @@ def scope_panel(app):
                 html.P('Bilbao receives the parent symmetry operations and requested k vectors. The service key remains in this session’s backend.',classes='text-caption')
             with html.Div(v_show="prep_kind === 'structural'"):
                 html.P('ISODISTORT receives the parent structure—cell, symmetry and atomic sites—to generate displacement-mode children. No measured diffraction pattern is uploaded.',classes='text-body-2')
+                html.P('Preparation also generates native patterns along 64 independent distortion/lattice trajectories per model and bank, then trains a compound-specific ranking model. Pattern generation, training and any failures appear separately in Libraries. The model orders candidates for native refinement; it does not establish a structure or discard alternatives.',classes='text-body-2')
                 v.VSelect(label='Structural candidate scope',v_model=('prep_opd_policy',),items=("[{title:'Highest symmetry per irrep',value:'highest-symmetry-per-irrep'},{title:'All returned order-parameter directions',value:'all'}]",),variant='outlined',density='compact',disabled=('prep_busy',))
                 with html.Details(classes='my-3'):
                     html.Summary('Structural construction and refinement limits',style='cursor:pointer')
@@ -91,7 +92,7 @@ def scope_panel(app):
                         with v.VCol(cols=12,md=4,style='box-sizing:border-box;min-width:0'):v.VTextField(label='Reciprocal-metric search radius',v_model=('prep_cell_radius',),type='text',inputmode='decimal',variant='outlined',density='compact',disabled=('prep_busy',),hint='Dimensionless reciprocal-cell bound. 0.01 does not mean ±1% of each lattice constant; accepted cells are checked separately.',persistent_hint=True)
             v.VBtn('Discover model families',id='preparation-discover',click=app.discover_preparation_models,disabled=('prep_busy || !prep_context_ready || !prep_selected_k.length',),variant='outlined',prepend_icon='mdi-file-search-outline')
             v.VDataTable(v_if='prep_discovery_rows.length',items=('prep_discovery_rows',),headers=("[{title:'Parent-basis k',key:'k'},{title:'Constructed candidates',key:'count'},{title:'Discovery status',key:'state'}]",),density='compact',items_per_page=10,classes='my-3')
-            html.P('{{ prep_candidate_count }} model/bank calculations in the currently selected scope.',v_if='prep_discovery_ready',classes='text-body-1 font-weight-bold')
+            html.P('{{ prep_candidate_count }} model/bank contexts in the selected scope. Structural training tasks are added automatically.',v_if='prep_discovery_ready',classes='text-body-1 font-weight-bold')
             v.VSelect(label='Concurrent Galaxy preparation jobs',v_model=('prep_parallel_jobs',),items=([1,2,4,8],),variant='outlined',density='compact',disabled=('prep_busy',),style='max-width:420px',hint='Native process pools respect the CPUs and memory actually granted by NDIP. This setting does not reserve resources.',persistent_hint=True)
             v.VBtn('Prepare selected models',id='preparation-start',click=app.start_preparation_models,disabled=('prep_busy || !prep_discovery_ready || !prep_selected_banks.length',),color='#15543c',variant='flat',prepend_icon='mdi-play',classes='mt-3')
 
@@ -110,8 +111,14 @@ def libraries_panel(app):
         with html.A(v_if='!!prep_download_href',href=('prep_download_href',),target='_blank',rel='noopener noreferrer',classes='radar-guide-link'):
             html.Span('Download the saved preparation ZIP')
         html.P('Prepared counts describe reference calculations, not accepted experimental fits. Actual-scan compatibility and native qualification are required before scientific use.',classes='text-body-2')
+        with html.Div(classes='d-flex flex-wrap my-3',style='gap:8px'):
+            v.VChip('{{ stage.title }}: {{ stage.prepared }} / {{ stage.total }}',v_for='stage in prep_stage_rows',
+                key='stage.kind',variant='tonal',color='#15543c')
         with v.VRow():
-            with v.VCol(cols=12,md=8):v.VTextField(label='Find a model, bank or message',v_model=('prep_entry_search',),variant='outlined',density='compact')
+            with v.VCol(cols=12,md=4):v.VTextField(label='Find a model, bank or message',v_model=('prep_entry_search',),variant='outlined',density='compact')
+            with v.VCol(cols=12,md=4):v.VSelect(label='Preparation stage',v_model=('prep_stage_filter',),
+                items=("[{title:'All stages',value:'all'},...prep_stage_rows.map(row=>({title:row.title,value:row.kind}))]",),
+                variant='outlined',density='compact')
             with v.VCol(cols=12,md=4):v.VSelect(label='Entry status',v_model=('prep_entry_filter',),items=([dict(title='All entries',value='all')]+[dict(title=x.capitalize(),value=x) for x in ['pending','preparing','prepared','failed','cancelled','unsupported']],),variant='outlined',density='compact')
         with v.VTable(density='compact',style='overflow-x:auto'):
             with html.Thead():

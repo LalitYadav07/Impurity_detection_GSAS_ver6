@@ -81,7 +81,8 @@ def validate_manifest(value):
                 or row['state'] not in STATES or type(row['attempt']) is not int or row['attempt'] < 0
                 or not isinstance(row['reason'], str) or len(row['reason']) > 2000
                 or not isinstance(row['model'], dict)
-                or row['model'].get('kind') not in {'reference', 'magnetic', 'structural'}
+                or row['model'].get('kind') not in {'reference', 'magnetic', 'structural',
+                                                 'structural-examples','structural-training'}
                 or not isinstance(row['model'].get('bank'), str) or not row['model']['bank']
                 or not isinstance(row['files'], list) or len(row['files']) > 200):
             raise ValueError('Invalid or duplicate preparation model record')
@@ -104,6 +105,9 @@ def validate_manifest(value):
                            models=[r['model'] for r in entries]))
     if value['id'] != identity[:24]:
         raise ValueError('Preparation identity differs from its exact inputs and model scope')
+    if any(row['model']['kind'] in {'structural-examples','structural-training'} for row in entries):
+        from .structural_dependencies import validate_entries
+        validate_entries(entries)
     # JSON values, including nested model/specification fields, remain data.
     if len(json.dumps(value, allow_nan=False)) > 8*1024*1024:
         raise ValueError('Preparation manifest exceeds its metadata budget')

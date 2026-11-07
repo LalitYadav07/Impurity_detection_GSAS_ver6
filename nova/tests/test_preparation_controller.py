@@ -48,6 +48,36 @@ def test_new_preparation_defaults_match_the_shared_structural_refinement_domain(
     application,_,_,_=app;s=application.server.state;settings=SearchSettings()
     assert float(s.prep_cell_radius)==settings.cell_radius
     assert float(s.prep_mode_radius)==settings.mode_radius
+    assert s.prep_opd_policy=='all'
+
+
+def test_structural_training_is_visible_and_separately_filterable(app,tmp_path):
+    from gpx_recipe.symmetry.compiler import file_sha
+    application,store,key,service=app;s=application.server.state
+    load_context(application,store,key,service,tmp_path)
+    directory=store.root/'structural-control';child=directory/'children/child.cif'
+    child.parent.mkdir(parents=True);child.write_text('data_public_scope_control\n')
+    record=catalog(PARENT,['0','0','0'],structural=True)
+    record['candidates'][0]['child']['sha256']=file_sha(child)
+    selected=store.create_models(key,name='Structural control',kind='structural',
+        catalogs=[dict(catalog=record,directory=str(directory))],bank_labels=['bank 1'])
+    s.prep_library=selected;application._preparation_table_changed()
+    stages={row['kind']:row['total'] for row in s.prep_stage_rows}
+    assert stages=={'structural':1,'structural-examples':8,'structural-training':1}
+    s.prep_stage_filter='structural-training';application._preparation_table_changed()
+    assert s.prep_table_count==1
+    assert s.prep_entries[0]['model']=='Structural family ranking model'
+    assert '0 / 8 blocks prepared' in s.prep_entries[0]['reason']
+    s.prep_stage_filter='structural';application._preparation_table_changed()
+    assert s.prep_table_count==1 and 'training patterns' not in s.prep_entries[0]['model']
+    queue=store.queue(selected);queue.resume(maximum_jobs=2)
+    first=queue.tick();jobs=first['queue']['jobs']
+    trainer=next(row['id'] for row in store.registry.get(selected).document['entries']
+        if row['model']['kind']=='structural-training')
+    assert all(job['mode']=='batch' for job in jobs)
+    assert trainer not in {member['entry'] for job in jobs for member in job['members']}
+    captured=[(job['id'],job['handle']['key']) for job in jobs]
+    assert [(job['id'],job['handle']['key']) for job in queue.tick()['queue']['jobs']]==captured
 
 
 def test_read_only_selection_caption_does_not_initialize_any_preparation_service():

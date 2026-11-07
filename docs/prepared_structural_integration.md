@@ -995,8 +995,27 @@ model JSON, numeric weights and training receipt. Large feature working files
 and native scratch do not leave the worker. Portable metadata must fit the
 same bound enforced by its reader before a completed model is published.
 
-These operations provide the application transport boundary, not yet an
-automatic UI training dependency or permission to prune candidates. Their
+Structural preparations created through the workspace now include the native
+starting bank, 64 distortion/lattice trajectories per model/bank in disjoint
+eight-trajectory blocks, and one dependent ranking-training entry per bank.
+All returned order-parameter directions are the initial discovery default;
+the selected k/OPD scope remains explicit. The library records the complete
+sample denominator. Missing or overlapping trajectory slices, omitted
+dependencies and different profile contexts cannot form a completed training
+declaration. The existing preparation queue admits training only after every
+declared block is prepared. A trainer owns a single Galaxy job and its own
+allocation-sized tensor pool, rather than nesting under a native batch pool.
+
+Libraries show separate starting-curve, pattern-block and ranking-model
+counts, with a stage filter and an explicit dependency-wait message. Completed
+model JSON, numeric weights and training receipt are published by the same
+checked entry mechanism and survive ordinary library ZIP export/import.
+Recovery reuses an identical captured training plan rather than submitting a
+replacement merely because the viewer was reopened. Settings use canonical
+JSON values, including augmentation intervals, across save/reload boundaries.
+
+These application dependencies do not grant permission to prune candidates.
+Model/Live/Webmon consumption of trained rankings, long training checkpoint/
+resume, broader sampling and scientific qualification remain required. The
 existing maximum native-job deadline still applies; interrupted jobs do not
-publish successful training receipts. Long training checkpoint/resume, broader
-sampling, automatic orchestration and scientific qualification remain required.
+publish successful training receipts.

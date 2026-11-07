@@ -43,7 +43,8 @@ def validate(value,library,runtime,identity):
             validate_handle(runtime,job['handle'])
             operation=job['handle']['request']['operation']
             if (job['handle']['source']!=identity or (job['mode']=='batch' and operation!='preparation-batch')
-                    or (job['mode']=='single' and operation not in {'preparation-magnetic','preparation-structural'})):
+                    or (job['mode']=='single' and operation not in {'preparation-magnetic','preparation-structural',
+                        'preparation-structural-examples','preparation-structural-training'})):
                 raise ValueError('Preparation handle names another source or operation')
         for member in job['members']:
             if (not isinstance(member,dict) or set(member)!={'entry','attempt'}

@@ -65,7 +65,7 @@ Azimuth:0
     dispatched = execute('structural-examples', dict(request,
         settings=dict(request['settings'], seed=1947, trajectories=3, steps=2)))
     assert dispatched['status'] == 'prepared'
-    assert dispatched['artifacts'] == ['examples.json', 'examples.npz']
+    assert dispatched['artifacts'] == ['examples.json', 'examples.npz', 'entry.json']
     result = json.loads((tmp_path/'examples/examples.json').read_text())
     assert result['examples'] == 7
     assert result['declared_child_group']['number'] == 63

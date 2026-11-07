@@ -17,6 +17,10 @@ from ..symmetry.contracts import digest, fields, number, validate_candidate, val
 from .reference import create_reference, validate_grid
 
 
+def input_roles(kind):
+    return ('source','instrument')+(('child',) if kind in {'structural','kernel','structural-examples'} else ())
+
+
 def validate_settings(kind, value):
     """Closed model choices; credentials, executable recipes and scores do not belong here."""
     if kind == 'reference':
