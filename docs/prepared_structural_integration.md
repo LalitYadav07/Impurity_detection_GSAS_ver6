@@ -736,3 +736,11 @@ Internal matched-work qualification can limit the number of complete updates
 per start. Such a receipt is explicitly unresolved; this limit is not exposed
 as a user accuracy setting and production callers leave it unset. Compare
 work counts as well as wall time when evaluating a faster implementation.
+
+Data-ranked starts retain a feasible displaced guess when every selected
+multistart point would otherwise have zero or negligible displacement. The
+best initial guess remains, the declared start count stays fixed, and all
+final displacement and cell coordinates remain free. This prevents a ranking
+filter from removing every attempt to escape a parent whose new reflection
+intensities have zero first derivative. It does not guarantee global coverage,
+establish a transition or override the unchanged-parent control.

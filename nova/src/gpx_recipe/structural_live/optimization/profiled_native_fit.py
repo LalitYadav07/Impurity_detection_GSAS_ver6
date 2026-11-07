@@ -245,7 +245,7 @@ def fit(source,table,observation,bank,*,seconds=120.,starts=4,seed=90231,warm=No
             if not allowed(z):rejected+=1;continue
             if any(np.linalg.norm(z[:d]-previous[:d])<=.2 for previous in exclusions):continue
             prior_ranked.append((cost,z))
-        selected=select_ensemble_starts(warm_ranked,prior_ranked,starts,d)
+        selected=select_ensemble_starts(warm_ranked,prior_ranked,starts,d,mode_dimensions=m)
         if not selected:raise ValueError('No feasible native starting point')
     except TimeoutError:
         selected=[]

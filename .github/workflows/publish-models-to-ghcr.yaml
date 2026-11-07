@@ -19,6 +19,7 @@ on:
       - tests/gpx_recipe/test_native_peak_batch*.py
       - tests/gpx_recipe/test_native_peak_derivative_batch*.py
       - tests/gpx_recipe/test_structural_live_profiled_native_fit.py
+      - tests/gpx_recipe/test_structural_start_diversity.py
       - tests/gpx_recipe/test_native_window_response*.py
       - tests/gpx_recipe/test_captured_cell_derivative*.py
       - tests/gpx_recipe/test_native_profile_capture.py
@@ -174,6 +175,7 @@ jobs:
             /validation/tests/gpx_recipe/test_native_peak_derivative_batch.py \
             /validation/tests/gpx_recipe/test_native_peak_derivative_batch_native.py \
             /validation/tests/gpx_recipe/test_structural_live_profiled_native_fit.py \
+            /validation/tests/gpx_recipe/test_structural_start_diversity.py \
             /validation/tests/gpx_recipe/test_native_window_response.py \
             /validation/tests/gpx_recipe/test_native_window_response_native.py \
             /validation/tests/gpx_recipe/test_native_profile_capture.py \
@@ -206,6 +208,6 @@ jobs:
             /validation/tests/gpx_recipe/test_prepared_k_series_native.py \
             /validation/tests/gpx_recipe/test_prepared_model_handoff_native.py \
             /validation/tests/gpx_recipe/test_structural_snapshot_job_native.py &&
-          python -c "import xml.etree.ElementTree as E; cases=E.parse(\"/tmp/preparation.xml\").findall(\".//testcase\"); assert len(cases)>=506 and all(c.find(\"skipped\") is None and c.find(\"failure\") is None and c.find(\"error\") is None for c in cases), \"Preparation native acceptance must run without skips\""'
+          python -c "import xml.etree.ElementTree as E; cases=E.parse(\"/tmp/preparation.xml\").findall(\".//testcase\"); assert len(cases)>=517 and all(c.find(\"skipped\") is None and c.find(\"failure\") is None and c.find(\"error\") is None for c in cases), \"Preparation native acceptance must run without skips\""'
       - name: Publish verified immutable image
         run: docker push "$IMAGE"
