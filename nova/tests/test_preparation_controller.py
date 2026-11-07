@@ -80,6 +80,21 @@ def test_structural_training_is_visible_and_separately_filterable(app,tmp_path):
     assert [(job['id'],job['handle']['key']) for job in queue.tick()['queue']['jobs']]==captured
 
 
+def test_failed_example_dependencies_explain_why_resume_cannot_start_training(app,tmp_path):
+    from test_structural_preparation_dependencies import library_inputs
+    application,store,_,_=app;s=application.server.state
+    library,_=library_inputs(tmp_path/'failure-control')
+    for row in library.document['entries']:
+        if row['model']['kind']=='structural-examples':
+            attempt=library.start(row['id']);library.finish(row['id'],attempt,state='failed',reason='Synthetic failure')
+    archive=tmp_path/'failure.zip';library.export(archive)
+    s.prep_library=store.import_archive(archive)['library'];s.prep_stage_filter='structural-training'
+    application._prep_refresh()
+    assert not s.prep_can_resume and not s.prep_can_pause
+    assert '2 blocks need attention' in s.prep_entries[0]['reason']
+    assert '0 / 2 blocks prepared' in s.prep_entries[0]['reason']
+
+
 def test_read_only_selection_caption_does_not_initialize_any_preparation_service():
     class ReadOnlyHistory:
         def __getattr__(self,name):raise AssertionError('A caption must not access the service: '+name)

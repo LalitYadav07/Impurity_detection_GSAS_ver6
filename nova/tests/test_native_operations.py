@@ -17,6 +17,30 @@ from radar_pd_nova.refinement_runtime import RuntimeUnavailable
 from test_model_runtime import remote
 
 
+def test_simultaneous_viewers_share_one_submission_when_file_locks_are_process_scoped(remote,tmp_path,monkeypatch):
+    import fcntl
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+    monkeypatch.setattr(fcntl,'flock',lambda *args:None)
+    runtime,service,source=remote
+    root,payload=inputs(tmp_path,source)
+    viewers=[GalaxyModelRuntime(runtime.root,service,poll_seconds=.001) for _ in range(4)]
+    for viewer in viewers:
+        monkeypatch.setattr(viewer,'find_dispatch',lambda key:service.jobs.get(key))
+        monkeypatch.setattr(viewer,'wait_capacity',lambda cancel=None:None)
+    original=service.submit_utility
+    def slow_post(**kwargs):
+        time.sleep(.01);return original(**kwargs)
+    monkeypatch.setattr(service,'submit_utility',slow_post)
+    barrier=threading.Barrier(4)
+    def submit(viewer):
+        barrier.wait(timeout=10)
+        return viewer.submit_native('inspect',payload,root,source=source)
+    with ThreadPoolExecutor(max_workers=4) as pool:handles=list(pool.map(submit,viewers))
+    assert len({h['key'] for h in handles})==1 and len(service.submissions)==1
+    assert len({h['job']['galaxy_job_id'] for h in handles})==1
+
+
 def test_structural_training_capture_includes_all_declared_blocks_without_loading_arrays(tmp_path):
     from types import SimpleNamespace
     from radar_pd_nova.native_operations import capture

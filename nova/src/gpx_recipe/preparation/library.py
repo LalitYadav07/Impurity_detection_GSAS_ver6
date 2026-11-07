@@ -8,11 +8,11 @@ from pathlib import Path, PurePosixPath
 import re
 import shutil
 import stat
-import threading
 import uuid
 import zipfile
 
 from ..execution import write_json
+from ..locking import file_lock
 from ..symmetry.contracts import digest
 
 SCHEMA = 'radar-experiment-preparation-library/v1'
@@ -22,6 +22,7 @@ SUFFIXES = {'.json', '.npz', '.cif', '.instprm', '.prm', '.ins', '.inst', '.txt'
 MAX_BYTES = 2*1024**3
 MAX_FILES = 20000
 MAX_MODELS = 5000
+MAX_METADATA = 8*1024**2
 
 
 def sha(path):
@@ -109,7 +110,10 @@ def validate_manifest(value):
         from .structural_dependencies import validate_entries
         validate_entries(entries)
     # JSON values, including nested model/specification fields, remain data.
-    if len(json.dumps(value, allow_nan=False)) > 8*1024*1024:
+    # Match the actual stored bytes, including the newline. Pretty-printing
+    # repeated native mode inventories could pass admission and then exceed
+    # the reader limit, making a newly created multi-bank library unreadable.
+    if len((json.dumps(value,separators=(',', ':'),allow_nan=False)+'\n').encode('utf-8')) > MAX_METADATA:
         raise ValueError('Preparation manifest exceeds its metadata budget')
     return value
 
@@ -118,9 +122,8 @@ class PreparationLibrary:
     """One durable model/bank denominator; retries never erase past coverage."""
     def __init__(self, root):
         self.root = Path(root).resolve()
-        self._lock = threading.RLock()
         self.path = self.root/'library.json'
-        if not self.path.is_file() or self.path.stat().st_size > 8*1024*1024:
+        if not self.path.is_file() or self.path.stat().st_size > MAX_METADATA:
             raise ValueError('Preparation library manifest is absent or oversized')
         self.document = validate_manifest(json.loads(self.path.read_text()))
         self.verify()
@@ -151,7 +154,7 @@ class PreparationLibrary:
                 specification=specification, specification_sha256=specification_sha256,
                 inputs=captured, entries=rows, observations_included=False, scientific_result=False)
             validate_manifest(document)
-            write_json(root/'library.json', document)
+            write_json(root/'library.json', document, compact=True)
             return cls(root)
         except Exception:
             shutil.rmtree(root)
@@ -166,7 +169,7 @@ class PreparationLibrary:
 
     def _read_document(self):
         if (self.path.is_symlink() or not self.path.is_file()
-                or self.path.stat().st_size > 8*1024*1024):
+                or self.path.stat().st_size > MAX_METADATA):
             raise ValueError('Preparation library manifest is absent or oversized')
         return validate_manifest(json.loads(self.path.read_text()))
 
@@ -237,14 +240,9 @@ class PreparationLibrary:
 
     @contextmanager
     def _transaction(self):
-        import fcntl
-        with self._lock, (self.root/'.library.lock').open('a+b') as stream:
-            fcntl.flock(stream, fcntl.LOCK_EX)
-            try:
-                self.refresh()
-                yield
-            finally:
-                fcntl.flock(stream, fcntl.LOCK_UN)
+        with file_lock(self.root/'.library.lock'):
+            self.refresh()
+            yield
 
     def row(self, identifier):
         matches = [r for r in self.document['entries'] if r['id'] == identifier]
@@ -355,7 +353,7 @@ class PreparationLibrary:
     def _save(self):
         validate_manifest(self.document)
         self._check_budget()
-        write_json(self.path, self.document)
+        write_json(self.path, self.document, compact=True)
 
     def export(self, destination):
         with self._transaction():
@@ -397,7 +395,7 @@ def import_library(archive, destination):
                         or member.flag_bits & 1):
                     raise ValueError('Preparation archive contains an unsupported entry')
             manifest_info = packet.getinfo('library.json')
-            if manifest_info.file_size > 8*1024*1024:
+            if manifest_info.file_size > MAX_METADATA:
                 raise ValueError('Preparation manifest exceeds its metadata budget')
             document = validate_manifest(json.loads(packet.read('library.json')))
             expected = {'library.json'} | {a['path'] for a in document['inputs']}

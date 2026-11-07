@@ -306,7 +306,15 @@ class PreparationQueue:
                 state['jobs'].append(job);self._save(state)
                 for member in members:self._ensure_attempt(member)
                 self._submit(state,job)
+            from gpx_recipe.preparation.structural_dependencies import blocked_training
+            blocked=blocked_training(self.library)
+            active=sum(j['phase']!='collected' for j in state['jobs'])
+            # A failed generation block cannot resolve by polling a waiting
+            # trainer. Finish ready sibling work, then pause for explicit retry.
+            if (blocked and not active and not state['paused']
+                    and not pending_entries(self.library,deferred=self._deferred(state))):
+                state['paused']=True;self._paused.set();self._save(state,remote=True)
             self._save(state)
             return dict(queue=copy.deepcopy(state),coverage=self.library.coverage(),
-                active=sum(j['phase']!='collected' for j in state['jobs']),
-                deferred=len(self._deferred(state)),effective_job_limit=limit)
+                active=active,deferred=len(self._deferred(state)),effective_job_limit=limit,
+                blocked_training=blocked)

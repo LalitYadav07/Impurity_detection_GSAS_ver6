@@ -81,13 +81,8 @@ def handle_path(root, key):
 
 @contextmanager
 def intent_lock(path):
-    import fcntl
-    with path.with_suffix('.lock').open('a+b') as stream:
-        fcntl.flock(stream, fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(stream, fcntl.LOCK_UN)
+    from gpx_recipe.locking import file_lock
+    with file_lock(path.with_suffix('.lock')):yield
 
 
 def capture(runtime, operation, payload, root, source, timeout, preparation_attempt=None):

@@ -1014,6 +1014,36 @@ Recovery reuses an identical captured training plan rather than submitting a
 replacement merely because the viewer was reopened. Settings use canonical
 JSON values, including augmentation intervals, across save/reload boundaries.
 
+When a prerequisite pattern block fails, ready sibling work can finish. Once
+no work remains runnable, the queue pauses and names the failed dependencies
+instead of polling a trainer indefinitely. Explicit retry retains completed
+blocks and the original denominator.
+
+Completed rankers can now travel in the same immutable structural input
+snapshot as native starting banks and shared profile tables. The capture binds
+parent CIF, instrument file, bank grid, model metadata and numeric weights.
+Exact candidate definitions determine routes; a protocol selecting fewer k
+families never acquires other candidates from a broader trained library.
+The shared worker-side advisory reader retains every protocol candidate and
+falls back to the complete native order on corrupt assets, missing ranges or
+unsupported patterns. Its caller must select the exact checked entry: a
+multi-bank instrument file's checksum alone cannot identify the right bank.
+This transport/inference API does not yet schedule the actual Model/Live
+campaign from its scores. Native source/profile admission and that scheduling
+handoff remain implementation work.
+
+Library manifests use compact JSON and check the same encoded byte count that
+the reader accepts. This avoids admitting a multi-bank plan whose pretty
+printed file is too large to reopen. The metadata and file-count limits remain
+in force; larger scopes must be rejected before calculation rather than
+silently omitting candidates or trajectories.
+
+Entry admission and native dispatch intents use the same process-local plus
+file-lock helper. Separate objects in one worker remain serialized when a
+container-shared filesystem provides process-scoped file-lock semantics. A
+new viewer still recovers the original dispatch rather than posting a second
+job. The cross-process file lock remains in place.
+
 These application dependencies do not grant permission to prune candidates.
 Model/Live/Webmon consumption of trained rankings, long training checkpoint/
 resume, broader sampling and scientific qualification remain required. The

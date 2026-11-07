@@ -195,13 +195,17 @@ def train(cohort, destination, *, epochs=60, seed=89113, threads=4):
 
 class Ranker:
     """A validated local CNN can order all families; it cannot prune them."""
-    def __init__(self, directory, *, threads=1):
+    def __init__(self, directory, *, threads=1, metadata_name='model.json', weights_name='weights.npz'):
         import torch
         self.allocation = allocation(threads)
         torch.set_num_threads(self.allocation['workers'])
         directory = Path(directory)
-        d = json.loads(read_bounded(directory/'model.json', MAX_METADATA_BYTES))
-        raw = read_bounded(directory/'weights.npz', MAX_BYTES)
+        if (any(not isinstance(name,str) or not name or Path(name).name!=name
+                for name in (metadata_name,weights_name))
+                or not metadata_name.endswith('.json') or not weights_name.endswith('.npz')):
+            raise ValueError('Structural model assets must be data files within one captured directory')
+        d = json.loads(read_bounded(directory/metadata_name, MAX_METADATA_BYTES))
+        raw = read_bounded(directory/weights_name, MAX_BYTES)
         classes = d.get('classes'); bins = d.get('bins')
         if (d.get('schema') not in {SCHEMA,'radar-structural-ranking-model/v3'} or d.get('architecture') != ARCHITECTURE
                 or d.get('weights_sha256') != hashlib.sha256(raw).hexdigest()

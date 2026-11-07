@@ -353,7 +353,9 @@ class PreparationMixin:
                     await self._prep_load_reference(key)
                 if key==s.prep_library:
                     s.prep_active_jobs=result['active'];self._preparation_table_changed()
-                    if result['coverage']['complete'] and not s.prep_busy:
+                    if result.get('blocked_training') and not result['active'] and not s.prep_busy:
+                        s.prep_message='Ranking-model training is waiting for failed pattern blocks. Retry the entries needing attention, then resume preparation. Completed blocks remain available.'
+                    elif result['coverage']['complete'] and not s.prep_busy:
                         if not result['coverage']['all_prepared']:
                             s.prep_message='Preparation stopped with entries needing attention. Successful sibling artifacts remain available.'
                         elif s.prep_library_kind=='Input inspection':
@@ -422,7 +424,10 @@ class PreparationMixin:
             paused=queue.snapshot()['paused'] if queue else True
             unfinished=bool(counts['pending'] or counts['preparing'])
             s.prep_can_pause=bool(unfinished and queue and not paused)
-            s.prep_can_resume=bool(unfinished and paused)
+            from gpx_recipe.preparation.structural_dependencies import ready
+            runnable=bool(counts['preparing'] or any(row['state']=='pending' and ready(library,row['model'])
+                for row in library.document['entries']))
+            s.prep_can_resume=bool(runnable and paused)
             kinds={r['model']['kind'] for r in library.document['entries']}
             s.prep_library_kind='Input inspection' if kinds=={'reference'} else 'Model preparation'
             s.prep_coverage=f"{counts['prepared']} prepared · {counts['preparing']} in preparation · {counts['pending']} pending · {counts['failed']+counts['cancelled']+counts['unsupported']} need attention · {coverage['total']} total"
@@ -443,6 +448,8 @@ class PreparationMixin:
                     keys=model['settings']['dependencies']
                     completed=sum(library.row(key)['state']=='prepared' for key in keys)
                     reason=f'Waiting for native training patterns: {completed} / {len(keys)} blocks prepared.'
+                    failed=sum(library.row(key)['state'] in {'failed','cancelled','unsupported'} for key in keys)
+                    if failed:reason+=f" {failed} {'block needs' if failed==1 else 'blocks need'} attention before training can start."
                 if s.prep_entry_filter!='all' and row['state']!=s.prep_entry_filter:continue
                 if s.prep_stage_filter!='all' and model['kind']!=s.prep_stage_filter:continue
                 if text and text not in (' '.join(display.values())+' '+model['bank']+' '+reason).lower():continue

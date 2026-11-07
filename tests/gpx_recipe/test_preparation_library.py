@@ -19,6 +19,29 @@ def library(tmp_path):
         inputs={'parent.cif': cif, 'profiles/bank.instprm': profile})
 
 
+def test_published_metadata_budget_matches_creation_mutation_and_import(tmp_path,monkeypatch):
+    from gpx_recipe.preparation import library as module
+    lib=library(tmp_path)
+    compact=len((json.dumps(lib.document,separators=(',',':'))+'\n').encode())
+    pretty=len((json.dumps(lib.document,indent=2)+'\n').encode())
+    limit=(compact+pretty)//2
+    assert compact<limit<pretty
+    monkeypatch.setattr(module,'MAX_METADATA',limit)
+    first=lib.document['entries'][0]['id'];lib.start(first)
+    assert lib.path.stat().st_size<=limit
+    reopened=PreparationLibrary(lib.root);assert reopened.document==lib.document
+    archive=tmp_path/'compact.zip';lib.export(archive)
+    restored=import_library(archive,tmp_path/'restored')
+    assert restored.document==lib.document and len(restored.document['entries'])==4
+
+
+def test_oversized_metadata_is_rejected_before_an_unreadable_library_is_published(tmp_path,monkeypatch):
+    from gpx_recipe.preparation import library as module
+    monkeypatch.setattr(module,'MAX_METADATA',1)
+    with pytest.raises(ValueError,match='metadata budget'):library(tmp_path)
+    assert not (tmp_path/'library').exists()
+
+
 def prepare_one(lib, identifier):
     attempt = lib.start(identifier)
     folder = lib.root/'entries'/identifier; folder.mkdir(parents=True)
@@ -56,16 +79,27 @@ def test_recovery_does_not_start_an_entry_already_owned_by_another_attempt(tmp_p
     assert PreparationLibrary(lib.root).row(identifier)['attempt'] == second
 
 
-def test_simultaneous_entry_admission_has_one_owner(tmp_path):
-    lib = library(tmp_path); identifier = lib.document['entries'][0]['id']
-    def start(_):
-        try:
-            return PreparationLibrary(lib.root).start(identifier)
-        except ValueError:
-            return 'already owned'
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        results = list(pool.map(start, range(2)))
-    assert sorted(str(v) for v in results) == ['1', 'already owned']
+@pytest.mark.parametrize('file_lock_effective',[True,False])
+def test_simultaneous_entry_admission_has_one_owner(tmp_path,monkeypatch,file_lock_effective):
+    import fcntl
+    import threading
+    import time
+    if not file_lock_effective:monkeypatch.setattr(fcntl,'flock',lambda *args:None)
+    lib=library(tmp_path)
+    refresh=PreparationLibrary.refresh
+    def slow_refresh(self):
+        result=refresh(self);time.sleep(.01);return result
+    monkeypatch.setattr(PreparationLibrary,'refresh',slow_refresh)
+    # Independent views begin from the same saved state. Widen the interval
+    # after reading it so a per-instance lock cannot pass by lucky scheduling.
+    for row in lib.document['entries']:
+        identifier=row['id'];barrier=threading.Barrier(4)
+        def start(_):
+            instance=PreparationLibrary(lib.root);barrier.wait(timeout=10)
+            try:return instance.start(identifier)
+            except ValueError:return 'already owned'
+        with ThreadPoolExecutor(max_workers=4) as pool:results=list(pool.map(start,range(4)))
+        assert sorted(str(v) for v in results)==['1','already owned','already owned','already owned']
 
 
 @pytest.mark.parametrize('target', ['input', 'response', 'manifest'])

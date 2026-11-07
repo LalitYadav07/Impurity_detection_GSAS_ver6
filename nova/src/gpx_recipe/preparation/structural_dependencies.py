@@ -85,6 +85,17 @@ def ready(library, model):
     return all(library.row(key)['state']=='prepared' for key in model['settings']['dependencies'])
 
 
+def blocked_training(library):
+    """Report failed prerequisites without changing or narrowing the plan."""
+    library.refresh();rows={r['id']:r for r in library.document['entries']};blocked=[]
+    for row in rows.values():
+        if row['model']['kind']!=TRAINING or row['state']!='pending':continue
+        failures=[key for key in row['model']['settings']['dependencies']
+                  if rows[key]['state'] in {'failed','cancelled','unsupported'}]
+        if failures:blocked.append(dict(entry=row['id'],dependencies=failures))
+    return blocked
+
+
 def dependencies(library, model):
     """Read only verified artifacts belonging to this exact bank and scope."""
     result=[]

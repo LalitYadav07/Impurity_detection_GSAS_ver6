@@ -126,6 +126,33 @@ def test_model_plan_inherits_only_profile_dependencies_its_engine_consumes(works
     if references:assert references[0]['model']['bank']==row['model']['bank']
 
 
+def test_failed_pattern_dependencies_pause_training_until_explicit_retry(workspace,tmp_path):
+    from test_structural_preparation_dependencies import library_inputs
+    from gpx_recipe.preparation.structural_dependencies import TRAINING
+    w,_,service=workspace
+    control,_=library_inputs(tmp_path/'structural-control')
+    archive=tmp_path/'control.zip';control.export(archive)
+    key=w.import_archive(archive)['library'];w.start(key,maximum_jobs=1)
+    initial=w.tick(key);assert initial['active']==1
+    job=initial['queue']['jobs'][0]
+    complete(w.queue(key),service,job,tmp_path,
+             states={m['entry']:'failed' for m in job['members']})
+    result=w.tick(key)
+    library=w.registry.get(key)
+    trainer=next(r for r in library.document['entries'] if r['model']['kind']==TRAINING)
+    assert result['active']==0 and result['queue']['paused']
+    assert result['coverage']['counts']['failed']==2 and result['coverage']['counts']['pending']==1
+    assert result['blocked_training']==[dict(entry=trainer['id'],dependencies=trainer['model']['settings']['dependencies'])]
+    assert not result['coverage']['complete']  # No failed block is dropped.
+    assert len(service.submissions)==1
+    assert w.tick(key)['queue']['paused'] and len(service.submissions)==1
+    for row in library.document['entries']:
+        if row['state']=='failed':library.retry(row['id'])
+    w.start(key,maximum_jobs=1);resumed=w.tick(key)
+    assert not resumed['queue']['paused'] and resumed['active']==1
+    assert len(service.submissions)==2 and not resumed['blocked_training']
+
+
 @pytest.mark.parametrize('cause',['incomplete','setting','duplicate','empty','ion','bank'])
 def test_unresolved_or_incompatible_discovery_does_not_start_a_hidden_narrower_plan(workspace,tmp_path,cause):
     w,key,service=workspace;finish_inspection(w,key,service,tmp_path)
