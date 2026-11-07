@@ -866,3 +866,51 @@ work, and a bound table is not reported as used until the renderer consumes
 its interpolation cells. The original fitting objective, derivatives and
 independent exported-GPX checks remain unchanged. Portable component reuse
 does not establish full-fit acceleration, convergence or scientific recovery.
+
+## Structural candidate-ranking development
+
+The structural preparation direction now also includes an observation-free
+training path. `preparation.structural_examples.generate` creates native
+patterns along physically normalized displacement and symmetry-compatible
+cell trajectories. It retains the exact child embedding and modes, checks
+the complete geometry's symmetry at two tolerances, and stores the native
+background separately. A tolerance-ambiguous geometry remains ambiguous; the
+declared child is not imposed as the label of every sampled configuration.
+Expensive children can be split into isolated trajectory shards. A shard uses
+the same complete seeded physical portfolio and global trajectory identities;
+it renders only its declared interval. Concatenating its non-parent rows
+reproduces an unsharded run exactly. This permits a work-conserving scheduler
+to share one expensive child's work instead of leaving cores idle at the tail
+of a model-by-model queue. Native initialization still occurs in each shard.
+
+`preparation.structural_cohort.read_block` checks bounded, data-only numerical
+files and their exact input identities. `assemble` removes the supplied native
+background for feature construction, retains peak maxima as well as integrated
+intensity, and connects complete trajectory groups before assigning holdouts.
+Identical features with different compatible labels retain the union of those
+labels. They are not dropped or assigned a convenient compulsory class.
+Different profiles currently require separate models; multi-bank score fusion
+needs independent validation.
+
+`preparation.structural_ranker.train` trains a compound/profile-specific CNN
+inside the existing CPU/RAM allocation guard. Validation selects a frozen
+checkpoint before the test holdout is inspected. Model files contain JSON and
+bounded numeric tensors, never executable serialized Python objects. `Ranker`
+checks tensor inventory, shapes, finite normalization, file integrity and exact
+parent/profile identities before inference. Unsupported masked intervals fail
+explicitly rather than acquiring complete-range confidence.
+
+This is development infrastructure, not a qualified candidate-pruning engine
+or a released UI workflow. Returned scores order every available space-group
+family and always require native refinement. A saved qualification flag cannot
+authorize exclusion. The exact child/irrep/transformation/origin definitions
+remain in model metadata and the matching preparation library; a space-group
+number alone is insufficient to reconstruct a refinement candidate.
+
+Before automatic shortlisting, acceptance must cover independent distortion
+directions, weak/near-parent changes, realistic profile and background errors,
+unknown or missing families, mixtures and real held-out series. Report family
+recall and native-fit outcomes as well as classifier accuracy. Five is an
+initial shortlist target; experimentally indistinguishable alternatives and
+failed adequacy require expansion. Extended k catalogs, automatic expansion,
+Model/Live handoffs and scientific acceptance are still integration work.

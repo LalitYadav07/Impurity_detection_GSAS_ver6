@@ -46,6 +46,11 @@ on:
       - tests/gpx_recipe/test_tof_profile_arrays.py
       - tests/gpx_recipe/test_tof_profile_hints.py
       - tests/gpx_recipe/test_prepared_tof_profile_handoff_native.py
+      - tests/gpx_recipe/test_structural_ranker_sampling.py
+      - tests/gpx_recipe/test_structural_ranker_features.py
+      - tests/gpx_recipe/test_structural_ranker_cohort.py
+      - tests/gpx_recipe/test_structural_ranker_training_native.py
+      - tests/gpx_recipe/test_structural_ranking_examples_native.py
       - tests/gpx_recipe/test_native_cell_proposals.py
       - tests/gpx_recipe/test_structural_background_context*.py
       - tests/gpx_recipe/test_structural_snapshot_job_native.py
@@ -199,6 +204,11 @@ jobs:
             /validation/tests/gpx_recipe/test_tof_profile_arrays.py \
             /validation/tests/gpx_recipe/test_tof_profile_hints.py \
             /validation/tests/gpx_recipe/test_prepared_tof_profile_handoff_native.py \
+            /validation/tests/gpx_recipe/test_structural_ranker_sampling.py \
+            /validation/tests/gpx_recipe/test_structural_ranker_features.py \
+            /validation/tests/gpx_recipe/test_structural_ranker_cohort.py \
+            /validation/tests/gpx_recipe/test_structural_ranker_training_native.py \
+            /validation/tests/gpx_recipe/test_structural_ranking_examples_native.py \
             /validation/tests/gpx_recipe/test_structural_start_diversity.py \
             /validation/tests/gpx_recipe/test_profiled_qualification.py \
             /validation/tests/gpx_recipe/test_native_window_response.py \
