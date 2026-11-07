@@ -59,6 +59,7 @@ on:
       - tests/gpx_recipe/test_structural_preparation_dependencies.py
       - tests/gpx_recipe/test_structural_preparation_dependencies_native.py
       - tests/gpx_recipe/test_preparation_structural_ranking_hints.py
+      - tests/gpx_recipe/test_structural_ranking_*.py
       - tests/gpx_recipe/test_preparation_library.py
       - tests/gpx_recipe/test_native_cell_proposals.py
       - tests/gpx_recipe/test_structural_background_context*.py
@@ -226,6 +227,10 @@ jobs:
             /validation/tests/gpx_recipe/test_structural_preparation_dependencies.py \
             /validation/tests/gpx_recipe/test_structural_preparation_dependencies_native.py \
             /validation/tests/gpx_recipe/test_preparation_structural_ranking_hints.py \
+            /validation/tests/gpx_recipe/test_structural_ranking_domain.py \
+            /validation/tests/gpx_recipe/test_structural_ranking_result.py \
+            /validation/tests/gpx_recipe/test_structural_ranking_dispatch.py \
+            /validation/tests/gpx_recipe/test_structural_ranking_admission_native.py \
             /validation/tests/gpx_recipe/test_preparation_library.py \
             /validation/tests/gpx_recipe/test_structural_start_diversity.py \
             /validation/tests/gpx_recipe/test_profiled_qualification.py \

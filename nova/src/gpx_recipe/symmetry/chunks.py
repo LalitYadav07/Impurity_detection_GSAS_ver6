@@ -22,7 +22,7 @@ from .resources import allocation
 
 def validate_request(request):
     required={'schema','protocol','protocol_sha256','trials','workers','dispatch_key','seconds'}
-    optional={'template','source_identity','origin','profiled_cache','prepared_scattering'}
+    optional={'template','source_identity','origin','profiled_cache','prepared_scattering','rank_structural'}
     if not isinstance(request,dict) or set(request)-required-optional or required-set(request) or request['schema']!='radar-model-chunk/v1':
         raise ValueError('Invalid model chunk request')
     protocol=validate_protocol(request['protocol'])
@@ -38,6 +38,8 @@ def validate_request(request):
     if 'prepared_scattering' in request:
         from ..preparation.hints import validate
         validate(request['prepared_scattering'],protocol)
+    if 'rank_structural' in request and (type(request['rank_structural']) is not bool or protocol['kind']!='structural'):
+        raise ValueError('Structural advisory ranking ownership needs an explicit boolean and structural protocol')
     if not isinstance(request['trials'],list) or not 1<=len(request['trials'])<=256 or len(set(request['trials']))!=len(request['trials']):
         raise ValueError('Declare one to 256 unique starts in a chunk')
     expected={trial_id(protocol,c['id'],s['id']):(c['id'],s['id']) for c,s in iter_trials(protocol)}
@@ -115,6 +117,28 @@ def run_profiled_group(directories,*,cancel,timeout,workers=1):
     return rows,pending
 
 
+def run_structural_ranking(protocol,captured,directory,*,snapshot,cancel,timeout):
+    """Optional, source-bound advisory work shares the first scientific launch.
+
+    Native global state and model inference stay in an isolated process. A
+    failed or timed-out ranking preserves the complete native search order.
+    """
+    from .compiler import native_environment
+    from ..preparation.structural_ranking_result import unavailable,validate
+    output=directory/'structural-ranking';began=time.monotonic()
+    try:
+        with (directory/'structural-ranking.log').open('w') as log:
+            result=run_scientific([sys.executable,'-m','gpx_recipe.preparation.structural_ranking_native',
+                str(captured),str(output)],timeout=timeout,cancel_event=cancel,cwd=directory,
+                env=native_environment(),stdout=log,stderr=subprocess.STDOUT)
+        if result.returncode:raise ValueError('Isolated native ranking worker did not complete')
+        value=json.loads((output/'ranking.json').read_text())
+        return validate(value,protocol,snapshot=snapshot)
+    except (OSError,ValueError,KeyError,TypeError,ScientificCancelled,subprocess.TimeoutExpired) as error:
+        return unavailable(protocol,'Prepared ranking unavailable: '+str(error)[:600],snapshot=snapshot,
+                           seconds=min(3600.,time.monotonic()-began))
+
+
 def execute_chunk(request, input_root, directory, *, cancel=None, runner=run_trial, clock=time.monotonic, environ=None):
     protocol,expected=validate_request(request)
     budget=allocation(request['workers'],environ=environ)
@@ -140,6 +164,14 @@ def execute_chunk(request, input_root, directory, *, cancel=None, runner=run_tri
         candidate,seed=expected[key]
         compile_shared_job(protocol,directory/'trials'/key,candidate_id=candidate,seed_id=seed,approved_hash=digest(protocol))
     started=clock();deadline=started+request['seconds']
+    structural_ranking=None
+    if (protocol['kind']=='structural' and request.get('rank_structural',True)
+            and request.get('prepared_scattering',{}).get('ranking_models',{}).get('entries')):
+        structural_ranking=run_structural_ranking(protocol,captured,directory,
+            snapshot=request['prepared_scattering']['snapshot_sha256'],cancel=cancel,
+            timeout=max(1.,min(90.,deadline-clock())))
+        positions={key:i for i,key in enumerate(structural_ranking['candidate_order'])}
+        remaining.sort(key=lambda key:positions[expected[key][0]])
     write_json(directory/'progress.json',dict(completed=0,total=len(remaining),active=0,pending=len(remaining)))
     if protocol.get('policy',{}).get('grouped_surrogate'):
         groups={}
@@ -204,5 +236,6 @@ def execute_chunk(request, input_root, directory, *, cancel=None, runner=run_tri
         response['profiled_cache']=export(protocol,expected,done,captured,directory)
         response['discarded_cache_candidates']=cache_discarded
     if prepared_scattering is not None:response['prepared_scattering']=prepared_scattering
+    if structural_ranking is not None:response['structural_ranking']=structural_ranking
     write_json(directory/'response.json',response)
     return response

@@ -1,0 +1,124 @@
+"""Native admission and observed-feature fidelity; no classifier-quality claim."""
+import json
+from pathlib import Path
+import shutil
+import numpy as np
+import pytest
+
+G=pytest.importorskip('GSASII.GSASIIscriptable')
+from GSASII import GSASIIstrMain as MAIN
+from gpx_recipe.preparation.reference import create_reference
+from gpx_recipe.preparation.structural_ranking_native import require_compatible,observed_features
+from gpx_recipe.symmetry.compiler import file_sha
+from test_native_profile_capture import native_source
+
+
+def pair(root,kind):
+    root.mkdir()
+    source,_=native_source(root/'input',kind)
+    project=G.G2Project(gpxfile=str(source));cif=root/'parent.cif'
+    project.phase(0).export_CIF(str(cif))
+    reference=create_reference(cif,root/'input/profile.instprm',root/'reference',kind=kind,
+        lower=12. if kind=='PNC' else 3000.,upper=125. if kind=='PNC' else 40000.,bins=701,bank=1)
+    other=G.G2Project(gpxfile=reference['path'])
+    return source,project,other
+
+
+@pytest.mark.parametrize('kind',['PNC','PNT'])
+def test_native_features_recompute_background_and_preserve_real_masks(tmp_path,kind):
+    source,p,_=pair(tmp_path/'control',kind);h=p.histogram(0)
+    arrays=h.data['data'][1];x=np.asarray(arrays[0]).copy()
+    h.data['Limits'][1]=[float(x[20]),float(x[-20])]
+    h.data['Limits'].append([float(x[100]),float(x[110])])
+    arrays[2][200]=0.
+    arrays[1]=np.ma.array(arrays[1],mask=np.zeros(len(x),bool));arrays[1].mask[300]=True
+    # Saved calculated/background arrays deliberately do not carry the actual
+    # coefficients. Inference must evaluate the native background afresh.
+    arrays[4][:]=-9876.
+    p.save();before=file_sha(source)
+    feature=observed_features(source,h)
+    assert file_sha(source)==before
+    assert np.all(np.diff(feature['q'])>0) and np.isfinite(feature['background']).all()
+    assert not np.any(feature['background']==-9876.)
+    expected=((x>=x[20])&(x<=x[-20])&~((x>=x[100])&(x<=x[110])))
+    expected[200]=False;expected[300]=False
+    selected=np.flatnonzero((x>=x[20])&(x<=x[-20]))
+    if kind=='PNT':selected=selected[::-1]
+    np.testing.assert_array_equal(feature['valid'],expected[selected])
+    # Independent full native calculations with/without background agree with
+    # the cheap background-only extraction on the exact observed fit interval.
+    original=np.asarray(MAIN.DoNoFit(str(source),h.name),float)
+    h.data['Background'][0][3:]=[0.]*h.data['Background'][0][2]
+    zero=tmp_path/'zero-background.gpx';p.save(str(zero))
+    no_background=np.asarray(MAIN.DoNoFit(str(zero),h.name),float)
+    np.testing.assert_allclose(feature['background'],(original-no_background)[selected],rtol=1e-9,atol=1e-7)
+
+
+@pytest.mark.parametrize('change',['none','cell_within','cell_outside','profile','position','adp','occupancy','sample','isotope'])
+def test_only_covered_native_contexts_enter_the_prepared_ranker(tmp_path,change):
+    _,p,r=pair(tmp_path/'control','PNT');parent=p.phase(0);h=p.histogram(0)
+    cx,_,_,cia=parent.data['General']['AtomPtrs']
+    if change=='cell_within':parent.data['General']['Cell'][1]*=1.0001
+    elif change=='cell_outside':parent.data['General']['Cell'][1]*=1.1
+    elif change=='profile':h.InstrumentParameters['X'][1]+=.1
+    elif change=='position':parent.data['Atoms'][0][cx+1]+=.001
+    elif change=='adp':parent.data['Atoms'][0][cia+1]+=.001
+    elif change=='occupancy':parent.data['Atoms'][0][cx+3]=.9
+    elif change=='sample':h.data['Sample Parameters']['Absorption'][0]+=.1
+    elif change=='isotope':parent.data['General'].setdefault('Isotope',{})['Er']='unprepared isotope selection'
+    if change in {'none','cell_within'}:
+        distance=require_compatible(parent,h,r.phase(0),r.histogram(0),maximum_metric=.001)
+        assert 0<=distance<=.001
+    else:
+        with pytest.raises(ValueError):require_compatible(parent,h,r.phase(0),r.histogram(0),maximum_metric=.001)
+
+
+@pytest.mark.parametrize('change',['same','profile','no_model','constraint'])
+def test_actual_gpx_reaches_source_bound_receipt_through_native_admission(tmp_path,monkeypatch,change):
+    """Inference is a controlled stub here; native input admission is real."""
+    from gpx_recipe.preparation import structural_hints,structural_ranking_hints as hints
+    from gpx_recipe.preparation.structural_domain import envelope
+    from gpx_recipe.preparation.structural_ranking_native import rank_gpx
+    from gpx_recipe.symmetry.compiler import package_signature
+    from gpx_recipe.symmetry.contracts import validate_protocol,validate_candidate
+    from gpx_recipe.symmetry.native_audit import inspect_source
+    from gpx_recipe.execution import write_json
+    source,p,_=pair(tmp_path/'control','PNT');root=source.parent
+    if change=='profile':p.histogram(0).InstrumentParameters['X'][1]+=.1;p.save()
+    elif change=='constraint':p.data['Constraints']['data']['Hist']=[['opaque unprepared mapping']];p.save()
+    child=Path(__file__).with_name('data')/'synthetic-ersi-cmcm-isodistort.cif'
+    shutil.copyfile(child,root/'child.cif')
+    candidate=validate_candidate(dict(id='public-ersi',modes=['fixture-admission-only'],
+        child=dict(path='child.cif',sha256=file_sha(root/'child.cif')),
+        transformation_matrix=[[-1,0,0],[0,-1,0],[0,0,1]],origin_shift=[0,0,0]))
+    context=inspect_source(source);parent=context['phases'][0]
+    write_json(root/'catalog.json',dict(schema='radar-symmetry-catalog/v1',
+        parent_setting_sha256=parent['setting_sha256'],k=['0','0','0'],candidates=[candidate]))
+    protocol=validate_protocol(dict(kind='structural',source=dict(path='source.gpx',sha256=file_sha(source)),
+        catalog=dict(path='catalog.json',sha256=file_sha(root/'catalog.json')),parent_phase=parent['name'],
+        histogram=p.histogram(0).name,parent_setting_sha256=parent['setting_sha256'],k=['0','0','0'],
+        implementation_sha256=package_signature(),magnetic_function_sha256=context['runtime']['magnetic_function_sha256'],
+        candidates=[candidate],seeds=[dict(id='admission-control')],sites=[],policy=dict(cycles=3,timeout_seconds=60,
+            maximum_trials=1,maximum_cell_multiplier=8,maximum_moment=6.,fit_band_percent=.25,
+            maximum_mode=.5,adequate_rwp_percent=12.)))
+    model=tmp_path/'model.json';write_json(model,dict(training_domain=envelope(.001)))
+    row=dict(entry='d'*24,bank='bank 1',grid=dict(kind='PNT',lower=3000.,upper=40000.,bins=701,bank=1),
+        files=dict(parent=dict(sha256=file_sha(tmp_path/'control/parent.cif')),
+                   instrument=dict(sha256=file_sha(root/'profile.instprm'))))
+    document=dict(snapshot_sha256='e'*64,ranking_models=dict(entries=[] if change=='no_model' else [row]))
+    monkeypatch.setattr(structural_hints,'read',lambda *a:document)
+    monkeypatch.setattr(hints,'checked_files',lambda *a:dict(parent=tmp_path/'control/parent.cif',
+        instrument=root/'profile.instprm',model=model))
+    calls=[]
+    def inference(*args,**kwargs):
+        calls.append(kwargs)
+        return dict(ranking_available=True,candidate_order=['public-ersi'],
+            families=[dict(space_group=63,model_score=1.,candidate_ids=['public-ersi'])],
+            support=dict(status='within_empirical_synthetic_support',nearest_training_rms=.1,
+                         validation_maximum_rms=.2,statistical_coverage_qualified=False))
+    monkeypatch.setattr(hints,'rank',inference)
+    destination=tmp_path/'ranking';result=rank_gpx(root,protocol,destination)
+    assert result==json.loads((destination/'ranking.json').read_text())
+    assert result['ranking_available']==(change=='same') and len(calls)==int(change=='same')
+    assert result['candidate_order']==['public-ersi'] and result['candidate_pruning_authorized'] is False
+    assert result['preparation_snapshot_sha256']=='e'*64

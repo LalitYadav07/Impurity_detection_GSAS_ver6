@@ -311,7 +311,14 @@ class Campaign:
                             candidate=prepared[0]['candidate']
                             group=[r for r in prepared if r['candidate']==candidate][:256]
                         else:
-                            group=balanced_trial_order(prepared,per_candidate=2 if paired else 1)[:size]
+                            ordered=balanced_trial_order(prepared,per_candidate=2 if paired else 1)
+                            ranking=self.setting('structural_rankings',{}).get(selected)
+                            if protocol['kind']=='structural' and ranking is not None:
+                                from ..preparation.structural_ranking_result import prioritize
+                                try:ordered=prioritize(ordered,ranking,protocol)
+                                except (ValueError,TypeError,KeyError):
+                                    self.set_setting('structural_ranking_notice','Saved ranking did not match this source and scope; complete native order retained.')
+                            group=ordered[:size]
                         for row in group:self.set_state(row['id'],'submitting')
                         try:
                             handles=transport.submit_many([(r['id'],self.trial_directory(r)) for r in group],workers=slots)

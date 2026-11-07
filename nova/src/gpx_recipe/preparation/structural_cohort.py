@@ -198,10 +198,11 @@ def assemble_into(block_factory, sink, *, bins=2048, split_seed=3917, augmenter=
                 previous = clean_origins[key]
                 union(previous['group'], group)
                 previous['labels'].update(labels); previous['references'].append(ref)
+                previous['metric_norm']=max(previous['metric_norm'],float(a['relative_metric_norm'][index]))
                 # The shared clean origin carries every alias label and source
                 # to all its noisy siblings, even aliases found in later blocks.
                 continue
-            origin = dict(labels=labels, group=group, references=[ref])
+            origin = dict(labels=labels, group=group, references=[ref],metric_norm=float(a['relative_metric_norm'][index]))
             clean_origins[key] = origin
             put(feature, origin, dict(kind='clean_native'))
             if augmenter is not None:
@@ -222,6 +223,8 @@ def assemble_into(block_factory, sink, *, bins=2048, split_seed=3917, augmenter=
                         for r in records], np.int8)
     if not np.all(targets[split == 0].any(axis=0)):
         raise ValueError('Every prepared symmetry class needs independent training trajectories')
+    from .structural_domain import envelope
+    domain=envelope(max(o['metric_norm'] for i,r in enumerate(records) if split[i]==0 for o in r['origins']))
     return dict(features=sink.finish(len(records)), compatible_labels=targets,
         classes=np.asarray(classes, np.int32), split=split, q_edges=edges,
         groups=[find(r['group']) for r in records],
@@ -240,4 +243,4 @@ def assemble_into(block_factory, sink, *, bins=2048, split_seed=3917, augmenter=
         parent_sha256=next(iter(sources)), instrument_sha256=next(iter(profiles)),
         original_examples=count, unique_examples=len(records),
         ambiguous_examples=int(np.count_nonzero(targets.sum(axis=1) > 1)),
-        screening_qualified=False)
+        training_domain=domain,screening_qualified=False)

@@ -700,6 +700,16 @@ class GalaxyChunkTransport:
                 for k in ['id','experiment','sample_key','bank','source_sha256']})
         chunk=dict(key=key,members=ids,protocol=sha,request=request,asset_id=asset_id,job=None,pending=True)
         with self._state_lock:
+            if (protocol.get('kind')=='structural' and prepared is not None
+                    and prepared.get('ranking_models',{}).get('entries')):
+                saved=self.campaign.setting('structural_rankings',{}).get(sha)
+                if saved is not None:
+                    from gpx_recipe.preparation.structural_ranking_result import validate as validate_ranking
+                    try:validate_ranking(saved,protocol,snapshot=prepared['snapshot_sha256'])
+                    except (ValueError,TypeError,KeyError):saved=None
+                owner=any(c['protocol']==sha and c.get('request',{}).get('rank_structural')
+                    and not c.get('complete') and not c.get('not_dispatched') for c in self.state['chunks'].values())
+                request['rank_structural']=saved is None and not owner
             self.state['chunks'][key]=chunk
             self.state['members'].update({uid:key for uid in ids});self.save()
             if self._dispatch_wave is not None:
@@ -801,6 +811,19 @@ class GalaxyChunkTransport:
                 terminal={r['id']:r for r in response['trials']};pending=response['pending']
                 if len(terminal)!=len(response['trials']) or len(set(pending))!=len(pending) or set(terminal)|set(pending)!=set(chunk['members']) or set(terminal)&set(pending):raise ValueError('Model chunk coverage changed')
                 verify_archived_receipts(self.state,terminal,received)
+                if 'structural_ranking' in response:
+                    protocol=json.loads((self.campaign.root/'inputs'/chunk['protocol']/'protocol.json').read_text())
+                    from gpx_recipe.preparation.structural_ranking_result import validate as validate_ranking
+                    try:
+                        if not chunk['request'].get('rank_structural'):raise ValueError('This chunk did not own advisory ranking')
+                        ranking=validate_ranking(response['structural_ranking'],protocol,
+                            snapshot=chunk['request']['prepared_scattering']['snapshot_sha256'])
+                    except (ValueError,TypeError,KeyError):
+                        self.campaign.set_setting('structural_ranking_notice','Prepared ranking receipt was not accepted; complete native search retained.')
+                    else:
+                        rankings=self.campaign.setting('structural_rankings',{})
+                        rankings[chunk['protocol']]=ranking
+                        self.campaign.set_setting('structural_rankings',rankings)
                 if response.get('profiled_cache'):
                     protocol=json.loads((self.campaign.root/'inputs'/chunk['protocol']/'protocol.json').read_text())
                     self._collect_profiled_cache(protocol,received,response,dispatch)

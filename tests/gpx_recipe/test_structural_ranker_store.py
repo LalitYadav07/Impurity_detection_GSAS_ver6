@@ -24,6 +24,7 @@ def test_streamed_assembly_preserves_aliases_labels_and_trajectory_holdouts(tmp_
             np.testing.assert_array_equal(stored[key], dense[key])
         for key in ('groups', 'candidate_groups', 'class_candidate_ids', 'candidates', 'input_sha256', 'ambiguous_examples'):
             assert stored[key] == dense[key]
+        assert stored['training_domain']==dense['training_domain']
         assert stored['references'] == [[list(r) for r in refs] for refs in dense['references']]
         train = np.flatnonzero(dense['split'] == 0)
         for actual, expected in zip(channel_statistics(stored['features'], train),

@@ -98,6 +98,10 @@ def train(cohort, destination, *, epochs=60, seed=89113, threads=4):
             or set(split) != {0, 1, 2}):
         raise ValueError('A complete finite cohort with independent holdouts is required')
     routes=_class_routes(classes,cohort['candidate_groups'],cohort.get('class_candidate_ids'))
+    domain=cohort.get('training_domain')
+    if domain is not None:
+        from .structural_domain import validate as validate_domain
+        validate_domain(domain)
     reference = np.asarray(cohort['reference_features']); edges = np.asarray(cohort['q_edges'])
     if (edges.dtype != np.float64 or edges.shape != (features.shape[2]+1,)
             or not np.isfinite(edges).all() or edges[0] <= 0 or np.any(np.diff(edges) <= 0)
@@ -181,6 +185,7 @@ def train(cohort, destination, *, epochs=60, seed=89113, threads=4):
         augmented_examples=cohort.get('augmented_examples', 0),
         checkpoint_selection='validation_top_five_recall_then_loss', selected_epoch=best_epoch,
         reference_feature_sha256=cohort['reference_feature_sha256'],
+        training_domain=domain,
         support_method=support['method'], support_validation_rows=support['validation_rows'],
         support_coverage_qualified=False,
         ambiguous_examples=cohort['ambiguous_examples'], examples=len(features),
@@ -228,6 +233,9 @@ class Ranker:
         if d['schema']==SCHEMA and 'class_candidate_ids' not in d:
             raise ValueError('Structural ranking models require their native candidate routes')
         routes=_class_routes(classes,groups,d.get('class_candidate_ids'))
+        if d.get('training_domain') is not None:
+            from .structural_domain import validate as validate_domain
+            validate_domain(d['training_domain'])
         validate_npz_bytes(raw, maximum_bytes=MAX_BYTES)
         model = network(len(classes)); expected = model.state_dict()
         with np.load(io.BytesIO(raw), allow_pickle=False) as saved:

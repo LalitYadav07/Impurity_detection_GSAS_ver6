@@ -1,0 +1,190 @@
+"""Native GPX admission for prepared structural ranking; no candidate pruning.
+
+One isolated calculation per acquisition can prioritize the remaining native
+work. It imports the exact prepared parent and bank, preserves measured data,
+and recalculates background without running another diffraction refinement.
+"""
+import json
+from pathlib import Path
+import time
+
+import numpy as np
+
+from ..execution import write_json
+from ..fit_domain import native_powder_fit_mask
+from ..symmetry.compiler import confined,package_signature,verify_inputs
+from ..symmetry.contracts import validate_protocol
+from .structural_ranking_result import unavailable,validate
+
+
+def _sites(phase):
+    cx,ct,_,cia=phase.data['General']['AtomPtrs']
+    sites={a[ct-1]:dict(type=a[ct],xyz=np.asarray(a[cx:cx+3],float),occupancy=float(a[cx+3]),
+        adp_type=a[cia],adp=np.asarray(a[cia+1:cia+8],float)) for a in phase.data['Atoms']}
+    if len(sites)!=len(phase.data['Atoms']):raise ValueError('Native parent atom labels must be unique')
+    return sites
+
+
+def require_unconstrained_project(project):
+    """CIF-only preparation does not cover extra user parameter mappings."""
+    constraints=project.data.get('Constraints',{})
+    constraints=constraints.get('data',constraints)
+    if any(constraints.get(key) for key in ('Hist','HAP','Phase','Global')):
+        raise ValueError('Prepared ranking is not qualified for additional user constraints')
+    if any(any(phase.data.get('RBModels',{}).values()) for phase in project.phases()):
+        raise ValueError('Prepared ranking is not qualified for assigned rigid-body models')
+
+
+def require_compatible(parent,histogram,reference,reference_histogram,*,maximum_metric):
+    """Compare native physical context, allowing only sampled parent strain.
+
+    Scales and background are observation-specific nuisances. Acquisition
+    temperature/pressure labels do not alter the native scattering context.
+    Geometry/ADP and profile changes need their own training coverage.
+    """
+    from gsas_magnetic_preflight import setting_fingerprint
+    from ..symmetry.native_audit import same
+    from .structural_domain import relative_metric_norm
+    a,b=parent.data['General'],reference.data['General']
+    if (a['Type']!='nuclear' or a.get('Modulated') or a.get('doPawley')
+            or setting_fingerprint(a['SGData'])!=setting_fingerprint(b['SGData'])):
+        raise ValueError('Prepared parent symmetry or setting differs from this native GPX')
+    if not same(a.get('Isotope'),b.get('Isotope')):
+        raise ValueError('Prepared neutron isotope selections differ from this native GPX')
+    left,right=_sites(parent),_sites(reference)
+    if set(left)!=set(right):raise ValueError('Prepared parent atom labels differ from this native GPX')
+    for key,x in left.items():
+        y=right[key];delta=x['xyz']-y['xyz'];delta-=np.rint(delta)
+        if (x['type']!=y['type'] or x['adp_type']!=y['adp_type']
+                or not np.isclose(x['occupancy'],y['occupancy'],rtol=0,atol=1e-8)
+                or not np.allclose(delta,0,rtol=0,atol=2e-6)
+                or not np.allclose(x['adp'],y['adp'],rtol=0,atol=1e-6)):
+            raise ValueError('Prepared chemistry, parent positions or ADPs differ at '+str(key))
+    distance=relative_metric_norm(b['Cell'][1:7],a['Cell'][1:7])
+    if distance>maximum_metric+1e-9:
+        raise ValueError('Current parent lattice exceeds the training-only reciprocal-metric envelope')
+    if not same(histogram.InstrumentParameters,reference_histogram.InstrumentParameters):
+        raise ValueError('Prepared instrument bank or profile coefficients differ from this native histogram')
+    hap=parent.data['Histograms'][histogram.name]
+    if hap.get('LeBail'):raise ValueError('Le Bail intensities do not define a structural ranking parent')
+    ref=reference.data['Histograms'][reference_histogram.name]
+    ignore={'Scale','Use','hId','Histogram','Fix FXU'}
+    if not same({k:v for k,v in hap.items() if k not in ignore},{k:v for k,v in ref.items() if k not in ignore}):
+        raise ValueError('Sample broadening, texture or histogram-phase corrections differ from preparation')
+    ignore={'Scale','ranId','InstrName','Temperature','Pressure','Time'}
+    if not same({k:v for k,v in histogram.data['Sample Parameters'].items() if k not in ignore},
+                {k:v for k,v in reference_histogram.data['Sample Parameters'].items() if k not in ignore}):
+        raise ValueError('Physical sample corrections differ from preparation')
+    if (not np.isfinite(hap['Scale'][0]) or hap['Scale'][0]<=0
+            or not np.isfinite(histogram.data['Sample Parameters']['Scale'][0])
+            or histogram.data['Sample Parameters']['Scale'][0]<=0):
+        raise ValueError('Structural ranking needs positive current phase and histogram scales')
+    return distance
+
+
+def observed_features(source,histogram):
+    """Original observations and mask; freshly evaluated native background.
+
+    getBackground uses the same native histogram slice as errRefine. It does
+    not evaluate structure factors, overwrite a GPX, invent counts or trust a
+    potentially stale saved calculated/background array.
+    """
+    from ..live.native_profile import NativeReducedProfile
+    forward=NativeReducedProfile(source)
+    native=forward.histo_phases[0][histogram.name]
+    sl=next(sl for name,sl in forward.parts if name==histogram.name)
+    prefix=f":{native['hId']}:"
+    arrays=histogram.data['data'][1]
+    x,y,w=(np.asarray(np.ma.getdata(a),float) for a in arrays[:3])
+    valid=np.isfinite(x)&np.isfinite(y)&np.isfinite(w)&(w>0)
+    for a in arrays[:3]:valid &= ~np.ma.getmaskarray(a)
+    valid &= native_powder_fit_mask(x,histogram.data['Limits'][1],histogram.data['Limits'][2:])
+    native_x=native['Data'][0][sl]
+    if not np.array_equal(np.asarray(np.ma.getdata(native_x)),x[sl]):
+        raise ValueError('Native background and observation grids differ')
+    background,_=forward.math.G2pwd.getBackground(prefix,forward.parms,forward.controls[prefix+'bakType'],
+        forward.controls[prefix+'histType'],native_x,native['Background'][1].get('fixback',None))
+    background=np.asarray(np.ma.getdata(background),float)
+    d=np.asarray(forward.lattice.Pos2dsp(histogram.InstrumentParameters,x[sl]),float)
+    if (background.shape!=x[sl].shape or not np.isfinite(d).all() or np.any(d<=0)):
+        raise ValueError('Native background or Q conversion is unavailable on this fit range')
+    q=2*np.pi/d;order=np.argsort(q,kind='stable')
+    if np.any(np.diff(q[order])<=0):raise ValueError('Native calibration has no unique increasing Q grid')
+    return dict(q=q[order],intensity=y[sl][order],background=background[order],valid=valid[sl][order])
+
+
+def rank_gpx(input_root,protocol,destination):
+    """Read one exact source revision and attached data-only training context."""
+    from .structural_hints import read
+    from . import structural_ranking_hints as hints
+    from .reference import create_reference
+    from .structural_domain import validate as validate_domain
+    from ..structural_live.native import modules,require_nuclear_runtime
+    from ..symmetry.worker import require_runtime,runtime_identity
+    from gsas_magnetic_preflight import setting_fingerprint
+    protocol=validate_protocol(protocol);verify_inputs(protocol,input_root)
+    if protocol['kind']!='structural' or protocol['implementation_sha256']!=package_signature():
+        raise ValueError('Structural ranking needs the exact captured structural implementation')
+    began=time.monotonic();out=Path(destination).resolve();out.mkdir(parents=True,exist_ok=False)
+    checks=[];snapshot=None;features=None;support=None
+    result=unavailable(protocol,'No compatible prepared structural ranking is attached')
+    try:
+        document=read(input_root,protocol)
+        if document is None:return result
+        snapshot=document['snapshot_sha256']
+        entries=document.get('ranking_models',{}).get('entries',[])
+        if not entries:
+            result=unavailable(protocol,'No prepared structural ranking model is attached',snapshot=snapshot)
+            return result
+        G,*_=modules();require_nuclear_runtime()
+        require_runtime(runtime_identity(),protocol['magnetic_function_sha256'])
+        source=confined(input_root,protocol['source']['path']);project=G.G2Project(gpxfile=str(source))
+        require_unconstrained_project(project)
+        parent=project.phase(protocol['parent_phase']);histogram=project.histogram(protocol['histogram'])
+        if setting_fingerprint(parent.data['General']['SGData'])!=protocol['parent_setting_sha256']:
+            raise ValueError('Current nuclear parent setting differs from the reviewed structural protocol')
+        used=[p for p in project.phases() if p.data.get('Histograms',{}).get(histogram.name,{}).get('Use')]
+        if len(used)!=1 or used[0].name!=parent.name:
+            raise ValueError('Prepared structural ranking is not qualified for additional active phases')
+        for row in entries:
+            try:
+                files=hints.checked_files(input_root,row,protocol)
+                metadata=json.loads(files['model'].read_text());domain=metadata.get('training_domain')
+                maximum=0. if domain is None else validate_domain(domain)['maximum_relative_reciprocal_metric_norm']
+                prepared=create_reference(files['parent'],files['instrument'],out/'reference'/row['entry'],**row['grid'])
+                reference=G.G2Project(gpxfile=prepared['path'])
+                require_compatible(parent,histogram,reference.phase(prepared['parent_phase']),
+                    reference.histogram(prepared['histogram']),maximum_metric=maximum)
+                if features is None:features=observed_features(source,histogram)
+                ranked=hints.rank(input_root,protocol,**features,entry_id=row['entry'],
+                    parent_sha256=row['files']['parent']['sha256'],instrument_sha256=row['files']['instrument']['sha256'])
+                if not ranked['ranking_available']:
+                    support=ranked.get('support')
+                    checks.append(dict(entry=row['entry'],status='inference_unavailable',
+                        reason=ranked.get('reason','Prepared model inference is unavailable')[:600]));continue
+                checks.append(dict(entry=row['entry'],status='compatible',
+                    reason='Native parent, bank profile, sites/ADPs and sample corrections matched within the trained lattice envelope'))
+                result=dict(unavailable(protocol,'Prepared simulations prioritize native work; every declared candidate remains available',snapshot=snapshot),
+                    ranking_available=True,candidate_order=ranked['candidate_order'],families=ranked['families'],
+                    entry_id=row['entry'],bank=row['bank'],support=ranked['support'])
+                break
+            except (OSError,ValueError,ImportError,KeyError,TypeError,IndexError) as error:
+                checks.append(dict(entry=row['entry'],status='incompatible',reason=str(error)[:600]))
+        else:
+            result=unavailable(protocol,'Prepared ranking is unavailable for this scan; the complete native search is retained',
+                               snapshot=snapshot,support=support)
+    except (OSError,ValueError,ImportError,KeyError,TypeError,IndexError) as error:
+        result=unavailable(protocol,'Native ranking admission did not complete: '+str(error)[:600],snapshot=snapshot)
+    finally:
+        result.update(checks=checks,seconds=time.monotonic()-began)
+        validate(result,protocol)
+        write_json(out/'ranking.json',result)
+        verify_inputs(protocol,input_root)
+    return result
+
+
+if __name__=='__main__':
+    import sys
+    root=Path(sys.argv[1]).resolve()
+    protocol=json.loads((root/'protocol.json').read_text())
+    rank_gpx(root,protocol,Path(sys.argv[2]))
