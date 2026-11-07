@@ -51,7 +51,7 @@ def test_batched_scalars_match_complete_native_trace_at_current_geometry(tmp_pat
         got,height,low,high=batched[key];expected,expected_height,nlow,nhigh=original[key]
         assert (low,high)==(nlow,nhigh)
         np.testing.assert_allclose(got,expected,rtol=1e-12,atol=1e-12)
-        assert height==pytest.approx(expected_height,rel=1e-12,abs=1e-12)
+        assert height==expected_height,(key,height,expected_height)
         shape,glo,ghi=geometry[key]
         np.testing.assert_array_equal(shape,got)
         assert (glo,ghi)==(nlow,nhigh)

@@ -171,6 +171,9 @@ jobs:
           python -m pip install --quiet pytest &&
           export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}/validation/tests/gpx_recipe" &&
           export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 &&
+          python -m pytest -q -o cache_dir=/tmp/pytest-cache \
+            /validation/tests/gpx_recipe/test_native_tof_scalars.py::test_batched_scalars_match_complete_native_trace_at_current_geometry \
+            /validation/tests/gpx_recipe/test_native_tof_forward.py::test_batched_native_curves_retain_original_values_and_observations &&
           python -m pytest -q -o cache_dir=/tmp/pytest-cache --junitxml=/tmp/preparation.xml \
             /validation/tests/gpx_recipe/test_preparation_theory_native.py \
             /validation/tests/gpx_recipe/test_preparation_reference.py \

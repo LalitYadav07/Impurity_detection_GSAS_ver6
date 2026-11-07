@@ -39,6 +39,7 @@ class NativeTOFForward:
         if self.fixed_workspace>=maximum_bytes:
             raise ScalarBatchUnavailable('Native forward output exceeds its workspace budget')
         self.qualified=False;self.disabled=False
+        self.anchor_comparison=None
         self.requests=self.rendered=self.anchor_checks=self.fallback_calls=self.peak_calls=0
         self.kernel_hits=self.kernel_misses=0
         self.seconds=0.;self.bypasses=Counter()
@@ -124,7 +125,14 @@ class NativeTOFForward:
             self.rendered+=1
             if not self.qualified:
                 native=s.native(physical);self.anchor_checks+=1
-                if not np.array_equal(curve,native):
+                identical=np.array_equal(curve,native)
+                delta=curve-native
+                self.anchor_comparison=dict(array_identical=identical,
+                    differing_bins=int(np.count_nonzero(delta)),
+                    maximum_absolute_error=float(np.max(abs(delta),initial=0.)),
+                    relative_l2_error=float(np.linalg.norm(delta)/max(np.linalg.norm(native),1e-30)),
+                    arithmetic_controls=self.floating)
+                if not identical:
                     self.disabled=True
                     self.bypasses['native anchor is not array-identical']+=1
                 else:self.qualified=True
@@ -140,6 +148,7 @@ class NativeTOFForward:
             native_fallback_calls=self.fallback_calls,peak_calls=self.peak_calls,
             seconds=self.seconds,qualified_anchor=self.qualified,disabled=self.disabled,
             kernel_hits=self.kernel_hits,kernel_misses=self.kernel_misses,
+            anchor_comparison=self.anchor_comparison,
             bypasses=dict(self.bypasses),maximum_workspace_bytes=self.maximum_bytes,
             profile_interpolation=False,observations_reused=False,
             native_peak_batch=self.native_batch.diagnostics() if self.native_batch is not None else None,

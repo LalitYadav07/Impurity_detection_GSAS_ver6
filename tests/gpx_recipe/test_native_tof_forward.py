@@ -25,7 +25,9 @@ def test_batched_native_curves_retain_original_values_and_observations(tmp_path,
         physical=point*s.radii
         expected=s.native(physical).copy()
         np.testing.assert_array_equal(engine.evaluate(physical),expected)
-    assert engine.diagnostics()['qualified_anchor'] and engine.anchor_checks==1
+    assert engine.diagnostics()['qualified_anchor'] and engine.anchor_checks==1,engine.diagnostics()
+    assert engine.anchor_comparison['array_identical']
+    assert engine.anchor_comparison['differing_bins']==0
     for got,expected in zip(h['Data'][:3],original):np.testing.assert_array_equal(got,expected)
 
 
@@ -53,6 +55,9 @@ def test_anchor_disagreement_disables_acceleration_and_keeps_original_curve(tmp_
     monkeypatch.setattr(engine.collector,'collect_physical',changed)
     np.testing.assert_array_equal(engine.evaluate(point),expected)
     assert engine.disabled and not engine.qualified
+    assert not engine.anchor_comparison['array_identical']
+    assert engine.anchor_comparison['differing_bins']>0
+    assert engine.anchor_comparison['maximum_absolute_error']>0
     monkeypatch.setattr(engine.collector,'collect_physical',lambda *a,**k:pytest.fail('A disabled renderer cannot run again'))
     np.testing.assert_array_equal(engine.evaluate(point),expected)
     assert engine.diagnostics()['bypasses']['native anchor is not array-identical']==1
