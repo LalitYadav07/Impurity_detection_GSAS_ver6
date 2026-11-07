@@ -57,6 +57,27 @@ construction call counts and fallback notes. Preparation attachments separately
 record how many rendered responses actually reached the worker. A transferred
 file alone is not reported as reused computation.
 
+## Repeated representative checks in one worker
+
+After the complete magnetic response passes its native compilation probes,
+the owning process can reuse that qualification for another freshly opened
+context with the exact same decoded coefficients and physical dependencies.
+The bounded ledger contains hashes and prior check errors, not model arrays.
+It binds observations, weights, masks, fit limits, fixed parameters, complete
+constraint-map contents, moment maps, active native functions, source/binary
+identity and arithmetic controls. Changed or unsupported contexts use the
+original complete probe set. A stronger requested probe count also runs in full.
+Passing those probes on an imported cache does not create an owned coefficient
+qualification; only this process's native compilation can establish its origin.
+
+Each reuse still calculates the current native offset and one nonzero native
+probe. Independent checks at the actual fitted solution, its fresh serialized
+Jacobian/stationarity and final GPX remain unchanged. Receipts distinguish
+prior complete probes from current probes; they do not count skipped work as
+new native calculations. No qualification is loaded from a file or inherited
+across a process boundary. Parallel representatives in separate workers each
+establish their own qualification.
+
 ## Acceptance
 
 The mandatory native publication gate includes complete Model/Live handoffs

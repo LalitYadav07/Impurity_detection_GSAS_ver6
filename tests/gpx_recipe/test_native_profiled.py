@@ -18,8 +18,13 @@ def test_reuses_only_checked_objective_and_rechecks_native_on_each_load(tmp_path
     assert not proof['cache_hit'] and cache.is_file()
     fresh=NativeMagneticStartingPoint(path,refine_scale=True,refine_background=True,maximum_moment=6.)
     reused,check=fresh.build(cache_path=cache,cache_identity='same-sealed-protocol')
-    assert check['cache_hit'] and check['native_calls']>=5
+    differences=[k for k,v in getattr(first,'_qualification_components',{}).items()
+        if getattr(fresh,'_qualification_components',{}).get(k)!=v]
+    assert check['cache_hit'] and check['native_calls']==2,(check['qualification_reuse'],differences)
     assert check['native_calls']<proof['native_calls']
+    assert check['qualification_reuse']==dict(owned_process=True,complete_prior_native_probes=4,
+        current_native_probes=1,requested_native_probes=4,imported_qualification_accepted=False,
+        qualification_persisted=False,unavailable_reason='')
     np.testing.assert_array_equal(reused.quadratic,model.quadratic)
     assert max(check['heldout_relative_errors'])<1e-8
     hist=project.histograms()[0]
@@ -27,6 +32,68 @@ def test_reuses_only_checked_objective_and_rechecks_native_on_each_load(tmp_path
     changed=NativeMagneticStartingPoint(path,refine_scale=True,refine_background=True,maximum_moment=6.)
     _,changed_proof=changed.build(cache_path=cache,cache_identity='same-sealed-protocol')
     assert not changed_proof['cache_hit']
+
+
+def test_new_native_context_or_stronger_probe_count_requires_complete_checks(tmp_path):
+    from gpx_recipe.symmetry import profiled_qualification
+    project,path=artificial_project(tmp_path)
+    cache=tmp_path/'objective.npz'
+    first=NativeMagneticStartingPoint(path,refine_scale=True,refine_background=True,maximum_moment=6.)
+    first.build(cache_path=cache,cache_identity='same-protocol')
+    stronger=NativeMagneticStartingPoint(path,refine_scale=True,refine_background=True,maximum_moment=6.)
+    _,proof=stronger.build(heldouts=6,cache_path=cache,cache_identity='same-protocol')
+    assert proof['cache_hit'] and not proof['qualification_reuse']['owned_process']
+    assert proof['qualification_reuse']['current_native_probes']==6
+    # A profile edit leaves the scale-zero offset unchanged. It must never
+    # inherit qualification solely from cache identity, offset or moment maps.
+    project.histograms()[0].data['Instrument Parameters'][0]['W'][1]*=1.2
+    project.save()
+    changed=NativeMagneticStartingPoint(path,refine_scale=True,refine_background=True,maximum_moment=6.)
+    _,proof=changed.build(cache_path=cache,cache_identity='same-protocol')
+    assert not proof['cache_hit'] and not proof['qualification_reuse']['owned_process']
+    assert proof['qualification_reuse']['current_native_probes']==4
+    # An independently started process has no ledger even when it sees the
+    # same valid data-only cache. Simulate only that ledger boundary here.
+    profiled_qualification._entries.clear()
+    cold=NativeMagneticStartingPoint(path,refine_scale=True,refine_background=True,maximum_moment=6.)
+    _,proof=cold.build(cache_path=cache,cache_identity='same-protocol')
+    assert proof['cache_hit'] and not proof['qualification_reuse']['owned_process']
+    assert proof['qualification_reuse']['current_native_probes']==4
+
+
+def test_imported_cache_never_inherits_process_qualification(tmp_path):
+    import json
+    import subprocess
+    import sys
+    from gpx_recipe.symmetry.compiler import native_environment,package_signature
+    _,path=artificial_project(tmp_path)
+    cache=tmp_path/'objective.npz';receipt=tmp_path/'fresh-worker.json'
+    context=NativeMagneticStartingPoint(path,refine_scale=True,refine_background=True,maximum_moment=6.)
+    context.build(cache_path=cache,cache_identity='same-protocol')
+    code='''import json,sys
+from pathlib import Path
+from gpx_recipe.symmetry.native_profiled import NativeMagneticStartingPoint
+from gpx_recipe.symmetry.compiler import package_signature
+n=NativeMagneticStartingPoint(sys.argv[1],refine_scale=True,refine_background=True,maximum_moment=6.)
+_,proof=n.build(cache_path=sys.argv[2],cache_identity='same-protocol')
+second=NativeMagneticStartingPoint(sys.argv[1],refine_scale=True,refine_background=True,maximum_moment=6.)
+_,again=second.build(cache_path=sys.argv[2],cache_identity='same-protocol')
+Path(sys.argv[3]).write_text(json.dumps(dict(proof=proof,again=again,implementation=package_signature())))
+'''
+    with (tmp_path/'fresh-worker.log').open('w') as log:
+        subprocess.run([sys.executable,'-c',code,str(path),str(cache),str(receipt)],
+            env=native_environment(),stdout=log,stderr=subprocess.STDOUT,check=True,timeout=120)
+    document=json.loads(receipt.read_text());proof=document['proof']
+    assert document['implementation']==package_signature()
+    assert proof['cache_hit'] and not proof['qualification_reuse']['owned_process']
+    assert proof['qualification_reuse']['current_native_probes']==4
+    assert proof['native_calls']==5
+    assert max(proof['heldout_relative_errors'])<=1e-8
+    # Four matching imported-cache probes are not an owned full coefficient
+    # construction. Reopening it again must not promote the imported matrix.
+    assert document['again']['cache_hit']
+    assert not document['again']['qualification_reuse']['owned_process']
+    assert document['again']['qualification_reuse']['current_native_probes']==4
 
 
 def test_wrong_quadratic_hint_rebuilds_from_native_instead_of_rejecting_model(tmp_path):

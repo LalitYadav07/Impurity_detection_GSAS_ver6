@@ -185,6 +185,8 @@ class NativeMagneticStartingPoint:
             fcntl.flock(stream,fcntl.LOCK_UN);stream.close()
 
     def build(self,*,heldouts=4,cache_path=None,cache_identity=None,factor_cache=None):
+        if type(heldouts) is not int or not 1<=heldouts<=64:
+            raise ValueError('One to sixty-four independent native probes are required')
         if cache_path is not None and cache_identity:
             # Immutable, checked cache readers may validate native holdouts
             # concurrently. Only a rebuild needs the exclusive writer lock.
@@ -311,8 +313,16 @@ class NativeMagneticStartingPoint:
         model=ProfiledMagneticObjective(offset=offset,nuclear=nuclear,quadratic=quadratic,
             background=background,moment_maps=self.cartesian_maps,maximum_moment=self.maximum_moment,
             normalization=normalization,fixed_scale=self.fixed_scale)
+        from . import profiled_qualification
+        qualification_key=profiled_qualification.identity(self,model)
+        owned_origin=profiled_qualification.prior(qualification_key,1) if cached is not None else None
+        prior_checks=owned_origin if owned_origin is not None and len(owned_origin)>=heldouts else None
         rng=np.random.default_rng(18019);errors=[]
-        for _ in range(heldouts):
+        # The same complete coefficient model has already passed all probes
+        # in this process. Keep a fresh nonzero native context probe rather
+        # than repeat identical compilation work for every representative.
+        current_checks=1 if prior_checks is not None else heldouts
+        for _ in range(current_checks):
             moments=rng.normal(size=dimension)
             maximum=np.max(np.linalg.norm(self.cartesian_maps@moments,axis=1))
             moments*=.6*self.maximum_moment/maximum
@@ -321,6 +331,7 @@ class NativeMagneticStartingPoint:
             native=self.residual(moments,scale,bg)
             errors.append(model.heldout_error(moments,scale,bg,native))
         if not errors or max(errors+[linear_error])>1e-8:
+            profiled_qualification.forget(qualification_key)
             if background_proof['method']=='unchanged native background function':
                 return self._build(heldouts=heldouts,cache_path=cache_path,cache_identity=cache_identity,
                     skip_cache=True,use_derivative=use_derivative,factor_cache=factor_cache,background_basis=False,
@@ -339,6 +350,12 @@ class NativeMagneticStartingPoint:
                     factor_cache=factor_cache,background_basis=background_basis)
             raise ValueError('The native profile failed held-out quadratic identity checks: '+
                 str(dict(heldouts=errors,linear_identity_error=linear_error)))
+        # Matching a few imported-array probes does not establish that this
+        # process constructed/qualified every coefficient. Only a native
+        # compilation (or stronger checks on an already owned compilation)
+        # can create or strengthen an owned qualification entry.
+        if prior_checks is None and (cached is None or owned_origin is not None):
+            profiled_qualification.remember(qualification_key,errors)
         if cached is None and cache_path is not None and cache_identity:
             target=Path(cache_path);temporary=target.with_name(target.name+'.'+uuid.uuid4().hex)
             try:
@@ -358,6 +375,11 @@ class NativeMagneticStartingPoint:
             compiler=compiler,compiler_note=compiler_note,compiler_diagnostics=compilation,
             background_compiler=background_proof,
             heldout_relative_errors=errors,linear_identity_error=linear_error,
+            qualification_reuse=dict(owned_process=prior_checks is not None,
+                complete_prior_native_probes=len(prior_checks or []),
+                current_native_probes=len(errors),requested_native_probes=heldouts,
+                imported_qualification_accepted=False,qualification_persisted=False,
+                unavailable_reason=getattr(self,'qualification_reuse_note','')),
             cache_hit=cached is not None,cache_identity=cache_identity,cache_note=cache_note,
             residual_reduction=dict(model.reduction_diagnostics),
             interpolation_anchor_seed=77831,
