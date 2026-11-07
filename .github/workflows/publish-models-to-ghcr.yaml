@@ -41,6 +41,8 @@ on:
       - tests/gpx_recipe/test_kernel_geometry_storage.py
       - tests/gpx_recipe/test_native_joint_profiled_fit.py
       - tests/gpx_recipe/test_tof_kernel_storage.py
+      - tests/gpx_recipe/test_tof_shape*.py
+      - tests/gpx_recipe/test_tof_profile_table_native.py
       - tests/gpx_recipe/test_native_cell_proposals.py
       - tests/gpx_recipe/test_structural_background_context*.py
       - tests/gpx_recipe/test_structural_snapshot_job_native.py
@@ -188,6 +190,9 @@ jobs:
             /validation/tests/gpx_recipe/test_structural_live_profiled_nuisance.py \
             /validation/tests/gpx_recipe/test_starting_proposal_banks.py \
             /validation/tests/gpx_recipe/test_tof_profile_proposals_native.py \
+            /validation/tests/gpx_recipe/test_tof_shape.py \
+            /validation/tests/gpx_recipe/test_tof_shape_native.py \
+            /validation/tests/gpx_recipe/test_tof_profile_table_native.py \
             /validation/tests/gpx_recipe/test_structural_start_diversity.py \
             /validation/tests/gpx_recipe/test_profiled_qualification.py \
             /validation/tests/gpx_recipe/test_native_window_response.py \

@@ -558,6 +558,37 @@ starting-bank measurement with reflection-envelope reuse enabled in both arms,
 not a complete nonlinear fit or NDIP throughput measurement. Preparation reuse
 after real cell/profile changes and full deployed acceptance remain required.
 
+### Cell-independent native TOF shape and table
+
+`IsotropicTOFShape` separates the reviewed isotropic shape calculation from
+the sample cell, atomic coordinates, space group, background and scan arrays.
+Its closed numeric specification contains difC, alpha/beta, sigma and X/Y/Z
+coefficients plus the four native isotropic size/strain coefficients. Native
+GSAS-II functions still calculate the shape; the specification is not a native
+origin certificate or a saved scientific result. Anisotropic broadening,
+profile lookup tables and unknown implementations remain unsupported here.
+
+`CompiledTOFTable.from_reference` can compile from a nuclear-CIF reference,
+bank profile and planned TOF interval without reading diffraction arrays or
+requiring an ISODISTORT child. The planned interval is converted by GSAS-II to
+a d-spacing envelope. Current reflections retain their actual centers,
+windows, intensities and measured grid. Out-of-envelope and numerically rough
+regions retain the original native peak calculation.
+
+The proposal renderer automatically shares one owned immutable table with
+other structural sources when their shape specification matches. Its registry
+has a 64 MiB numeric limit and resets after a fork; compilation runs outside
+the registry lock. A wholly disjoint d envelope compiles a new table, while
+uncovered reflections in a partially overlapping envelope keep native peaks.
+Process/thread,
+floating-point and native-function ownership remain checked. This separates
+reusable peak-shape physics from per-scan geometry; it does not qualify a
+portable uploaded table. Cold library transport and creating-job authority
+still need their own admission path. The current diagnostics explicitly keep
+`table_import_supported` false, and accepted fits and GPXs retain the complete
+original native comparisons. A reusable component is not evidence of a
+complete-workflow speedup or converged structural recovery.
+
 ## Bounded native kernel chunks
 
 The shared TOF renderer accepts a natively qualified primitive kernel chunk.

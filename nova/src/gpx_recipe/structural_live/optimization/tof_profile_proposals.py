@@ -9,7 +9,6 @@ from collections import Counter
 import ctypes
 import time
 import numpy as np
-from scipy.ndimage import minimum_filter, spline_filter, map_coordinates
 
 from .native_forward import NativeTOFForward, MAXIMUM_BYTES
 from .native_cell_proposals import ProposalUnavailable
@@ -17,18 +16,13 @@ from .native_tof_scalars import record_bytes
 from ...live.native_peak_batch import BatchUnavailable, pack_records
 from ...preparation.kernel_geometry import _profile
 from ...preparation.kernel_runtime import floating_state
+from .tof_profile_table import CompiledTOFTable,ROUGH_NATIVE_RELATIVE,shared_table
 
 MINIMUM_REFERENCE_BINS=1_000_000
-ROUGH_NATIVE_RELATIVE=32*np.finfo(np.float32).eps
-
-
-def _immutable(array):
-    array=np.ascontiguousarray(array)
-    return np.frombuffer(array.tobytes(),dtype=array.dtype).reshape(array.shape)
 
 
 class TOFProfileProposals:
-    def __init__(self,source,*,exact=None):
+    def __init__(self,source,*,exact=None,table=None):
         began=time.monotonic()
         self.source=source;self.exact=exact or NativeTOFForward(source)
         context=self.exact._context();n,_,powder,_,peak,_,axis,hist,_,_=context
@@ -41,80 +35,25 @@ class TOFProfileProposals:
         except AttributeError as error:
             raise ProposalUnavailable('Installed continuous TOF proposal helper needs an image update') from error
         self.profile_sha256=_profile(source);self.floating=floating_state()
-        phase=n.histo_phases[1][source.fast.slow.phase.name]
         refs=hist['Reflection Lists'][source.fast.slow.phase.name]['RefList']
         if not len(refs) or not np.isfinite(refs[:,4]).all() or np.any(refs[:,4]<=0):
             raise ProposalUnavailable('A complete positive native reflection metric is required')
-        collector=self.exact.collector
-        a=np.array([n.parms[collector.pfx+f'A{i}'] for i in range(6)])+n.math.GetDij(collector.phfx,phase['General']['SGData'],n.parms)
-        g,_=n.lattice.A2Gmat(a);_,gb=n.lattice.Gmat2AB(g)
-        logd=np.linspace(np.log(float(refs[:,4].min())*.7),np.log(float(refs[:,4].max())*1.3),513)
-        instrument={key:list(value) if isinstance(value,list) else value
-                    for key,value in hist['Instrument Parameters'][0].items()}
-        for key,value in instrument.items():
-            if isinstance(value,list) and len(value)>1 and collector.hfx+key in n.parms:
-                value[1]=n.parms[collector.hfx+key]
-        def shapes(ds):
-            positions=n.lattice.Dsp2pos(instrument,ds)
-            r=np.tile(refs[0],(len(ds),1)).T.copy();r[4]=ds;r[5]=positions
-            r[6:8]=collector.widths(r,0,g,gb,collector.phfx,n.controls,n.parms,n.histdict,collector.hfx)
-            r[12:14]=collector.exponentials(r,0,collector.hfx,n.parms)
-            return np.asarray([r[i] for i in (12,13,6,7)]).T,positions
-        ds=np.exp(logd);parameters,positions=shapes(ds)
-        if not np.isfinite(parameters).all() or np.any(parameters[:,2]<=0):
-            raise ProposalUnavailable('Native profile is not positive over this proposal envelope')
-        widths=np.sqrt(parameters[:,2])
-        _,low,high=powder.getWidthsTOF(positions,*parameters.T)
-        eta=np.linspace(float(np.arcsinh(-low/widths).min())-.5,
-                        float(np.arcsinh(high/widths).max())+.5,8193)
-        if not np.isfinite(eta).all() or eta[-1]<=eta[0]:
-            raise ProposalUnavailable('Invalid native TOF proposal support')
-        table=np.zeros((len(ds),len(eta)));valid=np.zeros(table.shape,dtype=np.uint8)
-        for i,(p,width) in enumerate(zip(parameters,widths)):
-            offsets=np.sinh(eta)*width
-            used=np.flatnonzero((offsets>=-low[i])&(offsets<high[i]))
-            if len(used)<2:continue
-            values=np.asarray(peak(0.,*p,offsets[used])[0],float)*width
-            finite=np.isfinite(values);table[i,used[finite]]=values[finite];valid[i,used[finite]]=1
-        if not valid.any():raise ProposalUnavailable('Native profile has no usable proposal envelope')
-        for i in range(len(table)):
-            good=np.flatnonzero(valid[i])
-            if len(good):table[i]=np.interp(np.arange(len(eta)),good,table[i,good])
-        self.coefficients=_immutable(spline_filter(table,order=3,mode='nearest'))
-        # The float32 native profile can be numerically rough even in a
-        # physically smooth tail (notably strongly asymmetric profiles).
-        # Probe every interpolation cell at its centre using original native
-        # peaks. Bad neighbourhoods retain native rendering; do not smooth
-        # those native artefacts or relax the whole-curve acceptance checks.
-        mid_ds=np.exp((logd[:-1]+logd[1:])/2)
-        mid_parameters,mid_positions=shapes(mid_ds)
-        mid_widths=np.sqrt(mid_parameters[:,2])
-        _,mid_low,mid_high=powder.getWidthsTOF(mid_positions,*mid_parameters.T)
-        mid_eta=(eta[:-1]+eta[1:])/2
-        qualified=valid.copy();self.midpoint_checks=0;self.rejected_cells=0;self.native_only_stripes=0
-        for i,(p,width) in enumerate(zip(mid_parameters,mid_widths)):
-            offsets=np.sinh(mid_eta)*width
-            used=np.flatnonzero((offsets>=-mid_low[i])&(offsets<mid_high[i]))
-            if len(used)<2:continue
-            expected=np.asarray(peak(0.,*p,offsets[used])[0],float)*width
-            coords=np.asarray([np.full(len(used),i+.5),used+.5])
-            predicted=map_coordinates(self.coefficients,coords,order=3,prefilter=False,mode='nearest')
-            scale=max(float(np.max(abs(expected),initial=0.)),1e-30)
-            rejected=(~np.isfinite(expected))|(~np.isfinite(predicted))|(abs(expected-predicted)>scale*1e-10)
-            bad=used[rejected];self.midpoint_checks+=len(used);self.rejected_cells+=len(bad)
-            rough=(~np.isfinite(expected))|(~np.isfinite(predicted))|(abs(expected-predicted)>scale*ROUGH_NATIVE_RELATIVE)
-            if np.any(rough&(abs(np.sinh(mid_eta[used]))>=np.sinh(6.))):
-                # Isolated sampling points cannot certify a numerically rough
-                # d interval. Preserve its entire original native response,
-                # rather than interpolating between apparently good islands.
-                qualified[i:i+2,:]=0;self.native_only_stripes+=1
-            for row in (i,i+1):
-                qualified[row,bad]=0;qualified[row,bad+1]=0
-        self.halo=_immutable(minimum_filter(qualified,size=(33,33),mode='constant',cval=0))
-        self.logd=_immutable(logd);self.eta=_immutable(eta)
-        self.numeric_bytes=sum(v.nbytes for v in (self.coefficients,self.halo,self.logd,self.eta))
-        if self.numeric_bytes>=MAXIMUM_BYTES:
-            raise ProposalUnavailable('Continuous TOF proposal table exceeds its resident bound')
+        from .tof_shape import IsotropicTOFShape
+        shape=IsotropicTOFShape(n,source.fast.slow.hist.name,source.fast.slow.phase.name)
+        self.shape_identity=shape.identity
+        self.table_reused=table is not None
+        if table is None:
+            table,self.table_reused=shared_table(shape,powder,
+                (float(refs[:,4].min()),float(refs[:,4].max())))
+        elif not isinstance(table,CompiledTOFTable):
+            raise TypeError('A currently owned native TOF table is required')
+        table.check_runtime()
+        if table.shape_identity!=shape.identity:
+            raise ProposalUnavailable('Prepared TOF shape differs from the current instrument or sample broadening')
+        self.table=table
+        for name in ('coefficients','halo','logd','eta','numeric_bytes','midpoint_checks',
+                     'rejected_cells','native_only_stripes'):
+            setattr(self,name,getattr(self.table,name))
         f64=np.ctypeslib.ndpointer(dtype=np.float64,flags='C_CONTIGUOUS')
         f32=np.ctypeslib.ndpointer(dtype=np.float32,flags='C_CONTIGUOUS')
         i64=np.ctypeslib.ndpointer(dtype=np.int64,flags='C_CONTIGUOUS')
@@ -129,6 +68,7 @@ class TOFProfileProposals:
 
     def _context(self):
         context=self.exact._context();self.batch._check()
+        self.table.check_runtime()
         if _profile(self.source)!=self.profile_sha256 or floating_state()!=self.floating:
             raise ProposalUnavailable('Current profile changed; regenerate TOF proposals')
         return context
@@ -172,20 +112,22 @@ class TOFProfileProposals:
             statistics=dict(self.statistics),resident_numeric_bytes=self.numeric_bytes,
             maximum_accounted_workspace_bytes=self.maximum_workspace,
             profile_sha256=self.profile_sha256,interpolation=True,
+            shape_sha256=self.shape_identity,
             native_midpoint_checks=self.midpoint_checks,rejected_interpolation_cells=self.rejected_cells,
             native_only_d_stripes=self.native_only_stripes,
             roughness_relative_to_native_precision=ROUGH_NATIVE_RELATIVE,
             native_origin_authority=False,observations_used_for_compilation=False,
+            owned_table_reused=self.table_reused,
             table_import_supported=False,original_native_objective_required=True)
 
 
-def for_source(source,*,exact=None):
+def for_source(source,*,exact=None,table=None):
     """Avoid table setup for workloads below the measured large-profile case."""
     exact=exact or NativeTOFForward(source)
     records=exact.collector.collect_physical(np.zeros(len(source.radii)),maximum_bytes=MAXIMUM_BYTES)
     if sum(high-low for _,_,low,high in records.values())<MINIMUM_REFERENCE_BINS:
         return None
-    result=TOFProfileProposals(source,exact=exact)
+    result=TOFProfileProposals(source,exact=exact,table=table)
     if not np.any(result.halo):
         raise ProposalUnavailable('Current native profile needs original peaks throughout the proposal envelope')
     return result
