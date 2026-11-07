@@ -107,17 +107,33 @@ static void proposal_spline_weights(double t,double *w) {
     w[0]=a*a*a/6.;w[1]=(3.*t*t*t-6.*t*t+4.)/6.;
     w[2]=(-3.*t*t*t+3.*t*t+3.*t+1.)/6.;w[3]=t*t*t/6.;
 }
-static int proposal_spline_sample(const double *c,const uint8_t *halo,
-        ptrdiff_t rows,ptrdiff_t cols,double u,double v,double *out) {
-    if (!isfinite(u)||!isfinite(v)||u<1.||v<1.||u>=rows-2.||v>=cols-2.) return 0;
-    ptrdiff_t hu=(ptrdiff_t)floor(u+.5),hv=(ptrdiff_t)floor(v+.5);
-    if (!halo[hu*cols+hv]) return 0;
-    ptrdiff_t iu=(ptrdiff_t)floor(u),iv=(ptrdiff_t)floor(v);
-    double wu[4],wv[4],value=0.;proposal_spline_weights(u-iu,wu);proposal_spline_weights(v-iv,wv);
+typedef struct {
+    const double *rows[4];
+    const uint8_t *halo;
+    double weights[4];
+    ptrdiff_t cols;
+} proposal_spline_row;
+
+/* The reflection metric is constant across its peak window. Keep its
+ * coefficient rows and cubic weights outside the bin loop; do not contract
+ * the coefficient rows, which would change the original summation order. */
+static void proposal_spline_row_init(proposal_spline_row *row,
+        const double *c,const uint8_t *halo,ptrdiff_t cols,double u) {
+    ptrdiff_t iu=(ptrdiff_t)floor(u),hu=(ptrdiff_t)floor(u+.5);
+    for (int i=0;i<4;i++) row->rows[i]=c+(iu-1+i)*cols;
+    row->halo=halo+hu*cols;row->cols=cols;
+    proposal_spline_weights(u-iu,row->weights);
+}
+static int proposal_spline_sample(const proposal_spline_row *row,double v,double *out) {
+    if (!isfinite(v)||v<1.||v>=row->cols-2.) return 0;
+    ptrdiff_t hv=(ptrdiff_t)floor(v+.5);
+    if (!row->halo[hv]) return 0;
+    ptrdiff_t iv=(ptrdiff_t)floor(v);
+    double wv[4],value=0.;proposal_spline_weights(v-iv,wv);
     for (int i=0;i<4;i++) {
-        const double *row=c+(iu-1+i)*cols+iv-1;double h=0.;
-        for (int j=0;j<4;j++) h+=wv[j]*row[j];
-        value+=wu[i]*h;
+        const double *coefficients=row->rows[i]+iv-1;double h=0.;
+        for (int j=0;j<4;j++) h+=wv[j]*coefficients[j];
+        value+=row->weights[i]*h;
     }
     if (!isfinite(value)||value<0.) return 0;
     *out=value;return 1;
@@ -140,12 +156,14 @@ int proposal_tof_profile_sum(peak_function peak,ptrdiff_t nr,ptrdiff_t nx,
         for (int j=0;j<5;j++) if (!isfinite(p[j])) return 3;
         double width=sqrt(p[3]),u=(log(d[row])-u0)/du;
         int supported=isfinite(width)&&width>0.&&isfinite(u)&&u>=1.&&u<rows-2.;
+        proposal_spline_row spline;
+        if (supported) proposal_spline_row_init(&spline,coefficients,halo,cols,u);
         int count=0;
         if (!supported) statistics[2]++;
         for (int64_t j=0;j<hi-lo;j++) {
             double dx=axis[lo+j]-p[0],value=0.;
             int central=supported&&dx>=-radius*width&&dx<radius*width;
-            if (!central&&supported&&proposal_spline_sample(coefficients,halo,rows,cols,u,
+            if (!central&&supported&&proposal_spline_sample(&spline,
                     (asinh(dx/width)-v0)/dv,&value)) {
                 temporary[j]=value/width;statistics[1]++;
             } else {
