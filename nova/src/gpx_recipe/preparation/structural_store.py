@@ -82,7 +82,9 @@ def build(directories, destination, *, bins=2048, split_seed=3917, augmenter=Non
     metadata.update(schema=SCHEMA, rows=cohort['unique_examples'], capacity=sink.capacity,
                     bins=bins, features_sha256=digest_file(sink.path),
                     targets_sha256=hashlib.sha256(raw).hexdigest(), split_seed=split_seed)
-    if len(json.dumps(metadata).encode()) > MAX_METADATA_BYTES:
+    # Admission must match write_json's actual representation; its indentation
+    # can make a large inventory exceed the reader's bound after publication.
+    if len((json.dumps(metadata, indent=2, allow_nan=False)+'\n').encode()) > MAX_METADATA_BYTES:
         raise ValueError('Structural feature-cache metadata exceeds its bounded inventory')
     write_json(destination/'store.json', metadata)
     return load(destination)

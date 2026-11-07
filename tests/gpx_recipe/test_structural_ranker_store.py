@@ -79,3 +79,16 @@ def test_file_reads_detect_changes_after_cache_admission(tmp_path):
             stored['features'].take(np.array([0]))
     finally:
         stored['features'].close()
+
+
+def test_metadata_budget_covers_the_actual_published_representation(tmp_path, monkeypatch):
+    from gpx_recipe.preparation import structural_store
+    stored = build([block(tmp_path)], tmp_path/'first-cache', bins=128)
+    stored['features'].close()
+    raw = (tmp_path/'first-cache/store.json').read_bytes()
+    compact_size = len(json.dumps(json.loads(raw)).encode())
+    assert compact_size < len(raw)
+    monkeypatch.setattr(structural_store, 'MAX_METADATA_BYTES', (compact_size+len(raw))//2)
+    with pytest.raises(ValueError, match='metadata exceeds'):
+        build([tmp_path/'first'], tmp_path/'oversized-cache', bins=128)
+    assert not (tmp_path/'oversized-cache/store.json').exists()
