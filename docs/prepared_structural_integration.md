@@ -23,6 +23,16 @@ changes have not yet been deployed as an accepted preparation release.
 Component measurements below retain their original scope; they do not prove
 complete-workflow speed, structural recovery or NDIP latency.
 
+Paired example generation draws shared parent cells before testing individual
+children. Child trajectories are now admitted at those fixed parent contexts,
+using the same metric transformation as the final native examples. A rejected
+combination redraws the whole child ray inside the original bounds, retaining
+all coordinates, amplitude steps and trajectory identities. It cannot replace
+a parent cell for one candidate, clip a point or omit an inconvenient family.
+An infeasible parent-only control or an exhausted trajectory scope still fails
+the block. This sampling change does not widen an existing model's verified
+parent-reference envelope; that requires new native curves and held-out tests.
+
 Structural Model and Live acquisition receipts separate the current worker's
 preparation from fitting and independent GPX checks. The displayed combined
 service time is a subtotal of native worker time; other worker tasks, Galaxy

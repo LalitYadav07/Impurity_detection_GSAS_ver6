@@ -49,7 +49,7 @@ def _direction(rng, dimensions, sparse):
 def draw_trajectories(mode_gram, cell_gram, bounds, *, seed, trajectories=64,
                       steps=4, displacement_range=(.0005, .04),
                       relative_metric_range=(.0001, .01), feasible=None,
-                      maximum_attempts=1000):
+                      trajectory_feasible=None, maximum_attempts=1000):
     """Draw independent directions, with nested amplitudes kept in one group.
 
     Intervals describe maximum trajectory amplitudes. Each trajectory contains
@@ -57,6 +57,9 @@ def draw_trajectories(mode_gram, cell_gram, bounds, *, seed, trajectories=64,
     explicit parent/null example is generated separately by the dataset owner;
     it must not be duplicated under every child's compulsory class label.
     Relative metric norm is NOT the exact finite real-space strain.
+    An indexed feasibility callback can additionally check a trajectory in
+    its already-declared shared parent context. Rejections redraw the whole
+    child trajectory; they cannot change that parent context or its identity.
     """
     for value, limit, name in [(seed, 2**32-1, 'seed'),
                                (trajectories, 4096, 'trajectory count'),
@@ -83,8 +86,8 @@ def draw_trajectories(mode_gram, cell_gram, bounds, *, seed, trajectories=64,
         raise ValueError('Positive finite per-coordinate bounds required')
     if trajectories*steps*(nm+nc)*8 > 64*1024**2:
         raise ValueError('Generate the example trajectories in smaller chunks')
-    if feasible is not None and not callable(feasible):
-        raise TypeError('The physical feasibility check must be callable')
+    if any(check is not None and not callable(check) for check in (feasible,trajectory_feasible)):
+        raise TypeError('The physical feasibility checks must be callable')
     rng = np.random.default_rng(seed); fractions = np.geomspace(.1, 1., steps)
     points = []; labels = []; mode_norms = []; cell_norms = []; rejected = 0
     for index in range(trajectories):
@@ -105,6 +108,11 @@ def draw_trajectories(mode_gram, cell_gram, bounds, *, seed, trajectories=64,
                 mask = np.asarray(feasible(block))
                 if mask.shape != (steps,) or mask.dtype != bool:
                     raise ValueError('Feasibility must return one boolean per configuration')
+                allowed = bool(mask.all())
+            if allowed and trajectory_feasible is not None:
+                mask = np.asarray(trajectory_feasible(index,block))
+                if mask.shape != (steps,) or mask.dtype != bool:
+                    raise ValueError('Trajectory feasibility must return one boolean per configuration')
                 allowed = bool(mask.all())
             if allowed:
                 points.extend(block); labels.extend([index]*steps)

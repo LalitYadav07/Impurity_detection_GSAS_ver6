@@ -16,7 +16,7 @@ from ..structural_live.service import SearchSettings, make_source
 from .reference import create_reference
 from .structural_examples import declared_group, render_native
 from .structural_sampling import from_source
-from .structural_conditioning import condition
+from .structural_conditioning import ParentConditioner,condition
 from .structural_parent_reference import NativeParentReference, ParentMetricSpace, rotations
 from ..structural_live.optimization.physical_prior_geometry import native_reciprocal_matrix
 from .worker import validate_request, verify_structural_child
@@ -75,7 +75,9 @@ def generate(request, *, seed, parent_seed, trajectories=64, steps=4,
         mode_radius=settings['mode_radius'], cell_radius=settings['cell_radius']))
     mark('preparing_child')
     child_group = declared_group(source)
-    original = from_source(source, seed=seed, trajectories=trajectories, steps=steps)
+    conditioning = ParentConditioner(source,parent_space,candidate['transformation_matrix'],parents)
+    original = from_source(source, seed=seed, trajectories=trajectories, steps=steps,
+        trajectory_feasible=conditioning.feasible)
     mark('sampling_child_trajectories')
     paired = condition(source, original, parent_space, candidate['transformation_matrix'], parents)
     selected = (paired.trajectory == -1) | ((paired.trajectory >= interval[0]) & (paired.trajectory < interval[1]))
@@ -134,6 +136,7 @@ def generate(request, *, seed, parent_seed, trajectories=64, steps=4,
         groups=[('parent:'+hashes[0] if i == -1 else f'parent:{hashes[0]}:{seed}:{parent_seed}:trajectory-{i}') for i in trajectory],
         roles={'0': 'original_parent_anchor', '1': 'shared_parent_only_control', '2': 'child_hypothesis'},
         conditioning='Replace parent-invariant metric only; retain every displacement and symmetry-breaking metric coordinate',
+        trajectory_admission='whole-child-rejection-at-fixed-shared-parent-context/v1',
         mode_dimensions=source.mode_dimensions, cell_dimensions=source.cell_dimensions,
         maximum_cell_reconstruction_error=paired.maximum_reconstruction_error,
         parent_control_comparisons=controls,

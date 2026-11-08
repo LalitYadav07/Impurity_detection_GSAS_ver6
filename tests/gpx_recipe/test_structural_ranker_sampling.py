@@ -49,11 +49,44 @@ def test_infeasible_scope_is_not_a_partial_or_relabelled_dataset():
             trajectories=2, feasible=lambda rows: np.zeros(len(rows), bool), maximum_attempts=3)
 
 
+def test_indexed_parent_admission_keeps_every_trajectory_and_whole_amplitude_ray():
+    calls=[]
+    def feasible(index,rows):
+        calls.append((index,rows.copy()))
+        return (rows[:,0]>0) if index%3==0 else np.ones(len(rows),bool)
+    args=(np.eye(2),np.eye(1),np.ones(3))
+    result=draw_trajectories(*args,seed=4,trajectories=6,steps=4,trajectory_feasible=feasible)
+    assert set(result.trajectory)==set(range(6))
+    assert result.points.shape==(24,3)
+    assert result.rejected_directions==len(calls)-6
+    assert result.rejected_directions>0
+    for index in range(6):
+        block=result.points[result.trajectory==index]
+        np.testing.assert_allclose(block,np.geomspace(.1,1.,4)[:,None]*block[-1],atol=1e-18)
+    np.testing.assert_array_equal(result.points,
+        draw_trajectories(*args,seed=4,trajectories=6,steps=4,trajectory_feasible=feasible).points)
+
+
+def test_unrestricted_parent_check_does_not_change_existing_random_draws():
+    args=(np.eye(3),np.eye(2),np.ones(5))
+    old=draw_trajectories(*args,seed=61)
+    new=draw_trajectories(*args,seed=61,trajectory_feasible=lambda index,rows:np.ones(len(rows),bool))
+    np.testing.assert_array_equal(new.points,old.points)
+    assert new.rejected_directions==old.rejected_directions
+
+
 @pytest.mark.parametrize('bad', [lambda rows: True, lambda rows: np.ones(len(rows)),
                                  lambda rows: np.ones(len(rows)+1, bool)])
 def test_untyped_feasibility_is_not_training_truth(bad):
     with pytest.raises(ValueError, match='one boolean'):
         draw_trajectories(np.eye(1), np.eye(1), np.ones(2), seed=2, feasible=bad)
+
+
+@pytest.mark.parametrize('bad',[lambda index,rows:True,lambda index,rows:np.ones(len(rows)),
+                               lambda index,rows:np.ones(len(rows)+1,bool)])
+def test_untyped_parent_admission_cannot_change_the_portfolio(bad):
+    with pytest.raises(ValueError,match='one boolean'):
+        draw_trajectories(np.eye(1),np.eye(1),np.ones(2),seed=2,trajectory_feasible=bad)
 
 
 @pytest.mark.parametrize('gram', [np.zeros((2, 2)), np.array([[1., 2.], [2., 1.]]),

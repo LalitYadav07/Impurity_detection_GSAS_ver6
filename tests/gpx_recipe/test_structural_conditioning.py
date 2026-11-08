@@ -4,11 +4,11 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from gpx_recipe.preparation.structural_conditioning import condition
+from gpx_recipe.preparation.structural_conditioning import ParentConditioner,condition
 from gpx_recipe.preparation.structural_parent_reference import (
     ParentMetricSpace, child_metric, coefficients, parent_metric,
 )
-from gpx_recipe.preparation.structural_sampling import TrajectorySamples
+from gpx_recipe.preparation.structural_sampling import TrajectorySamples,draw_trajectories
 from gpx_recipe.structural_live.optimization.physical_prior_geometry import native_reciprocal_matrix
 
 
@@ -101,3 +101,66 @@ def test_empty_or_partial_trajectories_cannot_become_conditioned_examples():
     partial = TrajectorySamples(samples.points, np.array([0, 2]), np.zeros(2), np.zeros(2), 0)
     with pytest.raises(ValueError, match='complete'):
         condition(source, partial, space, basis, parents)
+
+
+def test_conditioned_admission_redraws_child_rays_without_changing_shared_parents_or_bounds():
+    source,_,space,basis,parents,_=setup()
+    # An anisotropic child strain can fit its original box, but after adding
+    # this fixed parent-only context it violates one of the same cell bounds.
+    source.radii[1:]=.00025
+    source.chemistry=SimpleNamespace(log_kernel=lambda rows:np.zeros(len(rows)))
+    parents=np.tile(coefficients(space.baseline+np.diag([.0002,.0002,0.])),(2,1))
+    context=ParentConditioner(source,space,basis,parents)
+    def complete(index,rows):
+        # Same metric geometry as this test's native cell mapping.
+        return context.feasible(index,rows)
+    settings=dict(seed=3,trajectories=2,steps=4,displacement_range=(.001,.001),
+        relative_metric_range=(.0002,.0002))
+    original=draw_trajectories(np.eye(1),np.eye(6),source.radii,**settings)
+    with pytest.raises(ValueError,match='physical domain'):
+        condition(source,original,space,basis,parents)
+    samples=draw_trajectories(np.eye(1),np.eye(6),source.radii,**settings,
+        trajectory_feasible=complete)
+    result=condition(source,samples,space,basis,parents)
+    assert samples.rejected_directions>0
+    assert result.points.shape==(11,7)
+    assert result.role.tolist()==[0,1,2,2,2,2,1,2,2,2,2]
+    assert set(result.trajectory)=={-1,0,1}
+    assert np.all(abs(result.points)<=source.radii)
+    for index in range(2):
+        rows=result.trajectory==index
+        np.testing.assert_array_equal(result.parent_a[rows],np.tile(parents[index],(5,1)))
+        np.testing.assert_array_equal(result.points[rows][1:,0],samples.points[samples.trajectory==index,0])
+    np.testing.assert_array_equal(context.parents,parents)
+    assert all(not value.flags.writeable for value in
+        (context.parents,context.basis,context.mapping,context.controls,context.metrics))
+
+
+def test_impossible_shared_parent_is_not_resampled_for_a_candidate():
+    source,_,space,basis,parents,_=setup()
+    source.radii[1:]=1e-12
+    before=parents.copy()
+    with pytest.raises(ValueError,match='physical domain'):
+        ParentConditioner(source,space,basis,parents)
+    np.testing.assert_array_equal(parents,before)
+
+
+def test_conditioned_admission_keeps_chemistry_and_propagates_technical_errors():
+    source,samples,space,basis,parents,_=setup()
+    source.chemistry=SimpleNamespace(log_kernel=lambda rows:np.where(rows[:,0]>.001,-np.inf,0.))
+    context=ParentConditioner(source,space,basis,parents)
+    assert context.feasible(0,np.repeat(samples.points,2,axis=0)).tolist()==[True,True,False,False]
+    def broken(rows):raise RuntimeError('Unavailable chemistry implementation')
+    source.chemistry.log_kernel=broken
+    with pytest.raises(RuntimeError,match='Unavailable chemistry'):
+        context.feasible(0,samples.points)
+
+
+@pytest.mark.parametrize('values',[lambda rows:np.nan,lambda rows:np.ones(len(rows)+1),
+                                  lambda rows:np.full(len(rows),np.inf)])
+def test_unusable_conditioned_chemistry_is_not_a_physical_rejection(values):
+    source,samples,space,basis,parents,_=setup()
+    source.chemistry=SimpleNamespace(log_kernel=values)
+    context=ParentConditioner(source,space,basis,parents)
+    with pytest.raises(ValueError,match='Conditioned chemistry'):
+        context.feasible(0,samples.points)

@@ -23,7 +23,8 @@ from test_structural_paired_preparation import inputs,completed_library
 
 
 @pytest.mark.parametrize('kind',['PNC','PNT'])
-def test_native_example_worker_returns_lossless_pairs_without_exporting_working_projects(tmp_path,kind):
+@pytest.mark.parametrize('parent_range',[PARENT_RANGE,(.0001,.003)])
+def test_native_example_worker_returns_lossless_pairs_without_exporting_working_projects(tmp_path,kind,parent_range):
     source,_=native_source(tmp_path/'input',kind)
     parent=tmp_path/'parent.cif';G.G2Project(gpxfile=str(source)).phase(0).export_CIF(str(parent))
     child=Path(__file__).with_name('data')/'synthetic-ersi-cmcm-isodistort.cif'
@@ -34,7 +35,7 @@ def test_native_example_worker_returns_lossless_pairs_without_exporting_working_
         settings=dict(candidate=dict(id='public-ersi',transformation_matrix=[[-1.,0,0],[0,-1.,0],[0,0,1.]],
             origin_shift=[0,0,0],child=dict(path='child.cif',sha256=file_sha(child))),
             mode_radius=.05,cell_radius=.01,seed=1947,parent_seed=8341,
-            parent_relative_metric_range=list(PARENT_RANGE),representation=REPRESENTATION,
+            parent_relative_metric_range=list(parent_range),representation=REPRESENTATION,
             trajectories=3,steps=2,trajectory_slice=[1,3]),destination=str(tmp_path/'output'))
     result=execute('structural-examples',request);root=Path(result['output'])
     original=read(root/'working-native');paired=read(root,names='examples')
@@ -42,6 +43,7 @@ def test_native_example_worker_returns_lossless_pairs_without_exporting_working_
     assert entry['detail']['timing']==original.manifest['timing']
     assert paired.manifest['examples']==7 and paired.manifest['trajectory_slice']==[1,3]
     assert paired.manifest['parent_controls_shape_qualified']
+    assert paired.manifest['trajectory_admission']=='whole-child-rejection-at-fixed-shared-parent-context/v1'
     for name in original.arrays:assert original.arrays[name].tobytes()==paired.arrays[name].tobytes()
     assert set(result['artifacts'])=={'examples.json','examples.npz','entry.json'}
     pack(root,tmp_path/'portable.zip',result['artifacts']);restored=unpack(tmp_path/'portable.zip',tmp_path/'restored')
