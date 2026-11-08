@@ -537,6 +537,8 @@ def test_long_series_map_uses_bounded_window_around_selected_scan():
     assert "map rows 26–55 of 55" in state.unet_transition_overlay_summary
     assert state.unet_transition_map_scroll_max == 26
     assert state.unet_transition_map_scroll_compact == "26–55 / 55"
+    assert state.unet_transition_map_height == 550
+    assert state.unet_transition_map["layout"]["height"] == 550
     app.select_unet_transition_map_start(1)
     assert app._unet_transition_map_ids == [row["run_id"] for row in rows[:30]]
     assert state.unet_transition_map_scroll_label == "Rows 1–30 of 55"

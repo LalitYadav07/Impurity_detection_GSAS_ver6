@@ -1,4 +1,4 @@
-"""Measured-curve transition tracker powered by the pinned 2×156 Focus U-Net."""
+"""Measured-curve transition tracker powered by the pinned full-Q U-Net."""
 
 from __future__ import annotations
 
@@ -64,6 +64,11 @@ _FEATURE_COLORS = {
 
 _DEFAULT_OVERLAYS = ["peak_emergence", "relative_intensity_change",
                      "peak_broadening", "peak_shift"]
+_OVERLAY_LABELS = {
+    "relative_intensity_change": "Intensity",
+    "peak_broadening": "Broadening",
+    "peak_shift": "Shift",
+}
 
 _CAUSE_LABELS = {
     "lattice_change_candidate": "Lattice change",
@@ -166,11 +171,22 @@ def _visible_ribbon_range(traces, limits):
     return [low - padding, high + padding]
 
 
+def _inline_map_height(scan_count):
+    if scan_count <= 8:
+        return 470
+    if scan_count <= 30:
+        return 550
+    if scan_count <= 60:
+        return 650
+    return 730
+
+
 def _evolution_figure(view_rows, patterns, scans, selected_id, current, earlier, *,
                       selected_types, selected_event=-1, scale="linear",
                       palette="Turbo", zoom=None, revision=0, series="",
                       color_limits=None, order_label="Acquisition order",
-                      order_by="acquired", identity=None, reference_id=None):
+                      order_by="acquired", identity=None, reference_id=None,
+                      height=690):
     """One shared-x view: native pair curves over a globally scaled heat map."""
     if not patterns:
         return plotly.Figure.to_data(empty_figure("Waiting for measured scans")), 0, 0
@@ -183,8 +199,9 @@ def _evolution_figure(view_rows, patterns, scans, selected_id, current, earlier,
     raw_hover = [[f"{value:.5g}" if np.isfinite(value) else ""
                   for value in row] for row in raw]
     count = len(view_rows)
+    row_heights = [.50, .50] if count <= 8 else [.38, .62] if count <= 30 else [.30, .70]
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
-                        row_heights=[.32, .68], vertical_spacing=.045)
+                        row_heights=row_heights, vertical_spacing=.045)
     identity = identity or {}
     for pattern, label, tone in ((earlier, "Reference scan", "#87958d"),
                                  (current, "Selected scan", "#183f78")):
@@ -266,7 +283,8 @@ def _evolution_figure(view_rows, patterns, scans, selected_id, current, earlier,
     for index in tick_indices:
         scan = scans[view_rows[index]["run_id"]]
         condition = _condition_label(scan, order_by)
-        tick_labels.append(f"{scan_label(scan)} · {condition}")
+        label = re.sub(r"^Exp\s+\d+\s*·\s*", "", scan_label(scan))
+        tick_labels.append(f"{label} · {condition.replace(' measured', '')}")
     fig.update_yaxes(title_text="Measured intensity", row=1, col=1)
     row_axis = 'Temperature order' if order_by == 'temperature' else order_label
     fig.update_yaxes(title_text=row_axis, tickmode="array",
@@ -274,8 +292,8 @@ def _evolution_figure(view_rows, patterns, scans, selected_id, current, earlier,
                      range=[count - .5, -.5], fixedrange=True, row=2, col=1)
     fig.update_xaxes(title_text=COORDINATES.get(current.scope.coordinate,
                                                current.scope.coordinate), row=2, col=1)
-    fig.update_layout(template="plotly_white", height=690,
-                      margin={"l": 190, "r": 24, "t": 30, "b": 108},
+    fig.update_layout(template="plotly_white", height=height,
+                      margin={"l": 170, "r": 24, "t": 25, "b": 82},
                       hovermode="closest", barmode="overlay", dragmode="zoom",
                       legend={"orientation": "h", "y": 1.12},
                       uirevision=f"{series}:{revision}")
@@ -742,6 +760,8 @@ class UnetTransitionMixin:
             ],
             "unet_transition_map_window": 30,
             "unet_transition_map_window_options": [30, 60, 100],
+            "unet_transition_map_height": 470,
+            "unet_transition_map_scroll_padding": 175,
             "unet_transition_map_start": 1,
             "unet_transition_map_scroll_max": 1,
             "unet_transition_map_scan_position": 1,
@@ -802,14 +822,13 @@ class UnetTransitionMixin:
     def _unet_transition_tracking_dashboard(self):
         with html.Section(classes="radar-result-card radar-transition-workspace my-3"):
             with html.Div(classes="radar-tracker-header"):
-                with html.Div():
-                    html.Div("OPTIONAL LOCAL MORPHOLOGY EVIDENCE", classes="radar-tracker-eyebrow")
-                    html.H3("U-Net feature review", classes="radar-card-title")
-                    html.P("Choose an ordering and comparison spacing, then inspect linked measured curves, model boxes and published fits.",
-                           classes="radar-section-help")
+                html.H3("U-Net feature review", classes="radar-card-title")
+                vuetify.VBtn(text=("setup_collapsed ? 'Show setup' : 'Focus plots'",),
+                             click="setup_collapsed = !setup_collapsed; $nextTick(() => window.setTimeout(() => window.document.querySelectorAll('.js-plotly-plot').forEach(el => el.getBoundingClientRect().width > 0 && window.Plotly && window.Plotly.Plots.resize(el)), 80))",
+                             variant="text", size="small")
                 vuetify.VBtn(text=("unet_transition_follow ? 'Following latest' : 'Return to latest'",),
                              click=self.follow_unet_transition_latest, variant="tonal", size="small",
-                             disabled=("unet_transition_follow",))
+                             v_if="!unet_transition_follow")
             vuetify.VProgressLinear(v_if="unet_transition_loading", indeterminate=True,
                                     color="#15543c", height=3)
             html.P("{{ unet_transition_loading_message }}", v_if="unet_transition_loading",
@@ -897,7 +916,8 @@ class UnetTransitionMixin:
                    v_if="unet_transition_selected_event >= 0 && !unet_transition_loading",
                    classes="radar-tracker-selected-inline")
             with html.Div(classes="radar-tracker-map-shell", v_show="!unet_transition_loading"):
-                with html.Div(classes="radar-tracker-map-scroll"):
+                with html.Div(classes="radar-tracker-map-scroll",
+                              style=("'height:' + unet_transition_map_height + 'px;padding-top:' + unet_transition_map_scroll_padding + 'px'",)):
                     vuetify.VBtn("↑ Page", click=self.previous_unet_transition_map_page,
                                  disabled=("unet_transition_map_start <= 1",),
                                  variant="text", size="x-small")
@@ -914,15 +934,19 @@ class UnetTransitionMixin:
                               title=("unet_transition_map_scroll_label",))
                 with html.Div(classes="radar-tracker-map-frame"):
                     figure = plotly.Figure(display_mode_bar=True, responsive=True,
-                                           style="height:690px;width:100%",
+                                           style=("'height:' + unet_transition_map_height + 'px;width:100%'",),
                                            relayout=(self.relayout_unet_transition_map, "[$event]"),
                                            click=(self.select_unet_transition_map_click,
                                                   _MAP_CLICK_ARGUMENTS))
                     figure.data = ("unet_transition_map.data",)
                     figure.layout = ("unet_transition_map.layout",)
-            html.P("Top: native measured reference and selected curves. Bottom: compatible scans in the chosen order. Use the slider to inspect a scan; use Page to browse map rows. Colored marks show whole-Q U-Net local suggestions mapped back to the measured axis. A wider comparison can reveal a cumulative change, but adjacent scans are needed to locate its onset. Heat-map colors use one global intensity range for the series; line curves remain raw.",
-                   v_show="!unet_transition_loading",
-                   classes="radar-section-help radar-tracker-map-caption")
+            with html.Details(classes="radar-tracker-map-help", v_show="!unet_transition_loading"):
+                html.Summary("How to read this map")
+                html.P("Top: raw measured reference and selected curves. Bottom: compatible scans in the chosen order. Colored marks are model suggestions mapped to the measured axis. The vertical slider selects a scan; Page browses rows. Wider comparisons can reveal cumulative changes; adjacent scans help locate onset. Heat-map colors share one global intensity scale for the series.",
+                       classes="radar-section-help")
+            with html.Details(classes="radar-tracker-map-help", v_if="!!powgen_convergence_notice && !unet_transition_loading"):
+                html.Summary("Fit quality note")
+                html.P("{{ powgen_convergence_notice }}", classes="radar-section-help")
             with html.Div(classes="radar-tracker-fit-grid", v_show="!unet_transition_loading"):
                 with html.Div(classes="radar-tracker-fit-card"):
                     html.H4("{{ unet_transition_reference_fit_label }}")
@@ -1499,7 +1523,8 @@ class UnetTransitionMixin:
             for name in (event.get("feature_types") or ["uncertain"])
         )
         state.unet_transition_overlay_options = [
-            {"title": f"{name.replace('_', ' ').capitalize()} ({counts[name]})", "value": name}
+            {"title": f"{_OVERLAY_LABELS.get(name, name.replace('_', ' ').capitalize())} ({counts[name]})",
+             "value": name}
             for name in [*_FEATURE_COLORS, "uncertain"]
         ]
         width = min(max(1, int(state.unet_transition_map_window)), 100)
@@ -1509,6 +1534,12 @@ class UnetTransitionMixin:
         else:
             start = max(0, min(position - width // 2, max_start))
         view_rows = rows[start:start + width]
+        map_height = _inline_map_height(len(view_rows))
+        state.unet_transition_map_height = map_height
+        state.unet_transition_map_scroll_padding = round(
+            25 + (.5 if len(view_rows) <= 8 else .38 if len(view_rows) <= 30 else .3)
+            * (map_height - 107) + .045 * (map_height - 107)
+        )
         state.unet_transition_map_start = start + 1
         state.unet_transition_map_scroll_max = max_start + 1
         state.unet_transition_map_scan_position = position + 1
@@ -1554,17 +1585,19 @@ class UnetTransitionMixin:
                 order_label=order_title,
                 order_by=state.unet_transition_order,
                 identity=identity, reference_id=selected.get("previous"),
+                height=map_height,
             )
             self._unet_transition_map_ids = [row["run_id"] for row in view_rows]
             self._unet_transition_map_identity = identity
             state.unet_transition_map = figure
-            state.unet_transition_dialog_figure = figure
+            state.unet_transition_dialog_figure = {
+                **figure, "layout": {**figure["layout"], "height": max(690, map_height)}
+            }
             total = sum(len(row.get("events") or []) for row in rows)
             span = (f" · map rows {start + 1}–{start + len(view_rows)} of {len(rows)}"
                     if len(view_rows) < len(rows) else "")
             state.unet_transition_overlay_summary = (
-                f"Showing {shown} of {total} model suggestions{span}. "
-                "Overlays are filtered by feature type; model attention is not calibrated."
+                f"Showing {shown} of {total} model regions{span}."
                 + (f" {saturated} heat-map cells exceed the locked color range."
                    if saturated else "")
             )
