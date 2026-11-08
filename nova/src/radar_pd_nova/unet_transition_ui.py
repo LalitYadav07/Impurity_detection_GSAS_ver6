@@ -19,9 +19,10 @@ from .scan_conditions import qualified_metadata
 from .sample_labels import recorded_sample_title
 from .facility_metadata import parse_nexus_timestamp
 from .results import discover_plot_payloads, gsas_figure, read_plot_payload
+from .transition_coordinate_mapping import mapped_calibration
 from .transition_input import digest
 from .transition_tracking_plot import COORDINATES, binned_intensity, display_grid, empty_figure
-from .unet_transition_engine import (ComparisonSuperseded, UnetTransitionEngine, acquisition_key,
+from .unet_transition_engine import (ComparisonSuperseded, FullQTransitionEngine, acquisition_key,
                                      available_orders, condition_order_value, source_signature)
 
 
@@ -61,7 +62,15 @@ _FEATURE_COLORS = {
     "diffuse_scattering_change": "#73634c",
 }
 
-_DEFAULT_OVERLAYS = ["peak_emergence", "peak_disappearance", "peak_shift"]
+_DEFAULT_OVERLAYS = ["peak_emergence", "relative_intensity_change",
+                     "peak_broadening", "peak_shift"]
+
+_CAUSE_LABELS = {
+    "lattice_change_candidate": "Lattice change",
+    "magnetic_order_candidate": "Magnetic order",
+    "new_phase_candidate": "New phase",
+    "structural_change_candidate": "Structural change",
+}
 
 # Resolve a heat-map row using the figure that emitted the browser event.
 # Trace metadata avoids repeating long acquisition IDs in every raster cell.
@@ -221,7 +230,9 @@ def _evolution_figure(view_rows, patterns, scans, selected_id, current, earlier,
             bars["hover"].append(
                 f"{scan_label(scans[row['run_id']])}<br>{_feature_label(event)}"
                 f"<br>{event['x0']:.5g}–{event['x1']:.5g}"
-                f"<br>Model attention {_score_label(event['attention_score'])} (not calibrated)"
+                + (f"<br>Q {event['q0']:.4g}–{event['q1']:.4g} Å⁻¹"
+                   if "q0" in event else "")
+                + f"<br>Model attention {_score_label(event['attention_score'])} (not calibrated)"
             )
             if row["run_id"] == selected_id:
                 fig.add_vrect(x0=event["x0"], x1=event["x1"],
@@ -645,13 +656,21 @@ def _history_figure(rows, scans):
 
 
 class UnetTransitionMixin:
+    def _unet_q_calibration(self, scan):
+        return mapped_calibration(scan, getattr(self, "_powgen_controller", None),
+                                  getattr(self, "records", {}),
+                                  service=getattr(self, "service", None))
+
+    def _new_unet_transition_engine(self):
+        return FullQTransitionEngine(calibration_resolver=self._unet_q_calibration)
+
     def _init_unet_transition_tracking(self):
         previous_generation = getattr(self, "_unet_transition_generation", -1)
         previous_task = getattr(self, "_unet_transition_task", None)
         if previous_task is not None and not previous_task.done():
             previous_task.cancel()
         self._optional_unet_sources = ([], [])
-        self._unet_transition_engine = UnetTransitionEngine()
+        self._unet_transition_engine = self._new_unet_transition_engine()
         self._unet_transition_report = {"records": [], "groups": []}
         self._unet_transition_scans = {}
         self._unet_transition_signature = None
@@ -672,7 +691,7 @@ class UnetTransitionMixin:
         self._unet_transition_fit_signature = None
         state = self.server.state
         for name, value in {
-            "transition_evidence_mode": "indicators",
+            "transition_evidence_mode": "unet",
             "unet_transition_series": "", "unet_transition_series_options": [],
             "unet_transition_selected": "", "unet_transition_scans": [],
             "unet_transition_scan_cards": [], "unet_transition_series_summary": "No measured series yet",
@@ -700,6 +719,8 @@ class UnetTransitionMixin:
             "unet_transition_notice": "", "unet_transition_events": [],
             "unet_transition_pair_label": "Waiting for measured scans",
             "unet_transition_pair_context": "", "unet_transition_attention_label": "No comparison",
+            "unet_transition_cause_summary": "", "unet_transition_causes": [],
+            "unet_transition_coverage_note": "", "unet_transition_profile_note": "",
             "unet_transition_attention_tone": "pending", "unet_transition_feature_count": 0,
             "unet_transition_selected_event": -1, "unet_transition_selected_event_number": 0,
             "unet_transition_selected_feature": "", "unet_transition_selected_interval": "",
@@ -833,6 +854,13 @@ class UnetTransitionMixin:
                     html.P("{{ unet_transition_pair_context }}", classes="radar-section-help")
                 html.Span("{{ unet_transition_attention_label }}",
                           classes=("'radar-tracker-attention ' + unet_transition_attention_tone",))
+            with html.Div(classes="radar-tracker-causes", v_if="unet_transition_causes.length && !unet_transition_loading"):
+                html.Span("{{ item.label }} · {{ item.score }}{{ item.selected ? ' · suggested' : '' }}",
+                          v_for="item in unet_transition_causes",
+                          classes=("'radar-tracker-cause ' + (item.selected ? 'selected' : 'below')",))
+            html.P("{{ unet_transition_cause_summary }} {{ unet_transition_coverage_note }}",
+                   v_if="!!unet_transition_cause_summary && !unet_transition_loading",
+                   classes="radar-section-help")
             html.P("{{ unet_transition_notice }}", v_if="!!unet_transition_notice && !unet_transition_loading",
                    classes="radar-tracker-notice")
             with html.Div(classes="radar-tracker-map-controls", v_show="!unet_transition_loading"):
@@ -892,7 +920,7 @@ class UnetTransitionMixin:
                                                   _MAP_CLICK_ARGUMENTS))
                     figure.data = ("unet_transition_map.data",)
                     figure.layout = ("unet_transition_map.layout",)
-            html.P("Top: native measured reference and selected curves. Bottom: compatible scans in the chosen order. Use the slider to inspect a scan; use Page to browse map rows. Colored marks are U-Net suggestions for the selected comparison spacing. A wider comparison can reveal a cumulative change, but adjacent scans are needed to locate its onset. Heat-map colors use one global intensity range for the series; line curves remain raw.",
+            html.P("Top: native measured reference and selected curves. Bottom: compatible scans in the chosen order. Use the slider to inspect a scan; use Page to browse map rows. Colored marks show whole-Q U-Net local suggestions mapped back to the measured axis. A wider comparison can reveal a cumulative change, but adjacent scans are needed to locate its onset. Heat-map colors use one global intensity range for the series; line curves remain raw.",
                    v_show="!unet_transition_loading",
                    classes="radar-section-help radar-tracker-map-caption")
             with html.Div(classes="radar-tracker-fit-grid", v_show="!unet_transition_loading"):
@@ -914,9 +942,10 @@ class UnetTransitionMixin:
                     html.P("{{ unet_transition_selected_fit_note }}", classes="radar-section-help")
             with html.Details(classes="radar-tracker-provenance", v_show="!unet_transition_loading"):
                 html.Summary("Model and source details")
-                html.P("Focus U-Net {{ unet_transition_model_version }} · 151 native-point windows with 50% overlap · full checkpoint {{ unet_transition_model_sha }}")
+                html.P("Full-Q U-Net {{ unet_transition_model_version }} · one 1024-bin pass over Q = 0.25–12 Å⁻¹ · full checkpoint {{ unet_transition_model_sha }}")
                 html.P("{{ unet_transition_scope_summary }}")
-                html.P("Experimental model trained with Luna silver labels. Attention scores are not calibrated probabilities. Local morphology suggestions do not identify a structural or magnetic phase transition.")
+                html.P("{{ unet_transition_profile_note }}", v_if="!!unet_transition_profile_note")
+                html.P("Experimental model trained on deterministic synthetic changes. Local and whole-pair cause scores are uncalibrated suggestions. Missing Q coverage is not evidence of no change.")
             with html.Div(v_if="unet_transition_unavailable.length > 0 && !unet_transition_loading"):
                 html.H4("Scans awaiting a usable comparison")
                 html.P("{{ item }}", v_for="item in unet_transition_unavailable",
@@ -957,6 +986,11 @@ class UnetTransitionMixin:
                     record = getattr(controller, "records", {}).get(run.run_id)
                     if record is not None and record.local_output_dir is not None:
                         row["unet_transition_fit_root"] = str(record.local_output_dir)
+                    if record is not None:
+                        row["transition_profile_dataset_id"] = (
+                            (getattr(record, "input_dataset_ids", {}) or {}).get("instrument")
+                            or row.get("transition_profile_dataset_id"))
+                        row["galaxy_job_id"] = getattr(record, "galaxy_job_id", None)
                     summary = run.scientific_summary or {}
                     if not row.get("pattern_observation"):
                         row["pattern_observation"] = summary.get("pattern_observation")
@@ -978,7 +1012,7 @@ class UnetTransitionMixin:
             self._unet_transition_generation += 1
             self._unet_transition_request = None
             self._unet_transition_signature = None
-            self._unet_transition_engine = UnetTransitionEngine()
+            self._unet_transition_engine = self._new_unet_transition_engine()
             self.server.state.unet_transition_follow = True
             self._unet_transition_x_range = None
             self._unet_transition_zoom_revision += 1
@@ -1065,7 +1099,7 @@ class UnetTransitionMixin:
         state.unet_transition_loading = bool(
             request is not None and request[2] == self._unet_transition_generation)
         state.unet_transition_loading_message = (
-            "Recomputing ordered scan pairs with Focus U-Net…"
+            "Recomputing ordered scan pairs with full-Q U-Net…"
             if state.unet_transition_loading else "")
 
     def _clear_unet_transition_report(self):
@@ -1255,6 +1289,10 @@ class UnetTransitionMixin:
         state.unet_transition_selected_feature = ""
         state.unet_transition_selected_interval = ""
         state.unet_transition_selected_support = ""
+        state.unet_transition_causes = []
+        state.unet_transition_cause_summary = ""
+        state.unet_transition_coverage_note = ""
+        state.unet_transition_profile_note = ""
         state.unet_transition_event_prev_disabled = True
         state.unet_transition_event_next_disabled = True
         state.unet_transition_profile = plotly.Figure.to_data(empty_figure("Select a comparison"))
@@ -1310,6 +1348,23 @@ class UnetTransitionMixin:
         except (OSError, ValueError, TypeError) as error:
             state.unet_transition_reference_fit_note = f"Fit display unavailable: {error}"
         events = row.get("events") or []
+        causes = (row.get("comparison") or {}).get("causes") or []
+        state.unet_transition_causes = [{"label": _CAUSE_LABELS.get(item["name"], item["name"]),
+                                          "score": _score_label(item["score"]),
+                                          "selected": bool(item["selected"])} for item in causes]
+        selected_causes = [item for item in causes if item["selected"]]
+        state.unet_transition_cause_summary = (
+            "Whole-pair cause suggestions are uncalibrated model scores."
+            + (" Selected cause has no supported local box." if selected_causes and not events else "")
+        ) if causes else ""
+        covered = (row.get("comparison") or {}).get("coverage_fraction")
+        state.unet_transition_coverage_note = (
+            f"Joint Q coverage: {100 * covered:.1f}% of 0.25–12 Å⁻¹."
+            if isinstance(covered, (int, float)) else "")
+        profiles = (row.get("comparison") or {}).get("profiles") or []
+        state.unet_transition_profile_note = "; ".join(
+            f"Physical bank {profile['source_bank']} → profile Bank {profile['profile_bank']} · "
+            f"SHA-256 {profile['sha256']}" for profile in profiles)
         state.unet_transition_summary = (f"{scan_label(before)} → {label}: " +
                                     (f"{len(events)} local feature box(es)" if events else
                                      "no supported local box" if row["status"] == "valid" else
@@ -1320,6 +1375,8 @@ class UnetTransitionMixin:
             f"{row.get('reference_steps', 1)} scan "
             f"{'step' if row.get('reference_steps', 1) == 1 else 'steps'} in chosen order · "
             f"{_acquired_label(before)} → {_acquired_label(after)}"
+            + (" · Directional labels follow reference → selected; reverse order is not separately validated."
+               if state.unet_transition_direction == "descending" else "")
         )
         state.unet_transition_attention_label = (
             f"Review needed · {len(events)} candidate{'s' if len(events) != 1 else ''}"
@@ -1358,7 +1415,12 @@ class UnetTransitionMixin:
         state.unet_transition_event_items = [{
             "index": index, "number": f"{index + 1:02d}",
             "feature": _feature_label(events[index]),
-            "interval": f"{events[index]['x0']:.4g}–{events[index]['x1']:.4g} {COORDINATES.get(scope.get('coordinate'), '')}",
+            "interval": (f"{events[index]['x0']:.4g}–{events[index]['x1']:.4g} "
+                         f"{COORDINATES.get(scope.get('coordinate'), '')} · "
+                         f"Q {events[index]['q0']:.4g}–{events[index]['q1']:.4g} Å⁻¹"
+                         if "q0" in events[index] else
+                         f"{events[index]['x0']:.4g}–{events[index]['x1']:.4g} "
+                         f"{COORDINATES.get(scope.get('coordinate'), '')}"),
             "score": _score_label(events[index]["attention_score"]),
             "tone": _feature_tone(events[index]),
         } for index in visible]
@@ -1375,12 +1437,14 @@ class UnetTransitionMixin:
             state.unet_transition_selected_feature = _feature_label(event).capitalize()
             state.unet_transition_selected_interval = (
                 f"{event['x0']:.5g}–{event['x1']:.5g} "
+                f"{COORDINATES.get(scope.get('coordinate'), '')} · "
+                f"Q {event['q0']:.4g}–{event['q1']:.4g} Å⁻¹"
+                if "q0" in event else
+                f"{event['x0']:.5g}–{event['x1']:.5g} "
                 f"{COORDINATES.get(scope.get('coordinate'), '')}"
             )
-            count = len(event.get("source_windows") or [])
             state.unet_transition_selected_support = (
-                f"model attention {_score_label(event['attention_score'])} · "
-                f"{count} contributing window{'s' if count != 1 else ''}"
+                f"model attention {_score_label(event['attention_score'])} · one full-Q pass"
             )
             selected_position = visible.index(selected)
             state.unet_transition_event_prev_disabled = selected_position == 0

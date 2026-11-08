@@ -1,0 +1,35 @@
+{
+  "schema": "radar-pd-full-q-model-receipt/v1",
+  "checkpoint_sha256": "3bc7a885f8e961b926933f98ad7c2f5de5866456215012945d19e2ab213c4a8b",
+  "architecture": "plain residual 1D U-Net, base 32, no attention",
+  "input": {
+    "channels": ["before", "after", "after_minus_before"],
+    "q_min_inv_angstrom": 0.25,
+    "q_max_inv_angstrom": 12.0,
+    "bins": 1024,
+    "coverage": "joint measured support",
+    "normalization": "pair-wide p5 baseline and p99.5 residual divisor"
+  },
+  "local_names": ["attention", "peak_emergence", "relative_intensity_change", "peak_broadening", "peak_shift"],
+  "cause_names": ["lattice_change_candidate", "magnetic_order_candidate", "new_phase_candidate", "structural_change_candidate"],
+  "local_thresholds": {
+    "attention": 0.85,
+    "peak_emergence": 0.95,
+    "relative_intensity_change": 0.9,
+    "peak_broadening": 0.95,
+    "peak_shift": 0.95
+  },
+  "cause_thresholds": {
+    "lattice_change_candidate": 0.95,
+    "magnetic_order_candidate": 0.4,
+    "new_phase_candidate": 0.95,
+    "structural_change_candidate": 0.1
+  },
+  "evaluation": {
+    "source": "expanded_synthetic_v4_combined/runs/plain_p995_large/evaluation/evaluation.json",
+    "best_epoch": 20,
+    "validation_event_f1_iou_025": 0.8734,
+    "frozen_synthetic_test_event_f1_iou_025": 0.9568,
+    "measured_status": "16 correlated roles, not a calibrated accuracy estimate"
+  }
+}

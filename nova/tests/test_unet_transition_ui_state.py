@@ -101,7 +101,8 @@ class Harness(ui.UnetTransitionMixin):
 
 @pytest.fixture
 def app(monkeypatch):
-    monkeypatch.setattr(ui, "UnetTransitionEngine", FakeEngine)
+    monkeypatch.setattr(ui.UnetTransitionMixin, "_new_unet_transition_engine",
+                        lambda self: FakeEngine())
     return Harness()
 
 
