@@ -1656,12 +1656,12 @@ class RadarPdNovaApp(FeedbackMixin, WebmonMixin, BatteryMixin, UnetTransitionMix
                     )
                     with html.Div(classes="radar-run-list"):
                         with vuetify.VListItem(
-                            v_for="run in run_rows.filter(item => !run_search || (item.name + ' ' + item.mode + ' ' + item.status + ' ' + item.created_display + ' ' + item.job_id).toLowerCase().includes(run_search.toLowerCase()))",
+                            v_for="run in run_rows.filter(item => !run_search || (item.name + ' ' + item.display_name + ' ' + item.mode + ' ' + item.status + ' ' + item.created_display + ' ' + item.job_id).toLowerCase().includes(run_search.toLowerCase()))",
                             key="run.uid",
                             click=(self._run_selection_changed, "[run.uid]"),
                             classes="radar-run-list-item",
                         ):
-                            html.Div("{{ run.name }}", classes="radar-run-list-name")
+                            html.Div("{{ run.display_name }}", classes="radar-run-list-name", title=("run.name",))
                             html.Div("{{ run.mode }} / {{ run.status }} · {{ run.created_display }} · job {{ run.job_short }}", classes="radar-run-list-meta")
                             html.Div("{{ run.stage }}", classes="radar-run-list-stage")
                         html.Div("This workspace is clear. Saved runs remain in Galaxy History.",
@@ -3074,7 +3074,7 @@ class RadarPdNovaApp(FeedbackMixin, WebmonMixin, BatteryMixin, UnetTransitionMix
                     update_modelValue=(self.select_powgen_scan, "[$event]"),
                 )
                 with html.Div(v_if="powgen_selected_scan.run_id", classes="radar-scan-inspector-summary"):
-                    html.Strong("{{ powgen_selected_scan.run_id }}")
+                    html.Strong("{{ powgen_selected_scan.scan_label || powgen_selected_scan.run_id }}", title=("powgen_selected_scan.run_id",))
                     html.Span("Rwp {{ powgen_selected_scan.rwp_display }} | {{ powgen_selected_scan.elapsed_display }} | {{ powgen_selected_scan.analysis_mode }}")
                     html.Span("{{ powgen_selected_scan.conditions_display }}")
                     html.Span(
@@ -4778,7 +4778,7 @@ class RadarPdNovaApp(FeedbackMixin, WebmonMixin, BatteryMixin, UnetTransitionMix
         state.powgen_latest_run_id = scientific_rows[0]["run_id"] if scientific_rows else "-"
         state.powgen_scan_options = [
             {
-                "title": f"{row['run_id']} · {row['rwp_display']} Rwp · {row['quality_label']}",
+                "title": f"{row['scan_label']} · {row['rwp_display']} Rwp · {row['quality_label']}",
                 "value": row["run_id"],
             }
             for row in scientific_rows
@@ -6864,6 +6864,7 @@ class RadarPdNovaApp(FeedbackMixin, WebmonMixin, BatteryMixin, UnetTransitionMix
         rows: list[dict[str, Any]] = []
         for record in sorted(self.records.values(), key=lambda item: item.created_utc, reverse=True):
             row = record.as_row()
+            row["display_name"] = _run_display_name(record.name)
             row["created_display"] = _format_eastern_time(record.created_utc, "%Y-%m-%d %H:%M %Z")
             row["job_short"] = (record.galaxy_job_id or "pending")[:8]
             rows.append(row)
