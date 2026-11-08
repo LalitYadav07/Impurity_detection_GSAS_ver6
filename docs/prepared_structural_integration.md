@@ -1865,3 +1865,40 @@ map through the same native preparation and occupied-site normalization used
 by `FullModeSlice`, bind it to the exact child/embedding and runtime, and verify
 the saved point interpretation before training a mode-family output. This is
 separate from the already verified three-curve feature and partition contracts.
+
+The complete native range-extension worker gate finished successfully on
+2026-11-08 with package `a2d66b1e9fcc2853b0df5505bf1ddc11ed2d9c44483b19afa41e5a8a19ec2ba0`
+(the partition implementation preceding the attention architecture change).
+All 1071 blocks and 179091 native rows yielded 594868 unique feature rows and
+105058 distinct clean training pairs. Every original 72612 feature row was
+checked against the actual saved feature file, including retained compatible
+labels and original fold membership. There are 65 physical trajectory groups:
+45 original training, 10 validation and 10 test groups. Expanded rows and noise
+variants are not additional independent experiments. The installed worker
+advanced through 20 warmup steps, published its numerical continuation, and
+rechecked the complete inputs; no held-out predictions were scored.
+
+That qualification took 1254.011 seconds including installed-source controls,
+with a 5068440816-byte temporary native bank and a measured 5934571520-byte
+process peak RSS. The bank was on bounded tmpfs inside a 16-GiB allocation;
+these figures are not evidence that the same combined memory footprint fits
+an 8-GiB NDIP worker. No expanded feature plane was exported or written.
+
+An observation-free recovery study then checked all 63 native mode maps against
+the full fitting source and the existing named-mode inventories, with no
+failures (225.221 seconds, four workers). The relevant native basis,
+normalization and conditioning source files were byte-identical to the existing
+corpus producer. The recovered numerical maps and their exact child/input
+identities remain private qualification artifacts, not automatically admitted
+uploaded mode targets or absence certificates. Mixed-point interpretation and
+portable publication still require their own checked integration.
+
+The 1008-unit generation cost audit isolates the actual speed problem: summed
+child-rendering time is 421570 seconds, of which 208461 seconds is forward
+curves and 212108 seconds is the unchanged independent native checks (64152
+checks). Generation used 452647 CPU seconds overall. These are overlapping
+per-unit measurements, not elapsed campaign seconds; the campaign elapsed
+about 2.5 hours on its 64-CPU allocation. Native child rendering accounts for
+about 93% of summed unit time. Cheap mode-map recovery does not solve that
+bottleneck, and the one-hour generation target remains unmet. Optimizations
+must retain every original point, complete mode coverage and native checks.
