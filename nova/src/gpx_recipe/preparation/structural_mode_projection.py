@@ -163,3 +163,40 @@ def descriptor(projection):
     return dict(candidate_id=d['candidate']['id'],identity=digest(d),stamp=projection.stamp,
         native_dimensions=d['native_dimensions'],physical_dimensions=d['physical_dimensions'],
         native_mode_labels=list(d['native_mode_labels']))
+
+
+def bind_block(source,destination,projection_directory,*,names='examples',stamp):
+    """Bind a recovered native map without regenerating a single saved curve.
+
+    This is a format adapter, not native provenance qualification. Its caller
+    must establish that the recovered map uses the original fitting basis.
+    All parent/profile/child/embedding identities and physical dimensions are
+    checked here; publication still requires its normal creating-job evidence.
+    """
+    from .structural_paired_blocks import read as read_block,filenames
+    source=Path(source);destination=Path(destination);primary,arrays=filenames(names)
+    original_sha=file_sha(source/primary)
+    block=read_block(source,names=names)
+    if block.mode_projection is not None:
+        raise ValueError('An already mapped paired block cannot acquire a replacement projection')
+    value=read(projection_directory,expected=block.manifest,stamp=stamp)
+    if ('mode_coverage' in block.manifest
+            and block.manifest['mode_coverage']['labels']!=value.metadata['native_mode_labels']):
+        raise ValueError('Recovered mode coordinates differ from the original named axes')
+    if file_sha(source/primary)!=original_sha:
+        raise ValueError('The original paired manifest changed during mode-map binding')
+    destination.mkdir(parents=True,exist_ok=False)
+    shutil.copyfile(source/arrays,destination/arrays)
+    if file_sha(destination/arrays)!=block.manifest['pairs_sha256']:
+        raise ValueError('The original paired arrays changed during mode-map binding')
+    copy(projection_directory,destination,expected=block.manifest,stamp=stamp)
+    document=dict(block.manifest,schema=PACKED_SCHEMA if 'array_encoding' in block.manifest else RAW_SCHEMA,
+        mode_projection=value.stamp,mode_projection_source_manifest_sha256=original_sha)
+    write_json(destination/primary,document)
+    restored=read_block(destination,names=names)
+    if (file_sha(source/primary)!=original_sha
+            or file_sha(source/arrays)!=block.manifest['pairs_sha256']
+            or any(restored.arrays[k].dtype!=v.dtype or restored.arrays[k].tobytes()!=v.tobytes()
+                   for k,v in block.arrays.items())):
+        raise ValueError('Mode-map binding changed an original paired value or input')
+    return restored

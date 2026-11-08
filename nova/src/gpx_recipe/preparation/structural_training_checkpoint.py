@@ -53,7 +53,7 @@ def identity(cohort,rows,targets,split,clean,mean,scale,*,epochs,seed,workers):
         'groups','example_simulations','references','candidates','candidate_groups','class_candidate_ids',
         'reference_feature_sha256','training_domain','augmentation','augmentation_sha256','original_examples',
         'augmented_examples','ambiguous_examples','channels','representation','reference_kind','partition_method','partition_anchor',
-        'mode_projection_inventory','mode_projection_references','mode_projection_coverage')}
+        'mode_projection_inventory','mode_projection_references','mode_projection_coverage','calibration_partition')}
     metadata.update(implementation=package_signature(),architecture=weights.ARCHITECTURE,
         torch_version=str(torch.__version__),numpy_version=np.__version__,epochs=epochs,seed=seed,workers=workers)
     from .structural_training_data import MAX_ROWS

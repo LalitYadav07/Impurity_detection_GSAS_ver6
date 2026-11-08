@@ -1940,8 +1940,18 @@ retention, excluded compatible targets, per-class coverage and retained-set
 sizes. It rejects evaluation on its own calibration groups. Model scores are
 not probabilities of a physical phase being present. Every deferred class
 remains available, and saved flags cannot authorize experimental pruning.
-This helper is not yet connected to a newly calibrated production classifier;
-the existing ranker still orders the complete native work inventory.
+New paired training can reserve calibration trajectories before normalization,
+prototype construction or fitting. The original validation and test groups do
+not move. Reservation is fixed before scores are observed; it is not retried
+to improve coverage. At least 5001 distinct clean fitting pairs and fitting
+support for every class must remain. Otherwise calibration is explicitly
+unavailable and the original fitting partition is retained. Counts report the
+four roles separately, without treating noisy variants as independent groups.
+The portable reader checks the reservation, model weights, physical identities
+and test denominators. Direct ranker results can carry an adaptive first work
+set, but the native campaign receipt/UI handoff is not yet connected to it.
+The complete native work inventory is still retained. No newly calibrated
+large-corpus classifier has been scientifically qualified.
 
 Mode evidence will require a multi-label output because several irreps and
 secondary distortions may coexist within the same space group. The intended
@@ -1964,3 +1974,47 @@ host checks. The final host suite also proves that changing only mode geometry
 identity invalidates a training checkpoint despite identical curve bytes.
 These overlapping suites are not additive, and none is an NDIP deployment or
 new classifier-accuracy result.
+
+### Continuous family targets and independent calibration checks
+
+A checked adapter can bind recovered native projection files to historical
+paired blocks without changing any original numerical array bytes. It rejects
+different parent/profile/child identities, mode labels or existing maps. The
+complete 63-candidate admission checked all 1071 original/extended blocks and
+179091 native simulation rows. All original numerical array bytes were
+retained. The run took 434.952 seconds with four CPUs and 8 GiB allocated;
+this includes observation-free native reference preparation, not regeneration
+of the saved training curves. It does not replace the separate roughly
+2.5-hour full curve-generation measurement.
+
+Native displacement labels identify 20 irrep families across this inventory.
+The family identity includes the exact parent convention and rational k;
+integer reciprocal shifts are not silently identified for centered parents.
+Each family retains its sites, component labels and order-parameter directions.
+Continuous targets are occupied-site Cartesian RMS contributions in the
+declared baseline-cell normalization. They are not automatically the primary
+order parameter, and their norms need not add in quadrature. Unknown labels
+and origin-gauge-dependent families remain masked instead of becoming zeros.
+The full admission found no unknown native labels and four candidate/family
+pairs with unresolved gauge dependence, affecting 11448 repeated row/family
+targets. Independent GSAS-II displacement calculations passed 314 comparisons;
+the largest absolute RMS difference was 9.09e-16 angstrom.
+
+The matching Linux regression suite passed 180 tests with no failures, errors
+or skips in 192.086 seconds. This includes the actual training wrapper with
+5401 clean fitting pairs and 4500 separate calibration rows, legacy portable
+models, native displacement oracles, checkpoint recovery and identity/count
+tampering. Those wrapper curves are deliberately artificial contract fixtures;
+their predictions are not a scientific accuracy result.
+
+The conditional mode prediction head remains untrained. Before full training,
+targets must aggregate every indistinguishable original construction and
+preserve amplitude ambiguity intervals. The legacy marginal compatible-label
+loss can favor one alternative; its objective and validation checkpoint
+selection must be aligned with retaining all compatible alternatives. Test
+groups must not choose that objective. Low scores cannot establish absence:
+bounded-small claims need calibrated sensitivity under noise, resolution,
+mixtures and nuisance variation, while symmetry-forbidden claims remain
+conditional on a complete reviewed candidate basis. Actual experimental
+handoffs, mode-presence/upper-bound performance and candidate-pruning authority
+remain unqualified.

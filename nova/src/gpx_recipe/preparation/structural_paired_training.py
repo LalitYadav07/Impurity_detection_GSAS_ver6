@@ -91,11 +91,18 @@ def train(cohort,destination,*,epochs=60,seed=89113,threads=4,_segment_seconds=N
             or not np.isfinite(_segment_seconds) or _segment_seconds<=0)):
         raise ValueError('An internal training segment needs a positive finite work budget')
     rows,targets,classes,split,clean,routes=_inputs(cohort)
+    from .structural_calibration_partition import reserve
+    reservation=reserve(cohort['groups'],split,clean,targets)
+    split=reservation.split
+    cohort=dict(cohort,calibration_partition=reservation.metadata)
     row_layout=rows.row_layout if len(rows)>MAX_ROWS else None
     dataset=describe_counts(cohort['groups'],split.tolist(),clean.tolist(),
         generated_pairs=cohort['original_examples'],
         simulated_observations=cohort.get('augmented_examples',0),
-        compatible_labels=(row.tolist() for row in targets),classes=classes.tolist(),row_layout=row_layout)
+        compatible_labels=(row.tolist() for row in targets),classes=classes.tolist(),row_layout=row_layout,
+        calibration=reservation.metadata['available'])
+    from .structural_training_counts import partition_names
+    partitions=partition_names(dataset)
     train_rows,validation_rows,test_rows=(np.flatnonzero(split==code) for code in range(3))
     clean_rows=train_rows[clean[train_rows]]
     representatives=_representatives(rows,clean_rows,targets,classes)
@@ -239,26 +246,42 @@ def train(cohort,destination,*,epochs=60,seed=89113,threads=4,_segment_seconds=N
             portable,transport=engine.portable_model(model,rows,representatives,mean,scale)
             progress('calibrating_training_support',selected_epoch=selected_epoch)
             support=fit_support(rows,train_rows,validation_rows,targets,mean,scale,seed=seed)
+            progress('packing_frozen_model',selected_epoch=selected_epoch)
+            plane,layout=weights.pack(portable)
+            arrays=dict(parameters=plane,q_edges=cohort['q_edges'],
+                normalization=np.r_[mean.ravel().astype(np.float64),scale.ravel().astype(np.float64),support['limit']],
+                classes=classes,reference_features=cohort['reference_features'],support_prototypes=support['prototypes'])
+            stream=io.BytesIO();np.savez_compressed(stream,**arrays);raw=stream.getvalue()
+            validate_npz_bytes(raw,maximum_bytes=MAX_BYTES)
+            adaptive_calibration=adaptive_test=None;test_capture=None
+            if reservation.metadata['available']:
+                from .structural_calibration_training import calibrate,Logits
+                progress('scoring_independent_calibration',selected_epoch=selected_epoch)
+                identities=dict(weights_sha256=hashlib.sha256(raw).hexdigest(),parent_sha256=cohort['parent_sha256'],
+                    instrument_sha256=cohort['instrument_sha256'],dataset_sha256=run_identity)
+                adaptive_calibration=calibrate(portable,rows,targets,split,cohort['groups'],classes,mean,scale,
+                    identities=identities)
+                test_capture=Logits(test_rows,len(classes))
             # Test labels have no influence on initialization, normalization,
             # sampling, prototypes, stopping or checkpoint selection.
             progress('scoring_holdout',selected_epoch=selected_epoch)
-            test=evaluate(portable,rows,targets,test_rows,mean,scale,classes,clean=clean)
+            test=evaluate(portable,rows,targets,test_rows,mean,scale,classes,clean=clean,
+                _logits_sink=None if test_capture is None else test_capture.add)
+            if test_capture is not None:
+                from .structural_adaptive_sets import evaluate as evaluate_adaptive
+                adaptive_test=evaluate_adaptive(test_capture.finish(),targets[test_rows],
+                    [cohort['groups'][i] for i in test_rows],adaptive_calibration,identities=identities)
             prior=evaluate(portable,rows,targets,test_rows,mean,scale,classes,prior=targets[train_rows].sum(0),clean=clean)
         progress('packing_model',selected_epoch=selected_epoch)
-        plane,layout=weights.pack(portable)
-        arrays=dict(parameters=plane,q_edges=cohort['q_edges'],
-            normalization=np.r_[mean.ravel().astype(np.float64),scale.ravel().astype(np.float64),support['limit']],
-            classes=classes,reference_features=cohort['reference_features'],support_prototypes=support['prototypes'])
-        stream=io.BytesIO();np.savez_compressed(stream,**arrays);raw=stream.getvalue()
-        validate_npz_bytes(raw,maximum_bytes=MAX_BYTES)
         metadata=dict(schema=weights.SCHEMA,architecture=weights.ARCHITECTURE,representation=weights.REPRESENTATION,
             channels=3,reference_kind=weights.REFERENCE_KIND,normalization_method=weights.NORMALIZATION,
             parent_sha256=cohort['parent_sha256'],instrument_sha256=cohort['instrument_sha256'],
             input_sha256=cohort['input_sha256'],candidates=cohort['candidates'],candidate_groups=cohort['candidate_groups'],
             class_candidate_ids=routes,weights_sha256=hashlib.sha256(raw).hexdigest(),tensor_layout_sha256=layout,
             classes=classes.tolist(),bins=rows.shape[2],epochs=epochs,seed=seed,allocation=budget,
-            counts={name:targets[split==code].sum(0).tolist() for code,name in enumerate(['train','validation','test'])},
-            partition_rows=[len(train_rows),len(validation_rows),len(test_rows)],dataset=dataset,test=test,prior_only_test=prior,
+            counts={name:targets[split==code].sum(0).tolist() for code,name in enumerate(partitions)},
+            partition_rows=[int(np.count_nonzero(split==code)) for code in range(len(partitions))],dataset=dataset,test=test,prior_only_test=prior,
+            calibration_partition=reservation.metadata,adaptive_calibration=adaptive_calibration,adaptive_test=adaptive_test,
             selected_epoch=selected_epoch,checkpoint_selection='all-training-rows-seen/validation-macro-top5-then-top5-then-loss',
             readout_health=health,
             curriculum=dict(warmup_steps=warmup_steps,clean_epochs=clean_epochs,gradient_norm_limit=1.,

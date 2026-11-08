@@ -25,6 +25,10 @@ class Ranker:
         d=document(directory,metadata_name,weights_name)
         raw=read_bounded(Path(directory)/weights_name,MAX_BYTES)
         classes=d.get('classes');bins=d.get('bins')
+        if (any(k in d for k in ['adaptive_calibration','adaptive_test']) and 'calibration_partition' not in d):
+            raise ValueError('Adaptive outputs require their independent calibration reservation')
+        if 'dataset' not in d and any(k in d for k in ['calibration_partition','adaptive_calibration','adaptive_test']):
+            raise ValueError('Adaptive calibration requires its complete fitting/calibration data receipt')
         if (d.get('schema')!=weights.SCHEMA or not isinstance(d.get('architecture'),str)
                 or d.get('architecture') not in weights.ARCHITECTURES
                 or d.get('representation')!=weights.REPRESENTATION or d.get('channels')!=3
@@ -37,22 +41,47 @@ class Ranker:
                 or d.get('background_required') is not True):
             raise ValueError('Unsupported or changed three-curve attention model')
         if 'dataset' in d:
-            from .structural_training_counts import validate as validate_counts
+            from .structural_training_counts import validate as validate_counts,partition_names
             counts=validate_counts(d['dataset'])
+            partitions=partition_names(counts)
             if (counts['unique_rows']!=d.get('examples')
                     or counts['generated_pairs']!=d.get('original_examples')
                     or counts['trajectory_groups']!=d.get('independent_groups')
-                    or [counts['partitions'][p]['rows'] for p in ('train','validation','test')]!=d.get('partition_rows')):
+                    or [counts['partitions'][p]['rows'] for p in partitions]!=d.get('partition_rows')):
                 raise ValueError('Attention training-count receipt differs from its model')
             if 'family_coverage' in counts:
                 coverage=counts['family_coverage'];model_counts=d.get('counts')
                 if (coverage['classes']!=classes or not isinstance(model_counts,dict)
-                        or set(model_counts)!={'train','validation','test'} or any(
+                        or set(model_counts)!=set(partitions) or any(
                         not isinstance(v,list) or len(v)!=len(classes)
                         or any(type(n)is not int or n<0 for n in v) for v in model_counts.values()) or any(
                         [coverage['partitions'][p][str(c)]['rows'] for c in classes]!=model_counts.get(p)
-                        for p in ('train','validation','test'))):
+                        for p in partitions)):
                     raise ValueError('Attention family coverage differs from its native class counts')
+            if len(partitions)==4 and 'calibration_partition' not in d:
+                raise ValueError('Four-way counts require their original independent reservation')
+            if 'calibration_partition' in d:
+                from .structural_calibration_partition import validate as validate_partition
+                reservation=validate_partition(d['calibration_partition'],dataset=counts)
+                calibration=d.get('adaptive_calibration')
+                if reservation['available']:
+                    from .structural_adaptive_sets import validate as validate_calibration
+                    calibration=validate_calibration(calibration)
+                    recovery=d.get('training_recovery')
+                    if not isinstance(recovery,dict) or not checksum(recovery.get('identity')):
+                        raise ValueError('Adaptive calibration requires its frozen training identity')
+                    expected=dict(weights_sha256=d['weights_sha256'],parent_sha256=d['parent_sha256'],
+                        instrument_sha256=d['instrument_sha256'],dataset_sha256=recovery['identity'])
+                    if (calibration['classes']!=classes or calibration['identities']!=expected
+                            or calibration['rows']!=counts['partitions']['calibration']['rows']
+                            or [r['id'] for r in calibration['groups']]!=reservation['calibration_groups']
+                            or calibration['used_groups_sha256']!=reservation['used_groups_sha256']):
+                        raise ValueError('Adaptive calibration differs from the frozen model or reserved data')
+                    from .structural_adaptive_sets import validate_evaluation
+                    validate_evaluation(d.get('adaptive_test'),classes,rows=counts['partitions']['test']['rows'],
+                        groups=counts['partitions']['test']['trajectory_groups'],class_rows=d['counts']['test'])
+                elif calibration is not None or d.get('adaptive_test') is not None:
+                    raise ValueError('An unavailable reservation cannot acquire an adaptive cutoff')
         candidates=d.get('candidates');groups=d.get('candidate_groups')
         if (not isinstance(candidates,list) or not 1<=len(candidates)<=5000
                 or not isinstance(groups,dict)
@@ -139,9 +168,15 @@ class Ranker:
         families=[dict(space_group=self.metadata['classes'][i],model_score=None if scores is None else float(scores[i]),
             candidate_ids=list(preferred[str(self.metadata['classes'][i])])) for i in order]
         first=list(dict.fromkeys(key for row in families for key in row['candidate_ids']))
-        return dict(families=families,ranking_available=available,reason=reason,
+        result=dict(families=families,ranking_available=available,reason=reason,
             candidate_order=(first+[key for key in self.metadata['candidate_groups'] if key not in first]
                 if available else sorted(self.metadata['candidate_groups'])),support=support,
             screening_qualified=False,candidate_pruning_authorized=False,native_refinement_required=True,
             complete_native_search_required=True,
             interpretation=reason)
+        if self.metadata.get('adaptive_calibration') is not None:
+            from .structural_adaptive_sets import select
+            calibration=self.metadata['adaptive_calibration']
+            result['adaptive_work_set']=select(logits.numpy() if scores is not None else np.zeros((1,len(families))),
+                calibration,identities=calibration['identities'],within_support=bool(inside and available))
+        return result

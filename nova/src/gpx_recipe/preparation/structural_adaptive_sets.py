@@ -119,6 +119,18 @@ def validate(value):
     return d
 
 
+def _work_counts(a,gaps,d,within_support):
+    order=np.argsort(-a,axis=1,kind='stable');q=d['maximum_gap'];classes=a.shape[1]
+    if not within_support or q is None:
+        return order,np.full(len(a),classes,np.int64)
+    counts=np.maximum(1,np.sum(gaps<=q,axis=1))
+    ordered=np.take_along_axis(a,order,axis=1)
+    breaks=(ordered[:,:-1]-ordered[:,1:])>-math.log(ADJACENT_SCORE_RATIO)
+    positions=np.arange(1,classes)
+    stops=np.where(breaks&(positions[None,:]>=counts[:,None]),positions[None,:],classes)
+    return order,np.min(stops,axis=1)
+
+
 def select(logits,calibration,*,identities,within_support=True):
     """Select a first work set, retaining the entire deferred work inventory."""
     d=validate(calibration)
@@ -126,14 +138,10 @@ def select(logits,calibration,*,identities,within_support=True):
     if type(within_support)is not bool:raise ValueError('Adaptive selection needs an explicit domain check')
     a,gaps=_scores(logits,d['classes'])
     if len(a)!=1:raise ValueError('Select one arriving pattern at a time')
-    order=np.argsort(-a[0],kind='stable');q=d['maximum_gap']
+    orders,counts=_work_counts(a,gaps,d,within_support);order=orders[0];count=int(counts[0]);q=d['maximum_gap']
     if not within_support or q is None:
-        count=len(order);reason=d['reason'] if within_support else 'Outside prepared support; retain every class'
+        reason=d['reason'] if within_support else 'Outside prepared support; retain every class'
     else:
-        count=int(np.count_nonzero(gaps[0,order]<=q))
-        count=max(1,count)
-        while count<len(order) and a[0,order[count-1]]-a[0,order[count]]<=-math.log(ADJACENT_SCORE_RATIO):
-            count+=1
         reason='Adaptive first work set; deferred classes remain available for native fitting'
     classes=[d['classes'][i] for i in order]
     return dict(schema=SCHEMA,retained_space_groups=classes[:count],deferred_space_groups=classes[count:],
@@ -144,16 +152,15 @@ def select(logits,calibration,*,identities,within_support=True):
 
 def evaluate(logits,compatible,groups,calibration,*,identities):
     """Measure false exclusions and work-set sizes on untouched test groups."""
-    d=validate(calibration);groups=_groups(groups);a,_=_scores(logits,d['classes']);y=np.asarray(compatible)
+    d=validate(calibration);groups=_groups(groups);a,gaps=_scores(logits,d['classes']);y=np.asarray(compatible)
+    if identities!=d['identities']:raise ValueError('Adaptive evaluation belongs to different model or physical identities')
     if y.dtype!=bool or y.shape!=a.shape or not y.any(1).all() or len(groups)!=len(a):
         raise ValueError('Adaptive evaluation needs complete test labels and physical groups')
     if {r['id'] for r in d['groups']}.intersection(groups):
         raise ValueError('Adaptive evaluation must not score its own calibration groups')
-    kept=np.zeros(y.shape,bool);positions={c:i for i,c in enumerate(d['classes'])};sizes=[]
-    for i,row in enumerate(a):
-        result=select(row[None],d,identities=identities)
-        retained=result['retained_space_groups'];sizes.append(len(retained))
-        kept[i,[positions[c] for c in retained]]=True
+    order,sizes=_work_counts(a,gaps,d,True)
+    kept=np.zeros(y.shape,bool)
+    kept[np.arange(len(a))[:,None],order]=np.arange(a.shape[1])[None,:]<sizes[:,None]
     any_hit=np.any(kept&y,axis=1);all_hit=np.all(kept|~y,axis=1);group_hits={}
     for g,hit in zip(groups,all_hit):group_hits[g]=group_hits.get(g,True) and bool(hit)
     per_class={str(c):dict(target_rows=int(y[:,i].sum()),excluded_target_rows=int((y[:,i]&~kept[:,i]).sum()),
@@ -161,6 +168,39 @@ def evaluate(logits,compatible,groups,calibration,*,identities):
     return dict(rows=len(a),physical_groups=len(group_hits),any_compatible_retention=float(any_hit.mean()),
         all_compatible_retention=float(all_hit.mean()),all_compatible_group_retention=sum(group_hits.values())/len(group_hits),
         excluded_compatible_labels=int((y&~kept).sum()),per_class=per_class,
-        retained_size=dict(minimum=min(sizes),median=float(np.median(sizes)),
-            p95=float(np.quantile(sizes,.95)),maximum=max(sizes)),
+        retained_size=dict(minimum=int(sizes.min()),median=float(np.median(sizes)),
+            p95=float(np.quantile(sizes,.95)),maximum=int(sizes.max())),
         experimental_coverage_qualified=False,candidate_pruning_authorized=False)
+
+
+def validate_evaluation(value,classes,*,rows,groups,class_rows):
+    d=fields(value,['rows','physical_groups','any_compatible_retention','all_compatible_retention',
+        'all_compatible_group_retention','excluded_compatible_labels','per_class','retained_size',
+        'experimental_coverage_qualified','candidate_pruning_authorized'])
+    _classes(classes)
+    if (type(d['rows'])is not int or d['rows']!=rows or type(d['physical_groups'])is not int or d['physical_groups']!=groups
+            or not 1<=groups<=rows or d['experimental_coverage_qualified'] is not False
+            or d['candidate_pruning_authorized'] is not False
+            or any(type(d[k]) not in (int,float) or not math.isfinite(d[k]) or not 0<=d[k]<=1
+                   for k in ['any_compatible_retention','all_compatible_retention','all_compatible_group_retention'])
+            or d['all_compatible_retention']>d['any_compatible_retention']
+            or not isinstance(d['per_class'],dict) or set(d['per_class'])!={str(c) for c in classes}
+            or type(d['excluded_compatible_labels'])is not int or d['excluded_compatible_labels']<0):
+        raise ValueError('Adaptive test metrics differ from the untouched test denominator')
+    excluded=0
+    for i,c in enumerate(classes):
+        r=fields(d['per_class'][str(c)],['target_rows','excluded_target_rows','retention'])
+        n=r['target_rows'];e=r['excluded_target_rows'];rate=r['retention']
+        if (type(n)is not int or n!=class_rows[i] or type(e)is not int or not 0<=e<=n
+                or (n==0 and rate is not None)
+                or (n>0 and (type(rate) not in (int,float) or not math.isfinite(rate)
+                    or not math.isclose(rate,(n-e)/n,rel_tol=0,abs_tol=4*np.finfo(float).eps)))):
+            raise ValueError('Adaptive class metrics differ from the native compatible-label counts')
+        excluded+=e
+    sizes=fields(d['retained_size'],['minimum','median','p95','maximum'])
+    if (excluded!=d['excluded_compatible_labels']
+            or type(sizes['minimum'])is not int or type(sizes['maximum'])is not int
+            or any(type(sizes[k]) not in (int,float) or not math.isfinite(sizes[k]) for k in ['median','p95'])
+            or not 1<=sizes['minimum']<=sizes['median']<=sizes['p95']<=sizes['maximum']<=len(classes)):
+        raise ValueError('Adaptive work sizes or excluded-label totals are inconsistent')
+    return d

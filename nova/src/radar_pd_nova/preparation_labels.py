@@ -75,11 +75,12 @@ def native_dimensions(library, entry):
 def training_description(library,entry):
     detail=_entry_detail(library,entry,{'structural-training'})
     if detail is None or 'dataset' not in detail:return None
-    from gpx_recipe.preparation.structural_training_counts import validate
+    from gpx_recipe.preparation.structural_training_counts import validate,partition_names
     counts=validate(detail['dataset']);parts=counts['partitions']
-    split=' / '.join(f"{parts[name]['clean_pairs']:,}" for name in ('train','validation','test'))
+    names=partition_names(counts)
+    split=' / '.join(f"{parts[name]['clean_pairs']:,}" for name in names)
     text=(f"{counts['unique_clean_pairs']:,} unique clean pairs · "
-        f"train / validation / test: {split} · "
+        f"{' / '.join(names)}: {split} · "
         f"{counts['unique_simulated_only_rows']:,} additional simulated rows · "
         f"{counts['trajectory_groups']:,} separate trajectory groups")
     if 'family_coverage' in counts:

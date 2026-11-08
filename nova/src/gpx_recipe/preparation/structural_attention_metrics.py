@@ -5,7 +5,7 @@ from .structural_training_data import batches
 from .structural_training_backend import forward
 
 
-def evaluate(model,rows,targets,indices,mean,scale,classes,*,prior=None,clean=None):
+def evaluate(model,rows,targets,indices,mean,scale,classes,*,prior=None,clean=None,_logits_sink=None):
     import torch
     from .structural_observation_metrics import ObservationMetrics
     observations=None if clean is None else ObservationMetrics(clean,len(rows),len(classes))
@@ -20,6 +20,7 @@ def evaluate(model,rows,targets,indices,mean,scale,classes,*,prior=None,clean=No
                 loss=torch.logsumexp(logits,1)-torch.logsumexp(logits.masked_fill(~permitted,-torch.inf),1)
             if not torch.isfinite(logits).all() or not torch.isfinite(loss).all():
                 raise ValueError('Nonfinite attention validation output')
+            if _logits_sink is not None:_logits_sink(selected,logits.numpy().copy())
             loss_sum+=float(loss.sum());order=np.argsort(-logits.numpy(),axis=1,kind='stable')
         else:order=np.broadcast_to(np.argsort(-prior,kind='stable'),allowed.shape)
         hits=np.take_along_axis(allowed,order,axis=1)
