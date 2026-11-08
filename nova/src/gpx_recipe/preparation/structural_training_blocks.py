@@ -12,6 +12,7 @@ from .structural_attention_weights import REPRESENTATION
 from .structural_cohort import read_block
 from .structural_paired_blocks import read as read_pairs, SCHEMA as PILOT_SCHEMA
 from .structural_pair_arrays import SCHEMA as PAIR_SCHEMA
+from .structural_mode_layout import SCHEMAS as NAMED_SCHEMAS
 from .tof_kernel_arrays import read_bounded
 from .structural_domain import DEFAULT_PARENT_METRIC_RANGE
 
@@ -23,7 +24,7 @@ PAIRED_FIELDS=('representation','parent_seed','parent_relative_metric_range')
 def representation(document):
     schema=document.get('schema') if isinstance(document,dict) else None
     if schema==LEGACY_SCHEMA:return None
-    if schema in {PILOT_SCHEMA,PAIR_SCHEMA}:return REPRESENTATION
+    if schema in {PILOT_SCHEMA,PAIR_SCHEMA}|NAMED_SCHEMAS:return REPRESENTATION
     raise ValueError('Unsupported structural training block representation')
 
 

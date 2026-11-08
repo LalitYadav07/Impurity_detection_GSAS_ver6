@@ -41,7 +41,7 @@ def validate_examples(request):
     from .worker import validate_request
     request = fields(request, ['source', 'instrument', 'child', 'grid', 'settings', 'destination'])
     settings = fields(request['settings'], ['candidate', 'mode_radius', 'cell_radius', 'seed'],
-                      dict(trajectories=64, steps=4, trajectory_slice=None,
+                      dict(trajectories=64, steps=4, trajectory_slice=None,mode_coverage=None,
                            **dict.fromkeys(PAIRED_FIELDS)))
     for key, lower, upper in [('seed', 0, 2**32-1), ('trajectories', 1, 4096), ('steps', 1, 32)]:
         settings[key] = number(settings[key], lower, upper, integer=True)
@@ -53,6 +53,11 @@ def validate_examples(request):
             or not 0 <= interval[0] < interval[1] <= settings['trajectories']):
         raise ValueError('Select a nonempty slice of the complete structural trajectory portfolio')
     settings['trajectory_slice'] = list(interval)
+    from .structural_mode_coverage import SCHEMA as MODE_COVERAGE
+    coverage=settings['mode_coverage']
+    if coverage is None:settings.pop('mode_coverage')
+    elif coverage!=MODE_COVERAGE or settings['representation']!=REPRESENTATION:
+        raise ValueError('Named-mode coverage requires its declared paired sampling version')
     if settings['representation'] is None:
         if any(settings[k] is not None for k in PAIRED_FIELDS[1:]):
             raise ValueError('Parent-paired controls require their three-curve representation')
@@ -252,6 +257,7 @@ def execute_examples(request):
     request = validate_examples(request); settings = request['settings']
     base = dict(request, settings={k: settings[k] for k in ('candidate', 'mode_radius', 'cell_radius')})
     options={k:settings[k] for k in ('seed','trajectories','steps','trajectory_slice')}
+    if 'mode_coverage' in settings:options['mode_coverage']=settings['mode_coverage']
     began=time.monotonic()
     if settings.get('representation')==REPRESENTATION:
         from .structural_pairs import generate
@@ -275,6 +281,7 @@ def execute_examples(request):
     if settings.get('representation')==REPRESENTATION:
         receipt.update(representation=REPRESENTATION,parent_seed=settings['parent_seed'],
             parent_relative_metric_range=settings['parent_relative_metric_range'],timing=detail['timing'])
+        if 'mode_coverage' in settings:receipt['mode_coverage']=settings['mode_coverage']
     return publish_result('structural-examples',request,receipt,['examples.json','examples.npz'])
 
 

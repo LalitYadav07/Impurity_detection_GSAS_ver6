@@ -16,6 +16,7 @@ from ..live.array_limits import validate_npz_bytes
 from ..symmetry.contracts import validate_candidate
 from .tof_kernel_arrays import read_bounded
 from . import structural_pair_arrays as packed
+from . import structural_mode_layout as named
 
 SCHEMA='radar-structural-ranking-paired-pilot/v1'
 MAX_BYTES=160*1024**2
@@ -47,7 +48,7 @@ def read(directory,*,names='pairs'):
     manifest_name,array_name=filenames(names)
     document=json.loads(read_bounded(directory/manifest_name,8*1024**2))
     raw=read_bounded(directory/array_name,MAX_BYTES)
-    if (not isinstance(document,dict) or document.get('schema') not in {SCHEMA,packed.SCHEMA}
+    if (not isinstance(document,dict) or document.get('schema') not in {SCHEMA,packed.SCHEMA}|named.SCHEMAS
             or document.get('observations_included') is not False
             or document.get('scientific_result') is not False
             or document.get('pairs_sha256')!=hashlib.sha256(raw).hexdigest()
@@ -55,11 +56,12 @@ def read(directory,*,names='pairs'):
             or any(type(document.get(k)) is not int or not 0<=document[k]<2**32 for k in ('seed','parent_seed'))):
         raise ValueError('A bound observation-free paired structural block is required')
     validate_npz_bytes(raw,maximum_bytes=MAX_BYTES)
+    is_packed=document['schema'] in {packed.SCHEMA,named.PACKED_SCHEMA}
     with np.load(io.BytesIO(raw),allow_pickle=False) as archive:
-        expected=(ARRAYS-set(packed.CURVES))|{k+'_byte_planes' for k in packed.CURVES} if document['schema']==packed.SCHEMA else ARRAYS
+        expected=(ARRAYS-set(packed.CURVES))|{k+'_byte_planes' for k in packed.CURVES} if is_packed else ARRAYS
         if set(archive.files)!=expected:raise ValueError('Unexpected paired structural array inventory')
         arrays={k:archive[k] for k in archive.files}
-    if document['schema']==packed.SCHEMA:
+    if is_packed:
         if document.get('array_encoding')!=packed.ENCODING:
             raise ValueError('Unsupported native paired array encoding')
         arrays=packed.decode(arrays,rows=document.get('examples'),bins=document.get('bins'),maximum_bytes=MAX_BYTES)
@@ -87,8 +89,13 @@ def read(directory,*,names='pairs'):
             or not isinstance(interval,list) or len(interval)!=2 or any(type(i) is not int for i in interval)
             or count*steps>32768 or not 0<=interval[0]<interval[1]<=count):
         raise ValueError('A complete declared paired trajectory slice is required')
-    expected=np.r_[-1,np.repeat(np.arange(*interval),steps+1)]
-    roles=np.r_[0,np.tile(np.r_[1,np.full(steps,2)],interval[1]-interval[0])]
+    if document['schema'] in named.SCHEMAS:
+        expected,roles,_,_=named.rows(document,count,steps,interval)
+    else:
+        if 'mode_coverage' in document:
+            raise ValueError('Named-mode coverage requires its explicit paired schema')
+        expected=np.r_[-1,np.repeat(np.arange(*interval),steps+1)]
+        roles=np.r_[0,np.tile(np.r_[1,np.full(steps,2)],interval[1]-interval[0])]
     if not np.array_equal(arrays['trajectory'],expected) or not np.array_equal(arrays['role'],roles):
         raise ValueError('Paired null controls and complete child trajectories must remain together')
     source=document['source_sha256'];prefix=f'parent:{source}:{document["seed"]}:{document["parent_seed"]}:trajectory-'
@@ -139,7 +146,8 @@ def pack_block(source,destination,*,source_names='pairs',names='pairs'):
     np.savez_compressed(destination/array_name,**arrays)
     raw=read_bounded(destination/array_name,MAX_BYTES)
     validate_npz_bytes(raw,maximum_bytes=MAX_BYTES)
-    document=dict(block.manifest,schema=packed.SCHEMA,array_encoding=packed.ENCODING,
+    schema=named.PACKED_SCHEMA if block.manifest['schema'] in named.SCHEMAS else packed.SCHEMA
+    document=dict(block.manifest,schema=schema,array_encoding=packed.ENCODING,
         original_pairs_sha256=block.manifest['pairs_sha256'],pairs_sha256=hashlib.sha256(raw).hexdigest())
     write_json(destination/manifest_name,document)
     restored=read(destination,names=names)

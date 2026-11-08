@@ -129,8 +129,8 @@ def draw_trajectories(mode_gram, cell_gram, bounds, *, seed, trajectories=64,
     return TrajectorySamples(*arrays, rejected)
 
 
-def from_source(source, **settings):
-    """Use the same complete, symmetry-constrained native geometry as fitting."""
+def physical_grams(source):
+    """One occupied-site displacement/cell metric for all sampling directions."""
     geometry = source.fast.empirical_constraint.geometry
     nm = source.mode_dimensions
     reciprocal = native_reciprocal_matrix(geometry.a0)
@@ -139,6 +139,12 @@ def from_source(source, **settings):
     mg = displacement_gram(mapping, direct, geometry.occupancy)
     directions = geometry.cell_mapping@source.lift[nm:, nm:]
     cg = reciprocal_metric_gram(reciprocal, np.asarray([native_reciprocal_matrix(v) for v in directions.T]))
+    return mg,cg
+
+
+def from_source(source, **settings):
+    """Use the same complete, symmetry-constrained native geometry as fitting."""
+    mg,cg=physical_grams(source)
     return draw_trajectories(mg, cg, source.radii,
         feasible=lambda rows: np.isfinite(source.chemistry.log_kernel(rows)), **settings)
 

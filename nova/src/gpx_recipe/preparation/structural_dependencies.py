@@ -163,7 +163,8 @@ def dependencies(library, model):
                 context(document)!=parent_context(other['settings'])
                 or document.get('grid')!=other['grid']
                 or document.get('trajectory_slice')!=other['settings']['trajectory_slice']
-                or document.get('candidate')!=other['settings']['candidate']):
+                or document.get('candidate')!=other['settings']['candidate']
+                or document.get('mode_coverage',{}).get('schema')!=other['settings'].get('mode_coverage')):
             raise ValueError('A paired dependency changed its declared candidate or parent trajectories')
         result.append((key,assets))
     return result

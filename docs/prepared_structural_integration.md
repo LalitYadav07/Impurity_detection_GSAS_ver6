@@ -1509,3 +1509,47 @@ This prevents a high parent score from putting every zero-distortion child
 ahead of the next ranked family. Every remaining candidate is appended to the
 native work order. This changes prioritization, not candidate exclusion, and
 does not turn a predicted symmetry family into a uniquely identified model.
+
+## Explicit native-mode coverage
+
+Sparse random directions in a metric-whitened basis need not isolate a named
+ISODISTORT mode. The paired producer can now add each complete native
+displacement axis, modulo only the preparation's demonstrated origin gauges.
+Both signs, three distinct existing parent contexts and every amplitude step
+are retained. Original mixed-mode samples remain exact prefixes of their
+parent groups. Amplitude rejection cannot substitute an easier mode or a
+different parent context; an incomplete physical scope fails explicitly.
+
+The worker's `mode_coverage=radar-additive-native-mode-coverage/v1` is an internal
+data-contract version, not a user speed/accuracy setting. Its raw and packed
+paired artifacts use version 2. Readers validate the complete axis/sign/context
+inventory and each selected whole-parent shard. Every additional ray endpoint
+retains an independent native check. Owned native-size records include all
+additional rows before the scheduler admits concurrent work. Earlier saved
+requests and paired version-1 artifacts retain their original layouts and
+bytes; they cannot claim the new coverage simply by adding a metadata flag.
+
+The library expander has not switched to this larger default portfolio yet.
+The complete expanded feature-cache capacity, transport and preparation-time
+qualification must be demonstrated first. Supporting the producer and its
+handoff is not evidence that the larger dataset trains successfully or that
+its classifier can discard candidates.
+
+## Structural size and pattern detectability are different diagnostics
+
+`structural_neighbor_change` reports changes in the fixed parent nearest-distance
+shells, with atom identities and periodic images retained. Those contacts are
+geometric neighbors, not automatically assigned chemical bonds. Supplying the
+matching parent geometry at each sampled cell removes ordinary parent-cell
+variation from this comparison, while retaining the child's symmetry-breaking
+strain and displacements. Partially occupied coincident sites and arithmetic
+boundary cases remain explicit rather than receiving an invented strong/weak
+decision.
+
+A 0.02 relative-distance change is a descriptive strong-distortion threshold.
+It is not a universal diffraction detection limit. Bond-angle changes can
+occur without a large nearest-distance change, and scattering contrast,
+resolution and noise affect the observed signature. This report neither
+removes weak examples nor changes their symmetry labels. It does not yet
+enforce a two-percent sampling target or provide a diffraction-detectability
+qualification. Those require separate coverage and observation diagnostics.

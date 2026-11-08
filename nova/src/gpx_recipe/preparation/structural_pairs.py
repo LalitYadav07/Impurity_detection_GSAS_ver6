@@ -24,7 +24,8 @@ from .structural_domain import DEFAULT_PARENT_METRIC_RANGE
 
 
 def generate(request, *, seed, parent_seed, trajectories=64, steps=4,
-             parent_relative_range=DEFAULT_PARENT_METRIC_RANGE, trajectory_slice=None, report_size=None):
+             parent_relative_range=DEFAULT_PARENT_METRIC_RANGE, trajectory_slice=None, report_size=None,
+             mode_coverage=None):
     """Generate complete physical child/parent pairs, with null controls.
 
     The parent seed is shared across every child of the same parent/bank.
@@ -39,6 +40,10 @@ def generate(request, *, seed, parent_seed, trajectories=64, steps=4,
         raise ValueError('A bounded amplitude-step count is required')
     if trajectories*steps>32768:
         raise ValueError('Generate the paired trajectories in a smaller complete portfolio')
+    from . import structural_mode_layout as named
+    from .structural_mode_coverage import supplement,SCHEMA as COVERAGE_SCHEMA,CONTEXTS_PER_MODE
+    if mode_coverage not in (None,COVERAGE_SCHEMA):
+        raise ValueError('Use the complete declared native-mode coverage version')
     interval = (0, trajectories) if trajectory_slice is None else trajectory_slice
     if (not isinstance(interval, (tuple, list)) or len(interval) != 2
             or any(type(i) is not int for i in interval)
@@ -79,11 +84,24 @@ def generate(request, *, seed, parent_seed, trajectories=64, steps=4,
     conditioning = ParentConditioner(source,parent_space,candidate['transformation_matrix'],parents)
     original = from_source(source, seed=seed, trajectories=trajectories, steps=steps,
         trajectory_feasible=conditioning.feasible)
+    coverage=None
+    if mode_coverage is not None:
+        contexts=min(CONTEXTS_PER_MODE,trajectories)
+        coverage=supplement(source,original,seed=seed,steps=steps,contexts=contexts,
+            trajectory_feasible=conditioning.feasible)
+        sampling=coverage.samples
+        coverage_record=named.describe(coverage,contexts=contexts)
+    else:sampling=original
     mark('sampling_child_trajectories')
-    paired = condition(source, original, parent_space, candidate['transformation_matrix'], parents)
+    paired = condition(source, sampling, parent_space, candidate['transformation_matrix'], parents)
     selected = (paired.trajectory == -1) | ((paired.trajectory >= interval[0]) & (paired.trajectory < interval[1]))
     points = paired.points[selected]; parent_a = paired.parent_a[selected]
     role = paired.role[selected]; trajectory = paired.trajectory[selected]
+    if coverage is not None:
+        expected,roles,_,endpoints=named.rows(dict(mode_coverage=coverage_record),trajectories,steps,interval)
+        if not np.array_equal(trajectory,expected) or not np.array_equal(role,roles):
+            raise ValueError('Conditioning changed the complete native-mode row identities')
+        denominator=len(points)
     if len(points)*len(source.fast.x)*8*2 > 128*1024**2:
         raise ValueError('Generate smaller paired blocks within the 128 MiB curve-array limit')
     from .structural_paired_blocks import MAX_BYTES
@@ -93,10 +111,17 @@ def generate(request, *, seed, parent_seed, trajectories=64, steps=4,
         raise ValueError('Shard complete paired trajectories to fit the bounded numerical block; retain every coordinate')
     if report_size is not None:
         if not callable(report_size):raise TypeError('Native output sizing requires an internal callback')
+        extra={}
+        if coverage is not None:
+            extra['mode_coverage_rows']=dict(schema=COVERAGE_SCHEMA,
+                native_modes=len(coverage.labels),gauge_modes=len(coverage.gauge_axes),
+                contexts=contexts,rays=len(coverage.rays),
+                selected_rays=sum(interval[0]<=ray['parent']<interval[1] for ray in coverage.rays))
         report_size(rows=len(points),bins=len(source.fast.x),mode_dimensions=source.mode_dimensions,
-                    cell_dimensions=source.cell_dimensions,numeric_bytes=numeric_bytes)
+                    cell_dimensions=source.cell_dimensions,numeric_bytes=numeric_bytes,**extra)
     mark('conditioning_and_selecting_whole_trajectories')
     checks = set(np.flatnonzero(role != 2)) | set(np.flatnonzero(np.r_[trajectory[:-1] != trajectory[1:], True]))
+    if coverage is not None:checks.update(map(int,endpoints))
     rendered = render_native(source, points, kind=request['grid']['kind'], check_indices=checks, progress=progress)
     mark('rendering_children')
     # No child callback is allowed after constructing the owned parent below.
@@ -154,5 +179,7 @@ def generate(request, *, seed, parent_seed, trajectories=64, steps=4,
         package_sha256=package_signature(), seconds=time.monotonic()-began)
     manifest['timing']=dict(stages_seconds=stages,child_rendering_seconds=rendered['timing_seconds'],
         scope='Worker wall time; native forward includes its own mandatory anchor; independent checks and regeneration are separate')
+    if coverage is not None:
+        manifest.update(schema=named.RAW_SCHEMA,mode_coverage=coverage_record)
     write_json(out/'pairs.json', manifest); progress('complete', len(points))
     return manifest
