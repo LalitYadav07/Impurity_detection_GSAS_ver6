@@ -61,6 +61,14 @@ def _inputs(cohort):
     if cohort.get('training_domain') is not None:
         from .structural_domain import validate
         validate(cohort['training_domain'])
+    family_targets=cohort.get('mode_family_targets')
+    if family_targets is not None:
+        from .structural_family_targets import TargetRows
+        if not isinstance(family_targets,TargetRows):raise ValueError('Mode targets require their checked native cohort builder')
+        family_targets.verify(cohort)
+        if (cohort.get('mode_family_target_identity')!=family_targets.metadata['identity']
+                or cohort.get('mode_family_supervision')!=family_targets.metadata):
+            raise ValueError('Mode-family supervision differs from its bound target table')
     return rows,targets,classes,split,clean,routes
 
 
@@ -308,6 +316,8 @@ def train(cohort,destination,*,epochs=60,seed=89113,threads=4,_segment_seconds=N
         if transport is not None:metadata['training_device_transport']=transport
         if 'partition_anchor' in cohort:metadata['partition_anchor']=cohort['partition_anchor']
         if 'mode_projection_coverage' in cohort:metadata['mode_projection_coverage']=cohort['mode_projection_coverage']
+        if 'mode_family_supervision' in cohort:
+            metadata.update(mode_family_supervision=cohort['mode_family_supervision'],mode_head_trained=False)
         encoded=(json.dumps(metadata,indent=2,allow_nan=False)+'\n').encode()
         if len(encoded)>MAX_METADATA_BYTES:raise ValueError('Attention model metadata exceeds the portable reader budget')
         (out/'weights.npz').write_bytes(raw);write_json(out/'model.json',metadata)

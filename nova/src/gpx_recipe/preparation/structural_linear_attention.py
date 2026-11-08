@@ -54,7 +54,13 @@ def full_local(base,*,attention=True):
             nn.init.zeros_(self.amplitude.weight);nn.init.zeros_(self.amplitude.bias)
             self.pool=ReadoutPool()
 
-        def forward(self,values,coverage=None):
+        def embedding(self,values,coverage=None):
+            """Shared 64-value readout before the final class projection.
+
+            Keeping this inside the existing encoder lets conditional mode
+            heads learn within-class changes without another curve engine.
+            Existing state-dict names and the class forward path stay exact.
+            """
             if values.ndim!=3 or values.shape[1]!=3:
                 raise ValueError('Exactly three ordered curve channels required')
             if not 64<=values.shape[2]<=8192:
@@ -84,7 +90,10 @@ def full_local(base,*,attention=True):
                 encoded=local if valid is None else local.masked_fill(~valid[:,None,:],0.)
             pooled=self.pool(encoded)
             hidden=self.head[1](self.head[0](pooled))+self.amplitude(torch.log(rms.clamp_min(1e-8)))
-            for layer in list(self.head.children())[2:]:hidden=layer(hidden)
+            for layer in list(self.head.children())[2:-1]:hidden=layer(hidden)
             return hidden
+
+        def forward(self,values,coverage=None):
+            return self.head[-1](self.embedding(values,coverage))
 
     return FullLocal()

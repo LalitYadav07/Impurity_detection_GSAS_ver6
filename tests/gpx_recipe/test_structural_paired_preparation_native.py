@@ -98,6 +98,12 @@ def test_three_curve_training_runs_through_the_actual_galaxy_wrapper(tmp_path,mo
         tmp_path/'job',tmp_path/'result.zip',asset_parts=more)
     assert result['result']['status']=='prepared'
     collected=unpack(tmp_path/'result.zip',tmp_path/'collected');model=Ranker(collected/'native/trained/model')
+    if native_maps:
+        supervision=model.metadata['mode_family_supervision']
+        assert supervision['mapped_blocks']==supervision['total_blocks']==1
+        assert supervision['rows']==model.metadata['examples'] and supervision['intervals']==0
+        assert model.metadata['mode_head_trained'] is False
+    else:assert 'mode_family_supervision' not in model.metadata
     assert model.metadata['schema']==SCHEMA and model.metadata['channels']==3
     assert model.metadata['architecture']==ARCHITECTURE and model.metadata['readout_health']['readout_active']
     assert model.metadata['classes']==[12,166]

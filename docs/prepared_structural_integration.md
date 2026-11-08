@@ -2012,9 +2012,9 @@ models, native displacement oracles, checkpoint recovery and identity/count
 tampering. Those wrapper curves are deliberately artificial contract fixtures;
 their predictions are not a scientific accuracy result.
 
-The conditional mode prediction head remains untrained. Before full training,
-targets must aggregate every indistinguishable original construction and
-preserve amplitude ambiguity intervals. New three-curve training replaces the
+The conditional mode prediction head remains untrained. The checked target
+builder now aggregates every indistinguishable original construction and
+preserves amplitude ambiguity intervals, as described below. New three-curve training replaces the
 legacy marginal compatible-label loss with cross-entropy averaged over every
 distinct compatible space-group label in each row. Duplicate candidate
 embeddings do not receive extra target mass. This equal target mass is a
@@ -2051,3 +2051,90 @@ temporary storage inside the same 8-GiB container allocation. Final receipts
 were copied to the private local audit directory. No benchmark inputs,
 historical outputs, container images or host configuration were deleted or
 changed to make room. Deployment pins remain unchanged.
+
+### All-alias conditional mode targets
+
+`structural_family_targets` binds continuous family-amplitude intervals to the
+exact paired cohort before training. For each compatible geometric space-group
+class, it uses every matching original native construction in that curve's
+reference list. The smallest and largest known amplitudes define its interval;
+choosing only the first construction would create false certainty. Missing
+maps, missing families and unresolved origin gauges remain unknown. Several
+families can contribute together. A family label retains the parent setting,
+rational k and irrep, while individual native component labels remain in the
+projection inventory. Family norms are not assumed orthogonal or additive.
+
+The sparse table shares targets across clean/noisy siblings without treating
+those siblings as independent evidence. It retains float64 amplitudes, binds
+all original aliases, compatible labels, physical groups and fold assignments,
+and rejects changed inputs or borrowed targets. Its storage and minibatch
+limits fail explicitly instead of dropping modes or aliases. The actual
+training wrapper assembles this supervision when native maps are available,
+and checkpoint identity binds the table. Published metadata still states
+`mode_head_trained=false`: passing a target table into the classifier does not
+train a mode predictor.
+
+The Linux/native suite passed 315 checks, with no failures, errors or skips,
+using four CPUs and 8 GiB. Two initial native-control failures were a test
+assumption: the public control's internal distortions retain a single space
+group. The corrected test compares native mode amplitudes without inventing a
+second symmetry class. This is a direct example of why class ranking alone
+cannot describe changes within a space group. The suite checks PNC and PNT
+controls, ambiguity, legacy/missing maps, float64 small amplitudes, source/fold
+binding and actual Galaxy training transport. These checks do not measure
+trained mode accuracy or experimental absence sensitivity.
+
+The intended result has two linked levels: an adaptive space-group work set,
+then class-conditional mode evidence. For an ambiguous work set, an upper bound
+must cover every still-plausible class and embedding; a favorable bound from
+only the leading model cannot exclude a mode. Symmetry-forbidden means that a
+complete reviewed candidate basis disallows that mode. Data-bounded-small
+means a calibrated upper amplitude bound lies below an experiment-specific
+detectable level. Unobserved, weak, masked, unrepresented or inseparable modes
+remain unresolved. Neither a low neural score nor a two-percent bond-change
+rule establishes absence. Tests of such claims require independent physical
+groups, noise/profile variation, null and injected-mode controls, and mode
+mixtures, followed by native checks. Diffraction mode evidence does not identify
+the energetic primary order parameter.
+
+The complete target census then retained all 1071 blocks, 179091 native
+simulation rows and 594868 unique feature rows. It rechecked every original
+72612 feature row and its original fold, preserving the full feature digest.
+After the fixed calibration reservation, 57319 distinct clean fitting pairs
+remain. The sparse table occupies 23399285 bytes and contains 944289 known
+amplitude intervals, including 18022 ambiguity ranges; 2036131 class/family
+targets remain unknown. These are conditional alias-target counts, not new
+independent experiments. The check took 1188.586 seconds, including 92.233
+seconds to construct the targets, with four CPUs and 20 GiB allocated. Peak
+process RSS was 2227990528 bytes; its RAM-backed native array store separately
+held 5068440816 bytes. This allocation is not proof of an 8-GiB full training
+run. No saved native diffraction curve was regenerated.
+
+The census found no known mode-family calibration targets for SG 6. SG 13
+also has some class/family conditions represented in holdouts but not fitting.
+Those gaps remain explicit: neither more noisy copies nor a learned score can
+turn them into calibrated smallness evidence. The rare native supplement still
+needs an additive import that preserves its noncontiguous original trajectory
+identities and fresh geometry labels; it cannot impersonate a complete named
+ray portfolio.
+
+`structural_mode_readout` adds the conditional amplitude head on the existing
+64-value attention embedding. The class forward path and portable tensor names
+are preserved. Sparse family queries share that embedding, and each row gives
+equal loss mass to its known classes rather than favoring classes with more
+mapped families. A fitting-only float64 asinh normalization retains tiny native
+amplitudes and rejects numerical erasure. Its 10/90 pinball outputs are not
+calibrated confidence intervals. On MPS the small query objective transfers to
+CPU float64 while retaining gradients; native targets are not narrowed.
+
+The expanded Linux/native suite passed 345 checks without failures, errors or
+skips. Public PNC and PNT controls each retain one actual SG (63): a shared
+attention encoder and mode head reduced fitting loss on four native fitting
+rows, with nine rows held out. Those small controls prove the optimization
+connection, not mode accuracy; held-out losses remain recorded separately.
+Host component suites passed 116 and 57 overlapping checks. One actual-MPS
+gradient and portable-head transport check passed with fallback disabled.
+The production training loop still publishes `mode_head_trained=false`; joint
+head training/publication, calibrated inference, UI handoffs and experimental
+mode-presence/absence qualification remain unfinished. Deployment pins remain
+unchanged.

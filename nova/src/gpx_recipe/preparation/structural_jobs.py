@@ -459,6 +459,13 @@ def execute_training(request):
             cohort = build(directories, cache, bins=settings['bins'],
                            split_seed=settings['split_seed'], augmenter=augmenter)
         try:
+            if paired and cohort.get('mode_projection_inventory'):
+                from .structural_family_targets import build as family_targets
+                from .structural_paired_blocks import read as read_pairs
+                write_json(out/'progress.json',dict(state='assembling_mode_family_targets',blocks=len(directories)))
+                families=family_targets(lambda:(read_pairs(path,names='examples') for path in directories),cohort)
+                cohort.update(mode_family_targets=families,mode_family_target_identity=families.metadata['identity'],
+                    mode_family_supervision=families.metadata)
             write_json(out/'progress.json', dict(state='training', examples=len(cohort['features']),
                 independent_groups=len(set(cohort['groups'])),feature_storage=cohort['features'].storage))
             remaining=(None if not paired or segments.SEGMENT_SECONDS is None else
