@@ -1283,3 +1283,14 @@ claim of full experimental temperature coverage. Actual cells outside its
 training-only envelope retain the complete native search. Broader nuisance
 sampling requires new physical trajectories and qualification, rather than
 relaxing the inference guard after inspecting experimental data.
+
+## Routing predicted families to native constructions
+
+Stored model metadata retains every construction that generated a compatible
+geometry label, including higher-symmetry special limits. At inference, an
+explicit construction of the predicted space group takes priority over those
+limits. If none exists, the compatible construction set remains the fallback.
+This prevents a high parent score from putting every zero-distortion child
+ahead of the next ranked family. Every remaining candidate is appended to the
+native work order. This changes prioritization, not candidate exclusion, and
+does not turn a predicted symmetry family into a uniquely identified model.

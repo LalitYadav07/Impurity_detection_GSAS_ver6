@@ -84,6 +84,18 @@ def _class_routes(classes, groups, supplied=None):
     return routes
 
 
+def _preferred_routes(classes,groups,routes):
+    """Prioritize declared symmetry without losing higher-symmetry limits.
+
+    Almost every child can generate the undistorted parent. Putting all of
+    those aliases in the first family would swallow later ranked families.
+    Prefer explicit constructions when present; otherwise keep the capable
+    work set. Callers append every remaining declared candidate afterwards.
+    """
+    return {str(group):([key for key in routes[str(group)] if groups[key]==int(group)]
+                       or list(routes[str(group)])) for group in classes}
+
+
 def train(cohort, destination, *, epochs=60, seed=89113, threads=4):
     import torch
     if type(epochs) is not int or not 1 <= epochs <= 1000 or type(seed) is not int or not 0 <= seed < 2**32:
@@ -333,10 +345,12 @@ class Ranker:
         if not np.isfinite(scores).all():
             raise ValueError('Structural model inference produced nonfinite scores')
         order = np.argsort(-scores, kind='stable')
+        preferred=_preferred_routes(self.metadata['classes'],self.metadata['candidate_groups'],self.routes)
         families=[dict(space_group=self.metadata['classes'][i], model_score=float(scores[i]),
-            candidate_ids=list(self.routes[str(self.metadata['classes'][i])])) for i in order]
+            candidate_ids=list(preferred[str(self.metadata['classes'][i])])) for i in order]
+        first=list(dict.fromkeys(key for row in families for key in row['candidate_ids']))
         return dict(families=families,
-            candidate_order=list(dict.fromkeys(key for row in families for key in row['candidate_ids'])),
+            candidate_order=first+[key for key in self.metadata['candidate_groups'] if key not in first],
             ranking_available=True, support=support, candidate_pruning_authorized=False,
             screening_qualified=False, native_refinement_required=True,
             interpretation='Relative model scores order hypotheses; all candidate families remain available')

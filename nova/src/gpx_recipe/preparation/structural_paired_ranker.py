@@ -12,7 +12,7 @@ from .structural_attention import network
 from . import structural_attention_weights as weights
 from .structural_features import three_curve_features
 from .structural_model_files import document,MAX_BYTES
-from .structural_ranker import _class_routes
+from .structural_ranker import _class_routes,_preferred_routes
 from .structural_support import distances,MAX_BYTES as SUPPORT_BYTES,STREAM_METHOD
 from .tof_kernel_arrays import read_bounded,checksum
 
@@ -118,10 +118,12 @@ class Ranker:
             with torch.no_grad():scores=self.model(torch.from_numpy(feature[None])).softmax(1)[0].numpy()
             if not np.isfinite(scores).all():raise ValueError('Three-curve model inference produced nonfinite scores')
         order=range(len(self.metadata['classes'])) if scores is None else np.argsort(-scores,kind='stable')
+        preferred=_preferred_routes(self.metadata['classes'],self.metadata['candidate_groups'],self.routes) if inside else self.routes
         families=[dict(space_group=self.metadata['classes'][i],model_score=None if scores is None else float(scores[i]),
-            candidate_ids=list(self.routes[str(self.metadata['classes'][i])])) for i in order]
+            candidate_ids=list(preferred[str(self.metadata['classes'][i])])) for i in order]
+        first=list(dict.fromkeys(key for row in families for key in row['candidate_ids']))
         return dict(families=families,ranking_available=inside,
-            candidate_order=(list(dict.fromkeys(key for row in families for key in row['candidate_ids']))
+            candidate_order=(first+[key for key in self.metadata['candidate_groups'] if key not in first]
                 if inside else sorted(self.metadata['candidate_groups'])),support=support,
             screening_qualified=False,candidate_pruning_authorized=False,native_refinement_required=True,
             complete_native_search_required=True,

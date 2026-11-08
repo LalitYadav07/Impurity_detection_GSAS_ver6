@@ -82,10 +82,13 @@ def test_files_are_read_as_exact_bounded_bytes_and_symlinks_are_rejected(data,tm
 def test_small_single_peak_or_unusable_cache_envelope_keeps_native_execution(ds,monkeypatch):
     from types import SimpleNamespace as NS
     from gpx_recipe.structural_live.optimization import tof_profile_proposals as proposals
+    from gpx_recipe.live.native_peak_records import PackedPeakRecords
     refs=np.zeros((len(ds),18));refs[:,4]=ds
     source=NS(radii=np.ones(1),fast=NS(slow=NS(phase=NS(name='parent'))))
     hist={'Reflection Lists':{'parent':{'RefList':refs}}}
-    exact=NS(collector=NS(collect_physical=lambda *a,**k:{(1,0,0):(np.zeros(5),1.,0,5)}),
+    packed=PackedPeakRecords(np.array([[2.,1.,1.,1.,1.]]),np.ones(1),np.array([[0,5]],np.int64),
+        np.ones(1),np.array([[1,0,0]],np.int64))
+    exact=NS(collector=NS(collect_packed_physical=lambda *a,**k:packed),
         _context=lambda:(None,None,None,None,None,None,None,hist,None,None))
     monkeypatch.setattr(proposals,'TOFProfileProposals',lambda *a,**k:pytest.fail('Keep the original native renderer'))
     assert proposals.for_source(source,exact=exact) is None

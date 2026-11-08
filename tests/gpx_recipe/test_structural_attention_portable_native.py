@@ -61,6 +61,21 @@ def test_attention_roundtrip_keeps_exact_logits_with_six_data_arrays(tmp_path):
     assert json.loads(json.dumps(outside))==outside
 
 
+def test_a_leading_parent_family_does_not_swallow_the_entire_child_search_order(tmp_path):
+    _,q,current,request,_,d=artifact(tmp_path/'model')
+    extra=dict(d['candidates'][0],id='other',child=dict(path='other.cif',sha256='d'*64))
+    d['candidates'].append(extra);d['candidate_groups']['other']=1
+    d['class_candidate_ids']={'12':['child','other'],'166':['other','child','parent']}
+    (tmp_path/'model/model.json').write_text(json.dumps(d));loaded=Ranker(tmp_path/'model')
+    with torch.no_grad():
+        loaded.model.head[-1].weight.zero_();loaded.model.head[-1].bias.copy_(torch.tensor([0.,5.]))
+    result=loaded.rank(q,current,**request)
+    assert result['ranking_available']
+    assert [(row['space_group'],row['candidate_ids']) for row in result['families']]==[(166,['parent']),(12,['child'])]
+    assert result['candidate_order']==['parent','child','other']
+    assert result['candidate_pruning_authorized'] is False and result['complete_native_search_required']
+
+
 @pytest.mark.parametrize('case',['missing','q_grid','reference_mask','mask','foreign_context'])
 def test_inference_requires_the_exact_native_parent_and_covered_range(tmp_path,case):
     _,q,current,request,_,_=artifact(tmp_path/'model');loaded=Ranker(tmp_path/'model')
