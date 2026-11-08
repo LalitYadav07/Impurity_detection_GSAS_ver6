@@ -1,5 +1,28 @@
 # Joint structural search
 
+## Current development status
+
+Model exploration and structural live snapshots use the same prepared nonlinear
+service, complete-mode geometry and independent GPX checks. Live snapshots use
+the existing acquisition owner and bounded Galaxy transport. Prepared native
+starting banks and compatible profile tables can travel with both paths.
+
+The preparation workspace now generates paired examples and trains the
+three-channel attention model by default. Clean pairs, noisy feature rows and
+independent trajectory holdouts have separate receipts. Trained rankings can
+prioritize Model campaign work after isolated native parent/profile admission;
+they retain the complete candidate list. Structural live snapshot fitting does
+not yet use those scores to filter its reviewed model portfolio.
+
+The expanded 63-construction, 20,223-pair cohort is a development benchmark.
+Completion of its generation, training and independent scientific evaluation
+is still required. No learned model is authorized to remove candidates.
+Broader parent-reference sampling, optimizer checkpoint/resume, aligned NDIP
+images and complete real-experiment/UI acceptance remain open work. These
+changes have not yet been deployed as an accepted preparation release.
+Component measurements below retain their original scope; they do not prove
+complete-workflow speed, structural recovery or NDIP latency.
+
 Structural Model and Live acquisition receipts separate the current worker's
 preparation from fitting and independent GPX checks. The displayed combined
 service time is a subtotal of native worker time; other worker tasks, Galaxy
@@ -30,7 +53,8 @@ These proposal banks are labelled `starting_proposals`, with zero
 `native_curves`. They cannot receive a native-production certificate or enter
 the native-bank registry. Only their creating process owns reuse; fresh workers
 regenerate into their new output directory without modifying the saved bank.
-No imported table or qualification flag is accepted. Scale/background profiling,
+Imported tables need their creating-job admission and current-context checks;
+an uploaded qualification flag cannot grant authority. Scale/background profiling,
 accepted optimization steps and independent GPX checks remain native. Gaussian
 conditional nuisance fitting solves its bounded least-squares problem from
 the actual native design, so screening-coefficient roundoff is not carried into
@@ -1052,9 +1076,10 @@ The shared worker-side advisory reader retains every protocol candidate and
 falls back to the complete native order on corrupt assets, missing ranges or
 unsupported patterns. Its caller must select the exact checked entry: a
 multi-bank instrument file's checksum alone cannot identify the right bank.
-This transport/inference API does not yet schedule the actual Model/Live
-campaign from its scores. Native source/profile admission and that scheduling
-handoff remain implementation work.
+Model campaigns now run isolated native source/profile admission in their
+first scientific chunk and save the source-bound advisory order for later
+dispatch. Structural live snapshot ranking and scientifically qualified
+candidate filtering remain separate, unfinished handoffs.
 
 Library manifests use compact JSON and check the same encoded byte count that
 the reader accepts. This avoids admitting a multi-bank plan whose pretty
@@ -1069,8 +1094,8 @@ new viewer still recovers the original dispatch rather than posting a second
 job. The cross-process file lock remains in place.
 
 These application dependencies do not grant permission to prune candidates.
-Model/Live/Webmon consumption of trained rankings, long training checkpoint/
-resume, broader sampling and scientific qualification remain required.
+Live/Webmon consumption of trained rankings, long training checkpoint/resume,
+broader sampling and scientific qualification remain required.
 Interrupted jobs do not publish successful training receipts.
 
 ## Three-curve attention development
