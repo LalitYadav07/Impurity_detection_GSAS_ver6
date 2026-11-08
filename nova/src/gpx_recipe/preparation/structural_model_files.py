@@ -15,4 +15,5 @@ def document(directory,metadata_name='model.json',weights_name='weights.npz'):
         raise ValueError('Structural model assets must be data files within one captured directory')
     value=json.loads(read_bounded(Path(directory)/metadata_name,MAX_METADATA_BYTES))
     if not isinstance(value,dict):raise ValueError('A structural model metadata object is required')
-    return value
+    from .structural_history import restore
+    return restore(value)

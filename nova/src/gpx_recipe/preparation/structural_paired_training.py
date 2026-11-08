@@ -332,9 +332,11 @@ def train(cohort,destination,*,epochs=60,seed=89113,threads=4,_segment_seconds=N
         if 'mode_family_supervision' in cohort:
             metadata.update(mode_family_supervision=cohort['mode_family_supervision'],mode_head_trained=modes is not None)
         if modes is not None:metadata['mode_readout']=modes.spec
-        encoded=(json.dumps(metadata,indent=2,allow_nan=False)+'\n').encode()
+        from .structural_history import pack as pack_history
+        stored_metadata=dict(metadata,history=pack_history(metadata['history']))
+        encoded=(json.dumps(stored_metadata,indent=2,allow_nan=False)+'\n').encode()
         if len(encoded)>MAX_METADATA_BYTES:raise ValueError('Attention model metadata exceeds the portable reader budget')
-        (out/'weights.npz').write_bytes(raw);write_json(out/'model.json',metadata)
+        (out/'weights.npz').write_bytes(raw);write_json(out/'model.json',stored_metadata)
         progress('complete',examples=len(rows),selected_epoch=selected_epoch,
             screening_qualified=False,seconds=time.monotonic()-began)
         return metadata

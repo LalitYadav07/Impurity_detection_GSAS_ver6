@@ -36,7 +36,8 @@ def inspect(path,*,identity=None,epochs=None):
     encoded=arrays.pop('metadata')
     if encoded.dtype!=np.uint8 or encoded.ndim!=1 or len(encoded)>MAX_METADATA_BYTES:
         raise ValueError('Invalid training continuation metadata')
-    metadata=json.loads(encoded.tobytes())
+    from .structural_history import restore as restore_history
+    metadata=restore_history(json.loads(encoded.tobytes()))
     if (not isinstance(metadata,dict)
             or not checksum(metadata.get('identity')) or not checksum(metadata.get('layout'))
             or (identity is not None and metadata['identity']!=identity)

@@ -110,6 +110,7 @@ def _state(model,plane):
 def save(directory,run_identity,model,optimizer,scheduler,rng,visited,*,warmup,epochs,
          history,best,selected_epoch,best_key,elapsed_seconds,row_layout=None):
     import torch
+    from .structural_history import pack as pack_history
     parameters,layout=weights.pack(model);named=list(model.named_parameters())
     if list(model.state_dict())!=[name for name,_ in named]:
         raise ValueError('Checkpoint optimizer and model must share the installed complete tensor layout')
@@ -123,7 +124,7 @@ def save(directory,run_identity,model,optimizer,scheduler,rng,visited,*,warmup,e
         first_moment=np.concatenate(first),second_moment=np.concatenate(second),steps=np.asarray(steps,np.float32),
         initialized=np.asarray(initialized,bool),visited=visited.copy(),torch_rng=torch.get_rng_state().numpy().copy())
     metadata=dict(schema=SCHEMA,identity=run_identity,layout=layout,arrays_sha256=array_identity(arrays),
-        warmup_completed=warmup,epochs_completed=epochs,history=history,selected_epoch=selected_epoch,
+        warmup_completed=warmup,epochs_completed=epochs,history=pack_history(history),selected_epoch=selected_epoch,
         best_key=best_key,numpy_rng=rng.bit_generator.state,optimizer_groups=optimizer.state_dict()['param_groups'],
         scheduler=scheduler.state_dict(),elapsed_seconds=elapsed_seconds)
     if row_layout is not None:metadata.update(schema=REPLAY_SCHEMA,row_layout=row_layout.copy())
@@ -153,7 +154,8 @@ def restore(directory,run_identity,model,optimizer,scheduler,rng,visited,*,epoch
     encoded=arrays.pop('metadata')
     if encoded.dtype!=np.uint8 or encoded.ndim!=1 or len(encoded)>MAX_METADATA_BYTES:
         raise ValueError('Invalid training checkpoint metadata')
-    metadata=json.loads(encoded.tobytes())
+    from .structural_history import restore as restore_history
+    metadata=restore_history(json.loads(encoded.tobytes()))
     if not isinstance(metadata,dict) or checked_row_layout(metadata,arrays['visited'])!=row_layout:
         raise ValueError('Training checkpoint differs from the current row layout')
     current,layout=weights.pack(model);named=list(model.named_parameters());count=len(named)
