@@ -96,6 +96,23 @@ def test_only_covered_native_contexts_enter_the_prepared_ranker(tmp_path,change)
         with pytest.raises(ValueError):require_compatible(parent,h,r.phase(0),r.histogram(0),maximum_metric=.001)
 
 
+@pytest.mark.parametrize('bound',[float('nan'),float('inf'),-.001,True,'0.001'])
+def test_invalid_training_bound_cannot_bypass_native_admission(tmp_path,bound):
+    _,p,r=pair(tmp_path/'control','PNT')
+    # A NaN bound used to make the outside-envelope comparison false.
+    p.phase(0).data['General']['Cell'][1]*=1.1
+    with pytest.raises(ValueError,match='finite nonnegative training-only'):
+        require_compatible(p.phase(0),p.histogram(0),r.phase(0),r.histogram(0),maximum_metric=bound)
+
+
+def test_outside_cell_message_explains_current_and_trained_ranges(tmp_path):
+    _,p,r=pair(tmp_path/'control','PNT')
+    p.phase(0).data['General']['Cell'][1]*=1.001
+    with pytest.raises(ValueError,match='current change .*trained maximum 0.001') as caught:
+        require_compatible(p.phase(0),p.histogram(0),r.phase(0),r.histogram(0),maximum_metric=.001)
+    assert 'Generate training examples over the wider parent-cell range' in str(caught.value)
+
+
 @pytest.mark.parametrize('change',['same','profile','no_model','constraint','paired_parent_within','paired_parent_outside','paired_legacy_domain','live_counts'])
 def test_actual_gpx_reaches_source_bound_receipt_through_native_admission(tmp_path,monkeypatch,change):
     """Inference is a controlled stub here; native input admission is real."""

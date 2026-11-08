@@ -61,6 +61,9 @@ def require_compatible(parent,histogram,reference,reference_histogram,*,maximum_
     from gsas_magnetic_preflight import setting_fingerprint
     from ..symmetry.native_audit import same
     from .structural_domain import relative_metric_norm
+    if (type(maximum_metric) not in (int,float) or not np.isfinite(maximum_metric)
+            or not 0<=maximum_metric<=10):
+        raise ValueError('A finite nonnegative training-only parent metric bound is required')
     a,b=parent.data['General'],reference.data['General']
     if (a['Type']!='nuclear' or a.get('Modulated') or a.get('doPawley')
             or setting_fingerprint(a['SGData'])!=setting_fingerprint(b['SGData'])):
@@ -78,7 +81,9 @@ def require_compatible(parent,histogram,reference,reference_histogram,*,maximum_
             raise ValueError('Prepared chemistry, parent positions or ADPs differ at '+str(key))
     distance=relative_metric_norm(b['Cell'][1:7],a['Cell'][1:7])
     if distance>maximum_metric+1e-9:
-        raise ValueError('Current parent lattice exceeds the training-only reciprocal-metric envelope')
+        raise ValueError('Current parent lattice exceeds the training-only reciprocal-metric envelope '
+            f'(current change {distance:.6g}; trained maximum {maximum_metric:.6g}). '
+            'Generate training examples over the wider parent-cell range before using this library.')
     if not same(histogram.InstrumentParameters,reference_histogram.InstrumentParameters):
         raise ValueError('Prepared instrument bank or profile coefficients differ from this native histogram')
     hap=parent.data['Histograms'][histogram.name]

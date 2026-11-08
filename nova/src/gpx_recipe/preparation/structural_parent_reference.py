@@ -12,6 +12,7 @@ import numpy as np
 from ..structural_live.optimization.physical_prior_geometry import (
     metric_matrix,native_reciprocal_matrix,reciprocal_metric_gram,orthonormal_lift,
 )
+from .structural_domain import DEFAULT_PARENT_METRIC_RANGE
 
 
 def coefficients(g,*,positive=True):
@@ -85,7 +86,7 @@ class ParentMetricSpace:
         if not np.isfinite(value) or value < -1e-12:raise ValueError('Invalid parent reciprocal-metric norm')
         return float(np.sqrt(max(value,0.)))
 
-    def draw(self,*,seed,count,relative_range=(.0001,.001)):
+    def draw(self,*,seed,count,relative_range=DEFAULT_PARENT_METRIC_RANGE):
         from .structural_sampling import _interval
         low,high=_interval(relative_range,'parent relative metric')
         if type(seed) is not int or not 0<=seed<2**32 or type(count) is not int or not 1<=count<=4096:

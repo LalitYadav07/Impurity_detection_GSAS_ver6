@@ -20,10 +20,11 @@ from .structural_conditioning import ParentConditioner,condition
 from .structural_parent_reference import NativeParentReference, ParentMetricSpace, rotations
 from ..structural_live.optimization.physical_prior_geometry import native_reciprocal_matrix
 from .worker import validate_request, verify_structural_child
+from .structural_domain import DEFAULT_PARENT_METRIC_RANGE
 
 
 def generate(request, *, seed, parent_seed, trajectories=64, steps=4,
-             parent_relative_range=(.0001, .001), trajectory_slice=None, report_size=None):
+             parent_relative_range=DEFAULT_PARENT_METRIC_RANGE, trajectory_slice=None, report_size=None):
     """Generate complete physical child/parent pairs, with null controls.
 
     The parent seed is shared across every child of the same parent/bank.

@@ -4,6 +4,9 @@ import numpy as np
 
 SCHEMA='radar-structural-ranking-training-domain/v1'
 PARENT_SCHEMA='radar-structural-ranking-parent-reference-domain/v1'
+# Shared parent nuisance sampling for newly declared paired libraries. This
+# is not an inference tolerance: admission still uses actual training cells.
+DEFAULT_PARENT_METRIC_RANGE=(.0001,.005)
 
 
 def validate(value):

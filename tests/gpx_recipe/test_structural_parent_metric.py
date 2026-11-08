@@ -54,6 +54,24 @@ def test_parent_draws_use_equal_physical_norm_and_reproducible_full_symmetry():
         assert space.norm(metric-g)==pytest.approx(.001,rel=1e-10)
 
 
+def test_new_parent_sampling_covers_thermal_offsets_and_keeps_saved_explicit_ranges():
+    from gpx_recipe.preparation.structural_domain import DEFAULT_PARENT_METRIC_RANGE
+    g,r=tetragonal();space=ParentMetricSpace(g,r)
+    old_interval=(.0001,.001)
+    old=space.draw(seed=83621,count=64,relative_range=old_interval)
+    new=space.draw(seed=83621,count=64)
+    explicit_new=space.draw(seed=83621,count=64,relative_range=DEFAULT_PARENT_METRIC_RANGE)
+    np.testing.assert_array_equal(new,explicit_new)
+    old_norms=np.array([space.norm(native_reciprocal_matrix(a)-g) for a in old])
+    new_norms=np.array([space.norm(native_reciprocal_matrix(a)-g) for a in new])
+    assert old_norms.max()<=old_interval[1]+1e-12
+    assert .003<new_norms.max()<=DEFAULT_PARENT_METRIC_RANGE[1]+1e-12
+    # New preparation does not mutate an explicit old request or draw a
+    # candidate-specific parent distribution. Every point retains symmetry.
+    np.testing.assert_array_equal(old,space.draw(seed=83621,count=64,relative_range=old_interval))
+    for a in new:space.require(native_reciprocal_matrix(a))
+
+
 def test_parent_metric_context_owns_immutable_scientific_inputs():
     g,r=tetragonal();space=ParentMetricSpace(g,r)
     baseline=space.baseline.copy();operations=space.operations.copy()

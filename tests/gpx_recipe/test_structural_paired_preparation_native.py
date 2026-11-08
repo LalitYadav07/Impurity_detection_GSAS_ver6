@@ -23,7 +23,7 @@ from test_structural_paired_preparation import inputs,completed_library
 
 
 @pytest.mark.parametrize('kind',['PNC','PNT'])
-@pytest.mark.parametrize('parent_range',[PARENT_RANGE,(.0001,.003)])
+@pytest.mark.parametrize('parent_range',[PARENT_RANGE,(.0001,.001),(.0001,.003)])
 def test_native_example_worker_returns_lossless_pairs_without_exporting_working_projects(tmp_path,kind,parent_range):
     source,_=native_source(tmp_path/'input',kind)
     parent=tmp_path/'parent.cif';G.G2Project(gpxfile=str(source)).phase(0).export_CIF(str(parent))

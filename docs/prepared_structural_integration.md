@@ -1352,8 +1352,10 @@ three-curve training dependency. Every bank shares its declared parent seed,
 metric interval and trajectory identities across all children. Old saved
 settings and entry identities are preserved. Mixed representations or changed
 parent sampling cannot form a training plan. The default parent reciprocal-
-metric interval is 0.0001–0.001 in the native parent metric norm; this narrow
-development envelope does not establish broad thermal-cell coverage.
+metric interval for newly declared libraries is 0.0001–0.005 in the native
+parent metric norm. Saved intervals retain their exact values. This expands
+the simulated nuisance domain; it does not enlarge an existing model's
+admission bound or establish broad thermal-cell coverage.
 
 Generation exports the same `examples.json` and `examples.npz` artifact names,
 using versioned paired content and lossless storage. Native construction GPXs
@@ -1466,12 +1468,17 @@ terms. The previous generic envelope remains unchanged for legacy models.
 Older paired models with only that generic envelope retain exact-parent use;
 they do not claim sampled thermal-cell coverage from their child distortions.
 
-The current paired default parent-reference range remains 0.0001–0.001 in
-relative reciprocal-metric norm. This is a narrow synthetic domain, not a
-claim of full experimental temperature coverage. Actual cells outside its
-training-only envelope retain the complete native search. Broader nuisance
-sampling requires new physical trajectories and qualification, rather than
-relaxing the inference guard after inspecting experimental data.
+New paired libraries sample a default parent-reference range of
+0.0001–0.005 in relative reciprocal-metric norm. The previous
+0.0001–0.001 range remains captured in older libraries and models; loading
+them does not change their sampling or acceptance. These are synthetic
+domains, not claims of full experimental temperature coverage. Actual cells
+outside a model's training-only envelope retain the complete native search.
+The rejection message gives both the current metric distance and trained
+maximum. Broader nuisance sampling requires new physical trajectories and
+qualification, rather than relaxing the inference guard. All child cell
+boxes and chemistry checks remain in force; an incompatible declared range
+fails explicitly instead of redrawing parent cells for selected families.
 
 ## Routing predicted families to native constructions
 

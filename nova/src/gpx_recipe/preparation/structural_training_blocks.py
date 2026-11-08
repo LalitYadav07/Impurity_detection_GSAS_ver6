@@ -13,9 +13,10 @@ from .structural_cohort import read_block
 from .structural_paired_blocks import read as read_pairs, SCHEMA as PILOT_SCHEMA
 from .structural_pair_arrays import SCHEMA as PAIR_SCHEMA
 from .tof_kernel_arrays import read_bounded
+from .structural_domain import DEFAULT_PARENT_METRIC_RANGE
 
 LEGACY_SCHEMA='radar-structural-ranking-examples/v3'
-PARENT_RANGE=(.0001,.001)
+PARENT_RANGE=DEFAULT_PARENT_METRIC_RANGE
 PAIRED_FIELDS=('representation','parent_seed','parent_relative_metric_range')
 
 
