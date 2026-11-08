@@ -1778,3 +1778,47 @@ complete training epoch, classifier accuracy, NDIP queue/staging latency or a
 scientifically qualified shortlist. No held-out predictions were scored by this
 lifecycle benchmark. Full-cohort training, calibration and live handoffs remain
 separate acceptance requirements.
+
+### Complete parent-range extensions and retained reference holdouts
+
+Training-plan v4 retains several complete parent metric ranges; v5 retains the
+same inventory plus the existing two-file numerical continuation. Existing v1
+legacy, v2 paired and v3 continuation plans keep their closed fields and guards.
+New plans bind every block to an explicit range stratum. Seeds, parent seed,
+trajectory/step counts, physical grid and exact candidate definitions must agree.
+Each stratum must cover the same entire candidate catalog and every declared
+trajectory. Additional original aliases are retained. A range expansion needs
+one retained reference interval contained in every added interval; unrelated
+campaigns cannot acquire guessed historical holdouts from filenames.
+
+The shared assembler reproduces that reference interval's exact alias closure
+and grouped partition at the declared split seed. This uses the same assembler
+with a bounded counting sink, not a second scientific algorithm or a large
+expanded feature cache. The additional ranges then inherit those physical-group
+assignments. A new label without training/validation/test support, a new alias
+linking reference training and holdout groups, or a changed common Q grid fails
+explicitly. The implementation does not move old holdouts, drop difficult
+labels or crop the new data to manufacture coverage. Original three-curve
+features remain in the expanded cohort.
+
+Dense, saved-file and seekable-native readers share this partition path. Native
+array capture still occurs only in the main admitted pass, so reference-fold
+reconstruction cannot write a large native bank before dimension admission.
+The model/checkpoint retains the reference input hashes, reference interval,
+split seed and physical-group assignment digest. The existing preparation
+queue, multipart staging and fresh-worker continuation preserve the complete
+range inventory. No new user speed/accuracy option is added.
+
+This preserves the declared narrow-reference partition for an expansion at the
+same split seed. It is not evidence that arbitrary previously trained models
+used that partition, and it does not establish a new independent calibration
+set or classifier accuracy. Native full-corpus comparison against the actual
+original saved partition remains an acceptance step.
+
+The combined local regression gate passed 171 tests with no failures, errors or
+skips on 2026-11-08 (47.126 seconds). It covers range inventory tampering, old
+plan compatibility, all three reader paths, multipart transfer, complete small
+training and fresh-worker numerical continuation. In particular, an adversarial
+added-label fixture reproduced the old holdout reshuffling and now verifies
+that original physical trajectories retain their folds. This gate does not
+substitute for the complete native-corpus comparison or scientific evaluation.

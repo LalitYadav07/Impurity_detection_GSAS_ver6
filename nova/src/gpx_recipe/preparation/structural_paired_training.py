@@ -281,6 +281,7 @@ def train(cohort,destination,*,epochs=60,seed=89113,threads=4,_segment_seconds=N
                 scope=('Owned CPU optimizer state, retained locally or restored from a bound worker continuation; checkpoints are not model-library artifacts'
                     if engine.kind=='cpu' else 'Owned MPS and CPU optimizer/random state; local exact-device recovery; checkpoints are not model-library artifacts')))
         if transport is not None:metadata['training_device_transport']=transport
+        if 'partition_anchor' in cohort:metadata['partition_anchor']=cohort['partition_anchor']
         encoded=(json.dumps(metadata,indent=2,allow_nan=False)+'\n').encode()
         if len(encoded)>MAX_METADATA_BYTES:raise ValueError('Attention model metadata exceeds the portable reader budget')
         (out/'weights.npz').write_bytes(raw);write_json(out/'model.json',metadata)

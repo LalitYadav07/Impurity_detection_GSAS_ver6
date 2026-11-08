@@ -23,9 +23,12 @@ def build(directories,destination,*,bins=4096,split_seed=69271,augmenter=None,na
     if not 1<=len(directories)<=5000:raise ValueError('A bounded paired example catalog is required')
     destination=Path(destination);destination.mkdir(parents=True,exist_ok=False)
     sink=DiskFeatures(destination,channels=3)
+    def blocks(indices=None):
+        return (read(directories[i],names=names) for i in (
+            range(len(directories)) if indices is None else indices))
     try:
-        cohort=assemble_into(lambda:(read(p,names=names) for p in directories),sink,bins=bins,
-            split_seed=split_seed,augmenter=augmenter,paired=True)
+        cohort=assemble_into(blocks,sink,bins=bins,
+            split_seed=split_seed,augmenter=augmenter,paired=True,subset_factory=blocks)
     finally:sink.close()
     stream=io.BytesIO();np.savez_compressed(stream,**{k:cohort[k] for k in ARRAYS})
     raw=stream.getvalue();validate_npz_bytes(raw,maximum_bytes=MAX_TARGET_BYTES)

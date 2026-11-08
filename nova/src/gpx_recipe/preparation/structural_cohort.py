@@ -114,10 +114,10 @@ def assemble_pairs(blocks, *, bins=4096, split_seed=69271, augmenter=None):
     """Three-curve cohorts use checked parent contexts and class-supported folds."""
     blocks=list(blocks)
     return assemble_into(lambda:iter(blocks),DenseFeatures(3),bins=bins,split_seed=split_seed,
-        augmenter=augmenter,paired=True)
+        augmenter=augmenter,paired=True,subset_factory=lambda indices:(blocks[i] for i in indices))
 
 
-def assemble_into(block_factory, sink, *, bins=2048, split_seed=3917, augmenter=None, paired=False):
+def assemble_into(block_factory, sink, *, bins=2048, split_seed=3917, augmenter=None, paired=False,subset_factory=None):
     """One two-pass assembly algorithm for memory or worker-local file storage.
 
     Only one validated raw block and one computed feature need reside at a
@@ -129,11 +129,17 @@ def assemble_into(block_factory, sink, *, bins=2048, split_seed=3917, augmenter=
     sources = set(); profiles = set(); metadata = []; count = 0
     lower = -np.inf; upper = np.inf; parent_key = None; parent_arrays = None
     definitions = {}; candidate_groups = {}; generated_groups = {}
+    if paired:
+        from .structural_training_strata import Inventory
+        strata=Inventory();unknown_sampling=False
     for block in block_factory():
         if not isinstance(block, PairedBlock if paired else ExampleBlock):
             raise TypeError('Validated structural example blocks are required')
         d, a = block.manifest, block.arrays
         metadata.append(copy.deepcopy(d))
+        if paired:
+            if 'parent_relative_metric_range' in d:strata.add(str(len(metadata)-1),d)
+            else:unknown_sampling=True  # Saved pre-range pilot readers remain valid.
         if len(metadata) > 5000:
             raise ValueError('The structural preparation block catalog is bounded')
         sources.add(d['source_sha256']); profiles.add(d['instrument_sha256'])
@@ -168,10 +174,31 @@ def assemble_into(block_factory, sink, *, bins=2048, split_seed=3917, augmenter=
             raise ValueError('Structural augmentation must match the native example profile')
     sink.reserve(count*(1 if augmenter is None else 1+augmenter.controls.variants), bins)
     edges = np.linspace(lower, upper, bins+1)
+    anchor=None
+    if paired:
+        ranges=strata.describe()
+        if ranges is not None:
+            if unknown_sampling:
+                raise ValueError('Cannot expand ranges without every original parent sampling identity')
+            from .structural_partition_anchor import PartitionOnly,capture
+            from .structural_training_strata import reference_range
+            original_range=reference_range(ranges)
+            indices=sorted(map(int,original_range['blocks']))
+            selected_indices=set(indices)
+            original_factory=(lambda:subset_factory(indices)) if subset_factory is not None else (
+                lambda:(block for i,block in enumerate(block_factory()) if i in selected_indices))
+            original=assemble_into(original_factory,PartitionOnly(),bins=bins,split_seed=split_seed,
+                                   augmenter=augmenter,paired=True)
+            anchor=capture(original,[metadata[i] for i in indices],
+                interval=original_range['parent_relative_metric_range'],split_seed=split_seed)
+            del original
+            if not np.array_equal(edges,anchor['q_edges']):
+                raise ValueError('New parent ranges changed the original shared feature grid')
     q, y, background = parent_arrays
     reference = (three_curve_features(q,y,y,edges,background=background,
         reference_background=background)['features'] if paired else
         pattern_features(q, y, edges, background=background))
+    if anchor is not None:reference=anchor['reference_features']
     records = []; parents = {}; duplicates = {}; clean_origins = {}; augmented = 0
 
     def find(group):
@@ -247,14 +274,21 @@ def assemble_into(block_factory, sink, *, bins=2048, split_seed=3917, augmenter=
         targets[i, [indices[c] for o in record['origins'] for c in o['labels']]] = True
     physical_groups=[find(r['group']) for r in records]
     if paired:
-        from .structural_partitions import partition_rows
-        assignments=partition_rows(physical_groups,targets,seed=split_seed)
+        if anchor is None:
+            from .structural_partitions import partition_rows
+            assignments=partition_rows(physical_groups,targets,seed=split_seed)
+        else:
+            from .structural_partition_anchor import assign
+            assignments={group:('train','validation','test')[code]
+                         for group,code in assign(anchor,parents,find).items()}
     else:
         assignments=partition_trajectories(physical_groups,seed=split_seed)
     split = np.asarray([{'train': 0, 'validation': 1, 'test': 2}[assignments[find(r['group'])]]
                         for r in records], np.int8)
     if not np.all(targets[split == 0].any(axis=0)):
         raise ValueError('Every prepared symmetry class needs independent training trajectories')
+    if anchor is not None and not all(targets[split==i].any(0).all() for i in range(3)):
+        raise ValueError('New symmetry labels need support in the retained original holdouts; refusing to reshuffle them')
     from .structural_domain import envelope
     domain=envelope(max(o['metric_norm'] for i,r in enumerate(records) if split[i]==0 for o in r['origins']),
         parent_references=paired)
@@ -277,6 +311,7 @@ def assemble_into(block_factory, sink, *, bins=2048, split_seed=3917, augmenter=
         original_examples=count, unique_examples=len(records),
         ambiguous_examples=int(np.count_nonzero(targets.sum(axis=1) > 1)),
         training_domain=domain,screening_qualified=False,
+        **(dict(partition_anchor=anchor['trace']) if anchor is not None else {}),
         **(dict(channels=3,representation='reference-current-signed-difference/shared-Q-asinh/v1',
             reference_kind='calculated_parent_at_shared_parent_compatible_cell',
             partition_method='class-supported-whole-trajectories/v1') if paired else {}))

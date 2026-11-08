@@ -73,7 +73,12 @@ def validate_entries(entries):
             if row['model']['kind']==EXAMPLES and row['model']['bank']==bank
             and row['model']['settings'].get('representation')==REPRESENTATION}
         if len(paired_contexts)>1:
-            raise ValueError('A bank must retain shared parent trajectories across all structural children')
+            from .structural_training_strata import Inventory
+            strata=Inventory()
+            for row in entries:
+                if row['model']['kind']==EXAMPLES and row['model']['bank']==bank:
+                    strata.add('blocks/'+row['id'],dict(row['model']['settings'],grid=row['model']['grid']))
+            strata.describe()
     for group in portfolios.values():
         start=0
         for lower,upper in sorted(group['intervals']):

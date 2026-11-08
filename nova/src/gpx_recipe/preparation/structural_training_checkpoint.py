@@ -52,7 +52,7 @@ def identity(cohort,rows,targets,split,clean,mean,scale,*,epochs,seed,workers):
     metadata={key:cohort.get(key) for key in ('parent_sha256','instrument_sha256','input_sha256',
         'groups','example_simulations','references','candidates','candidate_groups','class_candidate_ids',
         'reference_feature_sha256','training_domain','augmentation','augmentation_sha256','original_examples',
-        'augmented_examples','ambiguous_examples','channels','representation','reference_kind','partition_method')}
+        'augmented_examples','ambiguous_examples','channels','representation','reference_kind','partition_method','partition_anchor')}
     metadata.update(implementation=package_signature(),architecture=weights.ARCHITECTURE,
         torch_version=str(torch.__version__),numpy_version=np.__version__,epochs=epochs,seed=seed,workers=workers)
     from .structural_training_data import MAX_ROWS

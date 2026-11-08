@@ -282,17 +282,20 @@ def build(directories, *, bins=4096, split_seed=69271, augmenter=None, names='pa
                      instrument_sha256=augmenter.metadata['instrument_sha256'])
                 for q, y, sha in augmenter.impurities])
     sink = _RowHashes(); bank = _NativeArrays(destination); passes = 0
-    def blocks():
+    def blocks(indices=None):
         nonlocal passes
-        capture = passes > 0; passes += 1
-        for index, path in enumerate(directories):
+        capture = indices is None and passes > 0
+        if indices is None:passes += 1
+        for index in range(len(directories)) if indices is None else indices:
+            path=directories[index]
             block = read(path, names=names)
             # Admission/reservation happens between the assembler's passes.
             # An oversized cohort must fail before writing its native bank.
             if capture: bank.add(index, block)
             yield block
     try:
-        cohort = assemble_into(blocks, sink, bins=bins, split_seed=split_seed, augmenter=augmenter, paired=True)
+        cohort = assemble_into(blocks, sink, bins=bins, split_seed=split_seed, augmenter=augmenter,
+                               paired=True,subset_factory=blocks)
         if tuple(_file_state(p) for p in paths) != states:
             raise ValueError('Native replay sources changed during cohort assembly')
         bank.seal()
