@@ -472,6 +472,9 @@ def test_scan_slider_moves_within_a_single_map_page(app):
     assert state.unet_transition_selected == "synthetic-1"
     assert state.unet_transition_map_scan_max == 3
     assert state.unet_transition_map_scroll_max == 1
+    assert state.unet_transition_map_height == 470
+    assert state.unet_transition_map["layout"]["height"] == 470
+    assert state.unet_transition_dialog_figure["layout"]["height"] == 690
 
 
 def test_return_to_latest_restores_map_window_after_manual_paging(app):
