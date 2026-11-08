@@ -880,7 +880,10 @@ class RadarPdNovaApp(FeedbackMixin, WebmonMixin, BatteryMixin, UnetTransitionMix
                 )
             self._leave_session_page = client.JSEval(exec="window.location.replace('/');").exec
             self._scroll_workspace_top = client.JSEval(
-                exec="window.requestAnimationFrame(() => window.requestAnimationFrame(() => window.scrollTo({top: 0, behavior: 'auto'})));"
+                exec=("window.requestAnimationFrame(() => window.requestAnimationFrame(() => {"
+                      " const scroller = window.document.querySelector('.v-card.overflow-y-auto') || window.document.scrollingElement;"
+                      " if (scroller) scroller.scrollTop = 0;"
+                      " }));")
             ).exec
             # Vue deliberately ignores <style> elements embedded in a component
             # template. Client.Style registers the sheet in the document head,
